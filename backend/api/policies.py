@@ -3,7 +3,8 @@ Policies blueprint — per-action permission control (allow / ask / deny).
 """
 
 import logging
-from typing import TYPE_CHECKING
+import threading
+from typing import TYPE_CHECKING, cast
 
 from flask import Blueprint, jsonify, request
 
@@ -113,7 +114,7 @@ def respond_permission() -> "ResponseReturnValue":
             logger.warning("[POLICIES API] No gate found for request_id=%s", request_id)
             return jsonify(ok=True), 200
         gate['result'] = 'approved' if approved else 'denied'
-        gate['event'].set()
+        cast(threading.Event, gate['event']).set()
         return jsonify(ok=True), 200
     except Exception as exc:
         logger.error("[POLICIES API] Respond failed: %s", exc)

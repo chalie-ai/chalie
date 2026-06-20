@@ -18,12 +18,15 @@ post-turn hook closes both when the run ends. Paired with
 
 from __future__ import annotations
 
-from typing import ClassVar
+from typing import TYPE_CHECKING, ClassVar, cast
 
 from abilities._delegate import render_trail
 from services.post_turn_hook import PostTurnHook
 from services.processor_config import ProcessorConfig
 from tools.browser.session import close_session, screenshot_ledger
+
+if TYPE_CHECKING:
+    from services.message_processor import MessageProcessor
 
 _WEB_BROWSE_SYSTEM_PROMPT = (
     "You are a web-browsing agent with one goal, given below. You drive a real "
@@ -51,7 +54,7 @@ class _CloseBrowserSession(PostTurnHook):
     def __init__(self) -> None:
         self.final_ledger: list[tuple[str, str]] = []
 
-    def run(self, mp, result_text: str) -> None:  # noqa: ARG002 — hook signature
+    def run(self, mp: "MessageProcessor", result_text: str) -> None:  # noqa: ARG002 — hook signature
         uid = getattr(mp, "uid", None)
         if uid:
             self.final_ledger = screenshot_ledger(uid)
@@ -83,17 +86,17 @@ class WebBrowseConfig(ProcessorConfig):
 
         Populated by the post-turn hook just before it closes the session;
         empty until the run ends (or when no screenshots were taken)."""
-        return self.post_turn_hooks[0].final_ledger
+        return cast("_CloseBrowserSession", self.post_turn_hooks[0]).final_ledger
 
-    def get_user_definition(self, mp) -> str:
+    def get_user_definition(self, mp: "MessageProcessor") -> str:
         return ""
 
-    def get_user_prompt(self, mp) -> str:
+    def get_user_prompt(self, mp: "MessageProcessor") -> str:
         """Ledger is rebuilt from session state on every iteration so it can never
         lose a screenshot doc_id — it is derived deterministically from what was
         captured this run, not from anything the model carries forward in its own
         text."""
-        parts = [f"Browsing goal:\n{mp._raw_input}"]  # type: ignore[attr-defined]
+        parts = [f"Browsing goal:\n{mp._raw_input}"]
         shots = screenshot_ledger(getattr(mp, "uid", None) or 0)
         if shots:
             lines = "\n".join(f"- doc_id={doc_id} ({url})" for doc_id, url in shots)
@@ -103,5 +106,5 @@ class WebBrowseConfig(ProcessorConfig):
             parts.append(trail)
         return "\n\n".join(parts)
 
-    def get_system_prompt(self, mp) -> str:
+    def get_system_prompt(self, mp: "MessageProcessor") -> str:
         return _WEB_BROWSE_SYSTEM_PROMPT

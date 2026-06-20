@@ -2,7 +2,8 @@
 import json
 import math
 import re
-from typing import ClassVar
+import sqlite3
+from typing import ClassVar, cast
 
 from abilities._budget import BudgetCappedAbility
 from abilities._params import Keys
@@ -35,7 +36,7 @@ class SavePattern(BudgetCappedAbility):
     # file_permissions.py). The pre-gate is truthiness-based, so an empty
     # evidence list is rejected there too, while whitespace-only name/summary
     # residue still reaches run().
-    ACTION_REQUIRED: ClassVar[dict] = {
+    ACTION_REQUIRED: ClassVar[dict[str, tuple[str, ...]]] = {
         "": (Keys.name, Keys.frequency, Keys.summary, Keys.evidence_transcript_ids)
     }
 
@@ -63,7 +64,7 @@ class SavePattern(BudgetCappedAbility):
     def get_search_tooltip(self) -> str:
         return "record behavioural patterns"
 
-    _PARAMETERS: ClassVar[dict] = {
+    _PARAMETERS: ClassVar[dict[str, object]] = {
         "type": "object",
         "properties": {
             Keys.name: {
@@ -90,10 +91,10 @@ class SavePattern(BudgetCappedAbility):
         "required": [Keys.name, Keys.frequency, Keys.summary, Keys.evidence_transcript_ids],
     }
 
-    def get_parameters(self) -> dict:
+    def get_parameters(self) -> dict[str, object]:
         return self._PARAMETERS
 
-    def run(self, params: dict) -> ToolResult:
+    def run(self, params: dict[str, object]) -> ToolResult:
         capped = self.budget_exceeded()
         if capped is not None:
             return capped
@@ -101,7 +102,7 @@ class SavePattern(BudgetCappedAbility):
         # The validation ORDER and rules are frozen (regex → frequency set →
         # min-2 evidence); only the failure shape changes from a phantom-success
         # dict to a loud ToolResult error, in parity with save_graph.
-        name = (params.get(Keys.name) or "").strip()
+        name = (cast("str", params.get(Keys.name) or "")).strip()
         # The dispatcher pre-gate is truthiness-based, so a whitespace-only name
         # slips past it as a non-empty string and must be rejected here
         # (precedent: save_graph.py, file_permissions.py).
@@ -127,7 +128,7 @@ class SavePattern(BudgetCappedAbility):
                 hint=_EXAMPLE_HINT,
             )
 
-        summary = (params.get(Keys.summary) or "").strip()
+        summary = (cast("str", params.get(Keys.summary) or "")).strip()
         if not summary:
             return ToolResult.err(
                 "Missing required parameter(s): summary.",
@@ -155,7 +156,7 @@ class SavePattern(BudgetCappedAbility):
         source = pattern_provenance(proc)
         row_id, confidence_out, reinforced = _upsert_pattern(validated, source)
 
-        body = {"saved": 1}
+        body: dict[str, object] = {"saved": 1}
         if reinforced:
             body["reinforced"] = 1
         body["name"] = validated["name"]
@@ -164,7 +165,7 @@ class SavePattern(BudgetCappedAbility):
         return ToolResult.ok(body)
 
 
-def _upsert_pattern(validated: dict, source: str) -> tuple[int, float, bool]:
+def _upsert_pattern(validated: dict[str, object], source: str) -> tuple[int, float, bool]:
     """``source`` is the provenance of the pass that produced this pattern"""
     now_iso = utc_now().isoformat()
     db = get_shared_db_service()
@@ -185,15 +186,16 @@ def _upsert_pattern(validated: dict, source: str) -> tuple[int, float, bool]:
 
 
 def _update_existing_pattern(
-    conn, existing, validated: dict, now_iso: str, source: str
+    conn: sqlite3.Connection, existing: sqlite3.Row, validated: dict[str, object], now_iso: str, source: str
 ) -> tuple[int, float]:
-    existing_id, existing_value = existing[0], existing[1]
+    existing_id = cast("int", existing[0])
+    existing_value = existing[1]
     old_strength = float(existing[2]) if existing[2] is not None else 0.5
     old_evidence = int(existing[3]) if existing[3] is not None else 1
-    prev = parse_json_column(existing_value)
-    prev_conf = float(prev.get("confidence") or 0.0)
+    prev = cast("dict[str, object]", parse_json_column(existing_value))
+    prev_conf = float(cast("float", prev.get("confidence") or 0.0))
     new_conf = min(10.0, prev_conf + 7.0)
-    merged_evidence = list(dict.fromkeys([*(prev.get("evidence_transcript_ids") or []), *validated["evidence"]]))
+    merged_evidence = list(dict.fromkeys([*(cast("list[object]", prev.get("evidence_transcript_ids") or [])), *cast("list[object]", validated["evidence"])]))
     new_value = {
         "name": validated["name"],
         "frequency": validated["frequency"],
@@ -216,7 +218,7 @@ def _update_existing_pattern(
     return existing_id, new_conf
 
 
-def _insert_new_pattern(conn, validated: dict, now_iso: str, source: str) -> tuple[int, float]:
+def _insert_new_pattern(conn: sqlite3.Connection, validated: dict[str, object], now_iso: str, source: str) -> tuple[int, float]:
     new_value = {
         "name": validated["name"],
         "frequency": validated["frequency"],
@@ -224,7 +226,7 @@ def _insert_new_pattern(conn, validated: dict, now_iso: str, source: str) -> tup
         "summary": validated["summary"],
         "confidence": 7.0,
         "last_seen_at": now_iso,
-        "evidence_transcript_ids": list(validated["evidence"]),
+        "evidence_transcript_ids": list(cast("list[object]", validated["evidence"])),
     }
     cur = conn.execute(
         "INSERT INTO data_graph "
@@ -232,4 +234,4 @@ def _insert_new_pattern(conn, validated: dict, now_iso: str, source: str) -> tup
         "VALUES (?, ?, ?, ?, ?, ?, 1)",
         ("behavioral_pattern", validated["name"], json.dumps(new_value), now_iso, now_iso, source),
     )
-    return cur.lastrowid, 7.0
+    return cast("int", cur.lastrowid), 7.0

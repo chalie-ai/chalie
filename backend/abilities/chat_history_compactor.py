@@ -14,12 +14,32 @@ ALWAYS advances on a non-empty history, so compaction can never silently no-op i
 an infinite loop."""
 
 import logging
-from typing import ClassVar
+from typing import TYPE_CHECKING, ClassVar, cast
 
 from abilities._ability import Ability
 from abilities._compaction_config import CompactionConfig
 from abilities._result import ToolResult
 from services.system_message_prompt import ChatHistoryCompactionSystemPrompt
+
+if TYPE_CHECKING:
+    from typing import Protocol
+
+    class _CompactionParent(Protocol):
+        _compaction_kept_rows: int
+
+        def _previous_rows(self) -> list[object]: ...
+        def get_previous_messages(self, *, drop_oldest: int = ...) -> str: ...
+
+        class _Providers(Protocol):
+            def get_context_limit(self) -> int: ...
+            def measure(self, dto: object) -> int: ...
+
+        providers: _Providers
+
+        class _Config(Protocol):
+            channel: str
+
+        config: _Config
 
 logger = logging.getLogger(__name__)
 
@@ -54,24 +74,24 @@ class ChatHistoryCompactor(Ability):
     def get_search_tooltip(self) -> str:
         return "internal chat-history compaction"
 
-    _PARAMETERS: ClassVar[dict] = {"type": "object", "properties": {}}
+    _PARAMETERS: ClassVar[dict[str, object]] = {"type": "object", "properties": {}}
 
-    def get_parameters(self) -> dict:
+    def get_parameters(self) -> dict[str, object]:
         return self._PARAMETERS
 
-    def run(self, params: dict) -> ToolResult:
+    def run(self, params: dict[str, object]) -> ToolResult:
         from services.message_processor import MessageProcessor  # noqa: PLC0415
         from services import compaction_persistence, transcript_service  # noqa: PLC0415
 
-        parent = self.mp
-        channel = parent.config.channel
+        mp = cast("_CompactionParent", self.mp)
+        channel = mp.config.channel
 
         # Carry forward the prior checkpoint so continuity chains across
         # compactions instead of restarting from the recent tail each time.
         prior_row = compaction_persistence.get_compaction(channel)
-        prior = (prior_row.get("compacted_text") or "").strip() if prior_row else ""
+        prior = (cast(str, prior_row.get("compacted_text")) or "").strip() if prior_row else ""
 
-        combined = self._fit_compaction_input(parent, prior)
+        combined = self._fit_compaction_input(mp, prior)
         if combined is None:
             # Nothing to compact — suppress_history channel or no rows past the
             # watermark. Do NOT write a watermark (there is no backlog to fold).
@@ -80,7 +100,7 @@ class ChatHistoryCompactor(Ability):
         # _fit_compaction_input surfaced the count of transcript rows actually
         # folded into the checkpoint (kept after the rare drop-oldest fallback) —
         # an honest scalar already computed there, no extra provider call.
-        rows_compacted = int(getattr(parent, "_compaction_kept_rows", 0))
+        rows_compacted = mp._compaction_kept_rows
 
         summary = (MessageProcessor.process(combined, ChatHistoryCompactionConfig()) or "").strip()
         if not summary:
@@ -96,7 +116,7 @@ class ChatHistoryCompactor(Ability):
         return ToolResult.ok("Chat history compacted.", rows_compacted=rows_compacted)
 
     @staticmethod
-    def _fit_compaction_input(parent, prior: str):
+    def _fit_compaction_input(parent: "_CompactionParent", prior: str) -> str | None:
         """Build the bare compaction request body and shrink it to fit the cap.
 
         Canonical design step 4.1/4.2: the compaction request includes ONLY the

@@ -1,6 +1,6 @@
 """SaveGraph — record a durable, non-behavioural fact in the data graph."""
 import json
-from typing import ClassVar
+from typing import ClassVar, cast
 
 from abilities._budget import BudgetCappedAbility
 from abilities._params import Keys
@@ -37,7 +37,7 @@ class SaveGraph(BudgetCappedAbility):
             if row.get("tool_name") != "save_graph":
                 continue
             try:
-                p = json.loads(row.get("params") or "{}")
+                p = json.loads(cast("str", row.get("params") or "{}"))
             except (ValueError, TypeError):
                 continue
             k = p.get(Keys.kind, "")
@@ -51,7 +51,7 @@ class SaveGraph(BudgetCappedAbility):
     # or empty kind/key/value as code=missing-params before run() is reached
     # (precedent: _delegate.py, file_permissions.py). The pre-gate is
     # truthiness-based, so whitespace-only residue still reaches run().
-    ACTION_REQUIRED: ClassVar[dict] = {"": (Keys.kind, Keys.key, Keys.value)}
+    ACTION_REQUIRED: ClassVar[dict[str, tuple[str, ...]]] = {"": (Keys.kind, Keys.key, Keys.value)}
 
     def get_name(self) -> str:
         return "save_graph"
@@ -78,7 +78,7 @@ class SaveGraph(BudgetCappedAbility):
     def get_search_tooltip(self) -> str:
         return "store user facts to knowledge graph"
 
-    _PARAMETERS: ClassVar[dict] = {
+    _PARAMETERS: ClassVar[dict[str, object]] = {
         "type": "object",
         "properties": {
             Keys.kind: {"type": "string", "enum": ALLOWED_KINDS},
@@ -88,10 +88,10 @@ class SaveGraph(BudgetCappedAbility):
         "required": [Keys.kind, Keys.key, Keys.value],
     }
 
-    def get_parameters(self) -> dict:
+    def get_parameters(self) -> dict[str, object]:
         return self._PARAMETERS
 
-    def run(self, params: dict) -> ToolResult:
+    def run(self, params: dict[str, object]) -> ToolResult:
         capped = self.budget_exceeded()
         if capped is not None:
             return capped
@@ -109,8 +109,8 @@ class SaveGraph(BudgetCappedAbility):
         # The dispatcher pre-gate is truthiness-based, so a non-empty but
         # whitespace-only key/value slips past it and must be rejected here
         # (precedent: file_permissions.py).
-        key = params.get(Keys.key, "").strip()
-        value = params.get(Keys.value, "").strip()
+        key = cast("str", params.get(Keys.key, "")).strip()
+        value = cast("str", params.get(Keys.value, "")).strip()
         if not key or not value:
             missing = ", ".join(
                 name for name, val in (("key", key), ("value", value)) if not val

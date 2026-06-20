@@ -1,7 +1,12 @@
 from __future__ import annotations
 
+from typing import TYPE_CHECKING, cast
+
 from services.post_turn_hook import PostTurnHook
 from services.processor_config import ProcessorConfig
+
+if TYPE_CHECKING:
+    from services.message_processor import MessageProcessor
 
 # ── Pattern-match prompt builders and post_turn ───────────────────────────────
 
@@ -43,7 +48,7 @@ def _pattern_existing_patterns_block() -> str:
         return "(none yet)"
 
 
-def _touched_pattern_names(mp) -> set[str]:
+def _touched_pattern_names(mp: "MessageProcessor") -> set[str]:
     """Pattern names (= data_graph keys) save_pattern wrote this turn, from the DB."""
     import json as _json  # noqa: PLC0415
     from services.act_trail import ActTrail  # noqa: PLC0415
@@ -51,11 +56,11 @@ def _touched_pattern_names(mp) -> set[str]:
     if turn_id is None:
         return set()
     names: set[str] = set()
-    for row in ActTrail().fetch_by_turn(mp.config.channel, turn_id):
+    for row in ActTrail().fetch_by_turn(cast("ProcessorConfig", mp.config).channel, turn_id):
         if row.get("tool_name") != "save_pattern":
             continue
         try:
-            name = (_json.loads(row.get("params") or "{}") or {}).get("name")
+            name = (_json.loads(cast("str", row.get("params") or "{}")) or {}).get("name")
         except Exception:
             continue
         if name:
@@ -66,7 +71,7 @@ def _touched_pattern_names(mp) -> set[str]:
 class PatternDecayHook(PostTurnHook):
     """Confidence decay sweep: -0.005 on untouched active rows; soft-delete at <=0."""
 
-    def run(self, mp, response_text: str) -> None:
+    def run(self, mp: "MessageProcessor", response_text: str) -> None:
         import logging as _logging  # noqa: PLC0415
         _log = _logging.getLogger(__name__)
         try:
@@ -76,7 +81,7 @@ class PatternDecayHook(PostTurnHook):
             db = get_shared_db_service()
             with db.connection() as conn:
                 # Decrement confidence on untouched rows (excluded by pattern key).
-                params: list = []
+                params: list[object] = []
                 touched_filter = ""
                 if touched_names:
                     placeholders = ",".join("?" * len(touched_names))
@@ -121,7 +126,7 @@ class PatternDecayHook(PostTurnHook):
 class PatternSkillSyncHook(PostTurnHook):
     """Map the behavioural patterns touched this turn to curated skill playbooks."""
 
-    def run(self, mp, response_text: str) -> None:
+    def run(self, mp: "MessageProcessor", response_text: str) -> None:
         import logging as _logging  # noqa: PLC0415
         _log = _logging.getLogger(__name__)
         try:
@@ -137,7 +142,7 @@ class PatternSkillSyncHook(PostTurnHook):
                     "WHERE kind='behavioral_pattern' AND active=1 "
                     "AND deleted_at IS NULL AND source=? "
                     f"AND key IN ({placeholders})",
-                    (mp.config.channel, *names),
+                    (cast("ProcessorConfig", mp.config).channel, *names),
                 ).fetchall()
             touched_ids = {r[0] for r in rows}
             if not touched_ids:
@@ -150,6 +155,10 @@ class PatternSkillSyncHook(PostTurnHook):
 
 class PatternConfig(ProcessorConfig):
     """Pattern-match config — per-window background pattern recognition."""
+
+    if TYPE_CHECKING:
+        _window_start: int
+        _window_end: int
 
     def __init__(self, window_start: int, window_end: int) -> None:
         super().__init__(
@@ -167,10 +176,10 @@ class PatternConfig(ProcessorConfig):
         object.__setattr__(self, "_window_start", window_start)
         object.__setattr__(self, "_window_end", window_end)
 
-    def get_user_definition(self, mp) -> str:
+    def get_user_definition(self, mp: "MessageProcessor") -> str:
         return ""
 
-    def get_user_prompt(self, mp) -> str:
+    def get_user_prompt(self, mp: "MessageProcessor") -> str:
         """Pattern-match user-prompt: transcripts from window + existing patterns + trail."""
         import logging as _logging  # noqa: PLC0415
         _log = _logging.getLogger(__name__)
@@ -209,14 +218,14 @@ class PatternConfig(ProcessorConfig):
         existing = _pattern_existing_patterns_block()
         parts = [f"Existing patterns:\n{existing}", transcript_block]
         try:
-            trail = mp._render_act_trail()  # type: ignore[attr-defined]
+            trail = mp._render_act_trail()
             if trail:
                 parts.append(trail)
         except Exception:
             pass
         return "\n\n".join(parts)
 
-    def get_system_prompt(self, mp) -> str:
+    def get_system_prompt(self, mp: "MessageProcessor") -> str:
         """Pattern-match system prompt (inlined from PatternMatchProcessor.get_system_prompt)."""
         return (
             "You are analysing the user's recent transcripts to detect "

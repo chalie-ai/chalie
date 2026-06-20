@@ -50,18 +50,27 @@ resolve. The KEEP-classes (walk_up_to_apex, collapsed-tree retrieval, the
 write-contract round-trip) are algorithm-agnostic and stay GREEN.
 """
 
+from __future__ import annotations
+
 import contextlib
 import json
 import math
+import sqlite3
 import struct
 import uuid
+from collections.abc import Callable, Generator
+from typing import TYPE_CHECKING, cast
 
 import pytest
 
 from services.llm_clients.base import ProviderClient
-from services.provider_api import ProviderApiResponse
+from services.provider_api import ProviderApiRequest, ProviderApiResponse
 from services.providers import Providers
 from services.time_utils import parse_utc
+
+if TYPE_CHECKING:
+    from services.subconscious_worker import SubconsciousWorker
+    from services.database_service import DatabaseService
 
 pytestmark = pytest.mark.unit
 
@@ -104,7 +113,7 @@ def _topic_vec(axis: int, *, jitter_axis: int, jitter: float = 0.0) -> list[floa
     return [x / norm for x in v]
 
 
-def _sqlite_vec_available(db) -> bool:
+def _sqlite_vec_available(db: sqlite3.Connection) -> bool:
     """Check whether sqlite-vec is loaded (episodes_vec is accessible)."""
     try:
         db.execute("SELECT COUNT(*) FROM episodes_vec")
@@ -117,19 +126,19 @@ def _sqlite_vec_available(db) -> bool:
 
 
 def _insert_episode(
-    db,
+    db: sqlite3.Connection,
     *,
-    episode_id: str = None,
+    episode_id: str | None = None,
     gist: str = "Test gist",
     salience: int = 5,
     channel: str = "test",
     level: int = 0,
-    consolidated_into: str = None,
-    consolidated_from: list = None,
-    deleted_at: str = None,
-    transcript_ids: list = None,
-    transcript_id_start: int = None,
-    transcript_id_end: int = None,
+    consolidated_into: str | None = None,
+    consolidated_from: list[str] | None = None,
+    deleted_at: str | None = None,
+    transcript_ids: list[int] | None = None,
+    transcript_id_start: int | None = None,
+    transcript_id_end: int | None = None,
     emotional_valence: float = 0.0,
     emotional_arousal: float = 0.0,
 ) -> str:
@@ -161,7 +170,7 @@ def _insert_episode(
     return eid
 
 
-def _insert_embedding(db, episode_id: str, emb: list[float]) -> None:
+def _insert_embedding(db: sqlite3.Connection, episode_id: str, emb: list[float]) -> None:
     """Insert an embedding blob into episodes_vec for the given episode_id.
 
     Raises if sqlite-vec is not loaded — callers gate on _sqlite_vec_available.
@@ -187,28 +196,30 @@ class _FakeLLMService(ProviderClient):
 
     CONTENT_FIELD_LABEL = "message.content"
 
-    def __init__(self, send_fn):
+    def __init__(self, send_fn: Callable[[ProviderApiRequest], ProviderApiResponse]) -> None:
         self._send_fn = send_fn
 
     def get_context_limit(self) -> int:
         return 200_000
 
-    def estimate_request_tokens(self, dto) -> int:
+    def estimate_request_tokens(self, dto: ProviderApiRequest) -> int:
         return 1
 
-    def send(self, dto) -> ProviderApiResponse:
+    def send(self, dto: ProviderApiRequest) -> ProviderApiResponse:
         return self._send_fn(dto)
 
 
 @contextlib.contextmanager
-def _inject_fake_client(send_fn):
+def _inject_fake_client(
+    send_fn: Callable[[ProviderApiRequest], ProviderApiResponse],
+) -> Generator[None, None, None]:
     """Swap Providers._resolve at the class level for the block. No unittest.mock."""
     original = Providers._resolve
-    Providers._resolve = lambda self, *_a, **_kw: _FakeLLMService(send_fn)
+    setattr(Providers, '_resolve', lambda self, *_a, **_kw: _FakeLLMService(send_fn))
     try:
         yield
     finally:
-        Providers._resolve = original
+        setattr(Providers, '_resolve', original)
 
 
 def _super_ep_envelope(gist: str) -> ProviderApiResponse:
@@ -229,12 +240,12 @@ def _super_ep_envelope(gist: str) -> ProviderApiResponse:
     )
 
 
-def _worker():
+def _worker() -> SubconsciousWorker:
     from services.subconscious_worker import SubconsciousWorker
     return SubconsciousWorker(tick_sec=10, idle_window_sec=60)
 
 
-def _db_service():
+def _db_service() -> DatabaseService:
     from services.database_service import get_shared_db_service
     return get_shared_db_service()
 
@@ -242,7 +253,7 @@ def _db_service():
 # ── Roll-up DB inspection helpers ──────────────────────────────────────────────
 
 
-def _super_episodes(db, channel):
+def _super_episodes(db: sqlite3.Connection, channel: str) -> list[sqlite3.Row]:
     """Super/era rows (consolidated_from non-empty) currently live in a channel."""
     return db.execute(
         "SELECT id, gist, consolidated_from, level FROM episodes "
@@ -252,18 +263,27 @@ def _super_episodes(db, channel):
     ).fetchall()
 
 
-def _apex_leaf_count(db, channel, *, level=0):
+def _apex_leaf_count(db: sqlite3.Connection, channel: str, *, level: int = 0) -> int:
     """Count apex leaves (consolidated_into IS NULL, not deleted) at a level."""
-    return db.execute(
+    return cast(int, db.execute(
         "SELECT COUNT(*) FROM episodes "
         "WHERE channel=? AND consolidated_into IS NULL AND deleted_at IS NULL "
         "  AND level=?",
         (channel, level),
-    ).fetchone()[0]
+    ).fetchone()[0])
 
 
-def _seed_apex_cluster(db, channel, *, count, axis, jitter_axis, level=0,
-                       gist_prefix="shard", salience=7):
+def _seed_apex_cluster(
+    db: sqlite3.Connection,
+    channel: str,
+    *,
+    count: int,
+    axis: int,
+    jitter_axis: int,
+    level: int = 0,
+    gist_prefix: str = "shard",
+    salience: int = 7,
+) -> list[str]:
     """Seed ``count`` apex leaves on one tight topic (shared primary ``axis``,
     small per-leaf jitter). Returns the list of episode ids."""
     ids = []
@@ -292,7 +312,7 @@ class TestWalkUpToApex:
     shared singleton (already patched by the db fixture).
     """
 
-    def test_leaf_no_consolidated_into_returns_itself(self, db):
+    def test_leaf_no_consolidated_into_returns_itself(self, db: sqlite3.Connection) -> None:
         """A leaf episode with consolidated_into=NULL is its own apex."""
         from services.episodic_retrieval_service import walk_up_to_apex
 
@@ -301,7 +321,7 @@ class TestWalkUpToApex:
         assert result is not None
         assert result['id'] == eid
 
-    def test_one_hop_returns_super(self, db):
+    def test_one_hop_returns_super(self, db: sqlite3.Connection) -> None:
         """leaf → super (one hop) → returns super."""
         from services.episodic_retrieval_service import walk_up_to_apex
 
@@ -317,7 +337,7 @@ class TestWalkUpToApex:
         assert result is not None
         assert result['id'] == super_id
 
-    def test_two_hops_returns_apex(self, db):
+    def test_two_hops_returns_apex(self, db: sqlite3.Connection) -> None:
         """leaf → super → super-super (two hops) → returns apex."""
         from services.episodic_retrieval_service import walk_up_to_apex
 
@@ -333,7 +353,7 @@ class TestWalkUpToApex:
         assert result is not None
         assert result['id'] == apex_id
 
-    def test_cycle_logs_error_and_returns(self, db, caplog):
+    def test_cycle_logs_error_and_returns(self, db: sqlite3.Connection, caplog: pytest.LogCaptureFixture) -> None:
         """Cycle (a→b→a) is detected, logs an error, does not hang."""
         import logging
         from services.episodic_retrieval_service import walk_up_to_apex
@@ -369,7 +389,7 @@ class TestCountTriggeredRollup:
     The only seam is the LLM network boundary (Pattern H).
     """
 
-    def test_count_trigger_does_not_fire_below_fifty_apexes(self, db):
+    def test_count_trigger_does_not_fire_below_fifty_apexes(self, db: sqlite3.Connection) -> None:
         """Below the 50-apex count trigger NO consolidation happens — even with
         49 near-identical (cosine ~1.0) apex leaves on an allowlisted channel.
 
@@ -400,7 +420,7 @@ class TestCountTriggeredRollup:
             "must NO-OP (return []) until a channel reaches >=50 apex leaves"
         )
 
-        def _send(_dto):
+        def _send(_dto: ProviderApiRequest) -> ProviderApiResponse:
             return _super_ep_envelope("should never be summarised below trigger")
 
         with _inject_fake_client(_send):
@@ -413,7 +433,7 @@ class TestCountTriggeredRollup:
         # No leaf was consolidated — all 49 remain apex.
         assert _apex_leaf_count(db, "user") == 49
 
-    def test_count_trigger_fires_at_fifty_and_stamps_level_one(self, db):
+    def test_count_trigger_fires_at_fifty_and_stamps_level_one(self, db: sqlite3.Connection) -> None:
         """At >=50 apex leaves the count trigger fires: UMAP→HDBSCAN clusters the
         leaves, the worker writes super-episode parents, the children back-point
         at their parent, and each parent is stamped level=1.
@@ -442,7 +462,7 @@ class TestCountTriggeredRollup:
             "count-triggered UMAP→HDBSCAN pass must emit candidate groups"
         )
 
-        def _send(_dto):
+        def _send(_dto: ProviderApiRequest) -> ProviderApiResponse:
             return _super_ep_envelope("Consolidated reflection of a topic.")
 
         with _inject_fake_client(_send):
@@ -474,7 +494,7 @@ class TestCountTriggeredRollup:
                 "consolidated children must back-point at their super-episode"
             )
 
-    def test_clusters_are_topically_pure_and_noise_stays_leaf(self, db):
+    def test_clusters_are_topically_pure_and_noise_stays_leaf(self, db: sqlite3.Connection) -> None:
         """HDBSCAN clusters are topically coherent and genuine outliers are left
         as leaf apexes — never force-assigned into a cluster.
 
@@ -507,7 +527,7 @@ class TestCountTriggeredRollup:
 
         assert _apex_leaf_count(db, "user") == 53
 
-        def _send(_dto):
+        def _send(_dto: ProviderApiRequest) -> ProviderApiResponse:
             return _super_ep_envelope("Consolidated reflection of one topic.")
 
         with _inject_fake_client(_send):
@@ -544,7 +564,7 @@ class TestCountTriggeredRollup:
             )
             assert row[1] == 0, "outlier must remain a level-0 leaf"
 
-    def test_recursive_era_digest_forms_at_level_two(self, db):
+    def test_recursive_era_digest_forms_at_level_two(self, db: sqlite3.Connection) -> None:
         """When >=25 level-1 nodes accumulate they roll up recursively into a
         level-2 "era" digest whose level-1 children are tombstoned + back-pointed.
 
@@ -562,7 +582,7 @@ class TestCountTriggeredRollup:
         ))
         assert _apex_leaf_count(db, "user", level=1) == 25
 
-        def _send(_dto):
+        def _send(_dto: ProviderApiRequest) -> ProviderApiResponse:
             return _super_ep_envelope("Era digest of a season of reflections.")
 
         with _inject_fake_client(_send):
@@ -594,7 +614,7 @@ class TestCountTriggeredRollup:
                     "level-1 child rolled into an era must be tombstoned"
                 )
 
-    def test_rollup_children_are_tombstoned_with_tz_aware_utc(self, db):
+    def test_rollup_children_are_tombstoned_with_tz_aware_utc(self, db: sqlite3.Connection) -> None:
         """Every leaf consolidated into a super-episode is marked with a
         timezone-aware UTC ``tombstoned_at`` alongside its ``consolidated_into``
         back-pointer.
@@ -614,7 +634,7 @@ class TestCountTriggeredRollup:
                                          jitter_axis=201, gist_prefix="tomb-b"))
         assert _apex_leaf_count(db, "user") == 50
 
-        def _send(_dto):
+        def _send(_dto: ProviderApiRequest) -> ProviderApiResponse:
             return _super_ep_envelope("Consolidated reflection of a topic.")
 
         with _inject_fake_client(_send):
@@ -640,7 +660,7 @@ class TestCountTriggeredRollup:
             )
 
 
-def test_clustering_dependencies_import():
+def test_clustering_dependencies_import() -> None:
     """The new production clustering stack resolves in the runtime environment.
 
     Acceptance criterion (build §2 AC-5): scikit-learn / scipy / umap-learn /
@@ -678,30 +698,35 @@ class TestConsolidatedLeafSurfacesAsItself:
     """
 
     @pytest.fixture
-    def episodic_svc(self, db):
+    def episodic_svc(self, db: sqlite3.Connection) -> object:
         from services.database_service import get_shared_db_service
         from services.episodic_service import EpisodicService
         return EpisodicService(get_shared_db_service())
 
-    def test_consolidated_leaf_surfaces_at_its_own_level(self, db, episodic_svc):
+    def test_consolidated_leaf_surfaces_at_its_own_level(self, db: sqlite3.Connection, episodic_svc: object) -> None:
         """A leaf with consolidated_into set still surfaces as ITSELF when the
         query matches the leaf and NOT its super."""
         from services.episodic_retrieval_service import retrieve
+        from services.episodic_service import EpisodicService
+        from typing import cast as tcast
 
-        leaf_id = episodic_svc.store_episode({
+        svc = tcast(EpisodicService, episodic_svc)
+
+        leaf_id = svc.store_episode({
             'gist': 'watering the garden on a sunny afternoon',
             'salience': 5,
             'channel': 'ch-collapsed',
         })
-        super_id = episodic_svc.store_episode({
+        super_id = svc.store_episode({
             'gist': 'quarterly budget spreadsheet review meeting',
             'salience': 7,
             'channel': 'ch-collapsed',
         })
 
-        episodic_svc.set_consolidated_into(leaf_id, super_id)
+        svc.set_consolidated_into(leaf_id, super_id)
 
-        results = retrieve('watering garden', channel='ch-collapsed', k=10)
+        raw = retrieve('watering garden', channel='ch-collapsed', k=10)
+        results = tcast(list[dict[str, object]], raw)
         returned_ids = [r['id'] for r in results]
 
         assert leaf_id in returned_ids, (
@@ -714,26 +739,31 @@ class TestConsolidatedLeafSurfacesAsItself:
             f"— apex-promotion should be gone. Got: {returned_ids!r}"
         )
 
-    def test_consolidated_leaf_appears_once(self, db, episodic_svc):
+    def test_consolidated_leaf_appears_once(self, db: sqlite3.Connection, episodic_svc: object) -> None:
         """A single matching consolidated leaf is returned exactly once — the
         collapsed-tree hydration de-duplicates by id across the FTS and vector
         lanes."""
         from services.episodic_retrieval_service import retrieve
+        from services.episodic_service import EpisodicService
+        from typing import cast as tcast
 
-        leaf_id = episodic_svc.store_episode({
+        svc = tcast(EpisodicService, episodic_svc)
+
+        leaf_id = svc.store_episode({
             'gist': 'reading fiction novels late at night',
             'salience': 5,
             'channel': 'ch-collapsed-dedup',
         })
-        super_id = episodic_svc.store_episode({
+        super_id = svc.store_episode({
             'gist': 'reading habit super episode',
             'salience': 7,
             'channel': 'ch-collapsed-dedup',
         })
 
-        episodic_svc.set_consolidated_into(leaf_id, super_id)
+        svc.set_consolidated_into(leaf_id, super_id)
 
-        results = retrieve('reading fiction at night', channel='ch-collapsed-dedup', k=10)
+        raw = retrieve('reading fiction at night', channel='ch-collapsed-dedup', k=10)
+        results = tcast(list[dict[str, object]], raw)
         returned_ids = [r['id'] for r in results]
 
         assert returned_ids.count(leaf_id) == 1, (
@@ -757,23 +787,27 @@ class TestSuperEpisodeWriteContract:
     """
 
     @pytest.fixture
-    def episodic_svc(self, db):
+    def episodic_svc(self, db: sqlite3.Connection) -> object:
         from services.database_service import get_shared_db_service
         from services.episodic_service import EpisodicService
         return EpisodicService(get_shared_db_service())
 
-    def test_store_episode_persists_consolidated_from_list(self, db, episodic_svc):
+    def test_store_episode_persists_consolidated_from_list(self, db: sqlite3.Connection, episodic_svc: object) -> None:
         """A super-episode dict with consolidated_from=['a','b','c'] must land in
         the DB as a JSON array containing those three IDs, preserving order."""
+        from services.episodic_service import EpisodicService
+        from typing import cast as tcast
+
+        svc = tcast(EpisodicService, episodic_svc)
         src_ids = ['src-aaa', 'src-bbb', 'src-ccc']
-        super_ep = {
+        super_ep: dict[str, object] = {
             'gist': 'Three sibling episodes unified into one super',
             'salience': 7,
             'channel': 'ch-write-contract',
             'consolidated_from': src_ids,
         }
 
-        new_id = episodic_svc.store_episode(super_ep)
+        new_id = svc.store_episode(super_ep)
 
         row = db.execute(
             "SELECT consolidated_from FROM episodes WHERE id = ?", (new_id,)
@@ -786,9 +820,13 @@ class TestSuperEpisodeWriteContract:
             f"expected={src_ids!r}."
         )
 
-    def test_set_consolidated_into_persists_backpointer(self, db, episodic_svc):
+    def test_set_consolidated_into_persists_backpointer(self, db: sqlite3.Connection, episodic_svc: object) -> None:
         """set_consolidated_into(leaf_id, super_id) must land the super UUID
         verbatim in the leaf row's consolidated_into column."""
+        from services.episodic_service import EpisodicService
+        from typing import cast as tcast
+
+        svc = tcast(EpisodicService, episodic_svc)
         leaf_id = _insert_episode(db, gist='leaf to be consolidated', channel='ch-bp')
         super_id = 'super-xyz-123'
 
@@ -797,7 +835,7 @@ class TestSuperEpisodeWriteContract:
         ).fetchone()
         assert row[0] is None, "leaf must start with consolidated_into=NULL"
 
-        episodic_svc.set_consolidated_into(leaf_id, super_id)
+        svc.set_consolidated_into(leaf_id, super_id)
 
         row = db.execute(
             "SELECT consolidated_into FROM episodes WHERE id = ?", (leaf_id,)
@@ -807,7 +845,7 @@ class TestSuperEpisodeWriteContract:
             f"expected {super_id!r}, got {row[0]!r}."
         )
 
-    def test_rollup_parent_is_level_one_and_children_tombstoned(self, db):
+    def test_rollup_parent_is_level_one_and_children_tombstoned(self, db: sqlite3.Connection) -> None:
         """End-to-end write contract of one roll-up: the new super-episode parent
         carries level=1 and every source child gets BOTH consolidated_into and a
         tombstoned_at marker.
@@ -826,7 +864,7 @@ class TestSuperEpisodeWriteContract:
         seeded = topic_a | topic_b
         assert _apex_leaf_count(db, "user") == 50
 
-        def _send(_dto):
+        def _send(_dto: ProviderApiRequest) -> ProviderApiResponse:
             return _super_ep_envelope("Consolidated reflection of a topic.")
 
         with _inject_fake_client(_send):

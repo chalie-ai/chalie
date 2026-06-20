@@ -19,7 +19,7 @@ that corrupted such bodies is gone.
 
 import logging
 import sqlite3
-from typing import ClassVar
+from typing import ClassVar, cast
 
 from abilities._ability import Ability
 from abilities._params import Keys
@@ -62,7 +62,7 @@ class SkillBuilderAbility(Ability):
     # valid= names all four real actions; a known action missing required params →
     # one missing-params error naming ALL of them. edit/delete need only a title
     # (the existence/ownership checks live in run()); list needs nothing.
-    ACTION_REQUIRED: ClassVar[dict] = {
+    ACTION_REQUIRED: ClassVar[dict[str, tuple[str, ...]]] = {
         "create": (Keys.title, Keys.use_for, Keys.content),
         "edit": (Keys.title,),
         "delete": (Keys.title,),
@@ -97,7 +97,7 @@ class SkillBuilderAbility(Ability):
     def get_search_tooltip(self) -> str:
         return "create, edit, delete, or list user-defined skill playbooks"
 
-    _PARAMETERS: ClassVar[dict] = {
+    _PARAMETERS: ClassVar[dict[str, object]] = {
         "type": "object",
         "properties": {
             Keys.action: {
@@ -152,10 +152,10 @@ class SkillBuilderAbility(Ability):
         "required": [Keys.action],
     }
 
-    def get_parameters(self) -> dict:
+    def get_parameters(self) -> dict[str, object]:
         return self._PARAMETERS
 
-    def run(self, params: dict) -> ToolResult:
+    def run(self, params: dict[str, object]) -> ToolResult:
         # The ACTION_REQUIRED pre-gate has already rejected an unknown action and
         # any missing required params before this point, so action is one of the
         # four real actions and its required params are present. No try/except
@@ -178,7 +178,7 @@ class SkillBuilderAbility(Ability):
 # ── Helpers ────────────────────────────────────────────────────────────────────
 
 
-def _find_user_skill_by_title(conn: sqlite3.Connection, title: str) -> dict | None:
+def _find_user_skill_by_title(conn: sqlite3.Connection, title: str) -> dict[str, object] | None:
     row = conn.execute(
         "SELECT id, title, use_for, content, tags, version "
         "FROM skills WHERE source = 'user' AND lower(title) = lower(?)",
@@ -199,12 +199,12 @@ def _find_user_skill_by_title(conn: sqlite3.Connection, title: str) -> dict | No
 # ── Action handlers ────────────────────────────────────────────────────────────
 
 
-def _handle_create(params: dict) -> ToolResult:
+def _handle_create(params: dict[str, object]) -> ToolResult:
     # title / use_for / content presence is guaranteed by the ACTION_REQUIRED
     # pre-gate; here we only normalise.
-    title = (params.get(Keys.title) or "").strip()
-    use_for = (params.get(Keys.use_for) or "").strip()
-    content = (params.get(Keys.content) or "").strip()
+    title = (cast("str", params.get(Keys.title)) or "").strip()
+    use_for = (cast("str", params.get(Keys.use_for)) or "").strip()
+    content = (cast("str", params.get(Keys.content)) or "").strip()
 
     if not SKILLS_DB_PATH.exists():
         return ToolResult.err(
@@ -224,7 +224,7 @@ def _handle_create(params: dict) -> ToolResult:
                 action="create",
             )
 
-        tags = (params.get(Keys.tags) or "").strip()
+        tags = (cast("str", params.get(Keys.tags)) or "").strip()
         meta = {
             "title": title,
             "use_for": use_for,
@@ -238,7 +238,7 @@ def _handle_create(params: dict) -> ToolResult:
             "VALUES (?, ?, ?, ?, ?, 'user')",
             (title, use_for, content, tags, DEFAULT_VERSION),
         )
-        skill_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+        skill_id: int = cast("int", conn.execute("SELECT last_insert_rowid()").fetchone()[0])
 
         from services.embedding_service import EmbeddingService
         from utils.build_skills_db import index_skill
@@ -249,7 +249,7 @@ def _handle_create(params: dict) -> ToolResult:
 
         ensure_user_skills_dir()
         path = skill_yaml_path(title)
-        write_skill_file(path, meta)
+        write_skill_file(path, cast("dict[str, str | int]", meta))
 
         logger.info("%s Created skill '%s' (id=%d, file=%s)", _LOG_PREFIX, title, skill_id, path.name)
         return ToolResult.ok(
@@ -261,8 +261,8 @@ def _handle_create(params: dict) -> ToolResult:
         conn.close()
 
 
-def _handle_edit(params: dict) -> ToolResult:
-    title = (params.get(Keys.title) or "").strip()  # presence guaranteed by pre-gate
+def _handle_edit(params: dict[str, object]) -> ToolResult:
+    title = (cast("str", params.get(Keys.title)) or "").strip()  # presence guaranteed by pre-gate
 
     if not SKILLS_DB_PATH.exists():
         return ToolResult.err(
@@ -282,13 +282,13 @@ def _handle_edit(params: dict) -> ToolResult:
                 action="edit",
             )
 
-        skill_id = existing["id"]
-        updated_meta = {
+        skill_id: int = cast("int", existing["id"])
+        updated_meta: dict[str, object] = {
             "title": title,
-            "use_for": (params.get(Keys.use_for) or "").strip() or existing["use_for"],
-            "content": (params.get(Keys.content) or "").strip() or existing["content"],
-            "tags": (params.get(Keys.tags) or "").strip() if params.get(Keys.tags) is not None else (existing["tags"] or ""),
-            "version": existing["version"] + 1,
+            "use_for": (cast("str", params.get(Keys.use_for)) or "").strip() or existing["use_for"],
+            "content": (cast("str", params.get(Keys.content)) or "").strip() or existing["content"],
+            "tags": (cast("str", params.get(Keys.tags)) or "").strip() if params.get(Keys.tags) is not None else (existing["tags"] or ""),
+            "version": cast("int", existing["version"]) + 1,
         }
 
         conn.execute(
@@ -308,12 +308,12 @@ def _handle_edit(params: dict) -> ToolResult:
         from services.embedding_service import EmbeddingService
         from utils.build_skills_db import index_skill
         emb_service = EmbeddingService()
-        index_skill(conn, emb_service, skill_id, title, updated_meta["use_for"], updated_meta["tags"])
+        index_skill(conn, emb_service, skill_id, title, cast("str", updated_meta["use_for"]), cast("str", updated_meta["tags"]))
 
         conn.commit()
 
         ensure_user_skills_dir()
-        write_skill_file(skill_yaml_path(title), updated_meta)
+        write_skill_file(skill_yaml_path(title), cast("dict[str, str | int]", updated_meta))
 
         logger.info("%s Updated skill '%s' (id=%d, version=%d)", _LOG_PREFIX, title, skill_id, updated_meta["version"])
         return ToolResult.ok(
@@ -325,8 +325,8 @@ def _handle_edit(params: dict) -> ToolResult:
         conn.close()
 
 
-def _handle_delete(params: dict) -> ToolResult:
-    title = (params.get(Keys.title) or "").strip()  # presence guaranteed by pre-gate
+def _handle_delete(params: dict[str, object]) -> ToolResult:
+    title = (cast("str", params.get(Keys.title)) or "").strip()  # presence guaranteed by pre-gate
 
     if not SKILLS_DB_PATH.exists():
         return ToolResult.err(
@@ -346,7 +346,7 @@ def _handle_delete(params: dict) -> ToolResult:
                 action="delete",
             )
 
-        skill_id = existing["id"]
+        skill_id: int = cast("int", existing["id"])
         path = skill_yaml_path(title)
 
         remove_search_entries(conn, skill_id)
@@ -365,7 +365,7 @@ def _handle_delete(params: dict) -> ToolResult:
         conn.close()
 
 
-def _handle_list(params: dict) -> ToolResult:  # noqa: ARG001
+def _handle_list(params: dict[str, object]) -> ToolResult:  # noqa: ARG001
     if not SKILLS_DB_PATH.exists():
         return ToolResult.err(
             "The skill store is unavailable.",

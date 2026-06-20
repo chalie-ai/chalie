@@ -1,7 +1,12 @@
 from __future__ import annotations
 
+from typing import TYPE_CHECKING, cast
+
 from services.post_turn_hook import PostTurnHook
 from services.processor_config import ProcessorConfig
+
+if TYPE_CHECKING:
+    from services.message_processor import MessageProcessor
 
 # ── User-summary prompt builders and post_turn ────────────────────────────────
 
@@ -9,13 +14,13 @@ _MAX_TRAIT_ROWS = 200
 _MAX_PATTERN_ROWS = 25
 
 
-def _format_pattern_line(content: dict) -> str:
-    name = content.get("name", "unknown")
+def _format_pattern_line(content: dict[str, object]) -> str:
+    name = cast("str", content.get("name", "unknown"))
     freq = content.get("frequency", "?")
-    anchor = content.get("time_anchor") or ""
+    anchor = cast("str", content.get("time_anchor") or "")
     summary = content.get("summary", "")
     confidence = content.get("confidence", 0)
-    last_seen = (content.get("last_seen_at") or "")[:10] or "?"
+    last_seen = cast("str", content.get("last_seen_at") or "")[:10] or "?"
     anchor_part = f" @ {anchor}" if anchor else ""
     return (
         f"{name} ({freq}{anchor_part}): {summary} "
@@ -29,7 +34,7 @@ class PersistUserSummaryHook(PostTurnHook):
     callback for this channel. Writes user_summary_long FIRST so crash
     recovery works correctly."""
 
-    def run(self, mp, response_text: str) -> None:
+    def run(self, mp: "MessageProcessor", response_text: str) -> None:
         import json as _json  # noqa: PLC0415
         import logging as _logging  # noqa: PLC0415
         _log = _logging.getLogger(__name__)
@@ -168,10 +173,10 @@ class UserSummaryConfig(ProcessorConfig):
             post_turn_hooks=(PersistUserSummaryHook(),),
         )
 
-    def get_user_definition(self, mp) -> str:
+    def get_user_definition(self, mp: "MessageProcessor") -> str:
         return "You are a synthesiser. The user is a real human whose traits you are distilling."
 
-    def get_user_prompt(self, mp) -> str:
+    def get_user_prompt(self, mp: "MessageProcessor") -> str:
         """User-summary user-prompt: user_specific traits + behavioral_patterns."""
         import json as _json  # noqa: PLC0415
         import logging as _logging  # noqa: PLC0415
@@ -195,12 +200,12 @@ class UserSummaryConfig(ProcessorConfig):
             lines = [
                 f"{r['key']}: {r['value']}"
                 for r in rows
-                if r.get("key") and r.get("value")
+                if r is not None and r.get("key") and r.get("value")
             ]
             facts_section = "Facts:\n" + "\n".join(lines) if lines else "Facts:\n(no facts available)"
 
         # Section 2: active behavioral_patterns
-        active_patterns = []
+        active_patterns: list[dict[str, object]] = []
         try:
             from services.database_service import get_shared_db_service  # noqa: PLC0415
             db = get_shared_db_service()
@@ -219,9 +224,9 @@ class UserSummaryConfig(ProcessorConfig):
                 ).fetchall()
             for (value_json,) in pattern_rows:
                 try:
-                    content = _json.loads(value_json)
+                    content = _json.loads(cast("str", value_json))
                     if content:
-                        active_patterns.append(content)
+                        active_patterns.append(cast("dict[str, object]", content))
                 except Exception:
                     continue
         except Exception as exc:
@@ -237,7 +242,7 @@ class UserSummaryConfig(ProcessorConfig):
         )
         return facts_section + "\n\n" + patterns_section
 
-    def get_system_prompt(self, mp) -> str:
+    def get_system_prompt(self, mp: "MessageProcessor") -> str:
         """OLD assembly ``f"{user_def}\n\n{body}"``."""
         from services.system_message_prompt import UserSummarySystemPrompt  # noqa: PLC0415
         return f"{self.get_user_definition(mp)}\n\n{UserSummarySystemPrompt().get_prompt()}"

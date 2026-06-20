@@ -14,8 +14,13 @@ turn is what surfaces to the user and gets episodically encoded.
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from abilities._delegate import render_trail
 from services.processor_config import ProcessorConfig
+
+if TYPE_CHECKING:
+    from services.message_processor import MessageProcessor
 
 from configs.channels._common import DEFAULT_ALWAYS_AVAILABLE
 
@@ -56,16 +61,16 @@ class ScheduledConfig(ProcessorConfig):
             memory_seed=False,
         )
 
-    def get_user_definition(self, mp) -> str:
+    def get_user_definition(self, mp: "MessageProcessor") -> str:
         return ""
 
-    def get_user_prompt(self, mp) -> str:
+    def get_user_prompt(self, mp: "MessageProcessor") -> str:
         """Goal-driven user prompt: the scheduled instruction plus the trail."""
-        parts = [f"Scheduled task:\n{mp._raw_input}"]  # type: ignore[attr-defined]
+        parts = [f"Scheduled task:\n{mp._raw_input}"]
         trail = render_trail(mp)
         if trail:
             parts.append(trail)
         return "\n\n".join(parts)
 
-    def get_system_prompt(self, mp) -> str:
+    def get_system_prompt(self, mp: "MessageProcessor") -> str:
         return _SCHEDULED_SYSTEM_PROMPT

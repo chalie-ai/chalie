@@ -1,5 +1,9 @@
+from pathlib import Path
+from typing import cast
+
 import pytest
 
+from abilities._result import ToolResult
 from abilities.find_tools import FindToolsAbility
 from services.file_mapper_service import FileMapperService
 from services.mcp_client_service import McpClientService, _open_tools_db
@@ -23,15 +27,15 @@ def _stub_proc() -> MessageProcessor:
     return proc
 
 
-def _run_find_tools(ability: FindToolsAbility, proc: MessageProcessor, params: dict) -> str:
+def _run_find_tools(ability: FindToolsAbility, proc: MessageProcessor, params: dict[str, object]) -> ToolResult:
     ability.mp = proc
     return ability.run(params)
 
 
-def _seed_server_online(svc: McpClientService, name: str, tools: list[dict]) -> dict:
+def _seed_server_online(svc: McpClientService, name: str, tools: list[dict[str, object]]) -> dict[str, object]:
     server = svc.add_server(name=name, host=f"http://fake-{name}.lan:9000",
                              headers={}, enabled=True)
-    svc._write_tools(server["id"], name, tools)
+    svc._write_tools(cast(str, server["id"]), name, tools)
     with svc._db.connection() as conn:
         conn.execute(
             "UPDATE mcp_client_servers SET status='online' WHERE id=?",
@@ -42,7 +46,7 @@ def _seed_server_online(svc: McpClientService, name: str, tools: list[dict]) -> 
 
 
 # Representative Taskie tool definitions — match the kinds of tools this targets.
-_TASKIE_TOOLS = [
+_TASKIE_TOOLS: list[dict[str, object]] = [
     {
         "name": "list_tickets",
         "description": "List tickets in a project, optionally filtered by status or assignee.",
@@ -73,8 +77,8 @@ _TASKIE_TOOLS = [
 class TestSelectAdvertisedName:
 
     def test_bare_display_name_resolves_to_prefixed_call_name(
-        self, db, tmp_path, monkeypatch
-    ):
+        self, db: object, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """TDD at baseline: _run_select has no display-alias map → found=0.
 
         After the fix: _run_select resolves bare name to prefixed form via
@@ -116,8 +120,8 @@ class TestSelectAdvertisedName:
 class TestSemanticQueryViaEmbeddings:
 
     def test_query_create_task_or_ticket_returns_taskie_tools(
-        self, db, tmp_path, monkeypatch
-    ):
+        self, db: object, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """embed_server_tools() generates embeddings via EmbeddingService (ONNX).
 
         At baseline: AttributeError. After the fix: dual-signal RRF surfaces
@@ -131,7 +135,7 @@ class TestSemanticQueryViaEmbeddings:
         server = _seed_server_online(svc, "taskie", _TASKIE_TOOLS)
 
         # embed_server_tools is the new method — this MUST fail at baseline.
-        svc.embed_server_tools(server["id"])
+        svc.embed_server_tools(cast(str, server["id"]))
 
         ability = FindToolsAbility()
         proc = _stub_proc()
@@ -153,8 +157,8 @@ class TestSemanticQueryViaEmbeddings:
 class TestLooseMultiWordQuery:
 
     def test_multi_word_query_returns_results_via_vector_signal(
-        self, db, tmp_path, monkeypatch
-    ):
+        self, db: object, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """FTS-only scores 0.0625 → below 0.075 floor; embedding is the deciding signal.
 
         At baseline: no vec table → empty result. After the fix: dual-signal RRF
@@ -166,7 +170,7 @@ class TestLooseMultiWordQuery:
 
         svc = McpClientService()
         server = _seed_server_online(svc, "taskie", _TASKIE_TOOLS)
-        svc.embed_server_tools(server["id"])
+        svc.embed_server_tools(cast(str, server["id"]))
 
         # Precondition: FTS AND-query returns exactly 1 row (add_attachment).
         # That 1 row is single-signal (0.0625), filtered without the vector — the
@@ -204,8 +208,8 @@ class TestLooseMultiWordQuery:
 class TestEmbeddingsSurviveHeartbeatSync:
 
     def test_query_still_returns_tools_after_write_tools_rechurn(
-        self, db, tmp_path, monkeypatch
-    ):
+        self, db: object, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """After embed_server_tools() writes vector rows keyed by tool_name,
         calling _write_tools() again (simulating a heartbeat re-sync) deletes and
         re-inserts mcp_tools rows — reassigning mcp_tools.id to HIGHER values.
@@ -234,7 +238,7 @@ class TestEmbeddingsSurviveHeartbeatSync:
 
         # Seed taskie FIRST so its tools get the lowest rowids (e.g. 1..4).
         server = _seed_server_online(svc, "taskie", _TASKIE_TOOLS)
-        svc.embed_server_tools(server["id"])
+        svc.embed_server_tools(cast(str, server["id"]))
 
         # Seed a SECOND server AFTER taskie to advance the mcp_tools rowid high-water
         # mark past taskie's id range (e.g. id=5).  When taskie's _write_tools then
@@ -264,7 +268,7 @@ class TestEmbeddingsSurviveHeartbeatSync:
         # Simulate a heartbeat re-sync: _write_tools deletes + re-inserts.
         # With the second server having advanced the high-water mark, taskie's
         # re-insert gets fresh ids above the previous range.
-        svc._write_tools(server["id"], "taskie", _TASKIE_TOOLS)
+        svc._write_tools(cast(str, server["id"]), "taskie", _TASKIE_TOOLS)
 
         conn = _open_tools_db()
         try:
@@ -303,8 +307,8 @@ class TestEmbeddingsSurviveHeartbeatSync:
 class TestAddOnlyEmbeddingTrigger:
 
     def test_write_tools_does_not_alter_embedding_rows(
-        self, db, tmp_path, monkeypatch
-    ):
+        self, db: object, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """After embed_server_tools() writes vector rows, calling _write_tools()
         again (simulating a heartbeat or enable sync) must NOT regenerate or
         alter the mcp_tool_vectors rows.
@@ -322,7 +326,7 @@ class TestAddOnlyEmbeddingTrigger:
 
         svc = McpClientService()
         server = _seed_server_online(svc, "taskie", _TASKIE_TOOLS)
-        svc.embed_server_tools(server["id"])
+        svc.embed_server_tools(cast(str, server["id"]))
 
         # Snapshot the vector rows (rowid + tool_name pairs) before the sync.
         conn = _open_tools_db()
@@ -336,7 +340,7 @@ class TestAddOnlyEmbeddingTrigger:
         assert rows_before, "Precondition: embed_server_tools must have written mcp_tool_vectors rows."
 
         # Simulate a heartbeat: _write_tools is the re-sync path.
-        svc._write_tools(server["id"], "taskie", _TASKIE_TOOLS)
+        svc._write_tools(cast(str, server["id"]), "taskie", _TASKIE_TOOLS)
 
         conn = _open_tools_db()
         try:
@@ -361,8 +365,8 @@ class TestAddOnlyEmbeddingTrigger:
 class TestAmbiguousBareNameDropped:
 
     def test_bare_name_colliding_across_servers_is_not_silently_resolved(
-        self, db, tmp_path, monkeypatch
-    ):
+        self, db: object, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """Alias resolution drops ambiguous bare names and keeps unambiguous ones.
 
         Phase A (unambiguous): one server exposes 'ping'.  Bare name 'ping' must

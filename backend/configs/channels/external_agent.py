@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import TYPE_CHECKING, cast
+
 from services.post_turn_hook import PostTurnHook
 from services.processor_config import ProcessorConfig
 
@@ -7,6 +9,13 @@ from configs.channels._common import (
     DEFAULT_ALWAYS_AVAILABLE,
     substitute_provider_content_field,
 )
+
+if TYPE_CHECKING:
+    from services.message_processor import MessageProcessor
+
+    class _WithAgentAttrs:
+        _agent_name: str
+        _project: str
 
 
 class DiscloseToHumanHook(PostTurnHook):
@@ -23,7 +32,7 @@ class DiscloseToHumanHook(PostTurnHook):
         self._agent_name = agent_name
         self._project = project
 
-    def run(self, mp, response_text: str) -> None:
+    def run(self, mp: "MessageProcessor", response_text: str) -> None:
         import logging  # noqa: PLC0415
         _log = logging.getLogger(__name__)
         raw_input = getattr(mp, "_raw_input", "")
@@ -77,18 +86,20 @@ class EAMPConfig(ProcessorConfig):
         object.__setattr__(self, "_agent_name", agent_name)
         object.__setattr__(self, "_project", project)
 
-    def get_user_definition(self, mp) -> str:
+    def get_user_definition(self, mp: "MessageProcessor") -> str:
         """Static agent identity string.  §3b."""
+        _self = cast("_WithAgentAttrs", self)
         return (
-            f"The user is {self._agent_name}, an external agent. "
-            f"This conversation is about: {self._project}."
+            f"The user is {_self._agent_name}, an external agent. "
+            f"This conversation is about: {_self._project}."
         )
 
-    def get_system_prompt(self, mp) -> str:
+    def get_system_prompt(self, mp: "MessageProcessor") -> str:
         import logging  # noqa: PLC0415
         _log = logging.getLogger(__name__)
-        _agent_name = self._agent_name
-        _project = self._project
+        _self = cast("_WithAgentAttrs", self)
+        _agent_name = _self._agent_name
+        _project = _self._project
         try:
             from services.system_message_prompt import ExternalAgentSystemMessagePrompt  # noqa: PLC0415
             body = ExternalAgentSystemMessagePrompt().get_prompt()
@@ -104,7 +115,7 @@ class EAMPConfig(ProcessorConfig):
                     key = row.get("key") if isinstance(row, dict) else getattr(row, "key", None)
                     val = row.get("value") if isinstance(row, dict) else getattr(row, "value", None)
                     if key == "user_summary" and val:
-                        first_word = val.split()[0] if val else ""
+                        first_word = cast("str", val).split()[0] if val else ""
                         if first_word:
                             user_name = first_word
                         break
@@ -123,14 +134,14 @@ class EAMPConfig(ProcessorConfig):
             _log.warning("[EAMP] system prompt build failed: %s", exc)
             return ""
 
-    def get_user_prompt(self, mp) -> str:
+    def get_user_prompt(self, mp: "MessageProcessor") -> str:
         import logging  # noqa: PLC0415
         _log = logging.getLogger(__name__)
         parts: list[str] = []
 
         # Previous Messages
         try:
-            prev = mp.get_previous_messages()  # type: ignore[attr-defined]
+            prev = mp.get_previous_messages()
             if prev:
                 parts.append(f"## Previous Messages\n{prev}")
         except Exception as exc:
@@ -139,11 +150,11 @@ class EAMPConfig(ProcessorConfig):
         parts.append("")
 
         # Input line — BEFORE the trail (OLD get_user_prompt ordering).
-        parts.append(f"user: {mp._raw_input}")  # type: ignore[attr-defined]
+        parts.append(f"user: {mp._raw_input}")
 
         # ACT loop trail (carries the turn-0 memory seed once it has fired).
         try:
-            trail = mp._render_act_trail()  # type: ignore[attr-defined]
+            trail = mp._render_act_trail()
             if trail:
                 parts.append(trail)
         except Exception as exc:

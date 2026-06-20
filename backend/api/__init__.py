@@ -9,6 +9,7 @@ import pkgutil
 import logging
 from pathlib import Path
 from flask import Flask, Blueprint, Response, redirect, send_from_directory
+from flask.typing import ResponseReturnValue
 from flask_cors import CORS
 
 from services.file_mapper_service import FileMapperService
@@ -69,7 +70,7 @@ def _configure_app(app: Flask) -> None:
     app.config['SEND_FILE_MAX_AGE_DEFAULT'] = 0
 
     from werkzeug.middleware.proxy_fix import ProxyFix
-    app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_prefix=1)
+    setattr(app, 'wsgi_app', ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_prefix=1))
 
     CORS(app)
 
@@ -97,11 +98,11 @@ def _register_static_routes(app: Flask) -> None:
 
     # ── Brain admin SPA (auth-gated, matches the legacy /brain/ gate) ─────
     @app.route('/brain', methods=["GET"])
-    def brain_index_no_slash():
+    def brain_index_no_slash() -> ResponseReturnValue:
         return redirect('/brain/', code=301)
 
     @app.route('/brain/', methods=["GET"])
-    def brain_index():
+    def brain_index() -> ResponseReturnValue:
         from services.auth_session_service import validate_session
         from flask import request
         if not validate_session(request):
@@ -109,7 +110,7 @@ def _register_static_routes(app: Flask) -> None:
         return _send_index(brain_dir)
 
     @app.route('/brain/<path:filename>', methods=["GET"])
-    def brain_static(filename):
+    def brain_static(filename: str) -> ResponseReturnValue:
         from services.auth_session_service import validate_session
         from flask import request
         if not validate_session(request):
@@ -121,35 +122,35 @@ def _register_static_routes(app: Flask) -> None:
 
     # ── Login + on-boarding (interface multi-page entries, pre-auth) ──────
     @app.route('/login', methods=["GET"])
-    def login_index_no_slash():
+    def login_index_no_slash() -> ResponseReturnValue:
         return redirect('/login/', code=301)
 
     @app.route('/login/', methods=["GET"])
-    def login_index():
+    def login_index() -> ResponseReturnValue:
         return _send_index(interface_dir, 'login/index.html')
 
     @app.route('/on-boarding', methods=["GET"])
-    def onboarding_index_no_slash():
+    def onboarding_index_no_slash() -> ResponseReturnValue:
         return redirect('/on-boarding/', code=301)
 
     @app.route('/on-boarding/', methods=["GET"])
-    def onboarding_index():
+    def onboarding_index() -> ResponseReturnValue:
         return _send_index(interface_dir, 'on-boarding/index.html')
 
     # ── Interface chat SPA — catch-all (MUST be registered last) ──────────
     @app.route('/<path:filename>', methods=["GET"])
-    def interface_static(filename):
+    def interface_static(filename: str) -> ResponseReturnValue:
         candidate = interface_dir / filename
         if candidate.is_file():
             return send_from_directory(str(interface_dir), filename)
         return _send_index(interface_dir)
 
     @app.route('/', methods=["GET"])
-    def interface_index():
+    def interface_index() -> ResponseReturnValue:
         return _send_index(interface_dir)
 
 
-def create_app():
+def create_app() -> Flask:
     """Create and configure Flask application with all blueprints."""
     app = Flask(__name__)
 

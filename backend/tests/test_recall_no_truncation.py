@@ -25,6 +25,7 @@ content cannot equal the full gist.
 """
 
 import json
+import sqlite3
 
 import pytest
 
@@ -42,21 +43,21 @@ pytestmark = pytest.mark.unit
 _VEC_DIM = 256
 
 
-def _unit(index: int, dim: int = _VEC_DIM) -> list:
+def _unit(index: int, dim: int = _VEC_DIM) -> list[float]:
     """A unit basis vector matching the fixture's vec-table width."""
     v = [0.0] * dim
     v[index] = 1.0
     return v
 
 
-def _parse_body(rendered: str) -> dict:
+def _parse_body(rendered: str) -> dict[str, object]:
     """JSON-parse the recall body between the open tag and ``[end:memory]``."""
     head = rendered.index("]\n") + 2
     tail = rendered.index("\n[end:memory]")
-    return json.loads(rendered[head:tail])
+    return dict(json.loads(rendered[head:tail]))
 
 
-def _render_recall(params: dict) -> str:
+def _render_recall(params: dict[str, object]) -> str:
     """Run a real recall through the ability entry point and render the
     dispatcher envelope — the exact string the model reads. Unbound mp mirrors
     the data-graph/location/REST recall lanes that do not need a processor."""
@@ -65,19 +66,19 @@ def _render_recall(params: dict) -> str:
     return ToolDispatcher._render("memory", result, None)
 
 
-def _store_episode(gist: str, *, emb_index: int = 7, **fields) -> str:
+def _store_episode(gist: str, *, emb_index: int = 7, **fields: object) -> str:
     """Seed one episode via the PRODUCTION write path (EpisodicService), with a
     256-dim embedding exactly as every production caller passes."""
     from services.database_service import get_shared_db_service
     from services.episodic_service import EpisodicService
 
-    data = {"gist": gist, "salience": 8, "channel": "user", **fields}
+    data: dict[str, object] = {"gist": gist, "salience": 8, "channel": "user", **fields}
     return EpisodicService(get_shared_db_service()).store_episode(
         data, embedding=_unit(emb_index)
     )
 
 
-def test_semantic_recall_returns_the_full_untruncated_gist(db):
+def test_semantic_recall_returns_the_full_untruncated_gist(db: sqlite3.Connection) -> None:
     """An explicit semantic ``recall`` projects the WHOLE episode gist into the
     structured body — not the first 200 chars."""
     long_gist = (
@@ -97,7 +98,9 @@ def test_semantic_recall_returns_the_full_untruncated_gist(db):
             {"action": "recall", "query": "harbour ferry booking Gozo Channel Line"}
         )
     )
-    episodes = [r for r in body["results"] if r.get("kind") == "episode"]
+    from typing import cast
+    results = cast(list[dict[str, object]], body["results"])
+    episodes = [r for r in results if r.get("kind") == "episode"]
     assert episodes, f"semantic recall surfaced no episode: {body!r}"
 
     match = next((r for r in episodes if r["content"] == long_gist), None)
@@ -105,11 +108,11 @@ def test_semantic_recall_returns_the_full_untruncated_gist(db):
         "recalled episode content is not the full gist — still truncated. got: "
         f"{[r['content'] for r in episodes]!r}"
     )
-    assert "…" not in match["content"], "gist was clipped with an ellipsis"
-    assert len(match["content"]) == len(long_gist)
+    assert "…" not in cast(str, match["content"]), "gist was clipped with an ellipsis"
+    assert len(cast(str, match["content"])) == len(long_gist)
 
 
-def test_location_recall_returns_the_full_untruncated_gist(db):
+def test_location_recall_returns_the_full_untruncated_gist(db: sqlite3.Connection) -> None:
     """A location-only ``recall`` projects the WHOLE gist of every episode at
     that place — not the first 200 chars."""
     long_gist = (
@@ -125,7 +128,8 @@ def test_location_recall_returns_the_full_untruncated_gist(db):
     _store_episode(long_gist, location_name="Valletta", emb_index=9)
 
     body = _parse_body(_render_recall({"action": "recall", "location": "Valletta"}))
-    rows = body["results"]
+    from typing import cast
+    rows = cast(list[dict[str, object]], body["results"])
     assert rows, f"location recall surfaced no episode: {body!r}"
 
     match = next((r for r in rows if r["content"] == long_gist), None)
@@ -133,14 +137,15 @@ def test_location_recall_returns_the_full_untruncated_gist(db):
         "location-recalled episode content is not the full gist — still "
         f"truncated. got: {[r['content'] for r in rows]!r}"
     )
-    assert "…" not in match["content"], "gist was clipped with an ellipsis"
+    assert "…" not in cast(str, match["content"]), "gist was clipped with an ellipsis"
     assert match.get("location") == "Valletta"
-    assert len(match["content"]) == len(long_gist)
+    assert len(cast(str, match["content"])) == len(long_gist)
 
 
-def test_turn_zero_flashback_renders_the_full_untruncated_gist(db):
+def test_turn_zero_flashback_renders_the_full_untruncated_gist(db: sqlite3.Connection) -> None:
     """The turn-0 flashback bundle the model reads on session start carries the
     WHOLE episode gist — not a 160-char one-liner clipped with "…"."""
+    from typing import cast
     from configs.channels import UserConfig
     from services.message_processor import MessageProcessor
     from services.transcript_service import write_input_row
@@ -170,7 +175,7 @@ def test_turn_zero_flashback_renders_the_full_untruncated_gist(db):
         "ORDER BY id DESC LIMIT 1"
     ).fetchone()
     assert injected is not None, "the session-start seed recorded no memory call"
-    block = injected[0]
+    block = cast(str, cast(tuple[object, ...], injected)[0])
 
     assert long_gist in block, (
         f"turn-0 flashback clipped the gist — full text absent: {block!r}"

@@ -4,12 +4,16 @@ Real Flask app via create_app(), real on-disk dist, real auth sessions — no mo
 Unauthenticated redirect is asserted by the natural absence of a session cookie
 (validate_session returns False when no cookie is present).
 """
+import pathlib
+import sqlite3
+from collections.abc import Generator
+
 import pytest
 from services.file_mapper_service import FileMapperService
 
 
 @pytest.fixture
-def brain_dist():
+def brain_dist() -> Generator[pathlib.Path, None, None]:
     """Provide a minimal Vite-style dist for /brain/, restoring any
     real on-disk build afterward so the test never clobbers build output.
 
@@ -41,7 +45,7 @@ def brain_dist():
 
 
 @pytest.mark.unit
-def test_brain_bare_path_redirects_301(brain_dist):
+def test_brain_bare_path_redirects_301(brain_dist: pathlib.Path) -> None:
     """/brain → /brain/ with 301 (no auth needed for redirect)."""
     from api import create_app
 
@@ -52,7 +56,7 @@ def test_brain_bare_path_redirects_301(brain_dist):
 
 
 @pytest.mark.unit
-def test_brain_unauth_redirects_to_login(brain_dist):
+def test_brain_unauth_redirects_to_login(brain_dist: pathlib.Path) -> None:
     """/brain/ without a session cookie → 302 to /login/?next=/brain/.
 
     No mock needed: validate_session returns False naturally when the request
@@ -68,7 +72,7 @@ def test_brain_unauth_redirects_to_login(brain_dist):
     assert "next=/brain/" in location
 
 
-def test_brain_authed_serves_index(db, brain_dist):
+def test_brain_authed_serves_index(db: sqlite3.Connection, brain_dist: pathlib.Path) -> None:
     """/brain/ with a valid real session → 200 + SPA index.html."""
     from api import create_app
     from services.auth_session_service import create_session, SESSION_COOKIE_NAME
@@ -85,7 +89,7 @@ def test_brain_authed_serves_index(db, brain_dist):
     assert b'<div id="app">' in r.data
 
 
-def test_brain_authed_deep_path_spa_fallback(db, brain_dist):
+def test_brain_authed_deep_path_spa_fallback(db: sqlite3.Connection, brain_dist: pathlib.Path) -> None:
     """/brain/providers/some-deep-link → 200 SPA fallback (history mode reload)."""
     from api import create_app
     from services.auth_session_service import create_session, SESSION_COOKIE_NAME

@@ -1,3 +1,5 @@
+import sqlite3
+
 import pytest
 from abilities._registry import AbilityRegistry
 from configs.channels import UserConfig
@@ -5,7 +7,7 @@ from configs.channels import UserConfig
 pytestmark = pytest.mark.integration
 
 
-def test_thinking_never_discoverable(db):
+def test_thinking_never_discoverable(db: sqlite3.Connection) -> None:
     # thinking is registered but DISCOVERABLE=False, so it never enters the
     # global find_tools roster, and it is in no always_available list either.
     assert "thinking" in {a.get_name() for a in AbilityRegistry.all()}
@@ -14,7 +16,7 @@ def test_thinking_never_discoverable(db):
     assert "thinking" not in (cfg.always_available or [])
 
 
-def test_thinking_config_mirrors_parent_tool_surface(db):
+def test_thinking_config_mirrors_parent_tool_surface(db: sqlite3.Connection) -> None:
     from abilities.thinking import ThinkingConfig
     from configs.channels import UserConfig
     parent = UserConfig()
@@ -24,7 +26,7 @@ def test_thinking_config_mirrors_parent_tool_surface(db):
     assert tc.thinking_mode == "high"
 
 
-def test_thinking_gate_writes_the_public_thinking_level_attr(db):
+def test_thinking_gate_writes_the_public_thinking_level_attr(db: sqlite3.Connection) -> None:
     """The deliberation gate MUST write the PUBLIC self.thinking_level that
     _seed_turn_zero / send() / Providers.send() read. Regression guard: when the
     gate wrote the private self._thinking_level instead, high-deliberation thinking
@@ -69,18 +71,18 @@ class _ThinkingRecordingProvider:
     def __init__(self, reply_text: str) -> None:
         self._reply_text = reply_text
 
-    def get_context_limit(self):
+    def get_context_limit(self) -> int:
         return 200000
 
-    def estimate_request_tokens(self, dto):
+    def estimate_request_tokens(self, dto: object) -> int:
         return 1
 
-    def send(self, dto):
+    def send(self, dto: object) -> object:
         from services.provider_api import ProviderApiResponse
         return ProviderApiResponse(text=self._reply_text, model="recorder", tool_calls=None)
 
 
-def _build_thinking_parent(raw_input: str):
+def _build_thinking_parent(raw_input: str) -> object:
     """A real UserConfig MessageProcessor in the exact state ``_seed_turn_zero``
     fires the thinking pass from."""
     from services.message_processor import MessageProcessor
@@ -94,7 +96,7 @@ def _build_thinking_parent(raw_input: str):
     return parent
 
 
-def _dispatch_thinking(parent, reply_text: str) -> str:
+def _dispatch_thinking(parent: object, reply_text: str) -> str:
     """Drive the real turn-0 dispatch with a recorder that returns *reply_text*."""
     from abilities._dispatcher import ToolDispatcher
 
@@ -104,7 +106,7 @@ def _dispatch_thinking(parent, reply_text: str) -> str:
 
 
 @pytest.mark.unit
-def test_nothing_sentinel_yields_empty_body(db):
+def test_nothing_sentinel_yields_empty_body(db: sqlite3.Connection) -> None:
     """The ``NOTHING`` sentinel collapses to an empty body — ``ToolResult.ok("")``
     rendered as ``[thinking(status=success)]\\n\\n[end:thinking]`` (the body line
     is empty, the envelope still well-formed)."""
@@ -114,7 +116,7 @@ def test_nothing_sentinel_yields_empty_body(db):
 
 
 @pytest.mark.unit
-def test_nothing_sentinel_is_case_insensitive(db):
+def test_nothing_sentinel_is_case_insensitive(db: sqlite3.Connection) -> None:
     """run() does ``text.strip().upper() == "NOTHING"`` — so lowercase and
     surrounding whitespace still resolve to the empty-body envelope."""
     lowercase = _dispatch_thinking(_build_thinking_parent("Trivial A."), "nothing")

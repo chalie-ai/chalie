@@ -11,12 +11,13 @@
 import logging
 import re
 import threading
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 from services.time_formatter_service import TimeFormatterService
 
 if TYPE_CHECKING:
     from services.processor_config import ProcessorConfig
+    from services.provider_api import ProviderApiRequest
 
 logger = logging.getLogger(__name__)
 
@@ -52,7 +53,7 @@ _LLM_SENTINEL_PATTERNS = (
 )
 
 
-def _sanitize_llm_args(value):
+def _sanitize_llm_args(value: object) -> object:
     """Strip leaked provider sentinel tokens (``<|...|>``) from tool args, recursively."""
     if isinstance(value, str):
         for p in _LLM_SENTINEL_PATTERNS:
@@ -68,7 +69,7 @@ def _sanitize_llm_args(value):
 class MessageProcessor:
     """Single flat message processor for every channel — one instance per turn."""
 
-    def __init__(self, raw_input: str, metadata: dict | None = None):
+    def __init__(self, raw_input: str, metadata: dict[str, object] | None = None):
         self._raw_input = raw_input
         self._metadata = metadata or {}
         # Per-turn config — set by `mp.config = X` in process() / workers.
@@ -99,6 +100,11 @@ class MessageProcessor:
         # lost its working context, so the user prompt prepends a recovery banner.
         self.post_compaction_continuation: bool = False
         self.continuation_user_query: str | None = None
+        # Deliberation level: 'low'/'medium'/'high'. Overwritten by process() and
+        # by _run_thinking_gate(); default 'low' is safe for non-user channels.
+        self.thinking_level: str = "low"
+        # Rich media ordinal counter — set by cards/media abilities; None until first use.
+        self._rich_media_ordinals: object = None
 
     def cancel(self) -> None:
         self._cancel_event.set()
@@ -127,16 +133,21 @@ class MessageProcessor:
         self._cancel_event = value
 
     @property
-    def active_tools(self) -> list:
+    def active_tools(self) -> list[str]:
         return self._active_tools
 
     @active_tools.setter
-    def active_tools(self, value: list) -> None:
+    def active_tools(self, value: list[str]) -> None:
         self._active_tools = value
+
+    @property
+    def _cfg(self) -> "ProcessorConfig":
+        """Non-None config — always set before any method except __init__ is called."""
+        return cast("ProcessorConfig", self.config)
 
     def _run_thinking_gate(self) -> None:
         """Regression-head deliberation scoring → self.thinking_level (user channel only)."""
-        if self.config.channel != 'user':
+        if self._cfg.channel != 'user':
             return
 
         if self.thinking_override:
@@ -188,7 +199,7 @@ class MessageProcessor:
     def process(
         raw_input: str,
         config: "ProcessorConfig",  # noqa: F821 — deferred import avoids circular dep
-        metadata: "dict | None" = None,
+        metadata: "dict[str, object] | None" = None,
         cancel_event: "threading.Event | None" = None,
     ) -> str:
         """Single entry point: build an MP, run the turn under the channel lock, return text."""
@@ -199,14 +210,14 @@ class MessageProcessor:
         # Default 'low' — the gate must explicitly raise it. A 'medium' default
         # would apply deliberation pressure to every turn the gate didn't run
         # (non-user channels) or that crashed, regressing simple recall/chit-chat.
-        mp.thinking_level: str = "low"
+        mp.thinking_level = "low"
         from services.thinking_override_service import get_thinking_override
         mp.thinking_override = get_thinking_override()
         return mp._run()
 
     def _run(self) -> str:
         """Run the whole turn under the channel lock: setup, step chain, finalise."""
-        with _channel_lock(self.config.channel):
+        with _channel_lock(self._cfg.channel):
             self._setup()
             result = self._step()
             if self.cancel_event.is_set():
@@ -218,7 +229,7 @@ class MessageProcessor:
         """Pre-chain, once per turn: seed active tools, open the turn, gate, seed turn 0."""
         # ACTIVE_TOOLS is live from iteration 0; find_tools appends, build_tools
         # resolves it each turn. Empty for compaction/encoder channels by design.
-        self.active_tools = list(self.config.always_available or [])
+        self.active_tools = list(self._cfg.always_available or [])
 
         from services.transcript_service import turn_id_of_row, write_input_row
 
@@ -232,16 +243,16 @@ class MessageProcessor:
         # decay are DB-derived and key on the turn_id this row allocates). Only a
         # skip_input_row channel (vision, skill_association) leaves turn_id None
         # and lets its end message allocate its own turn.
-        if not self.config.skip_input_row:
+        if not self._cfg.skip_input_row:
             self.uid = write_input_row(
-                self.config.channel, self.config.role, self._raw_input,
+                self._cfg.channel, self._cfg.role, self._raw_input,
             )
             self.turn_id = turn_id_of_row(self.uid)
             self.anchor = self.uid
             if self.turn_id is not None:
                 self._chain_turn_ids.add(self.turn_id)
 
-        if self.config.channel == "user":
+        if self._cfg.channel == "user":
             self._run_thinking_gate()
 
         self._seed_turn_zero()
@@ -256,7 +267,7 @@ class MessageProcessor:
         #    gate deciding this is a session start / topic shift (a "yes, do that"
         #    re-fires nothing). Renders a curated block and records its own _auto
         #    memory(recall) row; the model-invoked memory.recall keeps its JSON contract.
-        if self.config.memory_seed:
+        if self._cfg.memory_seed:
             from services.turn_zero_flashback import TurnZeroFlashback  # noqa: PLC0415
             TurnZeroFlashback(self).seed()
 
@@ -266,7 +277,7 @@ class MessageProcessor:
         #    barrier). Safe concurrently: each task builds its OWN ToolDispatcher and
         #    holds its own thread-local connection; writes serialise at the SQLite WAL
         #    layer, and doc_id is a pre-generated random hex, never a cross-connection rowid.
-        attachments = list(self._metadata.get("attachments") or [])
+        attachments = list(cast("list[str]", self._metadata.get("attachments") or []))
         if attachments:
             from concurrent.futures import ThreadPoolExecutor  # noqa: PLC0415
             with ThreadPoolExecutor(max_workers=min(len(attachments), 8)) as pool:
@@ -303,19 +314,19 @@ class MessageProcessor:
             if match:
                 link_transcript_doc(self.uid, match.group(1))
 
-    def _build_send_dto(self):
+    def _build_send_dto(self) -> "ProviderApiRequest":
         """Build a ProviderApiRequest from this mp's current state."""
         from services.provider_api import ProviderApiRequest, ThinkingLevel, ProviderType  # noqa: PLC0415
         from abilities._registry import AbilityRegistry  # noqa: PLC0415
         from services.providers import resolve_thinking_mode  # noqa: PLC0415
 
-        system = self.config.get_system_prompt(self)
+        system = self._cfg.get_system_prompt(self)
         messages = self._build_send_messages()
         tools = AbilityRegistry.build_tools(self)
 
         thinking_str = resolve_thinking_mode(
-            getattr(self.config, "thinking_mode", None),
-            getattr(self, "thinking_override", None),
+            cast("str | None", getattr(self.config, "thinking_mode", None)),
+            cast("str | None", getattr(self, "thinking_override", None)),
             self.thinking_level,
         )
         try:
@@ -341,16 +352,16 @@ class MessageProcessor:
             tools=tools or None,
             thinking_mode=level,
             cache_prefix=True,
-            _job_name=self.config.job,
-            _usage_class=getattr(self.config, 'usage_class', None) or 'chat',
+            _job_name=self._cfg.job,
+            _usage_class=cast("str", getattr(self.config, 'usage_class', None) or 'chat'),
             _caller=type(self).__name__,
         )
 
-    def _build_send_messages(self) -> list[dict]:
+    def _build_send_messages(self) -> list[dict[str, object]]:
         """Build the single-element user-message list, with checkpoint wrapper and config image."""
-        user = _wrap_with_checkpoint(self.config.channel, self.config.get_user_prompt(self))
-        message: dict = {"role": "user", "content": user}
-        img = self.config.get_image(self)
+        user = _wrap_with_checkpoint(self._cfg.channel, self._cfg.get_user_prompt(self))
+        message: dict[str, object] = {"role": "user", "content": user}
+        img = self._cfg.get_image(self)
         if img is not None:
             message["image"] = img
         return [message]
@@ -378,11 +389,11 @@ class MessageProcessor:
     def _store_row(self, text: "str | None") -> str:
         """Persist this step's assistant row and advance the anchor its tool calls record against."""
         formatted = self._format_response(text or "")
-        if self.config.skip_transcript:
+        if self._cfg.skip_transcript:
             return formatted
         from services.transcript_service import turn_id_of_row, write_assistant_row  # noqa: PLC0415
 
-        row_id = write_assistant_row(self.config.channel, formatted, turn_id=self.turn_id)
+        row_id = write_assistant_row(self._cfg.channel, formatted, turn_id=self.turn_id)
         if self.turn_id is None:
             self.turn_id = turn_id_of_row(row_id)
             if self.turn_id is not None:
@@ -401,11 +412,11 @@ class MessageProcessor:
         next step's tools pile into the prior group and the whole turn reads as
         one ever-growing ACT loop. Do NOT re-add a ``formatted.strip()`` guard.
         """
-        if self.config.broadcast_to == "user":
+        if self._cfg.broadcast_to == "user":
             from api.chat import _broadcast_interim  # noqa: PLC0415
             _broadcast_interim(self._metadata, formatted)
 
-    def _dispatch_tools(self, tool_calls: list) -> None:
+    def _dispatch_tools(self, tool_calls: list[dict[str, object]]) -> None:
         """Dispatch one step's tool calls in order through the chokepoint."""
         from abilities._dispatcher import ToolDispatcher  # noqa: PLC0415
 
@@ -413,12 +424,12 @@ class MessageProcessor:
         for tc in tool_calls:
             if self.cancel_event.is_set():
                 return
-            dispatcher.dispatch(tc["name"], tc["input"])
+            dispatcher.dispatch(cast("str", tc["name"]), cast("dict[str, object]", tc["input"]))
 
     def _continue(self, *, post_compaction: bool = False) -> "MessageProcessor":
         """Spawn the next link in the chain — a hidden-input continuation MP."""
         child = MessageProcessor(self._raw_input, self._metadata)
-        child.config = self.config.with_hidden_input()
+        child.config = self._cfg.with_hidden_input()
         child.uid = self.uid
         child.turn_id = self.turn_id
         child.anchor = self.uid
@@ -432,14 +443,14 @@ class MessageProcessor:
         if post_compaction:
             from services.transcript_service import latest_input_content  # noqa: PLC0415
             child.post_compaction_continuation = True
-            child.continuation_user_query = latest_input_content(self.config.channel)
+            child.continuation_user_query = latest_input_content(self._cfg.channel)
             if "review_transcript" not in child.active_tools:
                 child.active_tools.append("review_transcript")
         return child
 
     def _format_response(self, text: "str | None") -> str:
         """Normalise assistant text before it is persisted or broadcast."""
-        if self.config.broadcast_to == "user":
+        if self._cfg.broadcast_to == "user":
             from services.markup import markdown_to_html  # noqa: PLC0415
             return markdown_to_html(text)
         return text or ""
@@ -450,7 +461,7 @@ class MessageProcessor:
             return ""
         # Hooks are mutually independent; order is undefined and may become
         # concurrent, so each call is isolated (log + continue).
-        for hook in self.config.post_turn_hooks:
+        for hook in self._cfg.post_turn_hooks:
             try:
                 hook.run(self, formatted)
             except Exception as exc:  # noqa: BLE001 — failure isolation contract
@@ -463,10 +474,10 @@ class MessageProcessor:
 
     def _cleanup_cancelled(self) -> None:
         """Delete every transcript + tool_calls row of the cancelled chain, across every turn."""
-        turn_ids = {t for t in (self._chain_turn_ids or {self.turn_id}) if t is not None}
+        turn_ids = {t for t in (self._chain_turn_ids or ({self.turn_id} if self.turn_id is not None else set())) if t is not None}
         if not turn_ids:
             return
-        channel = self.config.channel
+        channel = self._cfg.channel
         try:
             from services.database_service import get_shared_db_service  # noqa: PLC0415
             db = get_shared_db_service()
@@ -494,17 +505,17 @@ class MessageProcessor:
                 exc,
             )
 
-    def _previous_rows(self) -> list:
+    def _previous_rows(self) -> list[dict[str, object]]:
         """Watermark-bounded transcript rows for this channel, EXCLUDING the current turn."""
-        if self.config.suppress_history:
+        if self._cfg.suppress_history:
             return []
         from services import compaction_persistence, transcript_service  # noqa: PLC0415
-        compaction = compaction_persistence.get_compaction(self.config.channel)
-        watermark = compaction["compacted_up_to_id"] if compaction else 0
-        rows = transcript_service.get_recent(self.config.channel, since_id=watermark)
+        compaction = compaction_persistence.get_compaction(self._cfg.channel)
+        watermark = cast("int", compaction["compacted_up_to_id"]) if compaction else 0
+        rows = transcript_service.get_recent(self._cfg.channel, since_id=watermark)
         if self.turn_id is None:
             return rows
-        return [r for r in rows if (r.get("turn_id") or 0) < self.turn_id]
+        return [r for r in rows if cast("int", r.get("turn_id") or 0) < self.turn_id]
 
     def get_previous_messages(self, drop_oldest: int = 0) -> str:
         """Render the ## Previous Messages block from _previous_rows()."""
@@ -513,10 +524,10 @@ class MessageProcessor:
             return ""
         lines: list[str] = []
         for entry in entries:
-            ts = _format_ts(entry.get("created_at"), row_kind="transcript", row_id=entry.get("id"))
-            raw_role = entry.get("role") or "unknown"
+            ts = _format_ts(cast("str | None", entry.get("created_at")), row_kind="transcript", row_id=cast("int | None", entry.get("id")))
+            raw_role = cast("str", entry.get("role") or "unknown")
             role_label = "Assistant" if raw_role == "assistant" else raw_role
-            content = (entry.get("content") or "").replace("\n", " ").strip()
+            content = cast("str", entry.get("content") or "").replace("\n", " ").strip()
             lines.append(f"[{ts}] {role_label}: {content}")
         return "\n".join(lines)
 
@@ -528,7 +539,7 @@ class MessageProcessor:
 
         trail = ActTrail()
         lines: list[str] = []
-        for row in trail.fetch_by_turn(self.config.channel, self.turn_id):
+        for row in trail.fetch_by_turn(self._cfg.channel, self.turn_id):
             if row.get("tool_name") == "chat_history_compactor":
                 continue
             lines.append(trail.render(row))
@@ -540,15 +551,15 @@ class MessageProcessor:
         from services import compaction_persistence  # noqa: PLC0415
         from services.transcript_service import turn_id_of_row  # noqa: PLC0415
 
-        before = compaction_persistence.get_compaction(self.config.channel)
-        before_id = before["compacted_up_to_id"] if before else 0
+        before = compaction_persistence.get_compaction(self._cfg.channel)
+        before_id = cast("int", before["compacted_up_to_id"]) if before else 0
 
         ToolDispatcher(self).dispatch(
             "chat_history_compactor", {"act_summary": "Compacting conversation"}
         )
 
-        after = compaction_persistence.get_compaction(self.config.channel)
-        after_id = after["compacted_up_to_id"] if after else 0
+        after = compaction_persistence.get_compaction(self._cfg.channel)
+        after_id = cast("int", after["compacted_up_to_id"]) if after else 0
         if after_id <= before_id:
             return
         new_turn = turn_id_of_row(after_id)
@@ -570,7 +581,7 @@ def _wrap_with_checkpoint(channel: str, user_body: str) -> str:
     from services import compaction_persistence
 
     row = compaction_persistence.get_compaction(channel)
-    if not row or not (compacted := (row.get('compacted_text') or '').strip()):
+    if not row or not (compacted := cast('str', row.get('compacted_text') or '').strip()):
         return user_body
     return (
         "### Checkpoint - What you were previously discussing / doing\n"

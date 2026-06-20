@@ -4,11 +4,13 @@ import json
 import sqlite3
 import sys
 from pathlib import Path
+from typing import cast
 
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from abilities._ability import Ability  # noqa: E402
 from abilities._registry import AbilityRegistry  # noqa: E402
 from services.embedding_service import EmbeddingService  # noqa: E402
 from services.embedding_utils import pack_embedding  # noqa: E402
@@ -55,7 +57,7 @@ def _create_schema(conn: sqlite3.Connection) -> None:
     conn.commit()
 
 
-def _compute_sha(ability) -> str:
+def _compute_sha(ability: Ability) -> str:
     raw = json.dumps([ability.get_summary(), *ability.get_examples()], ensure_ascii=False)
     return hashlib.sha256(raw.encode()).hexdigest()
 
@@ -78,7 +80,7 @@ def _dedup_entries(
     return kept_entries, kept_embs
 
 
-def _insert_ability(conn: sqlite3.Connection, emb_service: EmbeddingService, ability) -> int:
+def _insert_ability(conn: sqlite3.Connection, emb_service: EmbeddingService, ability: Ability) -> int:
     summary = ability.get_summary()
     conn.execute(
         "INSERT INTO abilities(name, summary) VALUES (?, ?)",
@@ -148,7 +150,7 @@ def _build(db_path: Path, sha_path: Path) -> None:
 
         total_entries = 0
         for ability in abilities:
-            n = _insert_ability(conn, emb_service, ability)
+            n = _insert_ability(conn, cast("EmbeddingService", emb_service), ability)
             print(f"  {ability.get_name()}: {n} entries")
             total_entries += n
     finally:

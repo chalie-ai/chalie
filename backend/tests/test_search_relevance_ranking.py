@@ -27,14 +27,14 @@ from tools.search.enrich import enrich_missing_summaries  # noqa: E402  — base
 # ── rank_results: top result is the topically-closest one ────────────────────
 
 
-def test_rank_results_puts_on_topic_result_first():
+def test_rank_results_puts_on_topic_result_first() -> None:
     """The Anthropic/Claude result must rank above clearly off-topic results.
 
     Uses the REAL EmbeddingService (offline ONNX) — no mocks.
     """
     query = "Anthropic Claude AI model"
 
-    results = [
+    results: list[dict[str, object]] = [
         {
             "title": "Tagliatelle al Ragù",
             "url": "https://recipes.example.com/pasta",
@@ -64,7 +64,8 @@ def test_rank_results_puts_on_topic_result_first():
     assert len(ranked) == 3
 
     # Best-first: the Anthropic result must be at position 0
-    assert "anthropic" in ranked[0]["title"].lower() or "claude" in ranked[0]["title"].lower(), (
+    title_0 = str(ranked[0]["title"]).lower()
+    assert "anthropic" in title_0 or "claude" in title_0, (
         f"Expected Anthropic/Claude result first, got: {ranked[0]['title']!r}"
     )
 
@@ -72,17 +73,21 @@ def test_rank_results_puts_on_topic_result_first():
     for r in ranked:
         assert "score" in r, f"Result missing 'score' key: {r['title']!r}"
         assert isinstance(r["score"], float), f"score is not float: {type(r['score'])}"
-        assert 0.0 <= r["score"] <= 1.0, f"score out of [0,1]: {r['score']}"
+        score = r["score"]
+        assert 0.0 <= score <= 1.0, f"score out of [0,1]: {score}"
 
     # List is sorted descending by score
-    scores = [r["score"] for r in ranked]
+    scores: list[float] = []
+    for r in ranked:
+        assert isinstance(r["score"], float)
+        scores.append(r["score"])
     assert scores == sorted(scores, reverse=True), f"Results not sorted descending: {scores}"
 
 
 # ── rank_results: fail-open on embedding error ────────────────────────────────
 
 
-def test_rank_results_fail_open_returns_original_on_embedding_error():
+def test_rank_results_fail_open_returns_original_on_embedding_error() -> None:
     """When the query itself would cause an error — tested by passing an empty
     string which the embedding service handles gracefully OR by the fail-open
     contract being exercised.  The invariant: if rank_results raises internally
@@ -91,7 +96,7 @@ def test_rank_results_fail_open_returns_original_on_embedding_error():
     We test the empty-query edge (the real service handles it, but the contract
     says fail-open and no exception must propagate).
     """
-    results = [
+    results: list[dict[str, object]] = [
         {"title": "A", "url": "https://a.com", "summary": "Alpha content.", "score": None, "date": None},
         {"title": "B", "url": "https://b.com", "summary": "Beta content.",  "score": None, "date": None},
     ]
@@ -108,14 +113,14 @@ def test_rank_results_fail_open_returns_original_on_embedding_error():
 # ── enrich_missing_summaries: already-has-summary results are untouched ───────
 
 
-def test_enrich_missing_summaries_result_with_existing_summary_is_returned_unchanged():
+def test_enrich_missing_summaries_result_with_existing_summary_is_returned_unchanged() -> None:
     """A result that already has a non-empty summary must be returned byte-identical.
 
     This is the one deterministic invariant for enrich_missing_summaries that
     requires no network access: results with a summary are not fetched and are
     not mutated.
     """
-    original = {
+    original: dict[str, object] = {
         "title": "Python asyncio documentation",
         "url": "https://docs.python.org/3/library/asyncio.html",
         "summary": "asyncio is a library to write concurrent code using the async/await syntax.",

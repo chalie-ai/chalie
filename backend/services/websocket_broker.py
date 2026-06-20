@@ -19,6 +19,14 @@ Usage:
 import json
 import logging
 import threading
+from typing import ClassVar, Protocol
+
+
+class _WebSocket(Protocol):
+    """Structural type for a WebSocket connection that can send a string."""
+
+    def send(self, data: str) -> None: ...
+
 
 logger = logging.getLogger(__name__)
 
@@ -26,10 +34,12 @@ logger = logging.getLogger(__name__)
 class WebSocketBroker:
     """Multi-connection WebSocket broker. Fire-and-forget fan-out broadcast."""
 
-    _instance = None
-    _init_lock = threading.Lock()
+    _instance: ClassVar["WebSocketBroker | None"] = None
+    _init_lock: ClassVar[threading.Lock] = threading.Lock()
+    _connections: set[_WebSocket]
+    _lock: threading.Lock
 
-    def __new__(cls):
+    def __new__(cls) -> "WebSocketBroker":
         if cls._instance is None:
             with cls._init_lock:
                 if cls._instance is None:
@@ -39,12 +49,12 @@ class WebSocketBroker:
                     cls._instance = instance
         return cls._instance
 
-    def connect(self, ws) -> None:
+    def connect(self, ws: _WebSocket) -> None:
         """Register a live WebSocket connection."""
         with self._lock:
             self._connections.add(ws)
 
-    def disconnect(self, ws) -> None:
+    def disconnect(self, ws: _WebSocket) -> None:
         """Remove a WebSocket connection when it closes.
 
         Removing a specific socket (rather than clearing the whole registry)
@@ -53,7 +63,7 @@ class WebSocketBroker:
         with self._lock:
             self._connections.discard(ws)
 
-    def broadcast(self, data: dict) -> None:
+    def broadcast(self, data: dict[str, object]) -> None:
         """Fire-and-forget push to every live connection. No-op if nobody is listening.
 
         Sockets that fail to send (closed/half-open) are pruned so a stale

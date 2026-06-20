@@ -22,7 +22,7 @@ tools/search/ until Phase 4 — this ability imports them from there.
 import logging
 import sqlite3
 import time
-from typing import ClassVar
+from typing import ClassVar, cast
 
 from abilities._ability import Ability
 from abilities._params import Keys
@@ -73,7 +73,7 @@ class SearchAbility(Ability):
     def get_search_tooltip(self) -> str:
         return "web and knowledge search"
 
-    def get_parameters(self) -> dict:
+    def get_parameters(self) -> dict[str, object]:
         return {
             "type": "object",
             "properties": {
@@ -86,12 +86,12 @@ class SearchAbility(Ability):
         }
 
     _DB: ClassVar[str] = str(FileMapperService.get_search_providers_db_path())
-    _providers: ClassVar[dict | None] = None
+    _providers: ClassVar[dict[str, object] | None] = None
 
-    def run(self, params: dict) -> ToolResult:
+    def run(self, params: dict[str, object]) -> ToolResult:
         # query presence is pre-gated by ACTION_REQUIRED; .strip() guards a
         # whitespace-only value that the truthiness pre-gate lets through.
-        query = (params.get(Keys.query) or "").strip()
+        query = (cast("str", params.get(Keys.query) or "")).strip()
         if not query:
             return ToolResult.err(
                 "query is required and cannot be blank.",
@@ -139,16 +139,14 @@ class SearchAbility(Ability):
         from tools.search.render import render_records
         body = render_records(items)
 
-        result_meta: dict = {"count": len(items)}
         if fell_back or meta.get("ddg_supplement"):
-            result_meta["fallback"] = _DDG
-
-        return ToolResult.ok(body, **result_meta)
+            return ToolResult.ok(body, count=len(items), fallback=_DDG)
+        return ToolResult.ok(body, count=len(items))
 
     # ── Provider registry ──────────────────────────────────────────────────────
 
     @classmethod
-    def _load_providers(cls) -> dict:
+    def _load_providers(cls) -> dict[str, object]:
         if cls._providers is not None:
             return cls._providers
 
@@ -164,18 +162,18 @@ class SearchAbility(Ability):
 
         return cls._providers
 
-    def _search_routed(self, query: str):
+    def _search_routed(self, query: str) -> "tuple[list[dict[str, object]], list[str], dict[str, object]]":
         try:
             from tools.search.router import route_query, _WEAK_SCORE
             ranked = route_query(query)
             if ranked:
                 providers = self._load_providers()
-                provider_dicts = [providers[p["name"]] for p in ranked if p["name"] in providers]
+                provider_dicts = [cast("dict[str, object]", providers[p["name"]]) for p in ranked if p["name"] in providers]
                 results = fetch_providers(provider_dicts, query, _PER_PROVIDER)
-                used = [p["name"] for p in provider_dicts]
-                meta: dict = {"routing_method": "auto"}
+                used = [cast("str", p["name"]) for p in provider_dicts]
+                meta: dict[str, object] = {"routing_method": "auto"}
 
-                top_score = ranked[0]["score"]
+                top_score = cast("float", ranked[0]["score"])
                 if top_score < _WEAK_SCORE:
                     ddg_results = fetch_ddg_fallback(query, _PER_PROVIDER)
                     if ddg_results:

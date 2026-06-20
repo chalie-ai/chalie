@@ -14,7 +14,16 @@ test_compaction_watermark.py and the end-to-end scenario suite; the old singleto
 _run_full_compaction / _handle_overflow tests were removed with the redesign.
 """
 
+from __future__ import annotations
+
+import sqlite3
+from typing import TYPE_CHECKING
+
 import pytest
+
+if TYPE_CHECKING:
+    from services.message_processor import MessageProcessor
+    from tests.helpers import StubProcessorConfig
 
 pytestmark = pytest.mark.unit
 
@@ -29,7 +38,7 @@ _GPM_USER_PROMPT = "What time is it?"
 _GPM_CHANNEL = 'test_channel'
 
 
-def _gpm_config(channel=_GPM_CHANNEL, role='test_role', suppress_history=False):
+def _gpm_config(channel: str = _GPM_CHANNEL, role: str = 'test_role', suppress_history: bool = False) -> StubProcessorConfig:
     from services.processor_config import ProcessorConfig
     from tests.helpers import StubProcessorConfig
 
@@ -54,7 +63,7 @@ class _GPMFakeProcessor:
     _ROLE = 'test_role'
 
     @staticmethod
-    def make(channel=_GPM_CHANNEL, suppress_history=False, **kwargs):
+    def make(channel: str = _GPM_CHANNEL, suppress_history: bool = False, **kwargs: object) -> MessageProcessor:
         from services.message_processor import MessageProcessor
 
         mp = object.__new__(MessageProcessor)
@@ -72,21 +81,21 @@ class _GPMFakeProcessor:
 
 
 class TestGetPreviousMessagesTranscript:
-    def _seed_transcript(self, db, channel=_GPM_CHANNEL):
+    def _seed_transcript(self, db: sqlite3.Connection, channel: str = _GPM_CHANNEL) -> tuple[int, int]:
         # created_at defaults to now() — recent rows that survive the 6h age cut-off.
         db.execute(
             "INSERT INTO transcript (channel, role, content) "
             "VALUES (?, 'user', 'Hello world')",
             (channel,)
         )
-        uid1 = db.execute("SELECT last_insert_rowid()").fetchone()[0]
+        uid1: int = db.execute("SELECT last_insert_rowid()").fetchone()[0]
 
         db.execute(
             "INSERT INTO transcript (channel, role, content) "
             "VALUES (?, 'assistant', 'Hi there')",
             (channel,)
         )
-        uid2 = db.execute("SELECT last_insert_rowid()").fetchone()[0]
+        uid2: int = db.execute("SELECT last_insert_rowid()").fetchone()[0]
 
         # tool_calls rows are now all durable (no ephemeral column)
         db.execute(
@@ -103,7 +112,7 @@ class TestGetPreviousMessagesTranscript:
         db.commit()
         return uid1, uid2
 
-    def test_tool_calls_do_not_appear_in_previous_messages(self, db):
+    def test_tool_calls_do_not_appear_in_previous_messages(self, db: sqlite3.Connection) -> None:
         """History replay no longer renders tool_calls rows (decision 2).
         Tool calls are retained durably but excluded from get_previous_messages()
         to keep the history prompt clean and unambiguous."""
@@ -124,7 +133,7 @@ class TestGetPreviousMessagesTranscript:
 
 
 class TestGetPreviousMessagesChannelIsolation:
-    def _seed_all_channels(self, db):
+    def _seed_all_channels(self, db: sqlite3.Connection) -> None:
         for channel in ('user', 'dmn', 'subagent', 'scheduled', _GPM_CHANNEL):
             db.execute(
                 "INSERT INTO transcript (channel, role, content) "
@@ -133,7 +142,7 @@ class TestGetPreviousMessagesChannelIsolation:
             )
         db.commit()
 
-    def test_test_channel_isolation(self, db):
+    def test_test_channel_isolation(self, db: sqlite3.Connection) -> None:
         self._seed_all_channels(db)
         p = _GPMFakeProcessor.make()  # uses test_channel as its CHANNEL
         result = p.get_previous_messages()
@@ -148,7 +157,7 @@ class TestGetPreviousMessagesChannelIsolation:
 
 
 class TestGetPreviousMessagesTimestampFormat:
-    def test_iso_timestamp_with_offset_formatted_correctly(self, db):
+    def test_iso_timestamp_with_offset_formatted_correctly(self, db: sqlite3.Connection) -> None:
         from datetime import timedelta
 
         from services.time_utils import utc_now
@@ -183,7 +192,7 @@ class TestGetPreviousMessagesTimestampFormat:
 
 
 class TestGetPreviousMessagesWindowFit:
-    def _seed_rows(self, db, n, channel=_GPM_CHANNEL):
+    def _seed_rows(self, db: sqlite3.Connection, n: int, channel: str = _GPM_CHANNEL) -> None:
         for i in range(n):
             db.execute(
                 "INSERT INTO transcript (channel, role, content) "
@@ -192,7 +201,7 @@ class TestGetPreviousMessagesWindowFit:
             )
         db.commit()
 
-    def test_renders_all_rows_uncapped(self, db):
+    def test_renders_all_rows_uncapped(self, db: sqlite3.Connection) -> None:
         # Well past the retired 50-row cap — every row must still render.
         n = 60
         self._seed_rows(db, n)
@@ -203,7 +212,7 @@ class TestGetPreviousMessagesWindowFit:
         assert "line-0000-end" in result
         assert f"line-{n - 1:04d}-end" in result
 
-    def test_drop_oldest_param_skips_oldest_rows(self, db):
+    def test_drop_oldest_param_skips_oldest_rows(self, db: sqlite3.Connection) -> None:
         # The 4.2 fallback drops the three oldest rows from the compaction input.
         n = 10
         self._seed_rows(db, n)
@@ -215,7 +224,7 @@ class TestGetPreviousMessagesWindowFit:
         assert "line-0003-end" in result               # first surviving row
         assert f"line-{n - 1:04d}-end" in result        # newest always kept
 
-    def test_drop_oldest_param_at_or_beyond_count_returns_empty(self, db):
+    def test_drop_oldest_param_at_or_beyond_count_returns_empty(self, db: sqlite3.Connection) -> None:
         # Skipping every row leaves nothing to render — the fallback floor relies
         # on this to know when there is nothing left to compact.
         n = 2
@@ -239,7 +248,7 @@ _COMPACT_CHANNEL = 'test_compact_channel'
 
 
 class TestWrapWithCheckpoint:
-    def test_row_with_content_exact_envelope_format(self, db):
+    def test_row_with_content_exact_envelope_format(self, db: sqlite3.Connection) -> None:
         from services.message_processor import _wrap_with_checkpoint
         from services import transcript_service
 

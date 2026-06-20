@@ -8,6 +8,8 @@
 
 
 
+import sqlite3
+
 import pytest
 
 from abilities._dispatcher import ToolDispatcher
@@ -18,14 +20,14 @@ pytestmark = pytest.mark.unit
 
 
 @pytest.fixture
-def chat_mp(db):
+def chat_mp(db: sqlite3.Connection) -> MP:
     return MP(seed_transcript(db, "chat", "search for something"), UserConfig({}))
 
 
 # ── Blank query: slips the pre-gate, caught by search's own .strip() guard ─────
 
 
-def test_blank_query_reports_missing_params(db, chat_mp):
+def test_blank_query_reports_missing_params(db: sqlite3.Connection, chat_mp: MP) -> None:
     out = ToolDispatcher(chat_mp).dispatch(
         "search", {"query": "   ", "act_summary": "x"}
     )

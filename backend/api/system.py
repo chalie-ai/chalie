@@ -5,11 +5,16 @@ System blueprint — /health, /metrics, /system/status, /system/observability/* 
 import json
 import logging
 import os
+from typing import TYPE_CHECKING, cast
 
 from flask import Blueprint, jsonify, request
+from flask.typing import ResponseReturnValue
 
 from .auth import require_session
 from services.time_utils import utc_now
+
+if TYPE_CHECKING:
+    from services.client_context_service import ClientContextService
 
 logger = logging.getLogger(__name__)
 
@@ -19,18 +24,18 @@ system_bp = Blueprint('system', __name__)
 _SIGNAL_SOURCE_HEALTH = '/health'
 
 
-def _ok_response():
+def _ok_response() -> ResponseReturnValue:
     """Standard health response body — used by both GET and POST."""
     from consumer import APP_VERSION
     return jsonify({"status": "ok", "version": APP_VERSION}), 200
 
 
-def _mirror_telemetry_to_world_state(svc, data: dict) -> None:
+def _mirror_telemetry_to_world_state(svc: "ClientContextService", data: dict[str, object]) -> None:
     """Mirror persisted client telemetry into WorldState as Signals."""
     from services.world_state import world_state, Signal
     world_state.set("telemetry", svc.get() or data)
     world_state.absorb(Signal(source=_SIGNAL_SOURCE_HEALTH, kind='heartbeat', payload=data))
-    device_class = data.get('device_class') or (data.get('device') or {}).get('class')
+    device_class = data.get('device_class') or cast(dict[str, object], data.get('device') or {}).get('class')
     if device_class:
         world_state.absorb(Signal(source=_SIGNAL_SOURCE_HEALTH, kind='device', payload={'device_class': device_class}))
     local_time = data.get('local_time')
@@ -38,7 +43,7 @@ def _mirror_telemetry_to_world_state(svc, data: dict) -> None:
         world_state.absorb(Signal(source=_SIGNAL_SOURCE_HEALTH, kind='local_time', payload={'local_time': local_time}))
 
 
-def _persist_heartbeat(data: dict) -> None:
+def _persist_heartbeat(data: dict[str, object]) -> None:
     """Persist client context + mirror to WorldState. Each step is independently logged on failure."""
     from services.client_context_service import ClientContextService
     svc = ClientContextService()
@@ -50,7 +55,7 @@ def _persist_heartbeat(data: dict) -> None:
 
 
 @system_bp.route('/health', methods=['GET', 'POST'])
-def health_check():
+def health_check() -> ResponseReturnValue:
     """Health check endpoint (no auth required). POST saves client context."""
     if request.method != 'POST':
         return _ok_response()
@@ -64,9 +69,9 @@ def health_check():
 
 
 @system_bp.route('/ready', methods=['GET'])
-def readiness_check():
+def readiness_check() -> ResponseReturnValue:
     """Readiness probe — true only when SQLite, MemoryStore, embeddings, and ONNX are ready."""
-    components = {}
+    components: dict[str, dict[str, object]] = {}
 
     # SQLite
     try:
@@ -133,7 +138,7 @@ def readiness_check():
 
 @system_bp.route('/metrics', methods=['GET'])
 @require_session
-def metrics_endpoint():
+def metrics_endpoint() -> ResponseReturnValue:
     """Metrics dashboard endpoint."""
     try:
         from services.metrics_service import MetricsService
@@ -147,22 +152,22 @@ def metrics_endpoint():
 
 @system_bp.route('/system/status', methods=['GET'])
 @require_session
-def system_status():
+def system_status() -> ResponseReturnValue:
     """Comprehensive system health and diagnostics."""
     try:
         from services.memory_client import MemoryClientService
         from services.database_service import get_shared_db_service
 
         store = MemoryClientService.create_connection()
-        result = {"status": "ok", "memory": {}, "storage": {}}
+        result: dict[str, object] = {"status": "ok", "memory": {}, "storage": {}}
 
         # MemoryStore health
         try:
             store.ping()
             # Count memory store keys
-            result["memory"]["working_memory_keys"] = len(store.keys("working_memory:*"))
-            result["memory"]["gist_keys"] = len(store.keys("gist_index:*"))
-            result["memory"]["fact_keys"] = len(store.keys("fact_index:*"))
+            cast(dict[str, object], result["memory"])["working_memory_keys"] = len(store.keys("working_memory:*"))
+            cast(dict[str, object], result["memory"])["gist_keys"] = len(store.keys("gist_index:*"))
+            cast(dict[str, object], result["memory"])["fact_keys"] = len(store.keys("fact_index:*"))
         except Exception as e:
             result["status"] = "degraded"
             result["memory_store_error"] = str(e)
@@ -180,10 +185,10 @@ def system_status():
                     try:
                         cursor.execute(query)
                         row = cursor.fetchone()
-                        result["storage"][table_label] = row[0] if row else 0
+                        cast(dict[str, object], result["storage"])[table_label] = row[0] if row else 0
                     except Exception as e:
                         logger.warning(f"[SYSTEM] Count query failed for '{table_label}': {e}")
-                        result["storage"][table_label] = -1
+                        cast(dict[str, object], result["storage"])[table_label] = -1
         except Exception as e:
             result["status"] = "degraded"
             result["database_error"] = str(e)
@@ -199,7 +204,7 @@ def system_status():
 # Observability — cognitive legibility endpoints
 # ─────────────────────────────────────────────
 
-def _now_iso():
+def _now_iso() -> str:
     return utc_now().isoformat()
 
 
@@ -209,7 +214,7 @@ _VALID_SOURCES = {'episodes', 'user', 'system'}
 
 @system_bp.route('/system/observability/records', methods=['GET'])
 @require_session
-def observability_records():
+def observability_records() -> ResponseReturnValue:
     """Paginated record browser for episodes, user, and system memory sources."""
     try:
         source = request.args.get('source', '')
@@ -257,7 +262,7 @@ def observability_records():
         rows = rows or []
         serialised = []
         for r in rows:
-            row = {
+            row: dict[str, object] = {
                 'created': r['created'],
                 'last_accessed': r['last_accessed'],
                 'value': r['value'],
@@ -283,7 +288,7 @@ def observability_records():
 
 @system_bp.route('/system/observability/tools', methods=['GET'])
 @require_session
-def observability_tools():
+def observability_tools() -> ResponseReturnValue:
     """Tool usage counts from tool_calls — count + last_used per tool."""
     try:
         from services.database_service import get_shared_db_service
@@ -313,7 +318,7 @@ def observability_tools():
 
 @system_bp.route('/system/observability/token-usage', methods=['GET'])
 @require_session
-def observability_token_usage():
+def observability_token_usage() -> ResponseReturnValue:
     """Token usage aggregated by time window, model, provider, and usage class.
 
     Query params:
@@ -336,7 +341,7 @@ def observability_token_usage():
 
 @system_bp.route('/system/observability/world-state', methods=['GET'])
 @require_session
-def observability_world_state():
+def observability_world_state() -> ResponseReturnValue:
     """World state as seen by the ACT loop — rendered block + raw inputs."""
     from services.world_state import world_state, _fetch_schedule_rows
     from services.heartbeat_service import heartbeat_service
@@ -353,7 +358,7 @@ def observability_world_state():
 
 @system_bp.route('/system/observability/compaction', methods=['GET'])
 @require_session
-def observability_compaction():
+def observability_compaction() -> ResponseReturnValue:
     """Continuity-compaction synthesis for the chat ('user') channel.
 
     Returns the durable summary the ACT loop carries forward after a
@@ -370,7 +375,7 @@ def observability_compaction():
             'compaction': {
                 'summary': record['compacted_text'],
                 'compacted_up_to_id': record['compacted_up_to_id'],
-                'compacted_at': locale_service.format_date(record['created_at'], for_ui=True),
+                'compacted_at': locale_service.format_date(cast(str, record['created_at']), for_ui=True),
             },
         }), 200
     except Exception:
@@ -380,7 +385,7 @@ def observability_compaction():
 
 @system_bp.route('/system/observability/write-queue', methods=['GET'])
 @require_session
-def observability_write_queue():
+def observability_write_queue() -> ResponseReturnValue:
     """Write queue runtime statistics.
 
     Returns a JSON snapshot of the :class:`~services.write_queue_service.WriteQueueService`
@@ -403,7 +408,7 @@ def observability_write_queue():
 
 @system_bp.route('/system/observability/telemetry', methods=['GET'])
 @require_session
-def observability_telemetry():
+def observability_telemetry() -> ResponseReturnValue:
     """Telemetry event summary across all tracked event types.
 
     Returns a per-event-type breakdown produced by the process-level
@@ -442,7 +447,7 @@ _ERROR_LEVELS = frozenset({"ERROR", "CRITICAL"})
 _ERROR_CAP = 200
 
 
-def _tail_error_lines() -> list[dict]:
+def _tail_error_lines() -> list[dict[str, object]]:
     """Read the last ~256 KB of /tmp/chalie.log and return ERROR/CRITICAL entries newest-first.
 
     Written by utils.logger.Logger.start() — see backend/utils/logger.py FileHandler.
@@ -453,7 +458,7 @@ def _tail_error_lines() -> list[dict]:
     except OSError:
         return []
 
-    errors: list[dict] = []
+    errors: list[dict[str, object]] = []
     try:
         fh_cm = open(_LOG_FILE_PATH, "r", errors="replace")
     except OSError:
@@ -478,7 +483,7 @@ def _tail_error_lines() -> list[dict]:
 
 @system_bp.route('/system/observability/errors', methods=['GET'])
 @require_session
-def observability_errors():
+def observability_errors() -> ResponseReturnValue:
     """Recent ERROR and CRITICAL log lines from /tmp/chalie.log, newest first.
 
     Reads only the last ~256 KB of the log file to avoid loading unbounded content.
@@ -497,7 +502,7 @@ def observability_errors():
 
 @system_bp.route('/system/update/check', methods=['GET'])
 @require_session
-def update_check():
+def update_check() -> ResponseReturnValue:
     try:
         from services.app_update_service import AppUpdateService
         info = AppUpdateService().check_for_update()
@@ -509,7 +514,7 @@ def update_check():
 
 @system_bp.route('/system/update/apply', methods=['POST'])
 @require_session
-def update_apply():
+def update_apply() -> ResponseReturnValue:
     try:
         from services.app_update_service import AppUpdateService
         data = request.get_json(silent=True) or {}
@@ -534,7 +539,7 @@ def update_apply():
 
 @system_bp.route('/system/context-usage', methods=['GET'])
 @require_session
-def get_context_usage():
+def get_context_usage() -> ResponseReturnValue:
     """Last user-turn request size + context window for the composer indicator.
 
     ``last_request_tokens`` is the provider-reported ``tokens_input`` of the most
@@ -557,7 +562,7 @@ def get_context_usage():
 
 @system_bp.route('/system/settings/<key>', methods=['GET'])
 @require_session
-def get_setting(key):
+def get_setting(key: str) -> ResponseReturnValue:
     from services.settings_service import SettingsService
     from services.database_service import get_shared_db_service
     try:
@@ -571,7 +576,7 @@ def get_setting(key):
 
 @system_bp.route('/system/settings/<key>', methods=['PUT'])
 @require_session
-def set_setting(key):
+def set_setting(key: str) -> ResponseReturnValue:
     from services.settings_service import SettingsService
     from services.database_service import get_shared_db_service
     data = request.get_json(silent=True) or {}

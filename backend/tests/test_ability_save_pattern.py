@@ -8,6 +8,7 @@
 
 
 import json
+import sqlite3
 
 import pytest
 
@@ -26,7 +27,7 @@ pytestmark = pytest.mark.unit
 # ── Fixtures / helpers ──────────────────────────────────────────────────────────
 
 
-def _seed_transcript(db) -> int:
+def _seed_transcript(db: sqlite3.Connection) -> int:
     return seed_transcript(
         db,
         channel="pattern_match",
@@ -34,7 +35,7 @@ def _seed_transcript(db) -> int:
     )
 
 
-def _mp(db) -> MessageProcessor:
+def _mp(db: sqlite3.Connection) -> MessageProcessor:
     mp = MessageProcessor("look for patterns")
     mp.config = PatternConfig(0, 1)
     mp.active_tools = list(mp.config.always_available or [])
@@ -54,19 +55,19 @@ def _body(rendered: str) -> str:
     return body(rendered, "save_pattern")
 
 
-def _rows(db, *, name=None, source="pattern_match") -> list:
+def _rows(db: sqlite3.Connection, *, name: str | None = None, source: str = "pattern_match") -> list[sqlite3.Row]:
     sql = (
         "SELECT id, kind, key, value, source FROM data_graph "
         "WHERE kind='behavioral_pattern' AND source=?"
     )
-    params: list = [source]
+    params: list[object] = [source]
     if name is not None:
         sql += " AND key=?"
         params.append(name)
     return db.execute(sql, params).fetchall()
 
 
-def _geo_mp(db) -> MessageProcessor:
+def _geo_mp(db: sqlite3.Connection) -> MessageProcessor:
     mp = MessageProcessor("look for geo patterns")
     mp.config = GeoConfig(0, 1)
     mp.active_tools = list(mp.config.always_available or [])
@@ -77,8 +78,8 @@ def _geo_mp(db) -> MessageProcessor:
     return mp
 
 
-def _valid_params(**overrides) -> dict:
-    params = {
+def _valid_params(**overrides: object) -> dict[str, object]:
+    params: dict[str, object] = {
         "name": "morning_run",
         "frequency": "weekday",
         "time_anchor": "07:00",
@@ -93,7 +94,7 @@ def _valid_params(**overrides) -> dict:
 # ── whitespace-only summary slips the truthiness pre-gate → run() rejects it ────
 
 
-def test_whitespace_only_summary_is_missing_params(db):
+def test_whitespace_only_summary_is_missing_params(db: sqlite3.Connection) -> None:
     mp = _mp(db)
     out = ToolDispatcher(mp).dispatch("save_pattern", _valid_params(summary="   "))
     assert "[save_pattern(status=error, code=missing-params" in out
@@ -105,7 +106,7 @@ def test_whitespace_only_summary_is_missing_params(db):
 # ── invalid name → loud invalid-param with example hint ─────────────────────────
 
 
-def test_invalid_name_is_invalid_param(db):
+def test_invalid_name_is_invalid_param(db: sqlite3.Connection) -> None:
     mp = _mp(db)
     out = ToolDispatcher(mp).dispatch("save_pattern", _valid_params(name="Morning Run"))
     h = _head(out)
@@ -122,7 +123,7 @@ def test_invalid_name_is_invalid_param(db):
 # ── invalid frequency → invalid-param with the full 5-frequency valid ladder ────
 
 
-def test_invalid_frequency_is_invalid_param(db):
+def test_invalid_frequency_is_invalid_param(db: sqlite3.Connection) -> None:
     mp = _mp(db)
     out = ToolDispatcher(mp).dispatch("save_pattern", _valid_params(frequency="hourly"))
     h = _head(out)
@@ -138,7 +139,7 @@ def test_invalid_frequency_is_invalid_param(db):
 # ── insufficient evidence → invalid-param mentioning the 2-id minimum ───────────
 
 
-def test_insufficient_evidence_is_invalid_param(db):
+def test_insufficient_evidence_is_invalid_param(db: sqlite3.Connection) -> None:
     mp = _mp(db)
     out = ToolDispatcher(mp).dispatch(
         "save_pattern", _valid_params(evidence_transcript_ids=[7])
@@ -154,7 +155,7 @@ def test_insufficient_evidence_is_invalid_param(db):
 # ── happy path → success, body {"saved":1,...}, real row with source ────────────
 
 
-def test_happy_path_stores_one_row(db):
+def test_happy_path_stores_one_row(db: sqlite3.Connection) -> None:
     mp = _mp(db)
     out = ToolDispatcher(mp).dispatch("save_pattern", _valid_params())
     h = _head(out)
@@ -180,7 +181,7 @@ def test_happy_path_stores_one_row(db):
 # ── geo pass → behavioral_pattern row stamped 'geo_pattern' provenance ──────────
 
 
-def test_geo_pass_stamps_geo_pattern_provenance(db):
+def test_geo_pass_stamps_geo_pattern_provenance(db: sqlite3.Connection) -> None:
     """When save_pattern runs under the GEO pass (GeoConfig), the behavioral"""
     mp = _geo_mp(db)
     out = ToolDispatcher(mp).dispatch(
@@ -199,7 +200,7 @@ def test_geo_pass_stamps_geo_pattern_provenance(db):
 # ── reinforce same name → success body carries reinforced:1, exactly one row ─────
 
 
-def test_reinforce_same_name(db):
+def test_reinforce_same_name(db: sqlite3.Connection) -> None:
     mp = _mp(db)
     first = ToolDispatcher(mp).dispatch("save_pattern", _valid_params())
     assert json.loads(_body(first))["saved"] == 1
@@ -221,7 +222,7 @@ def test_reinforce_same_name(db):
 # ── budget cap → capped=true success, body {"saved":0,"skipped":1}, no row ──────
 
 
-def test_budget_cap_is_loud_capped(db):
+def test_budget_cap_is_loud_capped(db: sqlite3.Connection) -> None:
     mp = _mp(db)
     # Fill this turn's durable trail to the cap with real save_pattern rows via
     # the production writer (the exact call the dispatcher makes), so the

@@ -20,6 +20,8 @@ Marked ``integration`` so it is excluded from ``-m unit`` CI gates (it makes
 live provider network calls).
 """
 
+import sqlite3
+
 import pytest
 
 from abilities._dispatcher import ToolDispatcher
@@ -30,12 +32,12 @@ pytestmark = pytest.mark.integration
 
 
 @pytest.fixture
-def chat_mp(db):
+def chat_mp(db: sqlite3.Connection) -> MP:
     """Real MessageProcessor stub — same factory the existing search tests use."""
     return MP(seed_transcript(db, "chat", "search for something"), UserConfig({}))
 
 
-def test_search_run_returns_xml_record_format_with_score_and_summary(db, chat_mp):
+def test_search_run_returns_xml_record_format_with_score_and_summary(db: sqlite3.Connection, chat_mp: MP) -> None:
     """SearchAbility.run() must return a body that uses the new <result index=> format.
 
     This drives the FULL production dispatch path (ToolDispatcher → PolicyManager

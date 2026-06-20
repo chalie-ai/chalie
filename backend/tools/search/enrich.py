@@ -18,6 +18,7 @@ fetched per search invocation.
 import logging
 import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from typing import cast
 
 logger = logging.getLogger(__name__)
 
@@ -78,14 +79,14 @@ def _extract_meta(html: str) -> tuple[str, str | None]:
     return desc, date
 
 
-def _enrich_one(result: dict) -> dict:
+def _enrich_one(result: dict[str, object]) -> dict[str, object]:
     """Fetch the page at ``result["url"]`` and fill in ``summary`` (and
     optionally ``date``) from the page's meta tags.
 
     Returns the result dict (potentially mutated) on success, or the original
     dict unchanged on any error.
     """
-    url = result.get("url", "")
+    url = cast("str", result.get("url", ""))
     if not url:
         return result
 
@@ -95,7 +96,7 @@ def _enrich_one(result: dict) -> dict:
         desc, date = _extract_meta(html)
         if desc:
             result = {**result, "summary": desc}
-        if date and not (result.get("date") or "").strip():
+        if date and not (cast("str", result.get("date")) or "").strip():
             result = {**result, "date": date}
     except Exception as exc:  # noqa: BLE001 — spec-mandated fail-open
         logger.debug("[SEARCH] enrich fetch failed for %s: %s", url, exc)
@@ -103,7 +104,7 @@ def _enrich_one(result: dict) -> dict:
     return result
 
 
-def enrich_missing_summaries(results: list[dict]) -> list[dict]:
+def enrich_missing_summaries(results: list[dict[str, object]]) -> list[dict[str, object]]:
     """Fill ``summary`` (and optionally ``date``) for results with blank summaries.
 
     Results that already have a non-empty ``summary`` are returned untouched
@@ -125,10 +126,10 @@ def enrich_missing_summaries(results: list[dict]) -> list[dict]:
         return results
 
     # Separate items that need enrichment from those that do not.
-    need_enrich: list[tuple[int, dict]] = []
-    already_ok: dict[int, dict] = {}
+    need_enrich: list[tuple[int, dict[str, object]]] = []
+    already_ok: dict[int, dict[str, object]] = {}
     for i, r in enumerate(results):
-        if (r.get("summary") or "").strip():
+        if (cast("str", r.get("summary")) or "").strip():
             already_ok[i] = r
         else:
             need_enrich.append((i, r))
@@ -137,7 +138,7 @@ def enrich_missing_summaries(results: list[dict]) -> list[dict]:
         return results
 
     # Fetch concurrently for the subset that needs enrichment.
-    enriched_by_index: dict[int, dict] = {}
+    enriched_by_index: dict[int, dict[str, object]] = {}
     if len(need_enrich) == 1:
         idx, r = need_enrich[0]
         enriched_by_index[idx] = _enrich_one(r)
@@ -156,7 +157,7 @@ def enrich_missing_summaries(results: list[dict]) -> list[dict]:
                     enriched_by_index[idx] = dict(need_enrich)[idx]
 
     # Reassemble in original order.
-    out: list[dict] = []
+    out: list[dict[str, object]] = []
     for i, r in enumerate(results):
         if i in already_ok:
             out.append(already_ok[i])

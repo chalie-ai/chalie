@@ -22,6 +22,9 @@ flags ``mp.uid`` is ``None`` and the prompt stays constant — both assertions b
 fail. With the fix the delegate sees its own work and can converge.
 """
 
+import sqlite3
+from typing import TYPE_CHECKING, Protocol, cast
+
 import pytest
 
 from abilities._dispatcher import ToolDispatcher
@@ -29,6 +32,10 @@ from configs.channels.web_browse import WebBrowseConfig
 from configs.channels.web_search import WebSearchConfig
 from services.message_processor import MessageProcessor
 from services.processor_config import ProcessorConfig
+
+if TYPE_CHECKING:
+    class _DelegateConfigCls(Protocol):
+        def __call__(self, policy_channel: ProcessorConfig.PolicyChannel) -> ProcessorConfig: ...
 
 pytestmark = pytest.mark.unit
 
@@ -50,7 +57,13 @@ def _delegate_mp(config: ProcessorConfig) -> MessageProcessor:
 
 
 @pytest.mark.parametrize("config_cls,channel,role,prefix", _DELEGATES)
-def test_delegate_sees_its_own_act_trail(db, config_cls, channel, role, prefix):
+def test_delegate_sees_its_own_act_trail(
+    db: sqlite3.Connection,
+    config_cls: "_DelegateConfigCls",
+    channel: str,
+    role: str,
+    prefix: str,
+) -> None:
     mp = _delegate_mp(config_cls(_CHAT))
 
     # ── Fix part 1: _setup assigned a uid and wrote the delegate's OWN
@@ -63,12 +76,13 @@ def test_delegate_sees_its_own_act_trail(db, config_cls, channel, role, prefix):
         "SELECT channel, role FROM transcript WHERE id = ?", (mp.uid,)
     ).fetchone()
     assert trow is not None, "no transcript row written for the delegate turn"
-    assert (trow[0], trow[1]) == (channel, role), (
+    assert (cast(tuple[object, ...], trow)[0], cast(tuple[object, ...], trow)[1]) == (channel, role), (
         f"delegate row landed on the wrong channel/role: {tuple(trow)!r}"
     )
 
     # Before any tool executes, the prompt is the bare, results-blind query.
-    blind = mp.config.get_user_prompt(mp)
+    config = cast(ProcessorConfig, mp.config)
+    blind = config.get_user_prompt(mp)
     assert blind.startswith(prefix)
     assert mp._render_act_trail() == "", "trail should be empty before any tool runs"
 
@@ -82,7 +96,7 @@ def test_delegate_sees_its_own_act_trail(db, config_cls, channel, role, prefix):
     # ── Fix part 2: the call was recorded under the delegate's uid (the FK the
     #    old None-uid silently dropped) and now renders into the trail. ─────────
     names = [
-        r[0]
+        cast(tuple[object, ...], r)[0]
         for r in db.execute(
             "SELECT tool_name FROM tool_calls WHERE transcript_id = ?", (mp.uid,)
         ).fetchall()
@@ -96,7 +110,7 @@ def test_delegate_sees_its_own_act_trail(db, config_cls, channel, role, prefix):
 
     # The NEXT-iteration prompt the delegate would send GREW to include the trail
     # — it is no longer blind to its own results.
-    seeing = mp.config.get_user_prompt(mp)
+    seeing = config.get_user_prompt(mp)
     assert seeing.startswith(prefix)
     assert len(seeing) > len(blind), (
         "delegate prompt did not grow across the iteration — still results-blind"

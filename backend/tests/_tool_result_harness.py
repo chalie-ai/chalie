@@ -9,15 +9,17 @@
 """Shared parsing/seeding plumbing for the ``test_ability_*_tool_result`` suite."""
 
 import json
+import sqlite3
+from typing import cast
 
 
 class MP:
-    def __init__(self, uid: int, config) -> None:
+    def __init__(self, uid: int, config: object) -> None:
         self.config = config
         self.uid = uid
 
 
-def seed_transcript(db, channel: str = "chat", content: str = "do a thing") -> int:
+def seed_transcript(db: sqlite3.Connection, channel: str = "chat", content: str = "do a thing") -> int:
     """Seed a turn-anchoring input row exactly as production does."""
     cur = db.execute(
         "INSERT INTO transcript (channel, role, content, turn_id) VALUES (?, ?, ?, "
@@ -25,10 +27,10 @@ def seed_transcript(db, channel: str = "chat", content: str = "do a thing") -> i
         (channel, "user", content, channel),
     )
     db.commit()
-    return cur.lastrowid
+    return cast(int, cur.lastrowid)
 
 
-def allow_policy(db, permission: str, channel: str = "chat") -> None:
+def allow_policy(db: sqlite3.Connection, permission: str, channel: str = "chat") -> None:
     """Flip the real ``policy`` table so *permission* is ``allow`` on *channel*."""
     db.execute(
         "INSERT OR REPLACE INTO policy (channel, permission, setting) "

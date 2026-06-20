@@ -45,7 +45,7 @@ class ActTrail:
         self,
         *,
         tool_name: str,
-        params: dict,
+        params: dict[str, object],
         result: str,
         transcript_id: "int | None",
         summary: "str | None" = None,
@@ -80,7 +80,7 @@ class ActTrail:
                 tool_name, transcript_id, exc,
             )
 
-    def fetch_by_turn(self, channel: str, turn_id: int) -> "list[dict]":
+    def fetch_by_turn(self, channel: str, turn_id: int) -> "list[dict[str, object]]":
         """Every tool call of one logical turn, ordered by autoincrement id.
 
         tool_calls carries no turn column; a turn's calls are derived by joining
@@ -104,7 +104,7 @@ class ActTrail:
             )
             return []
 
-    def fetch_by_transcript_id(self, transcript_id: int) -> "list[dict]":
+    def fetch_by_transcript_id(self, transcript_id: int) -> "list[dict[str, object]]":
         """All tool calls anchored to one input row, ordered by autoincrement id.
 
         The narrow single-anchor read — every tool call the dispatcher recorded
@@ -126,7 +126,7 @@ class ActTrail:
             return []
 
     @staticmethod
-    def render(row: dict) -> str:
+    def render(row: dict[str, object]) -> str:
         """Invariant shape: '[tool_name] params → result'. Same function for
         the LLM prompt, the UI card, and the audit view."""
         tool_name = row.get("tool_name", "unknown")

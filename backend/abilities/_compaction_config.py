@@ -10,7 +10,7 @@ suppressed.
 
 from __future__ import annotations
 
-from typing import ClassVar
+from typing import ClassVar, cast
 
 from services.processor_config import ProcessorConfig
 
@@ -42,11 +42,11 @@ class CompactionConfig(ProcessorConfig):
             memory_seed=False,
         )
 
-    def get_user_definition(self, mp) -> str:
+    def get_user_definition(self, mp: object) -> str:
         return ""
 
-    def get_user_prompt(self, mp) -> str:
-        return mp._raw_input
+    def get_user_prompt(self, mp: object) -> str:
+        return cast("str", getattr(mp, "_raw_input", ""))
 
-    def get_system_prompt(self, mp) -> str:
-        return self.SYSTEM_PROMPT_CLASS().get_prompt()
+    def get_system_prompt(self, mp: object) -> str:
+        return cast("str", cast("type", self.SYSTEM_PROMPT_CLASS)().get_prompt())

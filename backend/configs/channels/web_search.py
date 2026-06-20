@@ -20,10 +20,13 @@ Paired with ``WebSearchAbility`` (abilities/web_search.py).
 
 from __future__ import annotations
 
-from typing import ClassVar
+from typing import TYPE_CHECKING, ClassVar
 
 from abilities._delegate import render_trail
 from services.processor_config import ProcessorConfig
+
+if TYPE_CHECKING:
+    from services.message_processor import MessageProcessor
 
 _WEB_SEARCH_SYSTEM_PROMPT = (
     "You are a focused web-research agent. You receive one research query and "
@@ -68,15 +71,15 @@ class WebSearchConfig(ProcessorConfig):
             memory_seed=False,
         )
 
-    def get_user_definition(self, mp) -> str:
+    def get_user_definition(self, mp: "MessageProcessor") -> str:
         return ""
 
-    def get_user_prompt(self, mp) -> str:
-        parts = [f"Research query:\n{mp._raw_input}"]  # type: ignore[attr-defined]
+    def get_user_prompt(self, mp: "MessageProcessor") -> str:
+        parts = [f"Research query:\n{mp._raw_input}"]
         trail = render_trail(mp)
         if trail:
             parts.append(trail)
         return "\n\n".join(parts)
 
-    def get_system_prompt(self, mp) -> str:
+    def get_system_prompt(self, mp: "MessageProcessor") -> str:
         return _WEB_SEARCH_SYSTEM_PROMPT

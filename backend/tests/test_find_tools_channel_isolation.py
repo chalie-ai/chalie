@@ -26,6 +26,8 @@ These run against the REAL production stack:
 No mocks, no stub configs — the configs under test are the ones production runs.
 """
 
+from typing import Mapping, Sequence, cast
+
 import pytest
 
 from abilities._registry import AbilityRegistry
@@ -38,14 +40,14 @@ from services.processor_config import ProcessorConfig
 pytestmark = pytest.mark.unit
 
 
-def _mp_for(config) -> MessageProcessor:
+def _mp_for(config: ProcessorConfig) -> MessageProcessor:
     mp = MessageProcessor("find a tool for me")
     mp.config = config
     mp.active_tools = list(config.always_available or [])
     return mp
 
 
-def _find_tools_on(mp: MessageProcessor, params: dict):
+def _find_tools_on(mp: MessageProcessor, params: dict[str, object]) -> "str | Mapping[str, object] | Sequence[object]":
     """Drive the real find_tools dispatch path: bind the invoking mp and run.
 
     ``run()`` returns a ``ToolResult``; its ``body`` is a structured dict on
@@ -63,7 +65,7 @@ def _find_tools_on(mp: MessageProcessor, params: dict):
 
 class TestUserChannelCannotReachRawWebTools:
 
-    def test_select_browser_is_rejected_on_user_channel(self):
+    def test_select_browser_is_rejected_on_user_channel(self) -> None:
         """``find_tools(select=['browser'])`` on the user channel must NOT add
         browser — it is ``DISCOVERABLE=False``, absent from the global roster
         (raw browser is exclusive to the web_browse delegate). The result reports
@@ -76,11 +78,11 @@ class TestUserChannelCannotReachRawWebTools:
             "Raw 'browser' must never be activatable on the user channel — it is "
             f"DISCOVERABLE=False. active_tools={mp.active_tools}"
         )
-        assert "not found or unavailable" in result.lower(), (
+        assert "not found or unavailable" in cast(str, result).lower(), (
             f"Non-discoverable 'browser' select must be reported unavailable. result={result!r}"
         )
 
-    def test_select_search_is_rejected_on_user_channel(self):
+    def test_select_search_is_rejected_on_user_channel(self) -> None:
         """Raw 'search' is equally delegate-exclusive — DISCOVERABLE=False."""
         mp = _mp_for(UserConfig())
         result = _find_tools_on(mp, {"select": ["search"]})
@@ -88,9 +90,9 @@ class TestUserChannelCannotReachRawWebTools:
         assert "search" not in mp.active_tools, (
             f"Raw 'search' must be non-discoverable on the user channel. active_tools={mp.active_tools}"
         )
-        assert "not found or unavailable" in result.lower()
+        assert "not found or unavailable" in cast(str, result).lower()
 
-    def test_select_news_is_rejected_on_user_channel(self):
+    def test_select_news_is_rejected_on_user_channel(self) -> None:
         """Raw 'news' moved delegate-exclusive (TKT-1066) — DISCOVERABLE=False."""
         mp = _mp_for(UserConfig())
         result = _find_tools_on(mp, {"select": ["news"]})
@@ -98,9 +100,9 @@ class TestUserChannelCannotReachRawWebTools:
         assert "news" not in mp.active_tools, (
             f"Raw 'news' must be non-discoverable on the user channel. active_tools={mp.active_tools}"
         )
-        assert "not found or unavailable" in result.lower()
+        assert "not found or unavailable" in cast(str, result).lower()
 
-    def test_query_cannot_surface_browser_on_user_channel(self):
+    def test_query_cannot_surface_browser_on_user_channel(self) -> None:
         """Even a query that is a perfect semantic match for browser must not
         inject it — browser is DISCOVERABLE=False, so it never enters the global
         roster the query path searches over."""
@@ -112,7 +114,7 @@ class TestUserChannelCannotReachRawWebTools:
             f"regardless of relevance. active_tools={mp.active_tools}"
         )
 
-    def test_delegate_tools_remain_available_on_user_channel(self):
+    def test_delegate_tools_remain_available_on_user_channel(self) -> None:
         """The model must not over-block: the delegate tools (web_browse /
         web_search) are how the user channel reaches the web, and stay
         selectable (they are DISCOVERABLE=True)."""
@@ -125,7 +127,7 @@ class TestUserChannelCannotReachRawWebTools:
         assert "web_search" in mp.active_tools, (
             f"web_search delegate must stay available on user. active_tools={mp.active_tools}"
         )
-        assert result["not_found"] == [], (
+        assert cast(Mapping[str, object], result)["not_found"] == [], (
             f"delegate tools must not be reported unavailable. result={result!r}"
         )
 
@@ -137,7 +139,7 @@ class TestUserChannelCannotReachRawWebTools:
 
 class TestBackgroundChannelDiscovery:
 
-    def test_dmn_cannot_select_raw_web_or_pattern_tools(self):
+    def test_dmn_cannot_select_raw_web_or_pattern_tools(self) -> None:
         """The raw, non-discoverable tools (browser/search/news/save_pattern/
         save_graph) are absent from the global roster, so the DMN cannot select
         them either."""
@@ -150,9 +152,9 @@ class TestBackgroundChannelDiscovery:
         assert not leaked, (
             f"DMN must not reach non-discoverable tools {non_discoverable}; leaked: {leaked}"
         )
-        assert "not found or unavailable" in result.lower()
+        assert "not found or unavailable" in cast(str, result).lower()
 
-    def test_dmn_can_discover_the_delegate_wrappers(self):
+    def test_dmn_can_discover_the_delegate_wrappers(self) -> None:
         """Discovery is global now: the DMN carries find_tools and the delegate
         wrappers are DISCOVERABLE=True, so the background loop can discover and
         spawn web_browse / web_search / vision. Keeping that work out of the
@@ -166,7 +168,7 @@ class TestBackgroundChannelDiscovery:
                 f"DMN must be able to discover the {name} delegate. "
                 f"active_tools={mp.active_tools}"
             )
-        assert result["not_found"] == [], (
+        assert cast(Mapping[str, object], result)["not_found"] == [], (
             f"delegate wrappers must not be reported unavailable on DMN. result={result!r}"
         )
 
@@ -177,16 +179,16 @@ class TestBackgroundChannelDiscovery:
 
 class TestWebBrowseDelegateHasBrowser:
 
-    def test_browser_resolves_into_the_tool_schemas_on_web_browse_channel(self):
+    def test_browser_resolves_into_the_tool_schemas_on_web_browse_channel(self) -> None:
         """WebBrowseConfig pins browser as always-available, so build_tools
         resolves a real 'browser' tool schema for the delegate — the channel
         raw browser is exclusive to. (always_available bypasses discovery
         entirely: a non-discoverable tool is reached ONLY this way.)"""
         mp = _mp_for(WebBrowseConfig(ProcessorConfig.PolicyChannel.CHAT))
-        assert "browser" in mp.config.always_available
+        assert "browser" in cast(ProcessorConfig, mp.config).always_available
 
         schemas = AbilityRegistry.build_tools(mp)
-        names = {s["name"] for s in schemas}
+        names = {cast(str, s["name"]) for s in schemas}
 
         assert "browser" in names, (
             f"web_browse delegate must be handed the real browser tool. names={sorted(names)}"
@@ -215,7 +217,7 @@ _EXPECTED_NON_DISCOVERABLE = frozenset({
 })
 
 
-def test_non_discoverable_set_is_exactly_the_expected_eleven():
+def test_non_discoverable_set_is_exactly_the_expected_eleven() -> None:
     """Pin the whole visibility model: the set of registered abilities that are
     NOT in the global discovery roster must equal the expected non-discoverable
     eleven. Flipping any DISCOVERABLE flag (or adding a new non-discoverable

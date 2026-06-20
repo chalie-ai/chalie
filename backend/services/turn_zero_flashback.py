@@ -40,8 +40,13 @@ here (§4.7).
 """
 
 import logging
+from typing import TYPE_CHECKING, cast
 
 from services.time_formatter_service import TimeFormatterService
+
+if TYPE_CHECKING:
+    from services.message_processor import MessageProcessor
+    from services.processor_config import ProcessorConfig
 
 logger = logging.getLogger(__name__)
 
@@ -125,7 +130,7 @@ _HYDE_JOB_NAME = "turn_zero_hyde"
 
 class TurnZeroFlashback:
 
-    def __init__(self, mp) -> None:
+    def __init__(self, mp: "MessageProcessor") -> None:
         self._mp = mp
 
     # ── Public entry ──────────────────────────────────────────────────────────
@@ -208,10 +213,10 @@ class TurnZeroFlashback:
         """
         from services import compaction_persistence  # noqa: PLC0415
 
-        row = compaction_persistence.get_compaction(self._mp.config.channel)
+        row = compaction_persistence.get_compaction(cast("ProcessorConfig", self._mp.config).channel)
         if not row:
             return ""
-        doc = (row.get("compacted_text") or "").strip()
+        doc = (cast("str", row.get("compacted_text")) or "").strip()
         if not doc:
             return ""
         return self._extract_now_section(doc)
@@ -342,18 +347,18 @@ class TurnZeroFlashback:
         # Fetch one extra row so dropping the current turn still leaves a full
         # window of prior context.
         rows = transcript_service.get_recent(
-            self._mp.config.channel, limit=_CENTROID_WINDOW + 1
+            cast("ProcessorConfig", self._mp.config).channel, limit=_CENTROID_WINDOW + 1
         )
         current_uid = self._mp.uid
         return [
-            (r.get("content") or "").strip()
+            cast("str", r.get("content") or "").strip()
             for r in rows
             if r.get("role") in _CENTROID_ROLES
-            and (r.get("content") or "").strip()
+            and cast("str", r.get("content") or "").strip()
             and (current_uid is None or r.get("id") != current_uid)
         ][:_CENTROID_WINDOW]
 
-    def _conversation_centroid(self):
+    def _conversation_centroid(self) -> object | None:
         """Mean (re-normalised) embedding of the recent PRIOR channel messages.
 
         The centroid is the running mean of the last ``_CENTROID_WINDOW``
@@ -378,16 +383,16 @@ class TurnZeroFlashback:
         norm = float(np.linalg.norm(mean))
         if norm == 0.0:
             return None
-        return mean / norm
+        return cast("object", mean / norm)
 
     @staticmethod
-    def _cosine(a, b) -> float:
+    def _cosine(a: object, b: object) -> float:
         """Cosine similarity of two vectors. Inputs from the embedding service are
         L2-normalised, but the centroid mean is re-normalised by the caller, so a
         plain dot product is the cosine."""
         import numpy as np  # noqa: PLC0415
 
-        return float(np.dot(a, b))
+        return float(np.dot(cast("list[float]", a), cast("list[float]", b)))
 
     # ── Retrieval + render ────────────────────────────────────────────────────
 
@@ -417,10 +422,10 @@ class TurnZeroFlashback:
         return [
             text
             for hit in hits
-            if (text := (hit.get("text") or "").strip())
+            if (text := cast("str", hit.get("text") or "").strip())
         ][:_MAX_FACTS]
 
-    def _recall_episodes(self, query: str) -> list[dict]:
+    def _recall_episodes(self, query: str) -> list[dict[str, object]]:
         """Up to ``_MAX_EPISODES`` raw episodes for *query*, super-episodes first.
 
         Runs the shared episode recall with ``caller='seed'`` so the frozen
@@ -443,13 +448,13 @@ class TurnZeroFlashback:
         ordered = sorted(
             episodes,
             key=lambda ep: (
-                0 if int(ep.get("level") or 0) >= _SUPER_LEVEL_FLOOR else 1,
-                -float(ep.get("composite_score") or 0.0),
+                0 if int(cast("int", ep.get("level") or 0)) >= _SUPER_LEVEL_FLOOR else 1,
+                -float(cast("float", ep.get("composite_score") or 0.0)),
             ),
         )
         return ordered[:_MAX_EPISODES]
 
-    def _render_block(self, facts: list[str], episodes: list[dict]) -> str:
+    def _render_block(self, facts: list[str], episodes: list[dict[str, object]]) -> str:
         """Render the curated bundle the model reads in place of recall JSON."""
         sections: list[str] = []
         if facts:
@@ -462,7 +467,7 @@ class TurnZeroFlashback:
             return "No relevant memory surfaced for this turn."
         return "\n".join(sections)
 
-    def _render_episode(self, ep: dict) -> str:
+    def _render_episode(self, ep: dict[str, object]) -> str:
         """One episode as ``On <date>: <gist>`` (spec §4.5).
 
         The gist is rendered in full — NO truncation (TKT-821); newlines are
@@ -471,14 +476,14 @@ class TurnZeroFlashback:
         unparseable / missing timestamp drops the date prefix rather than
         emitting a bogus one.
         """
-        gist = (ep.get("gist") or "").strip().replace("\n", " ")
+        gist = (cast("str", ep.get("gist")) or "").strip().replace("\n", " ")
         if not gist:
             return ""
         date = self._episode_date(ep.get("created_at"))
         return f"On {date}: {gist}" if date else gist
 
     @staticmethod
-    def _episode_date(raw) -> str:
+    def _episode_date(raw: object) -> str:
         """Local calendar date (YYYY-MM-DD) for a stored UTC timestamp, or "".
 
         Storage is timezone-aware UTC; the model sees the user's local day.
@@ -487,7 +492,7 @@ class TurnZeroFlashback:
         """
         if not raw:
             return ""
-        return TimeFormatterService.local(raw, fmt="%Y-%m-%d") or ""
+        return TimeFormatterService.local(cast("str", raw), fmt="%Y-%m-%d") or ""
 
     # ── Recording ─────────────────────────────────────────────────────────────
 

@@ -68,7 +68,7 @@ _REDDIT_FIXTURE = {
 }
 
 
-def test_transform_reddit_output_has_no_image_key():
+def test_transform_reddit_output_has_no_image_key() -> None:
     """After the redesign, transform() output dicts must not contain 'image'."""
     results = transform("reddit", "json", _REDDIT_FIXTURE, limit=10)
 

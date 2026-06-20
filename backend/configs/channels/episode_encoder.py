@@ -1,6 +1,11 @@
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from services.processor_config import ProcessorConfig
+
+if TYPE_CHECKING:
+    from services.message_processor import MessageProcessor
 
 
 class EpisodeEncoderConfig(ProcessorConfig):
@@ -19,13 +24,13 @@ class EpisodeEncoderConfig(ProcessorConfig):
             memory_seed=False,
         )
 
-    def get_user_definition(self, mp) -> str:
+    def get_user_definition(self, mp: "MessageProcessor") -> str:
         return (
             "The user is 'episode_encoder' — a background process that "
             "summarises transcript windows into memory snapshots."
         )
 
-    def get_user_prompt(self, mp) -> str:
+    def get_user_prompt(self, mp: "MessageProcessor") -> str:
         window = getattr(mp, "_window", "") or ""
         referenced = getattr(mp, "_referenced", "") or ""
         parts = [
@@ -42,7 +47,7 @@ class EpisodeEncoderConfig(ProcessorConfig):
             ])
         return "\n".join(parts)
 
-    def get_system_prompt(self, mp) -> str:
+    def get_system_prompt(self, mp: "MessageProcessor") -> str:
         from services.system_message_prompt import EpisodeEncoderSystemPrompt  # noqa: PLC0415
         return (
             f"{self.get_user_definition(mp)}\n\n"

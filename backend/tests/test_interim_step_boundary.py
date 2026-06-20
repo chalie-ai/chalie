@@ -29,7 +29,7 @@ import pytest
 pytestmark = pytest.mark.unit
 
 
-def _emit_and_capture(formatted: str) -> list:
+def _emit_and_capture(formatted: str) -> list[dict[str, object]]:
     """Run the real _emit_interim on a real user-channel MP and capture frames."""
     from configs.channels import UserConfig
     from services.message_processor import MessageProcessor
@@ -39,7 +39,7 @@ def _emit_and_capture(formatted: str) -> list:
     mp.config = UserConfig({})
     mp._metadata = {"exchange_id": "turn-1"}
 
-    received: list = []
+    received: list[dict[str, object]] = []
 
     class _Receiver:
         def send(self, raw: str) -> None:
@@ -56,7 +56,7 @@ def _emit_and_capture(formatted: str) -> list:
 
 
 @pytest.mark.parametrize("formatted", ["", "   ", "\n\t "])
-def test_tool_only_step_still_emits_interim_boundary(formatted):
+def test_tool_only_step_still_emits_interim_boundary(formatted: str) -> None:
     """A prose-less tool-bearing step still broadcasts its interim boundary frame.
 
     If this regresses to zero, a ``formatted.strip()`` guard was re-added to
@@ -71,9 +71,10 @@ def test_tool_only_step_still_emits_interim_boundary(formatted):
     assert messages[0]["interim"] is True
 
 
-def test_interim_carries_step_prose_when_present():
+def test_interim_carries_step_prose_when_present() -> None:
     """When the step has prose, the same frame carries it (the bubble renders)."""
+    from typing import cast
     messages = _emit_and_capture("Let me check the weather.")
     assert len(messages) == 1
     assert messages[0]["interim"] is True
-    assert "Let me check the weather." in messages[0]["content"]
+    assert "Let me check the weather." in cast(str, messages[0]["content"])

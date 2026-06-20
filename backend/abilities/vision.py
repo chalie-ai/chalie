@@ -172,7 +172,7 @@ class VisionAbility(Ability):
         mime_type = cast(str, doc.get("mime_type")) or "image/png"
         try:
             out = describe_image(
-                abs_path, mime_type, query, policy_channel=cast("MessageProcessor", self.mp).config.policy_channel
+                abs_path, mime_type, query, policy_channel=cast("ProcessorConfig", cast("MessageProcessor", self.mp).config).policy_channel
             )
         except Exception as exc:  # noqa: BLE001 — surfaced, never swallowed
             logger.exception("[VISION] describe failed")

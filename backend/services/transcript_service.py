@@ -5,7 +5,10 @@ Transcript Service — persistent conversation record.
 import logging
 import threading
 from collections import Counter
-from typing import List, Dict, Optional
+from typing import TYPE_CHECKING, cast
+
+if TYPE_CHECKING:
+    from services.database_service import DatabaseService
 
 logger = logging.getLogger(__name__)
 LOG_PREFIX = "[TRANSCRIPT]"
@@ -26,7 +29,7 @@ _EXTRACTION_WINDOW = 25
 _EXTRACTION_OVERLAP = 5
 
 
-def _resolve_location(lat, lon, name, channel):
+def _resolve_location(lat: float | None, lon: float | None, name: str | None, channel: str) -> tuple[float | None, float | None, str | None]:
     """Back-fill live location ONLY for channels whose source profile permits it
     (``location_backfill`` — user activity). Muted / non-user-activity channels
     store NULL location so background work never corrupts the geo signal.
@@ -43,7 +46,7 @@ def _resolve_location(lat, lon, name, channel):
     try:
         from services.locale_service import get_location
         loc = get_location()
-        return loc.get('lat'), loc.get('lon'), loc.get('name')
+        return cast("float | None", loc.get('lat')), cast("float | None", loc.get('lon')), cast("str | None", loc.get('name'))
     except Exception:
         return None, None, None
 
@@ -52,13 +55,13 @@ def append(
     channel: str,
     role: str,
     content: str,
-    tool_call_id: str = None,
-    tool_name: str = None,
+    tool_call_id: str | None = None,
+    tool_name: str | None = None,
     internal: bool = False,
-    location_lat=None,
-    location_lon=None,
-    location_name=None,
-) -> Optional[int]:
+    location_lat: float | None = None,
+    location_lon: float | None = None,
+    location_name: str | None = None,
+) -> int | None:
     if not channel:
         return None
     if not content and role != 'assistant':
@@ -98,7 +101,7 @@ def append(
 
 
 
-def get_recent(channel: str, limit: int = 20, since_id: int = None, _context=None) -> List[Dict]:
+def get_recent(channel: str, limit: int = 20, since_id: int | None = None, _context: object = None) -> list[dict[str, object]]:
     try:
         from services.database_service import get_shared_db_service
         db = get_shared_db_service()
@@ -154,7 +157,7 @@ def get_recent(channel: str, limit: int = 20, since_id: int = None, _context=Non
         return []
 
 
-def cleanup_unlinked_entries(channel: str = None) -> int:
+def cleanup_unlinked_entries(channel: str | None = None) -> int:
     try:
         from services import compaction_persistence
         from services.database_service import get_shared_db_service
@@ -203,7 +206,7 @@ def cleanup_unlinked_entries(channel: str = None) -> int:
                     """,
                     (t,),
                 )
-                referenced_ids = set()
+                referenced_ids: set[int] = set()
                 import json as _json
                 for ep_row in cursor.fetchall():
                     try:
@@ -252,7 +255,7 @@ def cleanup_unlinked_entries(channel: str = None) -> int:
 # ── Internal helpers ─────────────────────────────────────────────────
 
 
-def _maybe_trigger_extraction(channel: str, rowid: int) -> None:
+def _maybe_trigger_extraction(channel: str, rowid: int | None) -> None:
     """Fire episode extraction when the channel has accumulated
     _EXTRACTION_THRESHOLD untriggered transcripts.
 
@@ -270,6 +273,8 @@ def _maybe_trigger_extraction(channel: str, rowid: int) -> None:
 
     Never raises — failures logged and silently ignored.
     """
+    if rowid is None:
+        return
     # Bidirectional dependency: the per-source allowlist lives in
     # services/source_profiles.py; this is the episode-gate consumer.
     from services.source_profiles import profile_for
@@ -313,7 +318,7 @@ def _trigger_episode_extraction(channel: str, rowid: int) -> None:
 
     Never raises — any failure is logged only.
     """
-    def _run():
+    def _run() -> None:
         try:
             import threading
 
@@ -379,10 +384,10 @@ def _trigger_episode_extraction(channel: str, rowid: int) -> None:
             emp.uid = None
             emp.cancel_event = threading.Event()
             emp.thinking_level = "low"
-            emp._window = window_str
-            emp._referenced = referenced_str
+            setattr(emp, '_window', window_str)
+            setattr(emp, '_referenced', referenced_str)
             response = emp._run()
-            snapshots = _safe_json_load(response)
+            snapshots = cast("list[dict[str, object]]", _safe_json_load(response))
             if not snapshots:
                 return
 
@@ -401,17 +406,17 @@ def _trigger_episode_extraction(channel: str, rowid: int) -> None:
                     if _is_delete_only(ep):
                         delete_id = ep.get('delete_id')
                         if delete_id:
-                            episodic_svc.soft_delete(delete_id)
+                            episodic_svc.soft_delete(cast("str", delete_id))
                         continue
 
                     # Filter transcript_ids to valid window IDs
-                    raw_ids = ep.get('transcript_ids') or []
+                    raw_ids = cast("list[object]", ep.get('transcript_ids') or [])
                     ep['transcript_ids'] = [i for i in raw_ids if i in valid_ids]
                     if not ep['transcript_ids']:
                         continue
 
-                    ep['transcript_id_start'] = min(ep['transcript_ids'])
-                    ep['transcript_id_end'] = max(ep['transcript_ids'])
+                    ep['transcript_id_start'] = min(cast("list[int]", ep['transcript_ids']))
+                    ep['transcript_id_end'] = max(cast("list[int]", ep['transcript_ids']))
                     ep['channel'] = channel
 
                     dominant_location = _aggregate_dominant_location(entries)
@@ -420,13 +425,13 @@ def _trigger_episode_extraction(channel: str, rowid: int) -> None:
                         ep['location_lon'] = dominant_location['lon']
                         ep['location_name'] = dominant_location.get('name')
 
-                    gist = ep.get('gist', '') or ''
+                    gist = cast("str", ep.get('gist', '') or '')
                     embedding = emb_svc.generate_embedding(gist) if gist else None
 
                     novelty = compute_novelty(embedding, prior_embeddings) if embedding else 1.0
                     ep['salience'] = compute_salience(
-                        valence=float(ep.get('emotional_valence') or 0.0),
-                        arousal=float(ep.get('emotional_arousal') or 0.0),
+                        valence=float(cast("float", ep.get('emotional_valence') or 0.0)),
+                        arousal=float(cast("float", ep.get('emotional_arousal') or 0.0)),
                         has_open_loop=bool(ep.get('has_open_loop', False)),
                         novelty=novelty,
                     )
@@ -437,7 +442,7 @@ def _trigger_episode_extraction(channel: str, rowid: int) -> None:
                     ep.pop('delete_id', None)  # defensive — should be None here
 
                     if update_id:
-                        episodic_svc.update_episode(update_id, ep, embedding=embedding)
+                        episodic_svc.update_episode(cast("str", update_id), ep, embedding=embedding)
                     else:
                         episodic_svc.store_episode(ep, embedding=embedding)
 
@@ -465,7 +470,7 @@ def _trigger_episode_extraction(channel: str, rowid: int) -> None:
 # ── Episode extraction helpers ───────────────────────────────────────────────
 
 
-def _aggregate_dominant_location(entries: list) -> dict:
+def _aggregate_dominant_location(entries: list[dict[str, object]]) -> dict[str, object]:
     """When all location names are unique (no majority), falls back to the most recent non-null row."""
     located = [
         e for e in entries
@@ -499,7 +504,7 @@ def _aggregate_dominant_location(entries: list) -> dict:
     }
 
 
-def _format_window_entries(entries: list) -> str:
+def _format_window_entries(entries: list[dict[str, object]]) -> str:
     lines = []
     for entry in entries:
         entry_id = entry.get('id', '?')
@@ -514,7 +519,7 @@ def _format_window_entries(entries: list) -> str:
     return "\n".join(lines)
 
 
-def _parse_episode_ids_from_results(result_texts: List[str]) -> set:
+def _parse_episode_ids_from_results(result_texts: list[str]) -> set[str]:
     """Extract episode IDs from rendered memory recall envelopes.
 
     Only rows with ``kind == "episode"`` are collected — data-graph rows are
@@ -523,7 +528,7 @@ def _parse_episode_ids_from_results(result_texts: List[str]) -> set:
     """
     import json as _json
 
-    episode_ids: set = set()
+    episode_ids: set[str] = set()
     for text in result_texts:
         if not text or "[end:memory]" not in text:
             continue
@@ -547,7 +552,7 @@ def _parse_episode_ids_from_results(result_texts: List[str]) -> set:
     return episode_ids
 
 
-def _fetch_referenced_episodes(entries: list, db) -> list:
+def _fetch_referenced_episodes(entries: list[dict[str, object]], db: "DatabaseService") -> list[dict[str, object]]:
     """Query tool_calls for memory skill invocations within the window.
 
     ``tool_name='memory'`` covers both auto-seed and LLM-invoked recall —
@@ -602,7 +607,7 @@ def _fetch_referenced_episodes(entries: list, db) -> list:
         return []
 
 
-def _format_episodes_for_prompt(episodes: list) -> str:
+def _format_episodes_for_prompt(episodes: list[dict[str, object]]) -> str:
     if not episodes:
         return ''
     lines = []
@@ -628,7 +633,7 @@ def _strip_code_fence(text: str) -> str:
     return text[newline + 1 : close_start].strip()
 
 
-def _safe_json_load(text: str) -> list:
+def _safe_json_load(text: str) -> list[object]:
     import json as _json
 
     if not text:
@@ -648,7 +653,7 @@ def _safe_json_load(text: str) -> list:
         return []
 
 
-def _is_delete_only(ep: dict) -> bool:
+def _is_delete_only(ep: dict[str, object]) -> bool:
     if not ep.get('delete_id'):
         return False
     # All other meaningful fields must be absent or null/empty
@@ -688,7 +693,7 @@ def write_input_row(channel: str, role: str, content: str) -> int:
 
     _maybe_trigger_extraction(channel, row_id)
 
-    return row_id
+    return cast("int", row_id)
 
 
 def turn_id_of_row(row_id: int) -> int:
@@ -784,4 +789,4 @@ def write_assistant_row(channel: str, content: str, turn_id: "int | None" = None
 
     _maybe_trigger_extraction(channel, row_id)
 
-    return row_id
+    return cast("int", row_id)

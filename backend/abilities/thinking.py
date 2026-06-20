@@ -20,11 +20,23 @@ snapshots the parent's live active_tools. Firing `thinking` from ANY parent
 channel therefore works out of the box — there is no per-channel branch and no
 reference to a specific config class."""
 
-from typing import ClassVar
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, ClassVar, cast
 
 from abilities._ability import Ability
 from abilities._result import ToolResult
 from services.processor_config import ProcessorConfig
+
+if TYPE_CHECKING:
+    from typing import Protocol
+
+    from services.message_processor import MessageProcessor
+
+    class _ParentMP(Protocol):
+        _raw_input: str
+        active_tools: list[str]
+        config: ProcessorConfig
 
 # The deliberation overlay — the SOLE thing the thinking pass changes about the
 # parent's request. It lives in the system prompt (not the user turn) because the
@@ -55,7 +67,7 @@ class ThinkingConfig(ProcessorConfig):
 
     thinking_mode: ClassVar[str] = "high"
 
-    def __init__(self, active_tools, policy_channel) -> None:
+    def __init__(self, active_tools: object, policy_channel: ProcessorConfig.PolicyChannel) -> None:
         super().__init__(
             channel="thinking",
             role="thinking",
@@ -64,7 +76,7 @@ class ThinkingConfig(ProcessorConfig):
             # identical schemas. No discovery: this is a single deliberation pass
             # (no find_tools pinned), so the parent's active_tools snapshot is the
             # entire surface.
-            always_available=list(active_tools or []),
+            always_available=cast("list[str]", active_tools or []),
             skip_transcript=True,
             skip_input_row=True,
             suppress_history=True,
@@ -72,16 +84,16 @@ class ThinkingConfig(ProcessorConfig):
             memory_seed=False,
         )
 
-    def get_user_definition(self, mp) -> str:
+    def get_user_definition(self, mp: object) -> str:
         # Not consumed by the request builder — the parent's user definition is
         # already embedded inside the threaded user prompt below.
         return ""
 
-    def get_user_prompt(self, mp) -> str:
+    def get_user_prompt(self, mp: object) -> str:
         # The parent's exact rendered body, threaded in by ThinkingAbility.run.
         return (getattr(mp, "_metadata", None) or {}).get("thinking_user_prompt") or ""
 
-    def get_system_prompt(self, mp) -> str:
+    def get_system_prompt(self, mp: object) -> str:
         return _DELIBERATION_SYSTEM_PROMPT
 
 
@@ -107,14 +119,14 @@ class ThinkingAbility(Ability):
     def get_search_tooltip(self) -> str:
         return "internal deliberation pass"
 
-    _PARAMETERS: ClassVar[dict] = {"type": "object", "properties": {}}
+    _PARAMETERS: ClassVar[dict[str, object]] = {"type": "object", "properties": {}}
 
-    def get_parameters(self) -> dict:
+    def get_parameters(self) -> dict[str, object]:
         return self._PARAMETERS
 
-    def run(self, params: dict) -> ToolResult:
+    def run(self, params: dict[str, object]) -> ToolResult:
         from services.message_processor import MessageProcessor  # noqa: PLC0415
-        parent = self.mp
+        parent = cast("_ParentMP", self.mp)
         # Mirror the parent's about-to-be-sent request EXACTLY: its rendered user
         # message (user definition + world state + ## Previous Messages + input +
         # act-trail) and its live tool surface. Delegating to parent.config.* keeps
@@ -126,7 +138,7 @@ class ThinkingAbility(Ability):
                 list(parent.active_tools),
                 parent.config.policy_channel,
             ),
-            metadata={"thinking_user_prompt": parent.config.get_user_prompt(parent)},
+            metadata={"thinking_user_prompt": parent.config.get_user_prompt(cast("MessageProcessor", parent))},
         )
         text = (result or "").strip()
         if text.upper() == "NOTHING":

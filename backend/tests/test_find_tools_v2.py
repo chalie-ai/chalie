@@ -60,7 +60,7 @@ def _stub_proc() -> MessageProcessor:
     return proc
 
 
-def _run(ability: FindToolsAbility, proc: MessageProcessor, params: dict) -> str:
+def _run(ability: FindToolsAbility, proc: MessageProcessor, params: dict[str, object]) -> str:
     """Bind proc to ability, call run(), and render the dispatcher envelope.
 
     ``run()`` returns a ``ToolResult``; the single production formatter
@@ -85,7 +85,7 @@ def _run(ability: FindToolsAbility, proc: MessageProcessor, params: dict) -> str
 
 class TestFloorEviction:
 
-    def test_single_signal_junk_evicted_dual_signal_match_kept(self):
+    def test_single_signal_junk_evicted_dual_signal_match_kept(self) -> None:
         """The MIN_RRF_SCORE=0.075 floor keeps the dual-signal match (web_search,
         RRF=0.1250) and evicts the single-signal junk (read, RRF=0.0588).
 
@@ -118,7 +118,7 @@ class TestFloorEviction:
 
 class TestSelectExact:
 
-    def test_select_exact_appends_both_named_tools(self):
+    def test_select_exact_appends_both_named_tools(self) -> None:
         """run({'select': ['weather', 'email']}) appends both names to
         active_tools via the select path.
 
@@ -152,7 +152,7 @@ class TestSelectExact:
 
 class TestSelectNotFound:
 
-    def test_select_valid_added_bogus_reported_as_not_found(self):
+    def test_select_valid_added_bogus_reported_as_not_found(self) -> None:
         """run({'select': ['weather', 'bogus_tool_xyz']}) → weather injected into
         active_tools; the unresolved name is reported EXPLICITLY under the result
         body's ``not_found`` (TKT-894) and counted in ``not_found=`` meta — partial
@@ -201,7 +201,7 @@ class TestSelectNotFound:
 
 class TestBothParamsSelectWins:
 
-    def test_both_params_only_selected_tool_added_not_query_results(self):
+    def test_both_params_only_selected_tool_added_not_query_results(self) -> None:
         """run({'select': ['weather'], 'query': 'search the web for news'})
         must add only 'weather' (the selected tool). The query 'search the web
         for news' would add web_search + junk if the query path ran.
@@ -249,7 +249,7 @@ class TestBothParamsSelectWins:
 
 class TestNeitherParam:
 
-    def test_neither_select_nor_query_returns_error_nothing_appended(self):
+    def test_neither_select_nor_query_returns_error_nothing_appended(self) -> None:
         """run({}) with neither 'select' nor 'query' must return an error result
         and must NOT append anything to active_tools.
 
@@ -289,7 +289,7 @@ class TestNeitherParam:
 
 class TestResultFormat:
 
-    def test_successful_run_result_contains_required_v3_contract_not_v1(self):
+    def test_successful_run_result_contains_required_v3_contract_not_v1(self) -> None:
         """A successful find_tools call must produce a ToolResult (TKT-894) whose
         rendered body carries structured ``injected`` rows — each a ``name`` +
         ``summary`` — and drops the legacy prose/schema dump:

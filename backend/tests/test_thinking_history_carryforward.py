@@ -136,8 +136,10 @@ def test_thinking_system_prompt_is_deliberation_overlay_only(db: sqlite3.Connect
     from abilities._dispatcher import ToolDispatcher
     from abilities.thinking import _DELIBERATION_SYSTEM_PROMPT
 
+    from services.processor_config import ProcessorConfig
+
     parent = _build_parent("Plan the trip.")
-    parent_system = parent.config.get_system_prompt(parent)
+    parent_system = cast(ProcessorConfig, parent.config).get_system_prompt(parent)
 
     recorder = _RecordingProvider()
     with patch(_PROVIDERS_RESOLVE, return_value=recorder):

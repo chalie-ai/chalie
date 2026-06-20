@@ -1,9 +1,16 @@
 from __future__ import annotations
 
 import json
-from typing import Any
+from typing import TYPE_CHECKING, cast
 
 from services.processor_config import ProcessorConfig
+
+if TYPE_CHECKING:
+    from services.message_processor import MessageProcessor
+
+    class _WithFactAttrs:
+        _gist: str
+        _neighbours: list[object]
 
 # ── Fact-extraction config (subconscious worker fact pipeline, TKT-925) ────────
 #
@@ -30,7 +37,7 @@ VALID_OPS = frozenset({OP_ADD, OP_UPDATE, OP_DELETE, OP_NOOP})
 FACT_KIND = "user_specific"
 
 
-def parse_fact_ops(text: str) -> list:
+def parse_fact_ops(text: str) -> list[dict[str, object]]:
     """Parse the model's constrained output into a list of validated op dicts.
 
     Returns the subset of ops that are structurally valid (known op verb; key
@@ -56,7 +63,7 @@ def parse_fact_ops(text: str) -> list:
     return [op for op in (_clean_op(entry) for entry in raw_ops) if op is not None]
 
 
-def _clean_op(entry: Any) -> dict | None:
+def _clean_op(entry: object) -> dict[str, object] | None:
     """Validate one op entry; return a normalised dict or None when unusable."""
     if not isinstance(entry, dict):
         return None
@@ -98,7 +105,7 @@ class FactExtractionConfig(ProcessorConfig):
     the retrieval + the DB writes — this config only frames the decision).
     """
 
-    def __init__(self, gist: str, neighbours: list[Any]) -> None:
+    def __init__(self, gist: str, neighbours: list[object]) -> None:
         super().__init__(
             channel="fact_extraction",
             role="fact_extraction",
@@ -113,27 +120,28 @@ class FactExtractionConfig(ProcessorConfig):
         object.__setattr__(self, "_gist", gist)
         object.__setattr__(self, "_neighbours", neighbours)
 
-    def get_user_definition(self, mp) -> str:
+    def get_user_definition(self, mp: "MessageProcessor") -> str:
         return (
             "The user is 'fact_extraction' — a background process that routes "
             "hard, truth-valued facts out of a single episode into the durable "
             "fact store, reconciling them against what is already known."
         )
 
-    def get_user_prompt(self, mp) -> str:
-        if self._neighbours:
+    def get_user_prompt(self, mp: "MessageProcessor") -> str:
+        _self = cast("_WithFactAttrs", self)
+        if _self._neighbours:
             known = "\n".join(
-                f"- key={n.get('key')!r} value={n.get('value')!r}"
-                for n in self._neighbours
+                f"- key={cast('dict[str, object]', n).get('key')!r} value={cast('dict[str, object]', n).get('value')!r}"
+                for n in _self._neighbours
             )
         else:
             known = "(no similar facts on record)"
         return (
-            f"Episode:\n{self._gist}\n\n"
+            f"Episode:\n{_self._gist}\n\n"
             f"Most similar known facts:\n{known}"
         )
 
-    def get_system_prompt(self, mp) -> str:
+    def get_system_prompt(self, mp: "MessageProcessor") -> str:
         """Constrained-op system prompt — identical for every model tier."""
         example = json.dumps(
             {

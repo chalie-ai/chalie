@@ -4,8 +4,16 @@ import logging
 import os
 import threading
 import time
+from collections.abc import Callable
 from datetime import datetime, timedelta
-from typing import Optional
+from typing import TYPE_CHECKING, Optional, cast
+
+if TYPE_CHECKING:
+    from services.database_service import DatabaseService
+    from services.decay_engine_service import DecayEngineService
+    from services.embedding_service import EmbeddingService
+    from services.episodic_service import EpisodicService
+    from services.data_graph_service import DataGraphService
 
 from services.durable_timestamp import DurableTimestamp
 from services.time_utils import utc_now
@@ -84,7 +92,7 @@ class SubconsciousWorker:
         self,
         tick_sec: int = DEFAULT_TICK_SEC,
         idle_window_sec: int = DEFAULT_IDLE_WINDOW_SEC,
-    ):
+    ) -> None:
         self.tick_sec = tick_sec
         self.idle_window = timedelta(seconds=idle_window_sec)
         self._lock = threading.Lock()
@@ -95,7 +103,7 @@ class SubconsciousWorker:
         self._summarization_budget_remaining = _SUMMARIZATION_CLUSTER_BUDGET
         # Single DecayEngineService instance — shared across ticks.
         # Lazy-built on first use so import failures surface as a step error.
-        self._decay_engine = None
+        self._decay_engine: Optional["DecayEngineService"] = None
         # Hydrate from durable state on construction so the first tick after a
         # restart sees the correct already-fired value. Failure is non-fatal —
         # worst case we run one extra tick on first idle window after a crash.
@@ -106,7 +114,7 @@ class SubconsciousWorker:
 
     # ── Public entry ─────────────────────────────────────────────────────────
 
-    def run_once(self) -> dict:
+    def run_once(self) -> dict[str, object]:
         """Run one full tick. Returns a structured summary."""
         if not self._lock.acquire(blocking=False):
             logger.info(f"{LOG_PREFIX} tick already running — skipping re-entry")
@@ -128,9 +136,9 @@ class SubconsciousWorker:
 
     # ── Tick orchestration ───────────────────────────────────────────────────
 
-    def _tick(self) -> dict:
+    def _tick(self) -> dict[str, object]:
         """Body of one tick after gates have been cleared."""
-        steps: dict = {}
+        steps: dict[str, dict[str, object]] = {}
         steps["consolidate"] = self._safe_step("consolidate", self._step_consolidate)
         steps["fact_extraction"] = self._safe_step("fact_extraction", self._step_fact_extraction)
         steps["decay"] = self._safe_step("decay", self._step_decay)
@@ -162,7 +170,7 @@ class SubconsciousWorker:
         )
         return {"steps": steps, "last_fired_at": last_iso}
 
-    def _safe_step(self, name: str, fn) -> dict:
+    def _safe_step(self, name: str, fn: Callable[[], str]) -> dict[str, object]:
         """Run a single step under try/except. Returns step status dict."""
         try:
             detail = fn()
@@ -178,7 +186,8 @@ class SubconsciousWorker:
         from services.world_state import world_state
 
         snapshot = world_state.snapshot()
-        last_msg = snapshot.get("last_user_message_at")
+        last_msg_raw = snapshot.get("last_user_message_at")
+        last_msg = cast(Optional[datetime], last_msg_raw)
         now = utc_now()
 
         if last_msg is not None and now - last_msg < self.idle_window:
@@ -229,7 +238,7 @@ class SubconsciousWorker:
         )
 
     @staticmethod
-    def _consolidating_channels(db) -> list[str]:
+    def _consolidating_channels(db: "DatabaseService") -> list[str]:
         """Return the channels to consolidate: the HEAVY exact channels (user,"""
         from services.source_profiles import (  # noqa: PLC0415
             LIKE_EXTERNAL_AGENT,
@@ -253,7 +262,7 @@ class SubconsciousWorker:
             )
         return channels
 
-    def _consolidate_channel(self, channel: str, db, emb_svc) -> tuple[int, int]:
+    def _consolidate_channel(self, channel: str, db: "DatabaseService", emb_svc: "EmbeddingService") -> tuple[int, int]:
         """Consolidate one channel across both hierarchy rounds. Returns"""
         from services.episodic_constants import ERA_DIGEST_TRIGGER  # noqa: PLC0415
         from services.episodic_service import (  # noqa: PLC0415
@@ -305,7 +314,13 @@ class SubconsciousWorker:
         return found, written
 
     def _write_round(
-        self, channel, clusters, level, db, emb_svc, episodic_svc
+        self,
+        channel: str,
+        clusters: list[list[str]],
+        level: int,
+        db: "DatabaseService",
+        emb_svc: "EmbeddingService",
+        episodic_svc: "EpisodicService",
     ) -> int:
         """Write one roll-up round's clusters at ``level``. Returns supers written."""
         from services.episodic_service import _fetch_novelty_comparison_set  # noqa: PLC0415
@@ -335,7 +350,13 @@ class SubconsciousWorker:
 
     @staticmethod
     def _write_super_episode(
-        channel, cluster_ids, level, db, emb_svc, episodic_svc, prior_embeddings
+        channel: str,
+        cluster_ids: list[str],
+        level: int,
+        db: "DatabaseService",
+        emb_svc: "EmbeddingService",
+        episodic_svc: "EpisodicService",
+        prior_embeddings: list[bytes],
     ) -> bool:
         """Encode + store one parent episode for a cluster. Returns True on write."""
         from configs.channels import (  # noqa: PLC0415
@@ -359,10 +380,10 @@ class SubconsciousWorker:
             if len(sources) < HDBSCAN_MIN_CLUSTER_SIZE:
                 return False
 
-            all_t_ids = _collect_transcript_ids(sources)
+            all_t_ids = _collect_transcript_ids(cast(list[object], sources))
             transcript_spans = _fetch_transcript_spans(all_t_ids, db)
 
-            config = SuperEpisodeConfig(channel, sources, transcript_spans)
+            config = SuperEpisodeConfig(channel, cast(list[object], sources), transcript_spans)
             response = MessageProcessor.process("", config)
 
             if not response:
@@ -388,12 +409,12 @@ class SubconsciousWorker:
             super_ep["transcript_id_end"] = max(unique_t_ids) if unique_t_ids else None
             super_ep["consolidated_from"] = [ep["id"] for ep in sources]
 
-            gist = super_ep["gist"]
+            gist = cast(str, super_ep["gist"])
             embedding = emb_svc.generate_embedding(gist)
             novelty = compute_novelty(embedding, prior_embeddings) if embedding else 1.0
             super_ep["salience"] = compute_salience(
-                valence=float(super_ep.get("emotional_valence") or 0.0),
-                arousal=float(super_ep.get("emotional_arousal") or 0.0),
+                valence=float(cast(float, super_ep.get("emotional_valence") or 0.0)),
+                arousal=float(cast(float, super_ep.get("emotional_arousal") or 0.0)),
                 has_open_loop=bool(super_ep.get("has_open_loop", False)),
                 novelty=novelty,
             )
@@ -455,18 +476,25 @@ class SubconsciousWorker:
         )
 
     def _extract_facts_for_episode(
-        self, episode, episodic_svc, dg, counters,
-        config_cls, parse_ops, processor_cls,
+        self,
+        episode: dict[str, object],
+        episodic_svc: "EpisodicService",
+        dg: "DataGraphService",
+        counters: dict[str, int],
+        config_cls: object,
+        parse_ops: object,
+        processor_cls: object,
     ) -> None:
         """Run the constrained-op pipeline for a single episode and stamp it."""
-        gist = episode.get("gist") or ""
+        gist = cast(str, episode.get("gist") or "")
         neighbours = dg.recall(gist, limit=_FACT_NEIGHBOUR_LIMIT) if gist else []
 
-        config = config_cls(gist, neighbours)
-        response = processor_cls.process("", config)
+        from collections.abc import Callable as _Callable  # noqa: PLC0415
+        config = cast(_Callable[..., object], config_cls)(gist, neighbours)
+        response = cast(_Callable[[str, object], str], getattr(processor_cls, "process"))("", config)
 
         try:
-            ops = parse_ops(response)
+            ops = cast(list[dict[str, object]], cast(_Callable[..., object], parse_ops)(response))
         except ValueError as exc:
             counters["unparseable"] += 1
             logger.warning(
@@ -479,28 +507,28 @@ class SubconsciousWorker:
         # specific external agent) is recoverable from data_graph.source. dmn and
         # external-agent facts are wanted, so there is no channel gate here — the
         # backlog feeds every episode-producing channel.
-        source = _fact_source_for(episode.get("channel"))
+        source = _fact_source_for(cast(Optional[str], episode.get("channel")))
         for op in ops:
             self._apply_fact_op(op, dg, counters, source)
 
-        episodic_svc.set_facts_extracted_at(episode["id"])
+        episodic_svc.set_facts_extracted_at(cast(str, episode["id"]))
         counters["episodes"] += 1
 
-    def _apply_fact_op(self, op, dg, counters, source) -> None:
+    def _apply_fact_op(self, op: dict[str, object], dg: "DataGraphService", counters: dict[str, int], source: str) -> None:
         """Apply one validated constrained op to data_graph and count it."""
         from configs.channels.fact_extraction import OP_DELETE  # noqa: PLC0415
 
         verb = op["op"]
         try:
             if verb == OP_DELETE:
-                dg.invalidate(op["kind"], op["key"])
+                dg.invalidate(cast(str, op["kind"]), cast(str, op["key"]))
                 counters["delete"] += 1
                 return
-            result = dg.upsert_fact(op["key"], op["value"], source=source)
+            result = dg.upsert_fact(cast(str, op["key"]), cast(str, op["value"]), source=source)
             if result is None:
                 counters["noop"] += 1
                 return
-            counters[_FACT_STATUS_COUNTER.get(result.get("status"), "add")] += 1
+            counters[_FACT_STATUS_COUNTER.get(cast(str, result.get("status")), "add")] += 1
         except Exception as exc:
             counters["failed"] += 1
             logger.warning(
@@ -766,7 +794,7 @@ def get_subconscious_worker() -> SubconsciousWorker:
     return _DEFAULT_INSTANCE
 
 
-def subconscious_worker():
+def subconscious_worker() -> None:
     """WorkerManager entry point. Tick loop with a stable cadence."""
     worker = get_subconscious_worker()
     interval = max(1, worker.tick_sec)

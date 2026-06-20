@@ -18,7 +18,7 @@ Result contract (TKT-904):
 """
 
 import logging
-from typing import ClassVar, Optional
+from typing import ClassVar, Optional, cast
 
 from abilities._ability import Ability
 from abilities._params import Keys
@@ -63,7 +63,7 @@ class NewsAbility(Ability):
     def get_search_tooltip(self) -> str:
         return "news article search"
 
-    _PARAMETERS: ClassVar[dict] = {
+    _PARAMETERS: ClassVar[dict[str, object]] = {
         "type": "object",
         "properties": {
             Keys.query: {
@@ -79,12 +79,12 @@ class NewsAbility(Ability):
         "required": [Keys.query],
     }
 
-    def get_parameters(self) -> dict:
+    def get_parameters(self) -> dict[str, object]:
         return self._PARAMETERS
 
     _service: ClassVar[Optional[NewsService]] = None
 
-    _COUNTRY_CODE_MAP: ClassVar[dict] = {
+    _COUNTRY_CODE_MAP: ClassVar[dict[str, str]] = {
         "united states": "US", "united kingdom": "GB", "malta": "MT",
         "germany": "DE", "france": "FR", "japan": "JP", "canada": "CA",
         "australia": "AU", "italy": "IT", "spain": "ES", "netherlands": "NL",
@@ -97,10 +97,10 @@ class NewsAbility(Ability):
         "united arab emirates": "AE", "saudi arabia": "SA",
     }
 
-    def run(self, params: dict) -> ToolResult:
+    def run(self, params: dict[str, object]) -> ToolResult:
         # query presence is pre-gated by ACTION_REQUIRED; .strip() guards a
         # whitespace-only value that the truthiness pre-gate lets through.
-        query = (params.get(Keys.query) or "").strip()
+        query = (cast("str", params.get(Keys.query) or "")).strip()
         if not query:
             return ToolResult.err(
                 "query is required and cannot be blank.",
@@ -120,7 +120,7 @@ class NewsAbility(Ability):
 
         degraded = False
         if category:
-            source_ids = [s.id for s in news_sources.get_sources_by_category(category)]
+            source_ids = [s.id for s in news_sources.get_sources_by_category(cast("str", category))]
             articles = svc.fetch_feeds(source_ids)
             try:
                 articles.extend(svc.fetch_google_news(query, country_code=country_code))
@@ -152,11 +152,9 @@ class NewsAbility(Ability):
             for a in top
         ]
 
-        meta: dict = {"count": len(rows)}
         if degraded:
-            meta["degraded"] = True
-
-        return ToolResult.ok(rows, **meta)
+            return ToolResult.ok(rows, count=len(rows), degraded=True)
+        return ToolResult.ok(rows, count=len(rows))
 
     @staticmethod
     def _provider_unreachable(exc: NewsFetchError) -> ToolResult:
@@ -167,14 +165,14 @@ class NewsAbility(Ability):
         )
 
     @classmethod
-    def _get_service(cls):
+    def _get_service(cls) -> "NewsService":
         if cls._service is None:
             cls._service = NewsService()
         return cls._service
 
     @classmethod
-    def _resolve_country_code(cls, country) -> str:
+    def _resolve_country_code(cls, country: object) -> str:
         if not country:
             return "US"
-        return cls._COUNTRY_CODE_MAP.get(country.lower().strip(), "US")
+        return cls._COUNTRY_CODE_MAP.get(cast("str", country).lower().strip(), "US")
 

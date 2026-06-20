@@ -1,5 +1,11 @@
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
 
 import pytest
+
+if TYPE_CHECKING:
+    from tests.helpers import StubProcessorConfig
 
 
 # ---------------------------------------------------------------------------
@@ -8,14 +14,14 @@ import pytest
 
 def _make_config(
     *,
-    channel="dmn",
-    role="proactive_thought",
-    skip_transcript=True,
-    skip_input_row=False,
-    suppress_history=True,
-    broadcast_to=None,
-    memory_seed=False,
-):
+    channel: str = "dmn",
+    role: str = "proactive_thought",
+    skip_transcript: bool = True,
+    skip_input_row: bool = False,
+    suppress_history: bool = True,
+    broadcast_to: str | None = None,
+    memory_seed: bool = False,
+) -> StubProcessorConfig:
 
     from services.processor_config import ProcessorConfig
     from tests.helpers import StubProcessorConfig
@@ -44,7 +50,7 @@ def _make_config(
 @pytest.mark.unit
 class TestSuppressHistory:
 
-    def test_suppress_history_returns_empty_string(self):
+    def test_suppress_history_returns_empty_string(self) -> None:
         from services.message_processor import MessageProcessor
         config = _make_config(suppress_history=True)
         mp = object.__new__(MessageProcessor)

@@ -28,7 +28,7 @@ class ActEventEmitter:
     def __init__(self, config: object) -> None:
         self._config = config
 
-    def emit(self, event: dict) -> None:
+    def emit(self, event: dict[str, object]) -> None:
         """Broadcast *event* iff the bound config has a ``broadcast_to`` target;
         swallow broker errors so a dead socket never breaks the ACT loop."""
         if self._config is None or getattr(self._config, "broadcast_to", None) is None:

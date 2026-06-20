@@ -21,6 +21,9 @@ Result contract:
 """
 
 
+from typing import cast
+
+
 def _neutralize(text: str) -> str:
     """Defang record-boundary tokens in a free-text field.
 
@@ -33,7 +36,7 @@ def _neutralize(text: str) -> str:
     return text.replace("</result>", "<\\/result>").replace("<result", "<\\result")
 
 
-def render_records(results: list[dict]) -> str:
+def render_records(results: list[dict[str, object]]) -> str:
     """Render *results* to a string of XML-like ``<result>`` blocks.
 
     Args:
@@ -50,8 +53,8 @@ def render_records(results: list[dict]) -> str:
 
     blocks: list[str] = []
     for index, r in enumerate(results, start=1):
-        score: float | None = r.get("score")
-        date: str | None = r.get("date") or None
+        score: float | None = cast("float | None", r.get("score"))
+        date: str | None = cast("str | None", r.get("date")) or None
 
         # Build open-tag attributes
         attrs = f'index="{index}"'

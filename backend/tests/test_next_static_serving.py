@@ -2,12 +2,15 @@
 
 Real Flask app via create_app(), real on-disk dist files. No mocks.
 """
+import pathlib
+from collections.abc import Generator
+
 import pytest
 from services.file_mapper_service import FileMapperService
 
 
 @pytest.fixture
-def built_dist():
+def built_dist() -> Generator[pathlib.Path, None, None]:
     """Provide a minimal Vite-style dist for the routes to serve, restoring any
     real on-disk build afterward so the test never clobbers build output.
 
@@ -70,7 +73,7 @@ def built_dist():
             onboarding_index.unlink(missing_ok=True)
 
 
-def test_root_serves_index_and_hashed_asset(built_dist):
+def test_root_serves_index_and_hashed_asset(built_dist: pathlib.Path) -> None:
     """/ serves the Vue interface SPA; /assets/* served verbatim; unknown deep
     paths fall back to index.html (SPA history mode)."""
     from api import create_app
@@ -96,7 +99,7 @@ def test_root_serves_index_and_hashed_asset(built_dist):
     assert b'<div id="app">' in r.data
 
 
-def test_login_and_onboarding_entries_served(built_dist):
+def test_login_and_onboarding_entries_served(built_dist: pathlib.Path) -> None:
     """Login and on-boarding multi-page entries are served at their canonical paths."""
     from api import create_app
 

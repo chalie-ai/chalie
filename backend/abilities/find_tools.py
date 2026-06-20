@@ -1,7 +1,7 @@
 import copy
 import logging
 from pathlib import Path
-from typing import ClassVar
+from typing import ClassVar, cast
 
 from abilities._params import Keys
 from abilities._result import ToolResult
@@ -23,7 +23,7 @@ class FindToolsAbility(SearchableAbility):
 
     DISCOVERABLE: ClassVar[bool] = False  # the discovery entry point itself; pinned, never discovered
 
-    _PARAMETERS: ClassVar[dict] = {
+    _PARAMETERS: ClassVar[dict[str, object]] = {
         "type": "object",
         "properties": {
             Keys.select: {
@@ -129,22 +129,23 @@ class FindToolsAbility(SearchableAbility):
             logger.debug("[FIND_TOOLS] Could not fetch MCP tool index: %s", exc)
             return []
 
-    def get_parameters(self) -> dict:
+    def get_parameters(self) -> dict[str, object]:
         # Enrich the `select` description with the global discoverable-tools index.
         # The roster is the same on every channel (AbilityRegistry.discoverable_names);
         # find_tools is itself DISCOVERABLE=False, so it never lands in the search
         # index / SHA map and this enrichment never feeds the build. The framework
         # fields (act_summary / async) are injected uniformly afterwards by the
         # final get_input_schema().
-        params = copy.deepcopy(self._PARAMETERS)
+        params: dict[str, object] = copy.deepcopy(self._PARAMETERS)
         tools_index = self._build_tools_index()
         if tools_index:
-            params["properties"][Keys.select]["description"] = (
+            props = cast("dict[str, dict[str, object]]", params["properties"])
+            props[Keys.select]["description"] = (
                 f"Exact tool names to activate directly. Available tools: {tools_index}"
             )
         return params
 
-    def run(self, params: dict) -> ToolResult:
+    def run(self, params: dict[str, object]) -> ToolResult:
         """Dispatch to the select or query path and return a ToolResult.
 
         The result is structured so a weak model can tell what it actually got:
@@ -154,8 +155,8 @@ class FindToolsAbility(SearchableAbility):
         ``valid:`` ladder of real selectable names — never a prose-only result
         that hides whether a tool was injected.
         """
-        select_names = params.get(Keys.select)
-        query = params.get(Keys.query, "").strip()
+        select_names: list[str] | None = cast("list[str] | None", params.get(Keys.select))
+        query = cast("str", params.get(Keys.query, "")).strip()
 
         # Require at least one param.
         if not select_names and not query:
@@ -247,10 +248,9 @@ class FindToolsAbility(SearchableAbility):
             "injected": [{"name": n, "summary": self._summary_for(n)} for n in matched],
             "not_found": not_found,
         }
-        meta = {"injected": len(matched)}
         if not_found:
-            meta["not_found"] = len(not_found)
-        return ToolResult.ok(body, **meta)
+            return ToolResult.ok(body, injected=len(matched), not_found=len(not_found))
+        return ToolResult.ok(body, injected=len(matched))
 
     def _run_query(self, query: str, allow: list[str], mcp_names: list[str]) -> ToolResult:
         effective_allow = list(set(allow) | set(mcp_names))
@@ -262,18 +262,18 @@ class FindToolsAbility(SearchableAbility):
             logger.warning("%s Embedding generation failed: %s", self._LOG_PREFIX, exc)
             return self._fallback(query, effective_allow)
 
-        blob = pack_embedding(query_embedding)
+        blob = cast("bytes", pack_embedding(query_embedding))
         rows = self._query(query, blob, allow)
         mcp_rows = self._query_mcp(query, blob, self.MAX_QUERY_RESULTS, mcp_names)
         rows = self._merge_and_truncate(rows + mcp_rows)
 
         # Apply relevance floor then cap to MAX_QUERY_RESULTS.
-        rows = [r for r in rows if r["score"] >= self.MIN_RRF_SCORE][:self.MAX_QUERY_RESULTS]
+        rows = [r for r in rows if cast("float", r["score"]) >= self.MIN_RRF_SCORE][:self.MAX_QUERY_RESULTS]
 
         for row in rows:
             logger.info("%s RRF: %s score=%.4f", self._LOG_PREFIX, row["key"], row["score"])
 
-        names = [r["key"] for r in rows]
+        names = [cast("str", r["key"]) for r in rows]
         self._append_active(names)
         return ToolResult.ok(self._query_body(names), injected=len(names), query=query)
 
@@ -283,12 +283,14 @@ class FindToolsAbility(SearchableAbility):
         proc = self.mp
         if proc is None:
             return
-        active = proc.active_tools
+        active: list[str] = cast("list[str]", getattr(proc, "active_tools", None))
+        if active is None:
+            return
         for name in names:
             if name not in active:
                 active.append(name)
 
-    def _query_body(self, names: list[str]) -> dict:
+    def _query_body(self, names: list[str]) -> dict[str, object]:
         return {
             "injected": [{"name": n, "summary": self._summary_for(n)} for n in names],
             "not_found": [],
@@ -302,7 +304,7 @@ class FindToolsAbility(SearchableAbility):
                 from services.mcp_client_service import McpClientService
                 result = McpClientService().get_tool_schema(name)
                 if result:
-                    return result.get("description") or ""
+                    return cast("str", result.get("description")) or ""
                 return ""
             from abilities._registry import AbilityRegistry
             ability = AbilityRegistry.get(name)
@@ -311,7 +313,7 @@ class FindToolsAbility(SearchableAbility):
             logger.warning("%s Summary lookup failed for %r: %s", self._LOG_PREFIX, name, exc)
             return ""
 
-    def _query(self, query: str, blob: bytes, allow: list[str]) -> list:
+    def _query(self, query: str, blob: bytes, allow: list[str]) -> list[dict[str, object]]:
         if not allow:
             return []
         placeholders = ",".join("?" * len(allow))
@@ -339,7 +341,7 @@ class FindToolsAbility(SearchableAbility):
             fts_params=(query, *allow),
         )
 
-    def _query_mcp(self, query: str, blob: bytes, limit: int, mcp_names: list[str]) -> list:
+    def _query_mcp(self, query: str, blob: bytes, limit: int, mcp_names: list[str]) -> list[dict[str, object]]:
         if not mcp_names:
             return []
         placeholders = ",".join("?" * len(mcp_names))
@@ -368,14 +370,14 @@ class FindToolsAbility(SearchableAbility):
         )
 
     @staticmethod
-    def _merge_and_truncate(rows: list[dict]) -> list[dict]:
+    def _merge_and_truncate(rows: list[dict[str, object]]) -> list[dict[str, object]]:
         seen: set[str] = set()
         merged = []
         for row in rows:
-            if row["key"] not in seen:
-                seen.add(row["key"])
+            if cast("str", row["key"]) not in seen:
+                seen.add(cast("str", row["key"]))
                 merged.append(row)
-        merged.sort(key=lambda r: r["score"], reverse=True)
+        merged.sort(key=lambda r: cast("float", r["score"]), reverse=True)
         return merged
 
     def _fallback(self, query: str, allow: list[str]) -> ToolResult:
@@ -403,11 +405,11 @@ class FindToolsAbility(SearchableAbility):
                 """,
                 fts_params=(query, *ability_names, self.MAX_QUERY_RESULTS),
             )
-            discovered.extend(row[0] for row in rows)
+            discovered.extend(cast("str", row[0]) for row in rows)
 
         for row in self._query_mcp(query, b"", self.MAX_QUERY_RESULTS, mcp_names):
-            if row["key"] not in discovered:
-                discovered.append(row["key"])
+            if cast("str", row["key"]) not in discovered:
+                discovered.append(cast("str", row["key"]))
 
         discovered = discovered[:self.MAX_QUERY_RESULTS]
 

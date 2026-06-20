@@ -3,9 +3,21 @@
 All factories return tuples unless noted otherwise. Override any field via keyword argument.
 """
 
+from __future__ import annotations
+
 from datetime import datetime, timezone, timedelta
+from typing import TYPE_CHECKING, Callable
 
 from services.processor_config import ProcessorConfig
+
+if TYPE_CHECKING:
+    from services.message_processor import MessageProcessor
+    from services.post_turn_hook import PostTurnHook
+
+    class _WithBuilders(ProcessorConfig):
+        _b_up: Callable[["MessageProcessor"], str]
+        _b_ud: Callable[["MessageProcessor"], str]
+        _b_sp: Callable[["MessageProcessor"], str]
 
 
 # ─── ProcessorConfig test stub ───────────────────────────────────────
@@ -18,33 +30,56 @@ class StubProcessorConfig(ProcessorConfig):
     def __init__(
         self,
         *,
-        build_user_prompt=None,
-        build_user_definition=None,
-        build_system_prompt=None,
-        **kwargs,
+        build_user_prompt: Callable[["MessageProcessor"], str] | None = None,
+        build_user_definition: Callable[["MessageProcessor"], str] | None = None,
+        build_system_prompt: Callable[["MessageProcessor"], str] | None = None,
+        channel: str,
+        role: str,
+        policy_channel: ProcessorConfig.PolicyChannel,
+        always_available: list[str],
+        skip_transcript: bool,
+        skip_input_row: bool,
+        suppress_history: bool,
+        broadcast_to: str | None,
+        memory_seed: bool,
+        post_turn_hooks: tuple["PostTurnHook", ...] = (),
     ) -> None:
-        super().__init__(**kwargs)
+        super().__init__(
+            channel=channel,
+            role=role,
+            policy_channel=policy_channel,
+            always_available=always_available,
+            skip_transcript=skip_transcript,
+            skip_input_row=skip_input_row,
+            suppress_history=suppress_history,
+            broadcast_to=broadcast_to,
+            memory_seed=memory_seed,
+            post_turn_hooks=post_turn_hooks,
+        )
         object.__setattr__(self, "_b_up", build_user_prompt or (lambda _mp: ""))
         object.__setattr__(self, "_b_ud", build_user_definition or (lambda _mp: ""))
         object.__setattr__(self, "_b_sp", build_system_prompt or (lambda _mp: ""))
 
-    def get_user_prompt(self, mp) -> str:
-        return self._b_up(mp)
+    def get_user_prompt(self, mp: "MessageProcessor") -> str:
+        from typing import cast
+        return cast("_WithBuilders", self)._b_up(mp)
 
-    def get_user_definition(self, mp) -> str:
-        return self._b_ud(mp)
+    def get_user_definition(self, mp: "MessageProcessor") -> str:
+        from typing import cast
+        return cast("_WithBuilders", self)._b_ud(mp)
 
-    def get_system_prompt(self, mp) -> str:
-        return self._b_sp(mp)
+    def get_system_prompt(self, mp: "MessageProcessor") -> str:
+        from typing import cast
+        return cast("_WithBuilders", self)._b_sp(mp)
 
 
 def make_stub_config(
     *,
-    always_available=None,
-    channel="user",
-    role="user",
-    policy_channel=None,
-):
+    always_available: list[str] | None = None,
+    channel: str = "user",
+    role: str = "user",
+    policy_channel: ProcessorConfig.PolicyChannel | None = None,
+) -> StubProcessorConfig:
     return StubProcessorConfig(
         channel=channel,
         role=role,
@@ -63,18 +98,18 @@ def make_stub_config(
 #   window_start, window_end, topic, created_by_session, group_id, is_prompt
 
 def make_scheduled_item(
-    item_id="sched-001",
-    item_type="reminder",
-    message="Test reminder",
-    due_at=None,
-    recurrence=None,
-    window_start=None,
-    window_end=None,
-    topic=None,
-    created_by_session=None,
-    group_id=None,
-    is_prompt=False,
-):
+    item_id: str = "sched-001",
+    item_type: str = "reminder",
+    message: str = "Test reminder",
+    due_at: str | None = None,
+    recurrence: str | None = None,
+    window_start: str | None = None,
+    window_end: str | None = None,
+    topic: str | None = None,
+    created_by_session: str | None = None,
+    group_id: str | None = None,
+    is_prompt: bool = False,
+) -> tuple[object, ...]:
     due_at = due_at or (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat()
     return (
         item_id, item_type, message, due_at, recurrence,
@@ -88,7 +123,7 @@ def make_scheduled_item(
 # but the raw query returns tuples.  This factory returns a dict matching
 # the service's output format (since the service converts internally).
 
-_EPISODE_DEFAULTS = {
+_EPISODE_DEFAULTS: dict[str, object] = {
     "id": "ep-001",
     "gist": "Weather conversation about Malta",
     "salience": 5,
@@ -107,8 +142,8 @@ _EPISODE_DEFAULTS = {
 }
 
 
-def make_episode_row(**overrides):
-    row = {**_EPISODE_DEFAULTS, **overrides}
+def make_episode_row(**overrides: object) -> dict[str, object]:
+    row: dict[str, object] = {**_EPISODE_DEFAULTS, **overrides}
     if row["created_at"] is None:
         row["created_at"] = datetime.now(timezone.utc)
     return row
@@ -119,19 +154,17 @@ def make_episode_row(**overrides):
 #   dimensions, timeout, supports_vision
 
 def make_provider_row(
-    provider_id=1,
-    name="test-provider",
-    platform="ollama",
-    model="gemma4:31b",
-    host="http://localhost:11434",
-    api_key=None,
-    dimensions=256,
-    timeout=30,
-    supports_vision=0,
-):
+    provider_id: int = 1,
+    name: str = "test-provider",
+    platform: str = "ollama",
+    model: str = "gemma4:31b",
+    host: str = "http://localhost:11434",
+    api_key: str | None = None,
+    dimensions: int = 256,
+    timeout: int = 30,
+    supports_vision: int = 0,
+) -> tuple[object, ...]:
     return (
         provider_id, name, platform, model, host,
         api_key, dimensions, timeout, supports_vision,
     )
-
-

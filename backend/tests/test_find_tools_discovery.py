@@ -12,6 +12,7 @@ not by semantic luck.
 
 import sqlite3
 from pathlib import Path
+from typing import TYPE_CHECKING, cast
 
 import numpy as np
 import pytest
@@ -20,6 +21,9 @@ from abilities._search import RRF_K
 from abilities.find_tools import FindToolsAbility
 from services.message_processor import MessageProcessor
 from tests.helpers import make_stub_config
+
+if TYPE_CHECKING:
+    from services.processor_config import ProcessorConfig
 
 pytestmark = pytest.mark.unit
 
@@ -35,7 +39,7 @@ pytestmark = pytest.mark.unit
 
 def _make_stub_processor() -> MessageProcessor:
     proc = object.__new__(MessageProcessor)
-    proc.config = make_stub_config()
+    proc.config = cast("ProcessorConfig", make_stub_config())
     proc._active_tools = []
     return proc
 
@@ -46,7 +50,7 @@ def _make_stub_processor() -> MessageProcessor:
 # ---------------------------------------------------------------------------
 
 @pytest.fixture(scope="session")
-def _real_embeddings():
+def _real_embeddings() -> dict[str, object]:
     from services.embedding_service import EmbeddingService
     es = EmbeddingService()
     weather_summary = "Get current weather and tomorrow's forecast for a city or device coordinates."
@@ -63,7 +67,7 @@ def _real_embeddings():
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _build_abilities_sqlite(path: Path, abilities: list) -> None:
+def _build_abilities_sqlite(path: Path, abilities: list[dict[str, object]]) -> None:
     """Build a minimal abilities.sqlite at path.
 
     Each ability dict: {"name": str, "summary": str, "embedding": list[float]}.
@@ -100,7 +104,7 @@ def _build_abilities_sqlite(path: Path, abilities: list) -> None:
     conn.close()
 
 
-def _execute_query(ability, query):
+def _execute_query(ability: FindToolsAbility, query: str) -> tuple[object, list[str]]:
     """The query path caps results at ``MAX_QUERY_RESULTS`` internally - there is no
     caller 'limit' knob (dropped in the v2 select/query split). Discovery filters
     against the global ``DISCOVERABLE=True`` roster — no per-call allowlist."""
@@ -117,8 +121,8 @@ def _execute_query(ability, query):
 class TestFindToolsDiscovery:
 
     def test_weather_discovered_via_abilities_db(
-        self, tmp_path, monkeypatch, _real_embeddings
-    ):
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, _real_embeddings: dict[str, object]
+    ) -> None:
         new_db_path = tmp_path / "abilities.sqlite"
         _build_abilities_sqlite(new_db_path, [{
             "name": "weather",
@@ -135,8 +139,8 @@ class TestFindToolsDiscovery:
         )
 
     def test_fts_keyword_path_surfaces_ability(
-        self, tmp_path, monkeypatch, _real_embeddings
-    ):
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, _real_embeddings: dict[str, object]
+    ) -> None:
         """Uses the query 'python sandbox' - FTS5 requires ALL query terms; the FTS
         hit lifts the result above ``MIN_RRF_SCORE`` where a vec-only signal would not.
         """
@@ -163,8 +167,8 @@ class TestFindToolsDiscovery:
         )
 
     def test_rrf_merges_vec_and_fts_results(
-        self, tmp_path, monkeypatch, _real_embeddings
-    ):
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, _real_embeddings: dict[str, object]
+    ) -> None:
         """``_query`` does NOT apply the relevance floor (that is layered on in
         ``_run_query``), so both abilities appear fused with weather ahead of code_eval.
         """
@@ -187,7 +191,7 @@ class TestFindToolsDiscovery:
         monkeypatch.setattr(FindToolsAbility, "_DB_PATH", new_db_path)
 
         ability = FindToolsAbility()
-        blob = pack_embedding(EmbeddingService().generate_embedding("weather forecast"))
+        blob = cast(bytes, pack_embedding(EmbeddingService().generate_embedding("weather forecast")))
         rows = ability._query("weather forecast", blob, ["weather", "code_eval"])
 
         names = [r["key"] for r in rows]
@@ -202,8 +206,8 @@ class TestFindToolsDiscovery:
         )
 
     def test_no_duplicates_when_ability_in_both_retrievers(
-        self, tmp_path, monkeypatch, _real_embeddings
-    ):
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, _real_embeddings: dict[str, object]
+    ) -> None:
         new_db_path = tmp_path / "abilities.sqlite"
         _build_abilities_sqlite(new_db_path, [{
             "name": "weather",
@@ -219,7 +223,7 @@ class TestFindToolsDiscovery:
             f"Duplicate 'weather' in active: {active}"
         )
 
-    def test_missing_db_returns_empty_gracefully(self, tmp_path, monkeypatch):
+    def test_missing_db_returns_empty_gracefully(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         nonexistent = tmp_path / "does_not_exist" / "abilities.sqlite"
         monkeypatch.setattr(FindToolsAbility, "_DB_PATH", nonexistent)
 
@@ -229,8 +233,8 @@ class TestFindToolsDiscovery:
         assert active == []
 
     def test_discoverable_allowlist_filters_results(
-        self, tmp_path, monkeypatch, _real_embeddings
-    ):
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, _real_embeddings: dict[str, object]
+    ) -> None:
         """Indexes both 'memory' and 'weather'. ``memory`` is DISCOVERABLE=False
         globally, so even though it is in the tmp index and would otherwise rank,
         the global discovery roster excludes it. ``weather`` is DISCOVERABLE=True
@@ -266,7 +270,7 @@ class TestFindToolsDiscovery:
 # ---------------------------------------------------------------------------
 
 
-def _build_stub_db(path: Path, abilities: list) -> None:
+def _build_stub_db(path: Path, abilities: list[dict[str, object]]) -> None:
     """Like _build_abilities_sqlite but accepts raw numpy float32 embeddings.
 
     Each ability dict: {"name": str, "summary": str, "embedding": np.ndarray}
@@ -290,7 +294,7 @@ def _build_stub_db(path: Path, abilities: list) -> None:
         entry_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
         conn.execute(
             "INSERT INTO ability_search_vec(rowid, embedding) VALUES (?, ?)",
-            (entry_id, pack_embedding(ab["embedding"].tolist())),
+            (entry_id, pack_embedding(cast(np.ndarray, ab["embedding"]).tolist())),
         )
         conn.execute(
             "INSERT INTO ability_search_fts(rowid, text) VALUES (?, ?)",
@@ -302,7 +306,7 @@ def _build_stub_db(path: Path, abilities: list) -> None:
 
 class TestFindToolsPhase3Gaps:
 
-    def test_rrf_order_matches_formula_when_vec_and_fts_disagree(self, tmp_path, monkeypatch):
+    def test_rrf_order_matches_formula_when_vec_and_fts_disagree(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """Fixture: ability_a vec rank 1 (no FTS hit); ability_b vec rank 2 with FTS
         rank 1 ('zetakeyword' in summary).
 
@@ -334,7 +338,7 @@ class TestFindToolsPhase3Gaps:
 
         monkeypatch.setattr(FindToolsAbility, "_DB_PATH", db_path)
         ability = FindToolsAbility()
-        blob = pack_embedding(q_vec.tolist())
+        blob = cast(bytes, pack_embedding(q_vec.tolist()))
         rows = ability._query("zetakeyword", blob, ["ability_a", "ability_b"])
 
         names = [r["key"] for r in rows]
@@ -346,7 +350,7 @@ class TestFindToolsPhase3Gaps:
             f"score(a) = {1/(RRF_K+1):.4f}"
         )
 
-    def test_fallback_keyword_search_queries_abilities_sqlite(self, tmp_path, monkeypatch):
+    def test_fallback_keyword_search_queries_abilities_sqlite(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """_fallback queries ability_search_fts in abilities.sqlite (never tool_capability_profiles)."""
         db_path = tmp_path / "fallback.sqlite"
         q_vec = np.zeros(768, dtype=np.float32)
@@ -365,7 +369,7 @@ class TestFindToolsPhase3Gaps:
 
         assert proc.active_tools == ["sandboxer"]
 
-    def test_query_abilities_filters_by_allowlist(self, tmp_path, monkeypatch):
+    def test_query_abilities_filters_by_allowlist(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """_query ignores rows whose name is outside the allowlist, regardless of vec or FTS rank."""
         from services.embedding_utils import pack_embedding
 
@@ -385,7 +389,7 @@ class TestFindToolsPhase3Gaps:
 
         monkeypatch.setattr(FindToolsAbility, "_DB_PATH", db_path)
         ability = FindToolsAbility()
-        blob = pack_embedding(q_vec.tolist())
+        blob = cast(bytes, pack_embedding(q_vec.tolist()))
         rows = ability._query("alphajet", blob, ["allowed_ability"])
 
         names = {r["key"] for r in rows}

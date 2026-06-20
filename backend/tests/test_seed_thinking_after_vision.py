@@ -13,17 +13,22 @@ real dispatcher. The ONLY stand-in is ``Providers._resolve`` — captured by
 
 import io
 import os
+import sqlite3
+from typing import TYPE_CHECKING, cast
 
 import pytest
 from unittest.mock import patch
 
 from configs.channels import UserConfig
 from services.database_service import get_shared_db_service
-from services.provider_api import ProviderApiResponse, ThinkingLevel
+from services.provider_api import ProviderApiRequest, ProviderApiResponse, ThinkingLevel
 from services.message_processor import MessageProcessor
 from services.provider_db_service import ProviderDbService
 from services.tmp_storage import new_tmp_path
 from services.transcript_service import turn_id_of_row, write_input_row
+
+if TYPE_CHECKING:
+    from services.llm_clients.base import ProviderClient
 
 pytestmark = pytest.mark.unit
 
@@ -37,16 +42,16 @@ class _RecordingProvider:
 
     CONTENT_FIELD_LABEL = "message.content"
 
-    def __init__(self):
-        self.sends = []
+    def __init__(self) -> None:
+        self.sends: list[dict[str, object]] = []
 
-    def get_context_limit(self):
+    def get_context_limit(self) -> int:
         return 200000
 
-    def estimate_request_tokens(self, dto):
+    def estimate_request_tokens(self, dto: ProviderApiRequest) -> int:
         return 1
 
-    def send(self, dto):
+    def send(self, dto: ProviderApiRequest) -> ProviderApiResponse:
         self.sends.append({
             "system": dto.system,
             "messages": dto.messages,
@@ -59,19 +64,20 @@ class _RecordingProvider:
 def _png_with_text(text: str) -> bytes:
     """A small high-contrast PNG rendering *text*."""
     from PIL import Image, ImageDraw, ImageFont
+    from PIL.ImageFont import FreeTypeFont, ImageFont as CoreFont
 
     img = Image.new("RGB", (480, 160), "white")
     draw = ImageDraw.Draw(img)
-    font = None
+    loaded_font: FreeTypeFont | CoreFont | None = None
     for candidate in ("DejaVuSans-Bold.ttf", "Arial Bold.ttf", "DejaVuSans.ttf"):
         try:
-            font = ImageFont.truetype(candidate, 72)
+            loaded_font = ImageFont.truetype(candidate, 72)
             break
         except Exception:
             continue
-    if font is None:
-        font = ImageFont.load_default()
-    draw.text((20, 40), text, fill="black", font=font)
+    if loaded_font is None:
+        loaded_font = ImageFont.load_default()
+    draw.text((20, 40), text, fill="black", font=loaded_font)
     buf = io.BytesIO()
     img.save(buf, format="PNG")
     return buf.getvalue()
@@ -86,7 +92,7 @@ def _write_attachment(label: str) -> str:
     return path
 
 
-def _build_parent(attachments: "list[str]") -> MessageProcessor:
+def _build_parent(attachments: list[str]) -> MessageProcessor:
     """A real UserConfig MessageProcessor in the exact state ``_seed_turn_zero``
     fires from: turn boundary allocated, input row written ON that turn,
     ``active_tools`` seeded, attachments on metadata, and the thinking gate already
@@ -107,7 +113,7 @@ def _build_parent(attachments: "list[str]") -> MessageProcessor:
     return parent
 
 
-def test_turn0_thinking_pass_sees_uploaded_image_in_its_snapshot(db):
+def test_turn0_thinking_pass_sees_uploaded_image_in_its_snapshot(db: sqlite3.Connection) -> None:
     """The thinking pass fires AFTER the upload, so the parent body it snapshots
     already carries the upload's act-trail row.
 
@@ -134,7 +140,7 @@ def test_turn0_thinking_pass_sees_uploaded_image_in_its_snapshot(db):
         f"(total sends={len(recorder.sends)})"
     )
 
-    content = high_sends[0]["messages"][0]["content"]
+    content = cast(str, cast(dict[str, object], cast(list[object], high_sends[0]["messages"])[0])["content"])
     # The deliberation snapshot must contain the upload's act-trail row — proof the
     # thinking pass fired AFTER the vision-bearing upload, not before. The upload's
     # structured success body carries the doc name + status=ready (TKT-893).

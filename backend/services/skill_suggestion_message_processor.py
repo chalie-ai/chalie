@@ -1,7 +1,16 @@
 import logging
 import threading
+from typing import TYPE_CHECKING, cast
 
 from services.file_mapper_service import FileMapperService
+
+if TYPE_CHECKING:
+    from typing import Protocol
+
+    class _TriggerCtx(Protocol):
+        _trigger_channel: str
+        _trigger_turn_id: int
+
 
 logger = logging.getLogger(__name__)
 
@@ -55,8 +64,8 @@ def _run_suggestion_processor(
         # Trigger context — the user turn that fired this suggestion pass.
         # get_user_prompt reads these to derive the real act-trail and query
         # from the DB instead of the suggestion MP's own (empty) turn.
-        mp._trigger_channel = trigger_channel  # type: ignore[attr-defined]
-        mp._trigger_turn_id = trigger_turn_id  # type: ignore[attr-defined]
+        cast("_TriggerCtx", mp)._trigger_channel = trigger_channel
+        cast("_TriggerCtx", mp)._trigger_turn_id = trigger_turn_id
         mp._run()
     except Exception as exc:
         logger.warning("%s processor failed: %s", _LOG_PREFIX, exc)

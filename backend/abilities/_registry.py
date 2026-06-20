@@ -2,6 +2,8 @@ import importlib
 import logging
 import threading
 
+from typing import cast
+
 from abilities._ability import Ability
 from abilities._mcp_ability import _MCPAbility
 from services.file_mapper_service import FileMapperService
@@ -92,7 +94,7 @@ class AbilityRegistry:
         return {name for name, a in _get_registry().items() if a.DISCOVERABLE}
 
     @staticmethod
-    def build_tools(mp: "object") -> list[dict]:
+    def build_tools(mp: "object") -> list[dict[str, object]]:
         """Resolve ``mp.active_tools`` to native tool schemas for this ACT turn.
 
         ``active_tools`` is the live list of tool NAMES available this turn:
@@ -110,15 +112,15 @@ class AbilityRegistry:
         registry = _get_registry()
 
         seen: set[str] = set()
-        result: list[dict] = []
+        result: list[dict[str, object]] = []
         for name in active:
             if name in seen:
                 continue
             seen.add(name)
 
             if name.startswith("_mcp_"):
-                ability = _MCPAbility(name, mp=mp)
-                if ability.remote_schema() is None:
+                ability: Ability = _MCPAbility(name, mp=mp)
+                if cast("_MCPAbility", ability).remote_schema() is None:
                     logger.warning(
                         "[AbilityRegistry.build_tools] No MCP schema for '%s'", name
                     )

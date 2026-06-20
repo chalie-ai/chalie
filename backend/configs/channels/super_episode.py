@@ -1,8 +1,12 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, cast
 
 from services.processor_config import ProcessorConfig
+
+if TYPE_CHECKING:
+    from services.database_service import DatabaseService
+    from services.message_processor import MessageProcessor
 
 # ── Super-episode helper functions ───────────────────────────────────────────
 # Moved here from services/super_episode_encoder_processor.py (§1 "Killed" table).
@@ -24,7 +28,7 @@ def _super_ep_strip_code_fence(text: str) -> str:
     return text[newline + 1 : close_start].strip()
 
 
-def _safe_json_load_object(text: str) -> dict:
+def _safe_json_load_object(text: str) -> dict[str, object]:
     import json as _json  # noqa: PLC0415
     import logging as _logging  # noqa: PLC0415
     _log = _logging.getLogger(__name__)
@@ -36,7 +40,7 @@ def _safe_json_load_object(text: str) -> dict:
     try:
         parsed = _json.loads(text)
         if isinstance(parsed, dict):
-            return parsed
+            return cast("dict[str, object]", parsed)
         _log.warning("%s SuperEpisodeEncoder returned non-dict JSON", _SUPER_EP_LOG_PREFIX)
         return {}
     except ValueError:
@@ -44,11 +48,11 @@ def _safe_json_load_object(text: str) -> dict:
         return {}
 
 
-def _parse_super_ep_transcript_ids_field(raw) -> list:
+def _parse_super_ep_transcript_ids_field(raw: object) -> list[object]:
     import json as _json  # noqa: PLC0415
     if isinstance(raw, str):
         try:
-            return _json.loads(raw)
+            return cast("list[object]", _json.loads(raw))
         except Exception:
             return []
     if isinstance(raw, list):
@@ -56,28 +60,29 @@ def _parse_super_ep_transcript_ids_field(raw) -> list:
     return []
 
 
-def _collect_transcript_ids(episodes: list) -> set:
+def _collect_transcript_ids(episodes: list[object]) -> set[int]:
     """Also expands transcript_id_start..transcript_id_end so overlap rows
     are always included."""
-    ids: set = set()
+    ids: set[int] = set()
     for ep in episodes:
-        for tid in _parse_super_ep_transcript_ids_field(ep.get("transcript_ids")):
+        for tid in _parse_super_ep_transcript_ids_field(cast("dict[str, object]", ep).get("transcript_ids")):
             if tid is None:
                 continue
             try:
-                ids.add(int(tid))
+                ids.add(int(cast("int", tid)))
             except (TypeError, ValueError):
                 pass
 
-    starts = [ep["transcript_id_start"] for ep in episodes if ep.get("transcript_id_start") is not None]
-    ends = [ep["transcript_id_end"] for ep in episodes if ep.get("transcript_id_end") is not None]
+    eps = [cast("dict[str, object]", ep) for ep in episodes]
+    starts = [cast("int", ep["transcript_id_start"]) for ep in eps if ep.get("transcript_id_start") is not None]
+    ends = [cast("int", ep["transcript_id_end"]) for ep in eps if ep.get("transcript_id_end") is not None]
     if starts and ends:
         ids.update(range(min(starts), max(ends) + 1))
 
     return ids
 
 
-def _fetch_transcript_spans(t_ids: set, db) -> str:
+def _fetch_transcript_spans(t_ids: set[int], db: "DatabaseService") -> str:
     """Returns '' if no transcript IDs found."""
     import logging as _logging  # noqa: PLC0415
     _log = _logging.getLogger(__name__)
@@ -116,6 +121,11 @@ def _fetch_transcript_spans(t_ids: set, db) -> str:
 
 # ── Super-episode config ─────────────────────────────────────────────────────
 
+if TYPE_CHECKING:
+    class _WithSourcesSpans:
+        _sources: list[object]
+        _spans: object
+
 
 class SuperEpisodeConfig(ProcessorConfig):
     """§3b / O2 — post_turn_hooks = () (caller owns the episode write).
@@ -126,7 +136,7 @@ class SuperEpisodeConfig(ProcessorConfig):
     transcript channel is always 'super_episode_encoder'.
     """
 
-    def __init__(self, channel: str, sources: list[Any], spans: Any) -> None:
+    def __init__(self, channel: str, sources: list[object], spans: object) -> None:
         super().__init__(
             channel="super_episode_encoder",
             role="super_episode_encoder",
@@ -141,20 +151,24 @@ class SuperEpisodeConfig(ProcessorConfig):
         object.__setattr__(self, "_sources", sources)
         object.__setattr__(self, "_spans", spans)
 
-    def get_user_definition(self, mp) -> str:
+    def get_user_definition(self, mp: "MessageProcessor") -> str:
         return (
             "The user is 'super_episode_encoder' — a background process that "
             "consolidates clusters of related episodes into a single super-episode."
         )
 
-    def get_user_prompt(self, mp) -> str:
-        src = "\n\n".join(f"[{e['id']}] {e['gist']}" for e in self._sources)
+    def get_user_prompt(self, mp: "MessageProcessor") -> str:
+        _self = cast("_WithSourcesSpans", self)
+        src = "\n\n".join(
+            f"[{cast('dict[str, object]', e)['id']}] {cast('dict[str, object]', e)['gist']}"
+            for e in _self._sources
+        )
         return (
             f"Source episodes:\n\n{src}\n\n"
-            f"Raw transcript spans covering these episodes:\n\n{self._spans}"
+            f"Raw transcript spans covering these episodes:\n\n{_self._spans}"
         )
 
-    def get_system_prompt(self, mp) -> str:
+    def get_system_prompt(self, mp: "MessageProcessor") -> str:
         """OLD assembly ``f"{user_def}\n\n{body}"``."""
         from services.system_message_prompt import SuperEpisodeEncoderSystemPrompt  # noqa: PLC0415
         return f"{self.get_user_definition(mp)}\n\n{SuperEpisodeEncoderSystemPrompt().get_prompt()}"

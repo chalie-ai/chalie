@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
 
+if TYPE_CHECKING:
+    from services.message_processor import MessageProcessor
 
 _CONTENT_FIELD_PLACEHOLDER = "{{provider_content_field_name}}"
 
 
-def substitute_provider_content_field(body: str, mp) -> str:
+def substitute_provider_content_field(body: str, mp: "MessageProcessor") -> str:
     """Replace {{provider_content_field_name}} with the active provider's
     CONTENT_FIELD_LABEL, read through the mp-owned providers gateway. Best-effort:
     placeholder absent or resolution fails → body unchanged (design §6.3)."""

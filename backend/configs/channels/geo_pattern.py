@@ -1,6 +1,11 @@
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from services.processor_config import ProcessorConfig
+
+if TYPE_CHECKING:
+    from services.message_processor import MessageProcessor
 
 from configs.channels.pattern import _pattern_existing_patterns_block
 
@@ -50,6 +55,10 @@ def _geo_pattern_load_transcript_block(window_start: int, window_end: int) -> st
 class GeoConfig(ProcessorConfig):
     """Geo-pattern config — per-window background geo recognition."""
 
+    if TYPE_CHECKING:
+        _window_start: int
+        _window_end: int
+
     def __init__(self, window_start: int, window_end: int) -> None:
         super().__init__(
             channel="geo_pattern",
@@ -65,23 +74,23 @@ class GeoConfig(ProcessorConfig):
         object.__setattr__(self, "_window_start", window_start)
         object.__setattr__(self, "_window_end", window_end)
 
-    def get_user_definition(self, mp) -> str:
+    def get_user_definition(self, mp: "MessageProcessor") -> str:
         return ""
 
-    def get_user_prompt(self, mp) -> str:
+    def get_user_prompt(self, mp: "MessageProcessor") -> str:
         """Geo-pattern user-prompt: location transcripts + existing patterns + trail."""
         block = _geo_pattern_load_transcript_block(self._window_start, self._window_end)
         existing = _pattern_existing_patterns_block()
         parts = [f"Existing patterns:\n{existing}", block]
         try:
-            trail = mp._render_act_trail()  # type: ignore[attr-defined]
+            trail = mp._render_act_trail()
             if trail:
                 parts.append(trail)
         except Exception:
             pass
         return "\n\n".join(parts)
 
-    def get_system_prompt(self, mp) -> str:
+    def get_system_prompt(self, mp: "MessageProcessor") -> str:
         """Geo-pattern system prompt (inlined from GeoPatternProcessor.get_system_prompt)."""
         return (
             "You are analysing the user's recent location-tagged transcripts "

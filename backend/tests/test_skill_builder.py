@@ -1,10 +1,15 @@
 import shutil
 import sqlite3
 from pathlib import Path
+from typing import TYPE_CHECKING, cast
 
 import pytest
 
 from services.file_mapper_service import FileMapperService
+
+if TYPE_CHECKING:
+    from services.message_processor import MessageProcessor as _MP
+    from services.processor_config import ProcessorConfig as _PC
 
 # ---------------------------------------------------------------------------
 # Marks
@@ -33,12 +38,12 @@ def _skill_count(db_path: Path, source: str = "user") -> int:
         row = conn.execute(
             "SELECT COUNT(*) FROM skills WHERE source = ?", (source,)
         ).fetchone()
-        return row[0]
+        return cast(int, row[0])
     finally:
         conn.close()
 
 
-def _get_skill_row(db_path: Path, title: str) -> dict | None:
+def _get_skill_row(db_path: Path, title: str) -> dict[str, object] | None:
     conn = sqlite3.connect(str(db_path))
     try:
         row = conn.execute(
@@ -58,7 +63,7 @@ def _get_skill_row(db_path: Path, title: str) -> dict | None:
 # ---------------------------------------------------------------------------
 
 @pytest.fixture
-def skill_env(tmp_path, monkeypatch):
+def skill_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict[str, Path]:
     db_path = _copy_db(tmp_path)
     yaml_dir = tmp_path / "user_skills"
     yaml_dir.mkdir()
@@ -81,24 +86,24 @@ def skill_env(tmp_path, monkeypatch):
 @pytest.mark.unit
 class TestSlugifyTitle:
 
-    def test_spaces_become_hyphens(self):
+    def test_spaces_become_hyphens(self) -> None:
         from utils.skills_io import slugify_title
 
         assert slugify_title("Track Package Delivery") == "track-package-delivery"
 
-    def test_special_chars_become_hyphens(self):
+    def test_special_chars_become_hyphens(self) -> None:
         from utils.skills_io import slugify_title
 
         assert slugify_title("Morning & Evening!") == "morning-evening"
 
-    def test_truncated_at_64_chars(self):
+    def test_truncated_at_64_chars(self) -> None:
         from utils.skills_io import slugify_title
 
         long_title = "a" * 100
         result = slugify_title(long_title)
         assert len(result) == 64
 
-    def test_leading_trailing_hyphens_stripped(self):
+    def test_leading_trailing_hyphens_stripped(self) -> None:
         from utils.skills_io import slugify_title
 
         result = slugify_title("  -- hello world --  ")
@@ -110,13 +115,13 @@ class TestSlugifyTitle:
 @pytest.mark.unit
 class TestSkillYamlPath:
 
-    def test_returns_path_in_user_skills_dir(self):
+    def test_returns_path_in_user_skills_dir(self) -> None:
         from utils.skills_io import USER_SKILLS_DIR, skill_yaml_path
 
         path = skill_yaml_path("My Custom Skill")
         assert path.parent == USER_SKILLS_DIR
 
-    def test_filename_is_slugified_title_with_yaml_extension(self):
+    def test_filename_is_slugified_title_with_yaml_extension(self) -> None:
         from utils.skills_io import skill_yaml_path, slugify_title
 
         title = "Weekly Expense Review"
@@ -133,7 +138,7 @@ class TestSkillYamlPath:
 @pytest.mark.integration
 class TestSkillBuilderCreateValidation:
 
-    def test_create_existing_db_succeeds(self, skill_env):
+    def test_create_existing_db_succeeds(self, skill_env: dict[str, Path]) -> None:
         from abilities._result import ToolResult
         from abilities.skill_builder import SkillBuilderAbility
 
@@ -157,7 +162,7 @@ class TestSkillBuilderLifecycle:
     _USE_FOR = "conducting structured weekly reviews"
     _CONTENT = "1. Summarise completed tasks.\n2. Plan next week."
 
-    def test_create_inserts_row_and_writes_yaml(self, skill_env):
+    def test_create_inserts_row_and_writes_yaml(self, skill_env: dict[str, Path]) -> None:
         from abilities.skill_builder import SkillBuilderAbility
 
         db_path = skill_env["db_path"]
@@ -189,11 +194,11 @@ class TestSkillBuilderLifecycle:
         assert self._TITLE in content
         assert self._USE_FOR in content
 
-    def test_create_duplicate_title_returns_error(self, skill_env):
+    def test_create_duplicate_title_returns_error(self, skill_env: dict[str, Path]) -> None:
         from abilities.skill_builder import SkillBuilderAbility
 
         ability = SkillBuilderAbility()
-        params = {
+        params: dict[str, object] = {
             "action": "create",
             "title": self._TITLE,
             "use_for": self._USE_FOR,
@@ -205,7 +210,7 @@ class TestSkillBuilderLifecycle:
         assert result.status == "error"
         assert result.code == "skill-already-exists"
 
-    def test_edit_increments_version_and_updates_content(self, skill_env):
+    def test_edit_increments_version_and_updates_content(self, skill_env: dict[str, Path]) -> None:
         from abilities.skill_builder import SkillBuilderAbility
 
         ability = SkillBuilderAbility()
@@ -223,10 +228,11 @@ class TestSkillBuilderLifecycle:
         assert result.meta["action"] == "edit"
 
         row = _get_skill_row(skill_env["db_path"], self._TITLE)
+        assert row is not None
         assert row["version"] == 2
         assert row["content"] == new_content
 
-    def test_delete_removes_row_and_yaml_file(self, skill_env):
+    def test_delete_removes_row_and_yaml_file(self, skill_env: dict[str, Path]) -> None:
         from abilities.skill_builder import SkillBuilderAbility
 
         db_path = skill_env["db_path"]
@@ -249,8 +255,9 @@ class TestSkillBuilderLifecycle:
         yaml_files = list(skill_env["yaml_dir"].glob("*.yaml"))
         assert len(yaml_files) == 0
 
-    def test_list_includes_created_skill(self, skill_env):
+    def test_list_includes_created_skill(self, skill_env: dict[str, Path]) -> None:
         from abilities.skill_builder import SkillBuilderAbility
+        from collections.abc import Sequence
 
         ability = SkillBuilderAbility()
         ability.run({
@@ -265,9 +272,10 @@ class TestSkillBuilderLifecycle:
         assert result.status == "success"
         assert result.meta["action"] == "list"
         # list now returns structured JSON rows, not prose.
-        titles = [row["title"] for row in result.body]
+        body_rows = cast(Sequence[dict[str, object]], result.body)
+        titles = [row["title"] for row in body_rows]
         assert self._TITLE in titles
-        mine = next(row for row in result.body if row["title"] == self._TITLE)
+        mine = next(row for row in body_rows if row["title"] == self._TITLE)
         assert mine["source"] == "user"
 
 
@@ -277,19 +285,18 @@ class TestSkillBuilderLifecycle:
 # ===========================================================================
 
 
-def _fetch_content_from_db(db_path, title: str) -> str | None:
+def _fetch_content_from_db(db_path: Path, title: str) -> str | None:
     conn = sqlite3.connect(str(db_path))
     try:
         row = conn.execute(
             "SELECT content FROM skills WHERE lower(title) = lower(?)", (title,)
         ).fetchone()
-        return row[0] if row else None
+        return cast(str, row[0]) if row else None
     finally:
         conn.close()
 
 
-def _mp_for_skill_test(config, db):
-    from abilities._dispatcher import ToolDispatcher  # noqa: F401 — import used below
+def _mp_for_skill_test(config: "_PC", db: sqlite3.Connection) -> "_MP":
     from services.message_processor import MessageProcessor
     from tests._tool_result_harness import seed_transcript
 
@@ -313,8 +320,8 @@ def _skill_body(rendered: str, tool: str) -> object:
 
 @pytest.mark.unit
 def test_skill_body_containing_skill_builder_survives_manager_op_byte_identical(
-    tmp_path, monkeypatch, db
-):
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, db: sqlite3.Connection
+) -> None:
     import abilities.skill_builder as sb
     import utils.skills_io as sio
     from abilities._dispatcher import ToolDispatcher
@@ -361,8 +368,8 @@ def test_skill_body_containing_skill_builder_survives_manager_op_byte_identical(
     # "skill_builder" was NOT silently rewritten to "skill_manager".
     after = _fetch_content_from_db(dest, title)
     assert after == content
-    assert "skill_builder" in after
-    assert "skill_manager" not in after
+    assert "skill_builder" in (after or "")
+    assert "skill_manager" not in (after or "")
 
 
 # ===========================================================================
@@ -371,7 +378,7 @@ def test_skill_body_containing_skill_builder_survives_manager_op_byte_identical(
 
 
 @pytest.mark.unit
-def test_skill_suggestion_prompt_contains_real_query_and_trail(db):
+def test_skill_suggestion_prompt_contains_real_query_and_trail(db: sqlite3.Connection) -> None:
     """SkillSuggestionConfig.get_user_prompt must render the actual user query"""
     from services.transcript_service import write_input_row, turn_id_of_row
     from services.act_trail import ActTrail
@@ -407,8 +414,8 @@ def test_skill_suggestion_prompt_contains_real_query_and_trail(db):
     mp.uid = None
     mp.cancel_event = threading.Event()
     mp.thinking_level = "low"
-    mp._trigger_channel = "user"  # type: ignore[attr-defined]
-    mp._trigger_turn_id = trigger_turn_id  # type: ignore[attr-defined]
+    setattr(mp, "_trigger_channel", "user")
+    setattr(mp, "_trigger_turn_id", trigger_turn_id)
 
     # 4. Call the real get_user_prompt.
     prompt = mp.config.get_user_prompt(mp)

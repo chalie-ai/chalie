@@ -17,8 +17,16 @@ factory — only these small shared primitives.
 from __future__ import annotations
 
 import logging
+from typing import TYPE_CHECKING, cast
 
 from abilities._result import ToolResult
+
+if TYPE_CHECKING:
+    from typing import Protocol
+
+    class _ActTrailRenderer(Protocol):
+        def _render_act_trail(self) -> str | None: ...
+
 
 logger = logging.getLogger(__name__)
 
@@ -39,7 +47,7 @@ def delegate_result(result: str, *, hint: str) -> ToolResult:
 def render_trail(mp: object) -> str:
     """Render the current act-trail for a delegate's user prompt, or '' on miss."""
     try:
-        trail = mp._render_act_trail()  # type: ignore[attr-defined]
+        trail = cast("_ActTrailRenderer", mp)._render_act_trail()
         return trail or ""
     except Exception:
         logger.warning("[DELEGATE] act-trail render failed", exc_info=True)

@@ -128,7 +128,7 @@ class ProcessorConfig(ABC):
 
     # ── Per-turn image attachment (concrete hook — default: no image) ──────────
 
-    def get_image(self, mp: "MessageProcessor") -> "dict | None":
+    def get_image(self, mp: "MessageProcessor") -> "dict[str, object] | None":
         """VisionConfig overrides this to return"""
         return None
 

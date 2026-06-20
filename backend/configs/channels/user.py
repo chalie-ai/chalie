@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, cast
 
 from services.post_turn_hook import PostTurnHook
 from services.processor_config import ProcessorConfig
@@ -10,11 +10,14 @@ from configs.channels._common import (
     substitute_provider_content_field,
 )
 
+if TYPE_CHECKING:
+    from services.message_processor import MessageProcessor
+
 
 class ProactiveSuggestionHook(PostTurnHook):
     """Fires on a turn that ran 4+ tool calls. Non-blocking (daemon thread inside"""
 
-    def run(self, mp, response_text: str) -> None:
+    def run(self, mp: "MessageProcessor", response_text: str) -> None:
         import logging  # noqa: PLC0415
         _log = logging.getLogger(__name__)
         turn_id = getattr(mp, "turn_id", None)
@@ -22,17 +25,18 @@ class ProactiveSuggestionHook(PostTurnHook):
             return
         try:
             from services.act_trail import ActTrail  # noqa: PLC0415
-            rows = ActTrail().fetch_by_turn(mp.config.channel, turn_id)
+            channel = cast("ProcessorConfig", mp.config).channel
+            rows = ActTrail().fetch_by_turn(channel, turn_id)
             tool_call_count = sum(
                 1 for r in rows if r.get("tool_name") != "chat_history_compactor"
             )
             if tool_call_count < 4:
                 return
             from services.skill_suggestion_message_processor import maybe_suggest_skill  # noqa: PLC0415
-            rendered = mp._render_act_trail()  # type: ignore[attr-defined]
+            rendered = mp._render_act_trail()
             act_trail = rendered.split("\n") if rendered else []
             raw_input = getattr(mp, "_raw_input", "")
-            maybe_suggest_skill(act_trail, raw_input, mp.config.channel, turn_id)
+            maybe_suggest_skill(act_trail, raw_input, channel, turn_id)
         except Exception as exc:
             _log.warning("[POSTTURN] skill suggestion failed: %s", exc)
 
@@ -42,7 +46,7 @@ class UserConfig(ProcessorConfig):
 
     SUPPORTS_ASYNC = True
 
-    def __init__(self, metadata: dict[str, Any] | None = None) -> None:
+    def __init__(self, metadata: dict[str, object] | None = None) -> None:
         _metadata = metadata or {}
         super().__init__(
             channel="user",
@@ -57,19 +61,18 @@ class UserConfig(ProcessorConfig):
             post_turn_hooks=(ProactiveSuggestionHook(),),
         )
 
-    def get_user_definition(self, mp) -> str:
+    def get_user_definition(self, mp: "MessageProcessor") -> str:
         """Per-turn cached on mp._user_definition_cached so each ACT iteration"""
         _FALLBACK = "The user is a real human. Treat this conversation as peer-to-peer dialogue."
         cached = getattr(mp, "_user_definition_cached", None)
         if cached is not None:
-            return cached
+            return cast("str", cached)
 
         try:
             from services.mode_gate_service import STEER_THRESHOLD  # noqa: PLC0415
-            mode_state = getattr(mp, "_mode_state_cached", None)
-            if mode_state is None:
-                mode_state = {}
-            prefer_long = mode_state.get("converse", 0.0) >= STEER_THRESHOLD
+            _mode_state_raw = getattr(mp, "_mode_state_cached", None)
+            _mode_state = cast("dict[str, object]", _mode_state_raw) if _mode_state_raw is not None else cast("dict[str, object]", {})
+            prefer_long = cast("float", _mode_state.get("converse", 0.0)) >= STEER_THRESHOLD
         except Exception:
             prefer_long = False
 
@@ -77,23 +80,27 @@ class UserConfig(ProcessorConfig):
             from services.data_graph_service import get_data_graph_service  # noqa: PLC0415
             dgs = get_data_graph_service()
             rows = dgs.fetch(kinds=["system"], order_by="retrieval_weight DESC")
-            by_key = {r.get("key"): r for r in rows if r.get("key")}
+            by_key: dict[str, dict[str, object]] = {
+                cast("str", r.get("key")): r
+                for r in rows
+                if r is not None and r.get("key")
+            }
 
             preferred_key = "user_summary_long" if prefer_long else "user_summary"
             entry = by_key.get(preferred_key)
             if (not entry or not entry.get("value")) and prefer_long:
                 entry = by_key.get("user_summary")
             if entry and entry.get("value"):
-                result = entry["value"]
-                mp._user_definition_cached = result  # type: ignore[attr-defined]
+                result = cast("str", entry["value"])
+                setattr(mp, "_user_definition_cached", result)
                 return result
         except Exception:
             pass
 
-        mp._user_definition_cached = _FALLBACK  # type: ignore[attr-defined]
+        setattr(mp, "_user_definition_cached", _FALLBACK)
         return _FALLBACK
 
-    def get_system_prompt(self, mp) -> str:
+    def get_system_prompt(self, mp: "MessageProcessor") -> str:
         """Voice line sits at the very top for cache warmth. The"""
         import logging  # noqa: PLC0415
         _log = logging.getLogger(__name__)
@@ -120,7 +127,7 @@ class UserConfig(ProcessorConfig):
 
         return prompt
 
-    def get_user_prompt(self, mp) -> str:
+    def get_user_prompt(self, mp: "MessageProcessor") -> str:
         """Section order: user_def, World State, Previous Messages, blank,"""
         import logging  # noqa: PLC0415
         _log = logging.getLogger(__name__)
@@ -146,7 +153,7 @@ class UserConfig(ProcessorConfig):
 
         # 3. Previous Messages
         try:
-            prev = mp.get_previous_messages()  # type: ignore[attr-defined]
+            prev = mp.get_previous_messages()
             if prev:
                 parts.append(f"## Previous Messages\n{prev}")
         except Exception as exc:
@@ -163,7 +170,7 @@ class UserConfig(ProcessorConfig):
         #     transcript-reading tool, mirroring how a fresh post-compaction agent
         #     recovers continuity. Sits ABOVE the input line.
         if getattr(mp, "post_compaction_continuation", False):
-            query = getattr(mp, "continuation_user_query", None) or mp._raw_input  # type: ignore[attr-defined]
+            query = getattr(mp, "continuation_user_query", None) or mp._raw_input
             parts.append(
                 "You are continuing after a mid-turn compaction. "
                 f"The user query was: {query}. "
@@ -174,7 +181,7 @@ class UserConfig(ProcessorConfig):
 
         # 4. Input line with optional nudge — BEFORE the trail (OLD ordering).
         nudge_tag = (getattr(mp, "_metadata", None) or {}).get("nudge_tag") or ""
-        turn_line = f"user: {mp._raw_input}"  # type: ignore[attr-defined]
+        turn_line = f"user: {mp._raw_input}"
         if nudge_tag:
             turn_line += " " + nudge_tag
         parts.append(turn_line)
@@ -182,7 +189,7 @@ class UserConfig(ProcessorConfig):
         # 5. ACT loop trail (empty before any tools have run; carries the turn-0
         #    memory seed once it has fired).
         try:
-            trail = mp._render_act_trail()  # type: ignore[attr-defined]
+            trail = mp._render_act_trail()
             if trail:
                 parts.append(trail)
         except Exception as exc:

@@ -4,6 +4,11 @@ import json
 import logging
 import threading
 import time
+from typing import TYPE_CHECKING, cast
+
+if TYPE_CHECKING:
+    from services.llm_clients.base import ProviderClient
+    from services.provider_api import ProviderApiRequest, ProviderApiResponse
 
 logger = logging.getLogger(__name__)
 
@@ -17,7 +22,7 @@ _log_call_warn_lock = threading.Lock()
 MAX_CONTEXT_WINDOW = 200_000
 
 
-def resolve_thinking_mode(config_thinking_mode, override, level):
+def resolve_thinking_mode(config_thinking_mode: str | None, override: str | None, level: str) -> str | None:
     """Single precedence rule for a send's thinking level."""
     return config_thinking_mode or override or level
 
@@ -27,7 +32,7 @@ class Providers:
 
     # ── Resolution ──────────────────────────────────────────────────────────
 
-    def _resolve(self, provider_type=None):
+    def _resolve(self, provider_type: object = None) -> "ProviderClient":
         """Return the ProviderClient for the given ProviderType."""
         from services.provider_api import ProviderType, ProviderError  # noqa: PLC0415
         from services.llm_clients.factory import build_client  # noqa: PLC0415
@@ -62,7 +67,7 @@ class Providers:
 
     # ── Public API ──────────────────────────────────────────────────────────
 
-    def send(self, dto):
+    def send(self, dto: "ProviderApiRequest") -> "ProviderApiResponse":
         """Pre-flight check, call, telemetry — the single chokepoint."""
         from services.provider_api import RequestOverCapError  # noqa: PLC0415
 
@@ -87,12 +92,12 @@ class Providers:
         self._log_after_call(dto, response, wall_ms)
         return response
 
-    def measure(self, dto) -> int:
+    def measure(self, dto: "ProviderApiRequest") -> int:
         """Return the estimated token cost of dto without sending."""
         client = self._resolve(dto.type)
         return client.estimate_request_tokens(dto)
 
-    def get_context_limit(self, provider_type=None) -> int:
+    def get_context_limit(self, provider_type: object = None) -> int:
         """Declared context window for the active provider/model, hard-capped at MAX_CONTEXT_WINDOW."""
         from services.provider_api import ProviderType  # noqa: PLC0415
         pt = provider_type or ProviderType.CHAT
@@ -101,18 +106,18 @@ class Providers:
             from services.provider_cache_service import ProviderCacheService  # noqa: PLC0415
             config = ProviderCacheService.get_selected_provider() or {}
             declared = config.get("max_tokens")
-            if declared and int(declared) > 0:
-                return min(int(declared), MAX_CONTEXT_WINDOW)
+            if declared and int(cast("int | str", declared)) > 0:
+                return min(int(cast("int | str", declared)), MAX_CONTEXT_WINDOW)
 
         return min(self._resolve(pt).get_context_limit(), MAX_CONTEXT_WINDOW)
 
-    def selected_provider(self):
+    def selected_provider(self) -> "ProviderClient":
         """Return the resolved CHAT provider client."""
         return self._resolve()
 
     # ── Telemetry ────────────────────────────────────────────────────────────
 
-    def _log_after_call(self, dto, response, wall_ms=None):
+    def _log_after_call(self, dto: "ProviderApiRequest", response: "ProviderApiResponse", wall_ms: int | None = None) -> None:
         """Write the LLM request log file and persist per-call token accounting."""
         # Per-call token accounting (was LoggingLLMService._log_llm_call).
         # job_name is carried on the DTO via the _job_name metadata key (set
@@ -154,13 +159,13 @@ class Providers:
                 model=getattr(response, 'model', 'unknown'),
                 system_message=dto.system or '',
                 user_message=self._render_messages_for_log(dto.messages),
-                tools=dto.tools,
+                tools=cast("list[object] | None", dto.tools),
             )
         except Exception as exc:
             logger.debug("[LLM LOG] log_llm_request failed: %s", exc, exc_info=True)
 
     @staticmethod
-    def _record_send_counters(proc) -> None:
+    def _record_send_counters(proc: object) -> None:
         """Record per-send, per-channel turn counters (spec §4e)."""
         try:
             channel = getattr(getattr(proc, 'config', None), 'channel', '') or ''
@@ -175,11 +180,11 @@ class Providers:
             logger.debug("[LLM LOG] send-counter record failed: %s", exc)
 
     @staticmethod
-    def _render_messages_for_log(messages) -> str:
+    def _render_messages_for_log(messages: list[dict[str, object]] | None) -> str:
         """Render the messages array verbatim for a log file."""
-        msgs = messages or []
+        msgs: list[dict[str, object]] = messages or []
 
-        def _content_to_str(content):
+        def _content_to_str(content: object) -> str:
             if isinstance(content, str):
                 return content
             return json.dumps(content, ensure_ascii=False)

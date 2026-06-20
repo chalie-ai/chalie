@@ -18,6 +18,8 @@ are the ones production runs:
     `high` override cannot elevate the delegate above LOW.
 """
 
+from typing import cast
+
 import pytest
 
 from abilities._registry import AbilityRegistry
@@ -31,24 +33,24 @@ from services.providers import resolve_thinking_mode
 pytestmark = pytest.mark.unit
 
 
-def _mp_for(config) -> MessageProcessor:
+def _mp_for(config: ProcessorConfig) -> MessageProcessor:
     mp = MessageProcessor("what's in the news today")
     mp.config = config
     mp.active_tools = list(config.always_available or [])
     return mp
 
 
-def _find_tools_on(mp: MessageProcessor, params: dict) -> str:
+def _find_tools_on(mp: MessageProcessor, params: dict[str, object]) -> str:
     ability = FindToolsAbility()
     ability.mp = mp
-    return ability.run(params).body
+    return cast(str, ability.run(params).body)
 
 
 # ── news is no longer reachable from the user channel ────────────────────────
 
 class TestNewsBlockedOnUserChannel:
 
-    def test_select_news_is_rejected_on_user_channel(self):
+    def test_select_news_is_rejected_on_user_channel(self) -> None:
         """``find_tools(select=['news'])`` on the user channel must NOT activate
         news — it is ``DISCOVERABLE=False``, exactly like browser/search, so it is
         absent from the global discovery roster and can only be reached inside the
@@ -70,12 +72,12 @@ class TestNewsBlockedOnUserChannel:
 
 class TestNewsAvailableInWebSearchDelegate:
 
-    def test_web_search_delegate_tool_surface_includes_news(self):
+    def test_web_search_delegate_tool_surface_includes_news(self) -> None:
         """The web_search delegate's resolved per-turn tool schemas must include
         `news` — proving the delegate can actually dispatch it, alongside
         search/read/web_download."""
         mp = _mp_for(WebSearchConfig(ProcessorConfig.PolicyChannel.CHAT))
-        names = {t["name"] for t in AbilityRegistry.build_tools(mp)}
+        names = {cast(str, t["name"]) for t in AbilityRegistry.build_tools(mp)}
         assert "news" in names, (
             f"web_search delegate must expose the news tool. tools={sorted(names)}"
         )
@@ -85,7 +87,7 @@ class TestNewsAvailableInWebSearchDelegate:
 
 class TestWebSearchDelegatePinsThinkingLow:
 
-    def test_high_override_cannot_elevate_delegate_above_low(self):
+    def test_high_override_cannot_elevate_delegate_above_low(self) -> None:
         """A persisted user `high` thinking override must NOT reach the web_search
         delegate: the config pin wins in the exact precedence function send()
         uses. LOW maps to "no thinking flag" at the provider, so the delegate

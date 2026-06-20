@@ -26,8 +26,8 @@ from tools.search.render import render_records  # noqa: E402
 # ── Multi-result indexing 1..N ────────────────────────────────────────────────
 
 
-def test_render_multi_result_indexes_are_1_based_and_sequential():
-    results = [
+def test_render_multi_result_indexes_are_1_based_and_sequential() -> None:
+    results: list[dict[str, object]] = [
         {"title": "Alpha", "url": "https://a.example.com", "summary": "First.", "score": 0.9, "date": "2026-01-01"},
         {"title": "Beta",  "url": "https://b.example.com", "summary": "Second.", "score": 0.8, "date": None},
         {"title": "Gamma", "url": "https://c.example.com", "summary": "Third.", "score": None, "date": None},
@@ -46,8 +46,8 @@ def test_render_multi_result_indexes_are_1_based_and_sequential():
 # ── Best-first order is preserved as-supplied ─────────────────────────────────
 
 
-def test_render_preserves_list_order_first_result_is_index_1():
-    results = [
+def test_render_preserves_list_order_first_result_is_index_1() -> None:
+    results: list[dict[str, object]] = [
         {"title": "Winner",   "url": "https://win.example.com", "summary": "Top result.", "score": 0.95, "date": None},
         {"title": "Runner-up", "url": "https://run.example.com", "summary": "Second.",    "score": 0.70, "date": None},
     ]
@@ -68,8 +68,8 @@ def test_render_preserves_list_order_first_result_is_index_1():
 # ── Score rendered to 2 decimal places ───────────────────────────────────────
 
 
-def test_render_score_attribute_is_2_decimal_places():
-    results = [
+def test_render_score_attribute_is_2_decimal_places() -> None:
+    results: list[dict[str, object]] = [
         {"title": "A", "url": "https://a.com", "summary": "Summary.", "score": 0.87654, "date": None},
         {"title": "B", "url": "https://b.com", "summary": "Summary.", "score": 1.0,     "date": None},
         {"title": "C", "url": "https://c.com", "summary": "Summary.", "score": 0.5,     "date": None},
@@ -87,8 +87,8 @@ def test_render_score_attribute_is_2_decimal_places():
 # ── score= attribute omitted when score is None ───────────────────────────────
 
 
-def test_render_score_attribute_omitted_when_score_is_none():
-    results = [
+def test_render_score_attribute_omitted_when_score_is_none() -> None:
+    results: list[dict[str, object]] = [
         {"title": "No score", "url": "https://example.com", "summary": "Body.", "score": None, "date": None},
     ]
     rendered = render_records(results)
@@ -100,8 +100,8 @@ def test_render_score_attribute_omitted_when_score_is_none():
 # ── date= attribute omitted when date is None or empty ───────────────────────
 
 
-def test_render_date_attribute_omitted_when_date_is_none():
-    results = [
+def test_render_date_attribute_omitted_when_date_is_none() -> None:
+    results: list[dict[str, object]] = [
         {"title": "No date", "url": "https://example.com", "summary": "Body.", "score": 0.5, "date": None},
     ]
     rendered = render_records(results)
@@ -109,8 +109,8 @@ def test_render_date_attribute_omitted_when_date_is_none():
     assert "date=" not in rendered
 
 
-def test_render_date_attribute_omitted_when_date_is_empty_string():
-    results = [
+def test_render_date_attribute_omitted_when_date_is_empty_string() -> None:
+    results: list[dict[str, object]] = [
         {"title": "No date", "url": "https://example.com", "summary": "Body.", "score": 0.5, "date": ""},
     ]
     rendered = render_records(results)
@@ -121,8 +121,8 @@ def test_render_date_attribute_omitted_when_date_is_empty_string():
 # ── date= attribute present when date is set ─────────────────────────────────
 
 
-def test_render_date_attribute_present_when_date_is_set():
-    results = [
+def test_render_date_attribute_present_when_date_is_set() -> None:
+    results: list[dict[str, object]] = [
         {"title": "Dated", "url": "https://example.com", "summary": "Body.", "score": 0.7, "date": "2026-06-17"},
     ]
     rendered = render_records(results)
@@ -133,9 +133,9 @@ def test_render_date_attribute_present_when_date_is_set():
 # ── Long summary is NOT truncated ─────────────────────────────────────────────
 
 
-def test_render_very_long_summary_survives_in_full():
+def test_render_very_long_summary_survives_in_full() -> None:
     long_summary = "x" * 2000
-    results = [
+    results: list[dict[str, object]] = [
         {"title": "Long", "url": "https://example.com", "summary": long_summary, "score": 0.8, "date": None},
     ]
     rendered = render_records(results)
@@ -150,7 +150,7 @@ def test_render_very_long_summary_survives_in_full():
 # ── Empty list produces a sentinel without <result index= ────────────────────
 
 
-def test_render_empty_list_returns_sentinel_without_result_tag():
+def test_render_empty_list_returns_sentinel_without_result_tag() -> None:
     rendered = render_records([])
 
     assert "<result index=" not in rendered
@@ -161,11 +161,11 @@ def test_render_empty_list_returns_sentinel_without_result_tag():
 # ── Free-text content cannot forge a record boundary ─────────────────────────
 
 
-def test_render_neutralizes_result_tokens_in_content():
+def test_render_neutralizes_result_tokens_in_content() -> None:
     """A title/summary containing a literal ``</result>`` or ``<result …>`` must
     not forge a record boundary: a single-result render has exactly ONE genuine
     opening tag and ONE genuine closing tag."""
-    results = [
+    results: list[dict[str, object]] = [
         {
             "title": "Parsing <result index=2> blocks",
             "url": "https://example.com/xml",
@@ -181,10 +181,10 @@ def test_render_neutralizes_result_tokens_in_content():
     assert rendered.count("<result index=") == 1
 
 
-def test_render_preserves_non_result_angle_brackets():
+def test_render_preserves_non_result_angle_brackets() -> None:
     """Generic ``<``/``>`` in content (code, math) survive untouched — only the
     record-boundary tokens are escaped."""
-    results = [
+    results: list[dict[str, object]] = [
         {"title": "Generics in C++", "url": "https://example.com",
          "summary": "Use std::vector<int> and assert a < b.", "score": 0.5, "date": None},
     ]

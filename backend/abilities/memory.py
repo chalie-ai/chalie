@@ -16,7 +16,10 @@ directly.
 """
 
 import logging
-from typing import ClassVar
+from typing import TYPE_CHECKING, ClassVar, cast
+
+if TYPE_CHECKING:
+    from services.message_processor import MessageProcessor
 
 from abilities._ability import Ability
 from abilities._params import Keys
@@ -51,7 +54,7 @@ class MemoryAbility(Ability):
     def get_search_tooltip(self) -> str:
         return "personal memory store"
 
-    _PARAMETERS: ClassVar[dict] = {
+    _PARAMETERS: ClassVar[dict[str, object]] = {
         "type": "object",
         "properties": {
             Keys.action: {
@@ -118,7 +121,7 @@ class MemoryAbility(Ability):
         "required": [Keys.action],
     }
 
-    def get_parameters(self) -> dict:
+    def get_parameters(self) -> dict[str, object]:
         return self._PARAMETERS
 
     # SYSTEM tool: always allowed in every context and never shown in the Policy
@@ -140,7 +143,7 @@ class MemoryAbility(Ability):
         "forget": (Keys.key,),
     }
 
-    def run(self, params: dict) -> ToolResult:
+    def run(self, params: dict[str, object]) -> ToolResult:
         action = params.get(Keys.action, "recall")
         mp = self.mp
         channel = getattr(getattr(mp, "config", None), "channel", "") or ""
@@ -154,9 +157,9 @@ class MemoryAbility(Ability):
             if action == "store":
                 return memory_retrieval.handle_store(channel, params)
             if action == "recall":
-                return memory_retrieval.handle_recall(mp, channel, params)
+                return memory_retrieval.handle_recall(cast("MessageProcessor | None", mp), channel, params)
             if action == "reflect":
-                return memory_retrieval.handle_reflect(mp, params)
+                return memory_retrieval.handle_reflect(cast("MessageProcessor | None", mp), params)
             if action == "forget":
                 return memory_retrieval.handle_forget(params)
             return ToolResult.err(

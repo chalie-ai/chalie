@@ -27,7 +27,10 @@ fails RED against that code and passes GREEN with the connection-set broker.
 """
 
 import json
+import sqlite3
 import time
+from collections.abc import Generator
+from typing import cast
 
 import pytest
 
@@ -39,7 +42,7 @@ pytestmark = pytest.mark.unit
 # ── helpers ───────────────────────────────────────────────────────────────────
 
 
-def _seed_user_input(db, content: str) -> int:
+def _seed_user_input(db: sqlite3.Connection, content: str) -> int:
     """Persist a user-input transcript row the way production does, so
     ``_broadcast_turn_result`` resolves the turn's transcript id off it."""
     db.execute(
@@ -47,7 +50,7 @@ def _seed_user_input(db, content: str) -> int:
         "VALUES ('user', 'user', ?, 1)",
         (content,),
     )
-    return db.execute("SELECT last_insert_rowid()").fetchone()[0]
+    return cast(int, db.execute("SELECT last_insert_rowid()").fetchone()[0])
 
 
 class _Surface:
@@ -55,13 +58,13 @@ class _Surface:
     pushes JSON strings to it exactly as it does to a browser connection."""
 
     def __init__(self) -> None:
-        self.received: list[dict] = []
+        self.received: list[dict[str, object]] = []
 
     def send(self, raw: str) -> None:
         self.received.append(json.loads(raw))
 
     def types(self) -> list[str]:
-        return [m.get("type") for m in self.received]
+        return [cast(str, m.get("type")) for m in self.received]
 
 
 class _DeadSurface:
@@ -77,7 +80,7 @@ class _DeadSurface:
 
 
 @pytest.fixture
-def broker():
+def broker() -> Generator[WebSocketBroker, None, None]:
     """The real process-wide broker singleton, emptied before and after the test
     so leaked connections from other tests cannot perturb fan-out assertions."""
     b = WebSocketBroker()
@@ -93,7 +96,7 @@ def broker():
 # ── A. Fan-out: a turn result reaches every open surface ────────────────────────
 
 
-def test_turn_broadcast_reaches_all_open_surfaces(db, broker):
+def test_turn_broadcast_reaches_all_open_surfaces(db: sqlite3.Connection, broker: WebSocketBroker) -> None:
     """Two surfaces are open for the one user. A completed turn broadcast via the
     real ``_broadcast_turn_result`` must deliver the ``message`` AND ``done``
     events to BOTH — not just whichever connected last."""
@@ -125,7 +128,7 @@ def test_turn_broadcast_reaches_all_open_surfaces(db, broker):
 # ── B. Targeted disconnect: closing one surface keeps the others live ───────────
 
 
-def test_disconnect_removes_only_the_closed_surface(db, broker):
+def test_disconnect_removes_only_the_closed_surface(db: sqlite3.Connection, broker: WebSocketBroker) -> None:
     """When one surface disconnects, the others must keep receiving. The previous
     single-slot broker cleared the only reference on any disconnect, so the
     surviving tab went dark — this guards against that regression."""
@@ -147,7 +150,7 @@ def test_disconnect_removes_only_the_closed_surface(db, broker):
 # ── C. Dead-socket pruning: a failed send removes that surface, others unaffected ─
 
 
-def test_broadcast_prunes_dead_surface_and_keeps_delivering(db, broker):
+def test_broadcast_prunes_dead_surface_and_keeps_delivering(db: sqlite3.Connection, broker: WebSocketBroker) -> None:
     """A surface whose ``send`` raises (closed/half-open socket) is pruned on the
     failing broadcast and is not contacted again, while healthy surfaces continue
     to receive — one stale connection cannot block or accumulate."""
@@ -173,7 +176,7 @@ def test_broadcast_prunes_dead_surface_and_keeps_delivering(db, broker):
 # ── D. User-message echo: every open surface sees the message that was sent ─────
 
 
-def test_user_message_echo_reaches_all_surfaces_with_echo_id(broker):
+def test_user_message_echo_reaches_all_surfaces_with_echo_id(broker: WebSocketBroker) -> None:
     """When one surface sends a message, the server echoes it on the shared
     channel via the real ``_broadcast_user_echo``. Every open surface must
     receive a ``user_message`` frame carrying the verbatim text AND the
@@ -205,7 +208,9 @@ def test_user_message_echo_reaches_all_surfaces_with_echo_id(broker):
         )
 
 
-def test_post_chat_endpoint_broadcasts_user_echo_to_all_surfaces(authed_client, broker):
+def test_post_chat_endpoint_broadcasts_user_echo_to_all_surfaces(
+    authed_client: tuple[object, sqlite3.Connection, object], broker: WebSocketBroker
+) -> None:
     """End-to-end via the REAL entry point: a ``POST /chat`` carrying ``echo_id``
     must echo the message to every open surface before the turn runs.
 
@@ -216,7 +221,10 @@ def test_post_chat_endpoint_broadcasts_user_echo_to_all_surfaces(authed_client, 
     from the HTTP form field through to the fan-out the multi-surface sync
     depends on.
     """
-    client, _db_conn, _store = authed_client
+    from typing import cast as _cast
+    from flask.testing import FlaskClient
+
+    client = _cast(FlaskClient, authed_client[0])
 
     phone = _Surface()
     laptop = _Surface()

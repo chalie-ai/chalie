@@ -18,7 +18,7 @@ _BACKEND_DIR = Path(__file__).resolve().parent.parent
 # ---------------------------------------------------------------------------
 
 
-def test_save_pattern_save_graph_are_registered_abilities():
+def test_save_pattern_save_graph_are_registered_abilities() -> None:
     """SavePattern / SaveGraph are first-class Ability subclasses registered"""
     from abilities.save_graph import SaveGraph
     from abilities.save_pattern import SavePattern
@@ -40,7 +40,7 @@ def test_save_pattern_save_graph_are_registered_abilities():
 # ---------------------------------------------------------------------------
 
 
-def test_abilities_sqlite_excludes_non_discoverable_pattern_tools():
+def test_abilities_sqlite_excludes_non_discoverable_pattern_tools() -> None:
     """abilities.sqlite is the find_tools discovery index, built from the"""
     db_path = _BACKEND_DIR / "abilities" / "assets" / "abilities.sqlite"
     assert db_path.exists(), f"abilities.sqlite not found at {db_path}"
