@@ -50,7 +50,8 @@
   flex-direction: column;
   gap: var(--space-sm);
   margin: var(--space-xl) 0;
-  max-width: 90%;
+  width: 90%;
+  align-self: flex-end; // user message hugs the right; width keeps the panel at 90%
 }
 
 .speech-form--user {
