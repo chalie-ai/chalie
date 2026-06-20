@@ -320,9 +320,9 @@ class McpClientService:
         """
         old_prefix = f"_mcp_{_sanitize_name(cast(str, existing['name']))}_"
         new_prefix = f"_mcp_{_sanitize_name(name)}_"
-        self._delete_tools_for_server(cast(str, existing["id"]))
         if old_prefix != new_prefix:
-            self._delete_policy_rows(old_prefix)
+            self._delete_policy_rows(cast(str, existing["id"]))
+        self._delete_tools_for_server(cast(str, existing["id"]))
         logger.info(
             "%s Re-add of existing endpoint %r → upsert id=%s",
             _LOG_PREFIX, host, existing["id"],
@@ -378,10 +378,8 @@ class McpClientService:
         server = self.get_server(server_id)
         if server is None:
             raise LookupError(f"Server not found: {server_id}")
-        sanitized = _sanitize_name(cast(str, server["name"]))
-        prefix = f"_mcp_{sanitized}_"
+        self._delete_policy_rows(server_id)
         self._delete_tools_for_server(server_id)
-        self._delete_policy_rows(prefix)
         with self._db.connection() as conn:
             conn.execute(
                 "DELETE FROM mcp_client_servers WHERE id = ?", (server_id,)
@@ -887,11 +885,24 @@ class McpClientService:
         finally:
             conn.close()
 
-    def _delete_policy_rows(self, tool_name_prefix: str) -> None:
-        """Remove all policy rows whose permission starts with prefix
-        (clears an MCP server's lazily-provisioned rows on delete)."""
+    def _delete_policy_rows(self, server_id: str) -> None:
+        """Clear one server's lazily-provisioned policy rows — one exact-match
+        delete per tool, keyed off the tool_names in mcp_tools.
+
+        Exact matches (never a LIKE prefix) so a server can never delete a
+        colliding server's rows.  Reads mcp_tools, so callers MUST invoke this
+        before _delete_tools_for_server purges that index.
+        """
+        tools_db = _open_tools_db()
+        try:
+            tool_names = [r["tool_name"] for r in tools_db.execute(
+                "SELECT tool_name FROM mcp_tools WHERE server_id = ?", (server_id,)
+            ).fetchall()]
+        finally:
+            tools_db.close()
         with self._db.connection() as conn:
-            conn.execute("DELETE FROM policy WHERE permission LIKE ?", (f"{tool_name_prefix}%",))
+            for tool_name in tool_names:
+                conn.execute("DELETE FROM policy WHERE permission = ?", (tool_name,))
             conn.commit()
 
     def _resolve_tool(self, prefixed_name: str) -> tuple[dict[str, object], str]:
