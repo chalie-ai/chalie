@@ -24,6 +24,12 @@ export interface PlatformAdapter {
 
   // keeps the display on during voice record/playback
   createWakeLock(): WakeLockHandle;
+
+  // native on-device streaming STT (final result arrives via the
+  // 'chalie:voice-transcript' document event). web rejects 'STT_UNSUPPORTED'
+  // so callers fall back to MediaRecorder -> POST /voice/transcribe.
+  startSTT(): Promise<void>;
+  stopSTT(): Promise<void>;
 }
 
 export interface WakeLockHandle {
