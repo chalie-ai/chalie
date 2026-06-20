@@ -27,7 +27,7 @@ type.
 ```sh
 cd backend
 python3 -m mypy abilities api capabilities configs mcp_server services \
-    tools utils workers migrations scripts tests \
+    tools utils workers migrations tests \
     consumer.py run.py runtime_config.py migrate_transcript_rebuild.py
 ```
 

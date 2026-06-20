@@ -84,7 +84,6 @@ _PACKAGES = [
     "utils",
     "workers",
     "migrations",
-    "scripts",
     "tests",
 ]
 _TOP_LEVEL_MODULES = [
