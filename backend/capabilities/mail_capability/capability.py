@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 import logging
+from datetime import datetime
+from typing import TYPE_CHECKING, cast
 
 import yaml
 
@@ -13,9 +15,14 @@ from capabilities.base import AbstractCapability
 from capabilities.mail_capability.caldav_handler import CaldavHandler
 from capabilities.mail_capability.carddav_handler import CarddavHandler
 from capabilities.mail_capability.imap_handler import ImapHandler, SmtpCreds
-from capabilities.mail_capability.providers import build_custom_provider, discover_provider
+from capabilities.mail_capability.providers import ServerSettings, UnifiedProvider, build_custom_provider, discover_provider
 from services.time_utils import utc_now
 from utils.data_utils import parse_json_column
+
+if TYPE_CHECKING:
+    from capabilities.mail_capability.caldav_handler import _CalDAVClient  # noqa: PLC2701
+    from capabilities.mail_capability.imap_handler import _ImapClient  # noqa: PLC2701
+    from capabilities.mail_capability.carddav_handler import _CaldavClientProto  # noqa: PLC2701
 
 logger = logging.getLogger(__name__)
 
@@ -55,7 +62,7 @@ class MailCapability(AbstractCapability):
 
     def __init__(self) -> None:
         super().__init__()
-        self._manifest_cache: dict | None = None
+        self._manifest_cache: dict[str, object] | None = None
         self._imap_handler = ImapHandler()
         self._caldav_handler = CaldavHandler()
         self._carddav_handler = CarddavHandler()
@@ -71,7 +78,7 @@ class MailCapability(AbstractCapability):
     def get_id(self) -> str:
         return "mail"
 
-    def get_manifest(self) -> dict:
+    def get_manifest(self) -> dict[str, object]:
         if self._manifest_cache is None:
             with open(_MANIFEST_PATH, "r", encoding="utf-8") as fh:
                 self._manifest_cache = yaml.safe_load(fh)
@@ -81,7 +88,7 @@ class MailCapability(AbstractCapability):
     # Provider resolution
     # ------------------------------------------------------------------
 
-    def _resolve_provider(self, email: str):
+    def _resolve_provider(self, email: str) -> UnifiedProvider | None:
         provider = discover_provider(email)
         if provider is not None:
             return provider
@@ -105,12 +112,12 @@ class MailCapability(AbstractCapability):
     # Lifecycle — configure helpers
     # ------------------------------------------------------------------
 
-    def _resolve_or_build_provider(self, email: str, credentials: dict):
+    def _resolve_or_build_provider(self, email: str, credentials: dict[str, object]) -> UnifiedProvider:
         provider = discover_provider(email)
         if provider is not None:
             return provider
 
-        imap_host = (credentials.get("imap_host") or "").strip()
+        imap_host = (cast(str, credentials.get("imap_host")) or "").strip()
         if not imap_host:
             raise ValueError(
                 f"[mail] Unsupported provider for '{email}'. "
@@ -118,20 +125,20 @@ class MailCapability(AbstractCapability):
                 "For custom servers, pass imap_host."
             )
         _imap_tls = str(credentials.get("imap_tls", "1")).lower()
-        _smtp_host = (credentials.get("smtp_host") or "").strip() or None
+        _smtp_host = (cast(str, credentials.get("smtp_host")) or "").strip() or None
         _smtp_tls = str(credentials.get("smtp_tls", "0")).lower()
         return build_custom_provider(
             imap_host=imap_host,
-            imap_port=int(credentials.get("imap_port", 993)),
+            imap_port=int(cast(int, credentials.get("imap_port", 993))),
             imap_tls=_imap_tls not in ("0", "false", "no"),
             smtp_host=_smtp_host,
-            smtp_port=int(credentials.get("smtp_port", 587)),
+            smtp_port=int(cast(int, credentials.get("smtp_port", 587))),
             smtp_tls=_smtp_tls not in ("0", "false", "no"),
-            caldav_url=(credentials.get("caldav_url") or "").strip() or None,
-            carddav_url=(credentials.get("carddav_url") or "").strip() or None,
+            caldav_url=(cast(str, credentials.get("caldav_url")) or "").strip() or None,
+            carddav_url=(cast(str, credentials.get("carddav_url")) or "").strip() or None,
         )
 
-    def _persist_provider_credentials(self, email: str, password: str, provider) -> None:
+    def _persist_provider_credentials(self, email: str, password: str, provider: UnifiedProvider) -> None:
         self.store_credential(_K_EMAIL, email)
         self.store_credential(_K_PASSWORD, password)
         self.store_credential(_K_PROVIDER, provider.name)
@@ -154,7 +161,7 @@ class MailCapability(AbstractCapability):
                 provider.carddav_url.replace(_PLACEHOLDER_USERNAME, email),
             )
 
-    def _probe_protocols(self, email: str, password: str, provider) -> list[str]:
+    def _probe_protocols(self, email: str, password: str, provider: UnifiedProvider) -> list[str]:
         active: list[str] = []
 
         if provider.imap:
@@ -181,9 +188,9 @@ class MailCapability(AbstractCapability):
         if provider.caldav_url:
             caldav_url = provider.caldav_url.replace(_PLACEHOLDER_USERNAME, email)
             try:
-                client = self._caldav_handler.open_client(
+                client = cast("_ImapClient | None", self._caldav_handler.open_client(
                     url=caldav_url, username=email, password=password
-                )
+                ))
                 if client is not None:
                     active.append("caldav")
                     logger.info("[mail] CalDAV probe: OK")
@@ -195,9 +202,9 @@ class MailCapability(AbstractCapability):
         if provider.carddav_url:
             carddav_url = provider.carddav_url.replace(_PLACEHOLDER_USERNAME, email)
             try:
-                client = self._carddav_handler.open_client(
+                client = cast("_ImapClient | None", self._carddav_handler.open_client(
                     url=carddav_url, username=email, password=password
-                )
+                ))
                 if client is not None:
                     active.append("carddav")
                     logger.info("[mail] CardDAV probe: OK")
@@ -212,9 +219,9 @@ class MailCapability(AbstractCapability):
     # Lifecycle — configure
     # ------------------------------------------------------------------
 
-    def configure(self, credentials: dict) -> None:
-        email = (credentials.get("email") or credentials.get("username") or "").strip()
-        password = (credentials.get("password") or "").strip()
+    def configure(self, credentials: dict[str, object]) -> None:
+        email = (cast(str, credentials.get("email") or credentials.get("username") or "")).strip()
+        password = (cast(str, credentials.get("password")) or "").strip()
         if not email:
             raise ValueError("[mail] configure(): 'email' is required.")
         if not password:
@@ -253,7 +260,7 @@ class MailCapability(AbstractCapability):
             logger.warning("[mail] connect(): credentials missing.")
             return False
 
-        protocols: list[str] = parse_json_column(protocols_raw, default=[])
+        protocols: list[str] = cast("list[str]", parse_json_column(protocols_raw, default=[]))
 
         if not protocols:
             logger.warning("[mail] connect(): no active protocols stored.")
@@ -292,9 +299,9 @@ class MailCapability(AbstractCapability):
         if "caldav" in protocols and provider.caldav_url:
             caldav_url = provider.caldav_url.replace(_PLACEHOLDER_USERNAME, email)
             try:
-                client = self._caldav_handler.open_client(
+                client = cast("_ImapClient | None", self._caldav_handler.open_client(
                     url=caldav_url, username=email, password=password
-                )
+                ))
                 if client is not None:
                     self._caldav_ok = True
                     logger.info("[mail] CalDAV connected.")
@@ -305,9 +312,9 @@ class MailCapability(AbstractCapability):
         if "carddav" in protocols and provider.carddav_url:
             carddav_url = provider.carddav_url.replace(_PLACEHOLDER_USERNAME, email)
             try:
-                client = self._carddav_handler.open_client(
+                client = cast("_ImapClient | None", self._carddav_handler.open_client(
                     url=carddav_url, username=email, password=password
-                )
+                ))
                 if client is not None:
                     self._carddav_ok = True
                     logger.info("[mail] CardDAV connected.")
@@ -350,11 +357,11 @@ class MailCapability(AbstractCapability):
     # Cognitive pipeline — ingest
     # ------------------------------------------------------------------
 
-    def ingest(self) -> list:
+    def ingest(self) -> list[object]:
         if not self.is_connected():
             return []
 
-        items: list[dict] = []
+        items: list[object] = []
         email = self.load_credential(_K_EMAIL)
         password = self.load_credential(_K_PASSWORD)
         provider = self._resolve_provider(email or "")
@@ -369,8 +376,8 @@ class MailCapability(AbstractCapability):
                     host=provider.imap.host,
                     port=provider.imap.port,
                     tls=provider.imap.tls,
-                    email=email,
-                    password=password,
+                    email=cast(str, email),
+                    password=cast(str, password),
                 )
                 if client is not None:
                     try:
@@ -388,24 +395,24 @@ class MailCapability(AbstractCapability):
 
         if self._caldav_ok and provider.caldav_url:
             try:
-                caldav_url = provider.caldav_url.replace(_PLACEHOLDER_USERNAME, email)
-                client = self._caldav_handler.open_client(
-                    url=caldav_url, username=email, password=password
-                )
+                caldav_url = provider.caldav_url.replace(_PLACEHOLDER_USERNAME, cast(str, email))
+                client = cast("_ImapClient | None", self._caldav_handler.open_client(
+                    url=caldav_url, username=cast(str, email), password=cast(str, password)
+                ))
                 if client is not None:
-                    events = self._caldav_handler.ingest(client)
+                    events = self._caldav_handler.ingest(cast("_CalDAVClient", client))
                     items.extend(events)
             except Exception as exc:
                 logger.error("[mail] ingest() CalDAV: %s", exc)
 
         if self._carddav_ok and provider.carddav_url:
             try:
-                carddav_url = provider.carddav_url.replace(_PLACEHOLDER_USERNAME, email)
-                client = self._carddav_handler.open_client(
-                    url=carddav_url, username=email, password=password
-                )
+                carddav_url = provider.carddav_url.replace(_PLACEHOLDER_USERNAME, cast(str, email))
+                client = cast("_ImapClient | None", self._carddav_handler.open_client(
+                    url=carddav_url, username=cast(str, email), password=cast(str, password)
+                ))
                 if client is not None:
-                    contacts = self._carddav_handler.sync_contacts(client)
+                    contacts = self._carddav_handler.sync_contacts(cast("_CaldavClientProto", client))
                     items.extend(contacts)
             except Exception as exc:
                 logger.error("[mail] ingest() CardDAV: %s", exc)
@@ -416,10 +423,10 @@ class MailCapability(AbstractCapability):
     # Cognitive pipeline — understand
     # ------------------------------------------------------------------
 
-    def understand(self, items: list) -> list:
+    def understand(self, items: list[object]) -> list[object]:
         if not items:
             return items
-        imap_items = [it for it in items if "subject" in it and "uid" in it]
+        imap_items = [cast("dict[str, object]", it) for it in items if "subject" in cast("dict[str, object]", it) and "uid" in cast("dict[str, object]", it)]
         if imap_items:
             self._imap_handler.understand(imap_items)
         return items
@@ -428,14 +435,14 @@ class MailCapability(AbstractCapability):
     # Cognitive pipeline — monitor
     # ------------------------------------------------------------------
 
-    def _monitor_imap(self, email: str, password: str, provider) -> None:
+    def _monitor_imap(self, email: str, password: str, provider: UnifiedProvider) -> None:
         try:
             watermark_raw = self.load_credential(_K_WATERMARK)
             watermark = int(watermark_raw) if watermark_raw else None
             client = self._imap_handler.open_client(
-                host=provider.imap.host,
-                port=provider.imap.port,
-                tls=provider.imap.tls,
+                host=cast("ServerSettings", provider.imap).host,
+                port=cast("ServerSettings", provider.imap).port,
+                tls=cast("ServerSettings", provider.imap).tls,
                 email=email,
                 password=password,
             )
@@ -455,9 +462,9 @@ class MailCapability(AbstractCapability):
         except Exception as exc:
             logger.error("[mail] _do_monitor() IMAP: %s", exc)
 
-    def _monitor_caldav(self, email: str, password: str, provider, now) -> None:
+    def _monitor_caldav(self, email: str, password: str, provider: UnifiedProvider, now: datetime) -> None:
         try:
-            caldav_url = provider.caldav_url.replace(_PLACEHOLDER_USERNAME, email)
+            caldav_url = cast(str, provider.caldav_url).replace(_PLACEHOLDER_USERNAME, email)
             client = self._caldav_handler.open_client(
                 url=caldav_url, username=email, password=password
             )
@@ -467,9 +474,9 @@ class MailCapability(AbstractCapability):
         except Exception as exc:
             logger.error("[mail] _do_monitor() CalDAV: %s", exc)
 
-    def _monitor_carddav(self, email: str, password: str, provider) -> None:
+    def _monitor_carddav(self, email: str, password: str, provider: UnifiedProvider) -> None:
         try:
-            carddav_url = provider.carddav_url.replace(_PLACEHOLDER_USERNAME, email)
+            carddav_url = cast(str, provider.carddav_url).replace(_PLACEHOLDER_USERNAME, email)
             client = self._carddav_handler.open_client(
                 url=carddav_url, username=email, password=password
             )
@@ -493,13 +500,13 @@ class MailCapability(AbstractCapability):
             return
 
         if self._imap_ok and provider.imap:
-            self._monitor_imap(email, password, provider)
+            self._monitor_imap(cast(str, email), cast(str, password), provider)
 
         if self._caldav_ok and self._cycle_count % 3 == 0 and provider.caldav_url:
-            self._monitor_caldav(email, password, provider, now)
+            self._monitor_caldav(cast(str, email), cast(str, password), provider, now)
 
         if self._carddav_ok and self._cycle_count % 12 == 0 and provider.carddav_url:
-            self._monitor_carddav(email, password, provider)
+            self._monitor_carddav(cast(str, email), cast(str, password), provider)
 
         self._cycle_count += 1
 
@@ -507,12 +514,13 @@ class MailCapability(AbstractCapability):
     # Cognitive pipeline — act
     # ------------------------------------------------------------------
 
-    def act(self, action: str, params: dict) -> dict:
+    def act(self, action: str, params: dict[str, object]) -> dict[str, object]:
+        from collections.abc import Callable
         tool_map = {t["name"]: t["handler"] for t in self.get_tools()}
         handler = tool_map.get(action)
         if handler is None:
             return {"error": f"Unknown action: {action}"}
-        return handler(topic="", params=params)
+        return cast("dict[str, object]", cast("Callable[..., object]", handler)(topic="", params=params))
 
     # ------------------------------------------------------------------
     # Scheduler registration
@@ -530,15 +538,15 @@ class MailCapability(AbstractCapability):
             host=smtp_host,
             port=int(self.load_credential(_K_SMTP_PORT) or "587"),
             tls=self.load_credential(_K_SMTP_TLS) == "1",
-            from_addr=self.load_credential(_K_EMAIL),
-            password=self.load_credential(_K_PASSWORD),
+            from_addr=cast(str, self.load_credential(_K_EMAIL)),
+            password=cast(str, self.load_credential(_K_PASSWORD)),
         )
 
     # ------------------------------------------------------------------
     # Tools — connection helpers
     # ------------------------------------------------------------------
 
-    def _open_imap_client(self):
+    def _open_imap_client(self) -> "_ImapClient | None":
         _email = self.load_credential(_K_EMAIL)
         _password = self.load_credential(_K_PASSWORD)
         _provider = self._resolve_provider(_email or "")
@@ -548,26 +556,26 @@ class MailCapability(AbstractCapability):
             host=_provider.imap.host,
             port=_provider.imap.port,
             tls=_provider.imap.tls,
-            email=_email,
-            password=_password,
+            email=cast(str, _email),
+            password=cast(str, _password),
         )
 
-    def _open_caldav_client(self):
+    def _open_caldav_client(self) -> "_CalDAVClient | None":
         _email = self.load_credential(_K_EMAIL)
         _password = self.load_credential(_K_PASSWORD)
         _provider = self._resolve_provider(_email or "")
         if not _provider or not _provider.caldav_url:
             raise ValueError("CalDAV not available for this provider.")
-        _url = _provider.caldav_url.replace(_PLACEHOLDER_USERNAME, _email)
-        return self._caldav_handler.open_client(
-            url=_url, username=_email, password=_password
-        )
+        _url = _provider.caldav_url.replace(_PLACEHOLDER_USERNAME, cast(str, _email))
+        return cast("_CalDAVClient | None", self._caldav_handler.open_client(
+            url=_url, username=cast(str, _email), password=cast(str, _password)
+        ))
 
     # ------------------------------------------------------------------
     # Tools — IMAP handler methods
     # ------------------------------------------------------------------
 
-    def _th_search_email(self, topic, params, config=None, telemetry=None):
+    def _th_search_email(self, topic: object, params: dict[str, object], config: object = None, telemetry: object = None) -> dict[str, object]:
         if not self._imap_ok:
             return {"error": _ERR_IMAP_NOT_CONNECTED}
         try:
@@ -584,7 +592,7 @@ class MailCapability(AbstractCapability):
         except Exception as exc:
             return {"error": str(exc)}
 
-    def _th_read_email(self, topic, params, config=None, telemetry=None):
+    def _th_read_email(self, topic: object, params: dict[str, object], config: object = None, telemetry: object = None) -> dict[str, object]:
         if not self._imap_ok:
             return {"error": _ERR_IMAP_NOT_CONNECTED}
         try:
@@ -601,7 +609,7 @@ class MailCapability(AbstractCapability):
         except Exception as exc:
             return {"error": str(exc)}
 
-    def _th_draft_email(self, topic, params, config=None, telemetry=None):
+    def _th_draft_email(self, topic: object, params: dict[str, object], config: object = None, telemetry: object = None) -> dict[str, object]:
         if not self._imap_ok:
             return {"error": _ERR_IMAP_NOT_CONNECTED}
         try:
@@ -611,7 +619,7 @@ class MailCapability(AbstractCapability):
                 return {"error": "Failed to open IMAP connection."}
             try:
                 return self._imap_handler.draft_email(
-                    client, from_addr=_email, params=params,
+                    client, from_addr=cast(str, _email), params=params,
                 )
             finally:
                 try:
@@ -621,7 +629,7 @@ class MailCapability(AbstractCapability):
         except Exception as exc:
             return {"error": str(exc)}
 
-    def _th_manage_email(self, topic, params, config=None, telemetry=None):
+    def _th_manage_email(self, topic: object, params: dict[str, object], config: object = None, telemetry: object = None) -> dict[str, object]:
         if not self._imap_ok:
             return {"error": _ERR_IMAP_NOT_CONNECTED}
         try:
@@ -642,7 +650,7 @@ class MailCapability(AbstractCapability):
     # Tools — SMTP handler methods
     # ------------------------------------------------------------------
 
-    def _th_send_email(self, topic, params, config=None, telemetry=None):
+    def _th_send_email(self, topic: object, params: dict[str, object], config: object = None, telemetry: object = None) -> dict[str, object]:
         if not self._imap_ok:
             return {"error": _ERR_IMAP_NOT_CONNECTED}
         try:
@@ -651,7 +659,7 @@ class MailCapability(AbstractCapability):
         except Exception as exc:
             return {"error": str(exc)}
 
-    def _th_reply_email(self, topic, params, config=None, telemetry=None):
+    def _th_reply_email(self, topic: object, params: dict[str, object], config: object = None, telemetry: object = None) -> dict[str, object]:
         if not self._imap_ok:
             return {"error": _ERR_IMAP_NOT_CONNECTED}
         uid = params.get("uid")
@@ -691,13 +699,13 @@ class MailCapability(AbstractCapability):
         except Exception as exc:
             return {"error": str(exc)}
 
-    def _th_forward_email(self, topic, params, config=None, telemetry=None):
+    def _th_forward_email(self, topic: object, params: dict[str, object], config: object = None, telemetry: object = None) -> dict[str, object]:
         if not self._imap_ok:
             return {"error": _ERR_IMAP_NOT_CONNECTED}
         uid = params.get("uid")
         if not uid:
             return {"error": "uid is required for forward"}
-        to = (params.get("to") or "").strip()
+        to = (cast(str, params.get("to")) or "").strip()
         if not to:
             return {"error": "to is required for forward"}
         try:
@@ -721,7 +729,7 @@ class MailCapability(AbstractCapability):
                 f"Date: {original.get('date', '')}\n"
                 f"Subject: {original.get('subject', '')}\n\n"
             )
-            body = forward_header + original.get("body", "")
+            body = forward_header + cast(str, original.get("body", ""))
             result = self._imap_handler.send_email(
                 creds=creds,
                 params={
@@ -745,7 +753,7 @@ class MailCapability(AbstractCapability):
     # Tools — CalDAV handler methods
     # ------------------------------------------------------------------
 
-    def _th_create_event(self, topic, params, config=None, telemetry=None):
+    def _th_create_event(self, topic: object, params: dict[str, object], config: object = None, telemetry: object = None) -> dict[str, object]:
         if not self._caldav_ok:
             return {"error": _ERR_CALDAV_NOT_CONNECTED}
         try:
@@ -756,7 +764,7 @@ class MailCapability(AbstractCapability):
         except Exception as exc:
             return {"error": str(exc)}
 
-    def _th_update_event(self, topic, params, config=None, telemetry=None):
+    def _th_update_event(self, topic: object, params: dict[str, object], config: object = None, telemetry: object = None) -> dict[str, object]:
         if not self._caldav_ok:
             return {"error": _ERR_CALDAV_NOT_CONNECTED}
         try:
@@ -767,7 +775,7 @@ class MailCapability(AbstractCapability):
         except Exception as exc:
             return {"error": str(exc)}
 
-    def _th_delete_event(self, topic, params, config=None, telemetry=None):
+    def _th_delete_event(self, topic: object, params: dict[str, object], config: object = None, telemetry: object = None) -> dict[str, object]:
         if not self._caldav_ok:
             return {"error": _ERR_CALDAV_NOT_CONNECTED}
         try:
@@ -778,12 +786,12 @@ class MailCapability(AbstractCapability):
         except Exception as exc:
             return {"error": str(exc)}
 
-    def _th_find_free_slots(self, topic, params, config=None, telemetry=None):
+    def _th_find_free_slots(self, topic: object, params: dict[str, object], config: object = None, telemetry: object = None) -> dict[str, object]:
         if not self._caldav_ok:
             return {"error": _ERR_CALDAV_NOT_CONNECTED}
         return self._caldav_handler.find_free_slots(params)
 
-    def _th_get_attendees(self, topic, params, config=None, telemetry=None):
+    def _th_get_attendees(self, topic: object, params: dict[str, object], config: object = None, telemetry: object = None) -> dict[str, object]:
         if not self._caldav_ok:
             return {"error": _ERR_CALDAV_NOT_CONNECTED}
         return self._caldav_handler.get_attendees(params)
@@ -792,12 +800,12 @@ class MailCapability(AbstractCapability):
     # Tools — CardDAV handler methods
     # ------------------------------------------------------------------
 
-    def _th_list_contacts(self, topic, params, config=None, telemetry=None):
+    def _th_list_contacts(self, topic: object, params: dict[str, object], config: object = None, telemetry: object = None) -> dict[str, object]:
         if not self._carddav_ok:
             return {"error": "Mail (CardDAV) not connected."}
         return self._carddav_handler.list_contacts(params)
 
-    def _th_get_contact(self, topic, params, config=None, telemetry=None):
+    def _th_get_contact(self, topic: object, params: dict[str, object], config: object = None, telemetry: object = None) -> dict[str, object]:
         if not self._carddav_ok:
             return {"error": "Mail (CardDAV) not connected."}
         return self._carddav_handler.get_contact(params)
@@ -806,7 +814,7 @@ class MailCapability(AbstractCapability):
     # Tools — builder helpers
     # ------------------------------------------------------------------
 
-    def _build_smtp_tools(self) -> list:
+    def _build_smtp_tools(self) -> list[dict[str, object]]:
         smtp_host = self.load_credential(_K_SMTP_HOST)
         if not smtp_host:
             return []
@@ -867,7 +875,7 @@ class MailCapability(AbstractCapability):
             },
         ]
 
-    def _build_imap_tools(self) -> list:
+    def _build_imap_tools(self) -> list[dict[str, object]]:
         return self._build_smtp_tools() + [
             {
                 "name": "search_email",
@@ -946,7 +954,7 @@ class MailCapability(AbstractCapability):
             },
         ]
 
-    def _build_caldav_tools(self) -> list:
+    def _build_caldav_tools(self) -> list[dict[str, object]]:
         return [
             {
                 "name": "create_event",
@@ -1037,7 +1045,7 @@ class MailCapability(AbstractCapability):
             },
         ]
 
-    def _build_carddav_tools(self) -> list:
+    def _build_carddav_tools(self) -> list[dict[str, object]]:
         return [
             {
                 "name": "list_contacts",
@@ -1074,8 +1082,8 @@ class MailCapability(AbstractCapability):
     # Tools
     # ------------------------------------------------------------------
 
-    def get_tools(self) -> list:
-        tools: list[dict] = []
+    def get_tools(self) -> list[dict[str, object]]:
+        tools: list[dict[str, object]] = []
 
         if self._imap_ok:
             tools += self._build_imap_tools()
@@ -1093,7 +1101,7 @@ class MailCapability(AbstractCapability):
     # Health
     # ------------------------------------------------------------------
 
-    def health_details(self) -> dict:
+    def health_details(self) -> dict[str, object]:
         return {
             "connected": self.is_connected(),
             "protocols": {

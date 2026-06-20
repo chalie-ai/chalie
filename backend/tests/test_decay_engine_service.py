@@ -10,7 +10,9 @@ Ticket B changes:
 """
 
 import math
+import sqlite3
 import struct
+from typing import cast
 
 import pytest
 
@@ -35,9 +37,9 @@ _EMBED_DIM = 256  # matches conftest convergence(embedding_dimensions=256)
 # ── seeding helpers (real rows, no mocks) ─────────────────────────────────────
 
 
-def _insert_episode(db, episode_id, *, salience, channel="user", level=0,
-                    retrieval_weight, last_relevant_at, tombstoned_at=None,
-                    consolidated_into=None, created_at=None, with_shadows=True):
+def _insert_episode(db: sqlite3.Connection, episode_id: str, *, salience: int, channel: str = "user", level: int = 0,
+                    retrieval_weight: float, last_relevant_at: str, tombstoned_at: str | None = None,
+                    consolidated_into: str | None = None, created_at: str | None = None, with_shadows: bool = True) -> int:
     created = created_at or last_relevant_at
     db.execute(
         "INSERT INTO episodes "
@@ -48,9 +50,9 @@ def _insert_episode(db, episode_id, *, salience, channel="user", level=0,
          retrieval_weight, level, last_relevant_at, tombstoned_at,
          consolidated_into),
     )
-    rowid = db.execute(
+    rowid = cast(int, db.execute(
         "SELECT rowid FROM episodes WHERE id = ?", (episode_id,)
-    ).fetchone()[0]
+    ).fetchone()[0])
     if with_shadows:
         db.execute(
             "INSERT INTO episodes_fts(rowid, gist) VALUES (?, ?)",
@@ -65,33 +67,33 @@ def _insert_episode(db, episode_id, *, salience, channel="user", level=0,
     return rowid
 
 
-def _iso_ago(**kwargs):
+def _iso_ago(**kwargs: int) -> str:
     return (utc_now() - timedelta(**kwargs)).isoformat()
 
 
-def _legacy_ago(**kwargs):
+def _legacy_ago(**kwargs: int) -> str:
     return (utc_now() - timedelta(**kwargs)).strftime("%Y-%m-%d %H:%M:%S")
 
 
-def _fresh_conn():
+def _fresh_conn() -> sqlite3.Connection:
     return get_shared_db_service()._get_connection()
 
 
-def _rw(conn, episode_id):
+def _rw(conn: sqlite3.Connection, episode_id: str) -> float | None:
     row = conn.execute(
         "SELECT retrieval_weight FROM episodes WHERE id = ?", (episode_id,)
     ).fetchone()
     return row[0] if row else None
 
 
-def _exists(conn, episode_id):
+def _exists(conn: sqlite3.Connection, episode_id: str) -> bool:
     return conn.execute(
         "SELECT 1 FROM episodes WHERE id = ?", (episode_id,)
     ).fetchone() is not None
 
 
 class TestAbsoluteDecay:
-    def test_floored_corpus_recovers_on_first_tick(self, db):
+    def test_floored_corpus_recovers_on_first_tick(self, db: sqlite3.Connection) -> None:
         """A salience-7 episode whose last_relevant_at is ~1 day old should land near
         0.7 × exp(-24/336) ≈ 0.65 via the absolute law — not stuck at old 0.01 floor.
         """
@@ -101,14 +103,14 @@ class TestAbsoluteDecay:
         updated = DecayEngineService()._decay_episodic()
 
         conn = _fresh_conn()
-        new_rw = _rw(conn, "ep-floored")
+        new_rw = cast(float, _rw(conn, "ep-floored"))
         assert updated == 1
         assert new_rw > 0.5, f"floored weight should recover, got {new_rw}"
         # Sanity: it matches the absolute formula, not a multiply-down.
         expected = 0.7 * math.exp(-24.0 / (14 * 24))
         assert new_rw == pytest.approx(expected, abs=0.02)
 
-    def test_legacy_space_separated_anchor_is_parsed(self, db):
+    def test_legacy_space_separated_anchor_is_parsed(self, db: sqlite3.Connection) -> None:
         """Backfilled 'YYYY-MM-DD HH:MM:SS' anchor must parse correctly; an old
         salience-8 leaf should decay below its ceiling but stay positive.
         """
@@ -122,7 +124,7 @@ class TestAbsoluteDecay:
         # 60 days vs 14-day τ → 0.8 × exp(-1440/336) ≈ 0.011, still > 0 (parsed OK).
         assert rw is not None and 0.0 < rw < 0.1
 
-    def test_tick_is_idempotent(self, db):
+    def test_tick_is_idempotent(self, db: sqlite3.Connection) -> None:
         """A settled corpus produces zero further change on a repeat tick.
         """
         _insert_episode(db, "ep-idem", salience=6, retrieval_weight=0.01,
@@ -137,7 +139,7 @@ class TestAbsoluteDecay:
         assert second_updated == 0, "settled corpus must not be re-written"
         assert after_second == after_first
 
-    def test_tombstone_tau_decays_faster_than_leaf(self, db):
+    def test_tombstone_tau_decays_faster_than_leaf(self, db: sqlite3.Connection) -> None:
         """At equal age/salience, a tombstoned row decays below a live leaf.
 
         τ_tombstoned (7d) << τ_leaf (14d), so the tombstoned row's recomputed
@@ -152,13 +154,13 @@ class TestAbsoluteDecay:
         DecayEngineService()._decay_episodic()
 
         conn = _fresh_conn()
-        assert _rw(conn, "ep-tomb") < _rw(conn, "ep-leaf")
+        assert cast(float, _rw(conn, "ep-tomb")) < cast(float, _rw(conn, "ep-leaf"))
 
 
 class TestHardDeletion:
     """Tombstone-window and weak-leaf deletion, with vec/fts cleanup."""
 
-    def _shadow_counts(self, conn, rowid):
+    def _shadow_counts(self, conn: sqlite3.Connection, rowid: int) -> tuple[int, int]:
         fts = conn.execute(
             "SELECT COUNT(*) FROM episodes_fts WHERE rowid = ?", (rowid,)
         ).fetchone()[0]
@@ -167,7 +169,7 @@ class TestHardDeletion:
         ).fetchone()[0]
         return fts, vec
 
-    def test_tombstoned_beyond_window_is_deleted_with_shadows(self, db):
+    def test_tombstoned_beyond_window_is_deleted_with_shadows(self, db: sqlite3.Connection) -> None:
         """A row tombstoned > 30 days ago is hard-deleted; its fts+vec rows go too."""
         rowid = _insert_episode(
             db, "ep-old-tomb", salience=5, retrieval_weight=0.2,
@@ -185,7 +187,7 @@ class TestHardDeletion:
         assert self._shadow_counts(conn, rowid) == (0, 0), \
             "fts/vec shadow rows must be cleaned up on hard-delete"
 
-    def test_recently_tombstoned_survives(self, db):
+    def test_recently_tombstoned_survives(self, db: sqlite3.Connection) -> None:
         """A row tombstoned only 5 days ago is inside the 30-day window — kept."""
         _insert_episode(db, "ep-young-tomb", salience=5, retrieval_weight=0.2,
                         last_relevant_at=_iso_ago(days=10),
@@ -196,7 +198,7 @@ class TestHardDeletion:
         assert deleted == 0
         assert _exists(_fresh_conn(), "ep-young-tomb")
 
-    def test_weak_old_junk_leaf_deleted_but_near_misses_survive(self, db):
+    def test_weak_old_junk_leaf_deleted_but_near_misses_survive(self, db: sqlite3.Connection) -> None:
         """Weak+old+junk leaf is deleted; one-axis near-misses each survive.
 
         Delete branch requires ALL of: rw < 0.05, age > 90d, salience <= 3,
@@ -228,7 +230,7 @@ class TestHardDeletion:
         assert _exists(conn, "nm-young")
         assert _exists(conn, "nm-strong")
 
-    def test_consolidated_leaf_is_never_junk_deleted(self, db):
+    def test_consolidated_leaf_is_never_junk_deleted(self, db: sqlite3.Connection) -> None:
         """A weak old low-salience leaf that was rolled up is preserved.
 
         consolidated_into IS NOT NULL means the content lives on in a parent —
@@ -257,7 +259,7 @@ class TestFossilJanitor:
     targets the genuinely muted / absent-profile channels instead of dmn.
     """
 
-    def test_old_muted_channel_leaf_is_tombstoned(self, db):
+    def test_old_muted_channel_leaf_is_tombstoned(self, db: sqlite3.Connection) -> None:
         """An apex leaf older than the fossil window on a MUTED channel
         (skills_building) and one on an ABSENT-profile channel (discord, defaults
         to muted) both get tombstoned_at set. Replaces the old dmn fixture, which
@@ -280,7 +282,7 @@ class TestFossilJanitor:
             "SELECT tombstoned_at FROM episodes WHERE id = 'ep-legacy'"
         ).fetchone()[0] is not None
 
-    def test_heavy_channel_and_young_fossils_untouched(self, db):
+    def test_heavy_channel_and_young_fossils_untouched(self, db: sqlite3.Connection) -> None:
         """The shouldn't-fire side. The janitor leaves untouched:
           * every HEAVY (episode-producing) channel's old apex leaf — user, dmn
             AND external-agent:* — because TKT-926 protects the full allowlist
@@ -313,7 +315,7 @@ class TestFossilJanitor:
 class TestPureRead:
     """Retrieval must change zero rows (relevance advances only on writes)."""
 
-    def test_get_episode_by_id_does_not_mutate_the_row(self, db):
+    def test_get_episode_by_id_does_not_mutate_the_row(self, db: sqlite3.Connection) -> None:
         """EpisodicService.get_episode_by_id is a pure read.
 
         The old _update_activation_score bumped access_count / last_accessed_at /

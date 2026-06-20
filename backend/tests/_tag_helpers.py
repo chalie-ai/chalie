@@ -1,6 +1,7 @@
 
 import json
 import re
+from typing import cast
 
 
 def extract_body(tag_name: str, output: str) -> str:
@@ -27,9 +28,9 @@ def extract_body(tag_name: str, output: str) -> str:
     return before_terminator[0] if len(before_terminator) > 1 else ""
 
 
-def extract_json(tag_name: str, output: str) -> dict | list:
+def extract_json(tag_name: str, output: str) -> "dict[str, object] | list[object]":
     body = extract_body(tag_name, output)
-    return json.loads(body)
+    return cast("dict[str, object] | list[object]", json.loads(body))
 
 
 def has_opener(tag_name: str, output: str) -> bool:

@@ -14,17 +14,19 @@ _registry cache so each test starts with a clean lazy-load.
 
 import gc
 import threading
+from collections.abc import Iterator
 
 import pytest
 
 from abilities._ability import Ability
 from abilities._registry import AbilityRegistry, _reset_for_tests
+from abilities._result import ToolResult
 
 pytestmark = pytest.mark.unit
 
 
 @pytest.fixture(autouse=True)
-def clean_registry():
+def clean_registry() -> Iterator[None]:
     """Reset the registry before and after every test.
 
     gc.collect() is called before reset so that locally-scoped subclasses
@@ -43,30 +45,31 @@ def clean_registry():
 # ---------------------------------------------------------------------------
 
 
-def test_all_includes_registered_abilities():
+def test_all_includes_registered_abilities() -> None:
     """AbilityRegistry.all() surfaces every concrete subclass on disk."""
     names = [a.get_name() for a in AbilityRegistry.all()]
     assert "weather" in names
 
 
-def test_get_raises_key_error_for_unregistered_name():
+def test_get_raises_key_error_for_unregistered_name() -> None:
     """AbilityRegistry.get() raises KeyError for a name no subclass owns."""
     with pytest.raises(KeyError):
         AbilityRegistry.get("anything_not_registered")
 
 
-def test_get_raises_key_error_for_unknown_name_with_subclass_present():
+def test_get_raises_key_error_for_unknown_name_with_subclass_present() -> None:
     """AbilityRegistry.get() raises KeyError for a name that no subclass owns."""
 
     class _KnownAbility(Ability):
-        def get_name(self): return "known"
-        def get_summary(self): return "known ability"
-        def get_examples(self): return ["a", "b", "c", "d", "e", "f"]
-        def get_search_tooltip(self): return ""
-        def get_parameters(self): return {}
+        def get_name(self) -> str: return "known"
+        def get_summary(self) -> str: return "known ability"
+        def get_examples(self) -> list[str]: return ["a", "b", "c", "d", "e", "f"]
+        def get_search_tooltip(self) -> str: return ""
+        def get_parameters(self) -> dict[str, object]: return {}
 
-        def run(self, params):
-            return {}
+        def run(self, params: dict[str, object]) -> ToolResult:
+            from typing import cast
+            return cast("ToolResult", {})
 
     _reset_for_tests()
     with pytest.raises(KeyError):
@@ -81,25 +84,26 @@ def test_get_raises_key_error_for_unknown_name_with_subclass_present():
 # ---------------------------------------------------------------------------
 
 
-def test_all_called_twice_returns_consistent_result():
+def test_all_called_twice_returns_consistent_result() -> None:
     """Two calls to AbilityRegistry.all() return the same shape — registry is cached."""
     first = AbilityRegistry.all()
     second = AbilityRegistry.all()
     assert first == second
 
 
-def test_registry_reflects_concrete_subclass_after_reset():
+def test_registry_reflects_concrete_subclass_after_reset() -> None:
     """After reset, a newly defined subclass appears in the registry."""
 
     class _NewAbility(Ability):
-        def get_name(self): return "new_ability"
-        def get_summary(self): return "a freshly defined ability"
-        def get_examples(self): return ["do it", "run it", "start it", "go now", "begin", "execute"]
-        def get_search_tooltip(self): return ""
-        def get_parameters(self): return {}
+        def get_name(self) -> str: return "new_ability"
+        def get_summary(self) -> str: return "a freshly defined ability"
+        def get_examples(self) -> list[str]: return ["do it", "run it", "start it", "go now", "begin", "execute"]
+        def get_search_tooltip(self) -> str: return ""
+        def get_parameters(self) -> dict[str, object]: return {}
 
-        def run(self, params):
-            return {"text": "ok"}
+        def run(self, params: dict[str, object]) -> ToolResult:
+            from typing import cast
+            return cast("ToolResult", {"text": "ok"})
 
     _reset_for_tests()
 
@@ -116,13 +120,13 @@ def test_registry_reflects_concrete_subclass_after_reset():
 # ---------------------------------------------------------------------------
 
 
-def test_concurrent_get_calls_produce_no_race():
+def test_concurrent_get_calls_produce_no_race() -> None:
     """10 threads hitting AbilityRegistry.get() simultaneously raise only KeyError — no crash, no double-init."""
-    errors = []
-    key_errors = []
+    errors: list[object] = []
+    key_errors: list[bool] = []
     barrier = threading.Barrier(10)
 
-    def worker():
+    def worker() -> None:
         try:
             barrier.wait()
             AbilityRegistry.get("nonexistent_concurrent")

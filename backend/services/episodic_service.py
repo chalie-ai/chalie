@@ -21,13 +21,27 @@ import json
 import logging
 import struct
 import uuid
-from typing import Optional
+from typing import TYPE_CHECKING, Optional, cast
 
 import numpy as np
 
 from services.database_service import DatabaseService
 from services.embedding_utils import pack_embedding
 from services.time_utils import utc_now
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
+    from typing import Protocol
+
+    class _Cursor(Protocol):
+        def execute(self, sql: str, params: Sequence[object] = ...) -> object: ...
+        def fetchone(self) -> object: ...
+        def fetchall(self) -> list[object]: ...
+        def close(self) -> None: ...
+
+    class _Conn(Protocol):
+        def cursor(self) -> _Cursor: ...
+        def execute(self, sql: str, params: Sequence[object] = ...) -> object: ...
 
 # Hierarchy roll-up clustering stack. Bidirectional dependency: declared in
 # pyproject.toml ("scikit-learn"/"umap-learn"/"scipy"/"numba"/"llvmlite") and
@@ -41,13 +55,13 @@ class EpisodicService:
     """Manages episode storage and CRUD (no retrieval — see
     ``episodic_retrieval_service.retrieve``)."""
 
-    def __init__(self, database_service: DatabaseService, config: dict = None):
+    def __init__(self, database_service: DatabaseService, config: Optional[dict[str, object]] = None):
         self.db_service = database_service
         self.config = config or {}
 
     # ── Storage / CRUD ───────────────────────────────────────────────
 
-    def store_episode(self, episode_data: dict, *, embedding=None) -> str:
+    def store_episode(self, episode_data: dict[str, object], *, embedding: object = None) -> str:
         """Required fields: gist, salience, channel. ``embedding`` kwarg
         supersedes ``episode_data['embedding']`` when both are supplied.
         Raises ``ValueError`` when a required field is missing. Returns the
@@ -130,7 +144,7 @@ class EpisodicService:
             logging.error(f"Failed to store episode: {e}")
             raise
 
-    def _store_embedding(self, conn, episode_id: str, embedding):
+    def _store_embedding(self, conn: "_Conn", episode_id: str, embedding: object) -> None:
         """Store an embedding blob in the ``episodes_vec`` virtual table."""
         try:
             blob = pack_embedding(embedding)
@@ -141,7 +155,7 @@ class EpisodicService:
             cursor.execute("SELECT rowid FROM episodes WHERE id = ?", (episode_id,))
             row = cursor.fetchone()
             if row:
-                rowid = row[0]
+                rowid = cast(tuple[object, ...], row)[0]
                 cursor.execute(
                     "INSERT OR REPLACE INTO episodes_vec(rowid, embedding) VALUES (?, ?)",
                     (rowid, blob)
@@ -150,7 +164,7 @@ class EpisodicService:
         except Exception as e:
             logging.warning(f"Failed to store episode embedding: {e}")
 
-    def update_episode(self, episode_id: str, fields: dict, embedding=None) -> None:
+    def update_episode(self, episode_id: str, fields: dict[str, object], embedding: object = None) -> None:
         """Empty ``fields`` + no ``embedding`` is a no-op."""
         if not fields and embedding is None:
             return
@@ -191,7 +205,7 @@ class EpisodicService:
                 (super_id, now_iso, now_iso, leaf_id),
             )
 
-    def fetch_fact_extraction_backlog(self, limit: int) -> list:
+    def fetch_fact_extraction_backlog(self, limit: int) -> list[dict[str, object]]:
         """Return up to ``limit`` episodes awaiting fact extraction, oldest-first.
 
         The backlog is every non-deleted episode whose ``facts_extracted_at`` is
@@ -227,7 +241,7 @@ class EpisodicService:
                 (now_iso, episode_id),
             )
 
-    def get_episode_by_id(self, episode_id: str) -> Optional[dict]:
+    def get_episode_by_id(self, episode_id: str) -> Optional[dict[str, object]]:
         """Pure read — fetching never mutates. Relevance advances only on
         write-relevant events (creation, consolidation), not on access."""
         try:
@@ -486,7 +500,7 @@ def find_super_candidates(channel: str) -> list[list[str]]:
     return clusters
 
 
-def compute_novelty(new_embedding, prior_embeddings: list[bytes]) -> float:
+def compute_novelty(new_embedding: object, prior_embeddings: list[bytes]) -> float:
     """novelty = 1.0 - max(cosine_sim(new, prior) for prior in
     prior_embeddings). Clamped to [0.0, 1.0]. Returns 1.0 (fully
     novel) if prior_embeddings is empty."""

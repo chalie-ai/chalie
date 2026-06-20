@@ -1,15 +1,20 @@
 import logging
+from typing import TYPE_CHECKING
 
 from flask import Blueprint, jsonify, request
 
 from .auth import require_session
+
+if TYPE_CHECKING:
+    from flask.typing import ResponseReturnValue
+    from services.settings_service import SettingsService
 
 logger = logging.getLogger(__name__)
 
 voice_settings_bp = Blueprint("voice_settings", __name__, url_prefix="/api/voice-settings")
 
 
-def _get_services():
+def _get_services() -> "SettingsService":
     from services.database_service import get_shared_db_service
     from services.settings_service import SettingsService
 
@@ -19,7 +24,7 @@ def _get_services():
 
 @voice_settings_bp.route("", methods=["GET"])
 @require_session
-def get_voice_settings():
+def get_voice_settings() -> "ResponseReturnValue":
     from services.runtime_deps_service import RuntimeDepsService
 
     settings = _get_services()
@@ -35,7 +40,7 @@ def get_voice_settings():
 
 @voice_settings_bp.route("", methods=["PUT"])
 @require_session
-def update_voice_settings():
+def update_voice_settings() -> "ResponseReturnValue":
     from services.runtime_deps_service import RuntimeDepsService
 
     body = request.get_json(force=True)

@@ -8,7 +8,7 @@ logger = logging.getLogger(__name__)
 class SegmentService:
 
     @staticmethod
-    def build(content: str, transcript_ids: list) -> list:
+    def build(content: str, transcript_ids: list[int]) -> list[dict[str, object]]:
         """Always returns at least one plain text segment. When transcript_ids is empty, no DB query is issued."""
         if not transcript_ids:
             logger.warning(
@@ -23,7 +23,7 @@ class SegmentService:
         return segments or [{"type": "text", "content": content}]
 
     @staticmethod
-    def _fetch_tool_calls(transcript_ids: list) -> list:
+    def _fetch_tool_calls(transcript_ids: list[int]) -> list[dict[str, object]]:
         if not transcript_ids:
             return []
         try:

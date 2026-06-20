@@ -19,6 +19,9 @@ POST /api/snapshot/export  ·  POST /api/snapshot/import
 
 import sqlite3
 import zipfile
+from collections.abc import Iterator
+from pathlib import Path
+from typing import TYPE_CHECKING, cast
 
 import pytest
 
@@ -27,6 +30,9 @@ import services.vault_service as _vault_mod
 from services.database_service import DatabaseService
 from services.file_mapper_service import FileMapperService
 from services.vault_service import _vault_state
+
+if TYPE_CHECKING:
+    from flask.testing import FlaskClient
 
 
 # ── Shared production-path helpers (no re-implementation of prod logic) ───────
@@ -41,13 +47,13 @@ def _seed_transcript(channel: str, role: str, content: str) -> int:
 
 def _recent_contents(channel: str) -> list[str]:
     import services.transcript_service as transcript_service
-    return [r['content'] for r in transcript_service.get_recent(channel, limit=50)]
+    return cast(list[str], [r['content'] for r in transcript_service.get_recent(channel, limit=50)])
 
 
 # ── Fixtures ──────────────────────────────────────────────────────────────────
 
 @pytest.fixture(autouse=True)
-def _reset_vault_singletons():
+def _reset_vault_singletons() -> Iterator[None]:
     _vault_state.dek = None
     _vault_mod._vault_service_instance = None
     yield
@@ -56,7 +62,7 @@ def _reset_vault_singletons():
 
 
 @pytest.fixture
-def instance(_db_template, tmp_path, monkeypatch):
+def instance(_db_template: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Path]:
     import shutil
 
     root = tmp_path / "instance"
@@ -132,7 +138,7 @@ def _make_min_sqlite(path: str) -> None:
 
 
 @pytest.fixture
-def client(instance):
+def client(instance: Path) -> "Iterator[FlaskClient]":
     """Real Flask app via ``create_app``, bound to temp instance.
     Reuses auth/session/store seam from conftest's ``authed_client``."""
     from unittest.mock import patch
@@ -149,14 +155,14 @@ def client(instance):
             yield c
 
 
-def _pre_restore_asides() -> list:
+def _pre_restore_asides() -> list[Path]:
     return sorted(FileMapperService.get_data_path().glob(".pre-restore-*"))
 
 
 @pytest.mark.unit
 class TestSnapshotRoundtrip:
 
-    def test_plain_roundtrip_restores_seeded_rows_and_keeps_pre_restore_aside(self, instance):
+    def test_plain_roundtrip_restores_seeded_rows_and_keeps_pre_restore_aside(self, instance: Path) -> None:
         from services.snapshot_service import SnapshotService
 
         _seed_transcript("user", "user", "ALPHA-snapshot-marker")
@@ -188,7 +194,7 @@ class TestSnapshotRoundtrip:
         assert not FileMapperService.get_data_path(".pending-restore").exists(), \
             "apply_pending must clear the marker"
 
-    def test_encrypted_roundtrip_zip_is_real_aes_and_restores_with_password(self, instance):
+    def test_encrypted_roundtrip_zip_is_real_aes_and_restores_with_password(self, instance: Path) -> None:
         """Password export produces a genuine AES zip (reading WITHOUT the
         password raises RuntimeError per pyzipper) and a password import →
         apply_pending restores the pre-export state."""
@@ -221,7 +227,7 @@ class TestSnapshotRoundtrip:
 @pytest.mark.unit
 class TestSnapshotRejections:
 
-    def test_wrong_password_is_rejected_loudly_and_stages_nothing(self, instance, client):
+    def test_wrong_password_is_rejected_loudly_and_stages_nothing(self, instance: Path, client: "FlaskClient") -> None:
         """Importing an AES snapshot with the WRONG password fails loudly (4xx
         at the HTTP boundary, typed error from stage_import), stages NOTHING,
         leaves the live DB untouched, and triggers no restart (no .pending
@@ -256,7 +262,7 @@ class TestSnapshotRejections:
         assert "LIVE-UNTOUCHED-MARKER" in _recent_contents("user")
         assert not FileMapperService.get_data_path(".pending-restore").exists()
 
-    def test_schema_downgrade_snapshot_is_blocked_and_stages_nothing(self, instance):
+    def test_schema_downgrade_snapshot_is_blocked_and_stages_nothing(self, instance: Path) -> None:
         """A snapshot whose chalie.db carries a column the running build's
         schema.sql does NOT declare would force convergence to DROP user data on
         restore. stage_import must block it with a loud typed error and stage
@@ -275,7 +281,7 @@ class TestSnapshotRejections:
         _add_stray_column_to_zipped_db(str(zip_path), tampered, "transcript", "tkt949_ghost_col")
 
         with pytest.raises(Exception):
-            svc.stage_import(tampered, None)
+            svc.stage_import(cast(Path, tampered), None)
         assert not FileMapperService.get_data_path(".pending-restore").exists(), \
             "schema-downgrade must block staging entirely"
         assert _pre_restore_asides() == []
@@ -315,7 +321,7 @@ def _add_stray_column_to_zipped_db(src_zip: str, dst_zip: str, table: str, colum
 @pytest.mark.unit
 class TestSnapshotRollbackAndLimits:
 
-    def test_apply_pending_rolls_back_on_real_swap_failure(self, instance):
+    def test_apply_pending_rolls_back_on_real_swap_failure(self, instance: Path) -> None:
         """A REAL failure mid-apply (a staged artifact path made unreadable so
         the swap raises) must restore the ``.pre-restore-<ts>`` aside and leave
         the live artifacts intact (locked decision #4). No test-only branch is
@@ -355,7 +361,7 @@ class TestSnapshotRollbackAndLimits:
         finally:
             os.chmod(victim, 0o600)
 
-    def test_import_over_50mb_reaches_snapshot_logic_not_413(self, instance, client):
+    def test_import_over_50mb_reaches_snapshot_logic_not_413(self, instance: Path, client: "FlaskClient") -> None:
         """A ~60 MB upload must NOT be rejected with HTTP 413 by the global cap —
         proving the per-route MAX_CONTENT_LENGTH bypass (§5.1). The junk zip has
         no valid manifest, so a WORKING endpoint then fails the manifest/checksum

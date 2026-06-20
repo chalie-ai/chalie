@@ -1,6 +1,6 @@
 import base64
 import logging
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, cast
 
 logger = logging.getLogger(__name__)
 
@@ -10,8 +10,8 @@ _VISION_SYSTEM = (
 
 
 
-def build_vision_config(provider: Dict[str, Any]) -> Dict[str, Any]:
-    config: Dict[str, Any] = {
+def build_vision_config(provider: Dict[str, object]) -> Dict[str, object]:
+    config: Dict[str, object] = {
         'platform': provider.get('platform', ''),
         'model': provider.get('model', ''),
         'timeout': 60,
@@ -23,7 +23,7 @@ def build_vision_config(provider: Dict[str, Any]) -> Dict[str, Any]:
     return config
 
 
-def send_image_with_config(config: Dict[str, Any], image_bytes: bytes,
+def send_image_with_config(config: Dict[str, object], image_bytes: bytes,
                            prompt: str, mime_type: str = 'image/png') -> Optional[str]:
     """Send one text+image message to an explicit provider config; return text.
 
@@ -42,7 +42,7 @@ def send_image_with_config(config: Dict[str, Any], image_bytes: bytes,
         }
         dto = ProviderApiRequest(
             system=_VISION_SYSTEM,
-            messages=[message],
+            messages=[cast(dict[str, object], message)],
             type=ProviderType.VISION,
             thinking_mode=ThinkingLevel.LOW,
             cache_prefix=False,

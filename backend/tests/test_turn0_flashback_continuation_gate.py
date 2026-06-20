@@ -13,6 +13,8 @@ Status (RED-first): ``_seed_turn_zero`` currently fires unconditionally. Tests
 """
 
 import json
+import sqlite3
+from typing import cast
 
 import pytest
 
@@ -39,14 +41,14 @@ def _new_turn(text: str) -> MessageProcessor:
     return mp
 
 
-def _seed_count(db, caller: str = "seed") -> int:
+def _seed_count(db: sqlite3.Connection, caller: str = "seed") -> int:
     row = db.execute(
         "SELECT COUNT(*) FROM memory_recall_log WHERE caller = ?", (caller,)
     ).fetchone()
-    return row[0]
+    return cast(int, row[0])
 
 
-def _last_seed_result(db) -> str | None:
+def _last_seed_result(db: sqlite3.Connection) -> str | None:
     """Returns the act-trail result string the seed recall injected, or None if
     the gate skipped the seed call."""
     row = db.execute(
@@ -63,7 +65,7 @@ def _last_seed_result(db) -> str | None:
 _VEC_DIM = 256
 
 
-def _unit(index: int, dim: int = _VEC_DIM) -> list:
+def _unit(index: int, dim: int = _VEC_DIM) -> list[float]:
     v = [0.0] * dim
     v[index] = 1.0
     return v
@@ -84,7 +86,7 @@ def _write_compaction(channel: str, body: str) -> None:
 # ── 1. Flashback fires on session start ──────────────────────────────────────
 
 
-def test_flashback_fires_on_session_start(db):
+def test_flashback_fires_on_session_start(db: sqlite3.Connection) -> None:
     """Turn 0 with no prior turns and no centroid must fire the flashback:
     exactly one caller='seed' row appears."""
     assert _seed_count(db) == 0, "fixture leaked a prior seed row"
@@ -99,7 +101,7 @@ def test_flashback_fires_on_session_start(db):
 # ── 2. Continuation message does NOT re-fire ─────────────────────────────────
 
 
-def test_continuation_message_does_not_refire_flashback(db):
+def test_continuation_message_does_not_refire_flashback(db: sqlite3.Connection) -> None:
     """A continuation on the same topic embeds close to the centroid; the gate
     must SKIP the flashback - no new caller='seed' row beyond the session-start."""
     # Turn 1: session start — flashback fires (centroid is now established).
@@ -120,7 +122,7 @@ def test_continuation_message_does_not_refire_flashback(db):
 # ── 3. Topic shift DOES re-fire ──────────────────────────────────────────────
 
 
-def test_topic_shift_refires_flashback(db):
+def test_topic_shift_refires_flashback(db: sqlite3.Connection) -> None:
     """A message on a different topic embeds far from the centroid; the gate
     must RE-FIRE the flashback - a new caller='seed' row appears."""
     # Establish a centroid firmly about the Gozo trip.
@@ -145,7 +147,7 @@ def test_topic_shift_refires_flashback(db):
 # ── 4. Terse message resolves topic via living-doc 'Now' ─────────────────────
 
 
-def test_terse_message_resolves_topic_via_living_doc_now(db):
+def test_terse_message_resolves_topic_via_living_doc_now(db: sqlite3.Connection) -> None:
     """A terse message carries no topic alone; the gate composes its embed with
     the compaction '- Now -' section. Proof: the same terse message ('yes please')
     against the same centroid yields DIFFERENT decisions depending only on '- Now -':
@@ -203,7 +205,7 @@ def test_terse_message_resolves_topic_via_living_doc_now(db):
 # ── 5. Injected flashback is the curated render block, not JSON ───────────────
 
 
-def test_seed_renders_curated_block_not_json(db):
+def test_seed_renders_curated_block_not_json(db: sqlite3.Connection) -> None:
     """The seed injects a curated bundle (live facts as bullets + episodes as
     'On <date>: <one-liner>') rather than the raw recall JSON envelope."""
     # A live fact (data_graph) and an episode the recall can actually surface.
@@ -258,7 +260,7 @@ def test_seed_renders_curated_block_not_json(db):
 # ── 6. Explicit memory.recall keeps the TKT-886 JSON contract ────────────────
 
 
-def test_explicit_recall_keeps_json_contract(db):
+def test_explicit_recall_keeps_json_contract(db: sqlite3.Connection) -> None:
     """Regression pin: explicit memory.recall (no _auto) returns the TKT-886
     {results, fallback} JSON body unchanged - curated render is the seed path only."""
     get_data_graph_service().store(

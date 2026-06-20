@@ -32,6 +32,8 @@ from pathlib import Path
 
 import pyzipper
 
+from typing import cast
+
 from services.file_mapper_service import FileMapperService
 from services.time_utils import utc_now
 
@@ -118,11 +120,11 @@ class SnapshotService:
         }
         return roots[kind]
 
-    def _destination_for(self, entry: dict) -> Path:
+    def _destination_for(self, entry: dict[str, object]) -> Path:
         """Resolve the live destination path for a manifest entry (any KIND)."""
-        kind = entry["kind"]
+        kind = cast(str, entry["kind"])
         if kind in _TREE_KINDS:
-            return self._tree_root(kind) / entry["rel"]
+            return self._tree_root(kind) / cast(str, entry["rel"])
         return self._single_file_destination(kind)
 
     # ── Hashing (shared by export verify-write and import verify-read) ─────────
@@ -169,20 +171,20 @@ class SnapshotService:
         self._write_zip(staged, zip_path, manifest, password)
         return zip_path
 
-    def _assemble_export(self, staged: Path) -> dict:
+    def _assemble_export(self, staged: Path) -> dict[str, object]:
         """Lay every artifact into *staged* and return the manifest dict.
 
         WAL-folds the three DBs, copies the secure/documents/skills_user trees,
         and copies the VERSION marker, recording KIND + arcname + sha256 for
         each member.
         """
-        entries: list[dict] = []
+        entries: list[dict[str, object]] = []
         self._stage_single_file_dbs(staged, entries)
         self._stage_trees(staged, entries)
         self._stage_version(staged, entries)
         return {"version": _MANIFEST_VERSION, "artifacts": entries}
 
-    def _stage_single_file_dbs(self, staged: Path, entries: list[dict]) -> None:
+    def _stage_single_file_dbs(self, staged: Path, entries: list[dict[str, object]]) -> None:
         """WAL-fold each of the three databases into the staging dir."""
         sources = {
             _KIND_CHALIE_DB: self._fm.get_db_path(),
@@ -199,7 +201,7 @@ class SnapshotService:
             self._wal_fold(src, target)
             entries.append(self._entry(kind, arcname, target))
 
-    def _stage_trees(self, staged: Path, entries: list[dict]) -> None:
+    def _stage_trees(self, staged: Path, entries: list[dict[str, object]]) -> None:
         """Copy the secure / documents / skills_user trees into staging."""
         roots = {
             _KIND_SECURE: self._fm.get_secure_dir(),
@@ -219,7 +221,7 @@ class SnapshotService:
                 shutil.copy2(item, target)
                 entries.append(self._entry(kind, arcname, target, rel=rel))
 
-    def _stage_version(self, staged: Path, entries: list[dict]) -> None:
+    def _stage_version(self, staged: Path, entries: list[dict[str, object]]) -> None:
         """Copy the VERSION marker into staging."""
         src = self._fm.get_version_path()
         if not src.exists():
@@ -230,14 +232,14 @@ class SnapshotService:
         shutil.copy2(src, target)
         entries.append(self._entry(_KIND_VERSION, arcname, target))
 
-    def _entry(self, kind: str, arcname: str, staged_file: Path, rel: str | None = None) -> dict:
+    def _entry(self, kind: str, arcname: str, staged_file: Path, rel: str | None = None) -> dict[str, object]:
         """Build one manifest entry recording KIND + arcname + sha256 (+ rel)."""
-        entry = {"kind": kind, "arcname": arcname, "sha256": self._sha256(staged_file)}
+        entry: dict[str, object] = {"kind": kind, "arcname": arcname, "sha256": self._sha256(staged_file)}
         if rel is not None:
             entry["rel"] = rel
         return entry
 
-    def _write_zip(self, staged: Path, zip_path: Path, manifest: dict, password: str | None) -> None:
+    def _write_zip(self, staged: Path, zip_path: Path, manifest: dict[str, object], password: str | None) -> None:
         """Write every staged member (and the manifest) into the zip, AES-256 if
         a password is supplied, plain deflate otherwise."""
         with pyzipper.AESZipFile(
@@ -247,8 +249,8 @@ class SnapshotService:
                 zf.setpassword(password.encode("utf-8"))
                 zf.setencryption(pyzipper.WZ_AES, nbits=_AES_BITS)
             zf.writestr(_MANIFEST_NAME, json.dumps(manifest, indent=2))
-            for entry in manifest["artifacts"]:
-                zf.write(str(staged / entry["arcname"]), entry["arcname"])
+            for entry in cast(list[dict[str, object]], manifest["artifacts"]):
+                zf.write(str(staged / cast(str, entry["arcname"])), cast(str, entry["arcname"]))
 
     # ── Import (Phase A) ─────────────────────────────────────────────────────
 
@@ -288,40 +290,40 @@ class SnapshotService:
                 zf.setpassword(password.encode("utf-8"))
             zf.extractall(str(dest))
 
-    def _read_manifest(self, root: Path) -> dict:
+    def _read_manifest(self, root: Path) -> dict[str, object]:
         """Load and shallow-validate the manifest from an extracted snapshot."""
         manifest_path = root / _MANIFEST_NAME
         if not manifest_path.exists():
             raise SnapshotError("Snapshot is missing manifest.json")
-        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-        if not isinstance(manifest.get("artifacts"), list) or not manifest["artifacts"]:
+        manifest: dict[str, object] = cast(dict[str, object], json.loads(manifest_path.read_text(encoding="utf-8")))
+        if not isinstance(manifest.get("artifacts"), list) or not cast(list[object], manifest["artifacts"]):
             raise SnapshotError("Snapshot manifest declares no artifacts")
         return manifest
 
-    def _verify_members(self, root: Path, manifest: dict) -> None:
+    def _verify_members(self, root: Path, manifest: dict[str, object]) -> None:
         """Re-hash every extracted member and compare to the manifest sha256."""
-        for entry in manifest["artifacts"]:
-            member = root / entry["arcname"]
+        for entry in cast(list[dict[str, object]], manifest["artifacts"]):
+            member = root / cast(str, entry["arcname"])
             if not member.exists():
-                raise SnapshotError(f"Snapshot is missing artifact {entry['arcname']}")
+                raise SnapshotError(f"Snapshot is missing artifact {cast(str, entry['arcname'])}")
             actual = self._sha256(member)
-            if actual != entry["sha256"]:
+            if actual != cast(str, entry["sha256"]):
                 raise SnapshotError(
-                    f"Checksum mismatch for {entry['arcname']}"
+                    f"Checksum mismatch for {cast(str, entry['arcname'])}"
                 )
 
-    def _guard_schema_downgrade(self, root: Path, manifest: dict) -> None:
+    def _guard_schema_downgrade(self, root: Path, manifest: dict[str, object]) -> None:
         """Block a snapshot whose chalie.db carries any column the running
         build's schema.sql does not declare (snapshot ⊋ build = a newer DB whose
         restore would make convergence DROP user data)."""
         chalie_entry = next(
-            (e for e in manifest["artifacts"] if e["kind"] == _KIND_CHALIE_DB), None
+            (e for e in cast(list[dict[str, object]], manifest["artifacts"]) if e["kind"] == _KIND_CHALIE_DB), None
         )
         if chalie_entry is None:
             raise SnapshotError("Snapshot has no chalie.db to restore")
 
         build_cols = self._build_column_set()
-        snapshot_cols = self._snapshot_column_set(root / chalie_entry["arcname"])
+        snapshot_cols = self._snapshot_column_set(root / cast(str, chalie_entry["arcname"]))
 
         extra = {
             f"{table}.{col}"
@@ -334,7 +336,7 @@ class SnapshotService:
                 + ", ".join(sorted(extra))
             )
 
-    def _build_column_set(self) -> dict:
+    def _build_column_set(self) -> dict[str, set[str]]:
         """Column set of the running build, derived from schema.sql via the
         shared convergence introspection (so it matches convergence exactly)."""
         from services.database_service import get_shared_db_service
@@ -348,12 +350,13 @@ class SnapshotService:
         finally:
             desired_conn.close()
 
-    def _snapshot_column_set(self, chalie_db: Path) -> dict:
+    def _snapshot_column_set(self, chalie_db: Path) -> dict[str, set[str]]:
         """Column set of the snapshot's chalie.db, read-only, via the shared
         convergence introspection."""
+        from services.database_service import DatabaseService
         from services.schema_convergence_service import SchemaConvergenceService
 
-        convergence = SchemaConvergenceService(None)
+        convergence = SchemaConvergenceService(cast(DatabaseService, None))
         conn = sqlite3.connect(f"file:{chalie_db}?mode=ro", uri=True)
         try:
             return convergence.column_set(conn)
@@ -406,7 +409,7 @@ class SnapshotService:
         self._verify_members(pending, manifest)
         self._swap_in(pending, manifest)
 
-    def _swap_in(self, pending: Path, manifest: dict) -> None:
+    def _swap_in(self, pending: Path, manifest: dict[str, object]) -> None:
         """Move live artifacts into one aside, staged artifacts into place, then
         clear the marker. On a mid-swap failure, roll the live artifacts back and
         quarantine the staged set so the next boot does not re-apply it."""
@@ -415,7 +418,7 @@ class SnapshotService:
 
         moved: list[tuple[Path, Path]] = []  # (live_destination, aside_copy)
         try:
-            for entry in manifest["artifacts"]:
+            for entry in cast(list[dict[str, object]], manifest["artifacts"]):
                 if entry["kind"] not in _KNOWN_KINDS:
                     logger.warning(
                         "[snapshot] skipping unknown artifact kind %r (arcname=%s) — "
@@ -448,15 +451,15 @@ class SnapshotService:
         except OSError:
             logger.exception("[snapshot] could not re-enforce secure-dir perms after restore")
 
-    def _swap_artifact(self, pending: Path, aside: Path, entry: dict, moved: list) -> None:
+    def _swap_artifact(self, pending: Path, aside: Path, entry: dict[str, object], moved: list[tuple[Path, Path]]) -> None:
         """Move one live artifact into the aside, then move the staged copy into
         the live destination. Records the (dest, aside_copy) pair for rollback.
 
         For single-file DBs the live WAL-mode sidecars are moved aside alongside
         the main file so the restored (WAL-folded) DB starts clean."""
-        staged_file = pending / entry["arcname"]
+        staged_file = pending / cast(str, entry["arcname"])
         dest = self._destination_for(entry)
-        aside_copy = aside / entry["arcname"]
+        aside_copy = aside / cast(str, entry["arcname"])
         aside_copy.parent.mkdir(parents=True, exist_ok=True)
 
         if dest.exists():
@@ -476,7 +479,7 @@ class SnapshotService:
             if sidecar.exists():
                 shutil.move(str(sidecar), str(aside_copy.parent / f"{aside_copy.name}{suffix}"))
 
-    def _rollback(self, moved: list) -> None:
+    def _rollback(self, moved: list[tuple[Path, Path]]) -> None:
         """Restore every artifact that was already swapped, newest first, so the
         live instance is byte-identical to before the failed apply (incl. any
         DB sidecars that were moved aside)."""

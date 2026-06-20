@@ -6,19 +6,19 @@ pytestmark = pytest.mark.unit
 
 
 class TestComputeSalience:
-    def test_maximal_inputs_yield_10(self):
+    def test_maximal_inputs_yield_10(self) -> None:
         result = compute_salience(
             valence=1.0, arousal=1.0, has_open_loop=True, novelty=1.0,
         )
         assert result == 10
 
-    def test_minimal_inputs_yield_1(self):
+    def test_minimal_inputs_yield_1(self) -> None:
         result = compute_salience(
             valence=0.0, arousal=0.0, has_open_loop=False, novelty=0.0,
         )
         assert result == 1
 
-    def test_negative_valence_uses_absolute_value(self):
+    def test_negative_valence_uses_absolute_value(self) -> None:
         result_neg = compute_salience(
             valence=-1.0, arousal=0.5, has_open_loop=False, novelty=0.0,
         )
@@ -27,7 +27,7 @@ class TestComputeSalience:
         )
         assert result_neg == result_pos
 
-    def test_open_loop_boosts_score(self):
+    def test_open_loop_boosts_score(self) -> None:
         without = compute_salience(
             valence=0.0, arousal=0.0, has_open_loop=False, novelty=0.0,
         )
@@ -36,7 +36,7 @@ class TestComputeSalience:
         )
         assert with_ > without
 
-    def test_result_is_always_int_between_1_and_10(self):
+    def test_result_is_always_int_between_1_and_10(self) -> None:
         for v in (-1.0, -0.5, 0.0, 0.5, 1.0):
             for a in (0.0, 0.5, 1.0):
                 for o in (False, True):

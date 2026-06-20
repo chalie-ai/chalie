@@ -18,11 +18,20 @@ Permission model:
 """
 
 import logging
+from typing import TYPE_CHECKING, cast
 
 from flask import Blueprint, g, jsonify, request
 
 from .auth import require_auth
 from services.log_utils import safe
+
+if TYPE_CHECKING:
+    from typing import Protocol
+    from flask.typing import ResponseReturnValue
+    from services.wrapper_auth_service import WrapperAuthService
+
+    class _ERS(Protocol):
+        def retrieve(self, query_text: str, channel: "str | None") -> "list[dict[str, object]]": ...
 
 logger = logging.getLogger(__name__)
 
@@ -34,17 +43,17 @@ query_bp = Blueprint("query", __name__, url_prefix="/api/query")
 # Defined at module level so tests can patch them by name.
 # ---------------------------------------------------------------------------
 
-def _get_retrieval_module():
+def _get_retrieval_module() -> object:
     from services import episodic_retrieval_service
     return episodic_retrieval_service
 
 
-def _get_memory_client():
+def _get_memory_client() -> object:
     from services.memory_client import MemoryClientService
     return MemoryClientService
 
 
-def _get_db_service():
+def _get_db_service() -> object:
     from services.database_service import get_shared_db_service
     return get_shared_db_service()
 
@@ -53,7 +62,7 @@ def _get_db_service():
 # Auth helpers
 # ---------------------------------------------------------------------------
 
-def _get_wrapper_service():
+def _get_wrapper_service() -> "WrapperAuthService":
     from services.database_service import get_shared_db_service
     from services.wrapper_auth_service import WrapperAuthService
     return WrapperAuthService(get_shared_db_service())
@@ -76,7 +85,7 @@ def _check_query_permission(slice_name: str) -> bool:
         return False
 
 
-def _permission_denied(slice_name: str):
+def _permission_denied(slice_name: str) -> "ResponseReturnValue":
     return jsonify({"error": f"Not permitted to query '{slice_name}'"}), 403
 
 
@@ -84,7 +93,7 @@ def _permission_denied(slice_name: str):
 # Slice handlers (each returns a plain dict, never a Flask response)
 # ---------------------------------------------------------------------------
 
-def _slice_relevance(query: str) -> dict:
+def _slice_relevance(query: str) -> "dict[str, object]":
     """Uses episodic_retrieval_service for semantic similarity.
     Falls back to neutral defaults on any error.
     """
@@ -96,15 +105,15 @@ def _slice_relevance(query: str) -> dict:
         }
 
     relevance = 0.0
-    related_traits: list = []
+    related_traits: list[object] = []
 
     # Semantic similarity via episodic retrieval
     try:
-        episodes = _get_retrieval_module().retrieve(query_text=query, channel=None)
+        episodes = cast("_ERS", _get_retrieval_module()).retrieve(query_text=query, channel=None)
 
         if episodes:
             top = episodes[0]
-            raw_score = float(top.get("composite_score") or top.get("score") or 0.0)
+            raw_score = float(cast(float, top.get("composite_score") or top.get("score") or 0.0))
             # Sigmoid normalization: midpoint ~50, steepness 0.05
             # Maps composite scores (typical range 0-150) to [0,1]
             import math
@@ -127,7 +136,7 @@ def _slice_relevance(query: str) -> dict:
     }
 
 
-def _slice_memory(query: str, _k: int) -> dict:
+def _slice_memory(query: str, _k: int) -> "dict[str, object]":
     """Returns dict with key ``results`` — list of episode dicts with ``id``,
     ``summary``, ``score``, and ``created_at``.
     """
@@ -135,17 +144,17 @@ def _slice_memory(query: str, _k: int) -> dict:
         return {"results": []}
 
     try:
-        episodes = _get_retrieval_module().retrieve(
+        episodes = cast("_ERS", _get_retrieval_module()).retrieve(
             query_text=query, channel=None
         )
 
-        results = []
+        results: list[dict[str, object]] = []
         for ep in episodes:
             results.append({
                 "id": ep.get("id"),
                 "summary": ep.get("summary") or ep.get("content") or "",
                 "score": round(
-                    float(ep.get("composite_score") or ep.get("score") or 0.0), 4
+                    float(cast(float, ep.get("composite_score") or ep.get("score") or 0.0)), 4
                 ),
                 "created_at": ep.get("created_at"),
             })
@@ -160,7 +169,7 @@ def _slice_memory(query: str, _k: int) -> dict:
 # Slice dispatch table (used by composite endpoint)
 # ---------------------------------------------------------------------------
 
-def _dispatch_slice(slice_name: str) -> dict:
+def _dispatch_slice(slice_name: str) -> "dict[str, object]":
     """Handles parameterised slices like ``"relevance:auth tests"`` by splitting
     on the first colon.
     """
@@ -185,7 +194,7 @@ def _dispatch_slice(slice_name: str) -> dict:
 
 @query_bp.route("/relevance", methods=["GET"])
 @require_auth
-def get_relevance():
+def get_relevance() -> "ResponseReturnValue":
     """Returns 403 if bearer token lacks ``"relevance"`` query permission."""
     if not _check_query_permission("relevance"):
         return _permission_denied("relevance")
@@ -200,7 +209,7 @@ def get_relevance():
 
 @query_bp.route("/memory", methods=["GET"])
 @require_auth
-def get_memory():
+def get_memory() -> "ResponseReturnValue":
     """Returns 403 if bearer token lacks ``"memory"`` query permission."""
     if not _check_query_permission("memory"):
         return _permission_denied("memory")
@@ -221,7 +230,7 @@ def get_memory():
 
 @query_bp.route("/composite", methods=["POST"])
 @require_auth
-def get_composite():
+def get_composite() -> "ResponseReturnValue":
     """Each slice is checked independently against the bearer's query permissions.
     Denied slices are listed in the ``denied`` array. Cookie-authenticated
     requests are always fully permitted. Returns 200 even if all slices are denied.
@@ -231,9 +240,9 @@ def get_composite():
     if slices is None or not isinstance(slices, list):
         return jsonify({"error": "'slices' must be a JSON array"}), 400
 
-    results: dict = {}
-    denied: list = []
-    errors: list = []
+    results: dict[str, object] = {}
+    denied: list[str] = []
+    errors: list[str] = []
 
     for raw_slice in slices:
         if not isinstance(raw_slice, str) or not raw_slice.strip():

@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import ClassVar
+from typing import ClassVar, cast
 
 # Ability is the shared base every dispatchable tool subclasses; _MCPAbility is
 # a synthetic member of that hierarchy so MCP calls reuse the one gate AND the
@@ -25,7 +25,7 @@ from abilities._result import ToolResult
 logger = logging.getLogger(__name__)
 
 
-def _dispatch_mcp(tool_name: str, params: dict) -> ToolResult:
+def _dispatch_mcp(tool_name: str, params: "dict[str, object]") -> ToolResult:
     """Route an ``_mcp_<server>_<tool>`` call through ``McpClientService`` and map
     the remote outcome onto the ``ToolResult`` contract.
 
@@ -74,7 +74,7 @@ def _dispatch_mcp(tool_name: str, params: dict) -> ToolResult:
         )
 
     body = result["body"]
-    server = result["server"]
+    server = cast(str, result["server"])
     if result["is_error"]:
         message = body if isinstance(body, str) else json.dumps(body, ensure_ascii=False)
         return ToolResult.err(
@@ -84,7 +84,7 @@ def _dispatch_mcp(tool_name: str, params: dict) -> ToolResult:
                  "adjust the arguments or report the failure.",
             server=server,
         )
-    return ToolResult.ok(body, server=server)
+    return ToolResult.ok(cast("str | dict[str, object] | list[object]", body), server=server)
 
 
 class _MCPAbility(Ability):
@@ -107,10 +107,10 @@ class _MCPAbility(Ability):
     def __init__(self, tool_name: str, mp: "object | None" = None) -> None:
         super().__init__(mp)
         self._tool_name = tool_name
-        self._remote: "dict | None" = None
+        self._remote: "dict[str, object] | None" = None
         self._fetched = False
 
-    def remote_schema(self) -> "dict | None":
+    def remote_schema(self) -> "dict[str, object] | None":
         """The remote MCP tool schema (``{'name','description','input_schema'}``),
         fetched once and cached. None when the server exposes no such tool —
         build_tools treats that as 'skip this tool'."""
@@ -125,7 +125,7 @@ class _MCPAbility(Ability):
 
     def get_summary(self) -> str:
         remote = self.remote_schema()
-        return (remote or {}).get("description", "")
+        return cast(str, (remote or {}).get("description", ""))
 
     def get_examples(self) -> list[str]:
         return []
@@ -133,9 +133,9 @@ class _MCPAbility(Ability):
     def get_search_tooltip(self) -> str:
         return ""
 
-    def get_parameters(self) -> dict:
+    def get_parameters(self) -> "dict[str, object]":
         remote = self.remote_schema()
-        return (remote or {}).get("input_schema", {})
+        return cast("dict[str, object]", (remote or {}).get("input_schema", {}))
 
-    def run(self, params: dict) -> ToolResult:
+    def run(self, params: "dict[str, object]") -> ToolResult:
         return _dispatch_mcp(self._tool_name, params)

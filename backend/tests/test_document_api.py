@@ -9,6 +9,10 @@ exercised by end-to-end scenarios, not by mocks here.
 
 import hashlib
 import io
+import sqlite3
+from collections.abc import Generator
+from pathlib import Path
+from typing import TYPE_CHECKING
 
 import pytest
 from unittest.mock import patch
@@ -17,20 +21,23 @@ from flask import Flask
 from api.documents import documents_bp
 from services.file_mapper_service import FileMapperService
 
+if TYPE_CHECKING:
+    from flask.testing import FlaskClient
+
 
 @pytest.mark.unit
 class TestDocumentsAPI:
     """HTTP-layer validation that runs before any DB-backed service call."""
 
     @pytest.fixture
-    def client(self):
+    def client(self) -> "FlaskClient":
         app = Flask(__name__)
         app.register_blueprint(documents_bp)
         app.config["TESTING"] = True
         return app.test_client()
 
     @pytest.fixture(autouse=True)
-    def bypass_auth(self):
+    def bypass_auth(self) -> Generator[None, None, None]:
         with patch("services.auth_session_service.validate_session", return_value=True):
             yield
 
@@ -38,8 +45,9 @@ class TestDocumentsAPI:
     # POST /documents/upload — extension allowlist
     # ------------------------------------------------------------------
 
-    def test_upload_unsupported_extension(self, client):
+    def test_upload_unsupported_extension(self, client: "FlaskClient") -> None:
         """Disallowed extension is rejected with 400 before any service call."""
+        from typing import cast
         data = {"file": (io.BytesIO(b"malicious"), "virus.exe")}
         resp = client.post(
             "/documents/upload",
@@ -47,14 +55,14 @@ class TestDocumentsAPI:
             content_type="multipart/form-data",
         )
         assert resp.status_code == 400
-        assert "not supported" in resp.get_json()["error"].lower()
+        assert "not supported" in cast(str, cast("dict[str, object]", resp.get_json())["error"]).lower()
 
 
 @pytest.mark.unit
 class TestDocumentUploadRealStack:
     """Upload happy path: asserts HTTP response, DB row, and disk bytes with zero mocking."""
 
-    def test_upload_text_document_persists_ready_row_and_file(self, authed_client, tmp_path):
+    def test_upload_text_document_persists_ready_row_and_file(self, authed_client: "tuple[FlaskClient, sqlite3.Connection, object]", tmp_path: Path) -> None:
         client, db_conn, _store = authed_client
 
         body = b"Quarterly revenue summary 2026. Invoice total 4200 EUR."
@@ -102,7 +110,7 @@ class TestDocumentUploadRealStack:
 @pytest.mark.unit
 class TestHelpers:
 
-    def test_sanitize_filename_security_and_fallback(self):
+    def test_sanitize_filename_security_and_fallback(self) -> None:
         from api.documents import _sanitize_filename
         # Hardening is delegated to safe_filename (covered in test_filename_utils);
         # here we assert the document wrapper's fallback for empty results.
@@ -110,7 +118,7 @@ class TestHelpers:
         assert _sanitize_filename('..') == 'unnamed_document'
         assert _sanitize_filename('') == 'unnamed_document'
 
-    def test_validate_file_path_rejects_traversal(self, tmp_path):
+    def test_validate_file_path_rejects_traversal(self, tmp_path: Path) -> None:
         from api.documents import _validate_file_path
         with patch.object(FileMapperService, "_DOCUMENTS_DIR", tmp_path):
             assert _validate_file_path(str(tmp_path / "doc" / "file.pdf")) is True

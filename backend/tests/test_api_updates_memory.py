@@ -2,7 +2,10 @@
 # a string.  The pre-fix code called .split() on the ToolResult object → AttributeError
 # → broad except → HTTP 500 on every call.  The fix checks result.status instead.
 
+import sqlite3
+
 import pytest
+from flask.testing import FlaskClient
 
 from services.wrapper_auth_service import WrapperAuthService
 
@@ -13,7 +16,7 @@ pytestmark = pytest.mark.unit
 # Build a real, unauthenticated Flask test client — the authed_client conftest
 # fixture short-circuits validate_session with a patch, so we build the app
 # ourselves so require_auth runs the real bearer path.
-def _make_client():
+def _make_client() -> FlaskClient:
     from api import create_app
     app = create_app()
     app.config['TESTING'] = True
@@ -24,7 +27,7 @@ def _make_client():
 # .split() raised AttributeError → caught by except Exception → HTTP 500.
 # This would have FAILED (expected 200, got 500) on the pre-fix code.
 class TestUpdateMemorySuccess:
-    def test_success_returns_200_and_writes_data_graph_row(self, db):
+    def test_success_returns_200_and_writes_data_graph_row(self, db: sqlite3.Connection) -> None:
         svc = WrapperAuthService()
         raw_token, _wrapper_id = svc.create_token(
             name="test-wrapper",
@@ -57,7 +60,7 @@ class TestUpdateMemorySuccess:
 # --- Dropping data_graph causes DataGraphService.store() to raise, returning
 # None → handle_store returns ToolResult.err(code="invalid-kind") → 422.
 class TestUpdateMemoryStoreFailure:
-    def test_genuine_store_failure_returns_422(self, db):
+    def test_genuine_store_failure_returns_422(self, db: sqlite3.Connection) -> None:
         svc = WrapperAuthService()
         raw_token, _wrapper_id = svc.create_token(
             name="test-wrapper-fail",
@@ -81,7 +84,7 @@ class TestUpdateMemoryStoreFailure:
 
 # --- Missing auth → 401, guarding against a validate_session bypass.
 class TestUpdateMemoryNoToken:
-    def test_missing_auth_returns_401(self, db):
+    def test_missing_auth_returns_401(self, db: sqlite3.Connection) -> None:
         client = _make_client()
         resp = client.post(
             '/api/updates/memory',

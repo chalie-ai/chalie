@@ -6,6 +6,7 @@ Spawns the Flask app from the api/ package and runs it on the configured host/po
 
 import sys
 import logging
+from typing import cast
 import runtime_config
 
 from utils.logger import Logger
@@ -14,14 +15,14 @@ Logger.start()
 logger = logging.getLogger(__name__)
 
 
-def rest_api_worker():
+def rest_api_worker() -> None:
     # Can be run standalone: python -m workers.rest_api_worker
     # Or integrated into run.py as a daemon thread.
     try:
         logger.info("[REST API] Starting REST API worker...")
 
-        host = runtime_config.get("host", "0.0.0.0")
-        port = runtime_config.get("port", 31025)
+        host = cast("str", runtime_config.get("host", "0.0.0.0"))
+        port = cast("int", runtime_config.get("port", 31025))
 
         logger.info(f"[REST API] Starting Flask server on {host}:{port}")
 

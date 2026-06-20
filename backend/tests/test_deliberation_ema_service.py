@@ -12,6 +12,7 @@ import json
 import pytest
 
 from services.deliberation_ema_service import DeliberationEmaService, STATE_KEY
+from services.memory_store import MemoryStore
 
 pytestmark = pytest.mark.integration
 
@@ -23,7 +24,7 @@ _ALPHA = 0.6
 
 class TestDeliberationEmaColdStart:
 
-    def test_cold_start_seeds_ema_equal_to_scalar(self, store):
+    def test_cold_start_seeds_ema_equal_to_scalar(self, store: MemoryStore) -> None:
         svc = DeliberationEmaService()
         scalar = 0.75
         ema_returned, bucket = svc.update_and_bucket(scalar)
@@ -42,7 +43,7 @@ class TestDeliberationEmaColdStart:
         state = json.loads(raw)
         assert state["ema"] == pytest.approx(scalar, abs=1e-4)
 
-    def test_cold_start_low_scalar_seeds_low_ema(self, store):
+    def test_cold_start_low_scalar_seeds_low_ema(self, store: MemoryStore) -> None:
         svc = DeliberationEmaService()
         ema, bucket = svc.update_and_bucket(0.10)
         assert ema == pytest.approx(0.10, abs=1e-6)
@@ -51,7 +52,7 @@ class TestDeliberationEmaColdStart:
 
 class TestDeliberationEmaSmoothing:
 
-    def test_three_low_scalars_keep_bucket_low(self, store):
+    def test_three_low_scalars_keep_bucket_low(self, store: MemoryStore) -> None:
         svc = DeliberationEmaService()
         for _ in range(3):
             ema, bucket = svc.update_and_bucket(0.10)
@@ -63,7 +64,7 @@ class TestDeliberationEmaSmoothing:
             f"Three 0.1 inputs should stay 'low'; got bucket='{bucket}' ema={ema:.4f}"
         )
 
-    def test_single_high_spike_does_not_flip_from_low_immediately(self, store):
+    def test_single_high_spike_does_not_flip_from_low_immediately(self, store: MemoryStore) -> None:
         """EMA = alpha * low_ema + (1 - alpha) * spike.
 
         With alpha=0.6, low_ema=0.10, spike=0.90:
@@ -85,7 +86,7 @@ class TestDeliberationEmaSmoothing:
 
 class TestDeliberationEmaBucketTransition:
 
-    def test_sustained_high_scalars_flip_bucket_to_high(self, store):
+    def test_sustained_high_scalars_flip_bucket_to_high(self, store: MemoryStore) -> None:
         svc = DeliberationEmaService()
         # Seed a low EMA.
         svc.update_and_bucket(0.10)
@@ -104,7 +105,7 @@ class TestDeliberationEmaBucketTransition:
         )
         assert ema > _HIGH_THR
 
-    def test_reset_clears_ema_and_next_call_is_cold_start(self, store):
+    def test_reset_clears_ema_and_next_call_is_cold_start(self, store: MemoryStore) -> None:
         svc = DeliberationEmaService()
         svc.update_and_bucket(0.90)  # prime with a high score
         svc.reset()

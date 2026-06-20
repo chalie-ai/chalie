@@ -37,7 +37,7 @@ _RETURN_CONTRACT_CODES = ("[return-value]", "[return]")
 
 
 @pytest.mark.parametrize("name", _NAMES)
-def test_run_is_annotated_toolresult(name):
+def test_run_is_annotated_toolresult(name: str) -> None:
     ability = next(a for a in _ABILITIES if a.get_name() == name)
     hints = typing.get_type_hints(type(ability).run)
     assert hints.get("return") is ToolResult, (
@@ -45,7 +45,7 @@ def test_run_is_annotated_toolresult(name):
     )
 
 
-def test_ability_return_types_are_statically_honoured():
+def test_ability_return_types_are_statically_honoured() -> None:
     """Assert mypy sees no return-type violations for the abilities package.
 
     The subprocess stderr/stdout is also asserted to confirm mypy itself ran

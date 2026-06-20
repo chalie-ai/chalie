@@ -15,6 +15,9 @@ The radius ceiling was removed (TKT-923). What replaced it:
 Test DB vec tables are 256-dim (conftest template), so embeddings are seeded to 256 dimensions.
 """
 
+import sqlite3
+from typing import cast
+
 import pytest
 
 from services import episodic_retrieval_service as ers
@@ -25,13 +28,13 @@ pytestmark = pytest.mark.unit
 _DIM = 256
 
 
-def _unit(index: int, dim: int = _DIM) -> list:
+def _unit(index: int, dim: int = _DIM) -> list[float]:
     v = [0.0] * dim
     v[index] = 1.0
     return v
 
 
-def _seed(es: EpisodicService, gist: str, *, embedding, salience: int = 6,
+def _seed(es: EpisodicService, gist: str, *, embedding: list[float], salience: int = 6,
           channel: str = "chat") -> str:
     return es.store_episode(
         {"gist": gist, "salience": salience, "channel": channel},
@@ -39,7 +42,7 @@ def _seed(es: EpisodicService, gist: str, *, embedding, salience: int = 6,
     )
 
 
-def test_vector_lane_returns_the_semantically_nearest_episode(db):
+def test_vector_lane_returns_the_semantically_nearest_episode(db: sqlite3.Connection) -> None:
     """A representative query whose embedding matches one stored episode surfaces
     that episode through the vector lane — the lane is NON-EMPTY (the radius-0
     regression that silently emptied it is gone)."""
@@ -49,26 +52,23 @@ def test_vector_lane_returns_the_semantically_nearest_episode(db):
     target = _seed(es, "home wifi password is hunter2", embedding=_unit(3))
     _seed(es, "grocery list has bananas and milk", embedding=_unit(120))
 
-    episodes, telemetry = ers.retrieve(
-        query_text="wifi",
-        query_embedding=_unit(3),
-        channel="chat",
-        k=10,
-        return_telemetry=True,
+    episodes, telemetry = cast(
+        "tuple[list[dict[str, object]], dict[str, object]]",
+        ers.retrieve(query_text="wifi", query_embedding=_unit(3), channel="chat", k=10, return_telemetry=True),
     )
 
     ids = [e["id"] for e in episodes]
     assert target in ids, f"vector lane missed the nearest episode: {ids!r}"
     # The lane actually ran and produced candidates (radius-0 bug pinned dead).
-    assert telemetry["vector_candidates"] >= 1, telemetry
+    assert cast(int, telemetry["vector_candidates"]) >= 1, telemetry
     # The top hit is the exact match (vector_distance ~ 0).
     top = episodes[0]
     assert top["id"] == target
     assert top.get("vector_distance") is not None
-    assert top["vector_distance"] == pytest.approx(0.0, abs=1e-3)
+    assert cast(float, top["vector_distance"]) == pytest.approx(0.0, abs=1e-3)
 
 
-def test_relative_floor_drops_the_weak_tail_count_below_k(db):
+def test_relative_floor_drops_the_weak_tail_count_below_k(db: sqlite3.Connection) -> None:
     """A strong match and a much weaker (orthogonal) one go into the pool; the
     relative floor drops the weak candidate rather than padding the result up to
     k. Count < number of candidates, and the floor cut is reported."""
@@ -80,12 +80,9 @@ def test_relative_floor_drops_the_weak_tail_count_below_k(db):
     weak = _seed(es, "random note about a stapler", salience=1,
                  embedding=_unit(200))
 
-    episodes, telemetry = ers.retrieve(
-        query_text="Gozo",
-        query_embedding=_unit(10),
-        channel="chat",
-        k=10,
-        return_telemetry=True,
+    episodes, telemetry = cast(
+        "tuple[list[dict[str, object]], dict[str, object]]",
+        ers.retrieve(query_text="Gozo", query_embedding=_unit(10), channel="chat", k=10, return_telemetry=True),
     )
 
     ids = [e["id"] for e in episodes]
@@ -93,10 +90,10 @@ def test_relative_floor_drops_the_weak_tail_count_below_k(db):
     # The weak, far candidate is floored out — NOT padded back in to fill k.
     assert weak not in ids, f"relative floor failed to drop the weak tail: {ids!r}"
     assert len(episodes) < 2, f"floor did not trim the pool: {episodes!r}"
-    assert telemetry["floor_cut_count"] >= 1, telemetry
+    assert cast(int, telemetry["floor_cut_count"]) >= 1, telemetry
 
 
-def test_collapsed_tree_surfaces_super_and_leaf_in_one_pool(db):
+def test_collapsed_tree_surfaces_super_and_leaf_in_one_pool(db: sqlite3.Connection) -> None:
     """A leaf consolidated into a super-episode and the super itself BOTH compete
     in one pool. When a query matches both, both surface — the leaf is not walked
     away into its apex (collapsed-tree retrieval, TKT-923)."""
@@ -114,11 +111,14 @@ def test_collapsed_tree_surfaces_super_and_leaf_in_one_pool(db):
 
     # A vector query equidistant-ish to both lands them both as candidates; FTS
     # ("wifi") matches both gists too.
-    episodes = ers.retrieve(
-        query_text="wifi",
-        query_embedding=_unit(7),
-        channel="chat",
-        k=10,
+    episodes = cast(
+        "list[dict[str, object]]",
+        ers.retrieve(
+            query_text="wifi",
+            query_embedding=_unit(7),
+            channel="chat",
+            k=10,
+        ),
     )
 
     ids = [e["id"] for e in episodes]
@@ -126,7 +126,7 @@ def test_collapsed_tree_surfaces_super_and_leaf_in_one_pool(db):
     assert super_ep in ids, f"super-episode did not compete in the pool: {ids!r}"
 
 
-def test_higher_level_super_can_outrank_a_leaf(db):
+def test_higher_level_super_can_outrank_a_leaf(db: sqlite3.Connection) -> None:
     """A higher-salience super-episode competes on equal footing and can outrank
     a weaker leaf — levels are not muted; importance (salience × weight) lifts the
     super in the normalised composite."""
@@ -142,11 +142,14 @@ def test_higher_level_super_can_outrank_a_leaf(db):
                      salience=9, embedding=_unit(15))
     es.update_episode(super_ep, {"level": 2})
 
-    episodes = ers.retrieve(
-        query_text="Gozo trip",
-        query_embedding=_unit(15),
-        channel="chat",
-        k=10,
+    episodes = cast(
+        "list[dict[str, object]]",
+        ers.retrieve(
+            query_text="Gozo trip",
+            query_embedding=_unit(15),
+            channel="chat",
+            k=10,
+        ),
     )
 
     ids = [e["id"] for e in episodes]
@@ -158,16 +161,13 @@ def test_higher_level_super_can_outrank_a_leaf(db):
     )
 
 
-def test_empty_corpus_returns_nothing_without_padding(db):
+def test_empty_corpus_returns_nothing_without_padding(db: sqlite3.Connection) -> None:
     """No episodes stored → empty result and a clean telemetry envelope (no
     crash, no phantom rows). The floor never fabricates a result."""
-    episodes, telemetry = ers.retrieve(
-        query_text="anything at all",
-        query_embedding=_unit(5),
-        channel="chat",
-        k=10,
-        return_telemetry=True,
+    episodes, telemetry = cast(
+        "tuple[list[dict[str, object]], dict[str, object]]",
+        ers.retrieve(query_text="anything at all", query_embedding=_unit(5), channel="chat", k=10, return_telemetry=True),
     )
     assert episodes == []
-    assert telemetry["final_rrf_count"] == 0
-    assert telemetry["floor_cut_count"] == 0
+    assert cast(int, telemetry["final_rrf_count"]) == 0
+    assert cast(int, telemetry["floor_cut_count"]) == 0

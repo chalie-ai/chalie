@@ -40,3 +40,23 @@ class TestDeliberationScoreClassifier:
         )
         assert score >= 0.7
 ```
+
+## Static typing gate
+
+The whole backend — every first-party package, the top-level modules, and the
+test suite — type-checks clean under `mypy --strict`. This is enforced as a
+`pytest.mark.unit` test, `tests/test_static_typing_gate.py`, so a typing
+regression fails the unit suite just like any other test:
+
+```bash
+cd backend
+pytest tests/test_static_typing_gate.py -q   # runs mypy --strict over the tree
+```
+
+There is no relax/override block in `pyproject.toml`: new code is strict from
+the first line. Two rules hold without exception — **never `Any`** (reach for
+the most primitive concrete type: `object`, `dict[str, object]`,
+`list[object]`, `sqlite3.Row`, covariant `Mapping`/`Sequence`) and **never
+`# type: ignore`** (fix the underlying type problem). See
+[typing-ratchet.md](typing-ratchet.md) for the supported narrowing patterns
+(inline `cast`, write-only `Protocol`s, `setattr` for test monkeypatching).

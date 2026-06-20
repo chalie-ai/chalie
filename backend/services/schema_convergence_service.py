@@ -1,11 +1,23 @@
 """Declarative SQLite schema management — converges live DB to match schema.sql
 by adding missing objects and dropping stale ones."""
 
+from __future__ import annotations
+
 import logging
 import os
 import re
 import sqlite3
+from typing import TYPE_CHECKING, TypeAlias
+
 from services.file_mapper_service import FileMapperService
+
+if TYPE_CHECKING:
+    from services.database_service import DatabaseService
+
+    # Column info tuple from PRAGMA table_info: (cid, name, type, notnull, dflt_value, pk)
+    _ColInfo: TypeAlias = tuple[int | None, str | None, str | None, int | None, object, object]
+    _TableCols: TypeAlias = dict[str, _ColInfo]
+    _SchemaMap: TypeAlias = dict[str, _TableCols]
 
 logger = logging.getLogger(__name__)
 
@@ -49,7 +61,7 @@ def _load_sqlite_vec(conn: sqlite3.Connection) -> None:
 
 class SchemaConvergenceService:
 
-    def __init__(self, db_service, embedding_dimensions: int = 768):
+    def __init__(self, db_service: DatabaseService, embedding_dimensions: int = 768) -> None:
         self.db_service = db_service
         self._embedding_dimensions = embedding_dimensions
         self._schema_path = FileMapperService.get_schema_path()
@@ -193,9 +205,9 @@ class SchemaConvergenceService:
                 logger.debug(f"[convergence] Skipping desired-state statement: {exc}")
         return conn
 
-    def _split_statements(self, sql: str) -> list:
-        statements = []
-        current: list = []
+    def _split_statements(self, sql: str) -> list[str]:
+        statements: list[str] = []
+        current: list[str] = []
         depth = 0
 
         for token in re.split(r"(\bBEGIN\b|\bEND\b|;)", sql, flags=re.IGNORECASE):
@@ -228,12 +240,12 @@ class SchemaConvergenceService:
     # Introspection helpers
     # ──────────────────────────────────────────────────────────────────────────
 
-    def column_set(self, conn: sqlite3.Connection) -> dict:
+    def column_set(self, conn: sqlite3.Connection) -> dict[str, set[str]]:
         return {
             table: set(cols) for table, cols in self._introspect_tables(conn).items()
         }
 
-    def _introspect_tables(self, conn: sqlite3.Connection) -> dict:
+    def _introspect_tables(self, conn: sqlite3.Connection) -> dict[str, dict[str, tuple[int | None, str | None, str | None, int | None, object, object]]]:
         virtual_names = set(self._introspect_virtual_tables(conn).keys())
         # Build shadow table prefixes (FTS5/vec0 create shadow tables like
         # episodes_fts_data, episodes_vec_info, etc.)
@@ -252,13 +264,13 @@ class SchemaConvergenceService:
             result[name] = {row[1]: row for row in cols}
         return result
 
-    def _introspect_indexes(self, conn: sqlite3.Connection) -> dict:
+    def _introspect_indexes(self, conn: sqlite3.Connection) -> dict[str, str]:
         rows = conn.execute(
             "SELECT name, sql FROM sqlite_master WHERE type='index' AND sql IS NOT NULL"
         ).fetchall()
         return {name: self._normalize_ddl(ddl) for name, ddl in rows}
 
-    def _introspect_virtual_tables(self, conn: sqlite3.Connection) -> dict:
+    def _introspect_virtual_tables(self, conn: sqlite3.Connection) -> dict[str, str]:
         """Return {table_name: normalized_ddl} for all virtual tables (FTS5, vec0)."""
         rows = conn.execute(
             "SELECT name, sql FROM sqlite_master WHERE type='table' AND sql IS NOT NULL"
@@ -269,13 +281,13 @@ class SchemaConvergenceService:
                 result[name] = self._normalize_ddl(ddl)
         return result
 
-    def _introspect_triggers(self, conn: sqlite3.Connection) -> dict:
+    def _introspect_triggers(self, conn: sqlite3.Connection) -> dict[str, str]:
         rows = conn.execute(
             "SELECT name, sql FROM sqlite_master WHERE type='trigger' AND sql IS NOT NULL"
         ).fetchall()
         return {name: self._normalize_ddl(ddl) for name, ddl in rows}
 
-    def _normalize_ddl(self, ddl) -> str:
+    def _normalize_ddl(self, ddl: str) -> str:
         if not ddl:
             return ""
         normalized = ddl.lower()
@@ -287,7 +299,7 @@ class SchemaConvergenceService:
     # Convergence steps
     # ──────────────────────────────────────────────────────────────────────────
 
-    def _converge_tables(self, desired: dict, actual: dict, live_conn: sqlite3.Connection, schema_sql: str):
+    def _converge_tables(self, desired: dict[str, dict[str, tuple[int | None, str | None, str | None, int | None, object, object]]], actual: dict[str, dict[str, tuple[int | None, str | None, str | None, int | None, object, object]]], live_conn: sqlite3.Connection, schema_sql: str) -> tuple[int, int]:
         tables_created = 0
         columns_added = 0
 
@@ -354,9 +366,9 @@ class SchemaConvergenceService:
 
     def _drop_stale_tables(
         self,
-        desired: dict,
-        actual: dict,
-        live_virtual: dict,
+        desired: _SchemaMap,
+        actual: _SchemaMap,
+        live_virtual: dict[str, str],
         live_conn: sqlite3.Connection,
     ) -> int:
         dropped = 0
@@ -378,8 +390,8 @@ class SchemaConvergenceService:
 
     def _drop_stale_columns(
         self,
-        desired: dict,
-        actual: dict,
+        desired: _SchemaMap,
+        actual: _SchemaMap,
         live_conn: sqlite3.Connection,
     ) -> int:
         dropped = 0
@@ -402,8 +414,8 @@ class SchemaConvergenceService:
 
     def _drop_stale_indexes(
         self,
-        desired: dict,
-        actual: dict,
+        desired: dict[str, str],
+        actual: dict[str, str],
         live_conn: sqlite3.Connection,
     ) -> int:
         dropped = 0
@@ -420,8 +432,8 @@ class SchemaConvergenceService:
 
     def _drop_stale_virtual_tables(
         self,
-        desired: dict,
-        actual: dict,
+        desired: dict[str, str],
+        actual: dict[str, str],
         live_conn: sqlite3.Connection,
     ) -> int:
         dropped = 0
@@ -438,7 +450,7 @@ class SchemaConvergenceService:
                 )
         return dropped
 
-    def _destructive_safety_check(self, desired_tables: dict, live_tables: dict) -> bool:
+    def _destructive_safety_check(self, desired_tables: _SchemaMap, live_tables: _SchemaMap) -> bool:
         if not desired_tables:
             logger.error(
                 "[convergence] SAFETY: desired schema has zero tables — "
@@ -457,8 +469,8 @@ class SchemaConvergenceService:
     def _is_droppable_table(
         self,
         name: str,
-        virtual_names: set,
-        shadow_prefixes: tuple,
+        virtual_names: set[str],
+        shadow_prefixes: tuple[str, ...],
     ) -> bool:
         if name in _PROTECTED_TABLE_NAMES:
             return False
@@ -480,12 +492,12 @@ class SchemaConvergenceService:
 
     def _log_stale(
         self,
-        desired_tables: dict,
-        live_tables: dict,
-        desired_indexes: dict,
-        live_indexes: dict,
-        desired_virtual: dict,
-        live_virtual: dict,
+        desired_tables: _SchemaMap,
+        live_tables: _SchemaMap,
+        desired_indexes: dict[str, str],
+        live_indexes: dict[str, str],
+        desired_virtual: dict[str, str],
+        live_virtual: dict[str, str],
     ) -> None:
         for t in live_tables.keys() - desired_tables.keys():
             logger.warning(f"[convergence] STALE table (would drop): {t}")
@@ -499,7 +511,7 @@ class SchemaConvergenceService:
         for v in live_virtual.keys() - desired_virtual.keys():
             logger.warning(f"[convergence] STALE virtual table (would drop): {v}")
 
-    def _converge_indexes(self, desired: dict, actual: dict, live_conn: sqlite3.Connection) -> int:
+    def _converge_indexes(self, desired: dict[str, str], actual: dict[str, str], live_conn: sqlite3.Connection) -> int:
         synced = 0
 
         for idx_name, desired_ddl in desired.items():
@@ -525,7 +537,7 @@ class SchemaConvergenceService:
 
         return synced
 
-    def _extract_fts5_columns(self, normalized_ddl: str) -> list:
+    def _extract_fts5_columns(self, normalized_ddl: str) -> list[str]:
         """Parse the column list from a normalized FTS5 CREATE VIRTUAL TABLE DDL.
 
         Strips key=value options (e.g. content='episodes', content_rowid='rowid')
@@ -548,7 +560,7 @@ class SchemaConvergenceService:
                 columns.append(part)
         return columns
 
-    def _converge_virtual_tables(self, desired: dict, actual: dict, live_conn: sqlite3.Connection, schema_sql: str) -> int:
+    def _converge_virtual_tables(self, desired: dict[str, str], actual: dict[str, str], live_conn: sqlite3.Connection, schema_sql: str) -> int:
         """Create missing virtual tables; rebuild FTS5 tables whose column list changed."""
         created = 0
 
@@ -611,8 +623,8 @@ class SchemaConvergenceService:
 
     def _converge_triggers(
         self,
-        desired: dict,
-        actual: dict,
+        desired: dict[str, str],
+        actual: dict[str, str],
         live_conn: sqlite3.Connection,
         schema_sql: str,
     ) -> int:
@@ -656,8 +668,8 @@ class SchemaConvergenceService:
 
     def _drop_stale_triggers(
         self,
-        desired: dict,
-        actual: dict,
+        desired: dict[str, str],
+        actual: dict[str, str],
         live_conn: sqlite3.Connection,
     ) -> int:
         dropped = 0

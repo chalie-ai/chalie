@@ -10,8 +10,15 @@ import argparse
 import os
 import sys
 import logging
+from typing import TYPE_CHECKING, cast
 
 from utils.logger import Logger
+
+if TYPE_CHECKING:
+    from services.embedding_service import EmbeddingService
+    from services.onnx_inference_service import OnnxInferenceService
+    from services.database_service import DatabaseService
+    from consumer import WorkerManager as _WorkerManager
 
 # Force numpy/transformers to fully initialize before any background thread
 # imports them. Python's import system isn't fully thread-safe for nested
@@ -37,14 +44,14 @@ logger = logging.getLogger(__name__)
 
 
 
-def _start_model_preload():
+def _start_model_preload() -> None:
     """Kick off background model preloading (embedding + ONNX classifiers)."""
-    def _preload_models():
+    def _preload_models() -> None:
         try:
             logger.info("[System] Preloading embedding model (background)...")
             from services.embedding_service import get_embedding_service
-            svc = get_embedding_service()
-            svc.generate_embedding("warmup")
+            svc: "EmbeddingService | OnnxInferenceService | None" = get_embedding_service()
+            cast("EmbeddingService", svc).generate_embedding("warmup")
             logger.info("[System] Embedding model ready (inference warm)")
         except Exception as e:
             import traceback
@@ -88,7 +95,7 @@ def _start_model_preload():
     _threading.Thread(target=_preload_models, name="model-preload", daemon=True).start()
 
 
-def _migrate_legacy_policy_rules(database_service) -> None:
+def _migrate_legacy_policy_rules(database_service: "DatabaseService") -> None:
     """Upgrade-path only — on a fresh install this is a no-op. Critically does
     NOT create the ``policy`` table early: making the DB look non-empty to
     convergence's freshness check would skip the schema.sql seed pass (incl.
@@ -116,7 +123,7 @@ def _migrate_legacy_policy_rules(database_service) -> None:
     logger.info("[Startup] Legacy policy_rules copied into flat policy table")
 
 
-def _init_database():
+def _init_database() -> "DatabaseService":
     from services.database_service import get_shared_db_service
     from services.schema_convergence_service import SchemaConvergenceService
 
@@ -164,7 +171,7 @@ def _init_database():
     return database_service
 
 
-def _run_startup_migrations(database_service) -> None:
+def _run_startup_migrations(database_service: "DatabaseService") -> None:
     """Run all one-time startup migrations and data backfills."""
     import os as _os
 
@@ -255,7 +262,7 @@ def _run_startup_migrations(database_service) -> None:
         logger.warning(f"[Startup] AdaptiveLayer data_graph purge skipped: {_adl_err}")
 
 
-def _init_services(database_service) -> None:
+def _init_services(database_service: "DatabaseService") -> None:
     """Initialize singleton services and seed default configuration."""
     # Clean up expired auth sessions
     try:
@@ -285,7 +292,7 @@ def _init_services(database_service) -> None:
     logger.info("[Startup] TelemetryCollector initialized")
 
 
-def _register_workers(manager, host: str, port: int) -> None:
+def _register_workers(manager: "_WorkerManager", host: str, port: int) -> None:
     """Register all service workers with the WorkerManager."""
     from services.scheduler_service import scheduler_worker
     from workers.document_worker import document_purge_worker
@@ -311,7 +318,7 @@ def _register_workers(manager, host: str, port: int) -> None:
     _try_register(manager, "mcp-client-heartbeat",
                   "workers.mcp_client_worker", "mcp_client_worker")
 
-    def _flask_worker():
+    def _flask_worker() -> None:
         from api import create_app
         app = create_app()
         logger.info(f"[Chalie] Starting on http://{host}:{port}")
@@ -371,7 +378,7 @@ def _warmup_models() -> None:
         logger.warning(f"[Startup] Embedding warm-up skipped: {e}")
 
 
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser(description="Chalie — personal intelligence layer")
     parser.add_argument("--port", type=int, default=31025, help="Server port (default: 31025)")
     parser.add_argument("--host", default="0.0.0.0", help="Bind address (default: 0.0.0.0)")
@@ -413,7 +420,7 @@ def main():
     manager.run()
 
 
-def _bootstrap_capability_sync():
+def _bootstrap_capability_sync() -> None:
     """Bootstrap connected capabilities at startup.
 
     For each capability, call connect() — it checks credentials internally and
@@ -436,7 +443,7 @@ def _bootstrap_capability_sync():
         logger.warning("[bootstrap] Capability sync bootstrap failed: %s", exc)
 
 
-def _try_register(manager, name, module_path, func_name):
+def _try_register(manager: "_WorkerManager", name: str, module_path: str, func_name: str) -> None:
     """Try to import and register a service, logging failure gracefully."""
     try:
         import importlib

@@ -42,8 +42,57 @@ from __future__ import annotations
 import json
 import logging
 import time
-from typing import ClassVar, Optional
+from typing import TYPE_CHECKING, ClassVar, Optional, cast
 from uuid import uuid4
+
+if TYPE_CHECKING:
+    from typing import Protocol, TypedDict
+
+    class _GenCfg(TypedDict, total=False):
+        system_instruction: str
+        response_mime_type: str
+        tools: list[object]
+        thinking_config: object
+
+    class _GenaiTypes(Protocol):
+        def ThinkingConfig(self, **kwargs: object) -> object: ...
+        def Tool(self, **kwargs: object) -> object: ...
+        def GenerateContentConfig(self, **kwargs: object) -> object: ...
+        def Schema(self, **kwargs: object) -> object: ...
+        def FunctionDeclaration(self, **kwargs: object) -> object: ...
+
+    class _Genai(Protocol):
+        types: _GenaiTypes
+
+        def Client(self, **kwargs: object) -> "_GenaiClient": ...
+
+    class _GenaiModels(Protocol):
+        def generate_content(self, **kwargs: object) -> "_GenResponse": ...
+        def get(self, *, model: str) -> "_ModelInfo": ...
+
+    class _GenaiClient(Protocol):
+        models: _GenaiModels
+
+    class _ModelInfo(Protocol):
+        input_token_limit: "int | None"
+
+    class _Candidate(Protocol):
+        content: object
+        finish_reason: object
+
+    class _GenResponse(Protocol):
+        candidates: "list[_Candidate] | None"
+
+    class _FunctionCall(Protocol):
+        name: str
+        args: dict[str, object]
+
+    class _Part(Protocol):
+        text: str
+        function_call: "_FunctionCall | None"
+
+    class _Content(Protocol):
+        parts: "list[_Part] | None"
 
 from services.llm_clients.base import ProviderClient
 from services.provider_api import (
@@ -56,6 +105,7 @@ from services.provider_api import (
 )
 
 logger = logging.getLogger(__name__)
+
 
 _THINKING_BUDGETS: dict[str, int] = {
     ThinkingLevel.MEDIUM.value: 4096,
@@ -78,11 +128,11 @@ _TOKEN_LIMIT_STRINGS = frozenset({
 })
 
 
-def _gemini_convert_messages(messages: list) -> list:
+def _gemini_convert_messages(messages: list[dict[str, object]]) -> list[dict[str, object]]:
     """Convert normalised messages to Gemini content format."""
-    result = []
+    result: list[dict[str, object]] = []
     for msg in messages:
-        role = "model" if msg['role'] == 'assistant' else msg['role']
+        role = "model" if msg['role'] == 'assistant' else cast(str, msg['role'])
         if msg['role'] == 'tool':
             result.append({
                 "role": "user",
@@ -94,11 +144,11 @@ def _gemini_convert_messages(messages: list) -> list:
                 }],
             })
         elif msg['role'] == 'assistant' and msg.get('tool_calls'):
-            parts = []
+            parts: list[dict[str, object]] = []
             text = msg.get('content', '')
             if text:
                 parts.append({"text": text})
-            for tc in msg['tool_calls']:
+            for tc in cast(list[dict[str, object]], msg['tool_calls']):
                 parts.append({
                     "function_call": {"name": tc['name'], "args": tc['input']},
                 })
@@ -108,22 +158,22 @@ def _gemini_convert_messages(messages: list) -> list:
             img = msg.get('image')
             if img:
                 parts.append({
-                    "inline_data": {"mime_type": img['mime_type'], "data": img['data']},
+                    "inline_data": {"mime_type": cast(dict[str, object], img)['mime_type'], "data": cast(dict[str, object], img)['data']},
                 })
             result.append({"role": role, "parts": parts})
     return result
 
 
-def _accumulate_part(part, text_parts: list, tool_calls: list) -> None:
+def _accumulate_part(part: object, text_parts: list[str], tool_calls: list[dict[str, object]]) -> None:
     """Append text or a tool-call dict from a single Gemini response part."""
     if getattr(part, 'text', None):
-        text_parts.append(part.text)
+        text_parts.append(cast("_Part", part).text)
     fc = getattr(part, 'function_call', None)
     if fc:
         tool_calls.append({
-            'id': f"gemini_{fc.name}_{uuid4().hex[:8]}",
-            'name': fc.name,
-            'input': dict(fc.args) if fc.args else {},
+            'id': f"gemini_{cast('_FunctionCall', fc).name}_{uuid4().hex[:8]}",
+            'name': cast("_FunctionCall", fc).name,
+            'input': dict(cast("_FunctionCall", fc).args) if cast("_FunctionCall", fc).args else {},
         })
 
 
@@ -132,28 +182,28 @@ class GeminiClient(ProviderClient):
 
     CONTENT_FIELD_LABEL: ClassVar[str] = "candidates[].content.parts[].text"
 
-    def __init__(self, config: dict) -> None:
+    def __init__(self, config: dict[str, object]) -> None:
         self._config = config
-        self.model: str = config.get('model', 'gemini-2.5-flash')
-        self._format: str = config.get('format', 'text')
+        self.model: str = cast(str, config.get('model', 'gemini-2.5-flash'))
+        self._format: str = cast(str, config.get('format', 'text'))
 
-    def _get_sdk(self):
+    def _get_sdk(self) -> "_Genai":
         try:
             from google import genai  # noqa: PLC0415
-            return genai
+            return cast("_Genai", genai)
         except ImportError:
             raise RuntimeError(
                 "google-genai package is not installed. Run: pip install google-genai"
             )
 
-    def _get_client(self, genai):
+    def _get_client(self, genai: "_Genai") -> "_GenaiClient":
         from services.llm_service import _resolve_api_key, _app_user_agent  # noqa: PLC0415
         return genai.Client(
             api_key=_resolve_api_key(self._config),
             http_options={"headers": {"User-Agent": _app_user_agent()}},
         )
 
-    def _thinking_native(self, genai, level: ThinkingLevel, cfg: dict) -> None:
+    def _thinking_native(self, genai: "_Genai", level: ThinkingLevel, cfg: "_GenCfg") -> None:
         """Inject thinking_config into cfg for MEDIUM/HIGH/MAX."""
         value = level.value
         if level == ThinkingLevel.MAX:
@@ -172,17 +222,17 @@ class GeminiClient(ProviderClient):
                 value, self.model,
             )
 
-    def _build_gen_config(self, genai, system: str, tools: Optional[list],
-                          thinking_mode: ThinkingLevel) -> dict:
-        cfg: dict = {'system_instruction': system}
+    def _build_gen_config(self, genai: "_Genai", system: str, tools: Optional[list[dict[str, object]]],
+                          thinking_mode: ThinkingLevel) -> "_GenCfg":
+        cfg: "_GenCfg" = {'system_instruction': system}
         if self._format == 'json' and not tools:
             cfg['response_mime_type'] = 'application/json'
         if tools:
             cfg['tools'] = [
                 genai.types.Tool(function_declarations=[
                     genai.types.FunctionDeclaration(
-                        name=t['name'],
-                        description=t.get('description', ''),
+                        name=cast(str, t['name']),
+                        description=cast(str, t.get('description', '')),
                         parameters=t.get('input_schema'),
                     )
                     for t in tools
@@ -191,17 +241,17 @@ class GeminiClient(ProviderClient):
         self._thinking_native(genai, thinking_mode, cfg)
         return cfg
 
-    def _parse_response(self, response) -> tuple[str, Optional[list], Optional[str]]:
+    def _parse_response(self, response: "_GenResponse") -> tuple[str, Optional[list[dict[str, object]]], Optional[str]]:
         text_parts: list[str] = []
-        tool_calls: list[dict] = []
+        tool_calls: list[dict[str, object]] = []
         candidate = response.candidates[0] if response.candidates else None
         if candidate is not None:
-            for part in (candidate.content.parts or []):
+            for part in (cast("_Content", candidate.content).parts or []):
                 _accumulate_part(part, text_parts, tool_calls)
         finish_reason = str(candidate.finish_reason) if candidate and candidate.finish_reason else None
         return '\n'.join(text_parts), tool_calls or None, finish_reason
 
-    def _generate_with_fallback(self, client, genai, contents, gen_cfg: dict):
+    def _generate_with_fallback(self, client: "_GenaiClient", genai: "_Genai", contents: object, gen_cfg: "_GenCfg") -> object:
         """Execute generate_content, handling errors and thinking fallback.
 
         Error discrimination is based on the structured fields of
@@ -286,7 +336,7 @@ class GeminiClient(ProviderClient):
             lambda: self._generate_with_fallback(client, genai, contents, gen_cfg)
         )
         latency_ms = int((time.time() - start) * 1000)
-        text, tool_calls, finish_reason = self._parse_response(response)
+        text, tool_calls, finish_reason = self._parse_response(cast("_GenResponse", response))
 
         if not text and not tool_calls:
             logger.warning("[GeminiClient] Empty response, finish_reason=%s", finish_reason)
@@ -322,13 +372,13 @@ class GeminiClient(ProviderClient):
     def get_context_limit(self) -> int:
         """Query Gemini API for model's input token limit, cached."""
         if hasattr(self, '_cached_context_limit'):
-            return self._cached_context_limit  # type: ignore[attr-defined]
+            return self._cached_context_limit
         try:
             genai = self._get_sdk()
             from services.llm_service import _resolve_api_key  # noqa: PLC0415
             client = genai.Client(api_key=_resolve_api_key(self._config))
             model_info = client.models.get(model=self.model)
-            self._cached_context_limit: int = model_info.input_token_limit
+            self._cached_context_limit: int = cast(int, model_info.input_token_limit)
             return self._cached_context_limit
         except Exception as exc:
             logger.debug("[GeminiClient] Failed to get context limit: %s", exc)
@@ -339,7 +389,7 @@ class GeminiClient(ProviderClient):
         """Estimate using build_request_body + heuristic estimate_tokens."""
         from services.llm_service import estimate_tokens  # noqa: PLC0415
         contents = _gemini_convert_messages(dto.messages)
-        config_dict: dict = {'system_instruction': dto.system}
+        config_dict: dict[str, object] = {'system_instruction': dto.system}
         if dto.tools:
             config_dict['tools'] = [
                 {

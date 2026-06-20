@@ -1,8 +1,10 @@
 import time
 import logging
 import uuid
+from typing import Optional, cast
 
 from services.memory_client import MemoryClientService
+from services.memory_store import MemoryStore
 
 logger = logging.getLogger(__name__)
 
@@ -19,13 +21,13 @@ class WrapperRateLimiter:
         self,
         limit: int = DEFAULT_LIMIT,
         window_seconds: int = DEFAULT_WINDOW,
-        store=None,
+        store: Optional[MemoryStore] = None,
     ):
         self._limit = limit
         self._window = window_seconds
         self._store = store
 
-    def _get_store(self):
+    def _get_store(self) -> MemoryStore:
         if self._store is not None:
             return self._store
         return MemoryClientService.create_connection()
@@ -38,7 +40,7 @@ class WrapperRateLimiter:
         window_start = now - self._window
 
         # 1. Prune entries outside the current window
-        store.zremrangebyscore(key, '-inf', window_start)
+        store.zremrangebyscore(key, cast(float, '-inf'), window_start)
 
         # 2. Count remaining entries
         count = store.zcard(key)

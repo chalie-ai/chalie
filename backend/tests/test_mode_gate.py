@@ -4,22 +4,27 @@
 from __future__ import annotations
 
 import os
+import sqlite3
 import sys
 import tempfile
+from typing import TYPE_CHECKING, cast
 
 import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
+if TYPE_CHECKING:
+    from services.mode_gate_service import ModeGateService
+
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
 
-def _zero_state() -> dict:
+def _zero_state() -> dict[str, float]:
     from services.mode_gate_service import ModeGateService
     return dict.fromkeys(ModeGateService.MODES, 0.0)
 
 
-def _fresh_service(fire_threshold: float = 0.60):
+def _fresh_service(fire_threshold: float = 0.60) -> "ModeGateService":
     import services.mode_gate_service as mgm
     mgm._config_loaded = None
     mgm._fire_thresholds_cache = None
@@ -39,7 +44,7 @@ def _fresh_service(fire_threshold: float = 0.60):
 class TestUpdateStateFireRule:
     """Fire (prob >= threshold) snaps state up to max(state, prob)."""
 
-    def test_fire_from_zero_sets_state_to_prob(self):
+    def test_fire_from_zero_sets_state_to_prob(self) -> None:
         svc = _fresh_service(fire_threshold=0.60)
         state = _zero_state()
         probs = dict.fromkeys(svc.MODES, 0.0)
@@ -49,7 +54,7 @@ class TestUpdateStateFireRule:
 
         assert result['research'] == pytest.approx(0.82)
 
-    def test_fire_raises_state_when_prob_is_higher(self):
+    def test_fire_raises_state_when_prob_is_higher(self) -> None:
         svc = _fresh_service(fire_threshold=0.60)
         state = _zero_state()
         state['coding'] = 0.70
@@ -60,7 +65,7 @@ class TestUpdateStateFireRule:
 
         assert result['coding'] == pytest.approx(0.95)
 
-    def test_fire_clamps_at_ceiling(self):
+    def test_fire_clamps_at_ceiling(self) -> None:
         svc = _fresh_service(fire_threshold=0.60)
         state = _zero_state()
         probs = dict.fromkeys(svc.MODES, 0.0)
@@ -76,7 +81,7 @@ class TestUpdateStateFireRule:
 class TestUpdateStateDecayRule:
     """Miss (prob < threshold) multiplies state by decay_factor; below floor → 0.0."""
 
-    def test_miss_decays_state(self):
+    def test_miss_decays_state(self) -> None:
         svc = _fresh_service(fire_threshold=0.60)
         state = _zero_state()
         state['research'] = 0.90
@@ -86,7 +91,7 @@ class TestUpdateStateDecayRule:
 
         assert result['research'] == pytest.approx(0.90 * 0.75)
 
-    def test_miss_below_floor_collapses_to_zero(self):
+    def test_miss_below_floor_collapses_to_zero(self) -> None:
         svc = _fresh_service(fire_threshold=0.60)
         state = _zero_state()
         state['write'] = 0.012
@@ -96,7 +101,7 @@ class TestUpdateStateDecayRule:
 
         assert result['write'] == pytest.approx(0.0, abs=1e-9)
 
-    def test_independent_modes_decay_independently(self):
+    def test_independent_modes_decay_independently(self) -> None:
         svc = _fresh_service(fire_threshold=0.60)
         state = _zero_state()
         state['research'] = 0.80
@@ -119,7 +124,7 @@ class TestDecayTrajectory:
     miss t4 → 0.285 (drops below activation=0.30).
     """
 
-    def test_four_turn_decay_crosses_activation_at_t4(self):
+    def test_four_turn_decay_crosses_activation_at_t4(self) -> None:
         svc = _fresh_service(fire_threshold=0.60)
         activation = 0.30
         state = _zero_state()
@@ -149,7 +154,7 @@ class TestDecayTrajectory:
 class TestLoadConfigFallback:
     """_load_config() returns defaults when file is missing or malformed."""
 
-    def test_missing_file_returns_defaults(self):
+    def test_missing_file_returns_defaults(self) -> None:
         import services.mode_gate_service as mgm
         mgm._config_loaded = None
         mgm._fire_thresholds_cache = None
@@ -165,7 +170,7 @@ class TestLoadConfigFallback:
             mgm._config_loaded = None
             mgm._fire_thresholds_cache = None
 
-    def test_malformed_yaml_returns_defaults(self):
+    def test_malformed_yaml_returns_defaults(self) -> None:
         import services.mode_gate_service as mgm
         mgm._config_loaded = None
         mgm._fire_thresholds_cache = None
@@ -185,7 +190,7 @@ class TestLoadConfigFallback:
             mgm._fire_thresholds_cache = None
             os.unlink(bad_path)
 
-    def test_yaml_override_wins_over_default(self):
+    def test_yaml_override_wins_over_default(self) -> None:
         import services.mode_gate_service as mgm
         mgm._config_loaded = None
         mgm._fire_thresholds_cache = None
@@ -214,8 +219,8 @@ class TestLoadConfigFallback:
         try:
             mgm._CONFIG_PATH = yaml_path
             cfg = mgm._load_config()
-            assert cfg['fire_threshold_overrides']['research'] == pytest.approx(0.40)
-            assert cfg['fire_threshold_overrides']['coding'] is None
+            assert cast("dict[str, object]", cfg['fire_threshold_overrides'])['research'] == pytest.approx(0.40)
+            assert cast("dict[str, object]", cfg['fire_threshold_overrides'])['coding'] is None
         finally:
             mgm._CONFIG_PATH = original_path
             mgm._config_loaded = None
@@ -232,7 +237,7 @@ class TestLoadConfigFallback:
 class TestStateRoundTrip:
     """_save_state / _load_state persist and recover values via real MemoryStore."""
 
-    def test_save_then_load_returns_same_values(self, store):
+    def test_save_then_load_returns_same_values(self, store: object) -> None:
         svc = _fresh_service()
         written = dict.fromkeys(svc.MODES, 0.0)
         written['research'] = 0.72
@@ -244,14 +249,14 @@ class TestStateRoundTrip:
         assert recovered['research'] == pytest.approx(0.72, abs=1e-5)
         assert recovered['coding'] == pytest.approx(0.33, abs=1e-5)
 
-    def test_load_on_empty_store_returns_all_zeros(self, store):
+    def test_load_on_empty_store_returns_all_zeros(self, store: object) -> None:
         svc = _fresh_service()
         state = svc._load_state()
 
         assert all(v == pytest.approx(0.0, abs=1e-9) for v in state.values())
         assert set(state.keys()) == set(svc.MODES)
 
-    def test_save_overwrites_previous_state(self, store):
+    def test_save_overwrites_previous_state(self, store: object) -> None:
         svc = _fresh_service()
         first = dict.fromkeys(svc.MODES, 0.0)
         first['research'] = 0.80
@@ -264,7 +269,7 @@ class TestStateRoundTrip:
         recovered = svc._load_state()
         assert recovered['research'] == pytest.approx(0.30, abs=1e-5)
 
-    def test_reset_state_clears_store(self, store):
+    def test_reset_state_clears_store(self, store: object) -> None:
         svc = _fresh_service()
         state = dict.fromkeys(svc.MODES, 0.0)
         state['analyze'] = 0.55
@@ -280,10 +285,10 @@ class TestStateRoundTrip:
 class TestTick:
     """tick() classifies, persists, and returns the active mode set."""
 
-    def test_returns_active_modes_above_threshold(self, store):
+    def test_returns_active_modes_above_threshold(self, store: object) -> None:
         svc = _fresh_service()
         svc._fire_thresholds = dict.fromkeys(svc.MODES, 0.05)
-        svc._classify = lambda _text: dict.fromkeys(svc.MODES, 0.90)
+        setattr(svc, '_classify', lambda _text: dict.fromkeys(svc.MODES, 0.90))
 
         active = svc.tick("anything", turn_id="t-1")
 
@@ -291,25 +296,25 @@ class TestTick:
         assert active, "expected at least one active mode at prob=0.90"
         assert active <= set(svc.MODES)
 
-    def test_persists_state_across_calls(self, store):
+    def test_persists_state_across_calls(self, store: object) -> None:
         svc = _fresh_service()
         svc._fire_thresholds = dict.fromkeys(svc.MODES, 0.05)
-        svc._classify = lambda _text: dict.fromkeys(svc.MODES, 0.85)
+        setattr(svc, '_classify', lambda _text: dict.fromkeys(svc.MODES, 0.85))
 
         svc.tick("first turn", turn_id="t-a")
         state = svc._load_state()
 
         assert any(v > 0.0 for v in state.values())
 
-    def test_classifier_failure_returns_empty_set(self, store):
+    def test_classifier_failure_returns_empty_set(self, store: object) -> None:
         svc = _fresh_service()
-        svc._classify = lambda _text: {}
+        setattr(svc, '_classify', lambda _text: {})
 
         active = svc.tick("anything", turn_id="t-fail")
 
         assert active == set()
 
-    def test_log_line_fires_per_tick_bootstrap_true_then_false(self, db, store, caplog):
+    def test_log_line_fires_per_tick_bootstrap_true_then_false(self, db: sqlite3.Connection, store: object, caplog: "pytest.LogCaptureFixture") -> None:
         """Every tick emits exactly one [MODE-GATE] log line; the cold-start
         tick warms state from the last user transcript row (bootstrap=true)
         and the bootstrap never fires again (bootstrap=false thereafter)."""
@@ -322,7 +327,7 @@ class TestTick:
 
         svc = _fresh_service()
         svc._fire_thresholds = dict.fromkeys(svc.MODES, 0.05)
-        svc._classify = lambda _text: dict.fromkeys(svc.MODES, 0.85)
+        setattr(svc, '_classify', lambda _text: dict.fromkeys(svc.MODES, 0.85))
 
         with caplog.at_level(logging.INFO, logger='services.mode_gate_service'):
             svc.tick("first turn", turn_id="t-1")

@@ -99,13 +99,18 @@ voice-rocm = [
 ]
 
 [tool.mypy]
-# The unit suite enforces the ToolResult return-type contract on the abilities
-# package (tests/test_ability_returns_tool_result.py): every Ability.run() must
-# honour its declared `-> ToolResult` on every code path. follow_imports=silent
-# and ignore_missing_imports keep that check scoped to first-party ability code
-# without requiring the whole transitive dependency graph to be typed.
+# Global strict mode, no exceptions. The whole backend — every first-party
+# package plus the test suite and top-level modules — type-checks clean under
+# `mypy --strict`. There is deliberately no relax/override block: any new code
+# is held to the same bar from the start. See docs/typing-ratchet.md for the
+# history of how the codebase was migrated to this state and how the gate works.
+strict = true
 follow_imports = "silent"
 ignore_missing_imports = true
+# `--strict` does NOT imply these; we enable them explicitly so the bar is
+# closer to a hard-typed language. strict_bytes forbids the implicit
+# str/bytes/bytearray promiscuity mypy otherwise tolerates.
+strict_bytes = true
 
 [tool.setuptools]
 # backend/ is not an importable package — it's run directly via run.py.

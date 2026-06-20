@@ -7,7 +7,7 @@ import logging
 logger = logging.getLogger(__name__)
 
 
-def document_purge_worker():
+def document_purge_worker() -> None:
     import time
 
     CYCLE_SECONDS = 6 * 60 * 60  # 6 hours

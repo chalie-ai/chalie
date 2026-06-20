@@ -24,9 +24,17 @@ import logging
 import threading
 import time
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Callable, Dict, List, Optional, Tuple, cast
 
 import numpy as np
+
+if TYPE_CHECKING:
+    from typing import Protocol
+
+    class _Session(Protocol):
+        def run(self, output_names: None, input_feed: dict[str, np.ndarray]) -> list[np.ndarray]: ...
+
+    _Tokenizer = Callable[..., dict[str, np.ndarray]]
 
 logger = logging.getLogger(__name__)
 
@@ -69,13 +77,13 @@ def _get_encoder_sha256(onnx_path: Path) -> str:
 
 
 def _gelu(x: np.ndarray) -> np.ndarray:
-    return 0.5 * x * (1.0 + np.tanh(np.sqrt(2.0 / np.pi) * (x + 0.044715 * x ** 3)))
+    return cast(np.ndarray, 0.5 * x * (1.0 + np.tanh(np.sqrt(2.0 / np.pi) * (x + 0.044715 * x ** 3))))
 
 
 def _softmax(logits: np.ndarray) -> np.ndarray:
     shifted = logits - logits.max(axis=-1, keepdims=True)
     exp_l = np.exp(shifted)
-    return exp_l / exp_l.sum(axis=-1, keepdims=True)
+    return cast(np.ndarray, exp_l / exp_l.sum(axis=-1, keepdims=True))
 
 
 class _ClassifierHead:
@@ -123,12 +131,12 @@ def _mean_pool(last_hidden_state: np.ndarray, attention_mask: np.ndarray) -> np.
     mask = attention_mask[..., np.newaxis].astype(np.float32)
     sum_emb = (last_hidden_state * mask).sum(axis=1)
     sum_mask = mask.sum(axis=1).clip(min=1e-9)
-    return sum_emb / sum_mask
+    return cast(np.ndarray, sum_emb / sum_mask)
 
 
 def _l2_normalize(embeddings: np.ndarray) -> np.ndarray:
     norms = np.linalg.norm(embeddings, axis=-1, keepdims=True).clip(min=1e-9)
-    return embeddings / norms
+    return cast(np.ndarray, embeddings / norms)
 
 
 class OnnxInferenceService:
@@ -161,7 +169,7 @@ class OnnxInferenceService:
 
     # ── Encoder access (borrowed from embedding_service) ──────────────────────
 
-    def _get_encoder(self):
+    def _get_encoder(self) -> tuple[object, object, list[str], list[str]]:
         from services import embedding_service as _emb_mod
         session, tokenizer = _emb_mod._get_session_and_tokenizer()
         return session, tokenizer, _emb_mod._output_names, _emb_mod._input_names
@@ -172,7 +180,7 @@ class OnnxInferenceService:
     def _embed(self, text: str) -> np.ndarray:
         session, tokenizer, output_names, input_names = self._get_encoder()
 
-        encoded = tokenizer(
+        encoded = cast("_Tokenizer", tokenizer)(
             [text],
             return_tensors="np",
             padding=True,
@@ -186,7 +194,7 @@ class OnnxInferenceService:
         if "token_type_ids" in input_names:
             feed["token_type_ids"] = np.zeros_like(input_ids)
 
-        outputs = session.run(None, feed)
+        outputs = cast("_Session", session).run(None, feed)
 
         if "sentence_embedding" in output_names:
             pooled = outputs[output_names.index("sentence_embedding")]
@@ -198,7 +206,7 @@ class OnnxInferenceService:
 
     # ── Task registration ─────────────────────────────────────────────────────
 
-    def _load_task_meta(self, task_name: str):
+    def _load_task_meta(self, task_name: str) -> Optional[tuple[dict[str, object], Path]]:
         task_dir = self._pretrained_dir / task_name
         prefix = _TASK_PREFIXES.get(task_name, task_name)
         meta_path = task_dir / f"{prefix}-classifier_meta.json"
@@ -207,7 +215,7 @@ class OnnxInferenceService:
             return None
         try:
             with open(meta_path) as f:
-                return json.load(f), task_dir
+                return cast(dict[str, object], json.load(f)), task_dir
         except (json.JSONDecodeError, OSError) as e:
             logger.warning(f"{LOG_PREFIX} Cannot read meta for '{task_name}': {e}")
             return None
@@ -225,8 +233,8 @@ class OnnxInferenceService:
             )
         return actual_sha
 
-    def _load_head_arrays(self, task_name: str, task_dir, meta: dict):
-        head_asset = meta.get("head_asset")
+    def _load_head_arrays(self, task_name: str, task_dir: Path, meta: dict[str, object]) -> Optional[tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]]:
+        head_asset = cast(str, meta.get("head_asset"))
         if not head_asset:
             logger.warning(f"{LOG_PREFIX} No head_asset in meta for '{task_name}'")
             return None
@@ -252,7 +260,7 @@ class OnnxInferenceService:
             return None
         meta, task_dir = loaded
 
-        actual_sha = self._verify_encoder_sha(task_name, meta.get("base_encoder_sha256", "").lower())
+        actual_sha = self._verify_encoder_sha(task_name, cast(str, meta.get("base_encoder_sha256", "")).lower())
         if actual_sha is None:
             return None
 
@@ -261,15 +269,15 @@ class OnnxInferenceService:
             return None
         w1, b1, w2, b2 = arrays
 
-        labels = meta.get("labels", [])
-        activation = meta.get("activation", meta.get("mlp_activation", "gelu"))
-        task_type = meta.get("task_type", "classification")
-        output_activation = meta.get("output_activation", "softmax")
-        num_outputs = meta.get("num_outputs", meta.get("num_classes", w2.shape[0]))
-        extra_feature_dim = meta.get("extra_feature_dim", 0)
-        input_dim = meta.get("input_dim", w1.shape[1])
-        hidden_dim = meta.get("hidden_dim", w1.shape[0])
-        num_classes = meta.get("num_classes", w2.shape[0])
+        labels = cast(list[str], meta.get("labels", []))
+        activation = cast(str, meta.get("activation", meta.get("mlp_activation", "gelu")))
+        task_type = cast(str, meta.get("task_type", "classification"))
+        output_activation = cast(str, meta.get("output_activation", "softmax"))
+        num_outputs = cast(int, meta.get("num_outputs", meta.get("num_classes", w2.shape[0])))
+        extra_feature_dim = cast(int, meta.get("extra_feature_dim", 0))
+        input_dim = cast(int, meta.get("input_dim", w1.shape[1]))
+        hidden_dim = cast(int, meta.get("hidden_dim", w1.shape[0]))
+        num_classes = cast(int, meta.get("num_classes", w2.shape[0]))
 
         # Boot-time assertions for regression tasks
         if task_type == "regression":

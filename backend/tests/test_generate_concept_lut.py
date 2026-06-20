@@ -1,6 +1,8 @@
 """Tests for generate_concept_lut — idempotency and schema correctness."""
 
 import sqlite3
+from pathlib import Path
+from typing import cast
 
 import pytest
 import yaml
@@ -59,7 +61,7 @@ def _require_generator_prereqs() -> None:
 
 class TestGenerateConceptLut:
 
-    def test_row_count_covers_every_canonical_key(self, tmp_path):
+    def test_row_count_covers_every_canonical_key(self, tmp_path: Path) -> None:
         _require_generator_prereqs()
 
         expected_canonical = len(_canonical_keys_from_yaml())
@@ -68,10 +70,10 @@ class TestGenerateConceptLut:
 
         conn = _open_lut(db_path)
         try:
-            total = conn.execute("SELECT count(*) FROM lut_concepts").fetchone()[0]
-            distinct = conn.execute(
+            total = cast(int, conn.execute("SELECT count(*) FROM lut_concepts").fetchone()[0])
+            distinct = cast(int, conn.execute(
                 "SELECT count(DISTINCT canonical_key) FROM lut_concepts"
-            ).fetchone()[0]
+            ).fetchone()[0])
         finally:
             conn.close()
 
@@ -82,7 +84,7 @@ class TestGenerateConceptLut:
             f"Expected at least {expected_canonical} label rows, got {total}"
         )
 
-    def test_embeddings_count_matches_concepts(self, tmp_path):
+    def test_embeddings_count_matches_concepts(self, tmp_path: Path) -> None:
         _require_generator_prereqs()
 
         db_path = str(tmp_path / "concept_lut_test.sqlite")
@@ -90,14 +92,14 @@ class TestGenerateConceptLut:
 
         conn = _open_lut(db_path)
         try:
-            n_concepts = conn.execute("SELECT count(*) FROM lut_concepts").fetchone()[0]
-            n_embeddings = conn.execute("SELECT count(*) FROM lut_embeddings").fetchone()[0]
+            n_concepts = cast(int, conn.execute("SELECT count(*) FROM lut_concepts").fetchone()[0])
+            n_embeddings = cast(int, conn.execute("SELECT count(*) FROM lut_embeddings").fetchone()[0])
         finally:
             conn.close()
 
         assert n_embeddings == n_concepts
 
-    def test_idempotent_second_run_replaces_cleanly(self, tmp_path):
+    def test_idempotent_second_run_replaces_cleanly(self, tmp_path: Path) -> None:
         """Running the generator twice produces the same result — no duplicates."""
         _require_generator_prereqs()
 
@@ -113,7 +115,7 @@ class TestGenerateConceptLut:
             f"After 2 runs: expected at least {expected_canonical}, got {second}"
         )
 
-    def test_rules_are_valid_values(self, tmp_path):
+    def test_rules_are_valid_values(self, tmp_path: Path) -> None:
         """Every rule column value must be one of: temporal, coexist, immutable."""
         _require_generator_prereqs()
 
@@ -130,7 +132,7 @@ class TestGenerateConceptLut:
         invalid = [r[0] for r in rows if r[0] not in valid_rules]
         assert not invalid, f"Invalid rule values found: {invalid}"
 
-    def test_canonical_keys_match_yaml(self, tmp_path):
+    def test_canonical_keys_match_yaml(self, tmp_path: Path) -> None:
         """The distinct canonical keys in the DB match the source YAML set.
 
         Each alias gets its own row pointing to the same canonical_key, so the
@@ -158,6 +160,6 @@ class TestGenerateConceptLut:
 def _row_count(db_path: str) -> int:
     conn = _open_lut(db_path)
     try:
-        return conn.execute("SELECT count(*) FROM lut_concepts").fetchone()[0]
+        return cast(int, conn.execute("SELECT count(*) FROM lut_concepts").fetchone()[0])
     finally:
         conn.close()

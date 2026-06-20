@@ -8,6 +8,8 @@ real provider row created by the production ProviderDbService factory.
 """
 
 import base64
+import sqlite3
+from typing import cast
 
 import pytest
 
@@ -25,7 +27,7 @@ def _png_bytes() -> bytes:
     )
 
 
-def test_analyze_is_ocr_only_even_with_vision_provider_configured(db):
+def test_analyze_is_ocr_only_even_with_vision_provider_configured(db: sqlite3.Connection) -> None:
     svc = ProviderDbService(get_shared_db_service())
 
     # Real factory creates the row. Platform 'ollama' is not key-requiring, so
@@ -42,7 +44,7 @@ def test_analyze_is_ocr_only_even_with_vision_provider_configured(db):
             "api_key": "",
         }
     )
-    pid = provider["id"]
+    pid = cast(int, cast("dict[str, object]", provider)["id"])
     db.execute("UPDATE providers SET supports_vision = 1 WHERE id = ?", (pid,))
     db.commit()
 

@@ -15,12 +15,29 @@ Lifecycle:
   - Clean shutdown via atexit or SIGTERM (daemon thread)
 """
 
+from __future__ import annotations
+
 import atexit
 import logging
 import queue
 import threading
 import time
 from concurrent.futures import Future
+from typing import TYPE_CHECKING, Callable, cast
+
+if TYPE_CHECKING:
+    from typing import Protocol
+
+    class _BrowserLike(Protocol):
+        def close(self) -> None: ...
+        def is_connected(self) -> bool: ...
+
+    class _ChromiumLike(Protocol):
+        def launch(self, *, headless: bool, args: list[str]) -> object: ...
+
+    class _PlaywrightLike(Protocol):
+        chromium: _ChromiumLike
+        def stop(self) -> None: ...
 
 logger = logging.getLogger(__name__)
 
@@ -43,8 +60,8 @@ _LAUNCH_ARGS = [
 class BrowserPool:
     """Dedicated-thread browser pool.  Thread-safe facade for Playwright."""
 
-    def __init__(self):
-        self._queue: queue.Queue = queue.Queue()
+    def __init__(self) -> None:
+        self._queue: queue.Queue[object] = queue.Queue()
         self._thread: threading.Thread | None = None
         self._lock = threading.Lock()
         self._running = False
@@ -55,7 +72,7 @@ class BrowserPool:
 
     # -- Public API (called from any thread) -----------------------------------
 
-    def submit(self, fn, *args, **kwargs) -> Future:
+    def submit(self, fn: Callable[..., object], *args: object, **kwargs: object) -> Future[object]:
         """Submit a callable to the browser thread.
 
         ``fn`` receives the live Playwright Browser as its first argument::
@@ -73,15 +90,15 @@ class BrowserPool:
             result = future.result(timeout=60)
         """
         self._ensure_thread()
-        future: Future = Future()
+        future: Future[object] = Future()
         self._queue.put((fn, args, kwargs, future))
         return future
 
-    def execute(self, fn, *args, timeout=60, **kwargs):
+    def execute(self, fn: Callable[..., object], *args: object, timeout: float = 60, **kwargs: object) -> object:
         """Submit + block until result.  Raises on timeout or exception."""
         return self.submit(fn, *args, **kwargs).result(timeout=timeout)
 
-    def shutdown(self):
+    def shutdown(self) -> None:
         """Signal the browser thread to stop.  Blocks until drained."""
         self._running = False
         try:
@@ -89,7 +106,7 @@ class BrowserPool:
         except queue.Full:
             pass
 
-    def status(self) -> dict:
+    def status(self) -> dict[str, object]:
         """Return pool health for the /api/system/health endpoint."""
         return {
             "thread_alive": self._thread is not None and self._thread.is_alive(),
@@ -101,7 +118,7 @@ class BrowserPool:
 
     # -- Internal --------------------------------------------------------------
 
-    def _ensure_thread(self):
+    def _ensure_thread(self) -> None:
         with self._lock:
             if self._thread is None or not self._thread.is_alive():
                 self._running = True
@@ -113,7 +130,7 @@ class BrowserPool:
                 self._thread.start()
                 logger.info("[BROWSER POOL] Dedicated thread started")
 
-    def _loop(self):
+    def _loop(self) -> None:
         """Main loop — owns the Playwright runtime.  Never called externally."""
         pw = None
         browser = None
@@ -133,7 +150,10 @@ class BrowserPool:
             if item is None:
                 break
 
-            fn, args, kwargs, future = item
+            fn, args, kwargs, future = cast(
+                "tuple[Callable[..., object], tuple[object, ...], dict[str, object], Future[object]]",
+                item,
+            )
 
             try:
                 # Lazy-launch Playwright + Chromium
@@ -141,8 +161,8 @@ class BrowserPool:
                     from playwright.sync_api import sync_playwright
                     pw = sync_playwright().start()
 
-                if browser is None or not browser.is_connected():
-                    browser = pw.chromium.launch(headless=True, args=_LAUNCH_ARGS)
+                if browser is None or not cast("_BrowserLike", browser).is_connected():
+                    browser = cast("_PlaywrightLike", pw).chromium.launch(headless=True, args=_LAUNCH_ARGS)
                     self._browser_launches += 1
                     logger.info("[BROWSER POOL] Chromium launched")
 
@@ -154,7 +174,7 @@ class BrowserPool:
             except Exception as e:
                 self._ops_failed += 1
                 # If browser crashed, discard the reference so next op re-launches
-                if browser and not browser.is_connected():
+                if browser and not cast("_BrowserLike", browser).is_connected():
                     logger.warning("[BROWSER POOL] Browser disconnected — will re-launch")
                     browser = None
                 future.set_exception(e)
@@ -164,16 +184,16 @@ class BrowserPool:
         logger.info("[BROWSER POOL] Thread stopped")
 
     @staticmethod
-    def _close(browser, pw):
+    def _close(browser: object, pw: object) -> tuple[None, None]:
         """Close browser and Playwright, swallowing errors."""
         try:
             if browser:
-                browser.close()
+                cast("_BrowserLike", browser).close()
         except Exception:
             pass
         try:
             if pw:
-                pw.stop()
+                cast("_PlaywrightLike", pw).stop()
         except Exception:
             pass
         return None, None
@@ -196,7 +216,7 @@ def get_pool() -> BrowserPool:
     return _pool
 
 
-def shutdown():
+def shutdown() -> None:
     """Module-level shutdown — safe to call even if pool was never created."""
     if _pool is not None:
         _pool.shutdown()

@@ -12,6 +12,8 @@ import os
 import sys
 import threading
 import time
+from collections.abc import Iterator
+from typing import cast
 
 import pytest
 import uvicorn
@@ -22,7 +24,7 @@ _TEST_PORT = 18462
 
 
 @pytest.fixture(scope="module", autouse=True)
-def _patch_db(tmp_path_factory):
+def _patch_db(tmp_path_factory: pytest.TempPathFactory) -> Iterator[object]:
     import sqlite3
     from services import database_service
 
@@ -120,7 +122,7 @@ def _patch_db(tmp_path_factory):
 
     original = database_service.get_shared_db_service
 
-    def _patched():
+    def _patched() -> database_service.DatabaseService:
         return test_db
 
     database_service.get_shared_db_service = _patched
@@ -133,10 +135,11 @@ def _patch_db(tmp_path_factory):
 
 
 @pytest.fixture(scope="module")
-def auth_token(_patch_db):
+def auth_token(_patch_db: object) -> str:
+    from services.database_service import DatabaseService
     from services.wrapper_auth_service import WrapperAuthService
 
-    auth_svc = WrapperAuthService(_patch_db)
+    auth_svc = WrapperAuthService(cast(DatabaseService, _patch_db))
     raw_token, _ = auth_svc.create_token(
         name="E2E Test Agent",
         wrapper_id_override="__e2e_test__",
@@ -145,7 +148,7 @@ def auth_token(_patch_db):
 
 
 @pytest.fixture(scope="module")
-def mcp_server(_patch_db):
+def mcp_server(_patch_db: object) -> Iterator[dict[str, object]]:
     from mcp_server.server import create_mcp_server, _build_app
 
     mcp = create_mcp_server(host="127.0.0.1", port=_TEST_PORT)
@@ -172,7 +175,7 @@ def mcp_server(_patch_db):
 
 
 class TestMCPServerAuth:
-    def test_unauthenticated_request_rejected(self, mcp_server):
+    def test_unauthenticated_request_rejected(self, mcp_server: dict[str, object]) -> None:
         import urllib.request
         import urllib.error
 
@@ -197,7 +200,7 @@ class TestMCPServerAuth:
 
         assert exc_info.value.code == 401
 
-    def test_invalid_token_rejected(self, mcp_server):
+    def test_invalid_token_rejected(self, mcp_server: dict[str, object]) -> None:
         import urllib.request
         import urllib.error
 
@@ -225,7 +228,7 @@ class TestMCPServerAuth:
 
 
 class TestMCPServerToolList:
-    def _mcp_request(self, url, method, params, auth_token, session_id=None):
+    def _mcp_request(self, url: str, method: str, params: dict[str, object], auth_token: str, session_id: str | None = None) -> tuple[object | None, str | None]:
         import urllib.request
 
         body = json.dumps({
@@ -259,7 +262,7 @@ class TestMCPServerToolList:
 
         return None, resp_session_id
 
-    def test_tool_list_contains_talk_to_chalie(self, mcp_server, auth_token):
+    def test_tool_list_contains_talk_to_chalie(self, mcp_server: dict[str, object], auth_token: str) -> None:
         url = f"{mcp_server['url']}/mcp"
 
         # Step 1: Initialize session
@@ -280,14 +283,14 @@ class TestMCPServerToolList:
         )
         assert tools_result is not None, "tools/list did not return a result"
 
-        tool_names = [t["name"] for t in tools_result.get("tools", [])]
+        tool_names = [t["name"] for t in cast(list[dict[str, object]], cast(dict[str, object], tools_result).get("tools", []))]
         assert "talk_to_chalie" in tool_names, (
             f"Expected talk_to_chalie in {tool_names}"
         )
 
 
 class TestMCPServerToolCall:
-    def _mcp_request(self, url, method, params, auth_token, session_id=None):
+    def _mcp_request(self, url: str, method: str, params: dict[str, object], auth_token: str, session_id: str | None = None) -> tuple[object | None, str | None]:
         import urllib.request
 
         body = json.dumps({
@@ -319,7 +322,7 @@ class TestMCPServerToolCall:
 
         return None, resp_session_id
 
-    def test_talk_to_chalie_returns_response(self, mcp_server, auth_token):
+    def test_talk_to_chalie_returns_response(self, mcp_server: dict[str, object], auth_token: str) -> None:
         from unittest.mock import patch, MagicMock
 
         fake_response = MagicMock()
@@ -364,8 +367,8 @@ class TestMCPServerToolCall:
             )
 
         assert call_result is not None, "tools/call returned no result"
-        content = call_result.get("content", [])
+        content = cast(list[dict[str, object]], cast(dict[str, object], call_result).get("content", []))
         assert len(content) > 0, f"Expected content in response, got: {call_result}"
-        text = content[0].get("text", "")
+        text = cast(str, content[0].get("text", ""))
         assert len(text) > 0, "Expected non-empty text response from talk_to_chalie"
         assert "Hello from Chalie" in text

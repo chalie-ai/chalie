@@ -10,10 +10,16 @@ PROVIDER_IN_USE_MSG so the service constant and api/providers allowlist never
 drift apart.
 """
 
+import sqlite3
+from typing import TYPE_CHECKING, cast
+
 import pytest
 
 from services.database_service import get_shared_db_service
 from services.provider_db_service import PROVIDER_IN_USE_MSG, ProviderDbService
+
+if TYPE_CHECKING:
+    from flask.testing import FlaskClient
 
 pytestmark = pytest.mark.unit
 
@@ -22,20 +28,20 @@ def _svc() -> ProviderDbService:
     return ProviderDbService(get_shared_db_service())
 
 
-def _mk(svc, name, model, host):
-    return svc.create_provider(
+def _mk(svc: ProviderDbService, name: str, model: str, host: str) -> int:
+    return cast(int, cast("dict[str, object]", svc.create_provider(
         {"name": name, "platform": "ollama", "model": model, "host": host, "api_key": ""}
-    )["id"]
+    ))["id"])
 
 
-def _provider_ids(client):
+def _provider_ids(client: "FlaskClient") -> list[object]:
     return [p["id"] for p in client.get("/providers").get_json()["providers"]]
 
 
 # ── Through the real HTTP route ───────────────────────────────────────────────
 
 
-def test_cannot_delete_main_provider_returns_409(authed_client):
+def test_cannot_delete_main_provider_returns_409(authed_client: "tuple[FlaskClient, object, object]") -> None:
     client, _, _ = authed_client
 
     created = client.post(
@@ -54,7 +60,7 @@ def test_cannot_delete_main_provider_returns_409(authed_client):
     assert main_id in _provider_ids(client)
 
 
-def test_cannot_delete_delegate_provider_returns_409(authed_client):
+def test_cannot_delete_delegate_provider_returns_409(authed_client: "tuple[FlaskClient, object, object]") -> None:
     client, _, _ = authed_client
 
     # First provider → auto-selected as main.
@@ -75,7 +81,7 @@ def test_cannot_delete_delegate_provider_returns_409(authed_client):
     assert worker in _provider_ids(client)
 
 
-def test_provider_deletable_after_delegate_pin_cleared(authed_client):
+def test_provider_deletable_after_delegate_pin_cleared(authed_client: "tuple[FlaskClient, object, object]") -> None:
     client, _, _ = authed_client
 
     client.post("/providers", json={"name": "Main", "platform": "ollama",
@@ -99,7 +105,7 @@ def test_provider_deletable_after_delegate_pin_cleared(authed_client):
     assert worker not in _provider_ids(client)
 
 
-def test_can_delete_unassigned_provider(authed_client):
+def test_can_delete_unassigned_provider(authed_client: "tuple[FlaskClient, object, object]") -> None:
     client, _, _ = authed_client
 
     client.post("/providers", json={"name": "Main", "platform": "ollama",
@@ -118,7 +124,7 @@ def test_can_delete_unassigned_provider(authed_client):
 # ── Through the service entry point the route calls directly ───────────────────
 
 
-def test_cannot_delete_vision_provider(db):
+def test_cannot_delete_vision_provider(db: sqlite3.Connection) -> None:
     """A provider pinned as the vision provider cannot be deleted.
 
     delete_provider is the exact method the DELETE route invokes; it raises

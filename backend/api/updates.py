@@ -16,11 +16,15 @@ bypass permission checks entirely.
 import json
 import logging
 import uuid
+from typing import TYPE_CHECKING
 
 from flask import Blueprint, g, jsonify, request
 
 from .auth import require_auth
 from services.log_utils import safe
+
+if TYPE_CHECKING:
+    from flask.typing import ResponseReturnValue
 
 logger = logging.getLogger(__name__)
 
@@ -31,7 +35,7 @@ updates_bp = Blueprint("updates", __name__, url_prefix="/api/updates")
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _check_update_permission(update_type: str):
+def _check_update_permission(update_type: str) -> "ResponseReturnValue | None":
     """Return a 403 response if the bearer wrapper lacks the required permission.
 
     For cookie-authenticated requests (``g.wrapper_id is None``) this function
@@ -58,7 +62,7 @@ def _check_update_permission(update_type: str):
     return None
 
 
-def _get_db():
+def _get_db() -> object:
     from services.database_service import get_shared_db_service
     return get_shared_db_service()
 
@@ -69,7 +73,7 @@ def _get_db():
 
 @updates_bp.route("/belief", methods=["POST"])
 @require_auth
-def update_belief():
+def update_belief() -> "ResponseReturnValue":
     """Set or correct a user trait (belief update).
 
     Stores the trait in DataGraphService as kind='user_specific'. The ``key``
@@ -134,7 +138,7 @@ def update_belief():
 
 @updates_bp.route("/memory", methods=["POST"])
 @require_auth
-def update_memory():
+def update_memory() -> "ResponseReturnValue":
     """Encode a memory (episodic/semantic).
 
     Stores the provided content as a user trait with category ``behavioral``
@@ -203,7 +207,7 @@ def update_memory():
 
 @updates_bp.route("/feedback", methods=["POST"])
 @require_auth
-def update_feedback():
+def update_feedback() -> "ResponseReturnValue":
     """Report intent execution outcome (feedback update).
 
     Stores the outcome in MemoryStore for later consumption by the experience

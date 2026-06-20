@@ -21,6 +21,8 @@ written — ``ocr_text == 'INVOICE'`` (Task 6 commit notes).
 
 import base64
 import io
+import sqlite3
+from typing import TYPE_CHECKING, cast
 
 import pytest
 
@@ -30,6 +32,9 @@ from services.document_service import DocumentService
 from services.provider_db_service import ProviderDbService
 from services.tmp_storage import new_tmp_path
 
+if TYPE_CHECKING:
+    from PIL.ImageFont import FreeTypeFont, ImageFont as PILImageFont
+
 pytestmark = pytest.mark.unit
 
 
@@ -38,7 +43,7 @@ def _ocrable_invoice_png_path() -> str:
 
     img = Image.new("RGB", (480, 160), "white")
     draw = ImageDraw.Draw(img)
-    font = None
+    font: "FreeTypeFont | PILImageFont | None" = None
     for candidate in ("DejaVuSans-Bold.ttf", "Arial Bold.ttf", "DejaVuSans.ttf"):
         try:
             font = ImageFont.truetype(candidate, 72)
@@ -67,7 +72,7 @@ def _blank_png_path() -> str:
     return path
 
 
-def test_uploaded_image_is_findable_via_document_search(db):
+def test_uploaded_image_is_findable_via_document_search(db: sqlite3.Connection) -> None:
     """No vision provider -> OCR description -> the existing embed+FTS5 pipeline ->
     document.search finds the image by content (real recall, FTS5 + vector)."""
     ProviderDbService(get_shared_db_service()).set_vision_provider(None)
@@ -80,16 +85,16 @@ def test_uploaded_image_is_findable_via_document_search(db):
     # TKT-893: upload now returns a structured ToolResult body
     # ``{"id","hash","name","status"}`` (Task 6 hash preserved as a body key).
     assert up.status == "success", up
-    assert up.body["id"], up.body
-    assert up.body["hash"], up.body
+    assert cast(dict[str, object], up.body)["id"], up.body
+    assert cast(dict[str, object], up.body)["hash"], up.body
 
     found = ability.run({"action": "search", "query": "invoice"})
     # TKT-893: search returns a JSON list of document rows; the matched image
     # surfaces via the REAL recall path under its original_name.
-    assert any("inv.png" in (row.get("name") or "") for row in found.body), found.body
+    assert any("inv.png" in cast(str, cast(dict[str, object], row).get("name") or "") for row in cast(list[object], found.body)), found.body
 
 
-def test_textless_image_is_ready_not_failed(db):
+def test_textless_image_is_ready_not_failed(db: sqlite3.Connection) -> None:
     """A textless image with no vision provider (empty OCR) must persist 'ready',
     never 'failed' — directly proves the _run_upload_extraction image-aware branch."""
     ProviderDbService(get_shared_db_service()).set_vision_provider(None)
@@ -101,7 +106,7 @@ def test_textless_image_is_ready_not_failed(db):
     })
     # TKT-893: doc id comes straight off the structured upload body.
     assert up.status == "success", up
-    doc_id = up.body["id"]
+    doc_id = cast(str, cast(dict[str, object], up.body)["id"])
 
     doc = DocumentService(get_shared_db_service()).get_document(doc_id)
     assert doc is not None, up

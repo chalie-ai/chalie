@@ -13,7 +13,9 @@ credentials), so every call exercises the base's structured not-connected /
 action-meta error paths for real.
 """
 
+import sqlite3
 import threading
+from typing import cast
 
 import pytest
 
@@ -26,14 +28,14 @@ from services.act_trail import ActTrail
 pytestmark = pytest.mark.unit
 
 
-def _seed_transcript(db) -> int:
+def _seed_transcript(db: sqlite3.Connection) -> int:
     """Insert a user message transcript row for test setup."""
     cur = db.execute(
         "INSERT INTO transcript (channel, role, content) VALUES (?, ?, ?)",
         ("dmn", "user", "check my email"),
     )
     db.commit()
-    return cur.lastrowid
+    return cast(int, cur.lastrowid)
 
 
 class _MP:
@@ -46,7 +48,7 @@ class _MP:
         self.cancel_event = threading.Event()
 
 
-def test_email_is_a_capability_ability():
+def test_email_is_a_capability_ability() -> None:
     email = AbilityRegistry.get("email")
     assert isinstance(email, CapabilityAbility)
     assert email.CAPABILITY_KEY == "mail"
@@ -54,7 +56,7 @@ def test_email_is_a_capability_ability():
     assert email.ACTION_HANDLERS["read"] == "read_email"
 
 
-def test_not_connected_renders_structured_error_through_dispatcher(db):
+def test_not_connected_renders_structured_error_through_dispatcher(db: sqlite3.Connection) -> None:
     transcript_id = _seed_transcript(db)
     mp = _MP(transcript_id)
 
@@ -69,10 +71,10 @@ def test_not_connected_renders_structured_error_through_dispatcher(db):
 
     rows = ActTrail().fetch_by_transcript_id(transcript_id)
     assert [r["tool_name"] for r in rows] == ["email"]
-    assert "not connected" in rows[0]["result"].lower()
+    assert "not connected" in cast(str, rows[0]["result"]).lower()
 
 
-def test_action_flows_through_to_rendered_meta(db):
+def test_action_flows_through_to_rendered_meta(db: sqlite3.Connection) -> None:
     """A mapped action threads through the base into the rendered envelope meta.
 
     Dispatching email.read (also seeded allow) proves the base echoes the

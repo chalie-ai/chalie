@@ -13,7 +13,7 @@ from __future__ import annotations
 from services.llm_clients.base import ProviderClient
 
 
-def build_client(config: dict) -> ProviderClient:
+def build_client(config: dict[str, object]) -> ProviderClient:
     """Return a ProviderClient for the given provider config dict."""
     platform = config.get('platform')
     if not platform:

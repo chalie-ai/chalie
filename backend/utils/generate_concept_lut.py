@@ -34,7 +34,7 @@ def _load_sqlite_vec(conn: sqlite3.Connection) -> None:
         conn.load_extension('vec0')
 
 
-def _read_concepts(yaml_path: Path) -> list[dict]:
+def _read_concepts(yaml_path: Path) -> list[dict[str, str]]:
     with open(yaml_path) as f:
         data = yaml.safe_load(f)
     raw_concepts = data.get("concepts", [])
@@ -70,7 +70,7 @@ def _rebuild_tables(conn: sqlite3.Connection) -> None:
     conn.commit()
 
 
-def _insert_concepts(conn: sqlite3.Connection, concepts: list[dict]) -> list[int]:
+def _insert_concepts(conn: sqlite3.Connection, concepts: list[dict[str, str]]) -> list[int]:
     ids = []
     for c in concepts:
         conn.execute(
@@ -86,7 +86,7 @@ def _insert_concepts(conn: sqlite3.Connection, concepts: list[dict]) -> list[int
 def _embed_and_insert(
     conn: sqlite3.Connection,
     emb_service: EmbeddingService,
-    concepts: list[dict],
+    concepts: list[dict[str, str]],
     ids: list[int],
 ) -> int:
     inserted = 0

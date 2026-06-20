@@ -1,4 +1,6 @@
 import sqlite3
+from collections.abc import Iterator
+
 import pytest
 
 from services.file_mapper_service import FileMapperService
@@ -6,19 +8,19 @@ from services.file_mapper_service import FileMapperService
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
-def _get_columns(conn, table_name):
+def _get_columns(conn: sqlite3.Connection, table_name: str) -> set[str]:
     rows = conn.execute(f"PRAGMA table_info({table_name})").fetchall()
     return {row[1] for row in rows}
 
 
-def _get_tables(conn):
+def _get_tables(conn: sqlite3.Connection) -> set[str]:
     rows = conn.execute(
         "SELECT name FROM sqlite_master WHERE type='table'"
     ).fetchall()
     return {row[0] for row in rows}
 
 
-def _get_indexes(conn, table_name):
+def _get_indexes(conn: sqlite3.Connection, table_name: str) -> set[str]:
     rows = conn.execute(
         "SELECT name FROM sqlite_master WHERE type='index' AND tbl_name=?",
         (table_name,)
@@ -32,7 +34,7 @@ def _get_indexes(conn, table_name):
 class TestSchemaValidation:
 
     @pytest.fixture
-    def schema_db(self):
+    def schema_db(self) -> Iterator[sqlite3.Connection]:
         """sqlite-vec (vec0) and FTS5 virtual tables are filtered out because the
         in-memory SQLite used in unit tests does not have those extensions.  All
         regular tables, indexes, and seed INSERT statements remain intact.
@@ -58,7 +60,7 @@ class TestSchemaValidation:
 
     # ── Reliability defaults ─────────────────────────────────────────────────
 
-    def test_reliability_default_values(self, schema_db):
+    def test_reliability_default_values(self, schema_db: sqlite3.Connection) -> None:
         import uuid
 
         ep_id = str(uuid.uuid4())

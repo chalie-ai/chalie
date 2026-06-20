@@ -32,7 +32,14 @@ never imports the skill-tag formatter, and there is no rich-media card.
 
 from __future__ import annotations
 
-from typing import ClassVar
+from typing import TYPE_CHECKING, ClassVar, cast
+
+if TYPE_CHECKING:
+    from typing import Protocol
+
+    class _Capability(Protocol):
+        def is_connected(self) -> bool: ...
+        def get_tools(self) -> list[dict[str, object]]: ...
 
 from abilities._capability import CapabilityAbility
 from abilities._params import Keys
@@ -104,10 +111,10 @@ class HomeAbility(CapabilityAbility):
     def get_search_tooltip(self) -> str:
         return "smart home control"
 
-    def get_parameters(self) -> dict:
+    def get_parameters(self) -> dict[str, object]:
         return self._PARAMETERS
 
-    _PARAMETERS: ClassVar[dict] = {
+    _PARAMETERS: ClassVar[dict[str, object]] = {
         "type": "object",
         "properties": {
             Keys.action: {
@@ -166,7 +173,7 @@ class HomeAbility(CapabilityAbility):
 
     # ── Entry point — entity guardrail, then delegate to the base ──────────────
 
-    def run(self, params: dict) -> ToolResult:
+    def run(self, params: dict[str, object]) -> ToolResult:
         action = str(params.get(Keys.action, self.DEFAULT_ACTION)).lower()
         params[Keys.action] = action
 
@@ -190,7 +197,7 @@ class HomeAbility(CapabilityAbility):
 
     # ── Guardrails ─────────────────────────────────────────────────────────────
 
-    def _guard_entity(self, cap, action: str, entity_id: str) -> "ToolResult | None":
+    def _guard_entity(self, cap: "_Capability", action: str, entity_id: str) -> "ToolResult | None":
         entities = self._live_entities(cap, prefix=None)
         if entity_id in entities:
             return None
@@ -202,7 +209,7 @@ class HomeAbility(CapabilityAbility):
             action=action,
         )
 
-    def _guard_automation(self, cap, action: str, automation_id: str) -> "ToolResult | None":
+    def _guard_automation(self, cap: "_Capability", action: str, automation_id: str) -> "ToolResult | None":
         automations = self._live_entities(cap, prefix="automation.")
         if automation_id in automations:
             return None
@@ -216,23 +223,23 @@ class HomeAbility(CapabilityAbility):
 
     # ── Live-state lookup + closest-match helpers ──────────────────────────────
 
-    def _connected_capability(self):
+    def _connected_capability(self) -> "_Capability | None":
         from capabilities import load_capabilities
 
         cap = load_capabilities().get(self.CAPABILITY_KEY)
         if cap is None or not cap.is_connected():
             return None
-        return cap
+        return cast("_Capability", cap)
 
     @staticmethod
-    def _live_entities(cap, *, prefix: str | None) -> list[str]:
+    def _live_entities(cap: "_Capability", *, prefix: str | None) -> list[str]:
         from services.innate_skills._capability import dispatch_capability_handler
 
-        tool_map = {t["name"]: t["handler"] for t in cap.get_tools()}
+        tool_map = {cast(str, t["name"]): t["handler"] for t in cap.get_tools()}
         handler = tool_map["list_devices"]
         result = dispatch_capability_handler(handler, {"limit": 1000}, None)
-        devices = result.get("devices", []) if isinstance(result, dict) else []
-        ids = [d.get("entity_id", "") for d in devices if d.get("entity_id")]
+        devices = cast(list[dict[str, object]], result.get("devices", [])) if isinstance(result, dict) else []
+        ids = [cast(str, d.get("entity_id", "")) for d in devices if d.get("entity_id")]
         if prefix is not None:
             ids = [eid for eid in ids if eid.startswith(prefix)]
         return ids

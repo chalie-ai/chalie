@@ -9,15 +9,16 @@ recall — unlike probabilistic memory layers (gists, episodes, concepts).
 
 import logging
 import secrets
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, cast
 
+from services.database_service import DatabaseService
 from services.log_utils import safe
 from services.write_queue_service import get_write_queue
 
 logger = logging.getLogger(__name__)
 
 
-def embed_list(list_id: str, name: str, db=None) -> None:
+def embed_list(list_id: str, name: str, db: Optional[DatabaseService] = None) -> None:
     """Generate an embedding for the list name and store it in lists_vec. Non-fatal."""
     try:
         from services.embedding_service import EmbeddingService
@@ -45,7 +46,7 @@ def embed_list(list_id: str, name: str, db=None) -> None:
 class ListService:
     """Deterministic, id-addressed list management."""
 
-    def __init__(self, db_service):
+    def __init__(self, db_service: DatabaseService) -> None:
         self.db = db_service
         self._write_queue = get_write_queue()
 
@@ -64,7 +65,7 @@ class ListService:
         list_id = secrets.token_hex(4)
 
         try:
-            def _insert_list(_id=list_id, _name=name, _type=list_type, _db=self.db):
+            def _insert_list(_id: str = list_id, _name: str = name, _type: str = list_type, _db: DatabaseService = self.db) -> None:
                 with _db.connection() as conn:
                     cursor = conn.cursor()
                     cursor.execute("""
@@ -92,7 +93,7 @@ class ListService:
             return False
 
         try:
-            def _soft_delete(_id=list_id, _db=self.db):
+            def _soft_delete(_id: str = list_id, _db: DatabaseService = self.db) -> int:
                 with _db.connection() as conn:
                     cursor = conn.cursor()
                     cursor.execute("""
@@ -103,7 +104,7 @@ class ListService:
                     cursor.close()
                     return rc
 
-            updated = self._write_queue.submit_sync(_soft_delete) > 0
+            updated = cast(int, self._write_queue.submit_sync(_soft_delete)) > 0
             if updated:
                 logger.info("[LISTS] Deleted list '%s' (id=%s)", safe(list_row['name']), list_id)
             return True
@@ -119,7 +120,7 @@ class ListService:
             return -1
 
         try:
-            def _clear_items(_id=list_id, _db=self.db):
+            def _clear_items(_id: str = list_id, _db: DatabaseService = self.db) -> int:
                 with _db.connection() as conn:
                     cursor = conn.cursor()
                     cursor.execute("""
@@ -130,7 +131,7 @@ class ListService:
                     cursor.close()
                     return rc
 
-            count = self._write_queue.submit_sync(_clear_items)
+            count = cast(int, self._write_queue.submit_sync(_clear_items))
             if count > 0:
                 self._touch_list(list_id)
                 logger.info(f"[LISTS] Cleared {count} items from list '{list_row['name']}'")
@@ -153,7 +154,7 @@ class ListService:
 
         old_name = list_row['name']
         try:
-            def _rename(_id=list_id, _new_name=new_name, _db=self.db):
+            def _rename(_id: str = list_id, _new_name: str = new_name, _db: DatabaseService = self.db) -> int:
                 with _db.connection() as conn:
                     cursor = conn.cursor()
                     cursor.execute("""
@@ -164,7 +165,7 @@ class ListService:
                     cursor.close()
                     return rc
 
-            updated = self._write_queue.submit_sync(_rename) > 0
+            updated = cast(int, self._write_queue.submit_sync(_rename)) > 0
             if updated:
                 embed_list(list_id, new_name, db=self.db)
                 logger.info(f"[LISTS] Renamed list '{old_name}' -> '{new_name}'")
@@ -174,7 +175,7 @@ class ListService:
             logger.error(f"[LISTS] rename_list failed: {e}")
             return False
 
-    def get_list(self, list_id: str) -> Optional[Dict[str, Any]]:
+    def get_list(self, list_id: str) -> Optional[Dict[str, object]]:
         """Get a list with its active items; None if not found."""
         list_row = self._get_list_row(list_id)
         if not list_row:
@@ -210,7 +211,7 @@ class ListService:
             logger.error(f"[LISTS] get_list failed: {e}")
             return None
 
-    def get_all_lists(self) -> List[Dict[str, Any]]:
+    def get_all_lists(self) -> List[Dict[str, object]]:
         """Get all active lists with summary counts (item_count, checked_count)."""
         try:
             with self.db.connection() as conn:
@@ -266,7 +267,7 @@ class ListService:
             return 0
 
         try:
-            def _add_items_block(_id=list_id, _items=items, _dedupe=dedupe, _db=self.db):
+            def _add_items_block(_id: str = list_id, _items: List[str] = items, _dedupe: bool = dedupe, _db: DatabaseService = self.db) -> int:
                 with _db.connection() as conn:
                     cursor = conn.cursor()
 
@@ -328,7 +329,7 @@ class ListService:
                     cursor.close()
                     return added
 
-            added = self._write_queue.submit_sync(_add_items_block)
+            added = cast(int, self._write_queue.submit_sync(_add_items_block))
 
             if added > 0:
                 self._touch_list(list_id)
@@ -347,7 +348,7 @@ class ListService:
             return 0
 
         try:
-            def _remove_items_block(_id=list_id, _items=items, _db=self.db):
+            def _remove_items_block(_id: str = list_id, _items: List[str] = items, _db: DatabaseService = self.db) -> int:
                 with _db.connection() as conn:
                     cursor = conn.cursor()
                     removed = 0
@@ -364,7 +365,7 @@ class ListService:
                     cursor.close()
                     return removed
 
-            removed = self._write_queue.submit_sync(_remove_items_block)
+            removed = cast(int, self._write_queue.submit_sync(_remove_items_block))
             if removed > 0:
                 self._touch_list(list_id)
                 logger.info(f"[LISTS] Removed {removed} items from list '{list_row['name']}'")
@@ -388,7 +389,7 @@ class ListService:
             return 0
 
         try:
-            def _set_checked_block(_id=list_id, _items=items, _checked=checked, _db=self.db):
+            def _set_checked_block(_id: str = list_id, _items: List[str] = items, _checked: bool = checked, _db: DatabaseService = self.db) -> int:
                 with _db.connection() as conn:
                     cursor = conn.cursor()
                     count = 0
@@ -405,7 +406,7 @@ class ListService:
                     cursor.close()
                     return count
 
-            count = self._write_queue.submit_sync(_set_checked_block)
+            count = cast(int, self._write_queue.submit_sync(_set_checked_block))
             if count > 0:
                 self._touch_list(list_id)
             return count
@@ -416,7 +417,7 @@ class ListService:
 
     # Internal helpers
 
-    def _get_list_row(self, list_id: str) -> Optional[Dict[str, Any]]:
+    def _get_list_row(self, list_id: str) -> Optional[Dict[str, object]]:
         """Resolve an active list by exact ID. Returns dict or None."""
         if not list_id:
             return None
@@ -439,7 +440,7 @@ class ListService:
             logger.error(f"[LISTS] _get_list_row failed: {e}")
             return None
 
-    def _find_by_name(self, name: str) -> Optional[Dict[str, Any]]:
+    def _find_by_name(self, name: str) -> Optional[Dict[str, object]]:
         """Resolve an active list by case-insensitive name. Used only for create/rename collision checks."""
         if not name:
             return None
@@ -464,7 +465,7 @@ class ListService:
             return None
 
     def _touch_list(self, list_id: str) -> None:
-        def _touch(_id=list_id, _db=self.db):
+        def _touch(_id: str = list_id, _db: DatabaseService = self.db) -> None:
             with _db.connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute("""

@@ -21,7 +21,7 @@ _ENCODER_PATH = os.path.join(
 )
 
 
-def _require_encoder():
+def _require_encoder() -> None:
     if not os.path.exists(_ENCODER_PATH):
         pytest.skip("gte-modernbert-base encoder not on disk — skipping encoder-dependent test")
 
@@ -42,7 +42,7 @@ _MED_THR = 0.46
 
 class TestDeliberationScoreServiceBucketing:
 
-    def test_short_conversational_input_scores_below_medium_threshold(self):
+    def test_short_conversational_input_scores_below_medium_threshold(self) -> None:
         _require_encoder()
         svc = _real_svc()
         result = svc.classify("hi")
@@ -53,7 +53,7 @@ class TestDeliberationScoreServiceBucketing:
             f"'hi' scored {result:.4f} — expected < {_MED_THR} (low bucket)"
         )
 
-    def test_complex_multistep_prompt_scores_above_high_threshold(self):
+    def test_complex_multistep_prompt_scores_above_high_threshold(self) -> None:
         _require_encoder()
         svc = _real_svc()
         prompt = (
@@ -69,7 +69,7 @@ class TestDeliberationScoreServiceBucketing:
             f"Complex engineering prompt scored {result:.4f} — expected > {_HIGH_THR} (high bucket)"
         )
 
-    def test_simple_factual_question_scores_between_low_and_high(self):
+    def test_simple_factual_question_scores_between_low_and_high(self) -> None:
         _require_encoder()
         svc = _real_svc()
         result = svc.classify("What is the capital of France?")
@@ -81,7 +81,7 @@ class TestDeliberationScoreServiceBucketing:
         )
 
     @pytest.mark.parametrize("reflexive_input", ["hmm", "ok", "interesting"])
-    def test_reflexive_single_word_inputs_score_at_or_below_half(self, reflexive_input):
+    def test_reflexive_single_word_inputs_score_at_or_below_half(self, reflexive_input: str) -> None:
         _require_encoder()
         svc = _real_svc()
         result = svc.classify(reflexive_input)
@@ -94,7 +94,7 @@ class TestDeliberationScoreServiceBucketing:
             f"(reflexive single-word inputs must land in the low band)"
         )
 
-    def test_classify_two_different_inputs_produce_different_scores(self):
+    def test_classify_two_different_inputs_produce_different_scores(self) -> None:
         _require_encoder()
         svc = _real_svc()
         low = svc.classify("thanks")

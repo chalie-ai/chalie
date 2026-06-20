@@ -31,7 +31,11 @@ from __future__ import annotations
 import contextvars
 import logging
 import threading
+from typing import TYPE_CHECKING
 from uuid import uuid4
+
+if TYPE_CHECKING:
+    from abilities._ability import Ability
 
 logger = logging.getLogger(__name__)
 
@@ -42,7 +46,7 @@ class AsyncDelegateRunner:
     def __init__(self) -> None:
         self._active: dict[str, threading.Event] = {}
 
-    def spawn(self, ability: object, params: dict, mp: object) -> str:
+    def spawn(self, ability: "Ability", params: dict[str, object], mp: object) -> str:
         """Copies the calling thread's contextvars so locale/timezone
         propagate exactly as on the synchronous path. Returns immediately
         — the ACT iteration is never blocked (spec §4.0)."""
@@ -75,8 +79,8 @@ class AsyncDelegateRunner:
 
     def _run(
         self,
-        ability: object,
-        params: dict,
+        ability: "Ability",
+        params: dict[str, object],
         mp: object,
         delegate_id: str,
         cancel_event: threading.Event,

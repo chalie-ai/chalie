@@ -8,15 +8,35 @@ Extends the read skill's SSRF protection with browser-specific additions:
   - Download blocking, dialog auto-dismiss
 """
 
+from __future__ import annotations
+
 import logging
 import threading
 import time
+from typing import TYPE_CHECKING, cast
 from urllib.parse import urlparse
 
 # SSRF policy lives in ONE place — services.ssrf. The browser layer re-exports
 # the single blocklist and resolver so its request interceptor can never drift
 # from what the read/web_download abilities enforce.
 from services.ssrf import BLOCKED_NETS, resolve_and_check
+
+if TYPE_CHECKING:
+    from typing import Protocol
+
+    class _Route(Protocol):
+        class _Request(Protocol):
+            url: str
+        request: _Route._Request
+        def abort(self) -> None: ...
+        def continue_(self) -> None: ...
+
+    class _Download(Protocol):
+        def cancel(self) -> None: ...
+
+    class _Page(Protocol):
+        def route(self, pattern: str, handler: object) -> None: ...
+        def on(self, event: str, handler: object) -> None: ...
 
 logger = logging.getLogger(__name__)
 
@@ -38,7 +58,7 @@ class DnsCache:
     on resource-heavy pages.
     """
 
-    def __init__(self, ttl: float = 60.0):
+    def __init__(self, ttl: float = 60.0) -> None:
         self._cache: dict[str, tuple[bool, str, float]] = {}
         self._ttl = ttl
         self._lock = threading.Lock()
@@ -94,7 +114,7 @@ def validate_url(url: str, dns_cache: DnsCache | None = None) -> tuple[bool, str
 
 # -- Page-level security setup -------------------------------------------------
 
-def setup_page_security(page, dns_cache: DnsCache | None = None):
+def setup_page_security(page: object, dns_cache: DnsCache | None = None) -> None:
     """Install security handlers on a Playwright page.
 
     Must be called BEFORE any navigation.  Installs:
@@ -104,25 +124,25 @@ def setup_page_security(page, dns_cache: DnsCache | None = None):
     """
     cache = dns_cache or DnsCache()
 
-    def _intercept(route):
-        req_url = route.request.url
+    def _intercept(route: object) -> None:
+        req_url = cast("_Route", route).request.url
         ok, reason = validate_url(req_url, dns_cache=cache)
         if not ok:
             logger.debug("[BROWSER SEC] Blocked sub-request: %s (%s)", req_url, reason)
             try:
-                route.abort()
+                cast("_Route", route).abort()
             except Exception:
                 pass
             return
         try:
-            route.continue_()
+            cast("_Route", route).continue_()
         except Exception:
             pass
 
-    page.route("**/*", _intercept)
+    cast("_Page", page).route("**/*", _intercept)
 
     # Block file downloads — never write to disk
-    page.on("download", lambda dl: dl.cancel())
+    cast("_Page", page).on("download", lambda dl: cast("_Download", dl).cancel())
 
     # Dialogs are owned by tools/browser/session.PageSession, which records the
     # message for the action diff and then dismisses. (A second dismiss here

@@ -23,7 +23,7 @@ Rich-media rendering:
 """
 
 from datetime import datetime, timezone
-from typing import ClassVar
+from typing import ClassVar, cast
 
 from abilities._ability import Ability
 from abilities._params import Keys
@@ -64,7 +64,7 @@ class TimerAbility(Ability):
     def get_search_tooltip(self) -> str:
         return "countdown timer"
 
-    _PARAMETERS: ClassVar[dict] = {
+    _PARAMETERS: ClassVar[dict[str, object]] = {
         "type": "object",
         "properties": {
             Keys.title: {
@@ -81,11 +81,11 @@ class TimerAbility(Ability):
         "required": [Keys.title, Keys.duration_seconds],
     }
 
-    def get_parameters(self) -> dict:
+    def get_parameters(self) -> dict[str, object]:
         return self._PARAMETERS
 
-    def run(self, params: dict) -> ToolResult:
-        title = (params.get(Keys.title) or "").strip()
+    def run(self, params: dict[str, object]) -> ToolResult:
+        title = (cast(str, params.get(Keys.title)) or "").strip()
         duration_seconds = params.get(Keys.duration_seconds)
 
         # bool is an int subclass — exclude it so a literal True/False is rejected
@@ -111,7 +111,7 @@ class TimerAbility(Ability):
         return ToolResult.ok(payload, rich=payload)
 
     @classmethod
-    def enrich_rich_payload(cls, payload: dict, row: dict) -> dict:
+    def enrich_rich_payload(cls, payload: dict[str, object], row: dict[str, object]) -> dict[str, object]:
         """``started_at`` is intentionally absent from the LLM-visible JSON; the FE
         needs it to compute the countdown so the parser grafts it on at render
         time. ``parse_utc`` returns a ``datetime.min`` sentinel on garbage rather
@@ -122,7 +122,7 @@ class TimerAbility(Ability):
         created_at = row.get("created_at")
         if not created_at:
             return payload
-        parsed = parse_utc(created_at)
+        parsed = parse_utc(cast(datetime | str, created_at))
         if parsed == _PARSE_UTC_SENTINEL:
             return payload
         return {**payload, "started_at": parsed.isoformat()}

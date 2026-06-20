@@ -6,6 +6,7 @@ import ipaddress
 import logging
 import socket
 import sqlite3
+from typing import TYPE_CHECKING, cast
 from urllib.parse import urlparse
 
 import requests as req
@@ -14,6 +15,10 @@ from flask import Blueprint, jsonify, request
 from services.provider_db_service import PROVIDER_IN_USE_MSG
 
 from .auth import require_session
+
+if TYPE_CHECKING:
+    from flask.typing import ResponseReturnValue
+    from services.provider_db_service import ProviderDbService
 
 logger = logging.getLogger(__name__)
 
@@ -104,12 +109,12 @@ _OPENAI_DENY_SUBSTR = (
 )
 
 
-def _fetch_ollama_models(host: str):
+def _fetch_ollama_models(host: str) -> "tuple[list[dict[str, str | None]] | None, str | None]":
     safe_host, err = _validate_ollama_host(host)
     if err is not None:
         return None, err
     try:
-        r = req.get(f"{safe_host}/api/tags", timeout=_LIST_MODELS_TIMEOUT)
+        r = req.get(f"{cast(str, safe_host)}/api/tags", timeout=_LIST_MODELS_TIMEOUT)
         r.raise_for_status()
         models_data = r.json()
         models = []
@@ -127,7 +132,7 @@ def _fetch_ollama_models(host: str):
         return None, "Failed to fetch Ollama models"
 
 
-def _fetch_openai_models(api_key: str):
+def _fetch_openai_models(api_key: str) -> "tuple[list[dict[str, str | None]] | None, str | None]":
     """Filter to chat-capable text models only."""
     if not api_key:
         return None, "API key is required"
@@ -164,7 +169,7 @@ def _fetch_openai_models(api_key: str):
         return None, "OpenAI API request failed"
 
 
-def _fetch_anthropic_models(api_key: str):
+def _fetch_anthropic_models(api_key: str) -> "tuple[list[dict[str, str | None]] | None, str | None]":
     if not api_key:
         return None, "API key is required"
     try:
@@ -209,7 +214,7 @@ _GEMINI_MODELS_URL = 'https://generativelanguage.googleapis.com/v1beta/models'
 _GEMINI_MAX_PAGES = 10
 
 
-def _fetch_gemini_models(api_key: str):
+def _fetch_gemini_models(api_key: str) -> "tuple[list[dict[str, str | None]] | None, str | None]":
     """Cap pagination at 10 pages. Only ``generateContent`` models; strips ``models/`` prefix."""
     if not api_key:
         return None, "API key is required"
@@ -253,7 +258,7 @@ def _fetch_gemini_models(api_key: str):
         return None, "Gemini API request failed"
 
 
-def _fetch_openai_compatible_models(host: str, api_key: str):
+def _fetch_openai_compatible_models(host: str, api_key: str) -> "tuple[list[dict[str, str | None]] | None, str | None]":
     if not host:
         return None, "Host URL is required"
     if not api_key:
@@ -261,7 +266,7 @@ def _fetch_openai_compatible_models(host: str, api_key: str):
     safe_host, err = _validate_ollama_host(host)
     if err is not None:
         return None, err
-    url = safe_host.rstrip('/') + '/models'
+    url = cast(str, safe_host).rstrip('/') + '/models'
     try:
         r = req.get(
             url,
@@ -285,7 +290,7 @@ def _fetch_openai_compatible_models(host: str, api_key: str):
             if not mid:
                 continue
             models.append({"id": mid, "display_name": m.get('display_name')})
-        models.sort(key=lambda m: m['id'])
+        models.sort(key=lambda m: cast(str, m['id']))
         return models, None
     except req.exceptions.ConnectionError:
         return None, f"Cannot connect to {safe_host}"
@@ -296,7 +301,7 @@ def _fetch_openai_compatible_models(host: str, api_key: str):
         return None, "Failed to fetch models"
 
 
-def get_provider_service():
+def get_provider_service() -> "ProviderDbService":
     from services.database_service import get_shared_db_service
     from services.provider_db_service import ProviderDbService
     db = get_shared_db_service()
@@ -305,7 +310,7 @@ def get_provider_service():
 
 @providers_bp.route('', methods=['GET'])
 @require_session
-def list_providers():
+def list_providers() -> "ResponseReturnValue":
     """Omit ``api_key`` from output."""
     try:
         service = get_provider_service()
@@ -318,7 +323,7 @@ def list_providers():
 
 @providers_bp.route('/catalog', methods=['GET'])
 @require_session
-def list_catalog_providers():
+def list_catalog_providers() -> "ResponseReturnValue":
     """Return the curated provider presets for the setup wizard.
 
     Each preset maps a popular provider onto an existing Chalie platform plus a
@@ -334,7 +339,7 @@ def list_catalog_providers():
 
 @providers_bp.route('', methods=['POST'])
 @require_session
-def create_provider():
+def create_provider() -> "ResponseReturnValue":
     try:
         data = request.get_json()
         if not data:
@@ -349,7 +354,7 @@ def create_provider():
             return jsonify({"error": "Missing required field: model or models"}), 400
 
         service = get_provider_service()
-        provider = service.create_provider(data)
+        provider = cast("dict[str, object]", service.create_provider(data))
 
         # Invalidate provider cache
         try:
@@ -376,7 +381,7 @@ def create_provider():
 
 @providers_bp.route('/<int:provider_id>', methods=['GET'])
 @require_session
-def get_provider(provider_id):
+def get_provider(provider_id: int) -> "ResponseReturnValue":
     try:
         service = get_provider_service()
         provider = service.get_provider_by_id(provider_id)
@@ -396,14 +401,14 @@ def get_provider(provider_id):
 
 @providers_bp.route('/<int:provider_id>', methods=['PUT'])
 @require_session
-def update_provider(provider_id):
+def update_provider(provider_id: int) -> "ResponseReturnValue":
     try:
         data = request.get_json()
         if not data:
             return jsonify({"error": "Request body is required"}), 400
 
         service = get_provider_service()
-        provider = service.update_provider(provider_id, data)
+        provider = cast("dict[str, object]", service.update_provider(provider_id, data))
 
         # Invalidate provider cache
         try:
@@ -430,7 +435,7 @@ def update_provider(provider_id):
 
 @providers_bp.route('/<int:provider_id>', methods=['DELETE'])
 @require_session
-def delete_provider(provider_id):
+def delete_provider(provider_id: int) -> "ResponseReturnValue":
     try:
         service = get_provider_service()
         service.delete_provider(provider_id)
@@ -453,7 +458,7 @@ def delete_provider(provider_id):
 
 @providers_bp.route('/list-models', methods=['POST'])
 @require_session
-def list_models():
+def list_models() -> "ResponseReturnValue":
     """Always returns HTTP 200 — failures in body ``error`` field. Credentials POSTed (not query param) to keep out of access logs."""
     body = request.get_json(silent=True) or {}
     platform = (body.get('platform') or '').strip().lower()
@@ -494,15 +499,15 @@ def _map_api_error(error_str: str, platform: str, model: str) -> str:
     return error_str[:300]
 
 
-def _test_ollama_provider(config: dict, model: str, start: float):
+def _test_ollama_provider(config: "dict[str, object]", model: str, start: float) -> "ResponseReturnValue":
     import time
-    available, err = _fetch_ollama_models(config.get('host', ''))
+    available, err = _fetch_ollama_models(cast(str, config.get('host', '')))
     latency_ms = int((time.time() - start) * 1000)
 
     if err is not None:
         return jsonify({"success": False, "error": err}), 200
 
-    available_names = [m['id'] for m in (available or [])]
+    available_names = [cast(str, m['id']) for m in (available or [])]
     model_base = model.split(':')[0]
     model_found = any(
         m == model or m.startswith(model + ':') or m.split(':')[0] == model_base
@@ -528,7 +533,7 @@ def _test_ollama_provider(config: dict, model: str, start: float):
     }), 200
 
 
-def _test_api_provider(config: dict, platform: str, model: str, start: float):
+def _test_api_provider(config: "dict[str, object]", platform: str, model: str, start: float) -> "ResponseReturnValue":
     import time
     api_key = config.get('api_key')
     if not api_key:
@@ -570,7 +575,7 @@ def _test_api_provider(config: dict, platform: str, model: str, start: float):
 
 @providers_bp.route('/test', methods=['POST'])
 @require_session
-def test_provider():
+def test_provider() -> "ResponseReturnValue":
     import time
 
     try:
@@ -578,7 +583,7 @@ def test_provider():
         provider_id = data.get('provider_id')
 
         # Start from stored provider config if an ID is given
-        config = {}
+        config: dict[str, object] = {}
         if provider_id:
             service = get_provider_service()
             stored = service.get_provider_by_id(int(provider_id))
@@ -592,8 +597,8 @@ def test_provider():
             if val:
                 config[field] = val
 
-        platform = config.get('platform')
-        model = config.get('model')
+        platform = cast("str | None", config.get('platform'))
+        model = cast("str | None", config.get('model'))
 
         if not platform:
             return jsonify({"success": False, "error": "Platform is required"}), 200
@@ -614,7 +619,7 @@ def test_provider():
 
 @providers_bp.route('/selected', methods=['GET'])
 @require_session
-def get_selected_provider():
+def get_selected_provider() -> "ResponseReturnValue":
     try:
         service = get_provider_service()
         provider = service.get_selected_provider()
@@ -631,7 +636,7 @@ def get_selected_provider():
 
 @providers_bp.route('/selected', methods=['PUT'])
 @require_session
-def set_selected_provider():
+def set_selected_provider() -> "ResponseReturnValue":
     try:
         data = request.get_json()
         if not data or "provider_id" not in data:
@@ -669,11 +674,11 @@ def set_selected_provider():
 
 @providers_bp.route('/vision', methods=['GET'])
 @require_session
-def get_vision_provider():
+def get_vision_provider() -> "ResponseReturnValue":
     try:
         service = get_provider_service()
         status = service.get_vision_provider_status()
-        provider = status['provider']
+        provider = cast("dict[str, object] | None", status['provider'])
         if provider and provider.get('api_key'):
             provider['api_key'] = '***'
         return jsonify({'provider': provider, 'source': status['source']}), 200
@@ -684,7 +689,7 @@ def get_vision_provider():
 
 @providers_bp.route('/vision', methods=['PUT'])
 @require_session
-def set_vision_provider():
+def set_vision_provider() -> "ResponseReturnValue":
     try:
         data = request.get_json() or {}
         if 'provider_id' not in data:
@@ -716,12 +721,12 @@ def set_vision_provider():
 
 @providers_bp.route('/delegate', methods=['GET'])
 @require_session
-def get_delegate_provider():
+def get_delegate_provider() -> "ResponseReturnValue":
     """Return the configured delegate provider + resolution source ('auto'|'explicit'|'none')."""
     try:
         service = get_provider_service()
         status = service.get_delegate_provider_status()
-        provider = status['provider']
+        provider = cast("dict[str, object] | None", status['provider'])
         if provider and provider.get('api_key'):
             provider['api_key'] = '***'
         return jsonify({'provider': provider, 'source': status['source']}), 200
@@ -732,7 +737,7 @@ def get_delegate_provider():
 
 @providers_bp.route('/delegate', methods=['PUT'])
 @require_session
-def set_delegate_provider():
+def set_delegate_provider() -> "ResponseReturnValue":
     """Set or clear the delegate provider ID. Clearing falls back to main provider (no 'Disabled' state)."""
     try:
         data = request.get_json() or {}
@@ -745,7 +750,7 @@ def set_delegate_provider():
         if pid is None:
             service.set_delegate_provider(None)
             status = service.get_delegate_provider_status()
-            provider = status['provider']
+            provider = cast("dict[str, object] | None", status['provider'])
             if provider and provider.get('api_key'):
                 provider['api_key'] = '***'
             return jsonify({'provider': provider, 'source': status['source']}), 200

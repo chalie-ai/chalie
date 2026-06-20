@@ -25,12 +25,12 @@ class _MP:
     cancel_event = None
 
 
-def test_dispatch_unknown_tool_is_graceful_not_keyerror():
+def test_dispatch_unknown_tool_is_graceful_not_keyerror() -> None:
     out = ToolDispatcher(_MP()).dispatch("no_such_ability_xyz", {"action": "noop"})
     assert "Unknown tool" in out
 
 
-def test_real_tool_resolves_from_registry():
+def test_real_tool_resolves_from_registry() -> None:
     names = {a.get_name() for a in AbilityRegistry.all()}
     assert "memory" in names
     assert "find_tools" in names

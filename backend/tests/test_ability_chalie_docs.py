@@ -12,6 +12,9 @@ pinned centrally in test_tool_result_contract.py; this file holds only the
 chalie_docs ability's genuine behaviour tests (unknown-query errors, fetch-failed
 path, no-instruction guarantee) that have no coverage elsewhere."""
 
+import sqlite3
+from typing import cast
+
 import pytest
 
 import abilities.chalie_docs
@@ -24,16 +27,16 @@ from tests._tool_result_harness import seed_transcript
 pytestmark = pytest.mark.unit
 
 
-def _seed_transcript(db, channel: str) -> int:
+def _seed_transcript(db: sqlite3.Connection, channel: str) -> int:
     return seed_transcript(db, channel=channel, content="tell me about chalie")
 
 
 @pytest.fixture
-def chat_mp(db):
+def chat_mp(db: sqlite3.Connection) -> _MP:
     return _MP(_seed_transcript(db, "chat"), UserConfig({}))
 
 
-def _dead_table(monkeypatch) -> None:
+def _dead_table(monkeypatch: pytest.MonkeyPatch) -> None:
     """Repoint every production ``_QUERY_URLS`` entry at a non-resolvable
     ``chalie-docs.invalid`` host — the table's OWN field, not a mock. The SSRF
     guard fails closed on the unresolvable host before any socket opens, so the
@@ -50,7 +53,7 @@ def _dead_table(monkeypatch) -> None:
     monkeypatch.setattr(abilities.chalie_docs, "_QUERY_URLS", dead)
 
 
-def test_unknown_query_errors_with_doc_not_found_and_closest_match(db, chat_mp):
+def test_unknown_query_errors_with_doc_not_found_and_closest_match(db: sqlite3.Connection, chat_mp: _MP) -> None:
     """A query the table does not know returns a STABLE ``code=doc-not-found``
     error whose ``valid:`` ladder lists the REAL keys, with a closest-match hint —
     so a weak model self-corrects. The banned ``code=error`` marker must be gone.
@@ -73,10 +76,10 @@ def test_unknown_query_errors_with_doc_not_found_and_closest_match(db, chat_mp):
 
     # The act-trail recorded the same loud error envelope against the transcript.
     trail = ActTrail().fetch_by_transcript_id(chat_mp.uid)
-    assert "code=doc-not-found" in trail[0]["result"]
+    assert "code=doc-not-found" in cast(str, trail[0]["result"])
 
 
-def test_unknown_query_valid_ladder_is_the_real_table(db, chat_mp):
+def test_unknown_query_valid_ladder_is_the_real_table(db: sqlite3.Connection, chat_mp: _MP) -> None:
     """The ``valid:`` ladder on a doc-not-found error lists EXACTLY the real query
     keys from the production table — drives the guardrail against the live table,
     not a hardcoded list."""
@@ -89,7 +92,7 @@ def test_unknown_query_valid_ladder_is_the_real_table(db, chat_mp):
     assert advertised == set(abilities.chalie_docs._QUERY_URLS)
 
 
-def test_all_urls_unreachable_yields_fetch_failed_no_instruction(db, chat_mp, monkeypatch):
+def test_all_urls_unreachable_yields_fetch_failed_no_instruction(db: sqlite3.Connection, chat_mp: _MP, monkeypatch: pytest.MonkeyPatch) -> None:
     """When every url for a known query is unreachable, the ability returns a LOUD
     ``code=fetch-failed`` error — NOT the old 'use the read tool and visit …'
     instruction presented as a successful answer. We repoint the table's OWN urls
@@ -108,10 +111,10 @@ def test_all_urls_unreachable_yields_fetch_failed_no_instruction(db, chat_mp, mo
 
     # The act-trail recorded the same loud error — the model sees a routable failure.
     trail = ActTrail().fetch_by_transcript_id(chat_mp.uid)
-    assert "code=fetch-failed" in trail[0]["result"]
+    assert "code=fetch-failed" in cast(str, trail[0]["result"])
 
 
-def test_failure_carries_no_read_tool_instruction(db, chat_mp, monkeypatch):
+def test_failure_carries_no_read_tool_instruction(db: sqlite3.Connection, chat_mp: _MP, monkeypatch: pytest.MonkeyPatch) -> None:
     """No-fabrication guard: even on total failure the old instruction shape is
     gone — the rendered envelope must NOT instruct the model to 'use the read
     tool' or 'visit' a url list. The tool fetches docs itself or errors; it never

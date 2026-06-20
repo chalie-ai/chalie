@@ -19,17 +19,17 @@ class TestStripFillers:
         # Case insensitive
         ("UM check", "check"),
     ])
-    def test_filler_words_are_removed(self, filler, expected):
+    def test_filler_words_are_removed(self, filler: str, expected: str) -> None:
         assert _strip_fillers(filler) == expected
 
     @pytest.mark.parametrize("text", [
         "umbrella",   # "um" prefix but not a standalone filler
         "check my calendar for tomorrow",
     ])
-    def test_real_words_are_preserved(self, text):
+    def test_real_words_are_preserved(self, text: str) -> None:
         assert _strip_fillers(text) == text
 
-    def test_no_double_spaces_after_removal(self):
+    def test_no_double_spaces_after_removal(self) -> None:
         result = _strip_fillers("check um uh my calendar")
         assert "  " not in result
 
@@ -43,7 +43,7 @@ class TestFixContractions:
         ("youre right", "you're right"),
         ("thats great", "that's great"),
     ])
-    def test_contraction_is_restored(self, raw, expected):
+    def test_contraction_is_restored(self, raw: str, expected: str) -> None:
         assert _fix_contractions(raw) == expected
 
     @pytest.mark.parametrize("raw,expected", [
@@ -52,7 +52,7 @@ class TestFixContractions:
         # Title-case token → title-case result
         ("Didnt", "Didn't"),
     ])
-    def test_original_casing_is_preserved(self, raw, expected):
+    def test_original_casing_is_preserved(self, raw: str, expected: str) -> None:
         assert _fix_contractions(raw) == expected
 
     @pytest.mark.parametrize("text", [
@@ -60,6 +60,6 @@ class TestFixContractions:
         "they were here",  # "were" is past tense, not "we're"
         "its colour",      # "its" as possessive, not "it's"
     ])
-    def test_ambiguous_words_are_not_rewritten(self, text):
+    def test_ambiguous_words_are_not_rewritten(self, text: str) -> None:
         assert _fix_contractions(text) == text
 

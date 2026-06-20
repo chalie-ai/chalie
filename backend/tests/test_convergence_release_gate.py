@@ -22,15 +22,22 @@ Acceptance items:
 import contextlib
 import json
 import math
+import pathlib
+import sqlite3
 import struct
 import uuid
+from collections.abc import Callable, Generator
 from datetime import timedelta
+from typing import TYPE_CHECKING, cast
+
+if TYPE_CHECKING:
+    from services.subconscious_worker import SubconsciousWorker
 
 import pytest
 
 from services.database_service import DatabaseService
 from services.llm_clients.base import ProviderClient
-from services.provider_api import ProviderApiResponse
+from services.provider_api import ProviderApiRequest, ProviderApiResponse
 from services.providers import Providers
 from services.schema_convergence_service import SchemaConvergenceService
 from services.time_utils import utc_now
@@ -43,17 +50,17 @@ pytestmark = pytest.mark.unit
 _EMB_DIM = 256
 
 
-def _pack(floats: list) -> bytes:
+def _pack(floats: list[float]) -> bytes:
     return struct.pack(f"{len(floats)}f", *floats)
 
 
-def _unit(axis: int, dim: int = _EMB_DIM) -> list:
+def _unit(axis: int, dim: int = _EMB_DIM) -> list[float]:
     v = [0.0] * dim
     v[axis] = 1.0
     return v
 
 
-def _topic_vec(axis: int, *, jitter_axis: int, jitter: float = 0.0) -> list:
+def _topic_vec(axis: int, *, jitter_axis: int, jitter: float = 0.0) -> list[float]:
     """L2-normalised vector dominated by one axis with a small jitter component.
     Gives UMAP/HDBSCAN real intra-cluster spread rather than stacked points."""
     v = [0.0] * _EMB_DIM
@@ -75,28 +82,30 @@ class _FakeLLMService(ProviderClient):
 
     CONTENT_FIELD_LABEL = "message.content"
 
-    def __init__(self, send_fn):
+    def __init__(self, send_fn: Callable[[ProviderApiRequest], ProviderApiResponse]) -> None:
         self._send_fn = send_fn
 
     def get_context_limit(self) -> int:
         return 200_000
 
-    def estimate_request_tokens(self, dto) -> int:
+    def estimate_request_tokens(self, dto: ProviderApiRequest) -> int:
         return 1
 
-    def send(self, dto) -> ProviderApiResponse:
+    def send(self, dto: ProviderApiRequest) -> ProviderApiResponse:
         return self._send_fn(dto)
 
 
 @contextlib.contextmanager
-def _inject_fake_client(send_fn):
+def _inject_fake_client(
+    send_fn: Callable[[ProviderApiRequest], ProviderApiResponse],
+) -> Generator[None, None, None]:
     """Swap Providers._resolve for the duration of the block. No mock library."""
     original = Providers._resolve
-    Providers._resolve = lambda self, *_a, **_kw: _FakeLLMService(send_fn)
+    setattr(Providers, "_resolve", lambda self, *_a, **_kw: _FakeLLMService(send_fn))
     try:
         yield
     finally:
-        Providers._resolve = original
+        setattr(Providers, "_resolve", original)
 
 
 def _super_ep_response(gist: str) -> ProviderApiResponse:
@@ -114,7 +123,7 @@ def _super_ep_response(gist: str) -> ProviderApiResponse:
     )
 
 
-def _fact_op_response(ops: list) -> ProviderApiResponse:
+def _fact_op_response(ops: list[object]) -> ProviderApiResponse:
     return ProviderApiResponse(
         text=json.dumps({"ops": ops}),
         model="test-model",
@@ -123,13 +132,16 @@ def _fact_op_response(ops: list) -> ProviderApiResponse:
     )
 
 
-def _multiplex_send_fn(super_ep_gist: str, fact_ops_per_call: list):
+def _multiplex_send_fn(
+    super_ep_gist: str,
+    fact_ops_per_call: list[list[object]],
+) -> Callable[[ProviderApiRequest], ProviderApiResponse]:
     """Route LLM calls by detecting "super-episode encoder" in the system prompt;
     all other calls get sequential fact op draws (NOOP is safe for self-gating steps)."""
-    fact_state = {"n": 0}
+    fact_state: dict[str, int] = {"n": 0}
     ops_list = fact_ops_per_call  # list of op-lists, one per episode
 
-    def _send(dto):
+    def _send(dto: ProviderApiRequest) -> ProviderApiResponse:
         raw = str(dto)
         # SuperEpisodeEncoder system prompt uniquely contains this phrase.
         if "super-episode encoder" in raw:
@@ -145,17 +157,17 @@ def _multiplex_send_fn(super_ep_gist: str, fact_ops_per_call: list):
 # ── DB helpers ─────────────────────────────────────────────────────────────────
 
 
-def _shared_db_svc():
+def _shared_db_svc() -> DatabaseService:
     from services.database_service import get_shared_db_service
     return get_shared_db_service()
 
 
-def _worker():
-    from services.subconscious_worker import SubconsciousWorker
+def _worker() -> "SubconsciousWorker":
+    from services.subconscious_worker import SubconsciousWorker  # noqa: PLC0415
     return SubconsciousWorker(tick_sec=10, idle_window_sec=60)
 
 
-def _sqlite_vec_available(db) -> bool:
+def _sqlite_vec_available(db: sqlite3.Connection) -> bool:
     try:
         db.execute("SELECT COUNT(*) FROM episodes_vec")
         return True
@@ -164,17 +176,17 @@ def _sqlite_vec_available(db) -> bool:
 
 
 def _insert_episode_raw(
-    db,
+    db: sqlite3.Connection,
     *,
-    episode_id: str = None,
+    episode_id: str | None = None,
     gist: str,
     salience: int = 6,
     channel: str = "user",
     level: int = 0,
     retrieval_weight: float = 1.0,
-    last_relevant_at: str = None,
-    consolidated_into: str = None,
-    facts_extracted_at: str = None,
+    last_relevant_at: str | None = None,
+    consolidated_into: str | None = None,
+    facts_extracted_at: str | None = None,
 ) -> str:
     """Insert an episode row directly (bypasses store_episode's embedding requirement)."""
     eid = episode_id or str(uuid.uuid4())
@@ -196,7 +208,7 @@ def _insert_episode_raw(
     return eid
 
 
-def _insert_embedding(db, episode_id: str, emb: list) -> None:
+def _insert_embedding(db: sqlite3.Connection, episode_id: str, emb: list[float]) -> None:
     row = db.execute(
         "SELECT rowid FROM episodes WHERE id = ?", (episode_id,)
     ).fetchone()
@@ -208,10 +220,17 @@ def _insert_embedding(db, episode_id: str, emb: list) -> None:
         db.commit()
 
 
-def _seed_apex_cluster_raw(db, channel, *, count, axis, jitter_axis) -> list:
+def _seed_apex_cluster_raw(
+    db: sqlite3.Connection,
+    channel: str,
+    *,
+    count: int,
+    axis: int,
+    jitter_axis: int,
+) -> list[str]:
     """Seed apex leaf episodes pre-marked as fact-extracted so they do not
     compete with the fact-extraction backlog; purpose is to trigger roll-up (H)."""
-    ids = []
+    ids: list[str] = []
     vec_ok = _sqlite_vec_available(db)
     already_extracted = utc_now().isoformat()
     for i in range(count):
@@ -280,7 +299,7 @@ CREATE TABLE memory_recall_log (
 """
 
 
-def _build_old_shape_db(tmp_path) -> tuple:
+def _build_old_shape_db(tmp_path: pathlib.Path) -> "tuple[DatabaseService, dict[str, object]]":
     """Construct a pre-redesign database and seed all old-shape payloads.
 
     Returns (db_service, seed_meta) where seed_meta carries ids/timestamps
@@ -402,7 +421,7 @@ def _build_old_shape_db(tmp_path) -> tuple:
             "final_rrf_count) VALUES ('seed','where do I live','abc',0.5,0.42,2)"
         )
 
-    seed_meta = {
+    seed_meta: dict[str, object] = {
         "old_first_seen": old_first_seen,
         "new_first_seen": new_first_seen,
     }
@@ -421,7 +440,7 @@ class TestFullJumpConvergence:
     boundary is replaced (Pattern H - class-level swap, no mock library).
     """
 
-    def test_old_shape_db_heals_end_to_end(self, db, store, tmp_path):
+    def test_old_shape_db_heals_end_to_end(self, db: sqlite3.Connection, store: object, tmp_path: pathlib.Path) -> None:
         # ── STEP 1: build the old-shape database ──────────────────────────────
         old_db, seed_meta = _build_old_shape_db(tmp_path)
 
@@ -444,14 +463,14 @@ class TestFullJumpConvergence:
             # Instead we use the _qry() helper below which re-opens the connection
             # on every call-group via db.connection().
 
-            def _qry(sql, params=None):
+            def _qry(sql: str, params: tuple[object, ...] | None = None) -> list[object]:
                 """Re-open and query — safe after close_pool() has been called."""
                 with old_db.connection() as c:
                     if params:
-                        return c.execute(sql, params).fetchall()
-                    return c.execute(sql).fetchall()
+                        return cast("list[object]", c.execute(sql, params).fetchall())
+                    return cast("list[object]", c.execute(sql).fetchall())
 
-            def _qry1(sql, params=None):
+            def _qry1(sql: str, params: tuple[object, ...] | None = None) -> object:
                 rows = _qry(sql, params)
                 return rows[0] if rows else None
 
@@ -461,16 +480,16 @@ class TestFullJumpConvergence:
             svc.backfill_redesign_columns()
 
             # ── (A) Assert: redesign columns backfilled ────────────────────────
-            cols = {r[1] for r in _qry("PRAGMA table_info(episodes)")}
+            cols = {cast("tuple[object, ...]", r)[1] for r in _qry("PRAGMA table_info(episodes)")}
             for col in ("level", "last_relevant_at", "tombstoned_at",
                         "facts_extracted_at"):
                 assert col in cols, f"boot backfill failed to add episodes.{col}"
 
-            dg_cols = {r[1] for r in _qry("PRAGMA table_info(data_graph)")}
+            dg_cols = {cast("tuple[object, ...]", r)[1] for r in _qry("PRAGMA table_info(data_graph)")}
             assert "valid_from" in dg_cols and "valid_to" in dg_cols
 
             # Every episode row now has last_relevant_at populated.
-            null_lr = _qry1("SELECT COUNT(*) FROM episodes WHERE last_relevant_at IS NULL")[0]
+            null_lr = cast("tuple[object, ...]", _qry1("SELECT COUNT(*) FROM episodes WHERE last_relevant_at IS NULL"))[0]
             assert null_lr == 0, (
                 f"boot backfill left {null_lr} episode(s) with NULL last_relevant_at"
             )
@@ -479,12 +498,12 @@ class TestFullJumpConvergence:
             # valid_from — the backfill derived this from the superseded_by edge.
             old_valid_to_row = _qry1("SELECT valid_to FROM data_graph WHERE id=10")
             assert old_valid_to_row is not None, "superseded fact row (id=10) missing"
-            old_valid_to = old_valid_to_row[0]
+            old_valid_to = cast("tuple[object, ...]", old_valid_to_row)[0]
             assert old_valid_to == seed_meta["new_first_seen"], (
                 f"boot backfill: old.valid_to ({old_valid_to!r}) must equal "
                 f"new.first_seen_at ({seed_meta['new_first_seen']!r})"
             )
-            live_valid_to = _qry1("SELECT valid_to FROM data_graph WHERE id=11")[0]
+            live_valid_to = cast("tuple[object, ...]", _qry1("SELECT valid_to FROM data_graph WHERE id=11"))[0]
             assert live_valid_to is None, "live fact must keep valid_to=NULL"
 
             # ── STEP 3: seed ≥50 apex leaves on 'user' for roll-up (H) ────────
@@ -493,8 +512,8 @@ class TestFullJumpConvergence:
             # We need a fresh connection to check vec availability.
             with old_db.connection() as _c:
                 vec_ok = _sqlite_vec_available(_c)
-                topic_a_ids = []
-                topic_b_ids = []
+                topic_a_ids: list[str] = []
+                topic_b_ids: list[str] = []
                 if vec_ok:
                     topic_a_ids = _seed_apex_cluster_raw(
                         _c, "user", count=25, axis=2, jitter_axis=202
@@ -525,7 +544,7 @@ class TestFullJumpConvergence:
             # Verify it entered the backlog.
             row = _qry1("SELECT facts_extracted_at FROM episodes WHERE id=?",
                         (ep_for_fact,))
-            assert row is not None and row[0] is None, (
+            assert row is not None and cast("tuple[object, ...]", row)[0] is None, (
                 "newly-stored episode must enter the fact-extraction backlog"
             )
 
@@ -540,7 +559,7 @@ class TestFullJumpConvergence:
             # geo_patterns  → skips (insufficient located-transcript delta)
             # → Only consolidate and fact_extraction need the fake client.
 
-            fact_ops = [
+            fact_ops: list[list[object]] = [
                 # op for ep_for_fact: UPDATE triggers bi-temporal supersession.
                 [{"op": "UPDATE", "key": "residence", "value": "Valletta"}],
             ]
@@ -555,8 +574,8 @@ class TestFullJumpConvergence:
                 "SELECT retrieval_weight FROM episodes WHERE id='ep-user-a'"
             )
             assert rw_row is not None, "floored episode row missing after tick"
-            rw_a = rw_row[0]
-            assert rw_a > 0.3, (
+            rw_a = cast("tuple[object, ...]", rw_row)[0]
+            assert cast(float, rw_a) > 0.3, (
                 f"floored episode rw must recover above 0.3 after decay tick, "
                 f"got {rw_a:.4f} (salience=7, ~2d old → expected ~0.65)"
             )
@@ -568,7 +587,7 @@ class TestFullJumpConvergence:
                 "SELECT tombstoned_at FROM episodes WHERE id='ep-fossil'"
             )
             assert fossil_row is not None, "fossil episode row disappeared unexpectedly"
-            assert fossil_row[0] is not None, (
+            assert cast("tuple[object, ...]", fossil_row)[0] is not None, (
                 "fossil episode on unprotected 'legacy_chat' channel (30d old) "
                 "must be tombstoned by the janitor after tick 1"
             )
@@ -579,7 +598,7 @@ class TestFullJumpConvergence:
             # ep_retrieve was stored via EpisodicService.store_episode() above so
             # the FTS index is populated by the real production write path.
             from services.episodic_retrieval_service import retrieve
-            results = retrieve("hiking Maltese countryside", k=10)
+            results = cast("list[dict[str, object]]", retrieve("hiking Maltese countryside", k=10))
             returned_ids = [r["id"] for r in results]
             assert ep_retrieve in returned_ids, (
                 f"retrieval must surface the seeded hiking episode after heal; "
@@ -590,7 +609,7 @@ class TestFullJumpConvergence:
             extracted_at_row = _qry1(
                 "SELECT facts_extracted_at FROM episodes WHERE id=?", (ep_for_fact,)
             )
-            assert extracted_at_row is not None and extracted_at_row[0] is not None, (
+            assert extracted_at_row is not None and cast("tuple[object, ...]", extracted_at_row)[0] is not None, (
                 "fact-extraction step must stamp facts_extracted_at on each "
                 "processed episode"
             )
@@ -625,12 +644,12 @@ class TestFullJumpConvergence:
                     "the count-triggered roll-up must fire"
                 )
                 seeded_leaves = set(topic_a_ids) | set(topic_b_ids)
-                for sid, cfrom_json, level in supers:
+                for sid, cfrom_json, level in cast("list[tuple[object, object, object]]", supers):
                     assert level == 1, (
                         f"roll-up parent must be level=1, got {level!r} — "
                         "TKT-927 latent bug (store_episode never wrote level)"
                     )
-                    children = json.loads(cfrom_json)
+                    children = json.loads(cast(str, cfrom_json))
                     assert children, "super-episode has empty consolidated_from"
                     for child_id in children:
                         assert child_id in seeded_leaves, (
@@ -641,17 +660,17 @@ class TestFullJumpConvergence:
                             "FROM episodes WHERE id=?",
                             (child_id,),
                         )
-                        assert child_row[0] == sid, (
+                        assert cast("tuple[object, ...]", child_row)[0] == sid, (
                             f"child {child_id} must back-point at super {sid}"
                         )
-                        assert child_row[1] is not None, (
+                        assert cast("tuple[object, ...]", child_row)[1] is not None, (
                             f"child {child_id} must be tombstoned after roll-up"
                         )
 
             # ── (I) Assert: legacy kind='moment' rows wiped ───────────────────
-            moment_count = _qry1(
+            moment_count = cast("tuple[object, ...]", _qry1(
                 "SELECT COUNT(*) FROM data_graph WHERE kind='moment'"
-            )[0]
+            ))[0]
             assert moment_count == 0, (
                 f"decay step must wipe all legacy kind='moment' data_graph rows; "
                 f"{moment_count} remain"
@@ -678,8 +697,8 @@ class TestRestartSafety:
     """
 
     def test_partial_drain_is_durable_and_remainder_drains_on_restart(
-        self, db, store
-    ):
+        self, db: sqlite3.Connection, store: object
+    ) -> None:
         from services.subconscious_worker import _FACT_EXTRACTION_CALL_BUDGET
         from services.episodic_service import EpisodicService
 
@@ -689,7 +708,7 @@ class TestRestartSafety:
         n = budget + 3
 
         ep_svc = EpisodicService(_shared_db_svc())
-        ids = []
+        ids: list[str] = []
         for i in range(n):
             eid = ep_svc.store_episode(
                 {"gist": f"Restart-safety episode {i}.", "salience": 5,
@@ -706,13 +725,13 @@ class TestRestartSafety:
         db.commit()
 
         # All NOOP ops — we measure the drain, not the op semantics.
-        noop_send = lambda _dto: _fact_op_response([{"op": "NOOP"}])  # noqa: E731
+        noop_send: "Callable[[ProviderApiRequest], ProviderApiResponse]" = lambda _dto: _fact_op_response([{"op": "NOOP"}])  # noqa: E731
 
         # Helper: re-open a fresh connection after _step_fact_extraction may have
         # called close_pool() on the shared service.  _step_fact_extraction itself
         # does NOT call close_pool(), but we use _shared_db_svc()._get_connection()
         # to be safe (same pattern as test_decay_engine_service._fresh_conn()).
-        def _stamped_at(episode_id):
+        def _stamped_at(episode_id: str) -> object:
             conn = _shared_db_svc()._get_connection()
             row = conn.execute(
                 "SELECT facts_extracted_at FROM episodes WHERE id=?", (episode_id,)

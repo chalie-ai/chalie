@@ -9,10 +9,19 @@ import subprocess
 import sys
 import threading
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+import requests
+
+from pathlib import Path
 
 import requests
 
 from services.file_mapper_service import FileMapperService
+
+if TYPE_CHECKING:
+    from services.database_service import DatabaseService
+
 
 logger = logging.getLogger(__name__)
 
@@ -39,7 +48,7 @@ class RuntimeDepsService:
         t.start()
 
     @classmethod
-    def enable_voice(cls) -> dict:
+    def enable_voice(cls) -> dict[str, str]:
         """Trigger voice dependency installation in background.
 
         Returns immediate status dict.
@@ -58,7 +67,7 @@ class RuntimeDepsService:
         return {"status": "installing", "message": "Voice dependencies installing in background"}
 
     @classmethod
-    def init_voice_from_settings(cls, database_service) -> None:
+    def init_voice_from_settings(cls, database_service: "DatabaseService") -> None:
         """Check DB settings on boot — if voice is enabled, trigger install.
 
         Migration: if voice_enabled is not yet in the DB but the legacy
@@ -95,7 +104,7 @@ class RuntimeDepsService:
             cls._voice_status = "unknown"
 
     @classmethod
-    def get_status(cls) -> dict:
+    def get_status(cls) -> dict[str, dict[str, str | None]]:
         """Return current status of optional dependencies."""
         return {
             "voice": {"status": cls._voice_status, "error": cls._voice_error},

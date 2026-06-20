@@ -14,15 +14,24 @@ from __future__ import annotations
 
 import json
 import logging
+from typing import TYPE_CHECKING, cast
+
+if TYPE_CHECKING:
+    from typing import Optional, Protocol
+
+    class _DgsProtocol(Protocol):
+        def store(self, kind: str, key: str, value: str, *, source: Optional[str] = None) -> object: ...
+        def recall(self, query: str, *, kinds: Optional[list[str]] = None, limit: int = 10) -> list[dict[str, object]]: ...
+        def fetch(self, *, kinds: Optional[list[str]] = None, limit: Optional[int] = None, order_by: str = "") -> list[dict[str, object]]: ...
 
 logger = logging.getLogger(__name__)
 
 _CONTACT_KEY_PREFIX = "contact:"
 
 
-def _dgs():
+def _dgs() -> "_DgsProtocol":
     from services.data_graph_service import get_data_graph_service
-    return get_data_graph_service()
+    return cast("_DgsProtocol", get_data_graph_service())
 
 
 def index_person(email: str, name: str | None = None, source: str = "unknown") -> None:
@@ -45,13 +54,13 @@ def index_person(email: str, name: str | None = None, source: str = "unknown") -
         logger.debug("[contact_resolver] index_person failed for %s: %s", email, exc)
 
 
-def index_contact_profile(profile: dict, source: str = "carddav") -> None:
+def index_contact_profile(profile: dict[str, object], source: str = "carddav") -> None:
     """Store a full contact profile in the data graph.
 
     Uses ``key='contact:<Display Name>'``, ``value=<JSON profile>``.
     Called from CardDAV sync with the full parsed vCard dict.
     """
-    fn = (profile.get("fn") or "").strip()
+    fn = (cast(str, profile.get("fn")) or "").strip()
     if not fn:
         return
     try:
@@ -65,7 +74,7 @@ def index_contact_profile(profile: dict, source: str = "carddav") -> None:
         logger.debug("[contact_resolver] index_contact_profile failed for %s: %s", fn, exc)
 
 
-def _parse_contact_row(key: str, raw_value: str) -> dict | None:
+def _parse_contact_row(key: str, raw_value: str) -> dict[str, object] | None:
     """Parse a single data_graph row into a contact dict."""
     if not key.startswith(_CONTACT_KEY_PREFIX):
         return None
@@ -79,7 +88,7 @@ def _parse_contact_row(key: str, raw_value: str) -> dict | None:
     return {"email": suffix, "name": raw_value}
 
 
-def resolve(identifier: str, limit: int = 5) -> list[dict]:
+def resolve(identifier: str, limit: int = 5) -> list[dict[str, object]]:
     """Look up person entries matching *identifier* via RRF across key/value vec + FTS5.
     """
     if not identifier or not str(identifier).strip():
@@ -92,7 +101,7 @@ def resolve(identifier: str, limit: int = 5) -> list[dict]:
         )
         contacts = []
         for r in rows:
-            parsed = _parse_contact_row(r.get("key", ""), r.get("value", ""))
+            parsed = _parse_contact_row(cast(str, r.get("key", "")), cast(str, r.get("value", "")))
             if parsed is not None:
                 contacts.append(parsed)
         return contacts
@@ -101,12 +110,12 @@ def resolve(identifier: str, limit: int = 5) -> list[dict]:
         return []
 
 
-def get_tool() -> dict:
-    def _execute(topic, params, config=None, telemetry=None):
-        query = (params.get("query") or "").strip()
+def get_tool() -> dict[str, object]:
+    def _execute(topic: object, params: dict[str, object], config: object = None, telemetry: object = None) -> dict[str, object]:
+        query = (cast(str, params.get("query")) or "").strip()
         if not query:
             return {"contacts": [], "count": 0}
-        limit = min(int(params.get("limit", 10)), 20)
+        limit = min(int(cast(int, params.get("limit", 10))), 20)
         matches = resolve(query, limit=limit)
         return {"contacts": matches, "count": len(matches)}
 

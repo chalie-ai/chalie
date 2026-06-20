@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Optional, Tuple
+from typing import Optional, Tuple, cast
 
 logger = logging.getLogger(__name__)
 
@@ -13,10 +13,10 @@ STATE_KEY = "deliberation_score:ema"
 
 # ── Load thresholds once from classifier_meta.json ────────────────────────────
 
-_meta_cache: Optional[dict] = None
+_meta_cache: Optional[dict[str, object]] = None
 
 
-def _load_meta() -> dict:
+def _load_meta() -> dict[str, object]:
     global _meta_cache
     if _meta_cache is not None:
         return _meta_cache
@@ -24,7 +24,7 @@ def _load_meta() -> dict:
     from services.file_mapper_service import FileMapperService
     meta_path = FileMapperService.get_pretrained_path("deliberation_score", "deliberation-score-classifier_meta.json")
     with open(meta_path) as f:
-        meta = json.load(f)
+        meta: dict[str, object] = cast(dict[str, object], json.load(f))
 
     # Validate required keys
     if "ema_alpha" not in meta:
@@ -48,8 +48,8 @@ class DeliberationEmaService:
 
     def __init__(self) -> None:
         meta = _load_meta()
-        self._alpha: float = float(meta["ema_alpha"])
-        thresholds = meta["bucket_thresholds"]
+        self._alpha: float = float(cast(float, meta["ema_alpha"]))
+        thresholds = cast(dict[str, float], meta["bucket_thresholds"])
         self._high_thr: float = float(thresholds["high"])
         self._med_thr: float = float(thresholds["medium"])
 

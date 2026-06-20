@@ -21,7 +21,7 @@ import logging
 import os
 import re
 from pathlib import Path
-from typing import ClassVar
+from typing import ClassVar, cast
 
 from abilities._ability import Ability
 from abilities._params import Keys
@@ -65,7 +65,7 @@ class FilePermissionsAbility(Ability):
     #: ``code=missing-params`` BEFORE run(). Blank strings are invalid here, so the
     #: truthiness-based pre-gate is exactly right; run() guards the whitespace-only
     #: residue the pre-gate lets through (``"  "`` is truthy).
-    ACTION_REQUIRED: ClassVar[dict] = {"": (Keys.path, Keys.permissions)}
+    ACTION_REQUIRED: ClassVar[dict[str, tuple[str, ...]]] = {"": (Keys.path, Keys.permissions)}
 
     def get_name(self) -> str:
         return "file_permissions"
@@ -87,7 +87,7 @@ class FilePermissionsAbility(Ability):
     def get_search_tooltip(self) -> str:
         return "Change file permissions (chmod)"
 
-    _PARAMETERS: ClassVar[dict] = {
+    _PARAMETERS: ClassVar[dict[str, object]] = {
         "type": "object",
         "properties": {
             Keys.path: {
@@ -112,12 +112,12 @@ class FilePermissionsAbility(Ability):
         "required": [Keys.path, Keys.permissions],
     }
 
-    def get_parameters(self) -> dict:
+    def get_parameters(self) -> dict[str, object]:
         return self._PARAMETERS
 
-    def run(self, params: dict) -> ToolResult:
-        path_str = (params.get(Keys.path) or "").strip()
-        perm_str = (params.get(Keys.permissions) or "").strip()
+    def run(self, params: dict[str, object]) -> ToolResult:
+        path_str = cast(str, params.get(Keys.path) or "").strip()
+        perm_str = cast(str, params.get(Keys.permissions) or "").strip()
 
         # The ACTION_REQUIRED pre-gate rejects a missing/blank path or
         # permissions; this guards the whitespace-only residue it lets through

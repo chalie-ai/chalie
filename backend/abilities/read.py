@@ -27,7 +27,15 @@ diffs come back verbatim instead of being stripped to ``no-readable-content``.
 
 import logging
 import os
-from typing import ClassVar
+from typing import TYPE_CHECKING, ClassVar, cast
+
+if TYPE_CHECKING:
+    from typing import TypedDict
+
+    class _OkTextMeta(TypedDict, total=False):
+        source: str
+        content_type: str
+        truncated: bool
 from urllib.parse import urlparse
 
 import requests
@@ -62,7 +70,7 @@ class ReadAbility(Ability):
     def get_search_tooltip(self) -> str:
         return "fetch URL or file contents"
 
-    _PARAMETERS: ClassVar[dict] = {
+    _PARAMETERS: ClassVar[dict[str, object]] = {
         "type": "object",
         "properties": {
             Keys.source: {
@@ -77,7 +85,7 @@ class ReadAbility(Ability):
         "required": [Keys.source],
     }
 
-    def get_parameters(self) -> dict:
+    def get_parameters(self) -> dict[str, object]:
         return self._PARAMETERS
 
     #: The keys a model naturally emits for the read target — ``url``, ``path``,
@@ -87,7 +95,7 @@ class ReadAbility(Ability):
     #: ``source-required``. No per-tool alias list lives here anymore.
     _URL_FETCH_TIMEOUT: ClassVar[int] = 15
 
-    _BLOCKED_PATH_PREFIXES: ClassVar[tuple] = ("/etc", "/proc", "/dev", "/sys", "/var/run")
+    _BLOCKED_PATH_PREFIXES: ClassVar[tuple[str, ...]] = ("/etc", "/proc", "/dev", "/sys", "/var/run")
 
     #: Path suffixes whose bytes are plain text, not markup. A URL/file ending in
     #: one of these is normalised WITHOUT HTML extraction so raw diffs/patches/code
@@ -97,7 +105,7 @@ class ReadAbility(Ability):
         ".json", ".yaml", ".yml", ".toml", ".ini", ".py", ".js", ".ts", ".sh",
     )
 
-    def run(self, params: dict) -> ToolResult:
+    def run(self, params: dict[str, object]) -> ToolResult:
         source = self.param(params, Keys.source)
         if not isinstance(source, str) or not source.strip():
             # No usable target under any accepted key. Echo what the model DID send
@@ -117,8 +125,8 @@ class ReadAbility(Ability):
         max_chars = self.param(params, Keys.max_chars, default=20000, clamp=(100, 100000))
 
         if self._is_url(source):
-            return self._read_url(source, max_chars)
-        return self._read_file(source, max_chars)
+            return self._read_url(source, cast(int, max_chars))
+        return self._read_file(source, cast(int, max_chars))
 
     # ── Classification ─────────────────────────────────────────────────────────
 
@@ -232,7 +240,7 @@ class ReadAbility(Ability):
     @staticmethod
     def _ok_text(content: str, max_chars: int, *, source: str, content_type: str) -> ToolResult:
         clipped, was_clipped = truncate(content, max_chars)
-        meta: dict = {"source": source, "content_type": content_type}
+        meta: "_OkTextMeta" = {"source": source, "content_type": content_type}
         if was_clipped:
             meta["truncated"] = True
         return ToolResult.ok(clipped, **meta)

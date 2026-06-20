@@ -8,7 +8,12 @@
 
 """user_messages_total counts — dashboard derives on demand from transcript COUNT."""
 
+import sqlite3
+from typing import cast
+
 import pytest
+
+from services.memory_store import MemoryStore
 
 pytestmark = pytest.mark.unit
 
@@ -16,7 +21,7 @@ pytestmark = pytest.mark.unit
 # ── user_messages_total deleted as stored counter; dashboard uses COUNT ────────
 
 
-def test_stored_counter_does_not_affect_user_messages(db, store):
+def test_stored_counter_does_not_affect_user_messages(db: sqlite3.Connection, store: MemoryStore) -> None:
     from services.metrics_service import MetricsService
 
     db.execute(
@@ -28,13 +33,13 @@ def test_stored_counter_does_not_affect_user_messages(db, store):
     m = MetricsService()
     m.record_counter('user_messages_total', 999)  # stale / ignored
     dash = m.get_dashboard_data()
-    assert dash['counters']['user_messages_total'] == 1
+    assert cast("dict[str, object]", dash['counters'])['user_messages_total'] == 1
 
 
 # ── one user turn = exactly one user/user transcript row ───────────────────────
 
 
-def test_count_exactness_n_turns(db, store):
+def test_count_exactness_n_turns(db: sqlite3.Connection, store: MemoryStore) -> None:
     from services.metrics_service import MetricsService
 
     for i in range(5):
@@ -52,4 +57,4 @@ def test_count_exactness_n_turns(db, store):
     db.commit()
 
     dash = MetricsService().get_dashboard_data()
-    assert dash['counters']['user_messages_total'] == 5
+    assert cast("dict[str, object]", dash['counters'])['user_messages_total'] == 5

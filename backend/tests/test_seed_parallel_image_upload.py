@@ -6,6 +6,7 @@ that fires once before iteration 0 — with N real image attachments on a real
 """
 
 import io
+from typing import cast
 
 import pytest
 
@@ -25,7 +26,7 @@ def _png_with_text(text: str) -> bytes:
 
     img = Image.new("RGB", (480, 160), "white")
     draw = ImageDraw.Draw(img)
-    font = None
+    font: "ImageFont.FreeTypeFont | ImageFont.ImageFont | None" = None
     for candidate in ("DejaVuSans-Bold.ttf", "Arial Bold.ttf", "DejaVuSans.ttf"):
         try:
             font = ImageFont.truetype(candidate, 72)
@@ -57,7 +58,7 @@ def _build_parent(attachments: "list[str]") -> MessageProcessor:
     return parent
 
 
-def test_seed_uploads_all_attachments_in_parallel(db):
+def test_seed_uploads_all_attachments_in_parallel(db: object) -> None:
     """Proves the barrier joins all uploads before _seed_turn_zero returns."""
     ProviderDbService(get_shared_db_service()).set_vision_provider(None)
 
@@ -91,11 +92,11 @@ def test_seed_uploads_all_attachments_in_parallel(db):
     # Each reached a terminal ready state and is independently retrievable.
     for doc in new_docs:
         assert doc["status"] == "ready", (doc["original_name"], doc["status"])
-        fetched = svc.get_document(doc["id"])
+        fetched = svc.get_document(cast(str, doc["id"]))
         assert fetched is not None and fetched["id"] == doc["id"]
 
 
-def test_seed_skips_unreadable_attachment_without_aborting_others(db):
+def test_seed_skips_unreadable_attachment_without_aborting_others(db: object) -> None:
     """Proves the per-task OSError guard doesn't take down the whole barrier."""
     ProviderDbService(get_shared_db_service()).set_vision_provider(None)
 

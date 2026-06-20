@@ -13,6 +13,9 @@ real DTO construction — zero mocks.
 """
 
 import base64
+import sqlite3
+from pathlib import Path
+from typing import cast
 
 import pytest
 
@@ -34,7 +37,7 @@ def _png_1x1() -> bytes:
     )
 
 
-def _seed_ollama_with_window(db, max_tokens):
+def _seed_ollama_with_window(db: sqlite3.Connection, max_tokens: int) -> int:
     """OllamaClient.estimate_request_tokens works without a live model (pure heuristic /
     json serialisation), so over-cap tests never hit the network.
     """
@@ -50,13 +53,13 @@ def _seed_ollama_with_window(db, max_tokens):
         (str(pid),),
     )
     db.commit()
-    return pid
+    return cast(int, pid)
 
 
 # ── Tests ─────────────────────────────────────────────────────────────────────
 
 
-def test_send_raises_request_over_cap_for_oversized_dto(db):
+def test_send_raises_request_over_cap_for_oversized_dto(db: sqlite3.Connection) -> None:
     """Replaces the old OVER_CAP sentinel: callers now catch RequestOverCapError instead
     of comparing `response is OVER_CAP`. The pre-flight check fires before any network call.
 
@@ -75,7 +78,7 @@ def test_send_raises_request_over_cap_for_oversized_dto(db):
     # ~400 words × 1.3 ≈ 520 tokens/msg × 30 messages ≈ 15.6k tokens, which
     # exceeds any sane window cap (8192 default → cap ≈ 192).
     big = " ".join(f"w{j}" for j in range(400))
-    big_messages = [
+    big_messages: list[dict[str, object]] = [
         {"role": "user", "content": f"msg{i} {big}"}
         for i in range(30)
     ]
@@ -104,7 +107,7 @@ def test_send_raises_request_over_cap_for_oversized_dto(db):
         ProviderCacheService.invalidate()
 
 
-def test_measure_returns_positive_integer_for_real_dto(db):
+def test_measure_returns_positive_integer_for_real_dto(db: sqlite3.Connection) -> None:
     """Used by ChatHistoryCompactor._fit_compaction_input to decide how much history to drop."""
     from services.providers import Providers
     from services.provider_cache_service import ProviderCacheService
@@ -130,7 +133,7 @@ def test_measure_returns_positive_integer_for_real_dto(db):
         ProviderCacheService.invalidate()
 
 
-def test_build_send_dto_type_chat_for_user_config(db):
+def test_build_send_dto_type_chat_for_user_config(db: sqlite3.Connection) -> None:
     """The config's role is encoded in the DTO's type field, derived from the config's
     provider flags rather than read directly at the send call site.
     """
@@ -159,7 +162,7 @@ def test_build_send_dto_type_chat_for_user_config(db):
         ProviderCacheService.invalidate()
 
 
-def test_build_send_dto_type_vision_for_vision_config(db, tmp_path):
+def test_build_send_dto_type_vision_for_vision_config(db: sqlite3.Connection, tmp_path: Path) -> None:
     """The DTO type drives provider resolution in Providers.send(dto), derived from
     the config's uses_vision_provider flag.
     """
@@ -187,17 +190,17 @@ def test_build_send_dto_type_vision_for_vision_config(db, tmp_path):
     assert "image" in dto.messages[0], (
         "VisionConfig DTO messages[0] must carry 'image' dict; got: %s" % dto.messages[0].keys()
     )
-    assert dto.messages[0]["image"]["mime_type"] == "image/png"
+    assert cast(dict[str, object], dto.messages[0]["image"])["mime_type"] == "image/png"
 
 
-def test_send_image_with_config_returns_none_for_unreachable_provider():
+def test_send_image_with_config_returns_none_for_unreachable_provider() -> None:
     """The vision probe is a best-effort path - an offline host gets a network error,
     which send_image_with_config catches and maps to None.
     """
     from services.vision_service import send_image_with_config, build_vision_config
 
     # A syntactically valid but unreachable Ollama config (closed port 1).
-    provider_row = {
+    provider_row: dict[str, object] = {
         "platform": "ollama",
         "model": "llava",
         "host": "http://127.0.0.1:1",

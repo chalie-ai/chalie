@@ -5,7 +5,7 @@ _CTRL_CHARS_TRANS = {c: None for c in range(32) if c not in (9,)}  # keep tab, d
 _CTRL_CHARS_TRANS[127] = None  # DEL
 
 
-def safe(value) -> str:
+def safe(value: object) -> str:
     """Non-string inputs are coerced via str()."""
     if value is None:
         return ""

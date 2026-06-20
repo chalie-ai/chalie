@@ -23,15 +23,19 @@ guard.
 """
 
 import json
+import sqlite3
+from collections.abc import Generator
+from pathlib import Path
+from typing import cast
 
 import pytest
+from flask.testing import FlaskClient
 
 from configs.channels import UserConfig
 from abilities._dispatcher import ToolDispatcher
 from services.data_graph_service import get_data_graph_service
 from services.database_service import get_shared_db_service
 from services.decay_engine_service import DecayEngineService
-from services.embedding_service import get_embedding_service
 from services.message_processor import MessageProcessor
 from services.time_utils import utc_now
 from services import transcript_service
@@ -57,11 +61,11 @@ def _seed_assistant_turn(content: str = _ASSISTANT_TURN, channel: str = "user") 
     return transcript_service.write_assistant_row(channel, content)
 
 
-def _count_moments(conn) -> int:
-    return conn.execute("SELECT COUNT(*) FROM moments").fetchone()[0]
+def _count_moments(conn: sqlite3.Connection) -> int:
+    return cast(int, conn.execute("SELECT COUNT(*) FROM moments").fetchone()[0])
 
 
-def _moments_rows(conn) -> list:
+def _moments_rows(conn: sqlite3.Connection) -> list[dict[str, object]]:
     cur = conn.execute("SELECT * FROM moments")
     rows = cur.fetchall()
     return [dict(r) for r in rows]
@@ -70,7 +74,7 @@ def _moments_rows(conn) -> list:
 # ── 1. Save verbatim → row in the NEW moments table + dedup ───────────────────
 
 
-def test_pin_persists_verbatim_in_moments_table_and_dedups(authed_client):
+def test_pin_persists_verbatim_in_moments_table_and_dedups(authed_client: tuple[FlaskClient, sqlite3.Connection, object]) -> None:
     client, db, _store = authed_client
     tid = _seed_assistant_turn()
 
@@ -110,7 +114,7 @@ def test_pin_persists_verbatim_in_moments_table_and_dedups(authed_client):
 
 
 @pytest.fixture
-def db768(tmp_path):
+def db768(tmp_path: Path) -> Generator[sqlite3.Connection, None, None]:
     import services.database_service as _db_mod
     from services.database_service import DatabaseService
     from services.schema_convergence_service import SchemaConvergenceService
@@ -148,7 +152,7 @@ def db768(tmp_path):
 
 
 @pytest.fixture
-def authed_client768(db768):
+def authed_client768(db768: sqlite3.Connection) -> Generator[tuple[FlaskClient, sqlite3.Connection, object], None, None]:
     from unittest.mock import patch  # auth/store boundary only — see conftest
     from api import create_app
     from services.memory_store import MemoryStore
@@ -163,7 +167,7 @@ def authed_client768(db768):
             yield client, db768, real_store
 
 
-def test_pinned_moment_searchable_via_fts_and_vec(authed_client768):
+def test_pinned_moment_searchable_via_fts_and_vec(authed_client768: tuple[FlaskClient, sqlite3.Connection, object]) -> None:
     client, _db, _store = authed_client768
     tid = _seed_assistant_turn()
 
@@ -222,15 +226,15 @@ def _new_turn(text: str) -> MessageProcessor:
     return mp
 
 
-def _recall_body(out: str) -> dict:
+def _recall_body(out: str) -> dict[str, object]:
     """Parse the JSON body the memory dispatch wraps between its trail markers —
     the exact slicing test_turn0_flashback_continuation_gate.py uses."""
     head = out.index("]\n") + 2
     tail = out.index("\n[end:memory]")
-    return json.loads(out[head:tail])
+    return cast(dict[str, object], json.loads(out[head:tail]))
 
 
-def test_explicit_recall_surfaces_moment_in_labeled_lane(authed_client):
+def test_explicit_recall_surfaces_moment_in_labeled_lane(authed_client: tuple[FlaskClient, sqlite3.Connection, object]) -> None:
     client, _, _store = authed_client
     tid = _seed_assistant_turn()
     created = client.post(
@@ -262,7 +266,7 @@ def test_explicit_recall_surfaces_moment_in_labeled_lane(authed_client):
 # ── 4. Pinned moments are NOT in the turn-0 flashback ─────────────────────────
 
 
-def _last_seed_result(db) -> str | None:
+def _last_seed_result(db: sqlite3.Connection) -> str | None:
     row = db.execute(
         "SELECT result FROM tool_calls WHERE tool_name = 'memory' "
         "ORDER BY id DESC LIMIT 1"
@@ -270,7 +274,7 @@ def _last_seed_result(db) -> str | None:
     return None if row is None else row[0]
 
 
-def _reset_conversation(conn) -> None:
+def _reset_conversation(conn: sqlite3.Connection) -> None:
     """Restore genuine session-start conditions WITHOUT touching the pinned
     moment. The turn-0 flashback's continuation gate fires unconditionally only
     when there is no running thread to continue (no prior transcript turns / no
@@ -286,7 +290,7 @@ def _reset_conversation(conn) -> None:
     conn.commit()
 
 
-def test_turn_zero_flashback_excludes_pinned_moments(authed_client):
+def test_turn_zero_flashback_excludes_pinned_moments(authed_client: tuple[FlaskClient, sqlite3.Connection, object]) -> None:
     client, db, _store = authed_client
     tid = _seed_assistant_turn()
     created = client.post(
@@ -315,7 +319,7 @@ def test_turn_zero_flashback_excludes_pinned_moments(authed_client):
 # ── 5. data_graph rejects kind='moment' (enum enforced) ───────────────────────
 
 
-def test_data_graph_store_rejects_kind_moment(db):
+def test_data_graph_store_rejects_kind_moment(db: sqlite3.Connection) -> None:
     dgs = get_data_graph_service()
 
     result = dgs.store(kind="moment", key="moment_999", value="should be rejected")
@@ -332,7 +336,7 @@ def test_data_graph_store_rejects_kind_moment(db):
 # ── 6. Legacy data_graph kind='moment' rows are wiped by the decay cycle ───────
 
 
-def _seed_legacy_dg_moment(conn, key: str, value: str) -> None:
+def _seed_legacy_dg_moment(conn: sqlite3.Connection, key: str, value: str) -> None:
     """Insert a pre-TKT-928 ``kind='moment'`` row directly into data_graph (the
     'store' path can't be used — it rejects 'moment' after the change), plus its
     FTS companion, mirroring the 199 legacy rows the worker left behind."""
@@ -356,7 +360,7 @@ def _seed_legacy_dg_moment(conn, key: str, value: str) -> None:
     conn.commit()
 
 
-def test_decay_cycle_wipes_legacy_data_graph_moments(db):
+def test_decay_cycle_wipes_legacy_data_graph_moments(db: sqlite3.Connection) -> None:
     _seed_legacy_dg_moment(db, "moment_101", "an old auto-saved assistant reply")
     _seed_legacy_dg_moment(db, "moment_102", "another stale moment row")
     assert db.execute(
@@ -379,7 +383,7 @@ def test_decay_cycle_wipes_legacy_data_graph_moments(db):
 _CONTRACT_KEYS = {"id", "transcript_id", "key", "value", "message_text", "created_at"}
 
 
-def test_frontend_json_contract_is_byte_identical(authed_client):
+def test_frontend_json_contract_is_byte_identical(authed_client: tuple[FlaskClient, sqlite3.Connection, object]) -> None:
     client, _db, _store = authed_client
     tid = _seed_assistant_turn()
 
@@ -418,7 +422,7 @@ def test_frontend_json_contract_is_byte_identical(authed_client):
 # ── 8. Privacy delete-all wipes the moments table ─────────────────────────────
 
 
-def test_privacy_delete_all_wipes_moments(authed_client):
+def test_privacy_delete_all_wipes_moments(authed_client: tuple[FlaskClient, sqlite3.Connection, object]) -> None:
     client, db, _store = authed_client
     tid = _seed_assistant_turn()
     created = client.post(

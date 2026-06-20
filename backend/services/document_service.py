@@ -5,9 +5,11 @@ import logging
 import os
 import secrets
 import shutil
+import sqlite3
 from datetime import timedelta
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, cast
 
+from services.database_service import DatabaseService
 from services.file_mapper_service import FileMapperService
 from services.embedding_utils import pack_embedding as _pack_embedding
 from services.log_utils import safe
@@ -27,7 +29,7 @@ PURGE_WINDOW_DAYS = 30
 
 class DocumentService:
 
-    def __init__(self, db_service):
+    def __init__(self, db_service: DatabaseService) -> None:
         self.db = db_service
         self._write_queue = get_write_queue()
 
@@ -43,8 +45,8 @@ class DocumentService:
         file_path: str,
         file_hash: str,
         source_type: str = 'upload',
-        watched_folder_id: str = None,
-        doc_id: str = None,
+        watched_folder_id: Optional[str] = None,
+        doc_id: Optional[str] = None,
     ) -> str:
         doc_id = doc_id or secrets.token_hex(4)
 
@@ -54,7 +56,7 @@ class DocumentService:
                 file_hash, source_type, watched_folder_id,
             )
 
-            def _insert(params=_params, db=self.db):
+            def _insert(params: tuple[object, ...] = _params, db: DatabaseService = self.db) -> None:
                 with db.connection() as conn:
                     cursor = conn.cursor()
                     cursor.execute(
@@ -77,7 +79,7 @@ class DocumentService:
             logger.error(f"[DOCS] create_document failed: {e}")
             raise
 
-    def get_document(self, doc_id: str) -> Optional[Dict[str, Any]]:
+    def get_document(self, doc_id: str) -> Optional[Dict[str, object]]:
         try:
             with self.db.connection() as conn:
                 cursor = conn.cursor()
@@ -102,7 +104,7 @@ class DocumentService:
             logger.error(f"[DOCS] get_document failed: {e}")
             return None
 
-    def get_all_documents(self, include_deleted: bool = False) -> List[Dict[str, Any]]:
+    def get_all_documents(self, include_deleted: bool = False) -> List[Dict[str, object]]:
         try:
             with self.db.connection() as conn:
                 cursor = conn.cursor()
@@ -140,7 +142,7 @@ class DocumentService:
             logger.error(f"[DOCS] get_all_documents failed: {e}")
             return []
 
-    def search_documents_metadata(self, query: str) -> List[Dict[str, Any]]:
+    def search_documents_metadata(self, query: str) -> List[Dict[str, object]]:
         try:
             with self.db.connection() as conn:
                 cursor = conn.cursor()
@@ -200,7 +202,7 @@ class DocumentService:
             doc_id=doc_id,
         )
 
-        def _set_clean(did=doc_id, txt=text_content, db=self.db):
+        def _set_clean(did: str = doc_id, txt: str = text_content, db: DatabaseService = self.db) -> None:
             with db.connection() as conn:
                 conn.execute(
                     "UPDATE documents SET clean_text = ? WHERE id = ?",
@@ -225,7 +227,7 @@ class DocumentService:
         try:
             _params = (status, error_message, chunk_count, doc_id)
 
-            def _update(params=_params, db=self.db):
+            def _update(params: tuple[object, ...] = _params, db: DatabaseService = self.db) -> None:
                 with db.connection() as conn:
                     cursor = conn.cursor()
                     cursor.execute(
@@ -245,7 +247,7 @@ class DocumentService:
 
     def update_clean_text(self, doc_id: str, clean_text: str) -> None:
         try:
-            def _update(did=doc_id, txt=clean_text, db=self.db):
+            def _update(did: str = doc_id, txt: str = clean_text, db: DatabaseService = self.db) -> None:
                 with db.connection() as conn:
                     conn.execute(
                         "UPDATE documents SET clean_text = ?, updated_at = datetime('now') WHERE id = ?",
@@ -257,7 +259,7 @@ class DocumentService:
 
     def update_summary(self, doc_id: str, summary: str) -> None:
         try:
-            def _update(did=doc_id, s=summary, db=self.db):
+            def _update(did: str = doc_id, s: str = summary, db: DatabaseService = self.db) -> None:
                 with db.connection() as conn:
                     conn.execute(
                         "UPDATE documents SET summary = ?, updated_at = datetime('now') WHERE id = ?",
@@ -270,16 +272,16 @@ class DocumentService:
     def update_extracted_metadata(
         self,
         doc_id: str,
-        metadata: dict,
+        metadata: dict[str, object],
         summary: str,
-        summary_embedding: list = None,
-        clean_text: str = None,
-        language: str = None,
-        fingerprint: str = None,
-        page_count: int = None,
+        summary_embedding: Optional[list[float]] = None,
+        clean_text: Optional[str] = None,
+        language: Optional[str] = None,
+        fingerprint: Optional[str] = None,
+        page_count: Optional[int] = None,
     ) -> None:
         set_parts = ["extracted_metadata = ?", "summary = ?", "updated_at = datetime('now')"]
-        params: list = [json.dumps(metadata), summary]
+        params: list[object] = [json.dumps(metadata), summary]
 
         if clean_text is not None:
             set_parts.append("clean_text = ?")
@@ -300,12 +302,12 @@ class DocumentService:
         sql = f"UPDATE documents SET {', '.join(set_parts)} WHERE id = ?"
 
         def _update_meta(
-            stmt=sql,
-            p=params,
-            did=doc_id,
-            emb=packed_emb,
-            db=self.db,
-        ):
+            stmt: str = sql,
+            p: list[object] = params,
+            did: str = doc_id,
+            emb: Optional[bytes] = packed_emb,
+            db: DatabaseService = self.db,
+        ) -> None:
             with db.connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute(stmt, p)
@@ -327,7 +329,7 @@ class DocumentService:
 
     def set_supersedes(self, doc_id: str, supersedes_id: str) -> None:
         try:
-            def _supersede(did=doc_id, sid=supersedes_id, db=self.db):
+            def _supersede(did: str = doc_id, sid: str = supersedes_id, db: DatabaseService = self.db) -> None:
                 with db.connection() as conn:
                     cursor = conn.cursor()
                     cursor.execute(
@@ -349,10 +351,10 @@ class DocumentService:
     def find_duplicates(
         self,
         file_hash: str,
-        summary_embedding: Optional[list] = None,
+        summary_embedding: Optional[list[float]] = None,
         text_length: int = 0,
         exclude_id: Optional[str] = None,
-    ) -> List[Dict[str, Any]]:
+    ) -> List[Dict[str, object]]:
         results = []
 
         try:
@@ -428,7 +430,7 @@ class DocumentService:
             from services.time_utils import utc_now
             purge_after = utc_now() + timedelta(days=PURGE_WINDOW_DAYS)
 
-            def _soft_delete(did=doc_id, pa=purge_after, db=self.db):
+            def _soft_delete(did: str = doc_id, pa: object = purge_after, db: DatabaseService = self.db) -> int:
                 with db.connection() as conn:
                     cursor = conn.cursor()
                     cursor.execute(
@@ -442,7 +444,7 @@ class DocumentService:
                     cursor.close()
                 return affected
 
-            updated = self._write_queue.submit_sync(_soft_delete) > 0
+            updated = cast(int, self._write_queue.submit_sync(_soft_delete)) > 0
 
             if updated:
                 logger.info("[DOCS] Soft-deleted document %s", safe(doc_id))
@@ -465,7 +467,7 @@ class DocumentService:
 
     def restore(self, doc_id: str) -> bool:
         try:
-            def _restore(did=doc_id, db=self.db):
+            def _restore(did: str = doc_id, db: DatabaseService = self.db) -> int:
                 with db.connection() as conn:
                     cursor = conn.cursor()
                     cursor.execute(
@@ -479,7 +481,7 @@ class DocumentService:
                     cursor.close()
                 return affected
 
-            updated = self._write_queue.submit_sync(_restore) > 0
+            updated = cast(int, self._write_queue.submit_sync(_restore)) > 0
 
             if updated:
                 logger.info("[DOCS] Restored document %s", safe(doc_id))
@@ -506,7 +508,7 @@ class DocumentService:
             if not doc:
                 return False
 
-            def _hard_delete(did=doc_id, db=self.db):
+            def _hard_delete(did: str = doc_id, db: DatabaseService = self.db) -> int:
                 with db.connection() as conn:
                     cursor = conn.cursor()
                     # Clean up virtual tables BEFORE the document delete —
@@ -522,7 +524,7 @@ class DocumentService:
                     cursor.close()
                 return affected
 
-            deleted = self._write_queue.submit_sync(_hard_delete) > 0
+            deleted = cast(int, self._write_queue.submit_sync(_hard_delete)) > 0
 
             # Cascade-delete data_graph artifacts for this document.
             if deleted:
@@ -578,7 +580,7 @@ class DocumentService:
     # Watched folder helpers
     # ─────────────────────────────────────────────
 
-    def get_documents_by_watched_folder(self, folder_id: str) -> List[Dict[str, Any]]:
+    def get_documents_by_watched_folder(self, folder_id: str) -> List[Dict[str, object]]:
         try:
             with self.db.connection() as conn:
                 cursor = conn.cursor()
@@ -601,9 +603,9 @@ class DocumentService:
             logger.error(f"[DOCS] get_documents_by_watched_folder failed: {e}")
             return []
 
-    def update_tags(self, doc_id: str, tags: list) -> None:
+    def update_tags(self, doc_id: str, tags: list[str]) -> None:
         try:
-            def _update_tags(did=doc_id, t=json.dumps(tags), db=self.db):
+            def _update_tags(did: str = doc_id, t: str = json.dumps(tags), db: DatabaseService = self.db) -> None:
                 with db.connection() as conn:
                     cursor = conn.cursor()
                     cursor.execute(
@@ -618,12 +620,12 @@ class DocumentService:
 
     def update_classification(
         self, doc_id: str,
-        category: str = None, project: str = None,
-        doc_date: str = None, lock: bool = False,
+        category: Optional[str] = None, project: Optional[str] = None,
+        doc_date: Optional[str] = None, lock: bool = False,
     ) -> None:
         try:
             set_parts = ["updated_at = datetime('now')"]
-            params: list = []
+            params: list[object] = []
             if category is not None:
                 set_parts.append("doc_category = ?")
                 params.append(category)
@@ -638,10 +640,10 @@ class DocumentService:
             params.append(doc_id)
 
             def _update_class(
-                stmt=f"UPDATE documents SET {', '.join(set_parts)} WHERE id = ?",
-                p=params,
-                db=self.db,
-            ):
+                stmt: str = f"UPDATE documents SET {', '.join(set_parts)} WHERE id = ?",
+                p: list[object] = params,
+                db: DatabaseService = self.db,
+            ) -> None:
                 with db.connection() as conn:
                     cursor = conn.cursor()
                     cursor.execute(stmt, p)
@@ -651,7 +653,7 @@ class DocumentService:
         except Exception as e:
             logger.error(f"[DOCS] update_classification failed: {e}")
 
-    def get_classification_groups(self, field: str) -> List[Dict[str, Any]]:
+    def get_classification_groups(self, field: str) -> List[Dict[str, object]]:
         if field not in ('doc_category', 'doc_project', 'doc_date'):
             return []
         try:
@@ -683,7 +685,7 @@ class DocumentService:
 
     def update_file_path(self, doc_id: str, new_path: str) -> None:
         try:
-            def _update_path(did=doc_id, path=new_path, db=self.db):
+            def _update_path(did: str = doc_id, path: str = new_path, db: DatabaseService = self.db) -> None:
                 with db.connection() as conn:
                     cursor = conn.cursor()
                     cursor.execute(
@@ -700,7 +702,7 @@ class DocumentService:
     # Internal helpers
     # ─────────────────────────────────────────────
 
-    def _row_to_dict(self, row) -> Dict[str, Any]:
+    def _row_to_dict(self, row: sqlite3.Row) -> Dict[str, object]:
         return {
             'id': row[0],
             'original_name': row[1],

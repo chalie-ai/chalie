@@ -7,11 +7,14 @@ import os
 import queue
 import threading
 from pathlib import Path
-from typing import List, Optional
+from typing import TYPE_CHECKING, List, Optional, cast
 
 import numpy as np
 
 from services.onnx_session import CPU_PROVIDER, build_session, choose_providers
+
+if TYPE_CHECKING:
+    from services.memory_store import MemoryStore
 
 logger = logging.getLogger(__name__)
 
@@ -70,7 +73,7 @@ def _resolve_thread_count() -> int:
     return min(4, max(2, cpu // 2))
 
 
-def _build_session(providers: Optional[List[str]] = None):
+def _build_session(providers: Optional[List[str]] = None) -> tuple[object, Path]:
     import onnxruntime as ort
     from huggingface_hub import hf_hub_download
 
@@ -130,7 +133,7 @@ def _build_session(providers: Optional[List[str]] = None):
     return session, onnx_path
 
 
-def _rebuild_session_cpu_only():
+def _rebuild_session_cpu_only() -> object:
     global _session
     with _model_lock:
         session, _ = _build_session(providers=[CPU_PROVIDER])
@@ -138,7 +141,7 @@ def _rebuild_session_cpu_only():
         return session
 
 
-def _get_session_and_tokenizer():
+def _get_session_and_tokenizer() -> tuple[object, object]:
     global _session, _tokenizer, _output_names, _input_names
 
     if _session is not None and _tokenizer is not None:
@@ -152,8 +155,9 @@ def _get_session_and_tokenizer():
 
         session, onnx_path = _build_session()
 
-        _output_names = [o.name for o in session.get_outputs()]
-        _input_names = [i.name for i in session.get_inputs()]
+        from onnxruntime import InferenceSession as _IS  # noqa: PLC0415
+        _output_names = [o.name for o in cast(_IS, session).get_outputs()]
+        _input_names = [i.name for i in cast(_IS, session).get_inputs()]
         logger.debug(f"[EMBEDDING] Inputs: {_input_names}, outputs: {_output_names}")
 
         # Load tokenizer — cached in HF default cache after first download
@@ -176,18 +180,20 @@ def _mean_pool(last_hidden_state: np.ndarray, attention_mask: np.ndarray) -> np.
     mask = attention_mask[..., np.newaxis].astype(np.float32)
     sum_emb = (last_hidden_state * mask).sum(axis=1)
     sum_mask = mask.sum(axis=1).clip(min=1e-9)
-    return sum_emb / sum_mask
+    return cast(np.ndarray, sum_emb / sum_mask)
 
 
 def _l2_normalize(embeddings: np.ndarray) -> np.ndarray:
     norms = np.linalg.norm(embeddings, axis=-1, keepdims=True).clip(min=1e-9)
-    return embeddings / norms
+    return cast(np.ndarray, embeddings / norms)
 
 
 def _encode_batch(texts: List[str]) -> np.ndarray:
+    from onnxruntime import InferenceSession as _IS  # noqa: PLC0415
+    from transformers import PreTrainedTokenizerBase as _Tok  # noqa: PLC0415
     session, tokenizer = _get_session_and_tokenizer()
 
-    encoded = tokenizer(
+    encoded = cast(_Tok, tokenizer)(
         texts,
         return_tensors="np",
         padding=True,
@@ -202,17 +208,17 @@ def _encode_batch(texts: List[str]) -> np.ndarray:
         feed["token_type_ids"] = np.zeros_like(input_ids)
 
     try:
-        outputs = session.run(None, feed)
+        outputs = cast(_IS, session).run(None, feed)
     except Exception as e:
         # Accelerated providers (CoreML, CUDA, etc.) can init cleanly but fail
         # on specific runtime shapes/tokens. Rebuild once as CPU-only and retry.
-        if session.get_providers() != ["CPUExecutionProvider"]:
+        if cast(_IS, session).get_providers() != ["CPUExecutionProvider"]:
             logger.warning(
-                f"[EMBEDDING] Inference failed on {session.get_providers()}: {e}. "
+                f"[EMBEDDING] Inference failed on {cast(_IS, session).get_providers()}: {e}. "
                 f"Rebuilding session as CPU-only for the rest of this process."
             )
             session = _rebuild_session_cpu_only()
-            outputs = session.run(None, feed)
+            outputs = cast(_IS, session).run(None, feed)
         else:
             raise
 
@@ -230,7 +236,7 @@ def _cache_key(text: str) -> str:
     return _CACHE_PREFIX + hashlib.sha256(text.encode('utf-8')).hexdigest()[:16]
 
 
-def _get_store():
+def _get_store() -> object:
     from services.memory_client import MemoryClientService
     return MemoryClientService.create_connection()
 
@@ -246,7 +252,7 @@ def _get_store():
 # Worker is started lazily on the first job submission so that importing this
 # module in tests never spawns a real ONNX thread.
 
-_embedding_queue: queue.Queue = queue.Queue()
+_embedding_queue: queue.Queue[tuple[List[str], concurrent.futures.Future[np.ndarray]]] = queue.Queue()
 _embedding_worker_started = threading.Lock()
 _embedding_worker_running = False
 
@@ -273,9 +279,9 @@ def _ensure_worker_started() -> None:
         _embedding_worker_running = True
 
 
-def _submit_for_inference(texts: List[str], mp=None) -> np.ndarray:
+def _submit_for_inference(texts: List[str], mp: object = None) -> np.ndarray:
     _ensure_worker_started()
-    future: concurrent.futures.Future = concurrent.futures.Future()
+    future: concurrent.futures.Future[np.ndarray] = concurrent.futures.Future()
     _embedding_queue.put((texts, future))
     metrics = getattr(mp, '_metrics', None) if mp is not None else None
     if metrics is None:
@@ -297,61 +303,61 @@ def get_embedding_service() -> 'EmbeddingService':
 
 class EmbeddingService:
 
-    def __init__(self, config: dict = None):
+    def __init__(self, config: Optional[dict[str, object]] = None) -> None:
         self.config = config or {}
         self.embedding_dimensions = self.config.get('embedding_dimensions', 768)
 
-    def _cache_get(self, text: str) -> Optional[list]:
+    def _cache_get(self, text: str) -> Optional[list[float]]:
         try:
             store = _get_store()
-            raw = store.get(_cache_key(text))
+            raw = cast("MemoryStore", store).get(_cache_key(text))
             if raw is not None:
-                return json.loads(raw)
+                return cast(list[float], json.loads(raw))
         except Exception:
             pass
         return None
 
-    def _cache_put(self, text: str, embedding: list) -> None:
+    def _cache_put(self, text: str, embedding: list[float]) -> None:
         try:
             store = _get_store()
-            store.set(_cache_key(text), json.dumps(embedding), ex=_CACHE_TTL)
+            cast("MemoryStore", store).set(_cache_key(text), json.dumps(embedding), ex=_CACHE_TTL)
         except Exception:
             pass
 
-    def generate_embedding(self, text: str, mp=None) -> list:
+    def generate_embedding(self, text: str, mp: object = None) -> list[float]:
         # Cache check FIRST — bypass the queue entirely on a hit.
         cached = self._cache_get(text)
         if cached is not None:
             return cached
 
         try:
-            embedding = _submit_for_inference([text], mp)[0].tolist()
+            embedding = cast(list[float], _submit_for_inference([text], mp)[0].tolist())
             self._cache_put(text, embedding)
             return embedding
         except Exception as e:
             logger.error(f"[EMBEDDING] Generation failed: {e}")
             raise
 
-    def generate_embedding_np(self, text: str, mp=None) -> np.ndarray:
+    def generate_embedding_np(self, text: str, mp: object = None) -> np.ndarray:
         # Cache check FIRST — bypass the queue entirely on a hit.
         cached = self._cache_get(text)
         if cached is not None:
             return np.array(cached, dtype=np.float32)
 
         try:
-            embedding = _submit_for_inference([text], mp)[0]
+            embedding = cast(np.ndarray, _submit_for_inference([text], mp)[0])
             self._cache_put(text, embedding.tolist())
             return embedding
         except Exception as e:
             logger.error(f"[EMBEDDING] Generation failed: {e}")
             raise
 
-    def generate_embeddings_batch(self, texts: List[str], mp=None) -> List[np.ndarray]:
+    def generate_embeddings_batch(self, texts: List[str], mp: object = None) -> List[np.ndarray]:
         if not texts:
             return []
 
         try:
-            results = []
+            results: list[np.ndarray] = []
             # Process in chunks of 32 to bound memory usage per job.
             chunk_size = 32
             for i in range(0, len(texts), chunk_size):

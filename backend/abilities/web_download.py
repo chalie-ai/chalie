@@ -25,7 +25,7 @@ import logging
 import os
 import tempfile
 import uuid
-from typing import ClassVar
+from typing import ClassVar, cast
 from urllib.parse import urlparse
 
 import requests
@@ -52,7 +52,7 @@ class WebDownloadAbility(Ability):
     #: run() (instead of run() returning a status=success "url required" prose).
     #: Runs AFTER seam key-healing, so a model's ``uri``/``source``/etc. has already
     #: been canonicalised to ``url`` via ``VARIANTS[Keys.url]`` before this fires.
-    ACTION_REQUIRED: ClassVar[dict] = {"": (Keys.url,)}
+    ACTION_REQUIRED: ClassVar[dict[str, tuple[str, ...]]] = {"": (Keys.url,)}
 
     def get_name(self) -> str:
         return "web_download"
@@ -73,7 +73,7 @@ class WebDownloadAbility(Ability):
     def get_search_tooltip(self) -> str:
         return "File download from URL"
 
-    _PARAMETERS: ClassVar[dict] = {
+    _PARAMETERS: ClassVar[dict[str, object]] = {
         "type": "object",
         "properties": {
             Keys.url: {
@@ -88,10 +88,10 @@ class WebDownloadAbility(Ability):
         "required": [Keys.url],
     }
 
-    def get_parameters(self) -> dict:
+    def get_parameters(self) -> dict[str, object]:
         return self._PARAMETERS
 
-    def run(self, params: dict) -> ToolResult:
+    def run(self, params: dict[str, object]) -> ToolResult:
         url = self.param(params, Keys.url, required=True)
         url = str(url).strip()
 
@@ -105,7 +105,7 @@ class WebDownloadAbility(Ability):
             )
 
         timeout_min = self.param(params, Keys.timeout, default=15, clamp=(1, 120))
-        timeout_sec = float(timeout_min) * 60
+        timeout_sec = float(cast(float, timeout_min)) * 60
 
         dest_path = _build_dest_path(url)
         try:

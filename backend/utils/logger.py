@@ -3,7 +3,7 @@ import logging
 import traceback
 from contextvars import ContextVar
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Optional, Union
 
 
 # ---------------------------------------------------------------------------
@@ -29,7 +29,7 @@ def set_correlation_id(value: str) -> None:
 class _ChalieJsonFormatter(logging.Formatter):
 
     def format(self, record: logging.LogRecord) -> str:
-        entry = {
+        entry: dict[str, Union[str, list[str]]] = {
             "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
             "level": record.levelname,
             "logger": record.name,

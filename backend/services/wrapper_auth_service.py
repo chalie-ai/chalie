@@ -1,13 +1,17 @@
 import hashlib
 import json
 import logging
-
-from utils.data_utils import parse_json_column
 import secrets
 import uuid
-from typing import Optional
+from typing import Optional, cast
 
-from services.database_service import get_shared_db_service
+import sqlite3
+
+import flask
+
+from utils.data_utils import parse_json_column
+
+from services.database_service import DatabaseService, get_shared_db_service
 from services.log_utils import safe
 from services.time_utils import utc_now
 
@@ -19,7 +23,7 @@ def _hash_token(raw_token: str) -> str:
 
 
 class WrapperAuthService:
-    def __init__(self, db=None):
+    def __init__(self, db: DatabaseService | None = None) -> None:
         self._db = db or get_shared_db_service()
 
     # ------------------------------------------------------------------
@@ -29,9 +33,9 @@ class WrapperAuthService:
     def create_token(
         self,
         name: str,
-        capabilities: Optional[dict] = None,
-        permissions: Optional[dict] = None,
-        metadata: Optional[dict] = None,
+        capabilities: Optional[dict[str, object]] = None,
+        permissions: Optional[dict[str, object]] = None,
+        metadata: Optional[dict[str, object]] = None,
         wrapper_id_override: Optional[str] = None,
     ) -> tuple[str, str]:
         """Create a new wrapper token and persist its hash.
@@ -77,7 +81,7 @@ class WrapperAuthService:
     # Token validation
     # ------------------------------------------------------------------
 
-    def validate_bearer(self, request) -> Optional[str]:
+    def validate_bearer(self, request: "flask.Request") -> Optional[str]:
         """Validate the ``Authorization: Bearer <token>`` header on a Flask request.
 
         On success, slides ``last_seen_at`` to the current UTC time.
@@ -109,7 +113,7 @@ class WrapperAuthService:
                 cursor.close()
                 return None
 
-            wrapper_id = row[0]
+            wrapper_id = cast(str, row[0])
 
             # Slide last_seen_at
             cursor.execute(
@@ -139,12 +143,12 @@ class WrapperAuthService:
         if wrapper is None:
             return False
 
-        perms = wrapper.get("permissions", {})
+        perms = cast("dict[str, object]", wrapper.get("permissions", {}))
 
         if operation == "broadcast":
             return bool(perms.get("broadcast", False))
 
-        allowed_resources = perms.get(operation, [])
+        allowed_resources = cast("list[str]", perms.get(operation, []))
         return resource in allowed_resources
 
     # ------------------------------------------------------------------
@@ -176,7 +180,7 @@ class WrapperAuthService:
     # Listing / retrieval
     # ------------------------------------------------------------------
 
-    def list_wrappers(self) -> list[dict]:
+    def list_wrappers(self) -> list[dict[str, object]]:
         with self._db.connection() as conn:
             cursor = conn.cursor()
             cursor.execute(
@@ -193,7 +197,7 @@ class WrapperAuthService:
 
         return [self._row_to_dict(row) for row in rows]
 
-    def get_wrapper(self, wrapper_id: str) -> Optional[dict]:
+    def get_wrapper(self, wrapper_id: str) -> Optional[dict[str, object]]:
         with self._db.connection() as conn:
             cursor = conn.cursor()
             cursor.execute(
@@ -213,7 +217,7 @@ class WrapperAuthService:
             return None
         return self._row_to_dict(row)
 
-    def update_capabilities(self, wrapper_id: str, capabilities: dict) -> bool:
+    def update_capabilities(self, wrapper_id: str, capabilities: dict[str, object]) -> bool:
         with self._db.connection() as conn:
             cursor = conn.cursor()
             cursor.execute(
@@ -235,7 +239,7 @@ class WrapperAuthService:
     # ------------------------------------------------------------------
 
     @staticmethod
-    def _row_to_dict(row) -> dict:
+    def _row_to_dict(row: sqlite3.Row) -> dict[str, object]:
         return {
             "id": row[0],
             "wrapper_id": row[1],

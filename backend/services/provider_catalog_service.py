@@ -13,7 +13,7 @@ constant: no file I/O, no path resolution.
 
 from __future__ import annotations
 
-CURATED_PROVIDERS: list[dict] = [
+CURATED_PROVIDERS: list[dict[str, object]] = [
     {"id": "ollama", "name": "Ollama (local)", "platform": "ollama",
      "host": "http://localhost:11434", "needs_key": False},
     {"id": "openai", "name": "OpenAI", "platform": "openai",
@@ -51,5 +51,5 @@ CURATED_PROVIDERS: list[dict] = [
 ]
 
 
-def get_catalog() -> list[dict]:
+def get_catalog() -> list[dict[str, object]]:
     return CURATED_PROVIDERS

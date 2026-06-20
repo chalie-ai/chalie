@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import asdict, dataclass
+from typing import cast
 
 logger = logging.getLogger(__name__)
 
@@ -49,14 +50,14 @@ class ClientContext:
             from services.time_utils import utc_now  # noqa: PLC0415
 
             location = get_location()
-            loc_name = location.get("name") or ""
+            loc_name = cast(str, location.get("name") or "")
             city, country = "", ""
             if "," in loc_name:
                 city, country = [p.strip() for p in loc_name.split(",", 1)]
 
             return cls(
-                lat=location.get("lat"),
-                lon=location.get("lon"),
+                lat=cast(float | None, location.get("lat")),
+                lon=cast(float | None, location.get("lon")),
                 location_name=loc_name,
                 city=city,
                 country=country,
@@ -70,6 +71,6 @@ class ClientContext:
             logger.warning("[ClientContext] snapshot failed: %s", exc)
             return None
 
-    def as_dict(self) -> dict:
+    def as_dict(self) -> dict[str, object]:
         """Flatten to the dict shape abilities read off ``self.telemetry``."""
         return asdict(self)

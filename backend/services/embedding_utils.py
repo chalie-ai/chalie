@@ -1,9 +1,9 @@
 
 import struct
-from typing import Optional
+from typing import Optional, cast
 
 
-def pack_embedding(embedding) -> Optional[bytes]:
+def pack_embedding(embedding: object) -> Optional[bytes]:
     if embedding is None:
         return None
     if isinstance(embedding, bytes):
@@ -14,4 +14,4 @@ def pack_embedding(embedding) -> Optional[bytes]:
     if hasattr(embedding, 'tolist'):
         flat = embedding.tolist()
         return struct.pack(f'{len(flat)}f', *flat)
-    return embedding
+    return cast(bytes, embedding)

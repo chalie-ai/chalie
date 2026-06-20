@@ -10,6 +10,8 @@ source_type='screenshot' → ready doc → vision reads it on the delegate chann
 """
 
 import io
+import sqlite3
+from typing import cast
 
 import pytest
 
@@ -32,7 +34,7 @@ def _invoice_png_path() -> str:
 
     img = Image.new("RGB", (480, 160), "white")
     draw = ImageDraw.Draw(img)
-    font = None
+    font: ImageFont.FreeTypeFont | ImageFont.ImageFont | None = None
     for candidate in ("DejaVuSans-Bold.ttf", "Arial Bold.ttf", "DejaVuSans.ttf"):
         try:
             font = ImageFont.truetype(candidate, 72)
@@ -50,7 +52,7 @@ def _invoice_png_path() -> str:
     return path
 
 
-def test_screenshot_ingest_lands_in_screenshots_subdir_and_vision_reads_it(db):
+def test_screenshot_ingest_lands_in_screenshots_subdir_and_vision_reads_it(db: sqlite3.Connection) -> None:
     ProviderDbService(get_shared_db_service()).set_vision_provider(None)
     service = DocumentService(get_shared_db_service())
 
@@ -64,10 +66,10 @@ def test_screenshot_ingest_lands_in_screenshots_subdir_and_vision_reads_it(db):
 
     assert not ingested.get("error"), ingested
     assert ingested["status"] == "ready", ingested
-    doc = service.get_document(ingested["id"])
+    doc = cast(dict[str, object], service.get_document(cast(str, ingested["id"])))
     assert doc["source_type"] == "screenshot"
-    assert doc["file_path"].startswith("screenshots/"), doc["file_path"]
-    stored = FileMapperService.get_documents_path(doc["file_path"])
+    assert cast(str, doc["file_path"]).startswith("screenshots/"), doc["file_path"]
+    stored = FileMapperService.get_documents_path(cast(str, doc["file_path"]))
     assert stored.is_file(), f"file missing on disk: {stored}"
     assert FileMapperService.validate_document_path(str(stored))
 

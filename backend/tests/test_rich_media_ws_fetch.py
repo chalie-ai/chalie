@@ -20,6 +20,9 @@ Additionally tested:
 """
 
 import json
+import sqlite3
+from typing import cast
+
 import pytest
 
 pytestmark = pytest.mark.integration
@@ -57,16 +60,16 @@ def _make_tool_result(ordinal: int, location: str = "London, GB") -> str:
     return json.dumps(payload) + f"\n\n<span id='weather_{ordinal}'>"
 
 
-def _seed_transcript(db, channel: str, role: str, content: str = "x") -> int:
+def _seed_transcript(db: sqlite3.Connection, channel: str, role: str, content: str = "x") -> int:
     db.execute(
         "INSERT INTO transcript (channel, role, content, xml_migrated) "
         "VALUES (?, ?, ?, 1)",
         (channel, role, content),
     )
-    return db.execute("SELECT last_insert_rowid()").fetchone()[0]
+    return cast(int, db.execute("SELECT last_insert_rowid()").fetchone()[0])
 
 
-def _seed_tool_call(db, transcript_id: int, ordinal: int, location: str = "London, GB") -> None:
+def _seed_tool_call(db: sqlite3.Connection, transcript_id: int, ordinal: int, location: str = "London, GB") -> None:
     db.execute(
         "INSERT INTO tool_calls (transcript_id, tool_name, params, result, created_at) "
         "VALUES (?, 'weather', '{}', ?, datetime('now'))",
@@ -77,7 +80,7 @@ def _seed_tool_call(db, transcript_id: int, ordinal: int, location: str = "Londo
 class TestFetchByTranscriptIds:
     """The new function pairs tool_calls to exact transcript IDs."""
 
-    def test_user_channel_single_id_returns_weather_row(self, db):
+    def test_user_channel_single_id_returns_weather_row(self, db: sqlite3.Connection) -> None:
         tid = _seed_transcript(db, "user", "user", "What is the weather?")
         _seed_tool_call(db, tid, 1)
         db.commit()
@@ -87,9 +90,9 @@ class TestFetchByTranscriptIds:
 
         assert len(rows) == 1
         assert rows[0]["tool_name"] == "weather"
-        assert "<span id='weather_1'>" in rows[0]["result"]
+        assert "<span id='weather_1'>" in cast(str, rows[0]["result"])
 
-    def test_user_channel_multi_call_turn_returns_all(self, db):
+    def test_user_channel_multi_call_turn_returns_all(self, db: sqlite3.Connection) -> None:
         tid = _seed_transcript(db, "user", "user", "Compare London and Tokyo")
         _seed_tool_call(db, tid, 1, "London, GB")
         _seed_tool_call(db, tid, 2, "Tokyo, JP")
@@ -99,11 +102,11 @@ class TestFetchByTranscriptIds:
         rows = SegmentService._fetch_tool_calls([tid])
 
         assert len(rows) == 2
-        results = " ".join(r["result"] for r in rows)
+        results = " ".join(cast(str, r["result"]) for r in rows)
         assert "<span id='weather_1'>" in results
         assert "<span id='weather_2'>" in results
 
-    def test_subagent_channel_resolved_by_explicit_id(self, db):
+    def test_subagent_channel_resolved_by_explicit_id(self, db: sqlite3.Connection) -> None:
         """Regression sentinel: subagent rows MUST be reachable when their
         transcript IDs are passed explicitly. The old recency lookup with its
         ``role='user'`` filter silently missed these — this test exists to
@@ -121,9 +124,9 @@ class TestFetchByTranscriptIds:
             "transcript_id. If this fails the channel/role filter has been "
             "reintroduced and the subagent rich-media bug is back."
         )
-        assert "<span id='weather_1'>" in rows[0]["result"]
+        assert "<span id='weather_1'>" in cast(str, rows[0]["result"])
 
-    def test_concurrent_dmn_write_does_not_pollute_results(self, db):
+    def test_concurrent_dmn_write_does_not_pollute_results(self, db: sqlite3.Connection) -> None:
         """Regression sentinel against the DMN race. A concurrent user-channel
         row written *after* the assistant turn must not appear in the result
         when the lookup is by ID.
@@ -139,13 +142,13 @@ class TestFetchByTranscriptIds:
         rows = SegmentService._fetch_tool_calls([ump_tid])
 
         assert len(rows) == 1
-        assert "<span id='weather_1'>" in rows[0]["result"]
-        assert "Mars" not in rows[0]["result"], (
+        assert "<span id='weather_1'>" in cast(str, rows[0]["result"])
+        assert "Mars" not in cast(str, rows[0]["result"]), (
             "DMN row leaked into the assistant turn — recency lookup has "
             "been reintroduced."
         )
 
-    def test_empty_id_list_returns_empty(self):
+    def test_empty_id_list_returns_empty(self) -> None:
         from services.segment_service import SegmentService
         assert SegmentService._fetch_tool_calls([]) == []
 
@@ -153,7 +156,7 @@ class TestFetchByTranscriptIds:
 class TestSegmentServiceBuild:
     """SegmentService.build() must always return at least one segment."""
 
-    def test_no_transcript_ids_emits_text_segment(self):
+    def test_no_transcript_ids_emits_text_segment(self) -> None:
         from services.segment_service import SegmentService
 
         segments = SegmentService.build("Here is your result.", [])
@@ -162,11 +165,9 @@ class TestSegmentServiceBuild:
         assert segments[0]["type"] == "text"
         assert segments[0]["content"] == "Here is your result."
 
-    def test_html_content_no_tool_calls_emits_text_segment(self):
+    def test_html_content_no_tool_calls_emits_text_segment(self) -> None:
         from services.segment_service import SegmentService
 
         segments = SegmentService.build("<p>It is <b>sunny</b> today.</p>", [])
 
         assert all(s["type"] == "text" for s in segments)
-
-

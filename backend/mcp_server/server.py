@@ -20,11 +20,13 @@ import sqlite3
 
 import uvicorn
 from starlette.applications import Starlette
-from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 from starlette.requests import Request
-from starlette.responses import JSONResponse
+from starlette.responses import JSONResponse, Response
 
 from mcp.server.fastmcp import FastMCP
+
+from services.database_service import DatabaseService
 
 logger = logging.getLogger(__name__)
 
@@ -40,7 +42,7 @@ _current_wrapper_id: contextvars.ContextVar[str | None] = contextvars.ContextVar
 class BearerTokenMiddleware(BaseHTTPMiddleware):
     """ASGI middleware that validates Bearer tokens against wrapper_tokens."""
 
-    async def dispatch(self, request: Request, call_next):
+    async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
         auth_header = request.headers.get("authorization", "")
         if not auth_header.startswith("Bearer "):
             return JSONResponse(
@@ -91,7 +93,7 @@ class BearerTokenMiddleware(BaseHTTPMiddleware):
         if row is None:
             return None
 
-        wrapper_id = row[0] if isinstance(row, (tuple, list)) else row["wrapper_id"]
+        wrapper_id: str = row[0] if isinstance(row, (tuple, list)) else row["wrapper_id"]
 
         now = utc_now().isoformat()
         with db.connection() as conn:
@@ -149,7 +151,7 @@ def create_mcp_server(host: str = "0.0.0.0", port: int = _DEFAULT_PORT) -> FastM
             agent_name, project_or_task_name, loop_in_human, wrapper_id,
         )
 
-        def _run():
+        def _run() -> str:
             config = EAMPConfig(
                 agent_name=agent_name,
                 project=project_or_task_name,
@@ -199,7 +201,7 @@ def run_mcp_server() -> None:
     uvicorn.run(app, host="0.0.0.0", port=port, log_level="info")
 
 
-def _ensure_mcp_token(db) -> None:
+def _ensure_mcp_token(db: DatabaseService) -> None:
     """Generate an MCP auth token on first boot if none exists."""
     from services.wrapper_auth_service import WrapperAuthService
     from services.settings_service import SettingsService

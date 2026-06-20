@@ -23,7 +23,21 @@ from __future__ import annotations
 import json
 import logging
 import time
-from typing import ClassVar, Optional
+from collections.abc import Sequence
+from typing import TYPE_CHECKING, Callable, ClassVar, Optional, cast
+
+if TYPE_CHECKING:
+    from typing import Protocol
+
+    import anthropic as _anthropic_mod
+
+    _Msg = dict[str, object]
+
+    class _Block(Protocol):
+        id: object
+        name: object
+        input: object
+        text: str
 
 from services.llm_clients.base import ProviderClient
 from services.provider_api import (
@@ -43,22 +57,22 @@ _THINKING_BUDGETS: dict[str, int] = {
 }
 
 
-def _anthropic_convert_messages(messages: list) -> list:
+def _anthropic_convert_messages(messages: "list[_Msg]") -> "list[_Msg]":
     """Convert normalised messages to Anthropic's content-block format.
 
     Handles regular messages, assistant+tool_calls, tool results, and
     inline images (base64).
     """
-    result = []
+    result: "list[_Msg]" = []
     i = 0
     while i < len(messages):
         msg = messages[i]
         if msg['role'] == 'assistant' and msg.get('tool_calls'):
-            content = []
+            content: "list[_Msg]" = []
             text = msg.get('content', '')
             if text:
                 content.append({"type": "text", "text": text})
-            for tc in msg['tool_calls']:
+            for tc in cast("list[_Msg]", msg['tool_calls']):
                 content.append({
                     "type": "tool_use",
                     "id": tc['id'],
@@ -67,7 +81,7 @@ def _anthropic_convert_messages(messages: list) -> list:
                 })
             result.append({"role": "assistant", "content": content})
         elif msg['role'] == 'tool':
-            tool_results = []
+            tool_results: "list[_Msg]" = []
             while i < len(messages) and messages[i]['role'] == 'tool':
                 tm = messages[i]
                 tool_results.append({
@@ -79,9 +93,9 @@ def _anthropic_convert_messages(messages: list) -> list:
             result.append({"role": "user", "content": tool_results})
             continue
         else:
-            img = msg.get('image')
+            img = cast("_Msg", msg.get('image'))
             if img:
-                blocks = []
+                blocks: "list[_Msg]" = []
                 if msg.get('content'):
                     blocks.append({"type": "text", "text": msg['content']})
                 blocks.append({
@@ -99,20 +113,20 @@ def _anthropic_convert_messages(messages: list) -> list:
     return result
 
 
-def _parse_content_blocks(content) -> tuple[str, Optional[list], Optional[str]]:
+def _parse_content_blocks(content: Sequence[object]) -> tuple[str, Optional[list[dict[str, object]]], Optional[str]]:
     """Extract (text, tool_calls, thinking_block) from an Anthropic response content list."""
     text_parts: list[str] = []
-    tool_calls: list[dict] = []
+    tool_calls: list[dict[str, object]] = []
     thinking_block: Optional[str] = None
     for block in (content or []):
         block_type = getattr(block, 'type', None)
         if block_type == 'tool_use':
-            tool_calls.append({'id': block.id, 'name': block.name, 'input': block.input})
+            tool_calls.append({'id': cast("_Block", block).id, 'name': cast("_Block", block).name, 'input': cast("_Block", block).input})
         elif block_type == 'thinking':
             thinking_block = getattr(block, 'thinking', None)
             logger.debug("[AnthropicClient] thinking block present")
-        elif hasattr(block, 'text') and block.text:
-            text_parts.append(block.text)
+        elif hasattr(block, 'text') and cast("_Block", block).text:
+            text_parts.append(cast("_Block", block).text)
     return '\n'.join(text_parts), tool_calls or None, thinking_block
 
 
@@ -121,13 +135,13 @@ class AnthropicClient(ProviderClient):
 
     CONTENT_FIELD_LABEL: ClassVar[str] = "content[].text"
 
-    def __init__(self, config: dict) -> None:
+    def __init__(self, config: dict[str, object]) -> None:
         """Initialise from provider config dict (platform, model, api_key, timeout)."""
         self._config = config
-        self.model: str = config.get('model', 'claude-haiku-4-5-20251001')
-        self._timeout: int = config.get('timeout', 120)
+        self.model: str = cast(str, config.get('model', 'claude-haiku-4-5-20251001'))
+        self._timeout: int = cast(int, config.get('timeout', 120))
 
-    def _get_client(self):
+    def _get_client(self) -> "_anthropic_mod.Anthropic":
         import anthropic
         from services.llm_service import _resolve_api_key, _app_user_agent  # noqa: PLC0415
         return anthropic.Anthropic(
@@ -136,7 +150,7 @@ class AnthropicClient(ProviderClient):
             default_headers={"User-Agent": _app_user_agent()},
         )
 
-    def _thinking_native(self, level: ThinkingLevel, max_tokens: int) -> dict:
+    def _thinking_native(self, level: ThinkingLevel, max_tokens: int) -> dict[str, object]:
         """Return extra kwargs for the Anthropic thinking flag, or empty dict."""
         value = level.value
         if level == ThinkingLevel.MAX:
@@ -175,7 +189,7 @@ class AnthropicClient(ProviderClient):
             else dto.system
         )
 
-        create_kwargs: dict = {
+        create_kwargs: dict[str, object] = {
             'model': self.model,
             'max_tokens': max_out,
             'system': system,
@@ -184,9 +198,9 @@ class AnthropicClient(ProviderClient):
             **self._thinking_native(dto.thinking_mode, max_out),
         }
 
-        def _call():
+        def _call() -> "_anthropic_mod.types.Message":
             try:
-                return client.messages.create(**create_kwargs)
+                return cast("Callable[..., _anthropic_mod.types.Message]", client.messages.create)(**create_kwargs)
             except anthropic.RateLimitError as exc:
                 retry_after = None
                 if hasattr(exc, 'response') and exc.response is not None:
@@ -212,12 +226,12 @@ class AnthropicClient(ProviderClient):
                         "[THINKING] native flag rejected by provider=anthropic model=%s — retried without",
                         self.model,
                     )
-                    return client.messages.create(
+                    return cast("Callable[..., _anthropic_mod.types.Message]", client.messages.create)(
                         **{k: v for k, v in create_kwargs.items() if k != 'thinking'}
                     )
                 raise ProviderResponseError(str(exc), response_code=status or 0, provider='anthropic') from exc
 
-        response = _call_with_retry(_call)
+        response = cast("_anthropic_mod.types.Message", _call_with_retry(_call))
         latency_ms = int((time.time() - start) * 1000)
         text, tool_calls, thinking_block = _parse_content_blocks(response.content)
         stop_reason = response.stop_reason

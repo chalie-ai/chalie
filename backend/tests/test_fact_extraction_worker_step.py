@@ -27,13 +27,24 @@ leaks to a real path.
 
 import contextlib
 import json
+import sqlite3
+from collections.abc import Callable, Generator
+from typing import TYPE_CHECKING, cast
 
 import pytest
 
+from services.database_service import DatabaseService
 from services.episodic_service import EpisodicService
 from services.llm_clients.base import ProviderClient
 from services.provider_api import ProviderApiResponse
 from services.providers import Providers
+from services.subconscious_worker import SubconsciousWorker
+
+if TYPE_CHECKING:
+    from typing import Protocol
+
+    class _PatchableProviders(Protocol):
+        _resolve: Callable[..., ProviderClient]
 
 pytestmark = pytest.mark.unit
 
@@ -42,7 +53,7 @@ _DIM = 256  # conftest vec tables are 256-dim (suite convention)
 
 # ── 256-dim embedding helpers (test_episodic_retrieval_service.py precedent) ───
 
-def _unit(index: int, dim: int = _DIM) -> list:
+def _unit(index: int, dim: int = _DIM) -> list[float]:
     v = [0.0] * dim
     v[index] = 1.0
     return v
@@ -54,44 +65,44 @@ class _FakeLLMService(ProviderClient):
 
     CONTENT_FIELD_LABEL = "message.content"
 
-    def __init__(self, send_fn):
+    def __init__(self, send_fn: Callable[[object], ProviderApiResponse]) -> None:
         self._send_fn = send_fn
 
     def get_context_limit(self) -> int:
         return 200_000
 
-    def estimate_request_tokens(self, dto) -> int:
+    def estimate_request_tokens(self, dto: object) -> int:
         return 1  # pre-flight over-cap check never triggers
 
-    def send(self, dto) -> ProviderApiResponse:
+    def send(self, dto: object) -> ProviderApiResponse:
         return self._send_fn(dto)
 
 
 @contextlib.contextmanager
-def _inject_fake_client(send_fn):
+def _inject_fake_client(send_fn: Callable[[object], ProviderApiResponse]) -> Generator[None, None, None]:
     """Swap Providers._resolve at the class level for the block. No unittest.mock."""
     original = Providers._resolve
-    Providers._resolve = lambda self, *_a, **_kw: _FakeLLMService(send_fn)
+    cast("_PatchableProviders", Providers)._resolve = lambda self, *_a, **_kw: _FakeLLMService(send_fn)
     try:
         yield
     finally:
-        Providers._resolve = original
+        cast("_PatchableProviders", Providers)._resolve = original
 
 
-def _ops_response(ops: list | str) -> ProviderApiResponse:
+def _ops_response(ops: list[dict[str, object]] | str) -> ProviderApiResponse:
     text = ops if isinstance(ops, str) else json.dumps({"ops": ops})
     return ProviderApiResponse(
         text=text, model="test-model", provider="mock", tool_calls=None,
     )
 
 
-def _sequenced_sender(responses):
+def _sequenced_sender(responses: list[ProviderApiResponse]) -> Callable[[object], ProviderApiResponse]:
     """The fact step makes one LLM call per unprocessed episode; one entry per
     episode lets each candidate get its own op decision — last entry repeats.
     """
-    state = {"n": 0}
+    state: dict[str, int] = {"n": 0}
 
-    def _send(_dto):
+    def _send(_dto: object) -> ProviderApiResponse:
         i = min(state["n"], len(responses) - 1)
         state["n"] += 1
         return responses[i]
@@ -101,7 +112,7 @@ def _sequenced_sender(responses):
 
 # ── DB helpers ─────────────────────────────────────────────────────────────────
 
-def _seed_episode(db, gist, *, channel="user", emb_index=3, salience=6):
+def _seed_episode(db: sqlite3.Connection, gist: str, *, channel: str = "user", emb_index: int = 3, salience: int = 6) -> str:
     """Seed one episode via the PRODUCTION write path (EpisodicService).
 
     store_episode never sets facts_extracted_at, so the row enters the backlog
@@ -115,20 +126,20 @@ def _seed_episode(db, gist, *, channel="user", emb_index=3, salience=6):
     )
 
 
-def _db_service_from_conn():
+def _db_service_from_conn() -> DatabaseService:
     """Resolve the singleton DatabaseService the ``db`` fixture injected."""
     from services.database_service import get_shared_db_service
     return get_shared_db_service()
 
 
-def _facts_extracted_at(db, episode_id):
+def _facts_extracted_at(db: sqlite3.Connection, episode_id: str) -> object:
     row = db.execute(
         "SELECT facts_extracted_at FROM episodes WHERE id=?", (episode_id,)
     ).fetchone()
     return row[0] if row else None
 
 
-def _backlog_ids(db):
+def _backlog_ids(db: sqlite3.Connection) -> list[str]:
     """Episode ids still awaiting fact extraction, oldest-first."""
     return [
         r[0] for r in db.execute(
@@ -138,7 +149,7 @@ def _backlog_ids(db):
     ]
 
 
-def _fact_by_value(db, kind, value, *, active):
+def _fact_by_value(db: sqlite3.Connection, kind: str, value: str, *, active: int) -> dict[str, object] | None:
     """Fetch a data_graph fact for kind+value at the given active flag, or None.
 
     Queried by VALUE (which the fact step writes verbatim) rather than key:
@@ -161,17 +172,17 @@ def _fact_by_value(db, kind, value, *, active):
     }
 
 
-def _active_fact(db, kind, value):
+def _active_fact(db: sqlite3.Connection, kind: str, value: str) -> dict[str, object] | None:
     return _fact_by_value(db, kind, value, active=1)
 
 
-def _superseded_fact(db, kind, value):
+def _superseded_fact(db: sqlite3.Connection, kind: str, value: str) -> dict[str, object] | None:
     """The demoted (active=0) row carrying ``value`` — note deleted_at IS NULL
     still holds: supersession sets active=0 + valid_to, never deleted_at."""
     return _fact_by_value(db, kind, value, active=0)
 
 
-def _seed_active_fact(db, kind, key, value, *, retrieval_weight=1.0):
+def _seed_active_fact(db: sqlite3.Connection, kind: str, key: str, value: str, *, retrieval_weight: float = 1.0) -> dict[str, object]:
     """Seed a pre-existing live fact through the PRODUCTION write path.
 
     Using DataGraphService.store() (not raw SQL) means the seed key is
@@ -191,7 +202,7 @@ def _seed_active_fact(db, kind, key, value, *, retrieval_weight=1.0):
     return res
 
 
-def _seed_raw_fact(db, kind, key, value, *, retrieval_weight=1.0):
+def _seed_raw_fact(db: sqlite3.Connection, kind: str, key: str, value: str, *, retrieval_weight: float = 1.0) -> None:
     """Insert a pre-existing live fact via raw SQL with the key VERBATIM.
 
     Used by the DELETE test: DataGraphService.invalidate() matches the key
@@ -210,12 +221,11 @@ def _seed_raw_fact(db, kind, key, value, *, retrieval_weight=1.0):
 
 # ── Tests ──────────────────────────────────────────────────────────────────────
 
-def _worker():
-    from services.subconscious_worker import SubconsciousWorker
+def _worker() -> SubconsciousWorker:
     return SubconsciousWorker(tick_sec=10, idle_window_sec=60)
 
 
-def test_facts_routed_to_data_graph_without_chat_model_memory_store(db, store):
+def test_facts_routed_to_data_graph_without_chat_model_memory_store(db: sqlite3.Connection, store: object) -> None:
     """Acceptance 1 — a new episode (facts_extracted_at IS NULL) has its facts
     routed into data_graph by the WORKER step, and is marked processed.
 
@@ -247,7 +257,7 @@ def test_facts_routed_to_data_graph_without_chat_model_memory_store(db, store):
     assert ep not in _backlog_ids(db)
 
 
-def test_add_op_novel_fact_creates_new_row(db, store):
+def test_add_op_novel_fact_creates_new_row(db: sqlite3.Connection, store: object) -> None:
     """Acceptance 2 — ADD on a fact with no prior contradiction inserts exactly
     one new live data_graph row; nothing is superseded."""
     ep = _seed_episode(db, "User lives in Valletta.")
@@ -265,7 +275,7 @@ def test_add_op_novel_fact_creates_new_row(db, store):
     assert _facts_extracted_at(db, ep) is not None
 
 
-def test_update_op_contradiction_bitemporally_invalidates_old_fact(db, store):
+def test_update_op_contradiction_bitemporally_invalidates_old_fact(db: sqlite3.Connection, store: object) -> None:
     """Acceptance 3 — UPDATE/DELETE on a temporally-overlapping contradiction
     performs bi-temporal invalidation:
 
@@ -326,7 +336,7 @@ def test_update_op_contradiction_bitemporally_invalidates_old_fact(db, store):
     assert _facts_extracted_at(db, ep) is not None
 
 
-def test_noop_op_on_known_fact_writes_nothing(db, store):
+def test_noop_op_on_known_fact_writes_nothing(db: sqlite3.Connection, store: object) -> None:
     """Acceptance 4 — NOOP (duplicate / already-known fact) writes no new
     data_graph row and supersedes nothing, yet still marks the episode
     processed (it leaves the backlog)."""
@@ -347,7 +357,7 @@ def test_noop_op_on_known_fact_writes_nothing(db, store):
     )
 
 
-def test_delete_op_bitemporally_invalidates_the_revoked_fact(db, store):
+def test_delete_op_bitemporally_invalidates_the_revoked_fact(db: sqlite3.Connection, store: object) -> None:
     """Acceptance 3 (DELETE leg) — a DELETE op invalidates the named live fact
     bi-temporally: active=0, valid_to set, retrieval_weight halved, but the row
     is NOT hard-deleted (audit + bi-temporal history kept). DELETE matches the
@@ -379,7 +389,7 @@ def test_delete_op_bitemporally_invalidates_the_revoked_fact(db, store):
     assert _facts_extracted_at(db, ep) is not None
 
 
-def test_unparseable_model_output_is_noop_never_corruption(db, store):
+def test_unparseable_model_output_is_noop_never_corruption(db: sqlite3.Connection, store: object) -> None:
     """Acceptance 5 — unparseable LLM output → safe NOOP: zero data_graph
     writes, the episode is still marked processed (loud counter, never a
     corrupting partial write or an exception that aborts the tick).
@@ -412,7 +422,7 @@ def test_unparseable_model_output_is_noop_never_corruption(db, store):
     )
 
 
-def test_backlog_drains_at_budget_oldest_first(db, store):
+def test_backlog_drains_at_budget_oldest_first(db: sqlite3.Connection, store: object) -> None:
     """Acceptance 6 — more unprocessed episodes than the per-tick budget (~20):
     exactly budget-many are processed this tick, OLDEST-FIRST, and the remainder
     stay in the backlog (facts_extracted_at IS NULL) for a later tick.
@@ -426,7 +436,7 @@ def test_backlog_drains_at_budget_oldest_first(db, store):
     n = budget + 5
     # Seed n episodes with strictly increasing created_at so oldest-first is
     # unambiguous (store_episode stamps created_at = now; nudge each row back).
-    ids = []
+    ids: list[str] = []
     for i in range(n):
         ep = _seed_episode(db, f"Fact-bearing episode number {i}.", emb_index=i + 1)
         # Push created_at into the past, decreasing, so index 0 is oldest.

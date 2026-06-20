@@ -1,24 +1,28 @@
 import importlib
 import logging
+from typing import TYPE_CHECKING
 
 import yaml
 
 from services.file_mapper_service import FileMapperService
 
+if TYPE_CHECKING:
+    from capabilities.base import AbstractCapability
+
 logger = logging.getLogger(__name__)
 
 # Singleton cache — capability instances persist for the process lifetime so
 # that in-memory state (e.g. ``_connected``) survives across API calls.
-_capabilities_cache: dict | None = None
+_capabilities_cache: "dict[str, AbstractCapability] | None" = None
 
 
-def load_capabilities() -> dict:
+def load_capabilities() -> "dict[str, AbstractCapability]":
     global _capabilities_cache
     if _capabilities_cache is not None:
         return _capabilities_cache
 
     capabilities_dir = FileMapperService.get_capabilities_path()
-    discovered: dict = {}
+    discovered: "dict[str, AbstractCapability]" = {}
 
     for subdir in sorted(capabilities_dir.iterdir()):
         if not subdir.is_dir() or subdir.name.startswith('_'):

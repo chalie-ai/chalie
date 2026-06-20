@@ -14,6 +14,8 @@ fixture (which patches get_shared_db_service to an isolated SQLite instance).
 """
 
 import json
+import sqlite3
+from typing import cast
 
 import pytest
 
@@ -27,7 +29,7 @@ pytestmark = pytest.mark.unit
 
 class TestRenderBehavioralPattern:
 
-    def test_valid_json_produces_readable_line(self):
+    def test_valid_json_produces_readable_line(self) -> None:
         """Full JSON with all fields renders as 'name (freq @ anchor): summary [confidence=N]'."""
         from services.memory_retrieval import _render_behavioral_pattern
 
@@ -48,7 +50,7 @@ class TestRenderBehavioralPattern:
         assert "Practises 20 minutes" in result
         assert "[confidence=8.0]" in result
 
-    def test_missing_time_anchor_omits_at_segment(self):
+    def test_missing_time_anchor_omits_at_segment(self) -> None:
         """When time_anchor is absent the '@ HH:MM' segment is omitted entirely."""
         from services.memory_retrieval import _render_behavioral_pattern
 
@@ -65,7 +67,7 @@ class TestRenderBehavioralPattern:
         )
         assert "evening_walk (weekdays)" in result
 
-    def test_invalid_json_returns_raw_string(self):
+    def test_invalid_json_returns_raw_string(self) -> None:
         """Unparseable JSON is returned verbatim — no crash, no data loss."""
         from services.memory_retrieval import _render_behavioral_pattern
 
@@ -76,11 +78,11 @@ class TestRenderBehavioralPattern:
             f"Expected raw passthrough for invalid JSON, got: {result!r}"
         )
 
-    def test_non_string_input_returns_raw(self):
+    def test_non_string_input_returns_raw(self) -> None:
         """Non-string input (e.g. already-decoded dict) is handled without crash."""
         from services.memory_retrieval import _render_behavioral_pattern
 
-        result = _render_behavioral_pattern(None)
+        result = _render_behavioral_pattern(cast(str, None))
         assert result == "", f"None input should produce empty string, got: {result!r}"
 
 
@@ -91,10 +93,10 @@ class TestRenderBehavioralPattern:
 
 class TestRecallPayload:
 
-    def _make_hit(self, kind, key="some_key", text="some text", relevance="high"):
+    def _make_hit(self, kind: str, key: str = "some_key", text: str = "some text", relevance: str = "high") -> dict[str, object]:
         return {"id": key, "kind": kind, "text": text, "relevance": relevance}
 
-    def test_behavioral_pattern_row_carries_kind_field(self):
+    def test_behavioral_pattern_row_carries_kind_field(self) -> None:
         """A behavioral_pattern hit projects to a row whose kind field is set."""
         from services.memory_retrieval import _recall_payload
 
@@ -109,7 +111,7 @@ class TestRecallPayload:
         assert row["content"] == "dawn_meditation_practice (daily @ 06:00): ..."
         assert row["score"] == "high"
 
-    def test_every_row_carries_its_kind_field(self):
+    def test_every_row_carries_its_kind_field(self) -> None:
         """Unlike the old prose format, kind is a first-class field on EVERY row."""
         from services.memory_retrieval import _recall_payload
 
@@ -122,7 +124,7 @@ class TestRecallPayload:
         assert row["id"] == "residence"
         assert row["content"] == "Valletta"
 
-    def test_mixed_results_each_keep_their_own_kind(self):
+    def test_mixed_results_each_keep_their_own_kind(self) -> None:
         """In a mixed list every row reports its own kind verbatim."""
         from services.memory_retrieval import _recall_payload
 
@@ -147,7 +149,7 @@ class TestRecallPayload:
 class TestSearchDataGraphIncludesBehavioralPattern:
     """_search_data_graph surfaces behavioral_pattern rows from the real DB."""
 
-    def test_behavioral_pattern_row_is_returned_by_search(self, db):
+    def test_behavioral_pattern_row_is_returned_by_search(self, db: sqlite3.Connection) -> None:
         """A seeded behavioral_pattern row is visible in _search_data_graph results.
 
         This is the regression-protection case: before the fix,
@@ -185,7 +187,7 @@ class TestSearchDataGraphIncludesBehavioralPattern:
             f"behavioral_pattern kind not present in hits. Kinds returned: {kinds_returned}"
         )
 
-    def test_behavioral_pattern_hit_text_is_rendered_not_raw_json(self, db):
+    def test_behavioral_pattern_hit_text_is_rendered_not_raw_json(self, db: sqlite3.Connection) -> None:
         """The text field for a behavioral_pattern hit is the rendered line, not raw JSON."""
         from services.data_graph_service import get_data_graph_service, KIND_BEHAVIORAL_PATTERN
 
@@ -217,7 +219,7 @@ class TestSearchDataGraphIncludesBehavioralPattern:
         assert bp_hits, "Expected at least one behavioral_pattern hit"
 
         for hit in bp_hits:
-            text = hit.get("text", "")
+            text = cast(str, hit.get("text", ""))
             # Must be the rendered form, not raw JSON
             assert not text.strip().startswith("{"), (
                 f"text must be rendered, not raw JSON: {text!r}"

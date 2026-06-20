@@ -29,8 +29,60 @@ from __future__ import annotations
 
 import logging
 import re
+from typing import TYPE_CHECKING, cast
 
 from tools.browser.security import DnsCache, setup_page_security
+
+if TYPE_CHECKING:
+    from typing import Protocol
+
+    class _Locator(Protocol):
+        def count(self) -> int: ...
+        def nth(self, index: int) -> _Locator: ...
+        def inner_text(self) -> str: ...
+        def click(self, *, timeout: int) -> None: ...
+        def fill(self, value: str, *, timeout: int) -> None: ...
+        def select_option(self, *, label: str | None = None, value: str | None = None, timeout: int = 0) -> object: ...
+
+    class _Page(Protocol):
+        url: str
+        def goto(self, url: str, *, wait_until: str) -> object: ...
+        def evaluate(self, script: str, arg: object = None) -> object: ...
+        def inner_text(self, selector: str) -> str: ...
+        def wait_for_load_state(self, state: str, *, timeout: int) -> None: ...
+        def is_closed(self) -> bool: ...
+        def title(self) -> str: ...
+        def go_back(self, *, wait_until: str) -> None: ...
+        def screenshot(self, *, type: str) -> bytes: ...
+        def set_default_navigation_timeout(self, timeout: int) -> None: ...
+        def set_default_timeout(self, timeout: int) -> None: ...
+        def on(self, event: str, handler: object) -> None: ...
+        def get_by_role(self, role: str, *, name: str) -> _Locator: ...
+        def get_by_label(self, text: str) -> _Locator: ...
+        def get_by_placeholder(self, text: str) -> _Locator: ...
+        def get_by_text(self, text: str) -> _Locator: ...
+        def route(self, pattern: str, handler: object) -> None: ...
+
+    class _Context(Protocol):
+        def new_page(self) -> _Page: ...
+        def close(self) -> None: ...
+        browser: _Browser
+
+    class _Browser(Protocol):
+        def is_connected(self) -> bool: ...
+        def new_context(self, *, java_script_enabled: bool, ignore_https_errors: bool) -> _Context: ...
+
+    class _Dialog(Protocol):
+        type: str
+        message: str
+        def dismiss(self) -> None: ...
+
+    class _Popup(Protocol):
+        url: str
+        def close(self) -> None: ...
+
+    class _Response(Protocol):
+        status: int
 
 logger = logging.getLogger(__name__)
 
@@ -55,12 +107,12 @@ _WHITESPACE_RE = re.compile(r"\n{3,}")
 
 # ── Cross-thread entry points ────────────────────────────────────────────────
 
-def run_verb(key: int, verb: str, kwargs: dict) -> dict:
+def run_verb(key: int, verb: str, kwargs: dict[str, object]) -> dict[str, object]:
     """Execute one verb on *key*'s session via the pool thread. Returns the envelope."""
     if verb != "open" and key not in _SESSIONS:
         return error_envelope("No page is open. Use action='open' with a url first.")
     from tools.browser.pool import get_pool  # noqa: PLC0415
-    return get_pool().execute(_dispatch, key, verb, kwargs, timeout=90)
+    return cast("dict[str, object]", get_pool().execute(_dispatch, key, verb, kwargs, timeout=90))
 
 
 def close_session(key: int) -> None:
@@ -81,18 +133,18 @@ def screenshot_ledger(key: int) -> list[tuple[str, str]]:
     return list(_LEDGERS.get(key, ()))
 
 
-def error_envelope(message: str) -> dict:
+def error_envelope(message: str) -> dict[str, object]:
     """A full envelope carrying only an error — same shape as every success."""
     return {"page": {}, "data": None, "changed": _no_change(), "error": message}
 
 
-def _no_change() -> dict:
+def _no_change() -> dict[str, object]:
     return {"navigated": False, "dialog": None, "popup": None, "summary": ""}
 
 
 # ── Pool-thread internals ────────────────────────────────────────────────────
 
-def _dispatch(browser, key: int, verb: str, kwargs: dict) -> dict:
+def _dispatch(browser: object, key: int, verb: str, kwargs: dict[str, object]) -> dict[str, object]:
     session = _SESSIONS.get(key)
     if session and not session.alive():
         session.close()
@@ -102,19 +154,19 @@ def _dispatch(browser, key: int, verb: str, kwargs: dict) -> dict:
         if session is None:
             session = PageSession(browser)
             _SESSIONS[key] = session
-        return session.open(**kwargs)
+        return session.open(**cast("dict[str, str]", kwargs))
     if session is None:
         return error_envelope("No page is open. Use action='open' with a url first.")
-    return getattr(session, verb)(**kwargs)
+    return cast("dict[str, object]", getattr(session, verb)(**kwargs))
 
 
-def _close_on_thread(browser, key: int) -> None:  # noqa: ARG001 — pool always passes browser
+def _close_on_thread(browser: object, key: int) -> None:  # noqa: ARG001 — pool always passes browser
     session = _SESSIONS.pop(key, None)
     if session:
         session.close()
 
 
-def _trim(value, cap: int = READ_CAP):
+def _trim(value: object, cap: int = READ_CAP) -> object:
     """Recursively cap every string in the envelope — the hard token-bomb guard."""
     if isinstance(value, str) and len(value) > cap:
         return value[:cap] + "…[truncated]"
@@ -131,8 +183,8 @@ class PageSession:
     _CLICK_ROLES = ("button", "link", "tab", "menuitem", "checkbox", "radio")
     _FILL_ROLES = ("textbox", "searchbox", "combobox", "spinbutton")
 
-    def __init__(self, browser) -> None:
-        self._context = browser.new_context(
+    def __init__(self, browser: object) -> None:
+        self._context = cast("_Browser", browser).new_context(
             java_script_enabled=True,
             ignore_https_errors=True,
         )
@@ -159,74 +211,74 @@ class PageSession:
 
     # ── Verbs (each returns an envelope; kwargs match abilities/browser.py) ──
 
-    def open(self, url: str) -> dict:
+    def open(self, url: str) -> dict[str, object]:
         before = self._observe()
         resp = self.page.goto(url, wait_until="load")
         self._settle()
         return self._envelope(
             data=self._read_view(),
             changed=self._changed(before),
-            status=resp.status if resp else None,
+            status=cast("_Response", resp).status if resp else None,
         )
 
-    def read(self, section: str | None = None) -> dict:
+    def read(self, section: str | None = None) -> dict[str, object]:
         return self._envelope(data=self._read_view(section))
 
-    def find(self, query: str) -> dict:
-        found = self.page.evaluate(_FIND_JS, {"q": query, "limit": _FIND_LIMIT, "ctx": _CONTEXT_CHARS})
+    def find(self, query: str) -> dict[str, object]:
+        found = cast("dict[str, object]", self.page.evaluate(_FIND_JS, {"q": query, "limit": _FIND_LIMIT, "ctx": _CONTEXT_CHARS}))
         if not found["matches"] and not found["interactive"]:
             found["note"] = f"No matches for {query!r} on this page."
         return self._envelope(data=found)
 
-    def click(self, target: str) -> dict:
+    def click(self, target: str) -> dict[str, object]:
         locator, err = self._locate(target, self._CLICK_ROLES, text_fallback=True)
         if err:
             return err
         before = self._observe()
-        locator.click(timeout=_ACTION_TIMEOUT_MS)
+        cast("_Locator", locator).click(timeout=_ACTION_TIMEOUT_MS)
         self._settle()
         changed = self._changed(before)
         data = self._read_view() if changed["navigated"] else None
         return self._envelope(data=data, changed=changed)
 
-    def fill(self, target: str, value: str) -> dict:
+    def fill(self, target: str, value: str) -> dict[str, object]:
         locator, err = self._locate(target, self._FILL_ROLES, text_fallback=False)
         if err:
             return err
         before = self._observe()
-        locator.fill(value, timeout=_ACTION_TIMEOUT_MS)
+        cast("_Locator", locator).fill(value, timeout=_ACTION_TIMEOUT_MS)
         return self._envelope(changed=self._changed(before))
 
-    def select(self, target: str, value: str) -> dict:
+    def select(self, target: str, value: str) -> dict[str, object]:
         locator, err = self._locate(target, ("combobox", "listbox"), text_fallback=False)
         if err:
             return err
         before = self._observe()
         try:
-            locator.select_option(label=value, timeout=_ACTION_TIMEOUT_MS)
+            cast("_Locator", locator).select_option(label=value, timeout=_ACTION_TIMEOUT_MS)
         except Exception:
-            locator.select_option(value=value, timeout=_ACTION_TIMEOUT_MS)
+            cast("_Locator", locator).select_option(value=value, timeout=_ACTION_TIMEOUT_MS)
         self._settle()
         return self._envelope(changed=self._changed(before))
 
-    def scroll(self, direction: str) -> dict:
+    def scroll(self, direction: str) -> dict[str, object]:
         sign = -1 if direction == "up" else 1
-        position = self.page.evaluate(
+        position = cast("dict[str, object]", self.page.evaluate(
             "(s) => { window.scrollBy(0, s * window.innerHeight * 0.8);"
             " return {y: Math.round(window.scrollY),"
             " max: Math.round(document.body.scrollHeight - window.innerHeight)}; }",
             sign,
-        )
-        position["at_bottom"] = position["y"] >= position["max"]
+        ))
+        position["at_bottom"] = cast(int, position["y"]) >= cast(int, position["max"])
         return self._envelope(data=position)
 
-    def back(self) -> dict:
+    def back(self) -> dict[str, object]:
         before = self._observe()
         self.page.go_back(wait_until="load")
         self._settle()
         return self._envelope(data=self._read_view(), changed=self._changed(before))
 
-    def grab(self) -> dict:
+    def grab(self) -> dict[str, object]:
         """Viewport PNG + page info — NOT an envelope; the ability layer ingests it."""
         return {
             "png": self.page.screenshot(type="png"),
@@ -235,13 +287,13 @@ class PageSession:
 
     # ── Mechanical observation / diff ────────────────────────────────────────
 
-    def _observe(self) -> dict:
+    def _observe(self) -> dict[str, object]:
         try:
             return {"url": self.page.url, "chars": len(self._body_text())}
         except Exception:
             return {"url": "", "chars": 0}
 
-    def _changed(self, before: dict) -> dict:
+    def _changed(self, before: dict[str, object]) -> dict[str, object]:
         after = self._observe()
         navigated = bool(before["url"]) and after["url"] != before["url"]
         if navigated:
@@ -251,13 +303,13 @@ class PageSession:
         elif self._popup:
             summary = f"A popup opened ({self._popup}) and was closed."
         else:
-            delta = after["chars"] - before["chars"]
+            delta = cast(int, after["chars"]) - cast(int, before["chars"])
             summary = (
                 "Page content unchanged."
                 if abs(delta) < 50
                 else f"Page content changed ({delta:+d} characters)."
             )
-        changed = {
+        changed: dict[str, object] = {
             "navigated": navigated,
             "dialog": self._dialog,
             "popup": self._popup,
@@ -267,23 +319,23 @@ class PageSession:
         self._popup = None
         return changed
 
-    def _on_dialog(self, dialog) -> None:
-        self._dialog = f"{dialog.type}: {dialog.message}"[:_SUMMARY_CHARS]
+    def _on_dialog(self, dialog: object) -> None:
+        self._dialog = f"{cast('_Dialog', dialog).type}: {cast('_Dialog', dialog).message}"[:_SUMMARY_CHARS]
         try:
-            dialog.dismiss()
+            cast("_Dialog", dialog).dismiss()
         except Exception:
             pass
 
-    def _on_popup(self, popup) -> None:
+    def _on_popup(self, popup: object) -> None:
         try:
-            self._popup = popup.url
-            popup.close()
+            self._popup = cast("_Popup", popup).url
+            cast("_Popup", popup).close()
         except Exception:
             pass
 
     # ── Reading ───────────────────────────────────────────────────────────────
 
-    def _read_view(self, section: str | None = None) -> dict:
+    def _read_view(self, section: str | None = None) -> dict[str, object]:
         if section:
             text = self.page.evaluate(_SECTION_JS, section)
             if text is None:
@@ -291,7 +343,7 @@ class PageSession:
                     "outline": self._outline(),
                     "note": f"No heading matching {section!r}. Pick one from the outline.",
                 }
-            return {"text": _WHITESPACE_RE.sub("\n\n", text.strip())[:READ_CAP]}
+            return {"text": _WHITESPACE_RE.sub("\n\n", cast(str, text).strip())[:READ_CAP]}
         text = self._body_text()
         if len(text) > READ_CAP:
             return {
@@ -309,8 +361,8 @@ class PageSession:
     def _body_text(self) -> str:
         return _WHITESPACE_RE.sub("\n\n", self.page.inner_text("body").strip())
 
-    def _outline(self) -> list[dict]:
-        return self.page.evaluate(_OUTLINE_JS, _OUTLINE_LIMIT)
+    def _outline(self) -> list[dict[str, object]]:
+        return cast("list[dict[str, object]]", self.page.evaluate(_OUTLINE_JS, _OUTLINE_LIMIT))
 
     def _settle(self) -> None:
         try:
@@ -320,25 +372,27 @@ class PageSession:
 
     # ── Visible-text targeting (no CSS, ever) ─────────────────────────────────
 
-    def _locate(self, target: str, roles: tuple[str, ...], *, text_fallback: bool):
+    def _locate(
+        self, target: str, roles: tuple[str, ...], *, text_fallback: bool
+    ) -> tuple[object, None] | tuple[None, dict[str, object]]:
         """Resolve visible text to EXACTLY one element.
 
         Returns (locator, None) on success, (None, error-envelope) otherwise.
         Strategy order: role+accessible-name → label → placeholder → visible text.
         """
-        strategies = [self.page.get_by_role(role, name=target) for role in roles]
+        strategies: list[object] = [self.page.get_by_role(role, name=target) for role in roles]
         strategies += [self.page.get_by_label(target), self.page.get_by_placeholder(target)]
         if text_fallback:
             strategies.append(self.page.get_by_text(target))
         for locator in strategies:
-            count = locator.count()
+            count = cast("_Locator", locator).count()
             if count == 1:
                 return locator, None
             if count > 1:
-                names = []
+                names: list[object] = []
                 for i in range(min(count, _CANDIDATE_LIMIT)):
                     try:
-                        names.append(locator.nth(i).inner_text()[:80].strip() or f"<unnamed #{i}>")
+                        names.append(cast("_Locator", locator).nth(i).inner_text()[:80].strip() or f"<unnamed #{i}>")
                     except Exception:
                         names.append(f"<unreadable #{i}>")
                 return None, self._envelope(
@@ -357,18 +411,18 @@ class PageSession:
 
     # ── Envelope assembly ─────────────────────────────────────────────────────
 
-    def _envelope(self, data=None, changed: dict | None = None,
-                  status: int | None = None, error: str | None = None) -> dict:
+    def _envelope(self, data: object = None, changed: dict[str, object] | None = None,
+                  status: int | None = None, error: str | None = None) -> dict[str, object]:
         try:
-            page = {"url": self.page.url, "title": self.page.title(), "status": status}
+            page: object = {"url": self.page.url, "title": self.page.title(), "status": status}
         except Exception:
             page = {}
-        return _trim({
+        return cast("dict[str, object]", _trim({
             "page": page,
             "data": data,
             "changed": changed or _no_change(),
             "error": error,
-        })
+        }))
 
 
 _OUTLINE_JS = """(limit) => {

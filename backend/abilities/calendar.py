@@ -32,8 +32,8 @@ channel broadcasts to the user. This ability never formats a wire envelope.
 """
 
 import logging
-from datetime import timedelta, timezone
-from typing import ClassVar
+from datetime import datetime, timedelta, timezone
+from typing import ClassVar, cast
 
 from abilities._capability import CapabilityAbility
 from abilities._params import Keys
@@ -111,10 +111,10 @@ class CalendarAbility(CapabilityAbility):
     def get_search_tooltip(self) -> str:
         return "calendar events"
 
-    def get_parameters(self) -> dict:
+    def get_parameters(self) -> dict[str, object]:
         return self._PARAMETERS
 
-    _PARAMETERS: ClassVar[dict] = {
+    _PARAMETERS: ClassVar[dict[str, object]] = {
         "type": "object",
         "properties": {
             Keys.action: {
@@ -187,7 +187,7 @@ class CalendarAbility(CapabilityAbility):
 
     # ── Entry point — reads inline, writes through the base ────────────────────
 
-    def run(self, params: dict) -> ToolResult:
+    def run(self, params: dict[str, object]) -> ToolResult:
         action = str(params.get(Keys.action, self.DEFAULT_ACTION)).lower()
 
         if action in _READ_ACTIONS:
@@ -212,7 +212,7 @@ class CalendarAbility(CapabilityAbility):
 # Datetime validation — the data-corruption fix
 # ---------------------------------------------------------------------------
 
-def _parse_dt(value: str):
+def _parse_dt(value: str) -> datetime | None:
     """Returns ``None`` when the string is unparseable — the caller maps ``None`` to
     ``code=invalid-time`` and NEVER persists the ``parse_utc`` ``datetime.min``
     sentinel.
@@ -232,10 +232,10 @@ def _parse_dt(value: str):
     )
     if parsed is None:
         return None
-    return parsed.astimezone(timezone.utc)
+    return cast(datetime, parsed).astimezone(timezone.utc)
 
 
-def _normalise_write_datetimes(params: dict) -> ToolResult | None:
+def _normalise_write_datetimes(params: dict[str, object]) -> ToolResult | None:
     """Resolve any supplied ``dtstart`` / ``dtend`` to clean UTC ISO strings on
     ``params``. Returns an ``invalid-time`` ToolResult (and leaves params untouched)
     when a value is present but unparseable — so the CalDAV handler only ever sees
@@ -262,14 +262,14 @@ def _normalise_write_datetimes(params: dict) -> ToolResult | None:
 # Fuzzy addressing — uid OR title, with explicit disambiguation
 # ---------------------------------------------------------------------------
 
-def _resolve_target_uid(params: dict) -> ToolResult | None:
+def _resolve_target_uid(params: dict[str, object]) -> ToolResult | None:
     """For uid-addressed write actions, fill ``params['uid']`` from a fuzzy
     ``title`` match when no uid was given. Returns an error ToolResult on a
     missing target, no match, or an ambiguous (>1) match; ``None`` on success."""
-    if (params.get(Keys.uid) or "").strip():
+    if (cast(str, params.get(Keys.uid)) or "").strip():
         return None
 
-    title = (params.get(Keys.title) or "").strip()
+    title = (cast(str, params.get(Keys.title)) or "").strip()
     if not title:
         return ToolResult.err(
             "uid or title is required to address the event.",
@@ -291,7 +291,7 @@ def _resolve_target_uid(params: dict) -> ToolResult | None:
     return None
 
 
-def _ambiguous_match(title: str, matches: list[dict], hint: str) -> ToolResult:
+def _ambiguous_match(title: str, matches: list[dict[str, object]], hint: str) -> ToolResult:
     """Build the disambiguation error: the candidate uids + titles go in the BODY
     (never a silent first-hit pick) so the model can re-issue with a chosen uid."""
     candidates = ", ".join(f"{m['title']!r} (uid:{m['uid']})" for m in matches)
@@ -302,7 +302,7 @@ def _ambiguous_match(title: str, matches: list[dict], hint: str) -> ToolResult:
     )
 
 
-def _match_events_by_title(title: str) -> list[dict]:
+def _match_events_by_title(title: str) -> list[dict[str, object]]:
     """Return upcoming events whose title contains *title* (case-insensitive),
     each as the contract event dict. Reads through the shared scheduler query
     engine over the next default window so the match set is bounded."""
@@ -314,7 +314,7 @@ def _match_events_by_title(title: str) -> list[dict]:
         columns=_EVENT_COLUMNS,
     )
     needle = title.lower()
-    return [ev for ev in (_format_event(r) for r in rows) if needle in ev["title"].lower()]
+    return [ev for ev in (_format_event(r) for r in rows) if needle in cast(str, ev["title"]).lower()]
 
 
 # ---------------------------------------------------------------------------
@@ -324,12 +324,12 @@ def _match_events_by_title(title: str) -> list[dict]:
 _EVENT_COLUMNS = ("message", "due_at", "metadata", "external_uid")
 
 
-def _read_events(action: str, params: dict) -> ToolResult:
+def _read_events(action: str, params: dict[str, object]) -> ToolResult:
     from abilities.schedule import query_items
 
     if action == "get_event":
-        uid = (params.get(Keys.uid) or "").strip()
-        title = (params.get(Keys.title) or "").strip()
+        uid = (cast(str, params.get(Keys.uid)) or "").strip()
+        title = (cast(str, params.get(Keys.title)) or "").strip()
         if not uid and not title:
             return ToolResult.err(
                 "uid or title is required for get_event.",
@@ -362,11 +362,11 @@ def _read_events(action: str, params: dict) -> ToolResult:
                 return _ambiguous_match(title, matches, "re-issue get_event with the chosen uid.")
             event = matches[0]
 
-        body = {"action_performed": "get_event", "event": event}
+        body: dict[str, object] = {"action_performed": "get_event", "event": event}
         return ToolResult.ok(body, rich=dict(body), action="get_event")
 
     # list_events — honour the advertised default window (today → +7 days).
-    limit = min(int(params.get(Keys.limit) or 50), 200)
+    limit = min(int(cast(int, params.get(Keys.limit)) or 50), 200)
     date_from, date_to = _resolve_window(params)
 
     rows = query_items(
@@ -380,11 +380,11 @@ def _read_events(action: str, params: dict) -> ToolResult:
     return ToolResult.ok(body, rich=dict(body), action="list_events", count=len(events))
 
 
-def _resolve_window(params: dict) -> tuple[str, str]:
+def _resolve_window(params: dict[str, object]) -> tuple[str, str]:
     """Return the (date_from, date_to) ISO bounds for list_events, applying the
     advertised defaults (today → +7 days) when the model omits them."""
-    date_from = (params.get(Keys.date_from) or "").strip()
-    date_to = (params.get(Keys.date_to) or "").strip()
+    date_from = (cast(str, params.get(Keys.date_from)) or "").strip()
+    date_to = (cast(str, params.get(Keys.date_to)) or "").strip()
 
     if not date_from:
         start = utc_now().replace(hour=0, minute=0, second=0, microsecond=0)
@@ -396,13 +396,13 @@ def _resolve_window(params: dict) -> tuple[str, str]:
     return date_from, date_to
 
 
-def _format_event(row: dict) -> dict:
-    meta = parse_json_column(row.get("metadata"))
-    ext_uid = row.get("external_uid", "")
-    uid = ext_uid.removeprefix("caldav:") if ext_uid else meta.get("uid", "")
+def _format_event(row: dict[str, object]) -> dict[str, object]:
+    meta = cast("dict[str, object]", parse_json_column(row.get("metadata")))
+    ext_uid = cast(str, row.get("external_uid", ""))
+    uid = ext_uid.removeprefix("caldav:") if ext_uid else cast(str, meta.get("uid", ""))
     return {
         "uid": uid,
-        "title": row.get("message", ""),
+        "title": cast(str, row.get("message", "")),
         "dtstart": row.get("due_at"),
         "dtend": meta.get("dtend"),
         "location": meta.get("location"),

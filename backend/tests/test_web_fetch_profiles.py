@@ -16,12 +16,21 @@ consume.
 import os
 import socket
 import tempfile
+from collections.abc import Callable
+from pathlib import Path
+from typing import TYPE_CHECKING
 
 import pytest
 import requests
 
 from services import web_fetch
 from services.ssrf import is_private_url
+
+if TYPE_CHECKING:
+    from typing import Protocol
+
+    class _WebFetchModule(Protocol):
+        is_private_url: Callable[[str], bool]
 
 _HTTPBIN_HOST = "httpbin.org"
 
@@ -35,7 +44,7 @@ def _httpbin_reachable() -> bool:
 
 
 @pytest.fixture
-def httpbin():
+def httpbin() -> None:
     if not _httpbin_reachable():
         pytest.skip(f"{_HTTPBIN_HOST} unreachable — skip network-dependent fetch tests.")
 
@@ -44,7 +53,7 @@ def httpbin():
 
 
 @pytest.mark.unit
-def test_three_named_profiles_exist_with_distinct_user_agents():
+def test_three_named_profiles_exist_with_distinct_user_agents() -> None:
     """BROWSER / API / DOWNLOAD ship as the named profiles the abilities use."""
     assert web_fetch.BROWSER.name == "browser"
     assert web_fetch.API.name == "api"
@@ -57,21 +66,22 @@ def test_three_named_profiles_exist_with_distinct_user_agents():
 
 
 @pytest.mark.unit
-def test_fetch_text_uses_the_real_ssrf_guard():
+def test_fetch_text_uses_the_real_ssrf_guard() -> None:
     """The fetch service shares ONE SSRF guard with the abilities."""
     # Identity, not equality: web_fetch must call the same production guard.
-    assert web_fetch.is_private_url is is_private_url
+    from typing import cast
+    assert cast("_WebFetchModule", web_fetch).is_private_url is is_private_url
 
 
 @pytest.mark.unit
-def test_fetch_text_refuses_private_host_before_socket():
+def test_fetch_text_refuses_private_host_before_socket() -> None:
     """A loopback URL is blocked by the guard, raising FetchBlocked (no network)."""
     with pytest.raises(web_fetch.FetchBlocked):
         web_fetch.fetch_text("http://127.0.0.1/secret", profile=web_fetch.API)
 
 
 @pytest.mark.unit
-def test_stream_to_file_refuses_private_host_and_writes_nothing(tmp_path):
+def test_stream_to_file_refuses_private_host_and_writes_nothing(tmp_path: Path) -> None:
     """A blocked host raises before any file is created."""
     dest = os.path.join(str(tmp_path), "should_not_exist", "f.bin")
     with pytest.raises(web_fetch.FetchBlocked):
@@ -83,7 +93,7 @@ def test_stream_to_file_refuses_private_host_and_writes_nothing(tmp_path):
 
 
 @pytest.mark.integration
-def test_fetch_text_browser_profile_returns_body(httpbin):
+def test_fetch_text_browser_profile_returns_body(httpbin: None) -> None:
     """A real GET with the browser profile returns the decoded body."""
     body = web_fetch.fetch_text(
         "https://httpbin.org/user-agent", profile=web_fetch.BROWSER
@@ -92,7 +102,7 @@ def test_fetch_text_browser_profile_returns_body(httpbin):
 
 
 @pytest.mark.integration
-def test_fetch_text_api_profile_sends_bot_user_agent(httpbin):
+def test_fetch_text_api_profile_sends_bot_user_agent(httpbin: None) -> None:
     """The API profile presents the identified bot UA over the wire."""
     body = web_fetch.fetch_text(
         "https://httpbin.org/user-agent", profile=web_fetch.API
@@ -101,14 +111,14 @@ def test_fetch_text_api_profile_sends_bot_user_agent(httpbin):
 
 
 @pytest.mark.integration
-def test_fetch_text_raises_on_http_error(httpbin):
+def test_fetch_text_raises_on_http_error(httpbin: None) -> None:
     """HTTP failures bubble (raise_for_status) — never swallowed."""
     with pytest.raises(requests.RequestException):
         web_fetch.fetch_text("https://httpbin.org/status/404")
 
 
 @pytest.mark.integration
-def test_stream_to_file_writes_full_body(httpbin):
+def test_stream_to_file_writes_full_body(httpbin: None) -> None:
     """A real streamed download writes the file under the dest path."""
     dest = os.path.join(tempfile.gettempdir(), "chalie_webfetch_test", "robots.txt")
     if os.path.exists(dest):

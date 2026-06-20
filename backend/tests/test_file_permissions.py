@@ -8,10 +8,14 @@ under tester.md rule 5 (no collaborators, deterministic).
 """
 
 import os
+import sqlite3
 import stat
+from pathlib import Path
+from typing import cast
 
 import pytest
 
+from abilities._result import ToolResult
 from abilities.file_permissions import (
     FilePermissionsAbility,
     _format_octal,
@@ -25,14 +29,14 @@ pytestmark = pytest.mark.unit
 
 
 class _MP:
-    def __init__(self, uid: int, config) -> None:
+    def __init__(self, uid: int, config: object) -> None:
         self.config = config
         self.uid = uid
         self._uid = uid
 
 
 @pytest.fixture
-def chat_mp(db):
+def chat_mp(db: sqlite3.Connection) -> _MP:
     allow_policy(db, "file_permissions")
     return _MP(
         seed_transcript(db, "chat", "make this script executable"), UserConfig({})
@@ -59,7 +63,7 @@ def _parse_body(rendered: str) -> object:
     ("7777", 0o7777),
     ("1755", 0o1755),
 ])
-def test_parse_octal_accepts_valid_strings(text, expected):
+def test_parse_octal_accepts_valid_strings(text: str, expected: int) -> None:
     assert _parse_octal(text) == expected
 
 
@@ -74,7 +78,7 @@ def test_parse_octal_accepts_valid_strings(text, expected):
     "-755",   # negative sign
     "0o755",  # python literal prefix
 ])
-def test_parse_octal_rejects_invalid_strings(text):
+def test_parse_octal_rejects_invalid_strings(text: str) -> None:
     assert _parse_octal(text) is None
 
 
@@ -83,11 +87,11 @@ def test_parse_octal_rejects_invalid_strings(text):
 # ---------------------------------------------------------------------------
 
 
-def test_format_octal_strips_file_type_bits():
+def test_format_octal_strips_file_type_bits() -> None:
     assert _format_octal(stat.S_IFREG | 0o644) == "0644"
 
 
-def test_format_octal_preserves_special_bits():
+def test_format_octal_preserves_special_bits() -> None:
     assert _format_octal(0o4755) == "4755"
 
 
@@ -96,11 +100,11 @@ def test_format_octal_preserves_special_bits():
 # ---------------------------------------------------------------------------
 
 
-def _result_payload(result) -> dict:
-    return result.body
+def _result_payload(result: ToolResult) -> dict[str, object]:
+    return cast(dict[str, object], result.body)
 
 
-def test_execute_changes_permissions_and_reports_before_after(tmp_path):
+def test_execute_changes_permissions_and_reports_before_after(tmp_path: Path) -> None:
     target = tmp_path / "script.sh"
     target.write_text("#!/bin/bash\necho hi\n")
     os.chmod(target, 0o644)
@@ -116,7 +120,7 @@ def test_execute_changes_permissions_and_reports_before_after(tmp_path):
     assert (target.stat().st_mode & 0o7777) == 0o755
 
 
-def test_execute_accepts_leading_zero_permissions(tmp_path):
+def test_execute_accepts_leading_zero_permissions(tmp_path: Path) -> None:
     target = tmp_path / "config.yaml"
     target.write_text("k: v\n")
     os.chmod(target, 0o644)
@@ -126,7 +130,7 @@ def test_execute_accepts_leading_zero_permissions(tmp_path):
     assert (target.stat().st_mode & 0o7777) == 0o600
 
 
-def test_execute_accepts_symbolic_clause(tmp_path):
+def test_execute_accepts_symbolic_clause(tmp_path: Path) -> None:
     target = tmp_path / "script.sh"
     target.write_text("#!/bin/bash\n")
     os.chmod(target, 0o644)
@@ -137,7 +141,7 @@ def test_execute_accepts_symbolic_clause(tmp_path):
     assert (target.stat().st_mode & 0o7777) == 0o755
 
 
-def test_execute_accepts_intent_keyword(tmp_path):
+def test_execute_accepts_intent_keyword(tmp_path: Path) -> None:
     target = tmp_path / "key.pem"
     target.write_text("x")
     os.chmod(target, 0o666)
@@ -148,7 +152,7 @@ def test_execute_accepts_intent_keyword(tmp_path):
     assert (target.stat().st_mode & 0o7777) == 0o600
 
 
-def test_execute_works_on_directories(tmp_path):
+def test_execute_works_on_directories(tmp_path: Path) -> None:
     target = tmp_path / "subdir"
     target.mkdir()
     os.chmod(target, 0o755)
@@ -163,13 +167,13 @@ def test_execute_works_on_directories(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_execute_rejects_missing_path():
+def test_execute_rejects_missing_path() -> None:
     result = FilePermissionsAbility().run({"permissions": "755"})
     assert result.status == "error"
     assert result.code == "missing-params"
 
 
-def test_execute_rejects_missing_permissions(tmp_path):
+def test_execute_rejects_missing_permissions(tmp_path: Path) -> None:
     target = tmp_path / "f.txt"
     target.write_text("x")
     result = FilePermissionsAbility().run({"path": str(target)})
@@ -177,7 +181,7 @@ def test_execute_rejects_missing_permissions(tmp_path):
     assert result.code == "missing-params"
 
 
-def test_execute_rejects_invalid_mode(tmp_path):
+def test_execute_rejects_invalid_mode(tmp_path: Path) -> None:
     target = tmp_path / "f.txt"
     target.write_text("x")
     os.chmod(target, 0o644)
@@ -189,12 +193,12 @@ def test_execute_rejects_invalid_mode(tmp_path):
     assert (target.stat().st_mode & 0o7777) == 0o644
 
 
-def test_execute_rejects_path_not_found(tmp_path):
+def test_execute_rejects_path_not_found(tmp_path: Path) -> None:
     missing = tmp_path / "does-not-exist.txt"
     result = FilePermissionsAbility().run({"path": str(missing), "permissions": "644"})
     assert result.status == "error"
     assert result.code == "path-not-found"
-    assert str(missing) in result.body
+    assert str(missing) in cast(str, result.body)
 
 
 # ---------------------------------------------------------------------------
@@ -203,7 +207,7 @@ def test_execute_rejects_path_not_found(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_intent_readonly_strips_write_and_execute(db, chat_mp, tmp_path):
+def test_intent_readonly_strips_write_and_execute(db: sqlite3.Connection, chat_mp: _MP, tmp_path: Path) -> None:
     """``permissions="readonly"`` (the examples' own vocabulary) on a 0o755 file
     chmods it to 0o444 with ``mode_symbolic="r--r--r--"``."""
     target = tmp_path / "config.yaml"
@@ -215,13 +219,13 @@ def test_intent_readonly_strips_write_and_execute(db, chat_mp, tmp_path):
     )
 
     assert "[file_permissions(status=success" in out
-    body = _parse_body(out)
+    body = cast(dict[str, object], _parse_body(out))
     assert body["mode_octal"] == "0444"
     assert body["mode_symbolic"] == "r--r--r--"
     assert stat.S_IMODE(target.stat().st_mode) == 0o444
 
 
-def test_compound_symbolic_clauses(db, chat_mp, tmp_path):
+def test_compound_symbolic_clauses(db: sqlite3.Connection, chat_mp: _MP, tmp_path: Path) -> None:
     """``"u+x,go-rwx"`` resolves both clauses against the current 0o644 mode:
     ``u+x`` → owner rwx, ``go-rwx`` → group/other cleared, leaving 0o700."""
     target = tmp_path / "tool"
@@ -233,14 +237,14 @@ def test_compound_symbolic_clauses(db, chat_mp, tmp_path):
     )
 
     assert "[file_permissions(status=success" in out
-    body = _parse_body(out)
+    body = cast(dict[str, object], _parse_body(out))
     assert body["mode_octal"] == "0700"
     assert body["mode_symbolic"] == "rwx------"
     assert stat.S_IMODE(target.stat().st_mode) == 0o700
 
 
 @pytest.mark.parametrize("bad", ["banana", "u=g"])
-def test_invalid_mode_leaves_file_unchanged(db, chat_mp, tmp_path, bad):
+def test_invalid_mode_leaves_file_unchanged(db: sqlite3.Connection, chat_mp: _MP, tmp_path: Path, bad: str) -> None:
     """An unparseable value (gibberish ``"banana"`` and the unsupported copy-form
     ``"u=g"``) errors ``code=invalid-mode`` with a hint showing BOTH accepted
     forms, and the file's mode on disk is UNCHANGED."""
@@ -264,7 +268,7 @@ def test_invalid_mode_leaves_file_unchanged(db, chat_mp, tmp_path, bad):
     hasattr(os, "geteuid") and os.geteuid() == 0,
     reason="root may chmod any path, so the PermissionError never fires",
 )
-def test_permission_denied_on_root_owned_path(db, chat_mp):
+def test_permission_denied_on_root_owned_path(db: sqlite3.Connection, chat_mp: _MP) -> None:
     """chmod-ing a root-owned path (``/``) as a non-root user makes the real
     ``os.chmod`` raise ``PermissionError`` → ``code=permission-denied`` (not
     swallowed as success). Verified against the live OS first so the assertion is

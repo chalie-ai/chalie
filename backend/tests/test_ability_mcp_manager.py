@@ -11,6 +11,10 @@ conformance file removed in TKT-975. Drives the real ToolDispatcher end-to-end
 hot path with zero mocks, exercising add/list/enable/disable actions, structured
 row bodies, and the _classify_sync_error pure-function contract."""
 
+import sqlite3
+from pathlib import Path
+from typing import cast
+
 import pytest
 
 from abilities._dispatcher import ToolDispatcher
@@ -29,14 +33,14 @@ _DEAD_HOST = "http://127.0.0.1:1/mcp"
 
 
 class _MP:
-    def __init__(self, uid: int, config) -> None:
+    def __init__(self, uid: int, config: object) -> None:
         self.config = config
         self.uid = uid
         self._uid = uid
 
 
 @pytest.fixture
-def chat_mp(db, tmp_path, monkeypatch):
+def chat_mp(db: sqlite3.Connection, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> _MP:
     """A real chat mp bound to the test database, with the ``mcp_tools.sqlite``
     runtime DB isolated under ``tmp_path`` so ``list``/``add`` tool-count reads
     and tool writes never touch the developer's real data dir."""
@@ -55,7 +59,7 @@ def _parse_body(rendered: str) -> object:
 # ── 1. THE KILL SHOT: unreachable add → mcp-unreachable, but row IS registered ──
 
 
-def test_add_unreachable_host_is_loud_error_but_row_registered(db, chat_mp):
+def test_add_unreachable_host_is_loud_error_but_row_registered(db: sqlite3.Connection, chat_mp: _MP) -> None:
     """Adding a server whose host does not answer is ``code=mcp-unreachable`` (not
     a ``status=success`` "Registered …" prose body), the hint NAMES the server,
     AND the row was still written to the real ``mcp_client_servers`` table —
@@ -80,7 +84,7 @@ def test_add_unreachable_host_is_loud_error_but_row_registered(db, chat_mp):
 # ── 4. list with no servers → success, body [], count=0 ─────────────────────────
 
 
-def test_list_empty_is_success_empty_array(db, chat_mp):
+def test_list_empty_is_success_empty_array(db: sqlite3.Connection, chat_mp: _MP) -> None:
     """With no servers configured, ``list`` is SUCCESS carrying ``[]`` and
     ``count=0`` — an empty inventory is a valid state, never an error and never
     prose."""
@@ -94,7 +98,7 @@ def test_list_empty_is_success_empty_array(db, chat_mp):
 # ── 5. list after add → structured rows whose values match the DB row ───────────
 
 
-def test_list_returns_structured_rows_matching_db(db, chat_mp):
+def test_list_returns_structured_rows_matching_db(db: sqlite3.Connection, chat_mp: _MP) -> None:
     """After an add, ``list`` returns structured JSON rows with the contract keys,
     and each value matches the real ``mcp_client_servers`` row."""
     ToolDispatcher(chat_mp).dispatch(
@@ -105,7 +109,7 @@ def test_list_returns_structured_rows_matching_db(db, chat_mp):
 
     assert "[mcp_manager(status=success" in _head(out)
     assert "count=1" in _head(out)
-    rows = _parse_body(out)
+    rows = cast(list[dict[str, object]], _parse_body(out))
     assert len(rows) == 1
     row = rows[0]
     assert set(row) == {"id", "name", "url", "status", "enabled", "tool_count"}
@@ -125,7 +129,7 @@ def test_list_returns_structured_rows_matching_db(db, chat_mp):
 # ── 6. enable by name (dead host) → classified error, but row IS enabled ────────
 
 
-def test_enable_by_name_dead_host_errors_but_row_enabled(db, chat_mp):
+def test_enable_by_name_dead_host_errors_but_row_enabled(db: sqlite3.Connection, chat_mp: _MP) -> None:
     """Enabling a (dead) server by name is reported as a connect error, but the
     real row's ``enabled`` flag is flipped to true — the model is told the tools
     are not live yet while the row genuinely reflects the enable."""
@@ -150,7 +154,7 @@ def test_enable_by_name_dead_host_errors_but_row_enabled(db, chat_mp):
 # ── 7. disable by name → success {id,name,enabled:false} and DB row disabled ────
 
 
-def test_disable_by_name_succeeds_and_disables_row(db, chat_mp):
+def test_disable_by_name_succeeds_and_disables_row(db: sqlite3.Connection, chat_mp: _MP) -> None:
     """Disabling a server by name returns a structured success body
     ``{"id","name","enabled":false}`` and the real row is disabled."""
     svc = McpClientService()
@@ -173,7 +177,7 @@ def test_disable_by_name_succeeds_and_disables_row(db, chat_mp):
 # ── 8. enable/disable with neither server_id nor name → missing-params ──────────
 
 
-def test_enable_without_target_is_missing_params(db, chat_mp):
+def test_enable_without_target_is_missing_params(db: sqlite3.Connection, chat_mp: _MP) -> None:
     """Enable with neither server_id nor name is ``code=missing-params`` (from
     run()'s resolution ladder), not a success body."""
     out = ToolDispatcher(chat_mp).dispatch("mcp_manager", {"action": "enable"})
@@ -182,7 +186,7 @@ def test_enable_without_target_is_missing_params(db, chat_mp):
     assert "status=success" not in out
 
 
-def test_disable_without_target_is_missing_params(db, chat_mp):
+def test_disable_without_target_is_missing_params(db: sqlite3.Connection, chat_mp: _MP) -> None:
     """Disable with neither server_id nor name is ``code=missing-params``."""
     out = ToolDispatcher(chat_mp).dispatch("mcp_manager", {"action": "disable"})
 
@@ -193,7 +197,7 @@ def test_disable_without_target_is_missing_params(db, chat_mp):
 # ── 9. enable/disable with an unknown name → not-found ──────────────────────────
 
 
-def test_enable_unknown_name_is_not_found(db, chat_mp):
+def test_enable_unknown_name_is_not_found(db: sqlite3.Connection, chat_mp: _MP) -> None:
     """Enabling a name that matches no configured server is ``code=not-found``
     (not a success body, not a swallowed no-op)."""
     out = ToolDispatcher(chat_mp).dispatch(
@@ -204,7 +208,7 @@ def test_enable_unknown_name_is_not_found(db, chat_mp):
     assert "status=success" not in out
 
 
-def test_disable_unknown_name_is_not_found(db, chat_mp):
+def test_disable_unknown_name_is_not_found(db: sqlite3.Connection, chat_mp: _MP) -> None:
     """Disabling a name that matches no configured server is ``code=not-found``."""
     out = ToolDispatcher(chat_mp).dispatch(
         "mcp_manager", {"action": "disable", "name": "nope"}
@@ -217,7 +221,7 @@ def test_disable_unknown_name_is_not_found(db, chat_mp):
 # ── 10. _classify_sync_error — pure function (direct call sanctioned) ───────────
 
 
-def test_classify_sync_error_auth_markers():
+def test_classify_sync_error_auth_markers() -> None:
     assert _classify_sync_error("HTTP 401 Unauthorized") == "auth-failed"
     assert _classify_sync_error("server returned 403") == "auth-failed"
     assert _classify_sync_error("Forbidden") == "auth-failed"

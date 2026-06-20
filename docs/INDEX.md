@@ -17,6 +17,7 @@
 4. [14-DEFAULT-TOOLS.md](14-DEFAULT-TOOLS.md) — The 33 tools shipped with Chalie, with sample output
 5. [16-AMBIENT-AWARENESS.md](16-AMBIENT-AWARENESS.md) — Signals, WorldState, and the background workers
 6. [12-TESTING.md](12-TESTING.md) — Running and writing tests
+7. [typing-ratchet.md](typing-ratchet.md) — The `mypy --strict` standard and supported narrowing patterns
 
 ## Specialized
 

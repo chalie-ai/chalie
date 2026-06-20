@@ -3,15 +3,16 @@
 import time
 import json
 import uuid
-from typing import Dict, Any
+from typing import Dict, cast
 from services.memory_client import MemoryClientService
+from services.memory_store import MemoryStore
 
 
 class MetricsService:
     """Manages metrics collection with MemoryStore counters and timing records."""
 
-    def __init__(self):
-        self.store = MemoryClientService.create_connection()
+    def __init__(self) -> None:
+        self.store: MemoryStore = MemoryClientService.create_connection()
 
     def start_trace(self) -> str:
         trace_id = str(uuid.uuid4())[:8]
@@ -25,7 +26,7 @@ class MetricsService:
         self.store.setex(trace_key, 3600, json.dumps(trace_data))
         return trace_id
 
-    def record_timing(self, trace_id: str, operation: str, duration_ms: float):
+    def record_timing(self, trace_id: str, operation: str, duration_ms: float) -> None:
         trace_key = f"trace:{trace_id}"
         trace_json = self.store.get(trace_key)
         if trace_json:
@@ -40,7 +41,7 @@ class MetricsService:
         pipe.expire(rollup_key, 86400 * 7)
         pipe.execute()
 
-    def record_counter(self, metric_name: str, value: int = 1):
+    def record_counter(self, metric_name: str, value: int = 1) -> None:
         day_key = time.strftime('%Y-%m-%d')
         counter_key = f"metrics:counter:{metric_name}:{day_key}"
         pipe = self.store.pipeline()
@@ -48,10 +49,10 @@ class MetricsService:
         pipe.expire(counter_key, 86400 * 7)
         pipe.execute()
 
-    def get_dashboard_data(self) -> Dict[str, Any]:
+    def get_dashboard_data(self) -> Dict[str, object]:
         """Get aggregated metrics for dashboard display."""
         day_key = time.strftime('%Y-%m-%d')
-        dashboard: Dict[str, Any] = {
+        dashboard: Dict[str, object] = {
             'date': day_key,
             'counters': {},
             'timing_averages': {},
@@ -66,13 +67,13 @@ class MetricsService:
         for name in counter_names:
             counter_key = f"metrics:counter:{name}:{day_key}"
             value = self.store.get(counter_key)
-            dashboard['counters'][name] = int(value) if value else 0
+            cast(Dict[str, object], dashboard['counters'])[name] = int(value) if value else 0
 
         # user_messages_total is no longer a stored counter (§4e). One user turn
         # writes exactly one transcript row with channel='user' AND role='user'
         # (UMP hardcodes both), so the value is an exact on-read COUNT. Exact as
         # long as history compaction never hard-deletes user transcript rows.
-        dashboard['counters']['user_messages_total'] = self._count_user_messages()
+        cast(Dict[str, object], dashboard['counters'])['user_messages_total'] = self._count_user_messages()
 
         timing_operations = [
             'embedding', 'response_generation',
@@ -83,7 +84,7 @@ class MetricsService:
             values = self.store.lrange(rollup_key, 0, -1)
             if values:
                 float_values = [float(v) for v in values]
-                dashboard['timing_averages'][operation] = {
+                cast(Dict[str, object], dashboard['timing_averages'])[operation] = {
                     'count': len(float_values),
                     'avg_ms': sum(float_values) / len(float_values),
                     'min_ms': min(float_values),

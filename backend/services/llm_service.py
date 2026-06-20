@@ -14,7 +14,7 @@ no backward-compat re-export shims remain.
 import re
 import time
 import logging
-from typing import Optional
+from typing import TYPE_CHECKING, Callable, Optional, cast
 
 logger = logging.getLogger(__name__)
 
@@ -54,7 +54,7 @@ def estimate_tokens(text: str) -> int:
     return int(len(text.split()) * 1.3)
 
 
-def _call_with_retry(fn, max_retries=2, backoff=1.0):
+def _call_with_retry(fn: Callable[[], object], max_retries: int = 2, backoff: float = 1.0) -> object:
     """Rate limits (RateLimitError) are retried once with a short wait if
     the provider includes a Retry-After header (capped at 10s). If no
     header is present, the error propagates immediately."""
@@ -79,9 +79,11 @@ def _call_with_retry(fn, max_retries=2, backoff=1.0):
             logger.warning("LLM call failed (attempt %d): %s. Retrying in %ss...", attempt + 1, e, wait)
             time.sleep(wait)
             attempt += 1
+    if TYPE_CHECKING:  # mypy: loop always returns or raises; end is unreachable
+        raise RuntimeError("_call_with_retry: unreachable")
 
 
-def _parse_retry_after(exc) -> Optional[float]:
+def _parse_retry_after(exc: BaseException) -> Optional[float]:
     """Extract the Retry-After header value from an HTTP exception, or return None."""
     if hasattr(exc, 'response') and exc.response is not None:
         ra = exc.response.headers.get('retry-after')
@@ -93,7 +95,7 @@ def _parse_retry_after(exc) -> Optional[float]:
     return None
 
 
-def _is_thinking_rejection(exc, create_kwargs: dict) -> bool:
+def _is_thinking_rejection(exc: BaseException, create_kwargs: dict[str, object]) -> bool:
     """Return True when the provider rejected a reasoning_effort parameter."""
     if 'reasoning_effort' not in create_kwargs:
         return False
@@ -101,7 +103,7 @@ def _is_thinking_rejection(exc, create_kwargs: dict) -> bool:
     return 'reasoning_effort' in err or 'unsupported' in err
 
 
-def _resolve_api_key(config: dict) -> str:
+def _resolve_api_key(config: dict[str, object]) -> str:
     """Raises ValueError when the API key is not present in config."""
     api_key = config.get('api_key')
     if not api_key:
@@ -109,4 +111,4 @@ def _resolve_api_key(config: dict) -> str:
             "API key not found in provider configuration. "
             "Store the API key in the database via POST /providers or update via PUT /providers/<id>"
         )
-    return api_key
+    return cast(str, api_key)

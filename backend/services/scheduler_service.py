@@ -13,6 +13,11 @@ import logging
 import threading
 import time
 import uuid
+from collections.abc import Callable
+from typing import TYPE_CHECKING, cast
+
+if TYPE_CHECKING:
+    from services.database_service import DatabaseService
 
 from services.embedding_utils import pack_embedding
 from utils.logger import Logger
@@ -40,16 +45,16 @@ _SCHEDULED_DELIVERY_TEMPLATE = (
 )
 
 # System handler registry — capabilities register callbacks for item_type='system'
-_SYSTEM_HANDLERS: dict[str, callable] = {}
+_SYSTEM_HANDLERS: dict[str, Callable[..., object]] = {}
 
 
-def register_system_handler(source: str, callback: callable):
+def register_system_handler(source: str, callback: Callable[..., object]) -> None:
     """Register a callback for system scheduled items with the given topic."""
     _SYSTEM_HANDLERS[source] = callback
     logger.info(f"{LOG_PREFIX} Registered system handler: {source}")
 
 
-def embed_scheduled_item(item_id: str, message: str, db=None) -> None:
+def embed_scheduled_item(item_id: str, message: str, db: "DatabaseService | None" = None) -> None:
     """Non-fatal: logs a warning and returns silently on any failure."""
     try:
         from services.embedding_service import get_embedding_service
@@ -84,7 +89,7 @@ def embed_scheduled_item(item_id: str, message: str, db=None) -> None:
         logger.warning(f"{LOG_PREFIX} Failed to embed scheduled item {item_id}: {e}")
 
 
-def scheduler_worker():
+def scheduler_worker() -> None:
     Logger.start()
     logger.info(f"{LOG_PREFIX} Service started (poll interval: {_POLL_INTERVAL}s)")
 
@@ -104,7 +109,7 @@ def scheduler_worker():
             next_tick = time.monotonic() + _POLL_INTERVAL
 
 
-def _poll_and_fire():
+def _poll_and_fire() -> None:
     try:
         from services.database_service import get_shared_db_service
 
@@ -237,7 +242,7 @@ def _load_speed_from_history() -> float | None:
 _MIN_ADVISORY_BUFFER_MINUTES = 10  # minimum warning before departure time
 
 
-def _build_departure_advisory(item: dict) -> str | None:
+def _build_departure_advisory(item: dict[str, object]) -> str | None:
     """Return a departure advisory string when location data is available."""
     try:
         import json
@@ -246,9 +251,9 @@ def _build_departure_advisory(item: dict) -> str | None:
     except (TypeError, ValueError):
         return None
 
-    dest_lat = meta.get("destination_lat")
-    dest_lon = meta.get("destination_lon")
-    destination_name = meta.get("destination")
+    dest_lat = cast(dict[str, object], meta).get("destination_lat")
+    dest_lon = cast(dict[str, object], meta).get("destination_lon")
+    destination_name = cast(dict[str, object], meta).get("destination")
 
     if dest_lat is None or dest_lon is None:
         return None
@@ -265,7 +270,7 @@ def _build_departure_advisory(item: dict) -> str | None:
         if user_lat is None or user_lon is None:
             return None
 
-        dist = distance_km(float(user_lat), float(user_lon), float(dest_lat), float(dest_lon))
+        dist = distance_km(float(cast(float, user_lat)), float(cast(float, user_lon)), float(cast(float, dest_lat)), float(cast(float, dest_lon)))
 
         speed = _load_speed_from_history() or DEFAULT_SPEED_KMH
         travel_minutes = estimate_travel_minutes(dist, speed)
@@ -274,7 +279,7 @@ def _build_departure_advisory(item: dict) -> str | None:
         if not due_at_raw:
             return None
         from datetime import timezone as _tz
-        due_dt = parse_utc(due_at_raw)
+        due_dt = parse_utc(cast(str, due_at_raw))
         if due_dt == datetime.min.replace(tzinfo=_tz.utc):
             return None
         now = utc_now()
@@ -300,18 +305,18 @@ def _build_departure_advisory(item: dict) -> str | None:
     return None
 
 
-def _fire_item(item: dict):
+def _fire_item(item: dict[str, object]) -> None:
     """Fire a due item — directly or via LLM pipeline depending on item_type."""
     advisory = _build_departure_advisory(item)
-    message = item.get("message", "")
+    message = cast(str, item.get("message", ""))
     if advisory:
         message = f"{advisory}\n\n{message}"
-    source = item.get("item_type", "notification")
+    source = cast(str, item.get("item_type", "notification"))
     is_prompt = (source == "prompt")
 
     if source == "system":
         # System handler dispatch — capabilities register callbacks
-        handler_key = item.get("channel", item.get("topic", ""))
+        handler_key = cast(str, item.get("channel", item.get("topic", "")))
         handler = _SYSTEM_HANDLERS.get(handler_key)
         if handler:
             try:
@@ -333,7 +338,7 @@ def _fire_item(item: dict):
         # claiming/marking items. A nested write commit on the shared thread-local
         # connection would flush the in-progress 'fired' UPDATE and break the
         # claim atomicity, and the poll lock would be held for the whole loop.
-        item_id = item.get('id', 'unknown')
+        item_id = cast(str, item.get('id', 'unknown'))
         threading.Thread(
             target=_fire_scheduled_prompt,
             args=(item_id, message),
@@ -421,7 +426,7 @@ _RECURRENCE_MAP = {
 }
 
 
-def _in_quiet_hours(item: dict) -> bool:
+def _in_quiet_hours(item: dict[str, object]) -> bool:
     """Check if now is outside the item's active window (quiet hours)."""
     ws, we = item.get("window_start"), item.get("window_end")
     if not ws or not we:
@@ -429,10 +434,10 @@ def _in_quiet_hours(item: dict) -> bool:
     from services.locale_service import local_now
     now_local = local_now()
     current = (now_local.hour, now_local.minute)
-    return not (tuple(map(int, ws.split(":"))) <= current < tuple(map(int, we.split(":"))))
+    return not (tuple(map(int, cast(str, ws).split(":"))) <= current < tuple(map(int, cast(str, we).split(":"))))
 
 
-def _next_due(item: dict) -> datetime | None:
+def _next_due(item: dict[str, object]) -> datetime | None:
     """Return the next UTC due datetime for a recurring item, or None."""
     import calendar
     from services.locale_service import calculate_interval
@@ -443,7 +448,7 @@ def _next_due(item: dict) -> datetime | None:
         return None
 
     try:
-        due_at = parse_utc(item["due_at"])
+        due_at = parse_utc(cast(str, item["due_at"]))
     except Exception:
         return None
 
@@ -458,9 +463,9 @@ def _next_due(item: dict) -> datetime | None:
         day = min(due_at.day, calendar.monthrange(year, month)[1])
         return due_at.replace(year=year, month=month, day=day)
 
-    if recurrence.startswith("interval:"):
+    if cast(str, recurrence).startswith("interval:"):
         try:
-            mins = int(recurrence.split(":", 1)[1])
+            mins = int(cast(str, recurrence).split(":", 1)[1])
             next_utc, _ = calculate_interval(due_at, "minute", mins)
             return next_utc
         except (ValueError, IndexError):

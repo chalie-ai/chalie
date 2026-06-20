@@ -9,14 +9,20 @@
 
 
 import json
+import sqlite3
 import threading
+from collections.abc import Generator
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from typing import TYPE_CHECKING, cast
 
 import pytest
 
 from abilities._dispatcher import ToolDispatcher
 from configs.channels import DmnConfig
 from tests._tool_result_harness import MP, allow_policy, body, parse_body, seed_transcript
+
+if TYPE_CHECKING:
+    from capabilities.home_capability.capability import HomeCapability
 
 pytestmark = pytest.mark.unit
 
@@ -51,15 +57,15 @@ _STATES = [
 _STATES_BY_ID = {s["entity_id"]: s for s in _STATES}
 
 
-def _make_handler(posts: list):
+def _make_handler(posts: list[dict[str, object]]) -> type[BaseHTTPRequestHandler]:
     """Build a real local Home Assistant stub that serves HA endpoints and records
     every service POST so tests can assert calls reached (or didn't reach) the wire."""
 
     class _HAHandler(BaseHTTPRequestHandler):
-        def log_message(self, *_args):  # silence the stub's stderr access log
+        def log_message(self, *_args: object) -> None:  # silence the stub's stderr access log
             pass
 
-        def _send_json(self, code: int, payload) -> None:
+        def _send_json(self, code: int, payload: object) -> None:
             body = json.dumps(payload).encode()
             self.send_response(code)
             self.send_header("Content-Type", "application/json")
@@ -67,7 +73,7 @@ def _make_handler(posts: list):
             self.end_headers()
             self.wfile.write(body)
 
-        def do_GET(self):  # noqa: N802 (http.server contract)
+        def do_GET(self) -> None:  # noqa: N802 (http.server contract)
             path = self.path
             if path == "/api/" or path == "/api":
                 self._send_json(200, {"message": "API running."})
@@ -89,7 +95,7 @@ def _make_handler(posts: list):
                 return
             self._send_json(404, {"message": "Not found."})
 
-        def do_POST(self):  # noqa: N802 (http.server contract)
+        def do_POST(self) -> None:  # noqa: N802 (http.server contract)
             length = int(self.headers.get("Content-Length", 0))
             raw = self.rfile.read(length) if length else b"{}"
             try:
@@ -104,15 +110,15 @@ def _make_handler(posts: list):
 
 
 @pytest.fixture()
-def ha_server():
+def ha_server() -> Generator[dict[str, object], None, None]:
     """A real local HA REST stub in a background thread. Yields
     ``{"url", "posts"}`` — *posts* is the live list of every service POST the stub
     received, so a test can assert a control call did or did not fire."""
-    posts: list = []
+    posts: list[dict[str, object]] = []
     server = ThreadingHTTPServer(("127.0.0.1", 0), _make_handler(posts))
     thread = threading.Thread(target=server.serve_forever, daemon=True, name="ha-stub")
     thread.start()
-    host, port = server.server_address
+    host, port = cast(tuple[str, int], server.server_address)
     try:
         yield {"url": f"http://{host}:{port}", "posts": posts}
     finally:
@@ -120,7 +126,7 @@ def ha_server():
         thread.join(timeout=5)
 
 
-def _connect_home(url: str):
+def _connect_home(url: str) -> "HomeCapability":
     """Point the REAL ``HomeCapability`` at *url* and connect it for real.
 
     Mirrors exactly what ``HomeCapability.connect()`` does once credentials are
@@ -138,7 +144,7 @@ def _connect_home(url: str):
     from capabilities import load_capabilities
     from capabilities.home_capability import ha_rest_handler as rest
 
-    cap = load_capabilities().get("home")
+    cap = cast("HomeCapability", load_capabilities().get("home"))
     assert cap is not None, "the home capability must be discovered"
     cap._url = url
     cap._token = "test-token"
@@ -150,21 +156,21 @@ def _connect_home(url: str):
 
 
 @pytest.fixture(autouse=True)
-def _reset_home_connection():
+def _reset_home_connection() -> Generator[None, None, None]:
     """Each test starts with the home capability disconnected — the singleton
     cache persists across tests, so a connected fixture from a prior test must not
     leak into a not-connected assertion."""
     yield
     from capabilities import load_capabilities
 
-    cap = load_capabilities().get("home")
+    cap = cast("HomeCapability", load_capabilities().get("home"))
     if cap is not None:
         cap._connected = False
         cap._url = ""
         cap._token = ""
 
 
-def _allow(db, action: str, channel: str = "subconscious") -> None:
+def _allow(db: sqlite3.Connection, action: str, channel: str = "subconscious") -> None:
     """Seed an ``allow`` policy row so the real gate reaches run().
 
     home.control / home.trigger_automation / home.subscribe_events ship as
@@ -176,7 +182,7 @@ def _allow(db, action: str, channel: str = "subconscious") -> None:
 
 
 @pytest.fixture
-def dmn_mp(db):
+def dmn_mp(db: sqlite3.Connection) -> MP:
     """A real non-user-broadcast mp on the subconscious channel: the home read
     actions are seeded ``allow`` there, and write actions are flipped to ``allow``
     per-test via ``_allow`` so the real gate reaches run() without a WS ask-hang."""
@@ -194,18 +200,18 @@ def _parse_body(rendered: str, tool: str = "home") -> object:
 # ── 4. connected list_devices → structured dict body with devices + count ───────
 
 
-def test_list_devices_returns_structured_rows(db, dmn_mp, ha_server):
+def test_list_devices_returns_structured_rows(db: sqlite3.Connection, dmn_mp: MP, ha_server: dict[str, object]) -> None:
     """``list_devices`` returns a STRUCTURED JSON dict body (devices rows + count),
     not a double-encoded JSON string. RED-first: the old ability json.dumps'd the
     dict, so ``json.loads`` of the body yielded a ``str``, not a dict."""
-    _connect_home(ha_server["url"])
+    _connect_home(cast(str, ha_server["url"]))
 
     out = ToolDispatcher(dmn_mp).dispatch("home", {"action": "list_devices"})
 
     assert "[home(status=success" in out
-    body = _parse_body(out)
+    body = cast(dict[str, object], _parse_body(out))
     assert isinstance(body, dict), f"body must be a structured dict, got {body!r}"
-    ids = {d["entity_id"] for d in body["devices"]}
+    ids = {cast(dict[str, object], d)["entity_id"] for d in cast(list[object], body["devices"])}
     assert "light.office" in ids
     assert "automation.good_morning" in ids
     assert body["count"] == len(_STATES)
@@ -214,30 +220,30 @@ def test_list_devices_returns_structured_rows(db, dmn_mp, ha_server):
 # ── 5. connected get_state on a real entity → state dict body ───────────────────
 
 
-def test_get_state_on_real_entity_returns_state_dict(db, dmn_mp, ha_server):
+def test_get_state_on_real_entity_returns_state_dict(db: sqlite3.Connection, dmn_mp: MP, ha_server: dict[str, object]) -> None:
     """``get_state`` for an existing entity returns its state dict (entity_id +
     state + attributes) as a structured body."""
-    _connect_home(ha_server["url"])
+    _connect_home(cast(str, ha_server["url"]))
 
     out = ToolDispatcher(dmn_mp).dispatch(
         "home", {"action": "get_state", "entity_id": "climate.bedroom"}
     )
 
     assert "[home(status=success" in out
-    body = _parse_body(out)
+    body = cast(dict[str, object], _parse_body(out))
     assert body["entity_id"] == "climate.bedroom"
     assert body["state"] == "heat"
-    assert body["attributes"]["temperature"] == 21
+    assert cast(dict[str, object], body["attributes"])["temperature"] == 21
 
 
 # ── 6. connected control on an EXISTING entity → success + the POST fired ────────
 
 
-def test_control_existing_entity_succeeds_and_posts(db, dmn_mp, ha_server):
+def test_control_existing_entity_succeeds_and_posts(db: sqlite3.Connection, dmn_mp: MP, ha_server: dict[str, object]) -> None:
     """``control`` on an existing entity reaches the REST service POST and returns a
     structured ``{"status": "ok", …}`` body. The stub recorded exactly one service
     POST against the entity's domain/service."""
-    _connect_home(ha_server["url"])
+    _connect_home(cast(str, ha_server["url"]))
     _allow(db, "control")
 
     out = ToolDispatcher(dmn_mp).dispatch(
@@ -246,26 +252,26 @@ def test_control_existing_entity_succeeds_and_posts(db, dmn_mp, ha_server):
     )
 
     assert "[home(status=success" in out
-    body = _parse_body(out)
+    body = cast(dict[str, object], _parse_body(out))
     assert body["status"] == "ok"
     assert body["entity_id"] == "light.office"
     # The control call really hit the wire.
-    posts = ha_server["posts"]
+    posts = cast(list[dict[str, object]], ha_server["posts"])
     assert len(posts) == 1
     assert posts[0]["path"] == "/api/services/light/turn_off"
-    assert posts[0]["body"]["entity_id"] == "light.office"
+    assert cast(dict[str, object], posts[0]["body"])["entity_id"] == "light.office"
 
 
 # ── 7. connected control on a NONEXISTENT entity → unknown-entity, NO POST ───────
 
 
-def test_control_nonexistent_entity_blocks_with_candidates_no_post(db, dmn_mp, ha_server):
+def test_control_nonexistent_entity_blocks_with_candidates_no_post(db: sqlite3.Connection, dmn_mp: MP, ha_server: dict[str, object]) -> None:
     """The silent-false-success kill shot: ``control`` on an entity that does NOT
     exist errors ``code=unknown-entity`` with closest-match candidates BEFORE any
     REST write — and the stub received NO service POST. RED-first: the old ability
     fired the POST and rendered ``status=success`` even though HA changed nothing.
     """
-    _connect_home(ha_server["url"])
+    _connect_home(cast(str, ha_server["url"]))
     _allow(db, "control")
 
     out = ToolDispatcher(dmn_mp).dispatch(
@@ -285,11 +291,11 @@ def test_control_nonexistent_entity_blocks_with_candidates_no_post(db, dmn_mp, h
 # ── 8. connected get_state on a nonexistent entity → unknown-entity + candidates ─
 
 
-def test_get_state_nonexistent_entity_returns_unknown_entity(db, dmn_mp, ha_server):
+def test_get_state_nonexistent_entity_returns_unknown_entity(db: sqlite3.Connection, dmn_mp: MP, ha_server: dict[str, object]) -> None:
     """``get_state`` on a nonexistent entity errors ``code=unknown-entity`` with a
     closest-match candidate — not the unhandled 404 the raw REST get_state would
     raise."""
-    _connect_home(ha_server["url"])
+    _connect_home(cast(str, ha_server["url"]))
 
     out = ToolDispatcher(dmn_mp).dispatch(
         "home", {"action": "get_state", "entity_id": "light.livingroom"}
@@ -304,12 +310,12 @@ def test_get_state_nonexistent_entity_returns_unknown_entity(db, dmn_mp, ha_serv
 
 
 def test_trigger_nonexistent_automation_returns_unknown_automation_no_post(
-    db, dmn_mp, ha_server
-):
+    db: sqlite3.Connection, dmn_mp: MP, ha_server: dict[str, object]
+) -> None:
     """``trigger_automation`` for an automation_id that does not exist errors
     ``code=unknown-automation`` with the real automation named as a candidate, and
     fires NO trigger POST — the same false-success guard, applied to automations."""
-    _connect_home(ha_server["url"])
+    _connect_home(cast(str, ha_server["url"]))
     _allow(db, "trigger_automation")
 
     out = ToolDispatcher(dmn_mp).dispatch(
@@ -326,10 +332,10 @@ def test_trigger_nonexistent_automation_returns_unknown_automation_no_post(
 # ── 10. connected trigger_automation on a real automation → success + POST ───────
 
 
-def test_trigger_existing_automation_succeeds_and_posts(db, dmn_mp, ha_server):
+def test_trigger_existing_automation_succeeds_and_posts(db: sqlite3.Connection, dmn_mp: MP, ha_server: dict[str, object]) -> None:
     """``trigger_automation`` for an existing automation reaches the REST trigger
     service and returns a structured success body; the stub recorded the POST."""
-    _connect_home(ha_server["url"])
+    _connect_home(cast(str, ha_server["url"]))
     _allow(db, "trigger_automation")
 
     out = ToolDispatcher(dmn_mp).dispatch(
@@ -338,10 +344,10 @@ def test_trigger_existing_automation_succeeds_and_posts(db, dmn_mp, ha_server):
     )
 
     assert "[home(status=success" in out
-    body = _parse_body(out)
+    body = cast(dict[str, object], _parse_body(out))
     assert body["status"] == "ok"
     assert body["automation_id"] == "automation.good_morning"
-    posts = ha_server["posts"]
+    posts = cast(list[dict[str, object]], ha_server["posts"])
     assert len(posts) == 1
     assert posts[0]["path"] == "/api/services/automation/trigger"
 
@@ -349,16 +355,16 @@ def test_trigger_existing_automation_succeeds_and_posts(db, dmn_mp, ha_server):
 # ── 11. list_automations → structured automations rows ──────────────────────────
 
 
-def test_list_automations_returns_structured_rows(db, dmn_mp, ha_server):
+def test_list_automations_returns_structured_rows(db: sqlite3.Connection, dmn_mp: MP, ha_server: dict[str, object]) -> None:
     """``list_automations`` returns a structured dict body with the automation rows
     and a count — not a double-encoded JSON string."""
-    _connect_home(ha_server["url"])
+    _connect_home(cast(str, ha_server["url"]))
 
     out = ToolDispatcher(dmn_mp).dispatch("home", {"action": "list_automations"})
 
     assert "[home(status=success" in out
-    body = _parse_body(out)
+    body = cast(dict[str, object], _parse_body(out))
     assert isinstance(body, dict)
-    ids = {a["entity_id"] for a in body["automations"]}
+    ids = {cast(dict[str, object], a)["entity_id"] for a in cast(list[object], body["automations"])}
     assert ids == {"automation.good_morning"}
     assert body["count"] == 1

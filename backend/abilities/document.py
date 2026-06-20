@@ -33,12 +33,15 @@ import mimetypes as _mimetypes
 import os as _os
 import secrets as _secrets
 import shutil as _shutil
-from typing import ClassVar
+from typing import TYPE_CHECKING, ClassVar, cast
 
 from abilities._ability import Ability
 from abilities._params import Keys
 from abilities._result import ToolResult
 from services.document_chunking import create_document_artifacts
+
+if TYPE_CHECKING:
+    from services.document_service import DocumentService as _DocumentService
 
 logger = logging.getLogger(__name__)
 
@@ -53,7 +56,7 @@ class DocumentAbility(Ability):
     # require neither id nor name here because either addresses the document; the
     # handlers raise the precise missing-target error. ``upload`` is mechanical
     # (not in INPUT_SCHEMA) and validated inside ingest_file.
-    ACTION_REQUIRED: ClassVar[dict] = {
+    ACTION_REQUIRED: ClassVar[dict[str, tuple[str, ...]]] = {
         "search": (Keys.query,),
         "list": (),
         "view": (),
@@ -84,10 +87,10 @@ class DocumentAbility(Ability):
     def get_search_tooltip(self) -> str:
         return "document and notes manager"
 
-    def get_parameters(self) -> dict:
+    def get_parameters(self) -> dict[str, object]:
         return self._PARAMETERS
 
-    _PARAMETERS: ClassVar[dict] = {
+    _PARAMETERS: ClassVar[dict[str, object]] = {
         "type": "object",
         "properties": {
             Keys.action: {
@@ -125,8 +128,8 @@ class DocumentAbility(Ability):
         "required": [Keys.action],
     }
 
-    def run(self, params: dict) -> ToolResult:
-        action = params.get(Keys.action, "search")
+    def run(self, params: dict[str, object]) -> ToolResult:
+        action = cast(str, params.get(Keys.action, "search"))
 
         from services.database_service import get_shared_db_service
         from services.document_service import DocumentService
@@ -136,7 +139,7 @@ class DocumentAbility(Ability):
         return _dispatch(service, action, params)
 
 
-def _parse_extracted_metadata(raw) -> dict:
+def _parse_extracted_metadata(raw: object) -> dict[str, object]:
     if isinstance(raw, dict):
         return raw
     if isinstance(raw, str):
@@ -152,7 +155,7 @@ def _parse_extracted_metadata(raw) -> dict:
 _VALID_ACTIONS = ("search", "list", "view", "delete", "restore", "create")
 
 
-def _dispatch(service, action: str, params: dict) -> ToolResult:
+def _dispatch(service: "_DocumentService", action: str, params: dict[str, object]) -> ToolResult:
     if action == "search":
         return _handle_search(service, params)
     if action == "list":
@@ -176,15 +179,15 @@ def _dispatch(service, action: str, params: dict) -> ToolResult:
     )
 
 
-def _exact_name_matches(docs: list, name: str) -> list:
+def _exact_name_matches(docs: list[dict[str, object]], name: str) -> list[dict[str, object]]:
     lowered = name.lower()
-    return [d for d in docs if (d.get("original_name") or "").lower() == lowered]
+    return [d for d in docs if cast(str, d.get("original_name") or "").lower() == lowered]
 
 
-def _candidate_rows(docs: list) -> list:
+def _candidate_rows(docs: list[dict[str, object]]) -> list[dict[str, object]]:
     rows = []
     for d in docs:
-        snippet = (d.get("summary") or d.get("clean_text") or "").strip()[:_SNIPPET_CHARS]
+        snippet = cast(str, d.get("summary") or d.get("clean_text") or "").strip()[:_SNIPPET_CHARS]
         rows.append({
             "id": d.get("id"),
             "name": d.get("original_name"),
@@ -193,7 +196,7 @@ def _candidate_rows(docs: list) -> list:
     return rows
 
 
-def _resolve_unique(service, params: dict) -> "dict | ToolResult":
+def _resolve_unique(service: "_DocumentService", params: dict[str, object]) -> "dict[str, object] | ToolResult":
     """Resolve a single document for a destructive/addressed action.
 
     Returns the document dict on an unambiguous resolution, or an error
@@ -203,7 +206,7 @@ def _resolve_unique(service, params: dict) -> "dict | ToolResult":
     single non-exact (substring) match, returns ``ambiguous-match`` with the
     candidate rows rather than silently picking the first hit.
     """
-    doc_id = (params.get(Keys.id) or "").strip()
+    doc_id = cast(str, params.get(Keys.id) or "").strip()
     if doc_id:
         doc = service.get_document(doc_id)
         if not doc:
@@ -214,7 +217,7 @@ def _resolve_unique(service, params: dict) -> "dict | ToolResult":
             )
         return doc
 
-    name = (params.get(Keys.name) or "").strip()
+    name = cast(str, params.get(Keys.name) or "").strip()
     if not name:
         return ToolResult.err(
             "id or name is required to address the document.",
@@ -246,21 +249,21 @@ def _resolve_unique(service, params: dict) -> "dict | ToolResult":
     )
 
 
-def _group_results_by_doc(results: list) -> dict:
-    doc_artifacts: dict = {}
+def _group_results_by_doc(results: list[dict[str, object]]) -> dict[str, list[dict[str, object]]]:
+    doc_artifacts: dict[str, list[dict[str, object]]] = {}
     for row in results:
-        source = row.get("source", "") or ""
+        source = cast(str, row.get("source", "") or "")
         if source.startswith("document:"):
             doc_id = source.split(":", 1)[1]
         else:
-            parts = (row.get("key", "") or "").split(":")
+            parts = cast(str, row.get("key", "") or "").split(":")
             doc_id = parts[1] if len(parts) >= 3 else "unknown"
         doc_artifacts.setdefault(doc_id, []).append(row)
     return doc_artifacts
 
 
-def _handle_search(service, params: dict) -> ToolResult:
-    query = params.get(Keys.query, "").strip()
+def _handle_search(service: "_DocumentService", params: dict[str, object]) -> ToolResult:
+    query = cast(str, params.get(Keys.query, "")).strip()
 
     from services.data_graph_service import KIND_DOCUMENT, get_data_graph_service
 
@@ -282,7 +285,7 @@ def _handle_search(service, params: dict) -> ToolResult:
     return ToolResult.ok(rows, action="search", count=len(rows))
 
 
-def _handle_list(service) -> ToolResult:
+def _handle_list(service: "_DocumentService") -> ToolResult:
     docs = [d for d in service.get_all_documents() if d.get("status") == "ready"]
 
     rows = []
@@ -306,7 +309,7 @@ def _handle_list(service) -> ToolResult:
     return ToolResult.ok(rows, action="list", count=len(rows))
 
 
-def _append_meta_summary(lines: list, doc: dict, meta: dict) -> None:
+def _append_meta_summary(lines: list[str], doc: dict[str, object], meta: dict[str, object]) -> None:
     doc_type = meta.get("document_type", {})
     if isinstance(doc_type, dict):
         doc_type = doc_type.get("value", "")
@@ -317,20 +320,20 @@ def _append_meta_summary(lines: list, doc: dict, meta: dict) -> None:
     if doc.get("page_count"):
         lines.append(f"  Pages: {doc['page_count']}")
     if meta.get("companies"):
-        lines.append("  Companies: " + ", ".join(c["name"] for c in meta["companies"][:5]))
+        lines.append("  Companies: " + ", ".join(cast(str, c["name"]) for c in cast(list[dict[str, object]], meta["companies"])[:5]))
     if meta.get("dates"):
-        lines.append("  Dates: " + ", ".join(d["value"] for d in meta["dates"][:5]))
+        lines.append("  Dates: " + ", ".join(cast(str, d["value"]) for d in cast(list[dict[str, object]], meta["dates"])[:5]))
     if meta.get("expiration_dates"):
-        lines.append("  Expiration dates: " + ", ".join(d["value"] for d in meta["expiration_dates"][:3]))
+        lines.append("  Expiration dates: " + ", ".join(cast(str, d["value"]) for d in cast(list[dict[str, object]], meta["expiration_dates"])[:3]))
     if meta.get("monetary_values"):
         lines.append("  Monetary values: " + ", ".join(
-            f"{v['currency']} {v['amount']}" for v in meta["monetary_values"][:5]
+            f"{v['currency']} {v['amount']}" for v in cast(list[dict[str, object]], meta["monetary_values"])[:5]
         ))
     if meta.get("reference_numbers"):
-        lines.append("  References: " + ", ".join(r["value"] for r in meta["reference_numbers"][:5]))
+        lines.append("  References: " + ", ".join(cast(str, r["value"]) for r in cast(list[dict[str, object]], meta["reference_numbers"])[:5]))
 
 
-def _fetch_doc_fragments(doc_id: str) -> list:
+def _fetch_doc_fragments(doc_id: str) -> list[str]:
     from services.data_graph_service import get_data_graph_service
     dgs = get_data_graph_service()
     with dgs.db.connection() as conn:
@@ -341,7 +344,7 @@ def _fetch_doc_fragments(doc_id: str) -> list:
         return [row[0] for row in cursor.fetchall() if row[0]]
 
 
-def _handle_view(service, params: dict) -> ToolResult:
+def _handle_view(service: "_DocumentService", params: dict[str, object]) -> ToolResult:
     doc = _resolve_unique(service, params)
     if isinstance(doc, ToolResult):
         return doc
@@ -369,7 +372,7 @@ def _handle_view(service, params: dict) -> ToolResult:
     if clean_text:
         lines.append(f"\n--- Full Document Text ---\n{clean_text}")
     else:
-        fragments = _fetch_doc_fragments(doc["id"])
+        fragments = _fetch_doc_fragments(cast(str, doc["id"]))
         if fragments:
             lines.append("\n--- Full Document Text ---\n" + "\n\n".join(fragments))
         else:
@@ -378,12 +381,12 @@ def _handle_view(service, params: dict) -> ToolResult:
     return ToolResult.ok("\n".join(lines), action="view", id=doc["id"])
 
 
-def _handle_delete(service, params: dict) -> ToolResult:
+def _handle_delete(service: "_DocumentService", params: dict[str, object]) -> ToolResult:
     doc = _resolve_unique(service, params)
     if isinstance(doc, ToolResult):
         return doc
 
-    doc_id = doc["id"]
+    doc_id = cast(str, doc["id"])
     if not service.soft_delete(doc_id):
         return ToolResult.err(
             f"Failed to delete {doc['original_name']!r}.",
@@ -400,16 +403,16 @@ def _handle_delete(service, params: dict) -> ToolResult:
     )
 
 
-def _handle_restore(service, params: dict) -> ToolResult:
-    doc_id = (params.get(Keys.id) or "").strip()
-    name = (params.get(Keys.name) or "").strip()
+def _handle_restore(service: "_DocumentService", params: dict[str, object]) -> ToolResult:
+    doc_id = cast(str, params.get(Keys.id) or "").strip()
+    name = cast(str, params.get(Keys.name) or "").strip()
 
     if doc_id:
         doc = service.get_document(doc_id)
     elif name:
         deleted = [
             d for d in service.get_all_documents(include_deleted=True)
-            if d.get("deleted_at") and (d.get("original_name") or "").lower() == name.lower()
+            if d.get("deleted_at") and cast(str, d.get("original_name") or "").lower() == name.lower()
         ]
         if len(deleted) > 1:
             rows = _candidate_rows(deleted)
@@ -441,7 +444,7 @@ def _handle_restore(service, params: dict) -> ToolResult:
             action="restore",
         )
 
-    if not service.restore(doc["id"]):
+    if not service.restore(cast(str, doc["id"])):
         return ToolResult.err(
             f"Failed to restore {doc['original_name']!r}.",
             code="restore-failed",
@@ -454,13 +457,13 @@ def _handle_restore(service, params: dict) -> ToolResult:
 
 
 def ingest_file(
-    service,
+    service: "_DocumentService",
     src_path: str,
     *,
     name: "str | None" = None,
     subdir: "str | None" = None,
     source_type: str = "upload",
-) -> dict:
+) -> dict[str, object]:
     """The single mechanical ingest for an uploaded file given by PATH.
 
     Shared by both upload surfaces — chat attachments (via ``_handle_upload`` /
@@ -552,7 +555,7 @@ def ingest_file(
     }
 
 
-def _handle_upload(service, params: dict) -> ToolResult:
+def _handle_upload(service: "_DocumentService", params: dict[str, object]) -> ToolResult:
     """Mechanical upload dispatch (not LLM-callable).
 
     Thin orchestrator over ``ingest_file``. The structured success body
@@ -561,11 +564,11 @@ def _handle_upload(service, params: dict) -> ToolResult:
     """
     result = ingest_file(
         service,
-        params.get(Keys.path),
-        name=params.get(Keys.name),
+        cast(str, params.get(Keys.path)),
+        name=cast("str | None", params.get(Keys.name)),
     )
     if result.get("error"):
-        return ToolResult.err(result["error"], code="upload-failed", action="upload")
+        return ToolResult.err(cast(str, result["error"]), code="upload-failed", action="upload")
     if result.get("status") != "ready":
         return ToolResult.err(
             f"Failed to process document {result['name']!r}.",
@@ -584,9 +587,9 @@ def _handle_upload(service, params: dict) -> ToolResult:
     )
 
 
-def _handle_create(service, params: dict) -> ToolResult:
-    name = params.get(Keys.name, "").strip()
-    content = params.get(Keys.content, "").strip()
+def _handle_create(service: "_DocumentService", params: dict[str, object]) -> ToolResult:
+    name = cast(str, params.get(Keys.name, "")).strip()
+    content = cast(str, params.get(Keys.content, "")).strip()
 
     if "." not in name:
         name = f"{name}.md"

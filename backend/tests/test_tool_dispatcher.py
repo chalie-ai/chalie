@@ -15,7 +15,9 @@ The unknown-tool case proves dispatch records EVERY outcome so the model never
 retries a non-existent tool forever.
 """
 
+import sqlite3
 import threading
+from typing import cast
 
 import pytest
 
@@ -26,21 +28,21 @@ from services.act_trail import ActTrail
 pytestmark = pytest.mark.unit
 
 
-def _seed_transcript(db) -> int:
+def _seed_transcript(db: sqlite3.Connection) -> int:
     """Insert a transcript anchor row; tool_calls.transcript_id FK requires it."""
     cur = db.execute(
         "INSERT INTO transcript (channel, role, content) VALUES (?, ?, ?)",
         ("dmn", "user", "find me a tool"),
     )
     db.commit()
-    return cur.lastrowid
+    return cast(int, cur.lastrowid)
 
 
 class _MP:
     """Minimal MP-shaped context: config (DmnConfig, no-op emitter), uid (trail
     anchor), DISCOVERABLE/active_tools (exposed to find_tools for realism)."""
 
-    def __init__(self, uid: int):
+    def __init__(self, uid: int) -> None:
         self.config = DmnConfig()        # broadcast_to=None → emitter is a real no-op
         self.uid = uid
         self.DISCOVERABLE: list[str] = []
@@ -48,7 +50,7 @@ class _MP:
         self.cancel_event = threading.Event()
 
 
-def test_dispatch_runs_real_registered_tool_through_gate_and_records(db):
+def test_dispatch_runs_real_registered_tool_through_gate_and_records(db: sqlite3.Connection) -> None:
     transcript_id = _seed_transcript(db)
     mp = _MP(transcript_id)
 
@@ -66,10 +68,10 @@ def test_dispatch_runs_real_registered_tool_through_gate_and_records(db):
     rows = ActTrail().fetch_by_transcript_id(transcript_id)
     assert [r["tool_name"] for r in rows] == ["find_tools"]
     assert ActTrail.render(rows[0]).startswith("[find_tools]")
-    assert "missing-params" in rows[0]["result"]
+    assert "missing-params" in cast(str, rows[0]["result"])
 
 
-def test_dispatch_records_unknown_tool_outcome(db):
+def test_dispatch_records_unknown_tool_outcome(db: sqlite3.Connection) -> None:
     """Unknown tool returns a graceful string AND records it so the model never
     retries a non-existent tool forever."""
     transcript_id = _seed_transcript(db)

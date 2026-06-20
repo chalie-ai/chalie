@@ -24,10 +24,20 @@ level to prevent circular-import issues during early application boot.
 
 import logging
 from abc import ABC, abstractmethod
+from datetime import datetime
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from typing import Protocol
+
+    class _ToolConfigService(Protocol):
+        def set_tool_config(self, tool_name: str, config: dict[str, object]) -> bool: ...
+        def get_tool_config(self, tool_name: str) -> dict[str, str]: ...
+        def delete_tool_config(self, tool_name: str) -> bool: ...
 
 logger = logging.getLogger(__name__)
 
-def _get_tool_config_service():
+def _get_tool_config_service() -> "_ToolConfigService":
     """Return a :class:`~services.tool_config_service.ToolConfigService` instance via deferred import."""
     from services.database_service import get_shared_db_service
     from services.tool_config_service import ToolConfigService
@@ -46,7 +56,7 @@ class AbstractCapability(ABC):
         self._last_error: str | None = None
         self._failure_alerted: bool = False
         self._backoff_secs: int = 0
-        self._next_retry_at = None
+        self._next_retry_at: datetime | None = None
 
     # ------------------------------------------------------------------
     # Abstract interface — must be implemented by every subclass
@@ -57,11 +67,11 @@ class AbstractCapability(ABC):
         ...
 
     @abstractmethod
-    def get_manifest(self) -> dict:
+    def get_manifest(self) -> dict[str, object]:
         ...
 
     @abstractmethod
-    def configure(self, credentials: dict) -> None:
+    def configure(self, credentials: dict[str, object]) -> None:
         """Accept, validate, and persist credentials for this capability.
 
         Implementations should call :meth:`store_credential` to persist each field
@@ -83,11 +93,11 @@ class AbstractCapability(ABC):
         """Tear down the active connection and clear any cached state."""
 
     @abstractmethod
-    def ingest(self) -> list:
+    def ingest(self) -> list[object]:
         ...
 
     @abstractmethod
-    def understand(self, items: list) -> list:
+    def understand(self, items: list[object]) -> list[object]:
         """Extract meaning from raw ingested items."""
 
     @abstractmethod
@@ -95,7 +105,7 @@ class AbstractCapability(ABC):
         ...
 
     @abstractmethod
-    def act(self, action: str, params: dict) -> dict:
+    def act(self, action: str, params: dict[str, object]) -> dict[str, object]:
         ...
 
     def monitor(self) -> None:
@@ -113,7 +123,7 @@ class AbstractCapability(ABC):
         """
         return self._connected
 
-    def health_details(self) -> dict:
+    def health_details(self) -> dict[str, object]:
         """Return detailed health information including error tracking.
 
         Returns:
@@ -241,7 +251,7 @@ class AbstractCapability(ABC):
         logger.info("[%s] backoff %ds", self.get_id(), self._backoff_secs)
 
     @abstractmethod
-    def get_tools(self) -> list:
+    def get_tools(self) -> list[dict[str, object]]:
         """Return tool definitions exposed by this capability.
 
         Each entry in the returned list must be a dict with at minimum the

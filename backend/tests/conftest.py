@@ -2,9 +2,16 @@
 # Errors are pre-existing: 15 files excluded (numpy import failure in this env),
 # and 499 test-setup errors caused by missing sqlite-vec extension (vec0 module).
 import shutil
+import sqlite3
+from collections.abc import Iterator
+from pathlib import Path
+from typing import TYPE_CHECKING
 from unittest.mock import patch
 
 import pytest
+
+if TYPE_CHECKING:
+    from services.memory_store import MemoryStore
 
 
 # ── NOTE: get_shared_db_service import-time-binding hazard ────────────────────
@@ -25,7 +32,7 @@ import pytest
 # Function-scoped `db`: fresh copy per test, patched as the singleton.
 
 @pytest.fixture(scope='session')
-def _db_template(tmp_path_factory):
+def _db_template(tmp_path_factory: pytest.TempPathFactory) -> str:
     """Build a fully-converged SQLite database file (once per session).
 
     Runs the real production boot sequence — SchemaConvergenceService.converge()
@@ -65,7 +72,7 @@ def _db_template(tmp_path_factory):
 
 
 @pytest.fixture
-def db(_db_template, tmp_path):
+def db(_db_template: str, tmp_path: Path) -> Iterator[sqlite3.Connection]:
     """Fresh, fully-migrated SQLite database — one per test.
 
     Copies the session-scoped template, creates a real DatabaseService, and
@@ -120,7 +127,7 @@ def db(_db_template, tmp_path):
 # ── Non-DB mock fixtures ──────────────────────────────────────────
 
 @pytest.fixture
-def store():
+def store() -> "Iterator[MemoryStore]":
     """Isolated MemoryStore — same implementation used in production.
 
     Patches both the canonical ``get_shared_store()`` in memory_store and the
@@ -138,7 +145,7 @@ def store():
 
 
 @pytest.fixture
-def authed_client(db):
+def authed_client(db: sqlite3.Connection) -> Iterator[tuple[object, sqlite3.Connection, object]]:
     """Flask test client with real blueprints registered, auth bypassed.
 
     Uses the real ``db`` fixture (which patches ``get_shared_db_service``),
@@ -174,7 +181,7 @@ def authed_client(db):
 
 
 @pytest.fixture
-def tmp_state_file(tmp_path):
+def tmp_state_file(tmp_path: Path) -> Path:
     """Temporary state file path for tools using JSON state."""
     state_file = tmp_path / "state.json"
     return state_file

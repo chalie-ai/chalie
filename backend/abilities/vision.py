@@ -22,12 +22,16 @@ and belong with the other channels, not in the ability."""
 from __future__ import annotations
 
 import logging
-from typing import ClassVar
+from typing import TYPE_CHECKING, ClassVar, cast
 
 from abilities._ability import Ability
 from abilities._params import Keys
 from abilities._result import ToolResult
 from configs.channels.vision import VisionConfig
+
+if TYPE_CHECKING:
+    from services.message_processor import MessageProcessor
+    from services.processor_config import ProcessorConfig
 
 logger = logging.getLogger(__name__)
 
@@ -48,7 +52,7 @@ _NO_VISION_NOTE = (
 )
 
 
-def describe_image(image_path: str, mime_type: str, query: str, *, policy_channel) -> dict:
+def describe_image(image_path: str, mime_type: str, query: str, *, policy_channel: "ProcessorConfig.PolicyChannel") -> dict[str, object]:
     """Forks ONCE on vision-provider-configured. Provider path RAISES on provider
     failure (never swallowed); the OCR fallback is ONLY for the not-configured path.
     """
@@ -72,7 +76,7 @@ def describe_image(image_path: str, mime_type: str, query: str, *, policy_channe
     if ocr.get("error"):
         logger.warning("[VISION] OCR extraction error: %s", ocr["error"])
     return {
-        "description": (ocr.get("ocr_text") or "").strip(),
+        "description": (cast(str, ocr.get("ocr_text")) or "").strip(),
         "vision_used": False,
         "note": _NO_VISION_NOTE,
     }
@@ -107,9 +111,9 @@ class VisionAbility(Ability):
     # or empty image/query as code=missing-params before run() is reached
     # (precedent: save_graph.py, save_pattern.py, file_permissions.py). The
     # pre-gate is truthiness-based, so whitespace-only residue still reaches run().
-    ACTION_REQUIRED: ClassVar[dict] = {"": (Keys.image, Keys.query)}
+    ACTION_REQUIRED: ClassVar[dict[str, tuple[str, ...]]] = {"": (Keys.image, Keys.query)}
 
-    _PARAMETERS: ClassVar[dict] = {
+    _PARAMETERS: ClassVar[dict[str, object]] = {
         "type": "object",
         "properties": {
             Keys.image: {
@@ -127,15 +131,15 @@ class VisionAbility(Ability):
         "required": [Keys.image, Keys.query],
     }
 
-    def get_parameters(self) -> dict:
+    def get_parameters(self) -> dict[str, object]:
         return self._PARAMETERS
 
-    def run(self, params: dict) -> ToolResult:
+    def run(self, params: dict[str, object]) -> ToolResult:
         # The dispatcher pre-gate is truthiness-based, so a non-empty but
         # whitespace-only image/query slips past it and must be rejected here
         # (precedent: save_graph.py, file_permissions.py).
-        doc_id = (params.get(Keys.image) or "").strip()
-        query = (params.get(Keys.query) or "").strip()
+        doc_id = (cast(str, params.get(Keys.image)) or "").strip()
+        query = (cast(str, params.get(Keys.query)) or "").strip()
         if not doc_id or not query:
             missing = ", ".join(
                 name for name, val in (("image", doc_id), ("query", query)) if not val
@@ -164,11 +168,11 @@ class VisionAbility(Ability):
                 hint="the document has no stored file; re-upload the image",
             )
 
-        abs_path = str(FileMapperService.get_documents_path(doc["file_path"]))
-        mime_type = doc.get("mime_type") or "image/png"
+        abs_path = str(FileMapperService.get_documents_path(cast(str, doc["file_path"])))
+        mime_type = cast(str, doc.get("mime_type")) or "image/png"
         try:
             out = describe_image(
-                abs_path, mime_type, query, policy_channel=self.mp.config.policy_channel
+                abs_path, mime_type, query, policy_channel=cast("MessageProcessor", self.mp).config.policy_channel
             )
         except Exception as exc:  # noqa: BLE001 — surfaced, never swallowed
             logger.exception("[VISION] describe failed")
@@ -178,9 +182,9 @@ class VisionAbility(Ability):
                 hint="check the vision provider in the brain interface or try again",
             )
 
-        body = out["description"]
+        body = cast(str, out["description"])
         if out["note"]:
-            body = f"{body}\n\n{out['note']}" if body else out["note"]
+            body = f"{body}\n\n{cast(str, out['note'])}" if body else cast(str, out["note"])
         # The OCR fallback (no vision provider configured) is a downgraded read —
         # mark it degraded so the model can tell it from a real vision read
         # (loudness precedent: find_skills FTS fallback, programming_docs_search).

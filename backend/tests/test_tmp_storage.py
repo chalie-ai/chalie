@@ -7,6 +7,7 @@
 #     http://www.apache.org/licenses/LICENSE-2.0
 
 import os
+from pathlib import Path
 
 import pytest
 
@@ -21,7 +22,7 @@ from services.tmp_storage import (
 pytestmark = pytest.mark.unit
 
 
-def test_prefix_is_under_os_tempdir_and_not_hardcoded_slash_tmp():
+def test_prefix_is_under_os_tempdir_and_not_hardcoded_slash_tmp() -> None:
     # The prefix must live under the OS temp dir (resolved), composed with the
     # chalie_ marker — not a literal '/tmp/chalie_'.
     assert TMP_PATH_PREFIX == os.path.join(TMP_DIR, TMP_PREFIX)
@@ -29,13 +30,13 @@ def test_prefix_is_under_os_tempdir_and_not_hardcoded_slash_tmp():
     assert TMP_PREFIX == "chalie_"
 
 
-def test_new_tmp_path_lives_under_prefix():
+def test_new_tmp_path_lives_under_prefix() -> None:
     p = new_tmp_path("deadbeef.png")
     assert p == TMP_PATH_PREFIX + "deadbeef.png"
     assert p.startswith(TMP_PATH_PREFIX)
 
 
-def test_is_chalie_tmp_file_accepts_real_file_under_prefix():
+def test_is_chalie_tmp_file_accepts_real_file_under_prefix() -> None:
     path = new_tmp_path("unit_probe.bin")
     with open(path, "wb") as fh:
         fh.write(b"x")
@@ -45,17 +46,17 @@ def test_is_chalie_tmp_file_accepts_real_file_under_prefix():
         os.unlink(path)
 
 
-def test_is_chalie_tmp_file_rejects_path_outside_prefix(tmp_path):
+def test_is_chalie_tmp_file_rejects_path_outside_prefix(tmp_path: "Path") -> None:
     outside = tmp_path / "elsewhere.bin"
     outside.write_bytes(b"x")
     assert is_chalie_tmp_file(str(outside)) is False
 
 
-def test_is_chalie_tmp_file_rejects_missing_file():
+def test_is_chalie_tmp_file_rejects_missing_file() -> None:
     assert is_chalie_tmp_file(new_tmp_path("does_not_exist.bin")) is False
 
 
-def test_is_chalie_tmp_file_rejects_directory_under_prefix():
+def test_is_chalie_tmp_file_rejects_directory_under_prefix() -> None:
     # A directory under the prefix is not a *file*; the guard requires a file.
     dir_path = new_tmp_path("unit_probe_dir")
     os.mkdir(dir_path)

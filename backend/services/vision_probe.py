@@ -9,7 +9,7 @@ never look at it). Fully defensive — any failure returns False / 0.0.
 import json
 import logging
 import re
-from typing import Dict, Any, Optional
+from typing import Dict, Optional, SupportsInt, cast
 
 logger = logging.getLogger(__name__)
 
@@ -37,7 +37,7 @@ _EXPECTED_SHAPES = {('rectangle', 'red'), ('circle', 'yellow'), ('hexagon', 'gre
 _EXPECTED_TEXT = 'chalie can read!'
 
 
-def _extract_json(text: str) -> Optional[Dict[str, Any]]:
+def _extract_json(text: str) -> Optional[Dict[str, object]]:
     if not text:
         return None
     fenced = re.search(r'```(?:json)?\s*(\{.*\})\s*```', text, re.DOTALL)
@@ -64,7 +64,7 @@ def score_probe_response(text: str) -> float:
     score = 0.0
 
     try:
-        if int(data.get('number_of_shapes')) == _EXPECTED_COUNT:
+        if int(cast(SupportsInt, data.get('number_of_shapes'))) == _EXPECTED_COUNT:
             score += 0.30
     except (ValueError, TypeError):
         pass
@@ -90,7 +90,7 @@ def score_probe_response(text: str) -> float:
     return round(score, 4)
 
 
-def probe_provider(provider: Dict[str, Any]) -> bool:
+def probe_provider(provider: Dict[str, object]) -> bool:
     try:
         from services.file_mapper_service import FileMapperService
         from services import vision_service

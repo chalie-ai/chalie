@@ -9,17 +9,21 @@ requests an internal restart so the staged restore is applied at the next boot
 Auto-registered by ``api.__init__._register_blueprints`` (top-level
 ``snapshot_bp`` honouring its own ``url_prefix``) — no ``__init__`` edit needed.
 Depends on ``services.snapshot_service.SnapshotService`` (engine) and
-``services.app_update_service.AppUpdateService`` (restart).
+``services.restart_service.request_restart`` (restart).
 """
 
 import logging
 import tempfile
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from flask import Blueprint, jsonify, request, send_file
 from werkzeug.utils import secure_filename
 
 from .auth import require_session
+
+if TYPE_CHECKING:
+    from flask.typing import ResponseReturnValue
 
 logger = logging.getLogger(__name__)
 
@@ -35,7 +39,7 @@ _DEFAULT_UPLOAD_NAME = "snapshot.zip"
 
 @snapshot_bp.route("/export", methods=["POST"])
 @require_session
-def snapshot_export():
+def snapshot_export() -> "ResponseReturnValue":
     try:
         body = request.get_json(silent=True) or {}
         password = body.get("password") or None
@@ -56,7 +60,7 @@ def snapshot_export():
 
 @snapshot_bp.route("/import", methods=["POST"])
 @require_session
-def snapshot_import():
+def snapshot_import() -> "ResponseReturnValue":
     """Stage an uploaded snapshot and request a restart to apply it.
 
     Restore is destructive (full wipe-and-replace at next boot); the staging
@@ -89,6 +93,6 @@ def snapshot_import():
         shutil.rmtree(str(tmp_dir), ignore_errors=True)
 
     # Staging succeeded — restart so apply_pending() runs before the DB opens.
-    from services.app_update_service import AppUpdateService
-    AppUpdateService.request_restart()
+    from services.restart_service import request_restart
+    request_restart()
     return jsonify({"ok": True, "restarting": True}), 200

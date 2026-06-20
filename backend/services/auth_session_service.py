@@ -9,6 +9,8 @@ import os
 import secrets
 import logging
 
+from flask import Request, Response
+
 from services.time_utils import utc_now
 
 logger = logging.getLogger(__name__)
@@ -18,7 +20,7 @@ SESSION_TTL = 30 * 24 * 60 * 60  # 30 days in seconds
 SESSION_KEY_PREFIX = 'auth_session:'
 
 
-def _persist_session_to_sqlite(token: str):
+def _persist_session_to_sqlite(token: str) -> None:
     """Write session to SQLite so it survives MemoryStore wipes (restart)."""
     try:
         from services.database_service import get_shared_db_service
@@ -33,7 +35,7 @@ def _persist_session_to_sqlite(token: str):
         logger.error(f"[Session] SQLite persist failed: {e}")
 
 
-def _delete_session_from_sqlite(token: str):
+def _delete_session_from_sqlite(token: str) -> None:
     """Remove session from SQLite."""
     try:
         from services.database_service import get_shared_db_service
@@ -67,7 +69,7 @@ def _validate_session_in_sqlite(token: str) -> bool:
         return False
 
 
-def create_session(response) -> str:
+def create_session(response: Response) -> str:
     """Generates a cryptographically secure random token, stores it in both
     MemoryStore (fast path) and SQLite (durable), and attaches the
     ``chalie_session`` HTTP-only cookie to the given response object."""
@@ -92,7 +94,7 @@ def create_session(response) -> str:
     return token
 
 
-def validate_session(request) -> bool:
+def validate_session(request: Request) -> bool:
     """Checks MemoryStore first (fast path). If MemoryStore misses (e.g.
     after restart), falls back to SQLite and rehydrates MemoryStore on hit."""
     from services.memory_client import MemoryClientService
@@ -111,7 +113,7 @@ def validate_session(request) -> bool:
     return _validate_session_in_sqlite(token)
 
 
-def destroy_session(request, response):
+def destroy_session(request: Request, response: Response) -> None:
     """Deletes the session from both MemoryStore and SQLite, then deletes
     the ``chalie_session`` cookie from the client."""
     from services.memory_client import MemoryClientService
@@ -125,7 +127,7 @@ def destroy_session(request, response):
     logger.info("[Session] Destroyed session")
 
 
-def cleanup_expired_sessions():
+def cleanup_expired_sessions() -> None:
     """Delete expired sessions from SQLite. Called periodically or on startup."""
     try:
         from services.database_service import get_shared_db_service

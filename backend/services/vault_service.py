@@ -4,7 +4,10 @@ import json
 import logging
 import os
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import TYPE_CHECKING, Optional, cast
+
+if TYPE_CHECKING:
+    from services.database_service import DatabaseService
 
 # FileMapperService owns every repository-layout path (CLAUDE.md rule #9). The
 # vault key-material backup lives under data/secure/ so it persists on the same
@@ -169,7 +172,7 @@ class VaultService:
             singleton.  Injected to allow deterministic testing.
     """
 
-    def __init__(self, database_service):
+    def __init__(self, database_service: "DatabaseService") -> None:
         self._db = database_service
 
     # ------------------------------------------------------------------
@@ -241,10 +244,10 @@ class VaultService:
                 "[Vault] vault_config is empty — call initialize() before unlock()"
             )
 
-        salt = bytes(row["kdf_salt"])
-        nonce = bytes(row["dek_nonce"])
-        wrapped_dek = bytes(row["wrapped_dek"])
-        iterations = row["kdf_iterations"]
+        salt = bytes(cast(bytes, row["kdf_salt"]))
+        nonce = bytes(cast(bytes, row["dek_nonce"]))
+        wrapped_dek = bytes(cast(bytes, row["wrapped_dek"]))
+        iterations = cast(int, row["kdf_iterations"])
 
         kek = _derive_kek(password, salt, iterations)
         try:
@@ -367,7 +370,7 @@ class VaultService:
         if not self.is_unlocked():
             raise VaultLockedError("Vault is locked — call unlock() before encrypting")
         nonce = os.urandom(_NONCE_SIZE)
-        ciphertext_tag = _aesgcm_encrypt(_vault_state.dek, nonce, plaintext)
+        ciphertext_tag = _aesgcm_encrypt(cast(bytes, _vault_state.dek), nonce, plaintext)
         return nonce + ciphertext_tag
 
     def decrypt(self, blob: bytes) -> bytes:
@@ -384,7 +387,7 @@ class VaultService:
         nonce = blob[:_NONCE_SIZE]
         ciphertext_tag = blob[_NONCE_SIZE:]
         try:
-            return _aesgcm_decrypt(_vault_state.dek, nonce, ciphertext_tag)
+            return _aesgcm_decrypt(cast(bytes, _vault_state.dek), nonce, ciphertext_tag)
         except Exception as exc:
             raise ValueError(f"Decryption failed: {exc}") from exc
 
@@ -400,7 +403,7 @@ class VaultService:
     # Internal helpers
     # ------------------------------------------------------------------
 
-    def _load_vault_config(self) -> Optional[dict]:
+    def _load_vault_config(self) -> Optional[dict[str, object]]:
         """Read the singleton ``vault_config`` row (id=1) from the database.
 
         Returns:
@@ -416,7 +419,7 @@ class VaultService:
             )
             row = cursor.fetchone()
             cursor.close()
-        return row  # sqlite3.Row or None
+        return cast("dict[str, object] | None", row)  # sqlite3.Row or None
 
     def _persist_vault_config(self, km: "_VaultKeyMaterial") -> None:
         """Replace the singleton ``vault_config`` row (id=1) with *km*.

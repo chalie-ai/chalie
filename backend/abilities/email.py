@@ -29,7 +29,7 @@ never imports the skill-tag formatter.
 
 import logging
 import re
-from typing import ClassVar
+from typing import ClassVar, cast
 
 from abilities._capability import CapabilityAbility
 from abilities._params import Keys
@@ -107,10 +107,10 @@ class EmailAbility(CapabilityAbility):
     def get_search_tooltip(self) -> str:
         return "email inbox and sending"
 
-    def get_parameters(self) -> dict:
+    def get_parameters(self) -> dict[str, object]:
         return self._PARAMETERS
 
-    _PARAMETERS: ClassVar[dict] = {
+    _PARAMETERS: ClassVar[dict[str, object]] = {
         "type": "object",
         "properties": {
             Keys.action: {
@@ -183,7 +183,7 @@ class EmailAbility(CapabilityAbility):
 
     # ── Entry point — guardrail BEFORE the base's connected gate ────────────────
 
-    def run(self, params: dict) -> ToolResult:
+    def run(self, params: dict[str, object]) -> ToolResult:
         action = str(params.get(Keys.action, self.DEFAULT_ACTION)).lower()
 
         if action in _RECIPIENT_ACTIONS:
@@ -208,7 +208,7 @@ class EmailAbility(CapabilityAbility):
 _READ_BODY_LIMIT = 4000
 
 
-def _shape_result(action: str, body: dict) -> ToolResult:
+def _shape_result(action: str, body: dict[str, object]) -> ToolResult:
     """Reshape a successful handler dict into the contract body for *action*.
 
     A handler that surfaced its own ``error`` key (a backend failure, NOT a bad
@@ -226,7 +226,7 @@ def _shape_result(action: str, body: dict) -> ToolResult:
                 "date": e.get("date", ""),
                 "snippet": e.get("snippet", ""),
             }
-            for e in body.get("emails", [])
+            for e in cast(list[dict[str, object]], body.get("emails", []))
         ]
         return ToolResult.ok({"emails": rows}, action=action, count=len(rows))
 
@@ -259,9 +259,9 @@ def _shape_result(action: str, body: dict) -> ToolResult:
 # Guardrail — recipient shape validated pre-send
 # ---------------------------------------------------------------------------
 
-def _validate_recipient(params: dict) -> ToolResult | None:
+def _validate_recipient(params: dict[str, object]) -> ToolResult | None:
     """Runs ahead of the base's connected gate so the error fires regardless of SMTP state."""
-    to = (params.get(Keys.to) or "").strip()
+    to = cast(str, params.get(Keys.to) or "").strip()
     if not to:
         return None
     if not re.match(_RECIPIENT_RE, to):

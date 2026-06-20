@@ -13,11 +13,12 @@ memory tables.
 """
 
 import logging
+import sqlite3
 
 logger = logging.getLogger(__name__)
 
 
-def fts5_external_delete(conn, table: str, rowid: int, columns: dict) -> None:
+def fts5_external_delete(conn: sqlite3.Connection, table: str, rowid: int, columns: dict[str, str | None]) -> None:
     """Issues the FTS5 ``'delete'`` command with the indexed column values
     (required for external-content tables in production). Falls back to a
     plain DELETE for standalone FTS tables (e.g. test fixtures that omit

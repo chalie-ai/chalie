@@ -18,13 +18,20 @@ is a design-coupling signal, not an oversight.
 import base64
 import json
 import secrets
+import sqlite3
+from collections.abc import Iterator
+from pathlib import Path
+from typing import cast
+
 import pytest
 from flask import Flask
+from flask.testing import FlaskClient
 from werkzeug.security import generate_password_hash
 
 import services.database_service as _db_mod
 import services.vault_service as _vault_mod
 from api.user_auth import user_auth_bp
+from services.database_service import DatabaseService
 from services.file_mapper_service import FileMapperService
 from services.vault_service import _vault_state
 from services.provider_db_service import ProviderDbService
@@ -32,7 +39,7 @@ from services.provider_db_service import ProviderDbService
 
 # ── Shared helpers ────────────────────────────────────────────────────────────
 
-def _seed_account(raw_conn, password: str = "testpassword123") -> str:
+def _seed_account(raw_conn: sqlite3.Connection, password: str = "testpassword123") -> str:
     raw_conn.execute(
         "INSERT INTO master_account (username, password_hash) VALUES (?, ?)",
         ("admin", generate_password_hash(password)),
@@ -41,14 +48,14 @@ def _seed_account(raw_conn, password: str = "testpassword123") -> str:
     return password
 
 
-def _backups(secure_dir):
+def _backups(secure_dir: Path) -> list[Path]:
     return sorted(secure_dir.glob("vault_backup_*.json"), reverse=True)
 
 
 # ── Fixtures ──────────────────────────────────────────────────────────────────
 
 @pytest.fixture(autouse=True)
-def _reset_vault_singletons():
+def _reset_vault_singletons() -> Iterator[None]:
     """Clears the cached VaultService singleton before and after every test so
     ``get_vault_service()`` re-creates it against the per-test DB path."""
     _vault_state.dek = None
@@ -59,12 +66,12 @@ def _reset_vault_singletons():
 
 
 @pytest.fixture
-def secure_dir(tmp_path):
+def secure_dir(tmp_path: Path) -> Path:
     return tmp_path / "secure"
 
 
 @pytest.fixture
-def redirect_backup_paths(secure_dir, monkeypatch):
+def redirect_backup_paths(secure_dir: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Redirects ``FileMapperService._SECURE_DIR`` to ``tmp_path`` so all backup
     path helpers (``get_secure_dir``, ``get_vault_backup_path``,
     ``list_vault_backups``) resolve under the per-test temp directory."""
@@ -72,7 +79,7 @@ def redirect_backup_paths(secure_dir, monkeypatch):
 
 
 @pytest.fixture
-def auth_client(db, store, redirect_backup_paths):
+def auth_client(db: sqlite3.Connection, store: object, redirect_backup_paths: None) -> Iterator[tuple[FlaskClient, sqlite3.Connection]]:
     app = Flask(__name__)
     app.secret_key = secrets.token_hex(32)
     app.config["TESTING"] = True
@@ -87,8 +94,8 @@ def auth_client(db, store, redirect_backup_paths):
 class TestVaultBackupWrite:
 
     def test_initialize_writes_backup_file_with_hex_fields_and_secure_permissions(
-        self, db, store, redirect_backup_paths, secure_dir
-    ):
+        self, db: sqlite3.Connection, store: object, redirect_backup_paths: None, secure_dir: Path
+    ) -> None:
         vault = _vault_mod.get_vault_service()
         vault.initialize("strongpassword99")
 
@@ -124,8 +131,8 @@ class TestVaultBackupWrite:
 class TestVaultRestore:
 
     def test_login_restores_vault_and_previously_encrypted_secret_still_decrypts(
-        self, auth_client, secure_dir
-    ):
+        self, auth_client: tuple[FlaskClient, sqlite3.Connection], secure_dir: Path
+    ) -> None:
         client, raw_conn = auth_client
         pw = _seed_account(raw_conn)
 
@@ -167,8 +174,8 @@ class TestVaultRestore:
         )
 
     def test_login_skips_corrupt_newest_backup_and_restores_from_older(
-        self, auth_client, secure_dir
-    ):
+        self, auth_client: tuple[FlaskClient, sqlite3.Connection], secure_dir: Path
+    ) -> None:
         client, raw_conn = auth_client
         pw = _seed_account(raw_conn)
 
@@ -218,8 +225,8 @@ class TestVaultRestore:
 class TestVaultUnrecoverable:
 
     def test_login_wipes_master_account_and_returns_401_with_onboarding_required(
-        self, auth_client, secure_dir
-    ):
+        self, auth_client: tuple[FlaskClient, sqlite3.Connection], secure_dir: Path
+    ) -> None:
         client, raw_conn = auth_client
         pw = _seed_account(raw_conn)
 
@@ -273,8 +280,8 @@ class TestVaultUnrecoverable:
 class TestVaultBackupRetention:
 
     def test_second_initialize_retains_first_backup_and_adds_a_second(
-        self, db, store, redirect_backup_paths, secure_dir
-    ):
+        self, db: sqlite3.Connection, store: object, redirect_backup_paths: None, secure_dir: Path
+    ) -> None:
         vault = _vault_mod.get_vault_service()
         vault.initialize("passwordone99")
 
@@ -308,8 +315,8 @@ class TestVaultBackupRetention:
 class TestProviderDecryptTolerance:
 
     def test_good_provider_returned_when_another_row_has_garbage_key(
-        self, db, store
-    ):
+        self, db: sqlite3.Connection, store: object
+    ) -> None:
         # Initialize and unlock the vault so encryption is available
         vault = _vault_mod.get_vault_service()
         vault.initialize("correct-password-123")
@@ -336,7 +343,7 @@ class TestProviderDecryptTolerance:
         )
         db.commit()
 
-        service = ProviderDbService(_db_mod._shared_db_service)
+        service = ProviderDbService(cast(DatabaseService, _db_mod._shared_db_service))
         providers = service.get_all_providers()
 
         names = {p["name"] for p in providers}
@@ -353,7 +360,7 @@ class TestProviderDecryptTolerance:
         # Bad row must be marked, not crash the whole call
         assert bad.get("decrypt_failed") is True
 
-    def test_all_providers_returned_when_vault_is_locked(self, db, store):
+    def test_all_providers_returned_when_vault_is_locked(self, db: sqlite3.Connection, store: object) -> None:
         # Insert two providers (no need to encrypt — vault is never unlocked)
         db.execute(
             "INSERT INTO providers (name, platform, model, api_key) "
@@ -369,7 +376,7 @@ class TestProviderDecryptTolerance:
 
         # Vault intentionally left sealed (_reset_vault_singletons autouse
         # fixture ensures _vault_state.dek is None)
-        service = ProviderDbService(_db_mod._shared_db_service)
+        service = ProviderDbService(cast(DatabaseService, _db_mod._shared_db_service))
         providers = service.get_all_providers()
 
         assert len(providers) == 2

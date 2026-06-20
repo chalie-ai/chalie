@@ -1,8 +1,10 @@
 """Provider database service — manages provider configuration in DB (SQLite)."""
 
 import logging
-from typing import Dict, Any, Optional, List
+import sqlite3
+from typing import Dict, Optional, List, cast
 
+from services.database_service import DatabaseService
 from services.log_utils import safe
 
 logger = logging.getLogger(__name__)
@@ -24,7 +26,7 @@ class ProviderDbService:
         "dimensions, timeout, supports_vision, max_tokens"
     )
 
-    def __init__(self, database_service):
+    def __init__(self, database_service: DatabaseService) -> None:
         self.db = database_service
 
     @staticmethod
@@ -34,7 +36,7 @@ class ProviderDbService:
         return base64.b64encode(get_vault_service().encrypt_str(value)).decode()
 
     @staticmethod
-    def _unseal_api_key(encrypted_val) -> Optional[str]:
+    def _unseal_api_key(encrypted_val: Optional[str]) -> Optional[str]:
         if not encrypted_val:
             return None
         import base64
@@ -44,7 +46,7 @@ class ProviderDbService:
         except VaultLockedError:
             return None
 
-    def _row_to_provider(self, row) -> Dict[str, Any]:
+    def _row_to_provider(self, row: "sqlite3.Row | tuple[object, ...]") -> Dict[str, object]:
         if isinstance(row, dict):
             result = {
                 "id": row['id'],
@@ -82,7 +84,7 @@ class ProviderDbService:
         }
         if row[5]:
             try:
-                result["api_key"] = self._unseal_api_key(row[5])
+                result["api_key"] = self._unseal_api_key(cast(Optional[str], row[5]))
             except Exception:
                 logger.warning(
                     "[Provider] Decrypt failed for provider id=%s", row[0],
@@ -90,7 +92,7 @@ class ProviderDbService:
                 result["decrypt_failed"] = True
         return result
 
-    def get_all_providers(self) -> List[Dict[str, Any]]:
+    def get_all_providers(self) -> List[Dict[str, object]]:
         with self.db.connection() as conn:
             cursor = conn.cursor()
             cursor.execute(
@@ -101,7 +103,7 @@ class ProviderDbService:
             cursor.close()
             return [self._row_to_provider(row) for row in rows]
 
-    def list_providers_summary(self) -> List[Dict[str, Any]]:
+    def list_providers_summary(self) -> List[Dict[str, object]]:
         with self.db.connection() as conn:
             cursor = conn.cursor()
             cursor.execute(
@@ -127,7 +129,7 @@ class ProviderDbService:
                 for row in rows
             ]
 
-    def get_provider_by_id(self, provider_id: int) -> Optional[Dict[str, Any]]:
+    def get_provider_by_id(self, provider_id: int) -> Optional[Dict[str, object]]:
         with self.db.connection() as conn:
             cursor = conn.cursor()
             cursor.execute(
@@ -141,7 +143,7 @@ class ProviderDbService:
                 return None
             return self._row_to_provider(row)
 
-    def create_provider(self, data: Dict[str, Any]) -> Dict[str, Any]:
+    def create_provider(self, data: Dict[str, object]) -> Optional[Dict[str, object]]:
         default_model = data.get("model")
         if not default_model:
             raise ValueError("'model' is required")
@@ -158,7 +160,7 @@ class ProviderDbService:
                     "openai_compatible provider requires 'api_key' field"
                 )
 
-        api_key_val = data.get("api_key")
+        api_key_val = cast(Optional[str], data.get("api_key"))
         encrypted_key = self._seal_api_key(api_key_val) if api_key_val else None
 
         # Verify vision support with a live probe (content-verifying).
@@ -211,7 +213,7 @@ class ProviderDbService:
         try:
             from services.provider_token_limits import backfill_one
             with self.db.connection() as conn:
-                backfill_one(conn, new_id)
+                backfill_one(conn, cast(int, new_id))
                 conn.commit()
         except Exception as exc:
             logger.warning(
@@ -225,12 +227,12 @@ class ProviderDbService:
         # missing/empty OR when the previously-selected provider has been
         # deleted — in either case the new provider takes over the active slot.
         if self.get_selected_provider() is None:
-            self.set_selected_provider(new_id)
+            self.set_selected_provider(cast(int, new_id))
 
         # Fetch the newly created row and return it
-        return self.get_provider_by_id(new_id)
+        return self.get_provider_by_id(cast(int, new_id))
 
-    def update_provider(self, provider_id: int, data: Dict[str, Any]) -> Dict[str, Any]:
+    def update_provider(self, provider_id: int, data: Dict[str, object]) -> Optional[Dict[str, object]]:
         updates = []
         params = []
 
@@ -272,7 +274,7 @@ class ProviderDbService:
                 updates.append("api_key = NULL")
             else:
                 updates.append("api_key = ?")
-                params.append(self._seal_api_key(data["api_key"]))
+                params.append(self._seal_api_key(cast(str, data["api_key"])))
 
         if not updates:
             return self.get_provider_by_id(provider_id)
@@ -337,7 +339,7 @@ class ProviderDbService:
 
     # ── Selected Provider ──────────────────────────────────────────
 
-    def get_selected_provider(self) -> Optional[Dict[str, Any]]:
+    def get_selected_provider(self) -> Optional[Dict[str, object]]:
         with self.db.connection() as conn:
             cursor = conn.cursor()
             cursor.execute(
@@ -368,7 +370,7 @@ class ProviderDbService:
 
     _KEY_REQUIRING = ('anthropic', 'openai', 'gemini', 'openai_compatible')
 
-    def _resolve_vision_provider(self):
+    def _resolve_vision_provider(self) -> tuple[Optional[Dict[str, object]], str]:
         with self.db.connection() as conn:
             cursor = conn.cursor()
             cursor.execute(
@@ -389,11 +391,11 @@ class ProviderDbService:
             return selected, 'auto'
         return None, 'none'
 
-    def get_vision_provider(self) -> Optional[Dict[str, Any]]:
+    def get_vision_provider(self) -> Optional[Dict[str, object]]:
         provider, _ = self._resolve_vision_provider()
         return provider
 
-    def get_vision_provider_status(self) -> Dict[str, Any]:
+    def get_vision_provider_status(self) -> Dict[str, object]:
         """UI-facing — {'provider': dict|None, 'source': 'explicit'|'auto'|'none'}."""
         provider, source = self._resolve_vision_provider()
         return {'provider': provider, 'source': source}
@@ -423,7 +425,7 @@ class ProviderDbService:
     # back to the selected (main) provider, never the last-pinned one. There is
     # also no supports_vision requirement — any active provider can be pinned.
 
-    def _resolve_delegate_provider(self):
+    def _resolve_delegate_provider(self) -> tuple[Optional[Dict[str, object]], str]:
         with self.db.connection() as conn:
             cursor = conn.cursor()
             cursor.execute(
@@ -444,12 +446,12 @@ class ProviderDbService:
             return selected, 'auto'
         return None, 'none'
 
-    def get_delegate_provider(self) -> Optional[Dict[str, Any]]:
+    def get_delegate_provider(self) -> Optional[Dict[str, object]]:
         """Runtime resolver — the provider to use for delegate turns, or None."""
         provider, _ = self._resolve_delegate_provider()
         return provider
 
-    def get_delegate_provider_status(self) -> Dict[str, Any]:
+    def get_delegate_provider_status(self) -> Dict[str, object]:
         """UI-facing — {'provider': dict|None, 'source': 'explicit'|'auto'|'none'}."""
         provider, source = self._resolve_delegate_provider()
         return {'provider': provider, 'source': source}

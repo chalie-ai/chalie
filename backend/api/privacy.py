@@ -8,14 +8,20 @@ user_tool_preferences, memory_recall_log, llm_call_log,
 concept_lut_misses.
 """
 
+import collections.abc
 import json
 import logging
 from datetime import datetime
+from typing import TYPE_CHECKING
+
 from flask import Blueprint, Response, request, jsonify, stream_with_context
 
 from services.time_utils import utc_now
 
 from .auth import require_session
+
+if TYPE_CHECKING:
+    from flask.typing import ResponseReturnValue
 
 logger = logging.getLogger(__name__)
 
@@ -59,10 +65,10 @@ _DELETE_ALL_STORE_PATTERNS = (
 )
 
 
-def _serialize_row(row: dict) -> dict:
+def _serialize_row(row: dict[str, object]) -> dict[str, object]:
     import uuid
     from decimal import Decimal
-    result = {}
+    result: dict[str, object] = {}
     for k, v in row.items():
         if v is None:
             result[k] = None
@@ -83,7 +89,7 @@ def _serialize_row(row: dict) -> dict:
 
 @privacy_bp.route('/privacy/data-summary', methods=['GET'])
 @require_session
-def data_summary():
+def data_summary() -> "ResponseReturnValue":
     try:
         from services.database_service import get_shared_db_service
         from services.memory_client import MemoryClientService
@@ -130,7 +136,7 @@ def data_summary():
 
 @privacy_bp.route('/privacy/export', methods=['GET'])
 @require_session
-def export_data():
+def export_data() -> "ResponseReturnValue":
 
     user_data_tables = [
         "episodes",
@@ -148,7 +154,7 @@ def export_data():
     MAX_EXPORT_ROWS = 10000
     FETCH_BATCH = 500  # Rows fetched per iteration — keeps memory bounded
 
-    def generate():
+    def generate() -> "collections.abc.Generator[str, None, None]":
         from services.database_service import get_shared_db_service
         from services.memory_client import MemoryClientService
 
@@ -213,7 +219,7 @@ def export_data():
 
             # Group results by pattern for the same JSON shape as before
             compiled = [(p, _re.compile(p.replace("*", ".*").replace("?", "."))) for p in store_patterns]
-            by_pattern = {p: {} for p in store_patterns}
+            by_pattern: dict[str, dict[str, object]] = {p: {} for p in store_patterns}
             for key, entry in all_entries.items():
                 for pattern, rx in compiled:
                     if rx.fullmatch(key):
@@ -236,7 +242,7 @@ def export_data():
 
 @privacy_bp.route('/privacy/delete-all', methods=['DELETE'])
 @require_session
-def delete_all():
+def delete_all() -> "ResponseReturnValue":
     confirm = request.headers.get("X-Confirm-Delete", "")
     if confirm != "yes":
         return jsonify({"error": "Requires X-Confirm-Delete: yes header"}), 400

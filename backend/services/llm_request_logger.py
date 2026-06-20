@@ -39,7 +39,7 @@ def log_llm_request(
     model: str,
     system_message: str,
     user_message: str,
-    tools: list | None,
+    tools: list[object] | None,
 ) -> None:
     """Best-effort — any failure is swallowed so the caller's LLM flow is
     never blocked. The first failure per process is surfaced at WARNING

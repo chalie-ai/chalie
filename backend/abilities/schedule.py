@@ -25,7 +25,7 @@ import logging
 import re
 import uuid
 from datetime import datetime, timezone, timedelta
-from typing import ClassVar
+from typing import ClassVar, cast
 
 from abilities._ability import Ability
 from abilities._params import Keys
@@ -60,7 +60,7 @@ def query_items(
     columns: tuple[str, ...] = (
         "id", "item_type", "message", "due_at", "recurrence", "status",
     ),
-) -> list[dict]:
+) -> list[dict[str, object]]:
     """This is the single query path for all callers — the schedule ability,
     the calendar ability, and anything else that reads scheduled_items.
     """
@@ -69,7 +69,7 @@ def query_items(
     db = get_shared_db_service()
     col_str = ", ".join(columns)
     clauses: list[str] = []
-    params: list = []
+    params: list[object] = []
 
     if status:
         placeholders = ", ".join("?" for _ in status)
@@ -156,7 +156,7 @@ class ScheduleAbility(Ability):
     def get_search_tooltip(self) -> str:
         return "reminders and scheduled tasks"
 
-    _PARAMETERS: ClassVar[dict] = {
+    _PARAMETERS: ClassVar[dict[str, object]] = {
         "type": "object",
         "properties": {
             Keys.action: {
@@ -259,13 +259,13 @@ class ScheduleAbility(Ability):
         "required": [Keys.action],
     }
 
-    def get_parameters(self) -> dict:
+    def get_parameters(self) -> dict[str, object]:
         return self._PARAMETERS
 
     _PAST_DUE_GRACE_SECONDS: ClassVar[int] = 120
 
-    def run(self, params: dict) -> ToolResult:
-        action = (params.get(Keys.action) or "list").lower()
+    def run(self, params: dict[str, object]) -> ToolResult:
+        action = (cast(str, params.get(Keys.action)) or "list").lower()
 
         if action == "create":
             channel = getattr(getattr(self.mp, "config", None), "channel", "") or ""
@@ -293,35 +293,35 @@ def _resolve_place_coords(name: str) -> tuple[float, float] | None:
         from services.data_graph_service import get_data_graph_service, KIND_PLACE
         dgs = get_data_graph_service()
         rows = dgs.fetch(kinds=[KIND_PLACE])
-        matched = next((r for r in rows if r and r.get("key", "").lower() == name.lower()), None)
+        matched = next((r for r in rows if r and cast(str, r.get("key", "")).lower() == name.lower()), None)
         if not matched:
             return None
-        raw_value = matched.get("value") or "{}"
+        raw_value = cast(str, matched.get("value")) or "{}"
         import json as _json
-        place_data = _json.loads(raw_value) if isinstance(raw_value, str) else raw_value
+        place_data: dict[str, object] = _json.loads(raw_value) if isinstance(raw_value, str) else cast(dict[str, object], raw_value)
         lat = place_data.get("lat")
         lon = place_data.get("lon")
         if lat is None or lon is None:
             return None
-        return float(lat), float(lon)
+        return float(cast(float, lat)), float(cast(float, lon))
     except Exception as exc:
         import logging as _logging
         _logging.debug(f"[SCHEDULE] _resolve_place_coords failed for {name!r}: {exc}")
         return None
 
 
-def _build_destination_metadata(destination: str) -> dict:
+def _build_destination_metadata(destination: str) -> dict[str, object]:
     """When no matching saved place is found, stores the destination name as-is (no geocoding)."""
     coords = _resolve_place_coords(destination)
-    meta: dict = {"destination": destination}
+    meta: dict[str, object] = {"destination": destination}
     if coords:
         meta["destination_lat"] = coords[0]
         meta["destination_lon"] = coords[1]
     return meta
 
 
-def _validate_message(params: dict) -> tuple[str, ToolResult | None]:
-    message = (params.get(Keys.message) or "").strip()
+def _validate_message(params: dict[str, object]) -> tuple[str, ToolResult | None]:
+    message = (cast(str, params.get(Keys.message)) or "").strip()
     if not message:
         return "", ToolResult.err(
             "message is required for create.",
@@ -360,7 +360,7 @@ def _parse_due_at(due_at_str: str) -> datetime | None:
     )
     if parsed is None:
         return None
-    return parsed.astimezone(timezone.utc)
+    return cast(datetime, parsed).astimezone(timezone.utc)
 
 
 # Weekday tokens dateparser handles when bare but chokes on with a leading
@@ -379,13 +379,13 @@ def _normalise_due_at(text: str) -> str:
     return text.strip()
 
 
-def _resolve_due_at(params: dict, past_due_grace: int) -> tuple[datetime | None, ToolResult | None]:
+def _resolve_due_at(params: dict[str, object], past_due_grace: int) -> tuple[datetime | None, ToolResult | None]:
     """When destination_location is given without due_at, defaults to now + 30 days.
     Past-due items within the grace window are bumped to now + 5 seconds.
     """
-    due_at_str = (params.get(Keys.due_at) or "").strip()
+    due_at_str = (cast(str, params.get(Keys.due_at)) or "").strip()
     if not due_at_str:
-        if (params.get(Keys.destination_location) or "").strip():
+        if (cast(str, params.get(Keys.destination_location)) or "").strip():
             return utc_now() + timedelta(days=30), None
         return None, ToolResult.err(
             "due_at is required for create (unless a destination_location is given).",
@@ -425,8 +425,8 @@ def _resolve_due_at(params: dict, past_due_grace: int) -> tuple[datetime | None,
 _VALID_RECURRENCES = ("daily", "weekly", "monthly", "weekdays", "hourly")
 
 
-def _validate_recurrence(params: dict) -> tuple[str | None, ToolResult | None]:
-    recurrence = params.get(Keys.recurrence)
+def _validate_recurrence(params: dict[str, object]) -> tuple[str | None, ToolResult | None]:
+    recurrence = cast(str | None, params.get(Keys.recurrence))
     if not recurrence:
         return None, None
     recurrence = recurrence.lower()
@@ -458,9 +458,9 @@ def _validate_recurrence(params: dict) -> tuple[str | None, ToolResult | None]:
     )
 
 
-def _validate_windows(params: dict, recurrence: str | None) -> tuple[str | None, str | None, ToolResult | None]:
-    window_start = params.get(Keys.window_start)
-    window_end = params.get(Keys.window_end)
+def _validate_windows(params: dict[str, object], recurrence: str | None) -> tuple[str | None, str | None, ToolResult | None]:
+    window_start = cast(str | None, params.get(Keys.window_start))
+    window_end = cast(str | None, params.get(Keys.window_end))
 
     if not (window_start or window_end):
         return None, None, None
@@ -499,8 +499,8 @@ def _validate_windows(params: dict, recurrence: str | None) -> tuple[str | None,
     return window_start, window_end, None
 
 
-def _validate_item_type(params: dict) -> tuple[str, ToolResult | None]:
-    item_type = (params.get(Keys.item_type) or "notification").lower()
+def _validate_item_type(params: dict[str, object]) -> tuple[str, ToolResult | None]:
+    item_type = (cast(str, params.get(Keys.item_type)) or "notification").lower()
     if item_type not in ("notification", "prompt"):
         return "", ToolResult.err(
             f"item_type must be 'notification' or 'prompt', got {item_type!r}.",
@@ -518,7 +518,7 @@ def _due_at_strings(due_at: datetime) -> tuple[str, str]:
     return utc_iso, local_iso
 
 
-def _create(channel: str, params: dict, past_due_grace: int) -> ToolResult:
+def _create(channel: str, params: dict[str, object], past_due_grace: int) -> ToolResult:
     try:
         from services.database_service import get_shared_db_service
 
@@ -587,7 +587,7 @@ def _create(channel: str, params: dict, past_due_grace: int) -> ToolResult:
                 existing_row = cursor.fetchone()
                 existing_id = existing_row[0] if existing_row else item_id
                 logger.info(f"{LOG_PREFIX} Dedup: '{message[:60]}' already exists as {existing_id}")
-                utc_iso, local_iso = _due_at_strings(due_at)
+                utc_iso, local_iso = _due_at_strings(cast(datetime, due_at))
                 record = {
                     "id": existing_id,
                     "message": message,
@@ -597,7 +597,7 @@ def _create(channel: str, params: dict, past_due_grace: int) -> ToolResult:
                 }
                 return _create_result(record)
 
-        destination = (params.get(Keys.destination_location) or "").strip()
+        destination = (cast(str, params.get(Keys.destination_location)) or "").strip()
         if destination:
             dest_meta = _build_destination_metadata(destination)
             try:
@@ -617,7 +617,7 @@ def _create(channel: str, params: dict, past_due_grace: int) -> ToolResult:
             logger.warning(f"{LOG_PREFIX} Embedding failed (non-fatal): {emb_err}")
 
         logger.info(f"{LOG_PREFIX} Created {item_type}: {item_id}")
-        utc_iso, local_iso = _due_at_strings(due_at)
+        utc_iso, local_iso = _due_at_strings(cast(datetime, due_at))
         record = {
             "id": item_id,
             "message": message,
@@ -633,19 +633,19 @@ def _create(channel: str, params: dict, past_due_grace: int) -> ToolResult:
         return ToolResult.err(f"Create failed: {e}", code="create-failed")
 
 
-def _create_result(record: dict) -> ToolResult:
+def _create_result(record: dict[str, object]) -> ToolResult:
     """The dispatcher injects the ordinal + span instruction only when the
     invoking channel broadcasts to the user."""
-    body = {"status": "success", "action_performed": "create", "record": record}
-    card = {"action_performed": "create", "record": record}
+    body: dict[str, object] = {"status": "success", "action_performed": "create", "record": record}
+    card: dict[str, object] = {"action_performed": "create", "record": record}
     same_day = _fetch_same_day_items(record)
     if same_day:
         card["same_day_items"] = same_day
     return ToolResult.ok(body, rich=card, action="create")
 
 
-def _search(ability: "ScheduleAbility", params: dict, mp=None) -> ToolResult:
-    query = (params.get(Keys.query) or "").strip()
+def _search(ability: "ScheduleAbility", params: dict[str, object], mp: object = None) -> ToolResult:
+    query = (cast(str, params.get(Keys.query)) or "").strip()
     limit = ability.param(params, Keys.limit, default=5, clamp=(1, 50))
 
     try:
@@ -701,16 +701,16 @@ def _search(ability: "ScheduleAbility", params: dict, mp=None) -> ToolResult:
         return ToolResult.err(f"Search failed: {e}", code="search-failed")
 
 
-def _list(params: dict) -> ToolResult:
+def _list(params: dict[str, object]) -> ToolResult:
     try:
-        time_range = (params.get(Keys.time_range) or "all").lower()
+        time_range = (cast(str, params.get(Keys.time_range)) or "all").lower()
         start_dt, end_dt, _ = _resolve_time_range(time_range)
 
         rows = query_items(
             hidden=0,
             status=("pending", "fired") if start_dt else ("pending",),
-            date_from=start_dt,
-            date_to=end_dt,
+            date_from=cast(str | None, start_dt),
+            date_to=cast(str | None, end_dt),
         )
 
         records = [_serialise_item_row(row) for row in rows]
@@ -724,14 +724,14 @@ def _list(params: dict) -> ToolResult:
         return ToolResult.err(f"List failed: {e}", code="list-failed")
 
 
-def _serialise_item_row(row: dict) -> dict:
+def _serialise_item_row(row: dict[str, object]) -> dict[str, object]:
     from services.time_formatter_service import TimeFormatterService
     from services.time_utils import parse_utc
     due_raw = row.get("due_at")
-    utc_dt = parse_utc(due_raw)
+    utc_dt = parse_utc(cast(datetime | str, due_raw))
     sentinel = datetime.min.replace(tzinfo=timezone.utc)
     utc_iso = utc_dt.isoformat() if utc_dt != sentinel else str(due_raw)
-    local_iso = TimeFormatterService.local(due_raw, fmt=_LOCAL_ISO_FMT) or utc_iso
+    local_iso = TimeFormatterService.local(cast(datetime | str | None, due_raw), fmt=_LOCAL_ISO_FMT) or utc_iso
     return {
         "id": row.get("id"),
         "message": row.get("message"),
@@ -743,13 +743,13 @@ def _serialise_item_row(row: dict) -> dict:
     }
 
 
-def _resolve_time_range(time_range: str):
+def _resolve_time_range(time_range: str) -> tuple[datetime | None, datetime | None, str]:
     now_utc = utc_now()
 
     from services.locale_service import local_now
     client_now = local_now()
 
-    def _start_of_day(dt):
+    def _start_of_day(dt: datetime) -> datetime:
         return dt.replace(hour=0, minute=0, second=0, microsecond=0)
 
     if time_range == "today":
@@ -781,12 +781,12 @@ def _resolve_time_range(time_range: str):
         return None, None, "All Scheduled Items"
 
 
-def _cancel(params: dict) -> ToolResult:
+def _cancel(params: dict[str, object]) -> ToolResult:
     try:
         from services.database_service import get_shared_db_service
 
-        item_id = (params.get(Keys.item_id) or "").strip()
-        message_query = (params.get(Keys.message) or "").strip()
+        item_id = (cast(str, params.get(Keys.item_id)) or "").strip()
+        message_query = (cast(str, params.get(Keys.message)) or "").strip()
 
         if not item_id and not message_query:
             return ToolResult.err(
@@ -854,7 +854,7 @@ def _cancel(params: dict) -> ToolResult:
 
         logger.info(f"{LOG_PREFIX} Cancelled {item_id}")
 
-        record = {"id": item_id}
+        record: dict[str, object] = {"id": item_id}
         try:
             with db.connection() as conn:
                 cursor = conn.cursor()
@@ -902,7 +902,7 @@ def _normalize_hhmm(time_str: str) -> str | None:
         return None
 
 
-def _fetch_same_day_items(new_record: dict) -> list:
+def _fetch_same_day_items(new_record: dict[str, object]) -> list[dict[str, object]]:
     """Returns an empty list on any failure — the rich-media card is the only
     consumer and the missing section degrades gracefully on the client.
     """
@@ -917,7 +917,7 @@ def _fetch_same_day_items(new_record: dict) -> list:
         from services.time_utils import parse_utc
         from services.locale_service import to_local
 
-        new_due_utc = parse_utc(new_due_utc_str)
+        new_due_utc = parse_utc(cast(datetime | str, new_due_utc_str))
         if new_due_utc == datetime.min.replace(tzinfo=timezone.utc):
             return []
 

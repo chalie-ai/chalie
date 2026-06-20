@@ -29,12 +29,19 @@ the factory constructs a client without touching the network, and we assert on
 client.model / client.host to tell the providers apart — no LLM call is made.
 """
 
+import sqlite3
+from typing import TYPE_CHECKING, cast
+
 import pytest
 
 from services.database_service import get_shared_db_service
 from services.provider_api import ProviderType
 from services.provider_db_service import ProviderDbService
 from services.providers import Providers
+
+if TYPE_CHECKING:
+    from services.llm_clients.ollama import OllamaClient
+    from services.message_processor import MessageProcessor
 
 pytestmark = pytest.mark.unit
 
@@ -45,17 +52,17 @@ def _svc() -> ProviderDbService:
     return ProviderDbService(get_shared_db_service())
 
 
-def _mk(svc, name, model, host):
+def _mk(svc: ProviderDbService, name: str, model: str, host: str) -> int:
     """Host is an unreachable loopback port to skip the on-create vision probe."""
-    return svc.create_provider(
+    return cast(int, cast(dict[str, object], svc.create_provider(
         {"name": name, "platform": "ollama", "model": model, "host": host, "api_key": ""}
-    )["id"]
+    ))["id"])
 
 
 # ── Routing: Providers._resolve(DELEGATE) ─────────────────────────────────────
 
 
-def test_resolve_delegate_falls_back_to_selected_when_unpinned(db):
+def test_resolve_delegate_falls_back_to_selected_when_unpinned(db: sqlite3.Connection) -> None:
     svc = _svc()
     main = _mk(svc, "main-text", "qwen3", "http://127.0.0.1:2")
     svc.set_selected_provider(main)
@@ -63,13 +70,13 @@ def test_resolve_delegate_falls_back_to_selected_when_unpinned(db):
     from services.provider_cache_service import ProviderCacheService
     ProviderCacheService.invalidate()
 
-    delegate_client = Providers()._resolve(ProviderType.DELEGATE)
+    delegate_client = cast("OllamaClient", Providers()._resolve(ProviderType.DELEGATE))
 
     assert delegate_client.model == "qwen3"
     assert delegate_client.host == "http://127.0.0.1:2"
 
 
-def test_resolve_delegate_returns_pinned_provider_not_selected(db):
+def test_resolve_delegate_returns_pinned_provider_not_selected(db: sqlite3.Connection) -> None:
     svc = _svc()
     main = _mk(svc, "main-text", "qwen3", "http://127.0.0.1:2")
     svc.set_selected_provider(main)
@@ -80,8 +87,8 @@ def test_resolve_delegate_returns_pinned_provider_not_selected(db):
     from services.provider_cache_service import ProviderCacheService
     ProviderCacheService.invalidate()
 
-    chat_client = Providers()._resolve(ProviderType.CHAT)
-    delegate_client = Providers()._resolve(ProviderType.DELEGATE)
+    chat_client = cast("OllamaClient", Providers()._resolve(ProviderType.CHAT))
+    delegate_client = cast("OllamaClient", Providers()._resolve(ProviderType.DELEGATE))
 
     # Chat resolves the selected (main) provider.
     assert chat_client.model == "qwen3"
@@ -92,7 +99,7 @@ def test_resolve_delegate_returns_pinned_provider_not_selected(db):
     assert delegate_client.host == "http://127.0.0.1:3"
 
 
-def test_resolve_delegate_raises_when_no_provider_configured(db):
+def test_resolve_delegate_raises_when_no_provider_configured(db: sqlite3.Connection) -> None:
     svc = _svc()
     svc.set_delegate_provider(None)
     svc.set_selected_provider(0)  # 0 → get_provider_by_id miss → no selected
@@ -106,7 +113,7 @@ def test_resolve_delegate_raises_when_no_provider_configured(db):
         Providers()._resolve(ProviderType.DELEGATE)
 
 
-def test_send_routes_delegate_turn_through_delegate_client(db):
+def test_send_routes_delegate_turn_through_delegate_client(db: sqlite3.Connection) -> None:
     """Over-cap guard inside send() fires with DELEGATE provider's model ('llama3'), not
     chat provider's — proving send() resolves the correct pool."""
     from configs.channels.web_search import WebSearchConfig
@@ -141,7 +148,7 @@ def test_send_routes_delegate_turn_through_delegate_client(db):
 # ── DB layer: ProviderDbService delegate status round-trip ─────────────────────
 
 
-def test_delegate_status_default_explicit_then_clear_back_to_main(db):
+def test_delegate_status_default_explicit_then_clear_back_to_main(db: sqlite3.Connection) -> None:
     """get_delegate_provider_status() walks the full admin lifecycle:
 
       • default (nothing pinned) → source 'auto', provider == main
@@ -159,25 +166,25 @@ def test_delegate_status_default_explicit_then_clear_back_to_main(db):
     # Default — auto-resolves to the selected main provider.
     status = svc.get_delegate_provider_status()
     assert status["source"] == "auto"
-    assert status["provider"]["id"] == main
+    assert cast(dict[str, object], status["provider"])["id"] == main
 
     # Explicit pin.
     svc.set_delegate_provider(worker)
     status = svc.get_delegate_provider_status()
     assert status["source"] == "explicit"
-    assert status["provider"]["id"] == worker
+    assert cast(dict[str, object], status["provider"])["id"] == worker
 
     # Clear → falls back to main, NOT the worker just pinned.
     svc.set_delegate_provider(None)
     status = svc.get_delegate_provider_status()
     assert status["source"] == "auto"
-    assert status["provider"]["id"] == main
+    assert cast(dict[str, object], status["provider"])["id"] == main
 
 
 # ── DTO derivation: MessageProcessor._build_send_dto ───────────────────────────
 
 
-def _delegate_mp(config_cls, raw_input):
+def _delegate_mp(config_cls: type, raw_input: str) -> "MessageProcessor":
     """Build a real MessageProcessor bound to a delegate config, ready for
     _build_send_dto().
 
@@ -197,7 +204,7 @@ def _delegate_mp(config_cls, raw_input):
     return mp
 
 
-def test_build_send_dto_type_delegate_for_web_search_config(db):
+def test_build_send_dto_type_delegate_for_web_search_config(db: sqlite3.Connection) -> None:
     """WebSearchConfig → _build_send_dto() yields a DELEGATE-type DTO, so the
     web_search subagent runs on the delegate provider."""
     from configs.channels.web_search import WebSearchConfig
@@ -210,7 +217,7 @@ def test_build_send_dto_type_delegate_for_web_search_config(db):
     )
 
 
-def test_build_send_dto_type_delegate_for_web_browse_config(db):
+def test_build_send_dto_type_delegate_for_web_browse_config(db: sqlite3.Connection) -> None:
     """WebBrowseConfig → _build_send_dto() yields a DELEGATE-type DTO, so the
     web_browse subagent runs on the delegate provider."""
     from configs.channels.web_browse import WebBrowseConfig
@@ -223,7 +230,7 @@ def test_build_send_dto_type_delegate_for_web_browse_config(db):
     )
 
 
-def test_build_send_dto_vision_precedence_over_delegate(db):
+def test_build_send_dto_vision_precedence_over_delegate(db: sqlite3.Connection) -> None:
     """VisionConfig (`delegate:vision`) still produces a VISION-type DTO — vision
     provider precedence holds even though it is technically a delegate channel.
     Guards the vision > delegate > chat ordering in _build_send_dto()."""

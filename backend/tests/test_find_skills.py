@@ -15,6 +15,7 @@ import json
 import shutil
 import sqlite3
 from pathlib import Path
+from typing import cast
 
 import pytest
 
@@ -34,7 +35,7 @@ _REAL_SKILLS_DB = FileMapperService.get_skills_db_path()
 
 
 @pytest.fixture
-def skills_db(tmp_path, monkeypatch):
+def skills_db(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     """A real skills.sqlite COPY under tmp_path, with ``FindSkillsAbility._DB_PATH``
     redirected to it. The repo's checked-in skills.sqlite is NEVER touched — every
     SQL statement runs against the read-only byte copy (Rule 0)."""
@@ -44,7 +45,7 @@ def skills_db(tmp_path, monkeypatch):
     return dest
 
 
-def _mp(db) -> MessageProcessor:
+def _mp(db: sqlite3.Connection) -> MessageProcessor:
     """A real MessageProcessor bound to a real transcript anchor so the
     dispatcher's act-trail write lands on a real row.
 
@@ -71,10 +72,10 @@ def _pick_known_title(db_path: Path) -> tuple[int, str, str]:
     """Pull a real enabled skill row (id, title, content) to query against."""
     conn = sqlite3.connect(str(db_path))
     try:
-        return conn.execute(
+        return cast(tuple[int, str, str], conn.execute(
             "SELECT id, title, content FROM skills WHERE enabled = 1 "
             "AND content != '' ORDER BY id LIMIT 1"
-        ).fetchone()
+        ).fetchone())
     finally:
         conn.close()
 
@@ -82,7 +83,7 @@ def _pick_known_title(db_path: Path) -> tuple[int, str, str]:
 # ── missing / blank query → loud code=missing-params, NOT a silent success ──────
 
 
-def test_blank_query_is_missing_params(skills_db, db):
+def test_blank_query_is_missing_params(skills_db: Path, db: sqlite3.Connection) -> None:
     mp = _mp(db)
     out = ToolDispatcher(mp).dispatch("find_skills", {"query": "   ", "act_summary": "x"})
     assert "[find_skills(status=error, code=missing-params" in out
@@ -92,7 +93,7 @@ def test_blank_query_is_missing_params(skills_db, db):
 # ── index missing / corrupt → skill-index-error, NEVER a zero-hit success ───────
 
 
-def test_missing_db_is_skill_index_error(skills_db, db, monkeypatch):
+def test_missing_db_is_skill_index_error(skills_db: Path, db: sqlite3.Connection, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(FindSkillsAbility, "_DB_PATH", skills_db.parent / "gone.sqlite")
     mp = _mp(db)
     out = ToolDispatcher(mp).dispatch("find_skills", {"query": "analysis", "act_summary": "x"})
@@ -100,7 +101,7 @@ def test_missing_db_is_skill_index_error(skills_db, db, monkeypatch):
     assert "code=error]" not in out
 
 
-def test_corrupt_db_is_loud_not_zero_hit(skills_db, db):
+def test_corrupt_db_is_loud_not_zero_hit(skills_db: Path, db: sqlite3.Connection) -> None:
     """THE regression pin: a corrupt index must surface skill-index-error, not a
     zero-hit SUCCESS. Fails against HEAD (which renders [] as found=0 success)."""
     skills_db.write_bytes(b"this is not a sqlite database at all, just garbage bytes")
@@ -115,7 +116,7 @@ def test_corrupt_db_is_loud_not_zero_hit(skills_db, db):
 # ── matches → JSON rows carrying the playbook content + count meta ──────────────
 
 
-def test_match_returns_json_rows_with_playbook_content(skills_db, db):
+def test_match_returns_json_rows_with_playbook_content(skills_db: Path, db: sqlite3.Connection) -> None:
     _id, title, content = _pick_known_title(skills_db)
     # Query by the skill's own title so FTS (the offline route) finds it.
     mp = _mp(db)
@@ -143,13 +144,13 @@ def test_match_returns_json_rows_with_playbook_content(skills_db, db):
 # ── embedding failure → FTS-only fallback, same rows, degraded=true ─────────────
 
 
-def test_embedding_failure_degrades_to_fts_with_marker(skills_db, db, monkeypatch):
+def test_embedding_failure_degrades_to_fts_with_marker(skills_db: Path, db: sqlite3.Connection, monkeypatch: pytest.MonkeyPatch) -> None:
     """When the embedding service raises, run() degrades to FTS-only and the
     success carries meta degraded=true with the SAME row shape — never silently
     fewer signals, never an error."""
     from services.embedding_service import EmbeddingService
 
-    def _boom(self, *_args, **_kwargs):
+    def _boom(self: object, *_args: object, **_kwargs: object) -> None:
         raise RuntimeError("embedding backend unreachable")
 
     monkeypatch.setattr(EmbeddingService, "generate_embedding", _boom)
@@ -171,7 +172,7 @@ def test_embedding_failure_degrades_to_fts_with_marker(skills_db, db, monkeypatc
 # ── zero hits (healthy index) → success, count=0, matches=[] + note ─────────────
 
 
-def test_zero_hit_is_success_with_note(skills_db, db, monkeypatch):
+def test_zero_hit_is_success_with_note(skills_db: Path, db: sqlite3.Connection, monkeypatch: pytest.MonkeyPatch) -> None:
     """A genuine no-match against a HEALTHY index is a SUCCESS with count=0 and a
     matches=[] + note body, never an error. The vec KNN always returns its k
     nearest neighbours regardless of relevance, so a true zero-hit only arises on
@@ -179,7 +180,7 @@ def test_zero_hit_is_success_with_note(skills_db, db, monkeypatch):
     offline env takes anyway) with a token FTS cannot match."""
     from services.embedding_service import EmbeddingService
 
-    def _boom(self, *_args, **_kwargs):
+    def _boom(self: object, *_args: object, **_kwargs: object) -> None:
         raise RuntimeError("embedding backend unreachable")
 
     monkeypatch.setattr(EmbeddingService, "generate_embedding", _boom)
@@ -198,7 +199,7 @@ def test_zero_hit_is_success_with_note(skills_db, db, monkeypatch):
 # ── limit respected ────────────────────────────────────────────────────────────
 
 
-def test_limit_caps_row_count(skills_db, db):
+def test_limit_caps_row_count(skills_db: Path, db: sqlite3.Connection) -> None:
     mp = _mp(db)
     # A broad term that matches several skills, capped to one.
     out = ToolDispatcher(mp).dispatch(

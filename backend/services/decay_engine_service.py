@@ -1,6 +1,7 @@
 
 import math
 import logging
+import sqlite3
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -86,13 +87,13 @@ class _EpisodeDecayRow:
 
 class DecayEngineService:
 
-    def __init__(self):
+    def __init__(self) -> None:
         logger.info("[DECAY ENGINE] Initialized (absolute exponential decay)")
 
     def run_once(self) -> None:
         self.run_decay_cycle()
 
-    def run_decay_cycle(self):
+    def run_decay_cycle(self) -> None:
         fossils_tombstoned = self._janitor_fossil_episodes()
         episodic_count = self._decay_episodic()
         episodes_deleted = self._delete_expired_episodes()
@@ -113,7 +114,7 @@ class DecayEngineService:
         )
 
     @staticmethod
-    def _tau_hours_for(level: int, tombstoned_at) -> float:
+    def _tau_hours_for(level: int, tombstoned_at: str | None) -> float:
         if tombstoned_at:
             return _TAU_HOURS_TOMBSTONED
         if level >= _LEVEL_1 + 1:
@@ -165,7 +166,7 @@ class DecayEngineService:
             logger.exception(f"[DECAY ENGINE] Episodic decay failed: {e}")
             return 0
 
-    def _absolute_weight(self, row, now):
+    def _absolute_weight(self, row: "_EpisodeDecayRow", now: datetime) -> float | None:
         if row.anchor is None:
             return None
         anchor_dt = parse_utc(row.anchor)
@@ -234,7 +235,7 @@ class DecayEngineService:
             return 0
 
     @staticmethod
-    def _hard_delete_episode(conn, episode_id: str) -> None:
+    def _hard_delete_episode(conn: sqlite3.Connection, episode_id: str) -> None:
         row = conn.execute(
             "SELECT rowid, gist FROM episodes WHERE id = ?", (episode_id,)
         ).fetchone()

@@ -22,6 +22,9 @@ and out of scope for this ticket; a separate sweep will rework them onto a
 real-DB outcome assertion.
 """
 
+import sqlite3
+from typing import cast
+
 import pytest
 from unittest.mock import patch
 
@@ -29,7 +32,7 @@ pytestmark = pytest.mark.unit
 
 
 class TestAppend:
-    def test_basic_append(self, db):
+    def test_basic_append(self, db: sqlite3.Connection) -> None:
         from services.transcript_service import append
 
         rowid = append('test-topic', 'user', 'Hi')
@@ -43,7 +46,7 @@ class TestAppend:
         assert row['role'] == 'user'
         assert row['content'] == 'Hi'
 
-    def test_append_with_tool_info(self, db):
+    def test_append_with_tool_info(self, db: sqlite3.Connection) -> None:
         from services.transcript_service import append
 
         rowid = append(
@@ -59,7 +62,7 @@ class TestAppend:
         assert row['tool_call_id'] == 'tc_123'
         assert row['tool_name'] == 'search'
 
-    def test_append_internal_flag(self, db):
+    def test_append_internal_flag(self, db: sqlite3.Connection) -> None:
         from services.transcript_service import append
 
         rowid = append('test-topic', 'internal', 'notes', internal=True)
@@ -67,17 +70,17 @@ class TestAppend:
         cursor.execute("SELECT internal FROM transcript WHERE id = ?", (rowid,))
         assert cursor.fetchone()[0] == 1
 
-    def test_append_empty_content_returns_none(self, db):
+    def test_append_empty_content_returns_none(self, db: sqlite3.Connection) -> None:
         from services.transcript_service import append
         assert append('test-topic', 'user', '') is None
 
-    def test_append_empty_topic_returns_none(self, db):
+    def test_append_empty_topic_returns_none(self, db: sqlite3.Connection) -> None:
         from services.transcript_service import append
         assert append('', 'user', 'content') is None
 
 
 class TestGetRecent:
-    def test_get_recent_returns_ordered(self, db):
+    def test_get_recent_returns_ordered(self, db: sqlite3.Connection) -> None:
         from services.transcript_service import append, get_recent
 
         append('test', 'user', 'First')
@@ -90,7 +93,7 @@ class TestGetRecent:
         assert results[0]['content'] == 'First'
         assert results[2]['content'] == 'Third'
 
-    def test_get_recent_respects_limit(self, db):
+    def test_get_recent_respects_limit(self, db: sqlite3.Connection) -> None:
         from services.transcript_service import append, get_recent
 
         for i in range(10):
@@ -99,7 +102,7 @@ class TestGetRecent:
         results = get_recent('test', limit=3)
         assert len(results) == 3
 
-    def test_get_recent_since_id(self, db):
+    def test_get_recent_since_id(self, db: sqlite3.Connection) -> None:
         from services.transcript_service import append, get_recent
 
         id1 = append('test', 'user', 'First')
@@ -111,7 +114,7 @@ class TestGetRecent:
         assert results[0]['content'] == 'Second'
         assert results[1]['content'] == 'Third'
 
-    def test_get_recent_filters_by_topic(self, db):
+    def test_get_recent_filters_by_topic(self, db: sqlite3.Connection) -> None:
         from services.transcript_service import append, get_recent
 
         append('topic-a', 'user', 'A message')
@@ -139,7 +142,7 @@ class TestDbStateExtractionTrigger:
     profile gate both run for real in every one.
     """
 
-    def test_fires_when_untriggered_tail_crosses_threshold(self, db):
+    def test_fires_when_untriggered_tail_crosses_threshold(self, db: sqlite3.Connection) -> None:
         """Seed THRESHOLD untriggered transcripts in a channel; the next
         _maybe_trigger_extraction call must fire."""
         import services.transcript_service as ts
@@ -164,7 +167,7 @@ class TestDbStateExtractionTrigger:
 
         assert fired == [(channel, 999)]
 
-    def test_does_not_fire_below_threshold_on_extracting_channel(self, db):
+    def test_does_not_fire_below_threshold_on_extracting_channel(self, db: sqlite3.Connection) -> None:
         """On an EXTRACTING channel (user), one short of the threshold must not
         fire. This pins the real count path: the gate is open, so only the
         accumulated-tail count decides. (Previously this used a muted channel
@@ -187,7 +190,7 @@ class TestDbStateExtractionTrigger:
 
         assert fired == []
 
-    def test_muted_channel_never_fires_even_above_threshold(self, db):
+    def test_muted_channel_never_fires_even_above_threshold(self, db: sqlite3.Connection) -> None:
         """Per-source gate (the headline invariant of TKT-926): a channel whose
         profile is muted (no extract_episodes) produces NO episodes no matter how
         much transcript it accumulates. Seed WELL ABOVE the threshold on a muted
@@ -209,7 +212,7 @@ class TestDbStateExtractionTrigger:
             "test premise: delegate:* must be a muted source profile"
         )
 
-        last_id = None
+        last_id: int | None = None
         for _ in range(ts._EXTRACTION_THRESHOLD * 2):
             cur = db.execute(
                 "INSERT INTO transcript (channel, role, content) VALUES (?, 'user', 'x')",
@@ -220,7 +223,7 @@ class TestDbStateExtractionTrigger:
 
         # Real production entry point — no mock. For a muted channel the gate
         # returns before any DB read or thread spawn.
-        ts._maybe_trigger_extraction(channel, last_id)
+        ts._maybe_trigger_extraction(channel, cast(int, last_id))
 
         episode_count = db.execute(
             "SELECT COUNT(*) FROM episodes WHERE channel = ?", (channel,)
@@ -231,7 +234,7 @@ class TestDbStateExtractionTrigger:
             f"for channel {channel!r}"
         )
 
-    def test_episodes_in_other_channels_do_not_mask(self, db):
+    def test_episodes_in_other_channels_do_not_mask(self, db: sqlite3.Connection) -> None:
         """Episodes in other channels must not suppress a stale channel."""
         import services.transcript_service as ts
 
@@ -261,7 +264,7 @@ class TestDbStateExtractionTrigger:
 
         assert fired == [(stale, 999)]
 
-    def test_latest_episode_end_suppresses_until_tail_grows(self, db):
+    def test_latest_episode_end_suppresses_until_tail_grows(self, db: sqlite3.Connection) -> None:
         """An episode already covering the tail means count_since = 0 →
         no fire. Only once more transcripts accumulate past the episode's
         transcript_id_end does the trigger re-fire."""
@@ -307,7 +310,7 @@ class TestDbStateExtractionTrigger:
             ts._maybe_trigger_extraction(channel, new_last)
             assert fired == [(channel, new_last)]
 
-    def test_soft_deleted_episodes_do_not_mask(self, db):
+    def test_soft_deleted_episodes_do_not_mask(self, db: sqlite3.Connection) -> None:
         """Soft-deleted episodes must be ignored when computing the tail."""
         import services.transcript_service as ts
 

@@ -19,11 +19,26 @@ Blueprint prefix
 """
 
 import logging
+from typing import TYPE_CHECKING, cast
 
 from flask import Blueprint, jsonify, request
 from services.vault_service import VaultLockedError
 
 from .auth import require_auth
+
+if TYPE_CHECKING:
+    from collections.abc import Mapping
+    from flask.typing import ResponseReturnValue
+    from typing import Protocol
+
+    class _Capability(Protocol):
+        def get_manifest(self) -> dict[str, object]: ...
+        def is_connected(self) -> bool: ...
+        def load_credential(self, key: str) -> object: ...
+        def configure(self, credentials: object) -> None: ...
+        def connect(self) -> bool: ...
+        def disconnect(self) -> None: ...
+        def monitor(self) -> None: ...
 
 logger = logging.getLogger(__name__)
 
@@ -35,7 +50,7 @@ capabilities_bp = Blueprint("capabilities", __name__, url_prefix="/api/capabilit
 # ---------------------------------------------------------------------------
 
 
-def _load_caps() -> dict:
+def _load_caps() -> "Mapping[str, object]":
     """Imported lazily to avoid circular imports during application boot."""
     from capabilities import load_capabilities
     return load_capabilities()
@@ -63,17 +78,17 @@ def _get_last_sync_at(cap_id: str) -> str | None:
 
 @capabilities_bp.route("", methods=["GET"])
 @require_auth
-def list_capabilities():
+def list_capabilities() -> "ResponseReturnValue":
     try:
         caps = _load_caps()
         result = []
         for cap_id, cap in caps.items():
-            manifest = cap.get_manifest()
+            manifest = cast("_Capability", cap).get_manifest()
             result.append({
                 "id": cap_id,
                 "name": manifest.get("name", cap_id),
                 "version": manifest.get("version", ""),
-                "connected": cap.is_connected(),
+                "connected": cast("_Capability", cap).is_connected(),
                 "last_sync_at": _get_last_sync_at(cap_id),
                 "providers": manifest.get("providers", []),
                 "fields": manifest.get("fields"),
@@ -87,16 +102,16 @@ def list_capabilities():
 
 @capabilities_bp.route("/<cap_id>", methods=["GET"])
 @require_auth
-def get_capability(cap_id: str):
+def get_capability(cap_id: str) -> "ResponseReturnValue":
     """Password fields are excluded — only non-secret fields are returned so the UI can pre-fill the edit form."""
     try:
         caps = _load_caps()
         if cap_id not in caps:
             return jsonify({"error": f"Capability not found: {cap_id}"}), 404
 
-        cap = caps[cap_id]
+        cap = cast("_Capability", caps[cap_id])
         manifest = cap.get_manifest()
-        fields = manifest.get("fields") or []
+        fields = cast("list[dict[str, object]]", manifest.get("fields") or [])
 
         config = {}
         if cap.is_connected():
@@ -124,7 +139,7 @@ def get_capability(cap_id: str):
 
 @capabilities_bp.route("/<cap_id>/setup", methods=["POST"])
 @require_auth
-def setup_capability(cap_id: str):
+def setup_capability(cap_id: str) -> "ResponseReturnValue":
     """On success, triggers an immediate first sync in a background daemon thread.
 
     Raises:
@@ -136,7 +151,7 @@ def setup_capability(cap_id: str):
         if cap_id not in caps:
             return jsonify({"error": f"Capability not found: {cap_id}"}), 404
 
-        cap = caps[cap_id]
+        cap = cast("_Capability", caps[cap_id])
         credentials = request.get_json(force=True) or {}
 
         try:
@@ -151,7 +166,7 @@ def setup_capability(cap_id: str):
         # Trigger immediate first sync so the user doesn't wait for the scheduler
         import threading
 
-        def _first_sync():
+        def _first_sync() -> None:
             try:
                 cap.monitor()
                 logger.info("[capabilities] initial sync complete for '%s'", cap_id)
@@ -176,14 +191,14 @@ def setup_capability(cap_id: str):
 
 @capabilities_bp.route("/<cap_id>/disconnect", methods=["POST"])
 @require_auth
-def disconnect_capability(cap_id: str):
+def disconnect_capability(cap_id: str) -> "ResponseReturnValue":
     """Capability tools (email, calendar, contacts) will gracefully report "not connected" after disconnect."""
     try:
         caps = _load_caps()
         if cap_id not in caps:
             return jsonify({"error": f"Capability not found: {cap_id}"}), 404
 
-        cap = caps[cap_id]
+        cap = cast("_Capability", caps[cap_id])
 
         cap.disconnect()
         return jsonify({"status": "disconnected"}), 200
@@ -195,14 +210,14 @@ def disconnect_capability(cap_id: str):
 
 @capabilities_bp.route("/<cap_id>/status", methods=["GET"])
 @require_auth
-def capability_status(cap_id: str):
+def capability_status(cap_id: str) -> "ResponseReturnValue":
     """Error count is currently always ``0`` — a future scheduler revision will persist per-capability error counts."""
     try:
         caps = _load_caps()
         if cap_id not in caps:
             return jsonify({"error": f"Capability not found: {cap_id}"}), 404
 
-        cap = caps[cap_id]
+        cap = cast("_Capability", caps[cap_id])
 
         # Retrieve persisted error count if available (defaults to 0)
         error_count = 0
