@@ -6,17 +6,26 @@
 #
 #     http://www.apache.org/licenses/LICENSE-2.0
 
-"""Feature tests for TKT-947 — durable tool_calls retention."""
+"""Feature tests for tool_calls durability and unified retention.
+
+Two guarantees, both pinned against the production hot path:
+  * Rich-card rendering (TKT-947): a recorded tool_calls row survives its turn so
+    SegmentService / the live broadcast can build the rich segment from it.
+  * Unified retention: a tool_calls audit row lives and dies with its transcript
+    turn. The transcript GC reaps it exactly when it reaps the turn — below the
+    compaction watermark and uncited by any live episode. The old standalone
+    7-day janitor (_purge_tool_calls) is gone; there is one cleanup path.
+"""
 
 import json
 import sqlite3
-from datetime import timedelta
 from typing import cast
 
 import pytest
 
 from services.act_trail import ActTrail
-from services.time_utils import utc_now
+from services.decay_engine_service import DecayEngineService
+from services.transcript_service import Transcript
 
 pytestmark = pytest.mark.unit
 
@@ -128,7 +137,6 @@ def test_broadcast_turn_result_pairs_span_after_assistant_row_persisted(db: sqli
     shared function the refresh path uses.
     """
     import time
-    from services.transcript_service import Transcript
 
     # Chain model: the tool anchors to the assistant STEP row, the synthesis span
     # lands on the FINAL row, and all three rows share the turn_id the input row
@@ -186,54 +194,52 @@ def test_broadcast_turn_result_pairs_span_after_assistant_row_persisted(db: sqli
     assert len(done) == 1, "broadcast must still emit the done event"
 
 
-# ── C. Janitor: 7-day time-based purge ────────────────────────────────────────
+# ── C. Unified retention: tool_calls die with their transcript turn ───────────
 
 
-def test_janitor_deletes_old_rows_and_keeps_recent(db: sqlite3.Connection) -> None:
-    """DecayEngineService._purge_tool_calls() must delete rows older than 7 days
-    and leave rows within the 7-day window intact.
+def test_transcript_gc_reaps_tool_calls_of_obsolete_turns_only(db: sqlite3.Connection) -> None:
+    """A tool_calls row lives and dies with its turn — no separate clock.
 
-    Seeded directly via SQL (matching prod schema) so the test does not depend on
-    the janitor's own transport or the ActTrail write path — the assertion is
-    purely about what the purge deletes.
+    Drives the real decay entry point (the all-channels transcript GC) and pins
+    every side of the unified rule in one run:
+      * below watermark + uncited       -> the turn AND its tool_calls are reaped
+      * below watermark + episode-cited  -> both survive (evidence never orphaned)
+      * above the watermark              -> both survive (still live history)
     """
-    tid = _seed_transcript(db)
+    channel = "user"
+
+    # Two old turns through the production writer; one tool call recorded on each
+    # via ActTrail.record — the only production tool_calls write path.
+    obsolete = Transcript.write_input_row(channel, "user", "obsolete turn with a tool call")
+    cited = Transcript.write_input_row(channel, "user", "turn an episode still cites")
+    ActTrail().record(tool_name="weather", params={"location": "Valletta"}, result=_RICH_RESULT, transcript_id=obsolete)
+    ActTrail().record(tool_name="memory", params={}, result="recalled fact", transcript_id=cited)
+
+    # A live episode cites the second turn — the GC must protect its tool call too.
+    db.execute(
+        "INSERT INTO episodes (id, gist, salience, channel, transcript_ids) VALUES (?, ?, ?, ?, ?)",
+        ("ep-cite", "covers the cited turn", 5, channel, json.dumps([cited])),
+    )
     db.commit()
 
-    old_ts = (utc_now() - timedelta(days=8)).isoformat()
-    recent_ts = (utc_now() - timedelta(days=1)).isoformat()
+    # The compaction watermark row, written exactly as the compactor does.
+    Transcript.write_input_row(channel, "compaction", "## Voice\nliving checkpoint")
 
-    db.execute(
-        "INSERT INTO tool_calls (transcript_id, tool_name, params, result, created_at) "
-        "VALUES (?, 'memory', '{}', 'old result', ?)",
-        (tid, old_ts),
-    )
-    db.execute(
-        "INSERT INTO tool_calls (transcript_id, tool_name, params, result, created_at) "
-        "VALUES (?, 'search', '{}', 'recent result', ?)",
-        (tid, recent_ts),
-    )
-    db.commit()
+    # A post-watermark turn with its own tool call — still live, must survive.
+    live = Transcript.write_input_row(channel, "user", "post-watermark turn")
+    ActTrail().record(tool_name="search", params={}, result="fresh result", transcript_id=live)
 
-    before = cast(int, db.execute("SELECT COUNT(*) FROM tool_calls").fetchone()[0])
-    assert before == 2
+    # Real decay entry point — the all-channels discovery path, same as prod.
+    DecayEngineService()._cleanup_transcript()
 
-    from services.decay_engine_service import DecayEngineService
+    def _tool_calls_on(tid: int) -> int:
+        return cast(int, db.execute(
+            "SELECT COUNT(*) FROM tool_calls WHERE transcript_id = ?", (tid,)
+        ).fetchone()[0])
 
-    deleted = DecayEngineService()._purge_tool_calls()
-
-    assert deleted == 1, (
-        f"Expected 1 deleted row (the 8-day-old one), got {deleted}. "
-        "Either the janitor is not using time-based deletion or the cutoff is wrong."
-    )
-
-    remaining = db.execute(
-        "SELECT tool_name FROM tool_calls"
-    ).fetchall()
-    assert len(remaining) == 1
-    assert cast(tuple[object, ...], remaining[0])[0] == "search", (
-        "The recent row was deleted — janitor is too aggressive"
-    )
+    assert _tool_calls_on(obsolete) == 0, "tool_calls of the reaped obsolete turn must be gone"
+    assert _tool_calls_on(cited) == 1, "an episode-cited turn's tool_calls must survive"
+    assert _tool_calls_on(live) == 1, "tool_calls above the watermark must survive"
 
 
 # ── D. review_tool_calls filters narration rows ───────────────────────────────

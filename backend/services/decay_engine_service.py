@@ -42,11 +42,6 @@ _LEAF_DELETE_SALIENCE_MAX = 3
 # conservative default pending calibration.
 _JANITOR_FOSSIL_AGE_DAYS = 7
 
-# ── Tool-call retention ───────────────────────────────────────────────────────
-# Durable tool_calls rows are time-capped: rows older than this are purged each
-# decay cycle, replacing the old count-based (25 k) cap.
-_TOOL_CALLS_RETENTION_DAYS = 7
-
 # Below this absolute delta a recomputed weight is treated as unchanged, so an
 # already-settled corpus produces zero UPDATEs on a repeat tick.
 _RW_EPSILON = 0.0001
@@ -100,7 +95,6 @@ class DecayEngineService:
         data_graph_count = self._decay_data_graph()
         legacy_moments_wiped = self._wipe_legacy_data_graph_moments()
         transcript_cleaned = self._cleanup_transcript()
-        tool_calls_purged = self._purge_tool_calls()
 
         logger.info(
             f"[DECAY ENGINE] Cycle complete: "
@@ -109,8 +103,7 @@ class DecayEngineService:
             f"episodes_deleted={episodes_deleted}, "
             f"data_graph={data_graph_count} updated, "
             f"legacy_moments_wiped={legacy_moments_wiped}, "
-            f"transcript_cleaned={transcript_cleaned}, "
-            f"tool_calls_purged={tool_calls_purged}"
+            f"transcript_cleaned={transcript_cleaned}"
         )
 
     @staticmethod
@@ -333,23 +326,5 @@ class DecayEngineService:
             return Transcript.cleanup_unlinked_entries()
         except Exception as e:
             logger.warning(f"[DECAY ENGINE] Transcript cleanup failed: {e}")
-            return 0
-
-    def _purge_tool_calls(self) -> int:
-        cutoff = (utc_now() - timedelta(days=_TOOL_CALLS_RETENTION_DAYS)).isoformat()
-        try:
-            from services.database_service import get_shared_db_service
-            db = get_shared_db_service()
-            with db.connection() as conn:
-                result = conn.execute(
-                    "DELETE FROM tool_calls WHERE julianday(created_at) < julianday(?)",
-                    (cutoff,),
-                )
-                deleted = result.rowcount
-            if deleted:
-                logger.info(f"[DECAY ENGINE] Purged {deleted} tool_calls rows older than 7d")
-            return deleted
-        except Exception as e:
-            logger.debug(f"[DECAY ENGINE] Tool calls retention purge non-fatal: {e}")
             return 0
 

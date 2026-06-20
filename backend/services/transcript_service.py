@@ -432,6 +432,14 @@ class Transcript:
                         continue
 
                     id_placeholders = ','.join('?' * len(to_delete_ids))
+                    # Children before parent: tool_calls FK-references transcript
+                    # with no ON DELETE CASCADE, so an obsolete turn's audit rows
+                    # must go first. A tool call is dead the moment its turn is —
+                    # there is no separate tool-call retention clock any more.
+                    cursor.execute(
+                        f"DELETE FROM tool_calls WHERE transcript_id IN ({id_placeholders})",
+                        to_delete_ids,
+                    )
                     cursor.execute(
                         f"DELETE FROM transcript WHERE id IN ({id_placeholders})",
                         to_delete_ids,
