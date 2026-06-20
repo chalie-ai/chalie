@@ -47,8 +47,8 @@ function handleSettings(): void {
         v-if="totalCount > 0"
         id="taskDrawerBtn"
         class="btn-icon task-drawer-trigger"
-        aria-label="Active tasks"
-        title="Active tasks"
+        aria-label="Active processes"
+        title="Active processes"
         @click="tasks.open()"
       >
         <Clock :size="18" aria-hidden="true" />

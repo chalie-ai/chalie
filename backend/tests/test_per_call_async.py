@@ -174,7 +174,7 @@ def test_dispatch_with_async_returns_placeholder_and_registers_delegate() -> Non
     ctx = _Ctx(DmnConfig())
     ability = _BlockingAbility(mp=ctx)
 
-    before = set(async_delegate_runner.active_ids())
+    before = {cast(str, d["sub_id"]) for d in async_delegate_runner.active()}
     result = ToolDispatcher(ctx)._execute(ability, {"async": True}, None)
 
     # Non-blocking: the placeholder came back while run() is still blocked.
@@ -182,7 +182,7 @@ def test_dispatch_with_async_returns_placeholder_and_registers_delegate() -> Non
     assert started.wait(timeout=2), "background run() never started"
     assert not finished, "run() returned before release — was not backgrounded"
 
-    new = set(async_delegate_runner.active_ids()) - before
+    new = {cast(str, d["sub_id"]) for d in async_delegate_runner.active()} - before
     assert len(new) == 1
     delegate_id = new.pop()
     assert delegate_id.startswith("test_per_call_blocking_")
@@ -194,8 +194,8 @@ def test_dispatch_with_async_returns_placeholder_and_registers_delegate() -> Non
 
     # The daemon finishes run(), skips delivery, and deregisters in `finally`.
     for _ in range(100):
-        if delegate_id not in async_delegate_runner.active_ids():
+        if delegate_id not in {cast(str, d["sub_id"]) for d in async_delegate_runner.active()}:
             break
         time.sleep(0.05)
-    assert delegate_id not in async_delegate_runner.active_ids()
+    assert delegate_id not in {cast(str, d["sub_id"]) for d in async_delegate_runner.active()}
     assert finished == [True]

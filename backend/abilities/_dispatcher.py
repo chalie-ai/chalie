@@ -199,7 +199,7 @@ class ToolDispatcher:
             # this ACT iteration is never blocked (spec §4.0 / §4.4). The
             # placeholder is prose the model reads while the real work runs.
             from services.async_delegate_runner import async_delegate_runner  # noqa: PLC0415
-            placeholder = async_delegate_runner.spawn(ability, params, self._mp)
+            placeholder = async_delegate_runner.spawn(ability, params, self._mp, act_summary)
             tr = ToolResult.ok(str(placeholder))
         else:
             tr = self._run(ability, params)

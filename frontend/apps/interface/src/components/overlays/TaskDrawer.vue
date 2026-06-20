@@ -1,37 +1,75 @@
 <script setup lang="ts">
 /**
- * TaskDrawer — slide-out panel showing pending reminders and active subagents.
+ * Processes drawer — slide-out panel with two stacked sections:
+ *   top    · scheduled reminders (the existing scheduler list)
+ *   bottom · active delegates (backgrounded tool calls), one row each
+ * separated by a minimal divider when both are present.
  *
- * The trigger button lives in PresenceBar.vue; this component owns the scrim,
- * panel, and close button only. Open/close state is driven by tasks.isOpen.
+ * A delegate row shows the model's summary of what it's doing (bold title), the
+ * delegate's tool name (subtitle), and a foot row with a live elapsed timer on
+ * the left and a stop control on the right. Stop flips the delegate's cancel
+ * event server-side (POST /chat/subagent/<id>/stop); the row shows "Stopping…"
+ * until the subagent_end push removes it.
  *
- * The backend /chat/subagents/active returns only { sub_id } (no agent_type or
- * description), so each subagent renders as a generic "Working…" label.
+ * The trigger button lives in PresenceBar.vue. This component owns the scrim,
+ * panel, and close button only; open/close state is driven by tasks.isOpen.
+ * The hint appears on first open-with-content; the panel auto-closes when the
+ * last item clears.
  */
 import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue';
 import { Square, X } from '@lucide/vue';
 import { storeToRefs } from 'pinia';
 import { useTasksStore } from '../../stores/tasks';
 import { scheduler } from '../../api/scheduler';
+import type { ActiveSubagent } from '../../api/scheduler';
 import { webPlatformAdapter } from '@chalie/shared';
-import { relativeTime } from '../../utils/time';
+import { relativeTime, elapsedSince } from '../../utils/time';
 
 const HINT_KEY = 'task_strip_hint_shown';
 const POLL_INTERVAL_MS = 60_000;
+const TICK_INTERVAL_MS = 1_000;
+
+// ── Store ──────────────────────────────────────────────────────────────────────
 
 const tasks = useTasksStore();
 const { reminders, subagents, totalCount, isOpen } = storeToRefs(tasks);
 
+// ── Local state ───────────────────────────────────────────────────────────────
+
 const hintShown = ref(webPlatformAdapter.getItem(HINT_KEY) === '1');
 let pollTimer: ReturnType<typeof setInterval> | null = null;
+
+/** Live wall-clock driving every delegate's elapsed timer; ticks only while open. */
+const nowMs = ref(Date.now());
+let tickTimer: ReturnType<typeof setInterval> | null = null;
+
+/**
+ * Delegates whose stop was requested — rendered as "Stopping…" until the
+ * subagent_end push removes the row. Per-open state, cleared on close.
+ */
+const stopping = ref(new Set<string>());
+
+// ── Computed ──────────────────────────────────────────────────────────────────
 
 const hasReminders = computed(() => reminders.value.length > 0);
 const hasSubagents = computed(() => subagents.value.size > 0);
 
+/** Delegates as an array so v-for can iterate. */
 const subagentList = computed(() => Array.from(subagents.value.values()));
 
-/** First-time hint: only when the drawer is open AND has content. */
+/** Show the first-time hint only when the drawer is open with content. */
 const showHint = computed(() => !hintShown.value && isOpen.value && totalCount.value > 0);
+
+/** Row title: the model's summary, falling back to the tool name. */
+function delegateTitle(sa: ActiveSubagent): string {
+  return sa.summary || sa.tool_name;
+}
+
+function elapsed(sa: ActiveSubagent): string {
+  return elapsedSince(sa.started_at, nowMs.value);
+}
+
+// ── Drawer DOM refs (for CSS transition choreography) ─────────────────────────
 
 const drawerRef = ref<HTMLElement | null>(null);
 const scrimRef = ref<HTMLElement | null>(null);
@@ -43,7 +81,6 @@ function openDrawerDom(): void {
   requestAnimationFrame(() => {
     drawerRef.value?.classList.add('open');
   });
-  // Mark hint shown on first open-with-content.
   if (totalCount.value > 0 && !hintShown.value) {
     hintShown.value = true;
     webPlatformAdapter.setItem(HINT_KEY, '1');
@@ -52,10 +89,11 @@ function openDrawerDom(): void {
 
 function closeDrawerDom(): void {
   const drawer = drawerRef.value;
+  const scrim = scrimRef.value;
   if (!drawer) return;
 
   drawer.classList.remove('open');
-  scrimRef.value?.classList.add('hidden');
+  scrim?.classList.add('hidden');
 
   drawer.addEventListener(
     'transitionend',
@@ -68,28 +106,54 @@ function closeDrawerDom(): void {
   );
 }
 
+// ── Elapsed-timer ticker (open-only) ──────────────────────────────────────────
+
+function startTick(): void {
+  if (tickTimer !== null) return;
+  nowMs.value = Date.now();
+  tickTimer = setInterval(() => { nowMs.value = Date.now(); }, TICK_INTERVAL_MS);
+}
+
+function stopTick(): void {
+  if (tickTimer === null) return;
+  clearInterval(tickTimer);
+  tickTimer = null;
+}
+
+// ── Watch store isOpen ─────────────────────────────────────────────────────────
+
 watch(isOpen, (open) => {
   if (open) {
     openDrawerDom();
+    startTick();
   } else {
     closeDrawerDom();
+    stopTick();
+    stopping.value.clear();
   }
 });
 
-// Auto-close when the count drops to 0.
+// ── Auto-close when the last item clears ─────────────────────────────────────
+
 watch(totalCount, (count) => {
   if (count === 0 && isOpen.value) {
     tasks.close();
   }
 });
 
+// ── Stop delegate ─────────────────────────────────────────────────────────────
+
 async function stopSubagent(subId: string): Promise<void> {
+  stopping.value.add(subId);
   try {
     await scheduler.subagentStop(subId);
   } catch (err) {
-    console.warn('[TaskDrawer] Subagent stop request failed:', err);
+    console.warn('[ProcessesDrawer] delegate stop request failed:', err);
+    stopping.value.delete(subId); // surface the failure: let the user retry
   }
 }
+
+// ── Keyboard ──────────────────────────────────────────────────────────────────
 
 function handleKeydown(e: KeyboardEvent): void {
   if (e.key === 'Escape' && isOpen.value) {
@@ -97,9 +161,10 @@ function handleKeydown(e: KeyboardEvent): void {
   }
 }
 
+// ── Lifecycle ─────────────────────────────────────────────────────────────────
+
 onMounted(() => {
   document.addEventListener('keydown', handleKeydown);
-
   void tasks.loadActiveTasks();
   pollTimer = setInterval(() => { void tasks.loadActiveTasks(); }, POLL_INTERVAL_MS);
 });
@@ -110,10 +175,12 @@ onBeforeUnmount(() => {
     clearInterval(pollTimer);
     pollTimer = null;
   }
+  stopTick();
 });
 </script>
 
 <template>
+  <!-- Scrim -->
   <div
     id="taskDrawerScrim"
     ref="scrimRef"
@@ -122,19 +189,20 @@ onBeforeUnmount(() => {
     @click="tasks.close()"
   ></div>
 
+  <!-- Slide-out panel -->
   <aside
     id="taskDrawer"
     ref="drawerRef"
     class="task-drawer hidden"
     role="complementary"
-    aria-label="Active tasks"
+    aria-label="Active processes"
   >
     <div class="task-drawer__header">
-      <h2 class="task-drawer__title">Tasks</h2>
+      <h2 class="task-drawer__title">Processes</h2>
       <button
         id="taskDrawerClose"
         class="btn-icon task-drawer__close"
-        aria-label="Close tasks panel"
+        aria-label="Close processes panel"
         @click="tasks.close()"
       >
         <X :size="16" aria-hidden="true" />
@@ -142,6 +210,7 @@ onBeforeUnmount(() => {
     </div>
 
     <div id="taskDrawerList" class="task-drawer__list">
+      <!-- Top: scheduled reminders -->
       <template v-if="hasReminders">
         <div
           v-for="r in reminders"
@@ -153,31 +222,39 @@ onBeforeUnmount(() => {
         </div>
       </template>
 
+      <!-- Minimal divider between the two sections -->
       <div
         v-if="hasReminders && hasSubagents"
         class="task-drawer__section-divider"
       ></div>
 
+      <!-- Bottom: active delegates -->
       <template v-if="hasSubagents">
         <div
           v-for="sa in subagentList"
           :key="sa.sub_id"
-          class="task-drawer__item task-drawer__item--subagent"
+          class="task-drawer__delegate"
+          :class="{ 'is-stopping': stopping.has(sa.sub_id) }"
         >
-          <div class="task-drawer__subagent-row">
-            <span class="task-drawer__msg">Working&hellip;</span>
-            <span class="task-drawer__badge" :title="sa.sub_id">{{ sa.sub_id }}</span>
+          <div class="task-drawer__delegate-title">{{ delegateTitle(sa) }}</div>
+          <div class="task-drawer__delegate-type">{{ sa.tool_name }}</div>
+          <div class="task-drawer__delegate-foot">
+            <span class="task-drawer__timer">{{ elapsed(sa) }}</span>
+            <button
+              v-if="!stopping.has(sa.sub_id)"
+              class="task-drawer__stop"
+              :aria-label="`Stop ${sa.tool_name}`"
+              @click="stopSubagent(sa.sub_id)"
+            >
+              <Square :size="11" fill="currentColor" aria-hidden="true" />
+              <span>Stop</span>
+            </button>
+            <span v-else class="task-drawer__stopping">Stopping&hellip;</span>
           </div>
-          <button
-            class="task-drawer__stop-btn btn-icon"
-            :aria-label="`Stop subagent ${sa.sub_id}`"
-            @click="stopSubagent(sa.sub_id)"
-          >
-            <Square :size="12" fill="currentColor" aria-hidden="true" />
-          </button>
         </div>
       </template>
 
+      <!-- First-time hint — shown on first open-with-content. -->
       <div
         v-if="showHint"
         class="task-drawer__hint"
@@ -189,6 +266,8 @@ onBeforeUnmount(() => {
 </template>
 
 <style scoped lang="scss">
+// ── Scrim ──────────────────────────────────────────────────────────────────────
+
 .task-drawer__scrim {
   position: fixed;
   inset: 0;
@@ -201,6 +280,8 @@ onBeforeUnmount(() => {
     display: none;
   }
 }
+
+// ── Drawer panel ───────────────────────────────────────────────────────────────
 
 .task-drawer {
   position: fixed;
@@ -252,6 +333,8 @@ onBeforeUnmount(() => {
   }
 }
 
+// ── List ───────────────────────────────────────────────────────────────────────
+
 .task-drawer__list {
   flex: 1;
   overflow-y: auto;
@@ -275,28 +358,16 @@ onBeforeUnmount(() => {
   gap: 2px;
 }
 
-.task-drawer__item--subagent {
-  flex-direction: column;
-  gap: 4px;
-}
-
-.task-drawer__subagent-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  width: 100%;
-}
-
+// Reminder message: wrap, capped at two lines (no horizontal overflow).
 .task-drawer__msg {
   font-size: 13px;
   color: var(--text-primary);
   line-height: 1.4;
-  flex: 1;
-  min-width: 0;
+  width: 100%;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
   overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .task-drawer__due {
@@ -305,29 +376,79 @@ onBeforeUnmount(() => {
   font-variant-numeric: tabular-nums;
 }
 
-.task-drawer__badge {
-  font-size: 10px;
+// ── Delegate row ───────────────────────────────────────────────────────────────
+
+.task-drawer__delegate {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 10px 16px;
+
+  &:hover {
+    background: var(--surface-hover, rgba(128, 128, 128, 0.06));
+  }
+
+  &.is-stopping {
+    opacity: 0.55;
+  }
+}
+
+// Bold title: the model's summary, capped at two lines like the reminders.
+.task-drawer__delegate-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+  line-height: 1.35;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.task-drawer__delegate-type {
+  font-size: 11px;
+  color: var(--text-secondary);
+  line-height: 1.3;
+}
+
+.task-drawer__delegate-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 6px;
+}
+
+.task-drawer__timer {
+  font-size: 12px;
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
+.task-drawer__stop {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
   font-weight: 600;
   color: var(--text-secondary);
   background: var(--surface, var(--bg));
   border: 1px solid var(--border);
-  border-radius: 4px;
-  padding: 1px 5px;
-  flex-shrink: 0;
-  max-width: 100px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.task-drawer__stop-btn {
-  color: var(--text-secondary);
-  flex-shrink: 0;
-  padding: 4px;
+  border-radius: 6px;
+  padding: 3px 8px;
+  cursor: pointer;
+  transition: color 0.15s ease, border-color 0.15s ease;
 
   &:hover {
     color: var(--error, #e55);
+    border-color: var(--error, #e55);
   }
+}
+
+.task-drawer__stopping {
+  font-size: 11px;
+  font-style: italic;
+  color: var(--text-secondary);
 }
 
 .task-drawer__section-divider {
