@@ -12,19 +12,6 @@
     <!-- Playback controls — hidden while loading -->
     <div v-show="uiState !== 'loading'" class="voice-player__controls">
       <button
-        ref="bkBtnEl"
-        class="voice-player__btn voice-player__btn--skip"
-        aria-label="Skip back 10 seconds"
-        @click="_skipBack"
-      >
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <polyline points="1 4 1 10 7 10" />
-          <path d="M3.51 15a9 9 0 1 0 .49-3.68" />
-          <text x="7" y="17" font-size="6" fill="currentColor" stroke="none">10</text>
-        </svg>
-      </button>
-
-      <button
         ref="playBtnEl"
         class="voice-player__btn voice-player__btn--play"
         :aria-label="isPlaying ? 'Pause' : 'Play'"
@@ -38,19 +25,6 @@
         <!-- Play icon -->
         <svg v-else width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <polygon points="5 3 19 12 5 21 5 3" />
-        </svg>
-      </button>
-
-      <button
-        ref="ffBtnEl"
-        class="voice-player__btn voice-player__btn--skip"
-        aria-label="Skip forward 10 seconds"
-        @click="_skipForward"
-      >
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <polyline points="23 4 23 10 17 10" />
-          <path d="M20.49 15a9 9 0 1 1-.49-3.68" />
-          <text x="7" y="17" font-size="6" fill="currentColor" stroke="none">10</text>
         </svg>
       </button>
 
@@ -96,7 +70,6 @@
  * but the player only talks to itself and the event bus.
  *
  * Constants are ported verbatim from voice_player.js:
- *   _SKIP_SECONDS          = 10
  *   _LOADING_MAX_RETRIES   = 6
  *   _LOADING_DEFAULT_DELAY_MS = 3000
  */
@@ -109,7 +82,6 @@ import { voice } from '../../api/voice';
 
 // ── Constants (port verbatim) ─────────────────────────────────────────────────
 
-const _SKIP_SECONDS = 10;
 const _LOADING_MAX_RETRIES = 6;
 const _LOADING_DEFAULT_DELAY_MS = 3000;
 
@@ -391,33 +363,6 @@ function _togglePlayPause(): void {
   void _wakeLock?.release();
 }
 
-function _skipForward(): void {
-  if (!_buffer || !_audioCtx) return;
-  const pos = _currentPosition();
-  const target = pos + _SKIP_SECONDS;
-  if (target < _buffer.duration) {
-    _stopCurrentSource();
-    _playBufferFrom(_buffer, target);
-    return;
-  }
-  // Past end — stop, sit at end so play restarts from 0.
-  _stopCurrentSource();
-  _stopProgressTimer();
-  _paused = false;
-  _pausedOffset = 0;
-  progressValue.value = _buffer.duration || 0;
-  isPlaying.value = false;
-  void _wakeLock?.release();
-}
-
-function _skipBack(): void {
-  if (!_buffer || !_audioCtx) return;
-  const pos = _currentPosition();
-  const target = Math.max(0, pos - _SKIP_SECONDS);
-  _stopCurrentSource();
-  _playBufferFrom(_buffer, target);
-}
-
 function _onScrub(e: Event): void {
   if (!_buffer) return;
   const offset = Number.parseFloat((e.target as HTMLInputElement).value) || 0;
@@ -477,9 +422,7 @@ function _bindKeyboard(): void {
       t !== null &&
       (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable);
     if (editable) return;
-    if (e.key === ' ' || e.key === 'Space') { e.preventDefault(); _togglePlayPause(); return; }
-    if (e.key === 'ArrowRight') { _skipForward(); return; }
-    if (e.key === 'ArrowLeft') { _skipBack(); }
+    if (e.key === ' ' || e.key === 'Space') { e.preventDefault(); _togglePlayPause(); }
   };
   document.addEventListener('keydown', _boundKeydown);
 }
@@ -495,7 +438,7 @@ function _unbindKeyboard(): void {
 <style scoped lang="scss">
 .voice-player-overlay {
   position: fixed;
-  bottom: 1.5rem;
+  top: 1.5rem;
   left: 50%;
   transform: translateX(-50%);
   z-index: 900;

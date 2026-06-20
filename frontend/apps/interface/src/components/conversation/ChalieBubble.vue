@@ -31,13 +31,18 @@ const modeBadgeLabel = computed(() => {
 // ── FIX 5: only show Speak when there is speakable text ───────────────────
 const speakText = computed(() => chalieFormPlaintext(props.form));
 
+// Remember/speak controls live only on the LAST Chalie row of the turn — a
+// turn may now span several assistant transcript rows, and the controls act on
+// the whole turn (remember pins the whole turn's text, speak plays it all).
+const isLastInTurn = computed(() => conversationStore.isLastChalieInTurn(props.form.id));
+
 // ── FIX 4: Remember click — 150ms delay, guard against double-fire ─────────
 function onRemember(): void {
   if (pinned.value) return;
   pinned.value = true;
   setTimeout(() => {
-    // FIX 3: emit plaintext, not raw markup. Remember is per-message.
-    emit('chalie:pin-moment', { content: speakText.value });
+    // Pin the whole turn's plaintext — this control sits on the turn's last row.
+    emit('chalie:pin-moment', { content: conversationStore.turnSpeechText(props.form.id) });
     pinActive.value = true; // glow lands with the emit, per legacy timing
   }, 150);
 }
@@ -86,8 +91,9 @@ function onSpeak(): void {
       <!-- FIX 6: mode badge -->
       <span v-if="modeBadgeLabel" class="meta-mode-badge">{{ modeBadgeLabel }}</span>
 
-      <!-- FIX 4: disabled + active class when pinned -->
+      <!-- FIX 4: disabled + active class when pinned. Turn-level: last row only. -->
       <button
+        v-if="isLastInTurn"
         class="speech-form__remember-btn"
         :class="{ 'speech-form__remember-btn--active': pinActive }"
         aria-label="Remember this"
@@ -102,9 +108,9 @@ function onSpeak(): void {
         </svg>
       </button>
 
-      <!-- FIX 5: only render when there is speakable text -->
+      <!-- FIX 5: only render when there is speakable text; turn-level: last row only -->
       <button
-        v-if="speakText"
+        v-if="isLastInTurn && speakText"
         class="speech-form__speak-btn"
         aria-label="Listen to this message"
         type="button"

@@ -149,6 +149,18 @@ export const useConversationStore = defineStore('conversation', {
       }
       return null;
     },
+    /**
+     * True when `formId` is the LAST Chalie row in its turn. A turn can now hold
+     * several assistant transcript rows; the per-turn remember/speak controls
+     * appear once, on that final row, so they act on the whole turn.
+     */
+    isLastChalieInTurn(): (formId: number) => boolean {
+      return (formId) => {
+        const turn = this.turns.find((t) => t.forms.some((f) => f.id === formId));
+        const chalie = turn?.forms.filter((f) => f.kind === 'chalie') ?? [];
+        return chalie.length > 0 && chalie[chalie.length - 1].id === formId;
+      };
+    },
   },
 
   actions: {

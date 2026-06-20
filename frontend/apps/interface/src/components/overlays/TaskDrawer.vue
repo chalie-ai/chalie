@@ -260,7 +260,7 @@ onBeforeUnmount(() => {
   height: 100%;
   width: 320px;
   max-width: 90vw;
-  background: var(--surface-elevated, var(--surface));
+  background: var(--bg-2);
   border-left: 1px solid var(--border);
   box-shadow: -4px 0 24px var(--shadow, rgba(0, 0, 0, 0.15));
   z-index: 200;
