@@ -15,7 +15,7 @@ from abilities.chat_history_compactor import (
 )
 from abilities._compaction_config import CompactionConfig
 from configs.channels import UserConfig
-from services import transcript_service
+from services.transcript_service import Transcript
 from services.message_processor import MessageProcessor
 from services.provider_cache_service import ProviderCacheService
 
@@ -71,7 +71,7 @@ def test_fit_compaction_input_surfaces_kept_row_count(db: sqlite3.Connection) ->
     _seed_offline_provider_cap_zero(db)
     n_rows = 5
     for i in range(n_rows):
-        transcript_service.write_input_row(ch, "user", f"row{i:03d}")
+        Transcript.write_input_row(ch, "user", f"row{i:03d}")
     mp = _make_mp("compact", ch)
     try:
         combined = ChatHistoryCompactor._fit_compaction_input(cast("_CompactionParent", mp), "")

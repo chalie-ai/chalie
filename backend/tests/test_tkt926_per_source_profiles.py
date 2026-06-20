@@ -108,12 +108,12 @@ def _new_user_turn(text: str) -> object:
     Mirrors tests/test_turn0_flashback_continuation_gate.py:_new_turn."""
     from configs.channels import UserConfig
     from services.message_processor import MessageProcessor
-    from services.transcript_service import write_input_row
+    from services.transcript_service import Transcript
 
     mp = object.__new__(MessageProcessor)
     MessageProcessor.__init__(mp, text, {})
     mp.config = UserConfig()
-    mp.uid = write_input_row("user", "user", text)
+    mp.uid = Transcript.write_input_row("user", "user", text)
     mp.active_tools = list(mp.config.always_available or [])
     assert mp.config.channel == "user"
     return mp

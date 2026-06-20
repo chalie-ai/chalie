@@ -103,29 +103,11 @@ class ReviewTranscriptAbility(ReviewWindowAbility):
         return max(_MIN_BUFFER_MINUTES, min(_MAX_BUFFER_MINUTES, minutes))
 
     def _fetch(self, lo: str, hi: str, params: "dict[str, object]") -> "list[dict[str, object]]":
-        from services.database_service import get_shared_db_service
+        from services.transcript_service import Transcript
 
         include_subagent = bool(params.get(Keys.include_subagent_transcripts, False))
-        channels = ("user", "subagent") if include_subagent else ("user",)
-        placeholders = ", ".join("?" for _ in channels)
-
-        db = get_shared_db_service()
-        with db.connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute(
-                f"""
-                SELECT id, channel, role, content, created_at
-                FROM transcript
-                WHERE created_at BETWEEN ? AND ?
-                  AND channel IN ({placeholders})
-                ORDER BY id ASC
-                """,
-                (lo, hi, *channels),
-            )
-            columns = ("id", "channel", "role", "content", "created_at")
-            rows = [dict(zip(columns, r)) for r in cursor.fetchall()]
-            cursor.close()
-        return rows
+        channels = ["user", "subagent"] if include_subagent else ["user"]
+        return Transcript.by_time(channels, lo, hi)
 
     def _row(self, rec: "dict[str, object]", ordinal: int) -> "dict[str, object]":
         # Content is NOT clipped: this tool exists so the model can re-read EXACT

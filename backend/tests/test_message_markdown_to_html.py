@@ -12,7 +12,7 @@ from configs.channels.dmn import DmnConfig
 from services.message_processor import MessageProcessor
 from services.processor_config import ProcessorConfig
 from services.provider_api import ProviderApiResponse
-from services.transcript_service import get_recent, write_input_row
+from services.transcript_service import Transcript
 
 pytestmark = pytest.mark.unit
 
@@ -43,7 +43,7 @@ def _build_mp(config: ProcessorConfig, raw_input: str) -> MessageProcessor:
     mp = object.__new__(MessageProcessor)
     MessageProcessor.__init__(mp, raw_input, {})
     mp.config = config
-    mp.uid = write_input_row(config.channel, config.role, raw_input)
+    mp.uid = Transcript.write_input_row(config.channel, config.role, raw_input)
     mp.thinking_level = "low"
     mp.thinking_override = None
     mp.active_tools = list(config.always_available or [])
@@ -63,7 +63,7 @@ def test_user_channel_markdown_is_converted_to_html(db: sqlite3.Connection) -> N
     assert result == expected
 
     # The same converted HTML is what got persisted — no marker survives.
-    history = get_recent("user", limit=10)
+    history = Transcript.get_recent("user", limit=10)
     assistant = [r for r in history if r["role"] == "assistant"]
     assert assistant, "no assistant row persisted"
     content = assistant[-1]["content"]
@@ -83,7 +83,7 @@ def test_dmn_channel_markdown_is_left_verbatim(db: sqlite3.Connection) -> None:
     # Gated off: returned text is the raw markdown, untouched.
     assert result == leaked
 
-    history = get_recent("dmn", limit=10)
+    history = Transcript.get_recent("dmn", limit=10)
     assistant = [r for r in history if r["role"] == "assistant"]
     assert assistant, "no assistant row persisted"
     content = assistant[-1]["content"]
@@ -105,7 +105,7 @@ def test_inline_code_protects_emphasis_markers(db: sqlite3.Connection) -> None:
         result = mp._step()
 
     assert result == expected
-    content = [r for r in get_recent("user", limit=10) if r["role"] == "assistant"][-1]["content"]
+    content = [r for r in Transcript.get_recent("user", limit=10) if r["role"] == "assistant"][-1]["content"]
     assert content == expected
 
 
@@ -121,5 +121,5 @@ def test_snake_case_identifiers_are_not_underlined(db: sqlite3.Connection) -> No
 
     assert result == leaked
     assert "<u>" not in result
-    content = [r for r in get_recent("user", limit=10) if r["role"] == "assistant"][-1]["content"]
+    content = [r for r in Transcript.get_recent("user", limit=10) if r["role"] == "assistant"][-1]["content"]
     assert content == leaked

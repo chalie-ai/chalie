@@ -2,6 +2,7 @@
 
 import logging
 import sqlite3
+from typing import cast
 from flask import Blueprint, request, jsonify
 from flask.typing import ResponseReturnValue
 
@@ -70,60 +71,51 @@ def _fetch_attachments_for_transcripts(conn: sqlite3.Connection, transcript_ids:
     return by_id
 
 
-def get_recent_history(limit: int = 12, offset: int = 0) -> tuple[list[dict[str, object]], bool]:
+def get_recent_history(limit: int = 12, offset: int = 0) -> tuple[list[dict[str, object]], bool, int]:
     from services.database_service import get_shared_db_service
+    from services.transcript_service import Transcript
 
+    # Paginate by TURN, not by row. Under the chain model a turn is many rows
+    # (input → step rows that emitted the tools → final synthesis row), so a
+    # row LIMIT would collapse the page onto the latest turn. recent_turns picks
+    # whole turns (NULL-safe for legacy rows) and returns their rows oldest-first.
+    rows, has_more, turns_returned = Transcript.recent_turns(
+        'user', exclude_roles=('subagent_return', 'compaction'),
+        limit=limit, offset=offset,
+    )
+    if not rows:
+        return [], has_more, turns_returned
+
+    messages: list[dict[str, object]] = []
     db = get_shared_db_service()
     with db.connection() as conn:
-        rows = conn.execute(
-            "SELECT id, role, content, created_at FROM transcript "
-            "WHERE channel = 'user' AND role NOT IN ('subagent_return', 'compaction') "
-            "ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?",
-            (limit, offset),
-        ).fetchall()
-
-        # Build messages and attach rich-media segments for assistant rows.
-        # Under the chain model a tool turn is many rows (input → step rows that
-        # emitted the tools → final synthesis row). Each assistant row shows its
-        # OWN tool chips (anchored to that row), while rich-media spans resolve
-        # TURN-WIDE via _resolve_ids() — the span sits on the final row but the
-        # tool ran on a step row. The WS-send path calls the same helper, so the
-        # two paths can never silently diverge.
-        messages: list[dict[str, object]] = []
-
         # Re-render uploaded attachments on refresh: batch-fetch the doc links for
         # every user row in this page (the live blob: preview is gone after reload).
         attachments_by_id = _fetch_attachments_for_transcripts(
-            conn, [row[0] for row in rows if row[1] == 'user']
+            conn, [cast("int", r['id']) for r in rows if r['role'] == 'user']
         )
 
-        for row in reversed(rows):
-            transcript_id, role, content, created_at = row[0], row[1], row[2] or "", row[3]
-
-            ts = format_date(created_at, CHAT_TIMESTAMP_FMT, for_ui=True) or ""
+        for r in rows:
+            transcript_id = cast("int", r['id'])
+            role, content = r['role'], r['content'] or ""
+            ts = format_date(cast("str", r['created_at']), CHAT_TIMESTAMP_FMT, for_ui=True) or ""
+            msg: dict[str, object] = {
+                "id": str(transcript_id),
+                "role": role,
+                "content": content,
+                "timestamp": ts,
+                "turn_id": r['turn_id'],
+            }
 
             if role == 'user':
-                msg: dict[str, object] = {
-                    "id": str(transcript_id),
-                    "role": role,
-                    "content": content,
-                    "timestamp": ts,
-                }
                 attachments = attachments_by_id.get(transcript_id)
                 if attachments:
                     msg["attachments"] = attachments
-                messages.append(msg)
             else:
-                msg = {
-                    "id": str(transcript_id),
-                    "role": role,
-                    "content": content,
-                    "timestamp": ts,
-                }
                 # Per-row chips: the tools THIS row emitted (anchored to its own
                 # id), each with the ability's persisted act_summary — the blue
-                # box the frontend prints. Set only when the row drove tools; the
-                # framework compaction marker never surfaces as a chip.
+                # box the frontend prints. The framework compaction marker never
+                # surfaces as a chip.
                 own_calls = _fetch_tool_calls_for_transcripts(conn, [transcript_id])
                 chips = [
                     {"tool_name": c["tool_name"], "summary": c["summary"]}
@@ -135,15 +127,14 @@ def get_recent_history(limit: int = 12, offset: int = 0) -> tuple[list[dict[str,
                 # Segments: rich-media spans live on the final row but the tool
                 # ran on a step row, so pair TURN-WIDE — gather every tool call
                 # across the turn's transcript rows, then parse THIS row's content.
-                turn_ids = _resolve_ids(transcript_id, conn)
-                turn_calls = _fetch_tool_calls_for_transcripts(conn, turn_ids)
-                segments = _parse_rich_media(content, turn_calls)
+                turn_calls = _fetch_tool_calls_for_transcripts(conn, _resolve_ids(transcript_id, conn))
+                segments = _parse_rich_media(str(content), turn_calls)
                 if not segments and content:
                     segments = [{"type": "text", "content": content}]
                 msg["segments"] = segments
-                messages.append(msg)
+            messages.append(msg)
 
-    return messages, len(rows) == limit
+    return messages, has_more, turns_returned
 
 
 @conversation_bp.route('/conversation/recent', methods=['GET'])
@@ -158,5 +149,5 @@ def conversation_recent() -> ResponseReturnValue:
     except (ValueError, TypeError):
         offset = 0
 
-    messages, has_more = get_recent_history(limit, offset)
-    return jsonify({"messages": messages, "has_more": has_more})
+    messages, has_more, turns_returned = get_recent_history(limit, offset)
+    return jsonify({"messages": messages, "has_more": has_more, "turns_returned": turns_returned})

@@ -39,15 +39,15 @@ if TYPE_CHECKING:
 
 def _seed_transcript(channel: str, role: str, content: str) -> int:
     """Seed via the SAME entry point production uses to persist a turn."""
-    import services.transcript_service as transcript_service
-    rowid = transcript_service.append(channel=channel, role=role, content=content)
+    from services.transcript_service import Transcript
+    rowid = Transcript.append(channel=channel, role=role, content=content)
     assert rowid is not None, "production transcript append must persist a row"
     return rowid
 
 
 def _recent_contents(channel: str) -> list[str]:
-    import services.transcript_service as transcript_service
-    return cast(list[str], [r['content'] for r in transcript_service.get_recent(channel, limit=50)])
+    from services.transcript_service import Transcript
+    return cast(list[str], [r['content'] for r in Transcript.get_recent(channel, limit=50)])
 
 
 # ── Fixtures ──────────────────────────────────────────────────────────────────

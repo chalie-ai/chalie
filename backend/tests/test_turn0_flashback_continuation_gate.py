@@ -24,7 +24,7 @@ from services.data_graph_service import get_data_graph_service
 from services.database_service import get_shared_db_service
 from services.episodic_service import EpisodicService
 from services.message_processor import MessageProcessor
-from services.transcript_service import write_input_row
+from services.transcript_service import Transcript
 
 pytestmark = pytest.mark.unit
 
@@ -36,7 +36,7 @@ def _new_turn(text: str) -> MessageProcessor:
     mp = object.__new__(MessageProcessor)
     MessageProcessor.__init__(mp, text, {})
     mp.config = UserConfig()
-    mp.uid = write_input_row("user", "user", text)
+    mp.uid = Transcript.write_input_row("user", "user", text)
     mp.active_tools = list(mp.config.always_available or [])
     return mp
 

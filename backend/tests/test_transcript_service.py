@@ -33,9 +33,9 @@ pytestmark = pytest.mark.unit
 
 class TestAppend:
     def test_basic_append(self, db: sqlite3.Connection) -> None:
-        from services.transcript_service import append
+        from services.transcript_service import Transcript
 
-        rowid = append('test-topic', 'user', 'Hi')
+        rowid = Transcript.append('test-topic', 'user', 'Hi')
         assert rowid is not None
         assert rowid > 0
 
@@ -47,9 +47,9 @@ class TestAppend:
         assert row['content'] == 'Hi'
 
     def test_append_with_tool_info(self, db: sqlite3.Connection) -> None:
-        from services.transcript_service import append
+        from services.transcript_service import Transcript
 
-        rowid = append(
+        rowid = Transcript.append(
             'test-topic', 'tool', 'ok',
             tool_call_id='tc_123', tool_name='search',
         )
@@ -63,64 +63,64 @@ class TestAppend:
         assert row['tool_name'] == 'search'
 
     def test_append_internal_flag(self, db: sqlite3.Connection) -> None:
-        from services.transcript_service import append
+        from services.transcript_service import Transcript
 
-        rowid = append('test-topic', 'internal', 'notes', internal=True)
+        rowid = Transcript.append('test-topic', 'internal', 'notes', internal=True)
         cursor = db.cursor()
         cursor.execute("SELECT internal FROM transcript WHERE id = ?", (rowid,))
         assert cursor.fetchone()[0] == 1
 
     def test_append_empty_content_returns_none(self, db: sqlite3.Connection) -> None:
-        from services.transcript_service import append
-        assert append('test-topic', 'user', '') is None
+        from services.transcript_service import Transcript
+        assert Transcript.append('test-topic', 'user', '') is None
 
     def test_append_empty_topic_returns_none(self, db: sqlite3.Connection) -> None:
-        from services.transcript_service import append
-        assert append('', 'user', 'content') is None
+        from services.transcript_service import Transcript
+        assert Transcript.append('', 'user', 'content') is None
 
 
 class TestGetRecent:
     def test_get_recent_returns_ordered(self, db: sqlite3.Connection) -> None:
-        from services.transcript_service import append, get_recent
+        from services.transcript_service import Transcript
 
-        append('test', 'user', 'First')
-        append('test', 'assistant', 'Second')
-        append('test', 'user', 'Third')
+        Transcript.append('test', 'user', 'First')
+        Transcript.append('test', 'assistant', 'Second')
+        Transcript.append('test', 'user', 'Third')
 
-        results = get_recent('test', limit=10)
+        results = Transcript.get_recent('test', limit=10)
         assert len(results) == 3
         # Should be in chronological order (oldest first)
         assert results[0]['content'] == 'First'
         assert results[2]['content'] == 'Third'
 
     def test_get_recent_respects_limit(self, db: sqlite3.Connection) -> None:
-        from services.transcript_service import append, get_recent
+        from services.transcript_service import Transcript
 
         for i in range(10):
-            append('test', 'user', f'Msg{i}')
+            Transcript.append('test', 'user', f'Msg{i}')
 
-        results = get_recent('test', limit=3)
+        results = Transcript.get_recent('test', limit=3)
         assert len(results) == 3
 
     def test_get_recent_since_id(self, db: sqlite3.Connection) -> None:
-        from services.transcript_service import append, get_recent
+        from services.transcript_service import Transcript
 
-        id1 = append('test', 'user', 'First')
-        append('test', 'assistant', 'Second')
-        append('test', 'user', 'Third')
+        id1 = Transcript.append('test', 'user', 'First')
+        Transcript.append('test', 'assistant', 'Second')
+        Transcript.append('test', 'user', 'Third')
 
-        results = get_recent('test', since_id=id1)
+        results = Transcript.get_recent('test', since_id=id1)
         assert len(results) == 2
         assert results[0]['content'] == 'Second'
         assert results[1]['content'] == 'Third'
 
     def test_get_recent_filters_by_topic(self, db: sqlite3.Connection) -> None:
-        from services.transcript_service import append, get_recent
+        from services.transcript_service import Transcript
 
-        append('topic-a', 'user', 'A message')
-        append('topic-b', 'user', 'B message')
+        Transcript.append('topic-a', 'user', 'A message')
+        Transcript.append('topic-b', 'user', 'B message')
 
-        results = get_recent('topic-a')
+        results = Transcript.get_recent('topic-a')
         assert len(results) == 1
         assert results[0]['content'] == 'A message'
 
@@ -145,9 +145,9 @@ class TestDbStateExtractionTrigger:
     def test_fires_when_untriggered_tail_crosses_threshold(self, db: sqlite3.Connection) -> None:
         """Seed THRESHOLD untriggered transcripts in a channel; the next
         _maybe_trigger_extraction call must fire."""
-        import services.transcript_service as ts
+        from services.transcript_service import Transcript, _EXTRACTION_THRESHOLD
 
-        threshold = ts._EXTRACTION_THRESHOLD
+        threshold = _EXTRACTION_THRESHOLD
         # Episodes are produced only for channels whose source profile has
         # extract_episodes (user, dmn, external-agent:*). Any other channel
         # resolves to the muted default and returns before the COUNT. Seed an
@@ -162,8 +162,8 @@ class TestDbStateExtractionTrigger:
         db.commit()
 
         fired = []
-        with patch.object(ts, '_trigger_episode_extraction', side_effect=lambda c, r: fired.append((c, r))):
-            ts._maybe_trigger_extraction(channel, 999)
+        with patch.object(Transcript, '_trigger_episode_extraction', side_effect=lambda c, r: fired.append((c, r))):
+            Transcript._maybe_trigger_extraction(channel, 999)
 
         assert fired == [(channel, 999)]
 
@@ -172,9 +172,9 @@ class TestDbStateExtractionTrigger:
         fire. This pins the real count path: the gate is open, so only the
         accumulated-tail count decides. (Previously this used a muted channel
         and passed via the gate short-circuit, never exercising the threshold.)"""
-        import services.transcript_service as ts
+        from services.transcript_service import Transcript, _EXTRACTION_THRESHOLD
 
-        threshold = ts._EXTRACTION_THRESHOLD
+        threshold = _EXTRACTION_THRESHOLD
         channel = 'user'
 
         for _ in range(threshold - 1):
@@ -185,8 +185,8 @@ class TestDbStateExtractionTrigger:
         db.commit()
 
         fired = []
-        with patch.object(ts, '_trigger_episode_extraction', side_effect=lambda c, r: fired.append((c, r))):
-            ts._maybe_trigger_extraction(channel, 999)
+        with patch.object(Transcript, '_trigger_episode_extraction', side_effect=lambda c, r: fired.append((c, r))):
+            Transcript._maybe_trigger_extraction(channel, 999)
 
         assert fired == []
 
@@ -204,7 +204,7 @@ class TestDbStateExtractionTrigger:
         let the count path fire the encoder on a delegate channel and write an
         episode row, reddening this assertion.
         """
-        import services.transcript_service as ts
+        from services.transcript_service import Transcript, _EXTRACTION_THRESHOLD
         from services.source_profiles import profile_for
 
         channel = 'delegate:research'
@@ -213,7 +213,7 @@ class TestDbStateExtractionTrigger:
         )
 
         last_id: int | None = None
-        for _ in range(ts._EXTRACTION_THRESHOLD * 2):
+        for _ in range(_EXTRACTION_THRESHOLD * 2):
             cur = db.execute(
                 "INSERT INTO transcript (channel, role, content) VALUES (?, 'user', 'x')",
                 (channel,),
@@ -223,7 +223,7 @@ class TestDbStateExtractionTrigger:
 
         # Real production entry point — no mock. For a muted channel the gate
         # returns before any DB read or thread spawn.
-        ts._maybe_trigger_extraction(channel, cast(int, last_id))
+        Transcript._maybe_trigger_extraction(channel, cast(int, last_id))
 
         episode_count = db.execute(
             "SELECT COUNT(*) FROM episodes WHERE channel = ?", (channel,)
@@ -236,9 +236,9 @@ class TestDbStateExtractionTrigger:
 
     def test_episodes_in_other_channels_do_not_mask(self, db: sqlite3.Connection) -> None:
         """Episodes in other channels must not suppress a stale channel."""
-        import services.transcript_service as ts
+        from services.transcript_service import Transcript, _EXTRACTION_THRESHOLD
 
-        threshold = ts._EXTRACTION_THRESHOLD
+        threshold = _EXTRACTION_THRESHOLD
         # 'user' is an episode-producing (extracting) channel; an episode in a
         # DIFFERENT channel's watermark must not mask the 'user' tail (the
         # COUNT watermark is per-channel: WHERE episodes.channel = ?).
@@ -259,8 +259,8 @@ class TestDbStateExtractionTrigger:
         db.commit()
 
         fired = []
-        with patch.object(ts, '_trigger_episode_extraction', side_effect=lambda c, r: fired.append((c, r))):
-            ts._maybe_trigger_extraction(stale, 999)
+        with patch.object(Transcript, '_trigger_episode_extraction', side_effect=lambda c, r: fired.append((c, r))):
+            Transcript._maybe_trigger_extraction(stale, 999)
 
         assert fired == [(stale, 999)]
 
@@ -268,9 +268,9 @@ class TestDbStateExtractionTrigger:
         """An episode already covering the tail means count_since = 0 →
         no fire. Only once more transcripts accumulate past the episode's
         transcript_id_end does the trigger re-fire."""
-        import services.transcript_service as ts
+        from services.transcript_service import Transcript, _EXTRACTION_THRESHOLD
 
-        threshold = ts._EXTRACTION_THRESHOLD
+        threshold = _EXTRACTION_THRESHOLD
         channel = 'user'  # an episode-producing channel (gate open; count decides)
 
         # Seed transcripts 1..threshold
@@ -291,9 +291,9 @@ class TestDbStateExtractionTrigger:
         db.commit()
 
         fired = []
-        with patch.object(ts, '_trigger_episode_extraction', side_effect=lambda c, r: fired.append((c, r))):
+        with patch.object(Transcript, '_trigger_episode_extraction', side_effect=lambda c, r: fired.append((c, r))):
             # First call — episode covers everything, no untriggered tail
-            ts._maybe_trigger_extraction(channel, last_id)
+            Transcript._maybe_trigger_extraction(channel, last_id)
             assert fired == []
 
             # Add THRESHOLD more transcripts past the episode
@@ -307,14 +307,14 @@ class TestDbStateExtractionTrigger:
             new_last = db.execute(
                 "SELECT MAX(id) FROM transcript WHERE channel = ?", (channel,)
             ).fetchone()[0]
-            ts._maybe_trigger_extraction(channel, new_last)
+            Transcript._maybe_trigger_extraction(channel, new_last)
             assert fired == [(channel, new_last)]
 
     def test_soft_deleted_episodes_do_not_mask(self, db: sqlite3.Connection) -> None:
         """Soft-deleted episodes must be ignored when computing the tail."""
-        import services.transcript_service as ts
+        from services.transcript_service import Transcript, _EXTRACTION_THRESHOLD
 
-        threshold = ts._EXTRACTION_THRESHOLD
+        threshold = _EXTRACTION_THRESHOLD
         channel = 'user'  # an episode-producing channel (gate open; count decides)
 
         for _ in range(threshold):
@@ -335,6 +335,6 @@ class TestDbStateExtractionTrigger:
         db.commit()
 
         fired = []
-        with patch.object(ts, '_trigger_episode_extraction', side_effect=lambda c, r: fired.append((c, r))):
-            ts._maybe_trigger_extraction(channel, last_id)
+        with patch.object(Transcript, '_trigger_episode_extraction', side_effect=lambda c, r: fired.append((c, r))):
+            Transcript._maybe_trigger_extraction(channel, last_id)
         assert fired == [(channel, last_id)]

@@ -18,7 +18,7 @@ import sqlite3
 import pytest
 from flask.testing import FlaskClient
 
-from services import transcript_service
+from services.transcript_service import Transcript
 from services.markup import extract_plaintext, sanitize
 
 pytestmark = pytest.mark.integration
@@ -33,7 +33,7 @@ _ASSISTANT_HTML = sanitize(
 
 
 def _seed_assistant_turn(content: str = _ASSISTANT_HTML) -> int:
-    return transcript_service.write_assistant_row("user", content)
+    return Transcript.write_assistant_row("user", content)
 
 
 def _ui_message_text(content: str = _ASSISTANT_HTML) -> str:

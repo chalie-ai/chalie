@@ -86,12 +86,12 @@ def _build_thinking_parent(raw_input: str) -> object:
     """A real UserConfig MessageProcessor in the exact state ``_seed_turn_zero``
     fires the thinking pass from."""
     from services.message_processor import MessageProcessor
-    from services.transcript_service import write_input_row
+    from services.transcript_service import Transcript
 
     parent = object.__new__(MessageProcessor)
     MessageProcessor.__init__(parent, raw_input, None)
     parent.config = UserConfig()
-    parent.uid = write_input_row("user", "user", raw_input)
+    parent.uid = Transcript.write_input_row("user", "user", raw_input)
     parent.active_tools = list(parent.config.always_available or [])
     return parent
 

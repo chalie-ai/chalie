@@ -531,7 +531,7 @@ export const useSessionStore = defineStore('session', {
           convo.prependTurns(messages);
         }
 
-        this.historyOffset += messages.length;
+        this.historyOffset += data.turns_returned;
 
         if (!data.has_more || this.historyOffset >= MAX_TURNS) {
           this.historyExhausted = true;

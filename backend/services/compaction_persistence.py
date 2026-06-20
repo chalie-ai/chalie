@@ -24,24 +24,16 @@ def get_compaction(channel: str) -> Optional[Dict[str, object]]:
     """Latest history-compaction summary for a channel, or None. Never raises
     — DB errors are logged and treated as 'no compaction'."""
     try:
-        from services.database_service import get_shared_db_service
-        db = get_shared_db_service()
-        with db.connection() as conn:
-            row = conn.execute(
-                """
-                SELECT id, content, created_at FROM transcript
-                WHERE channel = ? AND role = 'compaction'
-                ORDER BY id DESC LIMIT 1
-                """,
-                (channel,),
-            ).fetchone()
-        if not row:
+        from services.transcript_service import Transcript
+        rows = Transcript.get_recent(channel, limit=1, role='compaction')
+        if not rows:
             return None
+        row = rows[0]
         return {
-            "compacted_text": row[0 + 1],         # content
-            "compacted_up_to_id": row[0],         # the row's own id
-            "tool_call_id": None,                 # legacy field; no longer a tool_call
-            "created_at": row[2],
+            "compacted_text": row['content'],
+            "compacted_up_to_id": row['id'],
+            "tool_call_id": None,
+            "created_at": row['created_at'],
         }
     except Exception as exc:
         logger.warning("%s Failed to get compaction for %s: %s", LOG_PREFIX, channel, exc)
@@ -50,5 +42,5 @@ def get_compaction(channel: str) -> Optional[Dict[str, object]]:
 
 def get_entries_since(channel: str, watermark: int = 0, limit: int = 2000) -> List[Dict[str, object]]:
     """Returns entries in chronological order (oldest first)."""
-    from services import transcript_service
-    return transcript_service.get_recent(channel, limit=limit, since_id=watermark)
+    from services.transcript_service import Transcript
+    return Transcript.get_recent(channel, limit=limit, since_id=watermark)

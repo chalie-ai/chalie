@@ -579,17 +579,8 @@ class SubconsciousWorker:
         # actually reads — user-behaviour channels, no compaction rows. Counting
         # background-loop rows (dmn writes many) would advance the delta past the
         # _MIN_DELTA trigger and fire spurious pattern passes the load discards.
-        from services.source_profiles import (  # noqa: PLC0415
-            non_compaction_sql,
-            pattern_user_channels_sql,
-        )
-        with db.connection() as conn:
-            latest_row = conn.execute(
-                "SELECT MAX(id) FROM transcript "
-                f"WHERE {pattern_user_channels_sql()} "
-                f"AND {non_compaction_sql()}"
-            ).fetchone()
-        latest = (latest_row[0] if latest_row else None) or 0
+        from services.transcript_service import Transcript  # noqa: PLC0415
+        latest = Transcript.latest_id(["user"], exclude_roles=("compaction",)) or 0
 
         delta = latest - cursor
         if delta < _MIN_DELTA:
@@ -698,18 +689,8 @@ class SubconsciousWorker:
             # Same allowlist as the geo-pattern window (geo_pattern.py): only
             # user geo-activity channels advance the cursor, so a located row on
             # a muted channel can never fire the geo pass.
-            from services.source_profiles import (  # noqa: PLC0415
-                geo_user_channels_sql,
-                non_compaction_sql,
-            )
-            with db.connection() as conn:
-                latest_row = conn.execute(
-                    "SELECT MAX(id) FROM transcript "
-                    "WHERE location_lat IS NOT NULL AND location_lon IS NOT NULL "
-                    f"AND {geo_user_channels_sql()} "
-                    f"AND {non_compaction_sql()}"
-                ).fetchone()
-            latest = (latest_row[0] if latest_row else None) or 0
+            from services.transcript_service import Transcript  # noqa: PLC0415
+            latest = Transcript.latest_id(["user"], require_location=True, exclude_roles=("compaction",)) or 0
         except Exception as exc:
             logger.debug(f"{LOG_PREFIX} geo_patterns no db: {exc}")
             return "skip: no db"

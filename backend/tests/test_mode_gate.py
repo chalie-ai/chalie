@@ -320,10 +320,10 @@ class TestTick:
         and the bootstrap never fires again (bootstrap=false thereafter)."""
         import logging
 
-        from services import transcript_service
+        from services.transcript_service import Transcript
 
         # Prior user turn the cold-start bootstrap replays (real prod writer).
-        transcript_service.write_input_row('user', 'user', 'plan my trip to Tokyo')
+        Transcript.write_input_row('user', 'user', 'plan my trip to Tokyo')
 
         svc = _fresh_service()
         svc._fire_thresholds = dict.fromkeys(svc.MODES, 0.05)

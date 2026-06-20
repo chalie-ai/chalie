@@ -183,33 +183,20 @@ class PatternConfig(ProcessorConfig):
         """Pattern-match user-prompt: transcripts from window + existing patterns + trail."""
         import logging as _logging  # noqa: PLC0415
         _log = _logging.getLogger(__name__)
-        # Bidirectional dependency: the per-source allowlist lives in
-        # services/source_profiles.py; this is the pattern-window consumer.
-        from services.source_profiles import (  # noqa: PLC0415
-            pattern_user_channels_sql,
-            non_compaction_sql,
-        )
         try:
-            from services.database_service import get_shared_db_service  # noqa: PLC0415
-            db = get_shared_db_service()
-            with db.connection() as conn:
-                rows = conn.execute(
-                    "SELECT id, role, content, created_at FROM transcript "
-                    "WHERE id > ? AND id <= ? "
-                    "AND content IS NOT NULL AND content != '' "
-                    # Only user-behaviour channels feed the pattern window.
-                    # Background loops (dmn, delegate:*, external-agent:*,
-                    # skills_building) and compaction rows are internal, not
-                    # observed user behaviour — the allowlist excludes them.
-                    f"AND {pattern_user_channels_sql()} "
-                    f"AND {non_compaction_sql()} "
-                    "ORDER BY id ASC",
-                    (self._window_start, self._window_end),
-                ).fetchall()
+            from services.transcript_service import Transcript  # noqa: PLC0415
+            rows = Transcript.window(
+                ["user"],
+                after_id=self._window_start,
+                before_id=self._window_end,
+                require_content=True,
+                exclude_roles=("compaction",),
+            )
             if not rows:
                 return "(no transcripts in window)"
             transcript_block = "\n".join(
-                f"[id={r[0]} | {r[1]} | {r[3]}] {r[2]}" for r in rows
+                f"[id={r['id']} | {r['role']} | {r['created_at']}] {r['content']}"
+                for r in rows
             )
         except Exception as exc:
             _log.warning("[PATTERN_CONFIG] transcript fetch failed: %s", exc)

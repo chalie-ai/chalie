@@ -380,7 +380,7 @@ def test_skill_body_containing_skill_builder_survives_manager_op_byte_identical(
 @pytest.mark.unit
 def test_skill_suggestion_prompt_contains_real_query_and_trail(db: sqlite3.Connection) -> None:
     """SkillSuggestionConfig.get_user_prompt must render the actual user query"""
-    from services.transcript_service import write_input_row, turn_id_of_row
+    from services.transcript_service import Transcript
     from services.act_trail import ActTrail
     from configs.channels import SkillSuggestionConfig
     from services.message_processor import MessageProcessor
@@ -388,8 +388,8 @@ def test_skill_suggestion_prompt_contains_real_query_and_trail(db: sqlite3.Conne
 
     # 1. Seed a user transcript row — this is the triggering turn.
     user_query = "Find me a good recipe for pasta carbonara and set a 20-minute timer"
-    row_id = write_input_row("user", "user", user_query)
-    trigger_turn_id = turn_id_of_row(row_id)
+    row_id = Transcript.write_input_row("user", "user", user_query)
+    trigger_turn_id = Transcript.turn_id_of_row(row_id)
 
     # 2. Seed two tool_calls rows anchored to that transcript row.
     ActTrail().record(

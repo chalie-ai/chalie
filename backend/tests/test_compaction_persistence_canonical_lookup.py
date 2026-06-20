@@ -22,8 +22,8 @@ _OTHER_CHANNEL = 'test_cp_other'
 
 
 def _seed_compaction(channel: str, summary: str) -> int:
-    from services import transcript_service
-    return transcript_service.write_input_row(channel, 'compaction', summary)
+    from services.transcript_service import Transcript
+    return Transcript.write_input_row(channel, 'compaction', summary)
 
 
 class TestGetCompactionCanonicalLookup:

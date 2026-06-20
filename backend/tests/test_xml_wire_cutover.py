@@ -2,7 +2,7 @@
  
  These tests guard the specific regressions Phase C introduced:
  
- 1. transcript_service.append() sets xml_migrated=1 on every new INSERT.
+ 1. Transcript.append() sets xml_migrated=1 on every new INSERT.
  2. api/conversation.get_recent_history() returns content per message and
     does NOT return a blocks key (blocks array was the old wire format).
  
@@ -26,9 +26,9 @@ class TestTranscriptAppendSetsXmlMigrated:
     """
 
     def test_append_sets_xml_migrated_1(self, db: sqlite3.Connection) -> None:
-        from services.transcript_service import append
+        from services.transcript_service import Transcript
 
-        rowid = append("ch-xml", "user", "Hello world")
+        rowid = Transcript.append("ch-xml", "user", "Hello world")
         assert rowid is not None
 
         row = db.execute(
@@ -38,9 +38,9 @@ class TestTranscriptAppendSetsXmlMigrated:
         assert row[0] == 1, "append() must write xml_migrated=1"
 
     def test_write_input_row_sets_xml_migrated_1(self, db: sqlite3.Connection) -> None:
-        from services.transcript_service import write_input_row
+        from services.transcript_service import Transcript
 
-        rowid = write_input_row("ch-xml", "user", "Input content")
+        rowid = Transcript.write_input_row("ch-xml", "user", "Input content")
         assert rowid is not None
 
         row = db.execute(
@@ -50,9 +50,9 @@ class TestTranscriptAppendSetsXmlMigrated:
         assert row[0] == 1, "write_input_row() must write xml_migrated=1"
 
     def test_write_assistant_row_sets_xml_migrated_1(self, db: sqlite3.Connection) -> None:
-        from services.transcript_service import write_assistant_row
+        from services.transcript_service import Transcript
 
-        rowid = write_assistant_row("ch-xml", "<p>Response</p>")
+        rowid = Transcript.write_assistant_row("ch-xml", "<p>Response</p>")
         assert rowid is not None
 
         row = db.execute(
@@ -80,7 +80,7 @@ class TestConversationHistoryXmlWireFormat:
         )
         db.commit()
 
-        messages, _ = get_recent_history(limit=12, offset=0)
+        messages, _, _ = get_recent_history(limit=12, offset=0)
         assert len(messages) >= 1
         for msg in messages:
             assert "content" in msg, "Each message must have a 'content' key"
@@ -96,6 +96,6 @@ class TestConversationHistoryXmlWireFormat:
         )
         db.commit()
 
-        messages, _ = get_recent_history(limit=12, offset=0)
+        messages, _, _ = get_recent_history(limit=12, offset=0)
         target = next((m for m in messages if "<p>Verbatim</p>" in cast(str, m.get("content", ""))), None)
         assert target is not None, "Content must be returned verbatim, not re-serialized"

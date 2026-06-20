@@ -38,7 +38,7 @@ from services.database_service import get_shared_db_service
 from services.decay_engine_service import DecayEngineService
 from services.message_processor import MessageProcessor
 from services.time_utils import utc_now
-from services import transcript_service
+from services.transcript_service import Transcript
 
 pytestmark = pytest.mark.unit
 
@@ -58,7 +58,7 @@ _SEMANTIC_PROBE = "ancient underground tomb sculpture from the stone age"
 
 
 def _seed_assistant_turn(content: str = _ASSISTANT_TURN, channel: str = "user") -> int:
-    return transcript_service.write_assistant_row(channel, content)
+    return Transcript.write_assistant_row(channel, content)
 
 
 def _count_moments(conn: sqlite3.Connection) -> int:
@@ -221,7 +221,7 @@ def _new_turn(text: str) -> MessageProcessor:
     mp = object.__new__(MessageProcessor)
     MessageProcessor.__init__(mp, text, {})
     mp.config = UserConfig()
-    mp.uid = transcript_service.write_input_row("user", "user", text)
+    mp.uid = Transcript.write_input_row("user", "user", text)
     mp.active_tools = list(mp.config.always_available or [])
     return mp
 
