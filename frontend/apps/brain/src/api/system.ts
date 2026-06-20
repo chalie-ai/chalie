@@ -18,4 +18,13 @@ export const system = {
   authStatus(): Promise<AuthStatus> {
     return api.get('/auth/status', { redirectOnAuthError: false });
   },
+
+  /**
+   * GET /auth/username — the master LOGIN username, embedded in the pairing QR
+   * so the device's UnlockVault needs only a password. Cookie-session only
+   * (backend rejects bearer callers), which the Brain dashboard always is.
+   */
+  username(): Promise<{ username: string }> {
+    return api.get('/auth/username');
+  },
 };

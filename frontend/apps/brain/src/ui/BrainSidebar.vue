@@ -14,6 +14,7 @@ import {
   BookOpen,
   Server,
   DatabaseBackup,
+  Smartphone,
   ChevronRight,
   Sun,
   Moon,
@@ -88,6 +89,7 @@ const NAV: NavItem[] = [
   { id: 'skills', label: 'Skills', icon: BookOpen, group: 'system' },
   { id: 'mcp', label: 'MCP', icon: Server, group: 'system' },
   { id: 'import-export', label: 'Import / Export', icon: DatabaseBackup, group: 'system' },
+  { id: 'link-device', label: 'Link device', icon: Smartphone, group: 'system' },
 ];
 
 const cognitionItems = computed(() => NAV.filter((n) => n.group === 'cognition'));

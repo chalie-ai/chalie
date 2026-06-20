@@ -12,6 +12,7 @@ import PoliciesView from './views/PoliciesView.vue';
 import SkillsView from './views/SkillsView.vue';
 import McpView from './views/McpView.vue';
 import ImportExportView from './views/ImportExportView.vue';
+import LinkDeviceView from './views/LinkDeviceView.vue';
 
 import MemorySub from './views/cognition/MemorySub.vue';
 import ToolsSub from './views/cognition/ToolsSub.vue';
@@ -107,6 +108,7 @@ export const router = createRouter({
     { path: '/skills', name: 'skills', component: SkillsView },
     { path: '/mcp', name: 'mcp', component: McpView },
     { path: '/import-export', name: 'import-export', component: ImportExportView },
+    { path: '/link-device', name: 'link-device', component: LinkDeviceView },
 
     // Catch-all → providers.
     { path: '/:pathMatch(.*)*', redirect: '/providers' },
