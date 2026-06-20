@@ -42,6 +42,8 @@ if TYPE_CHECKING:
 from services.file_mapper_service import FileMapperService
 from services.markup import extract_plaintext, markdown_to_html
 
+from .auth import require_auth
+
 logger = logging.getLogger(__name__)
 
 voice_bp = Blueprint("voice", __name__)
@@ -593,6 +595,7 @@ def _transcribe_sync(data: bytes) -> str:
 # ── Routes ──────────────────────────────────────────────────────────────────
 
 @voice_bp.route("/voice/health", methods=["GET"])
+@require_auth
 def voice_health() -> "ResponseReturnValue":
     """Voice service health check.
 
@@ -627,6 +630,7 @@ def voice_health() -> "ResponseReturnValue":
 
 
 @voice_bp.route("/voice/synthesize", methods=["POST"])
+@require_auth
 def voice_synthesize() -> "ResponseReturnValue":
     if not _VOICE_AVAILABLE:
         return jsonify(_voice_unavailable_payload()), 503
@@ -684,6 +688,7 @@ def voice_synthesize() -> "ResponseReturnValue":
 
 
 @voice_bp.route("/voice/transcribe", methods=["POST"])
+@require_auth
 def voice_transcribe() -> "ResponseReturnValue":
     if not _VOICE_AVAILABLE:
         return jsonify(_voice_unavailable_payload()), 503
