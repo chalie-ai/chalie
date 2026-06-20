@@ -17,6 +17,7 @@ import TaskDrawer from './components/overlays/TaskDrawer.vue';
 import QuickTipCard from './components/overlays/QuickTipCard.vue';
 import UpdatePrompt from './components/overlays/UpdatePrompt.vue';
 import VoicePlayerDialog from './components/voice/VoicePlayerDialog.vue';
+import UnlockVault from './components/layout/UnlockVault.vue';
 
 const { init: initTheme } = useTheme();
 const session = useSessionStore();
@@ -90,4 +91,5 @@ onBeforeUnmount(() => {
   <UpdatePrompt />
   <VoicePlayerDialog />
   <MomentSearchDialog ref="recallRef" />
+  <UnlockVault />
 </template>
