@@ -128,7 +128,7 @@ function onSpeak(): void {
 
 .chalie-markup p {
   margin: 0 0 0.75em;
-  line-height: 1.6;
+  line-height: 1.35;
 }
 
 .chalie-markup p:last-child {
@@ -196,7 +196,7 @@ function onSpeak(): void {
 
 .chalie-markup li {
   margin: 0.2em 0;
-  line-height: 1.6;
+  line-height: 1.35;
 }
 
 .chalie-markup blockquote {
