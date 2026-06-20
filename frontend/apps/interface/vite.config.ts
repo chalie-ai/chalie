@@ -30,6 +30,10 @@ export default defineConfig({
         login: fileURLToPath(new URL('./login/index.html', import.meta.url)),
         onboarding: fileURLToPath(new URL('./on-boarding/index.html', import.meta.url)),
       },
+      // Tauri-injected native plugins — never bundled into the web build.
+      // The tauriPlatformAdapter lazy-imports these; the web runtime never
+      // reaches them (window.__TAURI__ selects the web adapter instead).
+      external: [/^@tauri-apps\//],
     },
   },
 });
