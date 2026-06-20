@@ -135,6 +135,8 @@ Yes, at two levels: install time and runtime.
 
 The GPU wheel is only swapped in after a dry-run confirms it's reachable — machines without access to the GPU package index stay on CPU rather than failing. ORT version is pinned at `1.20.1`. For air-gapped AMD installs, set `ROCM_PIP_INDEX` to a local mirror before running the installer.
 
+Even once a GPU wheel is installed, Chalie verifies it can actually load at boot: if its native libraries are missing — for example the host's CUDA toolkit is absent or a different major version, so `libcudart.so` can't be found — it reinstalls the CPU `onnxruntime` wheel and starts on CPU instead of failing, logging a hint that names the exact version mismatch. The diagnosis appears in the **Cognition → Errors** panel.
+
 **Runtime** — all ONNX sessions are constructed through `backend/services/onnx_session.py`, which auto-selects the best available execution provider: **CUDA** on NVIDIA GPUs, **CoreML** on Apple Silicon, **CPU** as the fallback. No configuration needed.
 
 > **Mac caveat:** if any weight tensor in the model has a dimension larger than **16384** (the Metal 2D-texture ceiling — applies to every Mac, Intel through M4), `onnx_session.py` drops `CoreMLExecutionProvider` automatically and falls back to CPU. CoreML would otherwise partition the graph across ~177 sub-graphs and balloon virtual memory by ~21 GB. The default `gte-modernbert-base` trips this limit because its vocab embedding is `{50368, 768}`. You'll see `[EMBEDDING] Dropped CoreMLExecutionProvider: model has dim > 16384` in the log when this fires. To force CoreML anyway (not recommended — will almost certainly OOM on <64 GB Macs), pass `providers=["CoreMLExecutionProvider", ...]` explicitly.
