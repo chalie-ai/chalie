@@ -152,7 +152,7 @@ async function deleteList(list: List): Promise<void> {
   <!-- Loading state -->
   <div v-if="loading" class="loading">Loading…</div>
 
-  <!-- Empty state (legacy lists.js:43, VisionView inline pattern) -->
+  <!-- Empty state (legacy lists.js:43, empty-state inline pattern) -->
   <div v-else-if="listsData.length === 0" class="empty-state">
     <div class="empty-icon">
       <BrainIcon name="List" :size="40" />

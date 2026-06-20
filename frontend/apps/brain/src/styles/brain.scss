@@ -1981,7 +1981,7 @@ input[type='checkbox'] {
   .seg-btn { padding: 4px 8px; font-size: 11px; }
 }
 
-// ── Brain backup/restore panel (ported from frontend/brain/style.css:1112-1191) ──
+// ── Import/Export Time-Machine panel (ported from frontend/brain/import_export.js) ──
 // .form-hint (line 1239) and .form-input (line 1627) already exist above — not repeated.
 
 .brain-overview {
@@ -1989,12 +1989,6 @@ input[type='checkbox'] {
   display: flex;
   flex-direction: column;
   gap: 24px;
-}
-
-.brain-stats {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 12px;
 }
 
 .export-card {
@@ -2011,65 +2005,22 @@ input[type='checkbox'] {
 }
 
 .export-card-label {
-  font-size: 0.8rem;
-  color: var(--text-secondary);
-  margin-bottom: 4px;
-}
-
-.export-card-value {
-  font-size: 1.3rem;
-  font-weight: 600;
-}
-
-.brain-actions {
-  display: flex;
-  gap: 10px;
-}
-
-.brain-section {
-  border-top: 1px solid var(--border);
-  padding-top: 20px;
-}
-
-.brain-section-title {
   font-size: 0.9rem;
   font-weight: 600;
-  margin-bottom: 12px;
   color: var(--text-secondary);
+  margin-bottom: 8px;
 }
 
-.brain-form-grid {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 12px;
-  margin-bottom: 12px;
-}
-
-.brain-form-actions {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-
-// Legacy brain section re-declares .form-hint brighter/larger (style.css:1179-1182).
-// Scoped here (not a global re-declare) to restore the ghStatus appearance without
-// regressing the global .form-hint used by other panels.
-.brain-form-actions .form-hint {
-  font-size: 0.8rem;
-  color: var(--text-secondary);
-}
-
-// Legacy style.css:1184 declares a column-flex .form-label globally. The shared
-// design tokens (_tokens.scss:210) already own a global .form-label (bold inline
-// label), imported before this file — so a top-level re-declare here would
-// silently clobber that token app-wide. Scope to where BrainView actually uses
-// the legacy column variant: the GitHub form grid and the export/import modals.
-.brain-form-grid .form-label,
-.modal .form-label {
+// Legacy import_export.js uses the column-flex .form-label variant inside each
+// export card. The shared design tokens (_tokens.scss:210) already own a global
+// .form-label (bold inline label), imported before this file — so a top-level
+// re-declare here would silently clobber that token app-wide. Scope to the cards.
+.export-card .form-label {
   display: flex;
   flex-direction: column;
   gap: 4px;
   font-size: 0.8rem;
   color: var(--text-secondary);
-  margin-bottom: 8px;
+  margin: 12px 0;
+  text-align: left;
 }

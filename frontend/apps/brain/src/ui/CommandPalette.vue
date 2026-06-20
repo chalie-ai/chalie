@@ -26,8 +26,6 @@ interface CPItem {
 // Port of allItems in _renderCommandPalette (app.js:162-178).
 const ALL_ITEMS: CPItem[] = [
   { kind: 'Jump', label: 'Providers', icon: 'Providers', path: '/providers' },
-  { kind: 'Jump', label: 'Vision', icon: 'Eye', path: '/vision' },
-  { kind: 'Jump', label: 'Delegate', icon: 'Globe', path: '/delegate' },
   { kind: 'Jump', label: 'Cognition · Memory', icon: 'Memory', path: '/cognition/memory' },
   { kind: 'Jump', label: 'Cognition · Tools', icon: 'Tool', path: '/cognition/tools' },
   { kind: 'Jump', label: 'Cognition · World state', icon: 'Globe', path: '/cognition/world' },
@@ -51,7 +49,7 @@ const ALL_ITEMS: CPItem[] = [
   { kind: 'Jump', label: 'Policies · External agent', icon: 'Policy', path: '/policies/external' },
   { kind: 'Jump', label: 'Skills', icon: 'Skill', path: '/skills' },
   { kind: 'Jump', label: 'MCP', icon: 'Server', path: '/mcp' },
-  { kind: 'Jump', label: 'Brain', icon: 'Brain', path: '/brain' },
+  { kind: 'Jump', label: 'Import / Export', icon: 'Brain', path: '/import-export' },
 ];
 
 const filtered = computed(() => {

@@ -37,8 +37,6 @@ interface NavItem {
 // Port of BrainSidebar.NAV (sidebar.js:3-42).
 const NAV: NavItem[] = [
   { id: 'providers', label: 'Providers', icon: 'Providers', group: 'cognition' },
-  { id: 'vision', label: 'Vision', icon: 'Eye', group: 'cognition' },
-  { id: 'delegate', label: 'Delegate', icon: 'Globe', group: 'cognition' },
   {
     id: 'cognition', label: 'Cognition', icon: 'Brain', group: 'cognition',
     sub: [
@@ -82,7 +80,7 @@ const NAV: NavItem[] = [
   },
   { id: 'skills', label: 'Skills', icon: 'Skill', group: 'system' },
   { id: 'mcp', label: 'MCP', icon: 'Server', group: 'system' },
-  { id: 'brain', label: 'Brain', icon: 'Brain', group: 'system' },
+  { id: 'import-export', label: 'Import / Export', icon: 'Brain', group: 'system' },
 ];
 
 const cognitionItems = computed(() => NAV.filter((n) => n.group === 'cognition'));

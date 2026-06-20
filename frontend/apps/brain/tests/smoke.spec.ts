@@ -9,7 +9,6 @@ import { test, expect } from '@playwright/test';
 
 const NAV_IDS = [
   'providers',
-  'vision',
   'cognition',
   'scheduler',
   'lists',
@@ -18,14 +17,14 @@ const NAV_IDS = [
   'policies',
   'skills',
   'mcp',
-  'brain',
+  'import-export',
 ] as const;
 
 test.describe('Brain SPA — smoke', () => {
   test('boots at /brain/, redirects to providers, shell + nav render', async ({ page }) => {
     await page.goto('/brain/');
 
-    // Router "/" → "/providers" redirect (BrainView default).
+    // Router "/" → "/providers" redirect (default route).
     await expect(page).toHaveURL(/\/brain\/providers(\/|$|\?)/);
 
     // Shell grid chrome.
@@ -38,7 +37,7 @@ test.describe('Brain SPA — smoke', () => {
     await expect(page.locator('.sidebar-brand .wordmark')).toHaveText('Chalie');
     await expect(page.locator('.sidebar-brand .wordmark-sub')).toHaveText('Brain');
 
-    // All 11 top-level nav items present (Cognition + System groups).
+    // All 10 top-level nav items present (Cognition + System groups).
     for (const id of NAV_IDS) {
       await expect(page.locator(`[data-nav="${id}"]`)).toBeVisible();
     }

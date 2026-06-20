@@ -69,7 +69,9 @@ export const providers = {
     return api.get('/providers/vision');
   },
 
-  setVision(providerId: number): Promise<unknown> {
+  // provider_id null clears the explicit pin → vision falls back to the main
+  // provider when it can see. Backend returns the resolved status.
+  setVision(providerId: number | null): Promise<{ provider: Provider | null; source: string }> {
     return api.put('/providers/vision', { provider_id: providerId });
   },
 

@@ -17,6 +17,13 @@ const providerList = ref<Provider[]>([]);
 const selectedId = ref<number | null>(null);
 const loading = ref(true);
 
+// ── Role selectors (vision + delegate, consolidated — TKT-960) ────
+// source: 'explicit' (user-pinned) | 'auto' (fell back to main) | 'none'.
+const visionId = ref<number | null>(null);
+const visionSource = ref('none');
+const delegateId = ref<number | null>(null);
+const delegateSource = ref('none');
+
 // ── Catalog cache ─────────────────────────────────────────────────
 const catalog = ref<CatalogEntry[]>([]);
 const catalogLoaded = ref(false);
@@ -110,16 +117,64 @@ onUnmounted(() => {
 // function never re-sets loading to true.
 async function load(): Promise<void> {
   try {
-    const [provRes, selRes] = await Promise.all([
+    const [provRes, selRes, visRes, delRes] = await Promise.all([
       providers.list(),
       providers.getSelected(),
+      providers.getVision(),
+      providers.getDelegate(),
     ]);
     providerList.value = provRes.providers ?? [];
     selectedId.value = selRes.provider ? selRes.provider.id : null;
+    visionId.value = visRes.provider ? visRes.provider.id : null;
+    visionSource.value = visRes.source || 'none';
+    delegateId.value = delRes.provider ? delRes.provider.id : null;
+    delegateSource.value = delRes.source || 'none';
   } catch {
     showToast('Failed to connect to backend', 'error');
   }
   loading.value = false;
+}
+
+// ── Role selectors: options + current value ───────────────────────
+const visionCapable = computed(() => providerList.value.filter((p) => p.supports_vision));
+
+// "Use main provider" is only offered when the main provider itself can see.
+const mainSupportsVision = computed(
+  () => selectedId.value != null && visionCapable.value.some((p) => p.id === selectedId.value),
+);
+
+// Bound <select> value: explicit pin → its id, otherwise '' (use main / auto).
+const visionSelectValue = computed(() =>
+  visionSource.value === 'explicit' && visionId.value != null ? String(visionId.value) : '',
+);
+
+const delegateSelectValue = computed(() =>
+  delegateSource.value === 'explicit' && delegateId.value != null ? String(delegateId.value) : '',
+);
+
+// value '' clears the explicit pin → fall back to the main provider.
+async function setVision(value: string): Promise<void> {
+  const pid = value === '' ? null : Number(value);
+  try {
+    const res = await providers.setVision(pid);
+    visionId.value = res.provider ? res.provider.id : null;
+    visionSource.value = res.source || (pid == null ? 'auto' : 'explicit');
+    showToast('Vision provider updated', 'success');
+  } catch (e: unknown) {
+    showToast(apiErrorMessage(e, 'Failed', 'Failed to set vision provider'), 'error');
+  }
+}
+
+async function setDelegate(value: string): Promise<void> {
+  const pid = value === '' ? null : Number(value);
+  try {
+    const res = await providers.setDelegate(pid);
+    delegateId.value = res.provider ? res.provider.id : null;
+    delegateSource.value = res.source || (pid == null ? 'auto' : 'explicit');
+    showToast('Delegate provider updated', 'success');
+  } catch (e: unknown) {
+    showToast(apiErrorMessage(e, 'Failed', 'Failed to set delegate provider'), 'error');
+  }
 }
 
 // ── Select provider ───────────────────────────────────────────────
@@ -486,6 +541,43 @@ async function saveProvider(): Promise<void> {
         </div>
       </template>
     </div>
+
+    <!-- ── Role selectors (vision + delegate) ─────────────────────── -->
+    <template v-if="!loading && providerList.length > 0">
+      <h4 class="section-head">Vision</h4>
+      <p class="panel-desc">
+        Choose which provider Chalie uses to understand images. Only providers that passed the
+        vision probe can be selected.
+      </p>
+      <div class="form-group">
+        <select
+          v-if="visionCapable.length > 0"
+          :value="visionSelectValue"
+          @change="setVision(($event.target as HTMLSelectElement).value)"
+        >
+          <option v-if="mainSupportsVision" value="">Use main provider</option>
+          <option v-for="p in visionCapable" :key="p.id" :value="p.id">{{ p.name }}</option>
+        </select>
+        <select v-else disabled>
+          <option value="">Disabled — no vision-capable providers</option>
+        </select>
+      </div>
+
+      <h4 class="section-head">Delegate</h4>
+      <p class="panel-desc">
+        Subagent work (web_search, web_browse, …) runs on this provider. Defaults to your main
+        provider.
+      </p>
+      <div class="form-group">
+        <select
+          :value="delegateSelectValue"
+          @change="setDelegate(($event.target as HTMLSelectElement).value)"
+        >
+          <option value="">Use main provider</option>
+          <option v-for="p in providerList" :key="p.id" :value="p.id">{{ p.name }}</option>
+        </select>
+      </div>
+    </template>
   </template>
 
   <!-- ── Picker ────────────────────────────────────────────────── -->

@@ -4,8 +4,6 @@ import { system } from './api/system';
 
 // ── Views ────────────────────────────────────────────────────────────────────
 import ProvidersView from './views/ProvidersView.vue';
-import VisionView from './views/VisionView.vue';
-import DelegateView from './views/DelegateView.vue';
 import CognitionView from './views/CognitionView.vue';
 import SchedulerView from './views/SchedulerView.vue';
 import ListsView from './views/ListsView.vue';
@@ -14,7 +12,7 @@ import CapabilitiesView from './views/CapabilitiesView.vue';
 import PoliciesView from './views/PoliciesView.vue';
 import SkillsView from './views/SkillsView.vue';
 import McpView from './views/McpView.vue';
-import BrainView from './views/BrainView.vue';
+import ImportExportView from './views/ImportExportView.vue';
 
 // ── Cognition sub-views ──────────────────────────────────────────────────────
 import MemorySub from './views/cognition/MemorySub.vue';
@@ -50,8 +48,6 @@ export const router = createRouter({
     { path: '/', redirect: '/providers' },
 
     { path: '/providers', name: 'providers', component: ProvidersView },
-    { path: '/vision', name: 'vision', component: VisionView },
-    { path: '/delegate', name: 'delegate', component: DelegateView },
 
     {
       path: '/cognition',
@@ -116,7 +112,7 @@ export const router = createRouter({
 
     { path: '/skills', name: 'skills', component: SkillsView },
     { path: '/mcp', name: 'mcp', component: McpView },
-    { path: '/brain', name: 'brain', component: BrainView },
+    { path: '/import-export', name: 'import-export', component: ImportExportView },
 
     // Catch-all → providers (matches legacy _readHash() fallback to 'providers').
     { path: '/:pathMatch(.*)*', redirect: '/providers' },
