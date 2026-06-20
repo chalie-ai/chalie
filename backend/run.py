@@ -399,6 +399,13 @@ def main() -> None:
     from services.snapshot_service import SnapshotService
     SnapshotService.apply_pending()
 
+    # Guarantee a usable onnxruntime BEFORE any warmup thread imports it. On a
+    # host whose GPU/ROCm wheel can't load its native libs (e.g. libcudart
+    # missing), this swaps to the CPU wheel and logs an actionable ERROR hint
+    # (visible in the Cognition → Errors panel); a no-op when import already works.
+    from services.runtime_deps_service import RuntimeDepsService
+    RuntimeDepsService.ensure_onnxruntime()
+
     _start_model_preload()
 
     database_service = _init_database()
@@ -409,7 +416,6 @@ def main() -> None:
     _warmup_models()
 
     # Background-install optional runtime deps (playwright, voice if enabled)
-    from services.runtime_deps_service import RuntimeDepsService
     RuntimeDepsService.ensure_playwright()
     RuntimeDepsService.init_voice_from_settings(database_service)
 

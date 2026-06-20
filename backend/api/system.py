@@ -70,68 +70,16 @@ def health_check() -> ResponseReturnValue:
 
 @system_bp.route('/ready', methods=['GET'])
 def readiness_check() -> ResponseReturnValue:
-    """Readiness probe — true only when SQLite, MemoryStore, embeddings, and ONNX are ready."""
-    components: dict[str, dict[str, object]] = {}
+    """Readiness probe — 200 only when SQLite, MemoryStore, embeddings, and ONNX are ready.
 
-    # SQLite
-    try:
-        from services.database_service import get_shared_db_service
-        db = get_shared_db_service()
-        with db.connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute('SELECT 1')
-            cursor.close()
-        components['database'] = {'status': 'ok', 'connected': True}
-    except Exception as e:
-        logger.debug(f'[READY] database not ready: {e}')
-        components['database'] = {'status': 'error', 'connected': False, 'message': str(e)}
-
-    # MemoryStore
-    try:
-        from services.memory_client import MemoryClientService
-        store = MemoryClientService.create_connection()
-        store.ping()
-        components['memory_store'] = {'status': 'ok'}
-    except Exception as e:
-        logger.debug(f'[READY] memory store not ready: {e}')
-        components['memory_store'] = {'status': 'error', 'message': str(e)}
-
-    # Embedding model — lazy-loaded on first use. Ready once the ONNX session
-    # and tokenizer are initialised.
-    try:
-        from services.embedding_service import _session
-        if _session is not None:
-            components['embeddings'] = {'status': 'ok'}
-        else:
-            components['embeddings'] = {'status': 'loading'}
-    except Exception as e:
-        logger.debug(f'[READY] embedding model not ready: {e}')
-        components['embeddings'] = {'status': 'error', 'message': str(e)}
-
-    # ONNX models — preloaded in background thread on boot. Not ready until
-    # ensure_models() + warmup inference have completed.
-    try:
-        from services.onnx_inference_service import get_onnx_inference_service
-        onnx_svc = get_onnx_inference_service()
-        if onnx_svc.ready:
-            components['onnx'] = {'status': 'ok'}
-        elif onnx_svc.degraded:
-            # Registration completed but one or more tasks failed (e.g. sha256
-            # gate refused on encoder mismatch). Surface this loudly — the boot
-            # gate exists precisely to catch these cases. Silent fallback would
-            # let the system run with a wrong/incomplete classifier.
-            failed = onnx_svc.failed_registrations
-            components['onnx'] = {
-                'status': 'degraded',
-                'failed_tasks': [t for t, _ in failed],
-                'message': '; '.join(f'{t}: {err}' for t, err in failed),
-            }
-        else:
-            components['onnx'] = {'status': 'loading'}
-    except Exception as e:
-        logger.debug(f'[READY] ONNX not ready: {e}')
-        components['onnx'] = {'status': 'error', 'message': str(e)}
-
+    Delegates to the read-only :func:`services.preflight_service.run_preflight`.
+    The onnxruntime CPU self-heal and its actionable ERROR hint run once at boot
+    (``RuntimeDepsService.ensure_onnxruntime``); this probe only reports state, so
+    a broken runtime surfaces as ``embeddings: {status: error, message: <hint>}``
+    rather than the eternal ``loading`` it reported before.
+    """
+    from services.preflight_service import run_preflight
+    components = run_preflight()
     ready = all(c.get('status') == 'ok' for c in components.values())
     return jsonify({'ready': ready, **components}), (200 if ready else 503)
 

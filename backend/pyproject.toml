@@ -31,10 +31,11 @@ dependencies = [
     "pdfplumber>=0.11.0",
     "python-docx>=1.1.0",
     "python-pptx>=1.0.0",
-    # onnxruntime is installed by installer/install.sh so the right wheel
-    # (onnxruntime / onnxruntime-gpu / onnxruntime-rocm) is picked for the host.
-    # Pulled in transitively by rapidocr-onnxruntime for dev workflows; the
-    # installer swaps the wheel when a GPU is detected.
+    # onnx (the format library) is a direct dep. The onnxruntime *runtime* is
+    # pulled in transitively by rapidocr-onnxruntime, and the GPU/ROCm variant by
+    # the voice-* optional groups below. RuntimeDepsService.ensure_onnxruntime()
+    # self-heals to the CPU 'onnxruntime' wheel at boot when an installed
+    # GPU/ROCm wheel can't load its native libs (e.g. missing CUDA toolkit).
     "onnx>=1.17.0",
     "rapidocr_onnxruntime>=1.4.0",
     "ddgs>=0.1.0",

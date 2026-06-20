@@ -4,16 +4,13 @@ import importlib.util
 import logging
 import os
 import platform
+import re
 import shutil
 import subprocess
 import sys
 import threading
 from pathlib import Path
 from typing import TYPE_CHECKING
-
-import requests
-
-from pathlib import Path
 
 import requests
 
@@ -33,9 +30,63 @@ class RuntimeDepsService:
     _voice_error: str | None = None
     _playwright_status: str = "unknown"  # unknown | installing | available | error
     _playwright_error: str | None = None
+    _onnxruntime_status: str = "unknown"  # unknown | ok | healed_to_cpu | failed
+    _onnxruntime_hint: str | None = None
     _lock = threading.Lock()
 
     # ── Public API ────────────────────────────────────────────────────────
+
+    @classmethod
+    def ensure_onnxruntime(cls) -> None:
+        """Boot self-heal: guarantee ``import onnxruntime`` works, falling back to
+        the CPU wheel when the installed GPU/ROCm wheel can't load its native libs
+        (e.g. ``libcudart.so`` missing because the host CUDA toolkit is absent).
+
+        Synchronous and idempotent — call once at boot **before** any model-warmup
+        thread imports onnxruntime, so embeddings, classifiers and voice all import
+        a working runtime. The fallback is loud, never silent: the diagnosis and
+        remediation hint are logged at ERROR level so they surface in the
+        Cognition → Errors panel (``GET /system/observability/errors`` only shows
+        ERROR/CRITICAL). A no-op when the import already succeeds.
+        """
+        if cls._onnxruntime_status != "unknown":
+            return
+        try:
+            import onnxruntime  # noqa: F401
+            cls._onnxruntime_status = "ok"
+            return
+        except Exception as exc:
+            cls._onnxruntime_hint = cls._onnxruntime_hint_for(exc)
+            logger.error(
+                "[RuntimeDeps] onnxruntime import failed (%s) — falling back to the CPU wheel. %s",
+                exc, cls._onnxruntime_hint,
+            )
+        try:
+            cls._swap_onnxruntime_to_cpu()
+            importlib.invalidate_caches()
+            import onnxruntime  # noqa: F401
+            cls._onnxruntime_status = "healed_to_cpu"
+            logger.error(
+                "[RuntimeDeps] onnxruntime now runs on CPU — GPU acceleration disabled. %s",
+                cls._onnxruntime_hint,
+            )
+        except Exception as exc:
+            cls._onnxruntime_status = "failed"
+            logger.error(
+                "[RuntimeDeps] onnxruntime CPU fallback failed (%s) — embeddings, "
+                "classifiers and voice will be unavailable. %s",
+                exc, cls._onnxruntime_hint,
+            )
+
+    @classmethod
+    def onnxruntime_status(cls) -> str:
+        """Outcome of the boot self-heal: unknown | ok | healed_to_cpu | failed."""
+        return cls._onnxruntime_status
+
+    @classmethod
+    def onnxruntime_hint(cls) -> str | None:
+        """Remediation hint when the runtime couldn't load, else None."""
+        return cls._onnxruntime_hint
 
     @classmethod
     def ensure_playwright(cls) -> None:
@@ -123,6 +174,74 @@ class RuntimeDepsService:
             "noisereduce",
         )
         return all(importlib.util.find_spec(m) is not None for m in required)
+
+    # ── Private: onnxruntime ──────────────────────────────────────────────
+
+    @staticmethod
+    def _onnxruntime_hint_for(exc: BaseException) -> str:
+        """Map an onnxruntime import failure to an actionable remediation hint.
+
+        ``libcudart.so.N`` names the CUDA toolkit major version the wheel was built
+        against, so when the message carries it the version is surfaced verbatim —
+        that mismatch (wheel wants CUDA N, host has none) is the operator's fix.
+        """
+        msg = str(exc).lower()
+        cudart = re.search(r"libcudart\.so\.(\d+)", msg)
+        if cudart:
+            return (
+                f"The installed onnxruntime-gpu wheel needs libcudart.so.{cudart.group(1)} "
+                f"(CUDA {cudart.group(1)}), which this host can't load. Install a matching CUDA "
+                "toolkit, or stay on CPU — this fallback installs the plain 'onnxruntime' wheel "
+                "automatically. Voice/embeddings run on CPU until then."
+            )
+        if any(lib in msg for lib in ("libcudart", "libcudnn", "libcublas", "cuda")):
+            return (
+                "The installed onnxruntime-gpu wheel needs the CUDA runtime libraries "
+                "(e.g. libcudart) which are not on this host. Either install a CUDA toolkit "
+                "matching the wheel, or stay on CPU — this fallback installs the plain "
+                "'onnxruntime' wheel automatically. Voice/embeddings run on CPU until then."
+            )
+        if any(lib in msg for lib in ("libamdhip", "librocm", "rocm", "hip")):
+            return (
+                "The installed onnxruntime-rocm wheel needs the ROCm runtime libraries "
+                "which are not on this host. Install ROCm, or stay on CPU — this fallback "
+                "installs the plain 'onnxruntime' wheel automatically."
+            )
+        return (
+            "onnxruntime could not be imported. The CPU fallback installs the plain "
+            "'onnxruntime' wheel; if this persists, reinstall onnxruntime in the venv."
+        )
+
+    @classmethod
+    def _swap_onnxruntime_to_cpu(cls) -> None:
+        """Uninstall any GPU/ROCm onnxruntime wheel present and install the CPU wheel."""
+        import importlib.metadata as _md
+
+        def _present(dist: str) -> bool:
+            try:
+                _md.version(dist)
+                return True
+            except _md.PackageNotFoundError:
+                return False
+
+        to_remove = [d for d in ("onnxruntime-gpu", "onnxruntime-rocm") if _present(d)]
+        use_uv = bool(shutil.which("uv"))
+        if to_remove:
+            subprocess.run(
+                ["uv", "pip", "uninstall", "--python", sys.executable, *to_remove]
+                if use_uv else
+                [sys.executable, "-m", "pip", "uninstall", "-y", *to_remove],
+                capture_output=True, text=True, timeout=600,
+            )
+
+        result = subprocess.run(
+            ["uv", "pip", "install", "--python", sys.executable, "onnxruntime"]
+            if use_uv else
+            [sys.executable, "-m", "pip", "install", "onnxruntime"],
+            capture_output=True, text=True, timeout=600,
+        )
+        if result.returncode != 0:
+            raise RuntimeError(f"CPU onnxruntime install failed: {result.stderr[:300]}")
 
     # ── Private: Playwright ───────────────────────────────────────────────
 
