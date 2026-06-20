@@ -33,7 +33,7 @@ Chalie ships **33 LLM-callable tools**: 3 always available on every turn, 27 dis
 | `review_transcript` | Reads back conversation transcript rows around a given timestamp |
 | `schedule` | Creates, lists, searches, and cancels reminders and scheduled tasks |
 | `search_files` | Cross-platform file search — `glob` by filename, `grep` by content |
-| `skill_builder` | Creates, edits, and deletes user-defined skill playbooks |
+| `skill_builder` | Creates, edits, deletes, reads, and lists user-defined skill playbooks |
 | `timer` | Starts an ephemeral countdown card in the chat UI (client-side only) |
 | `ubiquiti` | Monitors and controls a UniFi network |
 | `vision` | Reads image contents via the vision provider (OCR fallback) — delegate, user-facing channels only |
