@@ -78,8 +78,10 @@ function pillSeconds(pill: ToolPill): string {
       </span>
     </div>
 
-    <!-- Live: running / done pills with name + ticking timer (green on done). -->
+    <!-- Live: running / done pills with name + ticking timer (green on done).
+         Before the first pill lands, the bare group is the "thinking…" anchor. -->
     <div v-else class="act-tools">
+      <span v-if="!form.tools.length" class="act-placeholder">thinking…</span>
       <div
         v-for="pill in form.tools"
         :key="pill.id"

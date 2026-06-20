@@ -220,12 +220,16 @@ export const useConversationStore = defineStore('conversation', {
     },
 
     /**
-     * Collapse a step's tool group to summary-only — called when the step is
-     * superseded (next interim prose bubble or the final reply has landed).
+     * Settle a step's tool group when its prose / final reply lands: an empty
+     * group — the up-front "thinking…" placeholder that never ran a tool — is
+     * evicted; one that ran tools collapses to summary-only.
      */
-    collapseAct(actId: number): void {
-      const form = this._findAct(actId);
-      if (form) form.collapsed = true;
+    resolveAct(actId: number): void {
+      const idx = this.forms.findIndex((f) => f.id === actId);
+      const form = idx === -1 ? undefined : this.forms[idx];
+      if (form?.kind !== 'act') return;
+      if (form.tools.length) form.collapsed = true;
+      else this.forms.splice(idx, 1);
     },
 
     appendToolPill(actId: number, id: string, name: string, summary?: string): void {

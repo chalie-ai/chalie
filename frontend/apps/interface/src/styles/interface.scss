@@ -274,12 +274,6 @@ body.speaker-user #ambientBloom {
   transition: background 420ms ease, border-color 420ms ease;
 }
 
-.presence-bar__left {
-  display: flex;
-  align-items: center;
-  gap: var(--space-md);
-}
-
 .presence-bar__right {
   display: flex;
   align-items: center;

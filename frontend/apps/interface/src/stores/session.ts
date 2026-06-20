@@ -17,7 +17,6 @@ import { showToast } from '../utils/toast';
 import { useConversationStore } from './conversation';
 import type { AttachmentPreview } from './conversation';
 import type { ConversationSegment } from '../api/conversation';
-import { usePresenceStore } from './presence';
 import { useTasksStore } from './tasks';
 import { useNotificationsStore } from './notifications';
 import type { TipState, UpdateState } from './notifications';
@@ -167,7 +166,6 @@ export const useSessionStore = defineStore('session', {
       if (!text && !files.length) return;
 
       const convo = useConversationStore();
-      const presence = usePresenceStore();
 
       if (this.isSending) {
         if (this._lastUserFormId != null) {
@@ -185,7 +183,6 @@ export const useSessionStore = defineStore('session', {
       }
 
       this.isSending = true;
-      presence.setState('processing');
 
       const userFormId = convo.appendUser(text || '[File attached]', previews, {
         inWorkingMemory: true,
@@ -208,7 +205,6 @@ export const useSessionStore = defineStore('session', {
       previews: AttachmentPreview[] = [],
     ): void {
       const convo = useConversationStore();
-      const presence = usePresenceStore();
       const ws = getWebSocket();
 
       if (showUserBubble) {
@@ -219,10 +215,10 @@ export const useSessionStore = defineStore('session', {
         this._lastUserText = text;
       }
 
-      // No upfront ACT form: a turn is a sequence of steps (prose bubble + own
-      // tool group), and groups open lazily on the step's first tool_start.
-      // PresenceBar / InputDock carry the working + stop affordances meanwhile.
-      this._activeActId = null;
+      // Open the ACT group up-front: an empty live group is the "thinking…"
+      // placeholder (logo + stop affordance). The step's first tool_start lands
+      // its pill in place; a tool-free turn evicts the empty group on resolve.
+      this._activeActId = convo.appendAct();
 
       // Capture the FINAL turn result across onMessage(final) / onDone — interim
       // steps render immediately and are never cached.
@@ -241,10 +237,6 @@ export const useSessionStore = defineStore('session', {
         text,
         source,
         {
-          onStatus: (stage: string) => {
-            presence.setState(stage);
-          },
-
           // Use d.id (NOT d.call_id) — frame is act_tool_start { type,name,id,summary }.
           // Lazily open the step's tool group; its prose already landed via the
           // preceding interim message.
@@ -277,11 +269,10 @@ export const useSessionStore = defineStore('session', {
               // group), then render this step's bubble; the next onToolStart
               // opens a fresh group beneath it.
               if (this._activeActId != null) {
-                convo.collapseAct(this._activeActId);
+                convo.resolveAct(this._activeActId);
                 this._activeActId = null;
               }
               if (d.content) convo.appendChalie(d.content, { ts: d.timestamp ?? '' });
-              presence.setState('responding');
               return;
             }
 
@@ -296,7 +287,6 @@ export const useSessionStore = defineStore('session', {
               segments: d.segments,
               timestamp: d.timestamp ?? '',
             };
-            presence.setState('responding');
           },
 
           onError: (data) => {
@@ -304,7 +294,7 @@ export const useSessionStore = defineStore('session', {
             // collapse the in-flight step and surface the error as its own form.
             // Only data.auth_failed redirects to login.
             if (this._activeActId != null) {
-              convo.collapseAct(this._activeActId);
+              convo.resolveAct(this._activeActId);
               this._activeActId = null;
             }
             convo.appendError(data.message);
@@ -314,9 +304,10 @@ export const useSessionStore = defineStore('session', {
 
           onDone: (data) => {
             responseMeta.duration_ms = data.duration_ms;
-            // Collapse the final step's tools before the reply lands beneath it.
+            // Settle the final step before the reply lands beneath it: collapse
+            // its tools, or evict the bare "thinking…" placeholder if none ran.
             if (this._activeActId != null) {
-              convo.collapseAct(this._activeActId);
+              convo.resolveAct(this._activeActId);
               this._activeActId = null;
             }
             if (responseContent || responseMeta.segments?.length) {
@@ -331,7 +322,6 @@ export const useSessionStore = defineStore('session', {
               });
             }
             useAmbientSensor().recordResponse();
-            presence.setState('resting');
             this.isSending = false;
             document.dispatchEvent(new CustomEvent('session:turn-done'));
 
@@ -351,7 +341,6 @@ export const useSessionStore = defineStore('session', {
      */
     async requestStop(): Promise<void> {
       const convo = useConversationStore();
-      const presence = usePresenceStore();
       const ws = getWebSocket();
 
       // Capture the user bubble's LIVE text: a mid-ACT append holds the
@@ -374,7 +363,6 @@ export const useSessionStore = defineStore('session', {
       ws.abort();
 
       this.isSending = false;
-      presence.setState('resting');
 
       document.dispatchEvent(
         new CustomEvent('session:turn-interrupted', { detail: { text: restoredText } }),
@@ -407,7 +395,6 @@ export const useSessionStore = defineStore('session', {
       if (this.isSending) return;
 
       const convo = useConversationStore();
-      const presence = usePresenceStore();
       const ws = getWebSocket();
 
       this.isSending = true;
@@ -433,7 +420,6 @@ export const useSessionStore = defineStore('session', {
         onDone: () => {
           this._activeActId = null;
           this.isSending = false;
-          presence.setState('resting');
         },
       });
     },

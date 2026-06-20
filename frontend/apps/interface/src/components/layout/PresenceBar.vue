@@ -1,13 +1,13 @@
 <script setup lang="ts">
 import { Star, Clock, Brain, Sun, Moon } from '@lucide/vue';
 import { storeToRefs } from 'pinia';
-import { usePresenceStore } from '../../stores/presence';
+import { useSessionStore } from '../../stores/session';
 import { useTasksStore } from '../../stores/tasks';
 import { useTheme } from '@chalie/shared';
 import { emit } from '../../composables/useEventBus';
 
-const presence = usePresenceStore();
-const { state, label } = storeToRefs(presence);
+const session = useSessionStore();
+const { isSending } = storeToRefs(session);
 
 const tasks = useTasksStore();
 const { totalCount } = storeToRefs(tasks);
@@ -27,12 +27,12 @@ function handleSettings(): void {
 
 <template>
   <header class="presence-bar">
-    <div class="presence-bar__left">
-      <div class="presence-dot" :data-state="state">
-        <div class="presence-dot__inner"></div>
-      </div>
-      <span class="presence-label">{{ label }}</span>
-    </div>
+    <img
+      class="presence-logo"
+      :class="{ 'presence-logo--active': isSending }"
+      src="/icons/icon.png"
+      alt="Chalie"
+    />
     <div class="presence-bar__right">
       <button
         id="recallBtn"
@@ -103,128 +103,24 @@ function handleSettings(): void {
   pointer-events: none;
 }
 
-// Presence Dot + per-state animations.
-// All colors via CSS token vars so both dark and light themes work (Rule 7).
-
-.presence-dot {
-  position: relative;
-  width: 12px;
-  height: 12px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
+// Chalie logo — the bar's left mark. Static at rest; a slow, slight opacity
+// breathe (0.7 → 1) while a turn is in flight, in sync with the in-feed
+// "thinking…" anchor. The gradient mark reads on both theme scrims (Rule 7).
+.presence-logo {
+  height: 30px;
+  width: auto;
+  display: block;
+  user-select: none;
+  -webkit-user-drag: none;
 }
 
-.presence-dot__inner {
-  width: 10px;
-  height: 10px;
-  border-radius: 50%;
-  background: var(--sand);
-  transition: all var(--duration-normal) var(--ease-out);
+.presence-logo--active {
+  animation: presence-logo-breathe 2.5s ease-in-out infinite;
 }
 
-.presence-label {
-  font-size: var(--font-size-sm);
-  font-weight: 500;
-  color: var(--text-secondary);
-  transition: color var(--duration-normal) var(--ease-out);
-}
-
-.presence-dot[data-state="resting"] .presence-dot__inner {
-  animation: pb-breathe 4s ease-in-out infinite;
-  background: var(--sand);
-  box-shadow: 0 0 8px currentColor;
-}
-
-@keyframes pb-breathe {
-  0%, 100% { transform: scale(1);   opacity: 0.7; }
-  50%       { transform: scale(1.2); opacity: 1;   }
-}
-
-.presence-dot[data-state="processing"] .presence-dot__inner {
-  animation: pb-pulse 1.5s ease-in-out infinite;
-  background: var(--dusk-blue);
-  box-shadow: 0 0 8px currentColor;
-}
-
-@keyframes pb-pulse {
-  0%, 100% { transform: scale(1);   }
-  50%       { transform: scale(1.4); }
-}
-
-.presence-dot[data-state="thinking"] .presence-dot__inner {
-  animation: pb-glow 2s ease-in-out infinite;
-  background: var(--violet);
-}
-
-@keyframes pb-glow {
-  0%, 100% { box-shadow: 0 0 4px var(--violet); }
-  50%       { box-shadow: 0 0 16px var(--violet), 0 0 32px color-mix(in oklab, var(--violet) 30%, transparent); }
-}
-
-.presence-dot[data-state="retrieving_memory"] .presence-dot__inner {
-  animation: pb-ripple 2s ease-out infinite;
-  background: var(--dusk-blue);
-  box-shadow: 0 0 8px currentColor;
-}
-
-@keyframes pb-ripple {
-  0%   { box-shadow: 0 0 0 0   color-mix(in oklab, var(--cyan) 40%, transparent); }
-  70%  { box-shadow: 0 0 0 12px color-mix(in oklab, var(--cyan)  0%, transparent); }
-  100% { box-shadow: 0 0 0 0   color-mix(in oklab, var(--cyan)  0%, transparent); }
-}
-
-.presence-dot[data-state="planning"] .presence-dot__inner {
-  background: linear-gradient(90deg, var(--violet), var(--dusk-blue), var(--violet));
-  background-size: 200% 100%;
-  animation: pb-shimmer 2s ease-in-out infinite;
-}
-
-@keyframes pb-shimmer {
-  0%   { background-position:  200% 0; }
-  100% { background-position: -200% 0; }
-}
-
-.presence-dot[data-state="narrating"] .presence-dot__inner {
-  background: linear-gradient(90deg, var(--violet), var(--dusk-blue), var(--violet));
-  background-size: 200% 100%;
-  animation: pb-shimmer 3s ease-in-out infinite;
-}
-
-.presence-dot[data-state="responding"] {
-  width: 24px;
-}
-
-.presence-dot[data-state="responding"] .presence-dot__inner {
-  width: 24px;
-  height: 6px;
-  border-radius: 3px;
-  background: var(--amber);
-  animation: pb-waveform 0.8s ease-in-out infinite alternate;
-}
-
-@keyframes pb-waveform {
-  0%   { transform: scaleY(1);   }
-  25%  { transform: scaleY(1.8); }
-  50%  { transform: scaleY(0.6); }
-  75%  { transform: scaleY(1.4); }
-  100% { transform: scaleY(1);   }
-}
-
-.presence-dot[data-state="still_working"] .presence-dot__inner {
-  animation: pb-pulse 1.5s ease-in-out infinite;
-  background: var(--dusk-blue);
-  box-shadow: 0 0 8px currentColor;
-}
-
-.presence-dot[data-state="error"] .presence-dot__inner {
-  background: var(--error);
-  animation: pb-blink 1.5s infinite;
-}
-
-@keyframes pb-blink {
-  0%, 100% { opacity: 1;   }
-  50%       { opacity: 0.3; }
+@keyframes presence-logo-breathe {
+  0%, 100% { opacity: 0.7; }
+  50%      { opacity: 1;   }
 }
 
 .theme-toggle {

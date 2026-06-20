@@ -348,6 +348,13 @@
   animation: act-logo-pulse 1.4s ease-in-out infinite;
 }
 
+// Bare-group anchor before any tool pill lands; evicted the moment one does.
+.act-placeholder {
+  font-size: var(--font-size-sm);
+  color: var(--text-tertiary);
+  animation: act-logo-pulse 1.4s ease-in-out infinite;
+}
+
 .act-stop-btn {
   background: transparent;
   border: none;
@@ -527,14 +534,8 @@ $act-group-line: calc(0.82rem * 1.4); // first-line box for both preview & summa
 }
 
 @keyframes act-logo-pulse {
-  0%, 100% {
-    opacity: 0.55;
-    box-shadow: 0 0 4px color-mix(in oklab, var(--violet) 25%, transparent);
-  }
-  50% {
-    opacity: 1;
-    box-shadow: 0 0 12px color-mix(in oklab, var(--violet) 70%, transparent);
-  }
+  0%, 100% { opacity: 0.55; }
+  50%      { opacity: 1; }
 }
 
 // Meta-mode badge (cognitive signal)
