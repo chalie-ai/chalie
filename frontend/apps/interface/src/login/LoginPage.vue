@@ -88,7 +88,7 @@ async function handleSubmit() {
 <style scoped lang="scss">
 .login-card {
   width: 100%;
-  max-width: 380px;
+  max-width: 420px;
   padding: 2.5rem 2rem;
   background: var(--bg-surface);
   border: 1px solid var(--border);
