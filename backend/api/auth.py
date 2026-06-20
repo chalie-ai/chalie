@@ -57,5 +57,23 @@ def require_auth(f: Callable[..., "ResponseReturnValue"]) -> Callable[..., "Resp
     return decorated
 
 
+def _cookie_only(f: Callable[..., "ResponseReturnValue"]) -> Callable[..., "ResponseReturnValue"]:
+    """Restrict a route to cookie-authenticated requests (no bearer tokens).
+
+    Stacked under ``@require_auth``: once a request has authenticated, a bearer
+    wrapper has ``g.wrapper_id`` set while a human cookie session leaves it
+    ``None``. Used where only a human dashboard session may act — minting
+    wrapper tokens, reading the master login username for device pairing —
+    never a wrapper acting on its own behalf.
+    """
+    @wraps(f)
+    def decorated(*args: object, **kwargs: object) -> "ResponseReturnValue":
+        if getattr(g, "wrapper_id", None) is not None:
+            return jsonify({"error": "This action requires cookie session auth"}), 403
+        return f(*args, **kwargs)
+
+    return decorated
+
+
 # Backward-compatible alias
 require_session = require_auth

@@ -1,10 +1,9 @@
 import logging
-from collections.abc import Callable
 from typing import TYPE_CHECKING, cast
 
 from flask import Blueprint, g, jsonify, request
 
-from .auth import require_auth
+from .auth import require_auth, _cookie_only
 from services.log_utils import safe
 
 if TYPE_CHECKING:
@@ -26,23 +25,6 @@ def _get_service() -> "WrapperAuthService":
     from services.database_service import get_shared_db_service
     from services.wrapper_auth_service import WrapperAuthService
     return WrapperAuthService(get_shared_db_service())
-
-
-def _cookie_only(f: Callable[..., "ResponseReturnValue"]) -> Callable[..., "ResponseReturnValue"]:
-    """Restrict a route to cookie-authenticated requests (no bearer tokens).
-
-    Used on the token creation endpoint so that only humans (not wrappers
-    themselves) can mint new credentials.
-    """
-    from functools import wraps
-
-    @wraps(f)
-    def decorated(*args: object, **kwargs: object) -> "ResponseReturnValue":
-        if getattr(g, "wrapper_id", None) is not None:
-            return jsonify({"error": "Token creation requires cookie session auth"}), 403
-        return f(*args, **kwargs)
-
-    return decorated
 
 
 # ---------------------------------------------------------------------------
