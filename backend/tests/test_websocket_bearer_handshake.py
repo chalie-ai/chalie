@@ -121,8 +121,15 @@ def test_ws_handshake_accepts_bearer_token_query_param(
         "an Unauthorized error frame was sent despite a valid ?token=; the only "
         f"frame on a healthy handshake is the broker ping. Got: {socket.sent_types()}"
     )
-    assert socket in broker._connections, (
-        "an authenticated handshake must register the socket with the broker"
+    # The broker's connect() + broadcast({"type": "ping"}) runs inside the
+    # handler's loop; the finally block disconnects cleanly on loop exit (the
+    # _BoundarySocket.receive() raises on the 2nd call to end the loop).  So
+    # after the handler returns the socket is no longer in _connections — correct
+    # production behaviour.  We prove it WAS registered by the fact the ping
+    # frame was delivered to it (the broker only fans out to registered sockets).
+    assert "ping" in socket.sent_types(), (
+        "an authenticated handshake must be registered with the broker — proved "
+        f"by receiving the broker ping. Got: {socket.sent_types()}"
     )
 
 
@@ -149,8 +156,9 @@ def test_ws_handshake_rejects_missing_and_invalid_token(
             f"handshake {url!r} must receive the Unauthorized error frame; got "
             f"{socket.sent_types()}"
         )
-        assert socket not in broker._connections, (
-            f"an unauthenticated handshake {url!r} must NOT be registered"
+        assert "ping" not in socket.sent_types(), (
+            f"an unauthenticated handshake {url!r} must NOT be registered with "
+            f"the broker — no ping may be delivered. Got: {socket.sent_types()}"
         )
 
 
