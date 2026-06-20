@@ -1,0 +1,70 @@
+import { test, expect } from '@playwright/test';
+
+// Feature tests — drive a REAL Chalie instance (CHALIE_BASE_URL). No mocks:
+// every assertion is a downstream effect of the real auth gate (router.ts),
+// the real /auth/status + /auth/login endpoints, and real localStorage.
+//
+// The pairing gate only fires on the Tauri runtime; in a browser harness we
+// honestly emulate that by injecting window.__TAURI__ before any script runs.
+// The token accessors read localStorage key 'chalie_access_token', so we drive
+// the "no token" / "has token" states by writing that real key.
+
+const USERNAME = process.env.CHALIE_TEST_USERNAME ?? 'admin';
+
+test.describe('Tauri pairing gate', () => {
+  test.use({ storageState: { cookies: [], origins: [] } });
+
+  test('Tauri + no token redirects to /pairing/ (not /login/)', async ({ page }) => {
+    await page.addInitScript(() => {
+      (window as unknown as { __TAURI__: object }).__TAURI__ = {};
+    });
+    await page.goto('/');
+    await expect(page).toHaveURL(/\/pairing\//, { timeout: 15_000 });
+    await expect(page.locator('.link-device__scan')).toBeVisible();
+  });
+
+  test('web (no __TAURI__) + no session still redirects to /login/', async ({ page }) => {
+    await page.goto('/');
+    await expect(page).toHaveURL(/\/login\//, { timeout: 15_000 });
+  });
+});
+
+test.describe('UnlockVault overlay', () => {
+  test.skip(!process.env.CHALIE_TEST_PASSWORD, 'needs CHALIE_TEST_PASSWORD');
+
+  test('wrong password keeps the overlay and shows an error when the vault is locked', async ({ page }) => {
+    await page.addInitScript((u) => {
+      localStorage.setItem('chalie_username', u as string);
+    }, USERNAME);
+    await page.goto('/');
+
+    const status = await page.request.get('/auth/status');
+    const locked = (await status.json()).vault_state === 'locked';
+    test.skip(!locked, 'vault already unlocked in this env');
+
+    await expect(page.locator('.unlock-vault')).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByLabel('Username', { exact: true })).toHaveCount(0);
+    await page.getByLabel('Password', { exact: true }).fill('definitely-wrong-pw');
+    await page.locator('.unlock-vault__submit').click();
+
+    await expect(page.locator('.unlock-vault__error')).toHaveText('Invalid password.', { timeout: 10_000 });
+    await expect(page.locator('.unlock-vault')).toBeVisible();
+  });
+});
+
+test.describe('on-resume refresh', () => {
+  test.skip(!process.env.CHALIE_TEST_PASSWORD, 'needs CHALIE_TEST_PASSWORD');
+
+  test('window focus re-runs the feed load', async ({ page }) => {
+    await page.goto('/');
+    await expect(page.locator('#conversationFeed')).toBeVisible({ timeout: 15_000 });
+
+    let historyCalls = 0;
+    page.on('request', (req) => {
+      if (req.url().includes('/conversation')) historyCalls += 1;
+    });
+    const before = historyCalls;
+    await page.evaluate(() => window.dispatchEvent(new Event('focus')));
+    await expect.poll(() => historyCalls, { timeout: 10_000 }).toBeGreaterThan(before);
+  });
+});
