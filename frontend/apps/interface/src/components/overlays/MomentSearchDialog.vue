@@ -200,9 +200,9 @@ defineExpose({ open: openRecall });
   padding: 0;
   border: none;
   border-radius: 12px;
-  background: var(--surface-elevated, var(--surface));
+  background: var(--bg-2);
   color: var(--text-primary);
-  box-shadow: 0 8px 48px var(--shadow, rgba(0, 0, 0, 0.28));
+  box-shadow: 0 8px 48px rgba(0, 0, 0, 0.28);
   width: min(560px, calc(100vw - 32px));
   max-height: calc(100vh - 64px);
   overflow: hidden;
@@ -210,7 +210,7 @@ defineExpose({ open: openRecall });
 
   // Native <dialog> backdrop
   &::backdrop {
-    background: var(--overlay-scrim, rgba(0, 0, 0, 0.45));
+    background: rgba(0, 0, 0, 0.45);
   }
 }
 
@@ -289,9 +289,9 @@ defineExpose({ open: openRecall });
     border-radius: 6px;
     background: linear-gradient(
       90deg,
-      var(--surface-hover, rgba(128, 128, 128, 0.1)) 25%,
-      var(--surface-active, rgba(128, 128, 128, 0.18)) 50%,
-      var(--surface-hover, rgba(128, 128, 128, 0.1)) 75%
+      var(--bg-surface) 25%,
+      var(--bg-surface-2) 50%,
+      var(--bg-surface) 75%
     );
     background-size: 200% 100%;
     animation: shimmer-sweep 1.4s infinite;
@@ -313,7 +313,7 @@ defineExpose({ open: openRecall });
 
   &:hover,
   &:focus-visible {
-    background: var(--surface-hover, rgba(128, 128, 128, 0.08));
+    background: color-mix(in oklab, var(--text) 6%, transparent);
     outline: none;
   }
 }
