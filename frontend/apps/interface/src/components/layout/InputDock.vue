@@ -384,6 +384,7 @@ onBeforeUnmount(() => {
       type="file"
       accept="image/jpeg,image/png,image/webp,image/gif"
       aria-label="Attach image"
+      multiple
       hidden
       @change="onFileInputChange"
     />
@@ -395,6 +396,7 @@ onBeforeUnmount(() => {
       type="file"
       accept=".pdf,.docx,.pptx,.html,.htm,.txt,.md,.csv,.json,.xml"
       aria-label="Attach document"
+      multiple
       hidden
       @change="onFileInputChange"
     />

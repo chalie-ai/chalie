@@ -784,8 +784,8 @@ body.speaker-user #ambientBloom {
   .conversation-spine {
     width: 100%;
     max-width: 100%;
-    padding-left: var(--space-sm);
-    padding-right: var(--space-sm);
+    padding-left: var(--space-md);
+    padding-right: var(--space-md);
   }
 
   // Input box (and its trays, via --dock-width) span 90% of the viewport,
