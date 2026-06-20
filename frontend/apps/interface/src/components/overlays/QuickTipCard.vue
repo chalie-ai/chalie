@@ -132,7 +132,8 @@ const fallbackIconSvg = `<svg viewBox="0 0 24 24" fill="none" stroke="currentCol
     0 2px 8px rgba(0, 0, 0, 0.2),
     0 8px 32px rgba(0, 0, 0, 0.35);
 
-  :global([data-theme='light']) & {
+  // plain `[data-theme] &` — :global() drops the `&` and leaks these onto <html>.
+  [data-theme='light'] & {
     background: color-mix(in oklab, var(--bg-2, #f5f3f0) 95%, transparent);
     box-shadow:
       0 1px 0 rgba(0, 0, 0, 0.04) inset,

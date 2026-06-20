@@ -174,7 +174,8 @@ function deny(req: PermissionRequest): void {
   overflow: hidden;
 
   // Light theme: soften the lift so it reads as depth, not a dark halo.
-  :global([data-theme="light"]) & {
+  // plain `[data-theme] &` — :global() drops the `&` and leaks this onto <html>.
+  [data-theme="light"] & {
     box-shadow:
       0 2px 8px rgba(0, 0, 0, 0.08),
       0 8px 32px rgba(0, 0, 0, 0.12);

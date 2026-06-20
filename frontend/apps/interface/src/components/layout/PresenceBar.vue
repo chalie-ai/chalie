@@ -322,7 +322,12 @@ function handleSettings(): void {
     0 0 0 1px color-mix(in oklab, var(--violet) 20%, transparent);
   transition: transform 320ms cubic-bezier(0.34, 1.56, 0.64, 1);
 
-  :global([data-theme="light"]) & {
+  // NB: plain `[data-theme] &` — NOT `:global([data-theme]) &`. The :global()
+  // form drops the trailing `&` during scoped-CSS compilation, leaking
+  // `transform` onto the bare `[data-theme="light"]` (the <html> element). A
+  // transform on <html> makes it the containing block for every position:fixed
+  // descendant, so the fixed presence-bar scrolls away with the page.
+  [data-theme="light"] & {
     transform: translateX(26px);
   }
 }

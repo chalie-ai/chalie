@@ -303,11 +303,7 @@ body.speaker-user #ambientBloom {
   background: var(--scrim-top);
   backdrop-filter: blur(24px) saturate(120%);
   -webkit-backdrop-filter: blur(24px) saturate(120%);
-  // The frosted scrim matches the page colour in both themes, so the bar needs
-  // a real boundary to read as a distinct bar — a violet@8% line is invisible
-  // on the light paper bg. --border-strong is a theme token (visible hairline
-  // in both themes).
-  border-bottom: 1px solid var(--border-strong);
+  border-bottom: 1px solid color-mix(in oklab, var(--violet) 8%, transparent);
   transition: background 420ms ease, border-color 420ms ease;
 }
 
