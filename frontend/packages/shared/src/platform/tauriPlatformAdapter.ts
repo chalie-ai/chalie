@@ -9,10 +9,11 @@ import { getHost } from '../config/host';
  * notification), external Brain (@tauri-apps/plugin-opener), and on-device STT
  * (custom tauri-plugin-stt, identifier 'stt').
  *
- * The @tauri-apps/* and @tauri-apps/api packages are added in the native-shell
- * phase; until then the lazy `import(...)` specifiers carry `@vite-ignore` so
- * the web build never pulls them in, and `@ts-expect-error` so tsc accepts the
- * not-yet-present module specifiers.
+ * The @tauri-apps/* packages are declared as dependencies of @chalie/shared, so
+ * the interface app's bundler resolves these dynamic imports into lazy chunks.
+ * Those chunks are only fetched inside the Tauri webview — the runtime selector
+ * picks this adapter only when window.__TAURI__ is present, so the web build
+ * never loads them.
  */
 export const tauriPlatformAdapter: PlatformAdapter = {
   // Webview shares the browser primitives — delegate.
@@ -31,8 +32,7 @@ export const tauriPlatformAdapter: PlatformAdapter = {
     webPlatformAdapter.notificationPermission(),
 
   requestNotificationPermission: async (): Promise<NotificationPermission> => {
-    // @ts-expect-error tauri plugin added in the native-shell phase
-    const { isPermissionGranted, requestPermission } = await import(/* @vite-ignore */ '@tauri-apps/plugin-notification');
+    const { isPermissionGranted, requestPermission } = await import('@tauri-apps/plugin-notification');
     if (await isPermissionGranted()) return 'granted';
     const result = await requestPermission();
     return result === 'granted' ? 'granted' : 'denied';
@@ -41,8 +41,7 @@ export const tauriPlatformAdapter: PlatformAdapter = {
   showNotification: (title, options) => {
     void (async () => {
       const { isPermissionGranted, requestPermission, sendNotification } =
-        // @ts-expect-error tauri plugin added in the native-shell phase
-        await import(/* @vite-ignore */ '@tauri-apps/plugin-notification');
+        await import('@tauri-apps/plugin-notification');
       let granted = await isPermissionGranted();
       if (!granted) granted = (await requestPermission()) === 'granted';
       if (granted) sendNotification({ title, body: options?.body });
@@ -51,20 +50,17 @@ export const tauriPlatformAdapter: PlatformAdapter = {
 
   openBrain: () => {
     void (async () => {
-      // @ts-expect-error tauri plugin added in the native-shell phase
-      const { openUrl } = await import(/* @vite-ignore */ '@tauri-apps/plugin-opener');
-      await openUrl(getHost() + '/brain');
+      const { openUrl } = await import('@tauri-apps/plugin-opener');
+      await openUrl(getHost().replace(/\/$/, '') + '/brain');
     })();
   },
 
   startSTT: async (): Promise<void> => {
-    // @ts-expect-error @tauri-apps/api added in the native-shell phase
-    const { invoke } = await import(/* @vite-ignore */ '@tauri-apps/api/core');
+    const { invoke } = await import('@tauri-apps/api/core');
     await invoke('plugin:stt|start');
   },
   stopSTT: async (): Promise<void> => {
-    // @ts-expect-error @tauri-apps/api added in the native-shell phase
-    const { invoke } = await import(/* @vite-ignore */ '@tauri-apps/api/core');
+    const { invoke } = await import('@tauri-apps/api/core');
     await invoke('plugin:stt|stop');
   },
 };

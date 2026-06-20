@@ -24,9 +24,5 @@ export default defineConfig({
   build: {
     outDir: 'dist',
     emptyOutDir: true,
-    rollupOptions: {
-      // Tauri-injected native plugins — never bundled into the web build.
-      external: [/^@tauri-apps\//],
-    },
   },
 });
