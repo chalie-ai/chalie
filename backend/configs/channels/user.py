@@ -69,14 +69,6 @@ class UserConfig(ProcessorConfig):
             return cast("str", cached)
 
         try:
-            from services.mode_gate_service import STEER_THRESHOLD  # noqa: PLC0415
-            _mode_state_raw = getattr(mp, "_mode_state_cached", None)
-            _mode_state = cast("dict[str, object]", _mode_state_raw) if _mode_state_raw is not None else cast("dict[str, object]", {})
-            prefer_long = cast("float", _mode_state.get("converse", 0.0)) >= STEER_THRESHOLD
-        except Exception:
-            prefer_long = False
-
-        try:
             from services.data_graph_service import get_data_graph_service  # noqa: PLC0415
             dgs = get_data_graph_service()
             rows = dgs.fetch(kinds=["system"], order_by="retrieval_weight DESC")
@@ -86,10 +78,7 @@ class UserConfig(ProcessorConfig):
                 if r is not None and r.get("key")
             }
 
-            preferred_key = "user_summary_long" if prefer_long else "user_summary"
-            entry = by_key.get(preferred_key)
-            if (not entry or not entry.get("value")) and prefer_long:
-                entry = by_key.get("user_summary")
+            entry = by_key.get("user_summary")
             if entry and entry.get("value"):
                 result = cast("str", entry["value"])
                 setattr(mp, "_user_definition_cached", result)
@@ -114,16 +103,6 @@ class UserConfig(ProcessorConfig):
         except Exception as exc:
             _log.warning("[UMP] system prompt build failed: %s", exc)
             return ""
-
-        # Mode-gate steering directives.
-        try:
-            mode_gate = getattr(mp, "_mode_gate_cached", None)
-            if mode_gate is not None:
-                additions = mode_gate.get_system_prompt_additions()
-                if additions:
-                    prompt = f"{prompt}\n\n{additions}"
-        except Exception as exc:
-            _log.debug("[UMP] mode-gate additions failed: %s", exc)
 
         return prompt
 

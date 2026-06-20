@@ -60,7 +60,6 @@ _DELETE_ALL_MOMENTS_VEC = "moments_vec"
 # MemoryStore key patterns that belong to the user and must be cleared.
 _DELETE_ALL_STORE_PATTERNS = (
     "working_memory:*",
-    "mode_gate:*",
     "deliberation_score:*",
 )
 

@@ -1,4 +1,4 @@
-# Tests assert: both heads register, shipped assets aren't overwritten, and missing meta causes clean failure (no silent fallback). Skips when shared encoder is absent from disk.
+# Tests assert: the deliberation head registers, shipped assets aren't overwritten, and missing meta causes clean failure (no silent fallback). Skips when shared encoder is absent from disk.
 
 import os
 import shutil
@@ -22,10 +22,6 @@ _DELIB_NPZ = os.path.join(
     _PRETRAINED_DIR, "deliberation_score",
     "deliberation-score_head.npz"
 )
-_MODE_META = os.path.join(
-    _PRETRAINED_DIR, "mode_detector",
-    "mode-detector-classifier_meta.json"
-)
 
 
 def _require_encoder() -> None:
@@ -34,14 +30,14 @@ def _require_encoder() -> None:
 
 
 def _require_shipped_assets() -> None:
-    for path in (_DELIB_META, _DELIB_NPZ, _MODE_META):
+    for path in (_DELIB_META, _DELIB_NPZ):
         if not os.path.exists(path):
             pytest.skip(f"Shipped pre-trained asset missing: {path}")
 
 
 class TestPretrainedAssetLayoutBoot:
 
-    def test_both_heads_register_without_exception(self) -> None:
+    def test_deliberation_head_registers_without_exception(self) -> None:
         _require_encoder()
         _require_shipped_assets()
 
@@ -56,11 +52,6 @@ class TestPretrainedAssetLayoutBoot:
         )
         assert delib_head.task_type == "regression"
         assert delib_head.num_outputs == 1
-
-        mode_head = svc._register_task("mode_detector")
-        assert mode_head is not None, (
-            "mode_detector head failed to register from pre-trained dir"
-        )
 
     def test_pretrained_assets_not_redownloaded_when_present(self) -> None:
         _require_encoder()

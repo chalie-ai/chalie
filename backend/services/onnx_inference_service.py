@@ -46,7 +46,6 @@ LOG_PREFIX = "[ONNX]"
 # - head file:  pre-trained/<task>/<name from meta["head_asset"]>
 MODEL_REGISTRY = [
     ("deliberation_score", "deliberation-score"),
-    ("mode_detector", "mode-detector"),
 ]
 
 _TASK_PREFIXES: Dict[str, str] = dict(MODEL_REGISTRY)
