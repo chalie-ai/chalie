@@ -1,5 +1,5 @@
 import { createRouter, createWebHistory } from 'vue-router';
-import { HttpError, AuthError } from '@chalie/shared';
+import { HttpError, AuthError, getToken } from '@chalie/shared';
 import HomeView from './views/HomeView.vue';
 import { system } from './api/system';
 
@@ -50,6 +50,11 @@ router.beforeEach(async () => {
     return redirect('/on-boarding/');
   }
   if (!has_session) {
+    // Native runtime with no bearer yet → pair by QR (no cookie-login on mobile).
+    // __TAURI__ falsy (web) or a token already present → fall through to /login/.
+    if ((window as unknown as { __TAURI__?: unknown }).__TAURI__ && !getToken()) {
+      return redirect('/pairing/');
+    }
     return redirect(
       '/login/?next=' + encodeURIComponent(window.location.pathname + window.location.search),
     );
