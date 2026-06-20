@@ -18,14 +18,9 @@
         @click="_togglePlayPause"
       >
         <!-- Pause icon -->
-        <svg v-if="isPlaying" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <rect x="6" y="4" width="4" height="16" />
-          <rect x="14" y="4" width="4" height="16" />
-        </svg>
+        <Pause v-if="isPlaying" :size="20" />
         <!-- Play icon -->
-        <svg v-else width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <polygon points="5 3 19 12 5 21 5 3" />
-        </svg>
+        <Play v-else :size="20" />
       </button>
 
       <input
@@ -48,10 +43,7 @@
         aria-label="Close player"
         @click="_close"
       >
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <line x1="18" y1="6" x2="6" y2="18" />
-          <line x1="6" y1="6" x2="18" y2="18" />
-        </svg>
+        <X :size="16" />
       </button>
     </div>
   </dialog>
@@ -75,6 +67,7 @@
  */
 
 import { ref, onMounted, onBeforeUnmount } from 'vue';
+import { Pause, Play, X } from '@lucide/vue';
 import { webPlatformAdapter } from '@chalie/shared';
 import type { WakeLockHandle } from '@chalie/shared';
 import { on } from '../../composables/useEventBus';

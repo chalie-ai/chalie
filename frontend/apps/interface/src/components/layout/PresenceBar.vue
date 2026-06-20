@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { Star, Clock, SlidersHorizontal, Sun, Moon } from '@lucide/vue';
 import { storeToRefs } from 'pinia';
 import { usePresenceStore } from '../../stores/presence';
 import { useTasksStore } from '../../stores/tasks';
@@ -46,9 +47,7 @@ function handleSettings(): void {
         title="Recall"
         @click="handleRecall"
       >
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <path d="M12 2l2.09 6.26L20 10l-5.91 1.74L12 18l-2.09-6.26L4 10l5.91-1.74L12 2z"></path>
-        </svg>
+        <Star :size="18" />
       </button>
       <!-- Task drawer trigger — shown only when there is something to display.
            Port of legacy index.html lines 122-127 (taskDrawerBtn).
@@ -61,10 +60,7 @@ function handleSettings(): void {
         title="Active tasks"
         @click="tasks.open()"
       >
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-          <circle cx="12" cy="12" r="10"></circle>
-          <polyline points="12 6 12 12 16 14"></polyline>
-        </svg>
+        <Clock :size="18" aria-hidden="true" />
         <span class="task-trigger__badge">{{ totalCount }}</span>
       </button>
       <!-- Settings — opens the Brain admin dashboard (app.js:266-267). -->
@@ -74,10 +70,7 @@ function handleSettings(): void {
         aria-label="Settings"
         @click="handleSettings"
       >
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <path d="M9.5 2A2.5 2.5 0 0 1 12 4.5v15a2.5 2.5 0 0 1-4.96-.44 2.5 2.5 0 0 1-2.96-3.08 3 3 0 0 1-.34-5.58 2.5 2.5 0 0 1 1.32-4.24 2.5 2.5 0 0 1 1.98-3A2.5 2.5 0 0 1 9.5 2Z"/>
-          <path d="M14.5 2A2.5 2.5 0 0 0 12 4.5v15a2.5 2.5 0 0 0 4.96-.44 2.5 2.5 0 0 0 2.96-3.08 3 3 0 0 0 .34-5.58 2.5 2.5 0 0 0-1.32-4.24 2.5 2.5 0 0 0-1.98-3A2.5 2.5 0 0 0 14.5 2Z"/>
-        </svg>
+        <SlidersHorizontal :size="18" />
       </button>
       <button
         class="theme-toggle"
@@ -87,14 +80,9 @@ function handleSettings(): void {
       >
         <span class="theme-toggle__track" aria-hidden="true">
           <!-- Sun icon -->
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <circle cx="12" cy="12" r="4"/>
-            <path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/>
-          </svg>
+          <Sun />
           <!-- Moon icon -->
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>
-          </svg>
+          <Moon />
         </span>
         <span class="theme-toggle__thumb" aria-hidden="true"></span>
       </button>

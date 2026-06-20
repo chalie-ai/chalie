@@ -6,7 +6,7 @@
 import { computed } from 'vue';
 import { useRoute } from 'vue-router';
 import { useShellStore } from '../stores/shell';
-import BrainIcon from './BrainIcon.vue';
+import { Menu, PanelLeft, Search } from '@lucide/vue';
 
 const shell = useShellStore();
 const route = useRoute();
@@ -39,7 +39,7 @@ function handleSearchKeydown(e: KeyboardEvent): void {
   <header class="topbar">
     <!-- Mobile hamburger -->
     <button class="icon-btn hamburger" aria-label="Open menu" @click="shell.openMobileSidebar()">
-      <BrainIcon name="Menu" />
+      <Menu :size="18" />
     </button>
 
     <!-- Desktop sidebar collapser -->
@@ -49,7 +49,7 @@ function handleSearchKeydown(e: KeyboardEvent): void {
       title="Toggle sidebar"
       @click="shell.toggleSidebar()"
     >
-      <BrainIcon name="Sidebar" />
+      <PanelLeft :size="18" />
     </button>
 
     <!-- Breadcrumb -->
@@ -72,7 +72,7 @@ function handleSearchKeydown(e: KeyboardEvent): void {
         @click="shell.openCommandPalette()"
         @keydown="handleSearchKeydown"
       >
-        <BrainIcon name="Search" :size="14" />
+        <Search :size="14" />
         <span class="topbar-search-text">Search…</span>
         <kbd>⌘K</kbd>
       </div>

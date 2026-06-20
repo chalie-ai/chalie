@@ -20,6 +20,7 @@
  * with a generic "Working…" label alongside its sub_id.
  */
 import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue';
+import { Square, X } from '@lucide/vue';
 import { storeToRefs } from 'pinia';
 import { useTasksStore } from '../../stores/tasks';
 import { scheduler } from '../../api/scheduler';
@@ -175,10 +176,7 @@ onBeforeUnmount(() => {
         aria-label="Close tasks panel"
         @click="tasks.close()"
       >
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
-          <line x1="18" y1="6" x2="6" y2="18"></line>
-          <line x1="6" y1="6" x2="18" y2="18"></line>
-        </svg>
+        <X :size="16" aria-hidden="true" />
       </button>
     </div>
 
@@ -217,9 +215,7 @@ onBeforeUnmount(() => {
             :aria-label="`Stop subagent ${sa.sub_id}`"
             @click="stopSubagent(sa.sub_id)"
           >
-            <svg width="12" height="12" viewBox="0 0 12 12" fill="currentColor" aria-hidden="true">
-              <rect x="1" y="1" width="10" height="10" rx="2"/>
-            </svg>
+            <Square :size="12" fill="currentColor" aria-hidden="true" />
           </button>
         </div>
       </template>

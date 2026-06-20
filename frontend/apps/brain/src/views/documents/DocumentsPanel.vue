@@ -7,7 +7,7 @@ import { useToast } from '../../composables/useToast';
 import { useConfirm } from '../../composables/useConfirm';
 import { HttpError } from '@chalie/shared';
 import { useBrainResource } from '../../composables/useBrainResource';
-import BrainIcon from '../../ui/BrainIcon.vue';
+import { Upload, ChevronRight, Eye, FileText, Trash2 } from '@lucide/vue';
 
 const props = defineProps<{
   statusFilter: 'active' | 'processing' | 'uploads' | 'deleted';
@@ -178,7 +178,7 @@ async function onUpload(event: Event): Promise<void> {
         @keydown.enter="onSearch"
       >
       <button class="btn btn-primary" @click="fileInput?.click()">
-        <BrainIcon name="Upload" :size="14" /> Upload
+        <Upload :size="14" /> Upload
       </button>
     </div>
   </div>
@@ -196,7 +196,7 @@ async function onUpload(event: Event): Promise<void> {
     <div class="provider-form-page" style="max-width:none">
       <div class="form-page-header">
         <button class="btn btn-secondary btn-sm back-btn" @click="viewMode = 'list'">
-          <BrainIcon name="Chevron" :size="14" /> Back
+          <ChevronRight :size="14" /> Back
         </button>
         <h3>{{ (detailDoc?.original_name as string) || 'Document' }}</h3>
       </div>
@@ -230,7 +230,7 @@ async function onUpload(event: Event): Promise<void> {
       <h4 class="section-head">Watched Folders</h4>
       <div class="watched-folders-list">
         <div v-for="f in folders" :key="f.id" class="watched-folder-item">
-          <span class="wf-icon"><BrainIcon name="Eye" :size="14" /></span>
+          <span class="wf-icon"><Eye :size="14" /></span>
           <span class="wf-label">{{ f.label || f.folder_path || '' }}</span>
           <span class="wf-path">{{ f.folder_path || '' }}</span>
           <span class="wf-meta">{{ f.last_scan_files || 0 }} files · {{ formatDate(f.last_scan_at) }}</span>
@@ -248,7 +248,7 @@ async function onUpload(event: Event): Promise<void> {
     <template v-else-if="filtered.length === 0">
       <div class="empty-state">
         <div class="empty-icon">
-          <BrainIcon name="Document" :size="40" />
+          <FileText :size="40" />
         </div>
         <h3>No documents</h3>
         <p>Upload or watch a folder to get started.</p>
@@ -275,7 +275,7 @@ async function onUpload(event: Event): Promise<void> {
       <!-- Drill-down header -->
       <div v-if="drillGroup" class="form-page-header">
         <button class="btn btn-secondary btn-sm back-btn" @click="drillGroup = null">
-          <BrainIcon name="Chevron" :size="14" /> Back
+          <ChevronRight :size="14" /> Back
         </button>
         <h3>{{ drillGroup }}</h3>
         <span class="doc-meta-item">{{ drillDocs.length }} document{{ drillDocs.length === 1 ? '' : 's' }}</span>
@@ -302,7 +302,7 @@ async function onUpload(event: Event): Promise<void> {
             <td class="row-actions">
               <button class="btn btn-sm btn-secondary" @click="viewDoc(d)">View</button>
               <button class="btn btn-sm btn-danger" @click="deleteDoc(d)">
-                <BrainIcon name="Trash" :size="12" />
+                <Trash2 :size="12" />
               </button>
             </td>
           </tr>

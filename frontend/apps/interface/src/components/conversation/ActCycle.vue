@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, watch, onUnmounted } from 'vue';
+import { Undo2 } from '@lucide/vue';
 import type { ActForm, ToolPill } from '../../stores/conversation';
 import { useSessionStore } from '../../stores/session';
 
@@ -71,9 +72,7 @@ function pillSeconds(pill: ToolPill): string {
         type="button"
         @click="onStop"
       >
-        <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
-          <path d="M4.5 2L1 5.5L4.5 9V6.5H10a3.5 3.5 0 0 1 0 7H7v2h3a5.5 5.5 0 0 0 0-11H4.5V2Z" />
-        </svg>
+        <Undo2 :size="14" />
       </button>
     </div>
 

@@ -6,6 +6,7 @@
 -->
 <script setup lang="ts">
 import { ref, computed } from 'vue';
+import { ChevronRight } from '@lucide/vue';
 import type { ActForm } from '../../stores/conversation';
 import ActCycle from './ActCycle.vue';
 
@@ -31,9 +32,7 @@ const preview = computed(() => {
       :aria-label="expanded ? 'Collapse steps' : 'Expand steps'"
       @click="expanded = !expanded"
     >
-      <svg class="act-group__caret" width="12" height="12" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-        <path d="M6 4l4 4-4 4" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
-      </svg>
+      <ChevronRight class="act-group__caret" :size="12" aria-hidden="true" />
     </button>
 
     <div class="act-group__content">

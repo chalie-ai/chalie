@@ -10,7 +10,7 @@ import { snapshot } from '../api/snapshot';
 import { useToast } from '../composables/useToast';
 import { useConfirm } from '../composables/useConfirm';
 import { apiErrorMessage } from '../api/http';
-import BrainIcon from '../ui/BrainIcon.vue';
+import { Brain, Download, Upload } from '@lucide/vue';
 
 const { show: showToast } = useToast();
 const { confirm } = useConfirm();
@@ -80,13 +80,13 @@ async function confirmImport(): Promise<void> {
 
 <template>
   <div class="panel-header">
-    <h2><BrainIcon name="Brain" :size="20" /> Import / Export</h2>
+    <h2><Brain :size="20" /> Import / Export</h2>
   </div>
 
   <div class="brain-overview">
     <!-- Export a full snapshot -->
     <div class="export-card">
-      <div class="export-card-icon"><BrainIcon name="Download" :size="24" /></div>
+      <div class="export-card-icon"><Download :size="24" /></div>
       <div class="export-card-label">Export a full snapshot</div>
       <p class="form-hint">
         Downloads a single .zip that is a complete clone of this instance — databases, documents,
@@ -101,13 +101,13 @@ async function confirmImport(): Promise<void> {
         >
       </label>
       <button class="btn btn-primary" @click="doExport">
-        <BrainIcon name="Download" :size="14" /> Export Snapshot
+        <Download :size="14" /> Export Snapshot
       </button>
     </div>
 
     <!-- Restore from a snapshot -->
     <div class="export-card">
-      <div class="export-card-icon"><BrainIcon name="Upload" :size="24" /></div>
+      <div class="export-card-icon"><Upload :size="24" /></div>
       <div class="export-card-label">Restore from a snapshot</div>
       <p class="form-hint">
         Importing a snapshot <strong>completely wipes and overrides ALL existing data</strong> in
@@ -125,7 +125,7 @@ async function confirmImport(): Promise<void> {
         >
       </label>
       <button class="btn btn-danger" @click="confirmImport">
-        <BrainIcon name="Upload" :size="14" /> Import &amp; Restore
+        <Upload :size="14" /> Import &amp; Restore
       </button>
     </div>
   </div>

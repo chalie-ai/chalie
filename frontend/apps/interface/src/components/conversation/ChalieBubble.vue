@@ -4,6 +4,7 @@ import type { ChalieForm } from '../../stores/conversation';
 import { chalieFormPlaintext, useConversationStore } from '../../stores/conversation';
 import { renderMarkup } from '../../composables/useMarkup';
 import { emit } from '../../composables/useEventBus';
+import { Star, Volume2 } from '@lucide/vue';
 import SegmentRenderer from './SegmentRenderer.vue';
 
 const conversationStore = useConversationStore();
@@ -92,11 +93,7 @@ function onSpeak(): void {
           :disabled="pinned"
           @click="onRemember"
         >
-          <svg
-            width="14" height="14" viewBox="0 0 24 24" fill="none"
-            stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M12 2l2.09 6.26L20 10l-5.91 1.74L12 18l-2.09-6.26L4 10l5.91-1.74L12 2z" />
-          </svg>
+          <Star :size="14" />
         </button>
 
         <!-- FIX 5: only render when there is speakable text -->
@@ -107,13 +104,7 @@ function onSpeak(): void {
           type="button"
           @click="onSpeak"
         >
-          <svg
-            width="14" height="14" viewBox="0 0 24 24" fill="none"
-            stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" />
-            <path d="M15.54 8.46a5 5 0 0 1 0 7.07" />
-            <path d="M19.07 4.93a10 10 0 0 1 0 14.14" />
-          </svg>
+          <Volume2 :size="14" />
         </button>
       </div>
     </div>

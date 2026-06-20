@@ -6,7 +6,7 @@ import { apiErrorMessage } from '../api/http';
 import { HttpError } from '@chalie/shared';
 import { useToast } from '../composables/useToast';
 import { useBrainResource } from '../composables/useBrainResource';
-import BrainIcon from '../ui/BrainIcon.vue';
+import { ChevronRight, Settings } from '@lucide/vue';
 
 const { show: showToast } = useToast();
 
@@ -110,7 +110,7 @@ async function disconnect(c: Capability): Promise<void> {
     <div class="provider-form-page">
       <div class="form-page-header">
         <button class="btn btn-secondary btn-sm back-btn" @click="viewMode = 'list'">
-          <BrainIcon name="Chevron" :size="14" /> Back
+          <ChevronRight :size="14" /> Back
         </button>
         <h3>{{ formCap.name }} {{ formConnected ? 'Settings' : 'Setup' }}</h3>
       </div>
@@ -178,7 +178,7 @@ async function disconnect(c: Capability): Promise<void> {
 
   <div v-else-if="caps.length === 0" class="empty-state">
     <div class="empty-icon">
-      <BrainIcon name="Capability" :size="40" />
+      <Settings :size="40" />
     </div>
     <h3>No capabilities</h3>
     <p>No services are configured yet.</p>

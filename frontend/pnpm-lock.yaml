@@ -50,6 +50,9 @@ importers:
       '@fontsource/inter':
         specifier: ^5.2.8
         version: 5.2.8
+      '@lucide/vue':
+        specifier: ^1.21.0
+        version: 1.21.0(vue@3.5.38(typescript@5.9.3))
       pinia:
         specifier: ^2.2.0
         version: 2.3.1(typescript@5.9.3)(vue@3.5.38(typescript@5.9.3))
@@ -84,6 +87,9 @@ importers:
       '@fontsource/inter':
         specifier: ^5.2.8
         version: 5.2.8
+      '@lucide/vue':
+        specifier: ^1.21.0
+        version: 1.21.0(vue@3.5.38(typescript@5.9.3))
       pinia:
         specifier: ^2.2.0
         version: 2.3.1(typescript@5.9.3)(vue@3.5.38(typescript@5.9.3))
@@ -336,6 +342,11 @@ packages:
 
   '@jridgewell/sourcemap-codec@1.5.5':
     resolution: {integrity: sha512-cYQ9310grqxueWbl+WuIUIaiUaDcj7WOq5fVhEljNVgRfOUhY9fy2zTvfoqWsnebh8Sl70VScFbICvJnLKB0Og==}
+
+  '@lucide/vue@1.21.0':
+    resolution: {integrity: sha512-eoFn3tppjKAc12ZqdnRSMFdtwQ1ZMRQFb6SV1Eub6Y8kU28ccnqKeSFdnur9hMg8gIbosU2Y3WFJr/J/xS/IlQ==}
+    peerDependencies:
+      vue: '>=3.0.1'
 
   '@nodelib/fs.scandir@2.1.5':
     resolution: {integrity: sha512-vq24Bq3ym5HEQm2NKCr3yXDwjc7vTsEThRDnkp2DK9p1uqLR+DHurm/NOTo0KG7HYHU7eppKZj3MyqYuMBf62g==}
@@ -1505,6 +1516,10 @@ snapshots:
   '@humanwhocodes/retry@0.4.3': {}
 
   '@jridgewell/sourcemap-codec@1.5.5': {}
+
+  '@lucide/vue@1.21.0(vue@3.5.38(typescript@5.9.3))':
+    dependencies:
+      vue: 3.5.38(typescript@5.9.3)
 
   '@nodelib/fs.scandir@2.1.5':
     dependencies:

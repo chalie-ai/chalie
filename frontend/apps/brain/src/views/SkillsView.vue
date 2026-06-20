@@ -7,7 +7,7 @@ import { apiErrorMessage } from '../api/http';
 import { useToast } from '../composables/useToast';
 import { useConfirm } from '../composables/useConfirm';
 import { useBrainResource } from '../composables/useBrainResource';
-import BrainIcon from '../ui/BrainIcon.vue';
+import { BookOpen, Plus, ChevronRight, ChevronDown, SquarePen, Trash2, Copy } from '@lucide/vue';
 
 const { show: showToast } = useToast();
 const { confirm } = useConfirm();
@@ -158,10 +158,10 @@ async function submitCreate(): Promise<void> {
 <template>
   <!-- Header -->
   <div class="panel-header">
-    <h2><BrainIcon name="Skill" :size="20" /> Skills</h2>
+    <h2><BookOpen :size="20" /> Skills</h2>
     <div class="panel-header-actions">
       <button class="btn btn-primary btn-sm" @click="openCreate">
-        <BrainIcon name="Plus" :size="14" /> New Skill
+        <Plus :size="14" /> New Skill
       </button>
     </div>
   </div>
@@ -173,7 +173,7 @@ async function submitCreate(): Promise<void> {
     <div class="provider-form-page">
       <div class="form-page-header">
         <button class="btn btn-secondary btn-sm" @click="viewMode = 'list'">
-          <BrainIcon name="Chevron" :size="14" /> Back
+          <ChevronRight :size="14" /> Back
         </button>
         <h3>New Skill</h3>
       </div>
@@ -232,7 +232,7 @@ async function submitCreate(): Promise<void> {
       style="margin-bottom:24px;"
     >
       <div class="empty-icon">
-        <BrainIcon name="Skill" :size="40" />
+        <BookOpen :size="40" />
       </div>
       <h3>No custom skills yet</h3>
       <p>Click "New Skill" to create a step-by-step playbook for a recurring task.</p>
@@ -290,7 +290,7 @@ async function submitCreate(): Promise<void> {
           <div class="skill-card-header">
             <div class="skill-card-title" style="cursor:pointer;" @click="toggleExpand(skill)">
               <span class="skill-expand-icon">
-                <BrainIcon :name="expandedId === skill.id ? 'ChevronDown' : 'Chevron'" :size="12" />
+                <component :is="expandedId === skill.id ? ChevronDown : ChevronRight" :size="12" />
               </span>
               <strong>{{ skill.title }}</strong>
               <span class="badge badge-violet">v{{ skill.version }}</span>
@@ -313,10 +313,10 @@ async function submitCreate(): Promise<void> {
                 </label>
               </label>
               <button class="btn btn-secondary btn-sm" @click="startEdit(skill)">
-                <BrainIcon name="Edit" :size="13" />
+                <SquarePen :size="13" />
               </button>
               <button class="btn btn-danger btn-sm" @click="deleteSkill(skill)">
-                <BrainIcon name="Trash" :size="13" />
+                <Trash2 :size="13" />
               </button>
             </div>
           </div>
@@ -352,7 +352,7 @@ async function submitCreate(): Promise<void> {
         <div class="skill-card-header">
           <div class="skill-card-title" style="cursor:pointer;" @click="toggleExpand(skill)">
             <span class="skill-expand-icon">
-              <BrainIcon :name="expandedId === skill.id ? 'ChevronDown' : 'Chevron'" :size="12" />
+              <component :is="expandedId === skill.id ? ChevronDown : ChevronRight" :size="12" />
             </span>
             <strong>{{ skill.title }}</strong>
             <span class="badge badge-muted">v{{ skill.version }}</span>
@@ -379,7 +379,7 @@ async function submitCreate(): Promise<void> {
               title="Copy &amp; Customise"
               @click="copySkill(skill)"
             >
-              <BrainIcon name="Copy" :size="13" /> Customise
+              <Copy :size="13" /> Customise
             </button>
           </div>
         </div>

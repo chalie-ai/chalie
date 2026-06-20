@@ -26,6 +26,7 @@ import { useAmbientSensor } from '../../composables/useAmbientSensor';
 import { system } from '../../api/system';
 import type { AttachmentPreview as ConvoAttachmentPreview } from '../../stores/conversation';
 import ImageAttachStrip from '../upload/ImageAttachStrip.vue';
+import { FileText, Image, Plus, Mic, Send } from '@lucide/vue';
 
 // ── Stores / composables ────────────────────────────────────────────────────
 
@@ -265,10 +266,7 @@ onBeforeUnmount(() => {
     >
       <div class="attach-menu__inner">
         <button class="attach-menu__item" type="button" @click="chooseDocument">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
-            <polyline points="14 2 14 8 20 8"></polyline>
-          </svg>
+          <FileText :size="16" />
           <span>Attach Document</span>
         </button>
         <button
@@ -278,11 +276,7 @@ onBeforeUnmount(() => {
           type="button"
           @click="chooseImage"
         >
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
-            <circle cx="8.5" cy="8.5" r="1.5"></circle>
-            <polyline points="21 15 16 10 5 21"></polyline>
-          </svg>
+          <Image :size="16" />
           <span>Take Photo / Pick Image</span>
         </button>
       </div>
@@ -299,10 +293,7 @@ onBeforeUnmount(() => {
           aria-label="Attach"
           @click.stop="toggleAttachMenu"
         >
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
-            <line x1="12" y1="5" x2="12" y2="19"></line>
-            <line x1="5" y1="12" x2="19" y2="12"></line>
-          </svg>
+          <Plus :size="20" />
         </button>
 
         <!-- Mic button: record voice → transcript posted as a 'voice' turn -->
@@ -314,12 +305,7 @@ onBeforeUnmount(() => {
           :data-state="recorderState"
           @click="handleMicClick"
         >
-          <svg class="voice-rec-btn__mic" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"></path>
-            <path d="M19 10v2a7 7 0 0 1-14 0v-2"></path>
-            <line x1="12" y1="19" x2="12" y2="23"></line>
-            <line x1="8" y1="23" x2="16" y2="23"></line>
-          </svg>
+          <Mic class="voice-rec-btn__mic" :size="18" />
           <span class="voice-rec-btn__dot" aria-hidden="true"></span>
           <span class="voice-rec-btn__spinner" aria-hidden="true"></span>
         </button>
@@ -342,10 +328,7 @@ onBeforeUnmount(() => {
           :disabled="!canSend"
           @click="handleSend()"
         >
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <line x1="22" y1="2" x2="11" y2="13"></line>
-            <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
-          </svg>
+          <Send :size="20" />
         </button>
       </div>
     </div>

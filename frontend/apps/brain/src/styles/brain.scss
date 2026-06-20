@@ -18,6 +18,13 @@
   box-sizing: border-box;
 }
 
+// Lucide icons render with stroke-width 2 by default; the brain app's house
+// weight is 1.75. One global override keeps every icon on-brand without
+// repeating :stroke-width on each call site.
+.lucide {
+  stroke-width: 1.75;
+}
+
 html,
 body {
   margin: 0;

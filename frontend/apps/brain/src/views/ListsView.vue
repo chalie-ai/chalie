@@ -6,7 +6,7 @@ import { useToast } from '../composables/useToast';
 import { useConfirm } from '../composables/useConfirm';
 import { useBrainResource } from '../composables/useBrainResource';
 import BrainModal from '../ui/BrainModal.vue';
-import BrainIcon from '../ui/BrainIcon.vue';
+import { Plus, List as ListIcon, ChevronDown, ChevronRight, X } from '@lucide/vue';
 import { HttpError } from '@chalie/shared';
 
 const { show: showToast } = useToast();
@@ -145,7 +145,7 @@ async function deleteList(list: List): Promise<void> {
   <div class="panel-header">
     <h2>Lists</h2>
     <button class="btn btn-primary" @click="showNew = true; newListName = ''">
-      <BrainIcon name="Plus" :size="14" /> New List
+      <Plus :size="14" /> New List
     </button>
   </div>
 
@@ -155,7 +155,7 @@ async function deleteList(list: List): Promise<void> {
   <!-- Empty state (legacy lists.js:43, empty-state inline pattern) -->
   <div v-else-if="listsData.length === 0" class="empty-state">
     <div class="empty-icon">
-      <BrainIcon name="List" :size="40" />
+      <ListIcon :size="40" />
     </div>
     <h3>No lists</h3>
     <p>Create your first list to get started.</p>
@@ -167,7 +167,7 @@ async function deleteList(list: List): Promise<void> {
       <div class="list-card-header" @click="toggle(list)">
         <div class="list-card-title">
           <span class="list-chev">
-            <BrainIcon :name="expanded[String(list.id)] ? 'ChevronDown' : 'Chevron'" :size="14" />
+            <component :is="expanded[String(list.id)] ? ChevronDown : ChevronRight" :size="14" />
           </span>
           <span>{{ list.name }}</span>
           <span class="list-count">{{ c.done }}/{{ c.total }}</span>
@@ -213,7 +213,7 @@ async function deleteList(list: List): Promise<void> {
     <div class="modal-header">
       <h3>New List</h3>
       <button class="btn-close" @click="showNew = false">
-        <BrainIcon name="Close" :size="16" />
+        <X :size="16" />
       </button>
     </div>
     <form @submit.prevent="createList">
@@ -240,7 +240,7 @@ async function deleteList(list: List): Promise<void> {
     <div class="modal-header">
       <h3>Rename List</h3>
       <button class="btn-close" @click="showRename = false">
-        <BrainIcon name="Close" :size="16" />
+        <X :size="16" />
       </button>
     </div>
     <form @submit.prevent="renameList">

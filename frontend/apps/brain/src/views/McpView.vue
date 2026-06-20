@@ -6,7 +6,7 @@ import { apiErrorMessage } from '../api/http';
 import { HttpError } from '@chalie/shared';
 import { useToast } from '../composables/useToast';
 import { useConfirm } from '../composables/useConfirm';
-import BrainIcon from '../ui/BrainIcon.vue';
+import { Copy } from '@lucide/vue';
 
 const { show: showToast } = useToast();
 const { confirm } = useConfirm();
@@ -278,7 +278,7 @@ onMounted(async () => {
             readonly
           >
           <button class="input-suffix-btn" title="Copy" @click="copyToken">
-            <BrainIcon name="Copy" :size="14" />
+            <Copy :size="14" />
           </button>
         </div>
         <div style="margin-top:10px">

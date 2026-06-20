@@ -6,10 +6,24 @@
 -->
 <script setup lang="ts">
 import { computed } from 'vue';
+import type { FunctionalComponent } from 'vue';
 import { useRouter, useRoute } from 'vue-router';
+import {
+  LayoutGrid,
+  Brain,
+  Calendar,
+  List,
+  FileText,
+  Settings,
+  ShieldCheck,
+  BookOpen,
+  Server,
+  ChevronRight,
+  Sun,
+  Moon,
+} from '@lucide/vue';
 import { useTheme } from '@chalie/shared';
 import { useShellStore } from '../stores/shell';
-import BrainIcon from './BrainIcon.vue';
 
 const shell = useShellStore();
 const route = useRoute();
@@ -29,16 +43,16 @@ interface SubItem {
 interface NavItem {
   id: string;
   label: string;
-  icon: string;
+  icon: FunctionalComponent;
   group: 'cognition' | 'system';
   sub?: SubItem[];
 }
 
 // Port of BrainSidebar.NAV (sidebar.js:3-42).
 const NAV: NavItem[] = [
-  { id: 'providers', label: 'Providers', icon: 'Providers', group: 'cognition' },
+  { id: 'providers', label: 'Providers', icon: LayoutGrid, group: 'cognition' },
   {
-    id: 'cognition', label: 'Cognition', icon: 'Brain', group: 'cognition',
+    id: 'cognition', label: 'Cognition', icon: Brain, group: 'cognition',
     sub: [
       { id: 'memory', label: 'Memory' },
       { id: 'tools', label: 'Tools' },
@@ -50,7 +64,7 @@ const NAV: NavItem[] = [
     ],
   },
   {
-    id: 'scheduler', label: 'Scheduler', icon: 'Calendar', group: 'cognition',
+    id: 'scheduler', label: 'Scheduler', icon: Calendar, group: 'cognition',
     sub: [
       { id: 'all', label: 'All' },
       { id: 'pending', label: 'Pending' },
@@ -59,9 +73,9 @@ const NAV: NavItem[] = [
       { id: 'cancelled', label: 'Cancelled' },
     ],
   },
-  { id: 'lists', label: 'Lists', icon: 'List', group: 'cognition' },
+  { id: 'lists', label: 'Lists', icon: List, group: 'cognition' },
   {
-    id: 'documents', label: 'Documents', icon: 'Document', group: 'cognition',
+    id: 'documents', label: 'Documents', icon: FileText, group: 'cognition',
     sub: [
       { id: 'active', label: 'Active' },
       { id: 'processing', label: 'Processing' },
@@ -69,18 +83,18 @@ const NAV: NavItem[] = [
       { id: 'deleted', label: 'Deleted' },
     ],
   },
-  { id: 'capabilities', label: 'Capabilities', icon: 'Capability', group: 'system' },
+  { id: 'capabilities', label: 'Capabilities', icon: Settings, group: 'system' },
   {
-    id: 'policies', label: 'Policies', icon: 'Policy', group: 'system',
+    id: 'policies', label: 'Policies', icon: ShieldCheck, group: 'system',
     sub: [
       { id: 'chat', label: 'Chat' },
       { id: 'background', label: 'Background' },
       { id: 'external', label: 'External agent' },
     ],
   },
-  { id: 'skills', label: 'Skills', icon: 'Skill', group: 'system' },
-  { id: 'mcp', label: 'MCP', icon: 'Server', group: 'system' },
-  { id: 'import-export', label: 'Import / Export', icon: 'Brain', group: 'system' },
+  { id: 'skills', label: 'Skills', icon: BookOpen, group: 'system' },
+  { id: 'mcp', label: 'MCP', icon: Server, group: 'system' },
+  { id: 'import-export', label: 'Import / Export', icon: Brain, group: 'system' },
 ];
 
 const cognitionItems = computed(() => NAV.filter((n) => n.group === 'cognition'));
@@ -130,7 +144,7 @@ function isExpanded(item: NavItem): boolean {
     <nav class="sidebar-scroll">
       <!-- Providers-only lock banner -->
       <div v-if="shell.providersOnly && !shell.sidebarCollapsed" class="sidebar-lock-banner">
-        <span class="sidebar-lock-icon"><BrainIcon name="Providers" :size="16" /></span>
+        <span class="sidebar-lock-icon"><LayoutGrid :size="16" /></span>
         <span>Add a provider to unlock the full dashboard.</span>
       </div>
 
@@ -145,9 +159,9 @@ function isExpanded(item: NavItem): boolean {
               :data-expanded="isExpanded(item)"
               @click="navigate(item.id, item.sub ? item.sub[0].id : null)"
             >
-              <span class="nav-icon"><BrainIcon :name="item.icon" /></span>
+              <span class="nav-icon"><component :is="item.icon" :size="18" /></span>
               <span class="nav-label">{{ item.label }}</span>
-              <span v-if="item.sub" class="nav-chev"><BrainIcon name="Chevron" :size="14" /></span>
+              <span v-if="item.sub" class="nav-chev"><ChevronRight :size="14" /></span>
             </button>
             <div v-if="item.sub" class="nav-sublist" :data-open="isExpanded(item)">
               <div>
@@ -177,9 +191,9 @@ function isExpanded(item: NavItem): boolean {
               :data-expanded="isExpanded(item)"
               @click="navigate(item.id, item.sub ? item.sub[0].id : null)"
             >
-              <span class="nav-icon"><BrainIcon :name="item.icon" /></span>
+              <span class="nav-icon"><component :is="item.icon" :size="18" /></span>
               <span class="nav-label">{{ item.label }}</span>
-              <span v-if="item.sub" class="nav-chev"><BrainIcon name="Chevron" :size="14" /></span>
+              <span v-if="item.sub" class="nav-chev"><ChevronRight :size="14" /></span>
             </button>
           </div>
         </template>
@@ -194,7 +208,7 @@ function isExpanded(item: NavItem): boolean {
         aria-label="Toggle theme"
         @click="toggleTheme"
       >
-        <BrainIcon :name="theme === 'dark' ? 'Sun' : 'Moon'" />
+        <component :is="theme === 'dark' ? Sun : Moon" :size="18" />
       </button>
     </div>
   </aside>

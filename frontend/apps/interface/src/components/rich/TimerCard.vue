@@ -13,6 +13,7 @@
  * resume / stop state machine — is reproduced exactly.
  */
 import { ref, computed, onMounted, onBeforeUnmount } from 'vue';
+import { Pause, Play, Square } from '@lucide/vue';
 import { webPlatformAdapter } from '@chalie/shared';
 
 // ── Payload contract ───────────────────────────────────────────────────────
@@ -415,24 +416,17 @@ onBeforeUnmount((): void => {
         @click="state === 'paused' ? onResume() : onPause()"
       >
         <!-- Pause icon -->
-        <svg
+        <Pause
           v-if="state !== 'paused'"
-          viewBox="0 0 24 24"
           fill="currentColor"
           aria-hidden="true"
-        >
-          <rect x="6" y="5" width="4" height="14" />
-          <rect x="14" y="5" width="4" height="14" />
-        </svg>
+        />
         <!-- Play / Resume icon -->
-        <svg
+        <Play
           v-else
-          viewBox="0 0 24 24"
           fill="currentColor"
           aria-hidden="true"
-        >
-          <polygon points="6,4 20,12 6,20" />
-        </svg>
+        />
       </button>
 
       <!-- Stop button -->
@@ -444,9 +438,7 @@ onBeforeUnmount((): void => {
         :disabled="isStopDisabled"
         @click="onStop"
       >
-        <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-          <rect x="6" y="6" width="12" height="12" rx="1" />
-        </svg>
+        <Square fill="currentColor" aria-hidden="true" />
       </button>
     </div>
   </div>

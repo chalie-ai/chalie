@@ -13,6 +13,7 @@
  *   Mute                 → notifications.muteTip()
  */
 import { computed, onMounted, onBeforeUnmount } from 'vue';
+import { Lightbulb, X } from '@lucide/vue';
 import { useNotificationsStore } from '../../stores/notifications';
 
 const notifications = useNotificationsStore();
@@ -35,14 +36,6 @@ onMounted(() => {
 onBeforeUnmount(() => {
   document.removeEventListener('keydown', onKeydown);
 });
-
-// ── Fallback icon SVG (port of quick_tip_card.js _fallbackIcon(), lines 162-168) ──
-
-const fallbackIconSvg = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
-  stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-  <path d="M9 18h6"/><path d="M10 22h4"/>
-  <path d="M12 2a7 7 0 0 0-4 12.7V17h8v-2.3A7 7 0 0 0 12 2z"/>
-</svg>`;
 </script>
 
 <template>
@@ -65,23 +58,16 @@ const fallbackIconSvg = `<svg viewBox="0 0 24 24" fill="none" stroke="currentCol
         aria-label="Dismiss tip"
         @click="notifications.dismissTip()"
       >
-        <svg
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          stroke-width="2.4"
-          stroke-linecap="round"
-          aria-hidden="true"
-        >
-          <line x1="18" y1="6" x2="6" y2="18" />
-          <line x1="6" y1="6" x2="18" y2="18" />
-        </svg>
+        <X :size="12" :stroke-width="2.4" aria-hidden="true" />
       </button>
 
       <!-- Header: icon + label (port of .tip__head, lines 63-67) -->
       <div class="tip__head">
         <!-- eslint-disable-next-line vue/no-v-html -->
-        <div class="tip__icon" v-html="tip?.icon_svg ?? fallbackIconSvg" />
+        <div v-if="tip?.icon_svg" class="tip__icon" v-html="tip.icon_svg" />
+        <div v-else class="tip__icon">
+          <Lightbulb aria-hidden="true" />
+        </div>
         <div class="tip__label">Quick tip</div>
       </div>
 

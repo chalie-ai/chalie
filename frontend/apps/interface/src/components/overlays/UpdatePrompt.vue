@@ -20,6 +20,7 @@
  *   other    — Apply button offered
  */
 import { ref, computed, watch, onBeforeUnmount } from 'vue';
+import { CloudDownload, X } from '@lucide/vue';
 import { useNotificationsStore } from '../../stores/notifications';
 
 const notifications = useNotificationsStore();
@@ -99,11 +100,7 @@ watch(visible, (v) => {
       <div v-if="visible" class="update-banner">
         <!-- Icon -->
         <span class="update-banner__icon" aria-hidden="true">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <polyline points="16 16 12 12 8 16" />
-            <line x1="12" y1="12" x2="12" y2="21" />
-            <path d="M20.39 18.39A5 5 0 0 0 18 9h-1.26A8 8 0 1 0 3 16.3" />
-          </svg>
+          <CloudDownload :size="14" />
         </span>
 
         <!-- Version text — port of #updateBannerVersion text content -->
@@ -122,10 +119,7 @@ watch(visible, (v) => {
           aria-label="Dismiss update notification"
           @click="dismissBanner"
         >
-          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true">
-            <line x1="18" y1="6" x2="6" y2="18" />
-            <line x1="6" y1="6" x2="18" y2="18" />
-          </svg>
+          <X :size="12" :stroke-width="2.4" aria-hidden="true" />
         </button>
       </div>
     </Transition>
@@ -150,10 +144,7 @@ watch(visible, (v) => {
             aria-label="Close"
             @click="closeDialog"
           >
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
-              <line x1="18" y1="6" x2="6" y2="18" />
-              <line x1="6" y1="6" x2="18" y2="18" />
-            </svg>
+            <X :size="16" aria-hidden="true" />
           </button>
 
           <!-- Title -->

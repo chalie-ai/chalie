@@ -7,7 +7,7 @@ import { apiErrorMessage } from '../../api/http';
 import { useToast } from '../../composables/useToast';
 import { useConfirm } from '../../composables/useConfirm';
 import { useBrainResource } from '../../composables/useBrainResource';
-import BrainIcon from '../../ui/BrainIcon.vue';
+import { Plus, ChevronRight, Calendar } from '@lucide/vue';
 
 const props = defineProps<{ statusFilter: 'all' | 'pending' | 'fired' | 'failed' | 'cancelled' }>();
 
@@ -98,7 +98,7 @@ async function cancelSchedule(s: ScheduleItem): Promise<void> {
   <div class="panel-header">
     <h2>Scheduler</h2>
     <button class="btn btn-primary" @click="openForm(null)">
-      <BrainIcon name="Plus" :size="14" /> New Schedule
+      <Plus :size="14" /> New Schedule
     </button>
   </div>
 
@@ -108,7 +108,7 @@ async function cancelSchedule(s: ScheduleItem): Promise<void> {
     <div class="provider-form-page">
       <div class="form-page-header">
         <button class="btn btn-secondary btn-sm back-btn" @click="formMode = 'list'">
-          <BrainIcon name="Chevron" :size="14" /> Back
+          <ChevronRight :size="14" /> Back
         </button>
         <h3>{{ editingId != null ? 'Edit Schedule' : 'New Schedule' }}</h3>
       </div>
@@ -158,7 +158,7 @@ async function cancelSchedule(s: ScheduleItem): Promise<void> {
   <template v-else-if="filtered.length === 0">
     <div class="empty-state">
       <div class="empty-icon">
-        <BrainIcon name="Calendar" :size="40" />
+        <Calendar :size="40" />
       </div>
       <h3>No schedules</h3>
       <p>Create your first scheduled task.</p>

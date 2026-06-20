@@ -5,9 +5,14 @@
 -->
 <script setup lang="ts">
 import { ref, computed, watch, nextTick, onMounted, onBeforeUnmount } from 'vue';
+import type { FunctionalComponent } from 'vue';
 import { useRouter } from 'vue-router';
+import {
+  LayoutGrid, History, Wrench, Globe, Sparkles, TriangleAlert, ChartLine,
+  FileText, Calendar, List, Upload, Trash2, Settings, ShieldCheck, BookOpen,
+  Server, Brain,
+} from '@lucide/vue';
 import { useShellStore } from '../stores/shell';
-import BrainIcon from './BrainIcon.vue';
 
 const shell = useShellStore();
 const router = useRouter();
@@ -19,37 +24,37 @@ const inputRef = ref<HTMLInputElement | null>(null);
 interface CPItem {
   kind: string;
   label: string;
-  icon: string;
+  icon: FunctionalComponent;
   path: string;
 }
 
 // Port of allItems in _renderCommandPalette (app.js:162-178).
 const ALL_ITEMS: CPItem[] = [
-  { kind: 'Jump', label: 'Providers', icon: 'Providers', path: '/providers' },
-  { kind: 'Jump', label: 'Cognition · Memory', icon: 'Memory', path: '/cognition/memory' },
-  { kind: 'Jump', label: 'Cognition · Tools', icon: 'Tool', path: '/cognition/tools' },
-  { kind: 'Jump', label: 'Cognition · World state', icon: 'Globe', path: '/cognition/world' },
-  { kind: 'Jump', label: 'Cognition · Personality', icon: 'Sparkles', path: '/cognition/personality' },
-  { kind: 'Jump', label: 'Cognition · Errors', icon: 'Alert', path: '/cognition/errors' },
-  { kind: 'Jump', label: 'Cognition · Usage', icon: 'Chart', path: '/cognition/usage' },
-  { kind: 'Jump', label: 'Cognition · Compacted Summary', icon: 'Document', path: '/cognition/compaction' },
-  { kind: 'Jump', label: 'Scheduler · All', icon: 'Calendar', path: '/scheduler/all' },
-  { kind: 'Jump', label: 'Scheduler · Pending', icon: 'Calendar', path: '/scheduler/pending' },
-  { kind: 'Jump', label: 'Scheduler · Fired', icon: 'Calendar', path: '/scheduler/fired' },
-  { kind: 'Jump', label: 'Scheduler · Failed', icon: 'Calendar', path: '/scheduler/failed' },
-  { kind: 'Jump', label: 'Scheduler · Cancelled', icon: 'Calendar', path: '/scheduler/cancelled' },
-  { kind: 'Jump', label: 'Lists', icon: 'List', path: '/lists' },
-  { kind: 'Jump', label: 'Documents · Active', icon: 'Document', path: '/documents/active' },
-  { kind: 'Jump', label: 'Documents · Processing', icon: 'Document', path: '/documents/processing' },
-  { kind: 'Jump', label: 'Documents · Uploads', icon: 'Upload', path: '/documents/uploads' },
-  { kind: 'Jump', label: 'Documents · Deleted', icon: 'Trash', path: '/documents/deleted' },
-  { kind: 'Jump', label: 'Capabilities', icon: 'Capability', path: '/capabilities' },
-  { kind: 'Jump', label: 'Policies · Chat', icon: 'Policy', path: '/policies/chat' },
-  { kind: 'Jump', label: 'Policies · Background', icon: 'Policy', path: '/policies/background' },
-  { kind: 'Jump', label: 'Policies · External agent', icon: 'Policy', path: '/policies/external' },
-  { kind: 'Jump', label: 'Skills', icon: 'Skill', path: '/skills' },
-  { kind: 'Jump', label: 'MCP', icon: 'Server', path: '/mcp' },
-  { kind: 'Jump', label: 'Import / Export', icon: 'Brain', path: '/import-export' },
+  { kind: 'Jump', label: 'Providers', icon: LayoutGrid, path: '/providers' },
+  { kind: 'Jump', label: 'Cognition · Memory', icon: History, path: '/cognition/memory' },
+  { kind: 'Jump', label: 'Cognition · Tools', icon: Wrench, path: '/cognition/tools' },
+  { kind: 'Jump', label: 'Cognition · World state', icon: Globe, path: '/cognition/world' },
+  { kind: 'Jump', label: 'Cognition · Personality', icon: Sparkles, path: '/cognition/personality' },
+  { kind: 'Jump', label: 'Cognition · Errors', icon: TriangleAlert, path: '/cognition/errors' },
+  { kind: 'Jump', label: 'Cognition · Usage', icon: ChartLine, path: '/cognition/usage' },
+  { kind: 'Jump', label: 'Cognition · Compacted Summary', icon: FileText, path: '/cognition/compaction' },
+  { kind: 'Jump', label: 'Scheduler · All', icon: Calendar, path: '/scheduler/all' },
+  { kind: 'Jump', label: 'Scheduler · Pending', icon: Calendar, path: '/scheduler/pending' },
+  { kind: 'Jump', label: 'Scheduler · Fired', icon: Calendar, path: '/scheduler/fired' },
+  { kind: 'Jump', label: 'Scheduler · Failed', icon: Calendar, path: '/scheduler/failed' },
+  { kind: 'Jump', label: 'Scheduler · Cancelled', icon: Calendar, path: '/scheduler/cancelled' },
+  { kind: 'Jump', label: 'Lists', icon: List, path: '/lists' },
+  { kind: 'Jump', label: 'Documents · Active', icon: FileText, path: '/documents/active' },
+  { kind: 'Jump', label: 'Documents · Processing', icon: FileText, path: '/documents/processing' },
+  { kind: 'Jump', label: 'Documents · Uploads', icon: Upload, path: '/documents/uploads' },
+  { kind: 'Jump', label: 'Documents · Deleted', icon: Trash2, path: '/documents/deleted' },
+  { kind: 'Jump', label: 'Capabilities', icon: Settings, path: '/capabilities' },
+  { kind: 'Jump', label: 'Policies · Chat', icon: ShieldCheck, path: '/policies/chat' },
+  { kind: 'Jump', label: 'Policies · Background', icon: ShieldCheck, path: '/policies/background' },
+  { kind: 'Jump', label: 'Policies · External agent', icon: ShieldCheck, path: '/policies/external' },
+  { kind: 'Jump', label: 'Skills', icon: BookOpen, path: '/skills' },
+  { kind: 'Jump', label: 'MCP', icon: Server, path: '/mcp' },
+  { kind: 'Jump', label: 'Import / Export', icon: Brain, path: '/import-export' },
 ];
 
 const filtered = computed(() => {
@@ -122,7 +127,7 @@ onBeforeUnmount(() => document.removeEventListener('keydown', onGlobalKeydown));
             :data-sub="item.path.split('/')[2] || ''"
             @click="selectItem(item)"
           >
-            <span class="cp-icon"><BrainIcon :name="item.icon" :size="14" /></span>
+            <span class="cp-icon"><component :is="item.icon" :size="14" /></span>
             <span>{{ item.label }}</span>
             <span v-if="idx === selectedIdx" class="cp-hint">↵</span>
           </div>

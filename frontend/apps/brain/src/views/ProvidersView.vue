@@ -6,7 +6,7 @@ import { apiErrorMessage } from '../api/http';
 import { useToast } from '../composables/useToast';
 import { useConfirm } from '../composables/useConfirm';
 import { useShellStore } from '../stores/shell';
-import BrainIcon from '../ui/BrainIcon.vue';
+import { Plus, LayoutGrid, ChevronRight } from '@lucide/vue';
 
 const { show: showToast } = useToast();
 const { confirm } = useConfirm();
@@ -478,7 +478,7 @@ async function saveProvider(): Promise<void> {
     <div class="panel-header">
       <h2>LLM Providers</h2>
       <button class="btn btn-primary" @click="openWizard(null)">
-        <BrainIcon name="Plus" :size="14" />
+        <Plus :size="14" />
         Add Provider
       </button>
     </div>
@@ -491,7 +491,7 @@ async function saveProvider(): Promise<void> {
       <template v-else-if="providerList.length === 0">
         <div class="empty-state">
           <div class="empty-icon">
-            <BrainIcon name="Providers" :size="40" />
+            <LayoutGrid :size="40" />
           </div>
           <h3>No providers</h3>
           <p>Add your first LLM provider to get started.</p>
@@ -585,7 +585,7 @@ async function saveProvider(): Promise<void> {
     <div class="provider-wizard">
       <div class="form-page-header">
         <button class="btn btn-secondary btn-sm back-btn" @click="backFromPicker">
-          <BrainIcon name="Chevron" :size="14" />
+          <ChevronRight :size="14" />
           Back
         </button>
         <h3>Choose a provider</h3>
@@ -616,7 +616,7 @@ async function saveProvider(): Promise<void> {
     <div class="provider-wizard">
       <div class="form-page-header">
         <button class="btn btn-secondary btn-sm back-btn" @click="backFromForm">
-          <BrainIcon name="Chevron" :size="14" />
+          <ChevronRight :size="14" />
           {{ isEditing ? 'Back' : 'Providers' }}
         </button>
         <h3>{{ isEditing ? 'Edit Provider' : `Set up ${preset?.name ?? ''}` }}</h3>

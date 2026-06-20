@@ -12,6 +12,7 @@
  * The session store wires WS `permission_request` frames to
  * `usePermissionsStore().enqueue(data)` before this component mounts.
  */
+import { Info } from '@lucide/vue';
 import { usePermissionsStore } from '../../stores/permissions';
 import type { PermissionRequest } from '../../stores/permissions';
 
@@ -102,20 +103,7 @@ function deny(req: PermissionRequest): void {
           <!-- Header: info icon + action label -->
           <div class="perm-card__header">
             <span class="perm-card__icon" aria-hidden="true">
-              <svg
-                width="14"
-                height="14"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                stroke-width="2"
-                stroke-linecap="round"
-                stroke-linejoin="round"
-              >
-                <circle cx="12" cy="12" r="10" />
-                <line x1="12" y1="8" x2="12" y2="12" />
-                <line x1="12" y1="16" x2="12.01" y2="16" />
-              </svg>
+              <Info :size="14" />
             </span>
             <p class="perm-card__title">{{ actionLabel(req.action_id) }}</p>
           </div>

@@ -15,6 +15,7 @@
 -->
 <script setup lang="ts">
 import { computed } from 'vue';
+import { Mail, Phone } from '@lucide/vue';
 
 // ── Payload contract ───────────────────────────────────────────────────────
 
@@ -79,14 +80,6 @@ const props = defineProps<{
    */
   synthesis?: string;
 }>();
-
-// ── SVG icon paths (exact strings from contacts.js) ────────────────────────
-
-const ICON_EMAIL =
-  '<rect x="3" y="5" width="18" height="14" rx="2"/><polyline points="3 7 12 13 21 7"/>';
-
-const ICON_PHONE =
-  '<path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"/>';
 
 // ── Initials logic (exact port of initials() from contacts.js lines 41-49) ─
 
@@ -196,17 +189,7 @@ const listContacts = computed<Contact[]>(() => {
           class="ct__field"
           :href="`tel:${p.value}`"
         >
-          <svg
-            width="11"
-            height="11"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="2"
-            stroke-linecap="round"
-            stroke-linejoin="round"
-            v-html="ICON_PHONE"
-          />
+          <Phone :size="11" />
           <span>{{ p.value }}</span>
         </a>
 
@@ -217,17 +200,7 @@ const listContacts = computed<Contact[]>(() => {
           class="ct__field"
           :href="`mailto:${e.value}`"
         >
-          <svg
-            width="11"
-            height="11"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="2"
-            stroke-linecap="round"
-            stroke-linejoin="round"
-            v-html="ICON_EMAIL"
-          />
+          <Mail :size="11" />
           <span>{{ e.value }}</span>
         </a>
 
@@ -237,17 +210,7 @@ const listContacts = computed<Contact[]>(() => {
           class="ct__field"
           :href="`mailto:${singleContact.email}`"
         >
-          <svg
-            width="11"
-            height="11"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="2"
-            stroke-linecap="round"
-            stroke-linejoin="round"
-            v-html="ICON_EMAIL"
-          />
+          <Mail :size="11" />
           <span>{{ singleContact.email }}</span>
         </a>
       </div>
@@ -275,17 +238,7 @@ const listContacts = computed<Contact[]>(() => {
         class="ct__field"
         :href="`tel:${primaryValue(c.phones)}`"
       >
-        <svg
-          width="11"
-          height="11"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          stroke-width="2"
-          stroke-linecap="round"
-          stroke-linejoin="round"
-          v-html="ICON_PHONE"
-        />
+        <Phone :size="11" />
         <span>{{ primaryValue(c.phones) }}</span>
       </a>
 
@@ -296,17 +249,7 @@ const listContacts = computed<Contact[]>(() => {
         class="ct__field"
         :href="`mailto:${primaryValue(c.emails) ?? c.email}`"
       >
-        <svg
-          width="11"
-          height="11"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          stroke-width="2"
-          stroke-linecap="round"
-          stroke-linejoin="round"
-          v-html="ICON_EMAIL"
-        />
+        <Mail :size="11" />
         <span>{{ primaryValue(c.emails) ?? c.email }}</span>
       </a>
     </div>
