@@ -10,7 +10,7 @@ import { useRouter } from 'vue-router';
 import {
   LayoutGrid, History, Wrench, Globe, Sparkles, TriangleAlert, ChartLine,
   FileText, Calendar, List, Upload, Trash2, Settings, ShieldCheck, BookOpen,
-  Server, Brain,
+  Server, DatabaseBackup,
 } from '@lucide/vue';
 import { useShellStore } from '../stores/shell';
 
@@ -54,7 +54,7 @@ const ALL_ITEMS: CPItem[] = [
   { kind: 'Jump', label: 'Policies · External agent', icon: ShieldCheck, path: '/policies/external' },
   { kind: 'Jump', label: 'Skills', icon: BookOpen, path: '/skills' },
   { kind: 'Jump', label: 'MCP', icon: Server, path: '/mcp' },
-  { kind: 'Jump', label: 'Import / Export', icon: Brain, path: '/import-export' },
+  { kind: 'Jump', label: 'Import / Export', icon: DatabaseBackup, path: '/import-export' },
 ];
 
 const filtered = computed(() => {

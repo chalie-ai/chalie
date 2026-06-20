@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Star, Clock, SlidersHorizontal, Sun, Moon } from '@lucide/vue';
+import { Star, Clock, Brain, Sun, Moon } from '@lucide/vue';
 import { storeToRefs } from 'pinia';
 import { usePresenceStore } from '../../stores/presence';
 import { useTasksStore } from '../../stores/tasks';
@@ -70,7 +70,7 @@ function handleSettings(): void {
         aria-label="Settings"
         @click="handleSettings"
       >
-        <SlidersHorizontal :size="18" />
+        <Brain :size="18" />
       </button>
       <button
         class="theme-toggle"

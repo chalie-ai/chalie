@@ -10,7 +10,7 @@ import { snapshot } from '../api/snapshot';
 import { useToast } from '../composables/useToast';
 import { useConfirm } from '../composables/useConfirm';
 import { apiErrorMessage } from '../api/http';
-import { Brain, Download, Upload } from '@lucide/vue';
+import { DatabaseBackup, Download, Upload } from '@lucide/vue';
 
 const { show: showToast } = useToast();
 const { confirm } = useConfirm();
@@ -80,7 +80,7 @@ async function confirmImport(): Promise<void> {
 
 <template>
   <div class="panel-header">
-    <h2><Brain :size="20" /> Import / Export</h2>
+    <h2><DatabaseBackup :size="20" /> Import / Export</h2>
   </div>
 
   <div class="brain-overview">
