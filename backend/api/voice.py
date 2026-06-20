@@ -39,10 +39,8 @@ if TYPE_CHECKING:
     class _KokoroModel(Protocol):
         def create(self, text: str, voice: str, speed: float, lang: str) -> "tuple[object, int]": ...
 
-from markdown_it import MarkdownIt
-
 from services.file_mapper_service import FileMapperService
-from services.markup import extract_plaintext
+from services.markup import extract_plaintext, markdown_to_html
 
 logger = logging.getLogger(__name__)
 
@@ -227,7 +225,16 @@ def _ensure_models() -> bool:
 # host form (otherwise espeak spells out every slash and digit), (c) collapse
 # whitespace.
 
-_md = MarkdownIt("commonmark", {"breaks": True, "html": False})
+# Block-level markdown the LLM occasionally leaks into responses. We do NOT run a
+# full markdown parser for TTS — we strip the block markers and route list items
+# through ``<li>`` so they share the HTML list-pause logic below. Images drop
+# entirely (alt text isn't spoken); links keep their text, not the URL.
+_FENCE_RE = re.compile(r"^[ \t]*```[^\n]*$", re.MULTILINE)
+_MD_IMAGE_RE = re.compile(r"!\[[^\]]*\]\([^)]*\)")
+_MD_LINK_RE = re.compile(r"\[([^\]]*)\]\([^)]*\)")
+_HEADING_RE = re.compile(r"^[ \t]*#{1,6}[ \t]+", re.MULTILINE)
+_BLOCKQUOTE_RE = re.compile(r"^[ \t]*>[ \t]?", re.MULTILINE)
+_LIST_ITEM_RE = re.compile(r"^[ \t]*(?:[-*+]|\d+\.)[ \t]+(.*)$", re.MULTILINE)
 _URL_RE = re.compile(r"https?://([^\s/?#]+)\S*")
 _WS_RE = re.compile(r"\s+")
 # Append a period before ``</li>`` when the item doesn't already end in
@@ -253,18 +260,18 @@ def _spoken_url(match: "re.Match[str]") -> str:
 def _clean_for_tts(text: str) -> str:
     if not text:
         return ""
-    # HTML pre-pass — strip LLM-emitted tags before markdown-it sees them so
-    # `<p>foo</p>` doesn't survive as literal "less-than p greater-than".
-    # Inject list-item terminators here so HTML lists emitted directly by the
-    # LLM (no markdown wrapper) also get inter-item pauses.
-    if "<" in text and ">" in text:
-        text = _LI_NEEDS_TERMINATOR_RE.sub(r"\1.</li>", text)
-        text = extract_plaintext(text)
-    rendered = _md.render(text)
-    # Markdown ``- item`` renders to ``<li>item</li>``; add the terminator
-    # before extract_plaintext flattens the tags.
-    rendered = _LI_NEEDS_TERMINATOR_RE.sub(r"\1.</li>", rendered)
-    plain = extract_plaintext(rendered)
+    # ONE common path: strip block markdown the LLM leaks (lists become <li> so
+    # they join the HTML list-pause logic), rewrite leaked inline emphasis via the
+    # shared markup helper, then flatten every tag through extract_plaintext.
+    text = _FENCE_RE.sub("", text)
+    text = _MD_IMAGE_RE.sub("", text)
+    text = _MD_LINK_RE.sub(r"\1", text)
+    text = _HEADING_RE.sub("", text)
+    text = _BLOCKQUOTE_RE.sub("", text)
+    text = _LIST_ITEM_RE.sub(r"<li>\1</li>", text)
+    text = markdown_to_html(text)
+    text = _LI_NEEDS_TERMINATOR_RE.sub(r"\1.</li>", text)
+    plain = extract_plaintext(text)
     plain = _URL_RE.sub(_spoken_url, plain)
     return _WS_RE.sub(" ", plain).strip()
 

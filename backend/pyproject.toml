@@ -6,7 +6,6 @@ requires-python = ">=3.11"
 
 dependencies = [
     "requests>=2.32.5",
-    "brotli>=1.1.0",
     "sqlite-vec>=0.1.9",
     "flask-sock>=0.7.0",
     "transformers>=4.48.0",
@@ -55,7 +54,6 @@ dependencies = [
     "feedparser>=6.0.0",
     "nh3>=0.2.0",
     "rapidfuzz>=3.0.0",
-    "markdown-it-py>=3.0.0",
     "mcp>=1.24.0",
     "uvicorn>=0.34.0",
     "geopy>=2.4.0",
