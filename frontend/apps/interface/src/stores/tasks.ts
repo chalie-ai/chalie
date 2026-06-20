@@ -1,7 +1,8 @@
 /**
  * Tasks store — reminders (GET /scheduler?status=pending, filtered to items with
- * a due_at) + active subagents (GET /chat/subagents/active, only { sub_id } per
- * entry). Live updates arrive via applyDriftEvent() from the session store.
+ * a due_at) + active delegates (GET /chat/subagents/active, each a full snapshot
+ * a Processes row renders). Live updates arrive via applyDriftEvent() from the
+ * session store.
  */
 import { defineStore } from 'pinia';
 import type { WsPushEvent } from '@chalie/shared';
@@ -19,7 +20,7 @@ export const useTasksStore = defineStore('tasks', {
   state: () => ({
     /** Pending reminders with a due_at, cached from the last poll. */
     reminders: [] as ScheduledItem[],
-    /** Active subagents keyed by sub_id (backend returns only { sub_id }). */
+    /** Active delegates keyed by sub_id, each a full ActiveSubagent snapshot. */
     subagents: new Map<string, ActiveSubagent>() as Map<string, ActiveSubagent>,
     isOpen: false,
   }),
@@ -75,7 +76,7 @@ export const useTasksStore = defineStore('tasks', {
     /**
      * Handle a task-category drift event. task/reminder refetch reminders (server
      * is the scheduling source of truth); subagent_start/_end add/remove the
-     * sub_id from the active map.
+     * delegate snapshot from the active map.
      */
     applyDriftEvent(data: WsPushEvent): void {
       const type = data.type as string;
@@ -92,9 +93,14 @@ export const useTasksStore = defineStore('tasks', {
       }
 
       if (type === 'subagent_start') {
-        const sub_id = (data as { sub_id?: string }).sub_id;
-        if (sub_id) {
-          this.subagents.set(sub_id, { sub_id });
+        const sa = data as unknown as ActiveSubagent;
+        if (sa.sub_id) {
+          this.subagents.set(sa.sub_id, {
+            sub_id: sa.sub_id,
+            tool_name: sa.tool_name,
+            summary: sa.summary ?? null,
+            started_at: sa.started_at,
+          });
         }
         return;
       }

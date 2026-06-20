@@ -20,9 +20,15 @@ export interface ScheduledItem {
   external_uid: string | null;
 }
 
-/** An active subagent entry from /chat/subagents/active. */
+/** An active delegate (backgrounded tool call) from /chat/subagents/active. */
 export interface ActiveSubagent {
   sub_id: string;
+  /** The delegate's tool name — the row's subtitle. */
+  tool_name: string;
+  /** The model's act-summary of what it's doing — the row's title; may be absent. */
+  summary: string | null;
+  /** ISO-8601 UTC start timestamp — drives the row's elapsed timer. */
+  started_at: string;
 }
 
 export const scheduler = {

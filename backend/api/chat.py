@@ -214,10 +214,14 @@ def _broadcast_turn_result(response: str, request_id: str, turn_start: float) ->
     broker.broadcast({"type": "done", "duration_ms": elapsed_ms})
 
 
-def deliver_async_result(mp: object, result_text: str) -> None:
+def deliver_async_result(mp: object, result_text: str, cancel_event: threading.Event) -> None:
     """Does NOT register _active_ump and does NOT go through dispatch_message /
     _start_turn, so it never cancels or combines the user's in-flight foreground
     turn — it simply appends another assistant turn.
+
+    The delegate's ``cancel_event`` is threaded into the synthesis turn so the
+    Processes-panel stop control aborts a spiralling delegate at the next chain
+    boundary (the processor returns "" and self-cleans when it is set).
     """
     from services.message_processor import MessageProcessor  # noqa: PLC0415
 
@@ -241,7 +245,9 @@ def deliver_async_result(mp: object, result_text: str) -> None:
     # (hidden_input), _setup writes no input row and the synthesised reply is the
     # turn's end message — write_assistant_row allocates its own turn_id at write
     # time. Broadcast through the same pipeline as a foreground reply.
-    response = MessageProcessor.process(result_text, synth_config, metadata)
+    response = MessageProcessor.process(result_text, synth_config, metadata, cancel_event=cancel_event)
+    if cancel_event.is_set():
+        return
     _broadcast_turn_result(response, request_id, turn_start)
 
 
@@ -403,16 +409,13 @@ def post_chat_stop() -> ResponseReturnValue:
 @chat_bp.route("/chat/subagents/active", methods=["GET"])
 @require_auth
 def get_active_subagents() -> ResponseReturnValue:
-    """Used by the frontend to hydrate the task drawer on page load/reconnect,
-    since WS push events are missed if the client was disconnected.
-
-    The delegate registry tracks only delegate_ids and cancel events — no
-    per-type metadata.
+    """Hydrates the Processes panel on page load/reconnect, since WS push events
+    are missed while the client is disconnected. Each row carries the tool name,
+    the model's summary of what the delegate is doing, and when it started.
     """
     from services.async_delegate_runner import async_delegate_runner
 
-    items = [{"sub_id": did} for did in async_delegate_runner.active_ids()]
-    return jsonify({"subagents": items}), 200
+    return jsonify({"subagents": async_delegate_runner.active()}), 200
 
 
 @chat_bp.route("/chat/subagent/<sub_id>/stop", methods=["POST"])
