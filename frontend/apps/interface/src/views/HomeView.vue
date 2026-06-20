@@ -3,6 +3,7 @@ import { ref, onMounted } from 'vue';
 import {
   ApiClient,
   getHost,
+  getToken,
   useTheme,
   useWebSocket,
   BaseButton,
@@ -12,7 +13,7 @@ import {
 
 const { theme, toggle } = useTheme();
 const { connected } = useWebSocket();
-const api = new ApiClient(getHost);
+const api = new ApiClient(getHost, getToken);
 const ready = ref<string>('checking…');
 const note = ref('');
 

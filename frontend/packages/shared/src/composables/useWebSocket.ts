@@ -1,7 +1,7 @@
 import { onMounted } from 'vue';
 import { storeToRefs } from 'pinia';
 import { WebSocketService } from '../services/WebSocketService';
-import { getHost } from '../config/host';
+import { getHost, getToken } from '../config/host';
 import { useConnectionStore } from '../stores/connection';
 
 let service: WebSocketService | null = null;
@@ -9,7 +9,7 @@ let focusBound = false;
 
 /** Process-wide singleton so every view shares one socket. */
 export function getWebSocket(): WebSocketService {
-  return (service ??= new WebSocketService(getHost));
+  return (service ??= new WebSocketService(getHost, getToken));
 }
 
 export function useWebSocket() {

@@ -125,14 +125,28 @@ export class WebSocketService {
   private lastInboundAt = 0;
   private livenessTimer: Interval | null = null;
 
-  constructor(private readonly getHost: GetHost) {}
+  constructor(
+    private readonly getHost: GetHost,
+    private readonly getToken: GetHost,
+  ) {}
+
+  /**
+   * Bearer header when a token is configured, else `{}`. Spreading the empty
+   * object is a no-op, so the web (cookie) path is unchanged.
+   */
+  private authHeaders(): Record<string, string> {
+    const token = this.getToken();
+    return token ? { Authorization: `Bearer ${token}` } : {};
+  }
 
   private baseUrl(): string {
     const host = this.getHost();
     return host ? host.replace(/\/$/, '') : globalThis.location.origin;
   }
   private buildWsUrl(): string {
-    return this.baseUrl().replace(/^http/, 'ws') + '/ws';
+    const token = this.getToken();
+    const query = token ? '?token=' + encodeURIComponent(token) : '';
+    return this.baseUrl().replace(/^http/, 'ws') + '/ws' + query;
   }
   private buildHttpUrl(path: string): string {
     return this.baseUrl() + path;
@@ -323,7 +337,7 @@ export class WebSocketService {
     fetch(this.buildHttpUrl('/action'), {
       method: 'POST',
       credentials: 'same-origin',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...this.authHeaders() },
       body: JSON.stringify(payload),
     }).catch(() => {
       callbacks.onError?.({ message: 'Action request failed.', recoverable: true });
@@ -341,6 +355,7 @@ export class WebSocketService {
     fetch(this.buildHttpUrl('/chat'), {
       method: 'POST',
       credentials: 'same-origin',
+      headers: { ...this.authHeaders() },
       body: form,
     }).catch(() => {
       this.chatCallbacks?.onError?.({ message: 'Chat request failed.', recoverable: true });

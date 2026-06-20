@@ -1,11 +1,11 @@
 import { ApiClient } from '../services/ApiClient';
-import { getHost } from '../config/host';
+import { getHost, getToken } from '../config/host';
 
 let client: ApiClient | null = null;
 
 /** Singleton ApiClient bound to the shared configurable host. */
 export function useApiClient(): ApiClient {
-  return (client ??= new ApiClient(getHost));
+  return (client ??= new ApiClient(getHost, getToken));
 }
 
 /**
