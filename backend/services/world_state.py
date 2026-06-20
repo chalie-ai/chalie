@@ -69,7 +69,7 @@ def _format_telemetry_value(value) -> str | None:
     if isinstance(value, (int, float)):
         return str(value)
     if isinstance(value, str):
-        return value if value else None
+        return value or None
     if isinstance(value, (list, tuple)):
         return ",".join(str(v) for v in value) if value else None
     if isinstance(value, dict):

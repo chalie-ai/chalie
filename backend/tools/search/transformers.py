@@ -154,7 +154,7 @@ def _transform_json(provider_name: str, data: dict, limit: int) -> list:
         url = _extract_url(item, field_map)
         date = _extract_date(item, field_map)
 
-        if not title and not snippet:
+        if not (title or snippet):
             continue
 
         results.append({

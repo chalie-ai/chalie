@@ -68,9 +68,7 @@ class PolicyManager:
         if permission.split(".", 1)[0] in INTERNAL:
             return callback()                       # INTERNAL tools always bypass (no channel, no row)
         setting = self._setting(channel.value, permission)
-        if setting in ("internal", "allow"):
-            return callback()
-        if setting == "ask" and channel not in _NO_HUMAN and self._ask_user(permission, channel.value):
+        if setting in ("internal", "allow") or (setting == "ask" and channel not in _NO_HUMAN and self._ask_user(permission, channel.value)):
             return callback()
         reason = setting if setting == "deny" else ("user_unavailable" if channel in _NO_HUMAN else "user_denied")
         self._log_blocked(channel.value, permission, reason)

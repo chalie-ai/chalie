@@ -509,7 +509,7 @@ def _test_ollama_provider(config: dict, model: str, start: float):
         for m in available_names
     )
 
-    if not model_found and not available_names:
+    if not (model_found or available_names):
         return jsonify({
             "success": True, "model": model, "latency_ms": latency_ms,
             "message": "Connected to Ollama (no models installed yet)"

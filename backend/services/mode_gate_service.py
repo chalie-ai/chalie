@@ -364,9 +364,7 @@ class ModeGateService:
         """Classifies the last user turn and applies one extra decay step to represent the N-1 → N gap.
         On any failure, returns state unchanged.
         """
-        if any(v > 0 for v in state.values()):
-            return state
-        if not self._bootstrap_on_cold_start:
+        if any(v > 0 for v in state.values()) or not self._bootstrap_on_cold_start:
             return state
 
         try:

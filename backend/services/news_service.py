@@ -377,9 +377,7 @@ def _normalize_title(title: str) -> str:
 def _derive_domain(feed_url: str) -> Optional[str]:
     try:
         hostname = urlparse(feed_url).hostname
-        if not hostname:
-            return None
-        if hostname in _PROXY_HOSTS:
+        if not hostname or hostname in _PROXY_HOSTS:
             return None
         return _RSS_SUBDOMAIN_RE.sub("", hostname)
     except Exception:

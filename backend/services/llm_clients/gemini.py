@@ -288,7 +288,7 @@ class GeminiClient(ProviderClient):
         latency_ms = int((time.time() - start) * 1000)
         text, tool_calls, finish_reason = self._parse_response(response)
 
-        if not text and not tool_calls:
+        if not (text or tool_calls):
             logger.warning("[GeminiClient] Empty response, finish_reason=%s", finish_reason)
             raise ProviderResponseError(
                 f"Empty Gemini response (finish_reason={finish_reason})",

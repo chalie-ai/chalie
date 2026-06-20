@@ -63,7 +63,7 @@ def _get_wrapper_service():
 
 def _effective_wrapper_id() -> str:
     wid = getattr(g, "wrapper_id", None)
-    return wid if wid else "__chat_ui__"
+    return wid or "__chat_ui__"
 
 
 def _check_signal_capability(wrapper_id: str, signal_type: str) -> bool:

@@ -231,7 +231,7 @@ class SearchExpanderService:
             if not value_exists:
                 from services.embedding_service import get_embedding_service
                 emb_svc = get_embedding_service()
-                value_text = value if value else key
+                value_text = value or key
                 val_emb = emb_svc.generate_embedding(value_text) if value_text else None
                 if val_emb:
                     blob = pack_embedding(val_emb)

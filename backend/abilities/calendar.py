@@ -330,7 +330,7 @@ def _read_events(action: str, params: dict) -> ToolResult:
     if action == "get_event":
         uid = (params.get(Keys.uid) or "").strip()
         title = (params.get(Keys.title) or "").strip()
-        if not uid and not title:
+        if not (uid or title):
             return ToolResult.err(
                 "uid or title is required for get_event.",
                 code="missing-target",

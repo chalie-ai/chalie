@@ -176,5 +176,4 @@ def authed_client(db):
 @pytest.fixture
 def tmp_state_file(tmp_path):
     """Temporary state file path for tools using JSON state."""
-    state_file = tmp_path / "state.json"
-    return state_file
+    return tmp_path / "state.json"

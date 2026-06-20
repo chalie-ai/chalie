@@ -294,7 +294,7 @@ class McpManagerAbility(Ability):
         caller only proceeds on a real server."""
         server_id = (params.get(Keys.server_id) or "").strip()
         name = (params.get(Keys.name) or "").strip()
-        if not server_id and not name:
+        if not (server_id or name):
             return ToolResult.err(
                 "Provide a server to act on.",
                 code="missing-params",

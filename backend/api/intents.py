@@ -24,7 +24,7 @@ intents_bp = Blueprint("intents", __name__, url_prefix="/api/intents")
 
 def _effective_wrapper_id() -> str:
     wid = getattr(g, "wrapper_id", None)
-    return wid if wid else "__chat_ui__"
+    return wid or "__chat_ui__"
 
 
 def _get_intent_service():

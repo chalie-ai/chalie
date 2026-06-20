@@ -63,9 +63,7 @@ _DESTRUCTIVE_PATTERNS: tuple[re.Pattern[str], ...] = (
 
 def _has_recursive_flag(tokens: list[str]) -> bool:
     for t in tokens[1:]:
-        if t == "--recursive":
-            return True
-        if t.startswith("-") and not t.startswith("--") and ("r" in t or "R" in t):
+        if t == "--recursive" or (t.startswith("-") and not t.startswith("--") and ("r" in t or "R" in t)):
             return True
         if not t.startswith("-"):
             break
@@ -258,7 +256,7 @@ def _has_unquoted(command: str, needle: str) -> bool:
             in_double = not in_double
         elif ch == "\\" and in_double and i + 1 < len(command):
             i += 1
-        elif not in_single and not in_double:
+        elif not (in_single or in_double):
             if command[i:i + len(needle)] == needle:
                 return True
         i += 1

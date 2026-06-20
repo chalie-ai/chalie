@@ -105,7 +105,7 @@ class FindToolsAbility(SearchableAbility):
         # not surfaced in this browse hint.
         mcp_display = [display for _call_name, display in self._get_online_mcp_tools_index()]
 
-        if not index and not mcp_display:
+        if not (index or mcp_display):
             return ""
         parts = [f"`{k}` ({v})" for k, v in index.items()]
         parts.extend(f"`{n}`" for n in mcp_display)
@@ -158,7 +158,7 @@ class FindToolsAbility(SearchableAbility):
         query = params.get(Keys.query, "").strip()
 
         # Require at least one param.
-        if not select_names and not query:
+        if not (select_names or query):
             return ToolResult.err(
                 "find_tools requires either 'select' (exact tool names) or 'query' "
                 "(a description of what you need).",

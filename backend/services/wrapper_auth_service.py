@@ -40,7 +40,7 @@ class WrapperAuthService:
         """
         raw_token = secrets.token_urlsafe(48)
         token_hash = _hash_token(raw_token)
-        wrapper_id = wrapper_id_override if wrapper_id_override else f"wrp_{uuid.uuid4().hex}"
+        wrapper_id = wrapper_id_override or f"wrp_{uuid.uuid4().hex}"
         record_id = str(uuid.uuid4())
         now = utc_now().isoformat()
 

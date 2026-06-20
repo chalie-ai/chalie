@@ -243,9 +243,7 @@ def _parse_octal(text: str) -> int | None:
     Accepts ``"755"`` and ``"0755"`` alike. Rejects empty strings, non-octal
     characters, and any value outside ``0o000``--``0o7777``.
     """
-    if len(text) not in (3, 4):
-        return None
-    if not all(c in "01234567" for c in text):
+    if len(text) not in (3, 4) or not all(c in "01234567" for c in text):
         return None
     value = int(text, 8)
     if value < 0 or value > _MAX_OCTAL:

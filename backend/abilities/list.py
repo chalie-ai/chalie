@@ -158,7 +158,7 @@ class ListAbility(Ability):
 
         service = ListService(get_shared_db_service())
         fresh = _fe_payload(service, list_id)
-        return fresh if fresh else payload
+        return fresh or payload
 
 
 def _dispatch(ability: "ListAbility", service, action: str, params: dict) -> ToolResult:
@@ -440,7 +440,7 @@ def _handle_check(ability: "ListAbility", service, params: dict) -> ToolResult:
         )
 
     to_check, to_uncheck = _split_check_items(raw)
-    if not to_check and not to_uncheck:
+    if not (to_check or to_uncheck):
         return ToolResult.err(
             "Each item must have 'content' (string) and 'checked' (bool).",
             code="invalid-items",

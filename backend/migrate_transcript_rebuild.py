@@ -39,7 +39,7 @@ logger = logging.getLogger(__name__)
 
 
 def _resolve_db(cli_arg: str | None) -> str:
-    return cli_arg if cli_arg else str(FileMapperService.get_db_path())
+    return cli_arg or str(FileMapperService.get_db_path())
 
 
 # ── Content extraction ──────────────────────────────────────────────────────

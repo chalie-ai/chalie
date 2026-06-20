@@ -110,7 +110,7 @@ class CarddavHandler:
         org = _vcard_org(card)
         title = _vcard_text(card, "title")
 
-        if not fn and not emails:
+        if not (fn or emails):
             return None
 
         return {

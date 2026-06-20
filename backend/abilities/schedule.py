@@ -788,7 +788,7 @@ def _cancel(params: dict) -> ToolResult:
         item_id = (params.get(Keys.item_id) or "").strip()
         message_query = (params.get(Keys.message) or "").strip()
 
-        if not item_id and not message_query:
+        if not (item_id or message_query):
             return ToolResult.err(
                 "item_id or message is required to cancel.",
                 code="cancel-target-required",

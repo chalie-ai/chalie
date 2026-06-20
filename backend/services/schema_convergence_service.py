@@ -460,9 +460,7 @@ class SchemaConvergenceService:
         virtual_names: set,
         shadow_prefixes: tuple,
     ) -> bool:
-        if name in _PROTECTED_TABLE_NAMES:
-            return False
-        if name.startswith(_PROTECTED_TABLE_PREFIXES):
+        if name in _PROTECTED_TABLE_NAMES or name.startswith(_PROTECTED_TABLE_PREFIXES):
             return False
         if name in virtual_names:
             return False

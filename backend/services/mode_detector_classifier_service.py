@@ -13,8 +13,7 @@ class ModeDetectorClassifierService:
         try:
             from services.onnx_inference_service import get_onnx_inference_service
             svc = get_onnx_inference_service()
-            result = svc.predict_all_sigmoids("mode_detector", user_turn)
-            return result
+            return svc.predict_all_sigmoids("mode_detector", user_turn)
         except Exception as exc:
             logger.warning("%s predict failed: %s", LOG_PREFIX, exc)
             return {}

@@ -38,10 +38,7 @@ def _read_line_with_timeout(proc, timeout: int, turn: int) -> bytes | None:
     if read_error[0]:
         raise RuntimeError(str(read_error[0]))
 
-    raw_line = line_data[0]
-    if not raw_line:
-        return None
-    return raw_line
+    return line_data[0] or None
 
 
 def _apply_size_limits(raw_line: bytes, total_bytes: int) -> tuple:

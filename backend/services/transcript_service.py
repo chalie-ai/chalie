@@ -59,9 +59,7 @@ def append(
     location_lon=None,
     location_name=None,
 ) -> Optional[int]:
-    if not channel:
-        return None
-    if not content and role != 'assistant':
+    if not channel or (not content and role != 'assistant'):
         return None
 
     try:

@@ -263,7 +263,7 @@ def _is_backend_error(status: str) -> bool:
 def handle_recall(mp, channel: str, params: dict) -> ToolResult:
     query = params.get("query", "")
     location = params.get("location", "")
-    if not query and not location:
+    if not (query or location):
         return ToolResult.err(
             "Recall needs a 'query' or a 'location' to search for.",
             code="no-query-or-location",

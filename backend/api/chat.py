@@ -359,7 +359,7 @@ def post_chat():
     echo_id = request.form.get("echo_id") or ""
     attachments = _stage_chat_uploads(request.files.getlist("files")[:10])
 
-    if not text and not attachments:
+    if not (text or attachments):
         return jsonify({"status": "ignored", "reason": "empty message"}), 202
 
     if not text and attachments:

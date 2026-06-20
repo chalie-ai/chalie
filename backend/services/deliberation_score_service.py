@@ -22,8 +22,7 @@ class DeliberationScoreService:
             return None
         try:
             svc = self._get_svc()
-            result = svc.predict_scalar("deliberation_score", user_turn)
-            return result
+            return svc.predict_scalar("deliberation_score", user_turn)
         except Exception as exc:
             logger.info("%s classify failed: %s", LOG_PREFIX, exc)
             return None
