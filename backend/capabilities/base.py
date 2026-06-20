@@ -104,10 +104,6 @@ class AbstractCapability(ABC):
     def _do_monitor(self) -> None:
         ...
 
-    @abstractmethod
-    def act(self, action: str, params: dict[str, object]) -> dict[str, object]:
-        ...
-
     def monitor(self) -> None:
         self._do_monitor()
 

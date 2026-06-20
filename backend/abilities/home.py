@@ -35,6 +35,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, ClassVar, cast
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
     from typing import Protocol
 
     class _Capability(Protocol):
@@ -233,11 +234,9 @@ class HomeAbility(CapabilityAbility):
 
     @staticmethod
     def _live_entities(cap: "_Capability", *, prefix: str | None) -> list[str]:
-        from services.innate_skills._capability import dispatch_capability_handler
-
         tool_map = {cast(str, t["name"]): t["handler"] for t in cap.get_tools()}
-        handler = tool_map["list_devices"]
-        result = dispatch_capability_handler(handler, {"limit": 1000}, None)
+        handler = cast("Callable[..., dict[str, object]]", tool_map["list_devices"])
+        result = handler({"limit": 1000})
         devices = cast(list[dict[str, object]], result.get("devices", [])) if isinstance(result, dict) else []
         ids = [cast(str, d.get("entity_id", "")) for d in devices if d.get("entity_id")]
         if prefix is not None:

@@ -1,12 +1,9 @@
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, cast
+from typing import cast
 
 import yaml
-
-if TYPE_CHECKING:
-    from collections.abc import Callable
 
 from capabilities.base import AbstractCapability
 from services.file_mapper_service import FileMapperService
@@ -119,13 +116,6 @@ class HomeCapability(AbstractCapability):
             return
         rest.probe(self._url, self._token, self._verify_ssl)
 
-    def act(self, action: str, params: dict[str, object]) -> dict[str, object]:
-        tool_map = {t["name"]: t["handler"] for t in self.get_tools()}
-        handler = tool_map.get(action)
-        if handler is None:
-            return {"error": f"Unknown action: {action}"}
-        return cast("dict[str, object]", cast("Callable[..., object]", handler)(topic="", params=params))
-
     # ── Tools ────────────────────────────────────────────────────────
 
     def _require_connection(self) -> dict[str, object] | None:
@@ -134,7 +124,7 @@ class HomeCapability(AbstractCapability):
             return {"error": "Home capability not connected. Configure it in the Brain dashboard."}
         return None
 
-    def _tool_list_devices(self, topic: object, params: dict[str, object], config: object = None, telemetry: object = None) -> dict[str, object]:
+    def _tool_list_devices(self, params: dict[str, object], telemetry: object = None) -> dict[str, object]:
         err = self._require_connection()
         if err:
             return err
@@ -145,7 +135,7 @@ class HomeCapability(AbstractCapability):
             limit=int(cast(int, params.get("limit", 50))),
         )
 
-    def _tool_get_state(self, topic: object, params: dict[str, object], config: object = None, telemetry: object = None) -> dict[str, object]:
+    def _tool_get_state(self, params: dict[str, object], telemetry: object = None) -> dict[str, object]:
         err = self._require_connection()
         if err:
             return err
@@ -154,7 +144,7 @@ class HomeCapability(AbstractCapability):
             return {"error": "entity_id is required"}
         return rest.get_state(self._url, self._token, self._verify_ssl, cast(str, eid))
 
-    def _tool_control(self, topic: object, params: dict[str, object], config: object = None, telemetry: object = None) -> dict[str, object]:
+    def _tool_control(self, params: dict[str, object], telemetry: object = None) -> dict[str, object]:
         err = self._require_connection()
         if err:
             return err
@@ -167,13 +157,13 @@ class HomeCapability(AbstractCapability):
             cast(str, eid), cast(str, svc), cast("dict[str, object] | None", params.get("service_data")),
         )
 
-    def _tool_list_automations(self, topic: object, params: dict[str, object], config: object = None, telemetry: object = None) -> dict[str, object]:
+    def _tool_list_automations(self, params: dict[str, object], telemetry: object = None) -> dict[str, object]:
         err = self._require_connection()
         if err:
             return err
         return rest.list_automations(self._url, self._token, self._verify_ssl)
 
-    def _tool_trigger_automation(self, topic: object, params: dict[str, object], config: object = None, telemetry: object = None) -> dict[str, object]:
+    def _tool_trigger_automation(self, params: dict[str, object], telemetry: object = None) -> dict[str, object]:
         err = self._require_connection()
         if err:
             return err
@@ -182,7 +172,7 @@ class HomeCapability(AbstractCapability):
             return {"error": "automation_id is required"}
         return rest.trigger_automation(self._url, self._token, self._verify_ssl, cast(str, aid))
 
-    def _tool_subscribe_events(self, topic: object, params: dict[str, object], config: object = None, telemetry: object = None) -> dict[str, object]:
+    def _tool_subscribe_events(self, params: dict[str, object], telemetry: object = None) -> dict[str, object]:
         err = self._require_connection()
         if err:
             return err

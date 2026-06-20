@@ -22,7 +22,10 @@ Errors are returned as structured :class:`ToolResult` values (``code`` +
 from __future__ import annotations
 
 from abc import ABC
-from typing import ClassVar
+from typing import TYPE_CHECKING, ClassVar, cast
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 from abilities._ability import Ability
 from abilities._result import ToolResult
@@ -81,7 +84,8 @@ class CapabilityAbility(Ability, ABC):
                 action=action,
             )
 
-        from services.innate_skills._capability import dispatch_capability_handler
-
-        result = dispatch_capability_handler(handler, params, self.telemetry)
+        action_params = {
+            k: v for k, v in params.items() if not k.startswith("_") and k != "action"
+        }
+        result = cast("Callable[..., dict[str, object]]", handler)(action_params, self.telemetry)
         return ToolResult.ok(result, action=action)

@@ -12,7 +12,6 @@ from services.file_mapper_service import FileMapperService
 from capabilities.ubiquiti_capability import unifi_rest_handler as rest
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
     from typing import TypedDict
 
     class _AuthKwargs(TypedDict):
@@ -177,13 +176,6 @@ class UbiquitiCapability(AbstractCapability):
             return
         rest.probe(self._url, self._site, **self._auth)
 
-    def act(self, action: str, params: dict[str, object]) -> dict[str, object]:
-        tool_map = {cast(str, t["name"]): cast("Callable[..., dict[str, object]]", t["handler"]) for t in self.get_tools()}
-        handler = tool_map.get(action)
-        if handler is None:
-            return {"error": f"Unknown action: {action}"}
-        return handler(topic="", params=params)
-
     # ── Tool handlers ────────────────────────────────────────────────
 
     def _require_connection(self) -> dict[str, object] | None:
@@ -191,26 +183,26 @@ class UbiquitiCapability(AbstractCapability):
             return {"status": "error", "error": "Ubiquiti controller not connected. Configure it in Brain → Capabilities."}
         return None
 
-    def _th_list_devices(self, topic: object, params: dict[str, object], config: object = None, telemetry: object = None) -> dict[str, object]:
+    def _th_list_devices(self, params: dict[str, object], telemetry: object = None) -> dict[str, object]:
         err = self._require_connection()
         if err:
             return err
         return rest.list_devices(self._url, self._site, **self._auth)
 
-    def _th_list_clients(self, topic: object, params: dict[str, object], config: object = None, telemetry: object = None) -> dict[str, object]:
+    def _th_list_clients(self, params: dict[str, object], telemetry: object = None) -> dict[str, object]:
         err = self._require_connection()
         if err:
             return err
         return rest.list_clients(self._url, self._site, **self._auth,
                                  active_only=cast(bool, params.get("active_only", True)))
 
-    def _th_get_info(self, topic: object, params: dict[str, object], config: object = None, telemetry: object = None) -> dict[str, object]:
+    def _th_get_info(self, params: dict[str, object], telemetry: object = None) -> dict[str, object]:
         err = self._require_connection()
         if err:
             return err
         return rest.get_info(self._url, self._site, cast(str, params.get("target", "health")), **self._auth)
 
-    def _th_control_client(self, topic: object, params: dict[str, object], config: object = None, telemetry: object = None) -> dict[str, object]:
+    def _th_control_client(self, params: dict[str, object], telemetry: object = None) -> dict[str, object]:
         err = self._require_connection() or self._require_mac_cmd(params, "control_client")
         if err:
             return err
@@ -218,7 +210,7 @@ class UbiquitiCapability(AbstractCapability):
         return rest.control_client(self._url, self._site, cast(str, params["mac"]), cast(str, params["command"]),
                                    **self._auth, **extra)
 
-    def _th_control_device(self, topic: object, params: dict[str, object], config: object = None, telemetry: object = None) -> dict[str, object]:
+    def _th_control_device(self, params: dict[str, object], telemetry: object = None) -> dict[str, object]:
         err = self._require_connection() or self._require_mac_cmd(params, "control_device")
         if err:
             return err
@@ -226,7 +218,7 @@ class UbiquitiCapability(AbstractCapability):
         return rest.control_device(self._url, self._site, cast(str, params["mac"]), cast(str, params["command"]),
                                    **self._auth, **extra)
 
-    def _th_manage_wlan(self, topic: object, params: dict[str, object], config: object = None, telemetry: object = None) -> dict[str, object]:
+    def _th_manage_wlan(self, params: dict[str, object], telemetry: object = None) -> dict[str, object]:
         err = self._require_connection()
         if err:
             return err
@@ -238,7 +230,7 @@ class UbiquitiCapability(AbstractCapability):
         return rest.update_wlan(self._url, self._site, cast(str, params.get("wlan_id", "")),
                                 cast(dict[str, object], params.get("updates", {})), **self._auth)
 
-    def _th_manage_port_forward(self, topic: object, params: dict[str, object], config: object = None, telemetry: object = None) -> dict[str, object]:
+    def _th_manage_port_forward(self, params: dict[str, object], telemetry: object = None) -> dict[str, object]:
         err = self._require_connection()
         if err:
             return err
@@ -250,7 +242,7 @@ class UbiquitiCapability(AbstractCapability):
         return rest.update_port_forward(self._url, self._site, cast(str, params.get("rule_id", "")),
                                         cast(dict[str, object], params.get("updates", {})), **self._auth)
 
-    def _th_manage_traffic_rule(self, topic: object, params: dict[str, object], config: object = None, telemetry: object = None) -> dict[str, object]:
+    def _th_manage_traffic_rule(self, params: dict[str, object], telemetry: object = None) -> dict[str, object]:
         err = self._require_connection()
         if err:
             return err
@@ -262,7 +254,7 @@ class UbiquitiCapability(AbstractCapability):
         return rest.update_traffic_rule(self._url, self._site, cast(str, params.get("rule_id", "")),
                                         cast(dict[str, object], params.get("updates", {})), **self._auth)
 
-    def _th_authorize_guest(self, topic: object, params: dict[str, object], config: object = None, telemetry: object = None) -> dict[str, object]:
+    def _th_authorize_guest(self, params: dict[str, object], telemetry: object = None) -> dict[str, object]:
         err = self._require_connection()
         if err:
             return err

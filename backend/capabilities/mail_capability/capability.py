@@ -511,22 +511,6 @@ class MailCapability(AbstractCapability):
         self._cycle_count += 1
 
     # ------------------------------------------------------------------
-    # Cognitive pipeline — act
-    # ------------------------------------------------------------------
-
-    def act(self, action: str, params: dict[str, object]) -> dict[str, object]:
-        from collections.abc import Callable
-        tool_map = {t["name"]: t["handler"] for t in self.get_tools()}
-        handler = tool_map.get(action)
-        if handler is None:
-            return {"error": f"Unknown action: {action}"}
-        return cast("dict[str, object]", cast("Callable[..., object]", handler)(topic="", params=params))
-
-    # ------------------------------------------------------------------
-    # Scheduler registration
-    # ------------------------------------------------------------------
-
-    # ------------------------------------------------------------------
     # SMTP / guard helpers
     # ------------------------------------------------------------------
 
@@ -575,7 +559,7 @@ class MailCapability(AbstractCapability):
     # Tools — IMAP handler methods
     # ------------------------------------------------------------------
 
-    def _th_search_email(self, topic: object, params: dict[str, object], config: object = None, telemetry: object = None) -> dict[str, object]:
+    def _th_search_email(self, params: dict[str, object], telemetry: object = None) -> dict[str, object]:
         if not self._imap_ok:
             return {"error": _ERR_IMAP_NOT_CONNECTED}
         try:
@@ -592,7 +576,7 @@ class MailCapability(AbstractCapability):
         except Exception as exc:
             return {"error": str(exc)}
 
-    def _th_read_email(self, topic: object, params: dict[str, object], config: object = None, telemetry: object = None) -> dict[str, object]:
+    def _th_read_email(self, params: dict[str, object], telemetry: object = None) -> dict[str, object]:
         if not self._imap_ok:
             return {"error": _ERR_IMAP_NOT_CONNECTED}
         try:
@@ -609,7 +593,7 @@ class MailCapability(AbstractCapability):
         except Exception as exc:
             return {"error": str(exc)}
 
-    def _th_draft_email(self, topic: object, params: dict[str, object], config: object = None, telemetry: object = None) -> dict[str, object]:
+    def _th_draft_email(self, params: dict[str, object], telemetry: object = None) -> dict[str, object]:
         if not self._imap_ok:
             return {"error": _ERR_IMAP_NOT_CONNECTED}
         try:
@@ -629,7 +613,7 @@ class MailCapability(AbstractCapability):
         except Exception as exc:
             return {"error": str(exc)}
 
-    def _th_manage_email(self, topic: object, params: dict[str, object], config: object = None, telemetry: object = None) -> dict[str, object]:
+    def _th_manage_email(self, params: dict[str, object], telemetry: object = None) -> dict[str, object]:
         if not self._imap_ok:
             return {"error": _ERR_IMAP_NOT_CONNECTED}
         try:
@@ -650,7 +634,7 @@ class MailCapability(AbstractCapability):
     # Tools — SMTP handler methods
     # ------------------------------------------------------------------
 
-    def _th_send_email(self, topic: object, params: dict[str, object], config: object = None, telemetry: object = None) -> dict[str, object]:
+    def _th_send_email(self, params: dict[str, object], telemetry: object = None) -> dict[str, object]:
         if not self._imap_ok:
             return {"error": _ERR_IMAP_NOT_CONNECTED}
         try:
@@ -659,7 +643,7 @@ class MailCapability(AbstractCapability):
         except Exception as exc:
             return {"error": str(exc)}
 
-    def _th_reply_email(self, topic: object, params: dict[str, object], config: object = None, telemetry: object = None) -> dict[str, object]:
+    def _th_reply_email(self, params: dict[str, object], telemetry: object = None) -> dict[str, object]:
         if not self._imap_ok:
             return {"error": _ERR_IMAP_NOT_CONNECTED}
         uid = params.get("uid")
@@ -699,7 +683,7 @@ class MailCapability(AbstractCapability):
         except Exception as exc:
             return {"error": str(exc)}
 
-    def _th_forward_email(self, topic: object, params: dict[str, object], config: object = None, telemetry: object = None) -> dict[str, object]:
+    def _th_forward_email(self, params: dict[str, object], telemetry: object = None) -> dict[str, object]:
         if not self._imap_ok:
             return {"error": _ERR_IMAP_NOT_CONNECTED}
         uid = params.get("uid")
@@ -753,7 +737,7 @@ class MailCapability(AbstractCapability):
     # Tools — CalDAV handler methods
     # ------------------------------------------------------------------
 
-    def _th_create_event(self, topic: object, params: dict[str, object], config: object = None, telemetry: object = None) -> dict[str, object]:
+    def _th_create_event(self, params: dict[str, object], telemetry: object = None) -> dict[str, object]:
         if not self._caldav_ok:
             return {"error": _ERR_CALDAV_NOT_CONNECTED}
         try:
@@ -764,7 +748,7 @@ class MailCapability(AbstractCapability):
         except Exception as exc:
             return {"error": str(exc)}
 
-    def _th_update_event(self, topic: object, params: dict[str, object], config: object = None, telemetry: object = None) -> dict[str, object]:
+    def _th_update_event(self, params: dict[str, object], telemetry: object = None) -> dict[str, object]:
         if not self._caldav_ok:
             return {"error": _ERR_CALDAV_NOT_CONNECTED}
         try:
@@ -775,7 +759,7 @@ class MailCapability(AbstractCapability):
         except Exception as exc:
             return {"error": str(exc)}
 
-    def _th_delete_event(self, topic: object, params: dict[str, object], config: object = None, telemetry: object = None) -> dict[str, object]:
+    def _th_delete_event(self, params: dict[str, object], telemetry: object = None) -> dict[str, object]:
         if not self._caldav_ok:
             return {"error": _ERR_CALDAV_NOT_CONNECTED}
         try:
@@ -786,12 +770,12 @@ class MailCapability(AbstractCapability):
         except Exception as exc:
             return {"error": str(exc)}
 
-    def _th_find_free_slots(self, topic: object, params: dict[str, object], config: object = None, telemetry: object = None) -> dict[str, object]:
+    def _th_find_free_slots(self, params: dict[str, object], telemetry: object = None) -> dict[str, object]:
         if not self._caldav_ok:
             return {"error": _ERR_CALDAV_NOT_CONNECTED}
         return self._caldav_handler.find_free_slots(params)
 
-    def _th_get_attendees(self, topic: object, params: dict[str, object], config: object = None, telemetry: object = None) -> dict[str, object]:
+    def _th_get_attendees(self, params: dict[str, object], telemetry: object = None) -> dict[str, object]:
         if not self._caldav_ok:
             return {"error": _ERR_CALDAV_NOT_CONNECTED}
         return self._caldav_handler.get_attendees(params)
@@ -800,12 +784,12 @@ class MailCapability(AbstractCapability):
     # Tools — CardDAV handler methods
     # ------------------------------------------------------------------
 
-    def _th_list_contacts(self, topic: object, params: dict[str, object], config: object = None, telemetry: object = None) -> dict[str, object]:
+    def _th_list_contacts(self, params: dict[str, object], telemetry: object = None) -> dict[str, object]:
         if not self._carddav_ok:
             return {"error": "Mail (CardDAV) not connected."}
         return self._carddav_handler.list_contacts(params)
 
-    def _th_get_contact(self, topic: object, params: dict[str, object], config: object = None, telemetry: object = None) -> dict[str, object]:
+    def _th_get_contact(self, params: dict[str, object], telemetry: object = None) -> dict[str, object]:
         if not self._carddav_ok:
             return {"error": "Mail (CardDAV) not connected."}
         return self._carddav_handler.get_contact(params)
