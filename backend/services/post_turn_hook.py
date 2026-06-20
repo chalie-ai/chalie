@@ -8,8 +8,8 @@
 
 """PostTurnHook — one independent unit of after-turn work.
 
-After the assistant row is persisted, ``MessageProcessor._record`` runs every
-hook in ``mp.config.post_turn_hooks``. Each hook is a single-responsibility,
+After the turn's final assistant row is persisted,
+``MessageProcessor._end_turn`` runs every hook in ``mp.config.post_turn_hooks``. Each hook is a single-responsibility,
 self-contained object: a config composes the ones it needs, and cross-cutting
 after-turn behaviours (proactive suggestion, pattern decay, disclosure-to-human,
 summary persistence) become reusable units instead of one opaque callable field.

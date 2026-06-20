@@ -21,9 +21,11 @@ The client sends messages over **HTTP** (`POST /chat`, multipart form-data with 
 POST /chat
   └─ daemon thread per turn
        └─ MessageProcessor.process(text, UserConfig(metadata), cancel_event)
-            ├─ _setup()    input transcript row · deliberation gate · turn-zero seeds
-            ├─ _loop()     LLM ↔ tools until a plain-text answer
-            └─ _record()   assistant transcript row · post-turn hooks
+            └─ _run()      under the per-channel lock:
+                 ├─ _setup()    input transcript row · deliberation gate · turn-zero seeds
+                 ├─ _step()     one LLM call; tool-bearing steps write their assistant
+                 │              row and recurse, a plain-text reply ends the chain
+                 └─ _end_turn() post-turn hooks
        └─ WebSocket: {"type":"message", ...} + {"type":"done", ...}
  ```
  
