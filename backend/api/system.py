@@ -12,6 +12,7 @@ from flask.typing import ResponseReturnValue
 
 from .auth import require_session
 from services.time_utils import utc_now
+from utils.logger import LOG_FILE_PATH as _LOG_FILE_PATH  # Written exclusively by utils/logger.py in the same process
 
 if TYPE_CHECKING:
     from services.client_context_service import ClientContextService
@@ -429,7 +430,6 @@ def observability_telemetry() -> ResponseReturnValue:
         return jsonify({"error": "Failed to retrieve telemetry summary"}), 500
 
 
-_LOG_FILE_PATH = "/tmp/chalie.log"  # Read-only; written exclusively by utils/logger.py in the same process
 _LOG_TAIL_BYTES = 256 * 1024   # 256 KB tail read — never loads the full file
 _ERROR_LEVELS = frozenset({"ERROR", "CRITICAL"})
 _ERROR_CAP = 200
