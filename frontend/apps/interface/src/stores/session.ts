@@ -68,6 +68,13 @@ export const useSessionStore = defineStore('session', {
       ws.onDisconnect(() => {
         conn.setConnected(false);
         this.isSending = false;
+        // A mid-turn drop strands the live act group: the turn's done now lands
+        // on the dead socket and is never resent, so collapse it here or the
+        // "thinking…" spinner hangs forever.
+        if (this._activeActId != null) {
+          useConversationStore().resolveAct(this._activeActId);
+          this._activeActId = null;
+        }
       });
 
       ws.onDrift((data: WsPushEvent) => {

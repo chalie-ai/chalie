@@ -199,7 +199,7 @@ export class WebSocketService {
     ws.onclose = () => {
       this.connected = false;
       this.stopLivenessWatch();
-      this.disconnectHandler?.();
+      this.notifyDisconnect();
       if (!this.intentionallyClosed) this.scheduleReconnect();
     };
     ws.onerror = () => {
@@ -223,6 +223,14 @@ export class WebSocketService {
 
   get isConnected(): boolean {
     return this.connected && this.ws?.readyState === WebSocket.OPEN;
+  }
+
+  /** Connection lost: drop the in-flight turn's callbacks before notifying
+   *  listeners. The turn's done went to the dead socket and is never resent, so
+   *  a lingering closure would otherwise swallow an unrelated turn's done. */
+  private notifyDisconnect(): void {
+    this.chatCallbacks = null;
+    this.disconnectHandler?.();
   }
 
   private scheduleReconnect(): void {
@@ -264,7 +272,7 @@ export class WebSocketService {
         /* already dead */
       }
     }
-    this.disconnectHandler?.();
+    this.notifyDisconnect();
     this.connect();
   }
 
