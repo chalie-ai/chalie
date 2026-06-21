@@ -85,13 +85,9 @@ export const useSessionStore = defineStore('session', {
         }
       });
 
-      // Tab-refocus / app-resume: re-assert WS liveness AND reconcile the feed.
-      // loadRecentConversation() is idempotent (dedupes by turn), so re-running it
-      // on resume is a safe no-op when nothing changed and a catch-up when turns
-      // arrived while the socket was down or the app was backgrounded.
+      // Tab-refocus / app-resume: re-assert WS liveness so the live pipe resumes.
       globalThis.addEventListener('focus', () => {
         ws.ensureAlive();
-        void this.loadRecentConversation();
       });
 
       // chalie:action — deterministic skill invocations. Registered inside init()

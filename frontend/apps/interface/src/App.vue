@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { onMounted, onBeforeUnmount, ref } from 'vue';
-import { useTheme } from '@chalie/shared';
+import { platform, useTheme } from '@chalie/shared';
 import { useSessionStore } from './stores/session';
 import { useVoiceStore } from './stores/voice';
 import { on } from './composables/useEventBus';
@@ -46,6 +46,12 @@ onMounted(() => {
   session.onAuthFailure(handleAuthFailure);
   session.init();
   voiceStore.checkAvailability();
+
+  // Native shell only: request OS notification permission once so background
+  // message notifications can fire. On web the browser drives its own prompt.
+  if ((globalThis as { __TAURI__?: unknown }).__TAURI__) {
+    void platform.requestNotificationPermission();
+  }
 
   _unbindRecall = on('chalie:open-recall', () => {
     recallRef.value?.open();

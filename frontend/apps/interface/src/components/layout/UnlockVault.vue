@@ -30,6 +30,10 @@ async function submit(): Promise<void> {
     if (result.vault_state === 'unlocked') {
       locked.value = false;
       password.value = '';
+      if (_poll) {
+        clearInterval(_poll);
+        _poll = null;
+      }
       window.location.replace('/');
     } else {
       error.value = result.error ?? 'Could not unlock the vault.';

@@ -15,6 +15,12 @@ import { getHost } from '../config/host';
  * picks this adapter only when window.__TAURI__ is present, so the web build
  * never loads them.
  */
+// Native OS notification grant. Inside a Tauri webview the web Notification API
+// stays 'default' even after the OS grants permission, so the synchronous gate
+// must read this cache — seeded at startup via requestNotificationPermission and
+// refreshed on every native send — rather than the (stale) web value.
+let _nativeNotifPerm: NotificationPermission = 'default';
+
 export const tauriPlatformAdapter: PlatformAdapter = {
   // Webview shares the browser primitives — delegate.
   getUserMedia: (constraints) => webPlatformAdapter.getUserMedia(constraints),
@@ -26,16 +32,14 @@ export const tauriPlatformAdapter: PlatformAdapter = {
   removeItem: (key) => webPlatformAdapter.removeItem(key),
   createWakeLock: (): WakeLockHandle => webPlatformAdapter.createWakeLock(),
 
-  notificationPermission: () =>
-    // Synchronous web contract; the native grant is reconciled lazily via
-    // requestNotificationPermission, so the cached web value is the gate.
-    webPlatformAdapter.notificationPermission(),
+  // Sync gate reads the cached native grant (the web API never updates in-webview).
+  notificationPermission: () => _nativeNotifPerm,
 
   requestNotificationPermission: async (): Promise<NotificationPermission> => {
     const { isPermissionGranted, requestPermission } = await import('@tauri-apps/plugin-notification');
-    if (await isPermissionGranted()) return 'granted';
-    const result = await requestPermission();
-    return result === 'granted' ? 'granted' : 'denied';
+    const granted = (await isPermissionGranted()) || (await requestPermission()) === 'granted';
+    _nativeNotifPerm = granted ? 'granted' : 'denied';
+    return _nativeNotifPerm;
   },
 
   showNotification: (title, options) => {
@@ -44,6 +48,7 @@ export const tauriPlatformAdapter: PlatformAdapter = {
         await import('@tauri-apps/plugin-notification');
       let granted = await isPermissionGranted();
       if (!granted) granted = (await requestPermission()) === 'granted';
+      _nativeNotifPerm = granted ? 'granted' : 'denied';
       if (granted) sendNotification({ title, body: options?.body });
     })();
   },

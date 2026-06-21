@@ -7,12 +7,12 @@ import './login.scss';
 import { createApp } from 'vue';
 import { createPinia } from 'pinia';
 import LoginPage from './LoginPage.vue';
-import { auth } from '../api/auth';
+import { system } from '../api/system';
 
 // Pre-mount auth gate: existing session → redirect to / and skip mounting.
 (async () => {
   try {
-    const status = await auth.authStatus();
+    const status = await system.authStatus();
     if (status.has_session) {
       window.location.replace('/');
       return;
