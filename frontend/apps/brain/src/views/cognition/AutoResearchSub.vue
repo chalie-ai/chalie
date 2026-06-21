@@ -3,7 +3,7 @@ import { ref, onMounted } from 'vue';
 import { ChevronLeft } from '@lucide/vue';
 import { cognition } from '../../api/cognition';
 import type { AutoResearchRun, AutoResearchDetail } from '../../api/cognition';
-import { formatDate } from '../../utils/format';
+import { formatDate, mdToHtml } from '../../utils/format';
 import EmptyState from '../../ui/EmptyState.vue';
 
 const viewMode = ref<'list' | 'detail'>('list');
@@ -63,15 +63,18 @@ onMounted(load);
         <div class="research-sections">
           <div class="research-section">
             <div class="research-section-heading">User Summary</div>
-            <div class="research-section-body">{{ detail.user_summary }}</div>
+            <!-- eslint-disable-next-line vue/no-v-html -->
+            <div class="research-section-body md" v-html="mdToHtml(detail.user_summary)"></div>
           </div>
           <div class="research-section">
             <div class="research-section-heading">Compacted Summary</div>
-            <div class="research-section-body">{{ detail.compacted_summary }}</div>
+            <!-- eslint-disable-next-line vue/no-v-html -->
+            <div class="research-section-body md" v-html="mdToHtml(detail.compacted_summary)"></div>
           </div>
           <div class="research-section">
             <div class="research-section-heading">Transcript</div>
-            <div class="research-section-body research-transcript">{{ detail.transcript }}</div>
+            <!-- eslint-disable-next-line vue/no-v-html -->
+            <div class="research-section-body md" v-html="mdToHtml(detail.transcript)"></div>
           </div>
         </div>
       </template>
@@ -132,8 +135,27 @@ onMounted(load);
   color: var(--text-primary);
   line-height: 1.6;
 }
-.research-transcript {
-  white-space: pre-wrap;
-  font-family: inherit;
+.md :deep(h3) {
+  font-size: 0.95rem;
+  font-weight: 600;
+  margin: 0.75rem 0 0.35rem;
+}
+.md :deep(ul) {
+  margin: 0.35rem 0;
+  padding-left: 1.25rem;
+}
+.md :deep(li) {
+  margin: 0.15rem 0;
+}
+.md :deep(code) {
+  font-family: var(--font-mono, monospace);
+  font-size: 0.85em;
+  background: var(--bg-subtle, var(--bg-hover));
+  padding: 0.1em 0.3em;
+  border-radius: 3px;
+}
+.md :deep(a) {
+  color: var(--accent, var(--text-link));
+  text-decoration: underline;
 }
 </style>

@@ -2,7 +2,7 @@
 import { ref, computed } from 'vue';
 import { cognition } from '../../api/cognition';
 import type { WorldState, WorldTelemetry, WorldSchedule } from '../../api/cognition';
-import { formatDate, escapeHtml } from '../../utils/format';
+import { formatDate, mdToHtml as renderMd } from '../../utils/format';
 import { useAsyncResource } from '@chalie/shared';
 import EmptyState from '../../ui/EmptyState.vue';
 import SegmentedControl from '../../ui/SegmentedControl.vue';
@@ -40,15 +40,10 @@ const deviceText = computed((): string => {
   return `${d.class || '—'} · ${d.platform || ''} · ${d.screen_w || '?'}×${d.screen_h || '?'}`;
 });
 
+// World telemetry tags like `[signal:news]` are bare brackets (no link target),
+// so the shared renderer leaves them as text — wrap them as world-tag chips here.
 function mdToHtml(md: string): string {
-  return escapeHtml(md)
-    .replace(/^### (.+)$/gm, '<h3>$1</h3>')
-    .replace(/^## (.+)$/gm, '<h3>$1</h3>')
-    .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
-    .replace(/^\* (.+)$/gm, '<li>$1</li>')
-    .replace(/(<li>.*<\/li>\n?)+/g, (m) => `<ul>${m}</ul>`)
-    .replace(/\[([^\]]+)\]/g, '<span class="world-tag">$1</span>')
-    .replace(/\n{2,}/g, '<br>');
+  return renderMd(md).replace(/\[([^\]]+)\]/g, '<span class="world-tag">$1</span>');
 }
 </script>
 
