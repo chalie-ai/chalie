@@ -382,7 +382,12 @@ def _read_events(action: str, params: dict[str, object]) -> ToolResult:
 
 def _resolve_window(params: dict[str, object]) -> tuple[str, str]:
     """Return the (date_from, date_to) ISO bounds for list_events, applying the
-    advertised defaults (today → +7 days) when the model omits them."""
+    advertised defaults (today → +7 days) when the model omits them. A bare-date
+    upper bound (YYYY-MM-DD, exactly as the schema instructs the model to pass) is
+    widened to an inclusive end-of-day instant: stored ``due_at`` values carry a
+    time-of-day, and the lexical ``due_at <= ?`` compare in ``query_items`` sorts a
+    timestamped value AFTER the bare date, so it would otherwise drop every event
+    on that final day."""
     date_from = (cast(str, params.get(Keys.date_from)) or "").strip()
     date_to = (cast(str, params.get(Keys.date_to)) or "").strip()
 
@@ -392,6 +397,8 @@ def _resolve_window(params: dict[str, object]) -> tuple[str, str]:
     if not date_to:
         base = _parse_dt(date_from) or utc_now()
         date_to = (base + timedelta(days=_DEFAULT_WINDOW_DAYS)).isoformat()
+    elif "T" not in date_to:
+        date_to = f"{date_to}T23:59:59.999999+00:00"
 
     return date_from, date_to
 

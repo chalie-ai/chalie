@@ -131,6 +131,27 @@ def test_list_events_default_window_is_today_plus_seven_days(db: sqlite3.Connect
     assert "Conference" not in titles
 
 
+def test_list_events_today_includes_timed_events_with_bare_date_bounds(db: sqlite3.Connection, chat_mp: _MP) -> None:
+    """"What's on my calendar today?" sends a BARE-date upper bound
+    (date_from == date_to == today's YYYY-MM-DD, exactly as the schema instructs).
+    A stored event's ``due_at`` carries a time-of-day, so the lexical
+    ``due_at <= '<today>'`` compare in query_items sorted the timestamped value
+    AFTER the bare date and silently dropped every event on that day. list_events
+    must widen the bare upper bound to end-of-day and return the event."""
+    today = utc_now().replace(hour=0, minute=0, second=0, microsecond=0)
+    _seed_event(db, uid="ev-today", title="Morning standup", due_at=today + timedelta(hours=8))
+
+    bare = today.date().isoformat()
+    out = ToolDispatcher(chat_mp).dispatch(
+        "calendar",
+        {"action": "list_events", "date_from": bare, "date_to": bare, "act_summary": "x"},
+    )
+
+    assert "[calendar(status=success" in out
+    titles = {ev["title"] for ev in cast(list[dict[str, object]], _parse_body(out)["events"])}
+    assert "Morning standup" in titles
+
+
 def test_get_event_by_uid_renders_the_event(db: sqlite3.Connection, chat_mp: _MP) -> None:
     """``get_event`` by CalDAV uid renders the single event record."""
     _seed_event(
