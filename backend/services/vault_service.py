@@ -33,6 +33,7 @@ _KDF_ALGORITHM = "pbkdf2_sha256"
 # ── Backup filesystem permissions ───────────────────────────────────────────────
 _SECURE_DIR_MODE = 0o700  # owner rwx only — the data/secure/ backup directory
 _SECURE_FILE_MODE = 0o400 # owner read-only — each backup file
+_BACKUP_RETENTION = 6     # keep only the newest N vault_backup_*.json files
 
 
 # ── Custom exception ───────────────────────────────────────────────────────────
@@ -445,12 +446,13 @@ class VaultService:
     def _write_backup(self, km: "_VaultKeyMaterial") -> None:
         """Append *km* as a fresh, uniquely-stamped backup under ``data/secure/``.
 
-        Every DEK generation writes a new ``vault_backup_<stamp>.json`` and never
-        overwrites or deletes an earlier one — backups are retained forever so
-        recovery can fall back through every generation. The backup holds the
-        same password-protected material as the ``vault_config`` row, so it is no
-        weaker than the database. Written atomically (tmp + rename) and locked to
-        owner-read-only inside an owner-only directory.
+        Every DEK generation writes a new ``vault_backup_<stamp>.json``; only the
+        newest ``_BACKUP_RETENTION`` files are kept so recovery can still fall
+        back through recent generations without the directory growing unbounded
+        (these files are bundled into every instance snapshot). The backup holds
+        the same password-protected material as the ``vault_config`` row, so it
+        is no weaker than the database. Written atomically (tmp + rename) and
+        locked to owner-read-only inside an owner-only directory.
         """
         from services.time_utils import utc_now
 
@@ -485,6 +487,10 @@ class VaultService:
             raise
         os.chmod(path, _SECURE_FILE_MODE)
         logger.info("[Vault] Key material backed up to %s", path.name)
+
+        # Prune everything beyond the newest N (list is sorted newest-first).
+        for stale in FileMapperService.list_vault_backups()[_BACKUP_RETENTION:]:
+            stale.unlink(missing_ok=True)
 
     def _restore_from_backup(self, password: str) -> bool:
         """Rebuild ``vault_config`` from the first backup that *password* opens.

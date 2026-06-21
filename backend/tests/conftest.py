@@ -124,6 +124,17 @@ def db(_db_template: str, tmp_path: Path) -> Iterator[sqlite3.Connection]:
         heartbeat_service._ctx = None
 
 
+# ── Vault backup isolation ────────────────────────────────────────
+# Any test that initialises the real vault (directly or via /auth/register)
+# writes a permanent vault_backup_*.json. Redirect the secure dir to a per-test
+# temp path so backups never accumulate in the repo's data/secure/.
+
+@pytest.fixture(autouse=True)
+def _isolate_vault_backups(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from services.file_mapper_service import FileMapperService
+    monkeypatch.setattr(FileMapperService, "_SECURE_DIR", tmp_path / "secure")
+
+
 # ── Non-DB mock fixtures ──────────────────────────────────────────
 
 @pytest.fixture

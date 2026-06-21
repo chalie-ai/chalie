@@ -124,6 +124,21 @@ class TestVaultBackupWrite:
         # No plaintext password in the backup
         assert "strongpassword99" not in backup_path.read_text(encoding="utf-8")
 
+    def test_backups_are_capped_to_the_newest_retention_window(
+        self, db: sqlite3.Connection, store: object, redirect_backup_paths: None, secure_dir: Path
+    ) -> None:
+        cap = _vault_mod._BACKUP_RETENTION
+        vault = _vault_mod.get_vault_service()
+        for _ in range(cap + 3):
+            vault.initialize("strongpassword99")
+
+        backups = _backups(secure_dir)
+        assert len(backups) == cap, f"only the newest {cap} backups must be retained, got {len(backups)}"
+        # The survivors are the newest stamps and every one still parses.
+        assert backups == sorted(secure_dir.glob("vault_backup_*.json"), reverse=True)[:cap]
+        for path in backups:
+            json.loads(path.read_text(encoding="utf-8"))
+
 
 # ── Restore: data survives vault_config corruption ────────────────────────────
 
