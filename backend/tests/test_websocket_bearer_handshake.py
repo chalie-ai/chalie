@@ -42,6 +42,13 @@ from services.websocket_broker import WebSocketBroker
 pytestmark = pytest.mark.unit
 
 
+@pytest.fixture(autouse=True)
+def _enable_internal_dev(monkeypatch: pytest.MonkeyPatch) -> None:
+    # The bearer-over-WS handshake is a native-client surface gated behind
+    # CHALIE_INTERNAL_DEV; this suite exercises it, so the gate runs open.
+    monkeypatch.setenv("CHALIE_INTERNAL_DEV", "1")
+
+
 class _BoundarySocket:
     """A real consumer at the WS boundary — the same ``send`` / ``close`` /
     ``receive`` contract the production browser socket fulfils. Records sent

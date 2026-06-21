@@ -7,7 +7,8 @@ from typing import TYPE_CHECKING, cast
 
 from flask import Blueprint, request, jsonify
 from services.database_service import text
-from .auth import require_auth, _cookie_only
+from .auth import require_auth, _cookie_only, internal_only
+from services.feature_flags import internal_dev_enabled
 from werkzeug.security import generate_password_hash, check_password_hash
 
 if TYPE_CHECKING:
@@ -71,6 +72,7 @@ def auth_status() -> "ResponseReturnValue":
     * ``has_providers``      — ``True`` if at least one active provider is configured.
     * ``has_session``        — ``True`` if the request carries a valid session token.
     * ``vault_state``        — ``"unlocked" | "locked" | "uninitialized"``.
+    * ``internal_dev``       — ``True`` when in-development features are enabled.
     """
     try:
         from services.database_service import get_shared_db_service
@@ -115,6 +117,7 @@ def auth_status() -> "ResponseReturnValue":
             "has_session": has_session,
             "vault_state": vault_state,
             "has_vision_provider": has_vision,
+            "internal_dev": internal_dev_enabled(),
         }), 200
     except Exception as e:
         logger.error(f"[REST API] Auth status error: {e}")
@@ -122,6 +125,7 @@ def auth_status() -> "ResponseReturnValue":
 
 
 @user_auth_bp.route('/auth/username', methods=['GET'])
+@internal_only
 @require_auth
 @_cookie_only
 def get_username() -> "ResponseReturnValue":

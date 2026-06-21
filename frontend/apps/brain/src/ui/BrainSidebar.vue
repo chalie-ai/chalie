@@ -93,7 +93,10 @@ const NAV: NavItem[] = [
 ];
 
 const cognitionItems = computed(() => NAV.filter((n) => n.group === 'cognition'));
-const systemItems = computed(() => NAV.filter((n) => n.group === 'system'));
+// Link-device is an in-development feature; hide it unless the backend reports it on.
+const systemItems = computed(() =>
+  NAV.filter((n) => n.group === 'system' && (n.id !== 'link-device' || shell.internalDev)),
+);
 
 const activeSection = computed(() => route.path.split('/')[1] || 'providers');
 const activeSub = computed(() => route.path.split('/')[2] || '');

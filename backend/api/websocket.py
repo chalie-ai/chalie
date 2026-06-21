@@ -43,9 +43,15 @@ def _authenticate_ws(flask_request: object) -> bool:
     """
     from flask import Request
     from services.auth_session_service import validate_session
+    from services.feature_flags import internal_dev_enabled
 
     if validate_session(cast("Request", flask_request)):
         return True
+
+    # Bearer-over-WS (the ``?token=`` arg) is a native-client-only path; with
+    # in-development features disabled the handshake stays cookie-only.
+    if not internal_dev_enabled():
+        return False
 
     token = cast("Request", flask_request).args.get("token", "")
     if not token:

@@ -13,12 +13,30 @@ import logging
 from collections.abc import Callable
 from typing import TYPE_CHECKING
 from functools import wraps
-from flask import request, jsonify, g
+from flask import request, jsonify, g, abort
+
+from services.feature_flags import internal_dev_enabled
 
 if TYPE_CHECKING:
     from flask.typing import ResponseReturnValue
 
 logger = logging.getLogger(__name__)
+
+
+def internal_only(f: Callable[..., "ResponseReturnValue"]) -> Callable[..., "ResponseReturnValue"]:
+    """Hide a route unless in-development features are enabled for this process.
+
+    Answers 404 (not 403) when disabled, so a gated feature is indistinguishable
+    from one that does not exist. Outermost decorator, above ``require_auth``, so
+    the gate closes before authentication even runs.
+    """
+    @wraps(f)
+    def decorated(*args: object, **kwargs: object) -> "ResponseReturnValue":
+        if not internal_dev_enabled():
+            abort(404)
+        return f(*args, **kwargs)
+
+    return decorated
 
 
 def require_auth(f: Callable[..., "ResponseReturnValue"]) -> Callable[..., "ResponseReturnValue"]:

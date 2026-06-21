@@ -14,6 +14,7 @@ from flask_cors import CORS
 
 from services.file_mapper_service import FileMapperService
 from .auth import require_session as require_session
+from .auth import internal_only
 
 
 logger = logging.getLogger(__name__)
@@ -140,10 +141,12 @@ def _register_static_routes(app: Flask) -> None:
     # The native (Tauri) client redirects here before any login to scan its
     # pairing QR; web never reaches it (the gate diverts only on the Tauri runtime).
     @app.route('/pairing', methods=["GET"])
+    @internal_only
     def pairing_index_no_slash() -> ResponseReturnValue:
         return redirect('/pairing/', code=301)
 
     @app.route('/pairing/', methods=["GET"])
+    @internal_only
     def pairing_index() -> ResponseReturnValue:
         return _send_index(interface_dir, 'pairing/index.html')
 

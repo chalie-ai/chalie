@@ -7,6 +7,7 @@ export interface AuthStatus {
   has_session: boolean;
   vault_state: 'unlocked' | 'locked' | 'uninitialized';
   has_vision_provider: boolean;
+  internal_dev: boolean;
 }
 
 export const system = {

@@ -27,6 +27,13 @@ from services.wrapper_auth_service import WrapperAuthService
 pytestmark = pytest.mark.unit
 
 
+@pytest.fixture(autouse=True)
+def _enable_internal_dev(monkeypatch: pytest.MonkeyPatch) -> None:
+    # /auth/username is a native-pairing surface gated behind CHALIE_INTERNAL_DEV;
+    # this suite exercises the feature, so it runs with the gate open.
+    monkeypatch.setenv("CHALIE_INTERNAL_DEV", "1")
+
+
 def _make_client() -> FlaskClient:
     # Real, unauthenticated app — require_auth runs its real cookie+bearer
     # path (the authed_client fixture patches validate_session, which would
