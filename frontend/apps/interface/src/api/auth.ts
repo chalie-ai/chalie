@@ -1,10 +1,11 @@
 import { api, AuthError, HttpError } from '@chalie/shared';
 
-/** Response from GET /auth/status. */
-export interface AuthStatus {
-  has_master_account: boolean;
-  has_session: boolean;
-  has_providers: boolean;
+/** POST /auth/login response (existing backend contract — do not rename keys). */
+export interface LoginResult {
+  ok?: boolean;
+  vault_state?: 'unlocked' | 'locked' | 'uninitialized';
+  error?: string;
+  onboarding_required?: boolean;
 }
 
 // Auth/onboarding endpoints: a 401 here is bad credentials / no session yet /
@@ -13,14 +14,10 @@ export interface AuthStatus {
 const NO_REDIRECT = { redirectOnAuthError: false } as const;
 
 export const auth = {
-  /** GET /auth/status — master-account / session / provider readiness. */
-  authStatus(): Promise<AuthStatus> {
-    return api.get<AuthStatus>('/auth/status', NO_REDIRECT);
-  },
-
-  /** POST /auth/login */
-  login(username: string, password: string): Promise<void> {
-    return api.post<void>('/auth/login', { username, password }, NO_REDIRECT);
+  /** POST /auth/login — unseal the vault with the stored login username + typed
+   *  password. Existing endpoint; called here only from the UnlockVault overlay. */
+  login(username: string, password: string): Promise<LoginResult> {
+    return api.post<LoginResult>('/auth/login', { username, password }, NO_REDIRECT);
   },
 
   // register() and setVoiceEnabled() back the onboarding multi-page entry, not

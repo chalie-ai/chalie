@@ -1,5 +1,5 @@
 import { createRouter, createWebHistory } from 'vue-router';
-import { HttpError, AuthError } from '@chalie/shared';
+import { HttpError, AuthError, getToken, isTauri } from '@chalie/shared';
 import HomeView from './views/HomeView.vue';
 import { system } from './api/system';
 
@@ -29,6 +29,17 @@ function redirect(to: string): false {
 //     all-false, which resolves to the onboarding redirect below.
 //   - Genuine network failure → stay; the backend guards the real endpoints.
 router.beforeEach(async () => {
+  // Native runtime with no bearer yet → pair by QR (no cookie-login on mobile).
+  // Pairing supplies the backend host, so nothing can be probed until then — this
+  // MUST precede authStatus (a host-less probe rejects with a network TypeError,
+  // which the catch below treats as "stay", stranding the unpaired app on the chat
+  // shell). /pairing/ is its own page (like /login/), so this full-document
+  // redirect lands there without re-entering this gate. Web, or a token already
+  // present, skips this.
+  if (isTauri && !getToken()) {
+    return redirect('/pairing/');
+  }
+
   let status;
   try {
     status = await system.authStatus();

@@ -8,6 +8,8 @@ export const useShellStore = defineStore('brain-shell', {
     sidebarCollapsed: false as boolean,
     mobileOpen: false as boolean,
     commandPaletteOpen: false as boolean,
+    // In-development features enabled (from /auth/status); gates the Link-device page.
+    internalDev: false as boolean,
   }),
 
   actions: {

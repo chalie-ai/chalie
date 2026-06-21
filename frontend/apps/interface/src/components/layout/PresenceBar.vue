@@ -3,7 +3,7 @@ import { Star, Clock, Brain, Sun, Moon } from '@lucide/vue';
 import { storeToRefs } from 'pinia';
 import { useSessionStore } from '../../stores/session';
 import { useTasksStore } from '../../stores/tasks';
-import { useTheme } from '@chalie/shared';
+import { useTheme, platform } from '@chalie/shared';
 import { emit } from '../../composables/useEventBus';
 
 const session = useSessionStore();
@@ -19,9 +19,9 @@ function handleThemeToggle(): void {
   emit('chalie:theme-changed', { theme: theme.value });
 }
 
-/** Settings button → open the Brain admin dashboard. */
+/** Settings button → open the Brain admin dashboard via the platform adapter. */
 function handleSettings(): void {
-  globalThis.open('/brain/', 'chalie-brain');
+  platform.openBrain();
 }
 </script>
 

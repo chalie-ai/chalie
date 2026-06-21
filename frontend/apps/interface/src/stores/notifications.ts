@@ -1,7 +1,7 @@
 /**
  * Notifications store — audio chime, OS notifications, tip card, update prompt.
  *
- * Browser-API access goes exclusively through webPlatformAdapter (no raw
+ * Browser-API access goes exclusively through the runtime platform adapter (no raw
  * window.Notification / localStorage / new AudioContext()); HTTP through api
  * wrappers only.
  *
@@ -10,7 +10,7 @@
  * activate automatically when the backend ships.
  */
 import { defineStore } from 'pinia';
-import { webPlatformAdapter } from '@chalie/shared';
+import { platform as adapter } from '@chalie/shared';
 import { tips } from '../api/tips';
 import { system } from '../api/system';
 
@@ -54,9 +54,7 @@ export interface UpdateState {
 let _audioCtx: AudioContext | null = null;
 
 function getAudioContext(): AudioContext {
-  if (!_audioCtx) {
-    _audioCtx = webPlatformAdapter.createAudioContext();
-  }
+  _audioCtx ??= adapter.createAudioContext();
   return _audioCtx;
 }
 
@@ -82,10 +80,10 @@ function playChime(): void {
 }
 
 function showOsNotification(text: string): void {
-  if (webPlatformAdapter.notificationPermission() !== 'granted') return;
+  if (adapter.notificationPermission() !== 'granted') return;
   const body = text.length > NOTIFY_BODY_MAX ? text.slice(0, NOTIFY_BODY_MAX) + '…' : text;
   try {
-    webPlatformAdapter.showNotification(NOTIFY_TITLE, { body, tag: NOTIFY_TAG });
+    adapter.showNotification(NOTIFY_TITLE, { body, tag: NOTIFY_TAG });
   } catch (e) {
     console.warn('[notifications] Notification API failed:', e);
   }
@@ -122,7 +120,7 @@ export const useNotificationsStore = defineStore('notifications', {
      */
     pushBackground(text: string): void {
       if (!text) return;
-      if (webPlatformAdapter.notificationPermission() !== 'granted') return;
+      if (adapter.notificationPermission() !== 'granted') return;
       showOsNotification(text);
       playChime();
       this.notifications.push({ id: String(Date.now()), text });
@@ -162,7 +160,7 @@ export const useNotificationsStore = defineStore('notifications', {
     /** Skips display if this version was already dismissed. DORMANT. */
     handleUpdate(payload: UpdateState): void {
       if (!payload || !payload.latest_tag) return;
-      const dismissed = webPlatformAdapter.getItem(LS_UPDATE_DISMISSED);
+      const dismissed = adapter.getItem(LS_UPDATE_DISMISSED);
       if (dismissed === payload.latest_tag) return;
       this.currentUpdate = payload;
       this.updateApplyMessage = null;
@@ -172,7 +170,7 @@ export const useNotificationsStore = defineStore('notifications', {
     /** Persists the dismissed version tag so it won't reappear. */
     dismissUpdate(): void {
       if (!this.currentUpdate) return;
-      webPlatformAdapter.setItem(LS_UPDATE_DISMISSED, this.currentUpdate.latest_tag);
+      adapter.setItem(LS_UPDATE_DISMISSED, this.currentUpdate.latest_tag);
       this.currentUpdate = null;
       this.updateApplyMessage = null;
     },

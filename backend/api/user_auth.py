@@ -7,6 +7,8 @@ from typing import TYPE_CHECKING, cast
 
 from flask import Blueprint, request, jsonify
 from services.database_service import text
+from .auth import require_auth, _cookie_only, internal_only
+from services.feature_flags import internal_dev_enabled
 from werkzeug.security import generate_password_hash, check_password_hash
 
 if TYPE_CHECKING:
@@ -70,6 +72,7 @@ def auth_status() -> "ResponseReturnValue":
     * ``has_providers``      — ``True`` if at least one active provider is configured.
     * ``has_session``        — ``True`` if the request carries a valid session token.
     * ``vault_state``        — ``"unlocked" | "locked" | "uninitialized"``.
+    * ``internal_dev``       — ``True`` when in-development features are enabled.
     """
     try:
         from services.database_service import get_shared_db_service
@@ -114,10 +117,36 @@ def auth_status() -> "ResponseReturnValue":
             "has_session": has_session,
             "vault_state": vault_state,
             "has_vision_provider": has_vision,
+            "internal_dev": internal_dev_enabled(),
         }), 200
     except Exception as e:
         logger.error(f"[REST API] Auth status error: {e}")
         return jsonify({"error": "Failed to check auth status"}), 500
+
+
+@user_auth_bp.route('/auth/username', methods=['GET'])
+@internal_only
+@require_auth
+@_cookie_only
+def get_username() -> "ResponseReturnValue":
+    """Return the master account LOGIN username for the authenticated dashboard
+    session — the credential the device's UnlockVault screen submits to
+    POST /auth/login. Cookie-session only; a wrapper bearer must not read it.
+    """
+    try:
+        from services.database_service import get_shared_db_service
+
+        db = get_shared_db_service()
+        with db.get_session() as session:
+            row = session.execute(
+                text("SELECT username FROM master_account LIMIT 1")
+            ).fetchone()
+        if not row:
+            return jsonify({"error": "No master account"}), 404
+        return jsonify({"username": row[0]}), 200
+    except Exception:
+        logger.exception("[REST API] Get username error")
+        return jsonify({"error": "Failed to read username"}), 500
 
 
 @user_auth_bp.route('/auth/register', methods=['POST'])

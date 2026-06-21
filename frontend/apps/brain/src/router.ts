@@ -12,6 +12,7 @@ import PoliciesView from './views/PoliciesView.vue';
 import SkillsView from './views/SkillsView.vue';
 import McpView from './views/McpView.vue';
 import ImportExportView from './views/ImportExportView.vue';
+import LinkDeviceView from './views/LinkDeviceView.vue';
 
 import MemorySub from './views/cognition/MemorySub.vue';
 import AutoResearchSub from './views/cognition/AutoResearchSub.vue';
@@ -109,6 +110,7 @@ export const router = createRouter({
     { path: '/skills', name: 'skills', component: SkillsView },
     { path: '/mcp', name: 'mcp', component: McpView },
     { path: '/import-export', name: 'import-export', component: ImportExportView },
+    { path: '/link-device', name: 'link-device', component: LinkDeviceView },
 
     // Catch-all → providers.
     { path: '/:pathMatch(.*)*', redirect: '/providers' },
@@ -132,7 +134,7 @@ function hardRedirect(to: string): false {
  * providersOnly LOCK (stay mounted, force Providers panel, NOT a hard redirect).
  * Network failure → stay; the real API endpoints guard themselves.
  */
-router.beforeEach(async () => {
+router.beforeEach(async (to) => {
   const { useShellStore } = await import('./stores/shell');
   const shell = useShellStore();
 
@@ -148,7 +150,8 @@ router.beforeEach(async () => {
     return true;
   }
 
-  const { has_master_account, has_session, has_providers } = status;
+  const { has_master_account, has_session, has_providers, internal_dev } = status;
+  shell.internalDev = internal_dev;
 
   if (!has_master_account) {
     return hardRedirect('/on-boarding/');
@@ -164,6 +167,11 @@ router.beforeEach(async () => {
     if (router.currentRoute.value.name !== 'providers') {
       return { name: 'providers' };
     }
+  }
+
+  // Link-device is an in-development feature; divert direct navigation when off.
+  if (!internal_dev && to.name === 'link-device') {
+    return { name: 'providers' };
   }
 
   return true;

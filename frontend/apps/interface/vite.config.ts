@@ -29,6 +29,7 @@ export default defineConfig({
         main: fileURLToPath(new URL('./index.html', import.meta.url)),
         login: fileURLToPath(new URL('./login/index.html', import.meta.url)),
         onboarding: fileURLToPath(new URL('./on-boarding/index.html', import.meta.url)),
+        pairing: fileURLToPath(new URL('./pairing/index.html', import.meta.url)),
       },
     },
   },

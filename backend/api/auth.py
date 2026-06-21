@@ -13,12 +13,30 @@ import logging
 from collections.abc import Callable
 from typing import TYPE_CHECKING
 from functools import wraps
-from flask import request, jsonify, g
+from flask import request, jsonify, g, abort
+
+from services.feature_flags import internal_dev_enabled
 
 if TYPE_CHECKING:
     from flask.typing import ResponseReturnValue
 
 logger = logging.getLogger(__name__)
+
+
+def internal_only(f: Callable[..., "ResponseReturnValue"]) -> Callable[..., "ResponseReturnValue"]:
+    """Hide a route unless in-development features are enabled for this process.
+
+    Answers 404 (not 403) when disabled, so a gated feature is indistinguishable
+    from one that does not exist. Outermost decorator, above ``require_auth``, so
+    the gate closes before authentication even runs.
+    """
+    @wraps(f)
+    def decorated(*args: object, **kwargs: object) -> "ResponseReturnValue":
+        if not internal_dev_enabled():
+            abort(404)
+        return f(*args, **kwargs)
+
+    return decorated
 
 
 def require_auth(f: Callable[..., "ResponseReturnValue"]) -> Callable[..., "ResponseReturnValue"]:
@@ -53,6 +71,24 @@ def require_auth(f: Callable[..., "ResponseReturnValue"]) -> Callable[..., "Resp
             logger.debug("[Auth] Bearer token validation failed: %s", e)
 
         return jsonify({"error": "Authentication required"}), 401
+
+    return decorated
+
+
+def _cookie_only(f: Callable[..., "ResponseReturnValue"]) -> Callable[..., "ResponseReturnValue"]:
+    """Restrict a route to cookie-authenticated requests (no bearer tokens).
+
+    Stacked under ``@require_auth``: once a request has authenticated, a bearer
+    wrapper has ``g.wrapper_id`` set while a human cookie session leaves it
+    ``None``. Used where only a human dashboard session may act — minting
+    wrapper tokens, reading the master login username for device pairing —
+    never a wrapper acting on its own behalf.
+    """
+    @wraps(f)
+    def decorated(*args: object, **kwargs: object) -> "ResponseReturnValue":
+        if getattr(g, "wrapper_id", None) is not None:
+            return jsonify({"error": "This action requires cookie session auth"}), 403
+        return f(*args, **kwargs)
 
     return decorated
 

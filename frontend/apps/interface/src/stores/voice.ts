@@ -9,7 +9,7 @@
  */
 import { defineStore } from 'pinia';
 import { ref } from 'vue';
-import { webPlatformAdapter } from '@chalie/shared';
+import { platform as adapter } from '@chalie/shared';
 import type { WakeLockHandle } from '@chalie/shared';
 import { voice } from '../api/voice';
 import { emit } from '../composables/useEventBus';
@@ -72,20 +72,48 @@ export const useVoiceStore = defineStore('voice', () => {
     }
   }
 
+  /** True while a native on-device STT capture is in flight (Tauri only). */
+  let _nativeSTT = false;
+
   /** Single entry point for the mic button. */
   async function toggleRecording(): Promise<void> {
+    if (_nativeSTT) {
+      _nativeSTT = false;
+      recorderState.value = 'idle';
+      try {
+        await adapter.stopSTT();
+      } catch (err) {
+        console.debug('[voice] stopSTT:', err);
+      }
+      return;
+    }
     if (recorderState.value === 'recording') {
       await _stopAndUpload();
-    } else if (recorderState.value === 'idle') {
-      await _startRecording();
+      return;
     }
-    // 'uploading' — button is effectively disabled; ignore clicks.
+    if (recorderState.value !== 'idle') return; // 'uploading' — ignore clicks.
+
+    // On the native runtime, capture on-device (server /voice/transcribe is
+    // bypassed). Native partial/final results arrive as chalie:voice-transcript
+    // window events emitted by the plugin, so we do NOT re-emit here.
+    try {
+      await adapter.startSTT();
+      _nativeSTT = true;
+      recError.value = null;
+      recorderState.value = 'recording';
+      return;
+    } catch (err) {
+      // STT_UNSUPPORTED (web) / permission-denied / no on-device model →
+      // fall back to the MediaRecorder + /voice/transcribe path.
+      console.debug('[voice] native STT unavailable, falling back:', err);
+    }
+    await _startRecording();
   }
 
   async function _startRecording(): Promise<void> {
     let stream: MediaStream;
     try {
-      stream = await webPlatformAdapter.getUserMedia({ audio: true });
+      stream = await adapter.getUserMedia({ audio: true });
     } catch (err: unknown) {
       const name = err instanceof DOMException ? err.name : '';
       if (name === 'NotAllowedError' || name === 'PermissionDeniedError') {
@@ -114,7 +142,7 @@ export const useVoiceStore = defineStore('voice', () => {
     _mediaRecorder.start(250);
     recorderState.value = 'recording';
 
-    _wakeLock = webPlatformAdapter.createWakeLock();
+    _wakeLock = adapter.createWakeLock();
     void _wakeLock.acquire();
 
     // Auto-stop at the 10-minute limit.
@@ -185,7 +213,7 @@ export const useVoiceStore = defineStore('voice', () => {
   async function _convertToWav(chunks: Blob[], mimeType: string): Promise<File> {
     const blob = new Blob(chunks, { type: mimeType });
     const arrayBuffer = await blob.arrayBuffer();
-    const audioCtx = webPlatformAdapter.createAudioContext();
+    const audioCtx = adapter.createAudioContext();
     const audioBuffer = await new Promise<AudioBuffer>((resolve, reject) => {
       audioCtx.decodeAudioData(arrayBuffer, resolve, reject);
     });

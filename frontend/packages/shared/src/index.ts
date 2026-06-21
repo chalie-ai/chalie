@@ -10,9 +10,13 @@ export type {
   ChatCallbacks,
   ActionCallbacks,
 } from './services/WebSocketService';
-export { getHost, setHost } from './config/host';
+export { getHost, setHost, getToken, setToken, getUsername, setUsername } from './config/host';
+export type { PairingPayload } from './config/pairing';
+export { validatePairingPayload } from './config/pairing';
 export type { PlatformAdapter, WakeLockHandle } from './platform/PlatformAdapter';
 export { webPlatformAdapter } from './platform/webPlatformAdapter';
+export { tauriPlatformAdapter } from './platform/tauriPlatformAdapter';
+export { platform, isTauri } from './platform';
 export { useThemeStore } from './stores/theme';
 export type { Theme } from './stores/theme';
 export { useConnectionStore } from './stores/connection';

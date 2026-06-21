@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { onMounted, onBeforeUnmount, ref } from 'vue';
-import { useTheme } from '@chalie/shared';
+import { platform, isTauri, useTheme } from '@chalie/shared';
 import { useSessionStore } from './stores/session';
 import { useVoiceStore } from './stores/voice';
 import { on } from './composables/useEventBus';
@@ -17,6 +17,7 @@ import TaskDrawer from './components/overlays/TaskDrawer.vue';
 import QuickTipCard from './components/overlays/QuickTipCard.vue';
 import UpdatePrompt from './components/overlays/UpdatePrompt.vue';
 import VoicePlayerDialog from './components/voice/VoicePlayerDialog.vue';
+import UnlockVault from './components/layout/UnlockVault.vue';
 
 const { init: initTheme } = useTheme();
 const session = useSessionStore();
@@ -45,6 +46,12 @@ onMounted(() => {
   session.onAuthFailure(handleAuthFailure);
   session.init();
   voiceStore.checkAvailability();
+
+  // Native shell only: request OS notification permission once so background
+  // message notifications can fire. On web the browser drives its own prompt.
+  if (isTauri) {
+    void platform.requestNotificationPermission();
+  }
 
   _unbindRecall = on('chalie:open-recall', () => {
     recallRef.value?.open();
@@ -90,4 +97,5 @@ onBeforeUnmount(() => {
   <UpdatePrompt />
   <VoicePlayerDialog />
   <MomentSearchDialog ref="recallRef" />
+  <UnlockVault />
 </template>

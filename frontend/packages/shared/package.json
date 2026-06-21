@@ -11,6 +11,11 @@
   "scripts": {
     "typecheck": "vue-tsc --noEmit -p tsconfig.json"
   },
+  "dependencies": {
+    "@tauri-apps/api": "^2",
+    "@tauri-apps/plugin-notification": "^2",
+    "@tauri-apps/plugin-opener": "^2"
+  },
   "peerDependencies": {
     "pinia": "^2.2.0",
     "vue": "^3.5.0"
