@@ -71,7 +71,7 @@ def _tool_name(server_name: str, remote_tool: str) -> str:
     """Build the prefixed tool name for a remote MCP tool.
 
     Format: _mcp_<sanitized_server_name>_<remote_tool_name>
-    Example: server='[task_tracker]', tool='create_document' → '_mcp_taskie_create_document'
+    Example: server='taskie', tool='create_document' → '_mcp_taskie_create_document'
     """
     return f"_mcp_{_sanitize_name(server_name)}_{remote_tool}"
 

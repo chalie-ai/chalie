@@ -7,7 +7,7 @@ real test DB and real files. ZERO mocks: the OCR description produced by the
 no-vision-provider fork flows through the SAME production pipeline
 (``create_document_artifacts`` -> data_graph embed + FTS5) that every upload
 uses, and ``document(action='search')`` recalls it via the REAL recall path
-(FTS5 + vector). Proves the [document_id] guardrail is truthful: an image with words
+(FTS5 + vector). Proves the doc_id guardrail is truthful: an image with words
 becomes a searchable document.
 
 Second test proves the ``_run_upload_extraction`` image-aware branch: a textless
@@ -106,8 +106,8 @@ def test_textless_image_is_ready_not_failed(db: sqlite3.Connection) -> None:
     })
     # : doc id comes straight off the structured upload body.
     assert up.status == "success", up
-    [document_id] = cast(str, cast(dict[str, object], up.body)["id"])
+    doc_id = cast(str, cast(dict[str, object], up.body)["id"])
 
-    doc = DocumentService(get_shared_db_service()).get_document([document_id])
+    doc = DocumentService(get_shared_db_service()).get_document(doc_id)
     assert doc is not None, up
     assert doc["status"] == "ready", doc.get("status")

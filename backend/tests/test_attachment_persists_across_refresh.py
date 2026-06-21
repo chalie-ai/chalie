@@ -1,7 +1,7 @@
 """Feature test: chat attachments survive a page refresh.
 
 Drives the REAL production chain end-to-end with ZERO mocks: ``_seed_turn_zero``
-must persist a ``transcript_docs(transcript_id, [document_id])`` link per upload, and
+must persist a ``transcript_docs(transcript_id, doc_id)`` link per upload, and
 ``get_recent_history`` must return those links as ``msg["attachments"]`` so the
 frontend re-renders from ``/documents/<id>/preview``.
 
@@ -72,7 +72,7 @@ def _build_parent(attachments: list[str]) -> MessageProcessor:
 def _linked_doc_ids(transcript_id: int) -> set[object]:
     with get_shared_db_service().connection() as conn:
         rows = conn.execute(
-            "SELECT [document_id] FROM transcript_docs WHERE transcript_id = ?",
+            "SELECT doc_id FROM transcript_docs WHERE transcript_id = ?",
             (transcript_id,),
         ).fetchall()
     return {r[0] for r in rows}
@@ -108,7 +108,7 @@ def test_attachments_are_linked_and_served_on_refresh(db: sqlite3.Connection) ->
     attachments = mine.get("attachments")
     assert attachments, "rebuilt user turn carries no attachments"
 
-    att_by_id = {a["[document_id]"]: a for a in cast(list[dict[str, object]], attachments)}
+    att_by_id = {a["doc_id"]: a for a in cast(list[dict[str, object]], attachments)}
     assert set(att_by_id) == {img_doc["id"], txt_doc["id"]}
 
     img_att = att_by_id[img_doc["id"]]
@@ -146,7 +146,7 @@ def test_skipped_upload_writes_no_link(db: sqlite3.Connection) -> None:
     messages, _, _ = get_recent_history(limit=120, offset=0)
     mine = next((m for m in messages if m["id"] == str(parent.uid)), None)
     assert mine is not None
-    assert [a["[document_id]"] for a in cast(list[dict[str, object]], mine.get("attachments", []))] == [good_id]
+    assert [a["doc_id"] for a in cast(list[dict[str, object]], mine.get("attachments", []))] == [good_id]
 
 
 def test_cancel_after_attachment_deletes_turn_and_cascades_link(db: sqlite3.Connection) -> None:
@@ -167,8 +167,8 @@ def test_cancel_after_attachment_deletes_turn_and_cascades_link(db: sqlite3.Conn
     uid = cast(int, parent.uid)
     new_docs = [d for d in svc.get_all_documents() if d["id"] not in before]
     assert len(new_docs) == 1
-    [document_id] = cast(str, new_docs[0]["id"])
-    assert _linked_doc_ids(uid) == {[document_id]}  # link exists pre-cancel
+    doc_id = cast(str, new_docs[0]["id"])
+    assert _linked_doc_ids(uid) == {doc_id}  # link exists pre-cancel
 
     # REAL production cleanup — must not be blocked by the link.
     parent._cleanup_cancelled()
@@ -178,4 +178,4 @@ def test_cancel_after_attachment_deletes_turn_and_cascades_link(db: sqlite3.Conn
     assert turn is None, "cancelled transcript row not deleted (FK blocked the delete?)"
     assert _linked_doc_ids(uid) == set(), "link not cascaded on transcript delete"
     # The document is independent of the turn — it must NOT be cascaded away.
-    assert svc.get_document([document_id]) is not None
+    assert svc.get_document(doc_id) is not None

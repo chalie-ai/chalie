@@ -35,7 +35,7 @@ _WEB_BROWSE_SYSTEM_PROMPT = (
     "returns JSON describing the page and what changed — trust it over your "
     "assumptions, and never invent content, URLs, or results.\n\n"
     "Screenshots are saved as documents; use the `vision` tool with the "
-    "returned [document_id] to see one. Use `memory` to recall user preferences when "
+    "returned doc_id to see one. Use `memory` to recall user preferences when "
     "the task needs them. If a page demands a login or CAPTCHA, report that "
     "plainly instead of trying to get past it.\n\n"
     "STOP RULE: the moment you can answer the goal — or know you cannot — stop "
@@ -82,7 +82,7 @@ class WebBrowseConfig(ProcessorConfig):
         )
 
     def final_screenshots(self) -> list[tuple[str, str]]:
-        """The ``([document_id], url)`` pairs captured by the finished run.
+        """The ``(doc_id, url)`` pairs captured by the finished run.
 
         Populated by the post-turn hook just before it closes the session;
         empty until the run ends (or when no screenshots were taken)."""
@@ -93,13 +93,13 @@ class WebBrowseConfig(ProcessorConfig):
 
     def get_user_prompt(self, mp: "MessageProcessor") -> str:
         """Ledger is rebuilt from session state on every iteration so it can never
-        lose a screenshot [document_id] — it is derived deterministically from what was
+        lose a screenshot doc_id — it is derived deterministically from what was
         captured this run, not from anything the model carries forward in its own
         text."""
         parts = [f"Browsing goal:\n{mp._raw_input}"]
         shots = screenshot_ledger(getattr(mp, "uid", None) or 0)
         if shots:
-            lines = "\n".join(f"- [document_id]={[document_id]} ({url})" for [document_id], url in shots)
+            lines = "\n".join(f"- doc_id={doc_id} ({url})" for doc_id, url in shots)
             parts.append(f"Screenshots captured this run (view with the vision tool):\n{lines}")
         trail = render_trail(mp)
         if trail:

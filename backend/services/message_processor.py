@@ -290,7 +290,7 @@ class MessageProcessor:
         #    across a bounded pool and JOIN before return (the `with` exit is the
         #    barrier). Safe concurrently: each task builds its OWN ToolDispatcher and
         #    holds its own thread-local connection; writes serialise at the SQLite WAL
-        #    layer, and [document_id] is a pre-generated random hex, never a cross-connection rowid.
+        #    layer, and doc_id is a pre-generated random hex, never a cross-connection rowid.
         attachments = list(cast("list[str]", self._metadata.get("attachments") or []))
         if attachments:
             from concurrent.futures import ThreadPoolExecutor  # noqa: PLC0415
@@ -319,7 +319,7 @@ class MessageProcessor:
         })
         # Persist the turn<->doc link so the chat re-renders this attachment on
         # refresh (the live preview is a browser-only blob: URL). The success body
-        # carries "id":"<[document_id]>" ONLY on success, so a failed upload links nothing.
+        # carries "id":"<doc_id>" ONLY on success, so a failed upload links nothing.
         # Scoped to the user-attachment seed: a model-issued upload mid-turn must
         # NOT render as a user attachment.
         if self.uid is not None:

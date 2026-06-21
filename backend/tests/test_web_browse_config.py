@@ -40,7 +40,7 @@ def test_screenshot_ledger_pins_doc_ids_into_every_prompt(db: sqlite3.Connection
     uid = cast(int, mp.uid)
     before = cfg.get_user_prompt(mp)
     assert before.startswith("Browsing goal:")
-    assert "[document_id]" not in before
+    assert "doc_id" not in before
 
     record_screenshot(uid, "ab12cd34", "https://example.com/checkout")
     after = cfg.get_user_prompt(mp)
@@ -83,7 +83,7 @@ def test_screenshot_doc_ids_survive_session_close_into_the_callers_answer(db: sq
     )
     assert tr.status == "success"
     assert "The page shows Example Domain." in tr.body
-    assert "[document_id]=ab12cd34" in tr.body
+    assert "doc_id=ab12cd34" in tr.body
     assert "vision" in tr.body
     assert tr.meta == {"screenshots": 1}
 

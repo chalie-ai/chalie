@@ -937,7 +937,7 @@ class Transcript:
 
 
     @staticmethod
-    def link_transcript_doc(transcript_id: int, [document_id]: str) -> None:
+    def link_transcript_doc(transcript_id: int, doc_id: str) -> None:
         """Link an uploaded document to the transcript turn that carried it.
 
         Powers chat-attachment persistence across page refresh: the live preview is a
@@ -951,8 +951,8 @@ class Transcript:
         db = get_shared_db_service()
         with db.connection() as conn:
             conn.execute(
-                "INSERT OR IGNORE INTO transcript_docs (transcript_id, [document_id]) VALUES (?, ?)",
-                (transcript_id, [document_id]),
+                "INSERT OR IGNORE INTO transcript_docs (transcript_id, doc_id) VALUES (?, ?)",
+                (transcript_id, doc_id),
             )
 
 

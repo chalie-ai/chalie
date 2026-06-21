@@ -122,7 +122,7 @@ def test_vision_run_provider_error_returns_visible_error(db: sqlite3.Connection)
     import hashlib
 
     doc_svc = DocumentService(get_shared_db_service())
-    [document_id] = doc_svc.create_document(
+    doc_id = doc_svc.create_document(
         original_name="pic.png",
         mime_type="image/png",
         file_size=len(_png_bytes()),
@@ -135,7 +135,7 @@ def test_vision_run_provider_error_returns_visible_error(db: sqlite3.Connection)
     abs_path.write_bytes(_png_bytes())
 
     ability = VisionAbility(mp=_make_user_mp())
-    result = ability.run({"image": [document_id], "query": "what is this"})
+    result = ability.run({"image": doc_id, "query": "what is this"})
 
     assert result.status == "error"
     assert result.body  # non-empty: the failure is visible, not swallowed
@@ -192,7 +192,7 @@ def _real_image_doc_for_vision(db: sqlite3.Connection, rel_dir: str = "vis_tr001
     documents path so the ability resolves a genuine file on disk."""
     png = _png_bytes()
     doc_svc = DocumentService(get_shared_db_service())
-    [document_id] = doc_svc.create_document(
+    doc_id = doc_svc.create_document(
         original_name="pic.png",
         mime_type="image/png",
         file_size=len(png),
@@ -202,7 +202,7 @@ def _real_image_doc_for_vision(db: sqlite3.Connection, rel_dir: str = "vis_tr001
     abs_path = FileMapperService.get_documents_path(rel_dir, "pic.png")
     abs_path.parent.mkdir(parents=True, exist_ok=True)
     abs_path.write_bytes(png)
-    return [document_id]
+    return doc_id
 
 
 @pytest.mark.unit
@@ -224,23 +224,23 @@ def test_whitespace_only_image_is_missing_params(db: sqlite3.Connection, _vision
 def test_doc_with_no_file_path_is_no_file_on_disk(db: sqlite3.Connection, _vision_chat_mp: MP) -> None:
     """A real document row whose ``file_path`` is empty (no stored file) →
     ``code=no-file-on-disk`` with a recovery hint."""
-    [document_id] = "facefeed2"
+    doc_id = "facefeed2"
     db.execute(
         "INSERT INTO documents (id, original_name, mime_type, file_size_bytes, "
         "file_path, file_hash) VALUES (?, ?, ?, ?, ?, ?)",
-        ([document_id], "pic.png", "image/png", len(_png_bytes()), "", "abc"),
+        (doc_id, "pic.png", "image/png", len(_png_bytes()), "", "abc"),
     )
     db.commit()
 
     out = ToolDispatcher(_vision_chat_mp).dispatch(
-        "vision", {"image": [document_id], "query": "x", "act_summary": "x"}
+        "vision", {"image": doc_id, "query": "x", "act_summary": "x"}
     )
 
     h = _vision_head(out)
     assert "status=error" in h
     assert "code=no-file-on-disk" in h
     assert "code=error]" not in out
-    assert [document_id] in _vision_body(out)
+    assert doc_id in _vision_body(out)
     assert any(ln.startswith("hint:") for ln in out.splitlines())
 
 
@@ -252,10 +252,10 @@ def test_ocr_fallback_success_is_degraded(db: sqlite3.Connection, _vision_chat_m
     ProviderDbService(get_shared_db_service()).set_vision_provider(None)
     assert ProviderDbService(get_shared_db_service()).get_vision_provider() is None
 
-    [document_id] = _real_image_doc_for_vision(db, rel_dir="vis_tr002")
+    doc_id = _real_image_doc_for_vision(db, rel_dir="vis_tr002")
 
     out = ToolDispatcher(_vision_chat_mp).dispatch(
-        "vision", {"image": [document_id], "query": "what is this", "act_summary": "x"}
+        "vision", {"image": doc_id, "query": "what is this", "act_summary": "x"}
     )
 
     h = _vision_head(out)

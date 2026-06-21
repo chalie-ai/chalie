@@ -136,9 +136,9 @@ def test_turn0_upload_records_path_not_base64_blob(db: sqlite3.Connection) -> No
         f"upload result lost its id/hash keys: {result!r}"
     )
     from services.message_processor import _SEED_UPLOAD_ID_RE
-    [document_id] = cast(re.Match[str], _SEED_UPLOAD_ID_RE.search(result)).group(1)
+    doc_id = cast(re.Match[str], _SEED_UPLOAD_ID_RE.search(result)).group(1)
 
-    doc = DocumentService(get_shared_db_service()).get_document([document_id])
-    assert doc is not None, f"document {[document_id]} was not persisted"
-    assert doc.get("status") == "ready", f"document {[document_id]} not ready: {doc.get('status')!r}"
-    assert doc.get("file_hash"), f"document {[document_id]} has no content hash"
+    doc = DocumentService(get_shared_db_service()).get_document(doc_id)
+    assert doc is not None, f"document {doc_id} was not persisted"
+    assert doc.get("status") == "ready", f"document {doc_id} not ready: {doc.get('status')!r}"
+    assert doc.get("file_hash"), f"document {doc_id} has no content hash"

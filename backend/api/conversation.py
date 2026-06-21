@@ -53,20 +53,20 @@ def _fetch_attachments_for_transcripts(conn: sqlite3.Connection, transcript_ids:
     placeholders = ",".join("?" * len(transcript_ids))
     rows = conn.execute(
         f"SELECT td.transcript_id, d.id, d.original_name, d.mime_type "
-        f"FROM transcript_docs td JOIN documents d ON d.id = td.[document_id] "
+        f"FROM transcript_docs td JOIN documents d ON d.id = td.doc_id "
         f"WHERE td.transcript_id IN ({placeholders}) AND d.deleted_at IS NULL "
         f"ORDER BY td.rowid",
         tuple(transcript_ids),
     ).fetchall()
     by_id: dict[int, list[dict[str, object]]] = {}
-    for tid, [document_id], name, mime in rows:
+    for tid, doc_id, name, mime in rows:
         mime = mime or ""
         by_id.setdefault(tid, []).append({
-            "[document_id]": [document_id],
+            "doc_id": doc_id,
             "filename": name,
             "mime_type": mime,
             "is_image": mime.startswith("image/"),
-            "url": f"/documents/{[document_id]}/preview",
+            "url": f"/documents/{doc_id}/preview",
         })
     return by_id
 

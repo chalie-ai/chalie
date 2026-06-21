@@ -119,7 +119,7 @@ class VisionAbility(Ability):
             Keys.image: {
                 "type": "string",
                 "description": (
-                    "The 8-character document id ([document_id]). If this is not available "
+                    "The 8-character document id (doc_id). If this is not available "
                     "in context, use the `document.search` tool to look it up."
                 ),
             },
@@ -138,11 +138,11 @@ class VisionAbility(Ability):
         # The dispatcher pre-gate is truthiness-based, so a non-empty but
         # whitespace-only image/query slips past it and must be rejected here
         # (precedent: save_graph.py, file_permissions.py).
-        [document_id] = (cast(str, params.get(Keys.image)) or "").strip()
+        doc_id = (cast(str, params.get(Keys.image)) or "").strip()
         query = (cast(str, params.get(Keys.query)) or "").strip()
-        if not [document_id] or not query:
+        if not doc_id or not query:
             missing = ", ".join(
-                name for name, val in (("image", [document_id]), ("query", query)) if not val
+                name for name, val in (("image", doc_id), ("query", query)) if not val
             )
             return ToolResult.err(
                 f"Missing required parameter(s): {missing}.",
@@ -154,16 +154,16 @@ class VisionAbility(Ability):
         from services.document_service import DocumentService  # noqa: PLC0415
         from services.file_mapper_service import FileMapperService  # noqa: PLC0415
 
-        doc = DocumentService(get_shared_db_service()).get_document([document_id])
+        doc = DocumentService(get_shared_db_service()).get_document(doc_id)
         if not doc:
             return ToolResult.err(
-                f"No document found for id={[document_id]}.",
+                f"No document found for id={doc_id}.",
                 code="not-found",
                 hint="use document.search to look up the document id",
             )
         if not doc.get("file_path"):
             return ToolResult.err(
-                f"Document {[document_id]} has no file on disk.",
+                f"Document {doc_id} has no file on disk.",
                 code="no-file-on-disk",
                 hint="the document has no stored file; re-upload the image",
             )

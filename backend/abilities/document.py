@@ -206,12 +206,12 @@ def _resolve_unique(service: "_DocumentService", params: dict[str, object]) -> "
     single non-exact (substring) match, returns ``ambiguous-match`` with the
     candidate rows rather than silently picking the first hit.
     """
-    [document_id] = cast(str, params.get(Keys.id) or "").strip()
-    if [document_id]:
-        doc = service.get_document([document_id])
+    doc_id = cast(str, params.get(Keys.id) or "").strip()
+    if doc_id:
+        doc = service.get_document(doc_id)
         if not doc:
             return ToolResult.err(
-                f"No document with id {[document_id]!r}.",
+                f"No document with id {doc_id!r}.",
                 code="not-found",
                 hint="call document with action=list to see existing ids.",
             )
@@ -254,11 +254,11 @@ def _group_results_by_doc(results: list[dict[str, object]]) -> dict[str, list[di
     for row in results:
         source = cast(str, row.get("source", "") or "")
         if source.startswith("document:"):
-            [document_id] = source.split(":", 1)[1]
+            doc_id = source.split(":", 1)[1]
         else:
             parts = cast(str, row.get("key", "") or "").split(":")
-            [document_id] = parts[1] if len(parts) >= 3 else "unknown"
-        doc_artifacts.setdefault([document_id], []).append(row)
+            doc_id = parts[1] if len(parts) >= 3 else "unknown"
+        doc_artifacts.setdefault(doc_id, []).append(row)
     return doc_artifacts
 
 
@@ -271,13 +271,13 @@ def _handle_search(service: "_DocumentService", params: dict[str, object]) -> To
     results = dgs.recall(query, kinds=[KIND_DOCUMENT], limit=10)
 
     rows = []
-    for [document_id], artifacts in _group_results_by_doc(results).items():
-        doc = service.get_document([document_id])
+    for doc_id, artifacts in _group_results_by_doc(results).items():
+        doc = service.get_document(doc_id)
         if not doc or doc.get("deleted_at"):
             continue
         rows.append({
-            "id": [document_id],
-            "name": doc.get("original_name", [document_id]),
+            "id": doc_id,
+            "name": doc.get("original_name", doc_id),
             "chunks": doc.get("chunk_count", 0),
             "matches": len(artifacts),
         })
@@ -333,13 +333,13 @@ def _append_meta_summary(lines: list[str], doc: dict[str, object], meta: dict[st
         lines.append("  References: " + ", ".join(cast(str, r["value"]) for r in cast(list[dict[str, object]], meta["reference_numbers"])[:5]))
 
 
-def _fetch_doc_fragments([document_id]: str) -> list[str]:
+def _fetch_doc_fragments(doc_id: str) -> list[str]:
     from services.data_graph_service import get_data_graph_service
     dgs = get_data_graph_service()
     with dgs.db.connection() as conn:
         cursor = conn.execute(
             "SELECT value FROM data_graph WHERE source=? AND active=1 ORDER BY key",
-            (f'document:{[document_id]}',),
+            (f'document:{doc_id}',),
         )
         return [row[0] for row in cursor.fetchall() if row[0]]
 
@@ -386,8 +386,8 @@ def _handle_delete(service: "_DocumentService", params: dict[str, object]) -> To
     if isinstance(doc, ToolResult):
         return doc
 
-    [document_id] = cast(str, doc["id"])
-    if not service.soft_delete([document_id]):
+    doc_id = cast(str, doc["id"])
+    if not service.soft_delete(doc_id):
         return ToolResult.err(
             f"Failed to delete {doc['original_name']!r}.",
             code="delete-failed",
@@ -395,20 +395,20 @@ def _handle_delete(service: "_DocumentService", params: dict[str, object]) -> To
         )
 
     from services.data_graph_service import get_data_graph_service
-    deleted_count = get_data_graph_service().hard_delete_by_source_prefix(f"document:{[document_id]}")
+    deleted_count = get_data_graph_service().hard_delete_by_source_prefix(f"document:{doc_id}")
 
     return ToolResult.ok(
-        {"id": [document_id], "name": doc["original_name"], "artifacts_removed": deleted_count},
+        {"id": doc_id, "name": doc["original_name"], "artifacts_removed": deleted_count},
         action="delete",
     )
 
 
 def _handle_restore(service: "_DocumentService", params: dict[str, object]) -> ToolResult:
-    [document_id] = cast(str, params.get(Keys.id) or "").strip()
+    doc_id = cast(str, params.get(Keys.id) or "").strip()
     name = cast(str, params.get(Keys.name) or "").strip()
 
-    if [document_id]:
-        doc = service.get_document([document_id])
+    if doc_id:
+        doc = service.get_document(doc_id)
     elif name:
         deleted = [
             d for d in service.get_all_documents(include_deleted=True)
@@ -477,7 +477,7 @@ def ingest_file(
     params verbatim) can never carry a file blob and blow the context window.
 
     ``subdir`` nests the document under a named folder inside the documents
-    root (``<subdir>/<[document_id]>/<name>``) so machine-generated files (browser
+    root (``<subdir>/<doc_id>/<name>``) so machine-generated files (browser
     screenshots) never clutter the flat upload listing; ``source_type`` is
     stored verbatim on the row.
 
@@ -508,8 +508,8 @@ def ingest_file(
     except OSError as e:
         return {"error": f"Failed to read file {src_path}: {e}"}
 
-    [document_id] = _secrets.token_hex(4)
-    rel_parts = ([subdir] if subdir else []) + [[document_id], name]
+    doc_id = _secrets.token_hex(4)
+    rel_parts = ([subdir] if subdir else []) + [doc_id, name]
     file_path_rel = "/".join(rel_parts)
 
     try:
@@ -529,7 +529,7 @@ def ingest_file(
             file_path=file_path_rel,
             file_hash=file_hash,
             source_type=source_type,
-            [document_id]=[document_id],
+            doc_id=doc_id,
         )
     except Exception as e:
         logger.exception(f"[DOCUMENT SKILL] Upload failed: {e}")
@@ -540,14 +540,14 @@ def ingest_file(
     # endpoint's response) — never "still being processed".
     from api.documents import _mark_upload_failed, _run_upload_extraction
     try:
-        _run_upload_extraction([document_id])
+        _run_upload_extraction(doc_id)
     except Exception as exc:
-        logger.exception(f"[DOCUMENT SKILL] Extraction failed for {[document_id]}: {exc}")
-        _mark_upload_failed([document_id], str(exc))
+        logger.exception(f"[DOCUMENT SKILL] Extraction failed for {doc_id}: {exc}")
+        _mark_upload_failed(doc_id, str(exc))
 
-    doc = service.get_document([document_id])
+    doc = service.get_document(doc_id)
     return {
-        "id": [document_id],
+        "id": doc_id,
         "hash": file_hash,
         "name": name,
         "size": file_size,
@@ -594,22 +594,22 @@ def _handle_create(service: "_DocumentService", params: dict[str, object]) -> To
     if "." not in name:
         name = f"{name}.md"
 
-    [document_id] = service.create_document_from_text(
+    doc_id = service.create_document_from_text(
         original_name=name,
         text_content=content,
         source_type='conversation',
     )
 
-    artifact_count = create_document_artifacts([document_id], content)
-    service.update_status([document_id], "ready", chunk_count=artifact_count)
+    artifact_count = create_document_artifacts(doc_id, content)
+    service.update_status(doc_id, "ready", chunk_count=artifact_count)
 
     summary = content[:500]
     dot_pos = summary.rfind(". ")
     if dot_pos > 200:
         summary = summary[:dot_pos + 1]
-    service.update_summary([document_id], summary)
+    service.update_summary(doc_id, summary)
 
     return ToolResult.ok(
-        {"id": [document_id], "name": name, "artifacts": artifact_count},
+        {"id": doc_id, "name": name, "artifacts": artifact_count},
         action="create",
     )
