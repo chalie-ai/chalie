@@ -1,5 +1,5 @@
 /**
- * QR pairing payload (spec §7). `host` is the Brain's own `window.location.origin`
+ * QR pairing payload. `host` is the Brain's own `window.location.origin`
  * (protocol + host + non-default port, no trailing slash); `token` is the raw
  * bearer minted once by POST /api/wrappers; `username` is the master login
  * username read from GET /auth/username so UnlockVault needs only a password.

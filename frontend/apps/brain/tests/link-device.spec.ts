@@ -33,7 +33,7 @@ test.describe('Brain — Link device pairing', () => {
       username: string;
     };
 
-    // Locked contract (spec §7 gate).
+    // Locked contract — pairing payload gate.
     expect(payload.v).toBe(1);
     expect(payload.token.length).toBeGreaterThan(0);
     // The master login username, read from the real GET /auth/username, is in

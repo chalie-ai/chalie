@@ -38,7 +38,7 @@ async function generate(): Promise<void> {
       token,
       username,
     };
-    validatePairingPayload(payload); // spec §7 gate — throws on a bad payload.
+    validatePairingPayload(payload); // contract gate — throws on a bad payload.
     const json = JSON.stringify(payload);
     const canvas = qrCanvas.value;
     if (!canvas) throw new Error('QR canvas not ready.');

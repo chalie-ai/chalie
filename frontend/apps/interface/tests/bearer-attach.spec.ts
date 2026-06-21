@@ -1,6 +1,6 @@
 import { test, expect } from '@playwright/test';
 
-// Real-hot-path feature test for the shared bearer-attach (TKT-1099). Drives the
+// Real-hot-path feature test for the shared bearer-attach. Drives the
 // genuine ApiClient / WebSocketService singletons against the live backend and
 // observes the ACTUAL outbound HTTP headers + the ACTUAL /ws handshake URL.
 // Zero mocks: localStorage is the real token store, the clients are the real ones.
