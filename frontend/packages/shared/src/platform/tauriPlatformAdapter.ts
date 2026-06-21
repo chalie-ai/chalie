@@ -20,6 +20,8 @@ import { getHost } from '../config/host';
 // must read this cache — seeded at startup via requestNotificationPermission and
 // refreshed on every native send — rather than the (stale) web value.
 let _nativeNotifPerm: NotificationPermission = 'default';
+// Unlisten handle for the native STT transcript bridge (Tauri IPC event → DOM bus).
+let _sttUnlisten: (() => void) | null = null;
 
 export const tauriPlatformAdapter: PlatformAdapter = {
   // Webview shares the browser primitives — delegate.
@@ -61,11 +63,24 @@ export const tauriPlatformAdapter: PlatformAdapter = {
   },
 
   startSTT: async (): Promise<void> => {
-    const { invoke } = await import('@tauri-apps/api/core');
+    const [{ invoke }, { listen }] = await Promise.all([
+      import('@tauri-apps/api/core'),
+      import('@tauri-apps/api/event'),
+    ]);
+    // The plugin streams transcripts over Tauri's IPC event bus; the app's
+    // compose-box listener is on the DOM CustomEvent bus, so bridge each across.
+    _sttUnlisten?.();
+    _sttUnlisten = await listen<{ text: string }>('chalie:voice-transcript', (e) => {
+      document.dispatchEvent(
+        new CustomEvent('chalie:voice-transcript', { detail: e.payload }),
+      );
+    });
     await invoke('plugin:stt|start');
   },
   stopSTT: async (): Promise<void> => {
     const { invoke } = await import('@tauri-apps/api/core');
     await invoke('plugin:stt|stop');
+    _sttUnlisten?.();
+    _sttUnlisten = null;
   },
 };
