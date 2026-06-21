@@ -64,7 +64,7 @@ POST /api/signals
 
 | Service | Cadence | What it does |
 |---|---|---|
-| **Subconscious worker** | Every 5 min, fires only after 30+ min of user idleness | The seven-step cognition tick — consolidation, decay, pattern matching, user-summary synthesis, DMN reflection, capability sync, geo patterns (see [04-ARCHITECTURE.md](04-ARCHITECTURE.md#background-cognition)) |
+| **Subconscious worker** | Every 5 min, fires only after 30+ min of user idleness | The eight-step cognition tick — consolidation, decay, pattern matching, user-summary synthesis, DMN reflection, capability sync, geo patterns, proactive research (see [04-ARCHITECTURE.md](04-ARCHITECTURE.md#background-cognition)) |
 | **World awareness** | Hourly | Derives up to 8 interests from the user's strongest traits and recent topics, fetches matching headlines, pushes a `news` signal — zero LLM calls |
 | **Decay engine** | Inside each subconscious tick | Recomputes episode retrieval weights, applies per-kind data-graph decay, deletes expired rows, prunes old transcripts and tool-call records |
 

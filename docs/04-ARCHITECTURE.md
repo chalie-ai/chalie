@@ -117,7 +117,7 @@ Four layers, each on a different timescale:
 | **Transcript** | Append-only record of every turn, channel-scoped, optionally GPS-tagged | Pruned once a row falls below its channel's compaction watermark and is no longer cited by a live episode (no age term) |
 | **Compaction** | LLM-written continuity summaries; the newest `role='compaction'` transcript row is the history watermark | No |
 | **Episodes** | Narrative snapshots extracted from transcript windows (see per-source profiles below), with salience and emotional scores; episodes form a three-level hierarchy — leaf (0), topic super-episode (1), era digest (2) — via periodic density-clustering roll-ups | Yes — exponential decay on last relevance, per-level tau |
-| **Data graph** | Structured facts (`user_specific`, `behavioral_pattern`, `place`, `document`, …) with per-kind decay and contradiction/canonicalisation rules | Yes — per-kind policy |
+| **Data graph** | Structured facts (`user_specific`, `behavioral_pattern`, `place`, `document`, `discovery`, …) with per-kind decay and contradiction/canonicalisation rules | Yes — per-kind policy |
 | **Moments** | User-curated bookmarks of individual assistant replies (the "remember this" pin), in their own table outside the data graph | No — lives until the user deletes it |
  
 Episode retrieval is hybrid: vector KNN + FTS5, reranked by relevance, recency, and salience, with a relative floor that drops weak candidates instead of padding results. Every data-graph write is also expanded asynchronously into paraphrase variants (doc2query) and embedded, so differently-worded questions still hit the right facts.
@@ -167,7 +167,7 @@ A standing step in the decay cycle wipes any leftover `kind='moment'` rows from 
  
 ## Background Cognition
  
-The **subconscious worker** ticks every 5 minutes but only fires when the user has been idle for 30+ minutes and there is something new since the last run. Each tick runs seven steps, each isolated so one failure can't block the rest:
+The **subconscious worker** ticks every 5 minutes but only fires when the user has been idle for 30+ minutes and there is something new since the last run. Each tick runs eight steps, each isolated so one failure can't block the rest:
  
 1. **Consolidate** — run the hierarchy roll-up on each episode-producing channel (`user`, `dmn`, each `external-agent:*`): a leaf round (level-0 → level-1) fires at 50+ apex leaves, and an era round (level-1 → level-2) fires at 25+ level-1 apexes; both use the UMAP→HDBSCAN pipeline described above; clusters stay channel-scoped and are never pooled across sources
 2. **Decay** — run the decay engine over episodes, the data graph, old transcripts, and tool-call records (7-day retention), and wipe any leftover legacy `kind='moment'` rows from the data graph (moments now have their own table). A fossil janitor tombstones stranded leaves on muted/legacy channels but protects episode-producing channels — the proactive voice never consolidates, so its leaves are permanently apex and must not be reaped
@@ -176,6 +176,7 @@ The **subconscious worker** ticks every 5 minutes but only fires when the user h
 5. **DMN** — a reflective ACT pass over the user summary and recent episodes; findings are saved to memory, nothing is pushed to chat
 6. **Capability sync** — poll connected external services (mail, calendar, contacts)
 7. **Geo patterns** — extract location-tied behavioural patterns from GPS-tagged transcripts. The pattern and geo windows (and their cursors) read only the channels the source profiles mark as user activity, so background loops never masquerade as the user being somewhere
+8. **Proactive research** — at most once every six hours (its own durable clock, checked each tick), a grounded pass over the user summary and the latest conversation summary researches the web and news for things the user would care about; genuinely interesting findings are saved as `discovery` memories that decay after about two weeks, to resurface in a later conversation — nothing is pushed to chat
  
 Every step is an ordinary `MessageProcessor.process()` call with its own channel config. There is no separate background engine. History compaction is no longer one of these steps: it happens only in-loop, when a turn's request outgrows the context window — the conversation-history window grows naturally as the conversation continues and is folded at that boundary, with no age-based cutoff.
  
