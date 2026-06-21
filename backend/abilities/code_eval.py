@@ -21,6 +21,7 @@ import json
 import logging
 import math
 import multiprocessing
+import operator
 import statistics
 import time
 import traceback
@@ -28,6 +29,7 @@ from queue import Empty
 from typing import TYPE_CHECKING, ClassVar, cast
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
     from typing import Protocol, TypedDict
 
     class _TruncMeta(TypedDict, total=False):
@@ -59,6 +61,25 @@ def _guarded_getattr(obj: object, name: str) -> object:
     if name.startswith("_"):
         raise AttributeError(f"Access to '{name}' is not permitted in the sandbox")
     return getattr(obj, name)
+
+
+# RestrictedPython rewrites ``x += 1`` into ``x = _inplacevar_("+=", x, 1)`` but,
+# unlike Zope's AccessControl, ships no runtime ``_inplacevar_`` — so every
+# augmented assignment is dead in the sandbox without one. Dispatch the op string
+# to the matching in-place ``operator`` builtin (the same table guarded_inplacevar
+# uses); only Name targets reach here, attribute/subscript targets are rejected by
+# RestrictedPython at compile time.
+_INPLACE_OPS: "dict[str, Callable[[object, object], object]]" = {
+    "+=": operator.iadd, "-=": operator.isub, "*=": operator.imul,
+    "/=": operator.itruediv, "//=": operator.ifloordiv, "%=": operator.imod,
+    "**=": operator.ipow, ">>=": operator.irshift, "<<=": operator.ilshift,
+    "&=": operator.iand, "^=": operator.ixor, "|=": operator.ior,
+    "@=": operator.imatmul,
+}
+
+
+def _inplacevar(op: str, var: object, expr: object) -> object:
+    return _INPLACE_OPS[op](var, expr)
 
 
 class CodeEvalAbility(Ability):
@@ -96,7 +117,12 @@ class CodeEvalAbility(Ability):
         "properties": {
             Keys.code: {
                 "type": "string",
-                "description": "Python code to execute. Use print() to emit results.",
+                "description": (
+                    "Python code to execute. Use print() to emit results. "
+                    "import is unavailable; these modules are pre-loaded and usable "
+                    "without importing: math, statistics, json, decimal, fractions, "
+                    "itertools, functools, collections."
+                ),
             },
         },
         "required": [Keys.code],
@@ -137,6 +163,7 @@ class CodeEvalAbility(Ability):
         "_getattr_": _guarded_getattr,
         "_getiter_": iter,
         "_getitem_": lambda obj, key: obj[key],
+        "_inplacevar_": _inplacevar,
         "math": math,
         "statistics": statistics,
         "json": json,

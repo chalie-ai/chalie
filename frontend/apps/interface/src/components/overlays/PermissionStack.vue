@@ -117,6 +117,11 @@ function actionLabel(actionId: string): string {
 }
 
 .perm-card {
+  // The #permStack teleport target is pointer-events:none (so its empty area
+  // doesn't block the chat behind it); re-enable here or the Allow/Deny clicks
+  // fall through to the turn underneath. The transition states below re-disable
+  // it mid enter/leave, which is intentional.
+  pointer-events: auto;
   background: color-mix(in oklab, var(--surface, var(--bg-chalie)) 95%, transparent);
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-md);
