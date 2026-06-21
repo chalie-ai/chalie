@@ -34,7 +34,7 @@ async function submit(): Promise<void> {
         clearInterval(_poll);
         _poll = null;
       }
-      window.location.replace('/');
+      globalThis.location.replace('/');
     } else {
       error.value = result.error ?? 'Could not unlock the vault.';
     }

@@ -91,7 +91,7 @@ export class ApiClient {
     const res = await fetch(this.buildUrl(path), {
       credentials: 'same-origin',
       ...init,
-      headers: { 'Content-Type': 'application/json', ...this.authHeaders(), ...(init?.headers ?? {}) },
+      headers: { 'Content-Type': 'application/json', ...this.authHeaders(), ...init?.headers },
     });
     if (res.status === 401) this.fail401(opts);
     if (!res.ok) return this.throwHttp(res);

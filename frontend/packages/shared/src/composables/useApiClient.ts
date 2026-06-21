@@ -5,7 +5,8 @@ let client: ApiClient | null = null;
 
 /** Singleton ApiClient bound to the shared configurable host. */
 export function useApiClient(): ApiClient {
-  return (client ??= new ApiClient(getHost, getToken));
+  client ??= new ApiClient(getHost, getToken);
+  return client;
 }
 
 /**

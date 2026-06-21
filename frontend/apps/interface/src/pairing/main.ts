@@ -12,7 +12,7 @@ import LinkDevice from './LinkDevice.vue';
 // SPA's gate never runs on this page. Already paired (token present) → there is
 // nothing to do, so bounce to the app.
 if (getToken()) {
-  window.location.replace('/');
+  globalThis.location.replace('/');
 } else {
   createApp(LinkDevice).mount('#app');
 }

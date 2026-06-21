@@ -140,8 +140,8 @@ def get_username() -> "ResponseReturnValue":
         if not row:
             return jsonify({"error": "No master account"}), 404
         return jsonify({"username": row[0]}), 200
-    except Exception as e:
-        logger.error("[REST API] Get username error: %s", e)
+    except Exception:
+        logger.exception("[REST API] Get username error")
         return jsonify({"error": "Failed to read username"}), 500
 
 

@@ -54,9 +54,7 @@ export interface UpdateState {
 let _audioCtx: AudioContext | null = null;
 
 function getAudioContext(): AudioContext {
-  if (!_audioCtx) {
-    _audioCtx = adapter.createAudioContext();
-  }
+  _audioCtx ??= adapter.createAudioContext();
   return _audioCtx;
 }
 

@@ -19,7 +19,7 @@ async function startScan(): Promise<void> {
     setHost(payload.host);
     setToken(payload.token);
     setUsername(payload.username); // so UnlockVault needs only a password.
-    window.location.replace('/');
+    globalThis.location.replace('/');
   } catch (err: unknown) {
     error.value = err instanceof Error ? err.message : 'Pairing failed. Try again.';
   } finally {
