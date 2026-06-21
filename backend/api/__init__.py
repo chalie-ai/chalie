@@ -79,9 +79,9 @@ def _register_static_routes(app: Flask) -> None:
     """Register static-file and SPA routes serving the Vue 3 builds.
 
     Two Vite builds are served verbatim (Vite content-hashes its own assets):
-      • interface  →  apps/interface/dist  — chat SPA at '/', plus the login and
-        on-boarding multi-page entries (dist/login/index.html, dist/on-boarding/
-        index.html).
+      • interface  →  apps/interface/dist  — chat SPA at '/', plus the login,
+        on-boarding, and pairing multi-page entries (dist/login/index.html,
+        dist/on-boarding/index.html, dist/pairing/index.html).
       • brain      →  apps/brain/dist      — admin SPA at '/brain/', auth-gated.
 
     index.html documents are served no-cache (they point at hashed asset URLs);
@@ -136,6 +136,16 @@ def _register_static_routes(app: Flask) -> None:
     @app.route('/on-boarding/', methods=["GET"])
     def onboarding_index() -> ResponseReturnValue:
         return _send_index(interface_dir, 'on-boarding/index.html')
+
+    # The native (Tauri) client redirects here before any login to scan its
+    # pairing QR; web never reaches it (the gate diverts only on the Tauri runtime).
+    @app.route('/pairing', methods=["GET"])
+    def pairing_index_no_slash() -> ResponseReturnValue:
+        return redirect('/pairing/', code=301)
+
+    @app.route('/pairing/', methods=["GET"])
+    def pairing_index() -> ResponseReturnValue:
+        return _send_index(interface_dir, 'pairing/index.html')
 
     # ── Interface chat SPA — catch-all (MUST be registered last) ──────────
     @app.route('/<path:filename>', methods=["GET"])
