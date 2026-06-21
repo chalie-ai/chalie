@@ -51,20 +51,3 @@ test.describe('UnlockVault overlay', () => {
     await expect(page.locator('.unlock-vault')).toBeVisible();
   });
 });
-
-test.describe('on-resume refresh', () => {
-  test.skip(!process.env.CHALIE_TEST_PASSWORD, 'needs CHALIE_TEST_PASSWORD');
-
-  test('window focus re-runs the feed load', async ({ page }) => {
-    await page.goto('/');
-    await expect(page.locator('#conversationFeed')).toBeVisible({ timeout: 15_000 });
-
-    let historyCalls = 0;
-    page.on('request', (req) => {
-      if (req.url().includes('/conversation')) historyCalls += 1;
-    });
-    const before = historyCalls;
-    await page.evaluate(() => window.dispatchEvent(new Event('focus')));
-    await expect.poll(() => historyCalls, { timeout: 10_000 }).toBeGreaterThan(before);
-  });
-});

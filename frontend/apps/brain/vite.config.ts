@@ -21,8 +21,5 @@ export default defineConfig({
     // (which becomes a hard error at Dart Sass 2.0).
     preprocessorOptions: { scss: { api: 'modern-compiler' } },
   },
-  build: {
-    outDir: 'dist',
-    emptyOutDir: true,
-  },
+  build: { outDir: 'dist', emptyOutDir: true },
 });

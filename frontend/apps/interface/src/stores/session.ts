@@ -85,10 +85,8 @@ export const useSessionStore = defineStore('session', {
         }
       });
 
-      // Tab-refocus / app-resume: re-assert WS liveness so the live pipe resumes.
-      globalThis.addEventListener('focus', () => {
-        ws.ensureAlive();
-      });
+      // Tab-refocus liveness check.
+      globalThis.addEventListener('focus', () => ws.ensureAlive());
 
       // chalie:action — deterministic skill invocations. Registered inside init()
       // so the WS single-owner rule holds (only one listener ever bound).
