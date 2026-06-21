@@ -371,7 +371,7 @@ def post_chat() -> ResponseReturnValue:
     attachments = _stage_chat_uploads(cast(Sequence[object], request.files.getlist("files")[:10]))
 
     if not text and not attachments:
-        return jsonify({"status": "ignored", "reason": "empty message"}), 202
+        return jsonify({"status": "error", "reason": "message required"}), 400
 
     if not text and attachments:
         text = "[File attached]"

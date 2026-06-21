@@ -13,17 +13,17 @@ from flask.testing import FlaskClient
 @pytest.mark.unit
 class TestChatEndpoints:
 
-    def test_chat_empty_message_ignored_and_no_turn_started(self, authed_client: tuple[FlaskClient, sqlite3.Connection, object]) -> None:
-        """An empty POST /chat is acknowledged with 202/ignored and must NOT
+    def test_chat_empty_message_rejected_and_no_turn_started(self, authed_client: tuple[FlaskClient, sqlite3.Connection, object]) -> None:
+        """An empty POST /chat fails loud with 400/message required and must NOT
         register a turn — a follow-up interrupt finds nothing in flight."""
         client, _db_conn, _store = authed_client
 
         resp = client.post('/chat', data={'text': '   '})
 
-        assert resp.status_code == 202
+        assert resp.status_code == 400
         data = resp.get_json()
-        assert data['status'] == 'ignored'
-        assert data['reason'] == 'empty message'
+        assert data['status'] == 'error'
+        assert data['reason'] == 'message required'
 
         # Cross-step proof: no UMP turn was registered for the empty message.
         interrupt = client.post('/chat/interrupt')
