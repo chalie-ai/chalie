@@ -125,6 +125,11 @@ class ToolDispatcher:
                     channel=cast("ProcessorConfig.PolicyChannel", getattr(config, "policy_channel", None)),
                     permission=permission,
                     callback=lambda: self._execute(ability, params, act_summary),
+                    # The turn's cancel_event lets a parked `ask` prompt unwind on
+                    # cancel instead of pinning the per-channel lock.
+                    # Sourced off the invoking mp (the action endpoint's ctx exposes
+                    # it too); absent → None → today's blocking wait (self-no-op).
+                    cancel_event=getattr(self._mp, "cancel_event", None),
                 )
 
         from services.act_trail import ActTrail  # noqa: PLC0415

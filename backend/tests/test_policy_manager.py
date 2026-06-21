@@ -100,7 +100,7 @@ def test_unknown_key_provisions_ask_then_escalates(mgr: PolicyManager, db: sqlit
 # 4. interactive CHAT 'ask': approved runs, denied blocks (gate monkeypatched, never broadcasts off-channel)
 @pytest.mark.parametrize("approved,should_run", [(True, True), (False, False)])
 def test_chat_ask_follows_user_verdict(mgr: PolicyManager, db: sqlite3.Connection, monkeypatch: pytest.MonkeyPatch, approved: bool, should_run: bool) -> None:
-    monkeypatch.setattr(PolicyManager, "_ask_user", lambda self, permission, channel: approved)
+    monkeypatch.setattr(PolicyManager, "_ask_user", lambda self, permission, channel, cancel_event=None: approved)
     _seed(db, "chat", "email.send", "ask")
     out = mgr.authorize(CH.CHAT, "email.send", _ran)
     if should_run:
