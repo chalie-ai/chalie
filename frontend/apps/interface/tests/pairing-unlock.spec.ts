@@ -4,10 +4,11 @@ import { test, expect } from '@playwright/test';
 // every assertion is a downstream effect of the real auth gate (router.ts),
 // the real /auth/status + /auth/login endpoints, and real localStorage.
 //
-// The pairing gate only fires on the Tauri runtime; in a browser harness we
-// honestly emulate that by injecting window.__TAURI__ before any script runs.
-// The token accessors read localStorage key 'chalie_access_token', so we drive
-// the "no token" / "has token" states by writing that real key.
+// The pairing gate only fires on the Tauri runtime, detected via the
+// `__TAURI_INTERNALS__` IPC bridge Tauri always injects; in a browser harness we
+// honestly emulate that by injecting it before any script runs. The token
+// accessors read localStorage key 'chalie_access_token', so we drive the
+// "no token" / "has token" states by writing that real key.
 
 const USERNAME = process.env.CHALIE_TEST_USERNAME ?? 'admin';
 
@@ -16,14 +17,14 @@ test.describe('Tauri pairing gate', () => {
 
   test('Tauri + no token redirects to /pairing/ (not /login/)', async ({ page }) => {
     await page.addInitScript(() => {
-      (window as unknown as { __TAURI__: object }).__TAURI__ = {};
+      (window as unknown as { __TAURI_INTERNALS__: object }).__TAURI_INTERNALS__ = {};
     });
     await page.goto('/');
     await expect(page).toHaveURL(/\/pairing\//, { timeout: 15_000 });
     await expect(page.locator('.link-device__scan')).toBeVisible();
   });
 
-  test('web (no __TAURI__) + no session still redirects to /login/', async ({ page }) => {
+  test('web (no Tauri runtime) + no session still redirects to /login/', async ({ page }) => {
     await page.goto('/');
     await expect(page).toHaveURL(/\/login\//, { timeout: 15_000 });
   });

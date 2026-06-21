@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { onMounted, onBeforeUnmount, ref } from 'vue';
-import { platform, useTheme } from '@chalie/shared';
+import { platform, isTauri, useTheme } from '@chalie/shared';
 import { useSessionStore } from './stores/session';
 import { useVoiceStore } from './stores/voice';
 import { on } from './composables/useEventBus';
@@ -49,7 +49,7 @@ onMounted(() => {
 
   // Native shell only: request OS notification permission once so background
   // message notifications can fire. On web the browser drives its own prompt.
-  if ((globalThis as { __TAURI__?: unknown }).__TAURI__) {
+  if (isTauri) {
     void platform.requestNotificationPermission();
   }
 

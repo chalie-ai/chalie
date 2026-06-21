@@ -16,7 +16,7 @@ export { validatePairingPayload } from './config/pairing';
 export type { PlatformAdapter, WakeLockHandle } from './platform/PlatformAdapter';
 export { webPlatformAdapter } from './platform/webPlatformAdapter';
 export { tauriPlatformAdapter } from './platform/tauriPlatformAdapter';
-export { platform } from './platform';
+export { platform, isTauri } from './platform';
 export { useThemeStore } from './stores/theme';
 export type { Theme } from './stores/theme';
 export { useConnectionStore } from './stores/connection';

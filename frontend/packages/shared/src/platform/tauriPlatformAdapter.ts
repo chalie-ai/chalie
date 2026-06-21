@@ -12,8 +12,8 @@ import { getHost } from '../config/host';
  * The @tauri-apps/* packages are declared as dependencies of @chalie/shared, so
  * the interface app's bundler resolves these dynamic imports into lazy chunks.
  * Those chunks are only fetched inside the Tauri webview — the runtime selector
- * picks this adapter only when window.__TAURI__ is present, so the web build
- * never loads them.
+ * picks this adapter only when the `__TAURI_INTERNALS__` bridge is present, so
+ * the web build never loads them.
  */
 // Native OS notification grant. Inside a Tauri webview the web Notification API
 // stays 'default' even after the OS grants permission, so the synchronous gate
