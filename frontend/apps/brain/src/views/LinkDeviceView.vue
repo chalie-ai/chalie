@@ -93,7 +93,11 @@ async function generate(): Promise<void> {
 
 <style scoped>
 .pairing-qr {
-  margin-top: var(--space-lg);
+  /* Block-level + auto side margins: the canvas defaults to display:inline, which
+     drops it into the same inline line-box as the button (text-align:center on
+     .export-card), overlapping them. Block takes it onto its own centered line. */
+  display: block;
+  margin: var(--space-lg) auto 0;
   border-radius: var(--radius-md);
   background: var(--bg-surface-2);
   padding: var(--space-md);
