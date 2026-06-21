@@ -2,7 +2,7 @@ import { api } from '@chalie/shared';
 
 /** A single attachment served from /documents/<id>/preview. */
 export interface ConversationAttachment {
-  [document_id]: string;
+  document_id: string;
   filename: string;
   mime_type: string;
   is_image: boolean;
