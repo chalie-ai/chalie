@@ -69,18 +69,27 @@ export const tauriPlatformAdapter: PlatformAdapter = {
     ]);
     // The plugin streams transcripts over Tauri's IPC event bus; the app's
     // compose-box listener is on the DOM CustomEvent bus, so bridge each across.
+    // Register the bridge first, but only retain its teardown handle once start
+    // succeeds — a rejected start would otherwise orphan the listener.
     _sttUnlisten?.();
-    _sttUnlisten = await listen<{ text: string }>('chalie:voice-transcript', (e) => {
+    _sttUnlisten = null;
+    const unlisten = await listen<{ text: string }>('chalie:voice-transcript', (e) => {
       document.dispatchEvent(
         new CustomEvent('chalie:voice-transcript', { detail: e.payload }),
       );
     });
-    await invoke('plugin:stt|start');
+    try {
+      await invoke('plugin:stt|start');
+    } catch (err) {
+      unlisten();
+      throw err;
+    }
+    _sttUnlisten = unlisten;
   },
   stopSTT: async (): Promise<void> => {
-    const { invoke } = await import('@tauri-apps/api/core');
-    await invoke('plugin:stt|stop');
     _sttUnlisten?.();
     _sttUnlisten = null;
+    const { invoke } = await import('@tauri-apps/api/core');
+    await invoke('plugin:stt|stop');
   },
 };
