@@ -158,6 +158,7 @@ def _now_iso() -> str:
 
 _RECORDS_LIMIT = 250
 _VALID_SOURCES = {'episodes', 'user', 'system'}
+_RESEARCH_LIST_LIMIT = 100
 
 
 @system_bp.route('/system/observability/records', methods=['GET'])
@@ -329,6 +330,45 @@ def observability_compaction() -> ResponseReturnValue:
     except Exception:
         logger.exception("[REST API] observability/compaction error")
         return jsonify({"error": "Failed to retrieve compaction summary"}), 500
+
+
+@system_bp.route('/system/observability/research', methods=['GET'])
+@require_session
+def observability_research() -> ResponseReturnValue:
+    """Newest-first list of proactive-research (Auto Research) runs.
+
+    Each row is one execution of the background research loop: when it ran and a
+    preview of what it surfaced. Read-only.
+    """
+    try:
+        from services import discovery_runs
+        return jsonify({
+            'generated_at': _now_iso(),
+            'runs': discovery_runs.list_runs(_RESEARCH_LIST_LIMIT),
+        }), 200
+    except Exception:
+        logger.exception("[REST API] observability/research error")
+        return jsonify({"error": "Failed to retrieve research runs"}), 500
+
+
+@system_bp.route('/system/observability/research/<int:run_id>', methods=['GET'])
+@require_session
+def observability_research_detail(run_id: int) -> ResponseReturnValue:
+    """One Auto Research run: the grounding it ran against plus its full output.
+
+    ``transcript`` is the loop's assistant output, read live from the transcript
+    by turn and joined into one blob — no tool calls, no input. 404 when the id
+    is unknown. Read-only.
+    """
+    try:
+        from services import discovery_runs
+        run = discovery_runs.get_run_detail(run_id)
+        if run is None:
+            return jsonify({"error": "not found"}), 404
+        return jsonify({'generated_at': _now_iso(), 'run': run}), 200
+    except Exception:
+        logger.exception("[REST API] observability/research detail error")
+        return jsonify({"error": "Failed to retrieve research run"}), 500
 
 
 @system_bp.route('/system/observability/write-queue', methods=['GET'])

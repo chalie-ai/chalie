@@ -9,6 +9,8 @@
  * GET  /system/observability/errors                              → recent errors
  * GET  /system/observability/token-usage?window=                 → token usage
  * GET  /system/observability/compaction                          → compaction summary
+ * GET  /system/observability/research                            → auto-research run list
+ * GET  /system/observability/research/<id>                       → auto-research run detail
  */
 import { api } from '@chalie/shared';
 
@@ -109,6 +111,20 @@ export interface CompactionEntry {
   [key: string]: unknown;
 }
 
+export interface AutoResearchRun {
+  id: number;
+  ran_at: string;
+  researched: string;
+}
+
+export interface AutoResearchDetail {
+  id: number;
+  ran_at: string;
+  user_summary: string;
+  compacted_summary: string;
+  transcript: string;
+}
+
 export const cognition = {
   memory(params: {
     source?: string;
@@ -150,5 +166,13 @@ export const cognition = {
 
   compaction(): Promise<{ compaction: CompactionEntry | null }> {
     return api.get('/system/observability/compaction');
+  },
+
+  research(): Promise<{ generated_at: string; runs: AutoResearchRun[] }> {
+    return api.get('/system/observability/research');
+  },
+
+  researchDetail(id: number): Promise<{ generated_at: string; run: AutoResearchDetail }> {
+    return api.get(`/system/observability/research/${id}`);
   },
 };

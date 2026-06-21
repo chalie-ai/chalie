@@ -40,6 +40,17 @@ _LAST_FIRED_TIMESTAMP = DurableTimestamp(
     source=_SOURCE_LAST_FIRED,
 )
 
+# Proactive-research clock — a dedicated dual-write timestamp so the discovery
+# loop fires on its own multi-hour cadence, independent of the per-tick clock
+# above. The step runs every idle tick but only actually reaches the web when
+# this interval has elapsed.
+_DISCOVERY_INTERVAL = timedelta(hours=6)
+_DISCOVERY_TIMESTAMP = DurableTimestamp(
+    memory_key="subconscious:discovery_last_fired_at",
+    data_graph_key="discovery_last_fired_at",
+    source="discovery_worker",
+)
+
 # Keys checked to determine whether DMN has a synthesis to work from.
 # SubconsciousWorker._step_dmn() skips when neither row is present.
 _DMN_SYNTHESIS_KEYS = ('user_summary', 'user_summary_long')
@@ -147,6 +158,7 @@ class SubconsciousWorker:
         steps["dmn"] = self._safe_step("dmn", self._step_dmn)
         steps["capability_sync"] = self._safe_step("capability_sync", self._step_capability_sync)
         steps["geo_patterns"] = self._safe_step("geo_patterns", self._step_geo_patterns)
+        steps["discovery"] = self._safe_step("discovery", self._step_discovery)
 
         now = utc_now()
         try:
@@ -166,7 +178,8 @@ class SubconsciousWorker:
             f"synthesis={steps['synthesis']['status']} "
             f"dmn={steps['dmn']['status']} "
             f"capability_sync={steps['capability_sync']['status']} "
-            f"geo_patterns={steps['geo_patterns']['status']}"
+            f"geo_patterns={steps['geo_patterns']['status']} "
+            f"discovery={steps['discovery']['status']}"
         )
         return {"steps": steps, "last_fired_at": last_iso}
 
@@ -724,6 +737,37 @@ class SubconsciousWorker:
             )
             raise
         return f"fired cursor={cursor}->{latest} delta={delta}"
+
+    def _step_discovery(self) -> str:
+        """Step 9 — proactive autonomous research, at most once per interval.
+
+        Self-throttling on a dedicated durable clock: it runs inside the ordinary
+        idle tick but only reaches the web once the interval has elapsed.
+        Grounding (user synthesis + the latest user-channel compaction) is
+        captured at dispatch and threaded into the run via metadata; the loop
+        records anything worth keeping as a discovery memory on its own.
+        """
+        last = _DISCOVERY_TIMESTAMP.load()
+        now = utc_now()
+        if last is not None and now - last < _DISCOVERY_INTERVAL:
+            return f"skip: fired {int((now - last).total_seconds() // 3600)}h ago"
+
+        from configs.channels import DiscoveryConfig  # noqa: PLC0415
+        from configs.channels.discovery import DISCOVERY_PROMPT  # noqa: PLC0415
+        from services.compaction_persistence import get_compaction  # noqa: PLC0415
+        from services.message_processor import MessageProcessor  # noqa: PLC0415
+
+        compaction = get_compaction("user")
+        MessageProcessor.process(
+            DISCOVERY_PROMPT,
+            DiscoveryConfig(),
+            metadata={
+                "user_summary": self._load_user_synthesis() or "",
+                "compacted_summary": cast(str, compaction["compacted_text"]) if compaction else "",
+            },
+        )
+        _DISCOVERY_TIMESTAMP.persist(now)
+        return "fired"
 
     def _load_user_synthesis(self) -> Optional[str]:
         """Check whether a user_summary row exists in data_graph."""

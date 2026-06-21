@@ -46,6 +46,7 @@ CHANNEL_USER = "user"
 CHANNEL_DMN = "dmn"
 CHANNEL_SKILLS_BUILDING = "skills_building"
 CHANNEL_SCHEDULED = "scheduled"
+CHANNEL_DISCOVERY = "discovery"
 
 # ── Channel patterns (SQL LIKE prefixes) ──────────────────────────────────────
 # External-agent channels are tagged ``external-agent:<id>`` (HYPHEN + colon);
@@ -127,6 +128,10 @@ _EXACT_PROFILES: dict[str, Profile] = {
     # CHANNEL_USER and is encoded there as an ordinary user episode.
     CHANNEL_SCHEDULED: _MUTED,
     CHANNEL_SKILLS_BUILDING: _MUTED,
+    # The proactive-research loop writes transcript rows, so it needs an explicit
+    # row (allowlist default is muted, but a write-capable channel states it). Its
+    # findings are saved as discovery memories, never re-derived as episodes/facts.
+    CHANNEL_DISCOVERY: _MUTED,
 }
 
 # Profile applied to every channel matching the prefix. The first matching

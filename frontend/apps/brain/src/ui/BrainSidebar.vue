@@ -48,6 +48,7 @@ const NAV: NavItem[] = [
     id: 'cognition', label: 'Cognition', icon: Brain, group: 'cognition',
     sub: [
       { id: 'memory', label: 'Memory' },
+      { id: 'auto-research', label: 'Auto Research' },
       { id: 'tools', label: 'Tools' },
       { id: 'world', label: 'World state' },
       { id: 'personality', label: 'Personality' },

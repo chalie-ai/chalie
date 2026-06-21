@@ -719,3 +719,19 @@ CREATE TABLE IF NOT EXISTS telemetry (
     key   TEXT PRIMARY KEY,
     value TEXT
 );
+
+-- ============================================================================
+-- DISCOVERY_RUNS — one row per proactive-research loop execution.
+-- ============================================================================
+-- The grounding the loop ran against (user + compacted summary at execution
+-- time) and a preview of what it surfaced. The loop's full output is NOT stored
+-- here — it lives in the transcript under the discovery channel/turn and is
+-- joined live by turn_id, keeping a single source of truth for the output.
+CREATE TABLE IF NOT EXISTS discovery_runs (
+    id                INTEGER PRIMARY KEY AUTOINCREMENT,
+    ran_at            TEXT NOT NULL DEFAULT (datetime('now')),
+    turn_id           INTEGER,
+    user_summary      TEXT,
+    compacted_summary TEXT,
+    researched        TEXT
+);

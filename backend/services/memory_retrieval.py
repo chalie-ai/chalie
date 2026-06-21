@@ -59,6 +59,13 @@ def handle_store(channel: str, params: dict[str, object]) -> ToolResult:
     value = params.get("value")
     kind = cast("str", params.get("kind", "user_specific"))
 
+    # The proactive-research loop never picks a kind: any store on its channel is
+    # a discovery memory. Routing by channel keeps a weak model from misfiling it.
+    from services.source_profiles import CHANNEL_DISCOVERY
+    if channel == CHANNEL_DISCOVERY:
+        from services.data_graph_service import KIND_DISCOVERY
+        kind = KIND_DISCOVERY
+
     if not key:
         return ToolResult.err(
             "store needs a 'key' naming the fact.",
@@ -567,6 +574,7 @@ def _search_data_graph(query: str, limit: int) -> tuple[list[dict[str, object]],
             KIND_USER_SPECIFIC,
             KIND_SYSTEM,
             KIND_MISC,
+            KIND_DISCOVERY,
         )
 
         # Moments are deliberately absent here: they live in the dedicated
@@ -577,7 +585,7 @@ def _search_data_graph(query: str, limit: int) -> tuple[list[dict[str, object]],
         rows = dgs.recall(
             query=query,
             kinds=[KIND_USER_SPECIFIC, KIND_SYSTEM, KIND_MISC,
-                   KIND_BEHAVIORAL_PATTERN, KIND_PLACE],
+                   KIND_BEHAVIORAL_PATTERN, KIND_PLACE, KIND_DISCOVERY],
             limit=limit,
         )
 

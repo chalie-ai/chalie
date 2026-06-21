@@ -29,13 +29,18 @@ KIND_MISC = 'misc'
 KIND_DOCUMENT = 'document'
 KIND_BEHAVIORAL_PATTERN = 'behavioral_pattern'
 KIND_PLACE = 'place'
+# 'discovery' is the proactive-research lane: timely findings the subconscious
+# research loop turns up about the user's interests. Recallable like any fact (it
+# joins generic data_graph recall + the turn-0 flashback) but ephemeral — it
+# decays over ~2 weeks so stale news fades on its own.
+KIND_DISCOVERY = 'discovery'
 # 'moment' is deliberately absent: moments are a dedicated user-curated store
 # (services/moments_service.py), not a data_graph kind. With it gone from
 # VALID_KINDS the store() guard below rejects any kind='moment' write — closing
 # the hole where any channel could write any kind.
 VALID_KINDS = frozenset({
     KIND_USER_SPECIFIC, KIND_SYSTEM, KIND_MISC,
-    KIND_DOCUMENT, KIND_BEHAVIORAL_PATTERN, KIND_PLACE,
+    KIND_DOCUMENT, KIND_BEHAVIORAL_PATTERN, KIND_PLACE, KIND_DISCOVERY,
 })
 
 _SELECT_ACTIVE_BY_KIND_KEY_SQL = (
@@ -83,6 +88,10 @@ _KIND_POLICY: dict[str, dict[str, object]] = {
     # reinforced on re-save of same coords, superseded when the user renames/moves a
     # place, only removed on explicit user request. Low decay, moderate salience floor.
     KIND_PLACE:              {'ttl_days': None,  'reinforce': True,  'contradiction': 'cosine_supersede', 'deletion': 'explicit', 'd_base': 0.05, 'salience_floor': 0.5},
+    # discovery: timely research findings from the proactive loop. Each is an
+    # independent item (no contradiction reconciliation); reinforced if re-found,
+    # decays like a user trait so it fades after ~2 weeks, soft-deleted on forget.
+    KIND_DISCOVERY:          {'ttl_days': 14,    'reinforce': True,  'contradiction': None,               'deletion': 'soft',     'd_base': 0.5,  'salience_floor': 0.2},
 }
 
 # Concept LUT asset — pre-built sqlite with lut_concepts + lut_embeddings (vec0).

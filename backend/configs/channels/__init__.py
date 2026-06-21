@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from configs.channels._common import DEFAULT_ALWAYS_AVAILABLE
 from configs.channels.skill_association import SkillAssociationConfig
+from configs.channels.discovery import DiscoveryConfig
 from configs.channels.dmn import DmnConfig
 from configs.channels.episode_encoder import EpisodeEncoderConfig
 from configs.channels.external_agent import EAMPConfig
@@ -33,6 +34,7 @@ from services.processor_config import ProcessorConfig
 __all__ = [
     "SkillAssociationConfig",
     "DEFAULT_ALWAYS_AVAILABLE",
+    "DiscoveryConfig",
     "DmnConfig",
     "EAMPConfig",
     "EpisodeEncoderConfig",
