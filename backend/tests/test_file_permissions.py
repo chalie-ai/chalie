@@ -202,7 +202,7 @@ def test_execute_rejects_path_not_found(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Migrated from test_ability_file_permissions_tool_result.py (TKT-975)
+# Migrated from test_ability_file_permissions_tool_result.py ()
 # Tests that drive the real ToolDispatcher end-to-end hot path.
 # ---------------------------------------------------------------------------
 

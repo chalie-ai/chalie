@@ -6,7 +6,7 @@ the browser copy silently lost ``0.0.0.0/8`` and ``100.64.0.0/10``, so a URL the
 ``read`` ability refused (e.g. ``http://0.0.0.0/``) would sail straight through
 the headless browser's request interceptor.
 
-TKT-883 collapses both into ``services.ssrf``. These tests lock that in by
+This refactor collapses both into ``services.ssrf``. These tests lock that in by
 **import identity** — every consumer must reference the SAME ``BLOCKED_NETS``
 object, not a list that merely happens to be equal today. Two separately
 declared lists could be made equal by hand and then drift apart again; one

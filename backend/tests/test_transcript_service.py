@@ -131,7 +131,7 @@ class TestDbStateExtractionTrigger:
     reaches _EXTRACTION_THRESHOLD, extraction fires. No process-local
     state, so restarts cannot desync from accumulated history.
 
-    ``test_muted_channel_never_fires_even_above_threshold`` (the TKT-926
+    ``test_muted_channel_never_fires_even_above_threshold`` (the 
     per-source gate invariant) drives the REAL trigger and asserts the real DB
     outcome (no episode row) — no production code is patched.
 
@@ -191,7 +191,7 @@ class TestDbStateExtractionTrigger:
         assert fired == []
 
     def test_muted_channel_never_fires_even_above_threshold(self, db: sqlite3.Connection) -> None:
-        """Per-source gate (the headline invariant of TKT-926): a channel whose
+        """Per-source gate (the headline invariant of ): a channel whose
         profile is muted (no extract_episodes) produces NO episodes no matter how
         much transcript it accumulates. Seed WELL ABOVE the threshold on a muted
         delegate channel, drive the REAL ``_maybe_trigger_extraction``, and assert

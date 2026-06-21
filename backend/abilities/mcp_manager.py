@@ -15,10 +15,10 @@ ping_and_sync() so remote tools are indexed before the LLM's next turn.
 
 Why a separate MCP manager ability instead of a REST-only workflow:
 the LLM needs to be able to set up an MCP connection when a user asks
-conversationally ("connect to the taskie MCP server at …"), without the
+conversationally ("connect to the remote MCP server at …"), without the
 user having to open the Brain UI.  This ability handles that path.
 
-Result contract (TKT-882 / TKT-910):
+Result contract:
   ``run()`` returns ONLY ``ToolResult.ok``/``ToolResult.err`` — the dispatcher
   renders the wire envelope.  Every failure carries a stable kebab-case code so
   a weak model can self-correct without re-reading the schema:
@@ -79,9 +79,9 @@ class McpManagerAbility(Ability):
     def get_examples(self) -> list[str]:
         return [
             "connect to the MCP server at https://mcp.example.com/mcp",
-            "add an MCP connection named taskie at https://mcp.example.com/mcp",
+            "add an MCP connection named weather at https://mcp.example.com/mcp",
             "list all connected MCP servers",
-            "enable the taskie MCP server",
+            "enable the weather MCP server",
             "disable the weather MCP server",
             "show me which external tools are available from remote MCP servers",
             "set up a connection to an external agent via MCP",
@@ -110,7 +110,7 @@ class McpManagerAbility(Ability):
                 "type": "string",
                 "description": (
                     "For add: required human-readable server label "
-                    "(e.g. 'taskie', 'home-assistant'). For enable/disable: the "
+                    "(e.g. 'weather', 'home-assistant'). For enable/disable: the "
                     "label to resolve the server by when no server_id is given."
                 ),
             },
@@ -151,8 +151,8 @@ class McpManagerAbility(Ability):
     # action → code=unknown-action with valid=<these keys>; a known action whose
     # required params are missing/blank → ONE code=missing-params naming them all.
     # ALL four actions are keyed — a non-empty map must cover every action or a
-    # known action falls through the unknown-action branch (TKT-902 lesson).  The
-    # pre-gate is truthiness-based, which is correct for add: name/host are blank-
+    # known action falls through the unknown-action branch (all actions must be mapped).
+    # The pre-gate is truthiness-based, which is correct for add: name/host are blank-
     # invalid strings.  run() still guards whitespace-only residue ("  " is truthy)
     # under the same missing-params code.
     ACTION_REQUIRED: ClassVar[dict[str, tuple[str, ...]]] = {

@@ -6,8 +6,7 @@
 #
 #     http://www.apache.org/licenses/LICENSE-2.0
 
-"""Contacts-specific business-logic tests migrated from the per-ability
-conformance file removed in TKT-975. The full ToolResult wire contract is
+"""Contacts-specific business-logic tests. The full ToolResult wire contract is
 pinned centrally in test_tool_result_contract.py; this file holds only the
 contacts ability's genuine behaviour tests (list/get precision, ambiguous-match,
 not-found with hint) that have no coverage elsewhere."""

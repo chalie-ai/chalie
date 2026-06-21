@@ -461,7 +461,7 @@ class DataGraphService:
     # ── fact pipeline write path ──────────────────────────────────────
 
     def upsert_fact(self, key: str, value: str, *, source: Optional[str] = None) -> Optional[dict[str, object]]:
-        """Exact-key ADD/UPDATE for the worker fact pipeline (TKT-925).
+        """Exact-key ADD/UPDATE for the worker fact pipeline ().
         The reconciliation decision was already made by the LLM against the
         *actual* neighbour keys the worker showed it, so this path writes
         the chosen key verbatim and does NOT re-run concept-LUT
@@ -1434,8 +1434,8 @@ class DataGraphService:
         revoked is not erased (that would lose the audit trail and the
         bi-temporal history) but closed — ``active=0``, ``valid_to`` set
         to now, retrieval weight halved. Recall lanes filter
-        ``valid_to IS NULL`` (TKT-923), so the row vanishes from retrieval
-        immediately, then the fast-decay tombstone regime (TKT-921)
+        ``valid_to IS NULL`` (), so the row vanishes from retrieval
+        immediately, then the fast-decay tombstone regime ()
         hard-deletes it after the superseded window.
 
         The key is matched VERBATIM (no concept-LUT canonicalization): the

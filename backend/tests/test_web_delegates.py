@@ -6,9 +6,9 @@
 #
 #     http://www.apache.org/licenses/LICENSE-2.0
 
-"""Web-delegate-ability tests migrated from TKT-975's removed conformance file.
+"""Web-delegate-ability tests.
 
-Pins TKT-898's failure-half contract for web_search and web_browse: missing-param
+Pins the failure-half contract for web_search and web_browse: missing-param
 pre-gate fires before a delegate spawns, empty delegate answer maps to
 ``delegate-no-answer``, and real prose answers are returned verbatim.
 

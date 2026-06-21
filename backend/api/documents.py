@@ -120,9 +120,9 @@ def _validate_file_path(full_path: str) -> bool:
     return FileMapperService.validate_document_path(full_path)
 
 
-def _read_existing_metadata(svc: "DocumentService", doc_id: str) -> "dict[str, object]":
+def _read_existing_metadata(svc: "DocumentService", [document_id]: str) -> "dict[str, object]":
     """Read prior extracted_metadata so concurrent writes are not clobbered."""
-    existing = svc.get_document(doc_id) or {}
+    existing = svc.get_document([document_id]) or {}
     meta = existing.get('extracted_metadata') or {}
     if isinstance(meta, str):
         try:
@@ -141,17 +141,17 @@ def _derive_summary(text: str) -> str:
     return summary
 
 
-def _mark_upload_failed(doc_id: str, error: str) -> None:
+def _mark_upload_failed([document_id]: str, error: str) -> None:
     """Best-effort status update to 'failed' — swallow errors since we're already in a failure path."""
     try:
         from services.document_service import DocumentService
         from services.database_service import get_shared_db_service
-        DocumentService(get_shared_db_service()).update_status(doc_id, 'failed', error[:500])
+        DocumentService(get_shared_db_service()).update_status([document_id], 'failed', error[:500])
     except Exception:
-        logger.exception(f"[DOCS API] Could not mark {doc_id} as failed")
+        logger.exception(f"[DOCS API] Could not mark {[document_id]} as failed")
 
 
-def _run_upload_extraction(doc_id: str) -> None:
+def _run_upload_extraction([document_id]: str) -> None:
     """Extract text + write artifacts + mark ready. Raises on unrecoverable errors."""
     from services.document_service import DocumentService
     from services.database_service import get_shared_db_service
@@ -159,13 +159,13 @@ def _run_upload_extraction(doc_id: str) -> None:
     from services.document_chunking import create_document_artifacts
 
     svc = DocumentService(get_shared_db_service())
-    doc = svc.get_document(doc_id)
+    doc = svc.get_document([document_id])
     if not doc:
         return
 
     file_path = cast(str, doc.get('file_path', ''))
     if not file_path:
-        svc.update_status(doc_id, 'failed', 'No file path')
+        svc.update_status([document_id], 'failed', 'No file path')
         return
 
     text = extract_text(str(FileMapperService.get_documents_path(file_path)))
@@ -175,24 +175,24 @@ def _run_upload_extraction(doc_id: str) -> None:
             # A textless image with no vision provider (e.g. a photo with no
             # words): persist 'ready' so it stays viewable / re-queryable via the
             # vision tool; there is simply nothing to index. NOT a failure.
-            svc.update_status(doc_id, 'ready', chunk_count=0)
+            svc.update_status([document_id], 'ready', chunk_count=0)
             return
-        svc.update_status(doc_id, 'failed', 'Text extraction returned empty')
+        svc.update_status([document_id], 'failed', 'Text extraction returned empty')
         return
 
-    artifact_count = create_document_artifacts(doc_id, text)
+    artifact_count = create_document_artifacts([document_id], text)
 
     # Write clean_text so document(action='view') can return full text.
     # Merge with prior metadata to avoid clobbering concurrent
     # synthesis/classification writes.
     svc.update_extracted_metadata(
-        doc_id,
-        metadata=_read_existing_metadata(svc, doc_id),
+        [document_id],
+        metadata=_read_existing_metadata(svc, [document_id]),
         summary=_derive_summary(text),
         clean_text=text,
     )
-    svc.update_status(doc_id, 'ready', chunk_count=artifact_count)
-    logger.info(f"[DOCS API] Processed upload {doc_id}: {artifact_count} artifacts")
+    svc.update_status([document_id], 'ready', chunk_count=artifact_count)
+    logger.info(f"[DOCS API] Processed upload {[document_id]}: {artifact_count} artifacts")
 
 
 # ---------------------------------------------------------------------------
@@ -243,14 +243,14 @@ def upload_document() -> "ResponseReturnValue":
             logger.error(f"[DOCS API] upload error: {result['error']}")
             return jsonify({"error": "Upload failed"}), 500
 
-        doc_id = cast(str, result["id"])
+        [document_id] = cast(str, result["id"])
         file_hash = cast(str, result["hash"])
 
         # Exact-hash duplicate detection, computed from the ingested file's hash.
-        duplicates = svc.find_duplicates(file_hash, None, 0, exclude_id=doc_id)
+        duplicates = svc.find_duplicates(file_hash, None, 0, exclude_id=[document_id])
 
         response: dict[str, object] = {
-            "id": doc_id,
+            "id": [document_id],
             "original_name": result["name"],
             "status": result.get("status") or "pending",
             "file_size": result["size"],
@@ -293,13 +293,13 @@ def list_documents() -> "ResponseReturnValue":
         return jsonify({"error": _ERR_INTERNAL}), 500
 
 
-@documents_bp.route("/documents/<doc_id>", methods=["GET"])
+@documents_bp.route("/documents/<[document_id]>", methods=["GET"])
 @require_session
-def get_document(doc_id: str) -> "ResponseReturnValue":
+def get_document([document_id]: str) -> "ResponseReturnValue":
     """Get document metadata + first N data_graph artifact previews."""
     try:
         svc = _get_document_service()
-        doc = svc.get_document(doc_id)
+        doc = svc.get_document([document_id])
         if not doc:
             return jsonify({"error": _ERR_NOT_FOUND}), 404
 
@@ -308,7 +308,7 @@ def get_document(doc_id: str) -> "ResponseReturnValue":
         with dgs.db.connection() as conn:
             rows = conn.execute(
                 "SELECT key, substr(value, 1, 200) as preview FROM data_graph WHERE source=? AND active=1 ORDER BY key LIMIT 5",
-                (f'document:{doc_id}',),
+                (f'document:{[document_id]}',),
             ).fetchall()
         result = _serialize_doc(doc)
         result['artifacts'] = [{'key': r[0], 'preview': r[1]} for r in rows]
@@ -318,13 +318,13 @@ def get_document(doc_id: str) -> "ResponseReturnValue":
         return jsonify({"error": _ERR_INTERNAL}), 500
 
 
-@documents_bp.route("/documents/<doc_id>/content", methods=["GET"])
+@documents_bp.route("/documents/<[document_id]>/content", methods=["GET"])
 @require_session
-def get_document_content(doc_id: str) -> "ResponseReturnValue":
+def get_document_content([document_id]: str) -> "ResponseReturnValue":
     """Get full document text reconstructed from data_graph artifacts."""
     try:
         svc = _get_document_service()
-        doc = svc.get_document(doc_id)
+        doc = svc.get_document([document_id])
         if not doc:
             return jsonify({"error": _ERR_NOT_FOUND}), 404
 
@@ -333,12 +333,12 @@ def get_document_content(doc_id: str) -> "ResponseReturnValue":
         with dgs.db.connection() as conn:
             rows = conn.execute(
                 "SELECT key, value FROM data_graph WHERE source=? AND active=1 ORDER BY key",
-                (f'document:{doc_id}',),
+                (f'document:{[document_id]}',),
             ).fetchall()
 
         artifacts = [{'key': r[0], 'content': r[1]} for r in rows]
         return jsonify({
-            "document_id": doc_id,
+            "document_id": [document_id],
             "total_artifacts": len(artifacts),
             "artifacts": artifacts,
         })
@@ -347,12 +347,12 @@ def get_document_content(doc_id: str) -> "ResponseReturnValue":
         return jsonify({"error": _ERR_INTERNAL}), 500
 
 
-@documents_bp.route("/documents/<doc_id>/download", methods=["GET"])
+@documents_bp.route("/documents/<[document_id]>/download", methods=["GET"])
 @require_session
-def download_document(doc_id: str) -> "ResponseReturnValue":
+def download_document([document_id]: str) -> "ResponseReturnValue":
     try:
         svc = _get_document_service()
-        doc = svc.get_document(doc_id)
+        doc = svc.get_document([document_id])
         if not doc:
             return jsonify({"error": _ERR_NOT_FOUND}), 404
 
@@ -376,13 +376,13 @@ def download_document(doc_id: str) -> "ResponseReturnValue":
         return jsonify({"error": _ERR_INTERNAL}), 500
 
 
-@documents_bp.route("/documents/<doc_id>/preview", methods=["GET"])
+@documents_bp.route("/documents/<[document_id]>/preview", methods=["GET"])
 @require_session
-def preview_document(doc_id: str) -> "ResponseReturnValue":
+def preview_document([document_id]: str) -> "ResponseReturnValue":
     """Stream file for inline browser preview (no Content-Disposition: attachment)."""
     try:
         svc = _get_document_service()
-        doc = svc.get_document(doc_id)
+        doc = svc.get_document([document_id])
         if not doc:
             return jsonify({"error": _ERR_NOT_FOUND}), 404
 
@@ -406,19 +406,19 @@ def preview_document(doc_id: str) -> "ResponseReturnValue":
         return jsonify({"error": _ERR_INTERNAL}), 500
 
 
-@documents_bp.route("/documents/<doc_id>/classify", methods=["PUT"])
+@documents_bp.route("/documents/<[document_id]>/classify", methods=["PUT"])
 @require_session
-def update_document_classification(doc_id: str) -> "ResponseReturnValue":
+def update_document_classification([document_id]: str) -> "ResponseReturnValue":
     """Update document classification metadata (user edit — locks auto-classification)."""
     try:
         svc = _get_document_service()
-        doc = svc.get_document(doc_id)
+        doc = svc.get_document([document_id])
         if not doc:
             return jsonify({"error": _ERR_NOT_FOUND}), 404
 
         data = request.get_json() or {}
         svc.update_classification(
-            doc_id,
+            [document_id],
             category=data.get('category'),
             project=data.get('project'),
             doc_date=data.get('date'),
@@ -443,12 +443,12 @@ def get_document_groups(field: str) -> "ResponseReturnValue":
         return jsonify({"error": _ERR_INTERNAL}), 500
 
 
-@documents_bp.route("/documents/<doc_id>", methods=["DELETE"])
+@documents_bp.route("/documents/<[document_id]>", methods=["DELETE"])
 @require_session
-def delete_document(doc_id: str) -> "ResponseReturnValue":
+def delete_document([document_id]: str) -> "ResponseReturnValue":
     try:
         svc = _get_document_service()
-        ok = svc.soft_delete(doc_id)
+        ok = svc.soft_delete([document_id])
         if not ok:
             return jsonify({"error": _ERR_NOT_FOUND}), 404
         return jsonify({"ok": True})
@@ -457,12 +457,12 @@ def delete_document(doc_id: str) -> "ResponseReturnValue":
         return jsonify({"error": _ERR_INTERNAL}), 500
 
 
-@documents_bp.route("/documents/<doc_id>/restore", methods=["POST"])
+@documents_bp.route("/documents/<[document_id]>/restore", methods=["POST"])
 @require_session
-def restore_document(doc_id: str) -> "ResponseReturnValue":
+def restore_document([document_id]: str) -> "ResponseReturnValue":
     try:
         svc = _get_document_service()
-        ok = svc.restore(doc_id)
+        ok = svc.restore([document_id])
         if not ok:
             return jsonify({"error": "Not found or not deleted"}), 404
         return jsonify({"ok": True})
@@ -471,12 +471,12 @@ def restore_document(doc_id: str) -> "ResponseReturnValue":
         return jsonify({"error": _ERR_INTERNAL}), 500
 
 
-@documents_bp.route("/documents/<doc_id>/purge", methods=["DELETE"])
+@documents_bp.route("/documents/<[document_id]>/purge", methods=["DELETE"])
 @require_session
-def purge_document(doc_id: str) -> "ResponseReturnValue":
+def purge_document([document_id]: str) -> "ResponseReturnValue":
     try:
         svc = _get_document_service()
-        ok = svc.hard_delete(doc_id)
+        ok = svc.hard_delete([document_id])
         if not ok:
             return jsonify({"error": _ERR_NOT_FOUND}), 404
         return jsonify({"ok": True})
@@ -507,9 +507,9 @@ def search_documents() -> "ResponseReturnValue":
         serialized = []
         for row in results:
             source = cast(str, row.get('source', '') or '')
-            doc_id = source.split(':', 1)[1] if source.startswith('document:') else ''
+            [document_id] = source.split(':', 1)[1] if source.startswith('document:') else ''
             serialized.append({
-                'document_id': doc_id,
+                'document_id': [document_id],
                 'key': row.get('key', ''),
                 'content': row.get('value', ''),
                 'source': source,
@@ -521,31 +521,31 @@ def search_documents() -> "ResponseReturnValue":
         return jsonify({"error": "Search failed"}), 500
 
 
-@documents_bp.route("/documents/<doc_id>/confirm", methods=["POST"])
+@documents_bp.route("/documents/<[document_id]>/confirm", methods=["POST"])
 @require_session
-def confirm_document(doc_id: str) -> "ResponseReturnValue":
+def confirm_document([document_id]: str) -> "ResponseReturnValue":
     try:
         svc = _get_document_service()
-        doc = svc.get_document(doc_id)
+        doc = svc.get_document([document_id])
         if not doc:
             return jsonify({"error": _ERR_NOT_FOUND}), 404
 
         if doc['status'] != 'awaiting_confirmation':
             return jsonify({"error": "Document is not awaiting confirmation"}), 400
 
-        svc.update_status(doc_id, 'ready', chunk_count=cast(int, doc.get('chunk_count', 0)))
+        svc.update_status([document_id], 'ready', chunk_count=cast(int, doc.get('chunk_count', 0)))
         return jsonify({"ok": True, "status": "ready"})
     except Exception as e:
         logger.error(f"[DOCS API] confirm error: {e}")
         return jsonify({"error": _ERR_INTERNAL}), 500
 
 
-@documents_bp.route("/documents/<doc_id>/augment", methods=["POST"])
+@documents_bp.route("/documents/<[document_id]>/augment", methods=["POST"])
 @require_session
-def augment_document(doc_id: str) -> "ResponseReturnValue":
+def augment_document([document_id]: str) -> "ResponseReturnValue":
     try:
         svc = _get_document_service()
-        doc = svc.get_document(doc_id)
+        doc = svc.get_document([document_id])
         if not doc:
             return jsonify({"error": _ERR_NOT_FOUND}), 404
 
@@ -562,27 +562,27 @@ def augment_document(doc_id: str) -> "ResponseReturnValue":
         metadata['_user_context'] = context
 
         svc.update_extracted_metadata(
-            doc_id,
+            [document_id],
             metadata=metadata,
             summary=cast(str, doc.get('summary', '')),
             summary_embedding=cast("list[float] | None", doc.get('summary_embedding')),
         )
 
         if doc['status'] != 'ready':
-            svc.update_status(doc_id, 'ready', chunk_count=cast(int, doc.get('chunk_count', 0)))
+            svc.update_status([document_id], 'ready', chunk_count=cast(int, doc.get('chunk_count', 0)))
         return jsonify({"ok": True, "status": "ready"})
     except Exception as e:
         logger.error(f"[DOCS API] augment error: {e}")
         return jsonify({"error": _ERR_INTERNAL}), 500
 
 
-@documents_bp.route("/documents/<doc_id>/supersede", methods=["POST"])
+@documents_bp.route("/documents/<[document_id]>/supersede", methods=["POST"])
 @require_session
-def supersede_document(doc_id: str) -> "ResponseReturnValue":
+def supersede_document([document_id]: str) -> "ResponseReturnValue":
     try:
         svc = _get_document_service()
 
-        new_doc = svc.get_document(doc_id)
+        new_doc = svc.get_document([document_id])
         if not new_doc:
             return jsonify({"error": "New document not found"}), 404
 
@@ -595,7 +595,7 @@ def supersede_document(doc_id: str) -> "ResponseReturnValue":
         if not old_doc:
             return jsonify({"error": "Old document not found"}), 404
 
-        svc.set_supersedes(doc_id, old_id)
+        svc.set_supersedes([document_id], old_id)
         svc.soft_delete(old_id)
 
         return jsonify({"ok": True, "supersedes_id": old_id})

@@ -1,4 +1,4 @@
-"""Additive feature tests for the snapshot Time-Machine (TKT-949).
+"""Additive feature tests for the snapshot Time-Machine ().
 
 Covers production paths the six locked tests in ``test_snapshot_service.py``
 do not reach: the HTTP export route, the no-staged-restore early return, the

@@ -6,8 +6,7 @@
 #
 #     http://www.apache.org/licenses/LICENSE-2.0
 
-"""Calendar-specific business-logic tests migrated from the per-ability
-conformance file removed in TKT-975. The full ToolResult wire contract is
+"""Calendar-specific business-logic tests. The full ToolResult wire contract is
 pinned centrally in test_tool_result_contract.py; this file holds only the
 calendar ability's genuine behaviour tests (default window, fuzzy matching,
 dtstart validation, ambiguous-title errors) that have no coverage elsewhere."""

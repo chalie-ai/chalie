@@ -250,7 +250,7 @@ class TestFossilJanitor:
     """Stranded apex leaves on NON-episode-producing channels get tombstoned to
     enter deletion — but HEAVY (episode-producing) channels are protected.
 
-    TKT-926 spec change: the janitor's protection moved from a single
+     spec change: the janitor's protection moved from a single
     ``channel != 'user'`` filter to the per-source allowlist
     (``janitor_protected_sql()`` = every channel whose profile sets
     ``extract_episodes``). dmn is HEAVY and never consolidates, so its leaves are
@@ -263,7 +263,7 @@ class TestFossilJanitor:
         """An apex leaf older than the fossil window on a MUTED channel
         (skills_building) and one on an ABSENT-profile channel (discord, defaults
         to muted) both get tombstoned_at set. Replaces the old dmn fixture, which
-        TKT-926 now protects."""
+         now protects."""
         _insert_episode(db, "ep-muted", salience=5, retrieval_weight=0.3,
                         channel="skills_building",
                         last_relevant_at=_iso_ago(days=_JANITOR_FOSSIL_AGE_DAYS + 3))
@@ -285,7 +285,7 @@ class TestFossilJanitor:
     def test_heavy_channel_and_young_fossils_untouched(self, db: sqlite3.Connection) -> None:
         """The shouldn't-fire side. The janitor leaves untouched:
           * every HEAVY (episode-producing) channel's old apex leaf — user, dmn
-            AND external-agent:* — because TKT-926 protects the full allowlist
+            AND external-agent:* — because  protects the full allowlist
             (dmn would otherwise be reaped wholesale: it never consolidates), and
           * any young leaf regardless of channel.
         """

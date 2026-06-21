@@ -1,10 +1,10 @@
-"""Feature tests for TKT-923: collapsed-tree episode retrieval engine.
+"""Feature tests for collapsed-tree episode retrieval engine.
 
 All lanes run real (zero mocks): FTS, sqlite-vec, per-lane min-max normalisation,
 relative score floor, and collapsed-tree walk — via the production retrieve entry point
 and real db fixture with episodes seeded against the actual tables.
 
-The radius ceiling was removed (TKT-923). What replaced it:
+What's implemented:
 
   * vector lane stays non-empty on representative queries (radius-0 regression pinned dead);
   * lane signals min-max normalised within candidate pool; RELATIVE floor drops weak tail —
@@ -96,7 +96,7 @@ def test_relative_floor_drops_the_weak_tail_count_below_k(db: sqlite3.Connection
 def test_collapsed_tree_surfaces_super_and_leaf_in_one_pool(db: sqlite3.Connection) -> None:
     """A leaf consolidated into a super-episode and the super itself BOTH compete
     in one pool. When a query matches both, both surface — the leaf is not walked
-    away into its apex (collapsed-tree retrieval, TKT-923)."""
+    away into its apex (collapsed-tree retrieval, )."""
     from services.database_service import get_shared_db_service
 
     es = EpisodicService(get_shared_db_service())

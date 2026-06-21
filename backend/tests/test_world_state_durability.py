@@ -1,4 +1,4 @@
-"""Feature tests for TKT-922 worker-gate durability across a process restart.
+"""Feature tests for  worker-gate durability across a process restart.
 
 ``last_user_message_at`` lives only in WorldState's in-memory ``_store`` dict
 at HEAD, so a container restart wipes it and starves the subconscious worker

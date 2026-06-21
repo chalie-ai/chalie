@@ -239,7 +239,7 @@ def test_fact_extraction_tags_provenance_with_origin_channel(db: sqlite3.Connect
 
 
 # NOTE — decay-janitor HEAVY-channel protection (anchor G) is covered in its own
-# home, tests/test_decay_engine_service.py::TestFossilJanitor, which TKT-926
+# home, tests/test_decay_engine_service.py::TestFossilJanitor, which 
 # updates from the old "non-user → reaped" contract to "non-episode-producing →
 # reaped, HEAVY protected". It is not duplicated here.
 

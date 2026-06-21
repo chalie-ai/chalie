@@ -9,7 +9,7 @@
 """Feature tests for tool_calls durability and unified retention.
 
 Two guarantees, both pinned against the production hot path:
-  * Rich-card rendering (TKT-947): a recorded tool_calls row survives its turn so
+  * Rich-card rendering: a recorded tool_calls row survives its turn so
     SegmentService / the live broadcast can build the rich segment from it.
   * Unified retention: a tool_calls audit row lives and dies with its transcript
     turn. The transcript GC reaps it exactly when it reaps the turn — below the
@@ -80,7 +80,7 @@ _RICH_RESULT = (
 
 
 def test_tool_calls_row_survives_turn_and_segment_service_builds_rich_card(db: sqlite3.Connection) -> None:
-    """This is the direct proof that TKT-947's purge-before-segment-build bug is fixed."""
+    """This is the direct proof that 's purge-before-segment-build bug is fixed."""
     tid = _seed_transcript(db, content="What's the weather in Valletta?")
     db.commit()
 
@@ -112,7 +112,7 @@ def test_tool_calls_row_survives_turn_and_segment_service_builds_rich_card(db: s
     assert len(rich) == 1, (
         f"Expected 1 rich segment, got {len(rich)}. Segments: {segments}. "
         "If this is 0, the span tag became an orphan — the row was purged before "
-        "SegmentService ran (the TKT-947 regression is back)."
+        "SegmentService ran (the  regression is back)."
     )
     assert rich[0]["tag"] == "weather_1"
     assert rich[0]["synthesis"] == "Sunny, 27°C."

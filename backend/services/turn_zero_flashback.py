@@ -6,7 +6,7 @@
 #
 #     http://www.apache.org/licenses/LICENSE-2.0
 
-"""Turn-0 flashback — the hot-path memory seed (spec §4.5).
+"""Turn-0 flashback — the hot-path memory seed.
 
 Owns the single declarative behaviour the orchestrator fires once before
 iteration 0 when ``config.memory_seed`` is set: ground the model's first
@@ -36,7 +36,7 @@ and its telemetry stay exactly as the retrieval rework left them, and it records
 its own ``memory(action='recall', _auto=True)`` act-trail row so the seed recall
 and its curated result are visible in the turn's act-trail, marked ``_auto`` as
 the framework seed (distinct from a model-invoked recall). Moments never appear
-here (§4.7).
+here in the seed.
 """
 
 import logging
@@ -88,7 +88,7 @@ _CENTROID_WINDOW = 6
 #: A message with fewer than this many whitespace tokens is "terse" — too thin to
 #: carry its own topic ("yes", "lol", "do that"). Terse messages are composed
 #: with the living-doc "Now" section before embedding so topic continuity
-#: survives them. ~8 tokens per spec §4.5.
+#: survives them. ~8 tokens.
 _TERSE_TOKEN_CEILING = 8
 
 #: Declared context window (tokens) at/above which the active provider is treated
@@ -100,9 +100,9 @@ _TERSE_TOKEN_CEILING = 8
 #: plain embedding, so the hot path never depends on it.
 _STRONG_PROVIDER_CONTEXT_FLOOR = 200_000
 
-#: Curated-bundle caps (spec §4.5: ≤5 facts + ≤3 dated episode gists). These are
+#: Curated-bundle caps (≤5 facts + ≤3 dated episode gists). These are
 #: selection counts (how many memories surface), not text limits — each surfaced
-#: gist is rendered in full (TKT-821).
+#: gist is rendered in full.
 _MAX_FACTS = 5
 _MAX_EPISODES = 3
 
@@ -430,7 +430,7 @@ class TurnZeroFlashback:
 
         Runs the shared episode recall with ``caller='seed'`` so the frozen
         ``memory_recall_log`` seed row + telemetry are written exactly as the
-        retrieval rework left them. Recall is cross-channel (TKT-926): a user
+        retrieval rework left them. Recall is cross-channel (): a user
         turn's flashback surfaces episodes from every episode-producing channel
         (user, dmn, external-agent:*), not just the caller's own. Returns raw
         episode dicts (gist + created_at) ordered so super-episodes / era digests
@@ -470,7 +470,7 @@ class TurnZeroFlashback:
     def _render_episode(self, ep: dict[str, object]) -> str:
         """One episode as ``On <date>: <gist>`` (spec §4.5).
 
-        The gist is rendered in full — NO truncation (TKT-821); newlines are
+        The gist is rendered in full — NO truncation (); newlines are
         collapsed to keep the bundle one line per episode, but no characters are
         dropped. The date is the episode's local-time creation day; an
         unparseable / missing timestamp drops the date prefix rather than

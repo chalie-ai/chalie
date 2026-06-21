@@ -1,4 +1,4 @@
-"""Feature tests for the whole-instance snapshot Time-Machine (TKT-949).
+"""Feature tests for the whole-instance snapshot Time-Machine.
 
 These drive the REAL production stack — no mocks of production code. The only
 ``patch()`` calls inherited from ``authed_client`` sit at the auth/session
@@ -11,9 +11,9 @@ daemon thread runs ``os._exit(42)`` two seconds later — it bypasses pytest. Th
 roundtrip tests drive the SAME production engine method directly
 (``SnapshotService.stage_import`` → ``apply_pending``). The HTTP endpoint is
 exercised only on paths that fail BEFORE ``request_restart`` is reached (wrong
-password, >50 MB junk zip). Design-coupling signal per build source-of-truth §3.6.
+password, >50 MB junk zip).
 
-Contract (§6): ``export()``  ·  ``stage_import()``  ·  ``apply_pending()`` boot B  ·
+Methods: ``export()``  ·  ``stage_import()``  ·  ``apply_pending()`` boot  ·
 POST /api/snapshot/export  ·  POST /api/snapshot/import
 """
 

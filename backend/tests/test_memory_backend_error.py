@@ -1,4 +1,4 @@
-"""Feature test: a dead retrieval backend surfaces as a LOUD, stable error (TKT-886).
+"""Feature test: a dead retrieval backend surfaces as a LOUD, stable error.
 
 The audit finding this pins: ``memory.recall`` used to discard the backend error
 status from its search lanes, so a dead store was indistinguishable from "no

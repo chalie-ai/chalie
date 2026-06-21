@@ -47,7 +47,7 @@ class _MP:
 
 
 def test_patch_file_passes_through_verbatim(db: sqlite3.Connection, tmp_path: Path) -> None:
-    """A raw ``.patch`` file must come back VERBATIM — the TKT-899 bug was that
+    """A raw ``.patch`` file must come back VERBATIM — the  bug was that
     ``extract_html`` stripped non-HTML text to ``no-readable-content``. The patch
     body has zero HTML, so any extraction would lose it."""
     transcript_id = _seed_transcript(db)

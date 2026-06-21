@@ -6,7 +6,7 @@
 #
 #     http://www.apache.org/licenses/LICENSE-2.0
 
-"""Feature tests for bash's command-derived policy classification (TKT-884).
+"""Feature tests for bash's command-derived policy classification ().
 
 Real hot path, zero mocks: every assertion drives the genuine
 ``ToolDispatcher(mp).dispatch()`` chokepoint against a real ``AbilityRegistry``,

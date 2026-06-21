@@ -45,7 +45,7 @@ def _seed_server_online(svc: McpClientService, name: str, tools: list[dict[str, 
     return server
 
 
-# Representative Taskie tool definitions — match the kinds of tools this targets.
+# Representative tool definitions from the task tracker MCP — match the kinds of tools this targets.
 _TASKIE_TOOLS: list[dict[str, object]] = [
     {
         "name": "list_tickets",
@@ -60,7 +60,7 @@ _TASKIE_TOOLS: list[dict[str, object]] = [
     {
         "name": "get_document",
         "description": "Retrieve a document by ID from the project document store.",
-        "inputSchema": {"type": "object", "properties": {"doc_id": {"type": "string"}}, "required": ["doc_id"]},
+        "inputSchema": {"type": "object", "properties": {"[document_id]": {"type": "string"}}, "required": ["[document_id]"]},
     },
     {
         "name": "add_attachment",
@@ -92,7 +92,7 @@ class TestSelectAdvertisedName:
                             tmp_path / "mcp_tools.sqlite")
 
         svc = McpClientService()
-        _seed_server_online(svc, "taskie", _TASKIE_TOOLS)
+        _seed_server_online(svc, "[task_tracker]", _TASKIE_TOOLS)
 
         # Discoverable: the prefixed MCP names (what effective_allow will contain).
         mcp_names = svc.get_online_mcp_tool_names()
@@ -132,7 +132,7 @@ class TestSemanticQueryViaEmbeddings:
                             tmp_path / "mcp_tools.sqlite")
 
         svc = McpClientService()
-        server = _seed_server_online(svc, "taskie", _TASKIE_TOOLS)
+        server = _seed_server_online(svc, "[task_tracker]", _TASKIE_TOOLS)
 
         # embed_server_tools is the new method — this MUST fail at baseline.
         svc.embed_server_tools(cast(str, server["id"]))
@@ -169,7 +169,7 @@ class TestLooseMultiWordQuery:
                             tmp_path / "mcp_tools.sqlite")
 
         svc = McpClientService()
-        server = _seed_server_online(svc, "taskie", _TASKIE_TOOLS)
+        server = _seed_server_online(svc, "[task_tracker]", _TASKIE_TOOLS)
         svc.embed_server_tools(cast(str, server["id"]))
 
         # Precondition: FTS AND-query returns exactly 1 row (add_attachment).
@@ -194,7 +194,7 @@ class TestLooseMultiWordQuery:
         result = _run_find_tools(ability, proc, {"query": "ticket document attachment"})
 
         assert len(proc.active_tools) >= 1, (
-            f"Expected >=1 taskie tool via dual-signal RRF for 'ticket document attachment'. "
+            f"Expected >=1 [task_tracker] tool via dual-signal RRF for 'ticket document attachment'. "
             f"Got active_tools={proc.active_tools}. Result: {result!r}. "
             f"Failure at baseline: embed_server_tools absent, no vec table, "
             f"single-signal FTS 0.0625 filtered by 0.075 floor."
@@ -219,10 +219,10 @@ class TestEmbeddingsSurviveHeartbeatSync:
 
         ID-churn strategy (§11 adjudication):
         SQLite (INTEGER PRIMARY KEY, no AUTOINCREMENT) reuses freed rowids 1..N when a
-        table is otherwise empty.  In a single-server isolated DB, taskie's DELETE+INSERT
+        table is otherwise empty.  In a single-server isolated DB, [task_tracker]'s DELETE+INSERT
         would get back ids 1..4 — making ids_before == ids_after and the precondition
         unsatisfiable.  Fix: seed a SECOND server FIRST so the mcp_tools rowid
-        high-water mark exceeds taskie's id range.  Taskie's DELETE+INSERT then
+        high-water mark exceeds [task_tracker]'s id range.  Its DELETE+INSERT then
         reassigns ids above that mark, guaranteeing ids_before != ids_after.
 
         At baseline: embed_server_tools absent → AttributeError.
@@ -236,16 +236,16 @@ class TestEmbeddingsSurviveHeartbeatSync:
 
         svc = McpClientService()
 
-        # Seed taskie FIRST so its tools get the lowest rowids (e.g. 1..4).
-        server = _seed_server_online(svc, "taskie", _TASKIE_TOOLS)
+        # Seed [task_tracker] FIRST so its tools get the lowest rowids (e.g. 1..4).
+        server = _seed_server_online(svc, "[task_tracker]", _TASKIE_TOOLS)
         svc.embed_server_tools(cast(str, server["id"]))
 
-        # Seed a SECOND server AFTER taskie to advance the mcp_tools rowid high-water
-        # mark past taskie's id range (e.g. id=5).  When taskie's _write_tools then
+        # Seed a SECOND server AFTER [task_tracker] to advance the mcp_tools rowid high-water
+        # mark past [task_tracker]'s id range (e.g. id=5).  When [task_tracker]'s _write_tools then
         # DELETEs ids 1..4 and re-INSERTs, SQLite picks max(existing)+1 = 6, 7, 8, 9
         # — guaranteeing ids_before != ids_after without AUTOINCREMENT.
         # (SQLite without AUTOINCREMENT reuses freed rowids when they are below the
-        # current max; seeding "other" after taskie keeps max > taskie's range.)
+        # current max; seeding "other" after [task_tracker] keeps max > [task_tracker]'s range.)
         _seed_server_online(svc, "other", [
             {
                 "name": "ping",
@@ -266,9 +266,9 @@ class TestEmbeddingsSurviveHeartbeatSync:
             conn.close()
 
         # Simulate a heartbeat re-sync: _write_tools deletes + re-inserts.
-        # With the second server having advanced the high-water mark, taskie's
+        # With the second server having advanced the high-water mark, [task_tracker]'s
         # re-insert gets fresh ids above the previous range.
-        svc._write_tools(cast(str, server["id"]), "taskie", _TASKIE_TOOLS)
+        svc._write_tools(cast(str, server["id"]), "[task_tracker]", _TASKIE_TOOLS)
 
         conn = _open_tools_db()
         try:
@@ -325,7 +325,7 @@ class TestAddOnlyEmbeddingTrigger:
                             tmp_path / "mcp_tools.sqlite")
 
         svc = McpClientService()
-        server = _seed_server_online(svc, "taskie", _TASKIE_TOOLS)
+        server = _seed_server_online(svc, "[task_tracker]", _TASKIE_TOOLS)
         svc.embed_server_tools(cast(str, server["id"]))
 
         # Snapshot the vector rows (rowid + tool_name pairs) before the sync.
@@ -340,7 +340,7 @@ class TestAddOnlyEmbeddingTrigger:
         assert rows_before, "Precondition: embed_server_tools must have written mcp_tool_vectors rows."
 
         # Simulate a heartbeat: _write_tools is the re-sync path.
-        svc._write_tools(cast(str, server["id"]), "taskie", _TASKIE_TOOLS)
+        svc._write_tools(cast(str, server["id"]), "[task_tracker]", _TASKIE_TOOLS)
 
         conn = _open_tools_db()
         try:
@@ -388,10 +388,10 @@ class TestAmbiguousBareNameDropped:
         svc = McpClientService()
 
         # Phase A: single server — bare name 'ping' is unambiguous.
-        _seed_server_online(svc, "taskie", [
+        _seed_server_online(svc, "[task_tracker]", [
             {
                 "name": "ping",
-                "description": "Ping the taskie service.",
+                "description": "Ping the [task_tracker] service.",
                 "inputSchema": {},
             }
         ])

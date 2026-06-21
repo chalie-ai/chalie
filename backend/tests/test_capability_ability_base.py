@@ -3,8 +3,8 @@
 ``email`` is the exemplar that still runs the base's whole delegation flow: it
 maps the model's ``action`` onto a mail-capability handler, refuses through the
 base when the capability is not connected, and renders the structured error. (The
-TKT-883 exemplar, ``contacts``, was migrated to inline local-index reads in
-TKT-905 and no longer reaches the base's handler-dispatch path — so the base flow
+ exemplar, ``contacts``, was migrated to inline local-index reads in
+ and no longer reaches the base's handler-dispatch path — so the base flow
 is now exercised against ``email``, which keeps ``ACTION_HANDLERS`` and the full
 ``super().run()`` path.)
 

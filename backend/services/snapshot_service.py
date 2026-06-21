@@ -1,4 +1,4 @@
-"""Snapshot Service — whole-instance Time-Machine export / restore (TKT-949).
+"""Snapshot Service — whole-instance Time-Machine export / restore.
 
 Produces a single standard ``.zip`` that is a complete clone of the running
 instance (the WAL-folded SQLite databases, the vault key-material backups, the

@@ -368,11 +368,11 @@ class TestStore:
         assert old['active'] == 0
         assert cast(float, old['retrieval_weight']) < 1.0
 
-        # TKT-925 (ticket-sanctioned spec change): bi-temporal invalidation now
+        #  (ticket-sanctioned spec change): bi-temporal invalidation now
         # closes the old fact's validity interval. Graphiti event-time model —
         # the superseded row's valid_to is set to the new row's valid_from, so
         # the old fact reads as "true from first_seen until the new fact arrived".
-        # Before TKT-925 valid_to was left NULL on supersession; this assertion
+        # Before  valid_to was left NULL on supersession; this assertion
         # is RED until _apply_temporal_supersession sets it.
         new = _raw_row(db_service, _rid(r2))
         assert new['valid_from'] is not None, (

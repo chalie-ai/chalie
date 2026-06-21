@@ -13,7 +13,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, asdict
 from datetime import datetime, timezone
 from typing import Optional, cast
-from urllib.parse import quote_plus, urlparse
+from urllib.parse import quote_plus
 
 # feedparser: tolerant RSS/Atom/RDF parsing + media/date normalisation,
 # replaces hand-rolled ElementTree pipeline
@@ -66,10 +66,6 @@ LEVENSHTEIN_THRESHOLD = 5
 
 _PUNCT_RE = re.compile(r"[^\w\s]")
 _WHITESPACE_RE = re.compile(r"\s+")
-
-# RSS subdomain prefixes to strip when deriving domain for Google News site: filter
-_RSS_SUBDOMAIN_RE = re.compile(r"^(?:feeds?2?|rss(?:feeds?)?|feed|moxie|www\d*)\.", re.IGNORECASE)
-_PROXY_HOSTS = {"rsshub.app", "hnrss.org", "feedburner.com", "feeds.feedburner.com"}
 
 
 @dataclass
@@ -374,15 +370,3 @@ def _entry_to_article(entry: dict[str, object], src: news_sources.Source, feed_i
 
 def _normalize_title(title: str) -> str:
     return _WHITESPACE_RE.sub(" ", _PUNCT_RE.sub("", title.lower())).strip()
-
-
-def _derive_domain(feed_url: str) -> Optional[str]:
-    try:
-        hostname = urlparse(feed_url).hostname
-        if not hostname:
-            return None
-        if hostname in _PROXY_HOSTS:
-            return None
-        return _RSS_SUBDOMAIN_RE.sub("", hostname)
-    except Exception:
-        return None

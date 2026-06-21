@@ -8,13 +8,12 @@
 
 """Feature test — every tool-bearing step broadcasts its interim boundary frame.
 
-Regression (TKT-1070, observed live on the Vue surface 2026-06-19): the surface
-collapses the previous step's tool group and opens the next ONLY when it
-receives an interim ``message`` frame. ``MessageProcessor._emit_interim`` used
-to gate that broadcast on ``formatted.strip()``, so a tool-only step — tool
-calls with no assistant prose, the common case — emitted no frame. The prior
-group never collapsed, every later step's tools piled into it, and the whole
-turn rendered as one ever-growing expanded ACT loop (the pre-TKT-1070 look).
+Regression observed live: the surface collapses the previous step's tool group and
+opens the next ONLY when it receives an interim ``message`` frame.
+``MessageProcessor._emit_interim`` used to gate that broadcast on ``formatted.strip()``,
+so a tool-only step — tool calls with no assistant prose, the common case — emitted
+no frame. The prior group never collapsed, every later step's tools piled into it, and
+the whole turn rendered as one ever-growing expanded ACT loop.
 
 The boundary frame must fire for a tool-bearing step regardless of whether the
 step produced prose. Driven through the real production method + the real

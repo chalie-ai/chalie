@@ -7,7 +7,7 @@ the same rule and a dead socket never breaks the loop.
 
 Constructed per-config by the tool dispatcher, this emitter carries only the
 tool ``act_tool_start`` / ``act_tool_end`` events. Mid-turn assistant prose is
-a separate concern: under the recursive turn chain (TKT-1070) each step that
+a separate concern: under the recursive turn chain each step that
 makes tool calls broadcasts its prose live as an interim ``message`` event
 (``MessageProcessor._emit_interim``) and persists it as its own transcript row
 (``_store_row``), so a single turn produces multiple assistant rows — one per

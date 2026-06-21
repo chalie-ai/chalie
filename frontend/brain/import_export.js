@@ -1,5 +1,5 @@
 /*
- * Import / Export panel — whole-instance snapshot Time-Machine (TKT-949).
+ * Import / Export panel — whole-instance snapshot Time-Machine.
  *
  * Export: optional password → POST /api/snapshot/export → download the .zip.
  * Import: file + optional password → confirm a FULL WIPE → multipart POST to

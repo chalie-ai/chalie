@@ -10,8 +10,8 @@ def _seed_turn(question: str, *answers: str) -> int:
     """Open a real turn via the production writers and append its step rows.
 
     write_input_row allocates the turn boundary atomically; every assistant step
-    shares that turn_id — the exact multi-row shape the chain model (TKT-1070)
-    persists. Returns the turn_id so the test can assert grouping.
+    shares that turn_id — the exact multi-row shape the chain model persists.
+    Returns the turn_id so the test can assert grouping.
     """
     input_id = Transcript.write_input_row('user', 'user', question)
     turn_id = Transcript.turn_id_of_row(input_id)

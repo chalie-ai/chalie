@@ -6,7 +6,7 @@ and returns it. 23 sources share ONE generic engine driven by a declarative
 :data:`SOURCES` table — adding a 24th source is a single ``Source(...)`` entry,
 never a new class.
 
-Truthfulness contract (TKT-892): this tool NEVER fabricates documentation. A
+Truthfulness contract: this tool NEVER fabricates documentation. A
 source that yields no candidate, or whose top candidate cannot be fetched /
 extracted, returns ``ToolResult.err(code="source-unavailable")`` — a loud error
 the model can route around — not invented page text presented as the answer. A

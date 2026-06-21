@@ -1,9 +1,9 @@
-"""Feature tests for TKT-928 — Moments v2 (dedicated user-curated store).
+"""Feature tests for  — Moments v2 (dedicated user-curated store).
 
-What TKT-928 changes (and therefore what these RED-first tests pin):
+What  changes (and therefore what these RED-first tests pin):
 
   Today "moments" live in ``data_graph`` as ``kind='moment'`` (auto-populated by a
-  6-hour worker). TKT-928 moves them to a dedicated ``moments`` table with its own
+  6-hour worker).  moves them to a dedicated ``moments`` table with its own
   FTS5 + vec0 index, removes ``kind='moment'`` from the data_graph enum (so the
   existing ``store()`` guard rejects it), wipes the legacy rows via a standing
   janitor step in the decay cycle, repoints ``api/moments.py`` onto the new table
@@ -251,7 +251,7 @@ def test_explicit_recall_surfaces_moment_in_labeled_lane(authed_client: tuple[Fl
     assert "results" in body and isinstance(body["results"], list), (
         f"explicit recall dropped the JSON results contract: {out!r}"
     )
-    assert "fallback" in body, "explicit recall dropped the TKT-886 fallback guardrail"
+    assert "fallback" in body, "explicit recall dropped the  fallback guardrail"
 
     moment_rows = [r for r in body["results"] if r.get("kind") == "moment"]
     assert moment_rows, (
@@ -280,7 +280,7 @@ def _reset_conversation(conn: sqlite3.Connection) -> None:
     when there is no running thread to continue (no prior transcript turns / no
     centroid) — so to observe the flashback at all we must clear the conversation
     state the pin's assistant turn created. The moment itself lives OUTSIDE the
-    transcript (in data_graph today, in the ``moments`` table after TKT-928), so
+    transcript (in data_graph today, in the ``moments`` table after ), so
     clearing the conversation leaves it intact and still recall-eligible — exactly
     the state we need to prove it is excluded from the auto-seed. tool_calls is the
     act-trail (FK into transcript) so it is cleared first."""
@@ -337,7 +337,7 @@ def test_data_graph_store_rejects_kind_moment(db: sqlite3.Connection) -> None:
 
 
 def _seed_legacy_dg_moment(conn: sqlite3.Connection, key: str, value: str) -> None:
-    """Insert a pre-TKT-928 ``kind='moment'`` row directly into data_graph (the
+    """Insert a pre- ``kind='moment'`` row directly into data_graph (the
     'store' path can't be used — it rejects 'moment' after the change), plus its
     FTS companion, mirroring the 199 legacy rows the worker left behind."""
     now = utc_now().isoformat()

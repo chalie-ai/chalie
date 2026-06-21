@@ -1,5 +1,5 @@
 """Feature tests: memory recall surfaces the FULL episode gist — NO truncation
-(TKT-821).
+().
 
 Three production hot-paths hard-clipped a recalled episode gist that the model
 actually reads, violating the NO-TRUNCATION contract:

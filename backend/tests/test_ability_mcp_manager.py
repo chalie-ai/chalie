@@ -6,8 +6,7 @@
 #
 #     http://www.apache.org/licenses/LICENSE-2.0
 
-"""mcp_manager-specific business-logic tests migrated from the per-ability
-conformance file removed in TKT-975. Drives the real ToolDispatcher end-to-end
+"""mcp_manager-specific business-logic tests. Drives the real ToolDispatcher end-to-end
 hot path with zero mocks, exercising add/list/enable/disable actions, structured
 row bodies, and the _classify_sync_error pure-function contract."""
 

@@ -26,8 +26,8 @@ def test_tool_name_sanitization_produces_valid_prefix() -> None:
     policy seeding, and find_tools gating all depend on.
     """
     # Server name with capitals, hyphens, spaces, and leading/trailing noise
-    result = _tool_name("My-Taskie Server!", "create_document")
-    assert result == "_mcp_my_taskie_server_create_document"
+    result = _tool_name("My-Server-One!", "create_document")
+    assert result == "_mcp_my_server_one_create_document"
 
     # Purely numeric server name
     result = _tool_name("42services", "ping")
@@ -54,18 +54,18 @@ def test_resolve_tool_routes_to_longest_prefix_server(db: sqlite3.Connection) ->
     """
     svc = McpClientService()
 
-    # Register two servers: 'task' and 'taskie' — 'task_' is a prefix of 'taskie_'
+    # Register two servers: 'task' and '[task_tracker]' — 'task_' is a prefix of 'taskie_'
     server_a = svc.add_server(name="task", host="http://nowhere:1111", headers={}, enabled=True)
-    server_b = svc.add_server(name="taskie", host="http://nowhere:2222", headers={}, enabled=True)
+    server_b = svc.add_server(name="[task_tracker]", host="http://nowhere:2222", headers={}, enabled=True)
 
     # Seed tool rows directly into mcp_tools.sqlite so _resolve_tool has something to match.
     # We do NOT call ping_and_sync (that requires the network); we test _resolve_tool's
     # lookup logic in isolation by seeding the servers table only.
     # _resolve_tool reads from mcp_client_servers via list_servers(), NOT mcp_tools.sqlite.
-    # The tool name encodes the server: _mcp_taskie_create_document → server 'taskie'.
+    # The tool name encodes the server: _mcp_taskie_create_document → server '[task_tracker]'.
     server, remote_tool = svc._resolve_tool("_mcp_taskie_create_document")
     assert server["id"] == server_b["id"], (
-        "Expected _mcp_taskie_create_document to resolve to the 'taskie' server, "
+        "Expected _mcp_taskie_create_document to resolve to the '[task_tracker]' server, "
         f"but got server id={server['id']!r} (name={server['name']!r})"
     )
     assert remote_tool == "create_document"
@@ -215,7 +215,7 @@ def test_get_tool_schema_round_trips_stored_input_schema(db: sqlite3.Connection,
     # mcp_tools has no FK to mcp_client_servers.
     svc._write_tools(
         "srv-1",
-        "taskie",
+        "[task_tracker]",
         [
             {
                 "name": "create_document",
@@ -283,9 +283,9 @@ def test_add_server_dedups_same_endpoint_variant(db: sqlite3.Connection) -> None
     """Re-adding the same endpoint (trailing-slash variant) updates the existing
     row instead of creating a duplicate."""
     svc = McpClientService()
-    a = svc.add_server(name="taskie", host="https://mcp.example.com/mcp",
+    a = svc.add_server(name="[task_tracker]", host="https://mcp.example.com/mcp",
                        headers={}, enabled=True)
-    b = svc.add_server(name="taskie", host="https://mcp.example.com/mcp/",
+    b = svc.add_server(name="[task_tracker]", host="https://mcp.example.com/mcp/",
                        headers={}, enabled=True)
     assert b["id"] == a["id"]
     assert len(svc.list_servers()) == 1
@@ -294,9 +294,9 @@ def test_add_server_dedups_same_endpoint_variant(db: sqlite3.Connection) -> None
 def test_add_server_upsert_updates_fields_and_reenables(db: sqlite3.Connection) -> None:
     """Re-adding a known endpoint refreshes headers and re-enables it."""
     svc = McpClientService()
-    a = svc.add_server(name="taskie", host="https://mcp.example.com/mcp",
+    a = svc.add_server(name="[task_tracker]", host="https://mcp.example.com/mcp",
                        headers={}, enabled=False)
-    b = svc.add_server(name="taskie", host="https://mcp.example.com/mcp",
+    b = svc.add_server(name="[task_tracker]", host="https://mcp.example.com/mcp",
                        headers={"Authorization": "Bearer x"}, enabled=True)
     assert b["id"] == a["id"]
     assert b["enabled"] is True
@@ -317,9 +317,9 @@ def test_add_server_upsert_name_change_purges_old_prefix_rows(db: sqlite3.Connec
     policy rows are purged so a later re-sync leaves no orphans."""
     monkeypatch.setattr(FileMapperService, "_DATA_DIR", tmp_path)
     svc = McpClientService()
-    s = svc.add_server(name="taskie", host="https://mcp.example.com/mcp",
+    s = svc.add_server(name="[task_tracker]", host="https://mcp.example.com/mcp",
                        headers={}, enabled=True)
-    old_tool = _tool_name("taskie", "create_document")
+    old_tool = _tool_name("[task_tracker]", "create_document")
 
     conn = _open_tools_db()
     try:

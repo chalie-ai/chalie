@@ -1,5 +1,5 @@
 """Feature test: memory recall returns a STRUCTURED JSON body, and the transcript
-back-reference resolves episodes from it (TKT-886).
+back-reference resolves episodes from it.
 
 Two contracts are pinned end-to-end against the real production hot path:
 

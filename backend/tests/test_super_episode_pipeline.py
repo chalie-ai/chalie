@@ -678,7 +678,7 @@ def test_clustering_dependencies_import() -> None:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# KEEP — collapsed-tree retrieval (TKT-923 contract, algorithm-agnostic)
+# KEEP — collapsed-tree retrieval ( contract, algorithm-agnostic)
 # ══════════════════════════════════════════════════════════════════════════════
 
 

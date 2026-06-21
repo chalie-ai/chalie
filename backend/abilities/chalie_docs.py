@@ -6,7 +6,7 @@ its documentation URL(s), fetches each page through the shared SSRF-guarded
 :func:`services.text_extractor.extract_html`, and returns the documentation text
 directly.
 
-TKT-901: the old ability answered with an INSTRUCTION ("use the read tool and
+Previously, the ability answered with an INSTRUCTION ("use the read tool and
 visit …") — a round-trip a weak model fumbles. It now does the fetch itself and
 returns the doc prose, so one call yields the answer.
 

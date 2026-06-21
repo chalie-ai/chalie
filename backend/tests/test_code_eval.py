@@ -1,4 +1,4 @@
-"""Unit tests for CodeEvalAbility — the sandbox result contract (TKT-917).
+"""Unit tests for CodeEvalAbility — the sandbox result contract.
 
 CPython-faithful: anything that RAN returns ``ok`` with a branchable
 ``exit_code`` (exactly how ``python script.py`` behaves) — clean exit 0 with
@@ -128,6 +128,30 @@ def test_no_path_returns_empty_string_loop_signal_is_gone() -> None:
     assert result.status == "error"
     assert result.code == "no-output"
     assert result.body == CodeEvalAbility._ERR_NO_OUTPUT
+
+
+# ── augmented assignment runs ( CE-1) ─────────────────────────
+
+
+def test_augmented_assignment_runs() -> None:
+    """Regression ( CE-1): RestrictedPython rewrites ``x += 1`` into
+    ``x = _inplacevar_("+=", x, 1)``. The sandbox shipped no ``_inplacevar_`` in its
+    globals, so EVERY augmented assignment died with
+    ``NameError: name '_inplacevar_' is not defined`` — a ubiquitous Python idiom
+    silently broken. Drive the real run() over a spread of in-place ops and the
+    exact ``*=`` accumulator loop the ticket reproduced (25!), asserting the
+    arithmetic actually executed."""
+    result = _run("x = 0\nx += 5\nx *= 3\nx -= 1\nx //= 2\nprint(x)")
+    assert result.status == "success"
+    body = cast("dict[str, object]", result.body)
+    assert body["exit_code"] == 0, cast("dict[str, object]", result.body)["stderr"]
+    assert cast(str, body["stdout"]).strip() == "7"  # ((0+5)*3 - 1) // 2 == 7
+
+    factorial = _run("result = 1\nfor i in range(1, 26):\n    result *= i\nprint(result)")
+    assert factorial.status == "success"
+    fbody = cast("dict[str, object]", factorial.body)
+    assert fbody["exit_code"] == 0, fbody["stderr"]
+    assert cast(str, fbody["stdout"]).strip() == "15511210043330985984000000"
 
 
 # ── hard wall-clock cap: runaway code is force-killed ─────────────────

@@ -1,5 +1,5 @@
 """
-Feature test for TKT-929 self-heal convergence release gate.
+Feature test for the self-heal convergence release gate.
 
 Verifies that a pre-redesign ("old-shape") DB heals end-to-end with NO
 operator-run migration - the boot sequence (converge + backfill) plus normal
@@ -647,7 +647,7 @@ class TestFullJumpConvergence:
                 for sid, cfrom_json, level in cast("list[tuple[object, object, object]]", supers):
                     assert level == 1, (
                         f"roll-up parent must be level=1, got {level!r} — "
-                        "TKT-927 latent bug (store_episode never wrote level)"
+                        " latent bug (store_episode never wrote level)"
                     )
                     children = json.loads(cast(str, cfrom_json))
                     assert children, "super-episode has empty consolidated_from"

@@ -1,4 +1,4 @@
-"""Feature tests — `news` is exclusive to the `web_search` delegate (TKT-1066).
+"""Feature tests — `news` is exclusive to the `web_search` delegate.
 
 The web-research tool surface moves `news` to behave exactly like `search`: a
 raw tool the user/background channels can never call directly, available ONLY

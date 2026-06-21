@@ -1,5 +1,5 @@
 /**
- * Snapshot API — whole-instance Import/Export Time-Machine (TKT-949).
+ * Snapshot API — whole-instance Import/Export Time-Machine.
  * Derived from frontend/brain/import_export.js; paired with backend/api/snapshot.py.
  *
  *   POST /api/snapshot/export → streams a single .zip clone of the instance

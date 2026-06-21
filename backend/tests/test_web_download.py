@@ -110,7 +110,7 @@ def test_too_large_download_is_an_error(httpbin: None) -> None:
 
 
 # ===========================================================================
-# Migrated from test_ability_web_download_tool_result.py (TKT-975)
+# Migrated from test_ability_web_download_tool_result.py ()
 # Offline contract: pre-gate, blocked schemes, SSRF guard, module hygiene.
 # All four scheme/SSRF tests migrated — none were covered in the network tier above.
 # ===========================================================================

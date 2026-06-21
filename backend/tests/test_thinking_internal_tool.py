@@ -54,7 +54,6 @@ def test_thinking_gate_writes_the_public_thinking_level_attr(db: sqlite3.Connect
 
 
 # ===========================================================================
-# Migrated from test_ability_thinking_tool_result.py (TKT-975)
 # Ability-specific business-logic tests for the NOTHING sentinel.
 # ===========================================================================
 

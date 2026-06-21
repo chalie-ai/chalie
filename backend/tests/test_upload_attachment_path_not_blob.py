@@ -23,7 +23,7 @@ and asserting the trail row the dispatch produced:
   * the whole params JSON stays small (a path can't bloat the window),
   * the upload still landed a ``ready`` document row with a content hash
     (the ``"id":``/``"hash":`` keys of the structured upload body the
-    transcript-doc link depends on — TKT-893).
+    transcript-doc link depends on — ).
 
 Zero mocks.  The upload never touches the LLM boundary (no vision provider -> the
 deterministic OCR fork), so no provider seam is needed.
@@ -130,15 +130,15 @@ def test_turn0_upload_records_path_not_base64_blob(db: sqlite3.Connection) -> No
     )
 
     # The upload still landed a real, ready document with a content hash — the
-    # structured ``{"id","hash",...}`` body the chat refresh link parses (TKT-893).
+    # structured ``{"id","hash",...}`` body the chat refresh link parses ().
     result = cast(str, rows[0]["result"])
     assert '"id":"' in result and '"hash":"' in result, (
         f"upload result lost its id/hash keys: {result!r}"
     )
     from services.message_processor import _SEED_UPLOAD_ID_RE
-    doc_id = cast(re.Match[str], _SEED_UPLOAD_ID_RE.search(result)).group(1)
+    [document_id] = cast(re.Match[str], _SEED_UPLOAD_ID_RE.search(result)).group(1)
 
-    doc = DocumentService(get_shared_db_service()).get_document(doc_id)
-    assert doc is not None, f"document {doc_id} was not persisted"
-    assert doc.get("status") == "ready", f"document {doc_id} not ready: {doc.get('status')!r}"
-    assert doc.get("file_hash"), f"document {doc_id} has no content hash"
+    doc = DocumentService(get_shared_db_service()).get_document([document_id])
+    assert doc is not None, f"document {[document_id]} was not persisted"
+    assert doc.get("status") == "ready", f"document {[document_id]} not ready: {doc.get('status')!r}"
+    assert doc.get("file_hash"), f"document {[document_id]} has no content hash"

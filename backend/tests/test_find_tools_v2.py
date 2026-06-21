@@ -155,7 +155,7 @@ class TestSelectNotFound:
     def test_select_valid_added_bogus_reported_as_not_found(self) -> None:
         """run({'select': ['weather', 'bogus_tool_xyz']}) → weather injected into
         active_tools; the unresolved name is reported EXPLICITLY under the result
-        body's ``not_found`` (TKT-894) and counted in ``not_found=`` meta — partial
+        body's ``not_found`` () and counted in ``not_found=`` meta — partial
         success is never silent.
 
         v1 returned a query-required error → neither behaviour. Test FAILS on v1.
@@ -290,7 +290,7 @@ class TestNeitherParam:
 class TestResultFormat:
 
     def test_successful_run_result_contains_required_v3_contract_not_v1(self) -> None:
-        """A successful find_tools call must produce a ToolResult (TKT-894) whose
+        """A successful find_tools call must produce a ToolResult () whose
         rendered body carries structured ``injected`` rows — each a ``name`` +
         ``summary`` — and drops the legacy prose/schema dump:
           - Contains 'injected'  (v3 structured success body)

@@ -280,8 +280,8 @@ class TestSkillBuilderLifecycle:
 
 
 # ===========================================================================
-# Migrated from test_ability_skills_tool_result.py (TKT-975)
-# Ability-specific business-logic tests that pin the TKT-896 regression.
+# Migrated from test_ability_skills_tool_result.py ()
+# Ability-specific business-logic tests that pin the  regression.
 # ===========================================================================
 
 

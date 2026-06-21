@@ -1,4 +1,4 @@
-"""Feature tests — TKT-925 worker fact-extraction step (Phase 3, ticket F).
+"""Feature tests — worker fact-extraction step.
 
 Tests the subconscious-worker step that closes the router gap: hard facts reach
 ``data_graph`` from the worker WITHOUT the chat model calling ``memory.store``.
@@ -294,7 +294,7 @@ def test_update_op_contradiction_bitemporally_invalidates_old_fact(db: sqlite3.C
     existing test_data_graph_service.py supersession test.
 
     RED until the step routes the op through store()'s supersession path AND
-    _apply_temporal_supersession sets valid_to (TKT-925).
+    _apply_temporal_supersession sets valid_to ().
     """
     _seed_active_fact(db, "user_specific", "residence", "Valletta",
                       retrieval_weight=1.0)

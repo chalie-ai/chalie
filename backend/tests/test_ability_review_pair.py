@@ -7,7 +7,7 @@
 #     http://www.apache.org/licenses/LICENSE-2.0
 
 """review_tool_calls / review_transcript specific business-logic tests migrated
-from the per-ability conformance file removed in TKT-975. Covers windowed row
+from the per-ability conformance file removed in . Covers windowed row
 retrieval, iter ordinals, empty-window hints, invalid-time errors, subagent
 toggle, buffer clamping, invalid-param handling, and the query-failed loud path.
 """

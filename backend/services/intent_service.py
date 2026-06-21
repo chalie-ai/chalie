@@ -8,7 +8,6 @@ land in ``intents:__broadcast__``; individual ones are also keyed by ID for O(1)
 import dataclasses
 import json
 import logging
-import uuid
 from typing import Optional, cast, TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -46,11 +45,6 @@ class CognitiveIntent:
     def to_json(self) -> str:
         """Serialize the intent to a JSON string."""
         return json.dumps(self.to_dict())
-
-
-def _make_intent_id() -> str:
-    """Generate a new intent ID."""
-    return str(uuid.uuid4())
 
 
 class IntentService:

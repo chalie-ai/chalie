@@ -6,13 +6,13 @@
 #
 #     http://www.apache.org/licenses/LICENSE-2.0
 
-"""Feature tests — argument-key resilience at the dispatch seam (TKT-963 / TKT-964).
+"""Feature tests — argument-key resilience at the dispatch seam.
 
 A weak model mangles the argument KEYS it emits: a stray escaped quote
 (``source"``), a capital (``URL``, ``MAX_CHARS``), or a synonym (``url`` for the
 read target, ``source`` for a download). Before the seam, ``json.loads`` decoded
 the corrupt key faithfully, it never matched the tool's schema, and the call
-bounced on a spurious required-field error — TKT-963 (``read`` returning
+bounced on a spurious required-field error (``read`` returning
 ``source-required`` for every URL/file a model passed under ``url``/``path``).
 
 These are ZERO-MOCK feature tests: each drives the live
@@ -65,7 +65,7 @@ def _list_service() -> ListService:
     return ListService(get_shared_db_service())
 
 
-# ── read: the TKT-963 regression — a mangled/aliased key heals to ``source`` ─────
+# ── read: the  regression — a mangled/aliased key heals to ``source`` ─────
 
 
 def test_read_mangled_source_key_heals_not_source_required(db: sqlite3.Connection) -> None:

@@ -12,7 +12,7 @@ if TYPE_CHECKING:
         _gist: str
         _neighbours: list[object]
 
-# ── Fact-extraction config (subconscious worker fact pipeline, TKT-925) ────────
+# ── Fact-extraction config (subconscious worker fact pipeline) ────────
 #
 # One small, tool-free LLM call per episode that turns the episode gist into a
 # set of constrained data_graph operations (Mem0 arXiv:2504.19413). The model

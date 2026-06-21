@@ -112,7 +112,7 @@ class TestRenderTelemetry:
         assert _fresh().render() == expected
 
     def test_location_surfaces_placename_not_raw_coordinates(self, db: sqlite3.Connection) -> None:
-        # Privacy posture (TKT-557): the chat/system telemetry block surfaces the
+        # Privacy posture (): the chat/system telemetry block surfaces the
         # human-readable place name only. The raw GPS coordinates the frontend
         # sends in the nested ``location`` dict stay out of this block — backend
         # consumers (departure advisory, weather, locale_service) read them

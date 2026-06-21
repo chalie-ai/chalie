@@ -1,4 +1,4 @@
-"""Feature tests (TKT-960): provider deletion guard via routes + service layer.
+"""Feature tests: provider deletion guard via routes + service layer.
 
 A provider assigned as main, vision, or delegate cannot be deleted because it
 would leave a dangling reference the resolver can no longer satisfy; the admin

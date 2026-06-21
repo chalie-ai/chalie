@@ -6,7 +6,7 @@
 #
 #     http://www.apache.org/licenses/LICENSE-2.0
 
-# Timer-ability business-logic tests migrated from the per-ability conformance file (TKT-975).
+# Timer-ability business-logic tests migrated from the per-ability conformance file ().
 
 import json
 import sqlite3

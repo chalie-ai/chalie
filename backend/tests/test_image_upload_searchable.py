@@ -7,7 +7,7 @@ real test DB and real files. ZERO mocks: the OCR description produced by the
 no-vision-provider fork flows through the SAME production pipeline
 (``create_document_artifacts`` -> data_graph embed + FTS5) that every upload
 uses, and ``document(action='search')`` recalls it via the REAL recall path
-(FTS5 + vector). Proves the doc_id guardrail is truthful: an image with words
+(FTS5 + vector). Proves the [document_id] guardrail is truthful: an image with words
 becomes a searchable document.
 
 Second test proves the ``_run_upload_extraction`` image-aware branch: a textless
@@ -82,14 +82,14 @@ def test_uploaded_image_is_findable_via_document_search(db: sqlite3.Connection) 
         "action": "upload",
         "path": _ocrable_invoice_png_path(),
     })
-    # TKT-893: upload now returns a structured ToolResult body
+    # : upload now returns a structured ToolResult body
     # ``{"id","hash","name","status"}`` (Task 6 hash preserved as a body key).
     assert up.status == "success", up
     assert cast(dict[str, object], up.body)["id"], up.body
     assert cast(dict[str, object], up.body)["hash"], up.body
 
     found = ability.run({"action": "search", "query": "invoice"})
-    # TKT-893: search returns a JSON list of document rows; the matched image
+    # : search returns a JSON list of document rows; the matched image
     # surfaces via the REAL recall path under its original_name.
     assert any("inv.png" in cast(str, cast(dict[str, object], row).get("name") or "") for row in cast(list[object], found.body)), found.body
 
@@ -104,10 +104,10 @@ def test_textless_image_is_ready_not_failed(db: sqlite3.Connection) -> None:
         "action": "upload",
         "path": _blank_png_path(),
     })
-    # TKT-893: doc id comes straight off the structured upload body.
+    # : doc id comes straight off the structured upload body.
     assert up.status == "success", up
-    doc_id = cast(str, cast(dict[str, object], up.body)["id"])
+    [document_id] = cast(str, cast(dict[str, object], up.body)["id"])
 
-    doc = DocumentService(get_shared_db_service()).get_document(doc_id)
+    doc = DocumentService(get_shared_db_service()).get_document([document_id])
     assert doc is not None, up
     assert doc["status"] == "ready", doc.get("status")

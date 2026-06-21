@@ -1,7 +1,7 @@
 """
 NewsAbility — Search news articles across global sources.
 
-Result contract (TKT-904):
+Result contract:
   ``run()`` returns a :class:`ToolResult` built only via ``ok`` / ``err``. The
   success body is a JSON list of ``{title, source, url, published_at, snippet}``
   rows (``snippet`` is the description truncated) with a ``count`` meta —
@@ -125,7 +125,7 @@ class NewsAbility(Ability):
             try:
                 articles.extend(svc.fetch_google_news(query, country_code=country_code))
             except NewsFetchError as exc:
-                # Partial-outage precedent (TKT-901): if the category feeds produced
+                # Partial-outage precedent: if the category feeds produced
                 # articles, Google News failing is a degraded-but-usable result;
                 # only when nothing was gathered is the whole call unreachable.
                 if not articles:

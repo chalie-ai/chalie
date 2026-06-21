@@ -48,16 +48,6 @@ def _get_retrieval_module() -> object:
     return episodic_retrieval_service
 
 
-def _get_memory_client() -> object:
-    from services.memory_client import MemoryClientService
-    return MemoryClientService
-
-
-def _get_db_service() -> object:
-    from services.database_service import get_shared_db_service
-    return get_shared_db_service()
-
-
 # ---------------------------------------------------------------------------
 # Auth helpers
 # ---------------------------------------------------------------------------

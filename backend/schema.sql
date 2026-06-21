@@ -585,8 +585,8 @@ CREATE INDEX IF NOT EXISTS idx_tool_calls_created ON tool_calls(created_at DESC)
 -- delete (only the link drops).
 CREATE TABLE IF NOT EXISTS transcript_docs (
     transcript_id INTEGER NOT NULL REFERENCES transcript(id) ON DELETE CASCADE,
-    doc_id        TEXT    NOT NULL REFERENCES documents(id)  ON DELETE CASCADE,
-    PRIMARY KEY (transcript_id, doc_id)
+    [document_id]        TEXT    NOT NULL REFERENCES documents(id)  ON DELETE CASCADE,
+    PRIMARY KEY (transcript_id, [document_id])
 );
 
 -- ────────────────────────────────────────────────────────────────

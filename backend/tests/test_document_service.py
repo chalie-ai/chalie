@@ -29,13 +29,13 @@ class _InlineWriteQueue:
         fn(*args, **kwargs)
 
 
-def _insert_document(db: sqlite3.Connection, doc_id: str = 'abc123', original_name: str = 'test.pdf',
+def _insert_document(db: sqlite3.Connection, [document_id]: str = 'abc123', original_name: str = 'test.pdf',
                      mime_type: str = 'application/pdf', file_size: int = 1024,
                      file_path: str = 'abc123/test.pdf', file_hash: str = 'sha256hash',
                      source_type: str = 'upload', status: str = 'pending', **extra: object) -> str:
     """Seed a document row directly for read-path tests."""
     cols: dict[str, object] = dict(
-        id=doc_id,
+        id=[document_id],
         original_name=original_name,
         mime_type=mime_type,
         file_size_bytes=file_size,
@@ -52,7 +52,7 @@ def _insert_document(db: sqlite3.Connection, doc_id: str = 'abc123', original_na
         list(cols.values()),
     )
     db.commit()
-    return doc_id
+    return [document_id]
 
 
 @pytest.fixture
@@ -66,7 +66,7 @@ def doc_service(db: sqlite3.Connection) -> DocumentService:
 @pytest.mark.unit
 class TestCreateDocument:
     def test_creates_document_and_returns_id(self, db: sqlite3.Connection, doc_service: DocumentService) -> None:
-        doc_id = doc_service.create_document(
+        [document_id] = doc_service.create_document(
             original_name='test.pdf',
             mime_type='application/pdf',
             file_size=1024,
@@ -75,13 +75,13 @@ class TestCreateDocument:
             source_type='upload',
         )
 
-        assert doc_id is not None
-        assert len(doc_id) == 8  # secrets.token_hex(4)
+        assert [document_id] is not None
+        assert len([document_id]) == 8  # secrets.token_hex(4)
 
         # Verify row exists in DB
         row = db.execute(
             "SELECT id, original_name, mime_type FROM documents WHERE id = ?",
-            (doc_id,),
+            ([document_id],),
         ).fetchone()
         assert row is not None
         assert row['original_name'] == 'test.pdf'
@@ -94,7 +94,7 @@ class TestGetDocument:
         assert result is None
 
     def test_returns_dict_when_found(self, db: sqlite3.Connection, doc_service: DocumentService) -> None:
-        _insert_document(db, doc_id='abc123', status='ready')
+        _insert_document(db, [document_id]='abc123', status='ready')
 
         result = doc_service.get_document('abc123')
         assert result is not None
@@ -106,7 +106,7 @@ class TestGetDocument:
 @pytest.mark.unit
 class TestSoftDelete:
     def test_soft_delete_sets_deleted_at(self, db: sqlite3.Connection, doc_service: DocumentService) -> None:
-        _insert_document(db, doc_id='abc123')
+        _insert_document(db, [document_id]='abc123')
 
         result = doc_service.soft_delete('abc123')
         assert result is True
@@ -120,7 +120,7 @@ class TestSoftDelete:
 @pytest.mark.unit
 class TestRestore:
     def test_restore_clears_deleted_at(self, db: sqlite3.Connection, doc_service: DocumentService) -> None:
-        _insert_document(db, doc_id='abc123')
+        _insert_document(db, [document_id]='abc123')
         doc_service.soft_delete('abc123')
 
         result = doc_service.restore('abc123')
@@ -136,8 +136,8 @@ class TestRestore:
 @pytest.mark.unit
 class TestGetAllDocuments:
     def test_excludes_deleted_by_default(self, db: sqlite3.Connection, doc_service: DocumentService) -> None:
-        _insert_document(db, doc_id='live1')
-        _insert_document(db, doc_id='dead1')
+        _insert_document(db, [document_id]='live1')
+        _insert_document(db, [document_id]='dead1')
         doc_service.soft_delete('dead1')
 
         result = doc_service.get_all_documents(include_deleted=False)
@@ -149,7 +149,7 @@ class TestGetAllDocuments:
 @pytest.mark.unit
 class TestFindDuplicates:
     def test_finds_exact_hash_match(self, db: sqlite3.Connection, doc_service: DocumentService) -> None:
-        _insert_document(db, doc_id='dup1', original_name='existing.pdf',
+        _insert_document(db, [document_id]='dup1', original_name='existing.pdf',
                          file_hash='same_hash')
 
         results = doc_service.find_duplicates('same_hash', None, 0)
@@ -160,7 +160,7 @@ class TestFindDuplicates:
 @pytest.mark.unit
 class TestUpdateStatus:
     def test_updates_status(self, db: sqlite3.Connection, doc_service: DocumentService) -> None:
-        _insert_document(db, doc_id='abc123', status='pending')
+        _insert_document(db, [document_id]='abc123', status='pending')
 
         doc_service.update_status('abc123', 'processing')
 

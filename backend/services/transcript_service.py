@@ -287,7 +287,7 @@ class Transcript:
                      limit: int = 12, offset: int = 0,
                      ) -> tuple[list[dict[str, object]], bool, int]:
         """The conversation feed's turn-paginated history. A turn is many rows under
-        the chain model (TKT-1070), so paginate by turn, never by row. Picks the
+        the chain model (), so paginate by turn, never by row. Picks the
         newest ``limit`` turn keys, then returns ALL their rows oldest-first.
         Returns ``(rows, has_more, turns_returned)``."""
         from services.database_service import get_shared_db_service
@@ -371,7 +371,7 @@ class Transcript:
             # canonical source — compaction_persistence.get_compaction reads the
             # latest role='compaction' transcript row, whose own id IS the
             # watermark. The all-channels discovery uses that SAME source so the
-            # two can never silently drift apart again (TKT-1097).
+            # two can never silently drift apart again ().
             if channel:
                 channels = [channel]
             else:
@@ -449,7 +449,7 @@ class Transcript:
                 cursor.close()
 
             # Always log the count — a steady 0 across channels is the signature
-            # of a watermark/discovery regression (the TKT-1097 no-op) and must
+            # of a watermark/discovery regression (the  no-op) and must
             # not stay invisible. info, never debug.
             logger.info(
                 f"{LOG_PREFIX} Transcript GC: deleted {total_deleted} unlinked "
@@ -937,7 +937,7 @@ class Transcript:
 
 
     @staticmethod
-    def link_transcript_doc(transcript_id: int, doc_id: str) -> None:
+    def link_transcript_doc(transcript_id: int, [document_id]: str) -> None:
         """Link an uploaded document to the transcript turn that carried it.
 
         Powers chat-attachment persistence across page refresh: the live preview is a
@@ -951,8 +951,8 @@ class Transcript:
         db = get_shared_db_service()
         with db.connection() as conn:
             conn.execute(
-                "INSERT OR IGNORE INTO transcript_docs (transcript_id, doc_id) VALUES (?, ?)",
-                (transcript_id, doc_id),
+                "INSERT OR IGNORE INTO transcript_docs (transcript_id, [document_id]) VALUES (?, ?)",
+                (transcript_id, [document_id]),
             )
 
 
@@ -985,7 +985,7 @@ class Transcript:
     def write_assistant_row(channel: str, content: str, turn_id: "int | None" = None) -> int:
         """Write one assistant row for a single chain step, grounded to its turn.
 
-        Under the recursive turn chain (TKT-1070) every step persists its own row
+        Under the recursive turn chain () every step persists its own row
         via ``MessageProcessor._store_row`` — the prose of each tool-bearing step
         plus the final settle text — so one turn produces MULTIPLE assistant rows
         that share a ``turn_id``, not a single end message. The MP supplies its

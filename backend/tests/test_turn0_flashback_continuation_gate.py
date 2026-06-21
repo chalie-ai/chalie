@@ -1,4 +1,4 @@
-"""Feature tests for TKT-924 - turn-0 flashback + continuation gate + render.
+"""Feature tests for turn-0 flashback + continuation gate + render.
 
 The gate (in ``MessageProcessor._seed_turn_zero``) fires the auto memory recall
 only on session start or topic shift, and skips it for continuation messages
@@ -257,11 +257,11 @@ def test_seed_renders_curated_block_not_json(db: sqlite3.Connection) -> None:
     )
 
 
-# ── 6. Explicit memory.recall keeps the TKT-886 JSON contract ────────────────
+# ── 6. Explicit memory.recall keeps the  JSON contract ────────────────
 
 
 def test_explicit_recall_keeps_json_contract(db: sqlite3.Connection) -> None:
-    """Regression pin: explicit memory.recall (no _auto) returns the TKT-886
+    """Regression pin: explicit memory.recall (no _auto) returns the 
     {results, fallback} JSON body unchanged - curated render is the seed path only."""
     get_data_graph_service().store(
         kind="user_specific", key="residence", value="Valletta", source="test:seed",

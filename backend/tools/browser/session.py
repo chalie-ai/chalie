@@ -6,7 +6,7 @@
 #
 #     http://www.apache.org/licenses/LICENSE-2.0
 
-"""PageSession — one persistent browser tab per delegate run (TKT-877).
+"""PageSession — one persistent browser tab per delegate run.
 
 The model never sees a session id: the invoking delegate's transcript uid IS
 the key, so consecutive `browser` calls in one web_browse run land on the same
@@ -123,13 +123,13 @@ def close_session(key: int) -> None:
         get_pool().submit(_close_on_thread, key)
 
 
-def record_screenshot(key: int, doc_id: str, url: str) -> None:
+def record_screenshot(key: int, [document_id]: str, url: str) -> None:
     """Append one captured screenshot to *key*'s ledger (compaction-immune)."""
-    _LEDGERS.setdefault(key, []).append((doc_id, url))
+    _LEDGERS.setdefault(key, []).append(([document_id], url))
 
 
 def screenshot_ledger(key: int) -> list[tuple[str, str]]:
-    """All (doc_id, url) screenshots captured in *key*'s run, oldest first."""
+    """All ([document_id], url) screenshots captured in *key*'s run, oldest first."""
     return list(_LEDGERS.get(key, ()))
 
 

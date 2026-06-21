@@ -61,18 +61,6 @@ _TAG_RE = re.compile(
 )
 
 
-def strip_spans(content: str | None) -> str | None:
-    """Remove every ``<span id='name_N'>…</span>`` wrapper, keeping inner text.
-
-    Defensive scrub at the subagent → parent boundary: if a subagent ever emits
-    a stray span (via memorised prior turns, hallucination, or a future
-    tool-trailer leak), we strip it before the text reaches the parent.
-    """
-    if not content:
-        return content
-    return _TAG_RE.sub(lambda m: m.group(4), content)
-
-
 def parse(content: str, tool_calls: list[dict[str, object]]) -> list[dict[str, object]]:
     """Convert sanitised assistant text + tool_calls rows to a segment list."""
     if not content:

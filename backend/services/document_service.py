@@ -46,13 +46,13 @@ class DocumentService:
         file_hash: str,
         source_type: str = 'upload',
         watched_folder_id: Optional[str] = None,
-        doc_id: Optional[str] = None,
+        [document_id]: Optional[str] = None,
     ) -> str:
-        doc_id = doc_id or secrets.token_hex(4)
+        [document_id] = [document_id] or secrets.token_hex(4)
 
         try:
             _params = (
-                doc_id, original_name, mime_type, file_size, file_path,
+                [document_id], original_name, mime_type, file_size, file_path,
                 file_hash, source_type, watched_folder_id,
             )
 
@@ -72,14 +72,14 @@ class DocumentService:
             # submit_sync so any DB error propagates via raise below
             self._write_queue.submit_sync(_insert)
 
-            logger.info(f"[DOCS] Created document '{original_name}' (id={doc_id})")
-            return doc_id
+            logger.info(f"[DOCS] Created document '{original_name}' (id={[document_id]})")
+            return [document_id]
 
         except Exception as e:
             logger.error(f"[DOCS] create_document failed: {e}")
             raise
 
-    def get_document(self, doc_id: str) -> Optional[Dict[str, object]]:
+    def get_document(self, [document_id]: str) -> Optional[Dict[str, object]]:
         try:
             with self.db.connection() as conn:
                 cursor = conn.cursor()
@@ -92,7 +92,7 @@ class DocumentService:
                            watched_folder_id,
                            created_at, updated_at, deleted_at, purge_after
                     FROM documents WHERE id = ?
-                """, (doc_id,))
+                """, ([document_id],))
                 row = cursor.fetchone()
                 cursor.close()
 
@@ -178,14 +178,14 @@ class DocumentService:
         text_content: str,
         source_type: str = 'conversation',
     ) -> str:
-        doc_id = secrets.token_hex(4)
+        [document_id] = secrets.token_hex(4)
 
         # Write markdown to disk — strip any path components from the filename
         # to prevent directory traversal via a crafted original_name.
         safe_name = os.path.basename(original_name) or "document.md"
-        doc_dir = FileMapperService.get_documents_path(doc_id)
+        doc_dir = FileMapperService.get_documents_path([document_id])
         os.makedirs(doc_dir, exist_ok=True)
-        file_path = str(FileMapperService.get_documents_path(doc_id, safe_name))
+        file_path = str(FileMapperService.get_documents_path([document_id], safe_name))
         with open(file_path, 'w', encoding='utf-8') as f:
             f.write(text_content)
 
@@ -196,13 +196,13 @@ class DocumentService:
             original_name=safe_name,
             mime_type='text/markdown',
             file_size=file_size,
-            file_path=f"{doc_id}/{safe_name}",
+            file_path=f"{[document_id]}/{safe_name}",
             file_hash=file_hash,
             source_type=source_type,
-            doc_id=doc_id,
+            [document_id]=[document_id],
         )
 
-        def _set_clean(did: str = doc_id, txt: str = text_content, db: DatabaseService = self.db) -> None:
+        def _set_clean(did: str = [document_id], txt: str = text_content, db: DatabaseService = self.db) -> None:
             with db.connection() as conn:
                 conn.execute(
                     "UPDATE documents SET clean_text = ? WHERE id = ?",
@@ -210,8 +210,8 @@ class DocumentService:
                 )
         self._write_queue.submit_sync(_set_clean)
 
-        logger.info(f"[DOCS] Created text document '{original_name}' (id={doc_id})")
-        return doc_id
+        logger.info(f"[DOCS] Created text document '{original_name}' (id={[document_id]})")
+        return [document_id]
 
     # ─────────────────────────────────────────────
     # Status & metadata updates
@@ -219,13 +219,13 @@ class DocumentService:
 
     def update_status(
         self,
-        doc_id: str,
+        [document_id]: str,
         status: str,
         error_message: Optional[str] = None,
         chunk_count: int = 0,
     ) -> None:
         try:
-            _params = (status, error_message, chunk_count, doc_id)
+            _params = (status, error_message, chunk_count, [document_id])
 
             def _update(params: tuple[object, ...] = _params, db: DatabaseService = self.db) -> None:
                 with db.connection() as conn:
@@ -240,14 +240,14 @@ class DocumentService:
                     cursor.close()
 
             self._write_queue.submit_sync(_update)
-            logger.info("[DOCS] Updated status for %s: %s", safe(doc_id), safe(status))
+            logger.info("[DOCS] Updated status for %s: %s", safe([document_id]), safe(status))
         except Exception as e:
-            logger.error("[DOCS] update_status failed for %s: %s", safe(doc_id), e)
+            logger.error("[DOCS] update_status failed for %s: %s", safe([document_id]), e)
             raise
 
-    def update_clean_text(self, doc_id: str, clean_text: str) -> None:
+    def update_clean_text(self, [document_id]: str, clean_text: str) -> None:
         try:
-            def _update(did: str = doc_id, txt: str = clean_text, db: DatabaseService = self.db) -> None:
+            def _update(did: str = [document_id], txt: str = clean_text, db: DatabaseService = self.db) -> None:
                 with db.connection() as conn:
                     conn.execute(
                         "UPDATE documents SET clean_text = ?, updated_at = datetime('now') WHERE id = ?",
@@ -257,9 +257,9 @@ class DocumentService:
         except Exception as e:
             logger.error(f"[DOCS] update_clean_text failed: {e}")
 
-    def update_summary(self, doc_id: str, summary: str) -> None:
+    def update_summary(self, [document_id]: str, summary: str) -> None:
         try:
-            def _update(did: str = doc_id, s: str = summary, db: DatabaseService = self.db) -> None:
+            def _update(did: str = [document_id], s: str = summary, db: DatabaseService = self.db) -> None:
                 with db.connection() as conn:
                     conn.execute(
                         "UPDATE documents SET summary = ?, updated_at = datetime('now') WHERE id = ?",
@@ -271,7 +271,7 @@ class DocumentService:
 
     def update_extracted_metadata(
         self,
-        doc_id: str,
+        [document_id]: str,
         metadata: dict[str, object],
         summary: str,
         summary_embedding: Optional[list[float]] = None,
@@ -296,7 +296,7 @@ class DocumentService:
             set_parts.append("page_count = ?")
             params.append(page_count)
 
-        params.append(doc_id)
+        params.append([document_id])
 
         packed_emb = _pack_embedding(summary_embedding) if summary_embedding is not None else None
         sql = f"UPDATE documents SET {', '.join(set_parts)} WHERE id = ?"
@@ -304,7 +304,7 @@ class DocumentService:
         def _update_meta(
             stmt: str = sql,
             p: list[object] = params,
-            did: str = doc_id,
+            did: str = [document_id],
             emb: Optional[bytes] = packed_emb,
             db: DatabaseService = self.db,
         ) -> None:
@@ -327,9 +327,9 @@ class DocumentService:
 
         self._write_queue.submit_sync(_update_meta)
 
-    def set_supersedes(self, doc_id: str, supersedes_id: str) -> None:
+    def set_supersedes(self, [document_id]: str, supersedes_id: str) -> None:
         try:
-            def _supersede(did: str = doc_id, sid: str = supersedes_id, db: DatabaseService = self.db) -> None:
+            def _supersede(did: str = [document_id], sid: str = supersedes_id, db: DatabaseService = self.db) -> None:
                 with db.connection() as conn:
                     cursor = conn.cursor()
                     cursor.execute(
@@ -340,7 +340,7 @@ class DocumentService:
                     cursor.close()
 
             self._write_queue.submit_sync(_supersede)
-            logger.info("[DOCS] Document %s supersedes %s", safe(doc_id), safe(supersedes_id))
+            logger.info("[DOCS] Document %s supersedes %s", safe([document_id]), safe(supersedes_id))
         except Exception as e:
             logger.error(f"[DOCS] set_supersedes failed: {e}")
 
@@ -394,12 +394,12 @@ class DocumentService:
                     """, (packed,))
                     for row in cursor.fetchall():
                         dist = float(row[3])
-                        doc_id = row[0]
-                        if exclude_id and doc_id == exclude_id:
+                        [document_id] = row[0]
+                        if exclude_id and [document_id] == exclude_id:
                             continue
                         if dist < DEDUP_EXACT_THRESHOLD:
                             results.append({
-                                'id': doc_id,
+                                'id': [document_id],
                                 'original_name': row[1],
                                 'created_at': row[2],
                                 'match_type': 'semantic_exact',
@@ -407,7 +407,7 @@ class DocumentService:
                             })
                         elif dist < DEDUP_REVISION_THRESHOLD:
                             results.append({
-                                'id': doc_id,
+                                'id': [document_id],
                                 'original_name': row[1],
                                 'created_at': row[2],
                                 'match_type': 'semantic_revision',
@@ -425,12 +425,12 @@ class DocumentService:
     # Soft delete / restore / purge
     # ─────────────────────────────────────────────
 
-    def soft_delete(self, doc_id: str) -> bool:
+    def soft_delete(self, [document_id]: str) -> bool:
         try:
             from services.time_utils import utc_now
             purge_after = utc_now() + timedelta(days=PURGE_WINDOW_DAYS)
 
-            def _soft_delete(did: str = doc_id, pa: object = purge_after, db: DatabaseService = self.db) -> int:
+            def _soft_delete(did: str = [document_id], pa: object = purge_after, db: DatabaseService = self.db) -> int:
                 with db.connection() as conn:
                     cursor = conn.cursor()
                     cursor.execute(
@@ -447,7 +447,7 @@ class DocumentService:
             updated = cast(int, self._write_queue.submit_sync(_soft_delete)) > 0
 
             if updated:
-                logger.info("[DOCS] Soft-deleted document %s", safe(doc_id))
+                logger.info("[DOCS] Soft-deleted document %s", safe([document_id]))
                 # Deactivate data_graph artifacts so they stop surfacing in recall.
                 try:
                     from services.data_graph_service import get_data_graph_service
@@ -455,19 +455,19 @@ class DocumentService:
                     with dgs.db.connection() as conn:
                         conn.execute(
                             "UPDATE data_graph SET active=0 WHERE source LIKE ?",
-                            (f'document:{doc_id}%',),
+                            (f'document:{[document_id]}%',),
                         )
                 except Exception as exc:
-                    logger.warning("[DOCS] Failed to deactivate artifacts for %s: %s", safe(doc_id), exc)
+                    logger.warning("[DOCS] Failed to deactivate artifacts for %s: %s", safe([document_id]), exc)
             return updated
 
         except Exception as e:
             logger.error(f"[DOCS] soft_delete failed: {e}")
             return False
 
-    def restore(self, doc_id: str) -> bool:
+    def restore(self, [document_id]: str) -> bool:
         try:
-            def _restore(did: str = doc_id, db: DatabaseService = self.db) -> int:
+            def _restore(did: str = [document_id], db: DatabaseService = self.db) -> int:
                 with db.connection() as conn:
                     cursor = conn.cursor()
                     cursor.execute(
@@ -484,7 +484,7 @@ class DocumentService:
             updated = cast(int, self._write_queue.submit_sync(_restore)) > 0
 
             if updated:
-                logger.info("[DOCS] Restored document %s", safe(doc_id))
+                logger.info("[DOCS] Restored document %s", safe([document_id]))
                 # Reactivate data_graph artifacts so they surface in recall again.
                 try:
                     from services.data_graph_service import get_data_graph_service
@@ -492,23 +492,23 @@ class DocumentService:
                     with dgs.db.connection() as conn:
                         conn.execute(
                             "UPDATE data_graph SET active=1 WHERE source LIKE ?",
-                            (f'document:{doc_id}%',),
+                            (f'document:{[document_id]}%',),
                         )
                 except Exception as exc:
-                    logger.warning("[DOCS] Failed to reactivate artifacts for %s: %s", safe(doc_id), exc)
+                    logger.warning("[DOCS] Failed to reactivate artifacts for %s: %s", safe([document_id]), exc)
             return updated
 
         except Exception as e:
             logger.error(f"[DOCS] restore failed: {e}")
             return False
 
-    def hard_delete(self, doc_id: str) -> bool:
+    def hard_delete(self, [document_id]: str) -> bool:
         try:
-            doc = self.get_document(doc_id)
+            doc = self.get_document([document_id])
             if not doc:
                 return False
 
-            def _hard_delete(did: str = doc_id, db: DatabaseService = self.db) -> int:
+            def _hard_delete(did: str = [document_id], db: DatabaseService = self.db) -> int:
                 with db.connection() as conn:
                     cursor = conn.cursor()
                     # Clean up virtual tables BEFORE the document delete —
@@ -530,20 +530,20 @@ class DocumentService:
             if deleted:
                 try:
                     from services.data_graph_service import get_data_graph_service
-                    get_data_graph_service().hard_delete_by_source_prefix(f'document:{doc_id}')
+                    get_data_graph_service().hard_delete_by_source_prefix(f'document:{[document_id]}')
                 except Exception as exc:
-                    logger.warning("[DOCS] Failed to cascade-delete data_graph artifacts for %s: %s", safe(doc_id), exc)
+                    logger.warning("[DOCS] Failed to cascade-delete data_graph artifacts for %s: %s", safe([document_id]), exc)
 
             # Delete file from disk (skip for watched folder docs — source files are not ours)
             if deleted and doc.get('file_path') and not doc.get('watched_folder_id'):
-                # Validate doc_id is a safe hex token before using in path construction.
-                safe_doc_id = os.path.basename(doc_id)
+                # Validate [document_id] is a safe hex token before using in path construction.
+                safe_doc_id = os.path.basename([document_id])
                 file_dir = str(FileMapperService.get_documents_path(safe_doc_id))
                 resolved = os.path.realpath(file_dir)
                 if FileMapperService.validate_document_path(resolved) and os.path.exists(resolved):
                     shutil.rmtree(resolved, ignore_errors=True)
             if deleted:
-                logger.info("[DOCS] Hard-deleted document %s", safe(doc_id))
+                logger.info("[DOCS] Hard-deleted document %s", safe([document_id]))
 
             return deleted
 
@@ -564,8 +564,8 @@ class DocumentService:
                 cursor.close()
 
             count = 0
-            for doc_id in expired_ids:
-                if self.hard_delete(doc_id):
+            for [document_id] in expired_ids:
+                if self.hard_delete([document_id]):
                     count += 1
 
             if count > 0:
@@ -603,9 +603,9 @@ class DocumentService:
             logger.error(f"[DOCS] get_documents_by_watched_folder failed: {e}")
             return []
 
-    def update_tags(self, doc_id: str, tags: list[str]) -> None:
+    def update_tags(self, [document_id]: str, tags: list[str]) -> None:
         try:
-            def _update_tags(did: str = doc_id, t: str = json.dumps(tags), db: DatabaseService = self.db) -> None:
+            def _update_tags(did: str = [document_id], t: str = json.dumps(tags), db: DatabaseService = self.db) -> None:
                 with db.connection() as conn:
                     cursor = conn.cursor()
                     cursor.execute(
@@ -619,7 +619,7 @@ class DocumentService:
             logger.error(f"[DOCS] update_tags failed: {e}")
 
     def update_classification(
-        self, doc_id: str,
+        self, [document_id]: str,
         category: Optional[str] = None, project: Optional[str] = None,
         doc_date: Optional[str] = None, lock: bool = False,
     ) -> None:
@@ -637,7 +637,7 @@ class DocumentService:
                 params.append(doc_date)
             if lock:
                 set_parts.append("meta_locked = 1")
-            params.append(doc_id)
+            params.append([document_id])
 
             def _update_class(
                 stmt: str = f"UPDATE documents SET {', '.join(set_parts)} WHERE id = ?",
@@ -683,9 +683,9 @@ class DocumentService:
             logger.error(f"[DOCS] get_classification_groups failed: {e}")
             return []
 
-    def update_file_path(self, doc_id: str, new_path: str) -> None:
+    def update_file_path(self, [document_id]: str, new_path: str) -> None:
         try:
-            def _update_path(did: str = doc_id, path: str = new_path, db: DatabaseService = self.db) -> None:
+            def _update_path(did: str = [document_id], path: str = new_path, db: DatabaseService = self.db) -> None:
                 with db.connection() as conn:
                     cursor = conn.cursor()
                     cursor.execute(

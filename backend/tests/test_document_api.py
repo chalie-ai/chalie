@@ -86,23 +86,23 @@ class TestDocumentUploadRealStack:
             assert payload["file_hash"] == hashlib.sha256(body).hexdigest()
             assert payload["file_size"] == len(body)
             assert payload["original_name"] == "note.txt"
-            doc_id = payload["id"]
+            [document_id] = payload["id"]
 
             # The real documents row landed via DocumentService.create_document.
             row = db_conn.execute(
                 "SELECT status, file_hash, file_path, original_name, source_type "
                 "FROM documents WHERE id=?",
-                (doc_id,),
+                ([document_id],),
             ).fetchone()
             assert row is not None, "no documents row was persisted"
             assert row[0] == "ready"
             assert row[1] == payload["file_hash"]
-            assert row[2] == f"{doc_id}/note.txt"
+            assert row[2] == f"{[document_id]}/note.txt"
             assert row[3] == "note.txt"
             assert row[4] == "upload"
 
             # The bytes were really copied into the document store on disk.
-            disk_path = FileMapperService.get_documents_path(doc_id, "note.txt")
+            disk_path = FileMapperService.get_documents_path([document_id], "note.txt")
             assert disk_path.exists(), f"file not written to store at {disk_path}"
             assert disk_path.read_bytes() == body
 

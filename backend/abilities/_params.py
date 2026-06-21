@@ -8,8 +8,8 @@ the ACTION_REQUIRED pre-gate, the policy gate, or ``run()`` ever sees the params
    lower-cased and stripped of every character outside ``[a-z0-9_-]``. This alone
    heals the single commonest model defect — a stray escaped quote or a capital,
    e.g. ``source"`` → ``source`` and ``MAX_CHARS`` → ``max_chars`` — with zero
-   per-tool knowledge. (This is the class of breakage TKT-963 root-caused: a
-   model stored ``{"source\"": "https://…"}`` and ``read`` bounced on
+   per-tool knowledge. (This heals a common model defect: a model stores
+   ``{"source\"": "https://…"}`` and ``read`` bounces on
    ``source-required`` because the corrupt KEY never matched.) This layer is
    :class:`KeyNormalizer`.
 

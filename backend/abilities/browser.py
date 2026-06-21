@@ -7,7 +7,7 @@ delegate run (key = the invoking mp's transcript uid); every successful call
 returns the same JSON envelope DICT with a mechanical `changed` diff (the
 dispatcher renders it as compact JSON — never a pre-dumped JSON string).
 Screenshots ingest through the document pipeline into a screenshots/ subdir and
-surface as doc_ids the `vision` tool can read.
+surface as document IDs the `vision` tool can read.
 
 Every result is an :class:`abilities._result.ToolResult` built only via
 ``ok()`` / ``err()``. Errors carry a STABLE KEBAB-CASE ``code`` (never the
@@ -226,10 +226,10 @@ class BrowserAbility(Ability):
         return ToolResult.ok({
             "page": page,
             "data": {
-                "doc_id": ingested["id"],
+                "document_id": ingested["id"],
                 "name": ingested["name"],
                 "status": ingested["status"],
-                "note": "Use the vision tool with image=<doc_id> to see this screenshot.",
+                "note": "Use the vision tool with image=<document_id> to see this screenshot.",
             },
             "changed": {"navigated": False, "dialog": None, "popup": None, "summary": ""},
             "error": None,

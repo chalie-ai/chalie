@@ -411,7 +411,7 @@ onMounted(async () => {
           id="mcpOutName"
           v-model="addName"
           type="text"
-          placeholder="e.g. taskie"
+          placeholder="e.g. [task_tracker]"
           class="form-input"
         >
       </div>

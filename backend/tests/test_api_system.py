@@ -82,7 +82,7 @@ class TestSystemAPI:
     def test_records_episodes_source_returns_gist_and_location(self, client: FlaskClient, db: sqlite3.Connection) -> None:
         """Episodes source returns value=gist + location, ordered by COALESCE(last_relevant_at, created_at) DESC.
 
-        TKT-921: last_accessed_at is write-dead; the endpoint now projects and orders by
+        : last_accessed_at is write-dead; the endpoint now projects and orders by
         COALESCE(last_relevant_at, created_at). A row with NULL last_relevant_at sorts by
         its created_at — there is no NULLs-last behaviour anymore.
 

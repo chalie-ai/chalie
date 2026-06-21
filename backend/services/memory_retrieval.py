@@ -19,15 +19,14 @@ is honest. A dead retrieval backend surfaces as
 ``results=0`` — the model must never be told "nothing is stored" when the
 store simply failed.
 
-Episode recall is cross-channel (TKT-926, Decision 1): the read path
-never filters by the caller's own channel, so a memory encoded on any
-episode-producing channel is recallable from any turn — exactly as
-facts already cross-pollinate via the channel-agnostic
-``data_graph.recall``. Muted channels write no episodes, so the
-channel-agnostic read naturally scopes to the set that actually holds
-memories. The caller's channel is recorded only for
-``memory_recall_log`` provenance and the per-channel feeling-of-knowing
-signal, never as a recall scope.
+Episode recall is cross-channel: the read path never filters by the
+caller's own channel, so a memory encoded on any episode-producing channel
+is recallable from any turn — exactly as facts already cross-pollinate via
+the channel-agnostic ``data_graph.recall``. Muted channels write no episodes,
+so the channel-agnostic read naturally scopes to the set that actually holds
+memories. The caller's channel is recorded only for ``memory_recall_log``
+provenance and the per-channel feeling-of-knowing signal, never as a recall
+scope.
 
 Two recall callers stay distinct only in their side-effects:
 ``caller='seed'`` is the silent turn-0 auto-seed (no fallback hint, no
@@ -663,7 +662,7 @@ def _write_recall_telemetry(
 ) -> None:
     """Persist one recall observation into ``memory_recall_log``.
 
-    The schema dropped the radius columns (TKT-920): the row now records the
+    The schema dropped the radius columns (): the row now records the
     new normalised-ranking signals — corpus size, per-lane candidate counts,
     how many candidates the relative score floor dropped, the final surfaced
     count, and the top vector distances.
@@ -702,7 +701,7 @@ def _turn_context(proc: object) -> tuple[str, object, str | None]:
     The radius drift-history apparatus is gone; only the telemetry-keying
     identifiers are still needed. The channel is the caller's own channel,
     recorded purely for ``memory_recall_log`` provenance — episode recall reads
-    cross-channel regardless (TKT-926). Returns ephemeral defaults when no
+    cross-channel regardless (). Returns ephemeral defaults when no
     processor is bound (e.g. the REST recall path).
     """
     if proc is None:
@@ -729,7 +728,7 @@ def recall_episodes(
     score floor live in ``episodic_retrieval_service.retrieve``; this function
     only embeds the query, routes it, records telemetry, and projects results.
 
-    Episode recall is cross-channel by design (TKT-926, Decision 1): an episode
+    Episode recall is cross-channel by design (, Decision 1): an episode
     encoded on any episode-producing channel (user, dmn, external-agent:*) is
     recallable from any turn, so the read path never filters by the caller's own
     channel. Muted channels write no episodes, so the channel-agnostic read
@@ -787,7 +786,7 @@ def recall_episodes(
             conf = min(1.0, cast("float", ep.get("composite_score", 0)) / 100.0)
             hits.append({
                 "id": str(ep.get("id", "")),
-                # Full gist verbatim — NO truncation (TKT-821). The recall block
+                # Full gist verbatim — NO truncation (). The recall block
                 # is bounded by the result limit + the request-level cap, not by
                 # clipping the text the model reads mid-sentence.
                 "text": gist,
@@ -819,7 +818,7 @@ def _search_episodes(
 def _count_episode_candidates(db_service: "DatabaseService") -> int:
     """Count recall-eligible episodes across every channel.
 
-    Episode recall is cross-channel (TKT-926), so the "0 matches (N candidates
+    Episode recall is cross-channel (), so the "0 matches (N candidates
     evaluated)" status counts the whole episode corpus — not just one channel's
     slice — to honestly report how many candidates the empty recall searched.
     """
@@ -873,7 +872,7 @@ def _search_episodes_by_location(
 ) -> tuple[list[dict[str, object]], str]:
     """Search episodes whose location_name contains the given text.
 
-    Cross-channel by design (TKT-926): a location recall surfaces episodes from
+    Cross-channel by design (): a location recall surfaces episodes from
     every episode-producing channel, mirroring the channel-agnostic semantic
     recall path. Also resolves saved place labels (e.g. 'home') via data_graph
     kind='place' to pick up alternate location_name strings stored at save time.
@@ -921,7 +920,7 @@ def _search_episodes_by_location(
             ep_id, gist, loc_name, created_at = row
             hits.append({
                 "id": str(ep_id),
-                # Full gist verbatim — NO truncation (TKT-821).
+                # Full gist verbatim — NO truncation ().
                 "text": gist or "",
                 "relevance": _LOCATION_SEARCH_RELEVANCE,
                 "confidence": _LOCATION_SEARCH_CONFIDENCE,

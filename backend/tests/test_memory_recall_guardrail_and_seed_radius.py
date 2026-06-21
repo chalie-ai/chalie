@@ -1,5 +1,5 @@
 """Test memory.recall guardrail behavior, silent turn-0 seed, and per-lane
-relative-floor telemetry (TKT-923). All exercised through the real production
+relative-floor telemetry. All exercised through the real production
 path via ToolDispatcher.dispatch("memory") with zero mocks.
 
 Pinned behaviors:

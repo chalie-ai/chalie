@@ -53,7 +53,7 @@ def test_email_calendar_contacts_are_registered() -> None:
 def test_email_not_connected_returns_structured_error() -> None:
     """EmailAbility returns a ToolResult not-connected error when mail is not connected.
 
-    email migrated onto CapabilityAbility in TKT-889, so the not-connected
+    email migrated onto CapabilityAbility in , so the not-connected
     surface is the base class's ``ToolResult.err`` (status=error,
     code=not-connected, hint naming the integration) — the canonical contract
     form, no longer the legacy JSON ``{status: error}`` body. In the test
@@ -72,7 +72,7 @@ def test_email_not_connected_returns_structured_error() -> None:
 def test_calendar_write_not_connected_returns_tool_result_error() -> None:
     """CalendarAbility write ops return a ToolResult not-connected error.
 
-    calendar migrated onto CapabilityAbility in TKT-888, so the not-connected
+    calendar migrated onto CapabilityAbility in , so the not-connected
     surface is the base class's ``ToolResult.err`` (status=error,
     code=not-connected, hint naming the integration) — the canonical contract
     form. Reads (list_events/get_event) query scheduled_items and are covered
@@ -93,11 +93,11 @@ def test_calendar_write_not_connected_returns_tool_result_error() -> None:
 def test_contacts_not_connected_returns_structured_error() -> None:
     """ContactsAbility returns a structured ToolResult error when mail is not connected.
 
-    contacts is the TKT-883 exemplar migrated onto CapabilityAbility, so its
+    contacts is the  exemplar migrated onto CapabilityAbility, so its
     not-connected surface is now a first-class ``ToolResult.err`` (status=error,
     code=not-connected, hint naming the integration) rather than a JSON body —
-    the canonical contract form. calendar followed in TKT-888 and email in
-    TKT-889; all three capability abilities now share the base's surface.
+    the canonical contract form. calendar followed in  and email in
+    ; all three capability abilities now share the base's surface.
     """
     from abilities.contacts import ContactsAbility
 

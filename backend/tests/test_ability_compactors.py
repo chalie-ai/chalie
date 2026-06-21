@@ -1,5 +1,4 @@
-"""Chat-history-compactor business-logic tests migrated from the per-ability
-conformance file removed in TKT-975. The full ToolResult wire contract is
+"""Chat-history-compactor business-logic tests. The full ToolResult wire contract is
 pinned centrally in test_tool_result_contract.py; this file holds only the
 compactor's genuine behaviour tests (rows_compacted surface, broadcast guard)
 that have no coverage elsewhere."""

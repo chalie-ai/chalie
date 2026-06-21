@@ -93,7 +93,7 @@ class TestUserChannelCannotReachRawWebTools:
         assert "not found or unavailable" in cast(str, result).lower()
 
     def test_select_news_is_rejected_on_user_channel(self) -> None:
-        """Raw 'news' moved delegate-exclusive (TKT-1066) — DISCOVERABLE=False."""
+        """Raw 'news' moved delegate-exclusive () — DISCOVERABLE=False."""
         mp = _mp_for(UserConfig())
         result = _find_tools_on(mp, {"select": ["news"]})
 
@@ -205,7 +205,7 @@ class TestWebBrowseDelegateHasBrowser:
 _EXPECTED_NON_DISCOVERABLE = frozenset({
     "browser",                 # raw web — web_browse delegate only
     "search",                  # raw web — web_search delegate only
-    "news",                    # raw web — web_search delegate only (TKT-1066)
+    "news",                    # raw web — web_search delegate only ()
     "save_graph",              # pattern-write — PatternMatchProcessor only
     "save_pattern",            # pattern-write — PatternMatchProcessor only
     "find_tools",              # the discovery entry point itself

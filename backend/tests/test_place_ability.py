@@ -7,9 +7,9 @@
 #     http://www.apache.org/licenses/LICENSE-2.0
 
 """Place-ability-specific business-logic tests migrated from the per-ability
-conformance file removed in TKT-975.
+conformance file removed in .
 
-Pins TKT-885's ToolResult contract: every action's happy path renders a
+Pins 's ToolResult contract: every action's happy path renders a
 non-empty parseable success envelope, and every failure carries a stable
 kebab-case code (NOT ``code="error"``). GPS is driven via real telemetry rows.
 """

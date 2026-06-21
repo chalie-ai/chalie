@@ -1,4 +1,4 @@
-"""Feature test for transcript garbage collection — the contract TKT-1097 restored.
+"""Feature test for transcript garbage collection.
 
 ``Transcript.cleanup_unlinked_entries`` is the decay engine's transcript-GC step:
 for every channel that has advanced a compaction watermark, it hard-deletes the

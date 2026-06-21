@@ -13,7 +13,7 @@ envelope prepend), ``transcript_service.cleanup_unlinked_entries``
 """
 
 import logging
-from typing import Optional, Dict, List
+from typing import Optional, Dict
 
 
 logger = logging.getLogger(__name__)
@@ -38,9 +38,3 @@ def get_compaction(channel: str) -> Optional[Dict[str, object]]:
     except Exception as exc:
         logger.warning("%s Failed to get compaction for %s: %s", LOG_PREFIX, channel, exc)
         return None
-
-
-def get_entries_since(channel: str, watermark: int = 0, limit: int = 2000) -> List[Dict[str, object]]:
-    """Returns entries in chronological order (oldest first)."""
-    from services.transcript_service import Transcript
-    return Transcript.get_recent(channel, limit=limit, since_id=watermark)

@@ -9,14 +9,13 @@
 """WebBrowseAbility — delegate an interactive web-browsing task to a focused agent.
 
 Pairs with a typed ``ProcessorConfig`` subclass (``WebBrowseConfig``, in
-``configs/channels/web_browse.py`` with the other channel configs).  Spec §5b /
-§10f.  Replaces the browsing role the former ``web_surfer`` subagent performed,
+``configs/channels/web_browse.py`` with the other channel configs).  Replaces the browsing role the former ``web_surfer`` subagent performed,
 scoped down to a clean-context agent that drives the raw ``browser`` tool
 (open / read / find / click / fill / select / scroll / back / screenshot) and reads what it finds.
 
 Named ``web_browse`` (not ``browser``) to avoid a flat-registry collision with
 the raw ``browser`` ability — its tool *surface* still uses the raw ``browser``
-tool (spec amendment 2026-06-02, Dylan, AC-3).
+tool.
 
 Permission boundary — ``policy_channel`` is inherited from the caller that
 invoked the ``web_browse`` tool (``self.mp.config.policy_channel``):
@@ -48,7 +47,7 @@ class WebBrowseAbility(Ability):
             "Spawn a subagent with full web browser control to perform an action on "
             "one or more websites. It drives a real browser — rendering pages, "
             "filling forms, navigating multi-step flows — and inspects screenshots "
-            "with its own vision. Screenshots are saved as documents whose doc_id "
+            "with its own vision. Screenshots are saved as documents whose [document_id] "
             "any vision tool can view later. Use for acting on a specific site — "
             "not for general lookups."
         )
@@ -104,13 +103,13 @@ class WebBrowseAbility(Ability):
 
     @staticmethod
     def _with_screenshots(tr: ToolResult, shots: list[tuple[str, str]]) -> ToolResult:
-        """Mechanical, not prompt-dependent: the caller receives every doc_id
+        """Mechanical, not prompt-dependent: the caller receives every [document_id]
         even when the delegate forgets to mention its screenshots."""
         if tr.status != "success" or not shots:
             return tr
-        lines = "\n".join(f"- doc_id={doc_id} ({url})" for doc_id, url in shots)
+        lines = "\n".join(f"- [document_id]={[document_id]} ({url})" for [document_id], url in shots)
         return ToolResult.ok(
             f"{tr.body}\n\nScreenshots saved as documents "
-            f"(view one with vision(image=<doc_id>)):\n{lines}",
+            f"(view one with vision(image=<[document_id]>)):\n{lines}",
             screenshots=len(shots),
         )

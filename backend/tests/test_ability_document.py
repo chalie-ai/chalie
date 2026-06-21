@@ -7,7 +7,7 @@
 #     http://www.apache.org/licenses/LICENSE-2.0
 
 """Document-specific business-logic tests migrated from the per-ability
-conformance file removed in TKT-975. The full ToolResult wire contract is
+conformance file removed in . The full ToolResult wire contract is
 pinned centrally in test_tool_result_contract.py; this file holds only the
 document ability's genuine behaviour tests (fuzzy-delete disambiguation,
 upload structured body, search rows/count) that have no coverage elsewhere."""
@@ -92,15 +92,15 @@ def test_delete_by_ambiguous_name_lists_candidates_and_deletes_nothing(db: sqlit
     assert "[document(status=error" in out, out
     assert "code=ambiguous-match" in out, out
     # Every candidate id must be present so the model can re-call with the exact id.
-    for doc_id in (id_jan, id_feb, id_mar):
-        assert doc_id in out, out
+    for [document_id] in (id_jan, id_feb, id_mar):
+        assert [document_id] in out, out
 
     # The hard guarantee: NOT ONE document was deleted.
     service = _service()
-    for doc_id in (id_jan, id_feb, id_mar):
-        doc = service.get_document(doc_id)
-        assert doc is not None, doc_id
-        assert doc.get("deleted_at") is None, (doc_id, doc.get("deleted_at"))
+    for [document_id] in (id_jan, id_feb, id_mar):
+        doc = service.get_document([document_id])
+        assert doc is not None, [document_id]
+        assert doc.get("deleted_at") is None, ([document_id], doc.get("deleted_at"))
 
     # The act-trail recorded the same error envelope against the transcript.
     trail = ActTrail().fetch_by_transcript_id(chat_mp.uid)
@@ -111,16 +111,16 @@ def test_delete_single_non_exact_fuzzy_match_is_ambiguous_not_first_hit(db: sqli
     """A name that matches exactly ONE document, but only as a non-exact substring,
     must STILL be treated as ambiguous (force an exact id) — never silently
     deleted. Only an exact-name or id match proceeds."""
-    doc_id = _ingest(db, tmp_path, "annual-report-2025.md", "Revenue grew 12 percent.")
+    [document_id] = _ingest(db, tmp_path, "annual-report-2025.md", "Revenue grew 12 percent.")
 
     out = ToolDispatcher(chat_mp).dispatch(
         "document", {"action": "delete", "name": "annual", "act_summary": "x"}
     )
 
     assert "code=ambiguous-match" in out, out
-    assert doc_id in out, out
+    assert [document_id] in out, out
 
-    assert cast(dict[str, object], _service().get_document(doc_id)).get("deleted_at") is None
+    assert cast(dict[str, object], _service().get_document([document_id])).get("deleted_at") is None
 
 
 def test_delete_by_exact_id_succeeds_and_row_is_gone(db: sqlite3.Connection, chat_mp: _MP, tmp_path: Path) -> None:
@@ -142,14 +142,14 @@ def test_delete_by_exact_id_succeeds_and_row_is_gone(db: sqlite3.Connection, cha
 def test_delete_by_unique_exact_name_succeeds(db: sqlite3.Connection, chat_mp: _MP, tmp_path: Path) -> None:
     """A single document whose name matches the query EXACTLY proceeds to delete —
     the unambiguous-match path."""
-    doc_id = _ingest(db, tmp_path, "taxes.md", "Tax notes for the year.")
+    [document_id] = _ingest(db, tmp_path, "taxes.md", "Tax notes for the year.")
 
     out = ToolDispatcher(chat_mp).dispatch(
         "document", {"action": "delete", "name": "taxes.md", "act_summary": "x"}
     )
 
     assert "[document(status=success" in out, out
-    assert cast(dict[str, object], _service().get_document(doc_id)).get("deleted_at") is not None
+    assert cast(dict[str, object], _service().get_document([document_id])).get("deleted_at") is not None
 
 
 def test_delete_unknown_name_is_not_found(db: sqlite3.Connection, chat_mp: _MP, tmp_path: Path) -> None:

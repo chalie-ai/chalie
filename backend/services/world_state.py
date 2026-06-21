@@ -23,8 +23,8 @@ _SECTION_HEADER = "### Background Telemetry,Processes & Signals"
 _STORE_KEY_LAST_USER_MESSAGE = "world_state:last_user_message_at"
 
 # Durable dual-write clock so the subconscious user-active gate survives a
-# process/container restart (TKT-922). Without it the gate starves: the value
-# lives only in the in-memory store and is wiped on every restart.
+# process/container restart. Without it the gate starves: the value lives only
+# in the in-memory store and is wiped on every restart.
 # Bidirectional dependency: services/durable_timestamp.py owns the persist/
 # hydrate mechanism; this module supplies the key pair + provenance.
 _DG_KEY_LAST_USER_MESSAGE = "world_state_last_user_message_at"

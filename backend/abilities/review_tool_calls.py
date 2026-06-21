@@ -113,7 +113,7 @@ class ReviewToolCallsAbility(ReviewWindowAbility):
 
 def _result_ok(result: object) -> bool:
     """A recorded result is now a dispatcher envelope whose first line is
-    ``[<tool>(status=…)]`` (TKT-882). The call failed iff that first line carries
+    ``[<tool>(status=…)]``. The call failed iff that first line carries
     ``status=error``."""
     first_line = str(result or "").splitlines()[0] if result else ""
     return "status=error" not in first_line

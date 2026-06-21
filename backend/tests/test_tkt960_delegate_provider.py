@@ -1,4 +1,4 @@
-"""Feature tests (TKT-960): the Delegate Provider — a dedicated provider for
+"""Feature tests: the Delegate Provider — a dedicated provider for
 subagent (delegate) turns (web_search, web_browse, …), independent of the main
 chat provider, defaulting to "use main provider".
 

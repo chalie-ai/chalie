@@ -7,9 +7,9 @@
 #     http://www.apache.org/licenses/LICENSE-2.0
 
 """Ubiquiti-ability-specific business-logic tests migrated from the per-ability
-conformance file removed in TKT-975.
+conformance file removed in .
 
-Pins TKT-890's schema-honesty contract: the prose-DSL params are gone, the
+Pins 's schema-honesty contract: the prose-DSL params are gone, the
 action enum exactly matches ACTION_HANDLERS, and the new action ids are
 correctly seeded in policy_defaults.json.
 """

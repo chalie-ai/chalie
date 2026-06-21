@@ -46,19 +46,3 @@ def discover_email_settings(email: str) -> EmailProviderSettings | None:
 
 def list_supported_providers() -> list[str]:
     return sorted({s.provider_name for s in PROVIDERS.values()})
-
-
-# -- Email domain → CalDAV provider mapping ----------------------------------
-
-_CALDAV_PROVIDERS: dict[str, str] = {}
-for _domain, _up in _UNIFIED_PROVIDERS.items():
-    if _up.caldav_url:
-        _slug = _up.name.lower()
-        _CALDAV_PROVIDERS[_domain] = _slug
-
-
-def email_to_caldav_provider(email: str) -> str | None:
-    if not email or "@" not in email:
-        return None
-    domain = Email.get_domain(email)
-    return _CALDAV_PROVIDERS.get(domain)

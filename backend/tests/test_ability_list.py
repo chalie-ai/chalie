@@ -6,10 +6,9 @@
 #
 #     http://www.apache.org/licenses/LICENSE-2.0
 
-"""list-specific business-logic tests migrated from the per-ability conformance
-file removed in TKT-975. Drives the real ToolDispatcher end-to-end hot path with
-zero mocks, exercising list name addressing, item disambiguation, rich card
-payloads, and the enrich_rich_payload refresh hook."""
+"""list-specific business-logic tests. Drives the real ToolDispatcher end-to-end
+hot path with zero mocks, exercising list name addressing, item disambiguation,
+rich card payloads, and the enrich_rich_payload refresh hook."""
 
 import json
 import sqlite3
