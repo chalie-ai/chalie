@@ -13,6 +13,8 @@ ERROR/CRITICAL — so the hint must be logged at ERROR, and /ready must report
 
 import json
 import logging
+import os
+import stat
 import sys
 from collections.abc import Iterator
 from pathlib import Path
@@ -217,3 +219,80 @@ class TestEnsureOnnxRuntimeHealsAndLogs:
         # …and the hint actually surfaces in the real Cognition → Errors endpoint.
         panel = [e["message"] for e in tc.get("/system/observability/errors").get_json()["errors"]]
         assert any("libcudart" in m and "CPU" in m for m in panel)
+
+
+@pytest.mark.unit
+class TestSwapRetriesTransientFailure:
+    """The boot-race regression: ``_swap_onnxruntime_to_cpu``'s install fails
+    instantly at boot (container network not up yet), pinning the runtime to
+    "failed" forever and hanging /ready. The swap must instead RETRY a transient
+    failure. Driven through the real swap → real PATH resolution → real subprocess
+    against a stub ``uv`` on PATH — no mock of our code, only the package index
+    is stubbed out (exactly what a flaky boot network simulates)."""
+
+    @staticmethod
+    def _fake_uv(tmp_path: Path, fail_first: int) -> Path:
+        """A real executable named ``uv`` that fails its first ``fail_first``
+        invocations (non-zero, like a network blip) then succeeds — proving the
+        retry, not faking our retry logic."""
+        counter = tmp_path / "uv_calls"
+        script = tmp_path / "bin" / "uv"
+        script.parent.mkdir(parents=True, exist_ok=True)
+        script.write_text(
+            "#!/bin/sh\n"
+            f'n=$(cat "{counter}" 2>/dev/null || echo 0); n=$((n+1)); echo "$n" > "{counter}"\n'
+            f'if [ "$n" -le {fail_first} ]; then echo "transient: network unreachable" >&2; exit 1; fi\n'
+            "exit 0\n"
+        )
+        script.chmod(script.stat().st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
+        return counter
+
+    @pytest.fixture(autouse=True)
+    def _guard_real_wheels(self) -> None:
+        import importlib.metadata as md
+        for dist in ("onnxruntime-gpu", "onnxruntime-rocm"):
+            try:
+                md.version(dist)
+                pytest.skip(f"{dist} is installed — the real swap would uninstall it")
+            except md.PackageNotFoundError:
+                pass
+
+    def _run_heal_with_stub_uv(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fail_first: int
+    ) -> Path:
+        counter = self._fake_uv(tmp_path, fail_first)
+        monkeypatch.setenv("PATH", f"{tmp_path / 'bin'}{os.pathsep}{os.environ['PATH']}")
+        # No real wall-clock backoff in the test; the retry COUNT is what matters.
+        monkeypatch.setattr("services.runtime_deps_service.time.sleep", lambda *_a: None)
+
+        # First onnxruntime import raises (broken wheel) → swap runs; the import
+        # after the stub "install" succeeds because the CPU wheel is really present.
+        saved_mods = {n: m for n, m in sys.modules.items() if n == "onnxruntime" or n.startswith("onnxruntime.")}
+        for n in saved_mods:
+            del sys.modules[n]
+        finder = _BrokenWheelFinder()
+        sys.meta_path.insert(0, finder)
+        RuntimeDepsService._onnxruntime_status = "unknown"
+        RuntimeDepsService._onnxruntime_hint = None
+        try:
+            RuntimeDepsService.ensure_onnxruntime()
+        finally:
+            sys.meta_path.remove(finder)
+            sys.modules.update(saved_mods)
+        return counter
+
+    def test_transient_install_failure_recovers(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Fails twice, succeeds on the 3rd — the boot-race scenario.
+        counter = self._run_heal_with_stub_uv(tmp_path, monkeypatch, fail_first=2)
+        assert counter.read_text().strip() == "3"  # retried, did not give up on attempt 1
+        assert RuntimeDepsService.onnxruntime_status() == "healed_to_cpu"
+
+    def test_persistent_failure_is_bounded_and_fails(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Never recovers → exactly 3 attempts, then a clean terminal "failed".
+        counter = self._run_heal_with_stub_uv(tmp_path, monkeypatch, fail_first=99)
+        assert counter.read_text().strip() == "3"  # bounded — no infinite retry loop
+        assert RuntimeDepsService.onnxruntime_status() == "failed"

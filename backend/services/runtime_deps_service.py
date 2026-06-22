@@ -9,6 +9,7 @@ import shutil
 import subprocess
 import sys
 import threading
+import time
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -234,14 +235,25 @@ class RuntimeDepsService:
                 capture_output=True, text=True, timeout=600,
             )
 
-        result = subprocess.run(
+        install_cmd = (
             ["uv", "pip", "install", "--python", sys.executable, "onnxruntime"]
             if use_uv else
-            [sys.executable, "-m", "pip", "install", "onnxruntime"],
-            capture_output=True, text=True, timeout=600,
+            [sys.executable, "-m", "pip", "install", "onnxruntime"]
         )
-        if result.returncode != 0:
-            raise RuntimeError(f"CPU onnxruntime install failed: {result.stderr[:300]}")
+        # Retry to ride out a transient boot-time failure. This runs synchronously
+        # at boot, often before the container network is up — a single non-zero
+        # exit would otherwise pin the runtime to "failed" for the whole process
+        # lifetime (ensure_onnxruntime is run-once), keeping /ready at 503 and the
+        # frontend stuck on the 'Waking up Chalie' splash until a manual restart.
+        last_err = ""
+        for attempt in range(3):
+            if attempt:
+                time.sleep(2 * attempt)
+            result = subprocess.run(install_cmd, capture_output=True, text=True, timeout=600)
+            if result.returncode == 0:
+                return
+            last_err = result.stderr[:300]
+        raise RuntimeError(f"CPU onnxruntime install failed after 3 attempts: {last_err}")
 
     # ── Private: Playwright ───────────────────────────────────────────────
 

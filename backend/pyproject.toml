@@ -31,12 +31,16 @@ dependencies = [
     "pdfplumber>=0.11.0",
     "python-docx>=1.1.0",
     "python-pptx>=1.0.0",
-    # onnx (the format library) is a direct dep. The onnxruntime *runtime* is
-    # pulled in transitively by rapidocr-onnxruntime, and the GPU/ROCm variant by
-    # the voice-* optional groups below. RuntimeDepsService.ensure_onnxruntime()
-    # self-heals to the CPU 'onnxruntime' wheel at boot when an installed
-    # GPU/ROCm wheel can't load its native libs (e.g. missing CUDA toolkit).
+    # onnx (the format library) and the onnxruntime CPU runtime are both direct
+    # base deps. embeddings, the classifier heads and rapidocr all need a working
+    # runtime, so the CPU wheel is pinned explicitly rather than leaned on as a
+    # transitive pull — that left it absent on some images, which pinned the boot
+    # self-heal to "failed" and hung /ready on the 'Waking up Chalie' splash.
+    # The GPU/ROCm variants come from the voice-* optional groups below;
+    # RuntimeDepsService.ensure_onnxruntime() reconciles a GPU/ROCm wheel that
+    # can't load its native libs back to this CPU wheel at boot.
     "onnx>=1.17.0",
+    "onnxruntime>=1.20.0",
     "rapidocr_onnxruntime>=1.4.0",
     "ddgs>=0.1.0",
     "RestrictedPython>=7.3",
