@@ -6,8 +6,9 @@ The model thinks as little as possible: it names WHAT to act on by visible text
 delegate run (key = the invoking mp's transcript uid); every successful call
 returns the same JSON envelope DICT with a mechanical `changed` diff (the
 dispatcher renders it as compact JSON — never a pre-dumped JSON string).
-Screenshots ingest through the document pipeline into a screenshots/ subdir and
-surface as doc_ids the `vision` tool can read.
+Screenshots ingest through the same document pipeline chat attachments use, so
+the page's vision description is produced at ingest time and rides back inline in
+the screenshot result — the agent sees the page without a separate vision call.
 
 Every result is an :class:`abilities._result.ToolResult` built only via
 ``ok()`` / ``err()``. Errors carry a STABLE KEBAB-CASE ``code`` (never the
@@ -199,12 +200,13 @@ class BrowserAbility(Ability):
 
         page: dict[str, object] = cast("dict[str, object]", grabbed["page"])
         host = urlparse(cast("str", page["url"])).hostname or "page"
+        doc_svc = DocumentService(get_shared_db_service())
         tmp = new_tmp_path(f"{token_hex(4)}.png")
         try:
             with open(tmp, "wb") as fh:
                 fh.write(cast("bytes", grabbed["png"]))
             ingested = ingest_file(
-                DocumentService(get_shared_db_service()),
+                doc_svc,
                 tmp,
                 name=f"screenshot-{host}.png",
                 subdir="screenshots",
@@ -213,23 +215,36 @@ class BrowserAbility(Ability):
         finally:
             if os.path.isfile(tmp):
                 os.remove(tmp)
-        if ingested.get("error"):
+        if ingested.get("error") or ingested.get("status") != "ready":
             return ToolResult.err(
-                f"Screenshot ingest failed: {ingested['error']}",
+                f"Screenshot ingest failed: {ingested.get('error') or ingested.get('status')}",
                 code="screenshot-ingest-failed",
-                hint="The page was captured but could not be stored; retry the "
-                     "screenshot.",
+                hint="The page was captured but could not be stored or read; retry "
+                     "the screenshot.",
                 url=cast("str", page["url"]),
             )
 
         record_screenshot(self._session_key(), cast("str", ingested["id"]), cast("str", page["url"]))
+        # The shared ingest already ran the page through vision (images route to
+        # describe_image inside _run_upload_extraction), storing the description as
+        # the document's clean_text — the same content document(action='view')
+        # surfaces. Hand it back inline so the agent sees the page directly.
+        doc = doc_svc.get_document(cast("str", ingested["id"]))
+        if doc is None:
+            return ToolResult.err(
+                "Screenshot stored but its document record vanished before it "
+                "could be read.",
+                code="screenshot-doc-missing",
+                hint="Retry the screenshot.",
+                url=cast("str", page["url"]),
+            )
         return ToolResult.ok({
             "page": page,
             "data": {
                 "doc_id": ingested["id"],
                 "name": ingested["name"],
                 "status": ingested["status"],
-                "note": "Use the vision tool with image=<doc_id> to see this screenshot.",
+                "vision": doc.get("clean_text") or "",
             },
             "changed": {"navigated": False, "dialog": None, "popup": None, "summary": ""},
             "error": None,
