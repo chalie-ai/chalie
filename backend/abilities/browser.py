@@ -1,4 +1,4 @@
-"""BrowserAbility — drive one persistent web page with nine flat verbs.
+"""BrowserAbility — drive one persistent web page with ten flat verbs.
 
 The model thinks as little as possible: it names WHAT to act on by visible text
 ("Sign in", "Email") and the code resolves WHERE mechanically
@@ -42,7 +42,8 @@ class BrowserAbility(Ability):
         return (
             "Drive a web page step by step: open a URL, read it, find text on it, "
             "click buttons and links by their visible label, fill and submit forms, "
-            "scroll, go back, and capture screenshots into the document store. The "
+            "scroll, go back, read an element's exact computed colours and fonts, "
+            "and capture screenshots into the document store. The "
             "page stays open between calls; every action returns the same JSON "
             "envelope describing the page and what just changed."
         )
@@ -56,7 +57,7 @@ class BrowserAbility(Ability):
             "take a screenshot of this page",
             "choose a country from the dropdown on this form",
             "scroll down and read the rest of the article",
-            "go back to the previous page",
+            "get the exact colour of the heading on this page",
         ]
 
     def get_search_tooltip(self) -> str:
@@ -69,7 +70,7 @@ class BrowserAbility(Ability):
                 "type": "string",
                 "enum": [
                     "open", "read", "find", "click", "fill",
-                    "select", "scroll", "back", "screenshot",
+                    "select", "scroll", "back", "screenshot", "style",
                 ],
                 "description": (
                     "What to do. 'open' a URL first; every other action works on "
@@ -85,7 +86,7 @@ class BrowserAbility(Ability):
                 "description": (
                     "Visible text of the element to act on — a button or link "
                     "label, or a form field's label/placeholder (e.g. 'Sign in', "
-                    "'Email'). Used by click/fill/select."
+                    "'Email'). Used by click/fill/select/style."
                 ),
             },
             Keys.value: {
@@ -114,7 +115,7 @@ class BrowserAbility(Ability):
 
     # Required params per action — consumed by the dispatcher's ACTION_REQUIRED
     # pre-gate (BEFORE the policy gate and BEFORE run()): an unknown action →
-    # code=unknown-action whose valid= names all nine verbs; a known action
+    # code=unknown-action whose valid= names all ten verbs; a known action
     # missing a required param → one code=missing-params naming it. run() never
     # sees either case.
     ACTION_REQUIRED: ClassVar[dict[str, tuple[str, ...]]] = {
@@ -127,6 +128,7 @@ class BrowserAbility(Ability):
         "scroll": (Keys.direction,),
         "back": (),
         "screenshot": (),
+        "style": (Keys.target,),
     }
 
     # verb -> params forwarded to the session layer (the required half is the
@@ -141,6 +143,7 @@ class BrowserAbility(Ability):
         "scroll": (Keys.direction,),
         "back": (),
         "screenshot": (),
+        "style": (Keys.target,),
     }
 
     def run(self, params: dict[str, object]) -> ToolResult:

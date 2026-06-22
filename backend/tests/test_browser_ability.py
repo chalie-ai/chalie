@@ -1,4 +1,4 @@
-"""Feature tests: the rebuilt 9-verb browser ability.
+"""Feature tests: the rebuilt 10-verb browser ability.
 
 Drives the REAL production hot path — ``ToolDispatcher.dispatch()`` on a real
 ``MessageProcessor`` bound to ``WebBrowseConfig`` (where ``browser`` is
@@ -25,7 +25,7 @@ from services.processor_config import ProcessorConfig
 
 pytestmark = pytest.mark.unit
 
-_VERBS = ["open", "read", "find", "click", "fill", "select", "scroll", "back", "screenshot"]
+_VERBS = ["open", "read", "find", "click", "fill", "select", "scroll", "back", "screenshot", "style"]
 
 
 def _browse_mp() -> MessageProcessor:
@@ -39,7 +39,7 @@ def _dispatch(params: dict[str, object]) -> str:
     return ToolDispatcher(_browse_mp()).dispatch("browser", params)
 
 
-def test_schema_is_nine_flat_verbs() -> None:
+def test_schema_is_ten_flat_verbs() -> None:
     schema = BrowserAbility(mp=None).get_input_schema()
     params = cast("dict[str, object]", schema["input_schema"])
     assert cast("dict[str, object]", cast("dict[str, object]", params["properties"])["action"])["enum"] == _VERBS

@@ -43,6 +43,7 @@ if TYPE_CHECKING:
         def click(self, *, timeout: int) -> None: ...
         def fill(self, value: str, *, timeout: int) -> None: ...
         def select_option(self, *, label: str | None = None, value: str | None = None, timeout: int = 0) -> object: ...
+        def evaluate(self, expression: str, arg: object = None) -> object: ...
 
     class _Page(Protocol):
         url: str
@@ -278,6 +279,13 @@ class PageSession:
         self._settle()
         return self._envelope(data=self._read_view(), changed=self._changed(before))
 
+    def style(self, target: str) -> dict[str, object]:
+        locator, err = self._locate(target, self._CLICK_ROLES, text_fallback=True)
+        if err:
+            return err
+        computed = cast("_Locator", locator).evaluate(_COMPUTED_STYLE_JS)
+        return self._envelope(data=computed)
+
     def grab(self) -> dict[str, object]:
         """Viewport PNG + page info — NOT an envelope; the ability layer ingests it."""
         return {
@@ -467,4 +475,13 @@ _FIND_JS = """({q, limit, ctx}) => {
     }
   }
   return {matches, interactive};
+}"""
+
+_COMPUTED_STYLE_JS = """(el) => {
+  const cs = getComputedStyle(el);
+  const out = {};
+  for (const k of ['color', 'background-color', 'border-color',
+                   'font-size', 'font-family', 'font-weight'])
+    out[k] = cs.getPropertyValue(k);
+  return out;
 }"""
