@@ -103,11 +103,11 @@ class Keys:
     list = "list"  # noqa: A003 — attr name mirrors the wire key (shadows builtin)
     location = "location"
     max_chars = "max_chars"
-    max_files = "max_files"
     message = "message"
     minutes = "minutes"
     name = "name"
     operation = "operation"
+    page = "page"
     path = "path"
     permissions = "permissions"
     port_idx = "port_idx"

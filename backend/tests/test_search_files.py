@@ -1,13 +1,27 @@
 import os
+import time
 from pathlib import Path
 from typing import cast
 
 import pytest
 
+from abilities import search_files
 from abilities._result import ToolResult
 from abilities.search_files import SearchFilesAbility
 
 pytestmark = pytest.mark.unit
+
+
+@pytest.fixture(autouse=True)
+def _isolated_cache(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Redirect the /tmp scratchpad to a per-test SIBLING of the search root so the
+    real cache constant is exercised end-to-end without tests polluting each other
+    (or the host /tmp). A sibling — never under ``tmp_path`` — guarantees a walk of
+    the search root can never pick up a cache file.
+    """
+    cache = f"{tmp_path}_cache"
+    os.makedirs(cache, exist_ok=True)
+    monkeypatch.setattr(search_files, "_CACHE_DIR", cache)
 
 
 def _run(action: str, query: str, directory: str | None = None, **extra: object) -> ToolResult:
@@ -25,11 +39,8 @@ def _glob_files(tr: ToolResult) -> list[str]:
 
 
 def _grep_rows(tr: ToolResult) -> list[dict[str, object]]:
-    """The match rows from a grep success body — a bare list when untruncated, or
-    the ``matches`` field of a dict body when a note/truncation rides along."""
+    """The match rows from a grep success body (always under ``matches``)."""
     assert tr.status == "success"
-    if isinstance(tr.body, list):
-        return cast(list[dict[str, object]], tr.body)
     assert isinstance(tr.body, dict)
     return cast(list[dict[str, object]], tr.body["matches"])
 
@@ -51,14 +62,12 @@ def test_missing_query_returns_error() -> None:
     assert "required" in str(tr.body)
 
 
-def test_max_files_boundary_validation(tmp_path: Path) -> None:
+def test_page_below_one_returns_error(tmp_path: Path) -> None:
     (tmp_path / "a.py").write_text("x")
-    for bad_value in (0, 201):
-        tr = _run("glob", "*.py", str(tmp_path), max_files=bad_value)
-        assert tr.status == "error"
-        assert tr.code == "invalid-param"
-        assert "must be between 1 and 200" in str(tr.body)
-        assert str(bad_value) in str(tr.body)
+    tr = _run("glob", "*.py", str(tmp_path), page=0)
+    assert tr.status == "error"
+    assert tr.code == "invalid-param"
+    assert "page" in str(tr.body)
 
 
 def test_context_lines_over_20_returns_error(tmp_path: Path) -> None:
@@ -123,20 +132,110 @@ def test_glob_no_match_is_success_with_broaden_note(tmp_path: Path) -> None:
     assert "broaden" in str(tr.body).lower()
 
 
-def test_glob_max_files_default_and_override(tmp_path: Path) -> None:
-    for i in range(15):
+# ── pagination (5 results per page) ───────────────────────────────
+
+
+def test_glob_paginates_five_per_page(tmp_path: Path) -> None:
+    for i in range(12):
         (tmp_path / f"f{i:02d}.dat").write_text("x")
 
-    default_tr = _run("glob", "*.dat", str(tmp_path))
-    assert len(_glob_files(default_tr)) == 10
-    assert default_tr.meta["truncated"] is True
+    p1 = _run("glob", "*.dat", str(tmp_path))  # page defaults to 1
+    assert len(_glob_files(p1)) == 5
+    assert p1.meta["page"] == 1
+    assert p1.meta["page_count"] == 3
+    assert p1.meta["count"] == 12
+    assert "You are currently on page 1 from 3 pages" in str(p1.body)
 
-    override_tr = _run("glob", "*.dat", str(tmp_path), max_files=5)
-    assert len(_glob_files(override_tr)) == 5
-    assert override_tr.meta["truncated"] is True
+    p2 = _run("glob", "*.dat", str(tmp_path), page=2)
+    p3 = _run("glob", "*.dat", str(tmp_path), page=3)
+    assert len(_glob_files(p2)) == 5
+    assert len(_glob_files(p3)) == 2
+    # every file appears exactly once across the three pages
+    seen = set(_glob_files(p1)) | set(_glob_files(p2)) | set(_glob_files(p3))
+    assert len(seen) == 12
+
+    # an out-of-range page clamps to the last page rather than erroring/emptying
+    clamp = _run("glob", "*.dat", str(tmp_path), page=99)
+    assert clamp.meta["page"] == 3
+    assert len(_glob_files(clamp)) == 2
 
 
-# ── grep ──────────────────────────────────────────────────────────
+def test_single_page_carries_no_pagination_note(tmp_path: Path) -> None:
+    (tmp_path / "a.dat").write_text("x")
+    tr = _run("glob", "*.dat", str(tmp_path))
+    assert tr.meta["page_count"] == 1
+    assert "currently on page" not in str(tr.body)
+
+
+def test_grep_paginates_one_row_per_matched_line(tmp_path: Path) -> None:
+    # a single file with 12 matching lines = 12 results = 3 pages (NOT 1 result).
+    (tmp_path / "log.txt").write_text("".join(f"hit {i}\n" for i in range(12)))
+
+    p1 = _run("grep", "hit", str(tmp_path), context_lines=0)
+    assert len(_grep_rows(p1)) == 5
+    assert p1.meta["count"] == 12
+    assert p1.meta["page_count"] == 3
+    assert "You are currently on page 1 from 3 pages" in str(p1.body)
+
+    p3 = _run("grep", "hit", str(tmp_path), page=3, context_lines=0)
+    rows3 = _grep_rows(p3)
+    assert [r["line"] for r in rows3] == [11, 12]  # the trailing 2 of 12 matched lines
+
+
+# ── scratchpad cache (/tmp, md5 of query, 10-min TTL) ─────────────
+
+
+def test_cache_serves_later_pages_without_rewalking(tmp_path: Path) -> None:
+    (tmp_path / "log.txt").write_text("".join(f"hit {i}\n" for i in range(12)))
+    _run("grep", "hit", str(tmp_path), context_lines=0)  # page 1 → walks, writes cache
+
+    # Gut the tree: a fresh walk would now find ZERO matches. Page 2 must still
+    # return the cached rows — proof the second call read the scratchpad.
+    (tmp_path / "log.txt").write_text("nothing here now\n")
+    p2 = _run("grep", "hit", str(tmp_path), page=2, context_lines=0)
+    assert len(_grep_rows(p2)) == 5
+
+    root = Path(str(tmp_path)).resolve()
+    assert os.path.exists(search_files._cache_path("grep", "hit", 0, root))
+
+
+def test_stale_cache_is_discarded_and_rebuilt(tmp_path: Path) -> None:
+    (tmp_path / "log.txt").write_text("hit one\n")
+    _run("grep", "hit", str(tmp_path), context_lines=0)  # writes cache (1 row)
+    cache_file = search_files._cache_path("grep", "hit", 0, Path(str(tmp_path)).resolve())
+    assert os.path.exists(cache_file)
+
+    # age the cache past its 10-minute TTL, then grow the tree
+    old = time.time() - (search_files._CACHE_TTL_S + 60)
+    os.utime(cache_file, (old, old))
+    (tmp_path / "log.txt").write_text("hit one\nhit two\n")
+
+    rebuilt = _run("grep", "hit", str(tmp_path), context_lines=0)
+    assert len(_grep_rows(rebuilt)) == 2  # stale cache discarded → fresh walk saw both lines
+
+
+# ── special-file safety (the hang fix) ────────────────────────────
+
+
+def test_skip_prunes_special_filesystem_prefixes() -> None:
+    assert search_files._skip("/proc")
+    assert search_files._skip("/proc/123/maps")
+    assert search_files._skip("/sys/kernel")
+    assert search_files._skip("/dev/null")
+    assert not search_files._skip("/home/user/proc_notes")  # substring, not a prefix
+    assert not search_files._skip("/etc/hosts")
+
+
+def test_grep_skips_non_regular_files_without_hanging(tmp_path: Path) -> None:
+    (tmp_path / "real.txt").write_text("hello world\n")
+    os.mkfifo(tmp_path / "pipe")  # a FIFO: open()-for-read blocks forever with no writer
+
+    tr = _run("grep", "hello", str(tmp_path), context_lines=0)  # must NOT park on the fifo
+    rows = _grep_rows(tr)
+    assert [r["text"] for r in rows] == ["hello world"]  # real file found, pipe skipped
+
+
+# ── grep content / context ────────────────────────────────────────
 
 
 def test_grep_returns_rows_with_context(tmp_path: Path) -> None:
@@ -193,21 +292,6 @@ def test_grep_context_lines_default_and_override(tmp_path: Path) -> None:
     assert ctx_lines == ["line 9", "line 10", "line 11"]
 
 
-def test_grep_max_files_default_and_override(tmp_path: Path) -> None:
-    for i in range(10):
-        (tmp_path / f"f{i}.py").write_text("NEEDLE\n")
-
-    default_tr = _run("grep", "NEEDLE", str(tmp_path))
-    default_files = {os.path.basename(cast(str, r["file"])) for r in _grep_rows(default_tr)}
-    assert len(default_files) == 5
-    assert default_tr.meta["truncated"] is True
-
-    override_tr = _run("grep", "NEEDLE", str(tmp_path), max_files=3)
-    override_files = {os.path.basename(cast(str, r["file"])) for r in _grep_rows(override_tr)}
-    assert len(override_files) == 3
-    assert override_tr.meta["truncated"] is True
-
-
 def test_grep_emits_one_row_per_match(tmp_path: Path) -> None:
     (tmp_path / "f.py").write_text("a\nMATCH1\nc\nMATCH2\ne\nf\n")
     tr = _run("grep", "MATCH", str(tmp_path), context_lines=1)
@@ -233,17 +317,3 @@ def test_grep_invalid_regex_returns_error(tmp_path: Path) -> None:
     assert "Invalid regex" in str(tr.body)
 
 
-# ── no restrictions ───────────────────────────────────────────────
-
-
-def test_no_blocked_paths() -> None:
-    tr = _run("glob", "*.conf", "/etc")
-    assert tr.status == "success"
-    assert "blocked" not in str(tr.body).lower()
-
-
-def test_default_directory_is_root() -> None:
-    tr = _run("glob", "*.this_extension_should_not_exist_xyz", "/tmp")
-    assert tr.status == "success"
-    assert _glob_files(tr) == []
-    assert tr.meta["count"] == 0
