@@ -229,6 +229,20 @@ def _dir_contains_py(path: str) -> bool:
     return False
 
 
+def _tracked_entries(backend_path: str) -> set[str]:
+    """Top-level entry names git tracks under ``backend_path``. The roster gate
+    covers first-party *source*, so untracked dirs (locally-staged docs) and
+    git-ignored build artifacts (``*.egg-info``) — which a clean checkout never
+    has — must not be measured against it."""
+    proc = subprocess.run(
+        ["git", "-C", backend_path, "ls-files", "-z"],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return {path.split("/", 1)[0] for path in proc.stdout.split("\0") if path}
+
+
 def test_typing_gate_covers_every_first_party_package_and_module() -> None:
     """Guarantee the strict gate's roster is exhaustive — no source escapes it.
 
@@ -243,7 +257,9 @@ def test_typing_gate_covers_every_first_party_package_and_module() -> None:
     py_free_dirs: set[str] = set()
     top_level_modules: set[str] = set()
 
-    for entry in os.listdir(backend_path):
+    tracked = _tracked_entries(backend_path)
+
+    for entry in tracked:
         full = os.path.join(backend_path, entry)
         if os.path.isdir(full):
             if entry in _SKIP_DIRS:
