@@ -140,7 +140,7 @@ wall hard rather than advisory. All run under `pytest -m unit`:
 | `test_first_party_source_is_strict_clean` | `mypy --strict` reports **zero** errors over every package + top-level module + the test suite. |
 | `test_no_explicit_any_in_annotations` | The literal `Any` token appears in **no** parameter, return, or variable annotation. AST-based, so `Any` in a docstring, comment, or identifier is not a false positive. This is the single largest hole `--strict` leaves open. |
 | `test_no_type_ignore_comments_in_first_party_source` | **Zero** `type:` suppression comments tree-wide — a *used* one is invisible to `--strict`. |
-| `test_typing_gate_covers_every_first_party_package_and_module` | The on-disk top-level layout matches the `_PACKAGES` / `_TOP_LEVEL_MODULES` roster exactly, so a new source package can never appear *outside* the type-checked set unnoticed. Py-free artifact dirs are listed in `_PY_FREE_DIRS`. |
+| `test_typing_gate_covers_every_first_party_package_and_module` | The git-tracked top-level layout matches the `_PACKAGES` / `_TOP_LEVEL_MODULES` roster exactly, so a new source package can never appear *outside* the type-checked set unnoticed. Only tracked entries are measured, so build artifacts (`*.egg-info`) and untracked local dirs are excluded by construction. Py-free artifact dirs are listed in `_PY_FREE_DIRS`. |
 
 `pyproject.toml` also sets `strict_bytes = true` on top of `--strict` (it is
 not implied), forbidding the implicit `str` / `bytes` / `bytearray`
