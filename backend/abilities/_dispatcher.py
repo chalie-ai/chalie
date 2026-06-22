@@ -96,7 +96,7 @@ class ToolDispatcher:
             # (e.g. 'source"', 'URL', or read's 'url' for 'source') is rewritten
             # to its canonical parameter, so the ACTION_REQUIRED pre-gate and the
             # ability see the real key instead of a corrupt one that would bounce
-            # on a spurious required-field error (TKT-963 / TKT-964). Defensive: a
+            # on a spurious required-field error. Defensive: a
             # registry/schema fault must never break dispatch — on failure the raw
             # params flow through unchanged.
             try:
