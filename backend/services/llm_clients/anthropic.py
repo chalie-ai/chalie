@@ -136,17 +136,15 @@ class AnthropicClient(ProviderClient):
     CONTENT_FIELD_LABEL: ClassVar[str] = "content[].text"
 
     def __init__(self, config: dict[str, object]) -> None:
-        """Initialise from provider config dict (platform, model, api_key, timeout)."""
+        """Initialise from provider config dict (platform, model, api_key)."""
         self._config = config
         self.model: str = cast(str, config.get('model', 'claude-haiku-4-5-20251001'))
-        self._timeout: int = cast(int, config.get('timeout', 120))
 
     def _get_client(self) -> "_anthropic_mod.Anthropic":
         import anthropic
         from services.llm_service import _resolve_api_key, _app_user_agent  # noqa: PLC0415
         return anthropic.Anthropic(
             api_key=_resolve_api_key(self._config),
-            timeout=self._timeout,
             default_headers={"User-Agent": _app_user_agent()},
         )
 

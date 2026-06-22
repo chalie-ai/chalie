@@ -21,6 +21,12 @@ _log_call_warn_lock = threading.Lock()
 # Hard ceiling on any provider's reported context window.
 MAX_CONTEXT_WINDOW = 200_000
 
+# Hard wall-clock ceiling (seconds) for a single provider API call. No model
+# should take longer than this to answer one request; on expiry the call is
+# abandoned and surfaced as a genuine API failure. This is the ONLY provider
+# call timeout — the per-platform client timeouts were removed in favour of it.
+SINGLE_CALL_TIMEOUT_S = 300
+
 
 def resolve_thinking_mode(config_thinking_mode: str | None, override: str | None, level: str) -> str | None:
     """Single precedence rule for a send's thinking level."""
@@ -87,10 +93,43 @@ class Providers:
             )
 
         t0 = time.monotonic()
-        response = client.send(dto)
+        response = self._call_bounded(client, dto)
         wall_ms = int((time.monotonic() - t0) * 1000)
         self._log_after_call(dto, response, wall_ms)
         return response
+
+    def _call_bounded(self, client: "ProviderClient", dto: "ProviderApiRequest") -> "ProviderApiResponse":
+        """Run the single provider API call under a hard wall-clock ceiling.
+
+        No model should take longer than SINGLE_CALL_TIMEOUT_S to answer one
+        request. The call runs on a daemon thread so a wedged socket can never
+        block the turn — on expiry it is abandoned and surfaced as a genuine API
+        failure. This is the only provider call timeout (the per-platform client
+        timeouts were removed); generic to every provider because it wraps
+        client.send, not any platform-specific path.
+        """
+        from services.provider_api import ProviderResponseError  # noqa: PLC0415
+
+        outcome: dict[str, "ProviderApiResponse"] = {}
+        failure: dict[str, BaseException] = {}
+
+        def _invoke() -> None:
+            try:
+                outcome["response"] = client.send(dto)
+            except BaseException as exc:  # noqa: BLE001 — re-raised in the calling thread
+                failure["error"] = exc
+
+        worker = threading.Thread(target=_invoke, name="provider-send", daemon=True)
+        worker.start()
+        worker.join(SINGLE_CALL_TIMEOUT_S)
+        if worker.is_alive():
+            raise ProviderResponseError(
+                f"Provider call exceeded the {SINGLE_CALL_TIMEOUT_S}s single-call ceiling and was abandoned",
+                provider=getattr(client, "provider", ""),
+            )
+        if failure:
+            raise next(iter(failure.values()))
+        return outcome["response"]
 
     def measure(self, dto: "ProviderApiRequest") -> int:
         """Return the estimated token cost of dto without sending."""

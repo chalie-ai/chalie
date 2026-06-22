@@ -136,7 +136,6 @@ class OllamaClient(ProviderClient):
         self.host: str = _validate_host(config.get('host'))
         self.model: str = _validate_model(config.get('model'))
         self._keep_alive: str = cast(str, config.get('keep_alive', '0'))
-        self._timeout: int = cast(int, config.get('timeout', 60))
         self._max_retries: int = cast(int, config.get('max_retries', 2))
         # Cached result of _model_supports_thinking(). None = not yet checked.
         self._thinking_supported: Optional[bool] = None
@@ -250,7 +249,7 @@ class OllamaClient(ProviderClient):
         for attempt in range(1 + self._max_retries):
             try:
                 resp = requests.post(
-                    url, json=payload, timeout=self._timeout,
+                    url, json=payload,
                     headers=self._user_agent(),
                 )
                 resp.raise_for_status()

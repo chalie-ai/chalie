@@ -111,7 +111,6 @@ class OpenAIClient(ProviderClient):
     def __init__(self, config: dict[str, object]) -> None:
         self._config = config
         self.model: str = cast(str, config.get('model', 'gpt-4o-mini'))
-        self._timeout: int = cast(int, config.get('timeout', 120))
         self._format: str = cast(str, config.get('format', 'text'))
 
     def _get_client(self) -> "_openai_mod.OpenAI":
@@ -119,7 +118,6 @@ class OpenAIClient(ProviderClient):
         from services.llm_service import _resolve_api_key, _app_user_agent  # noqa: PLC0415
         kwargs: dict[str, object] = {
             'api_key': _resolve_api_key(self._config),
-            'timeout': self._timeout,
             'default_headers': {
                 "HTTP-Referer": _APP_URL,
                 "X-Title": _APP_TITLE,
