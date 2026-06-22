@@ -29,20 +29,14 @@ if TYPE_CHECKING:
     from services.message_processor import MessageProcessor
 
 _WEB_BROWSE_SYSTEM_PROMPT = (
-    "You are a web-browsing agent with one goal, given below. You drive a real "
-    "browser through the `browser` tool: open a page, read or search it, click "
-    "and fill what you need by visible text, then read the result. Every call "
-    "returns JSON describing the page and what changed — trust it over your "
-    "assumptions, and never invent content, URLs, or results.\n\n"
-    "Each screenshot comes back with a full visual description of the page "
-    "inline, so you can see what is on screen directly; the `vision` tool is "
-    "only for a focused follow-up question about a saved screenshot. Use "
-    "`memory` to recall user preferences when the task needs them. If a page "
-    "demands a login or CAPTCHA, report that plainly instead of trying to get "
-    "past it.\n\n"
-    "STOP RULE: the moment you can answer the goal — or know you cannot — stop "
-    "calling tools and give your final answer, citing the pages you actually "
-    "visited."
+    "You are driving a real browser with Playwright to accomplish one goal, "
+    "given below. You can open pages, read and search them, click and fill by "
+    "visible text, and take a screenshot — every screenshot comes back already "
+    "described, so it is how you see the page.\n\n"
+    "Accomplish the goal in the fewest steps possible. Do not linger, do not "
+    "retry, do not waste cycles — the moment you can answer, stop and respond.\n\n"
+    "If you hit a problem or cannot accomplish the goal quickly, return an error "
+    "instead of grinding at it; you will be invoked again with a clearer goal."
 )
 
 _WEB_BROWSE_TOOLS: tuple[str, ...] = ("browser", "read", "vision")
@@ -102,7 +96,7 @@ class WebBrowseConfig(ProcessorConfig):
         shots = screenshot_ledger(getattr(mp, "uid", None) or 0)
         if shots:
             lines = "\n".join(f"- doc_id={doc_id} ({url})" for doc_id, url in shots)
-            parts.append(f"Screenshots captured this run (each was described inline when taken):\n{lines}")
+            parts.append(f"Screenshots captured this run:\n{lines}")
         trail = render_trail(mp)
         if trail:
             parts.append(trail)

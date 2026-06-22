@@ -49,7 +49,9 @@ class WebBrowseAbility(Ability):
             "filling forms, navigating multi-step flows — and inspects screenshots "
             "with its own vision. Screenshots are saved as documents whose doc_id "
             "any vision tool can view later. Use for acting on a specific site — "
-            "not for general lookups."
+            "not for general lookups. Give the subagent one narrow, concrete goal; "
+            "fire several in parallel for different tasks on the same site rather "
+            "than handing one subagent a broad, generic goal."
         )
 
     def get_examples(self) -> list[str]:
