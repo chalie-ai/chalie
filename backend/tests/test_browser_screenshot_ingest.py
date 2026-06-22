@@ -68,6 +68,10 @@ def test_screenshot_ingest_lands_in_screenshots_subdir_and_vision_reads_it(db: s
     assert ingested["status"] == "ready", ingested
     doc = cast(dict[str, object], service.get_document(cast(str, ingested["id"])))
     assert doc["source_type"] == "screenshot"
+    # The exact field BrowserAbility._screenshot hands back inline as data["vision"]:
+    # ingest ran the png through the image extractor (OCR here, vision in prod) and
+    # stored the readable content as clean_text — proving the screenshot self-describes.
+    assert "INVOICE" in cast(str, doc.get("clean_text") or ""), doc.get("clean_text")
     assert cast(str, doc["file_path"]).startswith("screenshots/"), doc["file_path"]
     stored = FileMapperService.get_documents_path(cast(str, doc["file_path"]))
     assert stored.is_file(), f"file missing on disk: {stored}"

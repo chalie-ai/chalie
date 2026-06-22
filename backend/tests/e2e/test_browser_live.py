@@ -40,5 +40,18 @@ def test_full_browse_flow_on_one_persistent_page() -> None:
     env = _run({"action": "back"})
     assert "example.com" in cast(str, cast(dict[str, object], env["page"])["url"])
 
+    # A screenshot self-describes: the shared document ingest runs the page
+    # through vision and the description rides back inline as data["vision"] —
+    # no separate vision-tool round-trip. The old "use the vision tool" note is
+    # gone, proving the result shape was rewired.
+    env = _run({"action": "screenshot"})
+    assert env["error"] is None, env
+    data = cast(dict[str, object], env["data"])
+    assert data["doc_id"], data
+    assert "note" not in data, data
+    vision = cast(str, data["vision"])
+    assert vision.strip(), "screenshot must carry the page description inline"
+    assert "domain" in vision.lower(), vision
+
     from tools.browser.session import close_session
     close_session(_Mp.uid)
