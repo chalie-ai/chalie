@@ -78,11 +78,15 @@ def _rebuild_schema(conn: sqlite3.Connection) -> None:
         "CREATE INDEX idx_skill_search_entries_skill ON skill_search_entries(skill_id)"
     )
     conn.execute("CREATE VIRTUAL TABLE skill_search_vec USING vec0(embedding float[768])")
+    # Trigram tokenizer → substring matching for the keyword grammar (see
+    # _search.build_keyword_query). The skill title is already indexed as a
+    # 'title' entry, so a keyword matches it as a substring.
     conn.execute("""
         CREATE VIRTUAL TABLE skill_search_fts USING fts5(
             text,
             content='skill_search_entries',
-            content_rowid='id'
+            content_rowid='id',
+            tokenize='trigram'
         )
     """)
     conn.commit()

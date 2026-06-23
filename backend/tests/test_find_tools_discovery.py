@@ -1,23 +1,19 @@
 """Feature tests for find_tools discovery via abilities.sqlite only.
 
-Strategy: monkeypatch _DB_PATH on FindToolsAbility to a tmp_path
-database populated with real embeddings. Real EmbeddingService is used.
-``FindToolsAbility.run()`` discovers against the GLOBAL roster of
-``DISCOVERABLE=True`` abilities (``AbilityRegistry.discoverable_names()``) —
-there is no per-config allowlist; tests bind a stub processor only because
-run() needs a config. Direct ``_query`` and ``_fallback`` calls accept the
-allowlist as a positional arg so RRF ordering can be verified by formula,
-not by semantic luck.
+Strategy: patch _DB_PATH on FindToolsAbility to a tmp_path database populated
+with real embeddings built via the real _create_schema (trigram FTS5) and the
+real EmbeddingService. ``FindToolsAbility.run()`` discovers against the GLOBAL
+roster of ``DISCOVERABLE=True`` abilities (``AbilityRegistry.discoverable_names()``)
+— there is no per-config allowlist; tests bind a stub processor only because
+run() needs a config.
 """
 
 import sqlite3
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
-import numpy as np
 import pytest
 
-from abilities._search import RRF_K
 from abilities.find_tools import FindToolsAbility
 from services.message_processor import MessageProcessor
 from tests.helpers import make_stub_config
@@ -44,7 +40,6 @@ def _make_stub_processor() -> MessageProcessor:
     return proc
 
 
-
 # ---------------------------------------------------------------------------
 # Session-scoped real embeddings
 # ---------------------------------------------------------------------------
@@ -64,13 +59,16 @@ def _real_embeddings() -> dict[str, object]:
 
 
 # ---------------------------------------------------------------------------
-# Helpers
+# Helper
 # ---------------------------------------------------------------------------
 
 def _build_abilities_sqlite(path: Path, abilities: list[dict[str, object]]) -> None:
-    """Build a minimal abilities.sqlite at path.
+    """Build a minimal abilities.sqlite at path using the real schema (trigram FTS).
 
     Each ability dict: {"name": str, "summary": str, "embedding": list[float]}.
+    Mirrors what utils.build_ability_db._insert_ability does: inserts both the
+    summary entry (with embedding) AND a kind='name' FTS-only entry per ability
+    so the keyword path (+docs → chalie_docs) works on trigram substrings.
     """
     from utils.build_ability_db import _create_schema, _load_sqlite_vec
     from services.embedding_utils import pack_embedding
@@ -78,7 +76,7 @@ def _build_abilities_sqlite(path: Path, abilities: list[dict[str, object]]) -> N
     conn = sqlite3.connect(str(path))
     conn.execute("PRAGMA foreign_keys = ON")
     _load_sqlite_vec(conn)
-    _create_schema(conn)
+    _create_schema(conn)  # creates FTS with tokenize='trigram'
 
     for ab in abilities:
         conn.execute(
@@ -86,6 +84,8 @@ def _build_abilities_sqlite(path: Path, abilities: list[dict[str, object]]) -> N
             (ab["name"], ab["summary"]),
         )
         ability_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+
+        # Summary entry: indexed for both vector and keyword search.
         conn.execute(
             "INSERT INTO ability_search_entries(ability_id, text, kind) VALUES (?, ?, ?)",
             (ability_id, ab["summary"], "summary"),
@@ -100,14 +100,22 @@ def _build_abilities_sqlite(path: Path, abilities: list[dict[str, object]]) -> N
             (entry_id, ab["summary"]),
         )
 
+        # Name entry: FTS-only so substring queries like +docs match chalie_docs.
+        conn.execute(
+            "INSERT INTO ability_search_entries(ability_id, text, kind) VALUES (?, ?, 'name')",
+            (ability_id, ab["name"]),
+        )
+        name_entry_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+        conn.execute(
+            "INSERT INTO ability_search_fts(rowid, text) VALUES (?, ?)",
+            (name_entry_id, ab["name"]),
+        )
+
     conn.commit()
     conn.close()
 
 
 def _execute_query(ability: FindToolsAbility, query: str) -> tuple[object, list[str]]:
-    """The query path caps results at ``MAX_QUERY_RESULTS`` internally - there is no
-    caller 'limit' knob (dropped in the v2 select/query split). Discovery filters
-    against the global ``DISCOVERABLE=True`` roster — no per-call allowlist."""
     proc = _make_stub_processor()
     ability.mp = proc
     result = ability.run({"query": query})
@@ -132,17 +140,18 @@ class TestFindToolsDiscovery:
         monkeypatch.setattr(FindToolsAbility, "_DB_PATH", new_db_path)
 
         ability = FindToolsAbility()
-        _, active = _execute_query(ability, "weather forecast")
+        _, active = _execute_query(ability, "+weather")
 
         assert "weather" in active, (
             f"Expected 'weather' in active, got: {active}"
         )
 
-    def test_fts_keyword_path_surfaces_ability(
+    def test_fts_keyword_path_surfaces_ability_by_name(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, _real_embeddings: dict[str, object]
     ) -> None:
-        """Uses the query 'python sandbox' - FTS5 requires ALL query terms; the FTS
-        hit lifts the result above ``MIN_RRF_SCORE`` where a vec-only signal would not.
+        """The '+' prefix requires the term substring-match against the index.
+        The name entry (kind='name') lets '+sandbox' find the ability named 'sandbox'
+        and '+code' find 'code_eval' via trigram substring matching.
         """
         new_db_path = tmp_path / "abilities.sqlite"
         _build_abilities_sqlite(new_db_path, [
@@ -160,52 +169,13 @@ class TestFindToolsDiscovery:
         monkeypatch.setattr(FindToolsAbility, "_DB_PATH", new_db_path)
 
         ability = FindToolsAbility()
-        _, active = _execute_query(ability, "python sandbox")
+        _, active = _execute_query(ability, "+code")
 
         assert "code_eval" in active, (
-            f"Expected 'code_eval' via FTS keyword, got: {active}"
+            f"Expected 'code_eval' via FTS substring match on '+code', got: {active}"
         )
 
-    def test_rrf_merges_vec_and_fts_results(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, _real_embeddings: dict[str, object]
-    ) -> None:
-        """``_query`` does NOT apply the relevance floor (that is layered on in
-        ``_run_query``), so both abilities appear fused with weather ahead of code_eval.
-        """
-        from services.embedding_service import EmbeddingService
-        from services.embedding_utils import pack_embedding
-
-        new_db_path = tmp_path / "abilities.sqlite"
-        _build_abilities_sqlite(new_db_path, [
-            {
-                "name": "weather",
-                "summary": _real_embeddings["weather_summary_text"],
-                "embedding": _real_embeddings["weather_summary"],
-            },
-            {
-                "name": "code_eval",
-                "summary": _real_embeddings["code_summary_text"],
-                "embedding": _real_embeddings["code_summary"],
-            },
-        ])
-        monkeypatch.setattr(FindToolsAbility, "_DB_PATH", new_db_path)
-
-        ability = FindToolsAbility()
-        blob = cast(bytes, pack_embedding(EmbeddingService().generate_embedding("weather forecast")))
-        rows = ability._query("weather forecast", blob, ["weather", "code_eval"])
-
-        names = [r["key"] for r in rows]
-        assert len(names) == len(set(names)), f"Duplicates in merged rows: {names}"
-        assert set(names) == {"weather", "code_eval"}, (
-            f"RRF should fuse both retrievers (weather dual-signal, code_eval via "
-            f"vec). Got: {names}"
-        )
-        assert names[0] == "weather", (
-            f"weather (dual vec+FTS signal) must outrank code_eval (vec only). "
-            f"Got order: {names}"
-        )
-
-    def test_no_duplicates_when_ability_in_both_retrievers(
+    def test_no_duplicates_when_ability_matches_both_name_and_summary(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, _real_embeddings: dict[str, object]
     ) -> None:
         new_db_path = tmp_path / "abilities.sqlite"
@@ -217,7 +187,7 @@ class TestFindToolsDiscovery:
         monkeypatch.setattr(FindToolsAbility, "_DB_PATH", new_db_path)
 
         ability = FindToolsAbility()
-        _, active = _execute_query(ability, "weather forecast")
+        _, active = _execute_query(ability, "+weather")
 
         assert active.count("weather") <= 1, (
             f"Duplicate 'weather' in active: {active}"
@@ -228,7 +198,7 @@ class TestFindToolsDiscovery:
         monkeypatch.setattr(FindToolsAbility, "_DB_PATH", nonexistent)
 
         ability = FindToolsAbility()
-        _, active = _execute_query(ability, "weather forecast")
+        _, active = _execute_query(ability, "+weather")
 
         assert active == []
 
@@ -256,144 +226,10 @@ class TestFindToolsDiscovery:
         monkeypatch.setattr(FindToolsAbility, "_DB_PATH", new_db_path)
 
         ability = FindToolsAbility()
-        _, active = _execute_query(ability, "weather forecast")
+        _, active = _execute_query(ability, "+weather")
 
         assert "memory" not in active, (
             f"'memory' (DISCOVERABLE=False) must be excluded by the global "
             f"discovery roster, got: {active}"
         )
         assert "weather" in active
-
-
-# ---------------------------------------------------------------------------
-# Gap fills
-# ---------------------------------------------------------------------------
-
-
-def _build_stub_db(path: Path, abilities: list[dict[str, object]]) -> None:
-    """Like _build_abilities_sqlite but accepts raw numpy float32 embeddings.
-
-    Each ability dict: {"name": str, "summary": str, "embedding": np.ndarray}
-    """
-    from utils.build_ability_db import _create_schema, _load_sqlite_vec
-    from services.embedding_utils import pack_embedding
-
-    conn = sqlite3.connect(str(path))
-    _load_sqlite_vec(conn)
-    _create_schema(conn)
-    for ab in abilities:
-        conn.execute(
-            "INSERT INTO abilities(name, summary) VALUES (?, ?)",
-            (ab["name"], ab["summary"]),
-        )
-        ability_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
-        conn.execute(
-            "INSERT INTO ability_search_entries(ability_id, text, kind) VALUES (?, ?, ?)",
-            (ability_id, ab["summary"], "summary"),
-        )
-        entry_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
-        conn.execute(
-            "INSERT INTO ability_search_vec(rowid, embedding) VALUES (?, ?)",
-            (entry_id, pack_embedding(cast(np.ndarray, ab["embedding"]).tolist())),
-        )
-        conn.execute(
-            "INSERT INTO ability_search_fts(rowid, text) VALUES (?, ?)",
-            (entry_id, ab["summary"]),
-        )
-    conn.commit()
-    conn.close()
-
-
-class TestFindToolsPhase3Gaps:
-
-    def test_rrf_order_matches_formula_when_vec_and_fts_disagree(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Fixture: ability_a vec rank 1 (no FTS hit); ability_b vec rank 2 with FTS
-        rank 1 ('zetakeyword' in summary).
-
-        RRF formula:
-          score(a) = 1/(RRF_K+1) [vec rank 1]   = 0.0625
-          score(b) = 1/(RRF_K+2) + 1/(RRF_K+1) = 0.0588 + 0.0625 = 0.1213
-
-        ability_b must rank first.
-        """
-        from services.embedding_utils import pack_embedding
-
-        db_path = tmp_path / "rrf_order.sqlite"
-
-        q_vec = np.zeros(768, dtype=np.float32)
-        q_vec[0] = 1.0
-        a_emb = np.zeros(768, dtype=np.float32)
-        a_emb[0] = 0.99
-        a_emb[1] = 0.01   # close to q_vec
-        b_emb = np.zeros(768, dtype=np.float32)
-        b_emb[0] = -0.99
-        b_emb[1] = 0.01   # opposite direction (large vec distance)
-
-        _build_stub_db(db_path, [
-            {"name": "ability_a", "summary": "alphajet engine design",
-             "embedding": a_emb},
-            {"name": "ability_b", "summary": "zetakeyword turbine systems",
-             "embedding": b_emb},
-        ])
-
-        monkeypatch.setattr(FindToolsAbility, "_DB_PATH", db_path)
-        ability = FindToolsAbility()
-        blob = cast(bytes, pack_embedding(q_vec.tolist()))
-        rows = ability._query("zetakeyword", blob, ["ability_a", "ability_b"])
-
-        names = [r["key"] for r in rows]
-        assert len(names) >= 2, f"Expected both abilities in results, got: {names}"
-        assert names[0] == "ability_b", (
-            f"ability_b should rank first (FTS win + vec rank 2 > vec-only rank 1). "
-            f"Got order: {names}. "
-            f"Expected score(b) = {1/(RRF_K+1) + 1/(RRF_K+2):.4f} > "
-            f"score(a) = {1/(RRF_K+1):.4f}"
-        )
-
-    def test_fallback_keyword_search_queries_abilities_sqlite(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        """_fallback queries ability_search_fts in abilities.sqlite (never tool_capability_profiles)."""
-        db_path = tmp_path / "fallback.sqlite"
-        q_vec = np.zeros(768, dtype=np.float32)
-        q_vec[0] = 1.0
-        _build_stub_db(db_path, [
-            {"name": "sandboxer",
-             "summary": "Execute Python code in a restricted sandbox",
-             "embedding": q_vec},
-        ])
-        monkeypatch.setattr(FindToolsAbility, "_DB_PATH", db_path)
-
-        ability = FindToolsAbility()
-        proc = _make_stub_processor()
-        ability.mp = proc
-        ability._fallback("sandbox", ["sandboxer"])
-
-        assert proc.active_tools == ["sandboxer"]
-
-    def test_query_abilities_filters_by_allowlist(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        """_query ignores rows whose name is outside the allowlist, regardless of vec or FTS rank."""
-        from services.embedding_utils import pack_embedding
-
-        db_path = tmp_path / "allowlist.sqlite"
-
-        q_vec = np.zeros(768, dtype=np.float32)
-        q_vec[0] = 1.0
-        a_emb = np.zeros(768, dtype=np.float32)
-        a_emb[0] = 0.99
-        b_emb = np.zeros(768, dtype=np.float32)
-        b_emb[0] = 0.95
-
-        _build_stub_db(db_path, [
-            {"name": "blocked_ability", "summary": "alphajet engine design", "embedding": a_emb},
-            {"name": "allowed_ability", "summary": "alphajet engine design", "embedding": b_emb},
-        ])
-
-        monkeypatch.setattr(FindToolsAbility, "_DB_PATH", db_path)
-        ability = FindToolsAbility()
-        blob = cast(bytes, pack_embedding(q_vec.tolist()))
-        rows = ability._query("alphajet", blob, ["allowed_ability"])
-
-        names = {r["key"] for r in rows}
-        assert names == {"allowed_ability"}, (
-            f"Expected only 'allowed_ability' through the allowlist, got: {names}"
-        )
-

@@ -1,38 +1,27 @@
-"""Feature tests for find_tools v2.
+"""Feature tests for find_tools v2 / v3.
 
-All six tests run against the REAL production stack:
+All tests run against the REAL production stack:
 - Real FindToolsAbility.run() entry point
 - Real EmbeddingService (ONNX, local)
 - Real abilities.sqlite (production DB, not a tmp fixture)
 - Real MessageProcessor stub (flat object.__new__, same pattern as
   test_find_tools_discovery.py / P1 no-subclass rule)
 
-These tests are written BEFORE the v2 implementation exists.
-They MUST FAIL on current (v1) code — that is the required failing
-baseline for the feature.
-
 Discovery roster is GLOBAL
 --------------------------
-find_tools no longer reads a per-config discoverable list — its candidate
-universe is the global set of ``DISCOVERABLE=True`` abilities
-(``AbilityRegistry.discoverable_names()``). The stub processor therefore carries
-no synthetic discovery set; every query runs against the real production roster.
+find_tools reads its candidate universe from the global set of
+``DISCOVERABLE=True`` abilities (``AbilityRegistry.discoverable_names()``).
+The stub processor carries no synthetic discovery set; every query runs against
+the real production roster.
 
-Empirically-pinned floor query
--------------------------------
-Query: 'search the web for news'
-Observed against the real abilities.sqlite + the global discoverable roster:
-  web_search    RRF=0.1250  (dual-signal: vec rank-1 + FTS rank-1)  GOOD
-  read          RRF=0.0588  (single-signal: FTS only)               JUNK
-  web_browse    RRF=0.0556  (single-signal)                         JUNK
-  skill_builder RRF=0.0526  (single-signal)                         JUNK
-  email         RRF=0.0500  (single-signal)                         JUNK
-
-(``news``/``search`` are DISCOVERABLE=False, so they never enter the roster at
-all.) The v2 floor MIN_RRF_SCORE=0.075 retains web_search (0.1250 >= 0.075) and
-evicts every single-signal hit (read 0.0588 <= 0.075 …). On v1 (no floor), the
-single-signal junk IS injected into active_tools — the floor eviction test
-catches that regression.
+Query grammar
+-------------
+The ``query`` param is a keyword grammar, not prose:
+  +term  → required (FTS AND, substring via trigram)
+  -term  → excluded
+  bare   → optional (OR group)
+There is no relevance floor — keyword and vector results are returned
+independently and deduped.
 """
 
 import pytest
@@ -72,39 +61,30 @@ def _run(ability: FindToolsAbility, proc: MessageProcessor, params: dict[str, ob
 
 
 # ---------------------------------------------------------------------------
-# Test 1 — floor eviction (query path)
+# Test 1 — keyword query path injects the target tool
 #
-# EMPIRICALLY PINNED against the real abilities.sqlite + global discoverable roster:
-#   query='search the web for news'
-#   web_search  RRF=0.1250  (dual-signal: vec+FTS) → KEPT  by floor >=0.075
-#   read        RRF=0.0588  (single-signal: FTS only) → EVICTED by floor <=0.075
-#
-# On v1 code: read IS in active_tools (no floor). Test FAILS → failing baseline.
-# On v2 code: read is evicted, web_search stays.     Test PASSES.
+# Under the new grammar, '+web_search' is a required substring term — the
+# trigram index on the name entry finds 'web_search' regardless of its prose
+# summary. The result carries the structured injected body (no legacy tokens).
 # ---------------------------------------------------------------------------
 
-class TestFloorEviction:
+class TestKeywordQueryInjectsTargetTool:
 
-    def test_single_signal_junk_evicted_dual_signal_match_kept(self) -> None:
-        """The MIN_RRF_SCORE=0.075 floor keeps the dual-signal match (web_search,
-        RRF=0.1250) and evicts the single-signal junk (read, RRF=0.0588).
-
-        Current v1 code has no floor — the single-signal hit IS injected → this
-        test FAILS on v1.
-        """
+    def test_required_term_query_injects_matching_tool(self) -> None:
+        """A '+term' required keyword finds the ability whose name contains that
+        substring and injects it. The result body carries the structured
+        ``injected`` list — never legacy prose tokens."""
         ability = FindToolsAbility()
-        # Discovery is global now: every DISCOVERABLE ability is a candidate.
         proc = _stub_proc()
 
-        _run(ability, proc, {"query": "search the web for news"})
+        result = _run(ability, proc, {"query": "+web_search"})
 
         assert "web_search" in proc.active_tools, (
-            "web_search (RRF=0.1250, dual-signal) must survive the floor and "
-            f"appear in active_tools. Got: {proc.active_tools}"
+            "web_search must be injected by a +web_search keyword query. "
+            f"Got: {proc.active_tools}"
         )
-        assert "read" not in proc.active_tools, (
-            "read (RRF=0.0588, single-signal junk) must be evicted by the "
-            f"MIN_RRF_SCORE=0.075 floor. Got: {proc.active_tools}"
+        assert "status=success" in result, (
+            f"Result must be success when a tool is found. result={result!r}"
         )
 
 
@@ -290,26 +270,22 @@ class TestNeitherParam:
 class TestResultFormat:
 
     def test_successful_run_result_contains_required_v3_contract_not_v1(self) -> None:
-        """A successful find_tools call must produce a ToolResult () whose
-        rendered body carries structured ``injected`` rows — each a ``name`` +
-        ``summary`` — and drops the legacy prose/schema dump:
+        """A successful find_tools call must produce a ToolResult whose rendered
+        body carries structured ``injected`` rows — each a ``name`` + ``summary``
+        — and drops the legacy prose/schema dump:
           - Contains 'injected'  (v3 structured success body)
           - Contains 'summary'   (each injected row carries the search tooltip)
           - Names the injected tool 'web_search'
           - Does NOT contain 'input_schema'  (v2 schema dump, dropped in v3)
           - Does NOT contain 'relevance'     (v1 cosmetic field)
           - Does NOT contain 'added_tools'   (v1 result envelope)
-
-        On v1 code: result contains 'added_tools' + 'relevance', no structured
-        'injected'/'summary' body. The contract assertions fail.
         """
         ability = FindToolsAbility()
-        # Discovery is global now. 'search the web for news' is the empirically
-        # pinned dual-signal query: web_search (RRF=0.1250) survives the floor,
-        # so the success body is deterministic.
         proc = _stub_proc()
 
-        result = _run(ability, proc, {"query": "search the web for news"})
+        # '+web_search' is a required substring term that the trigram index on
+        # the name entry resolves deterministically to the web_search ability.
+        result = _run(ability, proc, {"query": "+web_search"})
 
         assert "status=success" in result
         assert "injected" in result, (

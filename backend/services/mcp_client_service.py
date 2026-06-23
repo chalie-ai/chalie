@@ -148,7 +148,8 @@ CREATE VIRTUAL TABLE IF NOT EXISTS mcp_tools_fts USING fts5(
     tool_name,
     summary,
     content='mcp_tools',
-    content_rowid='id'
+    content_rowid='id',
+    tokenize='trigram'
 );
 """
 
@@ -177,7 +178,17 @@ def _open_tools_db() -> sqlite3.Connection:
     conn.row_factory = sqlite3.Row
     conn.executescript(_TOOLS_SCHEMA)
     try:
+        # A pre-trigram FTS table (CREATE IF NOT EXISTS would silently keep it)
+        # cannot do substring matching — drop and rebuild it once from mcp_tools.
+        row = conn.execute(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='mcp_tools_fts'"
+        ).fetchone()
+        if row and "trigram" not in (row["sql"] or "").lower():
+            conn.execute("DROP TABLE mcp_tools_fts")
+            row = None
         conn.executescript(_TOOLS_FTS_SCHEMA)
+        if row is None:
+            conn.execute("INSERT INTO mcp_tools_fts(mcp_tools_fts) VALUES('rebuild')")
     except sqlite3.OperationalError:
         pass  # FTS5 may not be available in all environments
     try:

@@ -5,7 +5,7 @@ from typing import ClassVar, cast
 
 from abilities._params import Keys
 from abilities._result import ToolResult
-from abilities._search import KNN_DEPTH, SearchableAbility
+from abilities._search import KNN_DEPTH, SearchableAbility, build_keyword_query
 from services.embedding_utils import pack_embedding
 from services.file_mapper_service import FileMapperService
 
@@ -17,7 +17,8 @@ class FindToolsAbility(SearchableAbility):
 
     Supports two mutually exclusive selection modes:
     - select: exact case-insensitive match against the effective allow-list.
-    - query: hybrid vec+FTS RRF semantic search with a relevance floor.
+    - query: keyword (trigram FTS5) + vector search run independently; the top
+      results of each are deduped and injected. No score fusion, no floor.
     When both are supplied, select takes precedence and query is ignored.
     """
 
@@ -33,7 +34,12 @@ class FindToolsAbility(SearchableAbility):
             },
             Keys.query: {
                 "type": "string",
-                "description": "Describe what you need.",
+                "description": (
+                    "Keywords describing the capability — NOT a sentence. Prefix a "
+                    "term with + to require it, - to exclude it; a bare term is "
+                    "optional. Substring matching, e.g. +docs matches `chalie_docs`. "
+                    "Example: +calendar +event -delete"
+                ),
             },
         },
         "required": [],
@@ -67,14 +73,9 @@ class FindToolsAbility(SearchableAbility):
     _MCP_DB_PATH: ClassVar[Path] = FileMapperService.get_mcp_tools_db_path()
     _LOG_PREFIX: ClassVar[str] = "[FIND_TOOLS]"
 
-    # Relevance floor: RRF scores below this are single-signal junk.
-    # Dual-signal rank-1 in both vec+FTS = 2×(1/(15+1)) = 0.125.
-    # Single-signal rank-1 = 1/(15+1) = 0.0625.
-    # 0.075 cleanly separates the two populations (empirically verified).
-    MIN_RRF_SCORE: ClassVar[float] = 0.075
-
-    # Maximum number of results returned by the query path after floor filtering.
-    MAX_QUERY_RESULTS: ClassVar[int] = 5
+    # Per-signal cap: up to this many keyword + this many vector results are
+    # deduped into the injected set (so at most 2×_RESULT_CAP distinct tools).
+    _RESULT_CAP: ClassVar[int] = 3
 
     @staticmethod
     def _discoverable_allow() -> set[str]:
@@ -253,27 +254,26 @@ class FindToolsAbility(SearchableAbility):
         return ToolResult.ok(body, injected=len(matched))
 
     def _run_query(self, query: str, allow: list[str], mcp_names: list[str]) -> ToolResult:
-        effective_allow = list(set(allow) | set(mcp_names))
+        fts_match, embed_text = build_keyword_query(query)
 
-        try:
-            from services.embedding_service import EmbeddingService
-            query_embedding = EmbeddingService().generate_embedding(query, mp=self.mp)
-        except Exception as exc:
-            logger.warning("%s Embedding generation failed: %s", self._LOG_PREFIX, exc)
-            return self._fallback(query, effective_allow)
+        blob: bytes | None = None
+        if embed_text:
+            try:
+                from services.embedding_service import EmbeddingService
+                blob = cast("bytes", pack_embedding(EmbeddingService().generate_embedding(embed_text, mp=self.mp)))
+            except Exception as exc:
+                logger.warning("%s Embedding generation failed (keyword-only): %s", self._LOG_PREFIX, exc)
 
-        blob = cast("bytes", pack_embedding(query_embedding))
-        rows = self._query(query, blob, allow)
-        mcp_rows = self._query_mcp(query, blob, self.MAX_QUERY_RESULTS, mcp_names)
-        rows = self._merge_and_truncate(rows + mcp_rows)
+        # Keyword and vector search run independently over both the curated
+        # ability index and the runtime MCP index; the top of each is deduped.
+        vec_rows = self._vec_rows(blob, allow) + self._vec_rows_mcp(blob, mcp_names)
+        fts_rows = self._fts_rows(fts_match, allow) + self._fts_rows_mcp(fts_match, mcp_names)
+        results = self._combine(vec_rows, fts_rows, self._RESULT_CAP)
 
-        # Apply relevance floor then cap to MAX_QUERY_RESULTS.
-        rows = [r for r in rows if cast("float", r["score"]) >= self.MIN_RRF_SCORE][:self.MAX_QUERY_RESULTS]
+        for row in results:
+            logger.info("%s injected %s via %s", self._LOG_PREFIX, row["key"], row["source"])
 
-        for row in rows:
-            logger.info("%s RRF: %s score=%.4f", self._LOG_PREFIX, row["key"], row["score"])
-
-        names = [cast("str", r["key"]) for r in rows]
+        names = [cast("str", r["key"]) for r in results]
         self._append_active(names)
         return ToolResult.ok(self._query_body(names), injected=len(names), query=query)
 
@@ -313,13 +313,13 @@ class FindToolsAbility(SearchableAbility):
             logger.warning("%s Summary lookup failed for %r: %s", self._LOG_PREFIX, name, exc)
             return ""
 
-    def _query(self, query: str, blob: bytes, allow: list[str]) -> list[dict[str, object]]:
-        if not allow:
+    def _vec_rows(self, blob: bytes | None, allow: list[str]) -> "list[tuple[object, object, float]]":
+        if blob is None or not allow:
             return []
         placeholders = ",".join("?" * len(allow))
-        return self._hybrid_search(
-            query, blob, self.MAX_QUERY_RESULTS,
-            vec_sql=f"""
+        return self._vec_search(
+            blob,
+            f"""
                 SELECT a.name, a.summary, v.distance
                 FROM ability_search_vec v
                 JOIN ability_search_entries e ON e.id = v.rowid
@@ -328,7 +328,16 @@ class FindToolsAbility(SearchableAbility):
                   AND a.name IN ({placeholders})
                 ORDER BY v.distance ASC
             """,
-            fts_sql=f"""
+            (blob, KNN_DEPTH, *allow),
+        )
+
+    def _fts_rows(self, fts_match: str, allow: list[str]) -> "list[tuple[object, object, float]]":
+        if not fts_match or not allow:
+            return []
+        placeholders = ",".join("?" * len(allow))
+        return self._fts_search(
+            fts_match,
+            f"""
                 SELECT a.name, a.summary, bm25(ability_search_fts) AS score
                 FROM ability_search_fts
                 JOIN ability_search_entries e ON e.id = ability_search_fts.rowid
@@ -337,81 +346,40 @@ class FindToolsAbility(SearchableAbility):
                   AND a.name IN ({placeholders})
                 ORDER BY score ASC
             """,
-            vec_params=(blob, KNN_DEPTH, *allow),
-            fts_params=(query, *allow),
+            (fts_match, *allow),
         )
 
-    def _query_mcp(self, query: str, blob: bytes, limit: int, mcp_names: list[str]) -> list[dict[str, object]]:
-        if not mcp_names:
+    def _vec_rows_mcp(self, blob: bytes | None, mcp_names: list[str]) -> "list[tuple[object, object, float]]":
+        if blob is None or not mcp_names:
             return []
         placeholders = ",".join("?" * len(mcp_names))
-        vec_sql = f"""
-            SELECT mt.tool_name, mt.summary, v.distance
-            FROM mcp_tools_vec v
-            JOIN mcp_tool_vectors mv ON mv.rowid = v.rowid
-            JOIN mcp_tools mt ON mt.tool_name = mv.tool_name
-            WHERE v.embedding MATCH ? AND k = ? AND mt.tool_name IN ({placeholders})
-            ORDER BY v.distance ASC
-        """
-        fts_sql = f"""
-            SELECT mt.tool_name, mt.summary, bm25(mcp_tools_fts) AS score
-            FROM mcp_tools_fts
-            JOIN mcp_tools mt ON mt.id = mcp_tools_fts.rowid
-            WHERE mcp_tools_fts MATCH ? AND mt.tool_name IN ({placeholders})
-            ORDER BY score ASC
-        """
-        return self._hybrid_search(
-            query, blob, limit,
-            vec_sql=vec_sql,
-            fts_sql=fts_sql,
-            vec_params=(blob, KNN_DEPTH, *mcp_names),
-            fts_params=(query, *mcp_names),
+        return self._vec_search(
+            blob,
+            f"""
+                SELECT mt.tool_name, mt.summary, v.distance
+                FROM mcp_tools_vec v
+                JOIN mcp_tool_vectors mv ON mv.rowid = v.rowid
+                JOIN mcp_tools mt ON mt.tool_name = mv.tool_name
+                WHERE v.embedding MATCH ? AND k = ? AND mt.tool_name IN ({placeholders})
+                ORDER BY v.distance ASC
+            """,
+            (blob, KNN_DEPTH, *mcp_names),
             db_path=self._MCP_DB_PATH,
         )
 
-    @staticmethod
-    def _merge_and_truncate(rows: list[dict[str, object]]) -> list[dict[str, object]]:
-        seen: set[str] = set()
-        merged = []
-        for row in rows:
-            if cast("str", row["key"]) not in seen:
-                seen.add(cast("str", row["key"]))
-                merged.append(row)
-        merged.sort(key=lambda r: cast("float", r["score"]), reverse=True)
-        return merged
-
-    def _fallback(self, query: str, allow: list[str]) -> ToolResult:
-        if not allow:
-            return ToolResult.ok({"injected": [], "not_found": []}, injected=0, query=query)
-
-        mcp_names = [n for n in allow if n.startswith("_mcp_")]
-        ability_names = [n for n in allow if not n.startswith("_mcp_")]
-
-        discovered: list[str] = []
-
-        if ability_names:
-            placeholders = ",".join("?" * len(ability_names))
-            rows = self._fts_only_search(
-                fts_sql=f"""
-                    SELECT a.name
-                    FROM ability_search_fts
-                    JOIN ability_search_entries e ON e.id = ability_search_fts.rowid
-                    JOIN abilities a ON a.id = e.ability_id
-                    WHERE ability_search_fts MATCH ?
-                      AND a.name IN ({placeholders})
-                    GROUP BY a.id
-                    ORDER BY a.name
-                    LIMIT ?
-                """,
-                fts_params=(query, *ability_names, self.MAX_QUERY_RESULTS),
-            )
-            discovered.extend(cast("str", row[0]) for row in rows)
-
-        for row in self._query_mcp(query, b"", self.MAX_QUERY_RESULTS, mcp_names):
-            if cast("str", row["key"]) not in discovered:
-                discovered.append(cast("str", row["key"]))
-
-        discovered = discovered[:self.MAX_QUERY_RESULTS]
-
-        self._append_active(discovered)
-        return ToolResult.ok(self._query_body(discovered), injected=len(discovered), query=query)
+    def _fts_rows_mcp(self, fts_match: str, mcp_names: list[str]) -> "list[tuple[object, object, float]]":
+        if not fts_match or not mcp_names:
+            return []
+        placeholders = ",".join("?" * len(mcp_names))
+        return self._fts_search(
+            fts_match,
+            f"""
+                SELECT mt.tool_name, mt.summary, bm25(mcp_tools_fts) AS score
+                FROM mcp_tools_fts
+                JOIN mcp_tools mt ON mt.id = mcp_tools_fts.rowid
+                WHERE mcp_tools_fts MATCH ? AND mt.tool_name IN ({placeholders})
+                ORDER BY score ASC
+            """,
+            (fts_match, *mcp_names),
+            db_path=self._MCP_DB_PATH,
+        )

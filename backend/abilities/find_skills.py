@@ -1,15 +1,18 @@
 """find_skills — surface curated step-by-step skill playbooks.
 
-Queries skills.sqlite using vec+FTS5 RRF fusion and returns matching skill
-playbooks together with any personalisation rules derived from the user's
-behavioural patterns (written by SkillAssociationService).
+Queries skills.sqlite with the shared keyword (trigram FTS5) + vector search
+and returns matching skill playbooks together with any personalisation rules
+derived from the user's behavioural patterns (written by SkillAssociationService).
+
+The ``query`` is the keyword grammar described in ``_search.build_keyword_query``
+(``+required``, ``-excluded``, bare optional), not prose.
 
 Returns a sealed :class:`abilities._result.ToolResult` (never a wire envelope):
 
-* matches → a JSON list, one row per skill ``{"name": <title>, "score": <rrf>,
-  "content": <full playbook content>, "rules": [{"pattern_name", "rule"}, …]}``
-  with ``meta count=<n>``. The content field is the actionable payload — it IS
-  the playbook the model executes.
+* matches → a JSON list, one row per skill ``{"name": <title>, "source":
+  <"keyword"|"vector">, "content": <full playbook content>, "rules":
+  [{"pattern_name", "rule"}, …]}`` with ``meta count=<n>``. The content field is
+  the actionable payload — it IS the playbook the model executes.
 * zero hits against a HEALTHY index → SUCCESS with ``count=0`` and a body
   ``{"matches": [], "note": "No skill playbooks found … broaden …"}`` — never an
   error.
@@ -17,13 +20,13 @@ Returns a sealed :class:`abilities._result.ToolResult` (never a wire envelope):
 * the index file missing OR a sqlite error while probing it →
   ``err(code="skill-index-error")``. This is the loud guardrail: a corrupt or
   unreadable index must NEVER masquerade as "no skills found".
-* an embedding failure degrades to an FTS-only search whose success carries
-  ``meta degraded=true`` (same row shape) — never silently fewer signals.
+* an embedding failure leaves the keyword signal alone and tags the success
+  ``meta degraded=true`` — never silently fewer signals.
 
-The shared ``_hybrid_search`` / ``_fts_only_search`` helpers in ``_search.py``
-swallow sqlite failures to ``[]`` (a behaviour find_tools depends on). This
-ability therefore probes the index FIRST — past a successful probe, an empty
-list from those helpers means genuinely-no-matches, not a broken index.
+The shared ``_vec_search`` / ``_fts_search`` helpers in ``_search.py`` swallow
+sqlite failures to ``[]`` (a behaviour find_tools depends on). This ability
+therefore probes the index FIRST — past a successful probe, an empty result
+means genuinely-no-matches, not a broken index.
 """
 
 import logging
@@ -33,7 +36,7 @@ from typing import ClassVar, cast
 
 from abilities._params import Keys
 from abilities._result import ToolResult
-from abilities._search import KNN_DEPTH, SearchableAbility
+from abilities._search import KNN_DEPTH, SearchableAbility, build_keyword_query
 from services.embedding_utils import pack_embedding
 from services.file_mapper_service import FileMapperService
 
@@ -74,7 +77,11 @@ class FindSkillsAbility(SearchableAbility):
         "properties": {
             Keys.query: {
                 "type": "string",
-                "description": "Describe the task or topic you need a playbook for.",
+                "description": (
+                    "Keywords describing the task — NOT a sentence. Prefix a term "
+                    "with + to require it, - to exclude it; a bare term is optional. "
+                    "Example: +research +competitor"
+                ),
             },
             Keys.limit: {
                 "type": "integer",
@@ -117,16 +124,20 @@ class FindSkillsAbility(SearchableAbility):
         if (probe_err := self._probe_index()) is not None:
             return probe_err
 
-        try:
-            from services.embedding_service import EmbeddingService  # noqa: PLC0415
-            query_embedding = EmbeddingService().generate_embedding(query, mp=self.mp)
-        except Exception as exc:  # noqa: BLE001
-            logger.warning(f"{self._LOG_PREFIX} embedding failed, degrading to FTS: {exc}")
-            return self._fallback(query, limit)
+        fts_match, embed_text = build_keyword_query(query)
 
-        blob = cast("bytes", pack_embedding(query_embedding))
-        rows = self._query(query, blob, limit)
-        return self._result(query, rows)
+        blob: bytes | None = None
+        degraded = False
+        if embed_text:
+            try:
+                from services.embedding_service import EmbeddingService  # noqa: PLC0415
+                blob = cast("bytes", pack_embedding(EmbeddingService().generate_embedding(embed_text, mp=self.mp)))
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(f"{self._LOG_PREFIX} embedding failed, keyword-only: {exc}")
+                degraded = True
+
+        rows = self._search(fts_match, blob, limit)
+        return self._result(query, rows, degraded=degraded)
 
     def _probe_index(self) -> "ToolResult | None":
         try:
@@ -149,11 +160,10 @@ class FindSkillsAbility(SearchableAbility):
         return None
 
     def _result(self, query: str, rows: list[dict[str, object]], *, degraded: bool = False) -> ToolResult:
-        """Build the success ToolResult from RRF rows (or the degraded fallback).
+        """Build the success ToolResult from the combined keyword+vector rows.
 
         Zero hits past a healthy probe is a genuine no-match SUCCESS, never an
-        error. *degraded* tags the FTS-only fallback so the model knows the
-        embedding signal was unavailable.
+        error. *degraded* tags a run whose embedding signal was unavailable.
         """
         if not rows:
             body = {
@@ -173,15 +183,15 @@ class FindSkillsAbility(SearchableAbility):
         content, rules = self._fetch_detail(cast("int", merged["key"]))
         return {
             "name": merged["label"],
-            "score": merged["score"],
+            "source": merged["source"],
             "content": content,
             "rules": rules,
         }
 
-    def _query(self, query: str, blob: bytes, limit: int) -> list[dict[str, object]]:
-        return self._hybrid_search(
-            query, blob, limit,
-            vec_sql="""
+    def _search(self, fts_match: str, blob: bytes | None, limit: int) -> list[dict[str, object]]:
+        vec_rows = self._vec_search(
+            blob,
+            """
                 SELECT s.id, s.title, v.distance
                 FROM skill_search_vec v
                 JOIN skill_search_entries e ON e.id = v.rowid
@@ -190,7 +200,11 @@ class FindSkillsAbility(SearchableAbility):
                 AND s.enabled = 1
                 ORDER BY v.distance ASC
             """,
-            fts_sql="""
+            (blob, KNN_DEPTH),
+        )
+        fts_rows = self._fts_search(
+            fts_match,
+            """
                 SELECT s.id, s.title, bm25(skill_search_fts) AS score
                 FROM skill_search_fts
                 JOIN skill_search_entries e ON e.id = skill_search_fts.rowid
@@ -199,9 +213,9 @@ class FindSkillsAbility(SearchableAbility):
                 AND s.enabled = 1
                 ORDER BY score ASC
             """,
-            vec_params=(blob, KNN_DEPTH),
-            fts_params=(query,),
+            (fts_match,),
         )
+        return self._combine(vec_rows, fts_rows, limit)
 
     def _fetch_detail(self, skill_id: int) -> tuple[str, list[dict[str, object]]]:
         conn = sqlite3.connect(str(self._DB_PATH))
@@ -219,22 +233,3 @@ class FindSkillsAbility(SearchableAbility):
             conn.close()
 
         return content, [{"pattern_name": r[0], "rule": r[1]} for r in rules]
-
-    def _fallback(self, query: str, limit: int) -> ToolResult:
-        rows = self._fts_only_search(
-            fts_sql="""
-                SELECT s.id, s.title
-                FROM skill_search_fts
-                JOIN skill_search_entries e ON e.id = skill_search_fts.rowid
-                JOIN skills s ON s.id = e.skill_id
-                WHERE skill_search_fts MATCH ?
-                AND s.enabled = 1
-                GROUP BY s.id
-                ORDER BY s.title
-                LIMIT ?
-            """,
-            fts_params=(query, limit),
-        )
-
-        merged = [{"key": r[0], "label": r[1], "score": 0.5} for r in rows]
-        return self._result(query, merged, degraded=True)

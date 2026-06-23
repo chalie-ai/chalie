@@ -128,7 +128,8 @@ def test_match_returns_json_rows_with_playbook_content(skills_db: Path, db: sqli
     assert isinstance(rows, list)
     assert len(rows) >= 1
     for row in rows:
-        assert set(row.keys()) == {"name", "score", "content", "rules"}
+        assert set(row.keys()) == {"name", "source", "content", "rules"}
+        assert row["source"] in {"keyword", "vector"}
         assert isinstance(row["rules"], list)
     count = int(head.split("count=")[1].split(",")[0].rstrip(")]"))
     assert count == len(rows)
@@ -164,7 +165,8 @@ def test_embedding_failure_degrades_to_fts_with_marker(skills_db: Path, db: sqli
     rows = json.loads(_body(out))
     assert isinstance(rows, list) and len(rows) >= 1
     for row in rows:
-        assert set(row.keys()) == {"name", "score", "content", "rules"}
+        assert set(row.keys()) == {"name", "source", "content", "rules"}
+        assert row["source"] in {"keyword", "vector"}
     mine = next((r for r in rows if r["name"] == title), None)
     assert mine is not None and mine["content"] == content
 

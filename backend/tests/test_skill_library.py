@@ -1,5 +1,3 @@
-from typing import cast
-
 import json
 
 import pytest
@@ -8,94 +6,7 @@ pytestmark = pytest.mark.unit
 
 
 # ---------------------------------------------------------------------------
-# 1. rrf_merge — pure RRF fusion, no IO
-# ---------------------------------------------------------------------------
-
-
-class TestRrfMerge:
-    """rrf_merge(vec_rows, fts_rows, k) returns a merged ranked list."""
-
-    def test_vec_and_fts_rows_both_appear_in_result(self) -> None:
-        from abilities._search import SearchableAbility
-
-        vec_rows = cast("list[tuple[object, ...]]", [(1, "Research Framework", 0.12)])
-        fts_rows = cast("list[tuple[object, ...]]", [(2, "Project Planning", -3.5)])
-
-        result = SearchableAbility.rrf_merge(vec_rows, fts_rows, k=5)
-
-        keys = {r["key"] for r in result}
-        assert keys == {1, 2}
-
-    def test_item_in_both_retrievers_appears_exactly_once(self) -> None:
-        from abilities._search import SearchableAbility
-
-        vec_rows = cast("list[tuple[object, ...]]", [(1, "Research Framework", 0.10)])
-        fts_rows = cast("list[tuple[object, ...]]", [(1, "Research Framework", -4.2)])
-
-        result = SearchableAbility.rrf_merge(vec_rows, fts_rows, k=5)
-
-        keys = [r["key"] for r in result]
-        assert keys.count(1) == 1
-
-    def test_item_in_both_retrievers_has_higher_score_than_single_retriever(self) -> None:
-        from abilities._search import SearchableAbility
-
-        vec_rows = cast("list[tuple[object, ...]]", [(1, "Skill A", 0.05), (2, "Skill B", 0.15)])
-        fts_rows = cast("list[tuple[object, ...]]", [(2, "Skill B", -5.0)])
-
-        result = SearchableAbility.rrf_merge(vec_rows, fts_rows, k=5)
-
-        assert result[0]["key"] == 2
-
-    def test_cap_at_k_limits_output_size(self) -> None:
-        from abilities._search import SearchableAbility
-
-        vec_rows = cast("list[tuple[object, ...]]", [(i, f"Skill {i}", float(i) * 0.01) for i in range(10)])
-
-        result = SearchableAbility.rrf_merge(vec_rows, [], k=3)
-
-        assert len(result) == 3
-
-    def test_empty_inputs_return_empty_list(self) -> None:
-        from abilities._search import SearchableAbility
-
-        assert SearchableAbility.rrf_merge([], [], k=5) == []
-
-    def test_fts_only_path_returns_results(self) -> None:
-        from abilities._search import SearchableAbility
-
-        fts_rows = cast("list[tuple[object, ...]]", [(7, "Meal Planning", -2.1), (8, "Fitness Routine", -3.8)])
-        result = SearchableAbility.rrf_merge([], fts_rows, k=5)
-
-        assert {r["key"] for r in result} == {7, 8}
-
-    def test_result_items_contain_required_keys(self) -> None:
-        from abilities._search import SearchableAbility
-
-        result = SearchableAbility.rrf_merge(
-            cast("list[tuple[object, ...]]", [(1, "A", 0.1)]),
-            cast("list[tuple[object, ...]]", [(2, "B", -4.0)]),
-            k=5,
-        )
-
-        for item in result:
-            assert "key" in item
-            assert "label" in item
-            assert "score" in item
-
-    def test_best_distance_wins_when_item_appears_multiple_times_in_vec(self) -> None:
-        from abilities._search import SearchableAbility
-
-        vec_rows = cast("list[tuple[object, ...]]", [(1, "Skill A", 0.50), (1, "Skill A", 0.05)])
-
-        result = SearchableAbility.rrf_merge(vec_rows, [], k=5)
-
-        assert [r["key"] for r in result].count(1) == 1
-        assert result[0]["key"] == 1
-
-
-# ---------------------------------------------------------------------------
-# 2. _parse_associations — pure JSON parser, no IO
+# _parse_associations — pure JSON parser, no IO
 # ---------------------------------------------------------------------------
 
 

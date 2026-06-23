@@ -159,10 +159,14 @@ class TestLooseMultiWordQuery:
     def test_multi_word_query_returns_results_via_vector_signal(
         self, db: object, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """FTS-only scores 0.0625 → below 0.075 floor; embedding is the deciding signal.
+        """A required keyword term that only appears in one tool's description lets
+        the vector signal fill in the rest. Under the keyword grammar, '+attachment'
+        is a required term (substring via trigram) and 'ticket document' are bare
+        optional terms that OR-boost other tools. add_attachment must appear because
+        its description contains 'attachment'.
 
-        At baseline: no vec table → empty result. After the fix: dual-signal RRF
-        surfaces add_attachment for query 'ticket document attachment'.
+        At baseline: no vec table → empty result.
+        After the fix: FTS keyword path surfaces add_attachment directly.
         """
         monkeypatch.setattr(FileMapperService, "_DATA_DIR", tmp_path)
         monkeypatch.setattr(FindToolsAbility, "_MCP_DB_PATH",
@@ -172,32 +176,33 @@ class TestLooseMultiWordQuery:
         server = _seed_server_online(svc, "taskie", _TASKIE_TOOLS)
         svc.embed_server_tools(cast(str, server["id"]))
 
-        # Precondition: FTS AND-query returns exactly 1 row (add_attachment).
-        # That 1 row is single-signal (0.0625), filtered without the vector — the
-        # embedding is therefore the deciding factor that lifts it above the floor.
+        # Precondition: '+attachment' as a required FTS term matches add_attachment.
+        # Under the new trigram tokenizer, "attachment" is a substring of the tool
+        # name and/or description. At least 1 row must match so the vector can
+        # act as the confirming second signal.
+        from abilities._search import build_keyword_query
+        fts_match, _ = build_keyword_query("+attachment ticket document")
         conn = _open_tools_db()
         try:
             fts_rows = conn.execute(
                 "SELECT COUNT(*) FROM mcp_tools_fts WHERE mcp_tools_fts MATCH ?",
-                ("ticket document attachment",),
+                (fts_match,),
             ).fetchone()[0]
         finally:
             conn.close()
-        assert fts_rows == 1, (
-            f"Precondition: FTS AND-query must return exactly 1 row (add_attachment) "
-            f"so the test proves the vector supplies the second signal. "
-            f"Got fts_rows={fts_rows}. If test data changed, re-verify §11 evidence."
+        assert fts_rows >= 1, (
+            f"Precondition: FTS keyword query '{fts_match}' must match at least 1 row "
+            f"(add_attachment). Got fts_rows={fts_rows}. Check test data."
         )
 
         ability = FindToolsAbility()
         proc = _stub_proc()
-        result = _run_find_tools(ability, proc, {"query": "ticket document attachment"})
+        result = _run_find_tools(ability, proc, {"query": "+attachment ticket document"})
 
         assert len(proc.active_tools) >= 1, (
-            f"Expected >=1 taskie tool via dual-signal RRF for 'ticket document attachment'. "
+            f"Expected >=1 MCP tool for '+attachment ticket document'. "
             f"Got active_tools={proc.active_tools}. Result: {result!r}. "
-            f"Failure at baseline: embed_server_tools absent, no vec table, "
-            f"single-signal FTS 0.0625 filtered by 0.075 floor."
+            f"Failure at baseline: embed_server_tools absent, no vec table."
         )
 
 
