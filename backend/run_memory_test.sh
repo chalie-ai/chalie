@@ -1,5 +1,5 @@
 #!/bin/bash
-# Helper script to run memory pipeline tests from remote server
+# Helper script to run the memory pipeline tests inside the application container
 # Usage: ./run_memory_test.sh
 
 set -e
@@ -18,8 +18,8 @@ echo ""
 # Check if running inside docker container
 if [ ! -f /.dockerenv ]; then
     echo -e "${YELLOW}Not running inside Docker container${NC}"
-    echo "Attempting to execute inside python-agent container..."
-    docker exec -it python-agent bash -c "cd /app && ./run_memory_test.sh"
+    echo "Attempting to execute inside the application container (override with CHALIE_CONTAINER)..."
+    docker exec -it "${CHALIE_CONTAINER:-chalie}" bash -c "cd /app && ./run_memory_test.sh"
     exit 0
 fi
 

@@ -11,7 +11,7 @@ jobs:
       - name: Checkout chalie-web
         uses: actions/checkout@v4
         with:
-          repository: chalie-ai/chalie-web
+          repository: dylangrech92/chalie-web
           token: ${{ secrets.CHALIE_WEB_TOKEN }}
 
       - name: Setup Node

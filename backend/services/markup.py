@@ -1,28 +1,15 @@
 """HTML sanitisation primitives for Chalie's structured response format.
 
-The LLM emits a strict subset of HTML. The backend sanitises every assistant
-response through ``nh3`` (Rust binding to the OWASP-aligned ``ammonia``
-library) before persisting / sending to the frontend. That single chokepoint
-replaces every hand-rolled tokenizer, regex tag-matcher, and markdown
-converter that lived here previously.
+The backend sanitises every assistant response through ``nh3`` before
+persisting/sending to the frontend.
 
-Allowlist (11 tags total):
-- LLM-emittable formatting (8): b, i, u, h1, code, p, ul, li
-- Rich-media pairing (1): span (id attribute only — used by RichMediaParser)
-- Programmatic only (3): img, actions, action
+Security: the LLM is NOT allowed to emit ``<a>`` (URLs are linkified by the
+frontend), so no arbitrary anchors can be injected into the rendered DOM.
 
-The LLM is NOT allowed to emit ``<a>``. Plain-text URLs in the LLM's
-response are linkified by the frontend so the model cannot inject
-arbitrary anchors into the rendered DOM.
-
-``<span id="tool_N">`` is allowed because the rich-media protocol requires
-these tags to survive the sanitisation pass so the parser can read them at
-the WS-send boundary. Only the ``id`` attribute is permitted; ``class``,
-``style``, ``onclick``, and all other span attributes are stripped.
-
-``sanitize()`` is the only entry point for LLM output. It accepts mixed
-plain text + allowlisted HTML and passes both through unchanged — text
-nodes are valid HTML, so no wrapping or escaping heuristics are needed.
+``<span id="tool_N">`` survives sanitisation because the rich-media protocol
+requires these tags at the WS-send boundary; only the ``id`` attribute is
+permitted — ``class``, ``style``, ``onclick``, and all other span attributes
+are stripped.
 """
 from __future__ import annotations
 
@@ -69,11 +56,7 @@ _MAX_CONTENT_LEN = 5_000_000
 
 
 def sanitize(html: str | None) -> str:
-    """Strip every tag / attribute outside the allowlist. Returns clean HTML.
-
-    Single chokepoint for LLM-emitted markup. Empty / ``None`` input returns
-    ``""`` so downstream code never has to nil-check.
-    """
+    """Single chokepoint for LLM-emitted markup. Empty/None input returns ""."""
     if not html:
         return ""
     bounded = html if len(html) <= _MAX_CONTENT_LEN else html[:_MAX_CONTENT_LEN]
@@ -86,13 +69,9 @@ def sanitize(html: str | None) -> str:
     )
 
 
-def actions_to_xml(actions: list[dict]) -> str:
-    """Render programmatic action buttons as XML.
-
-    Each action dict requires ``label`` and ``value`` keys. The harness
-    builds these — they bypass the LLM entirely — so the output here is
-    fed straight to ``sanitize()`` alongside any LLM body.
-    """
+def actions_to_xml(actions: list[dict[str, object]]) -> str:
+    """Action dicts are built by the harness which bypasses the LLM, so
+    output feeds straight to ``sanitize()`` alongside any LLM body."""
     if not actions:
         return ""
     parts = ["<actions>"]
@@ -108,8 +87,8 @@ def actions_to_xml(actions: list[dict]) -> str:
     return "".join(parts)
 
 
+
 def escape_attr(value: str) -> str:
-    """Escape value for use inside double-quoted XML attribute."""
     if not value:
         return ""
     return (
@@ -120,17 +99,62 @@ def escape_attr(value: str) -> str:
     )
 
 
-def extract_plaintext(html: str) -> str:
-    """Strip all tags + drop ``<actions>`` subtree, return spoken plain text.
+# ── Heuristic markdown fallback ───────────────────────────────────────────────
+#
+# The system prompt instructs the LLM to emit Chalie's HTML subset directly, but
+# models still occasionally leak the most common markdown emphasis markers. This
+# is a best-effort, INLINE-ONLY fallback applied to the final user-facing text
+# before it reaches ``sanitize()``. It rewrites only the handful of markers that
+# map cleanly onto allowlisted tags and leaves everything else untouched (HTML
+# the model already emitted, unrecognised markdown, block constructs, links). It
+# is deliberately NOT a markdown parser.
+#
+#   **bold**   →  <b>bold</b>
+#   *italic*   →  <i>italic</i>
+#   _under_    →  <u>under</u>      (Chalie maps ``_`` to underline, not italic)
+#   `code`     →  <code>code</code>
 
-    Used by the TTS / speak button. ``<actions>`` blocks are dropped entirely
-    via ``clean_content_tags`` — UI affordances do not belong in spoken
-    output. Every other tag (``<p>``, ``<b>``, ``<img>``, …) collapses to
-    its inner text content; image ``alt`` is *not* spoken (it's an a11y
-    label for the visual surface, not narration). Entities are decoded so
-    the speaker says ``cats & dogs``, not ``cats &amp; dogs``. Whitespace
-    is collapsed.
-    """
+# Inline code is masked before emphasis runs so markers INSIDE a code span (e.g.
+# ``a_b`` or ``x**y``) survive verbatim and are not rewritten.
+_CODE_SPAN_RE = re.compile(r"`([^`\n]+?)`")
+# Bold before italic: the ``**`` pair must be consumed before the single-``*``
+# rule sees it. ``(?=\S)`` / ``(?<=\S)`` forbid leading / trailing whitespace so
+# a stray ``** `` or a multiplication ``2 * 3`` is left alone.
+_BOLD_RE = re.compile(r"\*\*(?=\S)(.+?)(?<=\S)\*\*", re.DOTALL)
+_ITALIC_RE = re.compile(r"(?<!\*)\*(?=\S)([^*\n]+?)(?<=\S)\*(?!\*)")
+# Underline markers must not sit between word chars, so identifiers like
+# ``snake_case`` and ``__dunder__`` are never mangled.
+_UNDERLINE_RE = re.compile(r"(?<!\w)_(?=\S)([^_\n]+?)(?<=\S)_(?!\w)")
+_CODE_TOKEN_RE = re.compile("\x00C(\\d+)\x00")
+
+
+def markdown_to_html(text: str | None) -> str:
+    """Best-effort inline markdown→HTML pre-pass for ``sanitize()`` when the LLM leaks emphasis markers. NOT a full markdown parser."""
+    if not text:
+        return ""
+
+    # 1. Mask inline code so emphasis markers inside it are preserved verbatim.
+    code_spans: list[str] = []
+
+    def _stash(m: re.Match[str]) -> str:
+        code_spans.append(m.group(1))
+        return f"\x00C{len(code_spans) - 1}\x00"
+
+    out = _CODE_SPAN_RE.sub(_stash, text)
+
+    # 2. Emphasis — bold before italic so ``**`` is not eaten by the ``*`` rule.
+    out = _BOLD_RE.sub(r"<b>\1</b>", out)
+    out = _ITALIC_RE.sub(r"<i>\1</i>", out)
+    out = _UNDERLINE_RE.sub(r"<u>\1</u>", out)
+
+    # 3. Restore masked code spans as <code> tags.
+    return _CODE_TOKEN_RE.sub(
+        lambda m: f"<code>{code_spans[int(m.group(1))]}</code>", out
+    )
+
+
+def extract_plaintext(html: str) -> str:
+    """Used by the TTS / speak button. ``<actions>`` blocks are dropped via ``clean_content_tags`` because UI affordances don't belong in spoken output."""
     if not html:
         return ""
     spaced = _BLOCK_BOUNDARY_RE.sub(" ", html)

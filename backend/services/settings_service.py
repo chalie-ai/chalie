@@ -1,37 +1,22 @@
-"""Settings service — manages application-wide configuration in database."""
+
 
 import logging
 import secrets
-from typing import Optional
+from typing import Optional, cast
 
-from services.database_service import text
+from services.database_service import DatabaseService, text
 
 logger = logging.getLogger(__name__)
 
 
 class SettingsService:
-    """Manages application settings stored in database."""
 
-    def __init__(self, database_service):
-        """Initialise the service with a shared database connection.
-
-        Args:
-            database_service: Active database service instance used for all
-                settings reads and writes.
-        """
+    def __init__(self, database_service: DatabaseService) -> None:
         self.db = database_service
 
     def get(self, key: str) -> Optional[str]:
-        """Get a setting value by key.
-
-        Sensitive settings are decrypted via the VaultService (AES-256-GCM).
+        """Sensitive settings are decrypted via the VaultService (AES-256-GCM).
         The vault must be unlocked before sensitive settings can be read.
-
-        Args:
-            key: The settings key to look up.
-
-        Returns:
-            The plaintext setting value, or ``None`` if the key does not exist.
 
         Raises:
             :exc:`~services.vault_service.VaultLockedError`: If the setting is
@@ -52,26 +37,14 @@ class SettingsService:
                 import base64
                 from services.vault_service import get_vault_service
                 return get_vault_service().decrypt_str(base64.b64decode(row[1]))
-            return row[0]
+            return cast(str | None, row[0])
 
-    def set(self, key: str, value: str, value_type: str = 'string', description: str = None) -> str:
-        """Create or update a setting.
-
-        Sensitive settings are encrypted via the VaultService (AES-256-GCM)
+    def set(self, key: str, value: str, value_type: str = 'string', description: str | None = None) -> str:
+        """Sensitive settings are encrypted via the VaultService (AES-256-GCM)
         and stored as base64-encoded blobs in ``encrypted_value``.  Non-sensitive
         settings are stored as plain text in ``value``.
 
         The vault must be unlocked before a sensitive setting can be written.
-
-        Args:
-            key:         The settings key to create or update.
-            value:       The plaintext value to store.
-            value_type:  SQLite type hint stored alongside the row (default
-                         ``'string'``).  Used only on INSERT.
-            description: Optional human-readable description stored on INSERT.
-
-        Returns:
-            The original *value* string (unchanged).
 
         Raises:
             :exc:`~services.vault_service.VaultLockedError`: If the setting is
@@ -118,7 +91,6 @@ class SettingsService:
         return value
 
     def delete(self, key: str) -> bool:
-        """Delete a setting."""
         with self.db.get_session() as session:
             session.execute(
                 text("DELETE FROM settings WHERE key = :key"),
@@ -128,12 +100,7 @@ class SettingsService:
         return True
 
     def get_api_key_or_generate(self) -> str:
-        """
-        Get API key from settings, or generate and store a new one if not present.
-
-        Returns:
-            API key string
-        """
+        """Generates and stores a new API key in the database if one does not already exist."""
         # Try to get existing key
         existing = self.get('api_key')
         if existing:

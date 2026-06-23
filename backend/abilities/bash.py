@@ -1,34 +1,40 @@
-"""BashAbility — safe shell command execution with LLM classification and heuristic overrides."""
+"""BashAbility — safe shell command execution with command-derived risk classification."""
 
-import json
 import logging
 import os
 import re
 import shlex
 import subprocess
 from pathlib import Path
-from typing import ClassVar
+from typing import TYPE_CHECKING, ClassVar, cast
 
-from abilities._base import Ability
+if TYPE_CHECKING:
+    from typing import TypedDict
+
+    class _TruncMeta(TypedDict, total=False):
+        truncated: bool
+
+from abilities._ability import Ability
+from abilities._params import Keys
+from abilities._result import ToolResult, truncate
 
 logger = logging.getLogger(__name__)
 
-_MAX_OUTPUT_BYTES = 100 * 1024
+_MAX_OUTPUT_CHARS = 100 * 1024
 _TRUNCATION_NOTICE = "... (output truncated at 100KB)"
 _DEFAULT_TIMEOUT_S = 30
 _MAX_TIMEOUT_S = 300
 _NONPRINTABLE_THRESHOLD = 0.10
 _EMPTY_SUCCESS_MSG = "(no output — command succeeded silently)"
+# Single source of truth for where bash runs — the same value the model is told
+# in get_summary() and the cwd _run_command actually uses, so the two can never
+# drift.
+_WORKING_DIR = Path.home()
 
-_ACTION_SEVERITY: dict[str, int] = {
-    "read": 0,
-    "execute": 1,
-    "modify_file": 2,
-    "web_fetch": 3,
-    "installation": 4,
-    "remote_execution": 5,
-    "compound": 6,
-}
+# The risk class the policy gate keys on. Derived from the COMMAND (classify_action)
+# — never self-declared by the model. ``read`` is the benign inspection floor a
+# command falls back to when no heavier pattern matches.
+_DEFAULT_ACTION = "read"
 
 _REMOTE_WORDS: frozenset[str] = frozenset({
     "ssh", "scp", "rsync", "kubectl", "docker",
@@ -105,20 +111,7 @@ _SECRET_PREFIXES: tuple[str, ...] = ("ANTHROPIC_", "OPENAI_")
 class BashAbility(Ability):
     """Execute shell commands via ``bash -c`` with policy-gated classification."""
 
-    NAME = "bash"
-    TIMEOUT = _MAX_TIMEOUT_S
-    POLICY_CATEGORY = "System"
-    POLICY_LABELS: ClassVar[dict[str, str]] = {
-        "read": "Read-only commands",
-        "execute": "Run scripts/binaries",
-        "modify_file": "File modifications",
-        "web_fetch": "Network commands",
-        "installation": "Package management",
-        "remote_execution": "Remote access",
-        "compound": "Multi-command chains",
-    }
-    SEARCH_TOOLTIP = "Shell command execution"
-    SUMMARY = (
+    _SUMMARY: ClassVar[str] = (
         "Run a shell command via bash. "
         "DO USE bash when you need to perform CLI actions which are NOT "
         "possible via any other available tool. "
@@ -128,20 +121,40 @@ class BashAbility(Ability):
         "file_permissions, search_files). "
         "Prefer document over direct file tools when the file is within your workspace."
     )
-    EXAMPLES: ClassVar[list[str]] = [
-        "run this bash script for me",
-        "execute ffmpeg -i input.mp4 output.gif to convert this video",
-        "check what process is listening on port 8080",
-        "run git status in my project directory",
-        "what does uname -a return on this machine",
-        "run the deploy script at /home/user/scripts/deploy.sh",
-        "compress the /tmp/logs folder into a tarball",
-        "count the total lines of Python code under /app",
-    ]
-    INPUT_SCHEMA: ClassVar[dict] = {
+
+    def get_name(self) -> str:
+        return "bash"
+
+    def get_search_tooltip(self) -> str:
+        return "Shell command execution"
+
+    def get_summary(self) -> str:
+        # At build/introspection time (mp is None) return the bare base text so
+        # the search index + SHA map stay machine-independent. On a live request
+        # append the working directory so the model knows where commands run.
+        if self.mp is None:
+            return self._SUMMARY
+        return (
+            self._SUMMARY
+            + f" Working directory: {_WORKING_DIR}. Use absolute paths or cd to operate elsewhere."
+        )
+
+    def get_examples(self) -> list[str]:
+        return [
+            "run this bash script for me",
+            "execute ffmpeg -i input.mp4 output.gif to convert this video",
+            "check what process is listening on port 8080",
+            "run git status in my project directory",
+            "what does uname -a return on this machine",
+            "compress the /tmp/logs folder into a tarball",
+            "count the total lines of Python code under /app",
+            "ssh into server/machine",
+        ]
+
+    _PARAMETERS: ClassVar[dict[str, object]] = {
         "type": "object",
         "properties": {
-            "command": {
+            Keys.command: {
                 "type": "string",
                 "description": (
                     "Shell command to run via bash -c. "
@@ -151,29 +164,7 @@ class BashAbility(Ability):
                     "web_download for downloads, document for saving notes."
                 ),
             },
-            "action": {
-                "type": "string",
-                "enum": [
-                    "read",
-                    "execute",
-                    "modify_file",
-                    "web_fetch",
-                    "installation",
-                    "remote_execution",
-                    "compound",
-                ],
-                "description": (
-                    "Classify the command: "
-                    "read = inspection only (ls, cat, ps, df), "
-                    "execute = run a script or binary, "
-                    "modify_file = file changes (rm, mv, cp, mkdir, tee, redirects), "
-                    "web_fetch = network commands (curl, wget), "
-                    "installation = package management (pip, npm, brew, apt), "
-                    "remote_execution = remote access (ssh, docker, kubectl), "
-                    "compound = piped or chained commands."
-                ),
-            },
-            "timeout_s": {
+            Keys.timeout_s: {
                 "type": "integer",
                 "description": (
                     "Timeout in seconds (default 30, max 300). "
@@ -181,54 +172,50 @@ class BashAbility(Ability):
                 ),
             },
         },
-        "required": ["command", "action"],
+        "required": [Keys.command],
     }
 
-    def get_description(self) -> str:
-        cwd = Path.home()
-        return self.SUMMARY + f"Working directory: {cwd}. Use absolute paths or cd to operate elsewhere."
+    def get_parameters(self) -> dict[str, object]:
+        return self._PARAMETERS
 
-    def pre_dispatch(self, params: dict) -> dict:
-        """Escalate the LLM's self-classification via heuristic inspection."""
-        command = (params.get("command") or "").strip()
-        if not command:
-            return params
-        llm_action = params.get("action", "execute")
-        resolved = _resolve_action(command, llm_action)
-        if resolved != llm_action:
-            return {**params, "action": resolved}
-        return params
+    def classify_action(self, params: dict[str, object]) -> str:
+        """Derive the policy risk class from the COMMAND itself.
 
-    def execute(self, channel: str, params: dict, telemetry: dict | None) -> dict:
-        command = (params.get("command") or "").strip()
+        The dispatcher calls this before the policy gate and keys the
+        ``bash.<action>`` permission on the result, so the model can NEVER demote
+        a destructive command to a benign class by self-declaring one — there is
+        no model-supplied action to trust. Returns ``read`` (the benign
+        inspection floor) when no heavier pattern matches.
+        """
+        command = (cast(str, params.get(Keys.command)) or "").strip()
         if not command:
-            return {"text": "Error: command is required."}
+            return _DEFAULT_ACTION
+        return _classify_heuristic(command) or _DEFAULT_ACTION
+
+    def run(self, params: dict[str, object]) -> ToolResult:
+        command = (cast(str, params.get(Keys.command)) or "").strip()
+        if not command:
+            return ToolResult.err(
+                "command is required.",
+                code="missing-command",
+                hint="pass the shell command to run in 'command'.",
+            )
 
         destructive_error = _check_destructive(command)
         if destructive_error:
-            return {"text": destructive_error}
+            return ToolResult.err(
+                destructive_error,
+                code="destructive-blocked",
+                hint="this command is blocked outright; it cannot be run.",
+            )
 
-        timeout_s = _resolve_timeout(params.get("timeout_s"))
+        timeout_s = _resolve_timeout(cast("int | None", params.get(Keys.timeout_s)))
         safe_env = _build_safe_env()
 
         return _run_command(command, timeout_s, safe_env)
 
 
 # ── Classification ─────────────────────────────────────────────────────────
-
-
-def _resolve_action(command: str, llm_action: str) -> str:
-    """Apply heuristic overrides — can only ESCALATE, never demote."""
-    heuristic = _classify_heuristic(command)
-    if heuristic is None:
-        return llm_action
-
-    llm_severity = _ACTION_SEVERITY.get(llm_action, 1)
-    heuristic_severity = _ACTION_SEVERITY.get(heuristic, 1)
-
-    if heuristic_severity > llm_severity:
-        return heuristic
-    return llm_action
 
 
 def _classify_heuristic(command: str) -> str | None:
@@ -266,7 +253,6 @@ def _classify_heuristic(command: str) -> str | None:
 
 
 def _has_unquoted(command: str, needle: str) -> bool:
-    """Check if *needle* appears in *command* outside of quoted strings."""
     in_single = False
     in_double = False
     i = 0
@@ -323,66 +309,70 @@ def _resolve_timeout(timeout_param: int | None) -> int:
 # ── Subprocess execution ──────────────────────────────────────────────────
 
 
-def _run_command(command: str, timeout_s: int, env: dict) -> dict:
+def _run_command(command: str, timeout_s: int, env: dict[str, str]) -> ToolResult:
     try:
         proc = subprocess.run(
             ["bash", "-c", command],
             capture_output=True,
             timeout=timeout_s,
-            cwd=str(Path.home()),
+            cwd=str(_WORKING_DIR),
             env=env,
         )
     except subprocess.TimeoutExpired:
-        return {"text": json.dumps({
-            "error": f"Command timed out after {timeout_s}s and was killed.",
-            "returncode": -1,
-            "truncated": False,
-        })}
+        return ToolResult.err(
+            f"Command timed out after {timeout_s}s and was killed.",
+            code="command-timeout",
+            hint="raise timeout_s (max 300) or run a shorter command.",
+        )
     except OSError as exc:
-        return {"text": f"Error: failed to execute command: {exc}"}
+        return ToolResult.err(
+            f"Failed to execute command: {exc}",
+            code="exec-failed",
+        )
 
     stdout_raw = proc.stdout or b""
     stderr_raw = proc.stderr or b""
 
     if _is_binary(stdout_raw) or _is_binary(stderr_raw):
-        total = len(stdout_raw) + len(stderr_raw)
-        return {"text": json.dumps({
-            "stdout": f"(binary output, {len(stdout_raw)} bytes)",
-            "stderr": f"(binary output, {len(stderr_raw)} bytes)" if stderr_raw else "",
-            "returncode": proc.returncode,
-            "truncated": False,
-            "binary": True,
-            "total_bytes": total,
-        })}
-
-    truncated = False
-    combined_len = len(stdout_raw) + len(stderr_raw)
-    if combined_len > _MAX_OUTPUT_BYTES:
-        truncated = True
-        budget = _MAX_OUTPUT_BYTES
-        stdout_budget = min(len(stdout_raw), budget)
-        stderr_budget = min(len(stderr_raw), budget - stdout_budget)
-        stdout_raw = stdout_raw[:stdout_budget]
-        stderr_raw = stderr_raw[:stderr_budget]
+        return ToolResult.ok(
+            {
+                "exit_code": proc.returncode,
+                "stdout": f"(binary output, {len(stdout_raw)} bytes)",
+                "stderr": f"(binary output, {len(stderr_raw)} bytes)" if stderr_raw else "",
+                "binary": True,
+            },
+            total_bytes=len(stdout_raw) + len(stderr_raw),
+        )
 
     stdout_str = stdout_raw.decode("utf-8", errors="replace")
     stderr_str = stderr_raw.decode("utf-8", errors="replace")
 
-    if truncated:
-        if stdout_str:
-            stdout_str += _TRUNCATION_NOTICE
-        elif stderr_str:
+    # Clip combined output to the budget via the shared truncate primitive, giving
+    # stdout priority and reporting clipping uniformly through meta truncated=true.
+    truncated = False
+    stdout_str, clipped_out = truncate(stdout_str, _MAX_OUTPUT_CHARS)
+    if clipped_out:
+        truncated = True
+        stdout_str += _TRUNCATION_NOTICE
+        stderr_str = ""
+    else:
+        stderr_str, clipped_err = truncate(stderr_str, _MAX_OUTPUT_CHARS - len(stdout_str))
+        if clipped_err:
+            truncated = True
             stderr_str += _TRUNCATION_NOTICE
 
     if not stdout_str and not stderr_str and proc.returncode == 0:
         stdout_str = _EMPTY_SUCCESS_MSG
 
-    return {"text": json.dumps({
-        "stdout": stdout_str,
-        "stderr": stderr_str,
-        "returncode": proc.returncode,
-        "truncated": truncated,
-    })}
+    meta: "_TruncMeta" = {"truncated": True} if truncated else {}
+    return ToolResult.ok(
+        {
+            "exit_code": proc.returncode,
+            "stdout": stdout_str,
+            "stderr": stderr_str,
+        },
+        **meta,
+    )
 
 
 # ── Helpers ────────────────────────────────────────────────────────────────
@@ -401,8 +391,8 @@ def _is_binary(data: bytes) -> bool:
     return (non_printable / len(sample)) > _NONPRINTABLE_THRESHOLD
 
 
-def _build_safe_env() -> dict:
-    safe = {}
+def _build_safe_env() -> dict[str, str]:
+    safe: dict[str, str] = {}
     for key, value in os.environ.items():
         upper = key.upper()
         if any(upper.startswith(p) for p in _SECRET_PREFIXES):

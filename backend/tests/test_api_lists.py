@@ -1,18 +1,15 @@
-"""
-Tests for backend/api/lists.py — Lists API blueprint.
-
-Real-DB end-to-end tests via the ``authed_client`` fixture: routes hit a real
-ListService against a per-test SQLite database. No service-layer mocking.
-"""
+import sqlite3
 
 import pytest
+from flask.testing import FlaskClient
+from services.memory_store import MemoryStore
 
 
 pytestmark = pytest.mark.unit
 
 
-def _seed_list(db, list_id='abc12345', name='Shopping List',
-               list_type='checklist'):
+def _seed_list(db: sqlite3.Connection, list_id: str = 'abc12345', name: str = 'Shopping List',
+               list_type: str = 'checklist') -> None:
     db.execute(
         "INSERT INTO lists (id, name, list_type, created_at, updated_at) "
         "VALUES (?, ?, ?, datetime('now'), datetime('now'))",
@@ -21,7 +18,7 @@ def _seed_list(db, list_id='abc12345', name='Shopping List',
     db.commit()
 
 
-def _seed_item(db, item_id, list_id, content, checked=0, position=0):
+def _seed_item(db: sqlite3.Connection, item_id: str, list_id: str, content: str, checked: int = 0, position: int = 0) -> None:
     db.execute(
         "INSERT INTO list_items (id, list_id, content, checked, position, "
         "added_at, updated_at) VALUES (?, ?, ?, ?, ?, datetime('now'), datetime('now'))",
@@ -33,7 +30,7 @@ def _seed_item(db, item_id, list_id, content, checked=0, position=0):
 # ─── GET /lists ───────────────────────────────────────────────────────────
 
 class TestGetLists:
-    def test_returns_summaries(self, authed_client):
+    def test_returns_summaries(self, authed_client: tuple[FlaskClient, sqlite3.Connection, MemoryStore]) -> None:
         client, db, _ = authed_client
         _seed_list(db, list_id='aaa11111', name='Groceries')
         _seed_list(db, list_id='bbb22222', name='To-Do')
@@ -48,7 +45,7 @@ class TestGetLists:
 # ─── POST /lists ──────────────────────────────────────────────────────────
 
 class TestCreateList:
-    def test_creates_and_returns_201(self, authed_client):
+    def test_creates_and_returns_201(self, authed_client: tuple[FlaskClient, sqlite3.Connection, MemoryStore]) -> None:
         client, db, _ = authed_client
         resp = client.post('/lists', json={"name": "Chores"})
         assert resp.status_code == 201
@@ -61,12 +58,12 @@ class TestCreateList:
         ).fetchone()
         assert row['name'] == 'Chores'
 
-    def test_missing_name_returns_400(self, authed_client):
+    def test_missing_name_returns_400(self, authed_client: tuple[FlaskClient, sqlite3.Connection, MemoryStore]) -> None:
         client, _, _ = authed_client
         resp = client.post('/lists', json={})
         assert resp.status_code == 400
 
-    def test_duplicate_name_returns_409(self, authed_client):
+    def test_duplicate_name_returns_409(self, authed_client: tuple[FlaskClient, sqlite3.Connection, MemoryStore]) -> None:
         client, db, _ = authed_client
         _seed_list(db, name='Groceries')
         resp = client.post('/lists', json={"name": "Groceries"})
@@ -76,7 +73,7 @@ class TestCreateList:
 # ─── GET /lists/<id> ──────────────────────────────────────────────────────
 
 class TestGetList:
-    def test_returns_list_with_items(self, authed_client):
+    def test_returns_list_with_items(self, authed_client: tuple[FlaskClient, sqlite3.Connection, MemoryStore]) -> None:
         client, db, _ = authed_client
         _seed_list(db, list_id='abc12345', name='Groceries')
         _seed_item(db, 'i1', 'abc12345', 'milk', position=0)
@@ -93,7 +90,7 @@ class TestGetList:
 # ─── PUT /lists/<id>/rename ───────────────────────────────────────────────
 
 class TestRenameList:
-    def test_renames(self, authed_client):
+    def test_renames(self, authed_client: tuple[FlaskClient, sqlite3.Connection, MemoryStore]) -> None:
         client, db, _ = authed_client
         _seed_list(db, list_id='abc12345', name='Old')
         resp = client.put('/lists/abc12345/rename', json={"name": "New"})
@@ -107,7 +104,7 @@ class TestRenameList:
 # ─── DELETE /lists/<id> ───────────────────────────────────────────────────
 
 class TestDeleteList:
-    def test_soft_deletes(self, authed_client):
+    def test_soft_deletes(self, authed_client: tuple[FlaskClient, sqlite3.Connection, MemoryStore]) -> None:
         client, db, _ = authed_client
         _seed_list(db)
         resp = client.delete('/lists/abc12345')
@@ -121,7 +118,7 @@ class TestDeleteList:
 # ─── POST /lists/<id>/items ───────────────────────────────────────────────
 
 class TestAddItems:
-    def test_adds_and_returns_count(self, authed_client):
+    def test_adds_and_returns_count(self, authed_client: tuple[FlaskClient, sqlite3.Connection, MemoryStore]) -> None:
         client, db, _ = authed_client
         _seed_list(db)
         resp = client.post('/lists/abc12345/items', json={"items": ["Milk", "Eggs"]})
@@ -139,7 +136,7 @@ class TestAddItems:
 # ─── DELETE /lists/<id>/items (clear) ─────────────────────────────────────
 
 class TestClearItems:
-    def test_clears_all(self, authed_client):
+    def test_clears_all(self, authed_client: tuple[FlaskClient, sqlite3.Connection, MemoryStore]) -> None:
         client, db, _ = authed_client
         _seed_list(db)
         _seed_item(db, 'i1', 'abc12345', 'milk', position=0)
@@ -155,7 +152,7 @@ class TestClearItems:
 # ─── DELETE /lists/<id>/items/batch ───────────────────────────────────────
 
 class TestRemoveItems:
-    def test_removes_specified_items(self, authed_client):
+    def test_removes_specified_items(self, authed_client: tuple[FlaskClient, sqlite3.Connection, MemoryStore]) -> None:
         client, db, _ = authed_client
         _seed_list(db)
         _seed_item(db, 'i1', 'abc12345', 'milk', position=0)
@@ -169,7 +166,7 @@ class TestRemoveItems:
 # ─── PUT /lists/<id>/items/check ──────────────────────────────────────────
 
 class TestCheckItems:
-    def test_checks_items(self, authed_client):
+    def test_checks_items(self, authed_client: tuple[FlaskClient, sqlite3.Connection, MemoryStore]) -> None:
         client, db, _ = authed_client
         _seed_list(db)
         _seed_item(db, 'i1', 'abc12345', 'milk', position=0)
@@ -187,7 +184,7 @@ class TestCheckItems:
 # ─── PUT /lists/<id>/items/uncheck ────────────────────────────────────────
 
 class TestUncheckItems:
-    def test_unchecks_items(self, authed_client):
+    def test_unchecks_items(self, authed_client: tuple[FlaskClient, sqlite3.Connection, MemoryStore]) -> None:
         client, db, _ = authed_client
         _seed_list(db)
         _seed_item(db, 'i1', 'abc12345', 'milk', checked=1, position=0)

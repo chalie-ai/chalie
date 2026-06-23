@@ -1,8 +1,3 @@
-"""
-Unit tests for WrapperRateLimiter.
-
-Uses an in-process MemoryStore directly (no external dependencies).
-"""
 
 import time
 import pytest
@@ -15,8 +10,7 @@ from services.wrapper_rate_limiter import WrapperRateLimiter, _KEY_PREFIX
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _make_limiter(limit=10, window=60, store=None):
-    """Return a WrapperRateLimiter with a fresh MemoryStore if none provided."""
+def _make_limiter(limit: int = 10, window: int = 60, store: MemoryStore | None = None) -> tuple[WrapperRateLimiter, MemoryStore]:
     if store is None:
         store = MemoryStore()
     return WrapperRateLimiter(limit=limit, window_seconds=window, store=store), store
@@ -28,24 +22,23 @@ def _make_limiter(limit=10, window=60, store=None):
 
 @pytest.mark.unit
 class TestWrapperRateLimiterBasic:
-    def test_first_signal_is_allowed(self):
+    def test_first_signal_is_allowed(self) -> None:
         limiter, _ = _make_limiter(limit=5)
         assert limiter.is_allowed("wrp_test") is True
 
-    def test_signals_up_to_limit_are_allowed(self):
+    def test_signals_up_to_limit_are_allowed(self) -> None:
         limiter, _ = _make_limiter(limit=3)
         for _ in range(3):
             assert limiter.is_allowed("wrp_test") is True
 
-    def test_signal_over_limit_is_denied(self):
+    def test_signal_over_limit_is_denied(self) -> None:
         limiter, _ = _make_limiter(limit=3)
         for _ in range(3):
             limiter.is_allowed("wrp_test")
         # 4th should be denied
         assert limiter.is_allowed("wrp_test") is False
 
-    def test_deny_does_not_consume_slot(self):
-        """A denied call should not add to the counter."""
+    def test_deny_does_not_consume_slot(self) -> None:
         limiter, store = _make_limiter(limit=2)
         limiter.is_allowed("wrp_x")
         limiter.is_allowed("wrp_x")
@@ -56,7 +49,7 @@ class TestWrapperRateLimiterBasic:
         key = f"{_KEY_PREFIX}wrp_x"
         assert store.zcard(key) == 2
 
-    def test_different_wrappers_have_independent_counters(self):
+    def test_different_wrappers_have_independent_counters(self) -> None:
         limiter, _ = _make_limiter(limit=2)
         limiter.is_allowed("wrp_a")
         limiter.is_allowed("wrp_a")
@@ -73,7 +66,7 @@ class TestWrapperRateLimiterBasic:
 
 @pytest.mark.unit
 class TestWrapperRateLimiterSlidingWindow:
-    def test_old_entries_slide_out_of_window(self):
+    def test_old_entries_slide_out_of_window(self) -> None:
         """Entries older than the window should not count."""
         store = MemoryStore()
         limiter = WrapperRateLimiter(limit=2, window_seconds=1, store=store)
@@ -86,7 +79,7 @@ class TestWrapperRateLimiterSlidingWindow:
         # Both old entries should be pruned → counter is 0 → new call is allowed
         assert limiter.is_allowed("wrp_slide") is True
 
-    def test_fresh_entries_within_window_are_counted(self):
+    def test_fresh_entries_within_window_are_counted(self) -> None:
         """Entries within the window must still block new calls."""
         store = MemoryStore()
         limiter = WrapperRateLimiter(limit=2, window_seconds=60, store=store)
@@ -98,7 +91,7 @@ class TestWrapperRateLimiterSlidingWindow:
         # Window is 60s and entries are ~0s old — should be denied
         assert limiter.is_allowed("wrp_fresh") is False
 
-    def test_mixed_old_and_fresh_entries(self):
+    def test_mixed_old_and_fresh_entries(self) -> None:
         """Only entries within the window count toward the limit."""
         store = MemoryStore()
         limiter = WrapperRateLimiter(limit=2, window_seconds=10, store=store)
@@ -123,12 +116,12 @@ class TestWrapperRateLimiterSlidingWindow:
 
 @pytest.mark.unit
 class TestWrapperRateLimiterEdgeCases:
-    def test_limit_of_one_allows_exactly_one(self):
+    def test_limit_of_one_allows_exactly_one(self) -> None:
         limiter, _ = _make_limiter(limit=1)
         assert limiter.is_allowed("wrp_one") is True
         assert limiter.is_allowed("wrp_one") is False
 
-    def test_unique_members_prevent_collision(self):
+    def test_unique_members_prevent_collision(self) -> None:
         """Two calls at the exact same time should each record a distinct member."""
         store = MemoryStore()
         limiter = WrapperRateLimiter(limit=5, window_seconds=60, store=store)

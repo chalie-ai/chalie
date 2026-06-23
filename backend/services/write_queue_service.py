@@ -5,35 +5,12 @@ All SQLite write operations (INSERT / UPDATE / DELETE) that would otherwise
 race under concurrent callers are funnelled through a single background thread
 that drains a :class:`queue.Queue`.  This eliminates ``SQLITE_BUSY`` under
 high write concurrency while keeping call-sites simple.
-
-Two access patterns are supported:
-
-- **Fire-and-forget** (:meth:`WriteQueueService.submit`) — caller returns
-  immediately; the write happens asynchronously.
-- **Synchronous** (:meth:`WriteQueueService.submit_sync`) — caller blocks
-  until the callable completes and receives its return value.
-
-Typical usage::
-
-    from services.write_queue_service import get_write_queue
-
-    wq = get_write_queue()
-    wq.submit(db.execute, "INSERT INTO foo (bar) VALUES (?)", ("baz",))
-    row_id = wq.submit_sync(db.execute, "INSERT INTO foo (bar) VALUES (?)", ("qux",))
-
-Design notes
-------------
-- Internal implementation uses :class:`queue.Queue` (unbounded) and a single
-  daemon thread with a per-name lock pattern, simplified to one shared thread.
-- The background thread obtains its own thread-local SQLite connection from
-  :class:`~services.database_service.DatabaseService`, keeping it separate
-  from callers' connections.
 """
 
 import logging
 import queue
 import threading
-from typing import Any, Callable, Dict, List, Optional
+from typing import Callable, Dict, List, Optional, cast
 
 logger = logging.getLogger(__name__)
 
@@ -43,44 +20,19 @@ _TYPE_SINGLE = "single"
 
 
 class _QueueItem:
-    """Internal container for a single work item placed on the write queue.
-
-    Attributes:
-        item_type: Always ``_TYPE_SINGLE``.
-        fn: Callable to execute.
-        args: Positional arguments forwarded to *fn*.
-        kwargs: Keyword arguments forwarded to *fn*.
-        done_event: :class:`threading.Event` set by the worker when execution
-            completes.  ``None`` for fire-and-forget items.
-        result: Mutable one-element list used to pass the callable's return
-            value (or raised exception) back to a waiting caller.
-    """
+    """Internal container for a single work item placed on the write queue."""
 
     __slots__ = ("item_type", "fn", "args", "kwargs", "done_event", "result")
 
     def __init__(
         self,
         item_type: str,
-        fn: Optional[Callable] = None,
-        args: tuple = (),
-        kwargs: Optional[Dict[str, Any]] = None,
+        fn: Optional[Callable[..., object]] = None,
+        args: tuple[object, ...] = (),
+        kwargs: Optional[Dict[str, object]] = None,
         done_event: Optional[threading.Event] = None,
-        result: Optional[List] = None,
+        result: Optional[List[object]] = None,
     ) -> None:
-        """Initialise a queue work item.
-
-        Args:
-            item_type: Execution strategy — always ``_TYPE_SINGLE``.
-            fn: Callable invoked for the item.
-            args: Positional arguments forwarded to *fn*.
-            kwargs: Keyword arguments forwarded to *fn*.
-                Defaults to an empty dict when ``None``.
-            done_event: :class:`threading.Event` signalled by the worker on
-                completion.  ``None`` means fire-and-forget.
-            result: One-element list whose first slot receives either the
-                callable's return value or a raised :class:`Exception`.
-                ``None`` for fire-and-forget items.
-        """
         self.item_type = item_type
         self.fn = fn
         self.args = args
@@ -109,7 +61,7 @@ class WriteQueueService:
         The drain thread is started as a *daemon* so it does not prevent the
         Python interpreter from exiting when the main thread finishes.
         """
-        self._queue: queue.Queue = queue.Queue()
+        self._queue: queue.Queue[_QueueItem] = queue.Queue()
         self._processed: int = 0
         self._errors: int = 0
         self._stats_lock = threading.Lock()
@@ -126,7 +78,7 @@ class WriteQueueService:
     # Public API
     # ------------------------------------------------------------------
 
-    def submit(self, fn: Callable, *args: Any, **kwargs: Any) -> None:
+    def submit(self, fn: Callable[..., object], *args: object, **kwargs: object) -> None:
         """Enqueue a callable for fire-and-forget execution in the background.
 
         Returns immediately without blocking.  The callable is executed by the
@@ -146,7 +98,7 @@ class WriteQueueService:
         )
         self._queue.put(item)
 
-    def submit_sync(self, fn: Callable, *args: Any, **kwargs: Any) -> Any:
+    def submit_sync(self, fn: Callable[..., object], *args: object, **kwargs: object) -> object:
         """Enqueue a callable and block until it completes, returning its result.
 
         The callable is executed by the background drain thread.  If *fn*
@@ -165,7 +117,7 @@ class WriteQueueService:
                 calling thread verbatim.
         """
         done_event = threading.Event()
-        result: List[Any] = [None]  # index 0 holds the return value or a propagated exception
+        result: List[object] = [None]  # index 0 holds the return value or a propagated exception
 
         item = _QueueItem(
             item_type=_TYPE_SINGLE,
@@ -267,11 +219,11 @@ class WriteQueueService:
         Args:
             item: A :class:`_QueueItem` with ``item_type == _TYPE_SINGLE``.
         """
-        return_value: Any = None
+        return_value: object = None
         exc_caught: Optional[Exception] = None
 
         try:
-            return_value = item.fn(*item.args, **item.kwargs)
+            return_value = cast(Callable[..., object], item.fn)(*item.args, **item.kwargs)
         except Exception as exc:
             logger.error(
                 f"[WriteQueue] Single item failed: {exc}",

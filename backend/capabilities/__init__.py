@@ -1,50 +1,28 @@
-"""
-Capability framework — discovery, loading, and management of capability plugins.
-
-Each capability lives in its own sub-package under ``capabilities/`` and must
-provide a ``manifest.yaml`` file plus a ``capability.py`` module that exposes a
-concrete subclass of :class:`capabilities.base.AbstractCapability`.
-
-Public API
-----------
-- :func:`load_capabilities` — scan the filesystem and return all discovered
-  capability instances keyed by their ``id``.
-"""
-
 import importlib
 import logging
+from typing import TYPE_CHECKING
 
 import yaml
 
 from services.file_mapper_service import FileMapperService
 
+if TYPE_CHECKING:
+    from capabilities.base import AbstractCapability
+
 logger = logging.getLogger(__name__)
 
 # Singleton cache — capability instances persist for the process lifetime so
 # that in-memory state (e.g. ``_connected``) survives across API calls.
-_capabilities_cache: dict | None = None
+_capabilities_cache: "dict[str, AbstractCapability] | None" = None
 
 
-def load_capabilities() -> dict:
-    """Discover, load, and return all capability plugin instances.
-
-    On the first call, scans every direct sub-directory of ``capabilities/``
-    for a ``manifest.yaml``, imports and instantiates the declared
-    ``entry_class``, and caches the result.  Subsequent calls return the
-    same cached instances so that in-memory state (``_connected``, etc.)
-    is preserved across API requests.
-
-    Returns:
-        dict[str, AbstractCapability]: Mapping of capability ``id`` →
-        instantiated capability object.  Returns an empty dict if no
-        ``manifest.yaml`` files are found or all loads fail.
-    """
+def load_capabilities() -> "dict[str, AbstractCapability]":
     global _capabilities_cache
     if _capabilities_cache is not None:
         return _capabilities_cache
 
     capabilities_dir = FileMapperService.get_capabilities_path()
-    discovered: dict = {}
+    discovered: "dict[str, AbstractCapability]" = {}
 
     for subdir in sorted(capabilities_dir.iterdir()):
         if not subdir.is_dir() or subdir.name.startswith('_'):

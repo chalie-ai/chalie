@@ -9,6 +9,14 @@ All notable changes to Chalie are documented here. The format follows [Keep a Ch
 ### In Progress
 - **Uncertainty Engine** — Contradiction detection and resolution across the memory hierarchy. Adds `reliability` field to traits, episodes, and concepts; new `uncertainties` table; `UncertaintyService`; drift RECONCILE action. See `docs/15-UNCERTAINTY-ENGINE.md`.
 
+### Added
+- **Native mobile client support** — backend, Brain, and web-interface changes that let a native (Tauri) iOS/Android client pair with and drive a Chalie instance over the network:
+  - **Bearer-token WebSocket auth** — the realtime socket accepts the long-lived access token as an `Authorization: Bearer` fallback alongside the existing session cookie, so a native client with no cookie jar can connect.
+  - **`GET /auth/username`** — returns the configured account username so a freshly paired device can pre-fill the vault-unlock form (password only).
+  - **Link-device QR page** (Brain) — renders a pairing QR encoding the host, a long-lived token, and the username for a new device to scan.
+  - **Runtime platform adapter** (`@chalie/shared`) — selects a native or web implementation of notifications, external-link opening, and speech-to-text at runtime, keeping the interface bundle identical across web and native builds.
+  - **Pairing gate + vault-unlock overlay** (interface) — on the native runtime an unpaired client routes to a pairing screen; a locked vault surfaces an unlock overlay (password-only) instead of the chat feed.
+
 ### Changed
 - Compaction unified into `CompactionMessageProcessor` family — mid-ACT Stage 1 and Stage 2 compaction now dispatch through `TrailCompactionProcessor` and `FullCompactionProcessor` (subclasses of `_CompactionProcessorBase` → `MessageProcessor`) instead of inline `Providers.send_messages()` calls. Both subclasses hardcode `JOB='frontal-cortex-unified'`, `NATIVE_TOOLS=[]`, `SKIP_TRANSCRIPT_WRITE=True`, and override the recursion guard. System-prompt bodies live as `CompactionFullSystemPrompt` / `CompactionTrailSystemPrompt` constants in `system_message_prompt.py`. `MetricsAccumulator.merge()` (new method) folds sub-processor token + tool counts into the parent turn's metrics. Pure SQL helpers extracted to `compaction_persistence.py`.
 - Pattern matcher rewrite — `pattern_extractor.py` (694 LOC, 6-vertical × 4-class flow) replaced by `PatternMatchProcessor`, a single-pass LLM matcher that runs every ≥50 new transcripts. The model emits `save_pattern` / `save_graph` tool calls in parallel (`MAX_ITERATIONS=30`). Decay (−0.005 per pass, soft-delete at 0) moved from `DecayEngine` to `PatternMatchProcessor.postTurn()`.
@@ -79,7 +87,7 @@ All notable changes to Chalie are documented here. The format follows [Keep a Ch
 - One-shot migration `backend/utils/migrate_canonicalize_user_keys.py`: backfills existing `user_specific` rows to canonical keys; idempotent
 - Cosine formula: `cos = max(0.0, 1.0 - distance ** 2 / 2.0)` via `_l2_dist_to_cosine()`
 - Constants: `_CONCEPT_LUT_THRESHOLD = 0.80`, `_SYSTEM_KEY_THRESHOLD = 0.80`, `_RECALL_COSINE_FLOOR = 0.42`
-- New nightly scenarios: `096-lut-canonicalize-residence-temporal.yaml`, `097-lut-coexist-favorite-foods.yaml`, `098-job-title-temporal-supersedes.yaml`, `099-lut-miss-recorded.yaml`, `100-contradiction-classifier-removed.yaml`
+- New end-to-end coverage for LUT canonicalization (residence temporal supersession, coexisting favorite foods, job-title supersession), LUT-miss logging, and contradiction-classifier removal
 
 ### DB-Backed Context Window Management (2026-04-09)
 - Eliminated in-memory message accumulation in the LLM tool-calling loop; OOM kills in Docker containers no longer occur regardless of tool loop depth

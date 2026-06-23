@@ -6,6 +6,7 @@ Cached after first read; invalidated on ``set_tuple()``.
 
 import json
 import logging
+from typing import cast
 
 from services.file_mapper_service import FileMapperService
 
@@ -32,7 +33,7 @@ class PersonalityService:
         )
         return self._voice
 
-    def get_tuple(self) -> tuple[int, int, int, int, int]:
+    def get_tuple(self) -> tuple[int, int, int, int, int] | None:
         if self._tuple is not None:
             return self._tuple
         self.get_voice()
@@ -55,7 +56,6 @@ class PersonalityService:
         self._tuple = None
 
     def voice_for(self, tup: tuple[int, int, int, int, int]) -> str:
-        """Lookup by arbitrary tuple — used by corpus tests only."""
         return self._index.get(tup) or self._index.get(
             NEUTRAL, "Engage naturally as a peer.",
         )
@@ -68,14 +68,14 @@ class PersonalityService:
             if raw:
                 parsed = json.loads(raw)
                 if isinstance(parsed, list) and len(parsed) == 5:
-                    return tuple(int(v) for v in parsed)
+                    return cast("tuple[int, int, int, int, int]", tuple(int(v) for v in parsed))
         except Exception:
             pass
         return NEUTRAL
 
     @staticmethod
-    def _load_index() -> dict[tuple, str]:
-        index: dict[tuple, str] = {}
+    def _load_index() -> dict[tuple[int, int, int, int, int], str]:
+        index: dict[tuple[int, int, int, int, int], str] = {}
         try:
             with open(_VOICES_PATH, 'r', encoding='utf-8') as fh:
                 for raw in fh:

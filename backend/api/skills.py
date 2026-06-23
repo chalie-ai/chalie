@@ -7,6 +7,7 @@ user-skill YAML files in data/skills/user/.
 
 import logging
 import sqlite3
+from typing import TYPE_CHECKING
 
 from flask import Blueprint, jsonify, request
 
@@ -23,6 +24,9 @@ from utils.skills_io import (
 
 from .auth import require_session
 
+if TYPE_CHECKING:
+    from flask.typing import ResponseReturnValue
+
 logger = logging.getLogger(__name__)
 
 skills_bp = Blueprint("skills", __name__, url_prefix="/api/skills")
@@ -36,7 +40,7 @@ def _open_db() -> sqlite3.Connection:
     return open_skills_db(row_factory=True)
 
 
-def _row_to_dict(row: sqlite3.Row) -> dict:
+def _row_to_dict(row: sqlite3.Row) -> "dict[str, object]":
     return {
         "id": row["id"],
         "title": row["title"],
@@ -50,7 +54,7 @@ def _row_to_dict(row: sqlite3.Row) -> dict:
     }
 
 
-def _load_associations(conn: sqlite3.Connection) -> list[dict]:
+def _load_associations(conn: sqlite3.Connection) -> "list[dict[str, object]]":
     rows = conn.execute(
         "SELECT sa.skill_id, s.title AS skill_title, sa.pattern_name, sa.rule, sa.created_at "
         "FROM skill_associations sa "
@@ -85,8 +89,7 @@ def _index_new_skill(conn: sqlite3.Connection, skill_id: int, title: str, use_fo
 
 @skills_bp.route("", methods=["GET"])
 @require_session
-def list_skills():
-    """Return all skills from skills.sqlite grouped with associations."""
+def list_skills() -> "ResponseReturnValue":
     if not SKILLS_DB_PATH.exists():
         return jsonify({"skills": [], "associations": []}), 200
 
@@ -111,8 +114,7 @@ def list_skills():
 
 @skills_bp.route("", methods=["POST"])
 @require_session
-def create_skill():
-    """Create a new user skill."""
+def create_skill() -> "ResponseReturnValue":
     data = request.get_json(silent=True) or {}
     title = (data.get("title") or "").strip()
     use_for = (data.get("use_for") or "").strip()
@@ -174,8 +176,7 @@ def create_skill():
 
 @skills_bp.route("/<int:skill_id>", methods=["PUT"])
 @require_session
-def update_skill(skill_id: int):
-    """Update a user-created skill."""
+def update_skill(skill_id: int) -> "ResponseReturnValue":
     data = request.get_json(silent=True) or {}
 
     if not SKILLS_DB_PATH.exists():
@@ -235,8 +236,7 @@ def update_skill(skill_id: int):
 
 @skills_bp.route("/<int:skill_id>", methods=["DELETE"])
 @require_session
-def delete_skill(skill_id: int):
-    """Delete a user-created skill."""
+def delete_skill(skill_id: int) -> "ResponseReturnValue":
     if not SKILLS_DB_PATH.exists():
         return jsonify({"error": "skills database unavailable"}), 503
 
@@ -274,8 +274,7 @@ def delete_skill(skill_id: int):
 
 @skills_bp.route("/<int:skill_id>/toggle", methods=["PUT"])
 @require_session
-def toggle_skill(skill_id: int):
-    """Toggle the enabled/disabled state of any skill."""
+def toggle_skill(skill_id: int) -> "ResponseReturnValue":
     if not SKILLS_DB_PATH.exists():
         return jsonify({"error": "skills database unavailable"}), 503
 
@@ -303,8 +302,7 @@ def toggle_skill(skill_id: int):
 
 @skills_bp.route("/<int:skill_id>/copy", methods=["POST"])
 @require_session
-def copy_skill(skill_id: int):
-    """Copy a curated skill as a new user skill and disable the original."""
+def copy_skill(skill_id: int) -> "ResponseReturnValue":
     if not SKILLS_DB_PATH.exists():
         return jsonify({"error": "skills database unavailable"}), 503
 

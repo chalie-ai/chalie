@@ -1,36 +1,9 @@
-"""
-Structured JSON logging facade for the Chalie backend.
-
-Wraps Python's standard ``logging`` module with:
-
-- :class:`_ChalieJsonFormatter` — a zero-dependency JSON formatter so every
-  log line is machine-parseable JSON containing ``timestamp``, ``level``,
-  ``logger``, ``message``, and ``service`` fields.
-- A :data:`_correlation_id` :class:`~contextvars.ContextVar` that propagates a
-  request-scoped identifier into every log record emitted within that context.
-- Module-level :func:`get_correlation_id` / :func:`set_correlation_id` helpers
-  for callers that manage request boundaries.
-- A static :class:`Logger` facade that preserves the existing call-site API
-  (``Logger.info``, ``Logger.debug``, etc.) so no other module needs changing.
-
-Typical startup usage::
-
-    # In run.py or consumer.py — once, before anything else logs
-    from utils.logger import Logger
-    Logger.start()
-
-Per-request usage (WebSocket / REST)::
-
-    from utils.logger import set_correlation_id
-    set_correlation_id(str(uuid.uuid4()))
-"""
-
 import json
 import logging
 import traceback
 from contextvars import ContextVar
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Optional, Union
 
 
 # ---------------------------------------------------------------------------
@@ -41,12 +14,10 @@ _correlation_id: ContextVar[Optional[str]] = ContextVar("_correlation_id", defau
 
 
 def get_correlation_id() -> Optional[str]:
-    """Return the correlation ID active in the current execution context."""
     return _correlation_id.get()
 
 
 def set_correlation_id(value: str) -> None:
-    """Bind a correlation ID to the current execution context."""
     _correlation_id.set(value)
 
 
@@ -56,14 +27,9 @@ def set_correlation_id(value: str) -> None:
 
 
 class _ChalieJsonFormatter(logging.Formatter):
-    """JSON log formatter that emits one JSON object per log line.
-
-    Fields emitted: ``timestamp``, ``level``, ``logger``, ``service``,
-    ``message``, and optionally ``correlation_id`` and ``exc_info``.
-    """
 
     def format(self, record: logging.LogRecord) -> str:
-        entry = {
+        entry: dict[str, Union[str, list[str]]] = {
             "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
             "level": record.levelname,
             "logger": record.name,
@@ -82,19 +48,69 @@ class _ChalieJsonFormatter(logging.Formatter):
 
 
 # ---------------------------------------------------------------------------
+# Count-capped file handler — keeps /tmp/chalie.log a rolling window of the
+# most recent LOG_FILE_MAX_ENTRIES lines. Single-writer (see api/system.py).
+# ---------------------------------------------------------------------------
+
+# api/system.py:observability_errors reads this file to serve the brain dashboard error log.
+LOG_FILE_PATH = "/tmp/chalie.log"
+LOG_FILE_MAX_ENTRIES = 20_000
+# Overshoot allowed before one amortised rewrite. Batching keeps steady-state
+# logging O(1) per record instead of an O(n) full-file rewrite on every line.
+_LOG_TRIM_BATCH = 2_000
+_LOG_TRIM_AT = LOG_FILE_MAX_ENTRIES + _LOG_TRIM_BATCH
+
+
+class _CountCappedFileHandler(logging.FileHandler):
+    """FileHandler that keeps only the most recent LOG_FILE_MAX_ENTRIES lines.
+
+    Counts lines as they are emitted and, once the file overshoots the cap by
+    _LOG_TRIM_BATCH, rewrites it keeping the newest LOG_FILE_MAX_ENTRIES lines.
+    Each log record is exactly one line (_ChalieJsonFormatter), so line == entry.
+    """
+
+    def __init__(self, filename: str) -> None:
+        self._line_count = self._count_lines(filename)
+        super().__init__(filename)
+
+    @staticmethod
+    def _count_lines(filename: str) -> int:
+        try:
+            with open(filename, "r", errors="replace") as fh:
+                return sum(1 for _ in fh)
+        except OSError:
+            return 0
+
+    def emit(self, record: logging.LogRecord) -> None:
+        super().emit(record)
+        self._line_count += 1
+        if self._line_count > _LOG_TRIM_AT:
+            self._trim()
+
+    def _trim(self) -> None:
+        # Rewrite the same inode in "w" mode: O_TRUNC resets it to the kept tail,
+        # and the handler's own append stream resumes writing past it (O_APPEND
+        # recomputes the offset), so the live stream needs no reopen.
+        self.acquire()
+        try:
+            self.flush()
+            with open(self.baseFilename, "r", errors="replace") as fh:
+                kept = fh.readlines()[-LOG_FILE_MAX_ENTRIES:]
+            with open(self.baseFilename, "w") as fh:
+                fh.writelines(kept)
+            self._line_count = len(kept)
+        finally:
+            self.release()
+
+
+# ---------------------------------------------------------------------------
 # Logger facade
 # ---------------------------------------------------------------------------
 
 
 class Logger:
-    """Static facade over the standard ``logging`` module.
-
-    Call :meth:`start` once at process startup before issuing any log messages.
-    """
-
     @staticmethod
     def start() -> None:
-        """Initialise the root logger with JSON-formatted output handlers."""
         root = logging.getLogger()
 
         if root.handlers:
@@ -102,8 +118,7 @@ class Logger:
 
         formatter = _ChalieJsonFormatter()
 
-        # api/system.py:observability_errors reads this file to serve the brain dashboard error log.
-        file_handler = logging.FileHandler("/tmp/chalie.log")
+        file_handler = _CountCappedFileHandler(LOG_FILE_PATH)
         file_handler.setFormatter(formatter)
 
         stream_handler = logging.StreamHandler()

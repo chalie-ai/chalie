@@ -8,25 +8,39 @@ Extends the read skill's SSRF protection with browser-specific additions:
   - Download blocking, dialog auto-dismiss
 """
 
-import ipaddress
+from __future__ import annotations
+
 import logging
-import socket
 import threading
 import time
+from typing import TYPE_CHECKING, cast
 from urllib.parse import urlparse
+
+# SSRF policy lives in ONE place — services.ssrf. The browser layer re-exports
+# the single blocklist and resolver so its request interceptor can never drift
+# from what the read/web_download abilities enforce.
+from services.ssrf import BLOCKED_NETS, resolve_and_check
+
+if TYPE_CHECKING:
+    from typing import Protocol
+
+    class _Route(Protocol):
+        class _Request(Protocol):
+            url: str
+        request: _Route._Request
+        def abort(self) -> None: ...
+        def continue_(self) -> None: ...
+
+    class _Download(Protocol):
+        def cancel(self) -> None: ...
+
+    class _Page(Protocol):
+        def route(self, pattern: str, handler: object) -> None: ...
+        def on(self, event: str, handler: object) -> None: ...
 
 logger = logging.getLogger(__name__)
 
-# Same ranges as read_skill.py — single source of truth for SSRF policy
-_BLOCKED_NETS = [
-    ipaddress.ip_network('127.0.0.0/8'),
-    ipaddress.ip_network('10.0.0.0/8'),
-    ipaddress.ip_network('172.16.0.0/12'),
-    ipaddress.ip_network('192.168.0.0/16'),
-    ipaddress.ip_network('169.254.0.0/16'),   # link-local / AWS metadata
-    ipaddress.ip_network('::1/128'),           # IPv6 loopback
-    ipaddress.ip_network('fc00::/7'),          # IPv6 unique-local
-]
+__all__ = ["BLOCKED_NETS", "resolve_and_check", "DnsCache", "validate_url", "setup_page_security"]
 
 _BLOCKED_SCHEMES = frozenset({
     "file", "ftp", "javascript", "data", "blob",
@@ -44,7 +58,7 @@ class DnsCache:
     on resource-heavy pages.
     """
 
-    def __init__(self, ttl: float = 60.0):
+    def __init__(self, ttl: float = 60.0) -> None:
         self._cache: dict[str, tuple[bool, str, float]] = {}
         self._ttl = ttl
         self._lock = threading.Lock()
@@ -57,27 +71,10 @@ class DnsCache:
             if entry and (now - entry[2]) < self._ttl:
                 return entry[0], entry[1]
 
-        ok, reason = _resolve_and_check(hostname)
+        ok, reason = resolve_and_check(hostname)
         with self._lock:
             self._cache[hostname] = (ok, reason, now)
         return ok, reason
-
-
-def _resolve_and_check(hostname: str) -> tuple[bool, str]:
-    """Resolve hostname and check against blocked networks."""
-    if not hostname:
-        return False, "Empty hostname"
-    try:
-        results = socket.getaddrinfo(hostname, None, proto=socket.IPPROTO_TCP)
-    except socket.gaierror:
-        return False, f"DNS resolution failed: {hostname}"
-
-    for family, _, _, _, addr in results:
-        ip = ipaddress.ip_address(addr[0])
-        for net in _BLOCKED_NETS:
-            if ip in net:
-                return False, f"Blocked IP range: {ip} ({hostname})"
-    return True, ""
 
 
 # -- URL validation ------------------------------------------------------------
@@ -112,12 +109,12 @@ def validate_url(url: str, dns_cache: DnsCache | None = None) -> tuple[bool, str
 
     if dns_cache:
         return dns_cache.check(hostname)
-    return _resolve_and_check(hostname)
+    return resolve_and_check(hostname)
 
 
 # -- Page-level security setup -------------------------------------------------
 
-def setup_page_security(page, dns_cache: DnsCache | None = None):
+def setup_page_security(page: object, dns_cache: DnsCache | None = None) -> None:
     """Install security handlers on a Playwright page.
 
     Must be called BEFORE any navigation.  Installs:
@@ -127,25 +124,26 @@ def setup_page_security(page, dns_cache: DnsCache | None = None):
     """
     cache = dns_cache or DnsCache()
 
-    def _intercept(route):
-        req_url = route.request.url
+    def _intercept(route: object) -> None:
+        req_url = cast("_Route", route).request.url
         ok, reason = validate_url(req_url, dns_cache=cache)
         if not ok:
             logger.debug("[BROWSER SEC] Blocked sub-request: %s (%s)", req_url, reason)
             try:
-                route.abort()
+                cast("_Route", route).abort()
             except Exception:
                 pass
             return
         try:
-            route.continue_()
+            cast("_Route", route).continue_()
         except Exception:
             pass
 
-    page.route("**/*", _intercept)
+    cast("_Page", page).route("**/*", _intercept)
 
     # Block file downloads — never write to disk
-    page.on("download", lambda dl: dl.cancel())
+    cast("_Page", page).on("download", lambda dl: cast("_Download", dl).cancel())
 
-    # Auto-dismiss dialogs (alert, confirm, prompt, beforeunload)
-    page.on("dialog", lambda d: d.dismiss())
+    # Dialogs are owned by tools/browser/session.PageSession, which records the
+    # message for the action diff and then dismisses. (A second dismiss here
+    # would raise on the already-handled dialog.)

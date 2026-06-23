@@ -16,11 +16,11 @@ SELECT topic, role, content, created_at FROM (
 WHERE NOT EXISTS (SELECT 1 FROM topic_transcript LIMIT 1)
 ORDER BY created_at ASC;
 
--- 2. Select the first active provider as the global provider for existing installs.
+-- 2. Select the first provider as the global provider for existing installs.
 INSERT OR IGNORE INTO settings (key, value, value_type, description, is_sensitive)
 SELECT 'selected_provider_id',
-       (SELECT id FROM providers WHERE is_active = 1 ORDER BY id LIMIT 1),
+       (SELECT id FROM providers ORDER BY id LIMIT 1),
        'int',
        'ID of the active LLM provider',
        0
-WHERE (SELECT id FROM providers WHERE is_active = 1 ORDER BY id LIMIT 1) IS NOT NULL;
+WHERE (SELECT id FROM providers ORDER BY id LIMIT 1) IS NOT NULL;

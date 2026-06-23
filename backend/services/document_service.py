@@ -1,13 +1,3 @@
-"""
-Document Service — Data access layer for document storage, retrieval, and search.
-
-Manages document metadata, soft delete/purge lifecycle, duplicate detection
-(hash + semantic), and metadata search. Document content is stored as data_graph
-artifacts and retrieved via DocumentSkill.
-
-Documents are reference material — retrieved via the document skill (ACT loop),
-NOT injected into context assembly.
-"""
 
 import hashlib
 import json
@@ -15,9 +5,11 @@ import logging
 import os
 import secrets
 import shutil
+import sqlite3
 from datetime import timedelta
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, cast
 
+from services.database_service import DatabaseService
 from services.file_mapper_service import FileMapperService
 from services.embedding_utils import pack_embedding as _pack_embedding
 from services.log_utils import safe
@@ -36,15 +28,8 @@ PURGE_WINDOW_DAYS = 30
 
 
 class DocumentService:
-    """Manages document storage, chunk retrieval, and hybrid search."""
 
-    def __init__(self, db_service):
-        """Initialize the document service with a database connection.
-
-        Args:
-            db_service: :class:`~services.database_service.DatabaseService`
-                instance used for all document storage and retrieval operations.
-        """
+    def __init__(self, db_service: DatabaseService) -> None:
         self.db = db_service
         self._write_queue = get_write_queue()
 
@@ -60,29 +45,9 @@ class DocumentService:
         file_path: str,
         file_hash: str,
         source_type: str = 'upload',
-        watched_folder_id: str = None,
-        doc_id: str = None,
+        watched_folder_id: Optional[str] = None,
+        doc_id: Optional[str] = None,
     ) -> str:
-        """Create a new document record in the database.
-
-        Args:
-            original_name: Human-readable filename displayed in the UI.
-            mime_type: MIME type string (e.g. ``'application/pdf'``).
-            file_size: File size in bytes.
-            file_path: Path relative to the documents root (or absolute for
-                watched-folder documents).
-            file_hash: SHA-256 hex digest of the file for deduplication.
-            source_type: Origin label (``'upload'``, ``'watched_folder'``,
-                or ``'conversation'``).
-            watched_folder_id: Optional ID of the originating watched folder.
-            doc_id: Optional explicit document ID; generated if not provided.
-
-        Returns:
-            Eight-character hex document ID.
-
-        Raises:
-            Exception: Propagates any database error to the caller.
-        """
         doc_id = doc_id or secrets.token_hex(4)
 
         try:
@@ -91,8 +56,7 @@ class DocumentService:
                 file_hash, source_type, watched_folder_id,
             )
 
-            def _insert(params=_params, db=self.db):
-                """Insert the document row; executed on the write-queue thread."""
+            def _insert(params: tuple[object, ...] = _params, db: DatabaseService = self.db) -> None:
                 with db.connection() as conn:
                     cursor = conn.cursor()
                     cursor.execute(
@@ -115,15 +79,7 @@ class DocumentService:
             logger.error(f"[DOCS] create_document failed: {e}")
             raise
 
-    def get_document(self, doc_id: str) -> Optional[Dict[str, Any]]:
-        """Retrieve a single document record by its ID.
-
-        Args:
-            doc_id: Eight-character hex document identifier.
-
-        Returns:
-            Document dict, or ``None`` if not found or on database error.
-        """
+    def get_document(self, doc_id: str) -> Optional[Dict[str, object]]:
         try:
             with self.db.connection() as conn:
                 cursor = conn.cursor()
@@ -148,16 +104,7 @@ class DocumentService:
             logger.error(f"[DOCS] get_document failed: {e}")
             return None
 
-    def get_all_documents(self, include_deleted: bool = False) -> List[Dict[str, Any]]:
-        """Retrieve all document records, newest first.
-
-        Args:
-            include_deleted: When ``True``, soft-deleted documents are included in
-                the results.  Defaults to ``False``.
-
-        Returns:
-            List of document dicts ordered by ``created_at`` descending.
-        """
+    def get_all_documents(self, include_deleted: bool = False) -> List[Dict[str, object]]:
         try:
             with self.db.connection() as conn:
                 cursor = conn.cursor()
@@ -195,17 +142,7 @@ class DocumentService:
             logger.error(f"[DOCS] get_all_documents failed: {e}")
             return []
 
-    def search_documents_metadata(self, query: str) -> List[Dict[str, Any]]:
-        """Search non-deleted documents by name, tags, category, and project.
-
-        Args:
-            query: Search string matched case-insensitively against
-                ``original_name``, ``doc_category``, and ``doc_project``;
-                also matched exactly against tag values.
-
-        Returns:
-            List of matching document dicts ordered by ``created_at`` descending.
-        """
+    def search_documents_metadata(self, query: str) -> List[Dict[str, object]]:
         try:
             with self.db.connection() as conn:
                 cursor = conn.cursor()
@@ -241,21 +178,6 @@ class DocumentService:
         text_content: str,
         source_type: str = 'conversation',
     ) -> str:
-        """
-        Create a document from raw text without a file upload.
-
-        Writes the text to disk as a Markdown file, computes a SHA-256
-        hash, sizes the content, and creates a database record via
-        :meth:`create_document`.
-
-        Args:
-            original_name: Filename to use (should end in ``.md``).
-            text_content: Raw text content to write and store.
-            source_type: Origin label (default ``'conversation'``).
-
-        Returns:
-            Eight-character hex document ID.
-        """
         doc_id = secrets.token_hex(4)
 
         # Write markdown to disk — strip any path components from the filename
@@ -280,7 +202,7 @@ class DocumentService:
             doc_id=doc_id,
         )
 
-        def _set_clean(did=doc_id, txt=text_content, db=self.db):
+        def _set_clean(did: str = doc_id, txt: str = text_content, db: DatabaseService = self.db) -> None:
             with db.connection() as conn:
                 conn.execute(
                     "UPDATE documents SET clean_text = ? WHERE id = ?",
@@ -302,23 +224,10 @@ class DocumentService:
         error_message: Optional[str] = None,
         chunk_count: int = 0,
     ) -> None:
-        """Update the processing status of a document.
-
-        Args:
-            doc_id: Eight-character hex document identifier.
-            status: New status string (``'processing'``, ``'awaiting_confirmation'``,
-                ``'ready'``, or ``'failed'``).
-            error_message: Optional error detail stored when status is ``'failed'``.
-            chunk_count: Number of chunks produced (0 for non-terminal states).
-
-        Raises:
-            Exception: Propagates any database error to the caller.
-        """
         try:
             _params = (status, error_message, chunk_count, doc_id)
 
-            def _update(params=_params, db=self.db):
-                """Persist document status change on the write-queue thread."""
+            def _update(params: tuple[object, ...] = _params, db: DatabaseService = self.db) -> None:
                 with db.connection() as conn:
                     cursor = conn.cursor()
                     cursor.execute(
@@ -338,7 +247,7 @@ class DocumentService:
 
     def update_clean_text(self, doc_id: str, clean_text: str) -> None:
         try:
-            def _update(did=doc_id, txt=clean_text, db=self.db):
+            def _update(did: str = doc_id, txt: str = clean_text, db: DatabaseService = self.db) -> None:
                 with db.connection() as conn:
                     conn.execute(
                         "UPDATE documents SET clean_text = ?, updated_at = datetime('now') WHERE id = ?",
@@ -350,7 +259,7 @@ class DocumentService:
 
     def update_summary(self, doc_id: str, summary: str) -> None:
         try:
-            def _update(did=doc_id, s=summary, db=self.db):
+            def _update(did: str = doc_id, s: str = summary, db: DatabaseService = self.db) -> None:
                 with db.connection() as conn:
                     conn.execute(
                         "UPDATE documents SET summary = ?, updated_at = datetime('now') WHERE id = ?",
@@ -363,25 +272,16 @@ class DocumentService:
     def update_extracted_metadata(
         self,
         doc_id: str,
-        metadata: dict,
+        metadata: dict[str, object],
         summary: str,
-        summary_embedding: list = None,
-        clean_text: str = None,
-        language: str = None,
-        fingerprint: str = None,
-        page_count: int = None,
+        summary_embedding: Optional[list[float]] = None,
+        clean_text: Optional[str] = None,
+        language: Optional[str] = None,
+        fingerprint: Optional[str] = None,
+        page_count: Optional[int] = None,
     ) -> None:
-        """Store extracted metadata, summary, embedding, and text signals.
-
-        Builds a dynamic SET clause — only updates columns whose values are
-        provided (non-None).  This keeps the query minimal and avoids issues
-        with the sqlite-vec virtual table (embeddings are stored separately
-        in documents_vec).
-
-        Raises on failure so the caller (process_document) can mark status='failed'.
-        """
         set_parts = ["extracted_metadata = ?", "summary = ?", "updated_at = datetime('now')"]
-        params: list = [json.dumps(metadata), summary]
+        params: list[object] = [json.dumps(metadata), summary]
 
         if clean_text is not None:
             set_parts.append("clean_text = ?")
@@ -402,13 +302,12 @@ class DocumentService:
         sql = f"UPDATE documents SET {', '.join(set_parts)} WHERE id = ?"
 
         def _update_meta(
-            stmt=sql,
-            p=params,
-            did=doc_id,
-            emb=packed_emb,
-            db=self.db,
-        ):
-            """Persist extracted metadata and optionally upsert the summary embedding."""
+            stmt: str = sql,
+            p: list[object] = params,
+            did: str = doc_id,
+            emb: Optional[bytes] = packed_emb,
+            db: DatabaseService = self.db,
+        ) -> None:
             with db.connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute(stmt, p)
@@ -429,15 +328,8 @@ class DocumentService:
         self._write_queue.submit_sync(_update_meta)
 
     def set_supersedes(self, doc_id: str, supersedes_id: str) -> None:
-        """Mark a document as replacing (superseding) an older version.
-
-        Args:
-            doc_id: ID of the newer document.
-            supersedes_id: ID of the older document being replaced.
-        """
         try:
-            def _supersede(did=doc_id, sid=supersedes_id, db=self.db):
-                """Set supersedes_id on the document row."""
+            def _supersede(did: str = doc_id, sid: str = supersedes_id, db: DatabaseService = self.db) -> None:
                 with db.connection() as conn:
                     cursor = conn.cursor()
                     cursor.execute(
@@ -459,21 +351,10 @@ class DocumentService:
     def find_duplicates(
         self,
         file_hash: str,
-        summary_embedding: Optional[list] = None,
+        summary_embedding: Optional[list[float]] = None,
         text_length: int = 0,
         exclude_id: Optional[str] = None,
-    ) -> List[Dict[str, Any]]:
-        """
-        Dual-layer duplicate detection:
-        1. Exact hash match (SHA-256)
-        2. Semantic similarity of summary_embedding (if text is long enough)
-
-        Args:
-            exclude_id: Document ID to exclude from results (typically the
-                        document being checked, to avoid self-matching).
-
-        Returns list of dicts with 'doc', 'match_type', and 'distance' keys.
-        """
+    ) -> List[Dict[str, object]]:
         results = []
 
         try:
@@ -545,22 +426,11 @@ class DocumentService:
     # ─────────────────────────────────────────────
 
     def soft_delete(self, doc_id: str) -> bool:
-        """Soft-delete a document by setting its deletion timestamp.
-
-        Sets ``deleted_at`` to now and schedules ``purge_after`` 30 days from now.
-
-        Args:
-            doc_id: Eight-character hex document identifier.
-
-        Returns:
-            ``True`` if the document was found and deleted, ``False`` otherwise.
-        """
         try:
             from services.time_utils import utc_now
             purge_after = utc_now() + timedelta(days=PURGE_WINDOW_DAYS)
 
-            def _soft_delete(did=doc_id, pa=purge_after, db=self.db):
-                """Set deleted_at and schedule purge; return rowcount."""
+            def _soft_delete(did: str = doc_id, pa: object = purge_after, db: DatabaseService = self.db) -> int:
                 with db.connection() as conn:
                     cursor = conn.cursor()
                     cursor.execute(
@@ -574,7 +444,7 @@ class DocumentService:
                     cursor.close()
                 return affected
 
-            updated = self._write_queue.submit_sync(_soft_delete) > 0
+            updated = cast(int, self._write_queue.submit_sync(_soft_delete)) > 0
 
             if updated:
                 logger.info("[DOCS] Soft-deleted document %s", safe(doc_id))
@@ -596,20 +466,8 @@ class DocumentService:
             return False
 
     def restore(self, doc_id: str) -> bool:
-        """Restore a previously soft-deleted document.
-
-        Clears ``deleted_at`` and ``purge_after`` so the document re-appears in
-        normal queries.
-
-        Args:
-            doc_id: Eight-character hex document identifier.
-
-        Returns:
-            ``True`` if the document was found and restored, ``False`` otherwise.
-        """
         try:
-            def _restore(did=doc_id, db=self.db):
-                """Clear deleted_at and purge_after; return rowcount."""
+            def _restore(did: str = doc_id, db: DatabaseService = self.db) -> int:
                 with db.connection() as conn:
                     cursor = conn.cursor()
                     cursor.execute(
@@ -623,7 +481,7 @@ class DocumentService:
                     cursor.close()
                 return affected
 
-            updated = self._write_queue.submit_sync(_restore) > 0
+            updated = cast(int, self._write_queue.submit_sync(_restore)) > 0
 
             if updated:
                 logger.info("[DOCS] Restored document %s", safe(doc_id))
@@ -645,24 +503,12 @@ class DocumentService:
             return False
 
     def hard_delete(self, doc_id: str) -> bool:
-        """Permanently delete a document record and its file from disk.
-
-        Removes the entry from the ``documents_vec`` virtual table before deleting
-        the parent row so that FK-unaware virtual tables are cleaned up correctly.
-
-        Args:
-            doc_id: Eight-character hex document identifier.
-
-        Returns:
-            ``True`` if the document was found and deleted, ``False`` otherwise.
-        """
         try:
             doc = self.get_document(doc_id)
             if not doc:
                 return False
 
-            def _hard_delete(did=doc_id, db=self.db):
-                """Delete virtual-table rows then the document row; return rowcount."""
+            def _hard_delete(did: str = doc_id, db: DatabaseService = self.db) -> int:
                 with db.connection() as conn:
                     cursor = conn.cursor()
                     # Clean up virtual tables BEFORE the document delete —
@@ -678,7 +524,7 @@ class DocumentService:
                     cursor.close()
                 return affected
 
-            deleted = self._write_queue.submit_sync(_hard_delete) > 0
+            deleted = cast(int, self._write_queue.submit_sync(_hard_delete)) > 0
 
             # Cascade-delete data_graph artifacts for this document.
             if deleted:
@@ -706,11 +552,6 @@ class DocumentService:
             return False
 
     def purge_expired(self) -> int:
-        """Hard-delete all documents that have passed their scheduled purge date.
-
-        Returns:
-            Number of documents permanently deleted.
-        """
         try:
             # Find expired docs first (need file paths for disk cleanup)
             with self.db.connection() as conn:
@@ -739,8 +580,7 @@ class DocumentService:
     # Watched folder helpers
     # ─────────────────────────────────────────────
 
-    def get_documents_by_watched_folder(self, folder_id: str) -> List[Dict[str, Any]]:
-        """Get all documents (including soft-deleted) for a watched folder."""
+    def get_documents_by_watched_folder(self, folder_id: str) -> List[Dict[str, object]]:
         try:
             with self.db.connection() as conn:
                 cursor = conn.cursor()
@@ -763,16 +603,9 @@ class DocumentService:
             logger.error(f"[DOCS] get_documents_by_watched_folder failed: {e}")
             return []
 
-    def update_tags(self, doc_id: str, tags: list) -> None:
-        """Update the tags JSON array for a document.
-
-        Args:
-            doc_id: Eight-character hex document identifier.
-            tags: New list of tag strings to store.
-        """
+    def update_tags(self, doc_id: str, tags: list[str]) -> None:
         try:
-            def _update_tags(did=doc_id, t=json.dumps(tags), db=self.db):
-                """Persist updated tags on the write-queue thread."""
+            def _update_tags(did: str = doc_id, t: str = json.dumps(tags), db: DatabaseService = self.db) -> None:
                 with db.connection() as conn:
                     cursor = conn.cursor()
                     cursor.execute(
@@ -787,23 +620,12 @@ class DocumentService:
 
     def update_classification(
         self, doc_id: str,
-        category: str = None, project: str = None,
-        doc_date: str = None, lock: bool = False,
+        category: Optional[str] = None, project: Optional[str] = None,
+        doc_date: Optional[str] = None, lock: bool = False,
     ) -> None:
-        """Update document classification metadata, optionally locking it.
-
-        Args:
-            doc_id: Eight-character hex document identifier.
-            category: New ``doc_category`` value, or ``None`` to leave unchanged.
-            project: New ``doc_project`` value, or ``None`` to leave unchanged.
-            doc_date: New ``doc_date`` value (``YYYY-MM-DD``), or ``None`` to
-                leave unchanged.
-            lock: When ``True``, sets ``meta_locked = 1`` so automatic
-                classification cannot overwrite user edits.
-        """
         try:
             set_parts = ["updated_at = datetime('now')"]
-            params: list = []
+            params: list[object] = []
             if category is not None:
                 set_parts.append("doc_category = ?")
                 params.append(category)
@@ -818,11 +640,10 @@ class DocumentService:
             params.append(doc_id)
 
             def _update_class(
-                stmt=f"UPDATE documents SET {', '.join(set_parts)} WHERE id = ?",
-                p=params,
-                db=self.db,
-            ):
-                """Persist classification metadata on the write-queue thread."""
+                stmt: str = f"UPDATE documents SET {', '.join(set_parts)} WHERE id = ?",
+                p: list[object] = params,
+                db: DatabaseService = self.db,
+            ) -> None:
                 with db.connection() as conn:
                     cursor = conn.cursor()
                     cursor.execute(stmt, p)
@@ -832,11 +653,7 @@ class DocumentService:
         except Exception as e:
             logger.error(f"[DOCS] update_classification failed: {e}")
 
-    def get_classification_groups(self, field: str) -> List[Dict[str, Any]]:
-        """Get unique values and counts for a classification field (doc_category, doc_project, doc_date).
-
-        For doc_date, groups by year. Returns [{value, count}] sorted by count desc.
-        """
+    def get_classification_groups(self, field: str) -> List[Dict[str, object]]:
         if field not in ('doc_category', 'doc_project', 'doc_date'):
             return []
         try:
@@ -867,18 +684,8 @@ class DocumentService:
             return []
 
     def update_file_path(self, doc_id: str, new_path: str) -> None:
-        """Update the stored ``file_path`` for a document.
-
-        Used during folder-watcher scans when a rename is detected (same hash,
-        new path).
-
-        Args:
-            doc_id: Eight-character hex document identifier.
-            new_path: New absolute or relative file path string.
-        """
         try:
-            def _update_path(did=doc_id, path=new_path, db=self.db):
-                """Persist the renamed file path on the write-queue thread."""
+            def _update_path(did: str = doc_id, path: str = new_path, db: DatabaseService = self.db) -> None:
                 with db.connection() as conn:
                     cursor = conn.cursor()
                     cursor.execute(
@@ -895,17 +702,7 @@ class DocumentService:
     # Internal helpers
     # ─────────────────────────────────────────────
 
-    def _row_to_dict(self, row) -> Dict[str, Any]:
-        """Convert a documents table row tuple to a document dict.
-
-        Args:
-            row: sqlite3 row object with exactly 27 positional columns matching
-                the SELECT column order used throughout this service.
-
-        Returns:
-            Document dict with keys matching the ``documents`` table schema plus
-            boolean ``meta_locked``.
-        """
+    def _row_to_dict(self, row: sqlite3.Row) -> Dict[str, object]:
         return {
             'id': row[0],
             'original_name': row[1],

@@ -1,16 +1,7 @@
-"""HomeCapability -- Home Assistant integration via REST + WebSocket.
-
-REST for commands/queries (list_devices, get_state, control, list_automations,
-trigger_automation). Persistent WebSocket for subscribe_events and efficient
-_do_monitor() liveness checks.
-
-Credential storage: home:url, home:token, home:verify_ssl (encrypted via
-VaultService in tool_configs).
-"""
-
 from __future__ import annotations
 
 import logging
+from typing import cast
 
 import yaml
 
@@ -29,17 +20,10 @@ _K_VERIFY_SSL = "home:verify_ssl"
 
 
 class HomeCapability(AbstractCapability):
-    """Home Assistant capability.
-
-    Attributes:
-        _url (str): Home Assistant base URL, e.g. ``http://homeassistant.local:8123``.
-        _token (str): Long-Lived Access Token.
-        _verify_ssl (bool): Whether to verify SSL certificates on HTTPS connections.
-    """
 
     def __init__(self) -> None:
         super().__init__()
-        self._manifest_cache: dict | None = None
+        self._manifest_cache: dict[str, object] | None = None
         self._ws_handler = HaWebSocketHandler()
         self._url: str = ""
         self._token: str = ""
@@ -50,7 +34,7 @@ class HomeCapability(AbstractCapability):
     def get_id(self) -> str:
         return "home"
 
-    def get_manifest(self) -> dict:
+    def get_manifest(self) -> dict[str, object]:
         if self._manifest_cache is None:
             with open(_MANIFEST_PATH, encoding="utf-8") as fh:
                 self._manifest_cache = yaml.safe_load(fh)
@@ -58,29 +42,20 @@ class HomeCapability(AbstractCapability):
 
     # ── Lifecycle ────────────────────────────────────────────────────
 
-    def configure(self, credentials: dict) -> None:
-        """Validate credentials, probe HA REST API, and persist.
-
-        Args:
-            credentials: Must contain ``url`` (str) and ``token`` (str).
-                Optional ``verify_ssl`` (bool, default True).
-
-        Raises:
-            ValueError: If url or token is missing, or the HA instance rejects them.
-        """
-        url = (credentials.get("url") or "").strip().rstrip("/")
-        token = (credentials.get("token") or "").strip()
+    def configure(self, credentials: dict[str, object]) -> None:
+        url = (cast(str, credentials.get("url")) or "").strip().rstrip("/")
+        token = (cast(str, credentials.get("token")) or "").strip()
         if not url:
             raise ValueError("Home Assistant URL is required")
         if not token:
             raise ValueError("Long-Lived Access Token is required")
 
-        verify_ssl = credentials.get("verify_ssl", True)
+        verify_ssl: object = credentials.get("verify_ssl", True)
         if isinstance(verify_ssl, str):
             verify_ssl = verify_ssl.lower() not in ("0", "false", "no")
 
         try:
-            rest.probe(url, token, verify_ssl)
+            rest.probe(url, token, cast(bool, verify_ssl))
         except Exception as exc:
             raise ValueError(f"[home] Connection probe failed: {exc}") from exc
 
@@ -90,15 +65,10 @@ class HomeCapability(AbstractCapability):
 
         self._url = url
         self._token = token
-        self._verify_ssl = verify_ssl
+        self._verify_ssl = cast(bool, verify_ssl)
         self.connect()
 
     def connect(self) -> bool:
-        """Load stored credentials and probe the HA REST API.
-
-        Returns:
-            bool: ``True`` if the probe succeeds, ``False`` otherwise.
-        """
         url = self.load_credential(_K_URL)
         token = self.load_credential(_K_TOKEN)
         ssl_raw = self.load_credential(_K_VERIFY_SSL)
@@ -127,76 +97,54 @@ class HomeCapability(AbstractCapability):
 
     # ── Cognitive pipeline ───────────────────────────────────────────
 
-    def ingest(self) -> list:
-        """Fetch all entity states from HA REST API.
-
-        Returns:
-            list[dict]: Entity summary dicts, or ``[]`` when not connected.
-        """
+    def ingest(self) -> list[object]:
         if not self.is_connected():
             return []
         try:
-            return rest.list_devices(
+            return cast("list[object]", rest.list_devices(
                 self._url, self._token, self._verify_ssl, limit=200
-            ).get("devices", [])
+            ).get("devices", []))
         except Exception as exc:
             logger.warning("[home] ingest failed: %s", exc)
             return []
 
-    def understand(self, items: list) -> list:
+    def understand(self, items: list[object]) -> list[object]:
         return items
 
     def _do_monitor(self) -> None:
-        """Probe HA REST API unless a WebSocket connection is already alive."""
         if self._ws_handler.is_alive:
             return
         rest.probe(self._url, self._token, self._verify_ssl)
 
-    def act(self, action: str, params: dict) -> dict:
-        """Dispatch a write action to the matching tool handler.
-
-        Args:
-            action: Tool name, e.g. ``"control"``, ``"trigger_automation"``.
-            params: Action-specific parameters.
-
-        Returns:
-            dict: Handler result, or ``{"error": ...}`` for unknown actions.
-        """
-        tool_map = {t["name"]: t["handler"] for t in self.get_tools()}
-        handler = tool_map.get(action)
-        if handler is None:
-            return {"error": f"Unknown action: {action}"}
-        return handler(topic="", params=params)
-
     # ── Tools ────────────────────────────────────────────────────────
 
-    def _require_connection(self) -> dict | None:
+    def _require_connection(self) -> dict[str, object] | None:
         """Return an error dict when not connected, else None."""
         if not self.is_connected():
             return {"error": "Home capability not connected. Configure it in the Brain dashboard."}
         return None
 
-    def _tool_list_devices(self, topic, params, config=None, telemetry=None) -> dict:
+    def _tool_list_devices(self, params: dict[str, object], telemetry: object = None) -> dict[str, object]:
         err = self._require_connection()
         if err:
             return err
         return rest.list_devices(
             self._url, self._token, self._verify_ssl,
-            domain=params.get("domain"),
-            area=params.get("area"),
-            limit=int(params.get("limit", 50)),
+            domain=cast("str | None", params.get("domain")),
+            area=cast("str | None", params.get("area")),
+            limit=int(cast(int, params.get("limit", 50))),
         )
 
-    def _tool_get_state(self, topic, params, config=None, telemetry=None) -> dict:
+    def _tool_get_state(self, params: dict[str, object], telemetry: object = None) -> dict[str, object]:
         err = self._require_connection()
         if err:
             return err
         eid = params.get("entity_id")
         if not eid:
             return {"error": "entity_id is required"}
-        return rest.get_state(self._url, self._token, self._verify_ssl, eid)
+        return rest.get_state(self._url, self._token, self._verify_ssl, cast(str, eid))
 
-    def _tool_control(self, topic, params, config=None, telemetry=None) -> dict:
+    def _tool_control(self, params: dict[str, object], telemetry: object = None) -> dict[str, object]:
         err = self._require_connection()
         if err:
             return err
@@ -206,25 +154,25 @@ class HomeCapability(AbstractCapability):
             return {"error": "entity_id and service are required"}
         return rest.control(
             self._url, self._token, self._verify_ssl,
-            eid, svc, params.get("service_data"),
+            cast(str, eid), cast(str, svc), cast("dict[str, object] | None", params.get("service_data")),
         )
 
-    def _tool_list_automations(self, topic, params, config=None, telemetry=None) -> dict:
+    def _tool_list_automations(self, params: dict[str, object], telemetry: object = None) -> dict[str, object]:
         err = self._require_connection()
         if err:
             return err
         return rest.list_automations(self._url, self._token, self._verify_ssl)
 
-    def _tool_trigger_automation(self, topic, params, config=None, telemetry=None) -> dict:
+    def _tool_trigger_automation(self, params: dict[str, object], telemetry: object = None) -> dict[str, object]:
         err = self._require_connection()
         if err:
             return err
         aid = params.get("automation_id")
         if not aid:
             return {"error": "automation_id is required"}
-        return rest.trigger_automation(self._url, self._token, self._verify_ssl, aid)
+        return rest.trigger_automation(self._url, self._token, self._verify_ssl, cast(str, aid))
 
-    def _tool_subscribe_events(self, topic, params, config=None, telemetry=None) -> dict:
+    def _tool_subscribe_events(self, params: dict[str, object], telemetry: object = None) -> dict[str, object]:
         err = self._require_connection()
         if err:
             return err
@@ -234,16 +182,10 @@ class HomeCapability(AbstractCapability):
         ws_url = self._url.replace("http://", "ws://").replace("https://", "wss://")
         ws_url = f"{ws_url}/api/websocket"
         self._ws_handler.start(ws_url, self._token)
-        self._ws_handler.subscribe(eid)
+        self._ws_handler.subscribe(cast(str, eid))
         return {"status": "subscribed", "entity_id": eid}
 
-    def get_tools(self) -> list:
-        """Return tool definitions for all 6 home actions.
-
-        Returns:
-            list[dict]: Tool dicts with ``name``, ``description``, ``parameters``,
-            ``handler``, and ``timeout`` keys.
-        """
+    def get_tools(self) -> list[dict[str, object]]:
         return [
             {
                 "name": "list_devices",

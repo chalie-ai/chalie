@@ -1,32 +1,20 @@
-"""
-WebSocket endpoint — server→client push channel.
-
-All client→server requests use HTTP (POST /chat, POST /action, POST /upload).
-The WebSocket is receive-only from the client's perspective. The server sends:
-  ← {"type": "status", "stage": "..."}
-  ← {"type": "message", "content": "...", ...}
-  ← {"type": "act_narration", "text": "...", "step": N}
-  ← {"type": "done", "duration_ms": N}
-  ← {"type": "drift|task|reminder|escalation|notification", ...}
-  ← {"type": "permission_request", ...}
-  ← {"type": "ping"}
-
-The only client→server message the server expects is {"type": "pong"}.
-Any other client message is silently ignored.
-"""
-
 import json
 import logging
 import uuid
+from typing import TYPE_CHECKING, cast
 
+from simple_websocket import Server as _WS
 from utils.logger import set_correlation_id
-from services.websocket_broker import WebSocketBroker
+from services.memory_store import MemoryStore
+from services.websocket_broker import WebSocketBroker, _WebSocket
+
+if TYPE_CHECKING:
+    from flask_sock import Sock
 
 logger = logging.getLogger(__name__)
 
 
-def _drain_capability_alerts(store) -> None:
-    """Replay persisted capability alert keys via broker and delete them after delivery."""
+def _drain_capability_alerts(store: MemoryStore) -> None:
     try:
         broker = WebSocketBroker()
         alert_keys = store.keys('capability:alert:*')
@@ -43,25 +31,57 @@ def _drain_capability_alerts(store) -> None:
         logger.debug("[WS] Failed to scan capability alerts: %s", exc)
 
 
-def _ws_handler(ws) -> None:
-    """WebSocket connection lifecycle: auth → register → keep-alive loop.
+def _authenticate_ws(flask_request: object) -> bool:
+    """Authenticate a ``/ws`` handshake.
 
-    The receive loop exists solely for keep-alive: on receive timeout (60s)
-    the server sends a ping; the client responds with pong. All other
-    client→server traffic uses HTTP endpoints.
+    Cookie session first (the browser path, unchanged). If that fails, fall back
+    to the bearer token supplied as the ``?token=`` query arg — the mobile app
+    cannot send a cookie over a WebSocket, so it passes the raw wrapper token in
+    the URL. ``validate_bearer`` expects an ``Authorization: Bearer`` header, so
+    the query token is wrapped into that header form before reuse. A missing or
+    invalid token yields no wrapper id => caller closes the handshake unchanged.
     """
-    from flask import request as flask_request
+    from flask import Request
     from services.auth_session_service import validate_session
+    from services.feature_flags import internal_dev_enabled
+
+    if validate_session(cast("Request", flask_request)):
+        return True
+
+    # Bearer-over-WS (the ``?token=`` arg) is a native-client-only path; with
+    # in-development features disabled the handshake stays cookie-only.
+    if not internal_dev_enabled():
+        return False
+
+    token = cast("Request", flask_request).args.get("token", "")
+    if not token:
+        return False
+
+    from services.wrapper_auth_service import WrapperAuthService
+    from services.database_service import get_shared_db_service
+
+    bearer_request = cast(Request, Request.from_values(
+        headers={"Authorization": "Bearer " + token}
+    ))
+    try:
+        return bool(WrapperAuthService(get_shared_db_service()).validate_bearer(bearer_request))
+    except Exception as exc:
+        logger.debug("[WS] Bearer token validation failed: %s", exc)
+        return False
+
+
+def _ws_handler(ws: object) -> None:
+    from flask import request as flask_request
 
     broker = WebSocketBroker()
 
-    if not validate_session(flask_request):
+    if not _authenticate_ws(flask_request):
         try:
-            ws.send(json.dumps({"type": "error", "message": "Unauthorized"}))
+            cast(_WS, ws).send(json.dumps({"type": "error", "message": "Unauthorized"}))
         except Exception:
             pass
         try:
-            ws.close()
+            cast(_WS, ws).close()
         except Exception as exc:
             logger.debug("[WS] Close after auth failure failed: %s", exc)
         return
@@ -70,15 +90,16 @@ def _ws_handler(ws) -> None:
     set_correlation_id(connection_id)
     logger.debug("[WS] Connection established", extra={"connection_id": connection_id})
 
-    broker.connect(ws)
+    broker.connect(cast(_WebSocket, ws))
 
     from services.memory_client import MemoryClientService
     store = MemoryClientService.create_connection()
     _drain_capability_alerts(store)
 
+    ws_typed = cast(_WS, ws)
     try:
         while True:
-            raw = ws.receive(timeout=60)
+            raw = ws_typed.receive(timeout=60)
             if raw is None:
                 broker.broadcast({"type": "ping"})
                 continue
@@ -86,12 +107,11 @@ def _ws_handler(ws) -> None:
     except Exception as exc:
         logger.debug("[WS] Connection closed: %s", exc)
     finally:
-        broker.disconnect()
+        broker.disconnect(cast(_WebSocket, ws))
 
 
-def register_websocket(sock):
-    """Register the /ws endpoint on a flask-sock instance."""
-
-    @sock.route('/ws')
-    def ws_handler(ws):
+def register_websocket(sock: "Sock") -> None:
+    def ws_handler(ws: object) -> None:
         _ws_handler(ws)
+
+    sock.route('/ws')(ws_handler)

@@ -1,10 +1,11 @@
-"""Unit tests for WorldState.absorb() and WorldState.snapshot() — v0.5.0 §4.2.
+"""Tests WorldState with real MemoryStore — no mocks."""
 
-Uses real MemoryStore (the in-process dict-backed store).  No mocks.
-"""
+import sqlite3
+from collections.abc import Generator
+from datetime import datetime
+from unittest.mock import patch
 
 import pytest
-from datetime import datetime
 
 from services.world_state import WorldState, Signal
 
@@ -12,19 +13,19 @@ from services.world_state import WorldState, Signal
 @pytest.mark.unit
 class TestWorldStateTypedSnapshot:
     @pytest.fixture
-    def ws(self):
-        """Fresh WorldState backed by a real in-process MemoryStore."""
-        state = WorldState()
-        # Replace the internal _store dict with a real MemoryStore so
-        # the full set/get path is exercised without any DB dependency.
-        # WorldState._store is a plain dict; we keep it as-is — absorb/snapshot
-        # use self._store directly (dict keys), not MemoryStore API.
-        return state
+    def ws(self, db: sqlite3.Connection) -> Generator[WorldState, None, None]:
+        """Cold-booted WorldState: fresh MemoryStore isolates absorb→snapshot per test."""
+        from services.memory_store import MemoryStore
+
+        cold_cache = MemoryStore()
+        with patch('services.memory_store.get_shared_store', return_value=cold_cache), \
+             patch('services.memory_client.MemoryClientService.create_connection',
+                   return_value=cold_cache):
+            yield WorldState()
 
     # ── absorb: user_message ──────────────────────────────────────────────
 
-    def test_absorb_user_message_updates_snapshot(self, ws):
-        """absorb(kind='user_message') sets last_user_message_at in snapshot."""
+    def test_absorb_user_message_updates_snapshot(self, ws: WorldState) -> None:
         sig = Signal(source="ws", kind="user_message", payload={"text": "hello"})
         ws.absorb(sig)
         snap = ws.snapshot()
@@ -33,8 +34,7 @@ class TestWorldStateTypedSnapshot:
 
     # ── absorb: heartbeat ────────────────────────────────────────────────
 
-    def test_absorb_heartbeat_updates_snapshot(self, ws):
-        """absorb(kind='heartbeat') sets last_heartbeat_at in snapshot."""
+    def test_absorb_heartbeat_updates_snapshot(self, ws: WorldState) -> None:
         sig = Signal(source="/health", kind="heartbeat", payload={"battery": 90})
         ws.absorb(sig)
         snap = ws.snapshot()
@@ -43,22 +43,19 @@ class TestWorldStateTypedSnapshot:
 
     # ── absorb: device ───────────────────────────────────────────────────
 
-    def test_absorb_device_updates_snapshot(self, ws):
-        """absorb(kind='device') sets current_device_class in snapshot."""
+    def test_absorb_device_updates_snapshot(self, ws: WorldState) -> None:
         sig = Signal(source="/health", kind="device", payload={"device_class": "phone"})
         ws.absorb(sig)
         snap = ws.snapshot()
         assert snap["current_device_class"] == "phone"
 
-    def test_absorb_device_without_device_class_ignored(self, ws):
-        """absorb(kind='device') with no device_class payload leaves field None."""
+    def test_absorb_device_without_device_class_ignored(self, ws: WorldState) -> None:
         sig = Signal(source="/health", kind="device", payload={})
         ws.absorb(sig)
         snap = ws.snapshot()
         assert snap["current_device_class"] is None
 
-    def test_absorb_device_overwrites_previous(self, ws):
-        """Second absorb(kind='device') overwrites the first."""
+    def test_absorb_device_overwrites_previous(self, ws: WorldState) -> None:
         ws.absorb(Signal(source="/health", kind="device", payload={"device_class": "desktop"}))
         ws.absorb(Signal(source="/health", kind="device", payload={"device_class": "phone"}))
         snap = ws.snapshot()
@@ -66,8 +63,7 @@ class TestWorldStateTypedSnapshot:
 
     # ── absorb: local_time ───────────────────────────────────────────────
 
-    def test_absorb_local_time_string_updates_snapshot(self, ws):
-        """absorb(kind='local_time') with ISO string sets current_local_time."""
+    def test_absorb_local_time_string_updates_snapshot(self, ws: WorldState) -> None:
         time_str = "2026-04-25T14:30:00+00:00"
         sig = Signal(source="/health", kind="local_time", payload={"local_time": time_str})
         ws.absorb(sig)
@@ -75,8 +71,7 @@ class TestWorldStateTypedSnapshot:
         assert snap["current_local_time"] is not None
         assert isinstance(snap["current_local_time"], datetime)
 
-    def test_absorb_local_time_without_value_ignored(self, ws):
-        """absorb(kind='local_time') with empty payload leaves field None."""
+    def test_absorb_local_time_without_value_ignored(self, ws: WorldState) -> None:
         sig = Signal(source="/health", kind="local_time", payload={})
         ws.absorb(sig)
         snap = ws.snapshot()
@@ -84,8 +79,7 @@ class TestWorldStateTypedSnapshot:
 
     # ── snapshot: unset fields return None ───────────────────────────────
 
-    def test_snapshot_returns_none_for_unset_fields(self, ws):
-        """Fresh WorldState snapshot has all four typed fields as None."""
+    def test_snapshot_returns_none_for_unset_fields(self, ws: WorldState) -> None:
         snap = ws.snapshot()
         assert snap["last_user_message_at"] is None
         assert snap["last_heartbeat_at"] is None
@@ -94,8 +88,7 @@ class TestWorldStateTypedSnapshot:
 
     # ── unknown signal kinds silently ignored ────────────────────────────
 
-    def test_unknown_signal_kind_silently_ignored(self, ws):
-        """Unknown kind leaves snapshot unchanged — forward-compatible."""
+    def test_unknown_signal_kind_silently_ignored(self, ws: WorldState) -> None:
         sig = Signal(source="future_interface", kind="mood_shift", payload={"mood": "happy"})
         ws.absorb(sig)
         snap = ws.snapshot()
@@ -104,4 +97,3 @@ class TestWorldStateTypedSnapshot:
         assert snap["last_heartbeat_at"] is None
         assert snap["current_device_class"] is None
         assert snap["current_local_time"] is None
-

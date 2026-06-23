@@ -1,14 +1,15 @@
-"""
-Cookie-based session management.
-Sessions are stored in BOTH MemoryStore (hot cache) and SQLite (durable).
-MemoryStore is checked first for speed; SQLite is the fallback that survives
-container restarts.
+"""Cookie-based session management.
 
-Cookie name: chalie_session (HTTP-only, SameSite=Lax)
+Sessions are stored in both MemoryStore (hot cache) and SQLite (durable).
+MemoryStore is checked first for speed; SQLite is the fallback that
+survives container restarts. Cookie: ``chalie_session`` (HTTP-only,
+SameSite=Lax).
 """
 import os
 import secrets
 import logging
+
+from flask import Request, Response
 
 from services.time_utils import utc_now
 
@@ -19,7 +20,7 @@ SESSION_TTL = 30 * 24 * 60 * 60  # 30 days in seconds
 SESSION_KEY_PREFIX = 'auth_session:'
 
 
-def _persist_session_to_sqlite(token: str):
+def _persist_session_to_sqlite(token: str) -> None:
     """Write session to SQLite so it survives MemoryStore wipes (restart)."""
     try:
         from services.database_service import get_shared_db_service
@@ -34,7 +35,7 @@ def _persist_session_to_sqlite(token: str):
         logger.error(f"[Session] SQLite persist failed: {e}")
 
 
-def _delete_session_from_sqlite(token: str):
+def _delete_session_from_sqlite(token: str) -> None:
     """Remove session from SQLite."""
     try:
         from services.database_service import get_shared_db_service
@@ -68,27 +69,16 @@ def _validate_session_in_sqlite(token: str) -> bool:
         return False
 
 
-def create_session(response) -> str:
-    """Create a new session, set cookie on response, return token.
-
-    Generates a cryptographically secure random token, stores it in both
+def create_session(response: Response) -> str:
+    """Generates a cryptographically secure random token, stores it in both
     MemoryStore (fast path) and SQLite (durable), and attaches the
-    ``chalie_session`` HTTP-only cookie to the given response object.
-
-    Args:
-        response: Flask (or compatible) response object on which the session
-            cookie will be set.
-
-    Returns:
-        The newly created session token string.
-    """
+    ``chalie_session`` HTTP-only cookie to the given response object."""
     from services.memory_client import MemoryClientService
 
     token = secrets.token_urlsafe(32)
     store = MemoryClientService.create_connection()
     store.setex(f"{SESSION_KEY_PREFIX}{token}", SESSION_TTL, "1")
 
-    # Persist to SQLite so session survives restart
     _persist_session_to_sqlite(token)
 
     secure = os.environ.get('COOKIE_SECURE', 'false').lower() == 'true'
@@ -104,26 +94,15 @@ def create_session(response) -> str:
     return token
 
 
-def validate_session(request) -> bool:
-    """Return True if the request carries a valid session cookie.
-
-    Checks MemoryStore first (fast path). If MemoryStore misses (e.g. after
-    restart), falls back to SQLite and rehydrates MemoryStore on hit.
-
-    Args:
-        request: Flask (or compatible) request object providing access to
-            cookies.
-
-    Returns:
-        True if the session token is present and valid, False otherwise.
-    """
+def validate_session(request: Request) -> bool:
+    """Checks MemoryStore first (fast path). If MemoryStore misses (e.g.
+    after restart), falls back to SQLite and rehydrates MemoryStore on hit."""
     from services.memory_client import MemoryClientService
 
     token = request.cookies.get(SESSION_COOKIE_NAME)
     if not token:
         return False
 
-    # Fast path: check MemoryStore
     store = MemoryClientService.create_connection()
     key = f"{SESSION_KEY_PREFIX}{token}"
     exists = store.exists(key)
@@ -131,22 +110,12 @@ def validate_session(request) -> bool:
         store.expire(key, SESSION_TTL)  # Slide the TTL
         return True
 
-    # Slow path: check SQLite (handles post-restart scenario)
     return _validate_session_in_sqlite(token)
 
 
-def destroy_session(request, response):
-    """Invalidate the session and clear the cookie.
-
-    Deletes the session from both MemoryStore and SQLite, then instructs
-    the response to delete the ``chalie_session`` cookie from the client.
-
-    Args:
-        request: Flask (or compatible) request object providing access to
-            cookies.
-        response: Flask (or compatible) response object on which the cookie
-            deletion will be applied.
-    """
+def destroy_session(request: Request, response: Response) -> None:
+    """Deletes the session from both MemoryStore and SQLite, then deletes
+    the ``chalie_session`` cookie from the client."""
     from services.memory_client import MemoryClientService
 
     token = request.cookies.get(SESSION_COOKIE_NAME)
@@ -158,7 +127,7 @@ def destroy_session(request, response):
     logger.info("[Session] Destroyed session")
 
 
-def cleanup_expired_sessions():
+def cleanup_expired_sessions() -> None:
     """Delete expired sessions from SQLite. Called periodically or on startup."""
     try:
         from services.database_service import get_shared_db_service

@@ -1,5 +1,5 @@
-"""Tests for world_awareness_service — interest extraction and news scanning."""
-
+import sqlite3
+from typing import cast
 from unittest.mock import MagicMock
 
 import numpy as np
@@ -10,14 +10,13 @@ from services.news_service import NewsArticle
 from services.world_awareness_service import WorldAwarenessService
 
 
-def _reset_dgs_singleton():
-    """Clear the DataGraphService singleton so the next call creates a fresh one."""
+def _reset_dgs_singleton() -> None:
     import services.data_graph_service as _dgs_mod
     _dgs_mod._instance = None
 
 
-def _make_article(title="AI Breakthrough", **kwargs):
-    defaults = {
+def _make_article(title: str = "AI Breakthrough", **kwargs: str) -> NewsArticle:
+    defaults: dict[str, str] = {
         "title": title,
         "description": "New discovery",
         "url": "https://example.com/article",
@@ -30,8 +29,7 @@ def _make_article(title="AI Breakthrough", **kwargs):
     return NewsArticle(**defaults)
 
 
-def _seed_trait(db, key, value, confidence, evidence_count, category='preference'):
-    """Insert a data_graph row for a high-confidence user trait."""
+def _seed_trait(db: sqlite3.Connection, key: str, value: str, confidence: float, evidence_count: int, category: str = 'preference') -> None:
     db.execute(
         """INSERT INTO data_graph (kind, key, value, retrieval_weight, evidence_count,
                                    source, deleted_at, active)
@@ -41,8 +39,7 @@ def _seed_trait(db, key, value, confidence, evidence_count, category='preference
     db.commit()
 
 
-def _seed_topic_transcript(db, topic, count, last_ts=None):
-    """Insert `count` user transcript rows for a given channel."""
+def _seed_topic_transcript(db: sqlite3.Connection, topic: str, count: int, last_ts: str | None = None) -> None:
     if last_ts is None:
         from services.time_utils import utc_now
         last_ts = utc_now().isoformat()
@@ -55,8 +52,7 @@ def _seed_topic_transcript(db, topic, count, last_ts=None):
     db.commit()
 
 
-def _make_service(db):
-    """Create a WorldAwarenessService backed by the real test DB."""
+def _make_service(db: sqlite3.Connection) -> WorldAwarenessService:
     db_service = get_shared_db_service()
     return WorldAwarenessService(db_service)
 
@@ -66,13 +62,13 @@ def _make_service(db):
 @pytest.mark.unit
 class TestTraitExtraction:
 
-    def setup_method(self):
+    def setup_method(self) -> None:
         _reset_dgs_singleton()
 
-    def teardown_method(self):
+    def teardown_method(self) -> None:
         _reset_dgs_singleton()
 
-    def test_extracts_high_confidence_traits(self, db):
+    def test_extracts_high_confidence_traits(self, db: sqlite3.Connection) -> None:
         _seed_trait(db, "interest_ai", "artificial intelligence", 0.9, 5)
         _seed_trait(db, "profession", "software engineering", 0.85, 4)
 
@@ -84,14 +80,14 @@ class TestTraitExtraction:
         assert result[0]["score"] == pytest.approx(0.9 * 5, abs=1e-6)
         assert result[0]["source"] == "trait"
 
-    def test_skips_short_trait_values(self, db):
+    def test_skips_short_trait_values(self, db: sqlite3.Connection) -> None:
         _seed_trait(db, "key_short", "x", 0.9, 5)
 
         svc = _make_service(db)
         result = svc._extract_trait_interests()
         assert len(result) == 0
 
-    def test_db_error_returns_empty(self, db):
+    def test_db_error_returns_empty(self, db: sqlite3.Connection) -> None:
         from unittest.mock import patch, MagicMock
         mock_dgs = MagicMock()
         mock_dgs.fetch.side_effect = Exception("DB down")
@@ -106,7 +102,7 @@ class TestTraitExtraction:
 @pytest.mark.unit
 class TestTopicExtraction:
 
-    def test_extracts_topic_frequency(self, db):
+    def test_extracts_topic_frequency(self, db: sqlite3.Connection) -> None:
         _seed_topic_transcript(db, "machine_learning", 10)
         _seed_topic_transcript(db, "docker_compose", 5)
 
@@ -125,7 +121,7 @@ class TestTopicExtraction:
 @pytest.mark.unit
 class TestEmbeddingDedup:
 
-    def test_removes_near_duplicates(self, db):
+    def test_removes_near_duplicates(self, db: sqlite3.Connection) -> None:
         svc = _make_service(db)
 
         # Two identical vectors = similarity 1.0 > 0.85 threshold
@@ -134,7 +130,7 @@ class TestEmbeddingDedup:
         mock_emb.generate_embeddings_batch.return_value = [vec, vec]
         svc._embedding_svc = mock_emb
 
-        candidates = [
+        candidates: list[dict[str, str | float]] = [
             {"term": "AI", "score": 5.0, "source": "trait"},
             {"term": "artificial intelligence", "score": 3.0, "source": "trait"},
         ]
@@ -142,7 +138,7 @@ class TestEmbeddingDedup:
         assert len(result) == 1
         assert result[0]["term"] == "AI"  # highest score kept
 
-    def test_keeps_different_interests(self, db):
+    def test_keeps_different_interests(self, db: sqlite3.Connection) -> None:
         svc = _make_service(db)
 
         # Orthogonal vectors = similarity 0.0
@@ -154,7 +150,7 @@ class TestEmbeddingDedup:
         mock_emb.generate_embeddings_batch.return_value = [vec_a, vec_b]
         svc._embedding_svc = mock_emb
 
-        candidates = [
+        candidates: list[dict[str, str | float]] = [
             {"term": "AI", "score": 5.0, "source": "trait"},
             {"term": "cooking", "score": 3.0, "source": "trait"},
         ]
@@ -168,13 +164,13 @@ class TestEmbeddingDedup:
 @pytest.mark.unit
 class TestExtractInterests:
 
-    def setup_method(self):
+    def setup_method(self) -> None:
         _reset_dgs_singleton()
 
-    def teardown_method(self):
+    def teardown_method(self) -> None:
         _reset_dgs_singleton()
 
-    def test_combines_traits_and_topics(self, db):
+    def test_combines_traits_and_topics(self, db: sqlite3.Connection) -> None:
         _seed_trait(db, "interest", "artificial intelligence", 0.9, 5)
         _seed_topic_transcript(db, "cooking", 10)
 
@@ -192,9 +188,9 @@ class TestExtractInterests:
         result = svc.extract_interests()
         assert len(result) == 2
         # Sorted by score desc
-        assert result[0]["score"] >= result[1]["score"]
+        assert cast(float, result[0]["score"]) >= cast(float, result[1]["score"])
 
-    def test_capped_at_max_interests(self, db):
+    def test_capped_at_max_interests(self, db: sqlite3.Connection) -> None:
         # 10 traits + 10 topics = 20 candidates, should cap at 8
         for i in range(10):
             _seed_trait(db, f"key_{i}", f"interest number {i}", 0.9, 5, category='preference')
@@ -222,16 +218,16 @@ class TestExtractInterests:
 @pytest.mark.unit
 class TestScan:
 
-    def setup_method(self):
+    def setup_method(self) -> None:
         _reset_dgs_singleton()
         # Reset the world_state signals before each scan test
         from services.world_state import world_state
         world_state.set("signals", {})
 
-    def teardown_method(self):
+    def teardown_method(self) -> None:
         _reset_dgs_singleton()
 
-    def test_scan_writes_signals(self, db):
+    def test_scan_writes_signals(self, db: sqlite3.Connection) -> None:
         from services.world_state import world_state
         _seed_trait(db, "interest", "AI", 0.9, 5)
 
@@ -255,16 +251,16 @@ class TestScan:
         # Check the signal landed in the singleton
         signals = world_state.get("signals")
         assert "news" in signals
-        assert "AI Breakthrough" in signals["news"]["label"]
+        assert "AI Breakthrough" in cast(str, cast("dict[str, object]", signals["news"])["label"])
 
-    def test_scan_skips_empty_interests(self, db):
+    def test_scan_skips_empty_interests(self, db: sqlite3.Connection) -> None:
         from services.world_state import world_state
         svc = _make_service(db)
         count = svc.scan()
         assert count == 0
         assert world_state.get("signals") == {}
 
-    def test_scan_continues_on_search_failure(self, db):
+    def test_scan_continues_on_search_failure(self, db: sqlite3.Connection) -> None:
         from services.world_state import world_state
         _seed_trait(db, "key1", "AI", 0.9, 5)
         _seed_trait(db, "key2", "cooking", 0.8, 4)

@@ -4,10 +4,12 @@ Voice blueprint — STT + TTS via two single-purpose ONNX libraries.
 * TTS → ``kokoro_onnx.Kokoro`` (Kokoro v1.0 + espeak-ng phonemizer)
 * STT → ``moonshine_onnx.MoonshineOnnxModel`` (Moonshine base, ONNX)
 
-Both ONNX model files ship with the install — ``installer/install.sh`` writes
-them to ``resources/voice-models/`` at install time, so the first request does
-not have to wait on a network download. If the deps or files are missing every
-route returns ``{"status":"unavailable"}`` or 503 with a precise hint.
+The ONNX model files are downloaded on demand, not bundled with the install.
+Turning voice on in Settings (``PUT /api/voice-settings``) calls
+``RuntimeDepsService.enable_voice()``, which background-installs the voice deps
+and downloads the models into ``resources/voice-models/``. Until the deps or
+model files are present every route returns ``{"status":"unavailable"}`` or 503
+with a precise hint pointing the user back to that setting.
 
 Kokoro uses phonemizer-fork + espeakng-loader under the hood, which preserves
 punctuation as IPA pause tokens and handles numbers, abbreviations, and 2-3
@@ -26,13 +28,21 @@ import re
 import struct
 import tempfile
 import threading
+from typing import TYPE_CHECKING, cast
 
 from flask import Blueprint, Response, request, jsonify
 
-from markdown_it import MarkdownIt
+if TYPE_CHECKING:
+    from typing import Protocol
+    from flask.typing import ResponseReturnValue
+
+    class _KokoroModel(Protocol):
+        def create(self, text: str, voice: str, speed: float, lang: str) -> "tuple[object, int]": ...
 
 from services.file_mapper_service import FileMapperService
-from services.markup import extract_plaintext
+from services.markup import extract_plaintext, markdown_to_html
+
+from .auth import require_auth
 
 logger = logging.getLogger(__name__)
 
@@ -40,9 +50,11 @@ voice_bp = Blueprint("voice", __name__)
 
 # ── Constants (hardcoded — no env vars) ─────────────────────────────────────
 
-# Models are baked into the install by installer/install.sh into a directory
-# sibling to backend/, intentionally OUTSIDE the data/ volume so the files
-# travel with the image and survive `chalie update` on native installs.
+# Models live in resources/voice-models/ — a directory sibling to backend/,
+# intentionally OUTSIDE the data/ volume so the files survive `chalie update` on
+# native installs. They are downloaded at runtime by
+# RuntimeDepsService.enable_voice() when the user turns voice on in Settings,
+# not baked in by the installer.
 _KOKORO_MODEL = FileMapperService.get_voice_models_path("kokoro", "kokoro-v1.0.onnx")
 _KOKORO_VOICES = FileMapperService.get_voice_models_path("kokoro", "voices-v1.0.bin")
 _MOONSHINE_DIR = FileMapperService.get_voice_models_path("moonshine", "base")
@@ -100,7 +112,7 @@ _VOICE_INSTALL_HINT = (
 )
 
 
-def _voice_unavailable_payload() -> dict:
+def _voice_unavailable_payload() -> "dict[str, object]":
     return {
         "error": "Voice dependencies not installed",
         "reason": "deps_missing",
@@ -109,7 +121,7 @@ def _voice_unavailable_payload() -> dict:
     }
 
 
-def _loading_or_missing_response():
+def _loading_or_missing_response() -> "ResponseReturnValue":
     """503 with a precise ``reason`` and ``Retry-After`` so the client can decide
     whether to auto-retry (transient cold-start) or give up (missing files)."""
     missing = _missing_model_files()
@@ -118,7 +130,7 @@ def _loading_or_missing_response():
             "error": "Voice models not installed",
             "reason": "models_missing",
             "missing": missing,
-            "hint": "Re-run installer to download voice models.",
+            "hint": "Enable voice in Settings to download voice models.",
         }), 503
     return jsonify({
         "error": "Models still loading",
@@ -138,8 +150,8 @@ def _missing_model_files() -> list[str]:
 
 # ── Lazy model state ────────────────────────────────────────────────────────
 
-_kokoro = None
-_moonshine = None
+_kokoro: object = None
+_moonshine: object = None
 _load_lock = threading.Lock()
 _models_loaded = False
 _models_loading = False
@@ -152,8 +164,7 @@ _tts_lock = threading.Lock()
 _stt_lock = threading.Lock()
 
 
-def _ensure_models():
-    """Load Kokoro + Moonshine on first use. Thread-safe."""
+def _ensure_models() -> bool:
     global _kokoro, _moonshine, _models_loaded, _models_loading
 
     if _models_loaded:
@@ -216,7 +227,16 @@ def _ensure_models():
 # host form (otherwise espeak spells out every slash and digit), (c) collapse
 # whitespace.
 
-_md = MarkdownIt("commonmark", {"breaks": True, "html": False})
+# Block-level markdown the LLM occasionally leaks into responses. We do NOT run a
+# full markdown parser for TTS — we strip the block markers and route list items
+# through ``<li>`` so they share the HTML list-pause logic below. Images drop
+# entirely (alt text isn't spoken); links keep their text, not the URL.
+_FENCE_RE = re.compile(r"^[ \t]*```[^\n]*$", re.MULTILINE)
+_MD_IMAGE_RE = re.compile(r"!\[[^\]]*\]\([^)]*\)")
+_MD_LINK_RE = re.compile(r"\[([^\]]*)\]\([^)]*\)")
+_HEADING_RE = re.compile(r"^[ \t]*#{1,6}[ \t]+", re.MULTILINE)
+_BLOCKQUOTE_RE = re.compile(r"^[ \t]*>[ \t]?", re.MULTILINE)
+_LIST_ITEM_RE = re.compile(r"^[ \t]*(?:[-*+]|\d+\.)[ \t]+(.*)$", re.MULTILINE)
 _URL_RE = re.compile(r"https?://([^\s/?#]+)\S*")
 _WS_RE = re.compile(r"\s+")
 # Append a period before ``</li>`` when the item doesn't already end in
@@ -231,9 +251,7 @@ _LI_NEEDS_TERMINATOR_RE = re.compile(
 def _spoken_url(match: "re.Match[str]") -> str:
     """Rewrite ``http://google.com/123`` → ``google dot com``.
 
-    Without this, espeak reads URLs character-by-character ("h t t p
-    slash slash google dot com slash one two three") — fast but unpleasant.
-    Stripping protocol + path and verbalising dots produces a natural read.
+    Without this, espeak reads URLs character-by-character — fast but unpleasant.
     """
     host = match.group(1).lower()
     if host.startswith("www."):
@@ -242,21 +260,20 @@ def _spoken_url(match: "re.Match[str]") -> str:
 
 
 def _clean_for_tts(text: str) -> str:
-    """Markdown/HTML → plaintext; rewrite URLs; collapse whitespace."""
     if not text:
         return ""
-    # HTML pre-pass — strip LLM-emitted tags before markdown-it sees them so
-    # `<p>foo</p>` doesn't survive as literal "less-than p greater-than".
-    # Inject list-item terminators here so HTML lists emitted directly by the
-    # LLM (no markdown wrapper) also get inter-item pauses.
-    if "<" in text and ">" in text:
-        text = _LI_NEEDS_TERMINATOR_RE.sub(r"\1.</li>", text)
-        text = extract_plaintext(text)
-    rendered = _md.render(text)
-    # Markdown ``- item`` renders to ``<li>item</li>``; add the terminator
-    # before extract_plaintext flattens the tags.
-    rendered = _LI_NEEDS_TERMINATOR_RE.sub(r"\1.</li>", rendered)
-    plain = extract_plaintext(rendered)
+    # ONE common path: strip block markdown the LLM leaks (lists become <li> so
+    # they join the HTML list-pause logic), rewrite leaked inline emphasis via the
+    # shared markup helper, then flatten every tag through extract_plaintext.
+    text = _FENCE_RE.sub("", text)
+    text = _MD_IMAGE_RE.sub("", text)
+    text = _MD_LINK_RE.sub(r"\1", text)
+    text = _HEADING_RE.sub("", text)
+    text = _BLOCKQUOTE_RE.sub("", text)
+    text = _LIST_ITEM_RE.sub(r"<li>\1</li>", text)
+    text = markdown_to_html(text)
+    text = _LI_NEEDS_TERMINATOR_RE.sub(r"\1.</li>", text)
+    plain = extract_plaintext(text)
     plain = _URL_RE.sub(_spoken_url, plain)
     return _WS_RE.sub(" ", plain).strip()
 
@@ -269,7 +286,6 @@ _TTS_SPLIT_RE = re.compile(r"(?<=[.!?,;:—])\s+")
 
 
 def _segment_for_tts(text: str) -> list[str]:
-    """Split text into chunks under ``_MAX_TTS_CHUNK_CHARS`` on punctuation boundaries."""
     if not text:
         return []
     limit = _MAX_TTS_CHUNK_CHARS
@@ -340,7 +356,7 @@ def _dedup_repetitions(text: str) -> str:
 
 # ── STT audio preprocessing ─────────────────────────────────────────────────
 
-def _extract_speech(audio, sr: int):
+def _extract_speech(audio: object, sr: int) -> object:
     """Strip non-speech regions using Silero VAD.
 
     Returns a float32 array containing only the detected speech segments
@@ -393,13 +409,13 @@ def _extract_speech(audio, sr: int):
         return audio
 
 
-def _denoise(audio, sr: int):
+def _denoise(audio: object, sr: int) -> object:
     """Apply spectral noise reduction to a float32 audio array.
 
     Skips clips shorter than n_fft=2048 samples (128 ms at 16 kHz) to avoid
     STFT boundary errors. Returns original audio on any error (fail-safe).
     """
-    if len(audio) < 2048:
+    if len(cast("list[object]", audio)) < 2048:
         return audio
     try:
         import numpy as np
@@ -422,7 +438,6 @@ _MULTI_SPACE_RE = re.compile(r" {2,}")
 
 
 def _strip_fillers(text: str) -> str:
-    """Remove spoken filler words (um, uh, hmm, er, ah, erm) from STT output."""
     if not text:
         return text
     return _MULTI_SPACE_RE.sub(" ", _FILLER_RE.sub("", text)).strip()
@@ -496,19 +511,18 @@ def _fix_contractions(text: str) -> str:
 # ── WAV helpers ─────────────────────────────────────────────────────────────
 
 def _wav_duration_seconds(data: bytes) -> float:
-    """Parse a WAV header for duration without decoding the audio payload."""
     try:
         if len(data) < 44 or data[:4] != b"RIFF" or data[8:12] != b"WAVE":
             return 0.0
-        channels = struct.unpack_from("<H", data, 22)[0]
-        sample_rate = struct.unpack_from("<I", data, 24)[0]
-        bits_per_sample = struct.unpack_from("<H", data, 34)[0]
+        channels = cast(int, struct.unpack_from("<H", data, 22)[0])
+        sample_rate = cast(int, struct.unpack_from("<I", data, 24)[0])
+        bits_per_sample = cast(int, struct.unpack_from("<H", data, 34)[0])
         if sample_rate == 0 or channels == 0 or bits_per_sample == 0:
             return 0.0
         offset = 12
         while offset < len(data) - 8:
             chunk_id = data[offset:offset + 4]
-            chunk_size = struct.unpack_from("<I", data, offset + 4)[0]
+            chunk_size = cast(int, struct.unpack_from("<I", data, offset + 4)[0])
             if chunk_id == b"data":
                 bytes_per_sample = bits_per_sample // 8
                 return chunk_size / (sample_rate * channels * bytes_per_sample)
@@ -518,7 +532,7 @@ def _wav_duration_seconds(data: bytes) -> float:
         return 0.0
 
 
-def _audio_to_wav_bytes(samples, sample_rate: int) -> bytes:
+def _audio_to_wav_bytes(samples: object, sample_rate: int) -> bytes:
     import soundfile as sf
     buf = io.BytesIO()
     sf.write(buf, samples, sample_rate, format="WAV", subtype="PCM_16")
@@ -545,8 +559,9 @@ def _transcribe_sync(data: bytes) -> str:
         # we hand the samples back to transcribe (or slice them).
         audio = mo.load_audio(tmp.name)[0]  # → float32 [N] @ 16 kHz
 
-    audio = _extract_speech(audio, MOONSHINE_SAMPLE_RATE)
-    audio = _denoise(audio, MOONSHINE_SAMPLE_RATE)
+    import numpy as np
+    audio = cast("np.ndarray[tuple[int], np.dtype[np.float32]]", _extract_speech(audio, MOONSHINE_SAMPLE_RATE))
+    audio = cast("np.ndarray[tuple[int], np.dtype[np.float32]]", _denoise(audio, MOONSHINE_SAMPLE_RATE))
 
     if audio.shape[0] < _MIN_CHUNK_SAMPLES:
         return ""
@@ -580,7 +595,8 @@ def _transcribe_sync(data: bytes) -> str:
 # ── Routes ──────────────────────────────────────────────────────────────────
 
 @voice_bp.route("/voice/health", methods=["GET"])
-def voice_health():
+@require_auth
+def voice_health() -> "ResponseReturnValue":
     """Voice service health check.
 
     Returns ``status`` ∈ {``ok``, ``loading``, ``unavailable``}. When models
@@ -606,7 +622,7 @@ def voice_health():
             "status": "unavailable",
             "reason": "models_missing",
             "missing": missing_files,
-            "hint": "Re-run installer to download voice models.",
+            "hint": "Enable voice in Settings to download voice models.",
         }), 200
 
     threading.Thread(target=_ensure_models, daemon=True).start()
@@ -614,8 +630,8 @@ def voice_health():
 
 
 @voice_bp.route("/voice/synthesize", methods=["POST"])
-def voice_synthesize():
-    """Synthesise speech and return a single WAV blob."""
+@require_auth
+def voice_synthesize() -> "ResponseReturnValue":
     if not _VOICE_AVAILABLE:
         return jsonify(_voice_unavailable_payload()), 503
 
@@ -637,16 +653,16 @@ def voice_synthesize():
     try:
         if len(chunks) == 1:
             with _tts_lock:
-                samples, sr = _kokoro.create(
+                samples, sr = cast("_KokoroModel", _kokoro).create(
                     chunks[0], voice=TTS_VOICE, speed=1.0, lang=TTS_LANG,
                 )
         else:
             import numpy as np
-            all_samples: list = []
+            all_samples: list[object] = []
             sr = None
             with _tts_lock:
                 for i, chunk in enumerate(chunks):
-                    chunk_samples, chunk_sr = _kokoro.create(
+                    chunk_samples, chunk_sr = cast("_KokoroModel", _kokoro).create(
                         chunk, voice=TTS_VOICE, speed=1.0, lang=TTS_LANG,
                     )
                     if sr is None:
@@ -654,13 +670,13 @@ def voice_synthesize():
                     all_samples.append(chunk_samples)
                     if i < len(chunks) - 1:
                         pad_len = int(_TTS_SILENCE_PAD_SECONDS * sr)
-                        all_samples.append(np.zeros(pad_len, dtype=chunk_samples.dtype))
-            samples = np.concatenate(all_samples)
+                        all_samples.append(np.zeros(pad_len, dtype=cast("np.ndarray[tuple[int], np.dtype[np.float32]]", chunk_samples).dtype))
+            samples = np.concatenate(cast("list[np.ndarray[tuple[int], np.dtype[np.float32]]]", all_samples))
     except Exception as e:
         logger.error("[Voice] TTS synthesis failed: %s", e)
         return jsonify({"error": "TTS synthesis failed"}), 500
 
-    wav_bytes = _audio_to_wav_bytes(samples, sr)
+    wav_bytes = _audio_to_wav_bytes(samples, cast(int, sr))
     return Response(
         wav_bytes,
         mimetype="audio/wav",
@@ -672,8 +688,8 @@ def voice_synthesize():
 
 
 @voice_bp.route("/voice/transcribe", methods=["POST"])
-def voice_transcribe():
-    """Transcribe uploaded audio (WAV). Returns ``{"text": "..."}``."""
+@require_auth
+def voice_transcribe() -> "ResponseReturnValue":
     if not _VOICE_AVAILABLE:
         return jsonify(_voice_unavailable_payload()), 503
 

@@ -1,24 +1,11 @@
-"""
-Feature tests for the openai_compatible LLM platform.
-
-What this tests:
-  A user configures a third-party OpenAI-compatible provider (e.g., MiniMax) by
-  POSTing to /api/providers with platform='openai_compatible' and a custom host.
-  The server stores the provider, lists it back correctly, and the LLM service
-  factory returns an OpenAIService whose client is wired to the supplied base_url.
-
-Real-stack — no mocks of production code.
-  - Flask test client backed by the real authed_client fixture
-  - Real SQLite database built from schema.sql via SchemaConvergenceService
-  - Real vault (initialized + unlocked) so api_key encryption round-trips
-  - Real create_llm_service() factory and OpenAIService._get_client()
-  - The openai.OpenAI() constructor never makes network calls on init, so
-    asserting on client.base_url is safe and does not require network access.
-"""
+# Feature tests for the openai_compatible LLM platform.
+# Real-stack — no mocks of production code.
 
 import secrets
+import sqlite3
 
 import pytest
+from flask.testing import FlaskClient
 
 import services.vault_service as _vault_mod
 from services.vault_service import _vault_state, get_vault_service
@@ -29,7 +16,6 @@ from services.vault_service import _vault_state, get_vault_service
 # ---------------------------------------------------------------------------
 
 def _unlock_vault(password: str = "test-password") -> None:
-    """Initialise and unlock the vault for the current test's DB singleton."""
     vault = get_vault_service()
     vault.initialize(password)
     vault.unlock(password)
@@ -41,11 +27,9 @@ def _unlock_vault(password: str = "test-password") -> None:
 
 @pytest.mark.unit
 class TestOpenAICompatibleProvider:
-    """End-to-end feature tests for the openai_compatible platform."""
 
     @pytest.fixture(autouse=True)
-    def _reset_vault_state(self):
-        """Guarantee vault DEK is cleared before and after every test."""
+    def _reset_vault_state(self) -> object:
         _vault_state.dek = None
         _vault_mod._vault_service_instance = None
         yield
@@ -56,9 +40,7 @@ class TestOpenAICompatibleProvider:
     # 1. Provider is stored and listed back correctly
     # ------------------------------------------------------------------
 
-    def test_post_openai_compatible_stores_and_lists_provider(self, authed_client):
-        """POST /api/providers with openai_compatible platform stores the row and
-        GET /api/providers lists it back with platform and host intact."""
+    def test_post_openai_compatible_stores_and_lists_provider(self, authed_client: tuple[FlaskClient, sqlite3.Connection, object]) -> None:
         client, _, _store = authed_client
         _unlock_vault()
 
@@ -92,9 +74,7 @@ class TestOpenAICompatibleProvider:
     # 2. API key round-trips through vault encryption
     # ------------------------------------------------------------------
 
-    def test_api_key_decrypts_correctly_from_db(self, authed_client):
-        """The api_key stored via POST is encrypted in the DB and decrypts to
-        the original plaintext when fetched via ProviderDbService."""
+    def test_api_key_decrypts_correctly_from_db(self, authed_client: tuple[FlaskClient, sqlite3.Connection, object]) -> None:
         client, _, _store = authed_client
         _unlock_vault()
 
@@ -111,8 +91,10 @@ class TestOpenAICompatibleProvider:
 
         # Read back via the DB service (decrypts the key)
         from services.provider_db_service import ProviderDbService
+        from services.database_service import DatabaseService
+        from typing import cast
         import services.database_service as _db_mod
-        svc = ProviderDbService(_db_mod._shared_db_service)
+        svc = ProviderDbService(cast(DatabaseService, _db_mod._shared_db_service))
         provider = svc.get_provider_by_id(provider_id)
 
         assert provider is not None
@@ -121,72 +103,72 @@ class TestOpenAICompatibleProvider:
         assert provider['host'] == 'https://api.minimax.io/v1'
 
     # ------------------------------------------------------------------
-    # 3. create_llm_service returns OpenAIService for openai_compatible
+    # 3. build_client returns OpenAIClient for openai_compatible
     # ------------------------------------------------------------------
 
-    def test_create_llm_service_returns_openai_service(self):
-        """create_llm_service with platform='openai_compatible' returns an
-        OpenAIService instance, not an unknown-platform error."""
-        from services.llm_service import create_llm_service, OpenAIService
+    def test_build_client_returns_openai_client(self) -> None:
+        from services.llm_clients.factory import build_client
+        from services.llm_clients.openai import OpenAIClient
 
-        config = {
+        config: dict[str, object] = {
             'platform': 'openai_compatible',
             'model': 'MiniMax-M2',
             'host': 'https://api.minimax.io/v1',
             'api_key': secrets.token_hex(16),
         }
 
-        service = create_llm_service(config)
+        client = build_client(config)
 
-        assert isinstance(service, OpenAIService)
+        assert isinstance(client, OpenAIClient)
 
     # ------------------------------------------------------------------
     # 4. _get_client() wires base_url from the host field
     # ------------------------------------------------------------------
 
-    def test_get_client_uses_host_as_base_url(self):
-        """OpenAIService._get_client() for an openai_compatible config returns
-        an openai.OpenAI client whose base_url points to the configured host."""
-        from services.llm_service import OpenAIService
+    def test_get_client_uses_host_as_base_url(self) -> None:
+        from services.llm_clients.openai import OpenAIClient
 
-        config = {
+        config: dict[str, object] = {
             'platform': 'openai_compatible',
             'model': 'MiniMax-M2',
             'host': 'https://api.minimax.io/v1',
             'api_key': secrets.token_hex(16),
         }
 
-        service = OpenAIService(config)
-        client = service._get_client()
+        client = OpenAIClient(config)
+        openai_client = client._get_client()
 
         # openai.OpenAI stores base_url as httpx.URL (trailing slash normalised)
         from urllib.parse import urlparse
-        parsed = urlparse(str(client.base_url))
+        parsed = urlparse(str(openai_client.base_url))
         assert parsed.hostname == 'api.minimax.io'
         assert parsed.path.startswith('/v1')
 
-    def test_standard_openai_platform_uses_default_base_url(self):
-        """OpenAIService for platform='openai' (no host) uses the default
-        OpenAI base URL — verifies the two code paths are distinct."""
-        from services.llm_service import OpenAIService
+    def test_standard_openai_platform_uses_default_base_url(self) -> None:
+        """OpenAIClient for platform='openai' (no host) uses the default
+        OpenAI base URL — verifies the two code paths are distinct.
 
-        config = {
+        OpenAIService → OpenAIClient in services/llm_clients/openai.py.
+        """
+        from services.llm_clients.openai import OpenAIClient
+
+        config: dict[str, object] = {
             'platform': 'openai',
             'model': 'gpt-4o-mini',
             'api_key': secrets.token_hex(16),
         }
 
-        service = OpenAIService(config)
-        client = service._get_client()
+        client = OpenAIClient(config)
+        openai_client = client._get_client()
 
         from urllib.parse import urlparse
-        assert urlparse(str(client.base_url)).hostname == 'api.openai.com'
+        assert urlparse(str(openai_client.base_url)).hostname == 'api.openai.com'
 
     # ------------------------------------------------------------------
     # 5. Missing host → 4xx on POST
     # ------------------------------------------------------------------
 
-    def test_post_openai_compatible_without_host_returns_error(self, authed_client):
+    def test_post_openai_compatible_without_host_returns_error(self, authed_client: tuple[FlaskClient, sqlite3.Connection, object]) -> None:
         """POST /api/providers with platform='openai_compatible' but no host
         must be rejected with a 4xx response containing a useful error message."""
         client, _, _store = authed_client

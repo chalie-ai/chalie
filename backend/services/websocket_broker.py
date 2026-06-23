@@ -1,56 +1,86 @@
 """
-WebSocketBroker — singleton connection holder + fire-and-forget broadcast.
+WebSocketBroker — singleton connection registry + fire-and-forget fan-out.
 
-Chalie has one user, one WebSocket connection, one chat UI.
-No sequences, no buffers, no replay — if the WS drops the frontend
-does location.reload() and gets full state from the DB.
+Chalie is single-user, but that one user may have the chat UI open on
+several tabs/devices at once. The broker holds every live server→client
+WebSocket and fans each broadcast out to all of them, so every open client
+stays in sync. No sequences, no buffers, no replay: a dropped socket
+reconnects on its own (the client retries with backoff and runs a liveness
+watchdog), and the durable conversation stays aligned because every user and
+assistant message is broadcast on this channel as it happens — each surface
+renders what it receives.
 
 Usage:
     On connect:    WebSocketBroker().connect(ws)
-    On disconnect: WebSocketBroker().disconnect()
+    On disconnect: WebSocketBroker().disconnect(ws)
     Anywhere:      WebSocketBroker().broadcast({"type": "...", ...})
 """
 
 import json
 import logging
 import threading
+from typing import ClassVar, Protocol
+
+
+class _WebSocket(Protocol):
+    """Structural type for a WebSocket connection that can send a string."""
+
+    def send(self, data: str) -> None: ...
+
 
 logger = logging.getLogger(__name__)
 
 
 class WebSocketBroker:
-    """Single-connection WebSocket broker. Fire-and-forget broadcast."""
+    """Multi-connection WebSocket broker. Fire-and-forget fan-out broadcast."""
 
-    _instance = None
-    _init_lock = threading.Lock()
+    _instance: ClassVar["WebSocketBroker | None"] = None
+    _init_lock: ClassVar[threading.Lock] = threading.Lock()
+    _connections: set[_WebSocket]
+    _lock: threading.Lock
 
-    def __new__(cls):
+    def __new__(cls) -> "WebSocketBroker":
         if cls._instance is None:
             with cls._init_lock:
                 if cls._instance is None:
                     instance = super().__new__(cls)
-                    instance._ws = None
+                    instance._connections = set()
                     instance._lock = threading.Lock()
                     cls._instance = instance
         return cls._instance
 
-    def connect(self, ws) -> None:
-        """Register the active WebSocket connection."""
+    def connect(self, ws: _WebSocket) -> None:
+        """Register a live WebSocket connection."""
         with self._lock:
-            self._ws = ws
+            self._connections.add(ws)
 
-    def disconnect(self) -> None:
-        """Clear the WebSocket reference when the connection closes."""
-        with self._lock:
-            self._ws = None
+    def disconnect(self, ws: _WebSocket) -> None:
+        """Remove a WebSocket connection when it closes.
 
-    def broadcast(self, data: dict) -> None:
-        """Fire-and-forget push to the UI. No-op if nobody is listening."""
+        Removing a specific socket (rather than clearing the whole registry)
+        keeps every other open tab/device receiving broadcasts.
+        """
         with self._lock:
-            ws = self._ws
-        if ws is None:
+            self._connections.discard(ws)
+
+    def broadcast(self, data: dict[str, object]) -> None:
+        """Fire-and-forget push to every live connection. No-op if nobody is listening.
+
+        Sockets that fail to send (closed/half-open) are pruned so a stale
+        connection cannot accumulate or block delivery to healthy clients.
+        """
+        with self._lock:
+            targets = list(self._connections)
+        if not targets:
             return
-        try:
-            ws.send(json.dumps(data))
-        except Exception as exc:
-            logger.debug("[WS BROKER] broadcast failed (connection likely closed): %s", exc)
+        payload = json.dumps(data)
+        dead = []
+        for ws in targets:
+            try:
+                ws.send(payload)
+            except Exception as exc:
+                logger.debug("[WS BROKER] send failed (connection likely closed): %s", exc)
+                dead.append(ws)
+        if dead:
+            with self._lock:
+                self._connections.difference_update(dead)

@@ -1,14 +1,3 @@
-"""
-Generate search routing embeddings directly into providers.sqlite.
-
-Reads all provider examples, embeds them using EmbeddingService, and writes
-the vectors into an ``example_embeddings`` vec0 virtual table inside the same
-providers.sqlite database.
-
-Run from the backend directory:
-    cd backend && python -m utils.generate_search_cache
-"""
-
 import sqlite3
 import sys
 
@@ -19,7 +8,7 @@ from services.file_mapper_service import FileMapperService
 _DB_PATH = FileMapperService.get_search_providers_db_path()
 
 
-def main():
+def main() -> None:
     if not _DB_PATH.exists():
         print(f"ERROR: {_DB_PATH} not found")
         sys.exit(1)

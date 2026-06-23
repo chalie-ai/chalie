@@ -10,6 +10,7 @@ Called by SubconsciousWorker after every PatternMatchProcessor pass.
 import json
 import logging
 import sqlite3
+from typing import cast
 
 from services.file_mapper_service import FileMapperService
 from services.time_utils import utc_now
@@ -19,32 +20,13 @@ LOG_PREFIX = "[SKILL_ASSOC]"
 
 _SKILLS_DB = FileMapperService.get_skills_db_path()
 
-_SYSTEM_PROMPT = """You map behavioral patterns to skill playbooks.
-
-Given a list of the user's behavioral patterns and a list of available skills,
-identify which patterns are relevant to which skills and produce a personalisation
-rule for each match.
-
-A personalisation rule is a single sentence describing how the skill should be
-adapted based on the pattern. Only produce rules where the pattern genuinely
-informs how the skill should be executed differently.
-
-Respond with a JSON array of objects:
-[{"skill_id": <int>, "pattern_name": "<str>", "rule": "<str>"}]
-
-If no patterns match any skills, respond with an empty array: []"""
-
-
 class SkillAssociationService:
     """Run LLM-driven association passes between behavioural patterns and skills.
 
-    Accepts the row IDs of patterns touched by the current PMP pass, loads only
-    those patterns, makes one LLM call to determine personalisation rules, then
-    writes the results back to skill_associations in skills.sqlite.
+    Writes personalisation rules to skill_associations in skills.sqlite.
     """
 
     def run_pass(self, touched_pattern_ids: set[int]) -> int:
-        """Run a single association pass. Returns the number of rules written."""
         if not _SKILLS_DB.exists():
             logger.info(f"{LOG_PREFIX} skills.sqlite not found — skipping")
             return 0
@@ -75,34 +57,31 @@ class SkillAssociationService:
         return written
 
     def _load_patterns(self, row_ids: set[int]) -> list[tuple[str, str]]:
-        """Load behavioral_pattern rows by their data_graph IDs."""
         from services.database_service import get_shared_db_service
         db = get_shared_db_service()
         placeholders = ",".join("?" * len(row_ids))
         with db.connection() as conn:
-            return conn.execute(
+            return cast(list[tuple[str, str]], conn.execute(
                 f"SELECT key, value FROM data_graph "
                 f"WHERE id IN ({placeholders}) "
                 f"AND kind='behavioral_pattern' AND active=1 AND deleted_at IS NULL",
                 tuple(row_ids),
-            ).fetchall()
+            ).fetchall())
 
-    def _load_skill_index(self) -> list[tuple]:
-        """Read skill index (id, title, use_for) from skills.sqlite."""
+    def _load_skill_index(self) -> list[tuple[str, str, str]]:
         conn = sqlite3.connect(str(_SKILLS_DB))
         try:
-            return conn.execute(
+            return cast(list[tuple[str, str, str]], conn.execute(
                 "SELECT id, title, use_for FROM skills"
-            ).fetchall()
+            ).fetchall())
         finally:
             conn.close()
 
     def _request_associations(
         self,
         patterns: list[tuple[str, str]],
-        skills: list[tuple],
-    ) -> list[dict] | None:
-        """Call LLM to map patterns to skills. Returns parsed associations or None."""
+        skills: list[tuple[str, str, str]],
+    ) -> list[dict[str, object]] | None:
         pattern_list = [
             {key: json.loads(value).get("summary", value) if value else value}
             for key, value in patterns
@@ -116,14 +95,10 @@ class SkillAssociationService:
             f"## Available Skills\n{json.dumps(skill_list)}"
         )
 
-        from services.providers import Providers
+        from services.message_processor import MessageProcessor
+        from configs.channels import SkillAssociationConfig
         try:
-            response = Providers.instance().send(
-                user_prompt=user_prompt,
-                system_prompt=_SYSTEM_PROMPT,
-                job='subconscious',
-                tools=[],
-            )
+            text = MessageProcessor.process(user_prompt, SkillAssociationConfig())
         except Exception as exc:
             exc_str = str(exc).lower()
             if "context" in exc_str or "token" in exc_str or "length" in exc_str:
@@ -135,15 +110,14 @@ class SkillAssociationService:
                 logger.error(f"{LOG_PREFIX} LLM call failed: {exc}")
             return None
 
-        return _parse_associations(response.text)
+        return _parse_associations(text)
 
     def _write_associations(
         self,
-        associations: list[dict],
-        valid_skill_ids: set[int],
+        associations: list[dict[str, object]],
+        valid_skill_ids: set[str],
         pattern_names: set[str],
     ) -> int:
-        """Write valid associations. Returns count written."""
         now = utc_now().isoformat()
         written = 0
 
@@ -174,8 +148,7 @@ class SkillAssociationService:
         return written
 
 
-def _parse_associations(text: str) -> list[dict] | None:
-    """Parse LLM JSON response into a list of association dicts."""
+def _parse_associations(text: str) -> list[dict[str, object]] | None:
     if not text:
         return None
     try:
@@ -197,4 +170,4 @@ def _parse_associations(text: str) -> list[dict] | None:
         logger.warning(f"{LOG_PREFIX} LLM returned non-list: {type(result)}")
         return None
 
-    return result
+    return cast(list[dict[str, object]], result)

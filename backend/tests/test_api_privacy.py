@@ -1,12 +1,12 @@
-"""
-Tests for backend/api/privacy.py — privacy blueprint.
+# Tests for backend/api/privacy.py -- privacy blueprint.
 
-Covers /privacy/data-summary and /privacy/delete-all endpoints.
-"""
+import sqlite3
+from collections.abc import Iterator
 
 import pytest
 from unittest.mock import patch
 from flask import Flask
+from flask.testing import FlaskClient
 
 from api.privacy import privacy_bp
 from services.memory_store import MemoryStore
@@ -14,23 +14,15 @@ from services.memory_store import MemoryStore
 
 @pytest.mark.unit
 class TestPrivacyAPI:
-    """Test privacy API endpoints."""
-
     @pytest.fixture
-    def client(self, db):
-        """Create Flask test client with privacy blueprint.
-
-        Requires the ``db`` fixture so that get_shared_db_service() returns
-        the test database (patched at module level by conftest).
-        """
+    def client(self, db: sqlite3.Connection) -> FlaskClient:
         app = Flask(__name__)
         app.register_blueprint(privacy_bp)
         app.config['TESTING'] = True
         return app.test_client()
 
     @pytest.fixture(autouse=True)
-    def bypass_auth(self):
-        """Bypass session auth for all tests."""
+    def bypass_auth(self) -> Iterator[None]:
         with patch('services.auth_session_service.validate_session', return_value=True):
             yield
 
@@ -38,8 +30,7 @@ class TestPrivacyAPI:
     # GET /privacy/data-summary
     # ------------------------------------------------------------------
 
-    def test_data_summary_returns_counts(self, client, db):
-        """GET /privacy/data-summary returns table counts."""
+    def test_data_summary_returns_counts(self, client: FlaskClient, db: sqlite3.Connection) -> None:
         store = MemoryStore()
 
         with patch('services.memory_client.MemoryClientService.create_connection', return_value=store):
@@ -59,8 +50,7 @@ class TestPrivacyAPI:
     # DELETE /privacy/delete-all
     # ------------------------------------------------------------------
 
-    def test_delete_all_without_confirm_header_returns_400(self, client):
-        """DELETE /privacy/delete-all without X-Confirm-Delete returns 400."""
+    def test_delete_all_without_confirm_header_returns_400(self, client: FlaskClient) -> None:
         response = client.delete('/privacy/delete-all')
 
         assert response.status_code == 400
@@ -68,8 +58,7 @@ class TestPrivacyAPI:
         assert "error" in data
         assert "X-Confirm-Delete" in data["error"]
 
-    def test_delete_all_with_header_clears_data(self, client, db):
-        """DELETE /privacy/delete-all with header clears episodes, transcript, tool_calls."""
+    def test_delete_all_with_header_clears_data(self, client: FlaskClient, db: sqlite3.Connection) -> None:
         # Seed data
         db.execute(
             "INSERT INTO episodes (id, gist, salience, channel) "
@@ -98,9 +87,7 @@ class TestPrivacyAPI:
         assert db.execute("SELECT COUNT(*) FROM episodes").fetchone()[0] == 0
         assert db.execute("SELECT COUNT(*) FROM transcript").fetchone()[0] == 0
 
-    def test_delete_all_clears_extended_tables(self, client, db):
-        """DELETE /privacy/delete-all wipes data_graph, lists, list_items,
-        scheduled_items, and documents."""
+    def test_delete_all_clears_extended_tables(self, client: FlaskClient, db: sqlite3.Connection) -> None:
         # ── Seed data_graph ───────────────────────────────────────────────────
         db.execute(
             "INSERT INTO data_graph (kind, key, value) VALUES (?, ?, ?)",
@@ -155,13 +142,7 @@ class TestPrivacyAPI:
         assert db.execute("SELECT COUNT(*) FROM scheduled_items").fetchone()[0] == 0
         assert db.execute("SELECT COUNT(*) FROM documents").fetchone()[0] == 0
 
-    def test_delete_all_tables_all_exist_in_schema(self):
-        """Every table in _DELETE_ALL_TABLES must exist in the live schema.
-
-        Parses CREATE TABLE declarations directly from backend/schema.sql and
-        compares against _DELETE_ALL_TABLES.  Fails immediately if a future
-        schema rip removes a table that is still listed in the tuple.
-        """
+    def test_delete_all_tables_all_exist_in_schema(self) -> None:
         import re
 
         from api.privacy import _DELETE_ALL_TABLES

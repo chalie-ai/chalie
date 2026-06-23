@@ -1,181 +1,102 @@
-# Message Flow
+ # Message Flow
+ 
+Every message — whatever triggered it — runs the same **ACT loop** through the one `MessageProcessor`. What differs per path is the trigger, the channel config, and where the result goes.
+ 
+## The Four Paths
+ 
+ | Path | Trigger | Result |
+ |---|---|---|
+| **User** | `POST /chat` from the web UI | Reply pushed to every open surface over WebSocket |
+| **Subconscious** | 5-minute background tick (idle-gated) | Memory updates only — nothing pushed to chat |
+| **Scheduled** | A due reminder or scheduled prompt | Runs the task in the background, then relays the result through a user-channel turn pushed to the client |
+| **Delegate** | The model calls `web_search` / `web_browse` / `vision` mid-turn | A synthesized answer returned to the calling turn (async on the user channel) |
+ 
+ ---
+ 
+ ## User Path
+ 
+The client sends messages over **HTTP** (`POST /chat`, multipart form-data with text + optional file attachments). The WebSocket at `/ws` is push-only — the server uses it to stream status, tool activity, and the final reply back to the client, and to echo every received user message on the same channel so all open surfaces stay in sync.
+ 
+ ```
+POST /chat
+  └─ daemon thread per turn
+       └─ MessageProcessor.process(text, UserConfig(metadata), cancel_event)
+            └─ _run()      under the per-channel lock:
+                 ├─ _setup()    input transcript row · deliberation gate · turn-zero seeds
+                 ├─ _step()     one LLM call; tool-bearing steps write their assistant
+                 │              row and recurse, a plain-text reply ends the chain
+                 └─ _end_turn() post-turn hooks
+       └─ WebSocket: {"type":"message", ...} + {"type":"done", ...}
+ ```
+ 
+**Turn-zero seeds.** Before the first LLM call, the framework dispatches real tool calls whose results land in the turn's tool trail (never injected into the prompt):
+ 
+- a `memory` recall keyed on the input,
+- one `document` upload per attachment — uploads fan out in parallel and are joined at a barrier, so vision/OCR extraction overlaps,
+- an internal `thinking` pass, only when the deliberation classifier scores the message *high*.
+ 
+**History is literal text.** Previous conversation is rendered as a `## Previous Messages` block inside the single user message — the provider never receives a multi-turn array.
+ 
+**Interrupt & cancel.** `POST /chat/interrupt` stops the active turn; a cancelled turn deletes its transcript and tool-call rows, leaving no trace. Sending a new message mid-turn cancels the active turn and starts a fresh one with the original + new text combined. Cancellation reaches a turn even while it is parked waiting on an interactive permission prompt: the gate wait polls the cancel event, so a cancel resolves the prompt as denied and the turn unwinds, always releasing the per-channel lock so the replacement turn never deadlocks behind it.
+ 
+**Connection resilience.** Because replies arrive only over the push channel, the client guards the socket on two fronts. A socket that closes cleanly (`onclose`) triggers exponential-backoff reconnection. A *half-open* socket — one a reverse proxy idle-drops at the TCP layer without sending a close frame, so `onclose` never fires and `readyState` stays `OPEN` — is caught by a liveness watchdog: the client stamps the arrival time of every inbound frame and, if none arrives for longer than 1.5× the server's keep-alive ping interval, tears the dead socket down and reconnects. A tab regaining focus re-runs the same staleness check on demand, so a backgrounded tab heals the moment the user returns instead of silently swallowing the next reply. Whichever path tears the socket down, the client also finalizes any in-flight turn locally — it collapses the live progress indicator and drops the turn's pending callbacks. The turn's terminal `done` was delivered to the now-dead socket and is never resent, so without this the progress indicator would hang indefinitely even though the backend had already finished the turn, and a stale callback could later misattribute an unrelated turn's completion.
 
-Chalie handles five distinct message paths. All of them share the same **ACT loop** and **atomic storage** model. The paths differ in what triggers them, how much post-turn work they do, and whether the result goes to the user immediately or arrives as a proactive push.
+### Multi-surface sync
 
----
+A Chalie instance belongs to **one user**, but that user may have it open on several surfaces at once — phone, laptop, multiple tabs. There is one conversation, and every surface mirrors it. Two rules keep them aligned, both riding the single `/ws` broadcast channel that every surface subscribes to:
 
-## The Five Paths
+1. **User messages.** When a surface sends a message, the server stores it and broadcasts a `user_message` echo to every connection. The sending surface already rendered the bubble optimistically, so it recognises its own echo — by a client-minted `echo_id` round-tripped through `POST /chat` — and drops it; every other surface has no such bubble and renders one. The echo carries the text verbatim.
+2. **Assistant messages.** The final reply is broadcast as a `message` event to every connection. The surface that started the turn renders it through its turn callbacks; peer surfaces render a plain assistant bubble from the broadcast. Either way the reply shows on all surfaces.
 
-| Path | Trigger | Result |
-|---|---|---|
-| **User** | WebSocket message from the user | Response delivered on the same socket |
-| **DMN** | Step 5 of the subconscious worker tick (no own trigger) | Saves findings via memory tool; no chat-UI push |
-| **Goal pursuit** | Background daemon spawned per active goal | Proactive push when goal resolves |
-| **Scheduled** | Timer fires on a due prompt | Proactive push to client |
-| **Episode encoder** | Internal, runs when the transcript tail grows long enough | No user-visible output; consolidates memory |
-
-Each path is an independent orchestrator. There is no shared queue or central dispatcher — each path constructs its own processor instance and runs the loop directly.
-
----
-
-## User Path
-
-When a message arrives over WebSocket, a daemon thread is spawned immediately so the HTTP layer stays free. The processor runs the full ACT loop, stores the turn atomically, runs post-turn services, and delivers the response.
-
+The live per-turn ACT trail (status and tool activity) rides the same channel — the broker fans **every** frame out to all live connections and prunes any socket whose send fails, so one stale connection can neither block delivery nor accumulate. What differs is rendering, not routing: only the surface that started the turn shows the trail, because idle peers drop content-free ACT frames client-side (a render-policy choice) — the trail is ephemeral turn scaffolding, not durable conversation. A surface that joins mid-turn simply shows the user and assistant bubbles once they broadcast.
+ 
+ ---
+ 
+## The ACT Loop
+ 
 ```
-User (WebSocket)
-       │
-       ▼
-  daemon thread spawned
-       │
-       ▼
-  ┌─────────────────────────────┐
-  │  pre_act()                  │
-  │  · memory recall via        │
-  │    handle_memory() —        │
-  │    canonical tool dispatch, │
-  │    stored ephemeral=0       │
-  │  · deliberation-score gate  │
-  │    (exploration pass)       │
-  └────────────┬────────────────┘
-               │
-               ▼
-  ┌─────────────────────────────┐
-  │  ACT loop  (see below)      │
-  └────────────┬────────────────┘
-               │
-               ▼
-  ┌─────────────────────────────┐
-  │  Atomic store               │
-  │  (input + tools + response  │
-  │   in one transaction)       │
-  └────────────┬────────────────┘
-               │
-               ▼
-  ┌─────────────────────────────┐
-  │  Post-turn fan-out          │
-  │  (see below)                │
-  └────────────┬────────────────┘
-               │
-               ▼
-  Response + metrics → WebSocket → client
+build request (history + world state + input + tool trail)
+  → pre-flight size check ── over cap? ──► compact, rebuild, retry
+  → send to LLM
+  → no tool calls?  → done, return the text
+  → tool calls      → dispatch each via ToolDispatcher → results appended to trail
+  → next iteration (until done or cancelled)
 ```
-
-**History is literal text, not a messages array.** The previous conversation is assembled as a text block inside the user message body. The provider always receives a single-element messages list. This keeps history portable and independent of provider multi-turn formats.
-
----
-
-## ACT Loop
-
-Every processor runs the same ACT loop. The loop continues until the model produces a response with no tool calls, a cooperative cancel signal is received (`_cancel_event`), or the processor's iteration cap is reached. User-facing processors (UMP, SubagentProcessor) have no iteration cap — they run until the model finishes or the user stops them. Background processors retain hard caps (DMN=100, EAMP=200, PatternMatch=100, GeoPattern=100). The user can stop an active UMP turn via `POST /chat/interrupt` or a running subagent via `POST /chat/subagent/<sub_id>/stop`. When a turn is cancelled, `_cleanup_cancelled_turn()` deletes all tool_call and transcript rows for that turn — the cancelled turn leaves no trace in the database. If the user sent a new message mid-turn, the frontend concatenates the original + new message (separated by `\n\n`) and starts a fresh turn with the combined text.
-
-```
-  ┌──────────────────────────────────────────┐
-  │  Build prompt                            │
-  │  (world state, past messages, user text, │
-  │   accumulated tool trail)                │
-  │                 │                        │
-  │  Check context size ─── near limit? ──► compaction (see below)
-  │                 │                        │
-  │  Send to LLM                             │
-  │                 │                        │
-  │  No tool calls? ──► done                 │
-  │                 │                        │
-  │  Tool calls? ──► dispatch each tool      │
-  │                  · append result         │
-  │                    to trail              │
-  │                  · record tool in        │
-  │                    metrics               │
-  │                 │                        │
-  │  Check _cancel_event (cooperative stop)   │
-  │                 │                        │
-  └─────────────────┘ (next iteration)
-```
-
-Tool errors are returned to the model as structured result strings. They are never raised to the caller or surfaced to the user directly.
-
-All tool call records accumulate in memory during the loop. Nothing is written to the database until the loop finishes.
-
----
-
-## Mid-ACT Compaction
-
-When the rendered `user_body` exceeds 80% of the provider's context limit, or when the provider returns a `PayloadTooLargeError` (HTTP 413), `_handle_overflow()` fires. There is a single overflow path — no Stage 1 / Stage 2 distinction.
-
-**Overflow path — `_handle_overflow()`:**
-
-1. `_run_full_compaction(exclude_id=self._uid)` is called. This constructs a `ContinuityCompactionProcessor`, builds an LLM input from the previous compaction summary (if any) plus all transcript turns since the last success watermark (excluding the current in-flight turn so the model is not tempted to answer the user question instead of summarising).
-2. The LLM response is parsed for `<summary>...</summary>`. The extracted body is the new compaction text.
-   - **Success** — writes a `tool_calls` row with `tool_name='compaction'`, `ephemeral=0`, `params={"compacted_up_to_id": <max included id>, "status": "success"}`, `result=<summary body>`. Emits `[COMPACTION] {channel}: continuity success — in=… chars, out=… chars, watermark …→…`.
-   - **Failure** (parse error, empty output, LLM error) — writes a row with `status=failure` and `result=''`. Emits `[COMPACTION] {channel}: continuity failure — reason=…`. The lookup ignores failure rows, so the previous success summary remains active. The caller breaks to cap-exit and the turn cannot proceed.
-3. On success, in-flight ACT loop state is cleared: `_act_trail`, `_discovered_tools`, `_pending_tool_calls`, and `_thinking_exploration` are all reset. Any `tool_calls` rows with `transcript_id = self._uid AND ephemeral = 1` (in-flight ACT artifacts from the aborted iteration) are deleted. The iteration counter resets to 0 and the ACT loop restarts.
-
-A second `PayloadTooLargeError` after a successful recovery breaks immediately to cap-exit (tracked via `_payload_too_large_recovered`) — the summary itself is too large for the provider.
-
-**Compaction storage** is append-only. Results are `tool_calls` rows, not a separate table. `compaction_persistence.get_compaction(channel)` returns `{compacted_text, compacted_up_to_id, tool_call_id}` for the most recent success row, or `None` if none exists.
-
-**Subagent overflow** is handled differently. `SubagentProcessor._handle_overflow()` overrides the base: it calls `SubagentTrailCompactionProcessor` to compress `self._act_trail` in place, writes a `tool_calls` audit row with `tool_name='subagent_trail_compaction'` and `ephemeral=1`, and continues from the same iteration — no restart, because a subagent is one-shot and cannot rebuild channel history.
-
----
-
-## Post-Turn Fan-Out (User Path Only)
-
-After the turn is stored, the user processor triggers a set of services synchronously. Because the response is already on the wire (sent via narration callbacks during the loop), this fan-out does not affect perceived latency.
-
-- **Conversation phase tracking** — updates the current phase based on both the user message and the response.
-- **Metrics counter** — increments request and user-message totals.
-
-Background paths (DMN, goal pursuit, scheduled) skip all of this. They only update the request counter. (DMN no longer has an idle-timer to reset — it runs as Step 5 of the subconscious worker tick.)
-
-Personal facts are handled inline during the ACT loop: when the model decides to store something, it calls the memory ability directly. Contradiction detection happens at storage time.
-
----
-
-## Background Paths
-
-### DMN (Reflective Pass — Subconscious Step 5)
-
-DMN no longer has its own daemon, idle trigger, or proactive output channel (v0.6.0). It runs as **Step 5 of the subconscious worker tick** — see `04-ARCHITECTURE.md` for the full five-step ordering. The processor reflects on the user picture and persists findings to `data_graph` via the `memory` tool; nothing is pushed to chat.
-
-```
-  Subconscious tick (Step 5)
-      │
-      ├── load user_summary_long (fallback user_summary, else skip)
-      ├── load channel='user' episodes (retrieval_weight ≥ 0.3, 30d window, LIMIT 50)
-      │
-      ▼
-   ACT loop (news / search / browser ALWAYS_AVAILABLE; memory tool for writes)
-      │
-      ▼
-   Findings persisted to data_graph. No chat-UI broadcast.
-```
-
-### Goal Pursuit
-
-When the model calls the goal-pursuit tool, a daemon thread is spawned for that goal. It runs an extended ACT loop independently, with a long wall-clock budget. On completion, the result is pushed to the client as a proactive message.
-
-Each goal daemon is fully isolated. Multiple goals can run in parallel on separate threads.
-
-### Scheduled Prompts
-
-A polling loop checks for prompts that are due. When one fires, it runs an ACT loop with a reduced tool set (scheduling and goal-pursuit tools are excluded to prevent recursion). The result is pushed to the client and the item is marked executed.
-
-### Episode Encoder
-
-Runs internally when a channel's transcript tail grows beyond a threshold. Encodes recent transcript windows into episode records for later recall. Produces no user-visible output. The trigger is evaluated per-channel after each turn is stored.
-
----
-
-## Per-Turn Metrics
-
-Every WebSocket response frame carries a `metrics` block. Token counts span **all** LLM calls in the turn — the main ACT loop, the thinking exploration pass, and any compaction call fired by `_handle_overflow()`. Tool counts record how many times each tool was called. The response time is measured from before the daemon thread is spawned.
-
-```json
-{
-  "tokens_total": 4820,
-  "tools": { "memory": 1, "search": 2 },
-  "response_time_s": 1.43
-}
-```
-
-Action-button responses (no LLM call) carry the block with zero tokens. Error frames carry whatever partial metrics were accumulated before the failure.
+ 
+- There is no iteration cap on any channel: the loop terminates only when the model answers in plain text (no tool calls) or the cancel event fires. The user can always interrupt a turn.
+- Each individual `send to LLM` is bounded by a single hard wall-clock ceiling of 300 seconds. A provider that stalls past it — a stuck connection or a stream that stops mid-response — is abandoned and surfaced as a normal provider error rather than wedging the turn indefinitely. This one ceiling is the only provider call timeout; it applies uniformly to every provider.
+- Tool errors are returned to the model as structured result strings; they never crash the loop or surface raw to the user.
+- A soft brake on runaway retries, not a hard cap: when a tool returns an error identical to one it already produced earlier in the same turn, the dispatcher appends a one-shot steer to that result telling the model to re-check the tool's inputs and, if it still fails, stop and ask the user — so a tool stuck on the same error cannot spin the (uncapped) loop indefinitely.
+- Every tool call is written to the `tool_calls` table as it happens; a row lives and dies with its transcript turn — the decay engine's transcript GC reaps it together with the turn once that turn falls below the compaction watermark and is no longer cited by any live episode.
+ 
+### Compaction
+ 
+Compaction is size-driven only — there is no turn-count or age trigger. The `## Previous Messages` block each turn assembles keeps growing as the conversation continues; when the pre-flight check (or a provider-side size rejection) fires, the loop dispatches a single internal ability through the normal tool chokepoint:
+ 
+1. **`chat_history_compactor`** — summarises the older `## Previous Messages` block; the summary is written to the transcript as a `role='compaction'` row, whose id becomes the new history watermark.
+ 
+Because every iteration rebuilds the request from the database, advancing the watermark automatically shrinks the next request. If nothing is left to compact, the loop force-sends and lets the provider be the source of truth. The latest compaction summary is visible in Brain → Cognition → Compacted Summary.
+ 
+ ---
+ 
+ ## Background Paths
+ 
+**Subconscious tick** — every 5 minutes, gated on 30+ minutes of user idleness, the subconscious worker runs its nine steps (consolidate, fact extraction, decay, pattern match, synthesis, DMN reflection, capability sync, geo patterns, proactive research). See [04-ARCHITECTURE.md](04-ARCHITECTURE.md#background-cognition). Each is a normal `MessageProcessor` turn on its own channel. Most write no transcript rows and none broadcast to chat. History compaction is **not** one of these steps — it runs in-loop during a turn when the request outgrows the context window (the over-cap path above).
+ 
+**Scheduled prompts** — the scheduler worker polls for due items and fires each in two stages, modelled on the delegate tools. Stage one runs the instruction as an independent background turn on its own muted `scheduled` channel (full tool surface, no episodes or facts of its own), persisting the instruction so a fired task is recoverable. Stage two hands that result to an ordinary user-channel turn with `hidden_input=True`, which is what surfaces to the client and is episodically encoded — so the trigger text stays out of the visible conversation while the reply is delivered normally. The two stages run on a daemon thread so the poll never blocks on the LLM work.
+ 
+**Episode encoding** — after turns are stored on an episode-producing channel (`user`, `dmn`, `external-agent:*` — see [04-ARCHITECTURE.md](04-ARCHITECTURE.md#per-source-memory-profiles)), a rolling trigger (every ~20 new transcript rows) encodes the recent window into episodic memory. No user-visible output.
+ 
+ ---
+ 
+ ## Per-Turn Metrics
+ 
+Every final WebSocket frame carries a `metrics` block. Token counts cover **all** LLM calls in the turn — the main loop, any `thinking` pass, and any compaction calls:
+ 
+ ```json
+ {
+   "tokens_total": 4820,
+  "tools": { "memory": 1, "web_search": 1 },
+   "response_time_s": 1.43
+ }
+ ```

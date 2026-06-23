@@ -33,10 +33,16 @@ Signal schema (per item):
 
 import logging
 import uuid
+from typing import TYPE_CHECKING, cast
 
 from flask import Blueprint, g, jsonify, request
 
 from .auth import require_auth
+
+if TYPE_CHECKING:
+    from flask.typing import ResponseReturnValue
+    from services.wrapper_auth_service import WrapperAuthService
+    from services.wrapper_rate_limiter import WrapperRateLimiter
 
 logger = logging.getLogger(__name__)
 
@@ -50,42 +56,25 @@ _BATCH_MAX = 50
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _get_rate_limiter():
-    """Return the process-singleton WrapperRateLimiter."""
+def _get_rate_limiter() -> "WrapperRateLimiter":
     from services.wrapper_rate_limiter import WrapperRateLimiter
     return WrapperRateLimiter()
 
 
-def _get_wrapper_service():
-    """Return a WrapperAuthService using the shared DatabaseService."""
+def _get_wrapper_service() -> "WrapperAuthService":
     from services.database_service import get_shared_db_service
     from services.wrapper_auth_service import WrapperAuthService
     return WrapperAuthService(get_shared_db_service())
 
 
 def _effective_wrapper_id() -> str:
-    """Return the caller's wrapper_id, falling back to '__chat_ui__' for cookie auth."""
     wid = getattr(g, "wrapper_id", None)
     return wid if wid else "__chat_ui__"
 
 
 def _check_signal_capability(wrapper_id: str, signal_type: str) -> bool:
-    """Return True if the wrapper may emit ``signal_type``.
-
-    Cookie-authenticated callers (wrapper_id == '__chat_ui__') are always
-    allowed — they are the native UI, not an external wrapper.
-
-    Bearer-authenticated callers must have ``signal_type`` listed in
-    ``capabilities.signals``.  An absent or empty ``signals`` list means the
-    wrapper may not emit *any* signals.
-
-    Args:
-        wrapper_id: The resolved wrapper identifier.
-        signal_type: The signal type string the caller wants to emit.
-
-    Returns:
-        ``True`` if the caller is permitted, ``False`` otherwise.
-    """
+    """Cookie callers are always allowed; bearer callers need ``signal_type`` in
+    ``capabilities.signals`` (absent/empty list means no signals permitted)."""
     if wrapper_id == "__chat_ui__":
         return True
 
@@ -94,25 +83,15 @@ def _check_signal_capability(wrapper_id: str, signal_type: str) -> bool:
     if wrapper is None:
         return False
 
-    allowed_signals = wrapper.get("capabilities", {}).get("signals", [])
+    allowed_signals = cast("list[str]", cast("dict[str, object]", wrapper.get("capabilities", {})).get("signals", []))
     return "*" in allowed_signals or signal_type in allowed_signals
 
 
-def _validate_signal(body: dict | None) -> tuple[dict | None, str | None]:
-    """Validate a single signal payload.
-
-    Args:
-        body: Raw dict from the request JSON.
-
-    Returns:
-        ``(cleaned_dict, None)`` on success, or ``(None, error_message)`` on
-        failure.  The cleaned dict contains only the known fields with defaults
-        applied.
-    """
+def _validate_signal(body: "dict[str, object] | None") -> "tuple[dict[str, object] | None, str | None]":
     if not isinstance(body, dict):
         return None, "signal must be a JSON object"
 
-    signal_type = (body.get("signal_type") or "").strip()
+    signal_type = (cast(str, body.get("signal_type")) or "").strip()
     if not signal_type:
         return None, "signal_type is required"
 
@@ -122,7 +101,7 @@ def _validate_signal(body: dict | None) -> tuple[dict | None, str | None]:
 
     activation_energy = body.get("activation_energy", 0.5)
     try:
-        activation_energy = float(activation_energy)
+        activation_energy = float(cast(float, activation_energy))
     except (TypeError, ValueError):
         return None, "activation_energy must be a number"
     if not (0.0 <= activation_energy <= 1.0):
@@ -134,7 +113,7 @@ def _validate_signal(body: dict | None) -> tuple[dict | None, str | None]:
 
     return {
         "signal_type": signal_type,
-        "source": (body.get("source") or "").strip() or None,
+        "source": (cast(str, body.get("source")) or "").strip() or None,
         "content": str(content),
         "topic": body.get("topic") or None,
         "activation_energy": activation_energy,
@@ -142,7 +121,7 @@ def _validate_signal(body: dict | None) -> tuple[dict | None, str | None]:
     }, None
 
 
-def _build_and_emit(validated: dict, wrapper_id: str) -> str:
+def _build_and_emit(validated: "dict[str, object]", wrapper_id: str) -> str:
     """Write an external signal directly to world state (zero LLM).
 
     External signals update Chalie's world model without entering the
@@ -161,9 +140,9 @@ def _build_and_emit(validated: dict, wrapper_id: str) -> str:
     from services.world_state import world_state
 
     signal_id = str(uuid.uuid4())
-    source = validated["source"] or wrapper_id
+    source = cast(str, validated["source"]) or wrapper_id
 
-    world_state.push_signal(source, validated["content"], ttl=3600)
+    world_state.push_signal(source, cast(str, validated["content"]), ttl=3600)
 
     logger.debug(
         "[Signals API] External signal %s from %s → world_state",
@@ -179,7 +158,7 @@ def _build_and_emit(validated: dict, wrapper_id: str) -> str:
 
 @signals_bp.route("", methods=["POST"])
 @require_auth
-def ingest_signal():
+def ingest_signal() -> "ResponseReturnValue":
     """Ingest a single signal into world state (zero LLM).
 
     Body (JSON):
@@ -206,9 +185,9 @@ def ingest_signal():
         return jsonify({"error": err}), 400
 
     # Capability check for bearer-authenticated callers
-    if not _check_signal_capability(wrapper_id, validated["signal_type"]):
+    if not _check_signal_capability(wrapper_id, cast(str, cast("dict[str, object]", validated)["signal_type"])):
         return jsonify({
-            "error": f"wrapper is not permitted to emit signal type '{validated['signal_type']}'"
+            "error": f"wrapper is not permitted to emit signal type '{cast('dict[str, object]', validated)['signal_type']}'"
         }), 403
 
     # Rate limit check
@@ -216,7 +195,7 @@ def ingest_signal():
     if not limiter.is_allowed(wrapper_id):
         return jsonify({"error": "rate limit exceeded"}), 429
 
-    signal_id = _build_and_emit(validated, wrapper_id)
+    signal_id = _build_and_emit(cast("dict[str, object]", validated), wrapper_id)
     return jsonify({"ok": True, "signal_id": signal_id}), 202
 
 
@@ -226,7 +205,7 @@ def ingest_signal():
 
 @signals_bp.route("/batch", methods=["POST"])
 @require_auth
-def ingest_signals_batch():
+def ingest_signals_batch() -> "ResponseReturnValue":
     """Ingest up to 50 signals in a single request.
 
     Body (JSON):
@@ -256,7 +235,7 @@ def ingest_signals_batch():
     limiter = _get_rate_limiter()
     accepted = 0
     rejected = 0
-    errors = []
+    errors: list[dict[str, object]] = []
 
     for idx, item in enumerate(body):
         # Validate
@@ -267,11 +246,11 @@ def ingest_signals_batch():
             continue
 
         # Capability check
-        if not _check_signal_capability(wrapper_id, validated["signal_type"]):
+        if not _check_signal_capability(wrapper_id, cast(str, cast("dict[str, object]", validated)["signal_type"])):
             rejected += 1
             errors.append({
                 "index": idx,
-                "error": f"wrapper is not permitted to emit signal type '{validated['signal_type']}'",
+                "error": f"wrapper is not permitted to emit signal type '{cast('dict[str, object]', validated)['signal_type']}'",
             })
             continue
 
@@ -283,7 +262,7 @@ def ingest_signals_batch():
 
         # Emit
         try:
-            _build_and_emit(validated, wrapper_id)
+            _build_and_emit(cast("dict[str, object]", validated), wrapper_id)
             accepted += 1
         except Exception as exc:
             logger.exception("[Signals API] Batch emit error at index %d: %s", idx, exc)

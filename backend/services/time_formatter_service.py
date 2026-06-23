@@ -9,6 +9,7 @@ user's local wall-clock time, never raw UTC.
 """
 
 import logging
+from datetime import datetime
 
 from services.time_utils import utc_now, parse_utc
 from services.locale_service import format_date
@@ -17,33 +18,9 @@ logger = logging.getLogger(__name__)
 
 
 class TimeFormatterService:
-    """Compact, unit-normalised duration formatter.
-
-    All methods are static — no state, no constructor arguments, no DI.
-    """
 
     @staticmethod
     def duration(seconds: int | float) -> str:
-        """Return a compact human-readable duration string for *seconds*.
-
-        Tiers (breakpoints are inclusive on the lower bound):
-          0   – 60s    → '{X}s'      e.g. '0s', '45s', '60s'
-          61  – 3599s  → '{X}m'      e.g. '7m', '59m'
-          3600– 86399s → '{X}h {Y}m' e.g. '1h 0m', '23h 59m'
-          86400+s      → '{X}d {Y}h' e.g. '1d 0h', '3d 12h'
-
-        Always non-negative — caller adds directional context ('ago' / 'in')
-        in its own template. Negative input clamps to ``'0s'`` (defensive;
-        matches the ``ago()`` contract). Fractional seconds are floored at
-        each unit boundary.
-
-        Args:
-            seconds: Duration in seconds, may be fractional. Negative values
-                clamp to zero.
-
-        Returns:
-            Compact formatted string, e.g. '2h 30m'.
-        """
         secs = max(0, int(seconds))
         if secs <= 60:
             return f"{secs}s"
@@ -58,7 +35,7 @@ class TimeFormatterService:
         return f"{d}d {h}h"
 
     @staticmethod
-    def ago(past) -> str:
+    def ago(past: datetime | str | int | float) -> str:
         """Return '{duration} ago' for *past*.
 
         Accepts either a past datetime (aware or naive — parsed via
@@ -87,7 +64,7 @@ class TimeFormatterService:
         return f"{TimeFormatterService.duration(secs)} ago"
 
     @staticmethod
-    def local(value, fmt: str = "%Y-%m-%d %H:%M") -> str | None:
+    def local(value: datetime | str | None, fmt: str = "%Y-%m-%d %H:%M") -> str | None:
         """Format *value* in the user's local timezone.
 
         Delegates to locale_service.format_date(for_ui=True) — the single

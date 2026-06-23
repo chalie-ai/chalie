@@ -1,104 +1,62 @@
-# Testing Guide
-
-## Philosophy
-
-Every test answers one question: **does this service do what it claims?**
-
-Given real input X, through the real production stack, assert real observable output Y. If a test does not fit that shape, delete it.
-
-### Hard rules
-
-1. **Zero mocks.** No `MagicMock`, `Mock`, `patch`, `monkeypatch`, stubs, spies, or fakes against production code. In-memory SQLite is allowed — it is still SQLite, not a mock.
-2. **3–10 feature tests per service. Hard cap.** More than 10 is a design smell. Escalate; do not write the 11th test.
-3. **Real-world scenarios only.** Test what the service is responsible for, not how it is wired internally.
-4. **No contract or plumbing tests.** No field-list, call-count, version-pin, shape, or enum-membership assertions. A real feature test catches those failures with better signal.
-5. **No unit tests unless the function is pure.** Pure means: no IO, no collaborators, no state. Everything else is a feature test.
-6. **The coder agent never writes or modifies tests.** The tester agent has exclusive ownership.
-
-## Markers
-
-| Marker | When to use |
-|---|---|
-| `@pytest.mark.unit` | Pure functions only — no IO, no collaborators, deterministic |
-| `@pytest.mark.integration` | Anything touching a service, DB, model, or network — the default |
-
-`integration` is the default. Apply `unit` only when all three pure-function criteria hold.
+# Testing
 
 ## Running the Suite
 
 ```bash
 cd backend
 
-pytest -m unit          # fast — pure functions, in-memory, ~1 second
-pytest -m integration   # slow — real stack, real models
-pytest                  # both
+pytest -m unit          # pure functions only — fast
+pytest -m integration   # services, DB, real models — the default tier
+pytest -m e2e           # live network / real Chromium
+pytest                  # everything
 ```
 
-## Example Feature Test
+`pytest.ini` enforces `-x` (stop on first failure) and `--strict-markers`. Tests live in `backend/tests/` (most files at the root, marked `integration` by convention; `tests/unit/`, `tests/integration/`, and `tests/e2e/` hold the explicitly tiered ones).
+
+The shared `conftest.py` builds one real schema-converged SQLite template per session and hands each test a fresh copy — tests run against the real database layer, not fakes.
+
+## Philosophy
+
+Every test answers one question: **does this service do what it claims?** Given real input X, through the real production stack, assert real observable output Y.
+
+- Prefer real collaborators over mocks. In-memory or copied SQLite is fine — it's still SQLite. (The conftest patches only the auth/session boundary so API tests can run logged-in.)
+- Keep it to a handful of feature tests per service — test what the service is responsible for, not how it's wired internally.
+- No plumbing assertions: field lists, call counts, `isinstance` as the sole check, version pins.
+- Name tests after the real-world scenario: `test_architecture_question_scores_high`, not `test_predict_returns_dict`.
+- If a service can only be tested by mocking its collaborators, that's a design problem — add a real seam or cover it at a higher level instead.
+
+## Example
 
 ```python
-# backend/tests/test_classifier_features.py
-
 import pytest
-
-import paths
-
 pytestmark = pytest.mark.integration
 
-_MODELS_DIR = str(paths.MODELS_DIR)
-_PRETRAINED_DIR = str(paths.PRETRAINED_DIR)
-
-
-@pytest.fixture(scope="module")
-def onnx_svc():
-    from services.onnx_inference_service import OnnxInferenceService
-    return OnnxInferenceService(_MODELS_DIR, _PRETRAINED_DIR)
-
-
 class TestDeliberationScoreClassifier:
-
     def test_architecture_question_scores_high(self, onnx_svc):
         score = onnx_svc.predict_scalar(
             "deliberation_score",
-            "Design a fault-tolerant multi-region distributed system for a "
-            "high-traffic e-commerce platform.",
+            "Design a fault-tolerant multi-region distributed system "
+            "for a high-traffic e-commerce platform.",
         )
-
         assert score >= 0.7
 ```
 
-Names describe the real-world scenario: `test_architecture_question_routes_to_high`, not `test_predict_returns_dict`.
+## Static typing gate
 
-## Banned Patterns
+The whole backend — every first-party package, the top-level modules, and the
+test suite — type-checks clean under `mypy --strict`. This is enforced as a
+`pytest.mark.unit` test, `tests/test_static_typing_gate.py`, so a typing
+regression fails the unit suite just like any other test:
 
-- `assert True` — tests nothing
-- `assert isinstance(x, dict)` as the sole assertion
-- `assert x is not None` without a content check
-- Tests with zero assertions
-- Any `MagicMock`, `Mock`, `patch`, or `monkeypatch` of production code
-- Parametrised label pass-throughs where the test only asserts the mock returned what it was given
-- Assertions on version strings, SHA pins, weight shapes, field lists, or `.called_with(...)`
+```bash
+cd backend
+pytest tests/test_static_typing_gate.py -q   # runs mypy --strict over the tree
+```
 
-## Three Testing Tiers
-
-| Tier | Location | Purpose |
-|---|---|---|
-| Python feature tests | `backend/tests/` | Fast-feedback for individual service behaviour |
-| Nightly YAML scenarios | `chalie-nightly-test/scenarios/` | Primary system tests — full stack, HTTP to response |
-| Benchmarks | `chalie-nightly-test/benchmark_tasks/` | Scored quality measurement, not pass/fail |
-
-Python-level tests are a fast-feedback supplement. They do not replace the nightly scenarios. See `.claude/commands/nightly-tests.md` for the nightly scenario spec.
-
-**Boundary-contract sentinels.** Some test files exist specifically to canary a cross-layer invariant that the nightly scenarios would catch too late and too silently. `backend/tests/test_rich_media_subagent_isolation.py` (12 tests across three classes) is the reference example. It locks the rich-media round-3 architectural contract: `ActDispatcherService` must not inject `_rich_media_ordinal` on non-user-channel dispatches, and `SubagentAbility` must strip every `<span id='name_N'>…</span>` wrapper from returned text before handing it to the parent. Without these guards, nightly scenarios 058 and 059 regress silently — the LLM stops receiving the rich-media instruction trailer, cards stop rendering, and the only observable symptom is a plain-text response where a card was expected (the round-432 failure mode). If a refactor of `act_dispatcher_service.py` or `abilities/subagent.py` causes these sentinels to fail, treat it as a must-fix before merging.
-
-## What If a Service Cannot Be Tested Without Mocks?
-
-**Stop. Do not write the test. Escalate.**
-
-If the only way to test a service is to mock its collaborators, the code is too coupled to test in production shape. Possible resolutions:
-
-- Add a legitimate dependency-injection seam (via the coder agent, not the tester)
-- Test the behaviour at a higher level where real collaborators can run
-- Accept that the behaviour is covered by a nightly scenario and leave the Python-level test unwritten
-
-The wrong answer is always: write a mock-heavy test that proves nothing.
+There is no relax/override block in `pyproject.toml`: new code is strict from
+the first line. Two rules hold without exception — **never `Any`** (reach for
+the most primitive concrete type: `object`, `dict[str, object]`,
+`list[object]`, `sqlite3.Row`, covariant `Mapping`/`Sequence`) and **never
+`# type: ignore`** (fix the underlying type problem). See
+[typing-ratchet.md](typing-ratchet.md) for the supported narrowing patterns
+(inline `cast`, write-only `Protocol`s, `setattr` for test monkeypatching).

@@ -1,11 +1,15 @@
 """
 Tool Config Service — SQLite-backed per-tool configuration storage.
 
-Provides get/set/delete for tool config keys (credentials, endpoints, etc.).
 Config values are injected into tool containers at invocation time.
 """
 
+from __future__ import annotations
+
 import logging
+
+from services.database_service import DatabaseService
+
 
 logger = logging.getLogger(__name__)
 
@@ -13,39 +17,22 @@ logger = logging.getLogger(__name__)
 class ToolConfigService:
     """SQLite-backed per-tool configuration store.
 
-    Provides get/set/delete operations for arbitrary tool config keys
-    (API credentials, endpoint URLs, feature flags, etc.) as well as
-    reserved system keys such as ``_enabled`` and OAuth token fields.
-
     Reserved keys are write-protected through the public ``set_tool_config``
     interface; dedicated helper methods (``_set_enabled_flag``,
     ``_set_source_metadata``, etc.) must be used to update them.
     """
 
-    RESERVED_KEYS = {
+    RESERVED_KEYS: set[str] = {
         "_enabled",
         "_oauth_access_token", "_oauth_refresh_token",
         "_oauth_token_expires_at", "_oauth_connected_at", "_oauth_scopes",
         "_source_type", "_source_url", "_installed_tag",
     }
 
-    def __init__(self, database_service):
-        """Initialise the service with a shared database connection.
+    def __init__(self, database_service: DatabaseService) -> None:
+        self.db: DatabaseService = database_service
 
-        Args:
-            database_service: A ``DatabaseService`` instance whose
-                ``connection()`` context manager provides a SQLite
-                connection to the ``tool_configs`` table.
-        """
-        self.db = database_service
-
-    def get_tool_config(self, tool_name: str) -> dict:
-        """
-        Fetch all config key-value pairs for a tool.
-
-        Returns:
-            dict of {key: value}, empty dict on error or no config.
-        """
+    def get_tool_config(self, tool_name: str) -> dict[str, str]:
         try:
             with self.db.connection() as conn:
                 cursor = conn.cursor()
@@ -108,17 +95,8 @@ class ToolConfigService:
             logger.exception(f"[TOOL CONFIG] _set_source_metadata('{tool_name}'): {e}")
             return False
 
-    def set_tool_config(self, tool_name: str, config: dict) -> bool:
+    def set_tool_config(self, tool_name: str, config: dict[str, object]) -> bool:
         """
-        Upsert config key-value pairs for a tool.
-
-        Args:
-            tool_name: Tool identifier
-            config: Dict of {key: value} to store
-
-        Returns:
-            True on success, False on error.
-
         Raises:
             ValueError: If any key in config is a reserved internal key.
         """
@@ -146,12 +124,6 @@ class ToolConfigService:
             return False
 
     def delete_tool_config_key(self, tool_name: str, key: str) -> bool:
-        """
-        Delete a single config key for a tool.
-
-        Returns:
-            True if a row was deleted, False otherwise.
-        """
         try:
             with self.db.connection() as conn:
                 cursor = conn.cursor()
@@ -167,19 +139,7 @@ class ToolConfigService:
             return False
 
     def delete_tool_config(self, tool_name: str) -> bool:
-        """Delete ALL config rows for a tool (used during uninstall).
-
-        Removes every row in ``tool_configs`` whose ``tool_name`` matches the
-        provided value, including reserved system keys such as ``_enabled``
-        and OAuth fields.
-
-        Args:
-            tool_name: The tool identifier whose config rows should be purged.
-
-        Returns:
-            True if at least one row was deleted, False if no rows existed or
-            an exception occurred.
-        """
+        """Delete ALL config rows for a tool, including reserved system keys (used during uninstall)."""
         try:
             with self.db.connection() as conn:
                 cursor = conn.cursor()

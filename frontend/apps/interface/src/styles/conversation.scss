@@ -1,0 +1,558 @@
+// Conversation component styles. Colors use CSS-var tokens for dark+light (Rule 7).
+// Depends on @chalie/shared/styles/main.scss + interface.scss loaded first (tokens, keyframes).
+
+.speech-form {
+  position: relative;
+  padding: var(--space-lg);
+  border-radius: 18px;
+  background: var(--bg-chalie);
+  backdrop-filter: blur(16px) saturate(120%);
+  -webkit-backdrop-filter: blur(16px) saturate(120%);
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow-card);
+  animation: formEntry 200ms var(--ease-out) both;
+  transition: background 420ms ease, border-color 400ms ease, box-shadow 400ms ease;
+}
+
+// Neon accent stripe — left for Chalie (violet), right for user (cyan)
+.speech-form::before {
+  content: '';
+  position: absolute;
+  top: 14px;
+  bottom: 14px;
+  width: 2px;
+  border-radius: 2px;
+  z-index: 1;
+  pointer-events: none;
+}
+
+// --------------------------------------------------------------------------
+// 2. User bubble
+// --------------------------------------------------------------------------
+// The wrapper owns the outer spacing (clearing the neighbouring rows) and stacks
+// the attachment list above its bubble. The bubble itself is a full-width flat
+// panel — no border, no accent stripe, no spark glyph; a slightly-elevated
+// surface sets it apart from the page.
+.user-message {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-sm);
+  margin: var(--space-xl) 0;
+  width: 90%;
+  align-self: flex-end; // user message hugs the right; width keeps the panel at 90%
+}
+
+.speech-form--user {
+  background: var(--bg-surface-2);
+  border: none;
+  align-self: stretch;
+  width: 100%;
+  max-width: 100%;
+}
+
+.speech-form--user .speech-form__text {
+  white-space: pre-wrap;
+  font-weight: 600;
+}
+
+// Hover lift (pointer devices only)
+@media (hover: hover) {
+  .speech-form:hover {
+    transform: translateY(-2px);
+    border-color: color-mix(in oklab, var(--text-primary) 16%, transparent);
+    box-shadow: 0 12px 32px color-mix(in oklab, #000 55%, transparent), 0 0 0 1px color-mix(in oklab, var(--violet) 4%, transparent) inset;
+  }
+
+  .speech-form--user:hover {
+    box-shadow: 0 12px 32px color-mix(in oklab, #000 55%, transparent), 0 0 0 1px color-mix(in oklab, var(--cyan) 5%, transparent) inset;
+  }
+
+  [data-theme="light"] .speech-form:hover,
+  [data-theme="light"] .speech-form--user:hover {
+    box-shadow: none;
+  }
+}
+
+// Hard no-shadow guard inside bubbles
+.speech-form,
+.speech-form *,
+.speech-form::before,
+.speech-form::after,
+.speech-form *::before,
+.speech-form *::after {
+  box-shadow: none !important;
+  text-shadow: none !important;
+}
+
+.speech-form--chalie {
+  border: none;
+  box-shadow: none;
+  border-radius: 0;
+  background: none;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  align-self: stretch;
+  width: 100%;
+  max-width: 100%;
+  padding: 0;
+}
+
+// No accent stripe on Chalie — full-bleed text on the spine
+.speech-form--chalie::before {
+  display: none;
+}
+
+// Chalie glyph now lives inline in the footer (meta) row; ErrorForm keeps a header
+.speech-form--chalie .speech-form__meta .sender-glyph,
+.speech-form--chalie .speech-form__header .sender-glyph {
+  position: static;
+  width: 16px;
+  height: 16px;
+}
+
+// Sender glyph — SVG asset painted via mask so currentColor themes it
+.sender-glyph {
+  position: absolute;
+  top: -9px;
+  width: 18px;
+  height: 18px;
+  z-index: 3;
+  pointer-events: none;
+  display: inline-block;
+  background-color: currentColor;
+  -webkit-mask: center / contain no-repeat;
+  mask: center / contain no-repeat;
+}
+
+.speech-form--chalie .sender-glyph {
+  left: -9px;
+  color: var(--violet);
+  -webkit-mask-image: url(/icons/sender-glyph-chalie.svg);
+  mask-image: url(/icons/sender-glyph-chalie.svg);
+  animation: glyphTwinkle 3.2s ease-in-out infinite;
+}
+
+@keyframes glyphTwinkle {
+  0%, 100% { opacity: 0.55; }
+  50%      { opacity: 1; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .speech-form--chalie .sender-glyph { animation: none; opacity: 0.85; }
+}
+
+// Faded messages — outside working memory
+.message--faded {
+  opacity: 0.75;
+}
+
+.speech-form__text {
+  word-break: break-word;
+  position: relative;
+  z-index: 2;
+}
+
+// --------------------------------------------------------------------------
+// 7. Attachments — condensed right-aligned list, act-trail idiom
+// --------------------------------------------------------------------------
+.user-attachments {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end; // hug the right edge
+  gap: 0; // condensed — line-height carries the row rhythm
+  margin: 0;
+  padding: 0 var(--space-lg) 0 0; // line names up under the bubble's right padding
+  list-style: none;
+}
+
+.user-attachments__item {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-sm);
+  max-width: 100%;
+  padding: 1px 0;
+  border: none;
+  background: none;
+  cursor: pointer;
+  font-family: 'JetBrains Mono', 'Fira Code', ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.82rem;
+  line-height: 1.4;
+  letter-spacing: -0.005em;
+  color: var(--text-secondary);
+  transition: color 150ms ease;
+}
+
+.user-attachments__item:hover {
+  color: var(--accent-primary);
+}
+
+.user-attachments__icon {
+  flex-shrink: 0;
+  opacity: 0.7;
+}
+
+.user-attachments__name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.speech-form__meta {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  margin-top: var(--space-sm);
+  font-size: var(--font-size-sm);
+  color: var(--text-tertiary);
+  justify-content: flex-start;
+  position: relative;
+  z-index: 2;
+  font-family: 'JetBrains Mono', 'Fira Code', ui-monospace, 'SF Mono', Menlo, monospace;
+  letter-spacing: 0.04em;
+}
+
+// Action buttons (remember/speak) pushed to the right of the footer row
+.speech-form__actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  margin-left: auto;
+}
+
+.speech-form--user .speech-form__meta {
+  justify-content: flex-end;
+}
+
+.speech-form__timestamp {
+  font-size: 0.72rem;
+  color: var(--text-tertiary);
+  opacity: 0.85;
+  letter-spacing: 0.04em;
+}
+
+.speech-form__remember-btn {
+  background: none;
+  border: none;
+  color: var(--text-tertiary);
+  cursor: pointer;
+  padding: var(--space-xs);
+  border-radius: var(--radius-sm);
+  transition: color var(--duration-fast), box-shadow var(--duration-fast);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+}
+
+.speech-form__remember-btn svg { width: 24px; height: 24px; }
+
+.speech-form__remember-btn:hover {
+  color: var(--accent-primary);
+}
+
+.speech-form__remember-btn--active {
+  color: var(--accent-primary);
+  box-shadow: 0 0 8px color-mix(in oklab, var(--violet) 35%, transparent) !important;
+  cursor: default;
+}
+
+.speech-form__remember-btn:disabled:not(.speech-form__remember-btn--active) {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.speech-form__speak-btn {
+  background: none;
+  border: none;
+  color: var(--text-tertiary);
+  cursor: pointer;
+  padding: var(--space-xs);
+  border-radius: var(--radius-sm);
+  transition: color var(--duration-fast);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+}
+
+.speech-form__speak-btn svg { width: 24px; height: 24px; }
+
+.speech-form__speak-btn:hover {
+  color: var(--dusk-blue);
+}
+
+.speech-form--error {
+  background: color-mix(in oklab, var(--error) 8%, transparent);
+  border-color: color-mix(in oklab, var(--error) 20%, transparent);
+}
+
+.speech-form--error .speech-form__text {
+  color: var(--error);
+}
+
+// Escalation form (critic)
+.speech-form--escalation {
+  border-color: color-mix(in oklab, #ffb432 25%, transparent);
+  box-shadow: 0 0 16px color-mix(in oklab, #ffb432 6%, transparent);
+  margin-top: var(--space-lg);
+}
+
+.speech-form--escalation::before {
+  background: linear-gradient(
+    180deg,
+    transparent 0%,
+    color-mix(in oklab, #ffb432 85%, transparent) 20%,
+    color-mix(in oklab, #ffb432 85%, transparent) 80%,
+    transparent 100%
+  );
+  box-shadow: 0 0 8px color-mix(in oklab, #ffb432 60%, transparent), 0 0 18px color-mix(in oklab, #ffb432 33%, transparent);
+}
+
+.speech-form--escalation::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, color-mix(in oklab, #ffb432 30%, transparent), transparent);
+  pointer-events: none;
+}
+
+// ACT cycle
+.act-cycle {
+  align-self: flex-start;
+  max-width: 90%;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 4px 0;
+  animation: formEntry 200ms var(--ease-out) both;
+}
+
+.act-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 20px;
+}
+
+.act-logo {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--violet);
+  flex-shrink: 0;
+  animation: act-logo-pulse 1.4s ease-in-out infinite;
+}
+
+// Bare-group anchor before any tool pill lands; evicted the moment one does.
+.act-placeholder {
+  font-size: var(--font-size-sm);
+  color: var(--text-tertiary);
+  animation: act-logo-pulse 1.4s ease-in-out infinite;
+}
+
+.act-stop-btn {
+  background: transparent;
+  border: none;
+  color: var(--error);
+  cursor: pointer;
+  padding: 4px;
+  border-radius: 4px;
+  opacity: 0.7;
+  transition: opacity 180ms ease, transform 180ms ease;
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+.act-stop-btn:hover { opacity: 1; transform: scale(1.15); }
+.act-stop-btn:active { transform: scale(0.9); }
+.act-stop-btn--stopping { opacity: 0.35; cursor: not-allowed; pointer-events: none; }
+
+// Indented under the logo (logo 12 + gap 12 = 24) to align with the row.
+.act-tools {
+  margin-left: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
+.act-tools:empty {
+  display: none;
+}
+
+.act-tool {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  min-width: 220px;
+  max-width: 760px;
+  font-family: 'JetBrains Mono', 'Fira Code', ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.82rem;
+  line-height: 1.2;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.005em;
+  animation: formEntry 200ms var(--ease-out) both;
+}
+
+.act-tool__name {
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.act-tool__label {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+}
+
+.act-tool__summary {
+  color: var(--text-secondary);
+  font-weight: 400;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.act-tool__status {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  font-variant-numeric: tabular-nums;
+  min-width: 32px;
+}
+
+.act-tool--running {
+  color: color-mix(in oklab, var(--text-primary) 75%, transparent);
+}
+
+.act-tool--done {
+  color: var(--success);
+  opacity: 0.9;
+}
+
+.act-tool--error {
+  color: var(--error);
+  opacity: 0.5;
+}
+
+// Live elapsed readout shown beside the spinner while a call runs.
+.act-tool__elapsed {
+  margin-left: 6px;
+  font-variant-numeric: tabular-nums;
+}
+
+// Superseded step (tools done, replaced by next bubble): drop name pill + timer,
+// keep only the summaries indented to align with the live tool list.
+.act-cycle--collapsed {
+  gap: 2px;
+  padding: 0 0 2px;
+}
+
+.act-summaries {
+  margin-left: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 0; // act-trail rows condensed to line-height gaps only
+}
+
+.act-tool__summary--collapsed {
+  white-space: normal;
+  overflow: visible;
+  line-height: 1.4;
+  font-size: 0.82rem;
+  font-family: 'JetBrains Mono', 'Fira Code', ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+// A run of superseded steps folds behind one chevron: a caret-gutter + content
+// grid. Caret top-aligned to the first content line in BOTH states so expanding
+// never inserts an empty caret-only row.
+$act-group-line: calc(0.82rem * 1.4); // first-line box for both preview & summaries
+
+.act-group {
+  align-self: flex-start;
+  max-width: 90%;
+  display: grid;
+  grid-template-columns: 14px 1fr;
+  column-gap: 4px;
+  align-items: start;
+}
+
+.act-group__toggle {
+  // Caret-only button sized to the first content line so it centers on it.
+  height: $act-group-line;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  color: var(--text-muted);
+}
+
+.act-group__caret {
+  flex-shrink: 0;
+  transition: transform 180ms var(--ease-out);
+}
+
+.act-group--expanded .act-group__caret {
+  transform: rotate(90deg);
+}
+
+.act-group__content {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.act-group__preview {
+  height: $act-group-line;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: pointer;
+  color: var(--text-secondary);
+  font-family: 'JetBrains Mono', 'Fira Code', ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.82rem;
+  line-height: 1.4;
+}
+
+// Inside the folded group there is no live logo to indent under, so drop the
+// 24px summary indent — the expanded trail then lines up exactly with the
+// collapsed preview text (no rightward jump on expand).
+.act-group .act-summaries {
+  margin-left: 0;
+}
+
+@keyframes act-logo-pulse {
+  0%, 100% { opacity: 0.55; }
+  50%      { opacity: 1; }
+}
+
+// Meta-mode badge (cognitive signal)
+.meta-mode-badge {
+  font-size: 0.6rem;
+  letter-spacing: 0.06em;
+  padding: 1px 6px;
+  border-radius: 3px;
+  background: color-mix(in oklab, var(--text) 5%, transparent);
+  border: 1px solid color-mix(in oklab, var(--text) 8%, transparent);
+  color: color-mix(in oklab, var(--text-primary) 50%, transparent);
+  margin-left: 8px;
+  vertical-align: middle;
+  animation: meta-fade-in 150ms ease both;
+}
+
+@keyframes meta-fade-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}

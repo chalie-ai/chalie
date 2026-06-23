@@ -1,26 +1,9 @@
-"""
-Generate concept LUT embeddings into concept_lut.sqlite.
-
-Reads canonical keys + rules + aliases from concept_lut.yaml, embeds EACH
-label (canonical_key + every alias) via gte-modernbert (sha256-pinned, same
-encoder as production), and writes the result into a sqlite + sqlite-vec
-virtual table at:
-    backend/services/data_graph/assets/concept_lut.sqlite
+"""Generate concept LUT embeddings into concept_lut.sqlite.
 
 Each alias is stored as its own row in lut_concepts pointing back to the same
-canonical_key + rule.  This is necessary because cosine similarity between an
-alias (e.g. "birthday") and its canonical_key ("birth_date") under
-gte-modernbert falls below the 0.80 LUT threshold, causing canonicalization
+canonical_key + rule, because cosine similarity between an alias and its canonical_key
+under gte-modernbert falls below the 0.80 LUT threshold, causing canonicalization
 misses at runtime.
-
-Tables produced:
-    lut_concepts   — (id, canonical_key, rule, label)  regular table
-                     label is UNIQUE; canonical_key + alias rows share the same
-                     canonical_key + rule values
-    lut_embeddings — vec0(embedding float[768])  rowid mirrors lut_concepts.id
-
-Run from repo root:
-    python -m utils.generate_concept_lut
 """
 
 import sqlite3
@@ -43,7 +26,6 @@ _BATCH_SIZE = 32
 
 
 def _load_sqlite_vec(conn: sqlite3.Connection) -> None:
-    """Load the sqlite-vec extension; falls back to the bare SO name."""
     conn.enable_load_extension(True)
     try:
         import sqlite_vec
@@ -52,14 +34,7 @@ def _load_sqlite_vec(conn: sqlite3.Connection) -> None:
         conn.load_extension('vec0')
 
 
-def _read_concepts(yaml_path: Path) -> list[dict]:
-    """Parse YAML and return one row per label (canonical_key + each alias).
-
-    Each returned dict has:
-        canonical_key  — the authoritative key stored in data_graph
-        rule           — temporal / coexist / immutable
-        label          — the text to embed (canonical_key itself, or an alias)
-    """
+def _read_concepts(yaml_path: Path) -> list[dict[str, str]]:
     with open(yaml_path) as f:
         data = yaml.safe_load(f)
     raw_concepts = data.get("concepts", [])
@@ -79,7 +54,6 @@ def _read_concepts(yaml_path: Path) -> list[dict]:
 
 
 def _rebuild_tables(conn: sqlite3.Connection) -> None:
-    """Drop and recreate both tables for an idempotent rebuild."""
     conn.execute("DROP TABLE IF EXISTS lut_embeddings")
     conn.commit()
     conn.execute("CREATE VIRTUAL TABLE lut_embeddings USING vec0(embedding float[768])")
@@ -96,8 +70,7 @@ def _rebuild_tables(conn: sqlite3.Connection) -> None:
     conn.commit()
 
 
-def _insert_concepts(conn: sqlite3.Connection, concepts: list[dict]) -> list[int]:
-    """Insert concept metadata rows and return their assigned IDs."""
+def _insert_concepts(conn: sqlite3.Connection, concepts: list[dict[str, str]]) -> list[int]:
     ids = []
     for c in concepts:
         conn.execute(
@@ -113,10 +86,9 @@ def _insert_concepts(conn: sqlite3.Connection, concepts: list[dict]) -> list[int
 def _embed_and_insert(
     conn: sqlite3.Connection,
     emb_service: EmbeddingService,
-    concepts: list[dict],
+    concepts: list[dict[str, str]],
     ids: list[int],
 ) -> int:
-    """Embed labels (canonical_key + aliases) in batches and insert into lut_embeddings."""
     inserted = 0
     texts = [c["label"] for c in concepts]
 

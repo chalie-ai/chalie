@@ -13,10 +13,16 @@ Routes (all require session auth):
 import uuid
 import logging
 from datetime import datetime
+from typing import TYPE_CHECKING, cast
 
 from flask import Blueprint, jsonify, request
 
 from .auth import require_session
+
+if TYPE_CHECKING:
+    from collections.abc import Iterable
+
+    from flask.typing import ResponseReturnValue
 
 logger = logging.getLogger(__name__)
 
@@ -35,8 +41,7 @@ _INTERVAL_PREFIX = "interval:"
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _normalize_hhmm(s: str) -> str | None:
-    """Return HH:MM string if valid, else None."""
+def _normalize_hhmm(s: str) -> "str | None":
     if not s:
         return None
     parts = s.strip().split(":")
@@ -51,11 +56,8 @@ def _normalize_hhmm(s: str) -> str | None:
     return f"{h:02d}:{m:02d}"
 
 
-def _validate_recurrence(recurrence: str | None) -> tuple:
-    """Validate and normalise the recurrence field.
-
-    Returns (normalised_recurrence, None) on success, or (None, error_str).
-    """
+def _validate_recurrence(recurrence: "str | None") -> "tuple[str | None, str | None]":
+    """Returns (normalised_recurrence, None) on success, or (None, error_str)."""
     if recurrence is None:
         return None, None
     recurrence = recurrence.strip()
@@ -72,8 +74,8 @@ def _validate_recurrence(recurrence: str | None) -> tuple:
     return None, f"recurrence must be one of: {', '.join(sorted(_VALID_RECURRENCES))}, or 'interval:N'"
 
 
-def _validate_window(window_start: str | None, window_end: str | None, recurrence: str | None) -> str | None:
-    """Validate window_start/window_end consistency. Returns error string or None."""
+def _validate_window(window_start: "str | None", window_end: "str | None", recurrence: "str | None") -> "str | None":
+    """Returns error string or None."""
     if (window_start or window_end) and recurrence != "hourly":
         return "window_start/window_end are only valid for 'hourly' recurrence"
     if window_start and not window_end:
@@ -83,12 +85,9 @@ def _validate_window(window_start: str | None, window_end: str | None, recurrenc
     return None
 
 
-def _validate_item(data: dict, require_future: bool = True) -> tuple:
-    """
-    Validate item fields.  Returns (clean_dict, None) on success,
-    or (None, error_str) on failure.
-    """
-    message = (data.get("message") or "").strip()
+def _validate_item(data: "dict[str, object]", require_future: bool = True) -> "tuple[dict[str, object] | None, str | None]":
+    """Returns (clean_dict, None) on success, or (None, error_str) on failure."""
+    message = (cast(str, data.get("message")) or "").strip()
     if not message:
         return None, "message is required"
     if len(message) > 1000:
@@ -106,18 +105,18 @@ def _validate_item(data: dict, require_future: bool = True) -> tuple:
     if require_future and due_at <= utc_now():
         return None, "due_at must be in the future"
 
-    item_type = (data.get("item_type") or "notification").strip()
+    item_type = (cast(str, data.get("item_type")) or "notification").strip()
     if item_type in ("event", "system"):
         return None, "item_type 'event' and 'system' are reserved for internal use"
     if item_type not in _VALID_TYPES:
         return None, f"item_type must be one of: {', '.join(sorted(_VALID_TYPES))}"
 
-    recurrence, rec_err = _validate_recurrence(data.get("recurrence") or None)
+    recurrence, rec_err = _validate_recurrence(cast("str | None", data.get("recurrence")) or None)
     if rec_err:
         return None, rec_err
 
-    window_start = _normalize_hhmm(data.get("window_start") or "")
-    window_end = _normalize_hhmm(data.get("window_end") or "")
+    window_start = _normalize_hhmm(cast(str, data.get("window_start")) or "")
+    window_end = _normalize_hhmm(cast(str, data.get("window_end")) or "")
     win_err = _validate_window(window_start, window_end, recurrence)
     if win_err:
         return None, win_err
@@ -133,7 +132,7 @@ def _validate_item(data: dict, require_future: bool = True) -> tuple:
     }, None
 
 
-def _serialize_item(row: dict) -> dict:
+def _serialize_item(row: "dict[str, object]") -> "dict[str, object]":
     """Convert datetime fields to ISO strings for JSON serialisation."""
     out = dict(row)
     for field in ("due_at", "created_at", "last_fired_at"):
@@ -145,7 +144,7 @@ def _serialize_item(row: dict) -> dict:
     return out
 
 
-def _row_to_dict(row, cols) -> dict:
+def _row_to_dict(row: "Iterable[object]", cols: "list[str]") -> "dict[str, object]":
     return dict(zip(cols, row))
 
 
@@ -155,7 +154,7 @@ def _row_to_dict(row, cols) -> dict:
 
 @scheduler_bp.route("/scheduler", methods=["GET"])
 @require_session
-def list_scheduler():
+def list_scheduler() -> "ResponseReturnValue":
     """List scheduled items with optional status filter and pagination."""
     status_filter = request.args.get("status", "all").strip()
     include_hidden = request.args.get("include_hidden", "").lower() == "true"
@@ -174,8 +173,8 @@ def list_scheduler():
                 "created_by_session", "created_at", "last_fired_at", "group_id", "is_prompt",
                 "source", "external_uid"]
 
-        conditions = []
-        params: list = []
+        conditions: list[str] = []
+        params: list[object] = []
 
         if status_filter != "all":
             if status_filter not in _VALID_STATUSES:
@@ -223,7 +222,7 @@ def list_scheduler():
 
 @scheduler_bp.route("/scheduler", methods=["POST"])
 @require_session
-def create_scheduler():
+def create_scheduler() -> "ResponseReturnValue":
     """Create a new scheduled item."""
     data = request.get_json(silent=True) or {}
     clean, err = _validate_item(data, require_future=True)
@@ -254,17 +253,17 @@ def create_scheduler():
                 """,
                 (
                     item_id,
-                    clean["item_type"],
-                    clean["message"],
-                    clean["due_at"].isoformat(),
-                    clean["recurrence"],
-                    clean["window_start"],
-                    clean["window_end"],
+                    cast("dict[str, object]", clean)["item_type"],
+                    cast("dict[str, object]", clean)["message"],
+                    cast(datetime, cast("dict[str, object]", clean)["due_at"]).isoformat(),
+                    cast("dict[str, object]", clean)["recurrence"],
+                    cast("dict[str, object]", clean)["window_start"],
+                    cast("dict[str, object]", clean)["window_end"],
                     data.get("channel", "general"),
                     None,  # created_by_session — not available in dashboard context
                     now.isoformat(),
                     item_id,  # group_id = own id (root of a new series)
-                    clean["is_prompt"],
+                    cast("dict[str, object]", clean)["is_prompt"],
                 )
             )
 
@@ -278,10 +277,10 @@ def create_scheduler():
 
         # Embed for semantic world state retrieval — fire-and-forget background thread
         # (non-fatal: world state salience degrades gracefully without embedding)
-        def _embed():
+        def _embed() -> None:
             try:
                 from services.scheduler_service import embed_scheduled_item
-                embed_scheduled_item(item_id, clean["message"], db)
+                embed_scheduled_item(item_id, cast(str, cast("dict[str, object]", clean)["message"]), db)
             except Exception as emb_err:
                 logger.warning(f"[SCHEDULER API] Embedding failed (non-fatal): {emb_err}")
         import threading
@@ -297,7 +296,7 @@ def create_scheduler():
 
 @scheduler_bp.route("/scheduler/history", methods=["DELETE"])
 @require_session
-def prune_history():
+def prune_history() -> "ResponseReturnValue":
     """Delete fired/failed/cancelled items older than N days (default 30)."""
     try:
         older_than_days = max(int(request.args.get("older_than_days", 30)), 1)
@@ -330,7 +329,7 @@ def prune_history():
 
 @scheduler_bp.route("/scheduler/group/<group_id>", methods=["GET"])
 @require_session
-def get_scheduler_group(group_id):
+def get_scheduler_group(group_id: str) -> "ResponseReturnValue":
     """Return fire history for a recurring schedule group (newest first, max 50)."""
     try:
         limit = min(int(request.args.get("limit", 10)), 50)
@@ -369,7 +368,7 @@ def get_scheduler_group(group_id):
 
 @scheduler_bp.route("/scheduler/<item_id>", methods=["GET"])
 @require_session
-def get_scheduler_item(item_id):
+def get_scheduler_item(item_id: str) -> "ResponseReturnValue":
     """Fetch a single scheduled item by ID."""
     try:
         from services.database_service import get_shared_db_service
@@ -399,7 +398,7 @@ def get_scheduler_item(item_id):
 
 @scheduler_bp.route("/scheduler/<item_id>", methods=["PUT"])
 @require_session
-def update_scheduler_item(item_id):
+def update_scheduler_item(item_id: str) -> "ResponseReturnValue":
     """Update a pending scheduled item."""
     try:
         from services.database_service import get_shared_db_service
@@ -438,13 +437,13 @@ def update_scheduler_item(item_id):
                 WHERE id = ? AND status = 'pending'
                 """,
                 (
-                    clean["item_type"],
-                    clean["message"],
-                    clean["due_at"].isoformat(),
-                    clean["recurrence"],
-                    clean["window_start"],
-                    clean["window_end"],
-                    clean["is_prompt"],
+                    cast("dict[str, object]", clean)["item_type"],
+                    cast("dict[str, object]", clean)["message"],
+                    cast(datetime, cast("dict[str, object]", clean)["due_at"]).isoformat(),
+                    cast("dict[str, object]", clean)["recurrence"],
+                    cast("dict[str, object]", clean)["window_start"],
+                    cast("dict[str, object]", clean)["window_end"],
+                    cast("dict[str, object]", clean)["is_prompt"],
                     item_id,
                 )
             )
@@ -473,7 +472,7 @@ def update_scheduler_item(item_id):
 
 @scheduler_bp.route("/scheduler/<item_id>", methods=["DELETE"])
 @require_session
-def cancel_scheduler_item(item_id):
+def cancel_scheduler_item(item_id: str) -> "ResponseReturnValue":
     """Cancel a pending scheduled item (sets status to 'cancelled')."""
     try:
         from services.database_service import get_shared_db_service

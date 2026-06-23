@@ -11,26 +11,22 @@ Routing:
 Class-level cache per location key, 10-min TTL.
 
 Rich-media rendering:
-  When an ordinal is supplied (``params['_rich_media_ordinal']``), the return
-  value is a string: ``<JSON payload>\\n\\n<rich-media instruction trailer>``.
-  The instruction trailer tells the LLM to wrap its synthesis in a span tag
-  so the RichMediaParser can pair the card with this payload at WS-send time.
-
-  Error payloads do NOT include an instruction trailer — the LLM should not
-  attempt to render a card for an error response.
-
-  The first JSON segment (before the first blank line) is parsed by
-  RichMediaParser._extract_data() and becomes the card payload.
+  A successful weather lookup returns ``ToolResult.ok(payload, rich=payload)`` —
+  the weather dict is both the structured body the model reads AND the card
+  payload. The dispatcher (``ToolDispatcher._render``) owns ordinal assignment +
+  the span-tag instruction, and injects the card ONLY when the invoking channel
+  broadcasts to the user. Error lookups return ``ToolResult.err`` with no card.
 """
 
-import json
 import logging
 import time
-from typing import ClassVar
+from typing import ClassVar, cast
 
 import requests
 
-from abilities._base import Ability
+from abilities._ability import Ability
+from abilities._params import Keys
+from abilities._result import ToolResult
 from services.time_utils import utc_now
 
 logger = logging.getLogger(__name__)
@@ -52,26 +48,39 @@ _WMO = {
 _RAIN_WORDS = ("rain", "drizzle", "shower")
 _CLEAR_WORDS = ("clear", "sunny", "mainly clear")
 
+# Provider base URLs as module constants (not hardcoded inside the fetchers) so
+# the request endpoints are a single, overridable point of configuration. Offline
+# tests neutralise the module's OWN config by pointing these at a dead host —
+# forcing deterministic provider failure without mocking the requests collaborator.
+_OPEN_METEO_BASE = "https://api.open-meteo.com"
+_WTTR_BASE = "https://wttr.in"
+
 
 class WeatherAbility(Ability):
-    NAME = "weather"
-    SEARCH_TOOLTIP = "weather forecasts"
-    POLICY_CATEGORY = "News & Weather"
-    POLICY_LABELS = {"": "Weather lookup"}
-    SUMMARY = "Get current weather and tomorrow's forecast for a city or device coordinates."
-    EXAMPLES = [
-        "what's the weather like today",
-        "will it rain tomorrow",
-        "do I need a jacket",
-        "is it sunny outside",
-        "temperature in London",
-        "weather forecast for tomorrow",
-        "should I bring an umbrella",
-    ]
-    INPUT_SCHEMA = {
+    def get_name(self) -> str:
+        return "weather"
+
+    def get_summary(self) -> str:
+        return "Get current weather and tomorrow's forecast for a city or device coordinates."
+
+    def get_examples(self) -> list[str]:
+        return [
+            "what's the weather like today",
+            "will it rain tomorrow",
+            "do I need a jacket",
+            "is it sunny outside",
+            "temperature in London",
+            "weather forecast for tomorrow",
+            "should I bring an umbrella",
+        ]
+
+    def get_search_tooltip(self) -> str:
+        return "weather forecasts"
+
+    _PARAMETERS: ClassVar[dict[str, object]] = {
         "type": "object",
         "properties": {
-            "location": {
+            Keys.location: {
                 "type": "string",
                 "description": (
                     "City or place name (e.g. 'Malta', 'London'). Omit to "
@@ -81,92 +90,67 @@ class WeatherAbility(Ability):
         },
         "required": [],
     }
-    TIMEOUT = 10
 
-    _cache: ClassVar[dict] = {}
+    def get_parameters(self) -> dict[str, object]:
+        return self._PARAMETERS
+
+    _cache: ClassVar[dict[str, tuple[dict[str, object], float]]] = {}
     _CACHE_TTL: ClassVar[int] = 600  # 10 minutes
 
-    def execute(self, channel: str, params: dict, telemetry: dict | None) -> dict | str:
-        """
-        Get current weather for a location.
+    def run(self, params: dict[str, object]) -> ToolResult:
+        location_param = cast(str, params.get(Keys.location, "")).strip()
+        lat, lon, location_name = _extract_location(self.telemetry)
 
-        Args:
-            channel: Conversation channel (passed by framework)
-            params: {"location": str (optional city name; omit to use client coordinates),
-                     "_rich_media_ordinal": int (injected by ActDispatcherService)}
-            telemetry: Client telemetry with location coords and resolved name
+        # Guardrail: with no device coordinates AND no location param there is no
+        # place to look up. The fallback chain would contact NO provider yet still
+        # report code=provider-unreachable — a lie. Reject loudly before any cache
+        # lookup or fetch so the model names a city instead of retrying a dead end.
+        if not location_param and (lat is None or lon is None):
+            return ToolResult.err(
+                "No location available: no device coordinates and no location parameter.",
+                code="missing-location",
+                hint="name a city, e.g. location=London",
+            )
 
-        Returns:
-            A string of the form ``<JSON payload>\\n\\n<rich-media instruction>``
-            so the LLM can pair its synthesis with this structured data via a
-            span tag.  Error payloads omit the instruction trailer.
-        """
-        ordinal = params.get("_rich_media_ordinal")
-        location_param = params.get("location", "").strip()
-        lat, lon, location_name = _extract_location(telemetry)
         cache_key = _build_cache_key(location_param, lat, lon, location_name)
 
         cached = _get_fresh_cache(cache_key)
         if cached is not None:
-            return _serialise(cached, ordinal)
+            return ToolResult.ok(cached, rich=cached)
 
         result, open_meteo_err, wttr_err = _fetch_with_fallback(location_param, lat, lon, location_name, cache_key)
 
         if result is not None:
             WeatherAbility._cache[cache_key] = (result, time.time())
-            return _serialise(result, ordinal)
+            return ToolResult.ok(result, rich=result)
 
-        return _serialise(_stale_or_error(cache_key, open_meteo_err, wttr_err), ordinal)
-
-
-_RICH_MEDIA_INSTRUCTION = (
-    "You MUST present this result by wrapping your synthesis in <span id='{tag}'>your synthesis here</span>. "
-    "The span will render as a weather card; without it, the user sees only "
-    "plain text. Example output: \"Current conditions in "
-    "<span id='{tag}'>Paris is 14°C with light rain — bring an umbrella.</span>\" "
-    "You may include multiple weather spans (one per location) and prose between them."
-)
-
-
-def _serialise(payload: dict, ordinal: int | None) -> dict | str:
-    """Serialise a weather payload dict to the tool result string or dict.
-
-    When an ordinal is provided (normal ACT dispatch path), the instruction
-    trailer is appended so the LLM knows to emit a span tag.  Error payloads
-    (``'error'`` key present) never get the instruction trailer because a card
-    should not be rendered for error data.  When ordinal is None (direct call,
-    tests, action-button path) the original dict is returned unchanged for
-    backward compatibility.
-
-    Args:
-        payload: Weather data dict (or error dict with ``error``/``details``).
-        ordinal: Per-turn call counter for this tool; None returns the raw dict.
-
-    Returns:
-        ``dict`` when ordinal is None or payload is an error; ``str`` otherwise.
-    """
-    if ordinal is None or "error" in payload:
-        return payload
-    tag = f"weather_{ordinal}"
-    data_json = json.dumps(payload)
-    instruction = _RICH_MEDIA_INSTRUCTION.format(tag=tag)
-    return f"{data_json}\n\n{instruction}"
+        payload = _stale_or_error(cache_key, open_meteo_err, wttr_err)
+        if "error" in payload:
+            return ToolResult.err(
+                cast(str, payload["error"]),
+                code="provider-unreachable",
+                hint="try again shortly or name a specific city.",
+                details=cast(str, payload.get("details", "")),
+            )
+        # Stale-but-real cached data — still a usable card, but mark it loudly so
+        # the model can distinguish degraded data from a fresh observation
+        # (loudness precedent: search fallback=ddg, programming_docs_search
+        # degraded=true). The fresh-cache hit above is NOT a degradation — unmarked.
+        return ToolResult.ok(payload, rich=payload, stale=True)
 
 
-def _extract_location(telemetry: dict | None) -> tuple:
-    """Pull (lat, lon, location_name) from telemetry; all default to None."""
+def _extract_location(telemetry: dict[str, object] | None) -> tuple[float | None, float | None, str | None]:
     if not telemetry:
         return None, None, None
     lat = telemetry.get("lat")
     lon = telemetry.get("lon")
     city = telemetry.get("city", "")
     country = telemetry.get("country", "")
-    location_name = f"{city}, {country}" if city and country else city or country or None
-    return lat, lon, location_name
+    location_name: str | None = f"{city}, {country}" if city and country else cast(str | None, city or country or None)
+    return cast(float | None, lat), cast(float | None, lon), location_name
 
 
-def _build_cache_key(location_param: str, lat, lon, location_name: str | None) -> str:
-    """Prefer resolved name, fall back to coords, then to the literal param ('auto' if empty)."""
+def _build_cache_key(location_param: str, lat: float | None, lon: float | None, location_name: str | None) -> str:
     if location_name and not location_param:
         return location_name.lower()
     if lat is not None and lon is not None and not location_param:
@@ -174,8 +158,7 @@ def _build_cache_key(location_param: str, lat, lon, location_name: str | None) -
     return location_param.lower() if location_param else "auto"
 
 
-def _get_fresh_cache(cache_key: str):
-    """Return the cached result if still within TTL, else None."""
+def _get_fresh_cache(cache_key: str) -> dict[str, object] | None:
     if cache_key not in WeatherAbility._cache:
         return None
     cached_result, cached_ts = WeatherAbility._cache[cache_key]
@@ -184,10 +167,8 @@ def _get_fresh_cache(cache_key: str):
     return None
 
 
-def _fetch_with_fallback(location_param: str, lat, lon, location_name, cache_key: str) -> tuple:
-    """Try Open-Meteo (coords) → wttr.in (city) → 5s retry of either. Returns (result, om_err, wttr_err).
-
-    Routing:
+def _fetch_with_fallback(location_param: str, lat: float | None, lon: float | None, location_name: str | None, cache_key: str) -> tuple[dict[str, object] | None, str, str]:
+    """Routing:
       - No location_param: prefer Open-Meteo with telemetry coords.
       - location_param matches telemetry city/country: prefer Open-Meteo with
         telemetry coords (LLM is just naming the user's home turf).
@@ -205,7 +186,7 @@ def _fetch_with_fallback(location_param: str, lat, lon, location_name, cache_key
     use_telemetry_coords = have_coords and (not location_param or _matches_telemetry(location_param, location_name))
 
     if use_telemetry_coords:
-        result, open_meteo_err = _fetch_open_meteo(lat, lon, location_name or f"{lat:.4f}, {lon:.4f}")
+        result, open_meteo_err = _fetch_open_meteo(cast(float, lat), cast(float, lon), location_name or f"{cast(float, lat):.4f}, {cast(float, lon):.4f}")
 
     if result is None and location_param:
         result, wttr_err = _fetch_wttr(location_param)
@@ -215,7 +196,7 @@ def _fetch_with_fallback(location_param: str, lat, lon, location_name, cache_key
     if result is None:
         logger.warning(f"[WEATHER] Both sources failed, retrying with 5s timeout for '{cache_key}'")
         if use_telemetry_coords:
-            result, _ = _fetch_open_meteo(lat, lon, location_name or f"{lat:.4f}, {lon:.4f}", timeout=5)
+            result, _ = _fetch_open_meteo(cast(float, lat), cast(float, lon), location_name or f"{cast(float, lat):.4f}, {cast(float, lon):.4f}", timeout=5)
         if result is None and location_param:
             result, _ = _fetch_wttr(location_param, timeout=5)
             if result is not None and use_telemetry_coords and location_name:
@@ -225,9 +206,7 @@ def _fetch_with_fallback(location_param: str, lat, lon, location_name, cache_key
 
 
 def _matches_telemetry(location_param: str, location_name: str | None) -> bool:
-    """True when the LLM-supplied location names the same place as telemetry.
-
-    Case-insensitive substring match in either direction so 'Żabbar' matches
+    """Case-insensitive substring match in either direction so 'Żabbar' matches
     'Iż-Żabbar, Malta' and 'malta' matches the country half. Diacritics are
     not normalised — a partial English/Maltese collision is acceptable.
     """
@@ -238,8 +217,7 @@ def _matches_telemetry(location_param: str, location_name: str | None) -> bool:
     return p in n or n in p
 
 
-def _stale_or_error(cache_key: str, open_meteo_err: str, wttr_err: str) -> dict:
-    """Return stale-cached result if any, else build a structured error response."""
+def _stale_or_error(cache_key: str, open_meteo_err: str, wttr_err: str) -> dict[str, object]:
     if cache_key in WeatherAbility._cache:
         logger.warning(f"[WEATHER] All sources unavailable, returning stale cache for '{cache_key}'")
         return WeatherAbility._cache[cache_key][0]
@@ -256,11 +234,10 @@ def _stale_or_error(cache_key: str, open_meteo_err: str, wttr_err: str) -> dict:
     }
 
 
-def _fetch_open_meteo(lat: float, lon: float, location_name: str, timeout: int = 15) -> tuple:
-    """Fetch current weather from Open-Meteo. Returns (result, error_str)."""
+def _fetch_open_meteo(lat: float, lon: float, location_name: str, timeout: int = 15) -> tuple[dict[str, object] | None, str]:
     try:
         url = (
-            "https://api.open-meteo.com/v1/forecast"
+            f"{_OPEN_METEO_BASE}/v1/forecast"
             f"?latitude={lat}&longitude={lon}"
             "&current=temperature_2m,apparent_temperature,relative_humidity_2m,"
             "precipitation,weather_code,wind_speed_10m,wind_direction_10m,is_day"
@@ -338,15 +315,19 @@ def _fetch_open_meteo(lat: float, lon: float, location_name: str, timeout: int =
             "sunset": sunset,
             "hourly": hourly_strip,
         }, ""
-    except Exception as e:
+    except (requests.RequestException, ValueError, KeyError, IndexError, TypeError) as e:
+        # The degradation set: transport failures (RequestException) and parse /
+        # shape surprises (ValueError covers JSON decode + float/int casts;
+        # KeyError/IndexError/TypeError cover unexpected provider-JSON shapes).
+        # These route to the fallback chain; a real bug (e.g. AttributeError) is
+        # NOT caught here and propagates so it is never misreported as a provider error.
         logger.warning(f"[WEATHER] Open-Meteo failed for ({lat},{lon}): {e}")
         return None, str(e)
 
 
-def _fetch_wttr(location: str, timeout: int = 15) -> tuple:
-    """Fetch current weather from wttr.in j1. Returns (result, error_str)."""
+def _fetch_wttr(location: str, timeout: int = 15) -> tuple[dict[str, object] | None, str]:
     try:
-        url = f"https://wttr.in/{location}?format=j1"
+        url = f"{_WTTR_BASE}/{location}?format=j1"
         resp = requests.get(url, timeout=timeout, headers={"User-Agent": "Chalie/1.0 cognitive-agent"})
         resp.raise_for_status()
         # wttr.in serves JSON without a charset header; requests guesses Latin-1
@@ -424,12 +405,15 @@ def _fetch_wttr(location: str, timeout: int = 15) -> tuple:
             "sunset": None,
             "hourly": [],
         }, ""
-    except Exception as e:
+    except (requests.RequestException, ValueError, KeyError, IndexError, TypeError) as e:
+        # Same degradation set as Open-Meteo: transport + parse/shape failures route
+        # to the fallback; programming bugs propagate rather than masquerade as a
+        # provider outage.
         logger.warning(f"[WEATHER] wttr.in failed for '{location}': {e}")
         return None, str(e)
 
 
-def _extract_hourly_strip(hourly: dict, current_iso: str) -> list:
+def _extract_hourly_strip(hourly: dict[str, object], current_iso: str) -> list[dict[str, object]]:
     """Pick the next 8 hourly readings starting from the slot containing current_iso.
 
     Open-Meteo returns ``hourly.time`` as ``["2026-05-03T09:00", ...]`` aligned
@@ -439,9 +423,9 @@ def _extract_hourly_strip(hourly: dict, current_iso: str) -> list:
     """
     if not hourly:
         return []
-    times = hourly.get("time", [])
-    temps = hourly.get("temperature_2m", [])
-    codes = hourly.get("weather_code", [])
+    times = cast(list[object], hourly.get("time", []))
+    temps = cast(list[object], hourly.get("temperature_2m", []))
+    codes = cast(list[object], hourly.get("weather_code", []))
     if not times or not temps:
         return []
 
@@ -449,25 +433,25 @@ def _extract_hourly_strip(hourly: dict, current_iso: str) -> list:
     if current_iso:
         prefix = current_iso[:13]  # "YYYY-MM-DDTHH"
         for i, t in enumerate(times):
-            if t.startswith(prefix):
+            if cast(str, t).startswith(prefix):
                 start_idx = i
                 break
 
-    out = []
+    out: list[dict[str, object]] = []
     end_idx = min(start_idx + 8, len(times))
     for i in range(start_idx, end_idx):
         try:
-            hour = int(times[i][11:13])
+            hour: int | None = int(cast(str, times[i])[11:13])
         except (ValueError, IndexError):
             hour = None
         try:
-            temp = round(float(temps[i]))
+            temp: int | None = round(float(cast(float, temps[i])))
         except (TypeError, ValueError, IndexError):
             temp = None
-        code = None
+        code: int | None = None
         if i < len(codes):
             try:
-                code = int(codes[i])
+                code = int(cast(int, codes[i]))
             except (TypeError, ValueError):
                 code = None
         if hour is not None and temp is not None:
@@ -482,7 +466,6 @@ def _degrees_to_compass(degrees: float) -> str:
 
 
 def _estimate_daylight(obs_time: str) -> bool:
-    """Estimate daylight from wttr.in observation time string."""
     try:
         if obs_time:
             parts = obs_time.strip().split(" ")
@@ -494,6 +477,8 @@ def _estimate_daylight(obs_time: str) -> bool:
                     elif parts[2].upper() == "AM" and hour == 12:
                         hour = 0
                 return 6 <= hour <= 20
-    except Exception:
+    except (ValueError, IndexError):
+        # Unparseable time string → fall through to the UTC-hour heuristic; a real
+        # bug is not swallowed.
         pass
     return 6 <= utc_now().hour <= 20

@@ -1,17 +1,25 @@
 """
-EpisodicRetrievalService — hybrid FTS + vector retrieval with apex traversal.
+EpisodicRetrievalService — hybrid FTS + vector retrieval over a collapsed tree.
 
 Retrieval pipeline:
-  1. FTS lane   — literal/keyword match against the gist column.
-  2. Vector lane — cosine KNN via sqlite-vec.
-  3. Union + dedup by episode ID.
-  4. Apex promotion — each hit walks the consolidated_into chain to the apex
-     episode.  Duplicate apexes are deduplicated so a super-episode only
-     appears once regardless of how many leaves matched.
-  5. Composite rerank — vector-sim + FTS-rank + arousal_salience + recency
-     + salience + retrieval_weight.  Entity/goal/outcome/emotional_congruence
-     components are intentionally absent (dropped in episodic simplification).
-  6. Reconsolidation bump on the returned episodes (salience + activation).
+  1. FTS lane    — literal/keyword match against the gist column.
+  2. Vector lane — cosine KNN via sqlite-vec (no distance ceiling; the relative
+     score floor below decides what survives).
+  3. Union + dedup by episode ID, merging the two lanes' signals onto one row.
+  4. Collapsed-tree rerank — episodes at ALL hierarchy levels (leaf, super,
+     era) compete in one candidate pool. Each lane signal is min-max normalised
+     within the pool, the composite ``score = relevance + recency + importance``
+     is computed, then a RELATIVE score floor drops weak candidates outright —
+     results are never padded back up to *k*.
+
+There is NO radius / adaptive-shrink apparatus: a hard vector-distance ceiling
+silently muted the vector lane (the radius-0 bug). Lane quality is now governed
+entirely by per-lane normalisation plus the relative floor.
+
+Retrieval is a pure read: it never mutates the episodes it returns.  Relevance
+(``last_relevant_at``, which anchors both the recency rerank term and the
+decay engine) advances only on write-relevant events such as episode creation
+and consolidation — never on access.
 
 Single production entry point: ``retrieve()``.  No class — this is a module-
 level function API so there is no per-call EpisodicService construction cost.
@@ -21,10 +29,15 @@ level function API so there is no per-call EpisodicService construction cost.
 import logging
 import math
 import re
-from typing import Optional
+from datetime import datetime, timezone
+from typing import TYPE_CHECKING, Optional, cast
 
+from services.database_service import DatabaseService
 from services.episodic_constants import APEX_TRAVERSAL_MAX_DEPTH
 from services.time_utils import utc_now, parse_utc
+
+if TYPE_CHECKING:
+    import sqlite3
 
 logger = logging.getLogger(__name__)
 
@@ -32,29 +45,37 @@ logger = logging.getLogger(__name__)
 
 _MAX_TRAVERSAL_DEPTH = APEX_TRAVERSAL_MAX_DEPTH
 
-# Reconsolidation debounce window — skip activation bump if the episode
-# was touched more recently than this.
-_RECONSOLIDATION_DEBOUNCE_SECONDS = 10 * 60  # 10 minutes
-_RECONSOLIDATION_SALIENCE_BOOST = 2  # 0.2 × 10 — matches legacy default
+# parse_utc never raises — it returns this sentinel on unparseable/legacy input
+# so a bad timestamp degrades the recency term loudly instead of crashing.
+_PARSE_SENTINEL = datetime.min.replace(tzinfo=timezone.utc)
+
+# Vector KNN depth pulled per query (spec §4.5: collapsed-tree KNN k=50).
+_VECTOR_KNN_K = 50
+
+# Composite scores are scaled into a 0-100-ish band for the memory skill's
+# confidence-label bucketing (composite_score / 100).
+_COMPOSITE_DISPLAY_SCALE = 10.0
+
+# Recency half-life: exp(-_RECENCY_DECAY_PER_HOUR × hours) ≈ 0.5 at ~14 days.
+_RECENCY_DECAY_PER_HOUR = 0.002
+
+# Recency fallback when the relevance anchor cannot be parsed (sentinel/legacy).
+_RECENCY_FALLBACK = 0.5
+
+# Salience normalisation denominator (salience is stored on a 0-10 scale).
+_SALIENCE_SCALE = 10.0
+
+# Relative score floor: a candidate must score at least this fraction of the
+# top candidate's score to survive. Below it, it is DROPPED (never padded to k).
+# Tuned for precision-over-recall on the turn-0 hot path (spec §1.3).
+_RELATIVE_SCORE_FLOOR = 0.5
 
 
 # ── Apex traversal ────────────────────────────────────────────────────────────
 
 
-def _get_episode_raw(episode_id: str, db=None) -> Optional[dict]:
-    """Fetch a single episode row WITHOUT bumping its activation score.
-
-    Used for apex traversal so intermediate hops don't accidentally boost
-    leaves that the caller will never see.  The final apex gets its bump
-    via the normal reconsolidation pass in ``retrieve``.
-
-    Args:
-        episode_id: The episode UUID.
-        db:         Optional DatabaseService; resolves via shared service if None.
-
-    Returns:
-        Episode dict or None if not found.
-    """
+def _get_episode_raw(episode_id: str, db: Optional[DatabaseService] = None) -> Optional[dict[str, object]]:
+    """Fetch a single episode row for apex traversal or final-apex surfacing."""
     if db is None:
         from services.database_service import get_shared_db_service
         db = get_shared_db_service()
@@ -70,7 +91,8 @@ def _get_episode_raw(episode_id: str, db=None) -> Optional[dict]:
                        emotional_valence, emotional_arousal,
                        consolidated_from, consolidated_into,
                        storage_strength, retrieval_weight,
-                       location_lat, location_lon, location_name
+                       location_lat, location_lon, location_name,
+                       last_relevant_at
                 FROM episodes
                 WHERE id = ? AND deleted_at IS NULL
                 """,
@@ -101,37 +123,15 @@ def _get_episode_raw(episode_id: str, db=None) -> Optional[dict]:
             'location_lat': row[17],
             'location_lon': row[18],
             'location_name': row[19],
+            'last_relevant_at': row[20],
         }
     except Exception as exc:
         logger.warning(f"[RETRIEVAL] _get_episode_raw failed for id={episode_id}: {exc}")
         return None
 
 
-def walk_up_to_apex(episode_id: str, db=None) -> Optional[dict]:
-    """Walk the consolidated_into chain from *episode_id* to its apex.
-
-    Returns the apex episode dict.  If the episode has no consolidated_into,
-    it is its own apex and is returned directly.
-
-    Does NOT bump activation on intermediate hops — see ``_get_episode_raw``.
-    The caller (``retrieve``) is responsible for activating the final apex
-    it actually surfaces to the user.
-
-    Cycle-safe: tracks visited IDs in a ``seen`` set and logs an error if a
-    cycle is detected, returning the current episode rather than looping.
-
-    Depth-safe: stops after _MAX_TRAVERSAL_DEPTH hops and logs a warning,
-    returning whatever episode is current at that point.
-
-    Args:
-        episode_id: UUID string of the starting episode.
-        db:         Optional DatabaseService for testing; resolves the shared
-                    service when None.
-
-    Returns:
-        Episode dict at the apex (or the current episode on cycle/depth-guard),
-        or None if the starting episode does not exist.
-    """
+def walk_up_to_apex(episode_id: str, db: Optional[DatabaseService] = None) -> Optional[dict[str, object]]:
+    """Walk the consolidated_into chain from *episode_id* to its apex."""
     seen: set[str] = set()
     current_id = episode_id
 
@@ -155,7 +155,7 @@ def walk_up_to_apex(episode_id: str, db=None) -> Optional[dict]:
 # ── Retrieval helpers ─────────────────────────────────────────────────────────
 
 
-def _pack_embedding(embedding) -> Optional[bytes]:
+def _pack_embedding(embedding: object) -> Optional[bytes]:
     """Pack a list of floats into a sqlite-vec binary blob."""
     if embedding is None:
         return None
@@ -192,12 +192,12 @@ def _count_episodes(channel: Optional[str] = None) -> int:
                 cursor = conn.execute(
                     "SELECT COUNT(*) FROM episodes WHERE deleted_at IS NULL"
                 )
-            return cursor.fetchone()[0]
+            return cast(int, cast("sqlite3.Row", cursor.fetchone())[0])
     except Exception:
         return 0
 
 
-def _fts_search(query_text: str, channel: Optional[str], k: int) -> list[dict]:
+def _fts_search(query_text: str, channel: Optional[str], k: int) -> list[dict[str, object]]:
     """Full-text search against episodes_fts (gist column only).
 
     Args:
@@ -287,18 +287,20 @@ def _fts_search(query_text: str, channel: Optional[str], k: int) -> list[dict]:
 
 
 def _vector_search(
-    query_embedding,
+    query_embedding: object,
     channel: Optional[str],
     k: int,
-    radius: Optional[float] = None,
-) -> list[dict]:
+) -> list[dict[str, object]]:
     """Cosine KNN search via sqlite-vec.
+
+    No distance ceiling is applied here: the relative score floor in
+    ``_rerank_composite`` decides what survives. This is what kills the
+    radius-0 bug where a hard ceiling muted the entire vector lane.
 
     Args:
         query_embedding: Query embedding as a list of floats.
         channel:         Channel filter (``None`` = no filter).
         k:               Max results to pull from sqlite-vec.
-        radius:          If supplied, drop hits with ``vector_distance > radius``.
 
     Returns:
         List of episode dicts with a ``vector_distance`` key.
@@ -351,7 +353,7 @@ def _vector_search(
             rows = cursor.fetchall()
             cursor.close()
 
-        hits = [
+        return [
             {
                 'id': str(r[0]),
                 'gist': r[1],
@@ -371,22 +373,18 @@ def _vector_search(
             }
             for r in rows
         ]
-        if radius is not None:
-            hits = [h for h in hits if h['vector_distance'] is not None
-                    and h['vector_distance'] <= radius]
-        return hits
     except Exception as exc:
         logger.warning(f"[RETRIEVAL] Vector search failed: {exc}")
         return []
 
 
-def _dedup_by_id(hits: list[dict]) -> list[dict]:
+def _dedup_by_id(hits: list[dict[str, object]]) -> list[dict[str, object]]:
     """Deduplicate hits preserving first-seen order.  Merges text_rank and
     vector_distance from duplicate entries onto the first occurrence."""
-    seen: dict[str, dict] = {}
-    ordered: list[dict] = []
+    seen: dict[str, dict[str, object]] = {}
+    ordered: list[dict[str, object]] = []
     for hit in hits:
-        eid = hit['id']
+        eid = cast(str, hit['id'])
         if eid not in seen:
             seen[eid] = dict(hit)
             ordered.append(seen[eid])
@@ -398,193 +396,151 @@ def _dedup_by_id(hits: list[dict]) -> list[dict]:
     return ordered
 
 
-def _rerank_composite(episodes: list[dict]) -> list[dict]:
-    """Composite rerank — simplified per plan.
+def _vector_sim(ep: dict[str, object]) -> float:
+    """Raw vector-lane similarity (1 - distance), 0 when the lane did not hit."""
+    vd = ep.get('vector_distance')
+    if vd is None:
+        return 0.0
+    return max(0.0, 1.0 - float(cast(float, vd)))
 
-    Score components (all normalised to ~[0, 1] before weighting):
-      - vector_sim      (w=4)  — 1 - vector_distance
-      - fts_rank_norm   (w=2)  — inverted + clamped FTS5 rank
-      - arousal         (w=1)  — raw emotional_arousal
-      - recency         (w=1)  — exponential decay with ~14-day half-life
-      - salience        (w=1)  — salience / 10
-      - retrieval       (w=3)  — retrieval_weight
 
-    No entity_overlap / goal_tag_overlap / outcome_relevance (columns gone).
-    No emotional_congruence (no query emotion available here; was hardcoded
-    constant which is zero-discrimination — dropped).
-    No super-episode boost — apex traversal already promoted supers.
+def _fts_strength(ep: dict[str, object]) -> float:
+    """Raw FTS-lane strength from the (negative) FTS5 rank, 0 when no hit.
+
+    FTS5 ``rank`` is negative and more negative = better; the magnitude is the
+    raw strength fed into per-lane min-max normalisation (no fixed /50 clamp —
+    normalisation is now relative to the candidate pool).
     """
-    now = utc_now()
-
-    for ep in episodes:
-        vd = ep.get('vector_distance')
-        if vd is not None:
-            vector_sim = max(0.0, 1.0 - float(vd))
-        else:
-            vector_sim = 0.0
-
-        tr = ep.get('text_rank')
-        if tr is not None:
-            fts_rank_norm = max(0.0, min(1.0, 1.0 - abs(float(tr)) / 50.0))
-        else:
-            fts_rank_norm = 0.0
-
-        arousal = ep.get('emotional_arousal')
-        arousal_norm = float(arousal) if arousal is not None else 0.0
-
-        created_str = ep.get('created_at')
-        try:
-            ref_time = parse_utc(ep.get('last_accessed_at') or created_str)
-            hours = (now - ref_time).total_seconds() / 3600.0
-            recency = math.exp(-0.002 * hours)  # half-life ≈ 14 days
-        except Exception:
-            recency = 0.5
-
-        salience_norm = float(ep.get('salience') or 5) / 10.0
-        retrieval_w = float(ep.get('retrieval_weight') or 1.0)
-
-        composite = (
-            vector_sim * 4.0
-            + fts_rank_norm * 2.0
-            + arousal_norm * 1.0
-            + recency * 1.0
-            + salience_norm * 1.0
-            + retrieval_w * 3.0
-        )
-        # Scale into the 0-100-ish space memory_skill uses for its
-        # confidence label bucketing (hits/100).
-        ep['composite_score'] = composite * 10.0
-
-    episodes.sort(key=lambda e: e.get('composite_score', 0.0), reverse=True)
-    return episodes
+    tr = ep.get('text_rank')
+    if tr is None:
+        return 0.0
+    return abs(float(cast(float, tr)))
 
 
-# ── Reconsolidation ───────────────────────────────────────────────────────────
+def _recency(ep: dict[str, object], now: datetime) -> float:
+    """Exponential recency term anchored on ``last_relevant_at`` (half-life 14d).
 
-
-def _is_debounced(ep: dict, store, now) -> bool:
-    """Return True if this episode should be skipped (debounce window active).
-
-    When a MemoryStore connection is available the debounce key is set on the
-    store; otherwise ``last_accessed_at`` is used as a fallback clock.
-    Side-effect: sets the debounce key in *store* when the episode is NOT
-    debounced and *store* is available.
+    The clock is the relevance anchor (last write-relevant event), falling back
+    to creation time — reads never advance it. ``parse_utc`` never raises; a
+    sentinel/legacy value yields a flat fallback rather than a crash.
     """
-    eid = ep.get('id')
-    if store is not None:
-        key = f"reconsolidation:{eid}"
-        if store.get(key):
-            return True
-        store.set(key, "1", ex=_RECONSOLIDATION_DEBOUNCE_SECONDS)
-        return False
-
-    last = ep.get('last_accessed_at')
-    if not last:
-        return False
-    try:
-        last_dt = parse_utc(last)
-        return (now - last_dt).total_seconds() < _RECONSOLIDATION_DEBOUNCE_SECONDS
-    except Exception:
-        return False
-
-
-def _write_reconsolidation(ep: dict, db, now) -> None:
-    """Persist activation bump for one episode and update the dict in place."""
-    new_salience = min(10, int(ep.get('salience') or 5) + _RECONSOLIDATION_SALIENCE_BOOST)
-    new_access_count = int(ep.get('access_count') or 0) + 1
-    iso_now = now.isoformat()
-
-    with db.connection() as conn:
-        conn.execute(
-            """
-            UPDATE episodes
-            SET salience = ?,
-                last_accessed_at = ?,
-                access_count = ?,
-                storage_strength = MIN(COALESCE(storage_strength, 1.0) + 0.1, 10.0),
-                retrieval_weight = MIN(COALESCE(retrieval_weight, 1.0) + 0.3, 1.0),
-                updated_at = datetime('now')
-            WHERE id = ?
-            """,
-            (new_salience, iso_now, new_access_count, ep['id']),
+    anchor = ep.get('last_relevant_at') or ep.get('created_at')
+    if not anchor:
+        return _RECENCY_FALLBACK
+    ref_time = parse_utc(cast(str, anchor))
+    if ref_time == _PARSE_SENTINEL:
+        logger.warning(
+            "[RETRIEVAL] unparseable relevance anchor for id=%s: %r",
+            ep.get('id'), anchor,
         )
+        return _RECENCY_FALLBACK
+    hours = (now - ref_time).total_seconds() / 3600.0
+    return math.exp(-_RECENCY_DECAY_PER_HOUR * hours)
 
-    ep['salience'] = new_salience
-    ep['last_accessed_at'] = iso_now
-    ep['access_count'] = new_access_count
+
+def _importance(ep: dict[str, object]) -> float:
+    """Importance term: salience/10 × retrieval_weight (spec §4.5)."""
+    salience_norm = float(cast(float, ep.get('salience') or 5)) / _SALIENCE_SCALE
+    retrieval_w = float(cast(float, ep.get('retrieval_weight') or 1.0))
+    return salience_norm * retrieval_w
 
 
-def _apply_reconsolidation(episodes: list[dict]) -> None:
-    """Bump activation_score + salience for retrieved episodes.
+def _min_max_normalise(values: list[float]) -> list[float]:
+    """Min-max normalise a lane's raw signals into [0, 1].
 
-    Debounced to avoid runaway boosts on rapid re-queries: an episode is
-    only reconsolidated once per ``_RECONSOLIDATION_DEBOUNCE_SECONDS`` window.
-    Falls back to ``last_accessed_at`` as the debounce clock.
+    A degenerate spread (all equal, including all-zero) maps every entry to 0.0
+    so a lane that fired uniformly adds no discrimination rather than inflating
+    every candidate to 1.0.
+    """
+    if not values:
+        return []
+    lo = min(values)
+    hi = max(values)
+    span = hi - lo
+    if span <= 0.0:
+        return [0.0 for _ in values]
+    return [(v - lo) / span for v in values]
 
-    Mutates the episode dicts in place — ``salience`` and
-    ``last_accessed_at`` reflect the new values on return.
+
+def _rerank_composite(episodes: list[dict[str, object]]) -> list[dict[str, object]]:
+    """Collapsed-tree composite rerank with a relative score floor.
+
+    Episodes at all hierarchy levels (leaf, super, era) compete in one pool.
+    The two retrieval lanes are min-max normalised WITHIN the pool, then
+
+        score = relevance + recency + importance
+
+    where ``relevance`` is the stronger of the two normalised lane signals,
+    ``recency`` is an exp half-life ≈ 14d term on ``last_relevant_at``, and
+    ``importance`` is ``salience/10 × retrieval_weight`` (spec §4.5).
+
+    A RELATIVE floor then drops every candidate scoring below
+    ``_RELATIVE_SCORE_FLOOR × top_score`` — survivors only, never padded to *k*.
+    Returns the survivors sorted by score descending.
     """
     if not episodes:
-        return
-
-    from services.database_service import get_shared_db_service
-
-    store = None
-    try:
-        from services.memory_client import MemoryClientService
-        store = MemoryClientService.create_connection()
-    except Exception:
-        store = None
+        return []
 
     now = utc_now()
 
-    try:
-        db = get_shared_db_service()
-    except Exception as exc:
-        logger.warning(f"[RETRIEVAL] _apply_reconsolidation db resolve failed: {exc}")
-        return
+    vector_norm = _min_max_normalise([_vector_sim(ep) for ep in episodes])
+    fts_norm = _min_max_normalise([_fts_strength(ep) for ep in episodes])
 
-    for ep in episodes:
-        eid = ep.get('id')
-        if not eid:
-            continue
-        try:
-            if _is_debounced(ep, store, now):
-                continue
-            _write_reconsolidation(ep, db, now)
-        except Exception as exc:
-            logger.warning(f"[RETRIEVAL] reconsolidation failed for id={eid}: {exc}")
+    for ep, v_norm, f_norm in zip(episodes, vector_norm, fts_norm):
+        relevance = max(v_norm, f_norm)
+        score = relevance + _recency(ep, now) + _importance(ep)
+        # Scale into the 0-100-ish space the memory skill buckets confidence
+        # labels in (composite_score / 100).
+        ep['composite_score'] = score * _COMPOSITE_DISPLAY_SCALE
+
+    episodes.sort(key=lambda e: cast(float, e.get('composite_score', 0.0)), reverse=True)
+
+    top_score = cast(float, episodes[0].get('composite_score', 0.0))
+    if top_score <= 0.0:
+        return episodes
+    floor = top_score * _RELATIVE_SCORE_FLOOR
+    return [ep for ep in episodes if cast(float, ep.get('composite_score', 0.0)) >= floor]
 
 
-def _promote_to_apex(union: list) -> list:
-    """Walk each hit up to its apex and deduplicate, merging lane signals."""
-    promoted: list[dict] = []
-    seen_apex: set[str] = set()
+def _promote_to_apex(union: list[dict[str, object]]) -> list[dict[str, object]]:
+    """Hydrate each matched hit into a full episode row for the collapsed tree.
+
+    Collapsed-tree retrieval (spec §4.5, RAPTOR collapsed-traversal): episodes
+    at ALL hierarchy levels — leaves, super-episodes, era digests — compete in
+    one candidate pool. A matched row is therefore surfaced AS-IS at its own
+    level; it is no longer walked up to its apex (which discarded leaves and
+    muted the lower levels). The full row is fetched so the rerank has
+    ``last_relevant_at``/``salience``/``retrieval_weight`` available, with the
+    matching hit's lane signals (text_rank / vector_distance) merged on.
+
+    The apex-walk utility (``walk_up_to_apex``) is retained for the hierarchy
+    consolidation path; it is intentionally not used here.
+    """
+    promoted: list[dict[str, object]] = []
+    seen: set[str] = set()
     for hit in union:
-        apex = walk_up_to_apex(hit['id'])
-        if apex is None:
+        eid = cast(str, hit['id'])
+        if eid in seen:
             continue
-        apex_id = apex['id']
-        if apex_id in seen_apex:
+        row = _get_episode_raw(eid)
+        if row is None:
             continue
-        seen_apex.add(apex_id)
-        merged = dict(apex)
-        if merged.get('text_rank') is None:
-            merged['text_rank'] = hit.get('text_rank')
-        if merged.get('vector_distance') is None:
-            merged['vector_distance'] = hit.get('vector_distance')
+        seen.add(eid)
+        merged = dict(row)
+        merged['text_rank'] = hit.get('text_rank')
+        merged['vector_distance'] = hit.get('vector_distance')
         promoted.append(merged)
     return promoted
 
 
-def _collect_top_distances(ranked: list) -> list:
+def _collect_top_distances(ranked: list[dict[str, object]]) -> list[float]:
     """Return rounded vector distances for the top-5 ranked episodes."""
     top_dists = []
     for ep in ranked[:5]:
         vd = ep.get('vector_distance')
         if vd is not None:
             try:
-                top_dists.append(round(float(vd), 4))
+                top_dists.append(round(float(cast(float, vd)), 4))
             except (TypeError, ValueError):
                 pass
     return top_dists
@@ -596,43 +552,37 @@ def _collect_top_distances(ranked: list) -> list:
 def retrieve(
     query_text: str,
     *,
-    query_embedding=None,
+    query_embedding: Optional[list[float]] = None,
     channel: Optional[str] = None,
-    radius: float = 0.3,
     k: int = 10,
     return_telemetry: bool = False,
-):
-    """Hybrid FTS + vector retrieval with apex promotion and composite rerank.
+) -> list[dict[str, object]] | tuple[list[dict[str, object]], dict[str, object]]:
+    """Hybrid FTS + vector retrieval over the collapsed episode tree.
 
-    This is the single production retrieval entry point for episodes.  It is
-    a drop-in replacement for the legacy ``EpisodicService.retrieve_episodes``
-    and carries the same radius/telemetry contract.
-
-    Adaptive radius: applies a population-aware shrink
-    ``effective = radius / (1 + 0.1 × log2(N + 2))`` before hitting sqlite-vec
-    so retrieval tightens as the corpus grows.
+    Single production retrieval entry point for episodes. Both lanes pull their
+    full candidate sets (no vector-distance ceiling); episodes at all levels
+    (leaf / super / era) compete in one pool, are scored by the normalised
+    composite rerank, and the weak tail is dropped by the relative score floor
+    (it is never padded back up to *k*).
 
     Args:
         query_text:      Raw text query (FTS lane).
         query_embedding: Pre-computed embedding.  If None, one is generated
                          from ``query_text`` via the embedding service.
         channel:         Episode channel filter.  ``None`` = all channels.
-        radius:          Input vector-distance ceiling (pre adaptive-shrink).
-        k:               Maximum number of results.
+        k:               Maximum number of results returned.
         return_telemetry: If True, return ``(episodes, telemetry_dict)``.
 
     Returns:
-        List of up to *k* apex episode dicts (highest composite_score first).
-        When ``return_telemetry`` is True, returns ``(list, telemetry)``.
+        Up to *k* episode dicts (highest composite_score first) that survived
+        the relative floor.  When ``return_telemetry`` is True, returns
+        ``(list, telemetry)``.
     """
-    telemetry: dict = {
+    telemetry: dict[str, object] = {
         'episode_count': 0,
-        'input_radius': radius,
-        'adaptive_shrink_divisor': 1.0,
-        'effective_radius': radius,
         'vector_candidates': 0,
-        'survivors_after_radius': 0,
         'fts_candidates': 0,
+        'floor_cut_count': 0,
         'final_rrf_count': 0,
         'top_distances': [],
     }
@@ -641,26 +591,11 @@ def retrieve(
         if query_embedding is None and query_text:
             query_embedding = _generate_embedding(query_text)
 
-        episode_count = _count_episodes(channel)
-        adaptive_divisor = 1.0 + 0.1 * math.log2(episode_count + 2)
-        effective_radius = radius / adaptive_divisor
+        telemetry['episode_count'] = _count_episodes(channel)
 
-        telemetry['episode_count'] = episode_count
-        telemetry['adaptive_shrink_divisor'] = adaptive_divisor
-        telemetry['effective_radius'] = effective_radius
-
-        # Pull 2× k candidates per lane so post-dedup/apex-promotion still has
-        # room to fill k slots.
         fts_hits = _fts_search(query_text or '', channel, k=k * 2)
-        all_vector_hits = _vector_search(query_embedding, channel, k=200)
-        telemetry['vector_candidates'] = len(all_vector_hits)
-
-        vector_hits = [
-            h for h in all_vector_hits
-            if h['vector_distance'] is not None
-            and h['vector_distance'] <= effective_radius
-        ]
-        telemetry['survivors_after_radius'] = len(vector_hits)
+        vector_hits = _vector_search(query_embedding, channel, k=_VECTOR_KNN_K)
+        telemetry['vector_candidates'] = len(vector_hits)
         telemetry['fts_candidates'] = len(fts_hits)
 
         union = _dedup_by_id(fts_hits + vector_hits)
@@ -669,8 +604,15 @@ def retrieve(
                 return [], telemetry
             return []
 
-        ranked = _rerank_composite(_promote_to_apex(union))[:k]
-        _apply_reconsolidation(ranked)
+        promoted = _promote_to_apex(union)
+        scored = _rerank_composite(promoted)
+        ranked = scored[:k]
+        # Candidates dropped by the relative score floor: scored candidates that
+        # did not survive the floor (before the final top-k truncation).
+        telemetry['floor_cut_count'] = len(promoted) - len(scored)
+        # Retrieval is a pure read: relevance advances only on write-relevant
+        # events (episode creation / consolidation), never on access, so no
+        # weight or salience bump is applied to the returned episodes here.
 
         telemetry['final_rrf_count'] = len(ranked)
         telemetry['top_distances'] = _collect_top_distances(ranked)

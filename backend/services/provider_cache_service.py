@@ -1,7 +1,7 @@
 """Provider cache service — in-memory lazy cache with MemoryStore-backed invalidation."""
 
 import logging
-from typing import Dict, Any, Optional
+from typing import cast
 
 logger = logging.getLogger(__name__)
 
@@ -10,31 +10,25 @@ class ProviderCacheService:
     """
     In-memory lazy cache for provider configurations.
 
-    Solves cache staleness by using MemoryStore versioning:
-    - API process mutates DB → increments MemoryStore version → local caches invalidate
-    - Worker processes: next get_providers() sees version mismatch → cache miss → re-fetch
-
-    Decryption happens ONLY on cache miss (cold start or after provider change).
+    Cross-process invalidation via MemoryStore versioning: API mutations in one
+    process invalidate caches in others on the next get_providers() call.
+    Decryption happens ONLY on cache miss.
     """
 
     # Class-level state (shared across all calls in this process)
-    _providers: Dict[str, Any] = {}  # {name: {platform, model, host, api_key, ...}}
-    _version: Optional[int] = None  # Last seen MemoryStore version
+    _providers: dict[str, dict[str, object]] = {}  # {name: {platform, model, host, api_key, ...}}
+    _version: int | None = None  # Last seen MemoryStore version
 
 
     @staticmethod
-    def get_providers() -> Dict[str, Any]:
-        """
-        Get all providers with lazy caching and MemoryStore-based invalidation.
+    def get_providers() -> dict[str, dict[str, object]]:
 
-        Returns:
-            dict: {provider_name: {platform, model, host, api_key, ...}}
-        """
         # Check if MemoryStore version has changed (cross-process invalidation)
+        current_version: int
         try:
             from services.memory_client import MemoryClientService
             store = MemoryClientService.create_connection()
-            current_version = store.get("providers:cache_version")
+            current_version = cast(int, store.get("providers:cache_version"))
             current_version = int(current_version) if current_version else 0
         except Exception as e:
             logger.warning(f"[ProviderCache] MemoryStore version check failed: {e}, using local cache")
@@ -64,7 +58,7 @@ class ProviderCacheService:
             db_providers = service.get_all_providers()
 
             # Convert to providers dict keyed by name
-            providers_dict = {}
+            providers_dict: dict[str, dict[str, object]] = {}
             for p in db_providers:
                 # Include 'name' in the entry so downstream consumers
                 # (Providers.get_compact_at, ProviderCacheService.get_job_assignment,
@@ -73,7 +67,7 @@ class ProviderCacheService:
                 # Without this, the resolved config has no way to identify
                 # which provider row backs it, breaking DB lookups keyed by
                 # provider name (e.g. compact_at threshold queries).
-                entry = {
+                entry: dict[str, object] = {
                     'name': p['name'],
                     'platform': p['platform'],
                     'model': p['model'],
@@ -86,7 +80,7 @@ class ProviderCacheService:
                     entry['dimensions'] = p['dimensions']
                 if p.get('timeout'):
                     entry['timeout'] = p['timeout']
-                providers_dict[p['name']] = entry
+                providers_dict[cast(str, p['name'])] = entry
 
             # Check vault state — api_keys decrypt to None when vault is locked.
             # Caching a vault-locked result would persist null api_keys until
@@ -125,14 +119,8 @@ class ProviderCacheService:
 
 
     @staticmethod
-    def get_selected_provider() -> Optional[Dict[str, Any]]:
-        """
-        Return the currently selected provider config, or None.
+    def get_selected_provider() -> dict[str, object] | None:
 
-        Resolution:
-          1. Look up selected_provider_id from settings via ProviderDbService
-          2. Return the matching provider config from the cache
-        """
         try:
             from services.database_service import get_shared_db_service
             from services.provider_db_service import ProviderDbService
@@ -148,6 +136,7 @@ class ProviderCacheService:
                     'api_key': selected.get('api_key'),
                     'dimensions': selected.get('dimensions'),
                     'timeout': selected.get('timeout'),
+                    'max_tokens': selected.get('max_tokens'),
                 }
         except Exception as e:
             logger.debug(f"[ProviderCache] Failed to get selected provider: {e}")
@@ -156,15 +145,7 @@ class ProviderCacheService:
 
     @staticmethod
     def invalidate() -> None:
-        """
-        Invalidate provider cache across all processes.
-        Called after create/update/delete provider.
-
-        Uses MemoryStore version counter for cross-process invalidation:
-        - Increments MemoryStore version
-        - Clears local cache (this process)
-        - Other processes detect version mismatch on next get_providers()
-        """
+        """Invalidate and bump the MemoryStore version counter so other processes detect a cache miss on next call."""
         try:
             from services.memory_client import MemoryClientService
             store = MemoryClientService.create_connection()

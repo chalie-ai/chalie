@@ -1,34 +1,28 @@
-"""
-Unit tests for the Scheduler API blueprint (api/scheduler.py).
-
-Uses the real `db` fixture (fully-migrated SQLite per test) instead of
-mock_db.  Auth is still bypassed via a mock on validate_session.
-"""
-
-import pytest
+import sqlite3
+from collections.abc import Iterator
 from datetime import datetime, timezone, timedelta
+from typing import cast
 from unittest.mock import patch
 
+import pytest
 from flask import Flask
+from flask.testing import FlaskClient
+
 from api.scheduler import scheduler_bp
 
 
-def _future_iso(hours=1):
+def _future_iso(hours: int = 1) -> str:
     return (datetime.now(timezone.utc) + timedelta(hours=hours)).isoformat()
 
 
-def _past_iso(hours=1):
+def _past_iso(hours: int = 1) -> str:
     return (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
 
 
-def _insert_item(db, **overrides):
-    """Insert a scheduled_items row and return the id.
+def _insert_item(db: sqlite3.Connection, **overrides: object) -> str:
 
-    Provides sensible defaults for every column so callers only need to
-    specify the fields they care about.
-    """
     now = datetime.now(timezone.utc).isoformat()
-    defaults = dict(
+    defaults: dict[str, object] = dict(
         id="abc12345",
         item_type="notification",
         message="Test reminder",
@@ -63,7 +57,7 @@ def _insert_item(db, **overrides):
         ),
     )
     db.commit()
-    return d["id"]
+    return cast(str, d["id"])
 
 
 @pytest.mark.unit
@@ -71,28 +65,28 @@ class TestSchedulerAPI:
     """Tests for every scheduler blueprint route."""
 
     @pytest.fixture
-    def client(self, db):
+    def client(self, db: sqlite3.Connection) -> FlaskClient:
         app = Flask(__name__)
         app.register_blueprint(scheduler_bp)
         app.config["TESTING"] = True
         return app.test_client()
 
     @pytest.fixture(autouse=True)
-    def bypass_auth(self):
+    def bypass_auth(self) -> Iterator[None]:
         with patch(
             "services.auth_session_service.validate_session", return_value=True
         ):
             yield
 
     @pytest.fixture(autouse=True)
-    def suppress_embed(self):
+    def suppress_embed(self) -> Iterator[None]:
         """Prevent the background embedding thread from running during tests."""
         with patch("services.scheduler_service.embed_scheduled_item"):
             yield
 
     # ----- GET /scheduler -----
 
-    def test_list_returns_items_with_pagination(self, client, db):
+    def test_list_returns_items_with_pagination(self, client: FlaskClient, db: sqlite3.Connection) -> None:
         _insert_item(db, id="item1")
         _insert_item(db, id="item2", group_id="item2")
 
@@ -108,7 +102,7 @@ class TestSchedulerAPI:
 
     # ----- POST /scheduler -----
 
-    def test_create_returns_201(self, client, db):
+    def test_create_returns_201(self, client: FlaskClient, db: sqlite3.Connection) -> None:
         resp = client.post(
             "/scheduler",
             json={"message": "Buy groceries", "due_at": _future_iso()},
@@ -130,8 +124,8 @@ class TestSchedulerAPI:
         "recurrence",
         ["daily", "hourly", "interval:60"],
     )
-    def test_create_accepts_valid_recurrence(self, client, db, recurrence):
-        payload = {
+    def test_create_accepts_valid_recurrence(self, client: FlaskClient, db: sqlite3.Connection, recurrence: str) -> None:
+        payload: dict[str, object] = {
             "message": "Recurring item",
             "due_at": _future_iso(),
             "recurrence": recurrence,
@@ -147,7 +141,7 @@ class TestSchedulerAPI:
             f"{resp.get_json()}"
         )
 
-    def test_create_window_on_non_hourly_returns_400(self, client, db):
+    def test_create_window_on_non_hourly_returns_400(self, client: FlaskClient, db: sqlite3.Connection) -> None:
         resp = client.post(
             "/scheduler",
             json={
@@ -164,7 +158,7 @@ class TestSchedulerAPI:
 
     # ----- GET /scheduler/<id> -----
 
-    def test_get_item_returns_item_when_found(self, client, db):
+    def test_get_item_returns_item_when_found(self, client: FlaskClient, db: sqlite3.Connection) -> None:
         _insert_item(db, id="xyz99999", group_id="xyz99999")
 
         resp = client.get("/scheduler/xyz99999")
@@ -176,7 +170,7 @@ class TestSchedulerAPI:
 
     # ----- PUT /scheduler/<id> -----
 
-    def test_update_pending_item(self, client, db):
+    def test_update_pending_item(self, client: FlaskClient, db: sqlite3.Connection) -> None:
         _insert_item(db, id="upd00001", group_id="upd00001")
 
         resp = client.put(
@@ -201,7 +195,7 @@ class TestSchedulerAPI:
         assert row["message"] == "Updated message"
         assert row["item_type"] == "prompt"
 
-    def test_update_returns_404_for_non_pending(self, client, db):
+    def test_update_returns_404_for_non_pending(self, client: FlaskClient, db: sqlite3.Connection) -> None:
         _insert_item(db, id="fired_item", status="fired", group_id="fired_item")
 
         resp = client.put(
@@ -217,7 +211,7 @@ class TestSchedulerAPI:
 
     # ----- DELETE /scheduler/<id> -----
 
-    def test_cancel_pending_item(self, client, db):
+    def test_cancel_pending_item(self, client: FlaskClient, db: sqlite3.Connection) -> None:
         _insert_item(db, id="cancel01", group_id="cancel01")
 
         resp = client.delete("/scheduler/cancel01")
@@ -236,7 +230,7 @@ class TestSchedulerAPI:
 
     # ----- DELETE /scheduler/history -----
 
-    def test_prune_history_returns_deleted_count(self, client, db):
+    def test_prune_history_returns_deleted_count(self, client: FlaskClient, db: sqlite3.Connection) -> None:
         # Insert 7 old, non-pending items that qualify for pruning.
         # The blueprint deletes WHERE status IN ('fired','failed','cancelled')
         # AND created_at < datetime('now', '-30 days')

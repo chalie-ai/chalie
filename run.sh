@@ -70,8 +70,10 @@ _install -e "$SCRIPT_DIR/backend"
 # Loop: Python exits with code 42 to request a restart (e.g. after in-place update).
 # Any other exit code passes through normally.
 while true; do
-  "$PYTHON" "$SCRIPT_DIR/backend/run.py" --port="$_PORT" --host="$_HOST"
-  _EXIT=$?
+  # set -e would kill the script on run.py's non-zero exit before we could
+  # read it, defeating the restart loop. Capture via `||` (exempt from errexit).
+  _EXIT=0
+  "$PYTHON" "$SCRIPT_DIR/backend/run.py" --port="$_PORT" --host="$_HOST" || _EXIT=$?
   if [[ "$_EXIT" -ne 42 ]]; then
     exit $_EXIT
   fi

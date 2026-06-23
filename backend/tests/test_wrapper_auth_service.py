@@ -1,7 +1,6 @@
-"""Tests for WrapperAuthService — bearer token auth lifecycle."""
-
 import json
-
+import sqlite3
+from typing import cast
 import pytest
 from unittest.mock import MagicMock
 
@@ -11,7 +10,7 @@ pytestmark = pytest.mark.unit
 
 
 @pytest.fixture
-def svc(db):
+def svc(db: sqlite3.Connection) -> WrapperAuthService:
     """WrapperAuthService using the real DB fixture (no arg = uses get_shared_db_service)."""
     return WrapperAuthService()
 
@@ -27,7 +26,7 @@ def _make_flask_request(authorization_header: str = "") -> MagicMock:
 
 
 class TestCreateToken:
-    def test_returns_unique_raw_token_and_wrapper_id(self, svc):
+    def test_returns_unique_raw_token_and_wrapper_id(self, svc: WrapperAuthService) -> None:
         raw1, wid1 = svc.create_token("W1")
         raw2, wid2 = svc.create_token("W2")
         assert isinstance(raw1, str) and len(raw1) > 20
@@ -35,7 +34,7 @@ class TestCreateToken:
         assert wid1 != wid2
         assert raw1 != raw2
 
-    def test_hash_is_stored_not_raw_token(self, svc, db):
+    def test_hash_is_stored_not_raw_token(self, svc: WrapperAuthService, db: sqlite3.Connection) -> None:
         raw, wid = svc.create_token("W1")
         row = db.execute(
             "SELECT token_hash FROM wrapper_tokens WHERE wrapper_id = ?", (wid,)
@@ -44,8 +43,8 @@ class TestCreateToken:
         assert row[0] == _hash_token(raw)
         assert row[0] != raw
 
-    def test_capabilities_round_trip(self, svc, db):
-        caps = {"signals": ["context_change"], "intents": ["read_memory"]}
+    def test_capabilities_round_trip(self, svc: WrapperAuthService, db: sqlite3.Connection) -> None:
+        caps: dict[str, object] = {"signals": ["context_change"], "intents": ["read_memory"]}
         _, wid = svc.create_token("W1", capabilities=caps)
         row = db.execute(
             "SELECT capabilities FROM wrapper_tokens WHERE wrapper_id = ?", (wid,)
@@ -54,13 +53,13 @@ class TestCreateToken:
 
 
 class TestValidateBearer:
-    def test_valid_token_returns_wrapper_id(self, svc):
+    def test_valid_token_returns_wrapper_id(self, svc: WrapperAuthService) -> None:
         raw, wid = svc.create_token("W1")
         req = _make_flask_request(f"Bearer {raw}")
         assert svc.validate_bearer(req) == wid
 
 
-    def test_revoked_token_returns_none(self, svc):
+    def test_revoked_token_returns_none(self, svc: WrapperAuthService) -> None:
         raw, wid = svc.create_token("W1")
         svc.revoke(wid)
         req = _make_flask_request(f"Bearer {raw}")
@@ -68,19 +67,19 @@ class TestValidateBearer:
 
 
 class TestCheckPermission:
-    def test_listed_resource_granted(self, svc):
+    def test_listed_resource_granted(self, svc: WrapperAuthService) -> None:
         perms = {"query": ["memory", "threads"], "update": ["memory"], "broadcast": True}
         _, wid = svc.create_token("W1", permissions=perms)
         assert svc.check_permission(wid, "query", "memory") is True
         assert svc.check_permission(wid, "broadcast", "") is True
 
-    def test_unlisted_resource_denied(self, svc):
+    def test_unlisted_resource_denied(self, svc: WrapperAuthService) -> None:
         perms = {"query": ["memory"], "update": [], "broadcast": False}
         _, wid = svc.create_token("W1", permissions=perms)
         assert svc.check_permission(wid, "query", "tools") is False
         assert svc.check_permission(wid, "broadcast", "") is False
 
-    def test_missing_and_revoked_wrapper_returns_false(self, svc):
+    def test_missing_and_revoked_wrapper_returns_false(self, svc: WrapperAuthService) -> None:
         assert svc.check_permission("nonexistent", "query", "memory") is False
         _, wid = svc.create_token("W1")
         svc.revoke(wid)
@@ -88,8 +87,8 @@ class TestCheckPermission:
 
 
 class TestListAndGet:
-    def test_get_returns_wrapper(self, svc):
-        caps = {"signals": ["x"]}
+    def test_get_returns_wrapper(self, svc: WrapperAuthService) -> None:
+        caps: dict[str, object] = {"signals": ["x"]}
         _, wid = svc.create_token("MyWrapper", capabilities=caps)
         result = svc.get_wrapper(wid)
         assert result is not None
@@ -98,12 +97,12 @@ class TestListAndGet:
 
 
 class TestUpdateCapabilities:
-    def test_update_persists_new_capabilities(self, svc):
-        _, wid = svc.create_token("W1", capabilities={"signals": ["old"]})
-        new_caps = {"signals": ["new1", "new2"], "intents": ["write"]}
+    def test_update_persists_new_capabilities(self, svc: WrapperAuthService) -> None:
+        _, wid = svc.create_token("W1", capabilities=cast(dict[str, object], {"signals": ["old"]}))
+        new_caps: dict[str, object] = {"signals": ["new1", "new2"], "intents": ["write"]}
         svc.update_capabilities(wid, new_caps)
         result = svc.get_wrapper(wid)
-        assert result["capabilities"] == new_caps
+        assert cast(dict[str, object], result)["capabilities"] == new_caps
 
 
 

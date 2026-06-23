@@ -8,12 +8,10 @@ _LIMIT = _MAX_TTS_CHUNK_CHARS
 
 
 def _word(length: int, char: str = "a") -> str:
-    """Return a single word of exactly *length* chars."""
     return char * length
 
 
 def _sentence_of(length: int) -> str:
-    """Return a sentence that is exactly *length* chars long, ending in '.'"""
     # "word word ... word." — fill with 4-char words + spaces then trim/pad.
     assert length >= 2
     body = "word " * (length // 5 + 2)
@@ -29,10 +27,10 @@ class TestSegmentForTts:
 
     # ── trivial / edge inputs ──────────────────────────────────────────────
 
-    def test_empty_string_returns_empty_list(self):
+    def test_empty_string_returns_empty_list(self) -> None:
         assert _segment_for_tts("") == []
 
-    def test_whitespace_only_returns_original_via_fallback(self):
+    def test_whitespace_only_returns_original_via_fallback(self) -> None:
         # Pure whitespace: all sentences strip to "" and are skipped, so chunks
         # stays empty.  The final guard "return chunks if chunks else [text]"
         # returns [text] to honour the "always non-empty list" contract.
@@ -40,12 +38,12 @@ class TestSegmentForTts:
         result = _segment_for_tts(text)
         assert result == [text]
 
-    def test_short_text_returns_single_element_list(self):
+    def test_short_text_returns_single_element_list(self) -> None:
         text = "Hello, world."
         result = _segment_for_tts(text)
         assert result == [text]
 
-    def test_text_exactly_at_limit_stays_as_one_chunk(self):
+    def test_text_exactly_at_limit_stays_as_one_chunk(self) -> None:
         # A single sentence whose length is exactly _MAX_TTS_CHUNK_CHARS must
         # not be split — the boundary is inclusive.
         text = _word(_LIMIT)   # one "word" (no spaces) of exactly the limit
@@ -55,7 +53,7 @@ class TestSegmentForTts:
 
     # ── sentence-level greedy accumulation ────────────────────────────────
 
-    def test_multiple_short_sentences_fit_in_one_chunk(self):
+    def test_multiple_short_sentences_fit_in_one_chunk(self) -> None:
         # Three short sentences whose combined length is well under the limit.
         text = "Hello. How are you? I am fine."
         result = _segment_for_tts(text)
@@ -63,7 +61,7 @@ class TestSegmentForTts:
         # The whole text (stripped) comes back as one chunk.
         assert result[0] == text
 
-    def test_sentences_accumulate_greedily_before_flushing(self):
+    def test_sentences_accumulate_greedily_before_flushing(self) -> None:
         # Build two groups of sentences: each group's combined length fits in
         # the limit, but adding any sentence from group 2 to group 1 would
         # overflow.  Expect exactly 2 chunks.
@@ -80,7 +78,7 @@ class TestSegmentForTts:
         assert s2 in result[0]
         assert s3 in result[1]
 
-    def test_sentences_that_exceed_limit_when_combined_split_across_chunks(self):
+    def test_sentences_that_exceed_limit_when_combined_split_across_chunks(self) -> None:
         # Each sentence individually fits, but concatenating them overflows.
         s1 = _word(200) + "."
         s2 = _word(200) + "."   # s1 + " " + s2 = 401 > 320
@@ -92,7 +90,7 @@ class TestSegmentForTts:
 
     # ── punctuation preserved with preceding text ──────────────────────────
 
-    def test_sentence_terminator_stays_with_preceding_sentence(self):
+    def test_sentence_terminator_stays_with_preceding_sentence(self) -> None:
         # The split regex uses a look-behind so the period/! stays with the
         # sentence it ends, not the start of the next chunk.
         long_s1 = _word(280) + "."   # just under limit on its own
@@ -105,7 +103,7 @@ class TestSegmentForTts:
 
     # ── clause-level fallback ──────────────────────────────────────────────
 
-    def test_single_long_sentence_splits_on_clause_boundary(self):
+    def test_single_long_sentence_splits_on_clause_boundary(self) -> None:
         # One sentence > 320 chars, split by a comma in the middle.
         part_a = _word(200)
         part_b = _word(200)
@@ -119,7 +117,7 @@ class TestSegmentForTts:
 
     # ── whitespace fallback ────────────────────────────────────────────────
 
-    def test_single_long_clause_with_no_punctuation_splits_on_whitespace(self):
+    def test_single_long_clause_with_no_punctuation_splits_on_whitespace(self) -> None:
         # Build a clause longer than the limit with no sentence or clause
         # punctuation at all — must fall through to word-level splitting.
         words = [_word(30) for _ in range(20)]   # 20 × 30 chars = 600 chars

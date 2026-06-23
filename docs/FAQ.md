@@ -31,7 +31,7 @@ There is no telemetry, no analytics, no cloud sync.
 
 ## What does "memory decays" mean?
 
-Chalie does not store everything forever. Episodic memories (specific conversation events) decay faster; semantic concepts (distilled knowledge) decay slower. Memories that are reinforced through repeated relevance survive longer. Memories that are never accessed fade and are eventually deleted.
+Chalie does not store everything forever. Episodic memories (specific conversation events) decay faster; semantic concepts (distilled knowledge) decay slower. Memories that are reinforced through repeated relevance survive longer. Memories that never become relevant again fade and are eventually deleted — merely reading a memory does not refresh it.
 
 This mirrors how human memory works — and it serves a practical purpose: it prevents Chalie from accumulating an ever-growing pile of outdated, contradictory noise. What persists is what matters.
 
@@ -41,12 +41,19 @@ You can inspect Chalie's memory at any time via the Brain dashboard Memory tab, 
 
 ## What LLM providers does Chalie support?
 
-- **Ollama** (local, recommended for privacy) — runs models like `gemma4:31b` entirely on your machine
+- **Ollama** (local, recommended for privacy) — runs models like `gemma3:4b` entirely on your machine
 - **Anthropic** — Claude models via API key
 - **OpenAI** — GPT models via API key
+- **OpenAI-compatible** — any endpoint speaking the Chat Completions format (Groq, OpenRouter, LM Studio, vLLM, …)
 - **Google Gemini** — Gemini models via API key
 
-You can assign different providers to different cognitive functions (e.g., use a local model for memory tasks and a cloud model for complex reasoning). See `docs/02-PROVIDERS-SETUP.md` for configuration.
+Three provider roles can be configured independently:
+
+- **Chat (main)** — handles all chat and reasoning turns.
+- **Vision** — optional dedicated provider for image understanding; falls back to the main provider when it supports vision.
+- **Delegate** — optional dedicated provider for subagent turns (`web_search`, `web_browse`, and other delegated tool work); falls back to the main provider when not set.
+
+Both the Vision and Delegate selectors live inside **Brain → Settings → Providers**. See `docs/02-PROVIDERS-SETUP.md` for configuration.
 
 ---
 
@@ -69,7 +76,7 @@ All background activity is attention-gated: if you're in deep focus, Chalie stay
 Yes, within hard limits. Chalie can:
 - Execute tasks via its ACT loop using tools
 - Schedule reminders and manage lists
-- Research topics autonomously via the goal pursuit system
+- Research topics autonomously via the `web_search` / `web_browse` delegate agents
 - Generate proactive suggestions and follow-ups
 
 Chalie will **not** take irreversible or destructive actions autonomously. Consequential actions (anything that affects external systems or requires user identity) are paused for confirmation. Silent autonomous handling is the default only for safe, reversible, or informational actions.
@@ -88,7 +95,7 @@ See `docs/09-TOOLS.md` for how tools work and `docs/14-DEFAULT-TOOLS.md` for the
 
 1. Start Chalie, create your account at `http://localhost:31025/on-boarding/`, and log in
 2. Open Brain at `http://localhost:31025/brain/` → **Settings** → **Providers** → **Add Provider**
-3. For Ollama: install from [ollama.ai](https://ollama.ai), pull a model (`ollama pull gemma4:31b`), set endpoint to `http://localhost:11434`
+3. For Ollama: install from [ollama.ai](https://ollama.ai), pull a model (`ollama pull gemma3:4b`), set endpoint to `http://localhost:11434`
 4. For cloud providers: paste your API key — it is encrypted and stored locally
 
 See `docs/02-PROVIDERS-SETUP.md` for full details.
@@ -128,6 +135,8 @@ Yes, at two levels: install time and runtime.
 
 The GPU wheel is only swapped in after a dry-run confirms it's reachable — machines without access to the GPU package index stay on CPU rather than failing. ORT version is pinned at `1.20.1`. For air-gapped AMD installs, set `ROCM_PIP_INDEX` to a local mirror before running the installer.
 
+Even once a GPU wheel is installed, Chalie verifies it can actually load at boot: if its native libraries are missing — for example the host's CUDA toolkit is absent or a different major version, so `libcudart.so` can't be found — it reinstalls the CPU `onnxruntime` wheel and starts on CPU instead of failing, logging a hint that names the exact version mismatch. The diagnosis appears in the **Cognition → Errors** panel.
+
 **Runtime** — all ONNX sessions are constructed through `backend/services/onnx_session.py`, which auto-selects the best available execution provider: **CUDA** on NVIDIA GPUs, **CoreML** on Apple Silicon, **CPU** as the fallback. No configuration needed.
 
 > **Mac caveat:** if any weight tensor in the model has a dimension larger than **16384** (the Metal 2D-texture ceiling — applies to every Mac, Intel through M4), `onnx_session.py` drops `CoreMLExecutionProvider` automatically and falls back to CPU. CoreML would otherwise partition the graph across ~177 sub-graphs and balloon virtual memory by ~21 GB. The default `gte-modernbert-base` trips this limit because its vocab embedding is `{50368, 768}`. You'll see `[EMBEDDING] Dropped CoreMLExecutionProvider: model has dim > 16384` in the log when this fires. To force CoreML anyway (not recommended — will almost certainly OOM on <64 GB Macs), pass `providers=["CoreMLExecutionProvider", ...]` explicitly.
@@ -161,7 +170,7 @@ Without passthrough the container falls back to CPU inference silently — Chali
 
 ## Does Chalie support voice?
 
-Yes — native speech-to-text (Moonshine Voice, ONNX) and text-to-speech (Kokoro 82M, ONNX) are built in and auto-detect their dependencies on startup. No Docker required. The voice service degrades gracefully (returns 503) if dependencies aren't installed.
+Yes — native speech-to-text (Moonshine, ONNX) and text-to-speech (Kokoro 82M, ONNX). Voice is **off by default**: turning it on in Brain → Settings downloads the dependencies and models on demand. The voice service degrades gracefully (returns 503) when they aren't installed, and the UI hides voice controls automatically.
 
 ---
 

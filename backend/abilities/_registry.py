@@ -1,17 +1,21 @@
 import importlib
+import logging
 import threading
 
-from abilities._base import Ability
+from typing import cast
+
+from abilities._ability import Ability
+from abilities._mcp_ability import _MCPAbility
 from services.file_mapper_service import FileMapperService
+
+logger = logging.getLogger(__name__)
 
 _lock = threading.RLock()
 _registry: dict[str, Ability] | None = None
 
 
 def _load() -> dict[str, Ability]:
-    """Walk backend/abilities/ and import every non-underscore .py module.
-
-    Concrete Ability subclasses self-register via __init_subclass__; we collect
+    """Concrete Ability subclasses self-register via __init_subclass__; we collect
     them after the walk by inspecting all subclasses of Ability.
     """
     abilities_dir = FileMapperService.get_abilities_path()
@@ -24,12 +28,11 @@ def _load() -> dict[str, Ability]:
     result: dict[str, Ability] = {}
     for subclass in _all_concrete_subclasses(Ability):
         instance = subclass()
-        result[instance.NAME] = instance
+        result[instance.get_name()] = instance
     return result
 
 
 def _all_concrete_subclasses(cls: type) -> list[type]:
-    """Recursively collect unique concrete (non-abstract) subclasses of *cls*."""
     seen: set[type] = set()
     out: list[type] = []
 
@@ -38,6 +41,8 @@ def _all_concrete_subclasses(cls: type) -> list[type]:
             if sub in seen:
                 continue
             seen.add(sub)
+            if getattr(sub, "_SYNTHETIC", False):
+                continue
             if not getattr(sub, "__abstractmethods__", None):
                 out.append(sub)
             _walk(sub)
@@ -59,39 +64,82 @@ def _get_registry() -> dict[str, Ability]:
 class AbilityRegistry:
     """Registry of every dispatchable Ability subclass.
 
-    Tool *scope* (always-available vs discoverable) is owned by each
-    MessageProcessor subclass — the registry just provides the dispatch
-    lookup and the full inventory.
+    Tool *scope* is two flags: an ability is pinned directly on a
+    MessageProcessor (``config.always_available``) or — iff its
+    ``Ability.DISCOVERABLE`` is True — reachable through ``find_tools``. The
+    registry owns the full inventory, the dispatch lookup, and the single global
+    roster of discoverable names that ``find_tools`` searches over.
     """
 
     @staticmethod
     def get(name: str) -> Ability:
-        """Return the Ability instance for *name*; raises KeyError on miss."""
+        """Raises KeyError on miss."""
         return _get_registry()[name]
 
     @staticmethod
     def all() -> list[Ability]:
-        """Return every registered Ability instance."""
         return list(_get_registry().values())
 
     @staticmethod
-    def policy_visible() -> list[Ability]:
-        """Return abilities that should appear in the policy UI.
+    def discoverable_names() -> set[str]:
+        """The global set of ability names ``find_tools`` may surface.
 
-        Excludes SYSTEM, INTERNAL, and actionless ALWAYS_AVAILABLE meta-tools
-        (find_tools, find_skills) whose denial would break routing.
+        This is the single source of truth for discovery scope: every ability
+        whose ``DISCOVERABLE`` flag is True. ``find_tools`` searches over exactly
+        this set for both the ``query`` (semantic) and ``select`` (by-name)
+        paths; the abilities.sqlite index is built from the same predicate, so
+        the two never drift. MCP proxies (``_mcp_*``) are not in the registry and
+        are handled by find_tools' MCP path separately.
         """
-        from services.message_processor import MessageProcessor
-        always_available = set(MessageProcessor.ALWAYS_AVAILABLE)
-        return [
-            a for a in _get_registry().values()
-            if not getattr(a, "SYSTEM", False)
-            and not getattr(a, "INTERNAL", False)
-            and not (
-                a.NAME in always_available
-                and not a.INPUT_SCHEMA.get("properties", {}).get("action")
-            )
-        ]
+        return {name for name, a in _get_registry().items() if a.DISCOVERABLE}
+
+    @staticmethod
+    def build_tools(mp: "object") -> list[dict[str, object]]:
+        """Resolve ``mp.active_tools`` to native tool schemas for this ACT turn.
+
+        ``active_tools`` is the live list of tool NAMES available this turn:
+        seeded with ``config.always_available`` by ``_setup`` and appended to by
+        ``find_tools``. Each name resolves to a FRESH per-turn Ability instance
+        bound to *mp* (native → registry template copy; ``_mcp_*`` → synthetic
+        ``_MCPAbility`` proxy) and its schema is assembled by the one ``final``
+        ``get_input_schema()`` — which injects ``act_summary`` (always) and
+        ``async`` (iff this channel backgrounds). Binding *mp* lets a getter
+        enrich for the live request (e.g. bash's cwd, find_tools' index). First-
+        seen wins on dupes; unknown names are logged and skipped. Returns ``[]``
+        when no active_tools are bound (compaction / encoder paths, or pre-_setup).
+        """
+        active = list(getattr(mp, "active_tools", None) or [])
+        registry = _get_registry()
+
+        seen: set[str] = set()
+        result: list[dict[str, object]] = []
+        for name in active:
+            if name in seen:
+                continue
+            seen.add(name)
+
+            if name.startswith("_mcp_"):
+                ability: Ability = _MCPAbility(name, mp=mp)
+                if cast("_MCPAbility", ability).remote_schema() is None:
+                    logger.warning(
+                        "[AbilityRegistry.build_tools] No MCP schema for '%s'", name
+                    )
+                    continue
+            else:
+                template = registry.get(name)
+                if template is None:
+                    logger.warning(
+                        "[AbilityRegistry.build_tools] No ability registered for '%s'",
+                        name,
+                    )
+                    continue
+                # Fresh per-turn instance bound to mp — getters may read mp to
+                # enrich (cwd / index) and the singleton template stays mp=None.
+                ability = type(template)(mp=mp)
+
+            result.append(ability.get_input_schema())
+
+        return result
 
 
 def _reset_for_tests() -> None:

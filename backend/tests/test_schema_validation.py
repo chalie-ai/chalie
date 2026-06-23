@@ -1,13 +1,6 @@
-"""
-Tests for backend/schema.sql structural integrity.
-
-Each test absorbs a specific nightly scenario, validating that the production
-schema contains the expected tables, columns, indexes, and seed data.
-The fixture loads the full schema into an in-memory SQLite database so these
-tests run with zero external dependencies.
-"""
-
 import sqlite3
+from collections.abc import Iterator
+
 import pytest
 
 from services.file_mapper_service import FileMapperService
@@ -15,22 +8,19 @@ from services.file_mapper_service import FileMapperService
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
-def _get_columns(conn, table_name):
-    """Return set of column names for a table."""
+def _get_columns(conn: sqlite3.Connection, table_name: str) -> set[str]:
     rows = conn.execute(f"PRAGMA table_info({table_name})").fetchall()
     return {row[1] for row in rows}
 
 
-def _get_tables(conn):
-    """Return set of table names."""
+def _get_tables(conn: sqlite3.Connection) -> set[str]:
     rows = conn.execute(
         "SELECT name FROM sqlite_master WHERE type='table'"
     ).fetchall()
     return {row[0] for row in rows}
 
 
-def _get_indexes(conn, table_name):
-    """Return set of index names for a table."""
+def _get_indexes(conn: sqlite3.Connection, table_name: str) -> set[str]:
     rows = conn.execute(
         "SELECT name FROM sqlite_master WHERE type='index' AND tbl_name=?",
         (table_name,)
@@ -44,14 +34,10 @@ def _get_indexes(conn, table_name):
 class TestSchemaValidation:
 
     @pytest.fixture
-    def schema_db(self):
-        """Load full production schema into in-memory SQLite.
-
-        sqlite-vec (vec0) and FTS5 virtual tables are filtered out before
-        execution because the bare in-memory SQLite used in unit tests does
-        not have those extensions loaded.  All regular tables, indexes, and
-        seed INSERT statements are preserved exactly as they appear in
-        schema.sql.
+    def schema_db(self) -> Iterator[sqlite3.Connection]:
+        """sqlite-vec (vec0) and FTS5 virtual tables are filtered out because the
+        in-memory SQLite used in unit tests does not have those extensions.  All
+        regular tables, indexes, and seed INSERT statements remain intact.
         """
         import re
         schema_path = FileMapperService.get_schema_path()
@@ -72,14 +58,9 @@ class TestSchemaValidation:
         yield conn
         conn.close()
 
-    # ── Scenario 201 ─────────────────────────────────────────────────────────
+    # ── Reliability defaults ─────────────────────────────────────────────────
 
-    def test_reliability_default_values(self, schema_db):
-        """Absorbs scenario 201: episodes table inserts without error.
-
-        The reliability column concept only applied to the removed knowledge table.
-        We verify episodes inserts still work correctly.
-        """
+    def test_reliability_default_values(self, schema_db: sqlite3.Connection) -> None:
         import uuid
 
         ep_id = str(uuid.uuid4())

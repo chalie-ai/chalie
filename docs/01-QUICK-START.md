@@ -8,6 +8,8 @@ curl -fsSL https://chalie.ai/install | bash
 
 Checks for Python 3.11+, downloads the latest release, and opens Chalie at **http://localhost:31025**. No root access required. Everything lives in `~/.chalie/`.
 
+The installer supports **macOS and Linux** only. On Windows, run from source (below) or use the Docker image.
+
 ---
 
 ## CLI
@@ -45,7 +47,7 @@ See [02-PROVIDERS-SETUP.md](02-PROVIDERS-SETUP.md) for provider details.
 
 ## Voice
 
-Voice features auto-detect on startup. When native dependencies are installed by the installer, voice appears automatically. When they are not, it is silently hidden. To skip voice during install: `--disable-voice`.
+Voice is off by default and is **not** bundled by the installer. Turn it on in Brain → Settings (the `voice_enabled` toggle, `PUT /api/voice-settings`): this calls `RuntimeDepsService.enable_voice()`, which background-installs the native voice dependencies and downloads the ONNX models into `resources/voice-models/`. Until the deps and model files are present, voice routes report `unavailable` and the controls stay hidden; once ready they appear automatically. Boot re-detects the saved setting via `RuntimeDepsService.init_voice_from_settings` (`backend/run.py`).
 
 ---
 

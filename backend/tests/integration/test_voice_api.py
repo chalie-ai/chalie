@@ -1,25 +1,12 @@
-"""
-Integration: voice API — synthesize (single WAV blob) + transcribe + health.
-
-Tests exercise the real kokoro-onnx + moonshine-onnx models via the real Flask
-app. Each test that requires model files skips cleanly when the model files are
-absent (resources/voice-models/), so the suite stays green in CI environments
-without voice dependencies installed.
-
-The pure-function tests in test_voice_xml_strip.py run unconditionally; these
-integration tests are for the full HTTP contract only.
-
-Uses the authed_client fixture from conftest.py (real Flask app, auth bypassed,
-real SQLite + MemoryStore).
-"""
-
 import io
+import sqlite3
+from typing import cast
 
 import pytest
+from flask.testing import FlaskClient
 
 
-def _voice_available(client) -> bool:
-    """Return True only if /voice/health reports status='ok'."""
+def _voice_available(client: FlaskClient) -> bool:
     resp = client.get('/voice/health')
     if resp.status_code != 200:
         return False
@@ -43,7 +30,7 @@ def _wav_duration(data: bytes) -> float:
             chunk_id = data[offset:offset + 4]
             chunk_size = struct.unpack_from('<I', data, offset + 4)[0]
             if chunk_id == b'data':
-                return chunk_size / (sample_rate * channels * (bits_per_sample // 8))
+                return cast(float, chunk_size / (sample_rate * channels * (bits_per_sample // 8)))
             offset += 8 + chunk_size
         return 0.0
     except Exception:
@@ -51,7 +38,7 @@ def _wav_duration(data: bytes) -> float:
 
 
 @pytest.mark.integration
-def test_health_endpoint_returns_known_status(authed_client):
+def test_health_endpoint_returns_known_status(authed_client: tuple[FlaskClient, sqlite3.Connection, object]) -> None:
     """GET /voice/health → 200 with status in {ok, loading, unavailable}."""
     client, _db, _store = authed_client
 
@@ -65,7 +52,7 @@ def test_health_endpoint_returns_known_status(authed_client):
 
 
 @pytest.mark.integration
-def test_synthesize_returns_single_wav_blob(authed_client):
+def test_synthesize_returns_single_wav_blob(authed_client: tuple[FlaskClient, sqlite3.Connection, object]) -> None:
     """POST /voice/synthesize → 200 audio/wav blob with non-zero duration."""
     client, _db, _store = authed_client
 
@@ -91,7 +78,7 @@ def test_synthesize_returns_single_wav_blob(authed_client):
 
 
 @pytest.mark.integration
-def test_synthesize_rejects_empty_text(authed_client):
+def test_synthesize_rejects_empty_text(authed_client: tuple[FlaskClient, sqlite3.Connection, object]) -> None:
     """POST /voice/synthesize → 400 for empty or whitespace-only input."""
     client, _db, _store = authed_client
 
@@ -112,7 +99,7 @@ def test_synthesize_rejects_empty_text(authed_client):
 
 
 @pytest.mark.integration
-def test_synthesize_markdown_input_produces_audio(authed_client):
+def test_synthesize_markdown_input_produces_audio(authed_client: tuple[FlaskClient, sqlite3.Connection, object]) -> None:
     """Markdown-rich LLM response (bold, italic, code span, list, link) → non-trivial WAV.
 
     Regression guard for the _clean_for_tts pipeline: if markdown markers
@@ -146,7 +133,7 @@ def test_synthesize_markdown_input_produces_audio(authed_client):
 
 
 @pytest.mark.integration
-def test_synthesize_html_input_produces_audio(authed_client):
+def test_synthesize_html_input_produces_audio(authed_client: tuple[FlaskClient, sqlite3.Connection, object]) -> None:
     """HTML input (<p>, <strong>, <em>) strips cleanly and synthesizes to audio.
 
     If the HTML pre-pass in _clean_for_tts is removed or broken, literal tag
@@ -175,7 +162,7 @@ def test_synthesize_html_input_produces_audio(authed_client):
 
 
 @pytest.mark.integration
-def test_synthesize_url_input_produces_audio(authed_client):
+def test_synthesize_url_input_produces_audio(authed_client: tuple[FlaskClient, sqlite3.Connection, object]) -> None:
     """Input containing a URL → audio (spoken-host form, not raw URL characters).
 
     The observable invariant is that audio is produced at all — espeak-ng would
@@ -200,7 +187,7 @@ def test_synthesize_url_input_produces_audio(authed_client):
 
 
 @pytest.mark.integration
-def test_transcribe_empty_file_returns_400(authed_client):
+def test_transcribe_empty_file_returns_400(authed_client: tuple[FlaskClient, sqlite3.Connection, object]) -> None:
     """POST /voice/transcribe with an empty file body → 400."""
     client, _db, _store = authed_client
 
@@ -219,7 +206,7 @@ def test_transcribe_empty_file_returns_400(authed_client):
 
 
 @pytest.mark.integration
-def test_transcribe_missing_file_field_returns_400(authed_client):
+def test_transcribe_missing_file_field_returns_400(authed_client: tuple[FlaskClient, sqlite3.Connection, object]) -> None:
     """POST /voice/transcribe with no file field → 400."""
     client, _db, _store = authed_client
 

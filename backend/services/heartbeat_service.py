@@ -7,6 +7,7 @@ Readers: WorldState, locale_service, act_dispatcher, api/context.
 import json
 import logging
 import time
+from typing import cast
 
 logger = logging.getLogger(__name__)
 
@@ -14,9 +15,9 @@ logger = logging.getLogger(__name__)
 class HeartbeatService:
 
     def __init__(self) -> None:
-        self._ctx: dict | None = None
+        self._ctx: dict[str, object] | None = None
 
-    def read(self) -> dict:
+    def read(self) -> dict[str, object]:
         if self._ctx is not None:
             return self._ctx
         try:
@@ -29,7 +30,7 @@ class HeartbeatService:
             self._ctx = {}
         return self._ctx
 
-    def write(self, ctx: dict) -> None:
+    def write(self, ctx: dict[str, object]) -> None:
         ctx["saved_at"] = time.time()
         flat = self._flatten(ctx)
         from services.database_service import get_shared_db_service
@@ -44,7 +45,7 @@ class HeartbeatService:
         self._ctx = ctx
 
     @staticmethod
-    def _flatten(ctx: dict, prefix: str = "") -> dict[str, str]:
+    def _flatten(ctx: dict[str, object], prefix: str = "") -> dict[str, str]:
         out: dict[str, str] = {}
         for key, value in ctx.items():
             full_key = f"{prefix}{key}"
@@ -55,8 +56,8 @@ class HeartbeatService:
         return out
 
     @staticmethod
-    def _unflatten(rows: list[tuple[str, str]]) -> dict:
-        out: dict = {}
+    def _unflatten(rows: list[tuple[str, str]]) -> dict[str, object]:
+        out: dict[str, object] = {}
         for flat_key, raw_value in rows:
             try:
                 value = json.loads(raw_value)
@@ -67,7 +68,7 @@ class HeartbeatService:
             for part in parts[:-1]:
                 if not isinstance(cursor.get(part), dict):
                     cursor[part] = {}
-                cursor = cursor[part]
+                cursor = cast(dict[str, object], cursor[part])
             cursor[parts[-1]] = value
         return out
 

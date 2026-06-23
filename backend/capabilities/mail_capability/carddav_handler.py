@@ -1,46 +1,70 @@
-"""CarddavHandler — contact sync for the unified mail capability.
-
-Fetches vCards from Google and Apple CardDAV endpoints, parses them into
-normalised contact dicts, and stores them in the knowledge graph via
-``contact_resolver.index_person``.  Provides ``list_contacts`` and
-``get_contact`` tool handlers for LLM-accessible identity lookup.
-
-Only Google and Apple support CardDAV; call sites are responsible for
-checking ``provider.carddav_url`` before instantiating this handler.
-"""
+"""CarddavHandler — contact sync for the unified mail capability."""
 
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 if TYPE_CHECKING:
-    pass  # No forward-reference type hints needed at this time.
+    from collections.abc import Callable
+    from typing import Optional, Protocol
+
+    class _DgsProtocol(Protocol):
+        def store(self, kind: str, key: str, value: str, *, source: Optional[str] = None) -> object: ...
+        def recall(self, query: str, *, kinds: Optional[list[str]] = None, limit: int = 10) -> list[dict[str, object]]: ...
+        def fetch(self, *, kinds: Optional[list[str]] = None, order_by: str = "", limit: Optional[int] = None) -> list[dict[str, object]]: ...
+
+    class _CaldavClientProto(Protocol):
+        url: object
+        def principal(self) -> object: ...
+
+    class _VCardProp(Protocol):
+        value: object
+        params: dict[str, object]
+
+    class _VCardObj(Protocol):
+        contents: dict[str, list["_VCardProp"]]
+
+    class _AddressBookHome(Protocol):
+        def addressbooks(self) -> "list[object]": ...
+
+    class _Principal(Protocol):
+        addressbook_home_set: "_AddressBookHome | None"
+        def addressbooks(self) -> "list[object]": ...
+
+    class _HasVcardObjects(Protocol):
+        def vcard_objects(self) -> "list[object]": ...
+
+    class _HasObjects(Protocol):
+        def objects(self) -> "list[object]": ...
+
+    class _HasVcardToString(Protocol):
+        def vcard_to_string(self) -> str: ...
+
+    class _HasData(Protocol):
+        data: object
+        def load(self) -> None: ...
 
 logger = logging.getLogger(__name__)
 
 
-def _dgs():
+def _dgs() -> "_DgsProtocol":
     from services.data_graph_service import get_data_graph_service
-    return get_data_graph_service()
+    return cast("_DgsProtocol", get_data_graph_service())
 
 
 class CarddavHandler:
-    """Sync CardDAV contacts into the knowledge graph."""
 
     # -----------------------------------------------------------------------
     # Connection
     # -----------------------------------------------------------------------
 
-    def open_client(self, url: str, username: str, password: str):
-        """Open a DAVClient for the given CardDAV endpoint.
-
-        Returns a connected ``caldav.DAVClient`` or ``None`` on failure.
-        """
+    def open_client(self, url: str, username: str, password: str) -> "_CaldavClientProto | None":
+        """Probe principal to confirm credentials are valid."""
         try:
             import caldav  # noqa: PLC0415
 
-            client = caldav.DAVClient(url=url, username=username, password=password)
+            client = cast("_CaldavClientProto", cast("Callable[..., object]", caldav.DAVClient)(url=url, username=username, password=password))
             # Probe the principal to confirm credentials are valid.
             client.principal()
             return client
@@ -52,17 +76,12 @@ class CarddavHandler:
     # Sync
     # -----------------------------------------------------------------------
 
-    def sync_contacts(self, client) -> list[dict]:
-        """Fetch all vCards from every address book on *client*.
-
-        Returns a (possibly empty) list of normalised contact dicts.  Failures
-        for individual cards are logged and skipped.
-        """
+    def sync_contacts(self, client: "_CaldavClientProto") -> list[dict[str, object]]:
         import caldav as _caldav  # noqa: PLC0415
 
-        contacts: list[dict] = []
+        contacts: list[dict[str, object]] = []
         try:
-            principal = client.principal()
+            principal = cast("_Principal", client.principal())
             address_books = _get_address_books(principal)
         except Exception as exc:
             logger.warning("[carddav] could not list address books: %s", exc)
@@ -74,7 +93,7 @@ class CarddavHandler:
         # address-book discovery but the collection URL is known.
         if not address_books:
             try:
-                direct = _caldav.Calendar(client=client, url=str(client.url))
+                direct = cast("Callable[..., object]", _caldav.Calendar)(client=client, url=str(client.url))
                 address_books = [direct]
                 logger.info("[carddav] using direct collection URL as address book")
             except Exception:
@@ -105,12 +124,8 @@ class CarddavHandler:
     # vCard parsing
     # -----------------------------------------------------------------------
 
-    def parse_vcard(self, vcard_data: str) -> dict | None:
-        """Parse a single vCard string into a normalised contact dict.
-
-        Returns ``None`` if the vCard has no usable identity (no FN and no
-        email).  All other fields fall back gracefully to empty strings / lists.
-        """
+    def parse_vcard(self, vcard_data: str) -> dict[str, object] | None:
+        """Return ``None`` if no usable identity (no FN and no email)."""
         try:
             import vobject  # noqa: PLC0415
         except ImportError:
@@ -118,7 +133,7 @@ class CarddavHandler:
             return None
 
         try:
-            card = vobject.readOne(vcard_data)
+            card = cast("_VCardObj", vobject.readOne(vcard_data))
         except Exception as exc:
             logger.debug("[carddav] vobject parse error: %s", exc)
             return None
@@ -151,15 +166,10 @@ class CarddavHandler:
     # Indexing
     # -----------------------------------------------------------------------
 
-    def index_contacts(self, contacts: list[dict]) -> None:
-        """Store *contacts* as full profile objects in the data graph.
-
-        Each contact is stored with ``key='contact:<Display Name>'`` and
-        ``value`` as a JSON object containing all available vCard fields.
-        """
+    def index_contacts(self, contacts: list[dict[str, object]]) -> None:
         from capabilities.contact_resolver import index_contact_profile  # noqa: PLC0415
         for contact in contacts:
-            fn = (contact.get("fn") or "").strip()
+            fn = (cast(str, contact.get("fn")) or "").strip()
             if not fn:
                 continue
             try:
@@ -171,8 +181,7 @@ class CarddavHandler:
     # Monitor (full sync cycle)
     # -----------------------------------------------------------------------
 
-    def monitor(self, client) -> None:
-        """Run one full sync cycle: fetch → parse → index."""
+    def monitor(self, client: "_CaldavClientProto") -> None:
         contacts = self.sync_contacts(client)
         if contacts:
             self.index_contacts(contacts)
@@ -181,22 +190,14 @@ class CarddavHandler:
     # Tool handlers
     # -----------------------------------------------------------------------
 
-    def list_contacts(self, params: dict) -> dict:
-        """List contacts from the knowledge store.
-
-        params:
-            query (str, optional): Free-text search term.
-            limit (int, optional): Max results, default 20.
-
-        Returns ``{"contacts": [...], "count": int}``.
-        """
+    def list_contacts(self, params: dict[str, object]) -> dict[str, object]:
         from capabilities.contact_resolver import (  # noqa: PLC0415
             _parse_contact_row,
             resolve,
         )
 
-        limit = min(int(params.get("limit", 20)), 50)
-        query = (params.get("query") or "").strip()
+        limit = min(int(cast(int, params.get("limit", 20))), 50)
+        query = (cast(str, params.get("query")) or "").strip()
 
         if query:
             matches = resolve(query, limit=limit)
@@ -204,9 +205,9 @@ class CarddavHandler:
 
         try:
             rows = _dgs().fetch(kinds=["user_specific"], order_by="key ASC", limit=limit)
-            contacts = []
+            contacts: list[dict[str, object]] = []
             for r in rows:
-                parsed = _parse_contact_row(r.get("key", ""), r.get("value", ""))
+                parsed = _parse_contact_row(cast(str, r.get("key", "")), cast(str, r.get("value", "")))
                 if parsed is not None:
                     contacts.append(parsed)
         except Exception as exc:
@@ -215,17 +216,10 @@ class CarddavHandler:
 
         return {"contacts": contacts, "count": len(contacts)}
 
-    def get_contact(self, params: dict) -> dict:
-        """Get a single contact by email or name.
-
-        params:
-            identifier (str, required): Email address or display name.
-
-        Returns ``{"contact": {...}}`` or ``{"error": "Contact not found"}``.
-        """
+    def get_contact(self, params: dict[str, object]) -> dict[str, object]:
         from capabilities.contact_resolver import resolve  # noqa: PLC0415
 
-        identifier = (params.get("identifier") or "").strip()
+        identifier = (cast(str, params.get("identifier")) or "").strip()
         if not identifier:
             return {"error": "identifier is required"}
 
@@ -241,8 +235,7 @@ class CarddavHandler:
 # ---------------------------------------------------------------------------
 
 
-def _vcard_text(card, prop: str) -> str:
-    """Return the string value of *prop* from *card*, or empty string."""
+def _vcard_text(card: "_VCardObj", prop: str) -> str:
     try:
         obj = card.contents.get(prop)
         if not obj:
@@ -252,8 +245,7 @@ def _vcard_text(card, prop: str) -> str:
         return ""
 
 
-def _vcard_name(card) -> tuple[str, str]:
-    """Return ``(given_name, family_name)`` from the N property."""
+def _vcard_name(card: "_VCardObj") -> tuple[str, str]:
     try:
         n_list = card.contents.get("n")
         if not n_list:
@@ -267,15 +259,10 @@ def _vcard_name(card) -> tuple[str, str]:
         return "", ""
 
 
-def _vcard_typed_list(card, prop: str) -> list[dict]:
-    """Return all values for *prop* with their TYPE parameter.
-
-    Each entry is ``{"value": "<str>", "type": "<work|home|other>"}``
-    so consumers can distinguish work vs personal emails/phones.
-    """
+def _vcard_typed_list(card: "_VCardObj", prop: str) -> list[dict[str, object]]:
     try:
         items = card.contents.get(prop) or []
-        result = []
+        result: list[dict[str, object]] = []
         for obj in items:
             if not obj.value:
                 continue
@@ -293,8 +280,7 @@ def _vcard_typed_list(card, prop: str) -> list[dict]:
         return []
 
 
-def _vcard_org(card) -> str:
-    """Return the ORG property value, flattening list values."""
+def _vcard_org(card: "_VCardObj") -> str:
     try:
         org_list = card.contents.get("org")
         if not org_list:
@@ -312,8 +298,7 @@ def _vcard_org(card) -> str:
 # ---------------------------------------------------------------------------
 
 
-def _get_address_books(principal) -> list:
-    """Return address books from *principal*, trying multiple API paths."""
+def _get_address_books(principal: "_Principal") -> list[object]:
     # caldav >=1.3 exposes addressbook_home_set
     try:
         home = principal.addressbook_home_set
@@ -321,7 +306,7 @@ def _get_address_books(principal) -> list:
             if hasattr(home, "addressbooks"):
                 return list(home.addressbooks())
             if hasattr(home, "__iter__"):
-                return list(home)
+                return list(cast("list[object]", home))
     except Exception:
         pass
 
@@ -336,24 +321,22 @@ def _get_address_books(principal) -> list:
     return []
 
 
-def _fetch_vcard_objects(address_book) -> list:
-    """Fetch individual vCard objects from an address book."""
+def _fetch_vcard_objects(address_book: object) -> list[object]:
     if hasattr(address_book, "vcard_objects"):
-        return list(address_book.vcard_objects())
+        return list(cast("_HasVcardObjects", address_book).vcard_objects())
     if hasattr(address_book, "objects"):
-        return list(address_book.objects())
+        return list(cast("_HasObjects", address_book).objects())
     return []
 
 
-def _extract_vcard_data(card_obj) -> str:
-    """Extract the raw vCard string from a caldav card object."""
+def _extract_vcard_data(card_obj: object) -> str:
     if hasattr(card_obj, "vcard_to_string"):
-        return str(card_obj.vcard_to_string())
+        return str(cast("_HasVcardToString", card_obj).vcard_to_string())
     if hasattr(card_obj, "data"):
-        data = card_obj.data
+        data = cast("_HasData", card_obj).data
         if not data and hasattr(card_obj, "load"):
-            card_obj.load()
-            data = card_obj.data
+            cast("_HasData", card_obj).load()
+            data = cast("_HasData", card_obj).data
         if data:
             return str(data)
     return ""

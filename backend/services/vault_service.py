@@ -1,28 +1,13 @@
-"""Vault Service — envelope encryption with password-derived master key.
-
-Implements AES-256-GCM envelope encryption:
-  - A random 256-bit Data Encryption Key (DEK) is generated once on
-    registration and never stored in plaintext.
-  - A Key Encryption Key (KEK) is derived from the user's master password
-    using PBKDF2-HMAC-SHA256 (600 000 iterations, 32-byte random salt).
-  - The DEK is wrapped (encrypted) with the KEK and stored in ``vault_config``
-    alongside the KDF parameters.
-  - All consumer encryption/decryption operations use the cached plaintext DEK
-    which is loaded into memory only after a successful ``unlock()`` call.
-
-Wire format for all secrets (encrypt output / decrypt input):
-    nonce (12 bytes) || AES-256-GCM ciphertext+tag
-
-The service is intentionally single-user: the plaintext DEK lives in a
-module-level singleton that is safe for a single-process, single-account
-architecture.  It is cleared on ``lock()`` or server restart.
-"""
+"""Vault Service — envelope encryption with password-derived master key."""
 
 import json
 import logging
 import os
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import TYPE_CHECKING, Optional, cast
+
+if TYPE_CHECKING:
+    from services.database_service import DatabaseService
 
 # FileMapperService owns every repository-layout path (CLAUDE.md rule #9). The
 # vault key-material backup lives under data/secure/ so it persists on the same
@@ -48,6 +33,7 @@ _KDF_ALGORITHM = "pbkdf2_sha256"
 # ── Backup filesystem permissions ───────────────────────────────────────────────
 _SECURE_DIR_MODE = 0o700  # owner rwx only — the data/secure/ backup directory
 _SECURE_FILE_MODE = 0o400 # owner read-only — each backup file
+_BACKUP_RETENTION = 6     # keep only the newest N vault_backup_*.json files
 
 
 # ── Custom exception ───────────────────────────────────────────────────────────
@@ -187,7 +173,7 @@ class VaultService:
             singleton.  Injected to allow deterministic testing.
     """
 
-    def __init__(self, database_service):
+    def __init__(self, database_service: "DatabaseService") -> None:
         self._db = database_service
 
     # ------------------------------------------------------------------
@@ -259,10 +245,10 @@ class VaultService:
                 "[Vault] vault_config is empty — call initialize() before unlock()"
             )
 
-        salt = bytes(row["kdf_salt"])
-        nonce = bytes(row["dek_nonce"])
-        wrapped_dek = bytes(row["wrapped_dek"])
-        iterations = row["kdf_iterations"]
+        salt = bytes(cast(bytes, row["kdf_salt"]))
+        nonce = bytes(cast(bytes, row["dek_nonce"]))
+        wrapped_dek = bytes(cast(bytes, row["wrapped_dek"]))
+        iterations = cast(int, row["kdf_iterations"])
 
         kek = _derive_kek(password, salt, iterations)
         try:
@@ -385,7 +371,7 @@ class VaultService:
         if not self.is_unlocked():
             raise VaultLockedError("Vault is locked — call unlock() before encrypting")
         nonce = os.urandom(_NONCE_SIZE)
-        ciphertext_tag = _aesgcm_encrypt(_vault_state.dek, nonce, plaintext)
+        ciphertext_tag = _aesgcm_encrypt(cast(bytes, _vault_state.dek), nonce, plaintext)
         return nonce + ciphertext_tag
 
     def decrypt(self, blob: bytes) -> bytes:
@@ -402,7 +388,7 @@ class VaultService:
         nonce = blob[:_NONCE_SIZE]
         ciphertext_tag = blob[_NONCE_SIZE:]
         try:
-            return _aesgcm_decrypt(_vault_state.dek, nonce, ciphertext_tag)
+            return _aesgcm_decrypt(cast(bytes, _vault_state.dek), nonce, ciphertext_tag)
         except Exception as exc:
             raise ValueError(f"Decryption failed: {exc}") from exc
 
@@ -418,7 +404,7 @@ class VaultService:
     # Internal helpers
     # ------------------------------------------------------------------
 
-    def _load_vault_config(self) -> Optional[dict]:
+    def _load_vault_config(self) -> Optional[dict[str, object]]:
         """Read the singleton ``vault_config`` row (id=1) from the database.
 
         Returns:
@@ -434,7 +420,7 @@ class VaultService:
             )
             row = cursor.fetchone()
             cursor.close()
-        return row  # sqlite3.Row or None
+        return cast("dict[str, object] | None", row)  # sqlite3.Row or None
 
     def _persist_vault_config(self, km: "_VaultKeyMaterial") -> None:
         """Replace the singleton ``vault_config`` row (id=1) with *km*.
@@ -454,18 +440,19 @@ class VaultService:
             )
 
     # ------------------------------------------------------------------
-    # Filesystem key-material backup (TKT-676)
+    # Filesystem key-material backup
     # ------------------------------------------------------------------
 
     def _write_backup(self, km: "_VaultKeyMaterial") -> None:
         """Append *km* as a fresh, uniquely-stamped backup under ``data/secure/``.
 
-        Every DEK generation writes a new ``vault_backup_<stamp>.json`` and never
-        overwrites or deletes an earlier one — backups are retained forever so
-        recovery can fall back through every generation. The backup holds the
-        same password-protected material as the ``vault_config`` row, so it is no
-        weaker than the database. Written atomically (tmp + rename) and locked to
-        owner-read-only inside an owner-only directory.
+        Every DEK generation writes a new ``vault_backup_<stamp>.json``; only the
+        newest ``_BACKUP_RETENTION`` files are kept so recovery can still fall
+        back through recent generations without the directory growing unbounded
+        (these files are bundled into every instance snapshot). The backup holds
+        the same password-protected material as the ``vault_config`` row, so it
+        is no weaker than the database. Written atomically (tmp + rename) and
+        locked to owner-read-only inside an owner-only directory.
         """
         from services.time_utils import utc_now
 
@@ -500,6 +487,10 @@ class VaultService:
             raise
         os.chmod(path, _SECURE_FILE_MODE)
         logger.info("[Vault] Key material backed up to %s", path.name)
+
+        # Prune everything beyond the newest N (list is sorted newest-first).
+        for stale in FileMapperService.list_vault_backups()[_BACKUP_RETENTION:]:
+            stale.unlink(missing_ok=True)
 
     def _restore_from_backup(self, password: str) -> bool:
         """Rebuild ``vault_config`` from the first backup that *password* opens.

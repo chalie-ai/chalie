@@ -1,20 +1,20 @@
-"""
-Locale Service — Single chokepoint for ALL localisation in Chalie.
+"""Locale Service — single chokepoint for ALL localisation in Chalie.
 
-RULES (enforced by code review):
-  - ALL dates/times stored in the DB MUST pass through this service and be UTC.
-  - ALL dates/times shown to users or used in triggers MUST pass through this
-    service and be converted to the user's local timezone.
-  - ALL locale-sensitive values (currency, language, location) MUST be read
-    from this service — never directly from telemetry, settings, or env.
+Rules (enforced by code review):
+- ALL dates/times stored in the DB MUST pass through this service and be UTC.
+- ALL dates/times shown to users or used in triggers MUST pass through
+  this service and be converted to the user's local timezone.
+- ALL locale-sensitive values (currency, language, location) MUST be
+  read from this service — never directly from telemetry, settings, or env.
 
 The backing store is the ``telemetry`` table (populated by the frontend
-heartbeat via ClientContextService.save()).  This service is the exclusive
-read interface for locale fields.
+heartbeat via ClientContextService.save()). This service is the
+exclusive read interface for locale fields.
 """
 
 import logging
 from datetime import datetime, timezone
+from typing import cast
 from zoneinfo import ZoneInfo
 
 from services.time_utils import utc_now, parse_utc
@@ -27,7 +27,7 @@ _LOCALE_KEYS = frozenset({
 })
 
 
-def _read_locale_fields() -> dict:
+def _read_locale_fields() -> dict[str, object]:
     """Extract locale-relevant fields from the telemetry cache.
 
     Returns a flat dict with keys like 'timezone', 'locale', 'location.lat'.
@@ -38,10 +38,10 @@ def _read_locale_fields() -> dict:
         ctx = heartbeat_service.read()
         if not ctx:
             return {}
-        result = {}
+        result: dict[str, object] = {}
         for key in _LOCALE_KEYS:
             parts = key.split(".")
-            value = ctx
+            value: object = ctx
             for part in parts:
                 if isinstance(value, dict):
                     value = value.get(part)
@@ -64,7 +64,7 @@ def get_timezone() -> ZoneInfo:
     tz_name = fields.get("timezone")
     if tz_name:
         try:
-            return ZoneInfo(tz_name)
+            return ZoneInfo(cast(str, tz_name))
         except Exception:
             logger.debug("[LOCALE] Invalid timezone '%s', falling back to UTC", tz_name)
     return ZoneInfo("UTC")
@@ -73,7 +73,7 @@ def get_timezone() -> ZoneInfo:
 def get_timezone_name() -> str:
     """Return the user's IANA timezone name string (e.g. 'Europe/Malta')."""
     fields = _read_locale_fields()
-    return fields.get("timezone") or "UTC"
+    return cast(str, fields.get("timezone")) or "UTC"
 
 
 def get_locale() -> str:
@@ -82,7 +82,7 @@ def get_locale() -> str:
     Falls back to 'en-US' when unavailable.
     """
     fields = _read_locale_fields()
-    return fields.get("locale") or "en-US"
+    return cast(str, fields.get("locale")) or "en-US"
 
 
 def get_language() -> str:
@@ -91,7 +91,7 @@ def get_language() -> str:
     Falls back to 'en' when unavailable.
     """
     fields = _read_locale_fields()
-    return fields.get("language") or "en"
+    return cast(str, fields.get("language")) or "en"
 
 
 def get_currency() -> str:
@@ -100,10 +100,10 @@ def get_currency() -> str:
     Falls back to 'USD' when unavailable.
     """
     fields = _read_locale_fields()
-    return fields.get("currency") or "USD"
+    return cast(str, fields.get("currency")) or "USD"
 
 
-def get_location() -> dict:
+def get_location() -> dict[str, object]:
     """Return the user's last known location.
 
     Returns:
@@ -124,7 +124,7 @@ CHAT_TIMESTAMP_FMT = "%d %b %H:%M"
 # ── Formatting helpers ────────────────────────────────────────────────────
 
 
-def format_date(dt, fmt: str = "%Y-%m-%d %H:%M", for_ui: bool = False) -> str | None:
+def format_date(dt: datetime | str | None, fmt: str = "%Y-%m-%d %H:%M", for_ui: bool = False) -> str | None:
     """Format a datetime for storage or display.
 
     This is THE chokepoint for all date/time formatting in the system.
@@ -161,7 +161,7 @@ def format_date(dt, fmt: str = "%Y-%m-%d %H:%M", for_ui: bool = False) -> str | 
     return dt.strftime(fmt)
 
 
-def to_utc(dt) -> datetime:
+def to_utc(dt: datetime | str) -> datetime:
     """Ensure a datetime is timezone-aware UTC.
 
     Use this before ANY database write involving a timestamp.
@@ -175,7 +175,7 @@ def to_utc(dt) -> datetime:
     return parse_utc(dt)
 
 
-def to_local(dt) -> datetime:
+def to_local(dt: datetime | str) -> datetime:
     """Convert a datetime to the user's local timezone.
 
     Use this before displaying any timestamp to the user or evaluating
@@ -200,7 +200,7 @@ def local_now() -> datetime:
 
 
 def calculate_interval(
-    date_time,
+    date_time: datetime | str,
     interval_type: str,
     interval: int,
 ) -> tuple[datetime, datetime]:
@@ -234,20 +234,3 @@ def calculate_interval(
     next_utc = base + delta
     next_local = next_utc.astimezone(get_timezone())
     return next_utc, next_local
-
-
-def format_currency(amount: float | int, symbol: bool = True) -> str:
-    """Format a monetary amount using the user's currency.
-
-    Args:
-        amount: Numeric amount.
-        symbol: If True, prefix with currency code.
-
-    Returns:
-        Formatted string like 'EUR 1,234.56' or '1,234.56'.
-    """
-    currency_code = get_currency()
-    formatted = f"{amount:,.2f}"
-    if symbol:
-        return f"{currency_code} {formatted}"
-    return formatted

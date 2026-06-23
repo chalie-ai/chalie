@@ -1,0 +1,12 @@
+// Login page layout — centres the card on the viewport.
+// Tokens come from @chalie/shared/styles/main.scss (imported before this).
+// The centring lives on #app, not body: #app is body's flex child, and a bare
+// flex item collapses to its content width — capping the card far under its
+// max-width. As a full-width block that owns the flexbox, the card fills out.
+#app {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1.5rem;
+}

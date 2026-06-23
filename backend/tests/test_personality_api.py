@@ -8,10 +8,13 @@ Blueprint: api.personality (url_prefix='/settings')
 """
 
 import json
+import sqlite3
 
 import pytest
 
+from flask.testing import FlaskClient
 from services.file_mapper_service import FileMapperService
+from services.memory_store import MemoryStore
 
 pytestmark = pytest.mark.unit
 
@@ -23,8 +26,8 @@ _VOICES_PATH = str(FileMapperService.get_backend_path(
 ))
 
 
-def _load_corpus() -> dict:
-    index = {}
+def _load_corpus() -> dict[tuple[int, ...], str]:
+    index: dict[tuple[int, ...], str] = {}
     with open(_VOICES_PATH, 'r', encoding='utf-8') as fh:
         for line in fh:
             line = line.strip()
@@ -40,10 +43,7 @@ def _load_corpus() -> dict:
 
 @pytest.mark.unit
 class TestPersonalityAPIGet:
-    """GET /settings/personality behaviour."""
-
-    def test_get_personality_returns_neutral_when_unset(self, authed_client):
-        """GET /settings/personality with no setting returns neutral tuple + neutral voice."""
+    def test_get_personality_returns_neutral_when_unset(self, authed_client: tuple[FlaskClient, sqlite3.Connection, MemoryStore]) -> None:
         corpus = _load_corpus()
         expected_voice = corpus[(0, 0, 0, 0, 0)]
 
@@ -65,10 +65,7 @@ class TestPersonalityAPIGet:
 
 @pytest.mark.unit
 class TestPersonalityAPIPut:
-    """PUT /settings/personality behaviour — persistence and round-trip."""
-
-    def test_put_personality_persists_and_returns_voice(self, authed_client):
-        """PUT with all-cool tuple returns correct voice; subsequent GET round-trips."""
+    def test_put_personality_persists_and_returns_voice(self, authed_client: tuple[FlaskClient, sqlite3.Connection, MemoryStore]) -> None:
         corpus = _load_corpus()
         target = [-2, -2, -2, -2, -2]
         expected_voice = corpus[tuple(target)]
@@ -103,10 +100,7 @@ class TestPersonalityAPIPut:
 
 @pytest.mark.unit
 class TestPersonalityAPIPutValidation:
-    """PUT /settings/personality rejects invalid payloads with 400."""
-
-    def test_put_rejects_out_of_range_step(self, authed_client):
-        """PUT with step +3 (out of range) returns 400."""
+    def test_put_rejects_out_of_range_step(self, authed_client: tuple[FlaskClient, sqlite3.Connection, MemoryStore]) -> None:
         client, _db, _store = authed_client
         resp = client.put(
             '/settings/personality',
@@ -117,8 +111,7 @@ class TestPersonalityAPIPutValidation:
             f"Expected 400 for out-of-range step, got {resp.status_code}"
         )
 
-    def test_put_rejects_tuple_wrong_length(self, authed_client):
-        """PUT with 4-element tuple returns 400."""
+    def test_put_rejects_tuple_wrong_length(self, authed_client: tuple[FlaskClient, sqlite3.Connection, MemoryStore]) -> None:
         client, _db, _store = authed_client
         resp = client.put(
             '/settings/personality',
@@ -129,8 +122,7 @@ class TestPersonalityAPIPutValidation:
             f"Expected 400 for 4-element tuple, got {resp.status_code}"
         )
 
-    def test_put_rejects_non_list_tuple(self, authed_client):
-        """PUT with 'tuple' as a string (not a list) returns 400."""
+    def test_put_rejects_non_list_tuple(self, authed_client: tuple[FlaskClient, sqlite3.Connection, MemoryStore]) -> None:
         client, _db, _store = authed_client
         resp = client.put(
             '/settings/personality',
@@ -141,8 +133,7 @@ class TestPersonalityAPIPutValidation:
             f"Expected 400 for string 'tuple', got {resp.status_code}"
         )
 
-    def test_put_rejects_missing_tuple_field(self, authed_client):
-        """PUT with empty body (no 'tuple' key) returns 400."""
+    def test_put_rejects_missing_tuple_field(self, authed_client: tuple[FlaskClient, sqlite3.Connection, MemoryStore]) -> None:
         client, _db, _store = authed_client
         resp = client.put(
             '/settings/personality',
@@ -153,8 +144,7 @@ class TestPersonalityAPIPutValidation:
             f"Expected 400 for missing 'tuple' field, got {resp.status_code}"
         )
 
-    def test_put_rejects_bools_as_integers(self, authed_client):
-        """``[true, false, 0, 0, 0]`` would satisfy ``isinstance(v, int)`` — reject explicitly."""
+    def test_put_rejects_bools_as_integers(self, authed_client: tuple[FlaskClient, sqlite3.Connection, MemoryStore]) -> None:
         client, _db, _store = authed_client
         resp = client.put(
             '/settings/personality',

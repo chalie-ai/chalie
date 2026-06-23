@@ -1,14 +1,18 @@
 """Unit tests for compaction_persistence.get_compaction() canonical SQL lookup.
 
-Invariants tested:
-- Returns None when no compaction rows exist for the channel
-- Returns None when only failure-status rows exist (status filter)
-- Returns the latest success row by tool_calls.id (append-only ordering)
-- Ignores rows from other channels (channel isolation)
-- Returns correct compacted_text, compacted_up_to_id, tool_call_id
+Storage model (design §3.6): the compaction summary lives in the transcript
+table as a row with role='compaction' whose OWN id is the watermark
+(compacted_up_to_id). There is no status/success/failure concept — _compact()
+only ever writes a row when summary extraction succeeds, so a persisted row is
+always a real summary.
+
+Rows are seeded through the production factory transcript_service.write_input_row
+— the exact path _compact() uses — so this test exercises the real write+read
+seam, not a hand-rolled INSERT.
 """
 
-import json
+import sqlite3
+
 import pytest
 
 pytestmark = pytest.mark.unit
@@ -17,110 +21,61 @@ _CHANNEL = 'test_cp_canonical'
 _OTHER_CHANNEL = 'test_cp_other'
 
 
-def _seed_transcript(db, channel, content='anchor'):
-    cursor = db.execute(
-        "INSERT INTO transcript (channel, role, content, created_at) "
-        "VALUES (?, 'user', ?, '2026-01-01 00:00:00')",
-        (channel, content),
-    )
-    db.commit()
-    return cursor.lastrowid
-
-
-def _seed_tool_call(db, transcript_id, status, compacted_text, compacted_up_to_id):
-    params = json.dumps({'status': status, 'compacted_up_to_id': compacted_up_to_id})
-    cursor = db.execute(
-        "INSERT INTO tool_calls "
-        "(transcript_id, tool_name, params, result, ephemeral, created_at) "
-        "VALUES (?, 'compaction', ?, ?, 0, '2026-01-01 00:00:01')",
-        (transcript_id, params, compacted_text),
-    )
-    db.commit()
-    return cursor.lastrowid
+def _seed_compaction(channel: str, summary: str) -> int:
+    from services.transcript_service import Transcript
+    return Transcript.write_input_row(channel, 'compaction', summary)
 
 
 class TestGetCompactionCanonicalLookup:
-    def test_returns_none_when_no_rows(self, db):
+    def test_returns_none_when_no_rows(self, db: sqlite3.Connection) -> None:
         from services.compaction_persistence import get_compaction
         result = get_compaction(_CHANNEL)
         assert result is None
 
-    def test_returns_none_when_only_failure_rows(self, db):
-        t_id = _seed_transcript(db, _CHANNEL)
-        _seed_tool_call(db, t_id, 'failure', 'some failed output', t_id)
-
-        from services.compaction_persistence import get_compaction
-        result = get_compaction(_CHANNEL)
-        assert result is None
-
-    def test_returns_success_row(self, db):
-        t_id = _seed_transcript(db, _CHANNEL)
-        _seed_tool_call(db, t_id, 'success', 'the summary text', t_id)
+    def test_returns_compaction_row(self, db: sqlite3.Connection) -> None:
+        watermark = _seed_compaction(_CHANNEL, 'the summary text')
 
         from services.compaction_persistence import get_compaction
         result = get_compaction(_CHANNEL)
         assert result is not None
         assert result['compacted_text'] == 'the summary text'
-        assert result['compacted_up_to_id'] == t_id
+        assert result['compacted_up_to_id'] == watermark
 
-    def test_returns_latest_success_by_id(self, db):
-        t1 = _seed_transcript(db, _CHANNEL, 'first')
-        t2 = _seed_transcript(db, _CHANNEL, 'second')
-        _seed_tool_call(db, t1, 'success', 'old summary', t1)
-        _seed_tool_call(db, t2, 'success', 'new summary', t2)
+    def test_returns_latest_by_id(self, db: sqlite3.Connection) -> None:
+        _seed_compaction(_CHANNEL, 'old summary')
+        newer = _seed_compaction(_CHANNEL, 'new summary')
 
         from services.compaction_persistence import get_compaction
+        from typing import cast
         result = get_compaction(_CHANNEL)
-        assert result['compacted_text'] == 'new summary'
-        assert result['compacted_up_to_id'] == t2
+        assert cast("dict[str, object]", result)['compacted_text'] == 'new summary'
+        assert cast("dict[str, object]", result)['compacted_up_to_id'] == newer
 
-    def test_success_after_failure_returns_success(self, db):
-        t1 = _seed_transcript(db, _CHANNEL, 'first')
-        t2 = _seed_transcript(db, _CHANNEL, 'second')
-        _seed_tool_call(db, t1, 'success', 'good summary', t1)
-        _seed_tool_call(db, t2, 'failure', 'failed attempt', t2)
-
-        from services.compaction_persistence import get_compaction
-        result = get_compaction(_CHANNEL)
-        assert result['compacted_text'] == 'good summary'
-
-    def test_channel_isolation(self, db):
-        t_other = _seed_transcript(db, _OTHER_CHANNEL, 'other')
-        _seed_tool_call(db, t_other, 'success', 'other channel summary', t_other)
+    def test_channel_isolation(self, db: sqlite3.Connection) -> None:
+        _seed_compaction(_OTHER_CHANNEL, 'other channel summary')
 
         from services.compaction_persistence import get_compaction
         result = get_compaction(_CHANNEL)
         assert result is None
 
-    def test_channel_isolation_own_channel_visible(self, db):
-        t_own = _seed_transcript(db, _CHANNEL, 'own')
-        t_other = _seed_transcript(db, _OTHER_CHANNEL, 'other')
-        _seed_tool_call(db, t_own, 'success', 'own summary', t_own)
-        _seed_tool_call(db, t_other, 'success', 'other summary', t_other)
+    def test_own_channel_visible_alongside_other_channel(self, db: sqlite3.Connection) -> None:
+        _seed_compaction(_CHANNEL, 'own summary')
+        _seed_compaction(_OTHER_CHANNEL, 'other summary')
 
         from services.compaction_persistence import get_compaction
+        from typing import cast
         result = get_compaction(_CHANNEL)
-        assert result['compacted_text'] == 'own summary'
+        assert cast("dict[str, object]", result)['compacted_text'] == 'own summary'
 
-    def test_result_contains_tool_call_id(self, db):
-        t_id = _seed_transcript(db, _CHANNEL)
-        tc_id = _seed_tool_call(db, t_id, 'success', 'summary', t_id)
+    def test_result_shape_tool_call_id_none_and_created_at_present(self, db: sqlite3.Connection) -> None:
+        watermark = _seed_compaction(_CHANNEL, 'summary')
 
         from services.compaction_persistence import get_compaction
+        from typing import cast
         result = get_compaction(_CHANNEL)
-        assert result['tool_call_id'] == tc_id
-
-    def test_compacted_up_to_id_zero_when_param_missing(self, db):
-        """If params lack compacted_up_to_id the field defaults to 0."""
-        t_id = _seed_transcript(db, _CHANNEL)
-        db.execute(
-            "INSERT INTO tool_calls "
-            "(transcript_id, tool_name, params, result, ephemeral, created_at) "
-            "VALUES (?, 'compaction', ?, 'text', 0, '2026-01-01 00:00:01')",
-            (t_id, json.dumps({'status': 'success'})),
-        )
-        db.commit()
-
-        from services.compaction_persistence import get_compaction
-        result = get_compaction(_CHANNEL)
-        assert result['compacted_up_to_id'] == 0
+        # tool_call_id is a retired legacy field: the watermark is no longer a
+        # tool_call, so the canonical reader always returns None for it.
+        assert cast("dict[str, object]", result)['tool_call_id'] is None
+        # created_at is populated from the transcript row's DB default.
+        assert cast("dict[str, object]", result)['created_at'] is not None
+        assert cast("dict[str, object]", result)['compacted_up_to_id'] == watermark

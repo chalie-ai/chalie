@@ -1,9 +1,4 @@
-"""Unit tests for services.rich_media_parser.
-
-parse() is a pure function with no collaborators — no DB, no network, no LLM.
-Covers: single card, multi-card, orphan tag, unclosed span, mismatched ordinal,
-prose-only (no spans), mixed prose+spans, double-quoted id, empty input.
-"""
+from typing import cast
 
 import pytest
 
@@ -12,8 +7,7 @@ from services.rich_media_parser import parse, _find_payload
 pytestmark = pytest.mark.unit
 
 
-def _tc(tool_name: str, result: str) -> dict:
-    """Minimal tool_call row dict."""
+def _tc(tool_name: str, result: str) -> dict[str, object]:
     return {"tool_name": tool_name, "params": "{}", "result": result, "ephemeral": 1}
 
 
@@ -22,18 +16,15 @@ def _tc(tool_name: str, result: str) -> dict:
 # ── _find_payload ─────────────────────────────────────────────────────────────
 
 class TestFindPayload:
-    """``_find_payload`` returns ``(payload, row)`` so the parser can hand the
-    matched row to the ability's ``enrich_rich_payload`` hook."""
-
-    def test_matches_single_quote_syntax(self):
+    def test_matches_single_quote_syntax(self) -> None:
         tc = _tc("weather", '{"loc":"London"}\n\n<span id=\'weather_1\'>')
-        payload, row = _find_payload("weather_1", [tc])
+        payload, row = cast("tuple[object, object]", _find_payload("weather_1", [tc]))
         assert payload == {"loc": "London"}
         assert row is tc
 
-    def test_matches_double_quote_syntax(self):
+    def test_matches_double_quote_syntax(self) -> None:
         tc = _tc("weather", '{"loc":"Paris"}\n\n<span id="weather_1">')
-        payload, row = _find_payload("weather_1", [tc])
+        payload, row = cast("tuple[object, object]", _find_payload("weather_1", [tc]))
         assert payload == {"loc": "Paris"}
         assert row is tc
 
@@ -41,17 +32,17 @@ class TestFindPayload:
 # ── parse() — core cases ──────────────────────────────────────────────────────
 
 class TestParseNoSpans:
-    def test_prose_only_returns_single_text_segment(self):
+    def test_prose_only_returns_single_text_segment(self) -> None:
         segs = parse("Hello there, how can I help?", [])
         assert segs == [{"type": "text", "content": "Hello there, how can I help?"}]
 
-    def test_empty_content_returns_empty_list(self):
+    def test_empty_content_returns_empty_list(self) -> None:
         assert parse("", []) == []
 
 
 
 class TestParseSingleCard:
-    def test_single_span_paired_with_tool_call(self):
+    def test_single_span_paired_with_tool_call(self) -> None:
         tool_result = '{"location":"London","temperature_c":12}\n\n<span id=\'weather_1\'>'
         tc = _tc("weather", tool_result)
         content = "<span id='weather_1'>It is partly cloudy in London.</span>"
@@ -63,7 +54,7 @@ class TestParseSingleCard:
         assert seg["synthesis"] == "It is partly cloudy in London."
         assert seg["payload"] == {"location": "London", "temperature_c": 12}
 
-    def test_prose_before_span(self):
+    def test_prose_before_span(self) -> None:
         tool_result = '{"location":"Tokyo"}\n\n<span id=\'weather_1\'>'
         tc = _tc("weather", tool_result)
         content = "Here is the weather. <span id='weather_1'>Clear skies.</span>"
@@ -77,7 +68,7 @@ class TestParseSingleCard:
 
 
 class TestParseMultiCard:
-    def test_two_cards_in_sequence(self):
+    def test_two_cards_in_sequence(self) -> None:
         tc1 = _tc("weather", '{"location":"London","temperature_c":12}\n\n<span id=\'weather_1\'>')
         tc2 = _tc("weather", '{"location":"Tokyo","temperature_c":22}\n\n<span id=\'weather_2\'>')
         content = (
@@ -97,7 +88,7 @@ class TestParseMultiCard:
 
 
 class TestParseOrphanTag:
-    def test_orphan_tag_emits_text_segment_with_synthesis(self, caplog):
+    def test_orphan_tag_emits_text_segment_with_synthesis(self, caplog: pytest.LogCaptureFixture) -> None:
         import logging
         content = "<span id='weather_1'>Some synthesis here.</span>"
         with caplog.at_level(logging.WARNING, logger="services.rich_media_parser"):
@@ -109,7 +100,7 @@ class TestParseOrphanTag:
 
 
 class TestParseUnclosedSpan:
-    def test_unclosed_span_passes_through_as_text(self):
+    def test_unclosed_span_passes_through_as_text(self) -> None:
         # Non-greedy regex won't match if </span> is absent
         tc = _tc("weather", '{"loc":"X"}\n\n<span id=\'weather_1\'>')
         content = "Hello <span id='weather_1'>No close"
@@ -117,7 +108,7 @@ class TestParseUnclosedSpan:
         # Entire content becomes a text segment since the regex doesn't match
         assert len(segs) == 1
         assert segs[0]["type"] == "text"
-        assert "Hello" in segs[0]["content"]
+        assert "Hello" in cast(str, segs[0]["content"])
 
 
 
@@ -142,12 +133,10 @@ class TestParseImageChoice:
         head = _json.dumps({"results": [{"title": "T"}], "image_candidates": self._CANDIDATES})
         return f"{head}\n\n<span id='search_1'>"
 
-    def test_chosen_url_in_candidates_promoted_to_image_url(self):
+    def test_chosen_url_in_candidates_promoted_to_image_url(self) -> None:
         tc = _tc("search", self._tool_result())
         content = "<span id='search_1' data-image='https://example.com/a.jpg'>Synthesis.</span>"
         segs = parse(content, [tc])
         rich = next(s for s in segs if s["type"] == "rich")
-        assert rich["payload"]["image_url"] == "https://example.com/a.jpg"
-        assert "image_candidates" not in rich["payload"]
-
-
+        assert cast(dict[str, object], rich["payload"])["image_url"] == "https://example.com/a.jpg"
+        assert "image_candidates" not in cast(dict[str, object], rich["payload"])

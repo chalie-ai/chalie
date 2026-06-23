@@ -1,47 +1,34 @@
-"""
-WorldState — in-process singleton for ambient world context.
-
-render() is called on demand: once per user turn and once per Cognition
-endpoint hit.  Signals are stored in an internal dict, TTL-pruned on read;
-telemetry and schedule are read directly from the database.
-
-Push sites:
-  - POST /health (heartbeat.js) → ClientContextService.save() →
-                                  upserts ``telemetry`` table rows
-  - POST /api/signals           → world_state.push_signal(source, label)
-  - WorldAwarenessService       → world_state.push_signal("news", headline)
-  - IMAPHandler                 → world_state.push_signal("inbox", summary)
-
-Pull sites (read inside render()):
-  - telemetry        — flat key/value rows persisted from the FE heartbeat
-  - scheduled_items  — upcoming / recently-fired schedule entries
-
-Output format (literal):
-  ### Background Telemetry,Processes & Signals
-  [telemetry]
-  * **user**;<flat top-level keys, k:v comma-separated>
-  * **device**;<keys nested under "device", k:v comma-separated>
-  * **behavioral**;<keys nested under "behavioral", k:v comma-separated>
-  …one bullet per top-level group the FE sent…
-  [schedule]
-  * {message} (due-in:{duration})
-  [signal:{source}] {label}
-"""
-
 import json
 import logging
 import threading
 import time as _time
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any
+from typing import TYPE_CHECKING, cast
 
+if TYPE_CHECKING:
+    from services.database_service import DatabaseService
+
+from services.durable_timestamp import DurableTimestamp
 from services.time_utils import utc_now, parse_utc
 from services.time_formatter_service import TimeFormatterService
 
 logger = logging.getLogger(__name__)
 
 _SECTION_HEADER = "### Background Telemetry,Processes & Signals"
+
+# Key for the last user-message timestamp. The in-memory ``_store`` dict and the
+# durable MemoryStore deliberately share this key — both are the fast in-process
+# read path for the same value.
+_STORE_KEY_LAST_USER_MESSAGE = "world_state:last_user_message_at"
+
+# Durable dual-write clock so the subconscious user-active gate survives a
+# process/container restart. Without it the gate starves: the value lives only
+# in the in-memory store and is wiped on every restart.
+# Bidirectional dependency: services/durable_timestamp.py owns the persist/
+# hydrate mechanism; this module supplies the key pair + provenance.
+_DG_KEY_LAST_USER_MESSAGE = "world_state_last_user_message_at"
+_SOURCE_LAST_USER_MESSAGE = "world_state"
 
 # Schedule query — pending items due in ≤7 days, or fired in last 24 hours, not hidden
 _SCHEDULE_SQL = """
@@ -64,18 +51,20 @@ LIMIT 200
 _TELEMETRY_HIDDEN_KEYS = {"saved_at", "_location_name_stale", "connection"}
 
 # Top-level dict groups that should not be rendered as their own bullet.
-_TELEMETRY_HIDDEN_GROUPS = {"behavioral"}
+# ``location`` carries the raw GPS dict (lat/lon) the frontend heartbeat sends;
+# it stays out of the chat/system prompt. Backend consumers read the coordinates
+# directly (departure advisory, weather, locale_service); the chat LLM only ever
+# sees the resolved ``location_name`` scalar, which renders under the synthetic
+# ``user`` group. (The background geo-pattern pass — configs/channels/geo_pattern.py
+# — is the one model-facing consumer still given coordinates, to cluster
+# location-tagged transcripts into place-based habits.)
+_TELEMETRY_HIDDEN_GROUPS = {"behavioral", "location"}
 
 # Strftime format for the synthesised local_time field — "Sat 02 May 2026 11:35".
 _LOCAL_TIME_FORMAT = "%a %d %b %Y %H:%M"
 
 
-def _format_telemetry_value(value) -> str | None:
-    """Render a leaf telemetry value as a string, or None to suppress the field.
-
-    Suppresses null/empty values so absent fields do not clutter the output.
-    Booleans render as ``true``/``false`` (LLM-friendly, matches JSON).
-    """
+def _format_telemetry_value(value: object) -> str | None:
     if value is None:
         return None
     if isinstance(value, bool):
@@ -97,8 +86,7 @@ def _is_hidden_telemetry_key(key: str) -> bool:
     return key in _TELEMETRY_HIDDEN_KEYS or key.startswith("_")
 
 
-def _render_dict_subfields(d: dict) -> list[str]:
-    """Render the visible fields of a nested telemetry dict as ``key:value`` strings."""
+def _render_dict_subfields(d: dict[str, object]) -> list[str]:
     sub_fields = []
     for sub_key, sub_value in d.items():
         if _is_hidden_telemetry_key(sub_key):
@@ -109,14 +97,7 @@ def _render_dict_subfields(d: dict) -> list[str]:
     return sub_fields
 
 
-def _group_telemetry(ctx: dict) -> list[tuple[str, list[str]]]:
-    """Group a nested telemetry dict into ``[(group_label, [k:v, ...])]`` entries.
-
-    - Top-level scalar keys collect under the synthetic ``user`` group.
-    - Top-level dict keys form their own groups (``device``, ``behavioral``, …).
-    - Hidden bookkeeping keys (``saved_at``, ``_location_name_stale``) drop.
-    - Empty groups are omitted entirely.
-    """
+def _group_telemetry(ctx: dict[str, object]) -> list[tuple[str, list[str]]]:
     user_fields: list[str] = []
     grouped: dict[str, list[str]] = {}
 
@@ -142,8 +123,7 @@ def _group_telemetry(ctx: dict) -> list[tuple[str, list[str]]]:
     return out
 
 
-def _schedule_due_field(due_at_str: str, now) -> str:
-    """Format the due-in field for a scheduled_items row."""
+def _schedule_due_field(due_at_str: str, now: datetime) -> str:
     try:
         diff_secs = (parse_utc(due_at_str) - now).total_seconds()
     except Exception:
@@ -153,8 +133,7 @@ def _schedule_due_field(due_at_str: str, now) -> str:
     return f"due-in:{TimeFormatterService.duration(abs(diff_secs))} ago"
 
 
-def _schedule_last_fired_field(last_fired_str) -> str | None:
-    """Format the last-fired field, or None if absent / unparseable."""
+def _schedule_last_fired_field(last_fired_str: str | None) -> str | None:
     if not last_fired_str:
         return None
     try:
@@ -163,8 +142,7 @@ def _schedule_last_fired_field(last_fired_str) -> str | None:
         return None
 
 
-def _schedule_recurrence_field(recurrence_str) -> str | None:
-    """Format the repeats field, or None if absent / non-numeric."""
+def _schedule_recurrence_field(recurrence_str: str | None) -> str | None:
     if not recurrence_str:
         return None
     try:
@@ -175,24 +153,24 @@ def _schedule_recurrence_field(recurrence_str) -> str | None:
     return f"repeats:every {TimeFormatterService.duration(rec_secs)}"
 
 
-def _keep_extreme(bucket: dict, message: str, row: dict, *, ts_key: str, prefer_lower: bool) -> None:
+def _keep_extreme(bucket: dict[str, dict[str, object]], message: str, row: dict[str, object], *, ts_key: str, prefer_lower: bool) -> None:
     """Insert ``row`` into ``bucket[message]`` if it has the more extreme timestamp under ``ts_key``."""
     current = bucket.get(message)
     if current is None:
         bucket[message] = row
         return
-    incoming_ts = row.get(ts_key) or ""
-    current_ts = current.get(ts_key) or ""
+    incoming_ts: str = cast(str, row.get(ts_key)) or ""
+    current_ts: str = cast(str, current.get(ts_key)) or ""
     if (prefer_lower and incoming_ts < current_ts) or (not prefer_lower and incoming_ts > current_ts):
         bucket[message] = row
 
 
-def _bucket_schedule_rows(rows: list) -> tuple[dict, dict]:
+def _bucket_schedule_rows(rows: list[dict[str, object]]) -> tuple[dict[str, dict[str, object]], dict[str, dict[str, object]]]:
     """Split rows into pending-by-message (earliest due_at) and fired-by-message (latest last_fired_at)."""
-    pending_by_msg: dict[str, dict] = {}
-    fired_by_msg: dict[str, dict] = {}
+    pending_by_msg: dict[str, dict[str, object]] = {}
+    fired_by_msg: dict[str, dict[str, object]] = {}
     for row in rows:
-        message = row.get("message") or ""
+        message: str = cast(str, row.get("message")) or ""
         status = row.get("status")
         if status == "pending":
             _keep_extreme(pending_by_msg, message, row, ts_key="due_at", prefer_lower=True)
@@ -201,20 +179,20 @@ def _bucket_schedule_rows(rows: list) -> tuple[dict, dict]:
     return pending_by_msg, fired_by_msg
 
 
-def _order_schedule_messages(pending: dict, fired: dict) -> list[str]:
+def _order_schedule_messages(pending: dict[str, dict[str, object]], fired: dict[str, dict[str, object]]) -> list[str]:
     """Pending entries first (by due_at asc), then fired-only entries (by last_fired_at desc)."""
-    ordered = sorted(pending.keys(), key=lambda m: pending[m].get("due_at") or "")
+    ordered = sorted(pending.keys(), key=lambda m: cast(str, pending[m].get("due_at")) or "")
     seen = set(ordered)
     ordered.extend(sorted(
         (m for m in fired if m not in seen),
-        key=lambda m: fired[m].get("last_fired_at") or "",
+        key=lambda m: cast(str, fired[m].get("last_fired_at")) or "",
         reverse=True,
     ))
     return ordered
 
 
 def _compute_local_time() -> str | None:
-    """Render the user's wall-clock time as ``Sat 02 May 2026 11:35``."""
+    """Return wall-clock time formatted as ``Sat 02 May 2026 11:35``."""
     try:
         from services.locale_service import format_date
         from services.time_utils import utc_now
@@ -224,13 +202,13 @@ def _compute_local_time() -> str | None:
         return None
 
 
-def _render_schedule_fields(row: dict, now) -> str:
+def _render_schedule_fields(row: dict[str, object], now: datetime) -> str:
     """Build the comma-separated field string for one schedule entry."""
-    fields = [_schedule_due_field(row.get("due_at") or "", now)]
-    last_fired_field = _schedule_last_fired_field(row.get("last_fired_at"))
+    fields = [_schedule_due_field(cast(str, row.get("due_at")) or "", now)]
+    last_fired_field = _schedule_last_fired_field(cast("str | None", row.get("last_fired_at")))
     if last_fired_field:
         fields.append(last_fired_field)
-    recurrence_field = _schedule_recurrence_field(row.get("recurrence"))
+    recurrence_field = _schedule_recurrence_field(cast("str | None", row.get("recurrence")))
     if recurrence_field:
         fields.append(recurrence_field)
     return ",".join(fields)
@@ -238,11 +216,9 @@ def _render_schedule_fields(row: dict, now) -> str:
 
 @dataclass(frozen=True)
 class Signal:
-    """Typed event pushed by a background worker or capability."""
-
     source: str
     kind: str
-    payload: dict[str, Any] = field(default_factory=dict)
+    payload: dict[str, object] = field(default_factory=dict)
     received_at: datetime = field(default_factory=utc_now)
 
 
@@ -252,41 +228,35 @@ class WorldState:
     Thread-safe via a single internal lock protecting ``_store``.
     """
 
-    def __init__(self):
-        self._store: dict = {}           # arbitrary type → dict fragments
+    def __init__(self) -> None:
+        """Build a WorldState and hydrate the restart-durable fields.
+
+        ``last_user_message_at`` is loaded from the dual-write store at
+        construction so the first read after a process/container restart sees
+        the persisted value (mirrors ``SubconsciousWorker.__init__``). Hydrate
+        failure is non-fatal — the field simply starts unset.
+        """
+        self._store: dict[str, object] = {}           # arbitrary type → dict fragments
         self._lock = threading.Lock()
+        self._user_msg_clock = DurableTimestamp(
+            memory_key=_STORE_KEY_LAST_USER_MESSAGE,
+            data_graph_key=_DG_KEY_LAST_USER_MESSAGE,
+            source=_SOURCE_LAST_USER_MESSAGE,
+        )
+        self._hydrate_last_user_message_at()
 
     # ── Public API ─────────────────────────────────────────────────────────
 
-    def set(self, type: str, value: dict) -> "WorldState":
-        """Store a typed fragment, overwriting any prior value.
-
-        Args:
-            type: Arbitrary key, e.g. ``'telemetry'``, ``'signals'``.
-            value: The dict to store.
-
-        Returns:
-            ``self`` for chaining.
-        """
+    def set(self, type: str, value: dict[str, object]) -> "WorldState":
         with self._lock:
             self._store[type] = value
         return self
 
-    def get(self, type: str) -> dict:
-        """Retrieve a typed fragment.
-
-        For ``type='signals'``, expired entries are pruned before returning.
-
-        Args:
-            type: Key previously passed to :meth:`set`.
-
-        Returns:
-            The stored dict, or ``{}`` when unset.
-        """
+    def get(self, type: str) -> dict[str, object]:
         with self._lock:
             if type == "signals":
                 self._prune_signals()
-            return dict(self._store.get(type) or {})
+            return dict(cast("dict[str, object]", self._store.get(type)) or {})
 
     def push_signal(self, source: str, label: str, ttl: int = 3600) -> None:
         """Merge a signal into the signals dict, overwriting the same source.
@@ -297,7 +267,7 @@ class WorldState:
             ttl: Seconds until this signal expires.  Default 3600 (1 hour).
         """
         with self._lock:
-            signals: dict = dict(self._store.get("signals") or {})
+            signals: dict[str, object] = dict(cast("dict[str, object]", self._store.get("signals")) or {})
             signals[source] = {
                 "label": label,
                 "expires_at": _time.time() + ttl,
@@ -315,9 +285,11 @@ class WorldState:
 
         Unknown kinds are silently ignored (forward-compatibility).
         """
+        persist_user_message: datetime | None = None
         with self._lock:
             if signal.kind == "user_message":
-                self._store["world_state:last_user_message_at"] = signal.received_at.isoformat()
+                self._store[_STORE_KEY_LAST_USER_MESSAGE] = signal.received_at.isoformat()
+                persist_user_message = signal.received_at
             elif signal.kind == "heartbeat":
                 self._store["world_state:last_heartbeat_at"] = signal.received_at.isoformat()
             elif signal.kind == "device":
@@ -328,24 +300,49 @@ class WorldState:
                 lt = signal.payload.get("local_time")
                 if lt:
                     self._store["world_state:current_local_time"] = (
-                        lt if isinstance(lt, str) else lt.isoformat()
+                        lt if isinstance(lt, str) else cast("datetime", lt).isoformat()
                     )
 
-    def snapshot(self) -> dict[str, Any]:
+        # Durable write happens outside the lock — the dual-write touches
+        # MemoryStore + data_graph and must not block other absorb/snapshot
+        # callers. The in-memory store is already updated above; persistence is
+        # the restart-survival copy the subconscious user-active gate reads.
+        if persist_user_message is not None:
+            self._user_msg_clock.persist(persist_user_message)
+
+    def _hydrate_last_user_message_at(self) -> None:
+        """Load the durable last-user-message timestamp into the in-memory store.
+
+        Called once from ``__init__`` so a restarted process sees the persisted
+        value on its first read. The durable read happens outside the snapshot
+        hot path; failure is non-fatal (the field starts unset).
+        """
+        try:
+            hydrated = self._user_msg_clock.load()
+        except Exception as exc:
+            logger.warning("[WorldState] hydrate last_user_message_at failed: %s", exc)
+            return
+        if hydrated is not None:
+            with self._lock:
+                self._store[_STORE_KEY_LAST_USER_MESSAGE] = hydrated.isoformat()
+
+    def snapshot(self) -> dict[str, object]:
         """Read-only snapshot of the four typed ambient fields. Caller treats as immutable.
 
         Datetime fields are ``None`` when not yet set; once set they return a
-        timezone-aware UTC ``datetime``.
+        timezone-aware UTC ``datetime``. ``last_user_message_at`` is hydrated
+        from durable storage at construction, so the in-memory store is the
+        single read source here even after a restart.
         """
         with self._lock:
-            raw_msg = self._store.get("world_state:last_user_message_at")
+            raw_msg = self._store.get(_STORE_KEY_LAST_USER_MESSAGE)
             raw_hb = self._store.get("world_state:last_heartbeat_at")
             raw_lt = self._store.get("world_state:current_local_time")
             return {
-                "last_user_message_at": parse_utc(raw_msg) if raw_msg is not None else None,
-                "last_heartbeat_at": parse_utc(raw_hb) if raw_hb is not None else None,
+                "last_user_message_at": parse_utc(cast("str", raw_msg)) if raw_msg is not None else None,
+                "last_heartbeat_at": parse_utc(cast("str", raw_hb)) if raw_hb is not None else None,
                 "current_device_class": self._store.get("world_state:current_device_class"),
-                "current_local_time": parse_utc(raw_lt) if raw_lt is not None else None,
+                "current_local_time": parse_utc(cast("str", raw_lt)) if raw_lt is not None else None,
             }
 
     def render(self) -> str:
@@ -430,7 +427,7 @@ class WorldState:
         """Produce [signal:{source}] lines from the in-memory signals dict."""
         with self._lock:
             self._prune_signals()
-            signals = dict(self._store.get("signals") or {})
+            signals: dict[str, dict[str, object]] = dict(cast("dict[str, dict[str, object]]", self._store.get("signals")) or {})
         if not signals:
             return []
         lines = []
@@ -441,14 +438,14 @@ class WorldState:
 
     def _prune_signals(self) -> None:
         """Remove expired signals from the store. Must be called under self._lock."""
-        signals = self._store.get("signals")
+        signals: dict[str, dict[str, object]] | None = cast("dict[str, dict[str, object]] | None", self._store.get("signals"))
         if not signals:
             return
         now = _time.time()
         pruned = {
             src: entry
             for src, entry in signals.items()
-            if entry.get("expires_at", 0) > now
+            if cast(float, entry.get("expires_at", 0)) > now
         }
         self._store["signals"] = pruned
 
@@ -456,12 +453,12 @@ class WorldState:
 # ── DB helpers (reused by the Cognition endpoint) ──────────────────────────
 
 
-def _get_db():
+def _get_db() -> "DatabaseService":
     from services.database_service import get_shared_db_service
     return get_shared_db_service()
 
 
-def _fetch_schedule_rows() -> list[dict]:
+def _fetch_schedule_rows() -> list[dict[str, object]]:
     """Execute the schedule query and return rows as list of dicts."""
     db = _get_db()
     with db.connection() as conn:

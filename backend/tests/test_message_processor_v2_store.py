@@ -6,15 +6,24 @@
 #
 #     http://www.apache.org/licenses/LICENSE-2.0
 
-"""Tests for get_previous_messages(), compaction, and store() hot paths.
+"""Tests for get_previous_messages() and the _wrap_with_checkpoint envelope.
 
-Uses real in-memory SQLite DB — no mocks for data path.
+Uses real in-memory SQLite DB — no mocks for the data path. The watermark /
+overflow / compaction-write behaviour is covered by the feature tests in
+test_compaction_watermark.py and the end-to-end scenario suite; the old singleton-mocked
+_run_full_compaction / _handle_overflow tests were removed with the redesign.
 """
 
-import logging as _logging
-from unittest.mock import MagicMock, patch
+from __future__ import annotations
+
+import sqlite3
+from typing import TYPE_CHECKING
 
 import pytest
+
+if TYPE_CHECKING:
+    from services.message_processor import MessageProcessor
+    from tests.helpers import StubProcessorConfig
 
 pytestmark = pytest.mark.unit
 
@@ -29,223 +38,93 @@ _GPM_USER_PROMPT = "What time is it?"
 _GPM_CHANNEL = 'test_channel'
 
 
-def _stub_gpm_prompt_cls():
-    from services.system_message_prompt import SystemMessagePrompt
+def _gpm_config(channel: str = _GPM_CHANNEL, role: str = 'test_role', suppress_history: bool = False) -> StubProcessorConfig:
+    from services.processor_config import ProcessorConfig
+    from tests.helpers import StubProcessorConfig
 
-    class _StubPrompt(SystemMessagePrompt):
-        _SYSTEM_PROMPT = ''
-
-    return _StubPrompt
+    return StubProcessorConfig(
+        channel=channel,
+        role=role,
+        policy_channel=ProcessorConfig.PolicyChannel.CHAT,
+        build_user_prompt=lambda _mp: _GPM_USER_PROMPT,
+        build_user_definition=lambda _mp: _GPM_USER_DEF,
+        build_system_prompt=lambda _mp: '',
+        always_available=[],
+        skip_transcript=False,
+        skip_input_row=False,
+        suppress_history=suppress_history,
+        broadcast_to=None,
+        memory_seed=False,
+    )
 
 
 class _GPMFakeProcessor:
-    """Concrete MessageProcessor subclass for get_previous_messages() tests."""
-
     _CHANNEL = _GPM_CHANNEL
     _ROLE = 'test_role'
 
     @staticmethod
-    def make(**kwargs):
+    def make(channel: str = _GPM_CHANNEL, suppress_history: bool = False, **kwargs: object) -> MessageProcessor:
         from services.message_processor import MessageProcessor
 
-        class _Fake(MessageProcessor):
-            CHANNEL = _GPMFakeProcessor._CHANNEL
-            ROLE = _GPMFakeProcessor._ROLE
-            SYSTEM_PROMPT_CLASS = _stub_gpm_prompt_cls()
-
-            def get_user_definition(self) -> str:
-                return _GPM_USER_DEF
-
-            def get_user_prompt(self) -> str:
-                return _GPM_USER_PROMPT
-
+        mp = object.__new__(MessageProcessor)
+        MessageProcessor.__init__(mp, 'test raw input', {'key': 'value'})
+        mp.config = _gpm_config(channel=channel, suppress_history=suppress_history)
+        mp.uid = None
         for k, v in kwargs.items():
-            setattr(_Fake, k, v)
-
-        return _Fake('test raw input', {'key': 'value'})
-
-    @staticmethod
-    def cls():
-        from services.message_processor import MessageProcessor
-
-        class _Fake(MessageProcessor):
-            CHANNEL = _GPMFakeProcessor._CHANNEL
-            ROLE = _GPMFakeProcessor._ROLE
-            SYSTEM_PROMPT_CLASS = _stub_gpm_prompt_cls()
-
-            def get_user_definition(self) -> str:
-                return _GPM_USER_DEF
-
-            def get_user_prompt(self) -> str:
-                return _GPM_USER_PROMPT
-
-        return _Fake
+            setattr(mp, k, v)
+        return mp
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# get_previous_messages() — empty channel → ''
-# ─────────────────────────────────────────────────────────────────────────────
-
-
-
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# get_previous_messages() — transcript rows + ephemeral filtering
+# get_previous_messages() — transcript rows (tool_calls excluded from history)
 # ─────────────────────────────────────────────────────────────────────────────
 
 
 class TestGetPreviousMessagesTranscript:
-    def _seed_transcript(self, db, channel=_GPM_CHANNEL):
-        """Insert two transcript rows and one tool_calls row each."""
+    def _seed_transcript(self, db: sqlite3.Connection, channel: str = _GPM_CHANNEL) -> tuple[int, int]:
+        # created_at defaults to now() — recent rows that survive the 6h age cut-off.
         db.execute(
-            "INSERT INTO transcript (channel, role, content, created_at) "
-            "VALUES (?, 'user', 'Hello world', '2026-04-10 10:00:00')",
+            "INSERT INTO transcript (channel, role, content) "
+            "VALUES (?, 'user', 'Hello world')",
             (channel,)
         )
-        uid1 = db.execute("SELECT last_insert_rowid()").fetchone()[0]
+        uid1: int = db.execute("SELECT last_insert_rowid()").fetchone()[0]
 
         db.execute(
-            "INSERT INTO transcript (channel, role, content, created_at) "
-            "VALUES (?, 'assistant', 'Hi there', '2026-04-10 10:01:00')",
+            "INSERT INTO transcript (channel, role, content) "
+            "VALUES (?, 'assistant', 'Hi there')",
             (channel,)
         )
-        uid2 = db.execute("SELECT last_insert_rowid()").fetchone()[0]
+        uid2: int = db.execute("SELECT last_insert_rowid()").fetchone()[0]
 
-        # Durable (ephemeral=0) tool_call linked to uid1 — MUST appear
+        # tool_calls rows are now all durable (no ephemeral column)
         db.execute(
-            "INSERT INTO tool_calls (transcript_id, tool_name, params, result, "
-            "ephemeral, created_at) "
-            "VALUES (?, 'memory', '{}', 'User likes dark mode', 0, '2026-04-10 10:00:30')",
+            "INSERT INTO tool_calls (transcript_id, tool_name, params, result, created_at) "
+            "VALUES (?, 'memory', '{}', 'User likes dark mode', '2026-04-10 10:00:30')",
             (uid1,)
         )
-
-        # Ephemeral (ephemeral=1) tool_call linked to uid2 — must NOT appear
         db.execute(
-            "INSERT INTO tool_calls (transcript_id, tool_name, params, result, "
-            "ephemeral, created_at) "
-            "VALUES (?, 'read', '{}', 'Web page content', 1, '2026-04-10 10:01:30')",
+            "INSERT INTO tool_calls (transcript_id, tool_name, params, result, created_at) "
+            "VALUES (?, 'read', '{}', 'Web page content', '2026-04-10 10:01:30')",
             (uid2,)
         )
 
         db.commit()
         return uid1, uid2
 
-    def test_durable_tool_call_appears(self, db):
+    def test_tool_calls_do_not_appear_in_previous_messages(self, db: sqlite3.Connection) -> None:
+        """History replay no longer renders tool_calls rows (decision 2).
+        Tool calls are retained durably but excluded from get_previous_messages()
+        to keep the history prompt clean and unambiguous."""
         self._seed_transcript(db)
         p = _GPMFakeProcessor.make()
         result = p.get_previous_messages()
-        assert '[memory()] User likes dark mode' in result
-        assert 'TOOL(memory)' not in result
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# get_previous_messages() — compaction row causes prepend + watermark
-# ─────────────────────────────────────────────────────────────────────────────
-
-
-def _seed_compaction_via_tool_calls(db, channel, compacted_text, compacted_up_to_id):
-    """Seed a success compaction row via the new tool_calls + transcript join.
-
-    Attaches the tool_calls row to the compacted_up_to_id transcript row as the
-    FK parent. This avoids inserting a phantom transcript row above the watermark
-    that would otherwise appear in get_previous_messages() output.
-    Returns the tool_call id.
-    """
-    import json
-    cursor = db.execute(
-        "INSERT INTO tool_calls "
-        "(transcript_id, tool_name, params, result, ephemeral, created_at) "
-        "VALUES (?, 'compaction', ?, ?, 0, '2026-01-01 00:00:01')",
-        (
-            compacted_up_to_id,
-            json.dumps({"compacted_up_to_id": compacted_up_to_id, "status": "success"}),
-            compacted_text,
-        )
-    )
-    db.commit()
-    return cursor.lastrowid
-
-
-class TestGetPreviousMessagesCompaction:
-    def _seed_with_compaction(self, db, channel=_GPM_CHANNEL):
-        """Insert three transcript rows; set compaction watermark at first."""
-        db.execute(
-            "INSERT INTO transcript (channel, role, content, created_at) "
-            "VALUES (?, 'user', 'Old message before compaction', '2026-04-09 09:00:00')",
-            (channel,)
-        )
-        wm_id = db.execute("SELECT last_insert_rowid()").fetchone()[0]
-
-        db.execute(
-            "INSERT INTO transcript (channel, role, content, created_at) "
-            "VALUES (?, 'user', 'New message after compaction', '2026-04-10 10:00:00')",
-            (channel,)
-        )
-        db.execute(
-            "INSERT INTO transcript (channel, role, content, created_at) "
-            "VALUES (?, 'assistant', 'New reply after compaction', '2026-04-10 10:01:00')",
-            (channel,)
-        )
-
-        _seed_compaction_via_tool_calls(db, channel, 'COMPACTED: previous context here', wm_id)
-        return wm_id
-
-    def test_compacted_text_prepended(self, db):
-        self._seed_with_compaction(db)
-        p = _GPMFakeProcessor.make()
-        result = p.get_previous_messages()
-        assert result.startswith('COMPACTED: previous context here')
-
-
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# get_previous_messages() — send() + store() wiring (db-only stubs)
-# ─────────────────────────────────────────────────────────────────────────────
-
-
-
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# get_previous_messages() — compaction only, no new rows above watermark
-# ─────────────────────────────────────────────────────────────────────────────
-
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# get_previous_messages() — compaction + one new transcript row above watermark
-# ─────────────────────────────────────────────────────────────────────────────
-
-
-class TestGetPreviousMessagesCompactionPlusOneRow:
-    def test_compaction_followed_by_new_row(self, db):
-        channel = _GPM_CHANNEL
-        db.execute(
-            "INSERT INTO transcript (channel, role, content, created_at) "
-            "VALUES (?, 'user', 'Pre-compaction message', '2026-04-09 08:00:00')",
-            (channel,)
-        )
-        watermark_id = db.execute("SELECT last_insert_rowid()").fetchone()[0]
-        db.commit()
-
-        db.execute(
-            "INSERT INTO transcript (channel, role, content, created_at) "
-            "VALUES (?, 'user', 'Post-compaction message', '2026-04-10 10:00:00')",
-            (channel,)
-        )
-        db.commit()
-
-        _seed_compaction_via_tool_calls(db, channel, 'COMPACTION SUMMARY', watermark_id)
-
-        p = _GPMFakeProcessor.make()
-        result = p.get_previous_messages()
-
-        assert result.startswith('COMPACTION SUMMARY')
-        assert 'Post-compaction message' in result
-        assert 'Pre-compaction message' not in result
-
+        # transcript rows render (user/assistant content)
+        assert 'Hello world' in result
+        assert 'Hi there' in result
+        # tool_calls are NOT injected into the history prompt
+        assert 'User likes dark mode' not in result
+        assert 'Web page content' not in result
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -254,18 +133,16 @@ class TestGetPreviousMessagesCompactionPlusOneRow:
 
 
 class TestGetPreviousMessagesChannelIsolation:
-    """Each processor only sees its own CHANNEL's rows."""
-
-    def _seed_all_channels(self, db):
+    def _seed_all_channels(self, db: sqlite3.Connection) -> None:
         for channel in ('user', 'dmn', 'subagent', 'scheduled', _GPM_CHANNEL):
             db.execute(
-                "INSERT INTO transcript (channel, role, content, created_at) "
-                "VALUES (?, 'user', ?, '2026-04-10 10:00:00')",
+                "INSERT INTO transcript (channel, role, content) "
+                "VALUES (?, 'user', ?)",
                 (channel, f"Content from {channel}")
             )
         db.commit()
 
-    def test_test_channel_isolation(self, db):
+    def test_test_channel_isolation(self, db: sqlite3.Connection) -> None:
         self._seed_all_channels(db)
         p = _GPMFakeProcessor.make()  # uses test_channel as its CHANNEL
         result = p.get_previous_messages()
@@ -274,257 +151,111 @@ class TestGetPreviousMessagesChannelIsolation:
             assert f'Content from {other}' not in result
 
 
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# get_previous_messages() — durable tool_call interleaving order
-# ─────────────────────────────────────────────────────────────────────────────
-
-
-class TestGetPreviousMessagesDurableToolInterleaving:
-    """Two durable tool_calls linked to the same transcript row must appear
-    immediately after that row, ordered by created_at."""
-
-    def test_two_durable_tool_calls_appear_under_their_transcript_row(self, db):
-        channel = _GPM_CHANNEL
-        db.execute(
-            "INSERT INTO transcript (channel, role, content, created_at) "
-            "VALUES (?, 'user', 'The input row', '2026-04-10 10:00:00')",
-            (channel,)
-        )
-        tid = db.execute("SELECT last_insert_rowid()").fetchone()[0]
-        db.commit()
-
-        db.execute(
-            "INSERT INTO tool_calls (transcript_id, tool_name, params, result, ephemeral, created_at) "
-            "VALUES (?, 'memory', '{}', 'Result from memory', 0, '2026-04-10 10:00:10')",
-            (tid,)
-        )
-        db.execute(
-            "INSERT INTO tool_calls (transcript_id, tool_name, params, result, ephemeral, created_at) "
-            "VALUES (?, 'find_tools', '{}', 'Found weather tool', 0, '2026-04-10 10:00:20')",
-            (tid,)
-        )
-        db.commit()
-
-        p = _GPMFakeProcessor.make()
-        result = p.get_previous_messages()
-
-        assert '[memory()] Result from memory' in result
-        assert '[find_tools()] Found weather tool' in result
-        assert 'TOOL(memory)' not in result
-        assert 'TOOL(find_tools)' not in result
-
-        input_pos = result.index('The input row')
-        memory_pos = result.index('[memory()] Result from memory')
-        find_pos = result.index('[find_tools()] Found weather tool')
-        assert input_pos < memory_pos < find_pos
-
-
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# get_previous_messages() — ephemeral=1 for same transcript row is dropped
-# ─────────────────────────────────────────────────────────────────────────────
-
-
-class TestGetPreviousMessagesEphemeralSiblingDropped:
-    def test_ephemeral_sibling_dropped_when_durable_present(self, db):
-        channel = _GPM_CHANNEL
-        db.execute(
-            "INSERT INTO transcript (channel, role, content, created_at) "
-            "VALUES (?, 'user', 'Row with mixed tool_calls', '2026-04-10 10:00:00')",
-            (channel,)
-        )
-        tid = db.execute("SELECT last_insert_rowid()").fetchone()[0]
-        db.commit()
-
-        db.execute(
-            "INSERT INTO tool_calls (transcript_id, tool_name, params, result, ephemeral, created_at) "
-            "VALUES (?, 'memory', '{}', 'DURABLE_RESULT', 0, '2026-04-10 10:00:05')",
-            (tid,)
-        )
-        db.execute(
-            "INSERT INTO tool_calls (transcript_id, tool_name, params, result, ephemeral, created_at) "
-            "VALUES (?, 'read', '{}', 'EPHEMERAL_RESULT', 1, '2026-04-10 10:00:10')",
-            (tid,)
-        )
-        db.commit()
-
-        p = _GPMFakeProcessor.make()
-        result = p.get_previous_messages()
-
-        assert 'DURABLE_RESULT' in result
-        assert 'EPHEMERAL_RESULT' not in result
-
-
 # ─────────────────────────────────────────────────────────────────────────────
 # get_previous_messages() — exact timestamp format regression
 # ─────────────────────────────────────────────────────────────────────────────
 
 
 class TestGetPreviousMessagesTimestampFormat:
-    def test_iso_timestamp_with_offset_formatted_correctly(self, db):
+    def test_iso_timestamp_with_offset_formatted_correctly(self, db: sqlite3.Connection) -> None:
+        from datetime import timedelta
+
+        from services.time_utils import utc_now
+
         channel = _GPM_CHANNEL
+        # A recent ISO-8601 created_at with a UTC offset (within the 6h window) must
+        # render minute-precision as [YYYY-MM-DD HH:MM].
+        recent = utc_now() - timedelta(minutes=5)
         db.execute(
             "INSERT INTO transcript (channel, role, content, created_at) "
-            "VALUES (?, 'user', 'Timestamp test', '2026-04-10T14:03:27+00:00')",
-            (channel,)
+            "VALUES (?, 'user', 'Timestamp test', ?)",
+            (channel, recent.isoformat())
         )
         db.commit()
 
         p = _GPMFakeProcessor.make()
         result = p.get_previous_messages()
-        assert '[2026-04-10 14:03]' in result
-
-
+        assert f"[{recent.strftime('%Y-%m-%d %H:%M')}]" in result
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# get_previous_messages() — role rendering per north star
+# get_previous_messages() — window-only, NO fixed row cap (compact-first)
+#
+# CANONICAL DESIGN (supersedes the trim-first build): there is
+# NO provider-layer trim. get_previous_messages() renders EVERY watermark-bounded
+# row. When the FULL request reaches the cap the ACT loop fires compaction BEFORE
+# sending (compact-first) — it never sends a trimmed/partial view. The only
+# drop-oldest is the ``drop_oldest`` PARAM, used solely by ChatHistoryCompactor's
+# rare bare-request fallback (step 4.2) when even the tool-free compaction request
+# overflows. _previous_rows() is id-ASC, so drop_oldest skips the OLDEST rows.
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-class TestGetPreviousMessagesRoleCase:
-    """Lock the role rendering convention: lowercase for inputs, title-case for assistant only."""
-
-    def test_role_rendering_conventions(self, db):
-        channel = _GPM_CHANNEL
-        for role, content in [
-            ('user', 'Hello'),
-            ('assistant', 'Hi there'),
-            ('subagent', 'Pursuit tick'),
-        ]:
+class TestGetPreviousMessagesWindowFit:
+    def _seed_rows(self, db: sqlite3.Connection, n: int, channel: str = _GPM_CHANNEL) -> None:
+        for i in range(n):
             db.execute(
-                "INSERT INTO transcript (channel, role, content, created_at) "
-                "VALUES (?, ?, ?, '2026-04-10 10:00:00')",
-                (channel, role, content)
+                "INSERT INTO transcript (channel, role, content) "
+                "VALUES (?, 'user', ?)",
+                (channel, f"line-{i:04d}-end"),
             )
         db.commit()
 
+    def test_renders_all_rows_uncapped(self, db: sqlite3.Connection) -> None:
+        # Well past the retired 50-row cap — every row must still render.
+        n = 60
+        self._seed_rows(db, n)
         p = _GPMFakeProcessor.make()
         result = p.get_previous_messages()
-        assert 'user: Hello' in result
-        assert 'Assistant: Hi there' in result
-        assert 'assistant: Hi there' not in result
-        assert 'subagent: Pursuit tick' in result
+        # One line per row (tool_calls not injected into history), no fixed cap.
+        assert len(result.splitlines()) == n
+        assert "line-0000-end" in result
+        assert f"line-{n - 1:04d}-end" in result
 
+    def test_drop_oldest_param_skips_oldest_rows(self, db: sqlite3.Connection) -> None:
+        # The 4.2 fallback drops the three oldest rows from the compaction input.
+        n = 10
+        self._seed_rows(db, n)
+        p = _GPMFakeProcessor.make()
+        result = p.get_previous_messages(drop_oldest=3)
+        assert len(result.splitlines()) == n - 3
+        for i in range(3):
+            assert f"line-{i:04d}-end" not in result   # oldest skipped
+        assert "line-0003-end" in result               # first surviving row
+        assert f"line-{n - 1:04d}-end" in result        # newest always kept
 
-# ─────────────────────────────────────────────────────────────────────────────
-# get_previous_messages() — token_budget parameter accepted and ignored
-# ─────────────────────────────────────────────────────────────────────────────
-
-
-class TestGetPreviousMessagesTokenBudget:
-    """token_budget is accepted without error; output is identical regardless."""
-
-
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# get_previous_messages() — empty channel returns '' even when other channels
-# have data
-# ─────────────────────────────────────────────────────────────────────────────
-
-
-class TestGetPreviousMessagesEmptyChannelWithOtherData:
-    def test_returns_empty_when_no_rows_for_this_channel(self, db):
-        db.execute(
-            "INSERT INTO transcript (channel, role, content, created_at) "
-            "VALUES ('other_channel', 'user', 'Not mine', '2026-04-10 10:00:00')"
-        )
-        db.commit()
-
-        p = _GPMFakeProcessor.make()  # uses test_channel as its CHANNEL
-        result = p.get_previous_messages()
-        assert result == ''
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# get_previous_messages() — empty content row does not raise
-# ─────────────────────────────────────────────────────────────────────────────
-
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# get_previous_messages() — explicit since_id=0 path
-# ─────────────────────────────────────────────────────────────────────────────
-
-
+    def test_drop_oldest_param_at_or_beyond_count_returns_empty(self, db: sqlite3.Connection) -> None:
+        # Skipping every row leaves nothing to render — the fallback floor relies
+        # on this to know when there is nothing left to compact.
+        n = 2
+        self._seed_rows(db, n)
+        p = _GPMFakeProcessor.make()
+        assert p.get_previous_messages(drop_oldest=2) == ""
+        assert p.get_previous_messages(drop_oldest=5) == ""
 
 
 # =============================================================================
-# RESCUED: compaction-specific db tests
-# (from test_message_processor_v2_compaction.py — B, D8-D10, E groups)
+# _wrap_with_checkpoint — real DB tests
+#
+# The checkpoint summary is read from the canonical watermark home: a transcript
+# row with role='compaction' (design §3.6, get_compaction). Seed it via the
+# production factory transcript_service.write_input_row — the exact call _compact()
+# makes — never a hand-rolled INSERT or the retired tool_calls audit-row model.
 # =============================================================================
+
 
 _COMPACT_CHANNEL = 'test_compact_channel'
-_COMPACT_USER_DEF = "The user is 'test' — compaction unit tests."
-
-
-def _make_compact_llm_response(text='summary text', tool_calls=None):
-    from services.llm_service import LLMResponse
-    return LLMResponse(
-        text=text,
-        model='test-model',
-        provider='mock',
-        tool_calls=tool_calls,
-    )
-
-
-def _make_compact_processor(channel=_COMPACT_CHANNEL, role='user', raw_input='hello', **kwargs):
-    from services.message_processor import MessageProcessor
-    from services.system_message_prompt import SystemMessagePrompt
-
-    class _StubPrompt(SystemMessagePrompt):
-        _SYSTEM_PROMPT = ''
-
-    _prompt = raw_input
-
-    class FakeCompactingProcessor(MessageProcessor):
-        CHANNEL = channel
-        ROLE = role
-        SYSTEM_PROMPT_CLASS = _StubPrompt
-
-        def get_user_definition(self) -> str:
-            return _COMPACT_USER_DEF
-
-        def get_user_prompt(self) -> str:
-            return _prompt
-
-    for k, v in kwargs.items():
-        setattr(FakeCompactingProcessor, k, v)
-
-    return FakeCompactingProcessor(raw_input)
-
-
-def _compact_seed_transcript_row(db, channel, role='user', content='test content'):
-    """Insert a transcript row and return its id (needed for FK in compactions)."""
-    cursor = db.execute(
-        "INSERT INTO transcript (channel, role, content) VALUES (?, ?, ?)",
-        (channel, role, content),
-    )
-    db.commit()
-    return cursor.lastrowid
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# _wrap_with_checkpoint — real DB tests
-# ─────────────────────────────────────────────────────────────────────────────
 
 
 class TestWrapWithCheckpoint:
-    """Module-private _wrap_with_checkpoint function behavior against real DB."""
-
-    def test_no_compaction_row_returns_bare_body(self, db):
+    def test_row_with_content_exact_envelope_format(self, db: sqlite3.Connection) -> None:
         from services.message_processor import _wrap_with_checkpoint
-        result = _wrap_with_checkpoint(_COMPACT_CHANNEL, 'hello user')
-        assert result == 'hello user'
+        from services.transcript_service import Transcript
 
-    def test_row_with_content_exact_envelope_format(self, db):
-        from services.message_processor import _wrap_with_checkpoint
-        anchor = _compact_seed_transcript_row(db, _COMPACT_CHANNEL)
-        _seed_compaction_via_tool_calls(db, _COMPACT_CHANNEL, 'checkpoint content', anchor)
+        # Production writes the compaction summary as a transcript row with
+        # role='compaction'; its own id is the watermark.
+        Transcript.write_input_row(_COMPACT_CHANNEL, 'compaction', 'checkpoint content')
+
         result = _wrap_with_checkpoint(_COMPACT_CHANNEL, 'current body')
         expected = (
             "### Checkpoint - What you were previously discussing / doing\n"
@@ -535,623 +266,3 @@ class TestWrapWithCheckpoint:
             "current body"
         )
         assert result == expected
-
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# _handle_overflow — DB-writing tests (d8, d9, d10)
-# ─────────────────────────────────────────────────────────────────────────────
-
-
-def _compact_get_audit_row(db, channel):
-    """Return the most recent success compaction audit row from tool_calls for channel."""
-    row = db.execute(
-        """
-        SELECT tc.result, json_extract(tc.params, '$.compacted_up_to_id') AS compacted_up_to_id
-        FROM tool_calls tc
-        JOIN transcript t ON t.id = tc.transcript_id
-        WHERE tc.tool_name = 'compaction'
-          AND t.channel = ?
-          AND json_extract(tc.params, '$.status') = 'success'
-        ORDER BY tc.id DESC
-        LIMIT 1
-        """,
-        (channel,),
-    ).fetchone()
-    if not row:
-        return None
-    return {'compacted_text': row[0], 'compacted_up_to_id': row[1]}
-
-
-class TestHandleOverflowDbWrites:
-    """_handle_overflow writes append-only tool_calls audit rows (not compactions table)."""
-
-    def test_d8_overflow_writes_fresh_audit_row_when_none_existed(self, db):
-        """When no prior compaction exists, _handle_overflow writes a fresh tool_calls row."""
-        t1_id = _compact_seed_transcript_row(db, _COMPACT_CHANNEL, 'user', 'hello')
-        t2_id = _compact_seed_transcript_row(db, _COMPACT_CHANNEL, 'assistant', 'hi')
-
-        p = _make_compact_processor()
-        p._act_trail = []
-        p._uid = t1_id
-
-        llm_resp = _make_compact_llm_response(
-            text='<analysis>notes</analysis><summary>fresh compaction summary</summary>'
-        )
-
-        with patch('services.providers.Providers.instance') as mock_inst, \
-             patch('services.compaction_persistence.get_entries_since', return_value=[
-                 {'id': t1_id, 'role': 'user', 'content': 'hello', 'tool_name': None},
-                 {'id': t2_id, 'role': 'assistant', 'content': 'hi', 'tool_name': None},
-             ]), \
-             patch('services.compaction_persistence.get_compaction', return_value=None):
-            mock_inst.return_value.send_messages.return_value = llm_resp
-            mock_inst.return_value.get_context_limit.return_value = 32_000
-            mock_inst.return_value.get_compact_at.return_value = 32_000
-            mock_inst.return_value.estimate_payload_tokens.return_value = 100
-            result = p._run_full_compaction()
-
-        assert result == 'fresh compaction summary'
-        row = _compact_get_audit_row(db, _COMPACT_CHANNEL)
-        assert row is not None
-        assert row['compacted_text'] == 'fresh compaction summary'
-
-    def test_d9_overflow_appends_new_row_on_top_of_existing(self, db):
-        """A second compaction appends a new row — both coexist, latest wins."""
-        old_t_id = _compact_seed_transcript_row(db, _COMPACT_CHANNEL, 'user', 'old turn')
-        _seed_compaction_via_tool_calls(db, _COMPACT_CHANNEL, 'old summary', old_t_id)
-
-        new_t_id = _compact_seed_transcript_row(db, _COMPACT_CHANNEL, 'user', 'new turn')
-
-        p = _make_compact_processor()
-        p._act_trail = []
-        p._uid = new_t_id
-
-        llm_resp = _make_compact_llm_response(
-            text='<analysis>notes</analysis><summary>updated compaction summary</summary>'
-        )
-
-        with patch('services.providers.Providers.instance') as mock_inst, \
-             patch('services.compaction_persistence.get_entries_since', return_value=[
-                 {'id': new_t_id, 'role': 'user', 'content': 'new turn', 'tool_name': None},
-             ]), \
-             patch('services.compaction_persistence.get_compaction', return_value={
-                 'compacted_text': 'old summary',
-                 'compacted_up_to_id': old_t_id,
-             }):
-            mock_inst.return_value.send_messages.return_value = llm_resp
-            mock_inst.return_value.get_context_limit.return_value = 32_000
-            mock_inst.return_value.get_compact_at.return_value = 32_000
-            mock_inst.return_value.estimate_payload_tokens.return_value = 100
-            p._run_full_compaction()
-
-        new_row = _compact_get_audit_row(db, _COMPACT_CHANNEL)
-        assert new_row is not None
-        assert new_row['compacted_text'] == 'updated compaction summary'
-
-    def test_d10_failure_audit_row_invisible_to_canonical_lookup(self, db):
-        """Failure audit rows are stored (status=failure) but invisible to get_compaction()."""
-        t_id = _compact_seed_transcript_row(db, _COMPACT_CHANNEL, 'user', 'a turn')
-
-        p = _make_compact_processor()
-        p._act_trail = []
-        p._uid = t_id
-
-        # LLM returns text without <summary> tags — causes a failure audit row
-        llm_resp = _make_compact_llm_response(text='this has no summary tags at all')
-
-        with patch('services.providers.Providers.instance') as mock_inst, \
-             patch('services.compaction_persistence.get_entries_since', return_value=[
-                 {'id': t_id, 'role': 'user', 'content': 'a turn', 'tool_name': None},
-             ]), \
-             patch('services.compaction_persistence.get_compaction', return_value=None):
-            mock_inst.return_value.send_messages.return_value = llm_resp
-            mock_inst.return_value.get_context_limit.return_value = 32_000
-            mock_inst.return_value.get_compact_at.return_value = 32_000
-            mock_inst.return_value.estimate_payload_tokens.return_value = 100
-            result = p._run_full_compaction()
-
-        assert result is None
-        # Failure row exists in DB but is invisible to canonical lookup
-        assert _compact_get_audit_row(db, _COMPACT_CHANNEL) is None
-        failure_row = db.execute(
-            "SELECT json_extract(params, '$.status') FROM tool_calls "
-            "WHERE tool_name='compaction' AND transcript_id=?",
-            (t_id,),
-        ).fetchone()
-        assert failure_row is not None
-        assert failure_row[0] == 'failure'
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# _run_full_compaction — direct DB tests (e1–e6)
-# ─────────────────────────────────────────────────────────────────────────────
-
-
-class TestRunFullCompaction:
-    """Direct tests for _run_full_compaction against real DB."""
-
-    def test_e1_no_entries_and_no_prior_checkpoint_skips_llm(self, db, caplog):
-        """With no entries AND no prior checkpoint, _run_full_compaction returns
-        None WITHOUT calling the LLM and without writing any audit row."""
-        p = _make_compact_processor()
-
-        with caplog.at_level(_logging.WARNING):
-            with patch('services.providers.Providers.instance') as mock_inst, \
-                 patch('services.compaction_persistence.get_entries_since', return_value=[]), \
-                 patch('services.compaction_persistence.get_compaction', return_value=None):
-                result = p._run_full_compaction()
-                mock_inst.return_value.send_messages.assert_not_called()
-
-        assert result is None
-        assert _compact_get_audit_row(db, _COMPACT_CHANNEL) is None
-        assert any(
-            'no entries' in rec.message and 'skipping LLM call' in rec.message
-            for rec in caplog.records
-        )
-
-
-    def test_e4_happy_path_writes_audit_row_and_returns_summary(self, db):
-        """Happy path: LLM returns <summary> tags, audit row written, summary text returned."""
-        t_id = _compact_seed_transcript_row(db, _COMPACT_CHANNEL, 'user', 'hello')
-        p = _make_compact_processor()
-        p._uid = t_id
-        llm_resp = _make_compact_llm_response(
-            text='<analysis>context notes</analysis><summary>happy path summary</summary>'
-        )
-
-        with patch('services.providers.Providers.instance') as mock_inst, \
-             patch('services.compaction_persistence.get_entries_since', return_value=[
-                 {'id': t_id, 'role': 'user', 'content': 'hello', 'tool_name': None},
-             ]), \
-             patch('services.compaction_persistence.get_compaction', return_value=None):
-            mock_inst.return_value.send_messages.return_value = llm_resp
-            mock_inst.return_value.get_context_limit.return_value = 32_000
-            mock_inst.return_value.get_compact_at.return_value = 32_000
-            mock_inst.return_value.estimate_payload_tokens.return_value = 100
-            result = p._run_full_compaction()
-
-        assert result == 'happy path summary'
-
-        row = _compact_get_audit_row(db, _COMPACT_CHANNEL)
-        assert row is not None
-        assert row['compacted_text'] == 'happy path summary'
-
-        # ephemeral=0 so it is persistent (not ephemeral)
-        tc_row = db.execute(
-            "SELECT ephemeral FROM tool_calls WHERE transcript_id=? AND tool_name='compaction'",
-            (t_id,),
-        ).fetchone()
-        assert tc_row is not None
-        assert tc_row[0] == 0
-
-    def test_e5_watermark_set_to_max_entry_id(self, db):
-        """Watermark is set to max(entry['id']) from the entries fed to the LLM."""
-        id3 = _compact_seed_transcript_row(db, _COMPACT_CHANNEL, 'user', 'a')
-        id5 = _compact_seed_transcript_row(db, _COMPACT_CHANNEL, 'user', 'c')
-        id7 = _compact_seed_transcript_row(db, _COMPACT_CHANNEL, 'assistant', 'b')
-
-        p = _make_compact_processor()
-        p._uid = id3
-        entries = [
-            {'id': id3, 'role': 'user', 'content': 'a', 'tool_name': None},
-            {'id': id7, 'role': 'assistant', 'content': 'b', 'tool_name': None},
-            {'id': id5, 'role': 'user', 'content': 'c', 'tool_name': None},
-        ]
-        llm_resp = _make_compact_llm_response(
-            text='<summary>compacted</summary>'
-        )
-
-        with patch('services.providers.Providers.instance') as mock_inst, \
-             patch('services.compaction_persistence.get_entries_since', return_value=entries), \
-             patch('services.compaction_persistence.get_compaction', return_value=None):
-            mock_inst.return_value.send_messages.return_value = llm_resp
-            mock_inst.return_value.get_context_limit.return_value = 32_000
-            mock_inst.return_value.get_compact_at.return_value = 32_000
-            mock_inst.return_value.estimate_payload_tokens.return_value = 100
-            p._run_full_compaction()
-
-        row = _compact_get_audit_row(db, _COMPACT_CHANNEL)
-        assert row is not None
-        assert row['compacted_up_to_id'] == id7
-
-
-# =============================================================================
-# End-to-end ACT loop glue: scenario 120/121 reproduce the same path —
-# compact_at is set tiny, the assembled payload must blow past it on the very
-# first iteration, _handle_overflow must run, an append-only success audit row
-# must be written, and the loop must restart and return a final answer.
-# =============================================================================
-
-
-class TestActLoopOverflowEndToEnd:
-    """The full path scenarios 120/121 exercise:
-
-    iter 0: prompt_assembly → _check_threshold(True) → _handle_overflow →
-            _run_full_compaction → write tool_calls(name='compaction',
-            status='success') → reset state → continue
-    iter 1: prompt_assembly → _check_threshold(False after compaction) →
-            send_messages → no tool_calls → break clean
-
-    Mocks: only the Providers singleton (estimate_payload_tokens returns >
-    compact_at on iter 0 then ≤ on iter 1; send_messages returns the
-    compaction LLM body on call 1 and a no-tool answer on call 2).
-    Real DB, real ACT loop, real _handle_overflow, real _run_full_compaction.
-    """
-
-    _CHANNEL = 'test_act_overflow_channel'
-
-    def test_first_iteration_overflow_writes_success_row_then_loop_completes(self, db):
-        """Scenario 120 in miniature: threshold fires once, success row appears."""
-        from services.message_processor import MessageProcessor
-        from services.system_message_prompt import SystemMessagePrompt
-
-        # Seed prior conversation so _run_full_compaction has entries to
-        # summarise. Without prior entries it short-circuits to None and
-        # writes no row — the same edge that the scenario carefully avoids
-        # by appending 8 transcript rows in step-4.
-        seed_ids = []
-        for i in range(4):
-            seed_ids.append(_compact_seed_transcript_row(
-                db, self._CHANNEL, 'user', f'prior turn {i} content',
-            ))
-            seed_ids.append(_compact_seed_transcript_row(
-                db, self._CHANNEL, 'assistant', f'prior reply {i}',
-            ))
-
-        # Insert the input row that send() would have written (we set
-        # SKIP_TRANSCRIPT_WRITE=False but pre-seed _uid manually below to
-        # bypass write_input_row's auth-context dependency).
-        input_uid = _compact_seed_transcript_row(
-            db, self._CHANNEL, 'user', 'current turn — small body',
-        )
-
-        class _StubPrompt(SystemMessagePrompt):
-            _SYSTEM_PROMPT = ''
-
-        class _OverflowProcessor(MessageProcessor):
-            CHANNEL = TestActLoopOverflowEndToEnd._CHANNEL
-            ROLE = 'user'
-            SYSTEM_PROMPT_CLASS = _StubPrompt
-            SKIP_TRANSCRIPT_WRITE = True  # we manage _uid ourselves
-
-            def get_user_definition(self):
-                return 'test user'
-
-            def get_user_prompt(self):
-                return 'current turn — small body'
-
-            def get_system_prompt(self):
-                return 'fake system prompt — content irrelevant, threshold mocked'
-
-            def get_tools(self):
-                return []
-
-        proc = _OverflowProcessor(raw_input='current turn — small body')
-        proc._uid = input_uid
-
-        # send_messages call sequence:
-        #   call 1: invoked by ContinuityCompactionProcessor.send() — must
-        #           return text containing <summary>...</summary>
-        #   call 2: invoked by main ACT loop iter 1 — must return a no-tool
-        #           response so the loop exits cleanly
-        compaction_resp = _make_compact_llm_response(
-            text='<analysis>looked at prior turns</analysis>'
-                 '<summary>summary of 4 prior exchanges</summary>',
-        )
-        final_resp = _make_compact_llm_response(text='final assistant answer')
-
-        # estimate_payload_tokens call sequence:
-        #   call 1: main ACT loop iter 0 _check_threshold — return >400 to
-        #           trigger overflow handler
-        #   call 2: ContinuityCompactionProcessor's own ACT iter 0
-        #           _check_threshold (always returns False because
-        #           ContinuityCompactionProcessor overrides it; this call
-        #           never happens in practice but we keep a value just in
-        #           case the overrides change)
-        #   call 3: main ACT loop iter 1 _check_threshold after the
-        #           compaction reset — return ≤400 so the loop proceeds to
-        #           send_messages
-        compact_at_value = 400
-        estimate_seq = iter([500, 100, 100, 100, 100])
-
-        with patch('services.providers.Providers.instance') as mock_inst:
-            mock_inst.return_value.send_messages.side_effect = [
-                compaction_resp,
-                final_resp,
-            ]
-            mock_inst.return_value.get_compact_at.return_value = compact_at_value
-            mock_inst.return_value.get_context_limit.return_value = 32_000
-            mock_inst.return_value.estimate_payload_tokens.side_effect = (
-                lambda *a, **kw: next(estimate_seq)
-            )
-
-            result = proc.send()
-
-        assert result == 'final assistant answer', (
-            f"ACT loop must reach iter 1 send_messages and return its text; "
-            f"got {result!r}. Likely cause: compaction failed (no audit row "
-            f"written) or threshold check did not toggle False on iter 1."
-        )
-
-        # The critical scenario-120 assertion: an append-only success
-        # tool_calls row exists for this turn.
-        row = _compact_get_audit_row(db, self._CHANNEL)
-        assert row is not None, (
-            "No success compaction tool_calls row found. _handle_overflow "
-            "did not run, or _run_full_compaction returned None."
-        )
-        assert row['compacted_text'] == 'summary of 4 prior exchanges'
-        assert row['compacted_up_to_id'] == max(seed_ids), (
-            f"watermark must advance to highest entry id fed to LLM; "
-            f"got {row['compacted_up_to_id']}, expected {max(seed_ids)}"
-        )
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# ACT loop cap-exit when _run_full_compaction returns None
-# Regression: if _handle_overflow returns False the loop must break and
-# send() must return '' rather than raising or returning partial narration.
-# ─────────────────────────────────────────────────────────────────────────────
-
-
-class TestActLoopCapExitOnOverflowFailure:
-    """When _handle_overflow fails (returns False) the ACT loop falls through
-    to send_messages — the 413 handler is the true safety net.  The recovery
-    flag is set so a second threshold trip on the same turn skips the handler
-    and lets the send proceed.
-    """
-
-    _CHANNEL = 'test_cap_exit_channel'
-
-    def test_overflow_failure_falls_through_to_send(self, db):
-        """_handle_overflow returning False must set recovery flag and fall
-        through to send_messages (not break to cap exit)."""
-        from services.message_processor import MessageProcessor
-        from services.system_message_prompt import SystemMessagePrompt
-
-        input_uid = _compact_seed_transcript_row(
-            db, self._CHANNEL, 'user', 'overflow me',
-        )
-
-        class _StubPrompt(SystemMessagePrompt):
-            _SYSTEM_PROMPT = ''
-
-        class _CapExitProcessor(MessageProcessor):
-            CHANNEL = TestActLoopCapExitOnOverflowFailure._CHANNEL
-            ROLE = 'user'
-            SYSTEM_PROMPT_CLASS = _StubPrompt
-            SKIP_TRANSCRIPT_WRITE = True
-
-            def get_user_definition(self):
-                return 'test user'
-
-            def get_user_prompt(self):
-                return 'overflow me'
-
-            def get_system_prompt(self):
-                return 'sys'
-
-            def get_tools(self):
-                return []
-
-        proc = _CapExitProcessor(raw_input='overflow me')
-        proc._uid = input_uid
-
-        with patch('services.providers.Providers.instance') as mock_inst:
-            mock_inst.return_value.get_compact_at.return_value = 10
-            mock_inst.return_value.get_context_limit.return_value = 32_000
-            mock_inst.return_value.estimate_payload_tokens.return_value = 9999
-            mock_resp = MagicMock()
-            mock_resp.text = 'fallthrough answer'
-            mock_resp.tool_calls = []
-            mock_resp.usage = MagicMock(input_tokens=10, output_tokens=5)
-            mock_inst.return_value.send_messages.return_value = mock_resp
-            with patch('services.compaction_persistence.get_compaction', return_value=None), \
-                 patch('services.compaction_persistence.get_entries_since', return_value=[
-                     {'id': input_uid, 'role': 'user', 'content': 'overflow me',
-                      'tool_name': None},
-                 ]):
-                result = proc.send()
-
-        assert result == 'fallthrough answer', (
-            f"send() must fall through to send_messages but got {result!r}"
-        )
-        assert proc._overflow_recovered_this_turn is True
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# _handle_overflow purges ephemeral=1 rows but preserves ephemeral=0 rows
-# Regression: if the DELETE is too broad it wipes the audit row that was
-# just written (ephemeral=0), making the next turn start without a checkpoint.
-# ─────────────────────────────────────────────────────────────────────────────
-
-
-class TestHandleOverflowEphemeralPurge:
-    """_handle_overflow must delete ephemeral=1 tool_calls for the current _uid
-    and leave ephemeral=0 rows (compaction audit, thinking) intact.
-    """
-
-    _CHANNEL = 'test_ephemeral_purge_channel'
-
-    def test_ephemeral_rows_deleted_durable_rows_preserved(self, db):
-        """After _handle_overflow, ephemeral=1 rows for the turn are gone
-        but ephemeral=0 rows survive."""
-        input_uid = _compact_seed_transcript_row(
-            db, self._CHANNEL, 'user', 'purge test',
-        )
-
-        # Pre-seed prior conversation rows so _run_full_compaction has
-        # something to summarise and returns a non-None result.
-        prior_ids = []
-        for i in range(3):
-            prior_ids.append(_compact_seed_transcript_row(
-                db, self._CHANNEL, 'user', f'prior {i}',
-            ))
-            prior_ids.append(_compact_seed_transcript_row(
-                db, self._CHANNEL, 'assistant', f'reply {i}',
-            ))
-
-        # Insert one ephemeral=1 tool_call (intermediate work) and one
-        # ephemeral=0 tool_call (durable record, e.g. a memory write) linked
-        # to the current turn's input row.
-        db.execute(
-            "INSERT INTO tool_calls (transcript_id, tool_name, params, result, "
-            "ephemeral, created_at) VALUES (?, 'read', '{}', 'web content', 1, "
-            "'2026-01-01 00:00:01')",
-            (input_uid,),
-        )
-        db.execute(
-            "INSERT INTO tool_calls (transcript_id, tool_name, params, result, "
-            "ephemeral, created_at) VALUES (?, 'memory', '{}', 'recalled fact', 0, "
-            "'2026-01-01 00:00:02')",
-            (input_uid,),
-        )
-        db.commit()
-
-        # Verify setup: both rows exist before overflow
-        rows_before = db.execute(
-            "SELECT ephemeral FROM tool_calls WHERE transcript_id=? "
-            "AND tool_name IN ('read','memory') ORDER BY ephemeral",
-            (input_uid,),
-        ).fetchall()
-        assert len(rows_before) == 2
-
-        from services.message_processor import MessageProcessor
-        from services.system_message_prompt import SystemMessagePrompt
-
-        class _StubPrompt(SystemMessagePrompt):
-            _SYSTEM_PROMPT = ''
-
-        class _PurgeProcessor(MessageProcessor):
-            CHANNEL = TestHandleOverflowEphemeralPurge._CHANNEL
-            ROLE = 'user'
-            SYSTEM_PROMPT_CLASS = _StubPrompt
-            SKIP_TRANSCRIPT_WRITE = True
-
-            def get_user_definition(self):
-                return 'test user'
-
-            def get_user_prompt(self):
-                return 'purge test'
-
-        proc = _PurgeProcessor(raw_input='purge test')
-        proc._uid = input_uid
-        proc._act_trail = []
-
-        compaction_resp = _make_compact_llm_response(
-            text='<analysis>x</analysis><summary>purge test summary</summary>'
-        )
-
-        with patch('services.providers.Providers.instance') as mock_inst, \
-             patch('services.compaction_persistence.get_compaction', return_value=None), \
-             patch('services.compaction_persistence.get_entries_since',
-                   return_value=[
-                       {'id': p, 'role': 'user', 'content': f'prior {i}',
-                        'tool_name': None}
-                       for i, p in enumerate(prior_ids)
-                   ]):
-            mock_inst.return_value.send_messages.return_value = compaction_resp
-            mock_inst.return_value.get_context_limit.return_value = 32_000
-            mock_inst.return_value.get_compact_at.return_value = 32_000
-            mock_inst.return_value.estimate_payload_tokens.return_value = 100
-            success = proc._handle_overflow()
-
-        assert success is True, "_handle_overflow should succeed with prior entries"
-
-        # ephemeral=1 row must be gone
-        ephemeral_row = db.execute(
-            "SELECT id FROM tool_calls WHERE transcript_id=? AND tool_name='read'",
-            (input_uid,),
-        ).fetchone()
-        assert ephemeral_row is None, (
-            "ephemeral=1 'read' tool_call should have been purged by _handle_overflow"
-        )
-
-        # ephemeral=0 row must survive
-        durable_row = db.execute(
-            "SELECT id FROM tool_calls WHERE transcript_id=? AND tool_name='memory'",
-            (input_uid,),
-        ).fetchone()
-        assert durable_row is not None, (
-            "ephemeral=0 'memory' tool_call must NOT be deleted by _handle_overflow"
-        )
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# exclude_id filters the current turn's transcript row from compaction input
-# Regression: without exclude_id the current unanswered user message enters
-# the compaction LLM prompt, potentially confusing the continuity summary.
-# ─────────────────────────────────────────────────────────────────────────────
-
-
-class TestRunFullCompactionExcludeId:
-    """_run_full_compaction(exclude_id=X) must not include transcript row X
-    in the entries fed to the LLM.  This is the mechanism that prevents the
-    current (unanswered) user turn from polluting the compaction context.
-    """
-
-    _CHANNEL = 'test_exclude_id_channel'
-
-    def test_current_turn_row_absent_from_compaction_entries(self, db):
-        """The transcript row for _uid is not included in the LLM input."""
-        # Prior conversation that should be included
-        prior_id = _compact_seed_transcript_row(
-            db, self._CHANNEL, 'user', 'prior message',
-        )
-        prior_reply = _compact_seed_transcript_row(
-            db, self._CHANNEL, 'assistant', 'prior reply',
-        )
-        # Current turn row — must be excluded
-        current_id = _compact_seed_transcript_row(
-            db, self._CHANNEL, 'user', 'SHOULD NOT APPEAR IN COMPACTION',
-        )
-
-        captured_inputs: list[list] = []
-
-        def fake_send(system_prompt, messages, job=None, **_kw):
-            # Capture the full message list passed to the compaction LLM
-            captured_inputs.append(messages)
-            from services.llm_service import LLMResponse
-            return LLMResponse(
-                text='<summary>compact result</summary>',
-                model='test', provider='mock', tool_calls=None,
-            )
-
-        p = _make_compact_processor(channel=self._CHANNEL)
-        p._uid = current_id
-
-        with patch('services.providers.Providers.instance') as mock_inst, \
-             patch('services.compaction_persistence.get_compaction', return_value=None), \
-             patch('services.compaction_persistence.get_entries_since',
-                   return_value=[
-                       {'id': prior_id, 'role': 'user', 'content': 'prior message',
-                        'tool_name': None},
-                       {'id': prior_reply, 'role': 'assistant', 'content': 'prior reply',
-                        'tool_name': None},
-                       {'id': current_id, 'role': 'user',
-                        'content': 'SHOULD NOT APPEAR IN COMPACTION',
-                        'tool_name': None},
-                   ]):
-            mock_inst.return_value.send_messages.side_effect = fake_send
-            mock_inst.return_value.get_context_limit.return_value = 32_000
-            mock_inst.return_value.get_compact_at.return_value = 32_000
-            mock_inst.return_value.estimate_payload_tokens.return_value = 100
-            result = p._run_full_compaction(exclude_id=current_id)
-
-        assert result == 'compact result'
-        # The LLM must have been called exactly once
-        assert len(captured_inputs) == 1, "LLM should be called exactly once"
-        # Flatten all message content from the captured call
-        all_content = ' '.join(
-            str(msg.get('content', ''))
-            for msg in captured_inputs[0]
-        )
-        assert 'SHOULD NOT APPEAR IN COMPACTION' not in all_content, (
-            "The current turn's transcript row leaked into the compaction LLM input. "
-            "exclude_id filtering is broken."
-        )
-        # Prior rows must still be present
-        assert 'prior message' in all_content or 'prior reply' in all_content, (
-            "Prior transcript rows must be included in the compaction input"
-        )

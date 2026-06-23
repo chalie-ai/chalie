@@ -1,32 +1,14 @@
-"""
-Provider token-limit backfill.
-
-Reads each provider's get_context_limit() and persists max_tokens +
-compact_at = max_tokens * COMPACTION_THRESHOLD_RATIO into the providers
-table. Used at boot (every active+inactive row) and on provider creation
-(single row).
-
-The 0.80 ratio constant lives in services.providers — there is no second
-copy in this module.
-"""
 import logging
+import sqlite3
 
 logger = logging.getLogger(__name__)
 
 
-def backfill_one(conn, provider_id: int) -> bool:
-    """Compute and persist max_tokens + compact_at for a single provider row.
-
-    Looks up the provider config via ConfigService.get_providers(), builds an
-    LLM service via create_llm_service, calls .get_context_limit(), then
-    UPDATEs the row. Caller owns the connection and the commit.
-
-    Returns True on successful UPDATE, False on any failure (failure is
-    logged at warning; the row's previous values are left intact).
-    """
-    from services.providers import COMPACTION_THRESHOLD_RATIO, MAX_CONTEXT_WINDOW
+def backfill_one(conn: sqlite3.Connection, provider_id: int) -> bool:
+    """Failure leaves the row's previous values intact."""
+    from services.providers import MAX_CONTEXT_WINDOW
     from services.config_service import ConfigService
-    from services.llm_service import create_llm_service
+    from services.llm_clients.factory import build_client
 
     try:
         row = conn.execute(
@@ -50,7 +32,7 @@ def backfill_one(conn, provider_id: int) -> bool:
             )
             return False
 
-        svc = create_llm_service(dict(pcfg))
+        svc = build_client(dict(pcfg))
         max_tokens = svc.get_context_limit()
         if not isinstance(max_tokens, (int, float)) or max_tokens <= 0:
             logger.warning(
@@ -59,15 +41,14 @@ def backfill_one(conn, provider_id: int) -> bool:
             )
             return False
         max_tokens = min(int(max_tokens), MAX_CONTEXT_WINDOW)
-        compact_at = int(max_tokens * COMPACTION_THRESHOLD_RATIO)
         conn.execute(
-            "UPDATE providers SET max_tokens = ?, compact_at = ?, "
+            "UPDATE providers SET max_tokens = ?, "
             "updated_at = datetime('now') WHERE id = ?",
-            (max_tokens, compact_at, provider_id),
+            (max_tokens, provider_id),
         )
         logger.info(
-            "[provider_token_limits] '%s' max_tokens=%d compact_at=%d (%.0f%%)",
-            name, max_tokens, compact_at, COMPACTION_THRESHOLD_RATIO * 100,
+            "[provider_token_limits] '%s' max_tokens=%d",
+            name, max_tokens,
         )
         return True
     except Exception as exc:
@@ -78,11 +59,8 @@ def backfill_one(conn, provider_id: int) -> bool:
         return False
 
 
-def backfill_all(conn) -> dict:
-    """Run backfill_one() for every provider row (active and inactive).
-
-    Returns {'total': N, 'succeeded': N, 'failed': N}. Caller owns commit.
-    """
+def backfill_all(conn: sqlite3.Connection) -> dict[str, int]:
+    """Returns {'total': N, 'succeeded': N, 'failed': N}. Caller owns commit."""
     rows = conn.execute("SELECT id FROM providers").fetchall()
     succeeded = 0
     failed = 0

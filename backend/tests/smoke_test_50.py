@@ -1,15 +1,4 @@
 #!/usr/bin/env python3
-"""
-50-prompt smoke test with diverse categories, mixed sessions, and rolling metrics.
-
-Sends prompts across multiple UUIDs (cold + warm contexts) and tracks:
-- Mode distribution vs expected
-- Response times with rolling average (detect degradation as context grows)
-
-Usage:
-    python3 tests/smoke_test_50.py
-    python3 tests/smoke_test_50.py --host myserver.local
-"""
 
 import sys
 import json
@@ -17,6 +6,7 @@ import time
 import urllib.request
 import urllib.error
 from datetime import datetime
+from typing import cast
 
 API_BASE = "http://localhost:8080"
 SPACING = 15  # seconds between prompts
@@ -96,8 +86,7 @@ PROMPTS = [
 ]
 
 
-def send_prompt(uuid, message):
-    """Send a prompt and return (response_dict, status_code, elapsed_seconds)."""
+def send_prompt(uuid: str, message: str) -> tuple[dict[str, object], int, float]:
     data = json.dumps({"uuid": uuid, "message": message}).encode()
     req = urllib.request.Request(
         f"{API_BASE}/api/message",
@@ -118,7 +107,7 @@ def send_prompt(uuid, message):
         return {"error": str(e)}, 0, elapsed
 
 
-def run():
+def run() -> int:
     print("=" * 70)
     print("  50-Prompt Smoke Test — Mode Distribution + Rolling Response Times")
     print(f"  {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
@@ -137,12 +126,12 @@ def run():
         print("ABORT: cannot reach API: %s" % e)
         return 1
 
-    results = []
-    mode_counts = {}
+    results: list[dict[str, object]] = []
+    mode_counts: dict[str, int] = {}
     correct = 0
-    total_time = 0
-    rolling_times = []  # (prompt_index, session_depth, elapsed)
-    session_depth = {}  # uuid -> count of prompts sent
+    total_time: float = 0
+    rolling_times: list[tuple[int, int, float]] = []  # (prompt_index, session_depth, elapsed)
+    session_depth: dict[str, int] = {}  # uuid -> count of prompts sent
 
     print("%-4s %-10s %-3s %-7s %-12s %-12s %-6s  %s" % (
         "#", "UUID", "Dep", "Time", "Got", "Expected", "Match", "Prompt"
@@ -160,7 +149,7 @@ def run():
             got_mode = "ERROR"
             match = False
         else:
-            got_mode = resp.get("mode", "?")
+            got_mode = cast(str, resp.get("mode", "?"))
             # Accept if got_mode matches expected, or if unified path is active
             # (unified generation returns "UNIFIED" instead of ACT)
             match = got_mode == expected or got_mode == "UNIFIED"
@@ -220,7 +209,7 @@ def run():
 
     # Rolling response times by session depth
     print("\nResponse time by session depth (context growth):")
-    depth_times = {}
+    depth_times: dict[int, list[float]] = {}
     for _, depth, elapsed in rolling_times:
         if depth not in depth_times:
             depth_times[depth] = []

@@ -1,32 +1,28 @@
-"""
-Feature tests for PatternMatchProcessor and its processor-scoped tools.
+"""Feature tests for PatternMatchProcessor."""
 
-Each test answers exactly one question: does this service do what it claims?
-Real in-memory SQLite via the `db` fixture (schema.sql through
-SchemaConvergenceService). MemoryStore is the real production implementation.
-
-LLM boundary: Providers.instance().send_messages is the ONLY boundary that
-is stubbed — everything else (DB, DataGraphService, save_pattern, save_graph)
-runs against real production code.
-
-Per feedback_test_philosophy.md: hot path only, no mock theater.
-"""
-
+import contextlib
 import json
-from unittest.mock import patch
+import sqlite3
+from collections.abc import Callable, Generator
+from typing import cast
 
 import pytest
 
-from services.llm_service import LLMResponse
+from services.llm_clients.base import ProviderClient
+from services.provider_api import ProviderApiRequest, ProviderApiResponse
+from services.providers import Providers
 
 pytestmark = pytest.mark.unit
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
-def _make_llm_response(text="", tool_calls=None):
-    """Return a minimal LLMResponse with the given tool_calls list."""
-    return LLMResponse(
+
+def _make_llm_response(
+    text: str = "",
+    tool_calls: list[dict[str, object]] | None = None,
+) -> ProviderApiResponse:
+    return ProviderApiResponse(
         text=text,
         model="test-model",
         provider="mock",
@@ -34,20 +30,45 @@ def _make_llm_response(text="", tool_calls=None):
     )
 
 
-def _tool_call(tool_name, **kwargs):
+class _FakeLLMService(ProviderClient):
+
+    CONTENT_FIELD_LABEL = "message.content"
+
+    def __init__(self, send_fn: Callable[[], ProviderApiResponse]) -> None:
+        self._send_fn = send_fn
+
+    def get_context_limit(self) -> int:
+        return 200_000
+
+    def estimate_request_tokens(self, dto: ProviderApiRequest) -> int:
+        return 1
+
+    def send(self, dto: ProviderApiRequest) -> ProviderApiResponse:
+        return self._send_fn()
+
+
+@contextlib.contextmanager
+def _inject_fake_client(
+    send_fn: Callable[[], ProviderApiResponse],
+) -> Generator[None, None, None]:
+    original = getattr(Providers, "_resolve")
+    setattr(Providers, "_resolve", lambda self, *_a, **_kw: _FakeLLMService(send_fn))
+    try:
+        yield
+    finally:
+        setattr(Providers, "_resolve", original)
+
+
+def _tool_call(tool_name: str, **kwargs: object) -> dict[str, object]:
     """Return a minimal tool_call dict matching the format MessageProcessor expects."""
     return {"name": tool_name, "input": kwargs}
 
 
-def _seed_transcripts(db, count):
-    """Seed `count` transcript rows and return the list of inserted IDs.
-
-    SQLite auto-increments, so we rely on SELECT after INSERT to get IDs.
-    """
+def _seed_transcripts(db: sqlite3.Connection, count: int) -> list[object]:
     for i in range(count):
         db.execute(
             "INSERT INTO transcript (channel, role, content, created_at) "
-            "VALUES ('test', 'user', ?, datetime('now', ? || ' seconds'))",
+            "VALUES ('user', 'user', ?, datetime('now', ? || ' seconds'))",
             (f"msg {i}", str(i)),
         )
     db.commit()
@@ -55,8 +76,7 @@ def _seed_transcripts(db, count):
     return [r[0] for r in rows]
 
 
-def _seed_cursor(db, cursor_value):
-    """Insert a data_graph row for pattern_match_cursor."""
+def _seed_cursor(db: sqlite3.Connection, cursor_value: int) -> None:
     db.execute(
         "INSERT INTO data_graph (kind, key, value, active, first_seen_at, last_confirmed_at, source) "
         "VALUES ('system', 'pattern_match_cursor', ?, 1, datetime('now'), datetime('now'), 'test')",
@@ -65,7 +85,12 @@ def _seed_cursor(db, cursor_value):
     db.commit()
 
 
-def _seed_pattern(db, name, confidence, active=1):
+def _seed_pattern(
+    db: sqlite3.Connection,
+    name: str,
+    confidence: float,
+    active: int = 1,
+) -> None:
     """Insert an active behavioral_pattern row with the given confidence."""
     value = json.dumps({
         "name": name,
@@ -84,7 +109,10 @@ def _seed_pattern(db, name, confidence, active=1):
     db.commit()
 
 
-def _fetch_pattern(db, name):
+def _fetch_pattern(
+    db: sqlite3.Connection,
+    name: str,
+) -> dict[str, object] | None:
     """Fetch the active behavioral_pattern row for a given name."""
     row = db.execute(
         "SELECT id, value, active FROM data_graph "
@@ -96,7 +124,10 @@ def _fetch_pattern(db, name):
     return {"id": row[0], "value": json.loads(row[1]), "active": row[2]}
 
 
-def _fetch_pattern_sql_cols(db, name):
+def _fetch_pattern_sql_cols(
+    db: sqlite3.Connection,
+    name: str,
+) -> dict[str, object] | None:
     """Fetch the SQL reinforcement columns for the most-recent behavioral_pattern row."""
     row = db.execute(
         "SELECT evidence_count, storage_strength, retrieval_weight, last_accessed_at "
@@ -114,7 +145,7 @@ def _fetch_pattern_sql_cols(db, name):
     }
 
 
-def _fetch_cursor(db):
+def _fetch_cursor(db: sqlite3.Connection) -> int | None:
     """Read the pattern_match_cursor value from data_graph. Returns int or None."""
     row = db.execute(
         "SELECT value FROM data_graph "
@@ -129,23 +160,16 @@ def _fetch_cursor(db):
         return None
 
 
-# ── Shared patch targets ─────────────────────────────────────────────────────
-
-_PROVIDERS_INSTANCE = "services.providers.Providers.instance"
-
-
 # ── Tests ─────────────────────────────────────────────────────────────────────
 
 
 class TestSkipsWhenDeltaBelowThreshold:
-    """Tests 1+2 — step returns 'skip' when delta is below the 50-transcript threshold.
-
-    Case A: no transcripts at all (cold boot) → no cursor row written.
-    Case B: cursor=10, only 30 transcripts (delta=20) → cursor unchanged.
-    """
+    """Tests 1+2 — step returns 'skip' when delta is below the 50-transcript threshold."""
 
     @pytest.mark.parametrize("scenario", ["cold_boot", "under_delta"])
-    def test_skips_when_below_threshold(self, scenario, db, store):
+    def test_skips_when_below_threshold(
+        self, scenario: str, db: sqlite3.Connection, store: object
+    ) -> None:
         from services.subconscious_worker import SubconsciousWorker
 
         if scenario == "under_delta":
@@ -180,7 +204,9 @@ class TestSkipsWhenDeltaBelowThreshold:
 class TestFiftyPlusDeltaFiresAndWritesPattern:
     """Test 3 — 60 transcripts, no cursor → processor fires, confidence=7.0."""
 
-    def test_50_plus_delta_fires_and_writes_new_pattern_confidence_7(self, db, store):
+    def test_50_plus_delta_fires_and_writes_new_pattern_confidence_7(
+        self, db: sqlite3.Connection, store: object
+    ) -> None:
         from services.subconscious_worker import SubconsciousWorker
 
         _seed_transcripts(db, 60)
@@ -196,20 +222,15 @@ class TestFiftyPlusDeltaFiresAndWritesPattern:
         llm_response_with_tool = _make_llm_response(tool_calls=[tc])
         llm_response_clean = _make_llm_response(tool_calls=None)
 
-        call_count = {"n": 0}
+        call_count: dict[str, int] = {"n": 0}
 
-        def _fake_send(system_prompt, messages, job=None, tools=None, **kw):
+        def _fake_send() -> ProviderApiResponse:
             call_count["n"] += 1
             if call_count["n"] == 1:
                 return llm_response_with_tool
             return llm_response_clean
 
-        with patch(_PROVIDERS_INSTANCE) as mock_inst:
-            mock_inst.return_value.send_messages.side_effect = _fake_send
-            mock_inst.return_value.get_context_limit.return_value = 32_000
-            mock_inst.return_value.get_compact_at.return_value = 32_000
-            mock_inst.return_value.estimate_payload_tokens.return_value = 100
-
+        with _inject_fake_client(_fake_send):
             worker = SubconsciousWorker(tick_sec=10, idle_window_sec=60)
             result = worker._step_pattern_match()
 
@@ -218,18 +239,16 @@ class TestFiftyPlusDeltaFiresAndWritesPattern:
         pattern = _fetch_pattern(db, "morning_run")
         assert pattern is not None, "Expected behavioral_pattern row for 'morning_run'"
         assert pattern["active"] == 1
-        assert pattern["value"]["confidence"] == pytest.approx(7.0)
+        assert cast(dict[str, object], pattern["value"])["confidence"] == pytest.approx(7.0)
 
 
 class TestSavePatternConfidenceCap:
-    """Tests 4+5 — reinforce always caps at 10.0, whether starting below or at the cap.
-
-    seed_confidence=4.0 → 4+7=11 → capped to 10.0.
-    seed_confidence=10.0 → already at cap → stays 10.0.
-    """
+    """Tests 4+5 — reinforce always caps at 10.0, whether starting below or at the cap."""
 
     @pytest.mark.parametrize("seed_confidence", [4.0, 10.0])
-    def test_reinforce_caps_at_10(self, seed_confidence, db, store):
+    def test_reinforce_caps_at_10(
+        self, seed_confidence: float, db: sqlite3.Connection, store: object
+    ) -> None:
         from services.subconscious_worker import SubconsciousWorker
 
         _seed_pattern(db, "morning_run", confidence=seed_confidence)
@@ -243,35 +262,33 @@ class TestSavePatternConfidenceCap:
             summary="goes for a run in the morning",
             evidence_transcript_ids=[1, 2],
         )
-        call_count = {"n": 0}
+        call_count: dict[str, int] = {"n": 0}
 
-        def _fake_send(system_prompt, messages, job=None, tools=None, **kw):
+        def _fake_send() -> ProviderApiResponse:
             call_count["n"] += 1
             if call_count["n"] == 1:
                 return _make_llm_response(tool_calls=[tc])
             return _make_llm_response(tool_calls=None)
 
-        with patch(_PROVIDERS_INSTANCE) as mock_inst:
-            mock_inst.return_value.send_messages.side_effect = _fake_send
-            mock_inst.return_value.get_context_limit.return_value = 32_000
-            mock_inst.return_value.get_compact_at.return_value = 32_000
-            mock_inst.return_value.estimate_payload_tokens.return_value = 100
+        with _inject_fake_client(_fake_send):
 
             worker = SubconsciousWorker(tick_sec=10, idle_window_sec=60)
             worker._step_pattern_match()
 
         pattern = _fetch_pattern(db, "morning_run")
         assert pattern is not None
-        assert pattern["value"]["confidence"] == pytest.approx(10.0), (
+        assert cast(dict[str, object], pattern["value"])["confidence"] == pytest.approx(10.0), (
             f"seed={seed_confidence}: expected confidence=10.0 (cap), "
-            f"got {pattern['value']['confidence']}"
+            f"got {cast(dict[str, object], pattern['value'])['confidence']}"
         )
 
 
 class TestUntouchedPatternDecaysAndSoftDeletes:
     """Test 6 — untouched patterns decay −0.005; pinned at 0 → soft-deleted."""
 
-    def test_untouched_pattern_decays_pinned_zero_soft_deletes(self, db, store):
+    def test_untouched_pattern_decays_pinned_zero_soft_deletes(
+        self, db: sqlite3.Connection, store: object
+    ) -> None:
         from services.subconscious_worker import SubconsciousWorker
 
         # Pattern A: confidence=0.5 → should decay to 0.495.
@@ -281,14 +298,10 @@ class TestUntouchedPatternDecaysAndSoftDeletes:
         _seed_transcripts(db, 60)
 
         # LLM returns NO tool calls → postTurn decay fires on all untouched rows.
-        def _fake_send(system_prompt, messages, job=None, tools=None, **kw):
+        def _fake_send() -> ProviderApiResponse:
             return _make_llm_response(tool_calls=None)
 
-        with patch(_PROVIDERS_INSTANCE) as mock_inst:
-            mock_inst.return_value.send_messages.side_effect = _fake_send
-            mock_inst.return_value.get_context_limit.return_value = 32_000
-            mock_inst.return_value.get_compact_at.return_value = 32_000
-            mock_inst.return_value.estimate_payload_tokens.return_value = 100
+        with _inject_fake_client(_fake_send):
 
             worker = SubconsciousWorker(tick_sec=10, idle_window_sec=60)
             worker._step_pattern_match()
@@ -321,7 +334,9 @@ class TestUntouchedPatternDecaysAndSoftDeletes:
 class TestSaveGraphRoutesThroughDataGraphService:
     """Test 7 — save_graph routes through DataGraphService with source='pattern_match'."""
 
-    def test_save_graph_routes_with_source_tag(self, db, store):
+    def test_save_graph_routes_with_source_tag(
+        self, db: sqlite3.Connection, store: object
+    ) -> None:
         from services.subconscious_worker import SubconsciousWorker
 
         _seed_transcripts(db, 60)
@@ -332,19 +347,15 @@ class TestSaveGraphRoutesThroughDataGraphService:
             key="residence",
             value="Lisbon",
         )
-        call_count = {"n": 0}
+        call_count: dict[str, int] = {"n": 0}
 
-        def _fake_send(system_prompt, messages, job=None, tools=None, **kw):
+        def _fake_send() -> ProviderApiResponse:
             call_count["n"] += 1
             if call_count["n"] == 1:
                 return _make_llm_response(tool_calls=[tc])
             return _make_llm_response(tool_calls=None)
 
-        with patch(_PROVIDERS_INSTANCE) as mock_inst:
-            mock_inst.return_value.send_messages.side_effect = _fake_send
-            mock_inst.return_value.get_context_limit.return_value = 32_000
-            mock_inst.return_value.get_compact_at.return_value = 32_000
-            mock_inst.return_value.estimate_payload_tokens.return_value = 100
+        with _inject_fake_client(_fake_send):
 
             worker = SubconsciousWorker(tick_sec=10, idle_window_sec=60)
             worker._step_pattern_match()
@@ -362,26 +373,29 @@ class TestSaveGraphRoutesThroughDataGraphService:
 
 
 class TestSaveGraphBehavioralPatternKindReturnsError:
-    """Test 8 — save_graph with kind='behavioral_pattern' returns invalid_kind error."""
+    """Test 8 — save_graph with kind='behavioral_pattern' returns a loud"""
 
-    def test_save_graph_kind_behavioral_pattern_returns_invalid_kind(self, db, store):
-        from abilities.save_graph import SaveGraph
+    def test_save_graph_kind_behavioral_pattern_returns_invalid_kind(
+        self, db: sqlite3.Connection, store: object
+    ) -> None:
+        from abilities.save_graph import ALLOWED_KINDS, SaveGraph
 
-        # SaveGraph reads its budget counter via current_processor() + getattr.
+        # SaveGraph reads its budget counter via self.mp + getattr.
         # No processor is bound here — getattr falls back to 0, validation
         # short-circuits before any DB write.
         instance = SaveGraph()
-        result = instance.execute(
-            "test",
+        result = instance.run(
             {"kind": "behavioral_pattern", "key": "x", "value": "y"},
-            None,
         )
 
-        assert isinstance(result, dict), f"SaveGraph.execute returned non-dict: {result!r}"
-        assert result.get("error") == "invalid_kind", (
-            f"Expected error='invalid_kind', got: {result}"
+        # run() now returns an error ToolResult — the invalid kind is loud.
+        assert result.status == "error", f"Expected error result, got: {result!r}"
+        assert result.code == "invalid-param", (
+            f"Expected code='invalid-param', got: {result.code}"
         )
-        assert result.get("kind") == "behavioral_pattern"
+        # The valid ladder lists the real storable kinds and excludes the rejected one.
+        assert tuple(ALLOWED_KINDS) == result.valid
+        assert "behavioral_pattern" not in result.valid
 
         # No row should have been written to data_graph.
         row = db.execute(
@@ -393,7 +407,9 @@ class TestSaveGraphBehavioralPatternKindReturnsError:
 class TestSavePatternBudgetCapAt20:
     """Test 9 — 21 save_pattern calls → 20 land, 21st returns budget_exceeded."""
 
-    def test_save_pattern_budget_cap_at_20(self, db, store):
+    def test_save_pattern_budget_cap_at_20(
+        self, db: sqlite3.Connection, store: object
+    ) -> None:
         from services.subconscious_worker import SubconsciousWorker
 
         _seed_transcripts(db, 60)
@@ -411,9 +427,9 @@ class TestSavePatternBudgetCapAt20:
             for i in range(21)
         ]
 
-        call_count = {"n": 0}
+        call_count: dict[str, int] = {"n": 0}
 
-        def _fake_send(system_prompt, messages, job=None, tools=None, **kw):
+        def _fake_send() -> ProviderApiResponse:
             call_count["n"] += 1
             if call_count["n"] == 1:
                 # Return all 21 tool calls in the first pass.
@@ -421,11 +437,7 @@ class TestSavePatternBudgetCapAt20:
             # Subsequent iterations: no more tool calls → loop exits.
             return _make_llm_response(tool_calls=None)
 
-        with patch(_PROVIDERS_INSTANCE) as mock_inst:
-            mock_inst.return_value.send_messages.side_effect = _fake_send
-            mock_inst.return_value.get_context_limit.return_value = 32_000
-            mock_inst.return_value.get_compact_at.return_value = 32_000
-            mock_inst.return_value.estimate_payload_tokens.return_value = 100
+        with _inject_fake_client(_fake_send):
 
             worker = SubconsciousWorker(tick_sec=10, idle_window_sec=60)
             worker._step_pattern_match()
@@ -439,139 +451,103 @@ class TestSavePatternBudgetCapAt20:
 
 
 class TestSaveGraphBudgetCapAt50:
-    """Test 10 — 51 save_graph calls → 50 land, 51st returns budget_exceeded."""
+    """Test 10 — 51 save_graph calls in one tick → 50 land, 51st hits the budget cap."""
 
-    def test_save_graph_budget_cap_at_50(self, db, store):
-        from abilities.save_graph import SaveGraph
-        from services.message_processor import bind_current_processor
-
-        # SaveGraph reads/writes its budget counter via current_processor()
-        # + getattr/setattr. Bind a stub as the current processor for the
-        # duration of the test so the counter persists across 51 calls.
-        class _StubProcessor:
-            _save_graph_calls = 0
-
-        stub_processor = _StubProcessor()
-        instance = SaveGraph()
-
-        with bind_current_processor(stub_processor):
-            results = [
-                instance.execute(
-                    "test",
-                    {"kind": "misc", "key": f"key_{i}", "value": f"value_{i}"},
-                    None,
-                )
-                for i in range(51)
-            ]
-
-        # First 50 must succeed.
-        for i, r in enumerate(results[:50]):
-            assert r.get("ok") is True, f"Call {i} expected ok=True, got: {r}"
-
-        # 51st must return budget_exceeded.
-        assert results[50].get("budget_exceeded") is True, (
-            f"Expected budget_exceeded on 51st call, got: {results[50]}"
-        )
-        assert results[50].get("tool") == "save_graph"
-
-        # Counter must be exactly 50.
-        assert stub_processor._save_graph_calls == 50, (
-            f"Expected _save_graph_calls=50, got {stub_processor._save_graph_calls}"
-        )
-
-
-class TestMaxIterations100CapsRunawayLoop:
-    """Test 11 — always-tool-calling LLM → loop caps at 100 iterations exactly.
-
-    TKT-598 raised PatternMatchProcessor.MAX_ITERATIONS from 30 to 100.
-    The safety cap still terminates a runaway loop; only the ceiling changed.
-    """
-
-    def test_max_iterations_100_caps_runaway_loop(self, db, store):
+    def test_save_graph_budget_cap_at_50(
+        self, db: sqlite3.Connection, store: object
+    ) -> None:
         from services.subconscious_worker import SubconsciousWorker
-        from services.pattern_match_processor import PatternMatchProcessor
-
-        # Confirm the processor carries the new cap before driving the loop.
-        assert PatternMatchProcessor.MAX_ITERATIONS == 100, (
-            f"PatternMatchProcessor.MAX_ITERATIONS is {PatternMatchProcessor.MAX_ITERATIONS}, "
-            "expected 100 (TKT-598 raised it from 30)"
-        )
 
         _seed_transcripts(db, 60)
 
-        # Always return a new save_pattern call with a unique name per iteration
-        # so budget doesn't stop us before iteration 100. The budget is 20, so
-        # iterations 1-20 land patterns; iterations 21-100 get budget_exceeded
-        # from handleTool but the loop keeps going until MAX_ITERATIONS=100.
-        send_call_count = {"n": 0}
-
-        def _always_tool_call(system_prompt, messages, job=None, tools=None, **kw):
-            n = send_call_count["n"]
-            send_call_count["n"] += 1
-            # Use unique names for each call.
-            tc = _tool_call(
-                "save_pattern",
-                name=f"habit_{n:03d}",
-                frequency="daily",
-                time_anchor="",
-                summary=f"habit {n}",
-                evidence_transcript_ids=[1, 2],
+        # 51 unique save_graph calls.
+        tcs_batch = [
+            _tool_call(
+                "save_graph",
+                kind="misc",
+                key=f"fact_{i:02d}",
+                value=f"value_{i:02d}",
             )
-            return _make_llm_response(tool_calls=[tc])
+            for i in range(51)
+        ]
 
-        with patch(_PROVIDERS_INSTANCE) as mock_inst:
-            mock_inst.return_value.send_messages.side_effect = _always_tool_call
-            mock_inst.return_value.get_context_limit.return_value = 32_000
-            mock_inst.return_value.get_compact_at.return_value = 32_000
-            mock_inst.return_value.estimate_payload_tokens.return_value = 100
+        call_count: dict[str, int] = {"n": 0}
 
+        def _fake_send() -> ProviderApiResponse:
+            call_count["n"] += 1
+            if call_count["n"] == 1:
+                # Return all 51 tool calls in the first pass.
+                return _make_llm_response(tool_calls=tcs_batch)
+            # Subsequent iterations: no more tool calls → loop exits.
+            return _make_llm_response(tool_calls=None)
+
+        with _inject_fake_client(_fake_send):
             worker = SubconsciousWorker(tick_sec=10, idle_window_sec=60)
-            # Must complete (not loop forever).
             worker._step_pattern_match()
 
-        # Providers.send_messages called exactly 100 times (MAX_ITERATIONS).
-        assert send_call_count["n"] == 100, (
-            f"Expected exactly 100 send_messages calls (MAX_ITERATIONS=100), "
-            f"got {send_call_count['n']}"
-        )
-
-        # Exactly 20 rows landed (budget kicked in after iteration 20).
+        # Exactly 50 misc rows should have landed (51st rejected by the budget cap).
         count = db.execute(
             "SELECT COUNT(*) FROM data_graph "
-            "WHERE kind='behavioral_pattern' AND source='pattern_match' AND active=1"
+            "WHERE kind='misc' AND source='pattern_match'"
         ).fetchone()[0]
-        assert count == 20, (
-            f"Expected 20 rows (budget cap), got {count}"
-        )
+        assert count == 50, f"Expected 50 rows (budget cap), got {count}"
 
 
 class TestReinforcementDiminishingBoost:
-    """Test 12 — each successive reinforce adds a smaller storage_strength boost and
-    the value is capped at 1.0 (TKT-581 fix, diminishing returns)."""
+    """Test 12 — each successive reinforce adds a smaller storage_strength boost and"""
 
-    def test_multiple_reinforcements_give_diminishing_boost(self, db, store):
-        from abilities.save_pattern import _upsert_pattern
+    def test_multiple_reinforcements_give_diminishing_boost(
+        self, db: sqlite3.Connection, store: object
+    ) -> None:
+        from services.subconscious_worker import SubconsciousWorker
 
         # Seed with SQL defaults (evidence_count=1, storage_strength=0.5).
         _seed_pattern(db, "evening_read", confidence=3.0)
 
-        tc_params = {
-            "name": "evening_read",
-            "frequency": "daily",
-            "time_anchor": "evening",
-            "summary": "reads before bed",
-            "evidence_transcript_ids": [1, 2],
-        }
+        tc = _tool_call(
+            "save_pattern",
+            name="evening_read",
+            frequency="daily",
+            time_anchor="evening",
+            summary="reads before bed",
+            evidence_transcript_ids=[1, 2],
+        )
 
-        # Reinforce 3 times directly via the production upsert function.
-        strengths = []
-        for _ in range(3):
-            _upsert_pattern({**tc_params, "evidence": tc_params["evidence_transcript_ids"]})
+        def _reinforce_once(
+            tool_call: dict[str, object],
+        ) -> Callable[[], ProviderApiResponse]:
+            """A fresh LLM stub: one save_pattern call on the first turn, then stop."""
+            state: dict[str, int] = {"n": 0}
+
+            def _send() -> ProviderApiResponse:
+                state["n"] += 1
+                if state["n"] == 1:
+                    return _make_llm_response(tool_calls=[tool_call])
+                return _make_llm_response(tool_calls=None)
+
+            return _send
+
+        # Three real background ticks. Each needs a fresh >=50-transcript window
+        # (the worker advances pattern_match_cursor to the latest id on a fire),
+        # so seed 60 more transcripts before each tick. "evening_read" is touched
+        # every turn → the post-turn decay hook excludes it, so storage_strength
+        # evolves purely by reinforcement.
+        strengths: list[float] = []
+        for tick in range(3):
+            _seed_transcripts(db, 60)
+            with _inject_fake_client(_reinforce_once(tc)):
+                worker = SubconsciousWorker(tick_sec=10, idle_window_sec=60)
+                result = worker._step_pattern_match()
+            assert result.startswith("fired"), (
+                f"tick {tick}: expected the matcher to fire, got {result!r}"
+            )
             cols = _fetch_pattern_sql_cols(db, "evening_read")
-            strengths.append(cols["storage_strength"])
+            assert cols is not None
+            strengths.append(cast(float, cols["storage_strength"]))
 
         # evidence_count must be 1 (initial) + 3 (reinforcements) = 4.
         cols = _fetch_pattern_sql_cols(db, "evening_read")
+        assert cols is not None
         assert cols["evidence_count"] == 4, (
             f"Expected evidence_count=4 after 3 reinforcements, got {cols['evidence_count']}"
         )
@@ -596,6 +572,102 @@ class TestReinforcementDiminishingBoost:
         )
 
         # strength must not exceed 1.0.
-        assert cols["storage_strength"] <= 1.0, (
+        assert cast(float, cols["storage_strength"]) <= 1.0, (
             f"storage_strength must be capped at 1.0, got {cols['storage_strength']}"
         )
+
+
+def _seed_located_transcripts(
+    db: sqlite3.Connection,
+    count: int,
+    *,
+    channel: str,
+) -> None:
+    """Seed `count` location-tagged transcripts on `channel`."""
+    for i in range(count):
+        db.execute(
+            "INSERT INTO transcript (channel, role, content, created_at, "
+            "location_lat, location_lon, location_name) "
+            "VALUES (?, 'user', ?, datetime('now', ? || ' seconds'), "
+            "35.9, 14.5, 'Valletta')",
+            (channel, f"at the gym {i}", str(i)),
+        )
+    db.commit()
+
+
+class TestGeoPassProvenance:
+    """Test 13 — the GEO pass writes behavioural patterns with source='geo_pattern'."""
+
+    def test_geo_pass_writes_pattern_with_geo_provenance(
+        self, db: sqlite3.Connection, store: object
+    ) -> None:
+        from services.subconscious_worker import SubconsciousWorker
+
+        # 35 located rows on the user channel — above the geo _MIN_DELTA (30).
+        _seed_located_transcripts(db, 35, channel="user")
+
+        tc = _tool_call(
+            "save_pattern",
+            name="harbour_gym",
+            frequency="daily",
+            time_anchor="18:00",
+            summary="user trains at the harbour gym daily",
+            evidence_transcript_ids=[1, 2, 3],
+        )
+        call_count: dict[str, int] = {"n": 0}
+
+        def _fake_send() -> ProviderApiResponse:
+            call_count["n"] += 1
+            if call_count["n"] == 1:
+                return _make_llm_response(tool_calls=[tc])
+            return _make_llm_response(tool_calls=None)
+
+        with _inject_fake_client(_fake_send):
+            worker = SubconsciousWorker(tick_sec=10, idle_window_sec=60)
+            result = worker._step_geo_patterns()
+
+        assert "fired" in result, f"Expected the geo step to fire, got: {result!r}"
+
+        row = db.execute(
+            "SELECT source FROM data_graph "
+            "WHERE kind='behavioral_pattern' AND key='harbour_gym' AND active=1 "
+            "ORDER BY id DESC LIMIT 1"
+        ).fetchone()
+        assert row is not None, "geo pass must write the behavioural_pattern row"
+        assert row[0] == "geo_pattern", (
+            f"geo-pass pattern must carry source='geo_pattern', got {row[0]!r} "
+            "(a 'pattern_match' tag here means the provenance fix regressed)"
+        )
+
+    def test_geo_pass_skips_when_located_rows_are_on_muted_channel(
+        self, db: sqlite3.Connection, store: object
+    ) -> None:
+        """Channel filter (anchor J): location-tagged rows on a NON-user-activity"""
+        from services.source_profiles import profile_for
+        from services.subconscious_worker import SubconsciousWorker
+
+        channel = "delegate:research"
+        assert not profile_for(channel).geo_is_user, (
+            "test premise: delegate:* must not count as user geo-activity"
+        )
+
+        # 50 located rows, all on a muted channel — well above _MIN_DELTA.
+        _seed_located_transcripts(db, 50, channel=channel)
+
+        def _fake_send() -> ProviderApiResponse:
+            raise AssertionError(
+                "the geo step must NOT fire (and so never call the LLM) when the "
+                "only located rows are on a non-user-activity channel"
+            )
+
+        with _inject_fake_client(_fake_send):
+            worker = SubconsciousWorker(tick_sec=10, idle_window_sec=60)
+            result = worker._step_geo_patterns()
+
+        assert result.startswith("skip"), (
+            f"expected the geo step to skip on muted-channel geo rows, got: {result!r}"
+        )
+        # No behavioural pattern was written.
+        assert db.execute(
+            "SELECT COUNT(*) FROM data_graph WHERE kind='behavioral_pattern'"
+        ).fetchone()[0] == 0

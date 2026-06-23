@@ -3,9 +3,16 @@ User authentication blueprint — /auth endpoints for master account.
 """
 
 import logging
+from typing import TYPE_CHECKING, cast
+
 from flask import Blueprint, request, jsonify
 from services.database_service import text
+from .auth import require_auth, _cookie_only, internal_only
+from services.feature_flags import internal_dev_enabled
 from werkzeug.security import generate_password_hash, check_password_hash
+
+if TYPE_CHECKING:
+    from flask.typing import ResponseReturnValue
 
 logger = logging.getLogger(__name__)
 
@@ -54,7 +61,7 @@ def _get_vault_state() -> str:
 
 
 @user_auth_bp.route('/auth/status', methods=['GET'])
-def auth_status():
+def auth_status() -> "ResponseReturnValue":
     """Check whether master account exists, providers are configured, and
     user has session.
 
@@ -65,6 +72,7 @@ def auth_status():
     * ``has_providers``      — ``True`` if at least one active provider is configured.
     * ``has_session``        — ``True`` if the request carries a valid session token.
     * ``vault_state``        — ``"unlocked" | "locked" | "uninitialized"``.
+    * ``internal_dev``       — ``True`` when in-development features are enabled.
     """
     try:
         from services.database_service import get_shared_db_service
@@ -74,15 +82,15 @@ def auth_status():
 
         # Check master account
         with db.get_session() as session:
-            account_count = session.execute(
+            account_count = cast("tuple[int, ...]", session.execute(
                 text("SELECT COUNT(*) FROM master_account")
-            ).fetchone()[0]
+            ).fetchone())[0]
 
         # Check providers (count only — avoids decryption which can fail if key changed)
         with db.get_session() as session:
-            provider_count = session.execute(
-                text("SELECT COUNT(*) FROM providers WHERE is_active = 1")
-            ).fetchone()[0]
+            provider_count = cast("tuple[int, ...]", session.execute(
+                text("SELECT COUNT(*) FROM providers")
+            ).fetchone())[0]
 
         # Check session — if the vault is sealed (server restarted while
         # session cookie survived), treat the session as invalid so every
@@ -92,19 +100,57 @@ def auth_status():
         if has_session and vault_state == "locked":
             has_session = False
 
+        # Vision availability — gates the image-upload affordance in the chat UI.
+        try:
+            from services.database_service import get_shared_db_service
+            from services.provider_db_service import ProviderDbService
+            has_vision = (
+                ProviderDbService(get_shared_db_service()).get_vision_provider()
+                is not None
+            )
+        except Exception:
+            has_vision = False
+
         return jsonify({
             "has_master_account": account_count > 0,
             "has_providers": provider_count > 0,
             "has_session": has_session,
             "vault_state": vault_state,
+            "has_vision_provider": has_vision,
+            "internal_dev": internal_dev_enabled(),
         }), 200
     except Exception as e:
         logger.error(f"[REST API] Auth status error: {e}")
         return jsonify({"error": "Failed to check auth status"}), 500
 
 
+@user_auth_bp.route('/auth/username', methods=['GET'])
+@internal_only
+@require_auth
+@_cookie_only
+def get_username() -> "ResponseReturnValue":
+    """Return the master account LOGIN username for the authenticated dashboard
+    session — the credential the device's UnlockVault screen submits to
+    POST /auth/login. Cookie-session only; a wrapper bearer must not read it.
+    """
+    try:
+        from services.database_service import get_shared_db_service
+
+        db = get_shared_db_service()
+        with db.get_session() as session:
+            row = session.execute(
+                text("SELECT username FROM master_account LIMIT 1")
+            ).fetchone()
+        if not row:
+            return jsonify({"error": "No master account"}), 404
+        return jsonify({"username": row[0]}), 200
+    except Exception:
+        logger.exception("[REST API] Get username error")
+        return jsonify({"error": "Failed to read username"}), 500
+
+
 @user_auth_bp.route('/auth/register', methods=['POST'])
-def register():
+def register() -> "ResponseReturnValue":
     """Create master account. Fails (409) if one exists. Sets session cookie on success.
 
     On success the vault is initialised with the master password and immediately
@@ -133,9 +179,9 @@ def register():
 
         # Check if master account already exists
         with db.get_session() as session:
-            existing = session.execute(
+            existing = cast("tuple[int, ...]", session.execute(
                 text("SELECT COUNT(*) FROM master_account")
-            ).fetchone()[0]
+            ).fetchone())[0]
 
             if existing > 0:
                 return jsonify({"error": "Master account already exists"}), 409
@@ -177,7 +223,7 @@ def register():
 
 
 @user_auth_bp.route('/auth/login', methods=['POST'])
-def login():
+def login() -> "ResponseReturnValue":
     """Verify credentials and set session cookie. Returns 401 on invalid credentials.
 
     After the password is verified against the account hash, the vault is opened
@@ -186,7 +232,7 @@ def login():
     * ``"unlocked"``      — the live ``vault_config`` row opened normally.
     * ``"restored"``      — the live row was missing/corrupt but a filesystem
                             backup key matched; the vault was rebuilt and opened
-                            with no data loss (TKT-676).
+                            with no data loss.
     * ``"unrecoverable"`` — neither the live row nor any backup opened. The DEK is
                             permanently lost, so the master account is wiped and a
                             401 with ``onboarding_required: True`` is returned to
@@ -233,7 +279,7 @@ def login():
 
         # The password is now verified against the account hash. Open the vault
         # with it, recovering from a filesystem backup if the live vault_config
-        # row is missing or corrupt (TKT-676). If neither the row nor any backup
+        # row is missing or corrupt. If neither the row nor any backup
         # opens, the DEK is permanently lost — wipe the account to force a clean
         # re-onboarding rather than logging the user into an unusable vault.
         vault = get_vault_service()
@@ -281,7 +327,7 @@ def login():
 
 
 @user_auth_bp.route('/auth/logout', methods=['POST'])
-def logout():
+def logout() -> "ResponseReturnValue":
     """Invalidate the current session and clear the cookie.
 
     Seals the vault by clearing the in-memory DEK before destroying the session

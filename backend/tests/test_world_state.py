@@ -1,21 +1,15 @@
 """
-Feature tests for WorldState — the singleton that renders ambient world context
-into the literal block consumed by prompt assembly.
-
-Real WorldState class, real in-memory SQLite (built from schema.sql via the
-``db`` fixture), zero mocks. Each test uses a fresh WorldState instance to
-avoid cross-test contamination from the module singleton.
-
-Per tester.md: every test asserts a real-world behaviour someone depends on —
-no plumbing, no shape checks, no "did we store the dict" tests. The render
-output is the only contract that matters; everything observable flows through
-``WorldState.render()``.
+Feature tests for WorldState using real in-memory SQLite (built from schema.sql
+via the ``db`` fixture), zero mocks. Each test uses a fresh WorldState instance
+to avoid cross-test contamination from the module singleton.
 """
 
 
+import sqlite3
 import time as _time
 import uuid
 from datetime import timedelta
+from typing import Optional
 
 import pytest
 
@@ -30,7 +24,6 @@ _HEADER = "### Background Telemetry,Processes & Signals"
 # ---------------------------------------------------------------------------
 
 def _fresh() -> WorldState:
-    """Create a fresh WorldState instance (not the module singleton)."""
     return WorldState()
 
 
@@ -42,8 +35,7 @@ def _past_iso(minutes: int) -> str:
     return (utc_now() - timedelta(minutes=minutes)).strftime("%Y-%m-%d %H:%M:%S")
 
 
-def _seed_telemetry(db, ctx: dict) -> None:
-    """Persist a heartbeat-shaped dict into the telemetry table via HeartbeatService."""
+def _seed_telemetry(db: sqlite3.Connection, ctx: dict[str, object]) -> None:
     from services.heartbeat_service import heartbeat_service
     heartbeat_service._ctx = None
     flat = heartbeat_service._flatten(ctx)
@@ -56,7 +48,7 @@ def _seed_telemetry(db, ctx: dict) -> None:
     heartbeat_service._ctx = None
 
 
-def _seed_pending(db, message: str, due_minutes_ahead: int, *, recurrence: str | None = None) -> None:
+def _seed_pending(db: sqlite3.Connection, message: str, due_minutes_ahead: int, *, recurrence: Optional[str] = None) -> None:
     db.execute(
         "INSERT INTO scheduled_items (id, message, due_at, status, hidden, recurrence) "
         "VALUES (?, ?, ?, 'pending', 0, ?)",
@@ -64,7 +56,7 @@ def _seed_pending(db, message: str, due_minutes_ahead: int, *, recurrence: str |
     )
 
 
-def _seed_fired(db, message: str, fired_minutes_ago: int) -> None:
+def _seed_fired(db: sqlite3.Connection, message: str, fired_minutes_ago: int) -> None:
     iso = _past_iso(fired_minutes_ago)
     db.execute(
         "INSERT INTO scheduled_items (id, message, due_at, status, hidden, last_fired_at) "
@@ -79,7 +71,7 @@ def _seed_fired(db, message: str, fired_minutes_ago: int) -> None:
 
 @pytest.mark.unit
 class TestRenderEmpty:
-    def test_empty_state_renders_nothing(self, db):
+    def test_empty_state_renders_nothing(self, db: sqlite3.Connection) -> None:
         ws = _fresh()
         assert ws.render() == ""
 
@@ -90,7 +82,7 @@ class TestRenderEmpty:
 
 @pytest.mark.unit
 class TestRenderTelemetry:
-    def test_telemetry_renders_exact_block(self, db):
+    def test_telemetry_renders_exact_block(self, db: sqlite3.Connection) -> None:
         # End-to-end shape: the FE persists a heartbeat with hidden keys
         # (connection, behavioral, saved_at, _location_name_stale) plus a
         # stale local_time string. The rendered block must be exactly the
@@ -119,6 +111,29 @@ class TestRenderTelemetry:
 
         assert _fresh().render() == expected
 
+    def test_location_surfaces_placename_not_raw_coordinates(self, db: sqlite3.Connection) -> None:
+        # Privacy posture (): the chat/system telemetry block surfaces the
+        # human-readable place name only. The raw GPS coordinates the frontend
+        # sends in the nested ``location`` dict stay out of this block — backend
+        # consumers (departure advisory, weather, locale_service) read them
+        # directly instead. The heartbeat below mirrors what
+        # ClientContextService.save() persists after Nominatim resolution: a
+        # nested ``location`` dict AND a top-level resolved ``location_name``.
+        _seed_telemetry(db, {
+            "timezone": "Europe/Malta",
+            "location": {"lat": 35.8989, "lon": 14.5146},
+            "location_name": "Valletta, Malta",
+        })
+
+        result = _fresh().render()
+
+        # The place name reaches the LLM …
+        assert "location_name:Valletta, Malta" in result
+        # … but the raw coordinates never do.
+        assert "**location**" not in result
+        assert "35.8989" not in result
+        assert "14.5146" not in result
+
 
 # ---------------------------------------------------------------------------
 # Schedule section
@@ -126,7 +141,7 @@ class TestRenderTelemetry:
 
 @pytest.mark.unit
 class TestRenderSchedule:
-    def test_upcoming_pending_renders_with_due_in_and_repeats(self, db):
+    def test_upcoming_pending_renders_with_due_in_and_repeats(self, db: sqlite3.Connection) -> None:
         # Single recurring upcoming item — covers the happy path: it appears,
         # gets a positive due-in, and the recurrence is formatted as repeats:every.
         _seed_pending(db, "Daily standup", due_minutes_ahead=60, recurrence="86400")
@@ -139,7 +154,7 @@ class TestRenderSchedule:
         assert "ago" not in bullet.split("(", 1)[1].split(",")[0]
         assert "repeats:every 1d 0h" in bullet
 
-    def test_hidden_items_excluded(self, db):
+    def test_hidden_items_excluded(self, db: sqlite3.Connection) -> None:
         db.execute(
             "INSERT INTO scheduled_items (id, message, due_at, status, hidden) "
             "VALUES (?, ?, ?, 'pending', 1)",
@@ -149,7 +164,7 @@ class TestRenderSchedule:
 
         assert "Secret task" not in _fresh().render()
 
-    def test_upcoming_pending_supersedes_recent_fire_for_same_message(self, db):
+    def test_upcoming_pending_supersedes_recent_fire_for_same_message(self, db: sqlite3.Connection) -> None:
         # Same job has both "just fired" and "due again soon" — show the upcoming one.
         _seed_fired(db, "Mail sync", fired_minutes_ago=30)
         _seed_pending(db, "Mail sync", due_minutes_ahead=45)
@@ -162,7 +177,7 @@ class TestRenderSchedule:
             f"Expected upcoming due-in (no 'ago'), got: {due_in_field!r}"
         )
 
-    def test_repeated_pending_shows_only_next_upcoming(self, db):
+    def test_repeated_pending_shows_only_next_upcoming(self, db: sqlite3.Connection) -> None:
         for minutes_ahead in (300, 90, 600):
             _seed_pending(db, "Sync run", due_minutes_ahead=minutes_ahead)
         db.commit()
@@ -181,7 +196,7 @@ class TestRenderSchedule:
 
 @pytest.mark.unit
 class TestRenderSignals:
-    def test_signals_render_sorted_by_source(self, db):
+    def test_signals_render_sorted_by_source(self, db: sqlite3.Connection) -> None:
         ws = _fresh()
         ws.push_signal("zzz", "last")
         ws.push_signal("aaa", "first")
@@ -193,7 +208,7 @@ class TestRenderSignals:
         assert "[signal:zzz] last" in result
         assert result.index("[signal:aaa]") < result.index("[signal:mmm]") < result.index("[signal:zzz]")
 
-    def test_expired_signals_pruned_on_render(self, db):
+    def test_expired_signals_pruned_on_render(self, db: sqlite3.Connection) -> None:
         ws = _fresh()
         ws.push_signal("stale", "old news", ttl=0)
         ws.push_signal("fresh", "live news", ttl=3600)
@@ -210,7 +225,7 @@ class TestRenderSignals:
 
 @pytest.mark.unit
 class TestRenderFullMix:
-    def test_sections_appear_in_fixed_order(self, db):
+    def test_sections_appear_in_fixed_order(self, db: sqlite3.Connection) -> None:
         _seed_telemetry(db, {"local_time": "10:00", "location_name": "Malta"})
         ws = _fresh()
         ws.push_signal("news", "heatwave")

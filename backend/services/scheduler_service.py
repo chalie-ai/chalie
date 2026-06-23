@@ -10,8 +10,14 @@ Entry point: scheduler_worker() registered in run.py.
 """
 
 import logging
+import threading
 import time
 import uuid
+from collections.abc import Callable
+from typing import TYPE_CHECKING, cast
+
+if TYPE_CHECKING:
+    from services.database_service import DatabaseService
 
 from services.embedding_utils import pack_embedding
 from utils.logger import Logger
@@ -22,28 +28,34 @@ logger = logging.getLogger(__name__)
 LOG_PREFIX = "[SCHEDULER]"
 _POLL_INTERVAL = 60  # seconds
 
+# Stage-2 origin label for the return hop onto the user channel.
+_SCHEDULED_SOURCE = "scheduled"
+
+# Daemon-thread name prefix for the asynchronous two-stage fire. The poll loop
+# must never block on the LLM work, so a fired prompt runs on its own thread
+# named ``scheduled-work-<item_id>``.
+_SCHEDULED_WORK_THREAD_PREFIX = "scheduled-work"
+
+# How a fired scheduled prompt's worked result is framed when it is handed to
+# the user-facing turn that actually surfaces (Stage 2). The placeholder is
+# filled with the work loop's synthesis.
+_SCHEDULED_DELIVERY_TEMPLATE = (
+    "A scheduled task just ran in the background. Relay its result to me now, "
+    "in your own voice:\n\n{result}"
+)
+
 # System handler registry — capabilities register callbacks for item_type='system'
-_SYSTEM_HANDLERS: dict[str, callable] = {}
+_SYSTEM_HANDLERS: dict[str, Callable[..., object]] = {}
 
 
-def register_system_handler(source: str, callback: callable):
+def register_system_handler(source: str, callback: Callable[..., object]) -> None:
     """Register a callback for system scheduled items with the given topic."""
     _SYSTEM_HANDLERS[source] = callback
     logger.info(f"{LOG_PREFIX} Registered system handler: {source}")
 
 
-def embed_scheduled_item(item_id: str, message: str, db=None) -> None:
-    """
-    Generate and store an embedding for a scheduled item.
-
-    Inserts into scheduled_items_vec keyed by the item's rowid.
-    Non-fatal: logs a warning and returns silently on any failure.
-
-    Args:
-        item_id: The text primary key of the scheduled item (e.g. '3f8a2b1c').
-        message: The message field to embed.
-        db: Optional DatabaseService instance; fetches shared db if not provided.
-    """
+def embed_scheduled_item(item_id: str, message: str, db: "DatabaseService | None" = None) -> None:
+    """Non-fatal: logs a warning and returns silently on any failure."""
     try:
         from services.embedding_service import get_embedding_service
         if db is None:
@@ -77,8 +89,7 @@ def embed_scheduled_item(item_id: str, message: str, db=None) -> None:
         logger.warning(f"{LOG_PREFIX} Failed to embed scheduled item {item_id}: {e}")
 
 
-def scheduler_worker():
-    """Module-level entry point for run.py."""
+def scheduler_worker() -> None:
     Logger.start()
     logger.info(f"{LOG_PREFIX} Service started (poll interval: {_POLL_INTERVAL}s)")
 
@@ -98,8 +109,7 @@ def scheduler_worker():
             next_tick = time.monotonic() + _POLL_INTERVAL
 
 
-def _poll_and_fire():
-    """Poll for due items and fire them — direct delivery or chat chokepoint."""
+def _poll_and_fire() -> None:
     try:
         from services.database_service import get_shared_db_service
 
@@ -232,7 +242,7 @@ def _load_speed_from_history() -> float | None:
 _MIN_ADVISORY_BUFFER_MINUTES = 10  # minimum warning before departure time
 
 
-def _build_departure_advisory(item: dict) -> str | None:
+def _build_departure_advisory(item: dict[str, object]) -> str | None:
     """Return a departure advisory string when location data is available."""
     try:
         import json
@@ -241,9 +251,9 @@ def _build_departure_advisory(item: dict) -> str | None:
     except (TypeError, ValueError):
         return None
 
-    dest_lat = meta.get("destination_lat")
-    dest_lon = meta.get("destination_lon")
-    destination_name = meta.get("destination")
+    dest_lat = cast(dict[str, object], meta).get("destination_lat")
+    dest_lon = cast(dict[str, object], meta).get("destination_lon")
+    destination_name = cast(dict[str, object], meta).get("destination")
 
     if dest_lat is None or dest_lon is None:
         return None
@@ -260,7 +270,7 @@ def _build_departure_advisory(item: dict) -> str | None:
         if user_lat is None or user_lon is None:
             return None
 
-        dist = distance_km(float(user_lat), float(user_lon), float(dest_lat), float(dest_lon))
+        dist = distance_km(float(cast(float, user_lat)), float(cast(float, user_lon)), float(cast(float, dest_lat)), float(cast(float, dest_lon)))
 
         speed = _load_speed_from_history() or DEFAULT_SPEED_KMH
         travel_minutes = estimate_travel_minutes(dist, speed)
@@ -269,7 +279,7 @@ def _build_departure_advisory(item: dict) -> str | None:
         if not due_at_raw:
             return None
         from datetime import timezone as _tz
-        due_dt = parse_utc(due_at_raw)
+        due_dt = parse_utc(cast(str, due_at_raw))
         if due_dt == datetime.min.replace(tzinfo=_tz.utc):
             return None
         now = utc_now()
@@ -295,18 +305,18 @@ def _build_departure_advisory(item: dict) -> str | None:
     return None
 
 
-def _fire_item(item: dict):
+def _fire_item(item: dict[str, object]) -> None:
     """Fire a due item — directly or via LLM pipeline depending on item_type."""
     advisory = _build_departure_advisory(item)
-    message = item.get("message", "")
+    message = cast(str, item.get("message", ""))
     if advisory:
         message = f"{advisory}\n\n{message}"
-    source = item.get("item_type", "notification")
+    source = cast(str, item.get("item_type", "notification"))
     is_prompt = (source == "prompt")
 
     if source == "system":
         # System handler dispatch — capabilities register callbacks
-        handler_key = item.get("channel", item.get("topic", ""))
+        handler_key = cast(str, item.get("channel", item.get("topic", "")))
         handler = _SYSTEM_HANDLERS.get(handler_key)
         if handler:
             try:
@@ -323,11 +333,18 @@ def _fire_item(item: dict):
         if not message or not message.strip():
             logger.warning(f"{LOG_PREFIX} Skipping prompt item '{item.get('id', '?')}' — empty message")
             return
-
-        item_id = item.get('id', 'unknown')
-        from api.chat import dispatch_message
-        dispatch_message(message, source='scheduled', hidden_input=True)
-        logger.info(f"{LOG_PREFIX} Dispatched scheduled prompt '{item_id}': {message[:80]}")
+        # Fire asynchronously: the two-stage work runs the full LLM ACT loop and
+        # must NOT execute on the scheduler poll thread, which is mid-transaction
+        # claiming/marking items. A nested write commit on the shared thread-local
+        # connection would flush the in-progress 'fired' UPDATE and break the
+        # claim atomicity, and the poll lock would be held for the whole loop.
+        item_id = cast(str, item.get('id', 'unknown'))
+        threading.Thread(
+            target=_fire_scheduled_prompt,
+            args=(item_id, message),
+            daemon=True,
+            name=f"{_SCHEDULED_WORK_THREAD_PREFIX}-{item_id}",
+        ).start()
     else:
         # Direct delivery — bypass LLM, broadcast straight to WebSocket
         from services.markup import sanitize
@@ -340,6 +357,67 @@ def _fire_item(item: dict):
         logger.info(f"{LOG_PREFIX} Fired {source} (direct) '{item.get('id')}': {message[:80]}")
 
 
+def _run_scheduled_work_loop(message: str) -> str:
+    """Stage 1 — run the scheduled instruction on its own muted channel.
+
+    An independent ``MessageProcessor.process`` carries out the task with the
+    full tool surface on channel ``scheduled``. That channel resolves to the
+    MUTED source profile, so the work loop produces no episodes, facts, geo or
+    pattern signal — only the return hop (Stage 2) is encoded. Returns the work
+    loop's synthesis, or '' if it exhausted its budget without an answer.
+    """
+    from configs.channels import ScheduledConfig  # noqa: PLC0415
+    from services.message_processor import MessageProcessor  # noqa: PLC0415
+    from services.processor_config import ProcessorConfig  # noqa: PLC0415
+
+    config = ScheduledConfig(ProcessorConfig.PolicyChannel.SUBCONSCIOUS)
+    return MessageProcessor.process(message, config)
+
+
+def _fire_scheduled_prompt(item_id: str, message: str) -> None:
+    """Fire a scheduled prompt in two stages (modelled on the web delegates).
+
+    Stage 1 runs the task on the muted ``scheduled`` channel and returns its
+    worked result. Stage 2 hands that result to an ordinary user-channel turn via
+    ``dispatch_message`` — that turn is what reaches the UI and is episodically
+    encoded as a normal user episode. If the work loop produced nothing usable,
+    the original instruction is delivered so the user is never left silent.
+
+    Runs on its own daemon thread (``scheduled-work-<item_id>``) so the scheduler
+    poll transaction is never held during the LLM loop. A Stage-1 failure is
+    logged with context and re-raised — Stage 2 is never fired with a fabricated
+    success — so the failure surfaces rather than masquerading as a delivered task.
+    """
+    from api.chat import dispatch_message  # noqa: PLC0415
+
+    try:
+        result = _run_scheduled_work_loop(message)
+    except Exception:
+        logger.exception(
+            f"{LOG_PREFIX} Scheduled work loop raised for '{item_id}' — "
+            f"not firing return hop"
+        )
+        raise
+
+    if result.strip():
+        delivery = _SCHEDULED_DELIVERY_TEMPLATE.format(result=result)
+        logger.info(
+            f"{LOG_PREFIX} Scheduled work loop produced result for '{item_id}': "
+            f"{result[:80]}"
+        )
+    else:
+        # Work loop exhausted its budget or was cancelled — fall back to the raw
+        # instruction so the scheduled prompt still surfaces to the user.
+        delivery = message
+        logger.warning(
+            f"{LOG_PREFIX} Scheduled work loop empty for '{item_id}' — "
+            f"delivering raw instruction"
+        )
+
+    dispatch_message(delivery, source=_SCHEDULED_SOURCE, hidden_input=True)
+    logger.info(f"{LOG_PREFIX} Dispatched scheduled prompt '{item_id}': {message[:80]}")
+
+
 _RECURRENCE_MAP = {
     "daily": ("day", 1),
     "weekly": ("day", 7),
@@ -348,7 +426,7 @@ _RECURRENCE_MAP = {
 }
 
 
-def _in_quiet_hours(item: dict) -> bool:
+def _in_quiet_hours(item: dict[str, object]) -> bool:
     """Check if now is outside the item's active window (quiet hours)."""
     ws, we = item.get("window_start"), item.get("window_end")
     if not ws or not we:
@@ -356,10 +434,10 @@ def _in_quiet_hours(item: dict) -> bool:
     from services.locale_service import local_now
     now_local = local_now()
     current = (now_local.hour, now_local.minute)
-    return not (tuple(map(int, ws.split(":"))) <= current < tuple(map(int, we.split(":"))))
+    return not (tuple(map(int, cast(str, ws).split(":"))) <= current < tuple(map(int, cast(str, we).split(":"))))
 
 
-def _next_due(item: dict) -> datetime | None:
+def _next_due(item: dict[str, object]) -> datetime | None:
     """Return the next UTC due datetime for a recurring item, or None."""
     import calendar
     from services.locale_service import calculate_interval
@@ -370,7 +448,7 @@ def _next_due(item: dict) -> datetime | None:
         return None
 
     try:
-        due_at = parse_utc(item["due_at"])
+        due_at = parse_utc(cast(str, item["due_at"]))
     except Exception:
         return None
 
@@ -385,9 +463,9 @@ def _next_due(item: dict) -> datetime | None:
         day = min(due_at.day, calendar.monthrange(year, month)[1])
         return due_at.replace(year=year, month=month, day=day)
 
-    if recurrence.startswith("interval:"):
+    if cast(str, recurrence).startswith("interval:"):
         try:
-            mins = int(recurrence.split(":", 1)[1])
+            mins = int(cast(str, recurrence).split(":", 1)[1])
             next_utc, _ = calculate_interval(due_at, "minute", mins)
             return next_utc
         except (ValueError, IndexError):

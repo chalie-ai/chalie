@@ -36,7 +36,7 @@ Existing software helps users **do more**. Chalie helps users **think less about
 
 1. **Reasoning is primary, communication is output.** Responding to a user is one possible action, not the default. Goals, plans, and world state persist across sessions and evolve autonomously.
 
-2. **Memory creates intelligence.** Progressive abstraction — raw observation → compressed episode → generalized concept — produces accumulated wisdom no single model call can replicate. Decay ensures relevance. Uncertainty prevents hallucination.
+2. **Memory creates intelligence.** Progressive abstraction — raw observation → compressed episode → generalized concept — produces accumulated understanding no single model call can replicate. Decay ensures relevance. Uncertainty prevents hallucination.
 
 3. **Models are stacked, not swapped.** A classifier, a planner, a verifier, and a communicator — working in sequence through deterministic gates — reason better together than any single model alone.
 
@@ -54,7 +54,7 @@ Chalie unlocks problem classes that no single model can solve alone, regardless 
 
 | Capability | What it means |
 |---|---|
-| Persistent reasoning | Accumulated wisdom across months of compressed experience |
+| Persistent reasoning | Accumulated understanding across months of compressed experience |
 | Autonomous goal execution | Detect intent, form plans, execute across sessions, self-correct |
 | Proactive goal inference | Notice goals forming across casual mentions over weeks |
 | World model maintenance | Track evolving external state — prices, deadlines, availability |

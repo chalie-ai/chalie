@@ -5,6 +5,8 @@ data/models/gte-modernbert-base/onnx/model.onnx). They exist to catch
 regressions in the ONNX pipeline end-to-end: load, tokenize, infer, normalize.
 """
 
+from typing import cast
+
 import numpy as np
 import onnxruntime as ort
 import pytest
@@ -20,44 +22,36 @@ from services.embedding_service import (
 
 
 class TestEmbeddingServiceONNX:
-    """Verify gte-modernbert-base ONNX pipeline loads and produces correct output."""
-
     @classmethod
-    def setup_class(cls):
-        """Load the ONNX session once for all tests in this class."""
+    def setup_class(cls) -> None:
         _get_session_and_tokenizer()
 
     # ── model load ──────────────────────────────────────────────────────────
 
-    def test_session_is_loaded(self):
-        """Module-level _session must be non-None after load."""
+    def test_session_is_loaded(self) -> None:
         from services.embedding_service import _session
         assert _session is not None
 
-    def test_tokenizer_is_loaded(self):
-        """Module-level _tokenizer must be non-None after load."""
+    def test_tokenizer_is_loaded(self) -> None:
         from services.embedding_service import _tokenizer
         assert _tokenizer is not None
 
     # ── output shape and dtype ───────────────────────────────────────────────
 
-    def test_generate_embedding_returns_768d_list(self):
-        """Single embedding should be a 768-element list."""
+    def test_generate_embedding_returns_768d_list(self) -> None:
         svc = EmbeddingService()
         vec = svc.generate_embedding("hello world")
         assert isinstance(vec, list)
         assert len(vec) == 768
 
-    def test_generate_embedding_np_returns_float32_array(self):
-        """generate_embedding_np should return a (768,) float32 numpy array."""
+    def test_generate_embedding_np_returns_float32_array(self) -> None:
         svc = EmbeddingService()
         vec = svc.generate_embedding_np("numpy test")
         assert isinstance(vec, np.ndarray)
         assert vec.dtype == np.float32
         assert vec.shape == (768,)
 
-    def test_batch_embeddings_shape(self):
-        """Batch of N texts should return N embeddings, each (768,)."""
+    def test_batch_embeddings_shape(self) -> None:
         svc = EmbeddingService()
         vecs = svc.generate_embeddings_batch(["first", "second", "third"])
         assert len(vecs) == 3
@@ -65,21 +59,18 @@ class TestEmbeddingServiceONNX:
             assert hasattr(v, "shape")
             assert v.shape == (768,)
 
-    def test_empty_batch_returns_empty_list(self):
-        """Empty input to batch embeddings must return an empty list."""
+    def test_empty_batch_returns_empty_list(self) -> None:
         svc = EmbeddingService()
         assert svc.generate_embeddings_batch([]) == []
 
     # ── L2 normalisation ─────────────────────────────────────────────────────
 
-    def test_embedding_is_l2_normalized(self):
-        """Single embedding norm must be 1.0 (±1e-5)."""
+    def test_embedding_is_l2_normalized(self) -> None:
         svc = EmbeddingService()
         vec = np.array(svc.generate_embedding("normalize this"))
         assert abs(np.linalg.norm(vec) - 1.0) < 1e-5
 
-    def test_batch_embeddings_are_l2_normalized(self):
-        """Every vector in a batch must have norm 1.0 (±1e-5)."""
+    def test_batch_embeddings_are_l2_normalized(self) -> None:
         svc = EmbeddingService()
         vecs = svc.generate_embeddings_batch(["alpha", "beta", "gamma"])
         for v in vecs:
@@ -87,16 +78,14 @@ class TestEmbeddingServiceONNX:
 
     # ── semantic quality ──────────────────────────────────────────────────────
 
-    def test_semantically_similar_texts_score_higher(self):
-        """Cosine similarity of related words must exceed unrelated pair."""
+    def test_semantically_similar_texts_score_higher(self) -> None:
         svc = EmbeddingService()
         dog = np.array(svc.generate_embedding("dog"))
         puppy = np.array(svc.generate_embedding("puppy"))
         quantum = np.array(svc.generate_embedding("quantum entanglement"))
         assert np.dot(dog, puppy) > np.dot(dog, quantum)
 
-    def test_identical_texts_have_similarity_one(self):
-        """Same text encoded twice should have cosine similarity ≈ 1.0."""
+    def test_identical_texts_have_similarity_one(self) -> None:
         svc = EmbeddingService()
         a = np.array(svc.generate_embedding("the quick brown fox"))
         b = np.array(svc.generate_embedding("the quick brown fox"))
@@ -104,8 +93,7 @@ class TestEmbeddingServiceONNX:
 
     # ── singleton ─────────────────────────────────────────────────────────────
 
-    def test_get_embedding_service_returns_singleton(self):
-        """get_embedding_service() must return the same instance on repeated calls."""
+    def test_get_embedding_service_returns_singleton(self) -> None:
         assert get_embedding_service() is get_embedding_service()
 
 
@@ -118,9 +106,7 @@ class TestCompilingEpCachePrime:
         not any(ep in _COMPILING_EPS for ep in ort.get_available_providers()),
         reason="No compiling EP available — prime-pass code path is unreachable here.",
     )
-    def test_prime_pass_writes_cache_and_loads_session(self):
-        """Wipe the optimized cache, rebuild on a host with a compiling EP, and confirm
-        the prime-then-load flow completes without the 'compiled nodes' serializer crash."""
+    def test_prime_pass_writes_cache_and_loads_session(self) -> None:
         onnx_path = _model_dir() / "onnx" / "model.onnx"
         ort_ver = ort.__version__.replace(".", "_")
         optimized_path = _model_dir() / "onnx" / f"model.optimized.{ort_ver}.onnx"
@@ -142,7 +128,7 @@ class TestCompilingEpCachePrime:
                     "prime pass should have written the optimized graph to disk"
                 )
                 # Session must come up — historically crashed mid-construction on Mac.
-                assert session.get_providers(), "session loaded with at least one provider"
+                assert cast(ort.InferenceSession, session).get_providers(), "session loaded with at least one provider"
             finally:
                 del session
         finally:

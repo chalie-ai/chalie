@@ -36,7 +36,7 @@ def ensure_user_skills_dir() -> None:
     USER_SKILLS_DIR.mkdir(parents=True, exist_ok=True)
 
 
-def write_skill_file(path: Path, meta: dict) -> None:
+def write_skill_file(path: Path, meta: dict[str, str | int]) -> None:
     """Write a skill metadata dict to a YAML frontmatter file."""
     if not path.resolve().is_relative_to(USER_SKILLS_DIR.resolve()):
         raise ValueError("Path outside user skills directory")

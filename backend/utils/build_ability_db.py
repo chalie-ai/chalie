@@ -1,27 +1,16 @@
-"""
-Build or drift-check the ability search database.
-
-Walks backend/abilities/ for concrete Ability subclasses, embeds SUMMARY +
-EXAMPLES for each, and writes:
-  backend/abilities/assets/abilities.sqlite  — vector + FTS5 search index
-  backend/pre-trained/abilities_sha.json   — drift sidecar
-
-Run from backend/:
-    python -m utils.build_ability_db           # build (default)
-    python -m utils.build_ability_db --check   # drift check
-"""
-
 import argparse
 import hashlib
 import json
 import sqlite3
 import sys
 from pathlib import Path
+from typing import cast
 
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from abilities._ability import Ability  # noqa: E402
 from abilities._registry import AbilityRegistry  # noqa: E402
 from services.embedding_service import EmbeddingService  # noqa: E402
 from services.embedding_utils import pack_embedding  # noqa: E402
@@ -41,7 +30,6 @@ def _load_sqlite_vec(conn: sqlite3.Connection) -> None:
 
 
 def _create_schema(conn: sqlite3.Connection) -> None:
-    """Create tables in a fresh (empty) database."""
     conn.execute("""
         CREATE TABLE abilities (
             id      INTEGER PRIMARY KEY,
@@ -54,23 +42,27 @@ def _create_schema(conn: sqlite3.Connection) -> None:
             id         INTEGER PRIMARY KEY,
             ability_id INTEGER NOT NULL REFERENCES abilities(id) ON DELETE CASCADE,
             text       TEXT    NOT NULL,
-            kind       TEXT    NOT NULL CHECK(kind IN ('summary', 'example'))
+            kind       TEXT    NOT NULL CHECK(kind IN ('summary', 'example', 'name'))
         )
     """)
     conn.execute("CREATE INDEX idx_search_entries_ability ON ability_search_entries(ability_id)")
     conn.execute("CREATE VIRTUAL TABLE ability_search_vec USING vec0(embedding float[768])")
+    # Trigram tokenizer over the tool NAME only — the FTS branch of the discovery
+    # cascade is bm25-on-name (see _search.SearchableAbility). Summary/example rows
+    # feed the vec index alone, so they are NOT inserted into FTS below.
     conn.execute("""
         CREATE VIRTUAL TABLE ability_search_fts USING fts5(
             text,
             content='ability_search_entries',
-            content_rowid='id'
+            content_rowid='id',
+            tokenize='trigram'
         )
     """)
     conn.commit()
 
 
-def _compute_sha(ability) -> str:
-    raw = json.dumps([ability.SUMMARY, *ability.EXAMPLES], ensure_ascii=False)
+def _compute_sha(ability: Ability) -> str:
+    raw = json.dumps([ability.get_name(), ability.get_summary(), *ability.get_examples()], ensure_ascii=False)
     return hashlib.sha256(raw.encode()).hexdigest()
 
 
@@ -78,11 +70,8 @@ def _dedup_entries(
     entries: list[tuple[str, str]],
     embeddings: list[np.ndarray],
 ) -> tuple[list[tuple[str, str]], list[np.ndarray]]:
-    """Drop entry j when cos(emb[i], emb[j]) > 0.95 for any i < j.
-
-    Embeddings are L2-normalised, so dot-product == cosine similarity.
-    Entry order determines precedence: summary first, then examples in order.
-    """
+    # Embeddings are L2-normalised, so dot-product == cosine similarity.
+    # Entry order determines precedence: summary first, then examples in order.
     kept_entries: list[tuple[str, str]] = []
     kept_embs: list[np.ndarray] = []
 
@@ -95,17 +84,17 @@ def _dedup_entries(
     return kept_entries, kept_embs
 
 
-def _insert_ability(conn: sqlite3.Connection, emb_service: EmbeddingService, ability) -> int:
-    """Insert one ability and its search entries; return count of entries inserted."""
+def _insert_ability(conn: sqlite3.Connection, emb_service: EmbeddingService, ability: Ability) -> int:
+    summary = ability.get_summary()
     conn.execute(
         "INSERT INTO abilities(name, summary) VALUES (?, ?)",
-        (ability.NAME, ability.SUMMARY),
+        (ability.get_name(), summary),
     )
     ability_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
 
     raw_entries: list[tuple[str, str]] = [
-        (ability.SUMMARY, "summary"),
-        *((ex, "example") for ex in ability.EXAMPLES),
+        (summary, "summary"),
+        *((ex, "example") for ex in ability.get_examples()),
     ]
     texts = [e[0] for e in raw_entries]
     embeddings = list(emb_service.generate_embeddings_batch(texts))
@@ -122,26 +111,39 @@ def _insert_ability(conn: sqlite3.Connection, emb_service: EmbeddingService, abi
             "INSERT INTO ability_search_vec(rowid, embedding) VALUES (?, ?)",
             (entry_id, pack_embedding(emb)),
         )
-        conn.execute(
-            "INSERT INTO ability_search_fts(rowid, text) VALUES (?, ?)",
-            (entry_id, text),
-        )
+
+    # Index the tool name as a keyword-only (FTS) entry — it is a lexical handle,
+    # not semantic content, so it gets no embedding / vec row. The summary/example
+    # rows above are deliberately NOT in FTS: the cascade's bm25 rung is name-only.
+    name = ability.get_name()
+    conn.execute(
+        "INSERT INTO ability_search_entries(ability_id, text, kind) VALUES (?, ?, 'name')",
+        (ability_id, name),
+    )
+    name_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+    conn.execute("INSERT INTO ability_search_fts(rowid, text) VALUES (?, ?)", (name_id, name))
 
     conn.commit()
-    return len(entries)
+    return len(entries) + 1
 
 
 def _build_sha_map() -> dict[str, str]:
-    """SHA map covers every ability indexed in the search DB."""
-    return {a.NAME: _compute_sha(a) for a in AbilityRegistry.all() if not getattr(a, 'INTERNAL', False)}
+    """SHA map covers exactly the abilities indexed in the search DB — the
+    DISCOVERABLE ones. Non-discoverable abilities are dispatched programmatically
+    or pinned directly, never model-selected, so they carry no index/SHA entry."""
+    return {
+        a.get_name(): _compute_sha(a)
+        for a in AbilityRegistry.all()
+        if a.DISCOVERABLE
+    }
 
 
 def _build(db_path: Path, sha_path: Path) -> None:
-    # Index every ability — the search DB is the single source of truth for
-    # find_tools. Per-processor scoping (which abilities a given processor
-    # may discover) is gated at find_tools query time via the calling
-    # processor's DISCOVERABLE list.
-    abilities = [a for a in AbilityRegistry.all() if not getattr(a, 'INTERNAL', False)]
+    # Index exactly the DISCOVERABLE abilities — the search DB is the single
+    # source of truth for find_tools' query path, and the discoverable roster is
+    # global (no per-channel scoping). A non-discoverable ability is absent here
+    # by construction, so find_tools can never surface it semantically or by name.
+    abilities = [a for a in AbilityRegistry.all() if a.DISCOVERABLE]
     print(f"Found {len(abilities)} abilities — building {db_path.name}...")
 
     emb_service = EmbeddingService() if abilities else None
@@ -159,8 +161,8 @@ def _build(db_path: Path, sha_path: Path) -> None:
 
         total_entries = 0
         for ability in abilities:
-            n = _insert_ability(conn, emb_service, ability)
-            print(f"  {ability.NAME}: {n} entries")
+            n = _insert_ability(conn, cast("EmbeddingService", emb_service), ability)
+            print(f"  {ability.get_name()}: {n} entries")
             total_entries += n
     finally:
         conn.close()

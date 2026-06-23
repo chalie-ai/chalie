@@ -10,13 +10,36 @@ Sessions are stored in MemoryStore via services.auth_session_service.
 """
 
 import logging
+from collections.abc import Callable
+from typing import TYPE_CHECKING
 from functools import wraps
-from flask import request, jsonify, g
+from flask import request, jsonify, g, abort
+
+from services.feature_flags import internal_dev_enabled
+
+if TYPE_CHECKING:
+    from flask.typing import ResponseReturnValue
 
 logger = logging.getLogger(__name__)
 
 
-def require_auth(f):
+def internal_only(f: Callable[..., "ResponseReturnValue"]) -> Callable[..., "ResponseReturnValue"]:
+    """Hide a route unless in-development features are enabled for this process.
+
+    Answers 404 (not 403) when disabled, so a gated feature is indistinguishable
+    from one that does not exist. Outermost decorator, above ``require_auth``, so
+    the gate closes before authentication even runs.
+    """
+    @wraps(f)
+    def decorated(*args: object, **kwargs: object) -> "ResponseReturnValue":
+        if not internal_dev_enabled():
+            abort(404)
+        return f(*args, **kwargs)
+
+    return decorated
+
+
+def require_auth(f: Callable[..., "ResponseReturnValue"]) -> Callable[..., "ResponseReturnValue"]:
     """Decorator that enforces authentication via cookie session or bearer token.
 
     Tries the cookie session first (existing path).  If that fails, tries
@@ -27,18 +50,7 @@ def require_auth(f):
     Returns 401 only when both methods fail.
     """
     @wraps(f)
-    def decorated(*args, **kwargs):
-        """Validate the request via cookie or bearer token.
-
-        Args:
-            *args: Positional arguments forwarded to the wrapped view function.
-            **kwargs: Keyword arguments forwarded to the wrapped view function.
-
-        Returns:
-            The return value of the wrapped view function ``f`` on success, or
-            a ``({"error": "Authentication required"}, 401)`` JSON response if
-            both cookie and bearer auth fail.
-        """
+    def decorated(*args: object, **kwargs: object) -> "ResponseReturnValue":
         from services.auth_session_service import validate_session
 
         # Try cookie session first
@@ -59,6 +71,24 @@ def require_auth(f):
             logger.debug("[Auth] Bearer token validation failed: %s", e)
 
         return jsonify({"error": "Authentication required"}), 401
+
+    return decorated
+
+
+def _cookie_only(f: Callable[..., "ResponseReturnValue"]) -> Callable[..., "ResponseReturnValue"]:
+    """Restrict a route to cookie-authenticated requests (no bearer tokens).
+
+    Stacked under ``@require_auth``: once a request has authenticated, a bearer
+    wrapper has ``g.wrapper_id`` set while a human cookie session leaves it
+    ``None``. Used where only a human dashboard session may act — minting
+    wrapper tokens, reading the master login username for device pairing —
+    never a wrapper acting on its own behalf.
+    """
+    @wraps(f)
+    def decorated(*args: object, **kwargs: object) -> "ResponseReturnValue":
+        if getattr(g, "wrapper_id", None) is not None:
+            return jsonify({"error": "This action requires cookie session auth"}), 403
+        return f(*args, **kwargs)
 
     return decorated
 

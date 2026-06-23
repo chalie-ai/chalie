@@ -1,37 +1,30 @@
 # Baseline: 2249 passed, 65 failed, 499 errors (2026-03-27)
 # Errors are pre-existing: 15 files excluded (numpy import failure in this env),
 # and 499 test-setup errors caused by missing sqlite-vec extension (vec0 module).
-"""
-Shared test fixtures — full sandbox isolation.
-
-No real external connections. MemoryStore IS the production implementation.
-"""
-
 import shutil
+import sqlite3
+from collections.abc import Iterator
+from pathlib import Path
+from typing import TYPE_CHECKING
 from unittest.mock import patch
 
 import pytest
 
-
-# ── Pre-import modules that bind get_shared_db_service at module level ────────
-# `services.dmn_service` does `from services.database_service import
-# get_shared_db_service` at import time. If the very first import of
-# `services.dmn_service` happens INSIDE a `patch('services.database_service
-# .get_shared_db_service', ...)` block (e.g. tests that mock the DB before
-# referencing dmn_service), the local reference inside dmn_service binds
-# permanently to the MagicMock and never recovers — polluting every later
-# test that touches DMNService.
-#
-# Pre-importing here forces the binding to happen against the real function
-# before any test patches can interfere.
-def _preload_db_bound_modules():
-    try:
-        import services.dmn_service  # noqa: F401
-    except Exception:
-        pass  # If something fails to import in this env, individual tests will surface it.
+if TYPE_CHECKING:
+    from services.memory_store import MemoryStore
 
 
-_preload_db_bound_modules()
+# ── NOTE: get_shared_db_service import-time-binding hazard ────────────────────
+# Modules that do `from services.database_service import get_shared_db_service`
+# at module scope copy the function reference at import time. If such a module's
+# FIRST import happens inside a `patch('services.database_service
+# .get_shared_db_service', ...)` block, its local name binds permanently to the
+# MagicMock and never recovers — polluting every later test. The `db` fixture
+# below is immune: it rebinds the `_shared_db_service` singleton (not the
+# function). But if a test `patch()`es the function directly, also patch the
+# CONSUMING module's own reference — see test_policies_api.py (mcp_client_service).
+# A blanket pre-load guard used to live here; it rotted (pointed at the deleted
+# `services.dmn_service`) and was removed.
 
 
 # ── Real-SQLite fixtures ──────────────────────────────────────────
@@ -39,14 +32,16 @@ _preload_db_bound_modules()
 # Function-scoped `db`: fresh copy per test, patched as the singleton.
 
 @pytest.fixture(scope='session')
-def _db_template(tmp_path_factory):
+def _db_template(tmp_path_factory: pytest.TempPathFactory) -> str:
     """Build a fully-converged SQLite database file (once per session).
 
     Runs the real production boot sequence — SchemaConvergenceService.converge()
-    — against a temp file.  The result is a "golden" database that
+    plus the policy seed (PolicyManager.apply_seed, as run.py does at boot) —
+    against a temp file.  The result is a "golden" database that
     function-scoped fixtures copy cheaply.
     """
     from services.database_service import DatabaseService
+    from services.policy_manager import PolicyManager
     from services.schema_convergence_service import SchemaConvergenceService
 
     template_dir = tmp_path_factory.mktemp('db_template')
@@ -55,6 +50,18 @@ def _db_template(tmp_path_factory):
     db = DatabaseService(template_path)
     convergence = SchemaConvergenceService(db, embedding_dimensions=256)
     convergence.converge()
+    # Mirror production boot (run.py / consumer.py): converge() applies only
+    # static column DEFAULTs, never value backfills, so the deterministic
+    # redesign-column backfill runs as a separate step right after it. Without
+    # this the template diverges from a real boot — last_relevant_at / valid_from
+    # / valid_to stay NULL where production would have populated them.
+    convergence.backfill_redesign_columns()
+
+    # Mirror boot: seed the flat policy table so gated tool calls on non-chat
+    # channels (e.g. subconscious email.* / timer) resolve to their real defaults
+    # instead of an empty-table lazy 'ask'→deny. (PolicyManager.INTERNAL tools
+    # bypass the gate entirely and carry no seed rows.)
+    PolicyManager(db).apply_seed()
 
     # Flush WAL into main file so shutil.copy2 gets a self-contained copy
     with db.connection() as conn:
@@ -65,7 +72,7 @@ def _db_template(tmp_path_factory):
 
 
 @pytest.fixture
-def db(_db_template, tmp_path):
+def db(_db_template: str, tmp_path: Path) -> Iterator[sqlite3.Connection]:
     """Fresh, fully-migrated SQLite database — one per test.
 
     Copies the session-scoped template, creates a real DatabaseService, and
@@ -117,10 +124,21 @@ def db(_db_template, tmp_path):
         heartbeat_service._ctx = None
 
 
+# ── Vault backup isolation ────────────────────────────────────────
+# Any test that initialises the real vault (directly or via /auth/register)
+# writes a permanent vault_backup_*.json. Redirect the secure dir to a per-test
+# temp path so backups never accumulate in the repo's data/secure/.
+
+@pytest.fixture(autouse=True)
+def _isolate_vault_backups(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from services.file_mapper_service import FileMapperService
+    monkeypatch.setattr(FileMapperService, "_SECURE_DIR", tmp_path / "secure")
+
+
 # ── Non-DB mock fixtures ──────────────────────────────────────────
 
 @pytest.fixture
-def store():
+def store() -> "Iterator[MemoryStore]":
     """Isolated MemoryStore — same implementation used in production.
 
     Patches both the canonical ``get_shared_store()`` in memory_store and the
@@ -138,7 +156,7 @@ def store():
 
 
 @pytest.fixture
-def authed_client(db):
+def authed_client(db: sqlite3.Connection) -> Iterator[tuple[object, sqlite3.Connection, object]]:
     """Flask test client with real blueprints registered, auth bypassed.
 
     Uses the real ``db`` fixture (which patches ``get_shared_db_service``),
@@ -166,8 +184,7 @@ def authed_client(db):
 
     with patch('services.auth_session_service.validate_session', return_value=True), \
          patch('services.memory_store.get_shared_store', return_value=real_store), \
-         patch('services.memory_client.MemoryClientService.create_connection', return_value=real_store), \
-         patch('api._get_or_generate_session_secret', return_value='test-secret'):
+         patch('services.memory_client.MemoryClientService.create_connection', return_value=real_store):
         app = create_app()
         app.config['TESTING'] = True
         with app.test_client() as client:
@@ -175,7 +192,7 @@ def authed_client(db):
 
 
 @pytest.fixture
-def tmp_state_file(tmp_path):
+def tmp_state_file(tmp_path: Path) -> Path:
     """Temporary state file path for tools using JSON state."""
     state_file = tmp_path / "state.json"
     return state_file

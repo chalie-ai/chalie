@@ -1,24 +1,9 @@
-"""
-Shared embedding utilities.
-
-Provides ``pack_embedding()`` — the single implementation for converting
-embedding lists/tuples to binary blobs for sqlite-vec virtual tables.
-Previously duplicated across 10+ service files.
-"""
 
 import struct
-from typing import Optional
+from typing import Optional, cast
 
 
-def pack_embedding(embedding) -> Optional[bytes]:
-    """Pack a list/tuple/ndarray of floats into a binary blob for sqlite-vec.
-
-    Args:
-        embedding: Embedding data as list, tuple, numpy ndarray, bytes, or None.
-
-    Returns:
-        Packed bytes blob, or None if embedding is None.
-    """
+def pack_embedding(embedding: object) -> Optional[bytes]:
     if embedding is None:
         return None
     if isinstance(embedding, bytes):
@@ -29,4 +14,4 @@ def pack_embedding(embedding) -> Optional[bytes]:
     if hasattr(embedding, 'tolist'):
         flat = embedding.tolist()
         return struct.pack(f'{len(flat)}f', *flat)
-    return embedding
+    return cast(bytes, embedding)

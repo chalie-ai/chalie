@@ -1,257 +1,236 @@
-# Copyright 2026 Chalie AI
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     http://www.apache.org/licenses/LICENSE-2.0
-
-"""
-Providers — thin singleton wrapping provider resolution and LLM send.
-
-Resolves the active DB provider, sends messages, returns a raw LLMResponse.
-"""
+"""Providers — standalone orchestrator facade for all provider API communication."""
 
 import json
-import threading
 import logging
+import threading
 import time
+from typing import TYPE_CHECKING, cast
+
+if TYPE_CHECKING:
+    from services.llm_clients.base import ProviderClient
+    from services.provider_api import ProviderApiRequest, ProviderApiResponse
 
 logger = logging.getLogger(__name__)
 
-# Fraction of a provider's max_tokens that triggers continuity compaction.
-# Lives here so both the boot backfill and any future tuning have one source.
-COMPACTION_THRESHOLD_RATIO = 0.80
+# First-failure-warning flags (mirrors llm_request_logger._warned_on_failure).
+# Disk-full / DB-lock errors are surfaced at WARNING once per process; all
+# subsequent failures drop to DEBUG to avoid log spam.
+_log_call_warned = False
+_log_call_warn_lock = threading.Lock()
 
-# Hard ceiling on any provider's reported context window. Ensures the system
-# never builds a request payload exceeding this size, regardless of what the
-# upstream API reports (e.g. Gemini 1M, future models with larger windows).
+# Hard ceiling on any provider's reported context window.
 MAX_CONTEXT_WINDOW = 200_000
+
+# Hard wall-clock ceiling (seconds) for a single provider API call. No model
+# should take longer than this to answer one request; on expiry the call is
+# abandoned and surfaced as a genuine API failure. This is the ONLY provider
+# call timeout — the per-platform client timeouts were removed in favour of it.
+SINGLE_CALL_TIMEOUT_S = 300
+
+
+def resolve_thinking_mode(config_thinking_mode: str | None, override: str | None, level: str) -> str | None:
+    """Single precedence rule for a send's thinking level."""
+    return config_thinking_mode or override or level
 
 
 class Providers:
-    """Singleton provider gateway. Resolves provider by job, sends messages."""
+    """Standalone orchestrator facade — no mp, no scaffolding."""
 
-    _instance = None
-    _lock = threading.Lock()
+    # ── Resolution ──────────────────────────────────────────────────────────
 
-    @classmethod
-    def instance(cls):
-        if cls._instance is None:
-            with cls._lock:
-                if cls._instance is None:
-                    cls._instance = cls()
-        return cls._instance
+    def _resolve(self, provider_type: object = None) -> "ProviderClient":
+        """Return the ProviderClient for the given ProviderType."""
+        from services.provider_api import ProviderType, ProviderError  # noqa: PLC0415
+        from services.llm_clients.factory import build_client  # noqa: PLC0415
 
-    def send(self, user_prompt, system_prompt, job='unified', tools=None, cache_prefix=True, thinking_mode=None):
-        """Sync send. Returns LLMResponse."""
-        if tools is None:
-            tools = self._get_tools()
-        provider = self._resolve(job)
-        messages = [{"role": "user", "content": user_prompt}]
+        pt = provider_type or ProviderType.CHAT
+
+        if pt == ProviderType.VISION:
+            from services.provider_db_service import ProviderDbService  # noqa: PLC0415
+            from services.database_service import get_shared_db_service  # noqa: PLC0415
+            vp = ProviderDbService(get_shared_db_service()).get_vision_provider()
+            if not vp:
+                raise RuntimeError("VISION type requested but no vision provider configured")
+            return build_client(dict(vp))
+
+        if pt == ProviderType.DELEGATE:
+            from services.provider_db_service import ProviderDbService  # noqa: PLC0415
+            from services.database_service import get_shared_db_service  # noqa: PLC0415
+            dp = ProviderDbService(get_shared_db_service()).get_delegate_provider()
+            if not dp:
+                raise RuntimeError("DELEGATE type requested but no delegate or selected provider configured")
+            return build_client(dict(dp))
+
+        if pt != ProviderType.CHAT:
+            raise ProviderError(f"Unsupported provider type for send: {pt}")
+
+        from services.provider_cache_service import ProviderCacheService  # noqa: PLC0415
+        config = ProviderCacheService.get_selected_provider()
+        if not config:
+            providers = ProviderCacheService.get_providers()
+            config = dict(next(iter(providers.values()))) if providers else {}
+        return build_client(dict(config))
+
+    # ── Public API ──────────────────────────────────────────────────────────
+
+    def send(self, dto: "ProviderApiRequest") -> "ProviderApiResponse":
+        """Pre-flight check, call, telemetry — the single chokepoint."""
+        from services.provider_api import RequestOverCapError  # noqa: PLC0415
+
+        client = self._resolve(dto.type)
+        window = min(client.get_context_limit(), MAX_CONTEXT_WINDOW)
+        cap = window - max(int(0.10 * window), 8000)
+
+        measured = client.estimate_request_tokens(dto)
+        if measured >= cap:
+            raise RequestOverCapError(
+                f"Request ({measured} tokens) exceeds cap ({cap}); window={window}",
+                window=window,
+                measured=measured,
+                cap=cap,
+                provider=getattr(client, 'provider', ''),
+                model=getattr(client, 'model', ''),
+            )
+
         t0 = time.monotonic()
-        response = provider.send_messages(system_prompt, messages, cache_prefix, tools=tools, thinking_mode=thinking_mode)
+        response = self._call_bounded(client, dto)
         wall_ms = int((time.monotonic() - t0) * 1000)
-        self._log_after_call(system_prompt, messages, tools, job, response, wall_ms)
+        self._log_after_call(dto, response, wall_ms)
         return response
 
-    def send_messages(self, system_prompt, messages, job='unified', tools=None, cache_prefix=True, thinking_mode=None):
-        """Multi-turn send with a pre-built messages array. Returns LLMResponse.
+    def _call_bounded(self, client: "ProviderClient", dto: "ProviderApiRequest") -> "ProviderApiResponse":
+        """Run the single provider API call under a hard wall-clock ceiling.
 
-        Used by the tool loop in MessageProcessor to send growing message arrays
-        across iterations without rebuilding them from scratch.
-
-        Args:
-            system_prompt: Assembled system prompt string.
-            messages: Full messages array (role/content dicts).
-            job: Provider job name used to resolve the LLM config.
-            tools: Tool schemas. If None, Providers resolves defaults.
-            cache_prefix: Whether to apply prompt prefix caching.
-            thinking_mode: Native deliberation flag. None = disabled (default),
-                'medium' or 'high' = provider-native thinking enabled.
+        No model should take longer than SINGLE_CALL_TIMEOUT_S to answer one
+        request. The call runs on a daemon thread so a wedged socket can never
+        block the turn — on expiry it is abandoned and surfaced as a genuine API
+        failure. This is the only provider call timeout (the per-platform client
+        timeouts were removed); generic to every provider because it wraps
+        client.send, not any platform-specific path.
         """
-        if tools is None:
-            tools = self._get_tools()
-        provider = self._resolve(job)
-        t0 = time.monotonic()
-        response = provider.send_messages(system_prompt, messages, cache_prefix, tools=tools, thinking_mode=thinking_mode)
-        wall_ms = int((time.monotonic() - t0) * 1000)
-        self._log_after_call(system_prompt, messages, tools, job, response, wall_ms)
-        return response
+        from services.provider_api import ProviderResponseError  # noqa: PLC0415
 
-    def _log_after_call(self, system_prompt, messages, tools, job, response, wall_ms=None):
-        """Write the LLM request log file. Best-effort, never raises.
+        outcome: dict[str, "ProviderApiResponse"] = {}
+        failure: dict[str, BaseException] = {}
 
-        Called by both :meth:`send` and :meth:`send_messages` so every LLM
-        request goes through a single logging chokepoint. Also records the
-        call's latency_ms into the bound processor's MetricsAccumulator so
-        the per-turn timing snapshot reflects every LLM round-trip
-        (ACT iterations, exploration, compaction).
-        """
+        def _invoke() -> None:
+            try:
+                outcome["response"] = client.send(dto)
+            except BaseException as exc:  # noqa: BLE001 — re-raised in the calling thread
+                failure["error"] = exc
+
+        worker = threading.Thread(target=_invoke, name="provider-send", daemon=True)
+        worker.start()
+        worker.join(SINGLE_CALL_TIMEOUT_S)
+        if worker.is_alive():
+            raise ProviderResponseError(
+                f"Provider call exceeded the {SINGLE_CALL_TIMEOUT_S}s single-call ceiling and was abandoned",
+                provider=getattr(client, "provider", ""),
+            )
+        if failure:
+            raise next(iter(failure.values()))
+        return outcome["response"]
+
+    def measure(self, dto: "ProviderApiRequest") -> int:
+        """Return the estimated token cost of dto without sending."""
+        client = self._resolve(dto.type)
+        return client.estimate_request_tokens(dto)
+
+    def get_context_limit(self, provider_type: object = None) -> int:
+        """Declared context window for the active provider/model, hard-capped at MAX_CONTEXT_WINDOW."""
+        from services.provider_api import ProviderType  # noqa: PLC0415
+        pt = provider_type or ProviderType.CHAT
+
+        if pt == ProviderType.CHAT:
+            from services.provider_cache_service import ProviderCacheService  # noqa: PLC0415
+            config = ProviderCacheService.get_selected_provider() or {}
+            declared = config.get("max_tokens")
+            if declared and int(cast("int | str", declared)) > 0:
+                return min(int(cast("int | str", declared)), MAX_CONTEXT_WINDOW)
+
+        return min(self._resolve(pt).get_context_limit(), MAX_CONTEXT_WINDOW)
+
+    def selected_provider(self) -> "ProviderClient":
+        """Return the resolved CHAT provider client."""
+        return self._resolve()
+
+    # ── Telemetry ────────────────────────────────────────────────────────────
+
+    def _log_after_call(self, dto: "ProviderApiRequest", response: "ProviderApiResponse", wall_ms: int | None = None) -> None:
+        """Write the LLM request log file and persist per-call token accounting."""
+        # Per-call token accounting (was LoggingLLMService._log_llm_call).
+        # job_name is carried on the DTO via the _job_name metadata key (set
+        # by MessageProcessor.send() and the probe callers).
+        job_name = getattr(dto, '_job_name', None) or ''
+        usage_class = getattr(dto, '_usage_class', None) or 'chat'
+        if job_name:
+            try:
+                from services.llm_call_log_service import log_call  # noqa: PLC0415
+                log_call(
+                    job_name=job_name,
+                    provider=getattr(response, 'provider', 'unknown'),
+                    model=getattr(response, 'model', 'unknown'),
+                    tokens_input=getattr(response, 'tokens_input', 0) or 0,
+                    tokens_output=getattr(response, 'tokens_output', 0) or 0,
+                    tokens_cache_read=getattr(response, 'tokens_cache_read', 0) or 0,
+                    tokens_cache_create=getattr(response, 'tokens_cache_create', 0) or 0,
+                    tokens_thinking=getattr(response, 'tokens_thinking', 0) or 0,
+                    latency_ms=getattr(response, 'latency_ms', 0) or 0,
+                    usage_class=usage_class,
+                )
+            except Exception as exc:
+                global _log_call_warned  # noqa: PLW0603
+                with _log_call_warn_lock:
+                    first = not _log_call_warned
+                    _log_call_warned = True
+                if first:
+                    logger.warning("[LLM LOG] log_call failed (non-fatal): %s", exc)
+                else:
+                    logger.debug("[LLM LOG] log_call failed (non-fatal): %s", exc)
+
+        # File-based request log (verbatim prompt/response log).
         try:
-            from services.message_processor import current_processor
-            proc = current_processor()
-            if proc is not None:
-                # Prefer the gateway-level wall_ms so providers that forget to
-                # populate response.latency_ms (e.g. OllamaService prior to the
-                # parallel patch) still report accurately. Fall back to the
-                # provider-reported value if wall_ms wasn't passed (older
-                # in-tree callers).
-                latency_ms = wall_ms
-                if latency_ms is None:
-                    latency_ms = getattr(response, 'latency_ms', None)
-                if latency_ms is not None:
-                    try:
-                        proc._metrics.record_llm_call(latency_ms)
-                    except Exception as exc:
-                        logger.debug(f"[LLM LOG] record_llm_call failed: {exc}")
-        except Exception as exc:
-            logger.debug(f"[LLM LOG] processor lookup failed: {exc}")
-        try:
-            from services.llm_request_logger import log_llm_request
-            from services.message_processor import current_processor
-            proc = current_processor()
-            caller_name = type(proc).__name__ if proc is not None else 'unknown'
-            user_msg_str = self._render_messages_for_log(messages)
+            from services.llm_request_logger import log_llm_request  # noqa: PLC0415
             log_llm_request(
-                caller=caller_name,
-                job=job,
+                caller=getattr(dto, '_caller', 'Providers'),
+                job=job_name,
                 provider=getattr(response, 'provider', 'unknown'),
                 model=getattr(response, 'model', 'unknown'),
-                system_message=system_prompt or '',
-                user_message=user_msg_str,
-                tools=tools,
+                system_message=dto.system or '',
+                user_message=self._render_messages_for_log(dto.messages),
+                tools=cast("list[object] | None", dto.tools),
             )
-        except Exception as e:
-            logger.debug(f"[LLM LOG] Hook failed: {e}", exc_info=True)
+        except Exception as exc:
+            logger.debug("[LLM LOG] log_llm_request failed: %s", exc, exc_info=True)
 
     @staticmethod
-    def _render_messages_for_log(messages):
-        """Render the messages array verbatim for a log file.
+    def _record_send_counters(proc: object) -> None:
+        """Record per-send, per-channel turn counters (spec §4e)."""
+        try:
+            channel = getattr(getattr(proc, 'config', None), 'channel', '') or ''
+            from services.metrics_service import MetricsService  # noqa: PLC0415
+            m = MetricsService()
+            m.record_counter('requests_total')
+            if channel == 'dmn':
+                m.record_counter('dmn_turns_total')
+            elif channel.startswith('delegate:'):
+                m.record_counter('subagent_turns_total')
+        except Exception as exc:
+            logger.debug("[LLM LOG] send-counter record failed: %s", exc)
 
-        Fidelity rules:
-          * list-valued ``content`` (Anthropic content-block form) is
-            JSON-serialised so nothing is silently lost to ``str(list)``.
-          * Single-element user messages (the MessageProcessor v2 common case)
-            are written as the raw string with no ``[user]`` prefix — the spec
-            says "verbatim".
-          * Multi-element arrays keep the ``[role]`` prefix per entry so
-            reviewers can tell the messages apart in the log.
-        """
-        msgs = messages or []
+    @staticmethod
+    def _render_messages_for_log(messages: list[dict[str, object]] | None) -> str:
+        """Render the messages array verbatim for a log file."""
+        msgs: list[dict[str, object]] = messages or []
 
-        def _content_to_str(content):
+        def _content_to_str(content: object) -> str:
             if isinstance(content, str):
                 return content
             return json.dumps(content, ensure_ascii=False)
 
         if len(msgs) == 1 and msgs[0].get('role') == 'user':
             return _content_to_str(msgs[0].get('content', ''))
-
         return '\n\n'.join(
             f"[{m.get('role', '?')}] {_content_to_str(m.get('content', ''))}"
             for m in msgs
         )
-
-    def _resolve(self, job):
-        """Resolve the active DB provider and wrap it as an LLM service.
-
-        Injects _job_name (for LoggingLLMService) and _usage_class (for
-        llm_call_log tagging) into the config dict before calling
-        create_llm_service.
-        """
-        from services.provider_cache_service import ProviderCacheService
-        from services.llm_service import create_llm_service
-        from services.message_processor import current_processor
-        config = ProviderCacheService.get_selected_provider()
-        if not config:
-            providers = ProviderCacheService.get_providers()
-            if providers:
-                config = dict(next(iter(providers.values())))
-            else:
-                config = {}
-        config = dict(config)  # don't mutate the cached dict
-        config['_job_name'] = job
-        proc = current_processor()
-        if proc is not None:
-            config['_usage_class'] = proc.USAGE_CLASS
-        return create_llm_service(config)
-
-    def _get_tools(self):
-        """Get native tool schemas for the calling processor's ALWAYS_AVAILABLE scope.
-
-        Honours the lazy-load contract: DISCOVERABLE abilities are NEVER
-        pre-injected here.  Falls back to an empty list when no processor is
-        bound (e.g. compaction / episode-encoder paths whose own
-        ALWAYS_AVAILABLE is empty by design).  The hot path passes ``tools=``
-        explicitly via ``MessageProcessor.send()``; this method is the
-        safety-net default.
-        """
-        from services.message_processor import current_processor
-        proc = current_processor()
-        if proc is None:
-            return []
-        return proc.get_tools()
-
-    def get_context_limit(self, job='unified'):
-        """Delegate to resolved provider, capped to MAX_CONTEXT_WINDOW."""
-        return min(self._resolve(job).get_context_limit(), MAX_CONTEXT_WINDOW)
-
-    def get_compact_at(self) -> 'int | None':
-        """Return the persisted compact_at threshold for the globally selected provider.
-
-        Reads providers.compact_at from the row referenced by the
-        selected_provider_id setting. Falls back to the first active row when
-        no provider is explicitly selected.
-
-        Returns None if no active provider row exists or compact_at is NULL
-        (boot backfill should always populate it; a NULL value signals a
-        misconfigured provider row).
-        """
-        try:
-            from services.database_service import get_shared_db_service
-            from services.provider_db_service import ProviderDbService
-
-            db = get_shared_db_service()
-            service = ProviderDbService(db)
-            selected = service.get_selected_provider()
-            with db.connection() as conn:
-                if selected and selected.get('id'):
-                    row = conn.execute(
-                        "SELECT compact_at FROM providers WHERE id = ? AND is_active = 1",
-                        (selected['id'],),
-                    ).fetchone()
-                else:
-                    # Fallback: first active provider
-                    row = conn.execute(
-                        "SELECT compact_at FROM providers WHERE is_active = 1 ORDER BY id LIMIT 1",
-                    ).fetchone()
-            if row is None:
-                logger.warning("[COMPACTION] get_compact_at: no active provider row found")
-                return None
-            return row[0]  # may be None if column is NULL
-        except Exception as exc:
-            logger.warning("[COMPACTION] get_compact_at() failed: %s", exc)
-            return None
-
-    def estimate_payload_tokens(self, system_prompt: str, messages: list, tools: list = None, job: str = 'unified') -> int:
-        """Return an estimated token count for the actual request body the provider will send.
-
-        Calls the resolved provider's ``build_request_body`` method — the same
-        method used by ``send_messages`` — so the measurement reflects the
-        literal serialised payload rather than a synthesised approximation.
-        Falls back to 0 on any error (safe: threshold check skips compaction
-        rather than triggering a false-positive).
-        """
-        from services.llm_service import estimate_tokens
-        try:
-            provider = self._resolve(job)
-            body = provider.build_request_body(system_prompt, messages, tools)
-            return estimate_tokens(body)
-        except Exception as exc:
-            logger.warning("[COMPACTION] estimate_payload_tokens failed: %s", exc)
-            return 0
-
-    def count_tokens(self, messages, system_prompt='', tools=None, job='unified'):
-        """Delegate to resolved provider."""
-        return self._resolve(job).count_tokens(messages, system_prompt, tools)

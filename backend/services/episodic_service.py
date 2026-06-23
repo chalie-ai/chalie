@@ -7,60 +7,65 @@
 #     http://www.apache.org/licenses/LICENSE-2.0
 
 """
-Episodic Service — Episode storage + CRUD.
+Episodic Service — episode storage + CRUD.
 
-Retrieval lives in ``episodic_retrieval_service``. Super-episode clustering
-helpers (``find_super_candidates``, ``compute_novelty``, and their DB helpers)
-remain module-level in this file because they operate directly on the
-``episodes`` + ``episodes_vec`` tables and are used by ``transcript_service``
-during post-extraction consolidation.
+Retrieval lives in ``episodic_retrieval_service``. Super-episode
+clustering helpers (``find_super_candidates``, ``cluster_apex_embeddings``,
+``compute_novelty``, and their DB helpers) remain module-level in this
+file because they operate directly on the ``episodes`` + ``episodes_vec``
+tables and are used by ``transcript_service`` during post-extraction
+consolidation.
 """
 
 import json
 import logging
 import struct
 import uuid
-from typing import Optional
+from typing import TYPE_CHECKING, Optional, cast
+
+import numpy as np
 
 from services.database_service import DatabaseService
 from services.embedding_utils import pack_embedding
+from services.time_utils import utc_now
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
+    from typing import Protocol
+
+    class _Cursor(Protocol):
+        def execute(self, sql: str, params: Sequence[object] = ...) -> object: ...
+        def fetchone(self) -> object: ...
+        def fetchall(self) -> list[object]: ...
+        def close(self) -> None: ...
+
+    class _Conn(Protocol):
+        def cursor(self) -> _Cursor: ...
+        def execute(self, sql: str, params: Sequence[object] = ...) -> object: ...
+
+# Hierarchy roll-up clustering stack. Bidirectional dependency: declared in
+# pyproject.toml ("scikit-learn"/"umap-learn"/"scipy"/"numba"/"llvmlite") and
+# consumed only by ``find_super_candidates`` below. UMAP is the only reducer that
+# yields usable density clusters at our embedding scale; sklearn ships HDBSCAN.
+import umap
+from sklearn.cluster import HDBSCAN
 
 
 class EpisodicService:
     """Manages episode storage and CRUD (no retrieval — see
     ``episodic_retrieval_service.retrieve``)."""
 
-    def __init__(self, database_service: DatabaseService, config: dict = None):
-        """Initialize the episodic service.
-
-        Args:
-            database_service: DatabaseService instance for connection management.
-            config: Optional config dict (currently unused — retained for
-                back-compat with existing constructor call sites).
-        """
+    def __init__(self, database_service: DatabaseService, config: Optional[dict[str, object]] = None):
         self.db_service = database_service
         self.config = config or {}
 
     # ── Storage / CRUD ───────────────────────────────────────────────
 
-    def store_episode(self, episode_data: dict, *, embedding=None) -> str:
-        """Store a new episode in the database.
-
-        Required fields: gist, salience, channel.
-
-        Args:
-            episode_data: Episode fields dict. May include an 'embedding' key
-                for backwards compatibility, but the ``embedding`` kwarg takes
-                precedence when both are supplied.
-            embedding: Optional embedding vector (list of floats). When provided,
-                supersedes episode_data.get('embedding').
-
-        Returns:
-            UUID of the created episode.
-
-        Raises:
-            ValueError: If any required field is missing.
-        """
+    def store_episode(self, episode_data: dict[str, object], *, embedding: object = None) -> str:
+        """Required fields: gist, salience, channel. ``embedding`` kwarg
+        supersedes ``episode_data['embedding']`` when both are supplied.
+        Raises ``ValueError`` when a required field is missing. Returns the
+        new episode UUID."""
         required_fields = ['gist', 'salience', 'channel']
         for field in required_fields:
             if field not in episode_data:
@@ -79,20 +84,28 @@ class EpisodicService:
             with self.db_service.connection() as conn:
                 cursor = conn.cursor()
 
+                # Creation is a write-relevant event: seed the relevance clock
+                # (last_relevant_at) so absolute decay measures Δt from now.
+                now_iso = utc_now().isoformat()
                 cursor.execute("""
                     INSERT INTO episodes (
-                        id, gist, salience, channel,
+                        id, gist, salience, channel, level,
                         transcript_ids, transcript_id_start, transcript_id_end,
                         emotional_valence, emotional_arousal,
                         consolidated_from, storage_strength, retrieval_weight,
-                        location_lat, location_lon, location_name
+                        location_lat, location_lon, location_name,
+                        last_relevant_at
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, (
                     episode_id,
                     episode_data['gist'],
                     episode_data['salience'],
                     episode_data['channel'],
+                    # Hierarchy depth: 0=leaf, 1=super-episode, 2+=era digest.
+                    # Roll-up writes stamp this so per-level decay tau applies;
+                    # untagged callers default to leaf (0).
+                    episode_data.get('level', 0),
                     json.dumps(episode_data.get('transcript_ids', [])),
                     transcript_id_start,
                     transcript_id_end,
@@ -104,6 +117,7 @@ class EpisodicService:
                     episode_data.get('location_lat'),
                     episode_data.get('location_lon'),
                     episode_data.get('location_name'),
+                    now_iso,
                 ))
 
                 # Insert embedding into vec table if available
@@ -130,7 +144,7 @@ class EpisodicService:
             logging.error(f"Failed to store episode: {e}")
             raise
 
-    def _store_embedding(self, conn, episode_id: str, embedding):
+    def _store_embedding(self, conn: "_Conn", episode_id: str, embedding: object) -> None:
         """Store an embedding blob in the ``episodes_vec`` virtual table."""
         try:
             blob = pack_embedding(embedding)
@@ -141,7 +155,7 @@ class EpisodicService:
             cursor.execute("SELECT rowid FROM episodes WHERE id = ?", (episode_id,))
             row = cursor.fetchone()
             if row:
-                rowid = row[0]
+                rowid = cast(tuple[object, ...], row)[0]
                 cursor.execute(
                     "INSERT OR REPLACE INTO episodes_vec(rowid, embedding) VALUES (?, ?)",
                     (rowid, blob)
@@ -150,17 +164,8 @@ class EpisodicService:
         except Exception as e:
             logging.warning(f"Failed to store episode embedding: {e}")
 
-    def update_episode(self, episode_id: str, fields: dict, embedding=None) -> None:
-        """Update an existing episode with the provided field values.
-
-        Args:
-            episode_id: The episode UUID.
-            fields: Column→value mapping to apply. Empty dict is a no-op.
-            embedding: Optional new embedding vector to store in episodes_vec.
-
-        Raises:
-            Exception: Propagates any database error to the caller.
-        """
+    def update_episode(self, episode_id: str, fields: dict[str, object], embedding: object = None) -> None:
+        """Empty ``fields`` + no ``embedding`` is a no-op."""
         if not fields and embedding is None:
             return
 
@@ -176,11 +181,6 @@ class EpisodicService:
                 self._store_embedding(conn, episode_id, embedding)
 
     def soft_delete(self, episode_id: str) -> None:
-        """Soft-delete an episode by setting its ``deleted_at`` timestamp.
-
-        Raises:
-            Exception: Propagates any database error to the caller.
-        """
         with self.db_service.connection() as conn:
             conn.execute("""
                 UPDATE episodes
@@ -189,26 +189,61 @@ class EpisodicService:
             """, (episode_id,))
 
     def set_consolidated_into(self, leaf_id: str, super_id: str) -> None:
-        """Set the consolidated_into back-pointer on a leaf episode.
-
-        Args:
-            leaf_id: UUID of the leaf episode to update.
-            super_id: UUID of the super-episode (episodes.id TEXT).
-
-        Raises:
-            Exception: Propagates any database error to the caller.
-        """
+        """Consolidation is a write-relevant event for the leaf — its content
+        has just been rolled into a parent — so the relevance clock advances.
+        The child is also tombstoned: its information now lives in the
+        parent, so the decay engine collapses it onto the 7-day tombstone
+        tau and hard-deletes it once aged past the janitor threshold. Both
+        markers are written in one statement so a child can never carry a
+        back-pointer without a tombstone."""
+        now_iso = utc_now().isoformat()
         with self.db_service.connection() as conn:
             conn.execute(
-                "UPDATE episodes SET consolidated_into = ? WHERE id = ?",
-                (super_id, leaf_id),
+                "UPDATE episodes "
+                "SET consolidated_into = ?, last_relevant_at = ?, tombstoned_at = ? "
+                "WHERE id = ?",
+                (super_id, now_iso, now_iso, leaf_id),
             )
 
-    def get_episode_by_id(self, episode_id: str) -> Optional[dict]:
-        """Retrieve a single non-deleted episode by its UUID.
+    def fetch_fact_extraction_backlog(self, limit: int) -> list[dict[str, object]]:
+        """Return up to ``limit`` episodes awaiting fact extraction, oldest-first.
 
-        Also triggers an access count + storage strength boost.
+        The backlog is every non-deleted episode whose ``facts_extracted_at`` is
+        still NULL — both fresh episodes and the pre-feature fossils that drain on
+        the per-tick budget (self-healing convergence, no migration script).
+        Oldest-first (``created_at ASC``) gives the cheapest clean supersession
+        chains; bi-temporal invalidation keeps correctness order-independent.
+
+        Returns a list of ``{id, gist, created_at, channel}`` dicts.
         """
+        with self.db_service.connection() as conn:
+            rows = conn.execute(
+                "SELECT id, gist, created_at, channel FROM episodes "
+                "WHERE facts_extracted_at IS NULL AND deleted_at IS NULL "
+                "ORDER BY created_at ASC, id ASC "
+                "LIMIT ?",
+                (limit,),
+            ).fetchall()
+        return [
+            {'id': str(r[0]), 'gist': r[1], 'created_at': r[2], 'channel': r[3]}
+            for r in rows
+        ]
+
+    def set_facts_extracted_at(self, episode_id: str) -> None:
+        """Stamping ``facts_extracted_at`` removes the episode from the
+        backlog so the next tick advances. This is a durable progress
+        marker — a tick interrupted mid-budget re-processes at most the
+        un-stamped remainder."""
+        now_iso = utc_now().isoformat()
+        with self.db_service.connection() as conn:
+            conn.execute(
+                "UPDATE episodes SET facts_extracted_at = ? WHERE id = ?",
+                (now_iso, episode_id),
+            )
+
+    def get_episode_by_id(self, episode_id: str) -> Optional[dict[str, object]]:
+        """Pure read — fetching never mutates. Relevance advances only on
+        write-relevant events (creation, consolidation), not on access."""
         try:
             with self.db_service.connection() as conn:
                 cursor = conn.cursor()
@@ -230,9 +265,6 @@ class EpisodicService:
 
                 if not row:
                     return None
-
-                # Update access tracking
-                self._update_activation_score(episode_id)
 
                 episode = {
                     'id': str(row[0]),
@@ -263,39 +295,14 @@ class EpisodicService:
             logging.error(f"Failed to get episode by ID: {e}")
             return None
 
-    def _update_activation_score(self, episode_id: str):
-        """Boost storage_strength and reset retrieval_weight on access."""
-        try:
-            with self.db_service.connection() as conn:
-                cursor = conn.cursor()
-
-                cursor.execute("""
-                    UPDATE episodes
-                    SET access_count = access_count + 1,
-                        last_accessed_at = datetime('now'),
-                        storage_strength = MIN(storage_strength + 0.1, 10.0),
-                        retrieval_weight = MIN(retrieval_weight + 0.3, 1.0)
-                    WHERE id = ?
-                """, (episode_id,))
-
-                cursor.close()
-
-        except Exception as e:
-            logging.error(f"Failed to update activation score: {e}")
-
-
 # ── Module-level novelty helpers ─────────────────────────────────────────────
 
 
 def _fetch_novelty_comparison_set(channel: str) -> list[bytes]:
-    """Return embedding blobs for the (recent ∪ most-activated) apex episodes.
-
-    Comparison set = dedup(last-100 by created_at) ∪ (top-100 by access_count),
-    apex-only (consolidated_into IS NULL), same channel, not deleted.
-
-    Returns a list of raw binary blobs suitable for compute_novelty().
-    Returns [] on any failure — novelty will be 1.0 (fully novel).
-    """
+    """Comparison set = dedup(last-100 by created_at) ∪ (top-100 by
+    access_count), apex-only (consolidated_into IS NULL), same channel,
+    not deleted. Returns [] on any failure — novelty will be 1.0
+    (fully novel)."""
     from services.database_service import get_shared_db_service
     from services.episodic_constants import NOVELTY_RECENT_LIMIT, NOVELTY_ACTIVATION_LIMIT
 
@@ -356,85 +363,87 @@ def _unpack_blob(blob: bytes) -> list[float]:
     return list(struct.unpack(f'{n}f', blob))
 
 
-def _cosine_sim_blobs(blob_a: bytes, blob_b: bytes) -> float:
-    """Compute cosine similarity between two sqlite-vec binary blobs.
+def cluster_apex_embeddings(ep_ids: list[str], ep_embs: list[bytes]) -> list[list[str]]:
+    """L2-normalise rows → UMAP reduce to a low-dimensional space →
+    sklearn HDBSCAN. Episodes sharing an HDBSCAN label form a group;
+    the noise label (-1) is dropped so genuine outliers stay leaf apexes
+    (never force-assigned). Only groups of at least
+    ``HDBSCAN_MIN_CLUSTER_SIZE`` survive.
 
-    Embeddings from EmbeddingService are L2-normalised, so cosine similarity
-    is just the dot product of the unpacked float vectors.  Returns 0.0 if
-    either blob is malformed or the lengths differ.
+    Shared by the leaf round (level-0 → level-1) and the era round
+    (level-1 → level-2) — both feed the same matrix path. The native
+    blob dimension is read as-is (768 prod / 256 test); UMAP reduces
+    either to ``UMAP_N_COMPONENTS``.
+
+    Returns ID-lists, one per surviving cluster, deterministic (sorted
+    IDs within each list; outer list sorted by first ID). Empty when
+    the input is too small to cluster.
     """
-    try:
-        import numpy as np
-        vec_a = np.array(_unpack_blob(blob_a), dtype=np.float32)
-        vec_b = np.array(_unpack_blob(blob_b), dtype=np.float32)
-        if vec_a.shape != vec_b.shape or vec_a.shape[0] == 0:
-            return 0.0
-        # Embeddings are pre-normalised — dot product equals cosine sim.
-        return float(np.dot(vec_a, vec_b))
-    except Exception:
-        return 0.0
+    from services.episodic_constants import (
+        HDBSCAN_MIN_CLUSTER_SIZE,
+        UMAP_DISCONNECTION_DISTANCE,
+        UMAP_MIN_DIST,
+        UMAP_N_COMPONENTS,
+        UMAP_N_NEIGHBORS,
+        UMAP_RANDOM_SEED,
+    )
 
+    n = len(ep_ids)
+    # UMAP needs n_neighbors < n_samples; below the cluster floor nothing can form.
+    if n < HDBSCAN_MIN_CLUSTER_SIZE or n < 2:
+        return []
 
-def _build_adjacency(ep_embs: list[bytes], threshold: float) -> list[list[int]]:
-    """Return an undirected adjacency list for episodes whose cosine >= threshold."""
-    n = len(ep_embs)
-    adj: list[list[int]] = [[] for _ in range(n)]
-    for i in range(n):
-        for j in range(i + 1, n):
-            if _cosine_sim_blobs(ep_embs[i], ep_embs[j]) >= threshold:
-                adj[i].append(j)
-                adj[j].append(i)
-    return adj
+    matrix = np.vstack([
+        np.asarray(_unpack_blob(blob), dtype=np.float32) for blob in ep_embs
+    ])
+    # L2-normalise rows so UMAP's cosine metric sees unit vectors; guard the rare
+    # zero-norm row (division would yield NaN and poison the reducer).
+    norms = np.linalg.norm(matrix, axis=1, keepdims=True)
+    norms[norms == 0.0] = 1.0
+    matrix /= norms
 
+    reducer = umap.UMAP(
+        n_components=UMAP_N_COMPONENTS,
+        metric="cosine",
+        n_neighbors=min(UMAP_N_NEIGHBORS, n - 1),
+        min_dist=UMAP_MIN_DIST,
+        random_state=UMAP_RANDOM_SEED,
+        # Detach genuine off-topic isolates instead of force-embedding them into
+        # the nearest dense region; they then surface as HDBSCAN noise and stay
+        # leaf apexes rather than polluting a topically-pure roll-up.
+        disconnection_distance=UMAP_DISCONNECTION_DISTANCE,
+    )
+    reduced = reducer.fit_transform(matrix)
 
-def _bfs_components(adj: list[list[int]], n: int, min_cluster: int) -> list[list[int]]:
-    """Return connected components of size >= min_cluster via iterative BFS."""
-    visited: set[int] = set()
-    components: list[list[int]] = []
-    for start in range(n):
-        if start in visited:
+    labels = HDBSCAN(
+        min_cluster_size=HDBSCAN_MIN_CLUSTER_SIZE,
+        metric="euclidean",
+        copy=True,
+    ).fit_predict(reduced)
+
+    groups: dict[int, list[str]] = {}
+    for label, ep_id in zip(labels, ep_ids):
+        # Any negative label is noise: -1 is HDBSCAN's own outlier flag and -3 is
+        # a UMAP-disconnected isolate. Both stay leaf apexes — never force-grouped.
+        if label < 0:
             continue
-        component: list[int] = []
-        queue: list[int] = [start]
-        visited.add(start)
-        while queue:
-            node = queue.pop()
-            component.append(node)
-            for neighbour in adj[node]:
-                if neighbour not in visited:
-                    visited.add(neighbour)
-                    queue.append(neighbour)
-        if len(component) >= min_cluster:
-            components.append(component)
-    return components
+        groups.setdefault(int(label), []).append(ep_id)
+
+    clusters = sorted(
+        (sorted(ids) for ids in groups.values() if len(ids) >= HDBSCAN_MIN_CLUSTER_SIZE),
+        key=lambda c: c[0],
+    )
+    return clusters
 
 
-def find_super_candidates(channel: str) -> list[list[str]]:
-    """Return lists of episode IDs that form semantic clusters via connected components.
+def _fetch_apex_embeddings(channel: str, level: int) -> tuple[list[str], list[bytes]]:
+    """Return (ids, embedding blobs) for apex episodes at a given hierarchy level.
 
-    A cluster qualifies when:
-      - it contains at least SUPER_EPISODE_MIN_CLUSTER episodes,
-      - every member is connected (directly or transitively) to every other
-        member via edges where cosine >= SUPER_EPISODE_THRESHOLD.
-
-    Algorithm: build an undirected graph where nodes are apex episodes and
-    edges are pairs whose cosine >= SUPER_EPISODE_THRESHOLD. Emit each
-    connected component of size >= SUPER_EPISODE_MIN_CLUSTER as a cluster.
-    Clique-tightness is NOT required — a chain of related episodes counts as
-    one cluster even if the endpoints aren't direct neighbours. This matches
-    how humans group related memories and prevents the pair-threshold bar
-    from compounding against itself when min_cluster > 2.
-
-    Args:
-        channel: The episode channel to cluster.
-
-    Returns:
-        List of ID-lists (strings), each list being one connected component.
-        Components are non-overlapping and deterministic (sorted IDs within
-        each list; outer list sorted by first ID).
+    Apex = ``consolidated_into IS NULL AND deleted_at IS NULL`` with an embedding
+    present, scoped to one channel and one ``level`` (0 = leaves, 1 = supers).
+    Returns two index-aligned lists, or two empty lists on any query failure.
     """
     from services.database_service import get_shared_db_service
-    from services.episodic_constants import SUPER_EPISODE_THRESHOLD, SUPER_EPISODE_MIN_CLUSTER
 
     try:
         db = get_shared_db_service()
@@ -446,53 +455,55 @@ def find_super_candidates(channel: str) -> list[list[str]]:
                 FROM episodes e
                 JOIN episodes_vec ev ON ev.rowid = e.rowid
                 WHERE e.channel = ?
+                  AND e.level = ?
                   AND e.consolidated_into IS NULL
                   AND e.deleted_at IS NULL
                   AND ev.embedding IS NOT NULL
                 ORDER BY e.created_at ASC
                 """,
-                (channel,),
+                (channel, level),
             )
             rows = cursor.fetchall()
             cursor.close()
     except Exception as exc:
-        logging.warning(f"[SUPER_CLUSTER] find_super_candidates query failed: {exc}")
+        logging.warning(f"[SUPER_CLUSTER] apex fetch failed (channel={channel}, level={level}): {exc}")
+        return [], []
+
+    ep_ids = [str(r[0]) for r in rows]
+    ep_embs = [r[1] for r in rows]
+    return ep_ids, ep_embs
+
+
+def find_super_candidates(channel: str) -> list[list[str]]:
+    """Count trigger: NO-OP (return ``[]``) until the channel holds at
+    least ``APEX_COUNT_TRIGGER`` leaf apexes — a count trigger always
+    eventually fires, unlike the old similarity gate that never did.
+    At the trigger the leaves are density-clustered via UMAP→HDBSCAN;
+    HDBSCAN noise is dropped so outliers stay leaf apexes.
+
+    Returns a list of ID-lists (strings), one per surviving cluster.
+    Empty below the count trigger or when no cluster forms.
+    """
+    from services.episodic_constants import APEX_COUNT_TRIGGER
+
+    ep_ids, ep_embs = _fetch_apex_embeddings(channel, level=0)
+
+    if len(ep_ids) < APEX_COUNT_TRIGGER:
         return []
 
-    if not rows:
-        return []
-
-    ep_ids: list[str] = [str(r[0]) for r in rows]
-    ep_embs: list[bytes] = [r[1] for r in rows]
-
-    adj = _build_adjacency(ep_embs, SUPER_EPISODE_THRESHOLD)
-    raw_components = _bfs_components(adj, len(ep_ids), SUPER_EPISODE_MIN_CLUSTER)
-
-    clusters = sorted(
-        [sorted(ep_ids[m] for m in comp) for comp in raw_components],
-        key=lambda c: c[0],
-    )
+    clusters = cluster_apex_embeddings(ep_ids, ep_embs)
     if clusters:
         logging.info(
-            f"[SUPER_CLUSTER] {len(clusters)} component(s) found "
+            f"[SUPER_CLUSTER] {len(clusters)} cluster(s) found "
             f"(sizes={[len(c) for c in clusters]}, channel={channel})"
         )
     return clusters
 
 
-def compute_novelty(new_embedding, prior_embeddings: list[bytes]) -> float:
-    """Return semantic novelty of new_embedding vs the prior comparison set.
-
-    novelty = 1.0 - max(cosine_sim(new, prior) for prior in prior_embeddings)
-    Clamped to [0.0, 1.0]. Returns 1.0 (fully novel) if prior_embeddings is empty.
-
-    Args:
-        new_embedding: The new embedding as a list/array of floats (L2-normalized).
-        prior_embeddings: List of raw binary blobs from _fetch_novelty_comparison_set().
-
-    Returns:
-        Float in [0.0, 1.0]. Higher = more novel.
-    """
+def compute_novelty(new_embedding: object, prior_embeddings: list[bytes]) -> float:
+    """novelty = 1.0 - max(cosine_sim(new, prior) for prior in
+    prior_embeddings). Clamped to [0.0, 1.0]. Returns 1.0 (fully
+    novel) if prior_embeddings is empty."""
     if not prior_embeddings:
         return 1.0
 

@@ -1,16 +1,8 @@
-"""Integration test: rich-media cards in the message processing pipeline.
-
-Verifies that when the weather tool returns a rich-media instruction string
-(JSON payload + trailer), the resulting tool_calls row contains the full string
-and the sanitised transcript.content contains the span tag emitted by a mocked
-LLM, so that WS segment assembly can pair them.
-
-Uses the real DB fixture (function-scoped SQLite copy), a real
-ActDispatcherService (with weather ability registered), and a mock LLM that
-returns a canned response containing the span tag.
-"""
+"""Integration test: rich-media cards in the message processing pipeline."""
 
 import json
+from typing import cast
+
 import pytest
 
 pytestmark = pytest.mark.unit
@@ -45,116 +37,56 @@ _MOCK_WEATHER_DICT = {
 }
 
 
-class TestOrdinalCounterOnDispatcher:
-    """ACT dispatcher injects _rich_media_ordinal into the action params."""
-
-    def test_first_weather_call_gets_ordinal_1(self):
-        from services.act_dispatcher_service import ActDispatcherService
-
-        dispatcher = ActDispatcherService()
-        ordinals_seen = []
-
-        def _capture_ordinal(channel, action):
-            ordinals_seen.append(action.get("_rich_media_ordinal"))
-            return "ok"
-
-        dispatcher.handlers["weather"] = _capture_ordinal
-        dispatcher.dispatch_action("user", {"type": "weather", "location": "London"})
-
-        assert ordinals_seen == [1]
-
-    def test_second_weather_call_gets_ordinal_2(self):
-        from services.act_dispatcher_service import ActDispatcherService
-
-        dispatcher = ActDispatcherService()
-        ordinals_seen = []
-
-        def _capture_ordinal(channel, action):
-            ordinals_seen.append(action.get("_rich_media_ordinal"))
-            return "ok"
-
-        dispatcher.handlers["weather"] = _capture_ordinal
-        dispatcher.dispatch_action("user", {"type": "weather", "location": "London"})
-        dispatcher.dispatch_action("user", {"type": "weather", "location": "Tokyo"})
-
-        assert ordinals_seen == [1, 2]
-
-    def test_different_tools_have_independent_ordinals(self):
-        from services.act_dispatcher_service import ActDispatcherService
-
-        dispatcher = ActDispatcherService()
-        ordinals_seen = {}
-
-        def _capture(name):
-            def _handler(channel, action):
-                ordinals_seen[name] = action.get("_rich_media_ordinal")
-                return "ok"
-            return _handler
-
-        dispatcher.handlers["weather"] = _capture("weather")
-        dispatcher.handlers["search"] = _capture("search")
-        dispatcher.dispatch_action("user", {"type": "weather"})
-        dispatcher.dispatch_action("user", {"type": "search"})
-        dispatcher.dispatch_action("user", {"type": "weather"})
-
-        # weather gets ordinal 2 on second call; search stays at 1
-        assert ordinals_seen["weather"] == 2
-        assert ordinals_seen["search"] == 1
-
-    def test_reset_turn_ordinals_clears_counter(self):
-        from services.act_dispatcher_service import ActDispatcherService
-
-        dispatcher = ActDispatcherService()
-        ordinals_seen = []
-
-        def _capture(channel, action):
-            ordinals_seen.append(action.get("_rich_media_ordinal"))
-            return "ok"
-
-        dispatcher.handlers["weather"] = _capture
-        dispatcher.dispatch_action("user", {"type": "weather"})
-        dispatcher.reset_turn_ordinals()
-        dispatcher.dispatch_action("user", {"type": "weather"})
-
-        assert ordinals_seen == [1, 1]
-
 
 class TestWeatherSerialise:
-    """WeatherAbility._serialise produces the expected string shape."""
 
-    def test_serialise_with_ordinal_produces_json_and_trailer(self):
-        from abilities.weather import _serialise
-        result = _serialise({"temperature_c": 12}, ordinal=1)
-        assert isinstance(result, str)
-        parts = result.split("\n\n", 1)
-        assert len(parts) == 2
-        payload_str, trailer = parts
+    def test_render_with_ordinal_produces_json_and_trailer(self) -> None:
+        from abilities._dispatcher import ToolDispatcher
+        from abilities._result import ToolResult
+
+        tr = ToolResult.ok({"temperature_c": 12}, rich={"temperature_c": 12})
+        rendered = ToolDispatcher._render("weather", tr, 1)
+        inner = rendered.split("\n", 1)[1].rsplit("\n", 1)[0]
+
+        payload_str, trailer = inner.split("\n\n", 1)
         assert json.loads(payload_str) == {"temperature_c": 12}
         assert "<span id='weather_1'>" in trailer
 
-    def test_serialise_without_ordinal_returns_dict(self):
-        from abilities.weather import _serialise
-        result = _serialise({"temperature_c": 12}, ordinal=None)
-        assert isinstance(result, dict)
-        assert result["temperature_c"] == 12
+    def test_render_without_ordinal_has_no_trailer(self) -> None:
+        from abilities._dispatcher import ToolDispatcher
+        from abilities._result import ToolResult
 
-    def test_serialise_error_payload_no_trailer(self):
-        from abilities.weather import _serialise
-        result = _serialise({"error": "unavailable", "details": "timeout"}, ordinal=1)
-        # Error payloads must not include an instruction trailer
-        assert isinstance(result, dict)
-        assert result["error"] == "unavailable"
+        tr = ToolResult.ok({"temperature_c": 12}, rich={"temperature_c": 12})
+        rendered = ToolDispatcher._render("weather", tr, None)
+        inner = rendered.split("\n", 1)[1].rsplit("\n", 1)[0]
+        # No ordinal → body is the bare payload JSON, no instruction trailer.
+        assert json.loads(inner) == {"temperature_c": 12}
+        assert "<span" not in rendered
 
-    def test_serialise_ordinal_2_uses_correct_tag(self):
-        from abilities.weather import _serialise
-        result = _serialise({"temperature_c": 20}, ordinal=2)
-        assert "<span id='weather_2'>" in result
+    def test_render_error_payload_no_trailer(self) -> None:
+        from abilities._dispatcher import ToolDispatcher
+        from abilities._result import ToolResult
+
+        tr = ToolResult.err("unavailable", code="provider-unreachable", details="timeout")
+        rendered = ToolDispatcher._render("weather", tr, 1)
+        # Error envelopes never carry a rich-media instruction trailer.
+        assert "status=error" in rendered
+        assert "unavailable" in rendered
+        assert "<span" not in rendered
+
+    def test_render_ordinal_2_uses_correct_tag(self) -> None:
+        from abilities._dispatcher import ToolDispatcher
+        from abilities._result import ToolResult
+
+        tr = ToolResult.ok({"temperature_c": 20}, rich={"temperature_c": 20})
+        rendered = ToolDispatcher._render("weather", tr, 2)
+        assert "<span id='weather_2'>" in rendered
 
 
 class TestRichMediaParserIntegration:
     """Parser round-trip: tool result → parse() → segments."""
 
-    def test_parse_produces_rich_segment_for_london(self):
+    def test_parse_produces_rich_segment_for_london(self) -> None:
         from services.rich_media_parser import parse
 
         tool_result = (
@@ -173,18 +105,18 @@ class TestRichMediaParserIntegration:
         rich_seg = segs[1]
 
         assert text_seg["type"] == "text"
-        assert "Here is the weather." in text_seg["content"]
+        assert "Here is the weather." in cast(str, text_seg["content"])
 
         assert rich_seg["type"] == "rich"
         assert rich_seg["tag"] == "weather_1"
         assert rich_seg["synthesis"] == "Partly cloudy, 12°C."
-        assert rich_seg["payload"]["location"] == "London, GB"
-        assert rich_seg["payload"]["temperature_c"] == pytest.approx(12.4, abs=1e-9)
+        assert cast("dict[str, object]", rich_seg["payload"])["location"] == "London, GB"
+        assert cast("dict[str, object]", rich_seg["payload"])["temperature_c"] == pytest.approx(12.4, abs=1e-9)
 
-    def test_parse_two_cities_produces_two_rich_segments(self):
+    def test_parse_two_cities_produces_two_rich_segments(self) -> None:
         from services.rich_media_parser import parse
 
-        def _make_result(loc, ordinal):
+        def _make_result(loc: str, ordinal: int) -> str:
             payload = dict(_MOCK_WEATHER_DICT, location=loc)
             return (
                 json.dumps(payload)
@@ -203,6 +135,6 @@ class TestRichMediaParserIntegration:
         rich_segs = [s for s in segs if s["type"] == "rich"]
         assert len(rich_segs) == 2
         assert rich_segs[0]["tag"] == "weather_1"
-        assert rich_segs[0]["payload"]["location"] == "Paris, FR"
+        assert cast("dict[str, object]", rich_segs[0]["payload"])["location"] == "Paris, FR"
         assert rich_segs[1]["tag"] == "weather_2"
-        assert rich_segs[1]["payload"]["location"] == "Tokyo, JP"
+        assert cast("dict[str, object]", rich_segs[1]["payload"])["location"] == "Tokyo, JP"

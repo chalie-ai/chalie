@@ -1,4 +1,4 @@
-"""Feature tests for the TKT-557 geo-tagging components.
+"""Feature tests for the geo-tagging components.
 
 Three services are covered:
 
@@ -14,7 +14,10 @@ geopy is required. Tests are skipped if the package is absent so the CI
 baseline is not broken in environments that haven't installed it yet.
 """
 
+import sqlite3
+from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
+from typing import cast
 
 import pytest
 
@@ -41,11 +44,8 @@ _requires_geopy = pytest.mark.skipif(
 # ---------------------------------------------------------------------------
 
 class TestDistanceKm:
-    """distance_km returns the geodesic distance between two real coordinates."""
-
     @_requires_geopy
-    def test_valletta_to_sliema_approx_2km(self):
-        """Valletta (35.8989, 14.5146) → Sliema (35.9121, 14.5013) ≈ 1.5–3 km."""
+    def test_valletta_to_sliema_approx_2km(self) -> None:
         from services.geo_utils import distance_km
 
         dist = distance_km(35.8989, 14.5146, 35.9121, 14.5013)
@@ -55,8 +55,7 @@ class TestDistanceKm:
         )
 
     @_requires_geopy
-    def test_same_point_is_zero(self):
-        """Identical coordinates return 0."""
+    def test_same_point_is_zero(self) -> None:
         from services.geo_utils import distance_km
 
         dist = distance_km(35.8989, 14.5146, 35.8989, 14.5146)
@@ -69,10 +68,8 @@ class TestDistanceKm:
 # ---------------------------------------------------------------------------
 
 class TestEstimateTravelMinutes:
-    """estimate_travel_minutes converts distance and speed to minutes."""
-
     @_requires_geopy
-    def test_zero_speed_returns_zero(self):
+    def test_zero_speed_returns_zero(self) -> None:
         """Zero speed guard returns 0.0 rather than raising ZeroDivisionError."""
         from services.geo_utils import estimate_travel_minutes
 
@@ -86,23 +83,21 @@ class TestEstimateTravelMinutes:
 # ---------------------------------------------------------------------------
 
 class TestEstimateSpeedFromHistory:
-    """estimate_speed_from_history derives median speed from location snapshots."""
 
-    def _entry(self, lat, lon, ts):
+    def _entry(self, lat: float, lon: float, ts: datetime) -> dict[str, object]:
         return {"location": {"lat": lat, "lon": lon}, "saved_at": ts.isoformat()}
 
     @_requires_geopy
-    def test_valid_entries_return_plausible_speed(self):
-        """Two points ~1.9 km apart with 4-minute gap → speed near 28–29 km/h."""
+    def test_valid_entries_return_plausible_speed(self) -> None:
         from services.geo_utils import estimate_speed_from_history
 
         t0 = datetime(2026, 1, 1, 10, 0, 0, tzinfo=timezone.utc)
         t1 = t0 + timedelta(minutes=4)
 
-        speed = estimate_speed_from_history([
+        speed = estimate_speed_from_history(cast(list[object], [
             self._entry(35.8989, 14.5146, t0),
             self._entry(35.9121, 14.5013, t1),
-        ])
+        ]))
 
         assert speed is not None
         # Valletta–Sliema at ~1.9 km in 4 min ≈ 28.5 km/h
@@ -117,55 +112,68 @@ class TestEstimateSpeedFromHistory:
         (lambda s: [s._entry(35.8989, 14.5146, datetime(2026, 1, 1, 10, 0, 0, tzinfo=timezone.utc)),
                     s._entry(35.9121, 14.5013, datetime(2026, 1, 1, 10, 0, 0, tzinfo=timezone.utc))], "identical timestamps"),
     ], ids=["empty", "single", "gps_noise", "same_ts"])
-    def test_degenerate_inputs_return_none(self, entries_fn, reason):
-        """Degenerate history inputs return None."""
+    def test_degenerate_inputs_return_none(
+        self,
+        entries_fn: Callable[["TestEstimateSpeedFromHistory"], list[dict[str, object]]],
+        reason: str,
+    ) -> None:
         from services.geo_utils import estimate_speed_from_history
 
-        result = estimate_speed_from_history(entries_fn(self))
+        result = estimate_speed_from_history(cast(list[object], entries_fn(self)))
         assert result is None, f"Expected None for {reason}, got {result}"
 
 
 # ---------------------------------------------------------------------------
-# Test 4: GeoPatternProcessor — constructor and static methods
+# Test 4: geo-pattern window honours the per-source channel allowlist
 # ---------------------------------------------------------------------------
 
-class TestGeoPatternProcessor:
-    """GeoPatternProcessor sets expected class attributes and prompt content."""
+def _seed_located_row(db: sqlite3.Connection, *, channel: str, role: str = "user", content: str) -> None:
+    db.execute(
+        "INSERT INTO transcript (channel, role, content, created_at, "
+        "location_lat, location_lon, location_name) "
+        "VALUES (?, ?, ?, datetime('now'), 35.9, 14.5, 'Valletta')",
+        (channel, role, content),
+    )
+    db.commit()
 
-    def test_constructor_sets_expected_attributes(self, db):
-        """GeoPatternProcessor constructor sets CHANNEL, ROLE, SKIP_TRANSCRIPT_WRITE,
-        MAX_ITERATIONS, ALWAYS_AVAILABLE, and DISCOVERABLE."""
-        from services.geo_pattern_processor import GeoPatternProcessor
 
-        proc = GeoPatternProcessor(window_start=0, window_end=100)
+class TestGeoPatternWindowChannelFilter:
+    """The geo-pattern window feeds the model ONLY rows whose source profile
+    marks them as user geo-activity. A located row on a muted/non-user channel
+    (or a compaction row) must never reach the model — the prior behaviour fed
+    every located row regardless of channel, so a delegate's coordinates could
+    masquerade as the user being somewhere.
 
-        assert proc.CHANNEL == "geo_pattern"
-        assert proc.ROLE == "background"
-        assert proc.SKIP_TRANSCRIPT_WRITE is True
-        assert proc.MAX_ITERATIONS == 30
-        assert "save_pattern" in proc.ALWAYS_AVAILABLE
-        assert "save_graph" in proc.ALWAYS_AVAILABLE
-        assert proc.DISCOVERABLE == []
+    Driven through the real ``_geo_pattern_load_transcript_block`` (the exact
+    builder GeoConfig.get_user_prompt calls) over mixed-channel fixtures.
+    """
 
-    def test_get_system_prompt_contains_geo_keywords(self, db):
-        """get_system_prompt() references location-tagging, save_pattern, save_graph,
-        and geo-spatial — the four pillars of the GPP's task description."""
-        from services.geo_pattern_processor import GeoPatternProcessor
+    def test_only_user_geoactivity_rows_enter_the_window(self, db: sqlite3.Connection) -> None:
+        from configs.channels.geo_pattern import _geo_pattern_load_transcript_block
 
-        proc = GeoPatternProcessor(window_start=0, window_end=100)
-        prompt = proc.get_system_prompt()
+        # One row per representative channel, all located, all in the window.
+        _seed_located_row(db, channel="user", content="USER at the gym")
+        _seed_located_row(db, channel="dmn", content="DMN reflection located")
+        _seed_located_row(db, channel="delegate:research", content="DELEGATE located")
+        _seed_located_row(db, channel="external-agent:bob", content="EXT located")
+        _seed_located_row(db, channel="user", role="compaction", content="COMPACTION located")
 
-        assert "location-tagged" in prompt, "System prompt must mention 'location-tagged'"
-        assert "save_pattern" in prompt, "System prompt must reference the save_pattern tool"
-        assert "save_graph" in prompt, "System prompt must reference the save_graph tool"
-        assert "geo" in prompt.lower(), "System prompt must reference geo-spatial context"
+        last_id = db.execute("SELECT MAX(id) FROM transcript").fetchone()[0]
+        block = _geo_pattern_load_transcript_block(0, last_id)
 
-    def test_existing_patterns_block_empty_db_returns_none_yet(self, db):
-        """_existing_patterns_block() with no behavioral_pattern rows returns '(none yet)'."""
-        from services.geo_pattern_processor import GeoPatternProcessor
+        # Only the user geo-activity row is admitted.
+        assert "USER at the gym" in block
+        # dmn is HEAVY for episodes but NOT user geo-activity (geo_is_user=False).
+        assert "DMN reflection located" not in block
+        # Muted / non-user channels and compaction rows are excluded.
+        assert "DELEGATE located" not in block
+        assert "EXT located" not in block
+        assert "COMPACTION located" not in block
 
-        proc = GeoPatternProcessor(window_start=0, window_end=100)
-        block = proc._existing_patterns_block()
+    def test_existing_patterns_block_empty_db_returns_none_yet(self, db: sqlite3.Connection) -> None:
+        from configs.channels import _pattern_existing_patterns_block
+
+        block = _pattern_existing_patterns_block()
 
         assert block == "(none yet)", (
             f"Expected '(none yet)' on empty DB, got: {block!r}"

@@ -1,18 +1,7 @@
 """
-Telemetry Service — in-process event collection and summarisation.
+Telemetry module-level event constants and a process singleton collector.
 
-Provides a lightweight :class:`TelemetryCollector` that:
-
-- Exposes a direct :meth:`TelemetryCollector.record` entry-point for services
-  that want to emit telemetry events.
-- Maintains an in-memory ring buffer (``collections.deque``, ``maxlen=1000``)
-  so memory footprint is bounded even under high event rates.
-- Provides :meth:`TelemetryCollector.get_summary` for the observability
-  endpoint at ``/system/observability/telemetry``.
-
-A process-level singleton is accessed via :func:`get_telemetry_collector`.
-
-Typical usage by a service::
+Usage by a service::
 
     from services.telemetry_service import get_telemetry_collector, MEMORY_RECALL
 
@@ -22,7 +11,7 @@ Typical usage by a service::
 import logging
 import threading
 from collections import deque, defaultdict
-from typing import Any, Dict, List, Optional
+from typing import Dict, List, Optional, cast
 
 from utils.logger import get_correlation_id
 
@@ -57,7 +46,7 @@ SURPRISING_CONNECTION: str = "surprising_connection"
 
 #: Ordered tuple of all telemetry event type constants — used for bus
 #: subscription and summary initialisation.
-ALL_TELEMETRY_EVENT_TYPES: tuple = (
+ALL_TELEMETRY_EVENT_TYPES: tuple[str, ...] = (
     MEMORY_RECALL,
     CONTEXT_ASSEMBLY,
     PROACTIVE_TRIGGER,
@@ -90,7 +79,7 @@ class TelemetryCollector:
         """Initialise an empty collector with an unbounded per-type counter and
         a ring buffer capped at 1,000 entries.
         """
-        self._buffer: deque = deque(maxlen=1000)
+        self._buffer: deque[Dict[str, object]] = deque(maxlen=1000)
         self._counts: Dict[str, int] = defaultdict(int)
         self._lock: threading.Lock = threading.Lock()
 
@@ -98,7 +87,7 @@ class TelemetryCollector:
     # Public API
     # ------------------------------------------------------------------
 
-    def record(self, event_type: str, payload: Dict[str, Any]) -> None:
+    def record(self, event_type: str, payload: Dict[str, object]) -> None:
         """Record a telemetry event into the ring buffer.
 
         Stamps the event with an ISO 8601 UTC timestamp and, if a
@@ -120,7 +109,7 @@ class TelemetryCollector:
         timestamp = utc_now().isoformat()
         correlation_id: Optional[str] = get_correlation_id()
 
-        entry: Dict[str, Any] = {
+        entry: Dict[str, object] = {
             "event_type": event_type,
             "timestamp": timestamp,
             "payload": dict(payload),
@@ -137,7 +126,7 @@ class TelemetryCollector:
             extra={"event_type": event_type, "correlation_id": correlation_id},
         )
 
-    def get_summary(self) -> Dict[str, Any]:
+    def get_summary(self) -> Dict[str, object]:
         """Return a summary of all recorded telemetry events.
 
         The summary is keyed by event type and includes:
@@ -170,18 +159,18 @@ class TelemetryCollector:
         with self._lock:
             # Snapshot the buffer to avoid holding the lock while building
             # the per-type recent lists.
-            snapshot: List[Dict[str, Any]] = list(self._buffer)
+            snapshot: List[Dict[str, object]] = list(self._buffer)
             counts_snapshot: Dict[str, int] = dict(self._counts)
 
         # Build per-type recent lists from the snapshot (newest-first)
-        recent_by_type: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
+        recent_by_type: Dict[str, List[Dict[str, object]]] = defaultdict(list)
         for entry in reversed(snapshot):
-            etype = entry["event_type"]
+            etype = cast(str, entry["event_type"])
             if len(recent_by_type[etype]) < 3:
                 recent_by_type[etype].append(entry)
 
         # Assemble the final summary, ensuring all canonical types are present
-        summary: Dict[str, Any] = {}
+        summary: Dict[str, object] = {}
         all_types = set(ALL_TELEMETRY_EVENT_TYPES) | set(counts_snapshot.keys())
         for etype in sorted(all_types):
             summary[etype] = {

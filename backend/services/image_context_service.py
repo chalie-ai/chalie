@@ -1,16 +1,16 @@
-"""
-Image Context Service — Analyze images attached to chat messages.
+"""Image Context Service — analyze images attached to chat messages via local RapidOCR.
 
-Uses local RapidOCR for text extraction. No external provider APIs required.
-
-Safety invariants applied before OCR:
-  - EXIF metadata stripped (removes GPS, device IDs, timestamps)
-  - Dimensions normalized to max 2048px
+Safety invariants applied before OCR: EXIF stripped (removes GPS, device
+IDs, timestamps); dimensions normalised to max 2048 px.
 """
 
 import io
 import logging
 import time
+from typing import TYPE_CHECKING, cast
+
+if TYPE_CHECKING:
+    from PIL.Image import Image as PILImage
 
 logger = logging.getLogger(__name__)
 
@@ -21,19 +21,13 @@ _MAX_DIMENSION = 2048
 _MIN_TEXT_LENGTH = 10
 
 
-def analyze(image_bytes: bytes, _mime_type: str = 'image/png') -> dict:
-    """
-    Analyze an image for chat context via local OCR.
-
-    Applies safety preprocessing (EXIF strip, dimension normalization) then
+def analyze(image_bytes: bytes, _mime_type: str = 'image/png') -> dict[str, object]:
+    """Applies safety preprocessing (EXIF strip, dimension normalisation) then
     runs RapidOCR for text extraction. No external providers needed.
 
-    Returns:
-        dict with keys:
-            ocr_text (str): Extracted text (empty string if none)
-            has_text (bool): Whether meaningful text was found
-            analysis_time_ms (int): Total analysis duration
-            error (str | None): Error message if analysis failed
+    ``vision_used`` is always False — ``analyze`` is OCR-only; the vision
+    path lives in the vision tool / describe_image() core, for which this
+    is the no-vision-provider fallback.
     """
     start = time.time()
 
@@ -42,19 +36,20 @@ def analyze(image_bytes: bytes, _mime_type: str = 'image/png') -> dict:
         'has_text': False,
         'analysis_time_ms': 0,
         'error': None,
+        'vision_used': False,
     }
 
     try:
         from PIL import Image
 
-        img = Image.open(io.BytesIO(image_bytes))
+        img = cast("PILImage", Image.open(io.BytesIO(image_bytes)))
         img = _strip_exif(img)
         img = _normalize_dimensions(img)
 
         from services.ocr_service import _extract_text
         ocr_text = _extract_text(img)
         result['ocr_text'] = ocr_text.strip() if ocr_text else ''
-        result['has_text'] = len(result['ocr_text']) >= _MIN_TEXT_LENGTH
+        result['has_text'] = len(cast(str, result['ocr_text'])) >= _MIN_TEXT_LENGTH
 
     except ImportError:
         result['error'] = 'Pillow (PIL) not installed'
@@ -69,12 +64,9 @@ def analyze(image_bytes: bytes, _mime_type: str = 'image/png') -> dict:
 
 # ─── Preprocessing ───────────────────────────────────────────────────────────
 
-def _strip_exif(img) -> object:
-    """Return a copy of the PIL Image with EXIF metadata removed.
-
-    Uses a BytesIO PNG round-trip: PNG encoder does not write EXIF by default.
-    Falls back to returning the original image unchanged on any error.
-    """
+def _strip_exif(img: "PILImage") -> "PILImage":
+    """Uses a BytesIO PNG round-trip: PNG encoder does not write EXIF by
+    default. Falls back to the original image unchanged on any error."""
     try:
         from PIL import Image
         buf = io.BytesIO()
@@ -88,7 +80,7 @@ def _strip_exif(img) -> object:
         return img
 
 
-def _normalize_dimensions(img) -> object:
+def _normalize_dimensions(img: "PILImage") -> "PILImage":
     """Downscale image so neither dimension exceeds _MAX_DIMENSION."""
     try:
         w, h = img.size

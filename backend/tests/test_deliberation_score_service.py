@@ -1,14 +1,7 @@
-"""Feature tests for DeliberationScoreService.
-
-Asserts bucketing behaviour and None semantics against the real shipped
-deliberation_score head and real encoder. The existing
-test_onnx_inference_service.py already covers predict_scalar range/NaN guards
-and the empty-string/whitespace None path; those tests are NOT duplicated here.
-
-Skips automatically when the encoder ONNX is absent from disk.
-
-pytestmark applies pytest.mark.integration to every test in this file.
-"""
+"""Feature tests for DeliberationScoreService — bucketing behaviour and None semantics
+against real shipped deliberation_score head and encoder. test_onnx_inference_service.py
+covers predict_scalar range/NaN guards; those tests are NOT duplicated here. Skips when
+the encoder ONNX is absent from disk."""
 
 import math
 import os
@@ -28,7 +21,7 @@ _ENCODER_PATH = os.path.join(
 )
 
 
-def _require_encoder():
+def _require_encoder() -> None:
     if not os.path.exists(_ENCODER_PATH):
         pytest.skip("gte-modernbert-base encoder not on disk — skipping encoder-dependent test")
 
@@ -48,10 +41,8 @@ _MED_THR = 0.46
 
 
 class TestDeliberationScoreServiceBucketing:
-    """Real-world bucketing: conversational inputs land low, complex prompts land high."""
 
-    def test_short_conversational_input_scores_below_medium_threshold(self):
-        """'hi' is pure chit-chat — classifier should score it below the medium bucket."""
+    def test_short_conversational_input_scores_below_medium_threshold(self) -> None:
         _require_encoder()
         svc = _real_svc()
         result = svc.classify("hi")
@@ -62,8 +53,7 @@ class TestDeliberationScoreServiceBucketing:
             f"'hi' scored {result:.4f} — expected < {_MED_THR} (low bucket)"
         )
 
-    def test_complex_multistep_prompt_scores_above_high_threshold(self):
-        """A deep, multi-constraint engineering prompt should land in the high bucket."""
+    def test_complex_multistep_prompt_scores_above_high_threshold(self) -> None:
         _require_encoder()
         svc = _real_svc()
         prompt = (
@@ -79,9 +69,7 @@ class TestDeliberationScoreServiceBucketing:
             f"Complex engineering prompt scored {result:.4f} — expected > {_HIGH_THR} (high bucket)"
         )
 
-    def test_simple_factual_question_scores_between_low_and_high(self):
-        """A one-step factual question scores somewhere in the low-to-medium range,
-        not at the top of the scale — verifies the classifier is not saturating."""
+    def test_simple_factual_question_scores_between_low_and_high(self) -> None:
         _require_encoder()
         svc = _real_svc()
         result = svc.classify("What is the capital of France?")
@@ -93,13 +81,7 @@ class TestDeliberationScoreServiceBucketing:
         )
 
     @pytest.mark.parametrize("reflexive_input", ["hmm", "ok", "interesting"])
-    def test_reflexive_single_word_inputs_score_at_or_below_half(self, reflexive_input):
-        """Reflexive single-word acknowledgments must score <= 0.5.
-
-        Migrated from deleted nightly scenario 013 — classifier input/output
-        contracts belong here as deterministic unit-style assertions, not in
-        end-to-end nightly flow tests.
-        """
+    def test_reflexive_single_word_inputs_score_at_or_below_half(self, reflexive_input: str) -> None:
         _require_encoder()
         svc = _real_svc()
         result = svc.classify(reflexive_input)
@@ -112,9 +94,7 @@ class TestDeliberationScoreServiceBucketing:
             f"(reflexive single-word inputs must land in the low band)"
         )
 
-    def test_classify_two_different_inputs_produce_different_scores(self):
-        """'hi' and a complex prompt must not return the same scalar — confirms the
-        classifier is actually discriminating, not outputting a constant."""
+    def test_classify_two_different_inputs_produce_different_scores(self) -> None:
         _require_encoder()
         svc = _real_svc()
         low = svc.classify("thanks")

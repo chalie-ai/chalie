@@ -1,128 +1,172 @@
-"""SavePattern — record a repeating behavioural pattern in the data graph.
-
-Reachable when a processor lists ``"save_pattern"`` in its ``ALWAYS_AVAILABLE``
-or ``DISCOVERABLE`` tool scope (currently just ``PatternMatchProcessor``).
-
-Budget + decay-tracking state lives on the calling processor (read via
-``current_processor()``).  PMP initialises ``_save_pattern_calls = 0`` and
-``_touched_pattern_ids = set()`` in ``__init__``; this Ability uses ``getattr``
-defaults so it remains usable from any processor that opts it in.
-"""
+"""SavePattern — record a repeating behavioural pattern in the data graph."""
 import json
-import logging
 import math
 import re
+import sqlite3
+from typing import ClassVar, cast
 
-from abilities._base import Ability
+from abilities._budget import BudgetCappedAbility
+from abilities._params import Keys
+from abilities._pattern_provenance import pattern_provenance
+from abilities._result import ToolResult
 from services.database_service import get_shared_db_service
-from services.message_processor import current_processor
 from services.time_utils import utc_now
 from utils.data_utils import parse_json_column
-
-logger = logging.getLogger(__name__)
 
 _NAME_PATTERN = re.compile(r"[a-z][a-z0-9_]*")
 _VALID_FREQUENCIES = frozenset({"daily", "weekly", "weekday", "weekend", "ad-hoc"})
 
-_BUDGET_CAP = 20
+# One-line recovery hint carrying a minimal, fully-valid example so a weak model
+# can self-correct without re-reading the schema (parity with save_graph).
+_EXAMPLE_HINT = (
+    "use a snake_case name, e.g. name=morning_run frequency=weekday "
+    "summary=user runs on weekdays evidence_transcript_ids=[12, 18]"
+)
 
 
-class SavePattern(Ability):
-    NAME = "save_pattern"
-    SEARCH_TOOLTIP = "record behavioural patterns"
+class SavePattern(BudgetCappedAbility):
     SYSTEM = True
-    SUMMARY = (
-        "Record a repeating behavioural pattern observed in the user's "
-        "transcripts. Use snake_case names; reuse existing names exactly "
-        "when reinforcing (case-sensitive). Requires at least 2 evidence "
-        "transcript ids."
-    )
-    EXAMPLES = [
-        "user goes for a run every weekday morning",
-        "user reads before bed most nights",
-        "user checks email first thing each morning",
-        "user has coffee around 07:30 on workdays",
-        "user meditates on weekends",
-        "user takes a walk after lunch on weekdays",
-    ]
-    INPUT_SCHEMA = {
+    DISCOVERABLE: ClassVar[bool] = False  # pattern-write tool; pinned on the pattern configs only
+
+    BUDGET_CAP: ClassVar[int] = 20
+
+    # Action-less single-purpose tool: the dispatcher pre-gate rejects a MISSING
+    # or empty name/frequency/summary/evidence_transcript_ids as
+    # code=missing-params before run() is reached (precedent: save_graph.py,
+    # file_permissions.py). The pre-gate is truthiness-based, so an empty
+    # evidence list is rejected there too, while whitespace-only name/summary
+    # residue still reaches run().
+    ACTION_REQUIRED: ClassVar[dict[str, tuple[str, ...]]] = {
+        "": (Keys.name, Keys.frequency, Keys.summary, Keys.evidence_transcript_ids)
+    }
+
+    def get_name(self) -> str:
+        return "save_pattern"
+
+    def get_summary(self) -> str:
+        return (
+            "Record a repeating behavioural pattern observed in the user's "
+            "transcripts. Use snake_case names; reuse existing names exactly "
+            "when reinforcing (case-sensitive). Requires at least 2 evidence "
+            "transcript ids."
+        )
+
+    def get_examples(self) -> list[str]:
+        return [
+            "user goes for a run every weekday morning",
+            "user reads before bed most nights",
+            "user checks email first thing each morning",
+            "user has coffee around 07:30 on workdays",
+            "user meditates on weekends",
+            "user takes a walk after lunch on weekdays",
+        ]
+
+    def get_search_tooltip(self) -> str:
+        return "record behavioural patterns"
+
+    _PARAMETERS: ClassVar[dict[str, object]] = {
         "type": "object",
         "properties": {
-            "name": {
+            Keys.name: {
                 "type": "string",
                 "description": "snake_case identifier; mirror existing names when reinforcing.",
             },
-            "frequency": {
+            Keys.frequency: {
                 "type": "string",
                 "enum": ["daily", "weekly", "weekday", "weekend", "ad-hoc"],
             },
-            "time_anchor": {
+            Keys.time_anchor: {
                 "type": "string",
                 "description": "Optional anchor: '07:00' | 'evening' | 'weekends' | '' if not applicable.",
             },
-            "summary": {
+            Keys.summary: {
                 "type": "string",
                 "description": "One concise sentence describing the habitual behavior. Not a narrative or episode summary.",
             },
-            "evidence_transcript_ids": {
+            Keys.evidence_transcript_ids: {
                 "type": "array",
                 "items": {"type": "integer"},
             },
         },
-        "required": ["name", "frequency", "summary", "evidence_transcript_ids"],
+        "required": [Keys.name, Keys.frequency, Keys.summary, Keys.evidence_transcript_ids],
     }
-    TIMEOUT = 10
 
-    def execute(self, channel: str, params: dict, telemetry: dict | None) -> dict:
-        proc = current_processor()
-        count = getattr(proc, "_save_pattern_calls", 0) if proc is not None else 0
-        if count >= _BUDGET_CAP:
-            return {"budget_exceeded": True, "tool": "save_pattern"}
+    def get_parameters(self) -> dict[str, object]:
+        return self._PARAMETERS
 
-        validated = _validate_pattern_params(params)
-        if "error" in validated:
-            return validated
+    def run(self, params: dict[str, object]) -> ToolResult:
+        capped = self.budget_exceeded()
+        if capped is not None:
+            return capped
 
-        row_id, confidence_out = _upsert_pattern(validated)
+        # The validation ORDER and rules are frozen (regex → frequency set →
+        # min-2 evidence); only the failure shape changes from a phantom-success
+        # dict to a loud ToolResult error, in parity with save_graph.
+        name = (cast("str", params.get(Keys.name) or "")).strip()
+        # The dispatcher pre-gate is truthiness-based, so a whitespace-only name
+        # slips past it as a non-empty string and must be rejected here
+        # (precedent: save_graph.py, file_permissions.py).
+        if not name:
+            return ToolResult.err(
+                "Missing required parameter(s): name.",
+                code="missing-params",
+                valid=("name", "frequency", "summary", "evidence_transcript_ids"),
+            )
+        if not _NAME_PATTERN.fullmatch(name):
+            return ToolResult.err(
+                f"Invalid pattern name {name!r}; must be snake_case.",
+                code="invalid-param",
+                hint=_EXAMPLE_HINT,
+            )
 
-        if proc is not None:
-            proc._save_pattern_calls = count + 1
-            touched = getattr(proc, "_touched_pattern_ids", None)
-            if touched is not None:
-                touched.add(row_id)
+        frequency = params.get(Keys.frequency, "")
+        if frequency not in _VALID_FREQUENCIES:
+            return ToolResult.err(
+                f"Unknown frequency {frequency!r}; not a recognised cadence.",
+                code="invalid-param",
+                valid=tuple(sorted(_VALID_FREQUENCIES)),
+                hint=_EXAMPLE_HINT,
+            )
 
-        return {"ok": True, "name": validated["name"], "confidence": confidence_out, "row_id": row_id}
+        summary = (cast("str", params.get(Keys.summary) or "")).strip()
+        if not summary:
+            return ToolResult.err(
+                "Missing required parameter(s): summary.",
+                code="missing-params",
+                valid=("name", "frequency", "summary", "evidence_transcript_ids"),
+            )
 
+        evidence = params.get(Keys.evidence_transcript_ids)
+        n_evidence = len(evidence) if isinstance(evidence, list) else 0
+        if n_evidence < 2:
+            return ToolResult.err(
+                f"At least 2 evidence transcript ids are required; got {n_evidence}.",
+                code="invalid-param",
+                hint="provide at least 2 evidence_transcript_ids from the transcript window",
+            )
 
-def _validate_pattern_params(params: dict) -> dict:
-    """Validate a save_pattern request. Returns the normalized fields, or an error dict."""
-    name = params.get("name", "")
-    if not name or not _NAME_PATTERN.fullmatch(name):
-        return {"error": "invalid_name", "name": name}
-    frequency = params.get("frequency", "")
-    if frequency not in _VALID_FREQUENCIES:
-        return {"error": "invalid_frequency", "frequency": frequency}
-    summary = (params.get("summary") or "").strip()
-    if not summary:
-        return {"error": "empty_summary"}
-    evidence = params.get("evidence_transcript_ids") or []
-    if not isinstance(evidence, list) or len(evidence) < 2:
-        return {
-            "error": "insufficient_evidence",
-            "required_min": 2,
-            "got": len(evidence) if isinstance(evidence, list) else 0,
+        validated = {
+            "name": name,
+            "frequency": frequency,
+            "summary": summary,
+            "evidence": evidence,
+            "time_anchor": params.get(Keys.time_anchor, "") or "",
         }
-    return {
-        "name": name,
-        "frequency": frequency,
-        "summary": summary,
-        "evidence": evidence,
-        "time_anchor": params.get("time_anchor", "") or "",
-    }
+        proc = self.mp
+        source = pattern_provenance(proc)
+        row_id, confidence_out, reinforced = _upsert_pattern(validated, source)
+
+        body: dict[str, object] = {"saved": 1}
+        if reinforced:
+            body["reinforced"] = 1
+        body["name"] = validated["name"]
+        body["confidence"] = confidence_out
+        body["row_id"] = row_id
+        return ToolResult.ok(body)
 
 
-def _upsert_pattern(validated: dict) -> tuple[int, float]:
-    """Insert or merge a behavioral_pattern row in data_graph. Returns (row_id, confidence)."""
+def _upsert_pattern(validated: dict[str, object], source: str) -> tuple[int, float, bool]:
+    """``source`` is the provenance of the pass that produced this pattern"""
     now_iso = utc_now().isoformat()
     db = get_shared_db_service()
 
@@ -135,18 +179,23 @@ def _upsert_pattern(validated: dict) -> tuple[int, float]:
         ).fetchone()
 
         if existing:
-            return _update_existing_pattern(conn, existing, validated, now_iso)
-        return _insert_new_pattern(conn, validated, now_iso)
+            row_id, conf = _update_existing_pattern(conn, existing, validated, now_iso, source)
+            return row_id, conf, True
+        row_id, conf = _insert_new_pattern(conn, validated, now_iso, source)
+        return row_id, conf, False
 
 
-def _update_existing_pattern(conn, existing, validated: dict, now_iso: str) -> tuple[int, float]:
-    existing_id, existing_value = existing[0], existing[1]
+def _update_existing_pattern(
+    conn: sqlite3.Connection, existing: sqlite3.Row, validated: dict[str, object], now_iso: str, source: str
+) -> tuple[int, float]:
+    existing_id = cast("int", existing[0])
+    existing_value = existing[1]
     old_strength = float(existing[2]) if existing[2] is not None else 0.5
     old_evidence = int(existing[3]) if existing[3] is not None else 1
-    prev = parse_json_column(existing_value)
-    prev_conf = float(prev.get("confidence") or 0.0)
+    prev = cast("dict[str, object]", parse_json_column(existing_value))
+    prev_conf = float(cast("float", prev.get("confidence") or 0.0))
     new_conf = min(10.0, prev_conf + 7.0)
-    merged_evidence = list(dict.fromkeys([*(prev.get("evidence_transcript_ids") or []), *validated["evidence"]]))
+    merged_evidence = list(dict.fromkeys([*(cast("list[object]", prev.get("evidence_transcript_ids") or [])), *cast("list[object]", validated["evidence"])]))
     new_value = {
         "name": validated["name"],
         "frequency": validated["frequency"],
@@ -164,12 +213,12 @@ def _update_existing_pattern(conn, existing, validated: dict, now_iso: str) -> t
         "SET value=?, last_confirmed_at=?, last_accessed_at=?, source=?, "
         "    evidence_count=?, storage_strength=?, retrieval_weight=1.0 "
         "WHERE id=?",
-        (json.dumps(new_value), now_iso, now_iso, "pattern_match", new_evidence, new_strength, existing_id),
+        (json.dumps(new_value), now_iso, now_iso, source, new_evidence, new_strength, existing_id),
     )
     return existing_id, new_conf
 
 
-def _insert_new_pattern(conn, validated: dict, now_iso: str) -> tuple[int, float]:
+def _insert_new_pattern(conn: sqlite3.Connection, validated: dict[str, object], now_iso: str, source: str) -> tuple[int, float]:
     new_value = {
         "name": validated["name"],
         "frequency": validated["frequency"],
@@ -177,12 +226,12 @@ def _insert_new_pattern(conn, validated: dict, now_iso: str) -> tuple[int, float
         "summary": validated["summary"],
         "confidence": 7.0,
         "last_seen_at": now_iso,
-        "evidence_transcript_ids": list(validated["evidence"]),
+        "evidence_transcript_ids": list(cast("list[object]", validated["evidence"])),
     }
     cur = conn.execute(
         "INSERT INTO data_graph "
         "(kind, key, value, first_seen_at, last_confirmed_at, source, active) "
         "VALUES (?, ?, ?, ?, ?, ?, 1)",
-        ("behavioral_pattern", validated["name"], json.dumps(new_value), now_iso, now_iso, "pattern_match"),
+        ("behavioral_pattern", validated["name"], json.dumps(new_value), now_iso, now_iso, source),
     )
-    return cur.lastrowid, 7.0
+    return cast("int", cur.lastrowid), 7.0

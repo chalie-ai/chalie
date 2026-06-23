@@ -5,37 +5,23 @@ Pure functions — no database, no MemoryStore, no Chalie services.
 Used by DocumentProcessingService (file pipeline) and the `read` innate skill
 (URL fetch + local file read).
 
-Supported formats:
-  - PDF         (pdfplumber)
-  - DOCX        (python-docx)
-  - PPTX        (python-pptx)
-  - HTML        (trafilatura)
-  - Plain text  (direct read)
-  - Markdown    (direct read)
-  - Any text/*  (direct read)
-  - Image       (PNG/JPEG/WEBP/GIF/BMP/TIFF via RapidOCR)
-
-All heavy-library imports are lazy so missing optional deps degrade gracefully.
+Supported formats (heavy-library imports are lazy):
+    PDF(pdfplumber), DOCX(python-docx), PPTX(python-pptx),
+    HTML(trafilatura), images via RapidOCR/vision, plain text/markdown.
 """
 
 import logging
 import mimetypes
 import re
+from typing import cast
 
 logger = logging.getLogger(__name__)
 
 
 # ─── Public API ──────────────────────────────────────────────────────────────
 
-def extract_text(file_path: str, mime_type: str = None) -> str:
-    """
-    Extract plain text from a local file.
-
-    Dispatches to a format-specific extractor based on MIME type.
-    If mime_type is not provided, it is inferred from the file extension.
-
-    Returns empty string on failure (never raises).
-    """
+def extract_text(file_path: str, mime_type: str | None = None) -> str:
+    """Dispatches to format-specific extractors by MIME type."""
     if not mime_type:
         mime_type = detect_mime_type(file_path)
 
@@ -70,7 +56,7 @@ def extract_text(file_path: str, mime_type: str = None) -> str:
     return _extract_plain(file_path)
 
 
-def extract_html(html: str, url: str = None) -> str:
+def extract_html(html: str, url: str | None = None) -> str:
     """
     Extract clean, readable text from an HTML string via trafilatura.
 
@@ -249,22 +235,18 @@ def _extract_plain(path: str) -> str:
 
 
 def _extract_image(path: str) -> str:
-    """Extract text from an image file via RapidOCR.
+    """Image 'text' = a rich vision description (OCR fallback when no vision
+    provider is configured). Routed through the shared describe_image() core so an
+    uploaded image is embedded + FTS5-indexed by the normal document pipeline and
+    becomes searchable by its visual content. A configured-but-failing vision
+    provider raises (never swallowed) — the upload pipeline decides how to surface
+    that. Only the description is returned; the user-facing no-vision note
+    is intentionally NOT indexed (it is index noise)."""
+    import mimetypes  # noqa: PLC0415
+    from abilities.vision import RICH_INDEX_PROMPT, describe_image  # noqa: PLC0415
+    from services.processor_config import ProcessorConfig  # noqa: PLC0415
 
-    Delegates to services.image_context_service.analyze, which applies safety
-    preprocessing (EXIF strip + dimension normalization) before OCR. Returns
-    empty string on any failure so the upload pipeline marks the doc 'failed'
-    cleanly rather than poisoning clean_text with garbage.
-    """
-    try:
-        with open(path, 'rb') as fh:
-            image_bytes = fh.read()
-    except Exception:
-        logger.exception('[TEXT EXTRACTOR] Image read failed')
-        return ''
-
-    from services import image_context_service
-    result = image_context_service.analyze(image_bytes)
-    if result.get('error'):
-        logger.warning(f"[TEXT EXTRACTOR] Image OCR failed: {result['error']}")
-    return result.get('ocr_text') or ''
+    mime_type = mimetypes.guess_type(path)[0] or 'image/png'
+    out = describe_image(path, mime_type, RICH_INDEX_PROMPT,
+                         policy_channel=ProcessorConfig.PolicyChannel.CHAT)
+    return cast(str, out['description']) or ''

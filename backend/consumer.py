@@ -6,23 +6,21 @@
 #
 #     http://www.apache.org/licenses/LICENSE-2.0
 
-"""
-Consumer — Master supervisor for Chalie's single-process architecture.
+"""Consumer — master supervisor for the single-process architecture.
 
-All workers run as daemon threads in one Python process.
-SQLite replaces PostgreSQL, MemoryStore replaces Redis.
+All workers run as daemon threads in one Python process. SQLite replaces
+PostgreSQL, MemoryStore replaces Redis.
 """
 
 import logging
 import time
 import signal
 import threading
-from typing import Dict, List, Tuple
+from typing import Callable, Dict, List, Tuple, cast
 
 from utils.logger import Logger
 
-def _read_version():
-    """Read version from the VERSION file — single source of truth."""
+def _read_version() -> str:
     try:
         from services.file_mapper_service import FileMapperService
         return FileMapperService.get_version_path().read_text().strip()
@@ -32,12 +30,12 @@ def _read_version():
 APP_VERSION = _read_version()
 
 
-def _thread_excepthook(args):
-    """Global exception handler for threads — threads die silently by default."""
+def _thread_excepthook(args: threading.ExceptHookArgs) -> None:
+    """Threads die silently by default — log uncaught exceptions globally."""
     logging.error(
-        f"[ThreadException] Uncaught exception in thread '{args.thread.name}': "
+        f"[ThreadException] Uncaught exception in thread '{cast(threading.Thread, args.thread).name}': "
         f"{args.exc_type.__name__}: {args.exc_value}",
-        exc_info=(args.exc_type, args.exc_value, args.exc_traceback)
+        exc_info=(args.exc_type, cast("BaseException", args.exc_value), args.exc_traceback)
     )
 
 
@@ -48,41 +46,21 @@ threading.excepthook = _thread_excepthook
 class WorkerManager:
     """Master supervisor for managing worker threads."""
 
-    def __init__(self):
-        """Initialise the WorkerManager with an empty thread registry."""
+    def __init__(self) -> None:
         self.threads: Dict[str, threading.Thread] = {}
-        self.service_definitions: List[Tuple[str, callable]] = []
+        self.service_definitions: List[Tuple[str, Callable[[], None]]] = []
         self.running = True
 
-    def register_service(self, worker_id: str, worker_func):
-        """Register a worker service definition for future spawning.
-
-        The service is appended to the internal ``service_definitions`` list.
-        It will be started when :meth:`spawn_all_services` is called, or
-        immediately via :meth:`spawn_service`.
-
-        Args:
-            worker_id: Unique string identifier for the worker, also used as
-                the daemon thread name (e.g., ``'decay-engine-service'``).
-            worker_func: Zero-arg callable implementing the worker's blocking run loop.
-        """
+    def register_service(self, worker_id: str, worker_func: Callable[[], None]) -> None:
         self.service_definitions.append((worker_id, worker_func))
         logging.info(f"[Manager] Registered service definition: {worker_id}")
 
-    def spawn_service(self, worker_id: str, worker_func):
-        """Spawn a worker as a daemon thread, skipping if one is already alive.
-
-        If a thread with the given ``worker_id`` already exists and is alive,
-        this method returns immediately without creating a duplicate.
-
-        Args:
-            worker_id: Unique identifier and daemon thread name for the worker.
-            worker_func: Zero-arg callable implementing the worker's blocking run loop.
-        """
+    def spawn_service(self, worker_id: str, worker_func: Callable[[], None]) -> None:
+        """Skip if a thread with the given worker_id is already alive."""
         if worker_id in self.threads and self.threads[worker_id].is_alive():
             return
 
-        def _run():
+        def _run() -> None:
             try:
                 worker_func()
             except Exception:
@@ -93,13 +71,9 @@ class WorkerManager:
         self.threads[worker_id] = t
         logging.info(f"[Manager] Spawned service: {worker_id} (thread)")
 
-    def spawn_all_services(self):
-        """Spawn all registered service definitions as daemon threads.
-
-        Iterates ``service_definitions`` in registration order and calls
-        :meth:`spawn_service` for each entry.  Individual spawn failures are
-        logged as errors but do not abort spawning of subsequent services.
-        """
+    def spawn_all_services(self) -> None:
+        """Individual spawn failures are logged but do not abort subsequent
+        spawns."""
         logging.info("[Manager] Spawning all services...")
         for worker_id, worker_func in self.service_definitions:
             try:
@@ -107,7 +81,7 @@ class WorkerManager:
             except Exception as e:
                 logging.error(f"[Manager] Failed to spawn service '{worker_id}': {e}")
 
-    def check_health(self):
+    def check_health(self) -> None:
         """Check service thread health and restart dead threads."""
         for worker_id, worker_func in self.service_definitions:
             try:
@@ -119,31 +93,18 @@ class WorkerManager:
                 logging.error(f"[Manager] Health check failed for service {worker_id}: {e}")
 
 
-    def shutdown_all(self):
-        """Initiate a graceful shutdown by clearing the running flag.
-
-        Sets ``self.running = False`` so the :meth:`run` loop exits cleanly.
-        Worker threads are daemon threads and are terminated automatically
-        when the main thread finishes.
-        """
+    def shutdown_all(self) -> None:
+        """Daemon threads are terminated automatically when the main thread
+        finishes."""
         logging.info("\n[Manager] Initiating graceful shutdown...")
         self.running = False
         # Daemon threads will be killed when main thread exits
         logging.info("[Manager] All services stopped")
 
-    def run(self):
-        """Run the main supervisor loop, spawning services and monitoring thread health.
-
-        Installs ``SIGINT`` and ``SIGTERM`` handlers that call
-        :meth:`shutdown_all`.  Spawns all registered services via
-        :meth:`spawn_all_services`, then enters a 5-second polling loop.
-        Every iteration calls :meth:`check_health` to restart dead threads.
-        A periodic summary is logged every 5 minutes (60 × 5 s intervals).
-
-        Blocks until :meth:`shutdown_all` is called or a
-        ``KeyboardInterrupt`` is received, after which it ensures
-        :meth:`shutdown_all` is invoked in the ``finally`` block.
-        """
+    def run(self) -> None:
+        """Installs SIGINT/SIGTERM handlers, spawns all services, then polls
+        every 5 s to restart dead threads. Logs a summary every 5 minutes.
+        Blocks until shutdown_all() or KeyboardInterrupt."""
         signal.signal(signal.SIGINT, lambda _sig, _frame: self.shutdown_all())
         signal.signal(signal.SIGTERM, lambda _sig, _frame: self.shutdown_all())
 
@@ -194,6 +155,9 @@ if __name__ == "__main__":
     database_service = get_shared_db_service()
     convergence = SchemaConvergenceService(database_service)
     convergence.converge()
+    # Separate deterministic value backfill — convergence applies only static
+    # column DEFAULTs, never derived values (last_relevant_at, valid_from, etc.).
+    convergence.backfill_redesign_columns()
 
     # Initialize API key
     try:
@@ -211,9 +175,5 @@ if __name__ == "__main__":
     manager.register_service("rest-api-worker-1", rest_api_worker)
     manager.register_service("scheduler-service", scheduler_worker)
     manager.register_service("document-purge-service", document_purge_worker)
-
-    # Moment context enrichment service (6h worker)
-    from services.moment_context_service import moment_context_worker
-    manager.register_service("moment-context-service", moment_context_worker)
 
     manager.run()

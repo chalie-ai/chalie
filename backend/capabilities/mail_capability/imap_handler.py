@@ -1,8 +1,4 @@
-"""ImapHandler — protocol-specific IMAP logic for MailCapability.
-
-Plain class; no AbstractCapability.  Credentials are passed as parameters
-so the parent MailCapability remains the sole credential owner.
-"""
+"""Protocol-specific IMAP logic for MailCapability."""
 
 from __future__ import annotations
 
@@ -12,8 +8,26 @@ import email.utils
 import logging
 from dataclasses import dataclass
 from datetime import timedelta
+from typing import TYPE_CHECKING, cast
 
 from services.time_utils import utc_now
+
+if TYPE_CHECKING:
+    from typing import Protocol
+
+    class _ImapClient(Protocol):
+        def login(self, user: str, password: str) -> object: ...
+        def select_folder(self, folder: str, readonly: bool = False) -> object: ...
+        def search(self, criteria: list[object]) -> list[int]: ...
+        def fetch(self, uids: list[int], data: list[bytes]) -> dict[int, dict[bytes, bytes]]: ...
+        def append(self, folder: str, msg: bytes, flags: list[bytes] = ...) -> object: ...
+        def delete_messages(self, uids: list[int]) -> object: ...
+        def expunge(self, uids: list[int]) -> object: ...
+        def set_flags(self, uids: list[int], flags: list[bytes]) -> object: ...
+        def move(self, uids: list[int], folder: str) -> object: ...
+        def copy(self, uids: list[int], folder: str) -> object: ...
+        def list_folders(self) -> list[tuple[object, object, str]]: ...
+        def logout(self) -> object: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -41,7 +55,7 @@ _SPAM_NAMES = {"junk", "spam", "[gmail]/spam", "bulk mail", "spamverdacht"}
 _DRAFTS_NAMES = {"drafts", "[gmail]/drafts", "draft", "entwürfe"}
 
 
-def _find_folder(client, names: set[str]) -> str | None:
+def _find_folder(client: "_ImapClient", names: set[str]) -> str | None:
     folders = client.list_folders()
     for _flags, _delim, name in folders:
         if name.lower() in names:
@@ -49,16 +63,15 @@ def _find_folder(client, names: set[str]) -> str | None:
     return None
 
 
-def _find_spam_folder(client) -> str | None:
+def _find_spam_folder(client: "_ImapClient") -> str | None:
     return _find_folder(client, _SPAM_NAMES)
 
 
-def _find_drafts_folder(client) -> str | None:
+def _find_drafts_folder(client: "_ImapClient") -> str | None:
     return _find_folder(client, _DRAFTS_NAMES)
 
 
 def _imap_date(iso_str: str) -> str:
-    """ISO YYYY-MM-DD → IMAP DD-Mon-YYYY."""
     from datetime import datetime as _dt
     try:
         return _dt.strptime(iso_str[:10], "%Y-%m-%d").strftime(_IMAP_DATE_FMT)
@@ -66,7 +79,7 @@ def _imap_date(iso_str: str) -> str:
         return iso_str
 
 
-def _hdr(msg, name: str) -> str:
+def _hdr(msg: _email_mod.message.Message, name: str) -> str:
     v = msg.get(name)
     return str(v) if v else ""
 
@@ -80,8 +93,7 @@ def _safe_date(s: str) -> str:
         return ""
 
 
-def parse_headers(uid: int, header_bytes: bytes) -> dict:
-    """Parse raw email header bytes into a normalized dict."""
+def parse_headers(uid: int, header_bytes: bytes) -> dict[str, object]:
     msg = _email_mod.message_from_bytes(header_bytes, policy=_email_mod.policy.default)
     from_name, from_addr = _email_mod.utils.parseaddr(_hdr(msg, "From"))
     return {
@@ -98,7 +110,6 @@ def parse_headers(uid: int, header_bytes: bytes) -> dict:
 
 
 def extract_body(raw_bytes: bytes) -> str:
-    """Extract plain-text body from raw RFC822 bytes."""
     msg = _email_mod.message_from_bytes(raw_bytes, policy=_email_mod.policy.default)
     parts = list(msg.walk()) if msg.is_multipart() else [msg]
     chunks: list[str] = []
@@ -115,18 +126,15 @@ def extract_body(raw_bytes: bytes) -> str:
 # ---------------------------------------------------------------------------
 
 class ImapHandler:
-    """Stateless IMAP/SMTP operations — credentials passed per-call."""
-
     # ------------------------------------------------------------------
     # Connections
     # ------------------------------------------------------------------
 
     def open_client(self, host: str, port: int, tls: bool,
-                    email: str, password: str, timeout: int = 30):
-        """Open and return an authenticated IMAPClient, or None on failure."""
+                    email: str, password: str, timeout: int = 30) -> "_ImapClient | None":
         import imapclient
         try:
-            c = imapclient.IMAPClient(host, port=port, ssl=tls, timeout=timeout)
+            c = cast("_ImapClient", imapclient.IMAPClient(host, port=port, ssl=tls, timeout=timeout))
             c.login(email, password)
             return c
         except Exception as exc:
@@ -137,12 +145,7 @@ class ImapHandler:
     # Ingest
     # ------------------------------------------------------------------
 
-    def ingest(self, client, watermark: int | None) -> tuple[list[dict], int | None]:
-        """Fetch new email headers from INBOX since *watermark* UID.
-
-        Returns (items, new_watermark).  Caller owns the client lifecycle.
-        First run (watermark=None/0) fetches the last _INITIAL_DAYS days.
-        """
+    def ingest(self, client: "_ImapClient", watermark: int | None) -> tuple[list[dict[str, object]], int | None]:
         wm = watermark or 0
         try:
             client.select_folder("INBOX", readonly=True)
@@ -166,8 +169,7 @@ class ImapHandler:
     # Understand
     # ------------------------------------------------------------------
 
-    def understand(self, items: list[dict]) -> None:
-        """Classify + index items in place: sets triage, is_thread; indexes senders."""
+    def understand(self, items: list[dict[str, object]]) -> None:
         if not items:
             return
         from capabilities.contact_resolver import index_person
@@ -176,17 +178,13 @@ class ImapHandler:
             item["triage"] = classify_email(item)
             item["is_thread"] = bool(item.get("in_reply_to"))
             if item.get("from_addr"):
-                index_person(item["from_addr"], item.get("from_name"), source="imap")
+                index_person(cast(str, item["from_addr"]), cast("str | None", item.get("from_name")), source="imap")
 
     # ------------------------------------------------------------------
     # WorldState inbox hint
     # ------------------------------------------------------------------
 
-    def inject_inbox_hint(self, client, *, owns_client: bool = False) -> None:
-        """Push a compact unseen-inbox summary into the world state singleton.
-
-        If owns_client is True the client is closed in the finally block.
-        """
+    def inject_inbox_hint(self, client: "_ImapClient", *, owns_client: bool = False) -> None:
         from capabilities.mail_capability.email_triage import classify_email
         try:
             client.select_folder("INBOX", readonly=True)
@@ -202,7 +200,7 @@ class ImapHandler:
                 cat = classify_email(item)
                 counts[cat] = counts.get(cat, 0) + 1
                 if cat == "actionable" and not top_actionable:
-                    top_actionable = item.get("from_name") or item.get("from_addr", "")
+                    top_actionable = cast(str, item.get("from_name") or item.get("from_addr", ""))
             actionable = counts.get("actionable", 0)
             informational = counts.get("informational", 0)
             if actionable == 0 and informational == 0:
@@ -232,21 +230,16 @@ class ImapHandler:
     # Search
     # ------------------------------------------------------------------
 
-    def search(self, client, params: dict) -> dict:
-        """Execute IMAP search and return classified header results.
-
-        Supported params: sender, subject, keyword, date_from, date_to,
-        triage (post-filter), unanswered, limit.
-        """
+    def search(self, client: "_ImapClient", params: dict[str, object]) -> dict[str, object]:
         from capabilities.mail_capability.email_triage import classify_email
         try:
             client.select_folder("INBOX", readonly=True)
-            criteria: list = []
-            sender  = (params.get("sender")    or "").strip()
-            subject = (params.get("subject")   or "").strip()
-            keyword = (params.get("keyword")   or "").strip()
-            date_from = (params.get("date_from") or "").strip()
-            date_to   = (params.get("date_to")   or "").strip()
+            criteria: list[object] = []
+            sender  = (cast(str, params.get("sender"))    or "").strip()
+            subject = (cast(str, params.get("subject"))   or "").strip()
+            keyword = (cast(str, params.get("keyword"))   or "").strip()
+            date_from = (cast(str, params.get("date_from")) or "").strip()
+            date_to   = (cast(str, params.get("date_to"))   or "").strip()
             if sender:
                 criteria.extend(["FROM", sender])
             if subject:
@@ -263,12 +256,12 @@ class ImapHandler:
                 since = (utc_now() - timedelta(days=7)).strftime(_IMAP_DATE_FMT)
                 criteria.extend(["SINCE", since])
             uids = client.search(criteria)
-            limit = int(params.get("limit", 20))
+            limit = int(cast(int, params.get("limit", 20)))
             uids = uids[-limit:] if len(uids) > limit else uids
             if not uids:
                 return {"emails": [], "count": 0}
             raw = client.fetch(uids, [_IMAP_FETCH_HEADER])
-            triage_filter = (params.get("triage") or "").lower()
+            triage_filter = (cast(str, params.get("triage")) or "").lower()
             results = []
             for u in sorted(raw.keys(), reverse=True):
                 item = parse_headers(u, raw[u][_IMAP_FETCH_HEADER])
@@ -295,13 +288,12 @@ class ImapHandler:
     # Read full body
     # ------------------------------------------------------------------
 
-    def read_email(self, client, params: dict) -> dict:
-        """Fetch full plain-text body of an email by UID. Caller owns client."""
+    def read_email(self, client: "_ImapClient", params: dict[str, object]) -> dict[str, object]:
         uid = params.get("uid")
         if not uid:
             return {"error": "uid is required"}
         try:
-            uid = int(uid)
+            uid = int(cast(int, uid))
         except (TypeError, ValueError):
             return {"error": "uid must be an integer"}
         try:
@@ -328,17 +320,12 @@ class ImapHandler:
     # Send
     # ------------------------------------------------------------------
 
-    def draft_email(self, client, *, from_addr: str, params: dict) -> dict:
-        """Create a draft email in the provider's Drafts folder via IMAP APPEND.
-
-        Required params: to, subject, body.
-        Optional params: in_reply_to (Message-ID for threading).
-        """
+    def draft_email(self, client: "_ImapClient", *, from_addr: str, params: dict[str, object]) -> dict[str, object]:
         from email.mime.text import MIMEText
-        to = (params.get("to") or "").strip()
-        subject = (params.get("subject") or "").strip()
-        body = (params.get("body") or "").strip()
-        in_reply_to = (params.get("in_reply_to") or "").strip()
+        to = (cast(str, params.get("to")) or "").strip()
+        subject = (cast(str, params.get("subject")) or "").strip()
+        body = (cast(str, params.get("body")) or "").strip()
+        in_reply_to = (cast(str, params.get("in_reply_to")) or "").strip()
         if not to or not subject or not body:
             return {"error": "to, subject, and body are required"}
         msg = MIMEText(body, "plain", "utf-8")
@@ -362,20 +349,15 @@ class ImapHandler:
     # Send via SMTP
     # ------------------------------------------------------------------
 
-    def send_email(self, *, creds: SmtpCreds, params: dict) -> dict:
-        """Send an email via SMTP.
-
-        Required params: to, subject, body.
-        Optional params: in_reply_to (Message-ID for threading), cc.
-        """
+    def send_email(self, *, creds: SmtpCreds, params: dict[str, object]) -> dict[str, object]:
         import smtplib
         from email.mime.text import MIMEText
 
-        to = (params.get("to") or "").strip()
-        subject = (params.get("subject") or "").strip()
-        body = (params.get("body") or "").strip()
-        in_reply_to = (params.get("in_reply_to") or "").strip()
-        cc = (params.get("cc") or "").strip()
+        to = (cast(str, params.get("to")) or "").strip()
+        subject = (cast(str, params.get("subject")) or "").strip()
+        body = (cast(str, params.get("body")) or "").strip()
+        in_reply_to = (cast(str, params.get("in_reply_to")) or "").strip()
+        cc = (cast(str, params.get("cc")) or "").strip()
 
         if not to or not subject or not body:
             return {"error": "to, subject, and body are required"}
@@ -417,12 +399,12 @@ class ImapHandler:
     # Manage
     # ------------------------------------------------------------------
 
-    def manage_email(self, client, params: dict) -> dict:
+    def manage_email(self, client: "_ImapClient", params: dict[str, object]) -> dict[str, object]:
         uid = params.get("uid")
         if uid is None:
             return {"error": "uid is required"}
         try:
-            uid = int(uid)
+            uid = int(cast(int, uid))
         except (TypeError, ValueError):
             return {"error": "uid must be an integer"}
         operation = params.get("operation")

@@ -1,3 +1,9 @@
+# ── Runtime image ─────────────────────────────────────────────────────
+# Single stage, no Node/pnpm. install.sh fetches ALL source from the GitHub
+# tarball, which now ships the committed Vue dist (frontend/apps/{interface,brain}/dist,
+# in-repo) — so the app's routes resolve on a fresh install with no
+# frontend build step. End users never build the frontend; shipping dist serves
+# everyone, this image included.
 FROM python:3.12-slim
 
 # Build-time install.sh flags.

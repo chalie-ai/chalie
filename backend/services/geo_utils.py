@@ -3,14 +3,22 @@
 import logging
 import statistics
 from datetime import datetime, timezone
+from typing import TYPE_CHECKING, Protocol, cast
 
 logger = logging.getLogger(__name__)
+
+if TYPE_CHECKING:
+    class _Distance(Protocol):
+        km: float
+
+    class _GeodesicFn(Protocol):
+        def __call__(self, a: tuple[float, float], b: tuple[float, float]) -> "_Distance": ...
 
 _geodesic = None
 
 
-def _get_geodesic():
-    """Return the lazily-imported geodesic distance function."""
+def _get_geodesic() -> object:
+    """Lazily import and cache the geodesic distance function."""
     global _geodesic
     if _geodesic is None:
         from geopy.distance import geodesic
@@ -24,9 +32,10 @@ _MAX_SPEED_KMH = 200.0  # guard against GPS jumps
 _PARSE_UTC_SENTINEL = datetime.min.replace(tzinfo=timezone.utc)
 
 
+
 def distance_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     """Geodesic distance in kilometres between two points."""
-    return _get_geodesic()((lat1, lon1), (lat2, lon2)).km
+    return cast("_GeodesicFn", _get_geodesic())((lat1, lon1), (lat2, lon2)).km
 
 
 def estimate_travel_minutes(dist_km: float, speed_kmh: float = DEFAULT_SPEED_KMH) -> float:
@@ -36,7 +45,7 @@ def estimate_travel_minutes(dist_km: float, speed_kmh: float = DEFAULT_SPEED_KMH
     return (dist_km / speed_kmh) * 60.0
 
 
-def estimate_speed_from_history(history_entries: list) -> float | None:
+def estimate_speed_from_history(history_entries: list[object]) -> float | None:
     """Derive average speed in km/h from timestamped location snapshots.
 
     Each entry is a dict with nested 'location' (lat/lon) and 'saved_at'
@@ -47,15 +56,15 @@ def estimate_speed_from_history(history_entries: list) -> float | None:
 
     valid = []
     for entry in history_entries:
-        loc = entry.get("location") or {}
+        loc = cast(dict[str, object], cast(dict[str, object], entry).get("location") or {})
         lat = loc.get("lat")
         lon = loc.get("lon")
-        ts_raw = (entry.get("saved_at") or "").strip()
+        ts_raw = cast(str, cast(dict[str, object], entry).get("saved_at") or "").strip()
         if lat is None or lon is None or not ts_raw:
             continue
         try:
-            lat_f = float(lat)
-            lon_f = float(lon)
+            lat_f = float(cast(float, lat))
+            lon_f = float(cast(float, lon))
         except (TypeError, ValueError):
             continue
         ts = parse_utc(ts_raw)

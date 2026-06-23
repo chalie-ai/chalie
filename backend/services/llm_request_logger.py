@@ -8,22 +8,10 @@
 
 """LLM request logger — writes every LLM call to its own file, verbatim.
 
-Filename: logs/{caller}-{utc_now().strftime('%Y%m%dT%H%M%S_%f')}.log
-Contents:
-  # caller: <ClassName or string>
-  # job: <job name>
-  # provider: <provider name>
-  # model: <model id>
-  # timestamp: <iso8601 utc>
-
-  user-message: <verbatim final user-message string>
-
-  system-message: <verbatim final system-message string>
-
-  tools: <JSON-serialised tools list, indent=2>
-
-One file per LLM request. Never append. Exceptions are swallowed with
-logger.debug() — logging must NEVER block the LLM call.
+Filename: ``logs/{caller}-{utc_now().strftime('%Y%m%dT%H%M%S_%f')}.log``,
+suffixed with the thread id for collision-free concurrent writes. One
+file per LLM request. Never append. Exceptions are swallowed with
+``logger.debug()`` — logging must NEVER block the LLM call.
 """
 
 import json
@@ -51,18 +39,12 @@ def log_llm_request(
     model: str,
     system_message: str,
     user_message: str,
-    tools: list | None,
+    tools: list[object] | None,
 ) -> None:
-    """Write one LLM request to its own log file.
-
-    Best-effort — any failure is swallowed so the caller's LLM flow is never
-    blocked. The first failure per process is surfaced at WARNING level so
-    disk-full / permission problems don't stay silent; all subsequent
-    failures fall to DEBUG to avoid spamming.
-
-    Filename: ``logs/{caller}-{YYYYMMDDTHHMMSS_ffffff}-{tid}.log``. The thread
-    id suffix makes concurrent calls from the same microsecond collision-free.
-    """
+    """Best-effort — any failure is swallowed so the caller's LLM flow is
+    never blocked. The first failure per process is surfaced at WARNING
+    so disk-full / permission problems don't stay silent; all subsequent
+    failures fall to DEBUG."""
     try:
         _LOGS_DIR.mkdir(parents=True, exist_ok=True)
         now = utc_now()

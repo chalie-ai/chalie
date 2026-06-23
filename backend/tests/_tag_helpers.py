@@ -1,23 +1,10 @@
-"""Helpers for asserting the canonical skill-output tag format.
-
-Format:
-  [<name>(k1=v1, k2=v2)]
-  <optional body>
-  [end:<name>]
-
-Use these helpers instead of repeating regex inline in every test file.
-"""
 
 import json
 import re
+from typing import cast
 
 
 def extract_body(tag_name: str, output: str) -> str:
-    """Return the body text between the opener and [end:<tag_name>].
-
-    Returns an empty string when there is no body (error-only tags).
-    Raises AssertionError when the opener or terminator is missing.
-    """
     opener_pattern = re.compile(
         r"^\[" + re.escape(tag_name) + r"\([^)]*\)\]",
         re.MULTILINE,
@@ -41,14 +28,9 @@ def extract_body(tag_name: str, output: str) -> str:
     return before_terminator[0] if len(before_terminator) > 1 else ""
 
 
-def extract_json(tag_name: str, output: str) -> dict | list:
-    """Return the JSON-parsed body between the tag markers.
-
-    Raises AssertionError on missing markers.
-    Raises json.JSONDecodeError if body is not valid JSON.
-    """
+def extract_json(tag_name: str, output: str) -> "dict[str, object] | list[object]":
     body = extract_body(tag_name, output)
-    return json.loads(body)
+    return cast("dict[str, object] | list[object]", json.loads(body))
 
 
 def has_opener(tag_name: str, output: str) -> bool:

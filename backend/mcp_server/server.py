@@ -6,16 +6,10 @@
 #
 #     http://www.apache.org/licenses/LICENSE-2.0
 
-"""
-MCP Server implementation using FastMCP.
+"""MCP server using FastMCP — single ``talk_to_chalie`` tool for external agents.
 
-Exposes a single tool ``talk_to_chalie`` that external agents use to
-communicate. Auth is validated via bearer token against the wrapper_tokens
-table (same pattern as the REST API bearer auth).
-
-Transport: Streamable HTTP on a dedicated port (default 8462).
-Auth: Custom ASGI middleware validates Bearer tokens before requests
-reach the MCP protocol layer.
+Streamable HTTP on a dedicated port (default 8462). Bearer tokens validated by
+ASGI middleware against ``wrapper_tokens`` (same as the REST API).
 """
 
 import asyncio
@@ -26,11 +20,13 @@ import sqlite3
 
 import uvicorn
 from starlette.applications import Starlette
-from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 from starlette.requests import Request
-from starlette.responses import JSONResponse
+from starlette.responses import JSONResponse, Response
 
 from mcp.server.fastmcp import FastMCP
+
+from services.database_service import DatabaseService
 
 logger = logging.getLogger(__name__)
 
@@ -46,7 +42,7 @@ _current_wrapper_id: contextvars.ContextVar[str | None] = contextvars.ContextVar
 class BearerTokenMiddleware(BaseHTTPMiddleware):
     """ASGI middleware that validates Bearer tokens against wrapper_tokens."""
 
-    async def dispatch(self, request: Request, call_next):
+    async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
         auth_header = request.headers.get("authorization", "")
         if not auth_header.startswith("Bearer "):
             return JSONResponse(
@@ -97,7 +93,7 @@ class BearerTokenMiddleware(BaseHTTPMiddleware):
         if row is None:
             return None
 
-        wrapper_id = row[0] if isinstance(row, (tuple, list)) else row["wrapper_id"]
+        wrapper_id: str = row[0] if isinstance(row, (tuple, list)) else row["wrapper_id"]
 
         now = utc_now().isoformat()
         with db.connection() as conn:
@@ -126,20 +122,6 @@ def create_mcp_server(host: str = "0.0.0.0", port: int = _DEFAULT_PORT) -> FastM
         project_or_task_name: str,
         loop_in_human: bool = False,
     ) -> str:
-        """Communicate with Chalie — your executive assistant.
-
-        Send messages, share updates, ask questions, or request actions.
-        Chalie has full access to memory, documents, schedules, and more.
-
-        Args:
-            message: What you want to say or ask Chalie.
-            agent_name: Your identity (e.g. "Claude Code", "Codex", "CI Bot").
-            project_or_task_name: The project or task context for this conversation.
-            loop_in_human: If true, Chalie will disclose this exchange to the user.
-
-        Returns:
-            Chalie's response.
-        """
         errors = []
         if not message or not message.strip():
             errors.append("'message' is required and cannot be empty.")
@@ -160,7 +142,8 @@ def create_mcp_server(host: str = "0.0.0.0", port: int = _DEFAULT_PORT) -> FastM
         if errors:
             return "Invalid parameters:\n" + "\n".join(f"- {e}" for e in errors)
 
-        from services.external_agent_message_processor import ExternalAgentMessageProcessor
+        from configs.channels import EAMPConfig  # noqa: PLC0415
+        from services.message_processor import MessageProcessor  # noqa: PLC0415
 
         wrapper_id = _current_wrapper_id.get()
         logger.info(
@@ -168,15 +151,14 @@ def create_mcp_server(host: str = "0.0.0.0", port: int = _DEFAULT_PORT) -> FastM
             agent_name, project_or_task_name, loop_in_human, wrapper_id,
         )
 
-        def _run():
-            proc = ExternalAgentMessageProcessor(
-                raw_input=message,
+        def _run() -> str:
+            config = EAMPConfig(
                 agent_name=agent_name,
-                project_or_task_name=project_or_task_name,
+                project=project_or_task_name,
                 loop_in_human=loop_in_human,
-                wrapper_id=wrapper_id,
+                wrapper_id=wrapper_id or "",
             )
-            return proc.send()
+            return MessageProcessor.process(message, config)
 
         response = await asyncio.to_thread(_run)
         return response or "(No response generated)"
@@ -219,7 +201,7 @@ def run_mcp_server() -> None:
     uvicorn.run(app, host="0.0.0.0", port=port, log_level="info")
 
 
-def _ensure_mcp_token(db) -> None:
+def _ensure_mcp_token(db: DatabaseService) -> None:
     """Generate an MCP auth token on first boot if none exists."""
     from services.wrapper_auth_service import WrapperAuthService
     from services.settings_service import SettingsService

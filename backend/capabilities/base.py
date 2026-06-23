@@ -24,19 +24,21 @@ level to prevent circular-import issues during early application boot.
 
 import logging
 from abc import ABC, abstractmethod
+from datetime import datetime
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from typing import Protocol
+
+    class _ToolConfigService(Protocol):
+        def set_tool_config(self, tool_name: str, config: dict[str, object]) -> bool: ...
+        def get_tool_config(self, tool_name: str) -> dict[str, str]: ...
+        def delete_tool_config(self, tool_name: str) -> bool: ...
 
 logger = logging.getLogger(__name__)
 
-def _get_tool_config_service():
-    """Return a :class:`~services.tool_config_service.ToolConfigService` instance.
-
-    Uses the shared database service singleton.  Deferred import prevents
-    circular imports during early boot.
-
-    Returns:
-        services.tool_config_service.ToolConfigService: Configured service
-        bound to the shared database connection.
-    """
+def _get_tool_config_service() -> "_ToolConfigService":
+    """Return a :class:`~services.tool_config_service.ToolConfigService` instance via deferred import."""
     from services.database_service import get_shared_db_service
     from services.tool_config_service import ToolConfigService
 
@@ -44,47 +46,17 @@ def _get_tool_config_service():
 
 
 class AbstractCapability(ABC):
-    """Abstract base class that every capability plugin must subclass.
-
-    Subclasses must implement all abstract methods that define the four-phase
-    cognitive pipeline (ingest → understand → monitor → act) plus lifecycle
-    and identity methods:
-
-    **Identity & lifecycle:**
-    * :meth:`get_id`
-    * :meth:`get_manifest`
-    * :meth:`configure`
-    * :meth:`connect`
-    * :meth:`disconnect`
-    * :meth:`health`
-
-    **Cognitive pipeline:**
-    * :meth:`ingest` — pull raw data from the external source
-    * :meth:`understand` — extract meaning from raw items via LLM or parsing
-    * :meth:`monitor` — detect changes, emit signals (called by scheduler)
-    * :meth:`act` — perform a write action on the external source
-    * :meth:`get_tools` — return tool definitions for dynamic registration
-
-    Concrete helper methods for credential management, connection-state
-    tracking, and health monitoring are provided by this base class and
-    should not be overridden unless there is a specific need.
-    """
+    """Abstract base class that every capability plugin must subclass."""
 
     MAX_CONSECUTIVE_FAILURES = 5
 
     def __init__(self) -> None:
-        """Initialise base state.
-
-        Sets the internal ``_connected`` flag to ``False`` and health
-        tracking counters to their defaults.  Subclasses should call
-        ``super().__init__()`` if they define their own ``__init__``.
-        """
         self._connected: bool = False
         self._error_count: int = 0
         self._last_error: str | None = None
         self._failure_alerted: bool = False
         self._backoff_secs: int = 0
-        self._next_retry_at = None
+        self._next_retry_at: datetime | None = None
 
     # ------------------------------------------------------------------
     # Abstract interface — must be implemented by every subclass
@@ -92,115 +64,47 @@ class AbstractCapability(ABC):
 
     @abstractmethod
     def get_id(self) -> str:
-        """Return the unique capability identifier (must match ``manifest.yaml``).
-
-        Returns:
-            str: Lowercase, hyphen-separated identifier, e.g. ``"caldav"``.
-        """
+        ...
 
     @abstractmethod
-    def get_manifest(self) -> dict:
-        """Return the parsed ``manifest.yaml`` contents as a dict.
-
-        Returns:
-            dict: Full manifest, including at minimum ``id``, ``name``,
-            ``version``, and ``entry_class`` keys.
-        """
+    def get_manifest(self) -> dict[str, object]:
+        ...
 
     @abstractmethod
-    def configure(self, credentials: dict) -> None:
+    def configure(self, credentials: dict[str, object]) -> None:
         """Accept, validate, and persist credentials for this capability.
 
-        Implementations should call :meth:`store_credential` to persist each
-        field and raise :exc:`ValueError` with a descriptive message if the
-        credentials are rejected (e.g. failed auth test against the remote
-        server).
-
-        Args:
-            credentials: Provider-specific mapping, e.g.
-                ``{"provider": "google", "username": "...", "password": "..."}``.
-
-        Raises:
-            ValueError: If credentials are invalid or the remote server rejects
-                them.
+        Implementations should call :meth:`store_credential` to persist each field
+        and raise :exc:`ValueError` with a descriptive message if the credentials are
+        rejected (e.g. failed auth test against the remote server).
         """
 
     @abstractmethod
     def connect(self) -> bool:
         """Establish a connection to the capability's data source.
 
-        Should load stored credentials via :meth:`load_credential`, attempt to
-        reach the remote service, update ``self._connected``, and return the
-        result without raising on transient errors.
-
-        Returns:
-            bool: ``True`` if the connection was established successfully,
-            ``False`` otherwise.
+        Should load stored credentials via :meth:`load_credential`, attempt to reach
+        the remote service, update ``self._connected``, and return the result without
+        raising on transient errors.
         """
 
     @abstractmethod
     def disconnect(self) -> None:
-        """Tear down the active connection and clear any cached state.
-
-        Must set ``self._connected = False``.  Should not raise.
-        """
+        """Tear down the active connection and clear any cached state."""
 
     @abstractmethod
-    def ingest(self) -> list:
-        """Fetch and return structured data from the capability's data source.
-
-        This method is called periodically by the scheduler via system
-        handler dispatch and should be idempotent.
-
-        Returns:
-            list[dict]: A list of structured data dicts whose schema is
-            defined by the concrete capability.
-        """
+    def ingest(self) -> list[object]:
+        ...
 
     @abstractmethod
-    def understand(self, items: list) -> list:
-        """Extract meaning from raw ingested items.
-
-        Called after :meth:`ingest` with the returned items. Implementations
-        should extract entities, dates, people, commitments, and patterns
-        via LLM prompts or deterministic parsing.
-
-        Args:
-            items: Raw data dicts returned by :meth:`ingest`.
-
-        Returns:
-            list[dict]: Enriched/extracted knowledge dicts ready for storage
-            via DataGraphService.
-        """
+    def understand(self, items: list[object]) -> list[object]:
+        """Extract meaning from raw ingested items."""
 
     @abstractmethod
     def _do_monitor(self) -> None:
-        """Detect changes and emit signals (subclass implementation).
-
-        Called periodically by the capability scheduler via :meth:`monitor`
-        or :meth:`run_monitor`. Should compare current state with previous
-        state and detect new/changed/deleted items.
-        """
-
-    @abstractmethod
-    def act(self, action: str, params: dict) -> dict:
-        """Perform a write action on the external data source.
-
-        Args:
-            action: Action name matching one of the manifest's declared actions,
-                e.g. ``"create_event"``, ``"send_email"``.
-            params: Action-specific parameters.
-
-        Returns:
-            dict: Result of the action, including at minimum a ``success``
-            boolean key.
-        """
+        ...
 
     def monitor(self) -> None:
-        """Run the monitor cycle.
-
-        Calls :meth:`_do_monitor` (the subclass implementation).
-        """
         self._do_monitor()
 
     def health(self) -> bool:
@@ -215,7 +119,7 @@ class AbstractCapability(ABC):
         """
         return self._connected
 
-    def health_details(self) -> dict:
+    def health_details(self) -> dict[str, object]:
         """Return detailed health information including error tracking.
 
         Returns:
@@ -343,7 +247,7 @@ class AbstractCapability(ABC):
         logger.info("[%s] backoff %ds", self.get_id(), self._backoff_secs)
 
     @abstractmethod
-    def get_tools(self) -> list:
+    def get_tools(self) -> list[dict[str, object]]:
         """Return tool definitions exposed by this capability.
 
         Each entry in the returned list must be a dict with at minimum the

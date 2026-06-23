@@ -1,0 +1,4 @@
+# The runtime stage fetches ALL source (including the committed Vue dist) via
+# install.sh from the GitHub tarball — nothing is COPYed from the build context,
+# so exclude everything and keep the context empty.
+*

@@ -1,14 +1,13 @@
 """
-Folder Watcher Worker — Background daemon thread that scans watched folders for changes.
-
-Runs every CHECK_INTERVAL seconds, checking which folders are due for a scan
-(based on their individual scan_interval) or have a manual scan requested.
-
-Registered in run.py as "folder-watcher-service".
+Folder Watcher Worker - background daemon thread. Registered in run.py as
+"folder-watcher-service".
 """
 
 import logging
 import time
+from typing import cast
+
+from services.folder_watcher_service import FolderWatcherService
 
 logger = logging.getLogger(__name__)
 
@@ -16,13 +15,13 @@ INITIAL_DELAY = 30    # 30 seconds after startup
 CHECK_INTERVAL = 30   # Check for due scans every 30s
 
 
-def _scan_folder_if_due(service, folder: dict) -> None:
-    """Scan a single folder when it is due or has been manually requested."""
-    if not (service.is_scan_due(folder) or service.is_scan_requested(folder['id'])):
+def _scan_folder_if_due(service: FolderWatcherService, folder: dict[str, object]) -> None:
+    """Scan folder if its interval is due or a manual scan was requested."""
+    if not (service.is_scan_due(folder) or service.is_scan_requested(cast(str, folder['id']))):
         return
     result = service.scan_folder(folder)
     label = folder.get('label') or folder.get('folder_path', '?')
-    total = result['new'] + result['updated'] + result['deleted'] + result['renamed']
+    total = cast("int", result['new']) + cast("int", result['updated']) + cast("int", result['deleted']) + cast("int", result['renamed'])
     if total > 0:
         logger.info(
             "[FOLDER WATCHER] %s: +%d new, ~%d updated, -%d deleted, ≈%d renamed",
@@ -32,12 +31,12 @@ def _scan_folder_if_due(service, folder: dict) -> None:
     if result.get('errors'):
         logger.warning(
             "[FOLDER WATCHER] %s: %d errors during scan",
-            label, len(result['errors']),
+            label, len(cast(list[object], result['errors'])),
         )
 
 
 def _run_scan_cycle() -> None:
-    """Load all enabled folders and scan each one that is due."""
+    """One scan cycle across all enabled watched folders."""
     from services.database_service import get_shared_db_service
     from services.folder_watcher_service import FolderWatcherService
 
@@ -52,8 +51,8 @@ def _run_scan_cycle() -> None:
             )
 
 
-def folder_watcher_worker():
-    """Entry point for the folder watcher daemon thread."""
+def folder_watcher_worker() -> None:
+    """Daemon thread entry point."""
     logger.info("[FOLDER WATCHER] Starting (initial delay %ds)", INITIAL_DELAY)
     time.sleep(INITIAL_DELAY)
 

@@ -1,15 +1,8 @@
 #!/usr/bin/env python3
-"""
-Single entry point for Chalie.
+"""Single entry point for Chalie.
 
-Start with:
-    python backend/run.py
-
-CLI options:
-    python backend/run.py --port=9000
-    python backend/run.py --host=127.0.0.1
-
-All worker threads, database initialization, and the Flask+WebSocket server
+CLI: `python backend/run.py [--port=9000] [--host=127.0.0.1]`
+All worker threads, database initialisation, and the Flask+WebSocket server
 run in a single process. Voice runs natively when deps are installed.
 """
 
@@ -17,8 +10,15 @@ import argparse
 import os
 import sys
 import logging
+from typing import TYPE_CHECKING, cast
 
 from utils.logger import Logger
+
+if TYPE_CHECKING:
+    from services.embedding_service import EmbeddingService
+    from services.onnx_inference_service import OnnxInferenceService
+    from services.database_service import DatabaseService
+    from consumer import WorkerManager as _WorkerManager
 
 # Force numpy/transformers to fully initialize before any background thread
 # imports them. Python's import system isn't fully thread-safe for nested
@@ -44,14 +44,14 @@ logger = logging.getLogger(__name__)
 
 
 
-def _start_model_preload():
+def _start_model_preload() -> None:
     """Kick off background model preloading (embedding + ONNX classifiers)."""
-    def _preload_models():
+    def _preload_models() -> None:
         try:
             logger.info("[System] Preloading embedding model (background)...")
             from services.embedding_service import get_embedding_service
-            svc = get_embedding_service()
-            svc.generate_embedding("warmup")
+            svc: "EmbeddingService | OnnxInferenceService | None" = get_embedding_service()
+            cast("EmbeddingService", svc).generate_embedding("warmup")
             logger.info("[System] Embedding model ready (inference warm)")
         except Exception as e:
             import traceback
@@ -95,18 +95,83 @@ def _start_model_preload():
     _threading.Thread(target=_preload_models, name="model-preload", daemon=True).start()
 
 
-def _init_database():
-    """Initialize SQLite database via declarative convergence and return the service."""
+def _migrate_legacy_policy_rules(database_service: "DatabaseService") -> None:
+    """Upgrade-path only — on a fresh install this is a no-op. Critically does
+    NOT create the ``policy`` table early: making the DB look non-empty to
+    convergence's freshness check would skip the schema.sql seed pass (incl.
+    the row that marks ``api_key`` sensitive, persisting the REST API key in
+    cleartext on fresh installs)."""
+    with database_service.connection() as conn:
+        has_legacy = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='policy_rules'"
+        ).fetchone() is not None
+        if not has_legacy:
+            return
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS policy (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                channel TEXT NOT NULL, permission TEXT NOT NULL,
+                setting TEXT NOT NULL CHECK (setting IN ('internal','allow','ask','deny')),
+                UNIQUE (channel, permission)
+            )
+        """)
+        conn.execute(
+            "INSERT OR IGNORE INTO policy (channel, permission, setting) "
+            "SELECT context, action_id, state FROM policy_rules"
+        )
+        conn.commit()
+    logger.info("[Startup] Legacy policy_rules copied into flat policy table")
+
+
+def _init_database() -> "DatabaseService":
     from services.database_service import get_shared_db_service
     from services.schema_convergence_service import SchemaConvergenceService
 
     database_service = get_shared_db_service()
+
+    # Provider deletion is permanent — there is no longer a soft-delete flag.
+    # Any rows still parked at is_active=0 are previously-deleted providers;
+    # purge them BEFORE convergence drops the column, otherwise they resurface
+    # as active providers (and collide on the UNIQUE name index). Self-disabling:
+    # once convergence removes is_active this block is a no-op.
+    try:
+        with database_service.connection() as _conn:
+            _cols = [r[1] for r in _conn.execute("PRAGMA table_info(providers)").fetchall()]
+            if 'is_active' in _cols:
+                _purged = _conn.execute("DELETE FROM providers WHERE is_active = 0").rowcount
+                _conn.commit()
+                if _purged:
+                    logger.info("[Startup] Purged %d soft-deleted provider row(s)", _purged)
+    except Exception as _prov_err:
+        logger.warning(f"[Startup] soft-deleted provider purge skipped: {_prov_err}")
+
+    # Policy (upgrade path): copy legacy policy_rules → policy BEFORE convergence
+    # drops policy_rules.  No-op on a fresh DB so it stays "fresh" and convergence
+    # runs schema.sql's seed pass (incl. the api_key is_sensitive row).
+    try:
+        _migrate_legacy_policy_rules(database_service)
+    except Exception as _pol_err:
+        logger.warning(f"[Startup] legacy policy_rules copy skipped: {_pol_err}")
+
     convergence = SchemaConvergenceService(database_service)
     convergence.converge()
+    # Separate deterministic value backfill — convergence applies only static
+    # column DEFAULTs, never derived values (last_relevant_at, valid_from, etc.).
+    convergence.backfill_redesign_columns()
+
+    # Policy: apply the declarative seed (idempotent) AFTER convergence has created
+    # the policy table.  INSERT OR IGNORE preserves any copied/user rows.
+    try:
+        from services.policy_manager import PolicyManager
+        inserted = PolicyManager(database_service).apply_seed()
+        logger.info("[Startup] Policy seed applied (%d new rows)", inserted)
+    except Exception as _seed_err:
+        logger.warning(f"[Startup] policy seed skipped: {_seed_err}")
+
     return database_service
 
 
-def _run_startup_migrations(database_service) -> None:
+def _run_startup_migrations(database_service: "DatabaseService") -> None:
     """Run all one-time startup migrations and data backfills."""
     import os as _os
 
@@ -148,6 +213,25 @@ def _run_startup_migrations(database_service) -> None:
     except Exception as _drop_err:
         logger.warning(f"[Startup] tool_calls invoked_by drop skipped: {_drop_err}")
 
+    # Drop legacy ephemeral column — every tool call is now durable; rows older
+    # than 7 days are removed by DecayEngineService._purge_tool_calls() instead.
+    try:
+        _ephem_sentinel = _os.path.join(
+            _os.path.dirname(database_service.db_path),
+            '.tool-calls-drop-ephemeral-v1.done',
+        )
+        if not _os.path.exists(_ephem_sentinel):
+            with database_service.connection() as _conn:
+                _cols = [r[1] for r in _conn.execute("PRAGMA table_info(tool_calls)").fetchall()]
+                if 'ephemeral' in _cols:
+                    _conn.execute("ALTER TABLE tool_calls DROP COLUMN ephemeral")
+                    _conn.commit()
+                    logger.info("[Startup] Dropped ephemeral column from tool_calls (durable retention)")
+            with open(_ephem_sentinel, 'w') as _f:
+                _f.write('done')
+    except Exception as _ephem_err:
+        logger.warning(f"[Startup] tool_calls ephemeral drop skipped: {_ephem_err}")
+
     # One-time episodes FTS rebuild
     try:
         _sentinel = _os.path.join(_os.path.dirname(database_service.db_path), '.episodes-fts-rebuild-v1.done')
@@ -178,7 +262,7 @@ def _run_startup_migrations(database_service) -> None:
         logger.warning(f"[Startup] AdaptiveLayer data_graph purge skipped: {_adl_err}")
 
 
-def _init_services(database_service) -> None:
+def _init_services(database_service: "DatabaseService") -> None:
     """Initialize singleton services and seed default configuration."""
     # Clean up expired auth sessions
     try:
@@ -186,16 +270,6 @@ def _init_services(database_service) -> None:
         cleanup_expired_sessions()
     except Exception:
         pass
-
-    # Seed default policy rules
-    try:
-        from services.policy_service import PolicyService
-        _policy_svc = PolicyService(database_service)
-        _seeded = _policy_svc.seed_defaults()
-        if _seeded:
-            logger.info(f"[Startup] Policy rules seeded: {_seeded} new defaults")
-    except Exception as _pol_err:
-        logger.warning(f"[Startup] Policy seed skipped: {_pol_err}")
 
     logger.info("[Startup] Encryption key deferred to post-login (vault mode)")
     logger.info("[Startup] Capability reconnection deferred to post-login (vault mode)")
@@ -218,7 +292,7 @@ def _init_services(database_service) -> None:
     logger.info("[Startup] TelemetryCollector initialized")
 
 
-def _register_workers(manager, host: str, port: int) -> None:
+def _register_workers(manager: "_WorkerManager", host: str, port: int) -> None:
     """Register all service workers with the WorkerManager."""
     from services.scheduler_service import scheduler_worker
     from workers.document_worker import document_purge_worker
@@ -231,9 +305,6 @@ def _register_workers(manager, host: str, port: int) -> None:
     from workers.folder_watcher_worker import folder_watcher_worker
     manager.register_service("folder-watcher-service", folder_watcher_worker)
 
-    from services.moment_context_service import moment_context_worker
-    manager.register_service("moment-context-service", moment_context_worker)
-
     from services.subconscious_worker import subconscious_worker
     manager.register_service("subconscious-worker", subconscious_worker)
 
@@ -244,8 +315,10 @@ def _register_workers(manager, host: str, port: int) -> None:
     _try_register(manager, "search-expander-service",
                   "services.search_expander_service", "search_expander_worker")
     _try_register(manager, "mcp-server", "mcp_server.server", "run_mcp_server")
+    _try_register(manager, "mcp-client-heartbeat",
+                  "workers.mcp_client_worker", "mcp_client_worker")
 
-    def _flask_worker():
+    def _flask_worker() -> None:
         from api import create_app
         app = create_app()
         logger.info(f"[Chalie] Starting on http://{host}:{port}")
@@ -305,7 +378,7 @@ def _warmup_models() -> None:
         logger.warning(f"[Startup] Embedding warm-up skipped: {e}")
 
 
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser(description="Chalie — personal intelligence layer")
     parser.add_argument("--port", type=int, default=31025, help="Server port (default: 31025)")
     parser.add_argument("--host", default="0.0.0.0", help="Bind address (default: 0.0.0.0)")
@@ -317,6 +390,22 @@ def main():
     import runtime_config
     runtime_config.set({"port": port, "host": host})
 
+    # Apply any staged whole-instance restore BEFORE the DB is opened. The first
+    # chalie.db open happens inside _init_database() → converge() below, so the
+    # artifact swap must complete here or convergence would run against the old
+    # DB. SnapshotService.apply_pending owns its own try/except (boot safety):
+    # a failed restore is rolled back + logged and never aborts startup.
+    # Paired with services/snapshot_service.py (Phase B) and api/snapshot.py.
+    from services.snapshot_service import SnapshotService
+    SnapshotService.apply_pending()
+
+    # Guarantee a usable onnxruntime BEFORE any warmup thread imports it. On a
+    # host whose GPU/ROCm wheel can't load its native libs (e.g. libcudart
+    # missing), this swaps to the CPU wheel and logs an actionable ERROR hint
+    # (visible in the Cognition → Errors panel); a no-op when import already works.
+    from services.runtime_deps_service import RuntimeDepsService
+    RuntimeDepsService.ensure_onnxruntime()
+
     _start_model_preload()
 
     database_service = _init_database()
@@ -327,7 +416,6 @@ def main():
     _warmup_models()
 
     # Background-install optional runtime deps (playwright, voice if enabled)
-    from services.runtime_deps_service import RuntimeDepsService
     RuntimeDepsService.ensure_playwright()
     RuntimeDepsService.init_voice_from_settings(database_service)
 
@@ -338,7 +426,7 @@ def main():
     manager.run()
 
 
-def _bootstrap_capability_sync():
+def _bootstrap_capability_sync() -> None:
     """Bootstrap connected capabilities at startup.
 
     For each capability, call connect() — it checks credentials internally and
@@ -361,7 +449,7 @@ def _bootstrap_capability_sync():
         logger.warning("[bootstrap] Capability sync bootstrap failed: %s", exc)
 
 
-def _try_register(manager, name, module_path, func_name):
+def _try_register(manager: "_WorkerManager", name: str, module_path: str, func_name: str) -> None:
     """Try to import and register a service, logging failure gracefully."""
     try:
         import importlib

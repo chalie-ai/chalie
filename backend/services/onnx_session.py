@@ -32,7 +32,10 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import List, Optional, Union
+from typing import TYPE_CHECKING, List, Optional, Union
+
+if TYPE_CHECKING:
+    from onnxruntime import InferenceSession
 
 logger = logging.getLogger(__name__)
 
@@ -65,13 +68,6 @@ def _model_fits_coreml(model_path: Path, limit: int = METAL_TEXTURE_LIMIT) -> bo
 
 
 def choose_providers(model_path: Optional[Union[Path, str]] = None) -> List[str]:
-    """Return the provider list to hand ORT, ordered by preference.
-
-    ``model_path`` is optional. When provided, it is inspected for the Metal
-    texture limit and CoreML is stripped if the model would trip it. Pass
-    ``None`` for models known to be small (e.g. classifier heads, Kokoro
-    phoneme decoder).
-    """
     import onnxruntime as ort
 
     providers = list(ort.get_available_providers())
@@ -92,33 +88,20 @@ def choose_providers(model_path: Optional[Union[Path, str]] = None) -> List[str]
 
 def build_session(
     model_path: Union[Path, str],
-    sess_options=None,
+    sess_options: object = None,
     providers: Optional[List[str]] = None,
     *,
     log_prefix: str = "[ONNX]",
-):
-    """Construct an ``ort.InferenceSession`` with CPU fallback on failure.
-
-    Args:
-        model_path: Path to the ``.onnx`` file.
-        sess_options: Optional pre-configured ``ort.SessionOptions``. A fresh
-            default is built when None.
-        providers: Explicit provider list. When None, ``choose_providers`` is
-            consulted.
-        log_prefix: Bracketed tag prepended to log lines ("[VOICE]", etc.).
-
-    Returns:
-        The constructed ``ort.InferenceSession``.
-
-    Raises:
-        The original ORT error when CPU-only construction also fails — at that
-        point the host cannot run the model at all.
-    """
+) -> 'InferenceSession':
     import onnxruntime as ort
 
     model_path = Path(model_path)
     chosen = list(providers) if providers is not None else choose_providers(model_path)
-    opts = sess_options if sess_options is not None else ort.SessionOptions()
+    opts = (
+        sess_options
+        if sess_options is not None
+        else ort.SessionOptions()
+    )
 
     try:
         session = ort.InferenceSession(str(model_path), sess_options=opts, providers=chosen)

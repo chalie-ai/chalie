@@ -1,14 +1,17 @@
 """Phase C wire-format regression tests.
+ 
+ These tests guard the specific regressions Phase C introduced:
+ 
+ 1. Transcript.append() sets xml_migrated=1 on every new INSERT.
+ 2. api/conversation.get_recent_history() returns content per message and
+    does NOT return a blocks key (blocks array was the old wire format).
+ 
+ All tests are @pytest.mark.unit: real SQLite (via db fixture), no mocks
+ of production code.
+ """
 
-These tests guard the specific regressions Phase C introduced:
-
-1. transcript_service.append() sets xml_migrated=1 on every new INSERT.
-2. api/conversation.get_recent_history() returns `content` per message and
-   does NOT return a `blocks` key — blocks array was the old wire format.
-
-All tests are @pytest.mark.unit: real SQLite (via `db` fixture), no mocks
-of production code.
-"""
+import sqlite3
+from typing import cast
 
 import pytest
 
@@ -22,10 +25,10 @@ class TestTranscriptAppendSetsXmlMigrated:
     corrupt already-correct XML content.
     """
 
-    def test_append_sets_xml_migrated_1(self, db):
-        from services.transcript_service import append
+    def test_append_sets_xml_migrated_1(self, db: sqlite3.Connection) -> None:
+        from services.transcript_service import Transcript
 
-        rowid = append("ch-xml", "user", "Hello world")
+        rowid = Transcript.append("ch-xml", "user", "Hello world")
         assert rowid is not None
 
         row = db.execute(
@@ -34,10 +37,10 @@ class TestTranscriptAppendSetsXmlMigrated:
         assert row is not None
         assert row[0] == 1, "append() must write xml_migrated=1"
 
-    def test_write_input_row_sets_xml_migrated_1(self, db):
-        from services.transcript_service import write_input_row
+    def test_write_input_row_sets_xml_migrated_1(self, db: sqlite3.Connection) -> None:
+        from services.transcript_service import Transcript
 
-        rowid = write_input_row("ch-xml", "user", "Input content")
+        rowid = Transcript.write_input_row("ch-xml", "user", "Input content")
         assert rowid is not None
 
         row = db.execute(
@@ -46,10 +49,10 @@ class TestTranscriptAppendSetsXmlMigrated:
         assert row is not None
         assert row[0] == 1, "write_input_row() must write xml_migrated=1"
 
-    def test_write_assistant_row_sets_xml_migrated_1(self, db):
-        from services.transcript_service import write_assistant_row
+    def test_write_assistant_row_sets_xml_migrated_1(self, db: sqlite3.Connection) -> None:
+        from services.transcript_service import Transcript
 
-        rowid = write_assistant_row("ch-xml", "<p>Response</p>")
+        rowid = Transcript.write_assistant_row("ch-xml", "<p>Response</p>")
         assert rowid is not None
 
         row = db.execute(
@@ -69,7 +72,7 @@ class TestConversationHistoryXmlWireFormat:
     chat.js now expects `content` only.
     """
 
-    def test_messages_have_content_key_not_blocks(self, db):
+    def test_messages_have_content_key_not_blocks(self, db: sqlite3.Connection) -> None:
         from api.conversation import get_recent_history
 
         db.execute(
@@ -77,7 +80,7 @@ class TestConversationHistoryXmlWireFormat:
         )
         db.commit()
 
-        messages, _ = get_recent_history(limit=12, offset=0)
+        messages, _, _ = get_recent_history(limit=12, offset=0)
         assert len(messages) >= 1
         for msg in messages:
             assert "content" in msg, "Each message must have a 'content' key"
@@ -85,8 +88,7 @@ class TestConversationHistoryXmlWireFormat:
                 "Message must NOT have a 'blocks' key — blocks array is the old wire format"
             )
 
-    def test_content_is_passed_through_verbatim(self, db):
-        """The XML string stored in transcript.content is not re-processed."""
+    def test_content_is_passed_through_verbatim(self, db: sqlite3.Connection) -> None:
         from api.conversation import get_recent_history
 
         db.execute(
@@ -94,6 +96,6 @@ class TestConversationHistoryXmlWireFormat:
         )
         db.commit()
 
-        messages, _ = get_recent_history(limit=12, offset=0)
-        target = next((m for m in messages if "<p>Verbatim</p>" in m.get("content", "")), None)
+        messages, _, _ = get_recent_history(limit=12, offset=0)
+        target = next((m for m in messages if "<p>Verbatim</p>" in cast(str, m.get("content", ""))), None)
         assert target is not None, "Content must be returned verbatim, not re-serialized"

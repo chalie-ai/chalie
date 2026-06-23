@@ -1,78 +1,90 @@
 """
 NewsAbility — Search news articles across global sources.
 
-Rich-media rendering:
-  When ``_rich_media_ordinal`` is present (user channel only), returns a
-  structured JSON payload + instruction trailer so the frontend renders an
-  article card.  The first article's image (if any) populates the thumbnail.
+Result contract:
+  ``run()`` returns a :class:`ToolResult` built only via ``ok`` / ``err``. The
+  success body is a JSON list of ``{title, source, url, published_at, snippet}``
+  rows (``snippet`` is the description truncated) with a ``count`` meta —
+  verbatim, machine-readable headlines the model quotes instead of re-prosing a
+  blob. Zero articles from a provider that ANSWERED is a success with ``count=0``
+  and an explicit empty list, never a blank body and never an error.
+
+  A provider that is unreachable raises ``NewsFetchError`` from the service; the
+  ability maps it to ``code=provider-unreachable`` with a recovery hint — a dead
+  provider is never an empty success. On the category path (category feeds +
+  Google News aggregated) a Google News failure is tolerated when the category
+  feeds produced articles (``meta degraded=true``); it is ``provider-unreachable``
+  only when nothing was gathered at all.
 """
 
-import json
 import logging
-from typing import ClassVar, Optional
+from typing import ClassVar, Optional, cast
 
-from abilities._base import Ability
+from abilities._ability import Ability
+from abilities._params import Keys
+from abilities._result import ToolResult
 from services import news_sources
-from services.news_service import NewsService
-from services.time_formatter_service import TimeFormatterService
+from services.news_service import NewsFetchError, NewsService
 
 logger = logging.getLogger(__name__)
 
-_RICH_MEDIA_INSTRUCTION = (
-    "You MUST present this result by wrapping your synthesis in <span id='{tag}'>your synthesis here</span>. "
-    "The span will render as a news article card; without it, the user sees "
-    "only plain text. Write a single paragraph that synthesises the key story "
-    "for the user. Example: \"Here's the latest — "
-    "<span id='{tag}'>The EU opened its first audits under the AI Act today, "
-    "targeting three major companies you've been tracking.</span>\""
-    "\n\nThumbnail (optional): if the data above includes an `image_candidates` "
-    "array, each entry has a `url`, `source_title` (the article it came from), "
-    "and `caption` (a short description derived from the image filename or "
-    "article metadata). Pick the candidate whose `caption` and `source_title` "
-    "together best match the topic of your synthesis. If no candidate is a "
-    "clear match, omit `data-image`. To attach a thumbnail, add "
-    "`data-image='<that url>'` to the span, e.g. "
-    "<span id='{tag}' data-image='https://example.com/pic.jpg'>your synthesis</span>. "
-    "Use a URL verbatim from `image_candidates`."
-)
+_CATEGORIES = ("tech", "business", "sports", "science", "entertainment", "us", "uk")
+_SNIPPET_LEN = 200
 
 
 class NewsAbility(Ability):
-    NAME = "news"
-    SEARCH_TOOLTIP = "news article search"
-    POLICY_CATEGORY = "News & Weather"
-    POLICY_LABELS = {"": "Search news"}
-    SUMMARY = "Search news articles across global sources by query, with optional category filtering for broad topic browsing."
-    EXAMPLES = [
-        "what's in the news about artificial intelligence today",
-        "latest tech news",
-        "what happened in sports today",
-        "news about the US election",
-        "any recent business news about Apple",
-        "what's happening in science this week",
-        "show me today's UK headlines",
-        "news about climate change legislation",
-    ]
-    INPUT_SCHEMA = {
+    DISCOVERABLE: ClassVar[bool] = False  # delegate-exclusive; pinned on WebSearchConfig only
+
+    # Pre-gated by the dispatcher BEFORE run() and BEFORE the policy gate: an
+    # action-less tool whose only hard requirement is a non-empty query. The ""
+    # key covers action-less tools (see ToolDispatcher._prevalidate); a missing or
+    # blank query is rejected as one code=missing-params error naming 'query', so
+    # run() never sees a query-less call.
+    ACTION_REQUIRED: ClassVar[dict[str, tuple[str, ...]]] = {"": (Keys.query,)}
+
+    def get_name(self) -> str:
+        return "news"
+
+    def get_summary(self) -> str:
+        return "Search news articles across global sources by query, with optional category filtering for broad topic browsing."
+
+    def get_examples(self) -> list[str]:
+        return [
+            "what's in the news about artificial intelligence today",
+            "latest tech news",
+            "what happened in sports today",
+            "news about the US election",
+            "any recent business news about Apple",
+            "what's happening in science this week",
+            "show me today's UK headlines",
+            "news about climate change legislation",
+        ]
+
+    def get_search_tooltip(self) -> str:
+        return "news article search"
+
+    _PARAMETERS: ClassVar[dict[str, object]] = {
         "type": "object",
         "properties": {
-            "query": {
+            Keys.query: {
                 "type": "string",
                 "description": "What to search for.",
             },
-            "category": {
+            Keys.category: {
                 "type": "string",
-                "enum": ["tech", "business", "sports", "science", "entertainment", "us", "uk"],
+                "enum": list(_CATEGORIES),
                 "description": "Narrow to a news category. Use only for broad topic browsing.",
             },
         },
-        "required": ["query"],
+        "required": [Keys.query],
     }
-    TIMEOUT = 10
+
+    def get_parameters(self) -> dict[str, object]:
+        return self._PARAMETERS
 
     _service: ClassVar[Optional[NewsService]] = None
 
-    _COUNTRY_CODE_MAP: ClassVar[dict] = {
+    _COUNTRY_CODE_MAP: ClassVar[dict[str, str]] = {
         "united states": "US", "united kingdom": "GB", "malta": "MT",
         "germany": "DE", "france": "FR", "japan": "JP", "canada": "CA",
         "australia": "AU", "italy": "IT", "spain": "ES", "netherlands": "NL",
@@ -85,111 +97,82 @@ class NewsAbility(Ability):
         "united arab emirates": "AE", "saudi arabia": "SA",
     }
 
-    def execute(self, channel: str, params: dict, telemetry: dict | None) -> dict | str:
-        query = (params.get("query") or "").strip()
+    def run(self, params: dict[str, object]) -> ToolResult:
+        # query presence is pre-gated by ACTION_REQUIRED; .strip() guards a
+        # whitespace-only value that the truthiness pre-gate lets through.
+        query = (cast("str", params.get(Keys.query) or "")).strip()
         if not query:
-            return {"text": "", "error": "A 'query' parameter is required."}
+            return ToolResult.err(
+                "query is required and cannot be blank.",
+                code="missing-params",
+                hint="pass a plain natural-language query.",
+                valid=("query",),
+            )
 
-        ordinal = params.get("_rich_media_ordinal")
-        category = params.get("category")
-        telemetry = telemetry or {}
+        # A bogus category must be rejected loudly, never silently degraded into
+        # an uncategorised search — the param helper raises ToolParamError
+        # (code=invalid-param) which the dispatcher renders canonically.
+        category = self.param(params, Keys.category, default=None, choices=_CATEGORIES)
+        telemetry = self.telemetry or {}
 
-        try:
-            svc = self._get_service()
-            country_code = self._resolve_country_code(telemetry.get("country"))
+        svc = self._get_service()
+        country_code = self._resolve_country_code(telemetry.get("country"))
 
-            if category:
-                source_ids = [s.id for s in news_sources.get_sources_by_category(category)]
-                articles = svc.fetch_feeds(source_ids)
+        degraded = False
+        if category:
+            source_ids = [s.id for s in news_sources.get_sources_by_category(cast("str", category))]
+            articles = svc.fetch_feeds(source_ids)
+            try:
                 articles.extend(svc.fetch_google_news(query, country_code=country_code))
-                articles = svc.deduplicate(articles)
-                articles = svc.rank_by_relevance(articles, query)
-            else:
+            except NewsFetchError as exc:
+                # Partial-outage precedent: if the category feeds produced
+                # articles, Google News failing is a degraded-but-usable result;
+                # only when nothing was gathered is the whole call unreachable.
+                if not articles:
+                    return self._provider_unreachable(exc)
+                logger.warning("[news-tool] Google News degraded on category path: %s", exc)
+                degraded = True
+            articles = svc.deduplicate(articles)
+            articles = svc.rank_by_relevance(articles, query)
+        else:
+            try:
                 articles = svc.fetch_google_news(query, country_code=country_code)
+            except NewsFetchError as exc:
+                return self._provider_unreachable(exc)
 
-            if not articles:
-                return {"text": f"No news found for \"{query}\".", "title": f"News: \"{query}\""}
+        top = articles[:10]
+        rows = [
+            {
+                "title": a.title,
+                "source": a.source,
+                "url": getattr(a, "url", "") or "",
+                "published_at": a.published_at,
+                "snippet": (a.description or "")[:_SNIPPET_LEN],
+            }
+            for a in top
+        ]
 
-            top = articles[:10]
+        if degraded:
+            return ToolResult.ok(rows, count=len(rows), degraded=True)
+        return ToolResult.ok(rows, count=len(rows))
 
-            if ordinal is None:
-                return {"text": _format_articles(top), "title": f"News: \"{query}\""}
-
-            return _serialise_rich(top, ordinal)
-        except Exception as e:
-            logger.exception(f"[news-tool] failed: {e}")
-            return {"text": "", "error": str(e)}
+    @staticmethod
+    def _provider_unreachable(exc: NewsFetchError) -> ToolResult:
+        return ToolResult.err(
+            f"The news provider was unreachable: {exc}",
+            code="provider-unreachable",
+            hint="the news source is down or unreachable — retry shortly, or tell the user news is temporarily unavailable.",
+        )
 
     @classmethod
-    def _get_service(cls):
+    def _get_service(cls) -> "NewsService":
         if cls._service is None:
             cls._service = NewsService()
         return cls._service
 
     @classmethod
-    def _resolve_country_code(cls, country) -> str:
+    def _resolve_country_code(cls, country: object) -> str:
         if not country:
             return "US"
-        return cls._COUNTRY_CODE_MAP.get(country.lower().strip(), "US")
+        return cls._COUNTRY_CODE_MAP.get(cast("str", country).lower().strip(), "US")
 
-
-def _serialise_rich(articles, ordinal: int) -> str:
-    tag = f"news_{ordinal}"
-    results = []
-    image_items: list[tuple[str, str]] = []
-    needs_og: list[tuple[str, str]] = []
-    for a in articles:
-        entry = {"title": a.title, "source": a.source, "url": getattr(a, "url", "")}
-        if a.description:
-            entry["desc"] = a.description[:200]
-        results.append(entry)
-        img = getattr(a, "image_url", "") or ""
-        title = a.title or ""
-        if img:
-            image_items.append((img, title))
-        elif entry["url"]:
-            needs_og.append((entry["url"], title))
-
-    # og_meta maps image_url → {"image_url", "description"} for caption derivation
-    og_meta: dict = {}
-    if len(image_items) < 3 and needs_og:
-        from services.og_image_service import resolve_og_images
-        try:
-            og_map = resolve_og_images([u for u, _ in needs_og[: 3 - len(image_items)]])
-        except Exception as exc:
-            logger.warning("[news-tool] og:image lookup failed: %s", exc)
-            og_map = {}
-        for article_url, title in needs_og:
-            meta = og_map.get(article_url)
-            if meta:
-                img = meta["image_url"]
-                image_items.append((img, title))
-                # Key by image URL so image_candidate_service can look it up
-                og_meta[img] = meta
-            if len(image_items) >= 3:
-                break
-
-    payload: dict = {"results": results}
-    if image_items:
-        try:
-            from services.image_candidate_service import build_image_candidates
-            candidates = build_image_candidates(image_items, og_meta=og_meta or None)
-        except Exception as exc:
-            logger.warning("[news-tool] image candidate shortlist failed: %s", exc)
-            candidates = []
-        if candidates:
-            payload["image_candidates"] = candidates
-    data_json = json.dumps(payload)
-    instruction = _RICH_MEDIA_INSTRUCTION.format(tag=tag)
-    return f"{data_json}\n\n{instruction}"
-
-
-def _format_articles(articles) -> str:
-    lines = []
-    for a in articles:
-        lines.append(f"• {a.title}")
-        lines.append(f"  {a.source} · {TimeFormatterService.ago(a.published_at)}")
-        if a.description:
-            lines.append(f"  {a.description[:150]}")
-        lines.append("")
-    return "\n".join(lines)

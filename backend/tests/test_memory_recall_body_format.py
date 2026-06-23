@@ -1,115 +1,154 @@
-"""Feature test: memory recall body contains [id:X,relevance:Y] markers.
+"""Feature test: memory recall returns a STRUCTURED JSON body, and the transcript
+back-reference resolves episodes from it.
 
-Key invariant: TranscriptService._fetch_referenced_episodes uses the regex
-``r'\\[id:([^,\\]]+)'`` to back-reference memory hits. This test seeds a real
-DataGraph entry, runs a real recall, and asserts the wire format that regex
-depends on is present inside the [memory(...)] / [end:memory] block.
+Two contracts are pinned end-to-end against the real production hot path:
 
-Zero mocks — real DataGraphService against real in-memory SQLite.
+1. **Structured recall body.** ``recall`` renders
+   ``[memory(status=success, …)]\\n{"results": [{id, content, score, kind,
+   created_at}, …]}\\n[end:memory]`` — machine-parseable rows, not the old
+   ``[id:X,relevance:Y] text`` prose. An EXPLICIT recall additionally carries a
+   ``fallback`` field naming the document/schedule tools; the silent turn-0 seed
+   carries none.
+
+2. **The episode back-reference still resolves.** ``transcript_service.
+   _fetch_referenced_episodes`` reads the rendered recall envelope back out of the
+   ``tool_calls`` table and must resolve the underlying episode row. The format is
+   load-bearing: this test stores a REAL episode, records a REAL recall envelope
+   carrying that episode's id, and proves the real consumer fetches it back.
+
+Zero mocks — real DataGraphService / EpisodicService / DatabaseService against the
+real ``db`` fixture, the real ``ToolDispatcher`` envelope renderer, and the real
+``ActTrail`` write.
 """
 
-import re
+import json
+import sqlite3
+from typing import cast
 
 import pytest
+
+from abilities._dispatcher import ToolDispatcher
+from abilities.memory import MemoryAbility
 
 pytestmark = pytest.mark.unit
 
 
-def _handle_memory(topic: str, params: dict) -> str:
-    """Thin shim: call MemoryAbility.execute and return the text string."""
-    from abilities.memory import MemoryAbility
-    result = MemoryAbility().execute(topic, params, None)
-    assert result is not None, "MemoryAbility.execute() returned None"
-    return result["text"]
+def _parse_body(rendered: str) -> dict[str, object]:
+    head = rendered.index("]\n") + 2
+    tail = rendered.index("\n[end:memory]")
+    return cast(dict[str, object], json.loads(rendered[head:tail]))
 
 
-class TestMemoryRecallBodyFormat:
-    """Verify the [id:X,relevance:Y] body format is produced by real recall."""
+def _render_recall(params: dict[str, object]) -> str:
+    result = MemoryAbility().run(params)
+    assert result is not None, "MemoryAbility.run() returned None"
+    return ToolDispatcher._render("memory", result, None)
 
-    def test_recall_with_hit_contains_id_relevance_markers(self, db):
-        """Real DataGraph recall wraps hits in [id:...,relevance:...] lines.
 
-        Seeds a user_specific fact, recalls it by query, and asserts the body
-        of the [memory(...)] tag contains the expected marker format.
-        The format is load-bearing: TranscriptService parses it with
-        r'\\[id:([^,\\]]+)' to resolve back-references.
-        """
+class TestMemoryRecallStructuredBody:
+    def test_recall_hit_is_a_structured_json_row(self, db: sqlite3.Connection) -> None:
         from services.data_graph_service import get_data_graph_service
 
-        # Seed a known fact via the real DataGraphService (bound to test db)
-        dgs = get_data_graph_service()
-        dgs.store(
-            kind='user_specific',
-            key='residence',
-            value='Valletta',
-            source='test:seed',
+        get_data_graph_service().store(
+            kind="user_specific", key="residence", value="Valletta", source="test:seed",
         )
 
-        result = _handle_memory('topic', {'action': 'recall', 'query': 'residence city'})
+        out = _render_recall({"action": "recall", "query": "residence city"})
 
-        # Both markers must be present
-        assert '[memory(' in result, f"Missing opener in: {result!r}"
-        assert '[end:memory]' in result, f"Missing terminator in: {result!r}"
+        assert "[memory(status=success" in out
+        assert "[end:memory]" in out
+        assert "results=0" not in out, f"expected a hit, got results=0: {out!r}"
 
-        # At least one result must exist
-        assert 'results=0' not in result, (
-            f"Expected a hit for 'residence city' but got results=0. Output: {result!r}"
+        body = _parse_body(out)
+        assert isinstance(body, dict), f"recall body must be a JSON object: {body!r}"
+        rows = cast(list[dict[str, object]], body["results"])
+        assert isinstance(rows, list) and rows, f"expected non-empty results list: {body!r}"
+
+        match = next((r for r in rows if r.get("id") == "residence"), None)
+        assert match is not None, f"stored key 'residence' missing from rows: {rows!r}"
+        # Every contracted field is present on the row.
+        assert set(match) >= {"id", "content", "score", "kind", "created_at"}, (
+            f"row missing contracted fields: {match!r}"
         )
+        assert "Valletta" in cast(str, match["content"])
+        assert cast(str, match["score"]) in ("high", "medium", "low")
+        assert match["kind"] == "user_specific"
 
-        # Body must contain the [id:X,relevance:Y] format that TranscriptService parses
-        id_marker_pattern = re.compile(r'\[id:[^,\]]+,relevance:(high|medium|low)\]')
-        body_start = result.index('\n') + 1
-        body_end = result.rindex('\n')
-        body = result[body_start:body_end]
-        assert id_marker_pattern.search(body), (
-            f"Body missing [id:X,relevance:Y] marker. Body: {body!r}"
+    def test_explicit_recall_carries_fallback_field_seed_does_not(self, db: sqlite3.Connection) -> None:
+        explicit = _parse_body(
+            _render_recall({"action": "recall", "query": "xyzzy_nonexistent_key_abc"})
         )
+        assert explicit["results"] == []
+        assert "fallback" in explicit, f"explicit recall lost the guardrail: {explicit!r}"
+        assert "`document` (action: search)" in cast(str, explicit["fallback"])
+        assert "`schedule` (action: search)" in cast(str, explicit["fallback"])
 
-        # The stored value must appear in the body
-        assert 'Valletta' in body, f"Stored value 'Valletta' missing from body: {body!r}"
+        seed = _parse_body(
+            _render_recall(
+                {"action": "recall", "query": "xyzzy_nonexistent_key_abc", "_auto": True}
+            )
+        )
+        assert seed["results"] == []
+        assert "fallback" not in seed, f"silent seed leaked the guardrail: {seed!r}"
 
-    def test_recall_no_results_has_results_zero_arg(self, db):
-        """Empty recall produces [memory(query=..., results=0)]\\n[end:memory].
 
-        Verifies the 'No memories found' semantic is now expressed as a tag
-        arg rather than a body string, keeping the wire format consistent.
+class TestEpisodeBackReferenceFromStructuredBody:
+    def test_recall_envelope_resolves_its_episode_downstream(self, db: sqlite3.Connection) -> None:
+        """The transcript back-reference fetches the real episode from a recorded
+        recall envelope whose JSON body carries that episode's id.
+
+        Producer → consumer end-to-end: a REAL episode is stored, a REAL recall
+        envelope carrying an ``episode``-kind row is recorded on the act-trail, and
+        the REAL ``_fetch_referenced_episodes`` resolves it back out of the JSON —
+        proving the structured body keeps the load-bearing back-reference alive.
         """
-        result = _handle_memory('topic', {'action': 'recall', 'query': 'xyzzy_nonexistent_key_abc'})
+        from services.act_trail import ActTrail
+        from services.database_service import get_shared_db_service
+        from services.episodic_service import EpisodicService
+        from services.memory_retrieval import _recall_payload
+        from services.transcript_service import Transcript
 
-        assert '[memory(' in result
-        assert '[end:memory]' in result
-        assert 'results=0' in result
-        # No body between the markers (empty recall has no body line)
-        lines = result.split('\n')
-        assert len(lines) == 2, (
-            f"Expected exactly 2 lines for empty recall, got {len(lines)}: {result!r}"
+        shared_db = get_shared_db_service()
+        episode_id = EpisodicService(shared_db).store_episode(
+            {"gist": "We talked about the trip to Gozo at home", "salience": 7, "channel": "chat"}
         )
 
-    def test_recall_body_key_matches_stored_key(self, db):
-        """The id: in [id:X,relevance:Y] must be the canonical data-graph key.
+        # A transcript anchor the trail row references.
+        cur = db.execute(
+            "INSERT INTO transcript (channel, role, content) VALUES (?, ?, ?)",
+            ("chat", "user", "what did we talk about at home"),
+        )
+        db.commit()
+        transcript_id = cast(int, cur.lastrowid)
 
-        TranscriptService uses this id to look up the original memory row.
-        """
-        from services.data_graph_service import get_data_graph_service
-
-        dgs = get_data_graph_service()
-        dgs.store(
-            kind='user_specific',
-            key='partner',
-            value='Sarah',
-            source='test:seed',
+        # Build the recall body exactly as production does — a real episode-kind
+        # hit through the real projection — and render the real envelope.
+        hit = {
+            "id": episode_id,
+            "text": "We talked about the trip to Gozo at home",
+            "relevance": "high",
+            "confidence": 0.9,
+            "kind": "episode",
+            "created_at": "2026-06-10T00:00:00+00:00",
+        }
+        body = {"results": _recall_payload([hit])}
+        from abilities._result import ToolResult
+        rendered = ToolDispatcher._render(
+            "memory", ToolResult.ok(body, query="home", results=1, degraded=False), None
         )
 
-        result = _handle_memory('topic', {'action': 'recall', 'query': 'partner relationship'})
+        # Record it on the real trail under tool_name='memory' — the exact row the
+        # consumer reads back.
+        ActTrail().record(
+            tool_name="memory", params={"action": "recall"}, result=rendered,
+            transcript_id=transcript_id,
+        )
 
-        if 'results=0' in result:
-            pytest.skip("FTS did not surface this hit — embedding unavailable in this env")
+        entries: list[dict[str, object]] = [{"id": transcript_id}]
+        episodes = Transcript._fetch_referenced_episodes(entries, shared_db)
 
-        body_start = result.index('\n') + 1
-        body_end = result.rindex('\n')
-        body = result[body_start:body_end]
-
-        # Key must appear in the id: field
-        assert '[id:partner,' in body, (
-            f"Expected '[id:partner,...' in body. Body: {body!r}"
+        assert episodes, "back-reference resolved no episodes from the JSON body"
+        assert any(str(ep.get("id")) == episode_id for ep in episodes), (
+            f"episode {episode_id} not resolved from recall envelope: "
+            f"{[ep.get('id') for ep in episodes]!r}"
         )

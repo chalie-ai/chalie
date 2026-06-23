@@ -1,13 +1,9 @@
-"""email_triage — embedding-based email classification.
-
-Classifies email header dicts as noise, informational, or actionable using
-cosine similarity against canonical intent anchors.  ``has_unsubscribe`` is
-the only deterministic fast-path; everything else goes through the embeddings.
-"""
+"""embedding-based email classification by cosine similarity against intent anchors."""
 
 from __future__ import annotations
 
 import logging
+from typing import cast
 
 import numpy as np
 
@@ -32,11 +28,10 @@ _TRIAGE_ANCHORS = {
     ),
 }
 
-_anchor_cache: dict | None = None
+_anchor_cache: dict[str, object] | None = None
 
 
-def _get_anchor_embeddings() -> dict:
-    """Return cached anchor embeddings, computing on first call."""
+def _get_anchor_embeddings() -> dict[str, object]:
     global _anchor_cache
     if _anchor_cache is not None:
         return _anchor_cache
@@ -49,26 +44,18 @@ def _get_anchor_embeddings() -> dict:
     return _anchor_cache
 
 
-def _build_email_text(item: dict) -> str:
-    """Build classification text from email signals."""
-    parts = []
+def _build_email_text(item: dict[str, object]) -> str:
+    parts: list[str] = []
     subj = item.get("subject", "")
     if subj:
-        parts.append(subj)
+        parts.append(cast(str, subj))
     sender = item.get("from_name") or item.get("from_addr", "")
     if sender:
-        parts.append(f"from {sender}")
+        parts.append(f"from {cast(str, sender)}")
     return " ".join(parts) if parts else "email message"
 
 
-def classify_email(item: dict) -> str:
-    """Classify an email header dict as noise, informational, or actionable.
-
-    Uses embedding similarity against canonical intent anchors.
-    Only ``has_unsubscribe`` is a deterministic fast path; threaded replies
-    (``in_reply_to``) go through the embedding classifier because many
-    automated systems (newsletters, GitHub notifications) set In-Reply-To.
-    """
+def classify_email(item: dict[str, object]) -> str:
     if item.get("has_unsubscribe"):
         return "noise"
 
@@ -80,7 +67,7 @@ def classify_email(item: dict) -> str:
     best_cat = "informational"
     best_sim = -1.0
     for cat, anchor_emb in anchors.items():
-        sim = float(np.dot(email_emb, anchor_emb))
+        sim = float(np.dot(email_emb, cast(np.ndarray, anchor_emb)))
         if sim > best_sim:
             best_sim = sim
             best_cat = cat

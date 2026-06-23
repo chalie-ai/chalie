@@ -1,27 +1,10 @@
 """
-Backfill migration: canonicalize existing user_specific data_graph keys via the concept LUT.
-
-Walks every active, non-deleted user_specific row in data_graph. For each row,
-embeds the key and performs a KNN lookup against concept_lut.sqlite. If the LUT
-returns a canonical key that differs from the stored key, the row is updated
-in-place:
-    - data_graph.key     → canonical_key
-    - data_graph_key_vec → new embedding blob for the canonical key
-    - FTS index          → delete old entry, insert new entry
-
-Collision handling (rule-aware merge when two raw keys canonicalize to the same target):
-    - temporal:  keep the more recently confirmed row as active=1; demote the older
-                 row to active=0 with retrieval_weight halved; link both via
-                 supersedes/superseded_by edges.
-    - coexist:   same value → merge evidence_count into existing row and hard-delete
-                 the migrating row. Different value → rewrite key and leave both active.
-    - immutable: same value → merge evidence_count and hard-delete the migrating row.
-                 Different value → log and skip (leave migrating row at original key
-                 to preserve history; will surface as a LUT miss on next read).
-
-Idempotent under canonical-key collisions: re-running will detect already-merged state
-via the rule dispatch and skip. Rows already at their canonical key are also skipped.
-Safe to re-run.
+Backfill migration: embed each active user_specific key, look it up against concept_lut.sqlite,
+and canonicalize keys that differ. Rule-aware merge when two raw keys map to the same target:
+  temporal   → newer row stays active=1; older demoted to active=0 with halved weight + supersedes edges.
+  coexist    → same value merges evidence and hard-deletes; different value rewrites key, both stay active.
+  immutable  → same value merges evidence and hard-deletes; different value logs and skips.
+Idempotent / safe to re-run.
 
 Run from backend/:
     python -m utils.migrate_canonicalize_user_keys [--dry-run]
@@ -31,6 +14,8 @@ import argparse
 import sqlite3
 import sys
 from pathlib import Path
+from typing import cast
+import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
@@ -40,7 +25,7 @@ from services.data_graph_service import (
     _CONCEPT_LUT_THRESHOLD,
     _l2_dist_to_cosine,
 )
-from services.database_service import get_shared_db_service
+from services.database_service import DatabaseService, get_shared_db_service
 from services.embedding_service import EmbeddingService
 from services.embedding_utils import pack_embedding
 
@@ -49,7 +34,6 @@ _TEMPORAL_DEMOTION_FACTOR = 0.5
 
 
 def _load_sqlite_vec(conn: sqlite3.Connection) -> None:
-    """Load the sqlite-vec extension into conn."""
     conn.enable_load_extension(True)
     try:
         import sqlite_vec
@@ -59,7 +43,6 @@ def _load_sqlite_vec(conn: sqlite3.Connection) -> None:
 
 
 def _open_lut() -> sqlite3.Connection:
-    """Open the concept LUT read-only."""
     if not Path(_CONCEPT_LUT_PATH).exists():
         raise FileNotFoundError(f"concept_lut.sqlite not found at {_CONCEPT_LUT_PATH}")
     conn = sqlite3.connect(_CONCEPT_LUT_PATH)
@@ -68,7 +51,6 @@ def _open_lut() -> sqlite3.Connection:
 
 
 def _lut_lookup(lut_conn: sqlite3.Connection, blob: bytes) -> tuple[str, str] | None:
-    """KNN lookup against lut_embeddings; return (canonical_key, rule) or None."""
     hits = lut_conn.execute(
         "SELECT rowid, distance FROM lut_embeddings WHERE embedding MATCH ? AND k = 1 ORDER BY distance",
         (blob,),
@@ -94,7 +76,6 @@ def _update_fts(
     old_sq: str,
     new_key: str,
 ) -> None:
-    """Delete old FTS entry and insert updated entry with new key."""
     try:
         conn.execute(
             "INSERT INTO data_graph_fts(data_graph_fts, rowid, key, value, kind, search_queries) "
@@ -116,7 +97,6 @@ def _update_fts(
 
 
 def _hard_delete_row(conn: sqlite3.Connection, row_id: int) -> None:
-    """Remove a data_graph row and all associated index and edge entries."""
     try:
         conn.execute(
             "INSERT INTO data_graph_fts(data_graph_fts, rowid, key, value, kind, search_queries) "
@@ -140,8 +120,7 @@ def _hard_delete_row(conn: sqlite3.Connection, row_id: int) -> None:
         pass
 
 
-def _fetch_active_row(conn: sqlite3.Connection, canonical_key: str) -> dict | None:
-    """Return the active row dict for (kind=user_specific, key=canonical_key), or None."""
+def _fetch_active_row(conn: sqlite3.Connection, canonical_key: str) -> dict[str, object] | None:
     row = conn.execute(
         "SELECT id, key, value, evidence_count, retrieval_weight, "
         "first_seen_at, last_confirmed_at "
@@ -163,13 +142,11 @@ def _fetch_active_row(conn: sqlite3.Connection, canonical_key: str) -> dict | No
     }
 
 
-def _effective_date(row: dict) -> str:
-    """Return the best available date string for recency comparison."""
-    return (row.get('last_confirmed_at') or row.get('first_seen_at') or '')
+def _effective_date(row: dict[str, object]) -> str:
+    return cast(str, row.get('last_confirmed_at') or row.get('first_seen_at') or '')
 
 
 def _add_supersession_edges(conn: sqlite3.Connection, winner_id: int, loser_id: int) -> None:
-    """Insert supersedes/superseded_by edges between winner and loser."""
     from services.time_utils import utc_now
     now_iso = utc_now().isoformat()
     for from_id, to_id, edge_type in (
@@ -189,28 +166,22 @@ def _add_supersession_edges(conn: sqlite3.Connection, winner_id: int, loser_id: 
 
 def _apply_temporal_collision(
     conn: sqlite3.Connection,
-    migrating: dict,
-    existing: dict,
+    migrating: dict[str, object],
+    existing: dict[str, object],
     canonical_key: str,
     dry_run: bool,
 ) -> None:
-    """Resolve a temporal collision between migrating and existing active rows.
-
-    The newer row (by last_confirmed_at / first_seen_at) wins and stays active=1.
-    The older row is demoted to active=0 with retrieval_weight halved.
-    Supersession edges link the two rows.
-    """
     migrating_date = _effective_date(migrating)
     existing_date = _effective_date(existing)
     if migrating_date >= existing_date:
-        winner_id, loser_id = migrating['id'], existing['id']
+        winner_id, loser_id = cast(int, migrating['id']), cast(int, existing['id'])
         winner_key = canonical_key
-        loser_rw = existing['retrieval_weight']
+        loser_rw = cast(float, existing['retrieval_weight'])
         action = f"  TEMPORAL collision on '{canonical_key}': migrating id={migrating['id']} wins over existing id={existing['id']}"
     else:
-        winner_id, loser_id = existing['id'], migrating['id']
+        winner_id, loser_id = cast(int, existing['id']), cast(int, migrating['id'])
         winner_key = canonical_key
-        loser_rw = migrating['retrieval_weight']
+        loser_rw = cast(float, migrating['retrieval_weight'])
         action = f"  TEMPORAL collision on '{canonical_key}': existing id={existing['id']} wins over migrating id={migrating['id']}"
 
     print(action)
@@ -231,8 +202,8 @@ def _apply_temporal_collision(
 
 def _apply_coexist_collision(
     conn: sqlite3.Connection,
-    migrating: dict,
-    existing: dict,
+    migrating: dict[str, object],
+    existing: dict[str, object],
     canonical_key: str,
     key: str,
     value: str,
@@ -241,58 +212,44 @@ def _apply_coexist_collision(
     emb_service: EmbeddingService,
     dry_run: bool,
 ) -> str:
-    """Resolve a coexist collision.
-
-    Same value: merge evidence_count into existing row, hard-delete migrating row.
-    Different value: rewrite migrating row's key and leave both active.
-
-    Returns 'merged-coexist' or 'updated'.
-    """
-    if (migrating['value'] or '').strip().lower() == (existing['value'] or '').strip().lower():
+    if (cast(str, migrating['value'] or '')).strip().lower() == (cast(str, existing['value'] or '')).strip().lower():
         print(f"  COEXIST same-value merge on '{canonical_key}': hard-deleting id={migrating['id']}, incrementing id={existing['id']} evidence_count")
         if dry_run:
             return 'merged-coexist'
-        merged_count = (existing['evidence_count'] or 1) + (migrating['evidence_count'] or 1)
+        merged_count = cast(int, existing['evidence_count'] or 1) + cast(int, migrating['evidence_count'] or 1)
         conn.execute(
             "UPDATE data_graph SET evidence_count=? WHERE rowid=?",
             (merged_count, existing['id']),
         )
-        _hard_delete_row(conn, migrating['id'])
+        _hard_delete_row(conn, cast(int, migrating['id']))
         return 'merged-coexist'
 
     # Different values — rewrite migrating row's key so both coexist under canonical_key
     print(f"  COEXIST diff-value rewrite on '{canonical_key}': id={migrating['id']} '{key}' → '{canonical_key}'")
     if dry_run:
         return 'updated'
-    _do_rewrite(conn, migrating['id'], key, value, search_queries, canonical_key, canonical_blob, emb_service)
+    _do_rewrite(conn, cast(int, migrating['id']), key, value, search_queries, canonical_key, canonical_blob, emb_service)
     return 'updated'
 
 
 def _apply_immutable_collision(
     conn: sqlite3.Connection,
-    migrating: dict,
-    existing: dict,
+    migrating: dict[str, object],
+    existing: dict[str, object],
     canonical_key: str,
     key: str,
     dry_run: bool,
 ) -> str:
-    """Resolve an immutable collision.
-
-    Same value: merge evidence_count into existing row, hard-delete migrating row.
-    Different value: log and skip — leave migrating row at original key.
-
-    Returns 'merged-immutable' or 'skipped'.
-    """
-    if (migrating['value'] or '').strip().lower() == (existing['value'] or '').strip().lower():
+    if (cast(str, migrating['value'] or '')).strip().lower() == (cast(str, existing['value'] or '')).strip().lower():
         print(f"  IMMUTABLE same-value merge on '{canonical_key}': hard-deleting id={migrating['id']}, incrementing id={existing['id']} evidence_count")
         if dry_run:
             return 'merged-immutable'
-        merged_count = (existing['evidence_count'] or 1) + (migrating['evidence_count'] or 1)
+        merged_count = cast(int, existing['evidence_count'] or 1) + cast(int, migrating['evidence_count'] or 1)
         conn.execute(
             "UPDATE data_graph SET evidence_count=? WHERE rowid=?",
             (merged_count, existing['id']),
         )
-        _hard_delete_row(conn, migrating['id'])
+        _hard_delete_row(conn, cast(int, migrating['id']))
         return 'merged-immutable'
 
     print(
@@ -415,11 +372,11 @@ _OUTCOME_COUNTERS = {
 
 
 def _run_row(
-    db,
+    db: DatabaseService,
     lut_conn: sqlite3.Connection,
     emb_service: EmbeddingService,
-    row: tuple,
-    emb,
+    row: tuple[int, str, str, str],
+    emb: np.ndarray,
     dry_run: bool,
 ) -> str:
     """Embed, validate, and process a single row. Returns an outcome string."""

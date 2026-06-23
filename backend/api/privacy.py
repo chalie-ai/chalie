@@ -5,17 +5,23 @@ User data tables covered: episodes, transcript, tool_calls,
 list_items, data_graph_edges, data_graph,
 lists, scheduled_items, documents, watched_folders,
 user_tool_preferences, memory_recall_log, llm_call_log,
-concept_lut_misses, browser_snapshots, browser_credentials.
+concept_lut_misses.
 """
 
+import collections.abc
 import json
 import logging
 from datetime import datetime
+from typing import TYPE_CHECKING
+
 from flask import Blueprint, Response, request, jsonify, stream_with_context
 
 from services.time_utils import utc_now
 
 from .auth import require_session
+
+if TYPE_CHECKING:
+    from flask.typing import ResponseReturnValue
 
 logger = logging.getLogger(__name__)
 
@@ -33,6 +39,7 @@ _DELETE_ALL_TABLES = (
     "transcript",
     "episodes",
     "data_graph",
+    "moments",
     "lists",
     "scheduled_items",
     "documents",
@@ -41,23 +48,26 @@ _DELETE_ALL_TABLES = (
     "memory_recall_log",
     "llm_call_log",
     "concept_lut_misses",
-    "browser_snapshots",
-    "browser_credentials",
 )
+
+# Companion index tables wiped alongside ``moments``. ``moments_fts`` is an
+# external-content FTS5 table, so its postings are cleared with the FTS5
+# ``'delete-all'`` command (a plain DELETE would strand them and corrupt the
+# next pin); ``moments_vec`` is a standalone vec0 table cleared by plain DELETE.
+_DELETE_ALL_MOMENTS_FTS = "moments_fts"
+_DELETE_ALL_MOMENTS_VEC = "moments_vec"
 
 # MemoryStore key patterns that belong to the user and must be cleared.
 _DELETE_ALL_STORE_PATTERNS = (
     "working_memory:*",
-    "mode_gate:*",
     "deliberation_score:*",
 )
 
 
-def _serialize_row(row: dict) -> dict:
-    """Convert a database row dict to JSON-serializable form."""
+def _serialize_row(row: dict[str, object]) -> dict[str, object]:
     import uuid
     from decimal import Decimal
-    result = {}
+    result: dict[str, object] = {}
     for k, v in row.items():
         if v is None:
             result[k] = None
@@ -78,8 +88,7 @@ def _serialize_row(row: dict) -> dict:
 
 @privacy_bp.route('/privacy/data-summary', methods=['GET'])
 @require_session
-def data_summary():
-    """Overview of all stored data — counts by type."""
+def data_summary() -> "ResponseReturnValue":
     try:
         from services.database_service import get_shared_db_service
         from services.memory_client import MemoryClientService
@@ -126,8 +135,7 @@ def data_summary():
 
 @privacy_bp.route('/privacy/export', methods=['GET'])
 @require_session
-def export_data():
-    """Export all user data as a streaming JSON download."""
+def export_data() -> "ResponseReturnValue":
 
     user_data_tables = [
         "episodes",
@@ -145,20 +153,7 @@ def export_data():
     MAX_EXPORT_ROWS = 10000
     FETCH_BATCH = 500  # Rows fetched per iteration — keeps memory bounded
 
-    def generate():
-        """Stream all user data as a single JSON object to the HTTP response.
-
-        Yields successive chunks of JSON text covering every SQLite table listed
-        in ``user_data_tables`` and every MemoryStore key prefix listed in
-        ``store_patterns``.  Rows are fetched in batches of ``FETCH_BATCH`` to
-        keep memory usage bounded, and tables that exceed ``MAX_EXPORT_ROWS``
-        rows are truncated with a ``"truncated": true`` marker in the output.
-
-        Yields:
-            str: Raw JSON text fragments that, when concatenated, form a valid
-            JSON object with ``"exported_at"``, ``"tables"``, and
-            ``"memory_store"`` top-level keys.
-        """
+    def generate() -> "collections.abc.Generator[str, None, None]":
         from services.database_service import get_shared_db_service
         from services.memory_client import MemoryClientService
 
@@ -223,7 +218,7 @@ def export_data():
 
             # Group results by pattern for the same JSON shape as before
             compiled = [(p, _re.compile(p.replace("*", ".*").replace("?", "."))) for p in store_patterns]
-            by_pattern = {p: {} for p in store_patterns}
+            by_pattern: dict[str, dict[str, object]] = {p: {} for p in store_patterns}
             for key, entry in all_entries.items():
                 for pattern, rx in compiled:
                     if rx.fullmatch(key):
@@ -246,17 +241,7 @@ def export_data():
 
 @privacy_bp.route('/privacy/delete-all', methods=['DELETE'])
 @require_session
-def delete_all():
-    """Nuclear option — clear all stored user data.
-
-    Wipes every user-owned table (episodes, transcript, tool_calls,
-    list_items, data_graph_edges, data_graph, lists, scheduled_items,
-    documents, watched_folders, user_tool_preferences, memory_recall_log,
-    llm_call_log, concept_lut_misses, browser_snapshots,
-    browser_credentials) and clears MemoryStore working_memory keys.
-
-    System / auth / config tables are deliberately excluded.
-    """
+def delete_all() -> "ResponseReturnValue":
     confirm = request.headers.get("X-Confirm-Delete", "")
     if confirm != "yes":
         return jsonify({"error": "Requires X-Confirm-Delete: yes header"}), 400
@@ -276,6 +261,18 @@ def delete_all():
                 except Exception as e:
                     logger.warning(f"[REST API] Failed to delete from {table}: {e}")
                     truncate_failures.append(table)
+            # The moments base table is cleared above; its external-content FTS
+            # index needs the FTS5 'delete-all' command (a plain DELETE strands
+            # postings), and its vec0 shadow is cleared by rowid-free DELETE.
+            try:
+                cursor.execute(
+                    f"INSERT INTO {_DELETE_ALL_MOMENTS_FTS}({_DELETE_ALL_MOMENTS_FTS}) "
+                    "VALUES ('delete-all')"
+                )
+                cursor.execute(f"DELETE FROM {_DELETE_ALL_MOMENTS_VEC}")
+            except Exception as e:
+                logger.warning(f"[REST API] Failed to clear moments indexes: {e}")
+                truncate_failures.append(_DELETE_ALL_MOMENTS_FTS)
             cursor.close()
 
         # Clear user-owned MemoryStore keys

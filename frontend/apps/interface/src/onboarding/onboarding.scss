@@ -1,0 +1,8 @@
+// Centres the onboarding card on the viewport; tokens from @chalie/shared main.scss.
+body {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+}

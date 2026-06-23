@@ -5,6 +5,7 @@ than storing them -- the caller (HomeCapability) owns credential lifecycle.
 """
 
 import logging
+from typing import cast
 
 import requests
 
@@ -13,7 +14,7 @@ logger = logging.getLogger(__name__)
 _TIMEOUT = 15
 
 
-def _headers(token: str) -> dict:
+def _headers(token: str) -> dict[str, str]:
     return {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
 
 
@@ -33,7 +34,7 @@ def _post(
     path: str,
     token: str,
     verify_ssl: bool,
-    body: dict | None = None,
+    body: dict[str, object] | None = None,
 ) -> requests.Response:
     resp = requests.post(
         f"{url.rstrip('/')}{path}",
@@ -46,9 +47,8 @@ def _post(
     return resp
 
 
-def probe(url: str, token: str, verify_ssl: bool) -> dict:
-    """Health check -- GET /api/. Returns the JSON body or raises."""
-    return _get(url, "/api/", token, verify_ssl).json()
+def probe(url: str, token: str, verify_ssl: bool) -> dict[str, object]:
+    return cast("dict[str, object]", _get(url, "/api/", token, verify_ssl).json())
 
 
 def list_devices(
@@ -58,10 +58,8 @@ def list_devices(
     domain: str | None = None,
     area: str | None = None,
     limit: int = 50,
-) -> dict:
-    """List HA entities, optionally filtered by domain and/or area."""
+) -> dict[str, object]:
     states = _get(url, "/api/states", token, verify_ssl).json()
-
     if domain:
         states = [s for s in states if s["entity_id"].startswith(f"{domain}.")]
 
@@ -90,9 +88,9 @@ def list_devices(
     return {"devices": devices, "count": len(devices), "total": total}
 
 
-def get_state(url: str, token: str, verify_ssl: bool, entity_id: str) -> dict:
-    """Get the full state of a single entity."""
+def get_state(url: str, token: str, verify_ssl: bool, entity_id: str) -> dict[str, object]:
     data = _get(url, f"/api/states/{entity_id}", token, verify_ssl).json()
+
     return {
         "entity_id": data["entity_id"],
         "state": data["state"],
@@ -108,20 +106,20 @@ def control(
     verify_ssl: bool,
     entity_id: str,
     service: str,
-    service_data: dict | None = None,
-) -> dict:
-    """Call a service on an entity (e.g. light/turn_on)."""
+    service_data: dict[str, object] | None = None,
+) -> dict[str, object]:
     domain = entity_id.split(".")[0]
-    body = {"entity_id": entity_id}
+
+    body: dict[str, object] = {"entity_id": entity_id}
     if service_data:
         body.update(service_data)
     _post(url, f"/api/services/{domain}/{service}", token, verify_ssl, body)
     return {"status": "ok", "entity_id": entity_id, "service": f"{domain}.{service}"}
 
 
-def list_automations(url: str, token: str, verify_ssl: bool) -> dict:
-    """List all automation entities."""
+def list_automations(url: str, token: str, verify_ssl: bool) -> dict[str, object]:
     states = _get(url, "/api/states", token, verify_ssl).json()
+
     autos = [
         {
             "entity_id": s["entity_id"],
@@ -135,8 +133,7 @@ def list_automations(url: str, token: str, verify_ssl: bool) -> dict:
     return {"automations": autos, "count": len(autos)}
 
 
-def trigger_automation(url: str, token: str, verify_ssl: bool, automation_id: str) -> dict:
-    """Manually trigger an automation."""
+def trigger_automation(url: str, token: str, verify_ssl: bool, automation_id: str) -> dict[str, object]:
     _post(
         url,
         "/api/services/automation/trigger",

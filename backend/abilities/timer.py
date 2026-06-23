@@ -14,75 +14,89 @@ iterations cannot misinterpret a literal timestamp as something they
 need to reason about, and the model never has to fill it.
 
 Rich-media rendering:
-  When an ordinal is supplied (``params['_rich_media_ordinal']``) the
-  return value is a string ``<JSON>\\n\\n<rich-media instruction trailer>``.
-  Without an ordinal — subagent calls, action-button calls, direct test
-  calls — the raw dict is returned and no trailer is appended.
+  A successful timer returns ``ToolResult.ok(payload, rich=payload)`` — the
+  ``{title, duration_seconds}`` dict is both the structured body the model
+  reads AND the card payload. The dispatcher (``ToolDispatcher._render``) owns
+  ordinal assignment + the span-tag instruction and injects the card ONLY when
+  the invoking channel broadcasts to the user. ``started_at`` is grafted onto
+  the card payload later, at parse time, by ``enrich_rich_payload``.
 """
 
-import json
-import logging
 from datetime import datetime, timezone
-from typing import ClassVar
+from typing import ClassVar, cast
 
-from abilities._base import Ability
+from abilities._ability import Ability
+from abilities._params import Keys
+from abilities._result import ToolResult
 from services.time_utils import parse_utc
 
-logger = logging.getLogger(__name__)
-
 _PARSE_UTC_SENTINEL = datetime.min.replace(tzinfo=timezone.utc)
-
-_RICH_MEDIA_INSTRUCTION = (
-    "You MUST present this result by wrapping your synthesis in <span id='{tag}'>your synthesis here</span>. "
-    "The span will render as a live countdown card; without it, the user "
-    "sees only plain text. Write a brief acknowledgement. Example: "
-    "\"<span id='{tag}'>Started a 25-minute focus timer.</span>\""
-)
 
 _MAX_DURATION_SECONDS = 24 * 60 * 60  # 24 hours
 _MIN_DURATION_SECONDS = 1
 
 
 class TimerAbility(Ability):
-    NAME = "timer"
-    SEARCH_TOOLTIP = "countdown timer"
     SYSTEM = True
-    SUMMARY = "Start a live countdown timer with a title — renders an in-chat card with pause, stop, and an alarm when it ends."
-    EXAMPLES = [
-        "start a 25 minute focus timer",
-        "set a 10 minute timer for the pasta",
-        "ring me in 5 minutes",
-        "kick off a 90 second breath hold",
-        "start a 1 hour deep work block",
-        "remind me in 15 minutes the laundry is ready",
-    ]
-    INPUT_SCHEMA: ClassVar[dict] = {
+
+    # title + duration_seconds are both required; presence is enforced by the
+    # dispatcher pre-gate (ACTION_REQUIRED) BEFORE run(). Key "" — action-less.
+    ACTION_REQUIRED: ClassVar[dict[str, tuple[str, ...]]] = {
+        "": (Keys.title, Keys.duration_seconds),
+    }
+
+    def get_name(self) -> str:
+        return "timer"
+
+    def get_summary(self) -> str:
+        return "Start a live countdown timer with a title — renders an in-chat card with pause, stop, and an alarm when it ends."
+
+    def get_examples(self) -> list[str]:
+        return [
+            "start a 25 minute focus timer",
+            "set a 10 minute timer for the pasta",
+            "ring me in 5 minutes",
+            "kick off a 90 second breath hold",
+            "start a 1 hour deep work block",
+            "remind me in 15 minutes the laundry is ready",
+        ]
+
+    def get_search_tooltip(self) -> str:
+        return "countdown timer"
+
+    _PARAMETERS: ClassVar[dict[str, object]] = {
         "type": "object",
         "properties": {
-            "title": {
+            Keys.title: {
                 "type": "string",
                 "description": "Short label for the timer (max 80 chars). E.g. 'Focus block', 'Pasta', 'Breath hold'.",
             },
-            "duration_seconds": {
+            Keys.duration_seconds: {
                 "type": "integer",
                 "description": "Total countdown length in seconds. Must be between 1 and 86400 (24 hours).",
                 "minimum": _MIN_DURATION_SECONDS,
                 "maximum": _MAX_DURATION_SECONDS,
             },
         },
-        "required": ["title", "duration_seconds"],
+        "required": [Keys.title, Keys.duration_seconds],
     }
-    TIMEOUT = 5
 
-    def execute(self, channel: str, params: dict, telemetry: dict | None) -> dict | str:
-        ordinal = params.get("_rich_media_ordinal")
-        title = (params.get("title") or "").strip()
-        duration_seconds = params.get("duration_seconds")
+    def get_parameters(self) -> dict[str, object]:
+        return self._PARAMETERS
 
-        if not title:
-            return {"error": "title is required"}
-        if not isinstance(duration_seconds, int) or duration_seconds < _MIN_DURATION_SECONDS or duration_seconds > _MAX_DURATION_SECONDS:
-            return {"error": f"duration_seconds must be an integer between {_MIN_DURATION_SECONDS} and {_MAX_DURATION_SECONDS}"}
+    def run(self, params: dict[str, object]) -> ToolResult:
+        title = (cast(str, params.get(Keys.title)) or "").strip()
+        duration_seconds = params.get(Keys.duration_seconds)
+
+        # bool is an int subclass — exclude it so a literal True/False is rejected
+        # rather than coerced into a 1-second / 0-second timer.
+        if isinstance(duration_seconds, bool) or not isinstance(duration_seconds, int) \
+                or duration_seconds < _MIN_DURATION_SECONDS or duration_seconds > _MAX_DURATION_SECONDS:
+            return ToolResult.err(
+                f"duration_seconds must be an integer between {_MIN_DURATION_SECONDS} and {_MAX_DURATION_SECONDS}",
+                code="invalid-duration",
+                hint=f"pass an integer number of seconds from {_MIN_DURATION_SECONDS} to {_MAX_DURATION_SECONDS}.",
+            )
 
         if len(title) > 80:
             title = title[:80]
@@ -91,19 +105,14 @@ class TimerAbility(Ability):
             "title": title,
             "duration_seconds": duration_seconds,
         }
-
-        if ordinal is None:
-            return payload
-
-        tag = f"timer_{ordinal}"
-        instruction = _RICH_MEDIA_INSTRUCTION.format(tag=tag)
-        return f"{json.dumps(payload)}\n\n{instruction}"
+        # body == rich: the model reads the same dict the FE card renders. The
+        # dispatcher injects the ordinal + span instruction only on a
+        # user-broadcast turn; started_at is grafted later by enrich_rich_payload.
+        return ToolResult.ok(payload, rich=payload)
 
     @classmethod
-    def enrich_rich_payload(cls, payload: dict, row: dict) -> dict:
-        """Inject the wall-clock anchor from the tool_calls row's ``created_at``.
-
-        ``started_at`` is intentionally absent from the LLM-visible JSON; the FE
+    def enrich_rich_payload(cls, payload: dict[str, object], row: dict[str, object]) -> dict[str, object]:
+        """``started_at`` is intentionally absent from the LLM-visible JSON; the FE
         needs it to compute the countdown so the parser grafts it on at render
         time. ``parse_utc`` returns a ``datetime.min`` sentinel on garbage rather
         than raising — that sentinel must be rejected so the FE falls through to
@@ -113,7 +122,7 @@ class TimerAbility(Ability):
         created_at = row.get("created_at")
         if not created_at:
             return payload
-        parsed = parse_utc(created_at)
+        parsed = parse_utc(cast(datetime | str, created_at))
         if parsed == _PARSE_UTC_SENTINEL:
             return payload
         return {**payload, "started_at": parsed.isoformat()}

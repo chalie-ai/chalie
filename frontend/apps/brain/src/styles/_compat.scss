@@ -1,0 +1,4 @@
+// Compat layer for legacy CSS var aliases. Intentionally empty: legacy var
+// names already match _tokens.scss (which also carries the legacy aliases
+// --bg-dark/--bg-card/--accent/--accent-hover). Add aliases here, not in
+// component styles, if a future panel introduces vars absent from _tokens.scss.

@@ -1,9 +1,11 @@
-"""Tests for api/system.py — /health, /metrics, /system/status, /system/observability/* endpoints."""
+import sqlite3
+from collections.abc import Iterator
 
 import pytest
 from unittest.mock import patch, MagicMock
 
 from flask import Flask
+from flask.testing import FlaskClient
 from api.system import system_bp
 from services.memory_store import MemoryStore
 
@@ -12,20 +14,20 @@ from services.memory_store import MemoryStore
 class TestSystemAPI:
 
     @pytest.fixture
-    def client(self):
+    def client(self) -> FlaskClient:
         app = Flask(__name__)
         app.register_blueprint(system_bp)
         app.config['TESTING'] = True
         return app.test_client()
 
     @pytest.fixture(autouse=True)
-    def bypass_auth(self):
+    def bypass_auth(self) -> Iterator[None]:
         with patch('services.auth_session_service.validate_session', return_value=True):
             yield
 
     # GET /health
 
-    def test_get_health_returns_ok_and_version(self, client):
+    def test_get_health_returns_ok_and_version(self, client: FlaskClient) -> None:
         """GET /health returns status 'ok' and the current APP_VERSION."""
         with patch('consumer.APP_VERSION', '2.5.0'):
             resp = client.get('/health')
@@ -36,7 +38,7 @@ class TestSystemAPI:
 
     # GET /system/status
 
-    def test_system_status_returns_expected_keys(self, client, db):
+    def test_system_status_returns_expected_keys(self, client: FlaskClient, db: sqlite3.Connection) -> None:
         """GET /system/status returns status, memory, storage top-level keys."""
         store = MemoryStore()
         # Seed 2 keys for each memory namespace so counts == 2.
@@ -59,7 +61,7 @@ class TestSystemAPI:
         assert data['memory']['gist_keys'] == 2
         assert data['memory']['fact_keys'] == 2
 
-    def test_system_status_degraded_when_store_fails(self, client, db):
+    def test_system_status_degraded_when_store_fails(self, client: FlaskClient, db: sqlite3.Connection) -> None:
         """GET /system/status reports 'degraded' when MemoryStore ping raises."""
         # Category C (error-path): keep MagicMock to simulate a broken store.
         broken_store = MagicMock()
@@ -77,19 +79,29 @@ class TestSystemAPI:
 
     # GET /system/observability/records
 
-    def test_records_episodes_source_returns_gist_and_location(self, client, db):
-        """Episodes source returns value=gist + location, ordered by last_accessed DESC (NULLs last)."""
+    def test_records_episodes_source_returns_gist_and_location(self, client: FlaskClient, db: sqlite3.Connection) -> None:
+        """Episodes source returns value=gist + location, ordered by COALESCE(last_relevant_at, created_at) DESC.
+
+        : last_accessed_at is write-dead; the endpoint now projects and orders by
+        COALESCE(last_relevant_at, created_at). A row with NULL last_relevant_at sorts by
+        its created_at — there is no NULLs-last behaviour anymore.
+
+        Seed:
+          ep-a: created=Jan-01, last_relevant_at=Jan-03  → sort key Jan-03 (third)
+          ep-b: created=Jan-02, last_relevant_at=Jan-04  → sort key Jan-04 (first)
+          ep-c: created=Jan-05, last_relevant_at=NULL     → sort key Jan-05 via COALESCE (second)
+        """
         db.execute(
-            "INSERT INTO episodes (id, gist, salience, channel, created_at, last_accessed_at, location_name) "
+            "INSERT INTO episodes (id, gist, salience, channel, created_at, last_relevant_at, location_name) "
             "VALUES ('ep-a', 'first gist', 5, 'user', '2026-01-01T00:00:00', '2026-01-03T00:00:00', 'Valletta, Malta')"
         )
         db.execute(
-            "INSERT INTO episodes (id, gist, salience, channel, created_at, last_accessed_at, location_name) "
+            "INSERT INTO episodes (id, gist, salience, channel, created_at, last_relevant_at, location_name) "
             "VALUES ('ep-b', 'second gist', 5, 'user', '2026-01-02T00:00:00', '2026-01-04T00:00:00', NULL)"
         )
         db.execute(
-            "INSERT INTO episodes (id, gist, salience, channel, created_at, last_accessed_at) "
-            "VALUES ('ep-c', 'null access', 5, 'user', '2026-01-03T00:00:00', NULL)"
+            "INSERT INTO episodes (id, gist, salience, channel, created_at) "
+            "VALUES ('ep-c', 'null relevant', 5, 'user', '2026-01-05T00:00:00')"
         )
         db.commit()
 
@@ -100,15 +112,20 @@ class TestSystemAPI:
         assert data['source'] == 'episodes'
         assert data['returned'] == 3
         values = [r['value'] for r in data['rows']]
-        assert values[-1] == 'null access'
-        assert values.index('second gist') < values.index('first gist')
+        # ep-c (sort key Jan-05 via COALESCE) first; ep-b (sort key Jan-04) second; ep-a (Jan-03) third
+        assert values[0] == 'null relevant'
+        assert values[1] == 'second gist'
+        assert values[2] == 'first gist'
+        # NULL last_relevant_at row sorts by its created_at (Jan-05) — ends up FIRST, not last
+        assert values.index('null relevant') == 0
+        # location passthrough
         row = next(r for r in data['rows'] if r['value'] == 'first gist')
         assert row['location'] == 'Valletta, Malta'
         assert 'key' not in row
-        row_null = next(r for r in data['rows'] if r['value'] == 'second gist')
-        assert row_null['location'] == ''
+        row_null_loc = next(r for r in data['rows'] if r['value'] == 'second gist')
+        assert row_null_loc['location'] == ''
 
-    def test_records_search_filters_by_like(self, client, db):
+    def test_records_search_filters_by_like(self, client: FlaskClient, db: sqlite3.Connection) -> None:
         """Search param filters gist (episodes) and key/value (data_graph)."""
         now_iso = '2026-01-01T00:00:00+00:00'
         db.execute(
@@ -130,7 +147,7 @@ class TestSystemAPI:
         assert data['returned'] == 1
         assert data['rows'][0]['key'] == 'favorite_color'
 
-    def test_records_pagination_offset_works(self, client, db):
+    def test_records_pagination_offset_works(self, client: FlaskClient, db: sqlite3.Connection) -> None:
         """First page returns 250 rows with has_more=true; offset=250 returns remainder."""
         now_iso = '2026-01-01T00:00:00+00:00'
         for i in range(260):
@@ -153,7 +170,7 @@ class TestSystemAPI:
         assert data2['returned'] == 10
         assert data2['has_more'] is False
 
-    def test_records_invalid_source_400(self, client, db):
+    def test_records_invalid_source_400(self, client: FlaskClient, db: sqlite3.Connection) -> None:
         """Unknown source returns 400 with error payload."""
         resp = client.get('/system/observability/records?source=bogus')
         assert resp.status_code == 400
@@ -161,7 +178,7 @@ class TestSystemAPI:
 
     # GET /system/observability/tools
 
-    def test_observability_tools_returns_stats(self, client, db):
+    def test_observability_tools_returns_stats(self, client: FlaskClient, db: sqlite3.Connection) -> None:
         """GET /system/observability/tools returns per-tool usage counts from tool_calls.
 
         Verifies: aggregation (COUNT, MAX), ORDER BY last_used_at DESC, and
@@ -240,10 +257,100 @@ class TestSystemAPI:
             assert 'last_used_at' in tool
 
 
+    # GET /system/observability/compaction
+
+    @staticmethod
+    def _seed_compaction(db: sqlite3.Connection, *, channel: str, summary: str, created_at: str) -> object:
+        """Seed a compaction summary the way production does (design §3.6): a
+        transcript row with role='compaction' whose OWN id is the watermark.
+
+        Replaces the retired tool_calls audit-row model — compaction state now
+        lives in the transcript table and get_compaction() reads the newest
+        role='compaction' row, taking its id as compacted_up_to_id. Returns that
+        row id (the watermark)."""
+        cur = db.execute(
+            "INSERT INTO transcript (role, content, channel, created_at) "
+            "VALUES ('compaction', ?, ?, ?)",
+            (summary, channel, created_at),
+        )
+        db.commit()
+        return cur.lastrowid
+
+    def test_observability_compaction_returns_null_when_none(self, client: FlaskClient, db: sqlite3.Connection) -> None:
+        """No compaction rows → 200 with {"compaction": null} (drives the empty-state card)."""
+        resp = client.get('/system/observability/compaction')
+        assert resp.status_code == 200
+        assert resp.get_json() == {'compaction': None}
+
+    def test_observability_compaction_returns_summary_and_formatted_timestamp(self, client: FlaskClient, db: sqlite3.Connection) -> None:
+        """A success compaction on the 'user' channel surfaces its summary, watermark, and a
+        backend-formatted timestamp (locale_service, for_ui — UTC fallback with no telemetry)."""
+        watermark = self._seed_compaction(
+            db, channel='user',
+            summary='Earlier turns condensed here.',
+            created_at='2026-01-01 00:00:01',
+        )
+        resp = client.get('/system/observability/compaction')
+        assert resp.status_code == 200
+        comp = resp.get_json()['compaction']
+        assert comp is not None
+        assert comp['summary'] == 'Earlier turns condensed here.'
+        # The watermark IS the compaction row's own id (design §3.6).
+        assert comp['compacted_up_to_id'] == watermark
+        # Timestamp is pre-formatted server-side; tests have no telemetry → UTC.
+        assert comp['compacted_at'] == '2026-01-01 00:00'
+
+    def test_observability_compaction_formats_production_iso_timestamp(self, client: FlaskClient, db: sqlite3.Connection) -> None:
+        """transcript.created_at is a free-form TEXT column that may hold an ISO-8601
+        string with a 'T' separator and a '+00:00' offset. The tab must render it as a
+        clean human-readable string with NO 'T', NO offset, and NO 'Z' (the exact
+        regression the UI scenario guards)."""
+        self._seed_compaction(
+            db, channel='user',
+            summary='Condensed.',
+            created_at='2026-05-30T22:45:01.123456+00:00',
+        )
+        resp = client.get('/system/observability/compaction')
+        assert resp.status_code == 200
+        compacted_at = resp.get_json()['compaction']['compacted_at']
+        assert compacted_at == '2026-05-30 22:45'
+        assert 'T' not in compacted_at
+        assert '+' not in compacted_at and not compacted_at.endswith('Z')
+
+    def test_observability_compaction_channel_isolation(self, client: FlaskClient, db: sqlite3.Connection) -> None:
+        """A compaction on a non-user channel must never appear in the chat tab."""
+        self._seed_compaction(
+            db, channel='subagent',
+            summary='subagent only',
+            created_at='2026-01-01 00:00:01',
+        )
+        resp = client.get('/system/observability/compaction')
+        assert resp.status_code == 200
+        assert resp.get_json()['compaction'] is None
+
+    def test_observability_compaction_latest_wins(self, client: FlaskClient, db: sqlite3.Connection) -> None:
+        """When several compactions exist, the newest (highest-id) role='compaction'
+        row is returned. Under the redesign _compact() only writes a row when the
+        summary extraction succeeds, so there is no failure-row state to filter —
+        the latest row is always the canonical one."""
+        self._seed_compaction(
+            db, channel='user',
+            summary='old summary', created_at='2026-01-01 00:00:01',
+        )
+        new_watermark = self._seed_compaction(
+            db, channel='user',
+            summary='new summary', created_at='2026-01-02 00:00:01',
+        )
+        resp = client.get('/system/observability/compaction')
+        assert resp.status_code == 200
+        comp = resp.get_json()['compaction']
+        assert comp['summary'] == 'new summary'
+        assert comp['compacted_up_to_id'] == new_watermark
+
 
     # GET /ready
 
-    def _ready_patches(self, db_ok=True, store_ok=True):
+    def _ready_patches(self, db_ok: bool = True, store_ok: bool = True) -> dict[str, object]:
         """Build patch context for /ready — database and store can be individually broken.
 
         Args:
@@ -273,7 +380,7 @@ class TestSystemAPI:
         mock_onnx_svc = MagicMock()
         mock_onnx_svc.ready = True
 
-        patches = {
+        patches: dict[str, object] = {
             'services.memory_client.MemoryClientService.create_connection': MagicMock(return_value=store),
             'services.onnx_inference_service.get_onnx_inference_service': MagicMock(return_value=mock_onnx_svc),
         }
@@ -290,7 +397,7 @@ class TestSystemAPI:
 
         return patches
 
-    def test_ready_all_ok_returns_200_with_component_status(self, client, db):
+    def test_ready_all_ok_returns_200_with_component_status(self, client: FlaskClient, db: sqlite3.Connection) -> None:
         """/ready with all components healthy returns 200 and structured component objects."""
         patches = self._ready_patches()
         from contextlib import ExitStack
@@ -305,7 +412,7 @@ class TestSystemAPI:
         assert data['database'] == {'status': 'ok', 'connected': True}
         assert data['memory_store'] == {'status': 'ok'}
 
-    def test_ready_db_failure_returns_503(self, client, db):
+    def test_ready_db_failure_returns_503(self, client: FlaskClient, db: sqlite3.Connection) -> None:
         """/ready with database down returns 503 and error status in database component."""
         patches = self._ready_patches(db_ok=False)
         from contextlib import ExitStack

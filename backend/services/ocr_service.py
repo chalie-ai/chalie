@@ -6,13 +6,13 @@ Single private entry point: `_extract_text(img)`. Callers:
 """
 
 import threading
+from typing import Callable, cast
 
 _engine = None
 _engine_lock = threading.Lock()
 
 
-def _get_engine():
-    """Lazy-init and cache the RapidOCR engine (thread-safe)."""
+def _get_engine() -> object:
     global _engine
     if _engine is None:
         with _engine_lock:
@@ -22,9 +22,8 @@ def _get_engine():
     return _engine
 
 
-def _extract_text(img) -> str:
-    """Run RapidOCR on a single image, return concatenated text in reading order."""
-    result, _ = _get_engine()(img)
+def _extract_text(img: object) -> str:
+    result, _ = cast(Callable[[object], tuple[list[list[object]], object]], _get_engine())(img)
     if not result:
         return ''
-    return '\n'.join(region[1] for region in result)
+    return '\n'.join(cast(str, region[1]) for region in result)

@@ -1,166 +1,313 @@
-"""UbiquitiAbility -- control and monitor a UniFi network via the Ubiquiti capability.
+"""UbiquitiAbility — monitor and control a UniFi network via the Ubiquiti capability.
 
-Delegates to UbiquitiCapability's tool handlers. Uses skill tag wrapper like
-home.py (no rich-media rendering).
+Delegates to ``UbiquitiCapability``'s REST handlers via the shared
+:class:`CapabilityAbility` base, which owns capability loading, the
+not-connected / unknown-action / handler-unavailable errors, handler dispatch,
+and result wrapping. This ability supplies its metadata, the flat-action wiring,
+the ACTION_REQUIRED pre-gate map, and the model→capability param translation.
+
+**The schema is the point of this tool.** The old surface was nine coarse
+actions (``control_client`` / ``manage_wlan`` / …) plus an undocumented prose-DSL
+the model had to guess: a free-text ``command`` (``"block-sta"``, ``"set-locate"``)
+and a ``sub_action`` (``"list"`` / ``"update"`` / ``"create"``). A weak local
+model could not reliably produce those strings, which defeats the entire purpose
+of a tool meant for one-shot home-network questions ("is the office AP up?").
+
+This rewrite replaces that with a FLAT action enum naming every real operation
+(``block_client``, ``restart_device``, ``list_wifi`` …), a single ``target``
+addressing param (device/client MAC), and a few typed optional params. There is
+no ``command`` and no ``sub_action`` anywhere — the capability's coarse handler +
+sub-command pair is an internal translation detail (:data:`_ACTION_SPEC`) the
+model never sees. Each flat action is invocable correctly from its one-line
+description alone.
+
+Every action returns a :class:`ToolResult` built only via ``ok`` / ``err``; the
+dispatcher renders the wire envelope. This ability never formats an envelope and
+never imports the skill-tag formatter.
 """
 
-import json
 import logging
+from typing import ClassVar, NamedTuple, cast
 
-from abilities._base import Ability
-from services.innate_skills._tag import tag as _skill_tag
+from abilities._capability import CapabilityAbility
+from abilities._params import Keys
+from abilities._result import ToolResult
 
 logger = logging.getLogger(__name__)
+LOG_PREFIX = "[UBIQUITI ABILITY]"
 
 
-class UbiquitiAbility(Ability):
-    NAME = "ubiquiti"
-    SEARCH_TOOLTIP = "UniFi network control"
-    POLICY_CATEGORY = "Ubiquiti"
-    POLICY_LABELS = {
-        "authorize_guest": "Authorize guest access",
-        "control_client": "Block / disconnect client",
-        "control_device": "Restart / locate device",
-        "get_info": "Get device info / health",
-        "list_clients": "List connected clients",
-        "list_devices": "List network devices",
-        "manage_port_forward": "Manage port forwarding",
-        "manage_traffic_rule": "Manage traffic rules",
-        "manage_wlan": "Manage WiFi networks",
-    }
-    SUMMARY = (
-        "Control and monitor a UniFi network: list devices and connected clients, "
-        "get device info and site health, block or disconnect clients, restart or "
-        "locate devices, manage WiFi networks and port forwarding, toggle traffic "
-        "rules, and authorize guest access."
+class _Spec(NamedTuple):
+    """The internal translation from one flat model-facing action to the coarse
+    capability handler + the fixed sub-command params that handler expects.
+    ``inject`` is the fixed prose-DSL the OLD schema forced the model to guess —
+    now supplied by the ability so the model never sees it.
+    """
+
+    handler: str
+    inject: dict[str, object]
+
+
+# The single source of truth: flat action → (capability handler, injected DSL).
+# The capability still speaks the coarse handler + command/sub_action dialect;
+# this table is the one place that dialect is spoken, keyed off a flat verb.
+_ACTION_SPEC: dict[str, _Spec] = {
+    # ── Read ────────────────────────────────────────────────────────────────
+    "list_devices": _Spec("list_devices", {}),
+    "list_clients": _Spec("list_clients", {}),
+    "device_status": _Spec("get_info", {}),  # target → get_info(target=<mac>)
+    "site_health": _Spec("get_info", {"target": "health"}),
+    "list_wifi": _Spec("manage_wlan", {"sub_action": "list"}),
+    "list_port_forwards": _Spec("manage_port_forward", {"sub_action": "list"}),
+    "list_traffic_rules": _Spec("manage_traffic_rule", {"sub_action": "list"}),
+    # ── Client control ──────────────────────────────────────────────────────
+    "block_client": _Spec("control_client", {"command": "block-sta"}),
+    "unblock_client": _Spec("control_client", {"command": "unblock-sta"}),
+    "disconnect_client": _Spec("control_client", {"command": "kick-sta"}),
+    # ── Device control ──────────────────────────────────────────────────────
+    "restart_device": _Spec("control_device", {"command": "restart"}),
+    "locate_device": _Spec("control_device", {"command": "set-locate"}),
+    "stop_locate_device": _Spec("control_device", {"command": "unset-locate"}),
+    "power_cycle_port": _Spec("control_device", {"command": "power-cycle"}),
+    # ── WiFi / forwarding / traffic writes ──────────────────────────────────
+    "update_wifi": _Spec("manage_wlan", {"sub_action": "update"}),
+    "create_port_forward": _Spec("manage_port_forward", {"sub_action": "create"}),
+    "update_port_forward": _Spec("manage_port_forward", {"sub_action": "update"}),
+    "update_traffic_rule": _Spec("manage_traffic_rule", {"sub_action": "update"}),
+    # ── Guest ───────────────────────────────────────────────────────────────
+    "authorize_guest": _Spec("authorize_guest", {}),
+}
+
+# Actions whose ``target`` addresses a device/client and is translated to the
+# capability's ``mac`` param. ``device_status`` accepts a MAC too (omitted →
+# the capability defaults to the site-health overview, which is what site_health
+# does explicitly), so it is NOT required-addressed.
+_TARGET_TO_MAC = (
+    "device_status",
+    "block_client", "unblock_client", "disconnect_client",
+    "restart_device", "locate_device", "stop_locate_device", "power_cycle_port",
+    "authorize_guest",
+)
+
+
+class UbiquitiAbility(CapabilityAbility):
+    CAPABILITY_KEY: ClassVar[str] = "ubiquiti"
+    DEFAULT_ACTION: ClassVar[str] = "list_devices"
+    NOT_CONNECTED_HINT: ClassVar[str] = (
+        "Configure the UniFi integration in the Brain dashboard."
     )
-    EXAMPLES = [
-        "What UniFi devices are on my network?",
-        "Show me who's connected to the WiFi",
-        "Block that unknown device on my network",
-        "Restart the office access point",
-        "Disable the guest WiFi",
-        "Is my network healthy?",
-        "Enable port forwarding for the game server",
-        "Authorize this device as a guest for 2 hours",
-    ]
-    INPUT_SCHEMA = {
+
+    # Maps the model-facing flat action onto the capability's coarse handler
+    # name. The base uses it to look up the handler and to build the valid=
+    # ladder for unknown-action errors, so the enum below is derived from it.
+    ACTION_HANDLERS: ClassVar[dict[str, str]] = {
+        action: spec.handler for action, spec in _ACTION_SPEC.items()
+    }
+
+    # Pre-gated by the dispatcher BEFORE run() (and before the policy gate): a
+    # known action missing a required param yields one code=missing-params error
+    # naming all missing params; an unknown action yields one code=unknown-action
+    # whose valid= names every real action. Read/list actions have no hard
+    # requirement; device_status defaults to the site overview when target is
+    # omitted, so it is not required-addressed.
+    ACTION_REQUIRED: ClassVar[dict[str, tuple[str, ...]]] = {
+        "list_devices": (),
+        "list_clients": (),
+        "device_status": (),
+        "site_health": (),
+        "list_wifi": (),
+        "list_port_forwards": (),
+        "list_traffic_rules": (),
+        "block_client": (Keys.target,),
+        "unblock_client": (Keys.target,),
+        "disconnect_client": (Keys.target,),
+        "restart_device": (Keys.target,),
+        "locate_device": (Keys.target,),
+        "stop_locate_device": (Keys.target,),
+        "power_cycle_port": (Keys.target, Keys.port_idx),
+        "update_wifi": (Keys.wlan_id, Keys.updates),
+        "create_port_forward": (Keys.rule,),
+        "update_port_forward": (Keys.rule_id, Keys.updates),
+        "update_traffic_rule": (Keys.rule_id, Keys.updates),
+        "authorize_guest": (Keys.target,),
+    }
+
+    def get_name(self) -> str:
+        return "ubiquiti"
+
+    def get_summary(self) -> str:
+        return (
+            "Monitor and control a UniFi (Ubiquiti) network: list devices and "
+            "connected clients, check device or site health, block / unblock / "
+            "disconnect a client, restart or locate a device, list and update WiFi "
+            "networks, port-forward and traffic rules, and authorize a guest device. "
+            "Available when the user asks about their home or office network."
+        )
+
+    def get_examples(self) -> list[str]:
+        return [
+            "what UniFi devices are on my network",
+            "who's connected to the WiFi right now",
+            "is the office access point up",
+            "block the client aa:bb:cc:dd:ee:ff",
+            "restart the living room access point",
+            "show my WiFi networks",
+            "is my network healthy",
+            "authorize this guest device for 2 hours",
+        ]
+
+    def get_search_tooltip(self) -> str:
+        return "UniFi network control"
+
+    def get_parameters(self) -> dict[str, object]:
+        return self._PARAMETERS
+
+    _PARAMETERS: ClassVar[dict[str, object]] = {
         "type": "object",
         "properties": {
-            "action": {
+            Keys.action: {
                 "type": "string",
-                "enum": [
-                    "list_devices",
-                    "list_clients",
-                    "get_info",
-                    "control_client",
-                    "control_device",
-                    "manage_wlan",
-                    "manage_port_forward",
-                    "manage_traffic_rule",
-                    "authorize_guest",
-                ],
-                "description": "The action to perform on the UniFi network.",
-            },
-            "mac": {
-                "type": "string",
-                "description": "MAC address of the target device or client (e.g. 'aa:bb:cc:dd:ee:ff').",
-            },
-            "target": {
-                "type": "string",
-                "description": "For get_info: 'health' for site overview, or a device MAC for detail.",
-            },
-            "command": {
-                "type": "string",
+                "enum": list(ACTION_HANDLERS),
                 "description": (
-                    "For control_client: 'block-sta', 'unblock-sta', 'kick-sta'. "
-                    "For control_device: 'restart', 'set-locate', 'unset-locate', 'power-cycle'."
+                    "The UniFi operation to perform. "
+                    "list_devices — list all network devices (APs, switches, gateways) with status. "
+                    "list_clients — list connected clients. "
+                    "device_status — health/detail for one device by target MAC (omit target for the site overview). "
+                    "site_health — the overall site health summary. "
+                    "block_client / unblock_client / disconnect_client — control a client by target MAC. "
+                    "restart_device / locate_device / stop_locate_device — control a device by target MAC. "
+                    "power_cycle_port — power-cycle a device's PoE port (needs target + port_idx). "
+                    "list_wifi — list WiFi networks. update_wifi — change a WiFi network (needs wlan_id + updates). "
+                    "list_port_forwards — list port-forward rules. create_port_forward — add one (needs rule). "
+                    "update_port_forward — change one (needs rule_id + updates). "
+                    "list_traffic_rules — list traffic rules. update_traffic_rule — change one (needs rule_id + updates). "
+                    "authorize_guest — authorize a guest device by target MAC."
                 ),
             },
-            "sub_action": {
+            Keys.target: {
                 "type": "string",
-                "enum": ["list", "update", "create"],
                 "description": (
-                    "For manage_wlan and manage_traffic_rule: 'list' or 'update'. "
-                    "For manage_port_forward: 'list', 'update', or 'create'."
+                    "MAC address of the device or client to act on, e.g. "
+                    "'aa:bb:cc:dd:ee:ff'. Required for device_status detail, client "
+                    "control, device control, and authorize_guest."
                 ),
             },
-            "wlan_id": {
-                "type": "string",
-                "description": "ID of the WiFi network to update.",
-            },
-            "rule_id": {
-                "type": "string",
-                "description": "ID of the port forward or traffic rule to update.",
-            },
-            "updates": {
-                "type": "object",
-                "description": (
-                    "Fields to update (e.g. {'enabled': false} to disable, "
-                    "{'x_passphrase': 'newpass'} to change WiFi password)."
-                ),
-            },
-            "rule": {
-                "type": "object",
-                "description": "Full rule definition for creating a new port forward rule.",
-            },
-            "active_only": {
+            Keys.active_only: {
                 "type": "boolean",
-                "description": "For list_clients: true for connected only, false for all known.",
+                "description": (
+                    "list_clients: when true (default) only currently connected "
+                    "clients; false includes all known clients."
+                ),
                 "default": True,
             },
-            "port_idx": {
+            Keys.port_idx: {
                 "type": "integer",
-                "description": "For control_device power-cycle: the switch port index.",
+                "description": "power_cycle_port: the switch PoE port index to cycle.",
             },
-            "minutes": {
+            Keys.wlan_id: {
+                "type": "string",
+                "description": "update_wifi: id of the WiFi network to change (from list_wifi).",
+            },
+            Keys.rule_id: {
+                "type": "string",
+                "description": (
+                    "update_port_forward / update_traffic_rule: id of the rule to "
+                    "change (from the matching list action)."
+                ),
+            },
+            Keys.updates: {
+                "type": "object",
+                "description": (
+                    "update_wifi / update_port_forward / update_traffic_rule: the "
+                    "fields to change, e.g. {'enabled': false} to disable, or "
+                    "{'x_passphrase': 'newpass'} to change a WiFi password."
+                ),
+            },
+            Keys.rule: {
+                "type": "object",
+                "description": "create_port_forward: the full port-forward rule definition.",
+            },
+            Keys.minutes: {
                 "type": "integer",
-                "description": "For authorize_guest: session duration in minutes.",
+                "description": "authorize_guest: session duration in minutes (default 60).",
                 "default": 60,
             },
-            "up_kbps": {
+            Keys.up_kbps: {
                 "type": "integer",
-                "description": "For authorize_guest: upload bandwidth limit in Kbps.",
+                "description": "authorize_guest: upload bandwidth cap in Kbps (optional).",
             },
-            "down_kbps": {
+            Keys.down_kbps: {
                 "type": "integer",
-                "description": "For authorize_guest: download bandwidth limit in Kbps.",
+                "description": "authorize_guest: download bandwidth cap in Kbps (optional).",
             },
-            "quota_mb": {
+            Keys.quota_mb: {
                 "type": "integer",
-                "description": "For authorize_guest: data quota in MB.",
+                "description": "authorize_guest: total data quota in MB (optional).",
             },
         },
-        "required": ["action"],
+        "required": [Keys.action],
     }
-    TIMEOUT = 30
 
-    def execute(self, channel: str, params: dict, telemetry: dict | None) -> dict | str:
-        action = params.get("action", "list_devices").lower()
+    # ── Entry point — translate the flat action, then delegate to the base ─────
 
-        from capabilities import load_capabilities
-        cap = load_capabilities().get("ubiquiti")
+    def run(self, params: dict[str, object]) -> ToolResult:
+        action = str(params.get(Keys.action, self.DEFAULT_ACTION)).lower()
+        params[Keys.action] = action
 
-        if cap is None:
-            result = {
-                "status": "error",
-                "error": "Ubiquiti capability not found. Configure it in the Brain dashboard.",
-            }
-            return {"text": _skill_tag("ubiquiti", json.dumps(result), action=action)}
+        spec = _ACTION_SPEC.get(action)
+        if spec is not None:
+            # Translate the flat addressing param into the capability's MAC, and
+            # inject the fixed sub-command DSL the coarse handler expects. The
+            # model supplied neither command nor sub_action — that prose-DSL is an
+            # internal detail this table owns. The translated ``target`` is dropped
+            # so it never leaks into a REST body; ``device_status`` keeps it because
+            # its handler (get_info) reads ``target`` directly.
+            if action in _TARGET_TO_MAC:
+                target = (cast(str, params.get(Keys.target)) or "").strip()
+                if target and action != "device_status":
+                    params["mac"] = target
+                    params.pop(Keys.target, None)
+            for key, value in spec.inject.items():
+                params.setdefault(key, value)
 
-        if not cap.is_connected():
-            result = {
-                "status": "error",
-                "error": "Ubiquiti capability not connected. Check your UniFi controller settings in the Brain dashboard.",
-            }
-            return {"text": _skill_tag("ubiquiti", json.dumps(result), action=action)}
+        result = super().run(params)
+        if result.status != "success" or not isinstance(result.body, dict):
+            # not-connected / unknown-action / handler-unavailable already carry a
+            # canonical code from the base — surface them untouched.
+            return result
+        return _shape_result(action, result.body)
 
-        tool_map = {t["name"]: t["handler"] for t in cap.get_tools()}
-        handler = tool_map.get(action)
-        if handler is None:
-            result = {"status": "error", "error": f"Unknown ubiquiti action: {action}"}
-            return {"text": _skill_tag("ubiquiti", json.dumps(result), action=action)}
 
-        result = self.handle(handler, params, telemetry)
+# ---------------------------------------------------------------------------
+# Result shaping — a trimmed, model-friendly body per action family
+# ---------------------------------------------------------------------------
 
-        return {"text": _skill_tag("ubiquiti", json.dumps(result), action=action)}
+# The list-shaped handler bodies and their row key, so list actions surface a
+# uniform JSON-rows body with a count meta.
+_LIST_BODIES = {
+    "devices": "list_devices",
+    "clients": "list_clients",
+    "wlans": "list_wifi",
+    "rules": "list_port_forwards",
+}
+
+
+def _shape_result(action: str, body: dict[str, object]) -> ToolResult:
+    """A handler that surfaced its own ``error`` key (a backend failure or a target
+    that the controller did not find, NOT a bad input the pre-gate would catch) is
+    passed through as the success body — the contract reserves ``err()`` for
+    anticipated input failures the ability itself detects; the dispatcher wraps
+    the unexpected."""
+    if "error" in body:
+        return ToolResult.ok(body, action=action)
+
+    for row_key in _LIST_BODIES:
+        if row_key in body and isinstance(body[row_key], list):
+            return ToolResult.ok(
+                {row_key: body[row_key]},
+                action=action,
+                count=body.get("count", len(cast(list[object], body[row_key]))),
+            )
+
+    # device_status / site_health / control / write echoes: structured already.
+    return ToolResult.ok(body, action=action)

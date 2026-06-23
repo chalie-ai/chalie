@@ -1,182 +1,257 @@
-"""Feature tests for Ability ABC contract (abilities/_base.py).
+"""Feature tests for the Ability ABC contract (abilities/_ability.py).
 
-Asserts that the metaclass enforcement, attribute validation, and lifecycle
-hooks behave exactly as the plan specifies — with no mocks, no stubs, no IO.
+SPEC CHANGE: the five ``NAME`` / ``SUMMARY`` / ``EXAMPLES`` /
+``SEARCH_TOOLTIP`` / ``INPUT_SCHEMA`` ClassVars were replaced by five zero-arg
+``@abstractmethod`` getters (``get_name`` / ``get_summary`` / ``get_examples`` /
+``get_search_tooltip`` / ``get_parameters``), and ``get_input_schema()`` became a
+``@typing.final`` template method — the SINGLE place a tool descriptor is built
+and the SINGLE injection site for the framework fields ``act_summary`` (always,
+required) and ``async`` (iff the bound processor's config sets
+``SUPPORTS_ASYNC``). The MessageProcessor is now constructor-injected
+(``Ability(mp=...)`` → ``self.mp``).
 
-Subclass namespace isolation: every test-local subclass uses a unique class
-name and is deleted with gc.collect() so Ability.__subclasses__() stays clean
-between tests.
+Because the metadata is now carried by ``@abstractmethod`` getters, a subclass
+that omits one is *abstract* — it no longer raises at class-creation (the old
+ClassVar guard's behaviour) but instead cannot be instantiated and never reaches
+the registry. The shape checks that CAN run at import (examples length/type, and
+the seal on the assembler) still raise at class-creation, via ``cls()`` in
+``__init_subclass__``.
+
+Subclass namespace isolation: every test-local subclass uses a unique class name
+and is deleted with gc.collect() so Ability.__subclasses__() stays clean between
+tests.
 """
 
 import gc
+from typing import cast
 
 import pytest
 
-from abilities._base import Ability
+from abilities._ability import Ability
+from configs.channels import DmnConfig, UserConfig
 
 pytestmark = pytest.mark.unit
 
 _VALID_EXAMPLES = ["ex one", "ex two", "ex three", "ex four", "ex five", "ex six"]
 
 
-def _noop_execute(self, channel, params, telemetry):  # noqa: ARG001
-    return {}
+class _Mp:
+    """Minimal real MP-shaped context — ``_inject_framework_fields`` reads only
+    ``self.mp.config.SUPPORTS_ASYNC`` off it, carrying a REAL channel config
+    (UserConfig backgrounds, DmnConfig does not). Not a mock — the real config
+    object decides the gate."""
+
+    def __init__(self, config: object) -> None:
+        self.config = config
 
 
-def _make_subclass(**attrs):
-    """Build an Ability subclass dynamically; triggers __init_subclass__ validation.
+def _getters(
+    name: str = "valid_ability",
+    summary: str = "Does something useful",
+    examples: "list[str] | None" = None,
+    tooltip: str = "a useful tool",
+    parameters: "dict[str, object] | None" = None,
+) -> "dict[str, object]":
+    """Build the concrete-ability namespace dict."""
+    examples = list(_VALID_EXAMPLES) if examples is None else examples
+    parameters = {"type": "object", "properties": {}, "required": []} if parameters is None else parameters
+    return {
+        "get_name": lambda self: name,
+        "get_summary": lambda self: summary,
+        "get_examples": lambda self: examples,
+        "get_search_tooltip": lambda self: tooltip,
+        "get_parameters": lambda self: parameters,
+        "run": lambda self, params: {"text": "done"},
+    }
 
-    Returns the created class so the construction expression is consumed by
-    callers (or by the discard convention). Most call sites ignore the return
-    because the test asserts on the side effect — TypeError raised mid-build —
-    via ``pytest.raises``.
+
+def _make_subclass(clsname: str, drop: "tuple[str, ...]" = (), **overrides: object) -> "type[Ability]":
+    """Build an Ability subclass dynamically; triggers __init_subclass__.
+
+    ``drop`` names getters to OMIT (leaving the abstractmethod unfilled, so the
+    class stays abstract). ``overrides`` replace individual namespace members.
     """
-    namespace = {"execute": _noop_execute, **attrs}
-    return type("_TestSubclass", (Ability,), namespace)
+    namespace = _getters()
+    namespace.update(overrides)
+    for member in drop:
+        namespace.pop(member, None)
+    return type(clsname, (Ability,), namespace)
 
 
 # ---------------------------------------------------------------------------
-# Required class attribute enforcement
+# Missing getter / run → abstract → cannot be instantiated (ABC enforcement)
 # ---------------------------------------------------------------------------
 
 
-def test_missing_name_raises_at_class_creation():
-    """Subclass without NAME raises TypeError at class body evaluation time."""
-    with pytest.raises(TypeError, match="NAME"):
-        _make_subclass(SUMMARY="some summary", EXAMPLES=_VALID_EXAMPLES, INPUT_SCHEMA={})
-
+def test_missing_name_getter_makes_class_abstract() -> None:
+    """A subclass that omits get_name is abstract — instantiation raises TypeError
+    naming the missing getter. (Replaces the old 'missing NAME ClassVar' guard.)"""
+    cls = _make_subclass("_MissingName", drop=("get_name",))
+    with pytest.raises(TypeError, match="get_name"):
+        cls()
+    del cls
     gc.collect()
 
 
-def test_missing_examples_raises_at_class_creation():
-    """Subclass without EXAMPLES raises TypeError at class body evaluation time."""
-    with pytest.raises(TypeError, match="EXAMPLES"):
-        _make_subclass(NAME="missing_examples", SUMMARY="some summary", INPUT_SCHEMA={})
+def test_missing_examples_getter_rejected_at_class_creation() -> None:
+    """A subclass that omits get_examples is rejected when the class is built: the
+    __init_subclass__ probe calls the inherited abstract get_examples() (→ None),
+    which fails the list[str] shape check — so it never becomes a usable ability."""
+    with pytest.raises(TypeError, match="get_examples"):
+        _make_subclass("_MissingExamples", drop=("get_examples",))
+    gc.collect()
 
+
+def test_subclass_without_run_cannot_be_instantiated() -> None:
+    """Concrete metadata but missing run() → still abstract → ABC blocks it."""
+    cls = _make_subclass("_NoRun", drop=("run",))
+    with pytest.raises(TypeError, match="run"):
+        cls()
+    del cls
     gc.collect()
 
 
 # ---------------------------------------------------------------------------
-# EXAMPLES type + length validation
+# get_examples type + length validation — enforced at import via cls() probe
 # ---------------------------------------------------------------------------
 
 
-def test_examples_non_list_raises():
-    """EXAMPLES as a non-list raises TypeError."""
-    with pytest.raises(TypeError, match="EXAMPLES"):
-        _make_subclass(NAME="examples_string", SUMMARY="some summary", EXAMPLES="not a list", INPUT_SCHEMA={})
-
+def test_examples_non_list_raises_at_class_creation() -> None:
+    """get_examples returning a non-list raises TypeError when the class is built."""
+    with pytest.raises(TypeError, match="get_examples"):
+        _make_subclass("_ExamplesString", get_examples=lambda self: "not a list")
     gc.collect()
 
 
-def test_examples_too_short_raises():
-    """EXAMPLES with fewer than 6 entries raises TypeError."""
+def test_examples_too_short_raises_at_class_creation() -> None:
+    """get_examples with fewer than 6 entries raises TypeError (lower bound)."""
     with pytest.raises(TypeError, match="6"):
-        _make_subclass(NAME="examples_short", SUMMARY="some summary", EXAMPLES=["a", "b", "c", "d"], INPUT_SCHEMA={})
-
+        _make_subclass("_ExamplesShort", get_examples=lambda self: ["a", "b", "c", "d"])
     gc.collect()
 
 
-def test_examples_too_long_raises():
-    """EXAMPLES with more than 8 entries raises TypeError."""
+def test_examples_too_long_raises_at_class_creation() -> None:
+    """get_examples with more than 8 entries raises TypeError (upper bound)."""
     with pytest.raises(TypeError, match="8"):
         _make_subclass(
-            NAME="examples_long",
-            SUMMARY="some summary",
-            EXAMPLES=["a", "b", "c", "d", "e", "f", "g", "h", "i", "j"],
-            INPUT_SCHEMA={},
+            "_ExamplesLong",
+            get_examples=lambda self: ["a", "b", "c", "d", "e", "f", "g", "h", "i", "j"],
         )
-
     gc.collect()
 
 
-def test_examples_exactly_six_accepted():
-    """EXAMPLES with exactly 6 entries is valid (lower boundary)."""
-
-    class _ExamplesSix(Ability):
-        NAME = "examples_six"
-        SUMMARY = "some summary"
-        EXAMPLES = ["a", "b", "c", "d", "e", "f"]
-        INPUT_SCHEMA = {}
-
-        def execute(self, channel, params, telemetry):
-            return {}
-
-    instance = _ExamplesSix()
-    assert len(instance.EXAMPLES) == 6
-
-    del _ExamplesSix
+def test_examples_exactly_six_accepted() -> None:
+    """get_examples with exactly 6 entries is valid (lower boundary)."""
+    cls = _make_subclass("_ExamplesSix", get_examples=lambda self: ["a", "b", "c", "d", "e", "f"])
+    instance = cls()
+    assert len(instance.get_examples()) == 6
+    del cls
     gc.collect()
 
 
 # ---------------------------------------------------------------------------
-# execute() abstract enforcement
+# The assembler is sealed — overriding it (or the injector) is rejected at import
 # ---------------------------------------------------------------------------
 
 
-def test_subclass_without_execute_cannot_be_instantiated():
-    """Concrete subclass missing execute() cannot be instantiated — ABC blocks it."""
+def test_overriding_get_input_schema_is_rejected() -> None:
+    """A subclass that redefines the final get_input_schema would fork the
+    act_summary/async contract — __init_subclass__ rejects it at class creation."""
+    with pytest.raises(TypeError, match="get_input_schema"):
+        _make_subclass("_OverridesAssembler", get_input_schema=lambda self: {})
+    gc.collect()
 
-    class _NoExecute(Ability):
-        NAME = "no_execute"
-        SUMMARY = "some summary"
-        EXAMPLES = _VALID_EXAMPLES
-        INPUT_SCHEMA = {}
-        # execute() intentionally omitted
 
-    with pytest.raises(TypeError):
-        _NoExecute()
-
-    del _NoExecute
+def test_overriding_inject_framework_fields_is_rejected() -> None:
+    """The single injection site is sealed too — redefining it is rejected."""
+    with pytest.raises(TypeError, match="_inject_framework_fields"):
+        _make_subclass("_OverridesInjector", _inject_framework_fields=lambda self, params: params)
     gc.collect()
 
 
 # ---------------------------------------------------------------------------
-# Valid concrete subclass construction
+# The single assembler: shape + framework-field injection
 # ---------------------------------------------------------------------------
 
 
-def test_valid_concrete_subclass_constructs_cleanly():
-    """A fully specified concrete subclass instantiates without error."""
+def test_valid_concrete_subclass_assembles_full_descriptor() -> None:
+    """A fully specified subclass instantiates and get_input_schema() returns the
+    full LLM-facing descriptor assembled from the getters."""
+    cls = _make_subclass(
+        "_ValidAbility",
+        get_name=lambda self: "valid_ability",
+        get_summary=lambda self: "Does something useful",
+        get_parameters=lambda self: {"type": "object", "properties": {"q": {"type": "string"}}, "required": ["q"]},
+    )
+    instance = cls()
 
-    class _ValidAbility(Ability):
-        NAME = "valid_ability"
-        SUMMARY = "Does something useful"
-        EXAMPLES = ["do the thing", "run the thing", "thing now", "quick thing", "thing please", "start thing"]
-        INPUT_SCHEMA = {"type": "object", "properties": {}}
+    assert instance.get_name() == "valid_ability"
+    assert instance.get_summary() == "Does something useful"
+    assert len(instance.get_examples()) == 6
 
-        def execute(self, channel, params, telemetry):
-            return {"text": "done"}
+    schema = instance.get_input_schema()
+    assert set(schema) == {"name", "description", "input_schema"}
+    assert schema["name"] == "valid_ability"
+    assert schema["description"] == "Does something useful"
+    # The declared param survived assembly.
+    assert cast("dict[str, object]", cast("dict[str, object]", schema["input_schema"])["properties"])["q"] == {"type": "string"}
 
-    instance = _ValidAbility()
-    assert instance.NAME == "valid_ability"
-    assert instance.SUMMARY == "Does something useful"
-    assert len(instance.EXAMPLES) == 6
-
-    del _ValidAbility
+    del cls
     gc.collect()
 
 
-# ---------------------------------------------------------------------------
-# Default class attribute values
-# ---------------------------------------------------------------------------
-
-
-def test_timeout_defaults_to_ten():
-    """TIMEOUT defaults to 10 unless overridden."""
-
-    class _DefaultTimeout(Ability):
-        NAME = "default_timeout"
-        SUMMARY = "Timeout default check"
-        EXAMPLES = ["a", "b", "c", "d", "e", "f"]
-        INPUT_SCHEMA = {}
-
-        def execute(self, channel, params, telemetry):
-            return {}
-
-    assert _DefaultTimeout.TIMEOUT == 10
-
-    del _DefaultTimeout
+def test_act_summary_always_injected_and_required() -> None:
+    """act_summary is injected into EVERY descriptor and marked required — the one
+    framework field present regardless of channel or mp."""
+    cls = _make_subclass("_ActSummaryProbe")
+    schema = cast("dict[str, object]", cls().get_input_schema()["input_schema"])
+    assert "act_summary" in cast("dict[str, object]", schema["properties"])
+    assert cast("dict[str, object]", cast("dict[str, object]", schema["properties"])["act_summary"])["type"] == "string"
+    assert "act_summary" in cast("list[str]", schema["required"])
+    del cls
     gc.collect()
 
 
+def test_async_injected_only_under_supports_async_config() -> None:
+    """async appears ONLY when the bound mp's config sets SUPPORTS_ASYNC. It is a
+    per-call deepcopy — never mutates the declared get_parameters()."""
+    shared_params: dict[str, object] = {"type": "object", "properties": {}, "required": []}
+    cls = _make_subclass("_AsyncProbe", get_parameters=lambda self: shared_params)
+
+    # SUPPORTS_ASYNC channel (UserConfig) → async exposed.
+    user_props = cast("dict[str, object]", cast("dict[str, object]", cls(mp=_Mp(UserConfig({}))).get_input_schema()["input_schema"])["properties"])
+    assert "async" in user_props
+    assert cast("dict[str, object]", user_props["async"])["type"] == "boolean"
+    assert cast("dict[str, object]", user_props["async"])["default"] is False
+
+    # Non-async channel (DmnConfig) → never exposed.
+    dmn_props = cast("dict[str, object]", cast("dict[str, object]", cls(mp=_Mp(DmnConfig())).get_input_schema()["input_schema"])["properties"])
+    assert "async" not in dmn_props
+
+    # No live processor (mp=None — build/introspection) → never exposed.
+    none_props = cast("dict[str, object]", cast("dict[str, object]", cls().get_input_schema()["input_schema"])["properties"])
+    assert "async" not in none_props
+
+    # The declared params dict was never mutated by any of the above.
+    assert "async" not in cast("dict[str, object]", shared_params["properties"])
+    assert "act_summary" not in cast("dict[str, object]", shared_params["properties"])
+
+    del cls
+    gc.collect()
+
+
+def test_mp_gated_summary_is_deterministic_at_build_time() -> None:
+    """A getter that enriches on a live mp (e.g. bash's cwd) MUST fall back to
+    deterministic base text at mp=None so the search index stays machine-stable."""
+
+    def _summary(self: Ability) -> str:
+        base = "base summary"
+        return f"{base} — cwd /tmp" if self.mp is not None else base
+
+    cls = _make_subclass("_MpGatedSummary", get_summary=_summary)
+
+    assert cls().get_summary() == "base summary"  # build-time: base text
+    assert cls(mp=_Mp(UserConfig({}))).get_summary() == "base summary — cwd /tmp"
+
+    del cls
+    gc.collect()

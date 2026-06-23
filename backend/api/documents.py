@@ -22,19 +22,24 @@ Routes (all require session auth):
   POST   /documents/watched-folders/browse    — browse host directories
 """
 
-import hashlib
 import json
 import logging
 import os
-import re
-import mimetypes
-import threading
 from datetime import datetime
+from typing import TYPE_CHECKING, cast
 
 from flask import Blueprint, jsonify, request, send_file
 
 from services.file_mapper_service import FileMapperService
+# safe_filename: shared werkzeug-backed sanitizer (services/filename_utils.py),
+# also used by api/upload.py — single source of truth for upload filenames.
+from services.filename_utils import safe_filename
 from .auth import require_session
+
+if TYPE_CHECKING:
+    from flask.typing import ResponseReturnValue
+    from services.document_service import DocumentService
+    from services.folder_watcher_service import FolderWatcherService
 
 logger = logging.getLogger(__name__)
 
@@ -43,6 +48,10 @@ _ERR_NOT_FOUND = "Not found"
 _ERR_FILE_NOT_FOUND = "File not found on disk"
 
 documents_bp = Blueprint("documents", __name__)
+
+# Fallback when an uploaded name reduces to nothing safe (e.g. ".." or
+# non-ASCII-only). secure_filename returns '' in those cases.
+_FALLBACK_DOCUMENT_NAME = 'unnamed_document'
 
 # Max upload size (50MB)
 MAX_FILE_SIZE = 50 * 1024 * 1024
@@ -79,20 +88,20 @@ ALLOWED_EXTENSIONS = {
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _get_document_service():
+def _get_document_service() -> "DocumentService":
     from services.database_service import get_shared_db_service
     from services.document_service import DocumentService
     return DocumentService(get_shared_db_service())
 
 
-def _serialize_dt(val):
+def _serialize_dt(val: object) -> object:
     if isinstance(val, datetime):
         return val.isoformat()
     return val
 
 
-def _serialize_doc(doc: dict) -> dict:
-    """Serialize document dict for JSON response."""
+def _serialize_doc(doc: "dict[str, object]") -> "dict[str, object]":
+    """Strips ``clean_text`` from list responses (too large)."""
     out = dict(doc)
     for field in ('created_at', 'updated_at', 'deleted_at', 'purge_after'):
         if field in out:
@@ -103,22 +112,7 @@ def _serialize_doc(doc: dict) -> dict:
 
 
 def _sanitize_filename(name: str) -> str:
-    """Sanitize filename: strip path separators, null bytes, control chars."""
-    # Remove path separators and null bytes
-    name = name.replace('/', '').replace('\\', '').replace('\x00', '')
-    # Remove control characters
-    name = re.sub(r'[\x00-\x1f\x7f]', '', name)
-    # Prevent directory traversal
-    name = name.lstrip('.')
-    # Collapse whitespace
-    name = re.sub(r'\s+', ' ', name).strip()
-    if not name:
-        name = 'unnamed_document'
-    # Limit length
-    if len(name) > 255:
-        ext = os.path.splitext(name)[1]
-        name = name[:255 - len(ext)] + ext
-    return name
+    return safe_filename(name) or _FALLBACK_DOCUMENT_NAME
 
 
 def _validate_file_path(full_path: str) -> bool:
@@ -126,16 +120,16 @@ def _validate_file_path(full_path: str) -> bool:
     return FileMapperService.validate_document_path(full_path)
 
 
-def _read_existing_metadata(svc, doc_id: str) -> dict:
+def _read_existing_metadata(svc: "DocumentService", doc_id: str) -> "dict[str, object]":
     """Read prior extracted_metadata so concurrent writes are not clobbered."""
     existing = svc.get_document(doc_id) or {}
     meta = existing.get('extracted_metadata') or {}
     if isinstance(meta, str):
         try:
-            return json.loads(meta)
+            return cast("dict[str, object]", json.loads(meta))
         except Exception:
             return {}
-    return meta
+    return cast("dict[str, object]", meta)
 
 
 def _derive_summary(text: str) -> str:
@@ -147,7 +141,7 @@ def _derive_summary(text: str) -> str:
     return summary
 
 
-def _mark_upload_failed(doc_id: str, error: str):
+def _mark_upload_failed(doc_id: str, error: str) -> None:
     """Best-effort status update to 'failed' — swallow errors since we're already in a failure path."""
     try:
         from services.document_service import DocumentService
@@ -157,25 +151,32 @@ def _mark_upload_failed(doc_id: str, error: str):
         logger.exception(f"[DOCS API] Could not mark {doc_id} as failed")
 
 
-def _run_upload_extraction(doc_id: str):
+def _run_upload_extraction(doc_id: str) -> None:
     """Extract text + write artifacts + mark ready. Raises on unrecoverable errors."""
     from services.document_service import DocumentService
     from services.database_service import get_shared_db_service
     from services.text_extractor import extract_text
-    from abilities.document import create_document_artifacts
+    from services.document_chunking import create_document_artifacts
 
     svc = DocumentService(get_shared_db_service())
     doc = svc.get_document(doc_id)
     if not doc:
         return
 
-    file_path = doc.get('file_path', '')
+    file_path = cast(str, doc.get('file_path', ''))
     if not file_path:
         svc.update_status(doc_id, 'failed', 'No file path')
         return
 
     text = extract_text(str(FileMapperService.get_documents_path(file_path)))
+    is_image = cast(str, doc.get('mime_type') or '').startswith('image/')
     if not text:
+        if is_image:
+            # A textless image with no vision provider (e.g. a photo with no
+            # words): persist 'ready' so it stays viewable / re-queryable via the
+            # vision tool; there is simply nothing to index. NOT a failure.
+            svc.update_status(doc_id, 'ready', chunk_count=0)
+            return
         svc.update_status(doc_id, 'failed', 'Text extraction returned empty')
         return
 
@@ -194,26 +195,22 @@ def _run_upload_extraction(doc_id: str):
     logger.info(f"[DOCS API] Processed upload {doc_id}: {artifact_count} artifacts")
 
 
-def _process_upload(doc_id: str):
-    """Extract text from uploaded document and create data_graph artifacts."""
-    def _run():
-        try:
-            _run_upload_extraction(doc_id)
-        except Exception as e:
-            logger.exception(f"[DOCS API] Failed to process upload {doc_id}: {e}")
-            _mark_upload_failed(doc_id, str(e))
-
-    threading.Thread(target=_run, daemon=True, name=f"doc-upload-{doc_id[:8]}").start()
-
-
 # ---------------------------------------------------------------------------
 # Routes
 # ---------------------------------------------------------------------------
 
 @documents_bp.route("/documents/upload", methods=["POST"])
 @require_session
-def upload_document():
-    """Multipart file upload → save to disk, create DB row, enqueue processing."""
+def upload_document() -> "ResponseReturnValue":
+    """Thin Brain/library wrapper over the single mechanical ingest.
+
+    Validates the multipart upload (presence, extension, size), stages it to a
+    temp path, then delegates to ``abilities.document.ingest_file`` — the exact
+    same path chat attachments take — so the path-not-bytes act-trail invariant
+    holds for every upload surface. Duplicate detection is computed after ingest
+    from the returned hash. Extraction is synchronous, so the response carries the
+    terminal status (``ready``/``failed``), not ``pending``.
+    """
     if 'file' not in request.files:
         return jsonify({"error": "No file provided"}), 400
 
@@ -221,68 +218,42 @@ def upload_document():
     if not file.filename:
         return jsonify({"error": "No filename provided"}), 400
 
-    # Sanitize filename
     original_name = _sanitize_filename(file.filename)
 
-    # Check extension
     ext = os.path.splitext(original_name)[1].lower()
     if ext and ext not in ALLOWED_EXTENSIONS:
         return jsonify({"error": f"File type '{ext}' is not supported"}), 400
 
-    # Read file content for size check and hash
-    content = file.read()
-    if len(content) > MAX_FILE_SIZE:
-        return jsonify({"error": f"File exceeds {MAX_FILE_SIZE // 1024 // 1024}MB limit"}), 400
-
-    if len(content) == 0:
-        return jsonify({"error": "File is empty"}), 400
-
-    # MIME type validation
-    content_type = file.content_type or mimetypes.guess_type(original_name)[0] or 'application/octet-stream'
-
-    # Compute file hash
-    file_hash = hashlib.sha256(content).hexdigest()
-
+    import uuid
+    from services.tmp_storage import new_tmp_path
+    tmp_path = new_tmp_path(f"{uuid.uuid4().hex[:8]}_{original_name}")
     try:
+        file.save(tmp_path)
+
+        size = os.path.getsize(tmp_path)
+        if size > MAX_FILE_SIZE:
+            return jsonify({"error": f"File exceeds {MAX_FILE_SIZE // 1024 // 1024}MB limit"}), 400
+        if size == 0:
+            return jsonify({"error": "File is empty"}), 400
+
+        from abilities.document import ingest_file
         svc = _get_document_service()
+        result = ingest_file(svc, tmp_path, name=original_name)
+        if result.get("error"):
+            logger.error(f"[DOCS API] upload error: {result['error']}")
+            return jsonify({"error": "Upload failed"}), 500
 
-        # Create document record
-        import secrets
-        doc_id = secrets.token_hex(4)
-        file_path = f"{doc_id}/{original_name}"
+        doc_id = cast(str, result["id"])
+        file_hash = cast(str, result["hash"])
 
-        # Save file to disk
-        dir_path = FileMapperService.get_documents_path(doc_id)
-        os.makedirs(dir_path, exist_ok=True)
-
-        full_path = str(FileMapperService.get_documents_path(doc_id, original_name))
-        if not _validate_file_path(full_path):
-            return jsonify({"error": "Invalid file path"}), 400
-
-        with open(full_path, 'wb') as f:
-            f.write(content)
-
-        # Create DB record
-        doc_id = svc.create_document(
-            original_name=original_name,
-            mime_type=content_type,
-            file_size=len(content),
-            file_path=file_path,
-            file_hash=file_hash,
-            source_type='upload',
-        )
-
-        # Check for exact hash duplicates before processing
+        # Exact-hash duplicate detection, computed from the ingested file's hash.
         duplicates = svc.find_duplicates(file_hash, None, 0, exclude_id=doc_id)
 
-        # Process upload in background
-        _process_upload(doc_id)
-
-        response = {
+        response: dict[str, object] = {
             "id": doc_id,
-            "original_name": original_name,
-            "status": "pending",
-            "file_size": len(content),
+            "original_name": result["name"],
+            "status": result.get("status") or "pending",
+            "file_size": result["size"],
             "file_hash": file_hash,
         }
 
@@ -302,12 +273,16 @@ def upload_document():
     except Exception as e:
         logger.error(f"[DOCS API] upload error: {e}")
         return jsonify({"error": "Upload failed"}), 500
+    finally:
+        try:
+            os.remove(tmp_path)
+        except OSError:
+            pass
 
 
 @documents_bp.route("/documents", methods=["GET"])
 @require_session
-def list_documents():
-    """List all documents."""
+def list_documents() -> "ResponseReturnValue":
     include_deleted = request.args.get('include_deleted', 'false').lower() == 'true'
     try:
         svc = _get_document_service()
@@ -320,7 +295,7 @@ def list_documents():
 
 @documents_bp.route("/documents/<doc_id>", methods=["GET"])
 @require_session
-def get_document(doc_id):
+def get_document(doc_id: str) -> "ResponseReturnValue":
     """Get document metadata + first N data_graph artifact previews."""
     try:
         svc = _get_document_service()
@@ -345,7 +320,7 @@ def get_document(doc_id):
 
 @documents_bp.route("/documents/<doc_id>/content", methods=["GET"])
 @require_session
-def get_document_content(doc_id):
+def get_document_content(doc_id: str) -> "ResponseReturnValue":
     """Get full document text reconstructed from data_graph artifacts."""
     try:
         svc = _get_document_service()
@@ -374,8 +349,7 @@ def get_document_content(doc_id):
 
 @documents_bp.route("/documents/<doc_id>/download", methods=["GET"])
 @require_session
-def download_document(doc_id):
-    """Download original file."""
+def download_document(doc_id: str) -> "ResponseReturnValue":
     try:
         svc = _get_document_service()
         doc = svc.get_document(doc_id)
@@ -383,19 +357,19 @@ def download_document(doc_id):
             return jsonify({"error": _ERR_NOT_FOUND}), 404
 
         if doc.get('watched_folder_id'):
-            full_path = doc['file_path']
+            full_path = cast(str, doc['file_path'])
             if not os.path.isfile(os.path.realpath(full_path)):
                 return jsonify({"error": _ERR_FILE_NOT_FOUND}), 404
         else:
-            full_path = str(FileMapperService.get_documents_path(doc['file_path']))
+            full_path = str(FileMapperService.get_documents_path(cast(str, doc['file_path'])))
             if not _validate_file_path(full_path) or not os.path.exists(full_path):
                 return jsonify({"error": _ERR_FILE_NOT_FOUND}), 404
 
         return send_file(
             full_path,
-            mimetype=doc['mime_type'],
+            mimetype=cast(str, doc['mime_type']),
             as_attachment=True,
-            download_name=doc['original_name'],
+            download_name=cast(str, doc['original_name']),
         )
     except Exception as e:
         logger.error(f"[DOCS API] download error: {e}")
@@ -404,7 +378,7 @@ def download_document(doc_id):
 
 @documents_bp.route("/documents/<doc_id>/preview", methods=["GET"])
 @require_session
-def preview_document(doc_id):
+def preview_document(doc_id: str) -> "ResponseReturnValue":
     """Stream file for inline browser preview (no Content-Disposition: attachment)."""
     try:
         svc = _get_document_service()
@@ -413,19 +387,19 @@ def preview_document(doc_id):
             return jsonify({"error": _ERR_NOT_FOUND}), 404
 
         if doc.get('watched_folder_id'):
-            full_path = doc['file_path']
+            full_path = cast(str, doc['file_path'])
             if not os.path.isfile(os.path.realpath(full_path)):
                 return jsonify({"error": _ERR_FILE_NOT_FOUND}), 404
         else:
-            full_path = str(FileMapperService.get_documents_path(doc['file_path']))
+            full_path = str(FileMapperService.get_documents_path(cast(str, doc['file_path'])))
             if not _validate_file_path(full_path) or not os.path.exists(full_path):
                 return jsonify({"error": _ERR_FILE_NOT_FOUND}), 404
 
         return send_file(
             full_path,
-            mimetype=doc['mime_type'],
+            mimetype=cast(str, doc['mime_type']),
             as_attachment=False,
-            download_name=doc['original_name'],
+            download_name=cast(str, doc['original_name']),
         )
     except Exception as e:
         logger.error(f"[DOCS API] preview error: {e}")
@@ -434,7 +408,7 @@ def preview_document(doc_id):
 
 @documents_bp.route("/documents/<doc_id>/classify", methods=["PUT"])
 @require_session
-def update_document_classification(doc_id):
+def update_document_classification(doc_id: str) -> "ResponseReturnValue":
     """Update document classification metadata (user edit — locks auto-classification)."""
     try:
         svc = _get_document_service()
@@ -458,7 +432,7 @@ def update_document_classification(doc_id):
 
 @documents_bp.route("/documents/groups/<field>", methods=["GET"])
 @require_session
-def get_document_groups(field):
+def get_document_groups(field: str) -> "ResponseReturnValue":
     """Get unique classification groups for a field (doc_category, doc_project, doc_date)."""
     try:
         svc = _get_document_service()
@@ -471,8 +445,7 @@ def get_document_groups(field):
 
 @documents_bp.route("/documents/<doc_id>", methods=["DELETE"])
 @require_session
-def delete_document(doc_id):
-    """Soft-delete a document."""
+def delete_document(doc_id: str) -> "ResponseReturnValue":
     try:
         svc = _get_document_service()
         ok = svc.soft_delete(doc_id)
@@ -486,8 +459,7 @@ def delete_document(doc_id):
 
 @documents_bp.route("/documents/<doc_id>/restore", methods=["POST"])
 @require_session
-def restore_document(doc_id):
-    """Undo soft delete."""
+def restore_document(doc_id: str) -> "ResponseReturnValue":
     try:
         svc = _get_document_service()
         ok = svc.restore(doc_id)
@@ -501,8 +473,7 @@ def restore_document(doc_id):
 
 @documents_bp.route("/documents/<doc_id>/purge", methods=["DELETE"])
 @require_session
-def purge_document(doc_id):
-    """Immediate hard delete."""
+def purge_document(doc_id: str) -> "ResponseReturnValue":
     try:
         svc = _get_document_service()
         ok = svc.hard_delete(doc_id)
@@ -516,7 +487,7 @@ def purge_document(doc_id):
 
 @documents_bp.route("/documents/search", methods=["GET"])
 @require_session
-def search_documents():
+def search_documents() -> "ResponseReturnValue":
     """Search across document artifacts in data_graph."""
     q_raw = request.args.get('q', None)
     if q_raw is None:
@@ -525,7 +496,7 @@ def search_documents():
     if not query:
         return jsonify({"error": "Query cannot be empty"}), 400
 
-    limit = min(int(request.args.get('limit', 5)), 20)
+    limit = min(request.args.get('limit', 5, type=int), 20)
 
     try:
         from services.data_graph_service import get_data_graph_service, KIND_DOCUMENT
@@ -535,7 +506,7 @@ def search_documents():
 
         serialized = []
         for row in results:
-            source = row.get('source', '') or ''
+            source = cast(str, row.get('source', '') or '')
             doc_id = source.split(':', 1)[1] if source.startswith('document:') else ''
             serialized.append({
                 'document_id': doc_id,
@@ -552,8 +523,7 @@ def search_documents():
 
 @documents_bp.route("/documents/<doc_id>/confirm", methods=["POST"])
 @require_session
-def confirm_document(doc_id):
-    """Confirm document after synthesis review — marks it as ready."""
+def confirm_document(doc_id: str) -> "ResponseReturnValue":
     try:
         svc = _get_document_service()
         doc = svc.get_document(doc_id)
@@ -563,7 +533,7 @@ def confirm_document(doc_id):
         if doc['status'] != 'awaiting_confirmation':
             return jsonify({"error": "Document is not awaiting confirmation"}), 400
 
-        svc.update_status(doc_id, 'ready', chunk_count=doc.get('chunk_count', 0))
+        svc.update_status(doc_id, 'ready', chunk_count=cast(int, doc.get('chunk_count', 0)))
         return jsonify({"ok": True, "status": "ready"})
     except Exception as e:
         logger.error(f"[DOCS API] confirm error: {e}")
@@ -572,8 +542,7 @@ def confirm_document(doc_id):
 
 @documents_bp.route("/documents/<doc_id>/augment", methods=["POST"])
 @require_session
-def augment_document(doc_id):
-    """Add user context to a document and confirm it."""
+def augment_document(doc_id: str) -> "ResponseReturnValue":
     try:
         svc = _get_document_service()
         doc = svc.get_document(doc_id)
@@ -589,18 +558,18 @@ def augment_document(doc_id):
             return jsonify({"error": "Field 'context' is required"}), 400
 
         # Store user context in extracted_metadata
-        metadata = doc.get('extracted_metadata') or {}
+        metadata = cast("dict[str, object]", doc.get('extracted_metadata') or {})
         metadata['_user_context'] = context
 
         svc.update_extracted_metadata(
             doc_id,
             metadata=metadata,
-            summary=doc.get('summary', ''),
-            summary_embedding=doc.get('summary_embedding'),
+            summary=cast(str, doc.get('summary', '')),
+            summary_embedding=cast("list[float] | None", doc.get('summary_embedding')),
         )
 
         if doc['status'] != 'ready':
-            svc.update_status(doc_id, 'ready', chunk_count=doc.get('chunk_count', 0))
+            svc.update_status(doc_id, 'ready', chunk_count=cast(int, doc.get('chunk_count', 0)))
         return jsonify({"ok": True, "status": "ready"})
     except Exception as e:
         logger.error(f"[DOCS API] augment error: {e}")
@@ -609,8 +578,7 @@ def augment_document(doc_id):
 
 @documents_bp.route("/documents/<doc_id>/supersede", methods=["POST"])
 @require_session
-def supersede_document(doc_id):
-    """Mark a new document as replacing an older one, and soft-delete the old."""
+def supersede_document(doc_id: str) -> "ResponseReturnValue":
     try:
         svc = _get_document_service()
 
@@ -640,7 +608,7 @@ def supersede_document(doc_id):
 # Watched Folders
 # ---------------------------------------------------------------------------
 
-def _get_watcher_service():
+def _get_watcher_service() -> "FolderWatcherService":
     from services.database_service import get_shared_db_service
     from services.folder_watcher_service import FolderWatcherService
     return FolderWatcherService(get_shared_db_service())
@@ -648,8 +616,7 @@ def _get_watcher_service():
 
 @documents_bp.route("/documents/watched-folders", methods=["GET"])
 @require_session
-def list_watched_folders():
-    """List all watched folders."""
+def list_watched_folders() -> "ResponseReturnValue":
     try:
         svc = _get_watcher_service()
         folders = svc.get_all_folders()
@@ -661,8 +628,7 @@ def list_watched_folders():
 
 @documents_bp.route("/documents/watched-folders", methods=["POST"])
 @require_session
-def create_watched_folder():
-    """Add a new watched folder."""
+def create_watched_folder() -> "ResponseReturnValue":
     data = request.get_json(silent=True) or {}
     folder_path = (data.get('folder_path') or '').strip()
 
@@ -693,8 +659,7 @@ def create_watched_folder():
 
 @documents_bp.route("/documents/watched-folders/<folder_id>", methods=["PUT"])
 @require_session
-def update_watched_folder(folder_id):
-    """Update watched folder settings."""
+def update_watched_folder(folder_id: str) -> "ResponseReturnValue":
     data = request.get_json(silent=True) or {}
     try:
         svc = _get_watcher_service()
@@ -713,8 +678,7 @@ def update_watched_folder(folder_id):
 
 @documents_bp.route("/documents/watched-folders/<folder_id>", methods=["DELETE"])
 @require_session
-def delete_watched_folder(folder_id):
-    """Remove a watched folder."""
+def delete_watched_folder(folder_id: str) -> "ResponseReturnValue":
     delete_documents = request.args.get('delete_documents', 'false').lower() == 'true'
     try:
         svc = _get_watcher_service()
@@ -729,8 +693,7 @@ def delete_watched_folder(folder_id):
 
 @documents_bp.route("/documents/watched-folders/<folder_id>/scan", methods=["POST"])
 @require_session
-def trigger_scan(folder_id):
-    """Trigger an immediate scan for a watched folder."""
+def trigger_scan(folder_id: str) -> "ResponseReturnValue":
     try:
         svc = _get_watcher_service()
         folder = svc.get_folder(folder_id)
@@ -746,8 +709,7 @@ def trigger_scan(folder_id):
 
 @documents_bp.route("/documents/watched-folders/browse", methods=["POST"])
 @require_session
-def browse_directories():
-    """Browse host filesystem directories for folder selection."""
+def browse_directories() -> "ResponseReturnValue":
     data = request.get_json(silent=True) or {}
     path = data.get('path')
 
@@ -762,5 +724,3 @@ def browse_directories():
     except Exception as e:
         logger.error(f"[DOCS API] browse error: {e}")
         return jsonify({"error": _ERR_INTERNAL}), 500
-
-

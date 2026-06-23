@@ -5,12 +5,19 @@ Derives user interests from traits and topic frequency, queries the news tool,
 and feeds results into world state. Zero LLM calls.
 """
 
+from __future__ import annotations
+
 import logging
 import time
+from typing import TYPE_CHECKING, cast
 
 import numpy as np
 
-from services.time_utils import utc_now
+
+if TYPE_CHECKING:
+    from services.database_service import DatabaseService
+    from services.embedding_service import EmbeddingService
+    from services.news_service import NewsService
 
 logger = logging.getLogger(__name__)
 
@@ -28,20 +35,20 @@ SIGNAL_SOURCE = "world_awareness"
 
 
 class WorldAwarenessService:
-    def __init__(self, database_service):
+    def __init__(self, database_service: "DatabaseService") -> None:
         self._db = database_service
-        self._embedding_svc = None
-        self._news_service = None
+        self._embedding_svc: "EmbeddingService | None" = None
+        self._news_service: "NewsService | None" = None
 
     # ── Lazy accessors ────────────────────────────────────────
 
-    def _get_embedding_service(self):
+    def _get_embedding_service(self) -> "EmbeddingService":
         if self._embedding_svc is None:
             from services.embedding_service import get_embedding_service
             self._embedding_svc = get_embedding_service()
         return self._embedding_svc
 
-    def _get_news_service(self):
+    def _get_news_service(self) -> "NewsService":
         if self._news_service is None:
             from services.news_service import NewsService
             self._news_service = NewsService()
@@ -50,11 +57,7 @@ class WorldAwarenessService:
 
     # ── Interest extraction ───────────────────────────────────
 
-    def extract_interests(self) -> list:
-        """Extract ranked interest terms from user traits + topic frequency.
-
-        Returns list of dicts: [{"term": str, "score": float, "source": "trait"|"topic"}, ...]
-        """
+    def extract_interests(self) -> list[dict[str, str | float]]:
         candidates = []
         candidates.extend(self._extract_trait_interests())
         candidates.extend(self._extract_topic_interests())
@@ -66,73 +69,50 @@ class WorldAwarenessService:
         deduped.sort(key=lambda x: x["score"], reverse=True)
         return deduped[:MAX_INTERESTS]
 
-    def _extract_trait_interests(self) -> list:
-        """Get interest terms from high-confidence user traits."""
+    def _extract_trait_interests(self) -> list[dict[str, str | float]]:
         try:
             from services.data_graph_service import get_data_graph_service
-            rows = get_data_graph_service().fetch(
+            rows = cast("list[dict[str, object]]", get_data_graph_service().fetch(
                 kinds=['user_specific'],
                 order_by='retrieval_weight DESC',
-            )
+            ))
             traits = [
                 r for r in rows
-                if (r.get('retrieval_weight') or 0) >= TRAIT_MIN_CONFIDENCE
-                and (r.get('evidence_count') or 0) >= TRAIT_MIN_REINFORCEMENTS
+                if cast(float, r.get('retrieval_weight') or 0) >= TRAIT_MIN_CONFIDENCE
+                and cast(int, r.get('evidence_count') or 0) >= TRAIT_MIN_REINFORCEMENTS
             ]
         except Exception as e:
             logger.warning(f"{LOG_PREFIX} Failed to query traits: {e}")
             return []
 
-        candidates = []
+        candidates: list[dict[str, str | float]] = []
         for row in traits:
-            term = (row.get('value') or '').strip()
+            term = cast(str, row.get('value') or '').strip()
             if len(term) < 2 or len(term) > 100:
                 continue
-            score = (row.get('retrieval_weight') or 0) * (row.get('evidence_count') or 1)
+            score: float = cast(float, row.get('retrieval_weight') or 0) * cast(int, row.get('evidence_count') or 1)
             candidates.append({"term": term, "score": score, "source": "trait"})
         return candidates
 
-    def _extract_topic_interests(self) -> list:
-        """Get interest terms from recent topic frequency."""
-        try:
-            conn = self._db.get_connection()
-            cutoff = utc_now().isoformat()
-            cursor = conn.execute(
-                """SELECT channel, COUNT(*) as freq,
-                          MAX(created_at) as last_seen
-                   FROM transcript
-                   WHERE created_at >= datetime(?, '-' || ? || ' days')
-                     AND role = 'user'
-                     AND channel IS NOT NULL
-                     AND channel != ''
-                   GROUP BY channel
-                   ORDER BY freq DESC
-                   LIMIT 20""",
-                (cutoff, TOPIC_LOOKBACK_DAYS),
-            )
-            topics = cursor.fetchall()
-        except Exception as e:
-            logger.warning(f"{LOG_PREFIX} Failed to query topics: {e}")
-            return []
-
-        candidates = []
+    def _extract_topic_interests(self) -> list[dict[str, str | float]]:
+        from services.transcript_service import Transcript  # noqa: PLC0415
+        topics = Transcript.channel_activity(TOPIC_LOOKBACK_DAYS)
+        candidates: list[dict[str, str | float]] = []
         max_freq = max((row[1] for row in topics), default=1)
         for row in topics:
             topic_name = row[0].strip()
             if len(topic_name) < 2:
                 continue
             term = topic_name.replace("_", " ").replace("-", " ")
-            freq_score = row[1] / max_freq
-            candidates.append({"term": term, "score": freq_score, "source": "topic"})
+            candidates.append({"term": term, "score": row[1] / max_freq, "source": "topic"})
         return candidates
 
-    def _deduplicate_by_embedding(self, candidates: list) -> list:
-        """Remove near-duplicate interests using embedding cosine similarity."""
+    def _deduplicate_by_embedding(self, candidates: list[dict[str, str | float]]) -> list[dict[str, str | float]]:
         if len(candidates) <= 1:
             return candidates
 
         emb_svc = self._get_embedding_service()
-        terms = [c["term"] for c in candidates]
+        terms = [cast(str, c["term"]) for c in candidates]
 
         try:
             embeddings = emb_svc.generate_embeddings_batch(terms)
@@ -142,8 +122,8 @@ class WorldAwarenessService:
 
         # Greedy dedup: keep highest-scored, drop anything too similar
         indexed = sorted(enumerate(candidates), key=lambda x: x[1]["score"], reverse=True)
-        kept_indices = []
-        kept_embeddings = []
+        kept_indices: list[int] = []
+        kept_embeddings: list[np.ndarray] = []
 
         for orig_idx, candidate in indexed:
             emb = embeddings[orig_idx]
@@ -178,7 +158,7 @@ class WorldAwarenessService:
         for interest in interests:
             try:
                 articles = news_svc.search(
-                    query=interest["term"],
+                    query=cast(str, interest["term"]),
                     limit=MAX_ARTICLES_PER_INTEREST,
                 )
                 if not articles:
@@ -199,7 +179,7 @@ class WorldAwarenessService:
 
 # ── Worker entry point ────────────────────────────────────────
 
-def world_awareness_worker():
+def world_awareness_worker() -> None:
     """Module-level entry point for run.py registration."""
     from services.database_service import DatabaseService
 

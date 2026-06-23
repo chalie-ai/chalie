@@ -10,7 +10,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/chalie-ai/chalie/releases"><img src="https://img.shields.io/github/v/release/chalie-ai/chalie?include_prereleases&style=for-the-badge&color=7c3aed" alt="Release"></a>
+  <a href="https://github.com/chalie-ai/chalie/tags"><img src="https://img.shields.io/github/v/tag/chalie-ai/chalie?style=for-the-badge&color=7c3aed" alt="Release"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-Apache%202.0-06b6d4?style=for-the-badge" alt="License"></a>
   <a href="https://github.com/chalie-ai/chalie/issues"><img src="https://img.shields.io/github/issues/chalie-ai/chalie?style=for-the-badge&color=ec4899" alt="Issues"></a>
   <a href="docs/04-ARCHITECTURE.md"><img src="https://img.shields.io/badge/Docs-architecture-7c3aed?style=for-the-badge" alt="Docs"></a>

@@ -1,13 +1,17 @@
-"""
-Tests for DocumentService -- CRUD, chunk storage, soft delete, purge, search.
+# Tests for DocumentService migrated from mock_db to real SQLite via shared `db` fixture.
 
-Migrated from mock_db to real SQLite via the shared `db` fixture.
-"""
+import sqlite3
+from collections.abc import Callable
+from typing import TYPE_CHECKING, cast
 
 import pytest
 
 from services.document_service import DocumentService
 from services.database_service import get_shared_db_service
+from services.write_queue_service import WriteQueueService
+
+if TYPE_CHECKING:
+    pass
 
 
 class _InlineWriteQueue:
@@ -18,19 +22,19 @@ class _InlineWriteQueue:
     of a background daemon.
     """
 
-    def submit_sync(self, fn, *args, **kwargs):
+    def submit_sync(self, fn: Callable[..., object], *args: object, **kwargs: object) -> object:
         return fn(*args, **kwargs)
 
-    def submit(self, fn, *args, **kwargs):
+    def submit(self, fn: Callable[..., object], *args: object, **kwargs: object) -> None:
         fn(*args, **kwargs)
 
 
-def _insert_document(db, doc_id='abc123', original_name='test.pdf',
-                     mime_type='application/pdf', file_size=1024,
-                     file_path='abc123/test.pdf', file_hash='sha256hash',
-                     source_type='upload', status='pending', **extra):
+def _insert_document(db: sqlite3.Connection, doc_id: str = 'abc123', original_name: str = 'test.pdf',
+                     mime_type: str = 'application/pdf', file_size: int = 1024,
+                     file_path: str = 'abc123/test.pdf', file_hash: str = 'sha256hash',
+                     source_type: str = 'upload', status: str = 'pending', **extra: object) -> str:
     """Seed a document row directly for read-path tests."""
-    cols = dict(
+    cols: dict[str, object] = dict(
         id=doc_id,
         original_name=original_name,
         mime_type=mime_type,
@@ -52,16 +56,16 @@ def _insert_document(db, doc_id='abc123', original_name='test.pdf',
 
 
 @pytest.fixture
-def doc_service(db):
+def doc_service(db: sqlite3.Connection) -> DocumentService:
     """DocumentService wired to the test database with inline write queue."""
     svc = DocumentService(get_shared_db_service())
-    svc._write_queue = _InlineWriteQueue()
+    svc._write_queue = cast(WriteQueueService, _InlineWriteQueue())
     return svc
 
 
 @pytest.mark.unit
 class TestCreateDocument:
-    def test_creates_document_and_returns_id(self, db, doc_service):
+    def test_creates_document_and_returns_id(self, db: sqlite3.Connection, doc_service: DocumentService) -> None:
         doc_id = doc_service.create_document(
             original_name='test.pdf',
             mime_type='application/pdf',
@@ -85,11 +89,11 @@ class TestCreateDocument:
 
 @pytest.mark.unit
 class TestGetDocument:
-    def test_returns_none_when_not_found(self, db, doc_service):
+    def test_returns_none_when_not_found(self, db: sqlite3.Connection, doc_service: DocumentService) -> None:
         result = doc_service.get_document('nonexistent')
         assert result is None
 
-    def test_returns_dict_when_found(self, db, doc_service):
+    def test_returns_dict_when_found(self, db: sqlite3.Connection, doc_service: DocumentService) -> None:
         _insert_document(db, doc_id='abc123', status='ready')
 
         result = doc_service.get_document('abc123')
@@ -101,7 +105,7 @@ class TestGetDocument:
 
 @pytest.mark.unit
 class TestSoftDelete:
-    def test_soft_delete_sets_deleted_at(self, db, doc_service):
+    def test_soft_delete_sets_deleted_at(self, db: sqlite3.Connection, doc_service: DocumentService) -> None:
         _insert_document(db, doc_id='abc123')
 
         result = doc_service.soft_delete('abc123')
@@ -115,7 +119,7 @@ class TestSoftDelete:
 
 @pytest.mark.unit
 class TestRestore:
-    def test_restore_clears_deleted_at(self, db, doc_service):
+    def test_restore_clears_deleted_at(self, db: sqlite3.Connection, doc_service: DocumentService) -> None:
         _insert_document(db, doc_id='abc123')
         doc_service.soft_delete('abc123')
 
@@ -131,7 +135,7 @@ class TestRestore:
 
 @pytest.mark.unit
 class TestGetAllDocuments:
-    def test_excludes_deleted_by_default(self, db, doc_service):
+    def test_excludes_deleted_by_default(self, db: sqlite3.Connection, doc_service: DocumentService) -> None:
         _insert_document(db, doc_id='live1')
         _insert_document(db, doc_id='dead1')
         doc_service.soft_delete('dead1')
@@ -144,7 +148,7 @@ class TestGetAllDocuments:
 
 @pytest.mark.unit
 class TestFindDuplicates:
-    def test_finds_exact_hash_match(self, db, doc_service):
+    def test_finds_exact_hash_match(self, db: sqlite3.Connection, doc_service: DocumentService) -> None:
         _insert_document(db, doc_id='dup1', original_name='existing.pdf',
                          file_hash='same_hash')
 
@@ -155,7 +159,7 @@ class TestFindDuplicates:
 
 @pytest.mark.unit
 class TestUpdateStatus:
-    def test_updates_status(self, db, doc_service):
+    def test_updates_status(self, db: sqlite3.Connection, doc_service: DocumentService) -> None:
         _insert_document(db, doc_id='abc123', status='pending')
 
         doc_service.update_status('abc123', 'processing')
@@ -164,5 +168,3 @@ class TestUpdateStatus:
             "SELECT status FROM documents WHERE id = 'abc123'"
         ).fetchone()
         assert row['status'] == 'processing'
-
-

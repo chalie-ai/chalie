@@ -1,24 +1,14 @@
-"""
-Wrappers API — CRUD endpoints for external wrapper bearer tokens.
-
-Routes:
-  POST   /api/wrappers                    — create a wrapper token (cookie auth only)
-  GET    /api/wrappers                    — list active wrappers
-  GET    /api/wrappers/<id>              — get wrapper details + capabilities
-  PUT    /api/wrappers/<id>/capabilities — update capabilities (bearer, own wrapper only)
-  DELETE /api/wrappers/<id>             — revoke wrapper token
-
-The POST route intentionally restricts token creation to cookie-authenticated
-sessions: only a human sitting in front of the UI should be able to mint new
-wrapper credentials.  All other routes accept both cookie and bearer auth.
-"""
-
 import logging
+from typing import TYPE_CHECKING, cast
 
 from flask import Blueprint, g, jsonify, request
 
-from .auth import require_auth
+from .auth import require_auth, _cookie_only
 from services.log_utils import safe
+
+if TYPE_CHECKING:
+    from flask.typing import ResponseReturnValue
+    from services.wrapper_auth_service import WrapperAuthService
 
 logger = logging.getLogger(__name__)
 
@@ -31,38 +21,10 @@ wrappers_bp = Blueprint("wrappers", __name__, url_prefix="/api/wrappers")
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _get_service():
-    """Return a WrapperAuthService using the shared DatabaseService."""
+def _get_service() -> "WrapperAuthService":
     from services.database_service import get_shared_db_service
     from services.wrapper_auth_service import WrapperAuthService
     return WrapperAuthService(get_shared_db_service())
-
-
-def _cookie_only(f):
-    """Restrict a route to cookie-authenticated requests (no bearer tokens).
-
-    Used on the token creation endpoint so that only humans (not wrappers
-    themselves) can mint new credentials.
-    """
-    from functools import wraps
-
-    @wraps(f)
-    def decorated(*args, **kwargs):
-        """Return 403 if the request was authenticated via bearer token.
-
-        Args:
-            *args: Positional arguments forwarded to the wrapped view.
-            **kwargs: Keyword arguments forwarded to the wrapped view.
-
-        Returns:
-            403 JSON error if ``g.wrapper_id`` is set (bearer auth); otherwise
-            the return value of the wrapped view.
-        """
-        if getattr(g, "wrapper_id", None) is not None:
-            return jsonify({"error": "Token creation requires cookie session auth"}), 403
-        return f(*args, **kwargs)
-
-    return decorated
 
 
 # ---------------------------------------------------------------------------
@@ -72,7 +34,7 @@ def _cookie_only(f):
 @wrappers_bp.route("", methods=["POST"])
 @require_auth
 @_cookie_only
-def create_wrapper():
+def create_wrapper() -> "ResponseReturnValue":
     """Create a new external wrapper token.
 
     Body (JSON):
@@ -107,9 +69,9 @@ def create_wrapper():
     svc = _get_service()
     raw_token, wrapper_id = svc.create_token(
         name=name,
-        capabilities=capabilities,
-        permissions=permissions,
-        metadata=metadata,
+        capabilities=cast("dict[str, object]", capabilities),
+        permissions=cast("dict[str, object]", permissions),
+        metadata=cast("dict[str, object]", metadata),
     )
 
     logger.info("[Wrappers API] Created wrapper token: %s name=%r", wrapper_id, name)
@@ -122,7 +84,7 @@ def create_wrapper():
 
 @wrappers_bp.route("", methods=["GET"])
 @require_auth
-def list_wrappers():
+def list_wrappers() -> "ResponseReturnValue":
     """List all non-revoked wrapper tokens.
 
     Returns:
@@ -141,7 +103,7 @@ def list_wrappers():
 
 @wrappers_bp.route("/<wrapper_id>", methods=["GET"])
 @require_auth
-def get_wrapper(wrapper_id: str):
+def get_wrapper(wrapper_id: str) -> "ResponseReturnValue":
     """Get details for a single wrapper token.
 
     Args:
@@ -163,7 +125,7 @@ def get_wrapper(wrapper_id: str):
 
 @wrappers_bp.route("/<wrapper_id>/capabilities", methods=["PUT"])
 @require_auth
-def update_capabilities(wrapper_id: str):
+def update_capabilities(wrapper_id: str) -> "ResponseReturnValue":
     """Replace the capabilities payload for a wrapper.
 
     Bearers may only update their **own** wrapper (``g.wrapper_id`` must match).
@@ -192,7 +154,7 @@ def update_capabilities(wrapper_id: str):
         return jsonify({"error": "capabilities must be a JSON object or array"}), 400
 
     svc = _get_service()
-    updated = svc.update_capabilities(wrapper_id, capabilities)
+    updated = svc.update_capabilities(wrapper_id, cast("dict[str, object]", capabilities))
     if not updated:
         return jsonify({"error": _ERR_WRAPPER_NOT_FOUND}), 404
 
@@ -205,7 +167,7 @@ def update_capabilities(wrapper_id: str):
 
 @wrappers_bp.route("/<wrapper_id>", methods=["DELETE"])
 @require_auth
-def revoke_wrapper(wrapper_id: str):
+def revoke_wrapper(wrapper_id: str) -> "ResponseReturnValue":
     """Revoke a wrapper token.
 
     Args:
