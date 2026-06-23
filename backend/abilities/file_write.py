@@ -1,8 +1,10 @@
 """FileWriteAbility — write content to a file at a caller-supplied absolute path.
 
 Act-trail guard: if the target file already exists, a prior ``read`` call on
-the same resolved path in the current transcript is required before the write
-is executed — so an overwrite is never blind.
+the same resolved path in the current turn is required before the write is
+executed — so an overwrite is never blind. The guard keys on the turn (every
+tool call the turn recorded), not on the single input row, so a ``read`` issued
+on any assistant step of the turn satisfies it.
 
 Returns a sealed :class:`abilities._result.ToolResult` (never a wire envelope):
 
@@ -18,13 +20,9 @@ Returns a sealed :class:`abilities._result.ToolResult` (never a wire envelope):
 import json
 import logging
 from pathlib import Path
-from typing import TYPE_CHECKING, ClassVar, cast
+from typing import ClassVar, cast
 
 from abilities._ability import Ability
-
-if TYPE_CHECKING:
-    class _DbProto:
-        def fetch_all(self, sql: str, params: object = None) -> list[dict[str, object]]: ...
 from abilities._params import Keys
 from abilities._result import ToolResult
 
@@ -108,14 +106,12 @@ class FileWriteAbility(Ability):
         target = Path(path_str).resolve()
 
         existed = target.exists()
-        if existed:
-            from services.database_service import get_shared_db_service
-            if not self._read_called_first(cast("_DbProto", get_shared_db_service()), target):
-                return ToolResult.err(
-                    f"You must read {target} before overwriting it.",
-                    code="read-required",
-                    hint=f"call the 'read' tool on {target} first, then retry the write",
-                )
+        if existed and not self._read_called_first(target):
+            return ToolResult.err(
+                f"You must read {target} before overwriting it.",
+                code="read-required",
+                hint=f"call the 'read' tool on {target} first, then retry the write",
+            )
 
         try:
             target.parent.mkdir(parents=True, exist_ok=True)
@@ -139,23 +135,22 @@ class FileWriteAbility(Ability):
             {"path": str(target), "bytes": bytes_written, "created": not existed}
         )
 
-    def _read_called_first(self, db: "_DbProto", target: Path) -> bool:
+    def _read_called_first(self, target: Path) -> bool:
         proc = self.mp
         if proc is None:
             return True
 
-        transcript_id = getattr(proc, "_uid", None)
-        if transcript_id is None:
-            logger.warning("file_write read-guard: active processor has no _uid — guard bypassed")
+        turn_id = getattr(proc, "turn_id", None)
+        channel = getattr(getattr(proc, "config", None), "channel", None)
+        if turn_id is None or channel is None:
+            logger.warning("file_write read-guard: active processor has no turn — guard bypassed")
             return True
 
+        from services.act_trail import ActTrail
         target_str = str(target)
-        rows = db.fetch_all(
-            "SELECT params FROM tool_calls "
-            "WHERE transcript_id = ? AND tool_name = 'read'",
-            (transcript_id,),
-        )
-        for row in rows:
+        for row in ActTrail().fetch_by_turn(channel, turn_id):
+            if row.get("tool_name") != "read":
+                continue
             try:
                 p = json.loads(cast(str, row["params"]))
             except (json.JSONDecodeError, TypeError):
@@ -163,8 +158,10 @@ class FileWriteAbility(Ability):
             source = p.get("source") or p.get("path") or p.get("url", "")
             if not source:
                 continue
+            # `read` expands ``~`` before reading, but records the raw arg — so the
+            # guard must expanduser too, or a tilde-path read would never match.
             try:
-                if Path(source).resolve() == target:
+                if Path(source).expanduser().resolve() == target:
                     return True
             except (ValueError, OSError):
                 if source == target_str:

@@ -28,16 +28,22 @@ pytestmark = pytest.mark.unit
 
 class _MP:
 
-    def __init__(self, uid: int, config: object) -> None:
+    def __init__(self, uid: int, turn_id: int, config: object) -> None:
         self.config = config
         self.uid = uid
         self._uid = uid
+        self.turn_id = turn_id
 
 
 @pytest.fixture
 def chat_mp(db: sqlite3.Connection) -> _MP:
     allow_policy(db, "file_write")
-    return _MP(seed_transcript(db, "chat", "save this to a file"), UserConfig({}))
+    # Seed under the real UserConfig transcript channel ("user"), not "chat":
+    # the read-guard joins tool_calls→transcript on (channel, turn_id), so the
+    # input row and the read rows must share the config's own channel.
+    uid = seed_transcript(db, "user", "save this to a file")
+    turn_id = cast("int", db.execute("SELECT turn_id FROM transcript WHERE id = ?", (uid,)).fetchone()[0])
+    return _MP(uid, turn_id, UserConfig({}))
 
 
 def _parse_body(rendered: str) -> object:
@@ -188,3 +194,87 @@ def test_permission_denied_into_readonly_dir(db: sqlite3.Connection, chat_mp: _M
     finally:
         # Restore so tmp_path teardown can remove the tree.
         locked.chmod(0o700)
+
+
+# ── 8. REGRESSION: read recorded under a later STEP row (not the input row) ──────
+
+
+def test_overwrite_with_read_under_later_step_row_succeeds(
+    db: sqlite3.Connection, chat_mp: _MP, tmp_path: Path
+) -> None:
+    """The read-guard keys on the TURN, not the input row. A real multi-step turn
+    records each ``read`` against the assistant STEP row (``mp.anchor``), whose
+    transcript_id is NOT the input row's ``uid``. Before this fix the guard queried
+    ``transcript_id = _uid`` only, so a read on any step after the first never
+    satisfied it and the model looped forever on ``read-required``."""
+    target = tmp_path / "existing.txt"
+    target.write_text("old content\n", encoding="utf-8")
+
+    # A later assistant step row in the SAME turn (channel + turn_id), exactly as
+    # MessageProcessor._store_row writes before that step's tools dispatch.
+    step_row = db.execute(
+        "INSERT INTO transcript (channel, role, content, turn_id) VALUES ('user', 'assistant', '', ?)",
+        (chat_mp.turn_id,),
+    ).lastrowid
+    db.commit()
+    ActTrail().record(
+        tool_name="read",
+        params={"source": str(target)},
+        result="[read(status=success)]\nold content\n[end:read]",
+        transcript_id=step_row,  # NOT chat_mp._uid — the bug was querying only _uid
+    )
+
+    out = ToolDispatcher(chat_mp).dispatch(
+        "file_write", {"path": str(target), "contents": "new content"}
+    )
+
+    assert "[file_write(status=success" in out
+    assert target.read_text(encoding="utf-8") == "new content"
+
+
+# ── 9. read recorded with a ``~`` path clears the guard for the resolved target ──
+
+
+def test_read_recorded_with_tilde_path_clears_guard(
+    db: sqlite3.Connection, chat_mp: _MP, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``read`` expands ``~`` before reading but records the raw ``~/…`` arg. The
+    guard must expanduser too, or a tilde-path read can never match the resolved
+    absolute target file_write is called with."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    target = tmp_path / "noted.txt"
+    target.write_text("old\n", encoding="utf-8")
+
+    ActTrail().record(
+        tool_name="read",
+        params={"source": "~/noted.txt"},
+        result="[read(status=success)]\nold\n[end:read]",
+        transcript_id=chat_mp._uid,
+    )
+
+    out = ToolDispatcher(chat_mp).dispatch(
+        "file_write", {"path": str(target), "contents": "new"}
+    )
+
+    assert "[file_write(status=success" in out
+    assert target.read_text(encoding="utf-8") == "new"
+
+
+# ── 10. LOOP-GUARD: a second identical erroring call is steered, the first is not ─
+
+
+def test_repeat_identical_error_injects_loop_guard(db: sqlite3.Connection, chat_mp: _MP) -> None:
+    """Two identical calls that both error with the same code: the first carries no
+    steer, the second carries the loop-guard instruction (re-check schema via
+    find_tools, then escalate to the user). Drives the real dispatcher record→
+    fetch_by_turn path with zero mocks."""
+    args = {"path": "relative/note.txt", "contents": "x"}  # relative → deterministic invalid-path
+
+    first = ToolDispatcher(chat_mp).dispatch("file_write", dict(args))
+    second = ToolDispatcher(chat_mp).dispatch("file_write", dict(args))
+
+    assert "[file_write(status=error, code=invalid-path" in first
+    assert "loop-guard" not in first
+    assert "[file_write(status=error, code=invalid-path" in second
+    assert "loop-guard" in second
+    assert "find_tools" in second

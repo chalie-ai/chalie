@@ -132,6 +132,11 @@ class ToolDispatcher:
                     cancel_event=getattr(self._mp, "cancel_event", None),
                 )
 
+        # Computed BEFORE the record below, so this call is not yet on the trail
+        # and cannot self-match. The steer (``""`` when not a repeat) rides back
+        # to the model on top of the unchanged recorded error.
+        steer = self._repeat_error_steer(tool_name, result_text)
+
         from services.act_trail import ActTrail  # noqa: PLC0415
         ActTrail().record(
             tool_name=tool_name,
@@ -147,7 +152,32 @@ class ToolDispatcher:
             # re-render the chip's summary instead of dropping it on reload.
             summary=act_summary,
         )
-        return result_text
+        return result_text + steer
+
+    def _repeat_error_steer(self, tool_name: str, result_text: str) -> str:
+        """Steering suffix when this exact error already fired for an identical
+        call earlier this turn — else ``""`` (self-no-op, appended unconditionally).
+
+        The ACT loop has no iteration cap (a runaway turn is a hard-restart
+        condition), so a tool stuck returning the same error can spin for minutes
+        until the model abandons it. When the identical error envelope is already
+        on the turn's trail, append a one-shot instruction telling the model to
+        stop retrying, re-check the schema, and escalate to the user. Identical
+        params yield an identical deterministic error, so envelope-equality IS
+        call-identity — and the success path never pays the query (the cheap
+        prefix check short-circuits first)."""
+        if not result_text.startswith(f"[{tool_name}(status=error"):
+            return ""
+        channel = getattr(getattr(self._mp, "config", None), "channel", None)
+        turn_id = getattr(self._mp, "turn_id", None)
+        if channel is None or turn_id is None:
+            return ""
+        from services.act_trail import ActTrail  # noqa: PLC0415
+        seen = any(
+            row.get("tool_name") == tool_name and row.get("result") == result_text
+            for row in ActTrail().fetch_by_turn(channel, turn_id)
+        )
+        return _REPEAT_ERROR_STEER if seen else ""
 
     # ── Resolution ─────────────────────────────────────────────────────────────
 
@@ -397,6 +427,16 @@ _RICH_INSTRUCTION = (
     "You MUST present this result by wrapping your synthesis in "
     "<span id='{tag}'>your synthesis here</span>. The span renders as a card; "
     "without it the user sees only plain text."
+)
+
+# Appended to the SECOND (and later) identical error a tool returns in one turn,
+# to break a retry loop. Written plainly so smaller models act on it.
+_REPEAT_ERROR_STEER = (
+    "\n\n[loop-guard] You already made this exact call this turn and got the same "
+    "error. Do NOT call it again the same way. First, look up the tool's correct "
+    "inputs with the `find_tools` tool and fix your input, then try once more. If "
+    "it still fails, stop retrying: tell the user what error you are getting, that "
+    "this tool may not be working right now, and ask them how they want to proceed."
 )
 
 
