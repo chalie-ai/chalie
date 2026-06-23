@@ -38,7 +38,7 @@ def _seed_contact(
     title: str = "",
 ) -> dict[str, object]:
     """Must use ``contact_resolver.index_contact_profile`` (CardDAV ingest entry
-    point) so the contact lands as a ``user_specific`` data_graph row resolvable by
+    point) so the contact lands as a ``contact`` data_graph row resolvable by
     the ability."""
     from capabilities.contact_resolver import index_contact_profile
 
