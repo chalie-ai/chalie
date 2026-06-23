@@ -47,8 +47,9 @@ def _create_schema(conn: sqlite3.Connection) -> None:
     """)
     conn.execute("CREATE INDEX idx_search_entries_ability ON ability_search_entries(ability_id)")
     conn.execute("CREATE VIRTUAL TABLE ability_search_vec USING vec0(embedding float[768])")
-    # Trigram tokenizer → substring matching, so a keyword like `+docs` (handled
-    # in _search.build_keyword_query) finds `chalie_docs` via its indexed name.
+    # Trigram tokenizer over the tool NAME only — the FTS branch of the discovery
+    # cascade is bm25-on-name (see _search.SearchableAbility). Summary/example rows
+    # feed the vec index alone, so they are NOT inserted into FTS below.
     conn.execute("""
         CREATE VIRTUAL TABLE ability_search_fts USING fts5(
             text,
@@ -110,13 +111,10 @@ def _insert_ability(conn: sqlite3.Connection, emb_service: EmbeddingService, abi
             "INSERT INTO ability_search_vec(rowid, embedding) VALUES (?, ?)",
             (entry_id, pack_embedding(emb)),
         )
-        conn.execute(
-            "INSERT INTO ability_search_fts(rowid, text) VALUES (?, ?)",
-            (entry_id, text),
-        )
 
     # Index the tool name as a keyword-only (FTS) entry — it is a lexical handle,
-    # not semantic content, so it gets no embedding / vec row.
+    # not semantic content, so it gets no embedding / vec row. The summary/example
+    # rows above are deliberately NOT in FTS: the cascade's bm25 rung is name-only.
     name = ability.get_name()
     conn.execute(
         "INSERT INTO ability_search_entries(ability_id, text, kind) VALUES (?, ?, 'name')",

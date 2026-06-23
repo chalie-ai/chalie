@@ -78,9 +78,9 @@ def _rebuild_schema(conn: sqlite3.Connection) -> None:
         "CREATE INDEX idx_skill_search_entries_skill ON skill_search_entries(skill_id)"
     )
     conn.execute("CREATE VIRTUAL TABLE skill_search_vec USING vec0(embedding float[768])")
-    # Trigram tokenizer → substring matching for the keyword grammar (see
-    # _search.build_keyword_query). The skill title is already indexed as a
-    # 'title' entry, so a keyword matches it as a substring.
+    # Trigram tokenizer over the skill TITLE only — the FTS branch of the discovery
+    # cascade is bm25-on-title (see _search.SearchableAbility). use_for rows feed
+    # the vec index alone, so they are NOT inserted into FTS (see index_skill).
     conn.execute("""
         CREATE VIRTUAL TABLE skill_search_fts USING fts5(
             text,
@@ -158,10 +158,13 @@ def index_skill(
             "INSERT INTO skill_search_vec(rowid, embedding) VALUES (?, ?)",
             (entry_id, pack_embedding(emb)),
         )
-        conn.execute(
-            "INSERT INTO skill_search_fts(rowid, text) VALUES (?, ?)",
-            (entry_id, text),
-        )
+        # Title only into FTS — the cascade's bm25 rung is title-only; use_for
+        # rows are reachable via the vec index alone.
+        if kind == "title":
+            conn.execute(
+                "INSERT INTO skill_search_fts(rowid, text) VALUES (?, ?)",
+                (entry_id, text),
+            )
 
     conn.commit()
     return len(entries)

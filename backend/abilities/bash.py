@@ -146,9 +146,9 @@ class BashAbility(Ability):
             "check what process is listening on port 8080",
             "run git status in my project directory",
             "what does uname -a return on this machine",
-            "run the deploy script at /home/user/scripts/deploy.sh",
             "compress the /tmp/logs folder into a tarball",
             "count the total lines of Python code under /app",
+            "ssh into server/machine",
         ]
 
     _PARAMETERS: ClassVar[dict[str, object]] = {

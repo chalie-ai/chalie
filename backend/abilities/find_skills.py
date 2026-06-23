@@ -1,32 +1,30 @@
 """find_skills — surface curated step-by-step skill playbooks.
 
-Queries skills.sqlite with the shared keyword (trigram FTS5) + vector search
-and returns matching skill playbooks together with any personalisation rules
+Queries skills.sqlite through the SAME shared discovery cascade as find_tools
+(see :class:`abilities._search.SearchableAbility`): a ``query`` array of intents,
+each run exact-title → bm25 on the title only (segment-gated) → vector on the
+full prose. Matching playbooks are returned with any personalisation rules
 derived from the user's behavioural patterns (written by SkillAssociationService).
 
-The ``query`` is the keyword grammar described in ``_search.build_keyword_query``
-(``+required``, ``-excluded``, bare optional), not prose.
+find_skills has no MCP surface and no name-ambiguity guard — that is the only
+way it differs from find_tools ("nothing more"). What it returns differs because
+a skill IS a playbook: the row carries the full ``content`` the model executes,
+not a tool activation.
 
 Returns a sealed :class:`abilities._result.ToolResult` (never a wire envelope):
 
-* matches → a JSON list, one row per skill ``{"name": <title>, "source":
-  <"keyword"|"vector">, "content": <full playbook content>, "rules":
-  [{"pattern_name", "rule"}, …]}`` with ``meta count=<n>``. The content field is
-  the actionable payload — it IS the playbook the model executes.
+* matches → a JSON list, one row per skill ``{"name": <title>, "content": <full
+  playbook content>, "rules": [{"pattern_name", "rule"}, …]}`` with ``meta
+  count=<n>``.
 * zero hits against a HEALTHY index → SUCCESS with ``count=0`` and a body
-  ``{"matches": [], "note": "No skill playbooks found … broaden …"}`` — never an
-  error.
+  ``{"matches": [], "note": …}`` — never an error.
 * a missing/blank query → ``err(code="missing-params")`` naming ``query``.
 * the index file missing OR a sqlite error while probing it →
   ``err(code="skill-index-error")``. This is the loud guardrail: a corrupt or
-  unreadable index must NEVER masquerade as "no skills found".
-* an embedding failure leaves the keyword signal alone and tags the success
-  ``meta degraded=true`` — never silently fewer signals.
-
-The shared ``_vec_search`` / ``_fts_search`` helpers in ``_search.py`` swallow
-sqlite failures to ``[]`` (a behaviour find_tools depends on). This ability
-therefore probes the index FIRST — past a successful probe, an empty result
-means genuinely-no-matches, not a broken index.
+  unreadable index must NEVER masquerade as "no skills found". The shared
+  ``_vec_search`` / ``_fts_search`` helpers swallow sqlite failures to ``[]``, so
+  this ability probes the index FIRST — past a successful probe, an empty result
+  means genuinely-no-matches, not a broken index.
 """
 
 import logging
@@ -36,14 +34,11 @@ from typing import ClassVar, cast
 
 from abilities._params import Keys
 from abilities._result import ToolResult
-from abilities._search import KNN_DEPTH, SearchableAbility, build_keyword_query
-from services.embedding_utils import pack_embedding
+from abilities._search import KNN_DEPTH, SearchableAbility
 from services.file_mapper_service import FileMapperService
 
 logger = logging.getLogger(__name__)
 
-_DEFAULT_LIMIT = 3
-_MAX_LIMIT = 5
 _BROADEN_HINT = "Try broadening the query or describing the task differently."
 
 
@@ -76,16 +71,14 @@ class FindSkillsAbility(SearchableAbility):
         "type": "object",
         "properties": {
             Keys.query: {
-                "type": "string",
+                "type": "array",
+                "items": {"type": "string"},
                 "description": (
-                    "Keywords describing the task — NOT a sentence. Prefix a term "
-                    "with + to require it, - to exclude it; a bare term is optional. "
-                    "Example: +research +competitor"
+                    "The task(s) you need a playbook for — one skill name or one "
+                    "described task per entry (e.g. \"competitor analysis\", \"plan "
+                    "my week\", \"write a performance review\"). Each entry is "
+                    "searched independently; the closest matching playbooks are returned."
                 ),
-            },
-            Keys.limit: {
-                "type": "integer",
-                "description": "Max results (default 3, max 5).",
             },
         },
         "required": [Keys.query],
@@ -98,15 +91,12 @@ class FindSkillsAbility(SearchableAbility):
     _LOG_PREFIX = "[FIND_SKILLS]"
 
     def run(self, params: dict[str, object]) -> ToolResult:
-        query = cast("str", params.get(Keys.query, "")).strip()
-        limit = min(cast("int", params.get(Keys.limit, _DEFAULT_LIMIT)) or _DEFAULT_LIMIT, _MAX_LIMIT)
-        logger.info(f"{self._LOG_PREFIX} query='{query}' limit={limit}")
-
-        if not query:
+        rows = params.get(Keys.query)
+        if not isinstance(rows, list) or not rows:
             return ToolResult.err(
-                "A non-empty 'query' is required.",
+                "find_skills requires 'query': a non-empty array of skill names or "
+                "described tasks to find a playbook for.",
                 code="missing-params",
-                hint="describe the task or topic you need a playbook for.",
                 valid=("query",),
             )
 
@@ -124,20 +114,14 @@ class FindSkillsAbility(SearchableAbility):
         if (probe_err := self._probe_index()) is not None:
             return probe_err
 
-        fts_match, embed_text = build_keyword_query(query)
-
-        blob: bytes | None = None
-        degraded = False
-        if embed_text:
-            try:
-                from services.embedding_service import EmbeddingService  # noqa: PLC0415
-                blob = cast("bytes", pack_embedding(EmbeddingService().generate_embedding(embed_text, mp=self.mp)))
-            except Exception as exc:  # noqa: BLE001
-                logger.warning(f"{self._LOG_PREFIX} embedding failed, keyword-only: {exc}")
-                degraded = True
-
-        rows = self._search(fts_match, blob, limit)
-        return self._result(query, rows, degraded=degraded)
+        title_index = self._title_index()
+        pins, disc, _not_found = self._discover(
+            rows,
+            lambda candidate: (title_index.get(candidate), False),
+            self._bm25_name,
+            self._vector_name,
+        )
+        return self._result(cast("list[int]", pins + disc))
 
     def _probe_index(self) -> "ToolResult | None":
         try:
@@ -159,71 +143,79 @@ class FindSkillsAbility(SearchableAbility):
             )
         return None
 
-    def _result(self, query: str, rows: list[dict[str, object]], *, degraded: bool = False) -> ToolResult:
-        """Build the success ToolResult from the combined keyword+vector rows.
-
-        Zero hits past a healthy probe is a genuine no-match SUCCESS, never an
-        error. *degraded* tags a run whose embedding signal was unavailable.
-        """
-        if not rows:
-            body = {
-                "matches": [],
-                "note": f'No skill playbooks found for "{query}". {_BROADEN_HINT}',
+    def _title_index(self) -> dict[str, int]:
+        """``{normalised title: skill_id}`` for the exact-name rung."""
+        conn = sqlite3.connect(str(self._DB_PATH))
+        try:
+            return {
+                self._norm(cast("str", title)): cast("int", skill_id)
+                for skill_id, title in conn.execute("SELECT id, title FROM skills WHERE enabled = 1")
             }
-            if degraded:
-                return ToolResult.ok(body, query=query, count=0, degraded=True)
-            return ToolResult.ok(body, query=query, count=0)
+        finally:
+            conn.close()
 
-        skill_rows = [self._row(r) for r in rows]
-        if degraded:
-            return ToolResult.ok(skill_rows, query=query, count=len(skill_rows), degraded=True)
-        return ToolResult.ok(skill_rows, query=query, count=len(skill_rows))
+    def _bm25_name(self, terms: list[str]) -> list[object]:
+        """Rung 2: bm25 over the skill TITLE only, gated by title-segment alignment."""
+        fts = self._fts_or(terms)
+        if not fts:
+            return []
+        rows = self._fts_search(
+            fts,
+            """
+                SELECT s.id, s.title, bm25(skill_search_fts) AS score
+                FROM skill_search_fts
+                JOIN skill_search_entries e ON e.id = skill_search_fts.rowid
+                JOIN skills s ON s.id = e.skill_id
+                WHERE skill_search_fts MATCH ? AND e.kind = 'title' AND s.enabled = 1
+                ORDER BY score ASC
+            """,
+            (fts,),
+        )
+        return self._gate(rows, terms)
 
-    def _row(self, merged: dict[str, object]) -> dict[str, object]:
-        content, rules = self._fetch_detail(cast("int", merged["key"]))
-        return {
-            "name": merged["label"],
-            "source": merged["source"],
-            "content": content,
-            "rules": rules,
-        }
-
-    def _search(self, fts_match: str, blob: bytes | None, limit: int) -> list[dict[str, object]]:
-        vec_rows = self._vec_search(
+    def _vector_name(self, terms: list[str]) -> list[object]:
+        """Rung 3: vector search on the full prose, per-title deduped, kept only
+        at/under ``VEC_CEILING``."""
+        blob = self._embed(terms)
+        if blob is None:
+            return []
+        rows = self._vec_search(
             blob,
             """
                 SELECT s.id, s.title, v.distance
                 FROM skill_search_vec v
                 JOIN skill_search_entries e ON e.id = v.rowid
                 JOIN skills s ON s.id = e.skill_id
-                WHERE v.embedding MATCH ? AND k = ?
-                AND s.enabled = 1
+                WHERE v.embedding MATCH ? AND k = ? AND s.enabled = 1
                 ORDER BY v.distance ASC
             """,
             (blob, KNN_DEPTH),
         )
-        fts_rows = self._fts_search(
-            fts_match,
-            """
-                SELECT s.id, s.title, bm25(skill_search_fts) AS score
-                FROM skill_search_fts
-                JOIN skill_search_entries e ON e.id = skill_search_fts.rowid
-                JOIN skills s ON s.id = e.skill_id
-                WHERE skill_search_fts MATCH ?
-                AND s.enabled = 1
-                ORDER BY score ASC
-            """,
-            (fts_match,),
-        )
-        return self._combine(vec_rows, fts_rows, limit)
+        return self._ceiling(rows)
 
-    def _fetch_detail(self, skill_id: int) -> tuple[str, list[dict[str, object]]]:
+    def _result(self, ids: list[int]) -> ToolResult:
+        """Build the success ToolResult from the cascade's winning skill ids.
+
+        Zero hits past a healthy probe is a genuine no-match SUCCESS, never an error."""
+        if not ids:
+            return ToolResult.ok(
+                {"matches": [], "note": f"No skill playbooks found. {_BROADEN_HINT}"},
+                count=0,
+            )
+        matches = [self._row(skill_id) for skill_id in ids]
+        return ToolResult.ok(matches, count=len(matches))
+
+    def _row(self, skill_id: int) -> dict[str, object]:
+        title, content, rules = self._fetch_detail(skill_id)
+        return {"name": title, "content": content, "rules": rules}
+
+    def _fetch_detail(self, skill_id: int) -> tuple[str, str, list[dict[str, object]]]:
         conn = sqlite3.connect(str(self._DB_PATH))
         try:
             row = conn.execute(
-                "SELECT content FROM skills WHERE id = ?", (skill_id,)
+                "SELECT title, content FROM skills WHERE id = ?", (skill_id,)
             ).fetchone()
-            content = row[0] if row else ""
+            title, content = (row[0], row[1]) if row else ("", "")
 
             rules = conn.execute(
                 "SELECT pattern_name, rule FROM skill_associations WHERE skill_id = ?",
@@ -232,4 +224,4 @@ class FindSkillsAbility(SearchableAbility):
         finally:
             conn.close()
 
-        return content, [{"pattern_name": r[0], "rule": r[1]} for r in rules]
+        return title, content, [{"pattern_name": r[0], "rule": r[1]} for r in rules]

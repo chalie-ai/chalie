@@ -74,16 +74,13 @@ _TASKIE_TOOLS: list[dict[str, object]] = [
 # Test 1 — select advertised name
 # ---------------------------------------------------------------------------
 
-class TestSelectAdvertisedName:
+class TestBareDisplayNameResolves:
 
     def test_bare_display_name_resolves_to_prefixed_call_name(
         self, db: object, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """TDD at baseline: _run_select has no display-alias map → found=0.
-
-        After the fix: _run_select resolves bare name to prefixed form via
-        get_online_mcp_tools_index().
-        """
+        """A query naming a bare MCP display name resolves to its prefixed call
+        name via the exact rung's display-alias map (get_online_mcp_tools_index)."""
         monkeypatch.setattr(FileMapperService, "_DATA_DIR", tmp_path)
         # _MCP_DB_PATH is a ClassVar resolved at import time from FileMapperService;
         # redirect it to the same tmp_path so _query_mcp / embed_server_tools open
@@ -104,12 +101,11 @@ class TestSelectAdvertisedName:
         # No ability names in discoverable — MCP names come from get_online_mcp_tool_names()
         # which the real run() calls against the db fixture.
         proc = _stub_proc()
-        result = _run_find_tools(ability, proc, {"select": ["list_tickets"]})
+        result = _run_find_tools(ability, proc, {"query": ["list_tickets"]})
 
         assert "_mcp_taskie_list_tickets" in proc.active_tools, (
-            f"Expected '_mcp_taskie_list_tickets' in active_tools after select=['list_tickets']. "
-            f"Got: {proc.active_tools}. Result: {result!r}. "
-            f"Failure at baseline: _run_select has no display-alias map."
+            f"Expected '_mcp_taskie_list_tickets' in active_tools after query=['list_tickets']. "
+            f"Got: {proc.active_tools}. Result: {result!r}."
         )
 
 
@@ -139,7 +135,7 @@ class TestSemanticQueryViaEmbeddings:
 
         ability = FindToolsAbility()
         proc = _stub_proc()
-        result = _run_find_tools(ability, proc, {"query": "create a task or ticket"})
+        result = _run_find_tools(ability, proc, {"query": ["create a task or ticket"]})
 
         ticket_tools = {"_mcp_taskie_list_tickets", "_mcp_taskie_create_ticket"}
         found = set(proc.active_tools) & ticket_tools
@@ -156,17 +152,12 @@ class TestSemanticQueryViaEmbeddings:
 
 class TestLooseMultiWordQuery:
 
-    def test_multi_word_query_returns_results_via_vector_signal(
+    def test_multi_word_query_returns_results_via_name_segment(
         self, db: object, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """A required keyword term that only appears in one tool's description lets
-        the vector signal fill in the rest. Under the keyword grammar, '+attachment'
-        is a required term (substring via trigram) and 'ticket document' are bare
-        optional terms that OR-boost other tools. add_attachment must appear because
-        its description contains 'attachment'.
-
-        At baseline: no vec table → empty result.
-        After the fix: FTS keyword path surfaces add_attachment directly.
+        """A multi-word intent whose term aligns to a tool-name segment resolves via
+        the bm25 name rung: 'attachment' segment-matches the 'add_attachment' MCP
+        tool, so at least one MCP tool is injected for 'attachment ticket document'.
         """
         monkeypatch.setattr(FileMapperService, "_DATA_DIR", tmp_path)
         monkeypatch.setattr(FindToolsAbility, "_MCP_DB_PATH",
@@ -176,33 +167,13 @@ class TestLooseMultiWordQuery:
         server = _seed_server_online(svc, "taskie", _TASKIE_TOOLS)
         svc.embed_server_tools(cast(str, server["id"]))
 
-        # Precondition: '+attachment' as a required FTS term matches add_attachment.
-        # Under the new trigram tokenizer, "attachment" is a substring of the tool
-        # name and/or description. At least 1 row must match so the vector can
-        # act as the confirming second signal.
-        from abilities._search import build_keyword_query
-        fts_match, _ = build_keyword_query("+attachment ticket document")
-        conn = _open_tools_db()
-        try:
-            fts_rows = conn.execute(
-                "SELECT COUNT(*) FROM mcp_tools_fts WHERE mcp_tools_fts MATCH ?",
-                (fts_match,),
-            ).fetchone()[0]
-        finally:
-            conn.close()
-        assert fts_rows >= 1, (
-            f"Precondition: FTS keyword query '{fts_match}' must match at least 1 row "
-            f"(add_attachment). Got fts_rows={fts_rows}. Check test data."
-        )
-
         ability = FindToolsAbility()
         proc = _stub_proc()
-        result = _run_find_tools(ability, proc, {"query": "+attachment ticket document"})
+        result = _run_find_tools(ability, proc, {"query": ["attachment ticket document"]})
 
         assert len(proc.active_tools) >= 1, (
-            f"Expected >=1 MCP tool for '+attachment ticket document'. "
-            f"Got active_tools={proc.active_tools}. Result: {result!r}. "
-            f"Failure at baseline: embed_server_tools absent, no vec table."
+            f"Expected >=1 MCP tool for 'attachment ticket document' via the name "
+            f"rung. Got active_tools={proc.active_tools}. Result: {result!r}."
         )
 
 
@@ -293,10 +264,9 @@ class TestEmbeddingsSurviveHeartbeatSync:
         )
 
         # Vector query must still work despite the id churn — keyed by tool_name.
-        # 'create a task or ticket' is dual-signal (vec + FTS) → RRF 0.125 → passes floor.
         ability = FindToolsAbility()
         proc = _stub_proc()
-        result = _run_find_tools(ability, proc, {"query": "create a task or ticket"})
+        result = _run_find_tools(ability, proc, {"query": ["create a task or ticket"]})
 
         assert len(proc.active_tools) >= 1, (
             f"Embeddings should survive _write_tools id churn (keyed by tool_name). "
@@ -403,13 +373,12 @@ class TestAmbiguousBareNameDropped:
 
         ability_a = FindToolsAbility()
         proc_a = _stub_proc()
-        result_a = _run_find_tools(ability_a, proc_a, {"select": ["ping"]})
+        result_a = _run_find_tools(ability_a, proc_a, {"query": ["ping"]})
 
         assert "_mcp_taskie_ping" in proc_a.active_tools, (
             f"Unambiguous bare name 'ping' must resolve to '_mcp_taskie_ping' "
             f"when only one server exposes it. active_tools={proc_a.active_tools}. "
-            f"Result: {result_a!r}. "
-            f"Failure at baseline: _run_select has no display-alias map."
+            f"Result: {result_a!r}."
         )
 
         # Phase B: add a second server with the same bare tool name → now ambiguous.
@@ -427,7 +396,7 @@ class TestAmbiguousBareNameDropped:
 
         ability_b = FindToolsAbility()
         proc_b = _stub_proc()
-        result_b = _run_find_tools(ability_b, proc_b, {"select": ["ping"]})
+        result_b = _run_find_tools(ability_b, proc_b, {"query": ["ping"]})
 
         assert "_mcp_taskie_ping" not in proc_b.active_tools, (
             f"Ambiguous bare 'ping' must not silently pick _mcp_taskie_ping. "
@@ -441,7 +410,7 @@ class TestAmbiguousBareNameDropped:
         # The prefixed form must always resolve unambiguously.
         proc_c = _stub_proc()
         ability_c = FindToolsAbility()
-        _run_find_tools(ability_c, proc_c, {"select": ["_mcp_taskie_ping"]})
+        _run_find_tools(ability_c, proc_c, {"query": ["_mcp_taskie_ping"]})
         assert "_mcp_taskie_ping" in proc_c.active_tools, (
             f"Prefixed form '_mcp_taskie_ping' must always resolve. "
             f"active_tools={proc_c.active_tools}"

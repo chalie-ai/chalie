@@ -13,7 +13,7 @@ roster are orthogonal.
 """
 
 import sqlite3
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
 from pathlib import Path
 from typing import cast
 
@@ -97,14 +97,14 @@ class TestVisionVisibility:
     def test_vision_selectable_on_user_channel(self) -> None:
         mp = _mp_for(UserConfig())
 
-        result = _find_tools_on(mp, {"select": ["vision"]})
+        result = _find_tools_on(mp, {"query": ["vision"]})
 
         assert "vision" in mp.active_tools, (
             f"vision delegate must be selectable on the user channel. "
             f"active_tools={mp.active_tools}"
         )
-        # find_tools now returns a structured body: a successful select reports
-        # nothing under not_found (vision was injected, not treated as unavailable).
+        # find_tools returns a structured body: an exact-name hit pins vision and
+        # reports nothing under not_found (vision was injected, not unavailable).
         assert result["not_found"] == [], (
             f"vision must not be reported unavailable on the user channel. result={result!r}"
         )
@@ -116,7 +116,7 @@ class TestVisionVisibility:
         gate's job (subconscious → deny, asserted above), NOT a discovery block."""
         mp = _mp_for(DmnConfig())
 
-        result = _find_tools_on(mp, {"select": ["vision"]})
+        result = _find_tools_on(mp, {"query": ["vision"]})
 
         assert "vision" in mp.active_tools, (
             f"vision must be discoverable on the DMN background channel. "

@@ -50,21 +50,18 @@ def _find_tools_on(mp: MessageProcessor, params: dict[str, object]) -> str:
 
 class TestNewsBlockedOnUserChannel:
 
-    def test_select_news_is_rejected_on_user_channel(self) -> None:
-        """``find_tools(select=['news'])`` on the user channel must NOT activate
-        news — it is ``DISCOVERABLE=False``, exactly like browser/search, so it is
-        absent from the global discovery roster and can only be reached inside the
-        web_search delegate. The result reports it as unavailable."""
+    def test_news_is_never_injected_on_user_channel(self) -> None:
+        """A query naming ``news`` on the user channel must NEVER inject the raw
+        news tool — it is ``DISCOVERABLE=False``, exactly like browser/search, so it
+        is absent from the global discovery roster and the index the cascade
+        searches; it can only be reached inside the web_search delegate."""
         mp = _mp_for(UserConfig())
 
-        result = _find_tools_on(mp, {"select": ["news"]})
+        _find_tools_on(mp, {"query": ["news"]})
 
         assert "news" not in mp.active_tools, (
             "Raw 'news' must never be activatable on the user channel — it is "
             f"DISCOVERABLE=False. active_tools={mp.active_tools}"
-        )
-        assert "not found or unavailable" in result.lower(), (
-            f"find_tools must report blocked news as unavailable. result={result!r}"
         )
 
 

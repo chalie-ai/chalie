@@ -26,7 +26,7 @@ These run against the REAL production stack:
 No mocks, no stub configs — the configs under test are the ones production runs.
 """
 
-from typing import Mapping, Sequence, cast
+from typing import Mapping, cast
 
 import pytest
 
@@ -47,7 +47,7 @@ def _mp_for(config: ProcessorConfig) -> MessageProcessor:
     return mp
 
 
-def _find_tools_on(mp: MessageProcessor, params: dict[str, object]) -> "str | Mapping[str, object] | Sequence[object]":
+def _find_tools_on(mp: MessageProcessor, params: dict[str, object]) -> "str | Mapping[str, object]":
     """Drive the real find_tools dispatch path: bind the invoking mp and run.
 
     ``run()`` returns a ``ToolResult``; its ``body`` is a structured dict on
@@ -65,49 +65,28 @@ def _find_tools_on(mp: MessageProcessor, params: dict[str, object]) -> "str | Ma
 
 class TestUserChannelCannotReachRawWebTools:
 
-    def test_select_browser_is_rejected_on_user_channel(self) -> None:
-        """``find_tools(select=['browser'])`` on the user channel must NOT add
-        browser — it is ``DISCOVERABLE=False``, absent from the global roster
-        (raw browser is exclusive to the web_browse delegate). The result reports
-        it as unavailable."""
+    @pytest.mark.parametrize("raw", ["browser", "search", "news"])
+    def test_raw_web_tool_is_never_injected_on_user_channel(self, raw: str) -> None:
+        """A query naming a raw web tool (``browser`` / ``search`` / ``news``) must
+        NEVER inject that raw tool — it is ``DISCOVERABLE=False``, absent from the
+        global roster and from the index the cascade searches (raw web is exclusive
+        to the web_browse/web_search delegates). The cascade may helpfully surface a
+        discoverable sibling, but the raw name itself must never reach active_tools."""
         mp = _mp_for(UserConfig())
 
-        result = _find_tools_on(mp, {"select": ["browser"]})
+        _find_tools_on(mp, {"query": [raw]})
 
-        assert "browser" not in mp.active_tools, (
-            "Raw 'browser' must never be activatable on the user channel — it is "
+        assert raw not in mp.active_tools, (
+            f"Raw {raw!r} must never be activatable on the user channel — it is "
             f"DISCOVERABLE=False. active_tools={mp.active_tools}"
         )
-        assert "not found or unavailable" in cast(str, result).lower(), (
-            f"Non-discoverable 'browser' select must be reported unavailable. result={result!r}"
-        )
-
-    def test_select_search_is_rejected_on_user_channel(self) -> None:
-        """Raw 'search' is equally delegate-exclusive — DISCOVERABLE=False."""
-        mp = _mp_for(UserConfig())
-        result = _find_tools_on(mp, {"select": ["search"]})
-
-        assert "search" not in mp.active_tools, (
-            f"Raw 'search' must be non-discoverable on the user channel. active_tools={mp.active_tools}"
-        )
-        assert "not found or unavailable" in cast(str, result).lower()
-
-    def test_select_news_is_rejected_on_user_channel(self) -> None:
-        """Raw 'news' moved delegate-exclusive () — DISCOVERABLE=False."""
-        mp = _mp_for(UserConfig())
-        result = _find_tools_on(mp, {"select": ["news"]})
-
-        assert "news" not in mp.active_tools, (
-            f"Raw 'news' must be non-discoverable on the user channel. active_tools={mp.active_tools}"
-        )
-        assert "not found or unavailable" in cast(str, result).lower()
 
     def test_query_cannot_surface_browser_on_user_channel(self) -> None:
         """Even a query that is a perfect semantic match for browser must not
         inject it — browser is DISCOVERABLE=False, so it never enters the global
         roster the query path searches over."""
         mp = _mp_for(UserConfig())
-        _find_tools_on(mp, {"query": "control a headless browser, click buttons and take a screenshot"})
+        _find_tools_on(mp, {"query": ["control a headless browser, click buttons and take a screenshot"]})
 
         assert "browser" not in mp.active_tools, (
             "A non-discoverable tool must never be injected via the query path, "
@@ -119,7 +98,7 @@ class TestUserChannelCannotReachRawWebTools:
         web_search) are how the user channel reaches the web, and stay
         selectable (they are DISCOVERABLE=True)."""
         mp = _mp_for(UserConfig())
-        result = _find_tools_on(mp, {"select": ["web_browse", "web_search"]})
+        result = _find_tools_on(mp, {"query": ["web_browse", "web_search"]})
 
         assert "web_browse" in mp.active_tools, (
             f"web_browse delegate must stay available on user. active_tools={mp.active_tools}"
@@ -139,20 +118,19 @@ class TestUserChannelCannotReachRawWebTools:
 
 class TestBackgroundChannelDiscovery:
 
-    def test_dmn_cannot_select_raw_web_or_pattern_tools(self) -> None:
+    def test_dmn_cannot_reach_raw_web_or_pattern_tools(self) -> None:
         """The raw, non-discoverable tools (browser/search/news/save_pattern/
-        save_graph) are absent from the global roster, so the DMN cannot select
-        them either."""
+        save_graph) are absent from the global roster, so a DMN query naming them
+        can never inject them either."""
         mp = _mp_for(DmnConfig())
         non_discoverable = ["browser", "search", "news", "save_pattern", "save_graph"]
 
-        result = _find_tools_on(mp, {"select": non_discoverable})
+        _find_tools_on(mp, {"query": non_discoverable})
 
         leaked = [n for n in non_discoverable if n in mp.active_tools]
         assert not leaked, (
             f"DMN must not reach non-discoverable tools {non_discoverable}; leaked: {leaked}"
         )
-        assert "not found or unavailable" in cast(str, result).lower()
 
     def test_dmn_can_discover_the_delegate_wrappers(self) -> None:
         """Discovery is global now: the DMN carries find_tools and the delegate
@@ -161,7 +139,7 @@ class TestBackgroundChannelDiscovery:
         subconscious is the policy gate's job, NOT a discovery block."""
         mp = _mp_for(DmnConfig())
 
-        result = _find_tools_on(mp, {"select": ["web_browse", "web_search", "vision"]})
+        result = _find_tools_on(mp, {"query": ["web_browse", "web_search", "vision"]})
 
         for name in ("web_browse", "web_search", "vision"):
             assert name in mp.active_tools, (

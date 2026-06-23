@@ -1,12 +1,10 @@
-import copy
 import logging
 from pathlib import Path
 from typing import ClassVar, cast
 
 from abilities._params import Keys
 from abilities._result import ToolResult
-from abilities._search import KNN_DEPTH, SearchableAbility, build_keyword_query
-from services.embedding_utils import pack_embedding
+from abilities._search import KNN_DEPTH, SearchableAbility
 from services.file_mapper_service import FileMapperService
 
 logger = logging.getLogger(__name__)
@@ -15,11 +13,11 @@ logger = logging.getLogger(__name__)
 class FindToolsAbility(SearchableAbility):
     """Discover and activate tools for the current ACT turn.
 
-    Supports two mutually exclusive selection modes:
-    - select: exact case-insensitive match against the effective allow-list.
-    - query: keyword (trigram FTS5) + vector search run independently; the top
-      results of each are deduped and injected. No score fusion, no floor.
-    When both are supplied, select takes precedence and query is ignored.
+    ``query`` is an array of intents — one tool name or one described action per
+    entry — run through the shared precise→broad cascade (see
+    :meth:`SearchableAbility._discover`): exact name → bm25 on the tool NAME only
+    (segment-gated) → vector on the full prose (``VEC_CEILING``). find_tools adds
+    the MCP surface and the bare-name ambiguity guard; everything else is shared.
     """
 
     DISCOVERABLE: ClassVar[bool] = False  # the discovery entry point itself; pinned, never discovered
@@ -27,29 +25,32 @@ class FindToolsAbility(SearchableAbility):
     _PARAMETERS: ClassVar[dict[str, object]] = {
         "type": "object",
         "properties": {
-            Keys.select: {
+            Keys.query: {
                 "type": "array",
                 "items": {"type": "string"},
-                "description": "Exact tool names to activate directly.",
-            },
-            Keys.query: {
-                "type": "string",
                 "description": (
-                    "Keywords describing the capability — NOT a sentence. Prefix a "
-                    "term with + to require it, - to exclude it; a bare term is "
-                    "optional. Substring matching, e.g. +docs matches `chalie_docs`. "
-                    "Example: +calendar +event -delete"
+                    "The tools or capabilities you need — one tool name or one "
+                    "described action per entry (e.g. \"weather\", \"send an email\", "
+                    "\"block time on my calendar\"). Each entry is searched "
+                    "independently: an exact tool name is activated directly, "
+                    "otherwise the closest matching tools are discovered and activated."
                 ),
             },
         },
-        "required": [],
+        "required": [Keys.query],
     }
 
     def get_name(self) -> str:
         return "find_tools"
 
     def get_summary(self) -> str:
-        return "Use this tool to discover more tools and capabilities. Search for the tools you need."
+        base = (
+            "Discover and activate the tools you need for this turn. Search by naming "
+            "a tool, or by describing the action you want to perform — one intent per "
+            "array entry."
+        )
+        roster = self._build_tools_index()
+        return f"{base} Available tools: {roster}" if roster else base
 
     def get_examples(self) -> list[str]:
         return [
@@ -66,16 +67,15 @@ class FindToolsAbility(SearchableAbility):
     def get_search_tooltip(self) -> str:
         return "discover available tools"
 
+    def get_parameters(self) -> dict[str, object]:
+        return self._PARAMETERS
+
     _DB_PATH: ClassVar[Path] = FileMapperService.get_abilities_db_path()
     # Separate runtime DB for dynamically-synced MCP client tools.
     # Queried in addition to _DB_PATH so build_ability_db rebuilds never
     # destroy _mcp_* rows.  See McpClientService and FileMapperService.
     _MCP_DB_PATH: ClassVar[Path] = FileMapperService.get_mcp_tools_db_path()
     _LOG_PREFIX: ClassVar[str] = "[FIND_TOOLS]"
-
-    # Per-signal cap: up to this many keyword + this many vector results are
-    # deduped into the injected set (so at most 2×_RESULT_CAP distinct tools).
-    _RESULT_CAP: ClassVar[int] = 3
 
     @staticmethod
     def _discoverable_allow() -> set[str]:
@@ -130,152 +130,100 @@ class FindToolsAbility(SearchableAbility):
             logger.debug("[FIND_TOOLS] Could not fetch MCP tool index: %s", exc)
             return []
 
-    def get_parameters(self) -> dict[str, object]:
-        # Enrich the `select` description with the global discoverable-tools index.
-        # The roster is the same on every channel (AbilityRegistry.discoverable_names);
-        # find_tools is itself DISCOVERABLE=False, so it never lands in the search
-        # index / SHA map and this enrichment never feeds the build. The framework
-        # fields (act_summary / async) are injected uniformly afterwards by the
-        # final get_input_schema().
-        params: dict[str, object] = copy.deepcopy(self._PARAMETERS)
-        tools_index = self._build_tools_index()
-        if tools_index:
-            props = cast("dict[str, dict[str, object]]", params["properties"])
-            props[Keys.select]["description"] = (
-                f"Exact tool names to activate directly. Available tools: {tools_index}"
-            )
-        return params
-
     def run(self, params: dict[str, object]) -> ToolResult:
-        """Dispatch to the select or query path and return a ToolResult.
+        """Run each query entry through the shared cascade and inject what wins.
 
-        The result is structured so a weak model can tell what it actually got:
-        the success body is ``{"injected": [{"name", "summary"}, …], "not_found":
-        […]}`` with ``injected``/``not_found`` counts in the meta, and a request
-        that yields nothing usable errors loudly (``unknown-tool``) with a
-        ``valid:`` ladder of real selectable names — never a prose-only result
-        that hides whether a tool was injected.
-        """
-        select_names: list[str] | None = cast("list[str] | None", params.get(Keys.select))
-        query = cast("str", params.get(Keys.query, "")).strip()
-
-        # Require at least one param.
-        if not select_names and not query:
+        The success body is ``{"injected": [{"name", "summary"}, …], "not_found":
+        [...]}`` with ``injected``/``not_found`` counts in the meta, so a weak model
+        can always tell what it actually got. ``not_found`` lists entries the
+        cascade could not satisfy plus any bare MCP name that was ambiguous
+        (refused, with the prefixed-name guidance, rather than silently resolved)."""
+        rows = params.get(Keys.query)
+        if not isinstance(rows, list) or not rows:
             return ToolResult.err(
-                "find_tools requires either 'select' (exact tool names) or 'query' "
-                "(a description of what you need).",
+                "find_tools requires 'query': a non-empty array of tool names or "
+                "described actions to discover.",
                 code="missing-params",
-                valid=("select", "query"),
+                valid=("query",),
             )
 
         # The discovery roster is global: every DISCOVERABLE ability plus the
-        # online MCP tools. There is no per-channel block list — a non-discoverable
-        # tool is simply absent from this set, so select reports it unknown and
-        # query never ranks it.
-        allow = self._discoverable_allow()
+        # online MCP tools. A non-discoverable tool is simply absent from this set.
         mcp_names = self._get_online_mcp_names()
-        effective_allow = allow | set(mcp_names)
+        effective_allow = self._discoverable_allow() | set(mcp_names)
+        allow_lower = {self._norm(name): name for name in effective_allow}
 
-        # select wins over query when both are provided.
-        if select_names:
-            return self._run_select(select_names, effective_allow)
-
-        if not effective_allow:
-            return ToolResult.ok({"injected": [], "not_found": []}, injected=0, query=query)
-
-        logger.info("%s query='%s'", self._LOG_PREFIX, query)
-        return self._run_query(query, list(allow), list(mcp_names))
-
-    def _run_select(
-        self, requested: list[str], effective_allow: set[str]
-    ) -> ToolResult:
-        """A name absent from the global discoverable roster is NEVER injected; it
-        lands in not_found and, when every requested name is unusable, drives a
-        loud ``unknown-tool`` error so the model never believes a non-discoverable
-        tool was injected.
-
-        Ambiguity rule: if a bare display name maps to more than one distinct call
-        name across servers, the alias is dropped — the caller must use the prefixed
-        form to avoid silent wrong-server selection."""
-        allow_lower = {name.lower(): name for name in effective_allow}
-
-        # Build display → call_name alias map for MCP tools in effective_allow.
-        # display_to_calls accumulates all call_names for each bare display name so we
-        # can detect cross-server collisions before committing to any alias.
+        # Bare MCP display name → all call_names owning it, so an exact bare name
+        # that collides across servers can be refused instead of silently pinned.
         display_to_calls: dict[str, list[str]] = {}
         for call_name, display in self._get_online_mcp_tools_index():
-            if call_name not in effective_allow:
-                continue
-            key = display.lower()
-            display_to_calls.setdefault(key, []).append(call_name)
+            if call_name in effective_allow:
+                display_to_calls.setdefault(self._norm(display), []).append(call_name)
 
-        # Alias is valid only when exactly one call_name owns the bare display name.
-        display_alias: dict[str, str] = {
-            key: calls[0]
-            for key, calls in display_to_calls.items()
-            if len(calls) == 1
-        }
+        allow_list, mcp_list = list(effective_allow), list(mcp_names)
+        pins, disc, not_found = self._discover(
+            rows,
+            lambda candidate: self._exact(candidate, allow_lower, display_to_calls),
+            lambda terms: self._bm25_name(terms, allow_list, mcp_list),
+            lambda terms: self._vector_name(terms, allow_list, mcp_list),
+        )
+        injected = cast("list[str]", pins + disc)
 
-        matched: list[str] = []
-        not_found: list[str] = []
+        for name in injected:
+            logger.info("%s injected %s", self._LOG_PREFIX, name)
+        self._append_active(injected)
 
-        for name in requested:
-            lower = name.lower()
-            canonical = allow_lower.get(lower) or display_alias.get(lower)
-            if canonical is not None:
-                matched.append(canonical)
-            else:
-                not_found.append(name)
-
-        # Two requested aliases (e.g. the bare display name and its prefixed call
-        # name) can resolve to the same canonical tool — collapse so the result
-        # JSON and the injected= count never double-report a single tool.
-        matched = list(dict.fromkeys(matched))
-
-        # Nothing usable: loud error so the model self-corrects rather than
-        # believing a non-discoverable / unknown tool was injected. The valid
-        # ladder is the real selectable names (the global discoverable roster).
-        if not matched:
-            valid = tuple(sorted(effective_allow))
-            return ToolResult.err(
-                f"Tools not found or unavailable: {', '.join(not_found)}.",
-                code="unknown-tool",
-                hint="No tool by that name is selectable here; pick one from the valid list.",
-                valid=valid,
-            )
-
-        self._append_active(matched)
         body = {
-            "injected": [{"name": n, "summary": self._summary_for(n)} for n in matched],
+            "injected": [{"name": n, "summary": self._summary_for(n)} for n in injected],
             "not_found": not_found,
         }
         if not_found:
-            return ToolResult.ok(body, injected=len(matched), not_found=len(not_found))
-        return ToolResult.ok(body, injected=len(matched))
+            return ToolResult.ok(body, injected=len(injected), not_found=len(not_found))
+        return ToolResult.ok(body, injected=len(injected))
 
-    def _run_query(self, query: str, allow: list[str], mcp_names: list[str]) -> ToolResult:
-        fts_match, embed_text = build_keyword_query(query)
+    @staticmethod
+    def _exact(
+        candidate: str,
+        allow_lower: dict[str, str],
+        display_to_calls: dict[str, list[str]],
+    ) -> tuple[str | None, bool]:
+        """Resolve the whole normalised entry against tool names.
 
-        blob: bytes | None = None
-        if embed_text:
-            try:
-                from services.embedding_service import EmbeddingService
-                blob = cast("bytes", pack_embedding(EmbeddingService().generate_embedding(embed_text, mp=self.mp)))
-            except Exception as exc:
-                logger.warning("%s Embedding generation failed (keyword-only): %s", self._LOG_PREFIX, exc)
+        Returns ``(canonical_name | None, ambiguous)``. A real ability/MCP
+        canonical name wins outright; a bare MCP display name owned by exactly
+        one server resolves to it; one owned by more than one server is ambiguous
+        (refuse + surface). Chalie names are single underscored tokens, so
+        ``"the calendar"`` → ``calendar`` pins but ``"delete my calendar event"``
+        does not auto-pin ``calendar`` — it is a fuzzy intent, not a name."""
+        canonical = allow_lower.get(candidate)
+        if canonical:
+            return canonical, False
+        calls = display_to_calls.get(candidate, [])
+        if len(calls) > 1:
+            return None, True
+        if len(calls) == 1:
+            return calls[0], False
+        return None, False
 
-        # Keyword and vector search run independently over both the curated
-        # ability index and the runtime MCP index; the top of each is deduped.
-        vec_rows = self._vec_rows(blob, allow) + self._vec_rows_mcp(blob, mcp_names)
-        fts_rows = self._fts_rows(fts_match, allow) + self._fts_rows_mcp(fts_match, mcp_names)
-        results = self._combine(vec_rows, fts_rows, self._RESULT_CAP)
+    def _bm25_name(self, terms: list[str], allow: list[str], mcp_names: list[str]) -> list[object]:
+        """Rung 2: bm25 over the tool NAME only, gated by name-segment alignment.
 
-        for row in results:
-            logger.info("%s injected %s via %s", self._LOG_PREFIX, row["key"], row["source"])
+        bm25 supplies the ranking; the segment gate (NOT a score floor) decides
+        membership, rejecting incidental substrings so prose escalates to vector."""
+        fts = self._fts_or(terms)
+        if not fts:
+            return []
+        rows = self._fts_rows(fts, allow) + self._fts_rows_mcp(fts, mcp_names)
+        return self._gate(rows, terms)
 
-        names = [cast("str", r["key"]) for r in results]
-        self._append_active(names)
-        return ToolResult.ok(self._query_body(names), injected=len(names), query=query)
+    def _vector_name(self, terms: list[str], allow: list[str], mcp_names: list[str]) -> list[object]:
+        """Rung 3: vector search on the full prose, per-name deduped, kept only
+        at/under ``VEC_CEILING``."""
+        blob = self._embed(terms)
+        if blob is None:
+            return []
+        rows = self._vec_rows(blob, allow) + self._vec_rows_mcp(blob, mcp_names)
+        return self._ceiling(rows)
 
     def _append_active(self, names: list[str]) -> None:
         if not names:
@@ -289,12 +237,6 @@ class FindToolsAbility(SearchableAbility):
         for name in names:
             if name not in active:
                 active.append(name)
-
-    def _query_body(self, names: list[str]) -> dict[str, object]:
-        return {
-            "injected": [{"name": n, "summary": self._summary_for(n)} for n in names],
-            "not_found": [],
-        }
 
     def _summary_for(self, name: str) -> str:
         """Never raises — returns an empty string on any failure so the caller can
@@ -320,7 +262,7 @@ class FindToolsAbility(SearchableAbility):
         return self._vec_search(
             blob,
             f"""
-                SELECT a.name, a.summary, v.distance
+                SELECT a.name, a.name, v.distance
                 FROM ability_search_vec v
                 JOIN ability_search_entries e ON e.id = v.rowid
                 JOIN abilities a ON a.id = e.ability_id
@@ -332,17 +274,19 @@ class FindToolsAbility(SearchableAbility):
         )
 
     def _fts_rows(self, fts_match: str, allow: list[str]) -> "list[tuple[object, object, float]]":
+        """bm25 over the tool NAME entry only (``kind='name'``); the segment gate
+        in ``_gate`` filters the rows this returns by ``row[1]`` (the name)."""
         if not fts_match or not allow:
             return []
         placeholders = ",".join("?" * len(allow))
         return self._fts_search(
             fts_match,
             f"""
-                SELECT a.name, a.summary, bm25(ability_search_fts) AS score
+                SELECT a.name, a.name, bm25(ability_search_fts) AS score
                 FROM ability_search_fts
                 JOIN ability_search_entries e ON e.id = ability_search_fts.rowid
                 JOIN abilities a ON a.id = e.ability_id
-                WHERE ability_search_fts MATCH ?
+                WHERE ability_search_fts MATCH ? AND e.kind = 'name'
                   AND a.name IN ({placeholders})
                 ORDER BY score ASC
             """,
@@ -356,7 +300,7 @@ class FindToolsAbility(SearchableAbility):
         return self._vec_search(
             blob,
             f"""
-                SELECT mt.tool_name, mt.summary, v.distance
+                SELECT mt.tool_name, mt.tool_name, v.distance
                 FROM mcp_tools_vec v
                 JOIN mcp_tool_vectors mv ON mv.rowid = v.rowid
                 JOIN mcp_tools mt ON mt.tool_name = mv.tool_name
@@ -368,13 +312,15 @@ class FindToolsAbility(SearchableAbility):
         )
 
     def _fts_rows_mcp(self, fts_match: str, mcp_names: list[str]) -> "list[tuple[object, object, float]]":
+        """MCP has no ``kind='name'`` split, so this matches name+description; the
+        segment gate on ``tool_name`` in ``_gate`` keeps only name hits."""
         if not fts_match or not mcp_names:
             return []
         placeholders = ",".join("?" * len(mcp_names))
         return self._fts_search(
             fts_match,
             f"""
-                SELECT mt.tool_name, mt.summary, bm25(mcp_tools_fts) AS score
+                SELECT mt.tool_name, mt.tool_name, bm25(mcp_tools_fts) AS score
                 FROM mcp_tools_fts
                 JOIN mcp_tools mt ON mt.id = mcp_tools_fts.rowid
                 WHERE mcp_tools_fts MATCH ? AND mt.tool_name IN ({placeholders})

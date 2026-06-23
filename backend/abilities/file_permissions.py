@@ -79,7 +79,7 @@ class FilePermissionsAbility(Ability):
             "chmod 755 /home/user/scripts/deploy.sh",
             "make this file read-only",
             "give this file 644 permissions",
-            "set permissions to 600 on my ssh key",
+            "change permissions on a file",
             "make this binary executable so I can run it",
             "lock down this config file to owner-only",
         ]

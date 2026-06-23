@@ -6,9 +6,17 @@
 #
 #     http://www.apache.org/licenses/LICENSE-2.0
 
-"""E2E EDR hot-path tests: real MessageProcessor, zero mocks.
+"""E2E hot-path tests for find_skills — real MessageProcessor, real skills.sqlite
+copy, real ONNX embeddings, zero mocks.
 
-Pins regressions (corrupt skill-index returning zero-hit success).
+find_skills runs the SAME shared discovery cascade as find_tools (see
+``abilities._search.SearchableAbility``): a ``query`` array of intents, each
+escalated exact-title → bm25-on-title (segment-gated) → vector on full prose.
+These tests drive the genuine ``ToolDispatcher.dispatch`` entry point and assert
+the model-facing envelope plus the playbook payload.
+
+Pins the load-bearing regression: a corrupt skill-index must surface
+``skill-index-error``, never masquerade as a zero-hit success.
 """
 
 import json
@@ -47,12 +55,8 @@ def skills_db(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 
 def _mp(db: sqlite3.Connection) -> MessageProcessor:
     """A real MessageProcessor bound to a real transcript anchor so the
-    dispatcher's act-trail write lands on a real row.
-
-    Kept local (not the harness ``MP``) because this drives the genuine
-    ``MessageProcessor`` carrying ``active_tools`` — the discovery/select surface
-    find_skills exercises — which the minimal ``config``+``uid`` harness ``MP``
-    does not model."""
+    dispatcher's act-trail write lands on a real row. Carries ``active_tools`` —
+    the genuine surface find_skills' discovery cascade runs against."""
     mp = MessageProcessor("find me a skill")
     mp.config = UserConfig({})
     mp.active_tools = list(mp.config.always_available or [])
@@ -83,9 +87,16 @@ def _pick_known_title(db_path: Path) -> tuple[int, str, str]:
 # ── missing / blank query → loud code=missing-params, NOT a silent success ──────
 
 
-def test_blank_query_is_missing_params(skills_db: Path, db: sqlite3.Connection) -> None:
+def test_missing_query_is_missing_params(skills_db: Path, db: sqlite3.Connection) -> None:
     mp = _mp(db)
-    out = ToolDispatcher(mp).dispatch("find_skills", {"query": "   ", "act_summary": "x"})
+    out = ToolDispatcher(mp).dispatch("find_skills", {"act_summary": "x"})
+    assert "[find_skills(status=error, code=missing-params" in out
+    assert "code=error]" not in out
+
+
+def test_empty_query_array_is_missing_params(skills_db: Path, db: sqlite3.Connection) -> None:
+    mp = _mp(db)
+    out = ToolDispatcher(mp).dispatch("find_skills", {"query": [], "act_summary": "x"})
     assert "[find_skills(status=error, code=missing-params" in out
     assert "code=error]" not in out
 
@@ -96,17 +107,18 @@ def test_blank_query_is_missing_params(skills_db: Path, db: sqlite3.Connection) 
 def test_missing_db_is_skill_index_error(skills_db: Path, db: sqlite3.Connection, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(FindSkillsAbility, "_DB_PATH", skills_db.parent / "gone.sqlite")
     mp = _mp(db)
-    out = ToolDispatcher(mp).dispatch("find_skills", {"query": "analysis", "act_summary": "x"})
+    out = ToolDispatcher(mp).dispatch("find_skills", {"query": ["analysis"], "act_summary": "x"})
     assert "[find_skills(status=error, code=skill-index-error" in out
     assert "code=error]" not in out
 
 
 def test_corrupt_db_is_loud_not_zero_hit(skills_db: Path, db: sqlite3.Connection) -> None:
     """THE regression pin: a corrupt index must surface skill-index-error, not a
-    zero-hit SUCCESS. Fails against HEAD (which renders [] as found=0 success)."""
+    zero-hit SUCCESS. The shared cascade's search helpers swallow sqlite errors to
+    [], so the index is probed FIRST — a probe failure is loud."""
     skills_db.write_bytes(b"this is not a sqlite database at all, just garbage bytes")
     mp = _mp(db)
-    out = ToolDispatcher(mp).dispatch("find_skills", {"query": "analysis", "act_summary": "x"})
+    out = ToolDispatcher(mp).dispatch("find_skills", {"query": ["analysis"], "act_summary": "x"})
     assert "[find_skills(status=error, code=skill-index-error" in out
     assert "status=success" not in out
     assert "count=0" not in out
@@ -116,11 +128,12 @@ def test_corrupt_db_is_loud_not_zero_hit(skills_db: Path, db: sqlite3.Connection
 # ── matches → JSON rows carrying the playbook content + count meta ──────────────
 
 
-def test_match_returns_json_rows_with_playbook_content(skills_db: Path, db: sqlite3.Connection) -> None:
+def test_exact_title_match_returns_playbook_content(skills_db: Path, db: sqlite3.Connection) -> None:
+    """An exact title pins that one skill (rung 1) and returns its full playbook —
+    each row is ``{name, content, rules}`` (no search-internal ``source`` field)."""
     _id, title, content = _pick_known_title(skills_db)
-    # Query by the skill's own title so FTS (the offline route) finds it.
     mp = _mp(db)
-    out = ToolDispatcher(mp).dispatch("find_skills", {"query": title, "act_summary": "x"})
+    out = ToolDispatcher(mp).dispatch("find_skills", {"query": [title], "act_summary": "x"})
     head = _head(out)
     assert "status=success" in head
     assert "count=" in head
@@ -128,87 +141,56 @@ def test_match_returns_json_rows_with_playbook_content(skills_db: Path, db: sqli
     assert isinstance(rows, list)
     assert len(rows) >= 1
     for row in rows:
-        assert set(row.keys()) == {"name", "source", "content", "rules"}
-        assert row["source"] in {"keyword", "vector"}
+        assert set(row.keys()) == {"name", "content", "rules"}
         assert isinstance(row["rules"], list)
     count = int(head.split("count=")[1].split(",")[0].rstrip(")]"))
     assert count == len(rows)
     mine = next((r for r in rows if r["name"] == title), None)
-    assert mine is not None
+    assert mine is not None, f"exact title {title!r} must pin its own skill. rows={rows!r}"
     assert mine["content"] == content
-    assert mine["content"]
-    # The row shape is identical whether the hybrid route ran or the FTS-only
-    # fallback did; when embeddings are unreachable the success carries
-    # degraded=true, otherwise it is absent. Either is a valid success here.
 
 
-# ── embedding failure → FTS-only fallback, same rows, degraded=true ─────────────
-
-
-def test_embedding_failure_degrades_to_fts_with_marker(skills_db: Path, db: sqlite3.Connection, monkeypatch: pytest.MonkeyPatch) -> None:
-    """When the embedding service raises, run() degrades to FTS-only and the
-    success carries meta degraded=true with the SAME row shape — never silently
-    fewer signals, never an error."""
-    from services.embedding_service import EmbeddingService
-
-    def _boom(self: object, *_args: object, **_kwargs: object) -> None:
-        raise RuntimeError("embedding backend unreachable")
-
-    monkeypatch.setattr(EmbeddingService, "generate_embedding", _boom)
-
-    _id, title, content = _pick_known_title(skills_db)
+def test_semantic_query_surfaces_matching_playbook(skills_db: Path, db: sqlite3.Connection) -> None:
+    """A described task (no title match) escalates to the vector rung and surfaces
+    the closest playbook — 'plan my meals for the week' → 'Weekly Meal Planning'."""
     mp = _mp(db)
-    out = ToolDispatcher(mp).dispatch("find_skills", {"query": title, "act_summary": "x"})
-    head = _head(out)
-    assert "status=success" in head
-    assert "degraded=true" in head
-    rows = json.loads(_body(out))
-    assert isinstance(rows, list) and len(rows) >= 1
-    for row in rows:
-        assert set(row.keys()) == {"name", "source", "content", "rules"}
-        assert row["source"] in {"keyword", "vector"}
-    mine = next((r for r in rows if r["name"] == title), None)
-    assert mine is not None and mine["content"] == content
+    out = ToolDispatcher(mp).dispatch(
+        "find_skills", {"query": ["plan my meals for the week"], "act_summary": "x"}
+    )
+    assert "status=success" in _head(out)
+    names = {r["name"] for r in json.loads(_body(out))}
+    assert "Weekly Meal Planning" in names, (
+        f"semantic query must surface the Weekly Meal Planning playbook. got={names!r}"
+    )
+
+
+def test_multi_intent_array_routes_each_entry(skills_db: Path, db: sqlite3.Connection) -> None:
+    """Each query-array entry is searched independently; the union of matches is
+    returned — one title-segment intent and one prose intent at once."""
+    mp = _mp(db)
+    out = ToolDispatcher(mp).dispatch(
+        "find_skills",
+        {"query": ["competitor teardown", "plan my meals for the week"], "act_summary": "x"},
+    )
+    assert "status=success" in _head(out)
+    names = {r["name"] for r in json.loads(_body(out))}
+    assert "Competitive Teardown" in names, f"got={names!r}"
+    assert "Weekly Meal Planning" in names, f"got={names!r}"
 
 
 # ── zero hits (healthy index) → success, count=0, matches=[] + note ─────────────
 
 
-def test_zero_hit_is_success_with_note(skills_db: Path, db: sqlite3.Connection, monkeypatch: pytest.MonkeyPatch) -> None:
-    """A genuine no-match against a HEALTHY index is a SUCCESS with count=0 and a
-    matches=[] + note body, never an error. The vec KNN always returns its k
-    nearest neighbours regardless of relevance, so a true zero-hit only arises on
-    the FTS-only route — forced here by failing the embedding (the fallback the
-    offline env takes anyway) with a token FTS cannot match."""
-    from services.embedding_service import EmbeddingService
-
-    def _boom(self: object, *_args: object, **_kwargs: object) -> None:
-        raise RuntimeError("embedding backend unreachable")
-
-    monkeypatch.setattr(EmbeddingService, "generate_embedding", _boom)
-
+def test_zero_hit_is_success_with_note(skills_db: Path, db: sqlite3.Connection) -> None:
+    """A nonsense query against a HEALTHY index is a SUCCESS with count=0 and a
+    matches=[] + note body, never an error. The vector terminus rejects it at the
+    fine-tuned ceiling, so no junk playbook is surfaced."""
     mp = _mp(db)
     nonsense = "zxqwftbloopglarnk"
-    out = ToolDispatcher(mp).dispatch("find_skills", {"query": nonsense, "act_summary": "x"})
+    out = ToolDispatcher(mp).dispatch("find_skills", {"query": [nonsense], "act_summary": "x"})
     head = _head(out)
     assert "status=success" in head
     assert "count=0" in head
     body = json.loads(_body(out))
     assert body["matches"] == []
-    assert nonsense in body["note"]
-
-
-# ── limit respected ────────────────────────────────────────────────────────────
-
-
-def test_limit_caps_row_count(skills_db: Path, db: sqlite3.Connection) -> None:
-    mp = _mp(db)
-    # A broad term that matches several skills, capped to one.
-    out = ToolDispatcher(mp).dispatch(
-        "find_skills", {"query": "analysis", "limit": 1, "act_summary": "x"}
-    )
-    head = _head(out)
-    assert "status=success" in head
-    body = json.loads(_body(out))
-    rows = body if isinstance(body, list) else body.get("matches", [])
-    assert len(rows) <= 1
+    assert "No skill playbooks found" in body["note"]
