@@ -73,12 +73,7 @@ class FindSkillsAbility(SearchableAbility):
             Keys.query: {
                 "type": "array",
                 "items": {"type": "string"},
-                "description": (
-                    "The task(s) you need a playbook for — one skill name or one "
-                    "described task per entry (e.g. \"competitor analysis\", \"plan "
-                    "my week\", \"write a performance review\"). Each entry is "
-                    "searched independently; the closest matching playbooks are returned."
-                ),
+                "description": "One skill name or one described task per entry.",
             },
         },
         "required": [Keys.query],

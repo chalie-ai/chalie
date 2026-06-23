@@ -117,26 +117,40 @@ def test_multi_intent_array_routes_each_entry() -> None:
     assert "pizza" in cast("list[str]", body["not_found"]), f"junk intent must be surfaced. body={body!r}"
 
 
-# ── result body shape, caps, and no legacy tokens ───────────────────────────────
+# ── result body shape, dedup, and no legacy tokens ──────────────────────────────
 
 
-def test_result_body_shape_caps_and_no_legacy_tokens() -> None:
+def test_result_body_shape_dedup_and_no_legacy_tokens() -> None:
     """Success body is {"injected": [{name, summary}, …], "not_found": [...]}; the
-    meta count matches the list length; at most the global cap of 6 tools; and none
-    of the dropped legacy fields (input_schema / relevance / added_tools) appear."""
+    meta count matches the list length; the injected list is deduped; and none of
+    the dropped legacy fields (input_schema / relevance / added_tools) appear."""
     _injected, body, rendered = _run(["documentation"])
 
     assert "status=success" in rendered
     assert isinstance(body["injected"], list)
     assert isinstance(body["not_found"], list)
-    for row in body["injected"]:
-        assert set(row.keys()) == {"name", "summary"}, f"row={row!r}"
+    names = [cast("dict[str, object]", row)["name"] for row in cast("list[object]", body["injected"])]
+    for row in cast("list[object]", body["injected"]):
+        assert set(cast("dict[str, object]", row).keys()) == {"name", "summary"}, f"row={row!r}"
     head = rendered.splitlines()[0]
     meta_count = int(head.split("injected=")[1].split(",")[0].rstrip(")]"))
-    assert meta_count == len(body["injected"])
-    assert len(body["injected"]) <= 6, f"global cap is 6. got {len(body['injected'])}"
+    assert meta_count == len(names)
+    assert len(names) == len(set(names)), f"injected must be deduped. names={names!r}"
     for legacy in ("input_schema", "relevance", "added_tools"):
         assert legacy not in rendered, f"legacy token {legacy!r} must be gone. rendered={rendered!r}"
+
+
+def test_no_global_cap_large_array_returns_all_deduped() -> None:
+    """The query array exists so the model can fetch every tool it needs in ONE
+    pass: a large array of distinct exact names must inject ALL of them (more than
+    the old global cap of 6), deduped, never truncated."""
+    names = ["weather", "calendar", "email", "chalie_docs", "web_browse", "web_search", "vision"]
+    injected, body, _r = _run(names + ["weather"])  # trailing dup must collapse
+    for n in ("weather", "calendar", "email", "chalie_docs", "web_browse", "web_search", "vision"):
+        assert n in injected, f"{n!r} must be injected (no global cap). injected={injected!r}"
+    assert len(injected) > 6, f"a large array must exceed the old cap of 6. injected={injected!r}"
+    assert len(injected) == len(set(injected)), f"injected must be deduped. injected={injected!r}"
+    assert injected.count("weather") == 1, f"duplicate intent must collapse. injected={injected!r}"
 
 
 # ── invalid query → loud error, nothing injected ────────────────────────────────

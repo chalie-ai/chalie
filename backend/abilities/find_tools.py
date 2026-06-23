@@ -28,13 +28,7 @@ class FindToolsAbility(SearchableAbility):
             Keys.query: {
                 "type": "array",
                 "items": {"type": "string"},
-                "description": (
-                    "The tools or capabilities you need — one tool name or one "
-                    "described action per entry (e.g. \"weather\", \"send an email\", "
-                    "\"block time on my calendar\"). Each entry is searched "
-                    "independently: an exact tool name is activated directly, "
-                    "otherwise the closest matching tools are discovered and activated."
-                ),
+                "description": "One tool name or one described action per entry.",
             },
         },
         "required": [Keys.query],

@@ -26,7 +26,7 @@ These run against the REAL production stack:
 No mocks, no stub configs — the configs under test are the ones production runs.
 """
 
-from typing import Mapping, cast
+from typing import Mapping, Sequence, cast
 
 import pytest
 
@@ -47,7 +47,7 @@ def _mp_for(config: ProcessorConfig) -> MessageProcessor:
     return mp
 
 
-def _find_tools_on(mp: MessageProcessor, params: dict[str, object]) -> "str | Mapping[str, object]":
+def _find_tools_on(mp: MessageProcessor, params: dict[str, object]) -> str | Mapping[str, object] | Sequence[object]:
     """Drive the real find_tools dispatch path: bind the invoking mp and run.
 
     ``run()`` returns a ``ToolResult``; its ``body`` is a structured dict on

@@ -89,10 +89,10 @@ class SearchableAbility(Ability, ABC):
     _LOG_PREFIX: ClassVar[str] = ""
 
     # Per-entry cap: at most this many discovery results from the winning rung.
+    # There is deliberately NO global cap across the query array — the array exists
+    # so the model can fetch every tool it needs in one pass; the final result is
+    # only deduped, never truncated.
     _RESULT_CAP: ClassVar[int] = 3
-    # Global backstop on discovery results across the whole query array (tunable,
-    # NOT a fine-tuned floor). Exact-name pins sit OUTSIDE this cap.
-    _GLOBAL_CAP: ClassVar[int] = 6
 
     @staticmethod
     def _norm(text: str) -> str:
@@ -130,11 +130,12 @@ class SearchableAbility(Ability, ABC):
         vector_fn: Callable[[list[str]], "list[object]"],
     ) -> "tuple[list[object], list[object], list[str]]":
         """The shared precise→broad discovery cascade — identical for find_tools and
-        find_skills. Per query-array row: stopword-strip → exact name (pinned,
-        outside the global cap; ambiguous bare name refused + surfaced) → bm25 on
-        the NAME only (segment-gated) → vector on the full prose (``VEC_CEILING``).
-        The first rung that yields wins; only the vector terminus failing leaves a
-        row empty. Returns ``(pinned_keys, discovered_keys_capped, not_found_rows)``."""
+        find_skills. Per query-array row: stopword-strip → exact name (pinned;
+        ambiguous bare name refused + surfaced) → bm25 on the NAME only
+        (segment-gated) → vector on the full prose (``VEC_CEILING``). The first rung
+        that yields wins; only the vector terminus failing leaves a row empty. The
+        union is deduped but NOT capped — every needed tool comes back in one pass.
+        Returns ``(pinned_keys, discovered_keys, not_found_rows)``."""
         pinned: list[object] = []
         discovered: list[object] = []
         not_found: list[str] = []
@@ -158,7 +159,7 @@ class SearchableAbility(Ability, ABC):
             else:
                 not_found.append(str(raw))
         pins = list(dict.fromkeys(pinned))
-        disc = [k for k in dict.fromkeys(discovered) if k not in pins][: self._GLOBAL_CAP]
+        disc = [k for k in dict.fromkeys(discovered) if k not in pins]
         return pins, disc, not_found
 
     def _gate(self, rows: "list[tuple[object, object, float]]", terms: list[str]) -> list[object]:
