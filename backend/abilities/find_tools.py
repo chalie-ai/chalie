@@ -1,4 +1,3 @@
-import copy
 import logging
 from pathlib import Path
 from typing import ClassVar, cast
@@ -43,7 +42,18 @@ class FindToolsAbility(SearchableAbility):
         return "find_tools"
 
     def get_summary(self) -> str:
-        return "Use this tool to discover more tools and capabilities. Search for the tools you need."
+        # The discoverable roster lives in the tool DESCRIPTION, not the `select`
+        # property description — weak models reliably read the former and skip the
+        # latter, so a failed `query` left them with no visible forward path. With
+        # the roster here, `select` is always a reachable fallback from a zero-hit
+        # query. find_tools is DISCOVERABLE=False, so this never feeds the build.
+        base = (
+            "Discover and activate tools for the current task. Prefer `query` with a "
+            "natural-language description of what you need. If `query` returns nothing, "
+            "or you already know the exact tool, pass its name in `select`."
+        )
+        roster = self._build_tools_index()
+        return f"{base} Selectable tools: {roster}" if roster else base
 
     def get_examples(self) -> list[str]:
         return [
@@ -130,20 +140,10 @@ class FindToolsAbility(SearchableAbility):
             return []
 
     def get_parameters(self) -> dict[str, object]:
-        # Enrich the `select` description with the global discoverable-tools index.
-        # The roster is the same on every channel (AbilityRegistry.discoverable_names);
-        # find_tools is itself DISCOVERABLE=False, so it never lands in the search
-        # index / SHA map and this enrichment never feeds the build. The framework
-        # fields (act_summary / async) are injected uniformly afterwards by the
-        # final get_input_schema().
-        params: dict[str, object] = copy.deepcopy(self._PARAMETERS)
-        tools_index = self._build_tools_index()
-        if tools_index:
-            props = cast("dict[str, dict[str, object]]", params["properties"])
-            props[Keys.select]["description"] = (
-                f"Exact tool names to activate directly. Available tools: {tools_index}"
-            )
-        return params
+        # Plain params — the discoverable roster is surfaced in get_summary() (the
+        # tool description), the field weak models actually read. get_input_schema()
+        # deep-copies before injecting framework fields, so the shared dict is safe.
+        return self._PARAMETERS
 
     def run(self, params: dict[str, object]) -> ToolResult:
         """Dispatch to the select or query path and return a ToolResult.
