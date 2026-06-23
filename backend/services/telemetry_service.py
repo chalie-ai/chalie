@@ -11,7 +11,7 @@ Usage by a service::
 import logging
 import threading
 from collections import deque, defaultdict
-from typing import Deque, Dict, List, Optional, Tuple, cast
+from typing import Dict, List, Optional, cast
 
 from utils.logger import get_correlation_id
 

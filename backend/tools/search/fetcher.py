@@ -207,7 +207,8 @@ def _fetch_one(provider: dict[str, object], query: str, limit: int) -> list[dict
         latency_ms = int((time.time() - t0) * 1000)
         _record_failure(name)
         logger.warning(
-            f'[SEARCH] provider={name} error=HTTP_{e.response.status_code} '
+            f'[SEARCH] provider={name} '
+            f'error=HTTP_{e.response.status_code if e.response is not None else "?"} '
             f'latency_ms={latency_ms}'
         )
         return []

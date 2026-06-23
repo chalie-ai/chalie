@@ -14,7 +14,7 @@ real dispatcher. The ONLY stand-in is ``Providers._resolve`` — captured by
 import io
 import os
 import sqlite3
-from typing import TYPE_CHECKING, cast
+from typing import cast
 
 import pytest
 from unittest.mock import patch
@@ -26,9 +26,6 @@ from services.message_processor import MessageProcessor
 from services.provider_db_service import ProviderDbService
 from services.tmp_storage import new_tmp_path
 from services.transcript_service import Transcript
-
-if TYPE_CHECKING:
-    from services.llm_clients.base import ProviderClient
 
 pytestmark = pytest.mark.unit
 

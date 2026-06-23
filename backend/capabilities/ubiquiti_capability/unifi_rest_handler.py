@@ -38,7 +38,7 @@ def _get_session(url: str, username: str, password: str, verify_ssl: bool) -> tu
 
     session = requests.Session()
     login_url = f"{url.rstrip('/')}/api/auth/login"
-    body = {"username": username, "password": password, "rememberMe": True}
+    body: dict[str, str | bool] = {"username": username, "password": password, "rememberMe": True}
 
     try:
         resp = session.post(login_url, json=body, verify=verify_ssl, timeout=_TIMEOUT)
