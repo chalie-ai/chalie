@@ -190,3 +190,38 @@ def test_stopword_only_query_does_not_crash_and_returns_valid_result() -> None:
     assert active == [], (
         f"Stopword-only query must inject nothing. active_tools={active!r}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Test 7 — real IMPLICIT queries surface the right tool
+#
+# This is the failure mode that triggered the rework: a model emitted the
+# implicit prose query 'all available tools and capabilities' (no keyword
+# markers, no tool name) and find_tools returned injected=0, so chalie_docs
+# was never discovered and the model fell back to improvised priors. A real
+# user / model phrases intent, not keyword grammar — the vector path must
+# carry these even when the lexical signal is weak.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "all available tools and capabilities",
+        "what can you do",
+        "help with chalie features",
+        "documentation",
+    ],
+)
+def test_implicit_prose_query_surfaces_chalie_docs(query: str) -> None:
+    """A real implicit query (prose, no +/- markers, no tool name) must still
+    discover chalie_docs. Before the rework these returned injected=0 because
+    the RRF floor evicted the lone vector hit; now the independent vector path
+    surfaces it within the cap."""
+    active, rendered = _run(query)
+
+    assert "chalie_docs" in active, (
+        f"Implicit query {query!r} must discover chalie_docs so the model can "
+        f"use it in the same turn (this returned injected=0 pre-rework). "
+        f"Got active_tools={active!r}. Rendered: {rendered!r}"
+    )
