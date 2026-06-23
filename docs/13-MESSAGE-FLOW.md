@@ -66,6 +66,7 @@ build request (history + world state + input + tool trail)
 - There is no iteration cap on any channel: the loop terminates only when the model answers in plain text (no tool calls) or the cancel event fires. The user can always interrupt a turn.
 - Each individual `send to LLM` is bounded by a single hard wall-clock ceiling of 300 seconds. A provider that stalls past it — a stuck connection or a stream that stops mid-response — is abandoned and surfaced as a normal provider error rather than wedging the turn indefinitely. This one ceiling is the only provider call timeout; it applies uniformly to every provider.
 - Tool errors are returned to the model as structured result strings; they never crash the loop or surface raw to the user.
+- A soft brake on runaway retries, not a hard cap: when a tool returns an error identical to one it already produced earlier in the same turn, the dispatcher appends a one-shot steer to that result telling the model to re-check the tool's inputs and, if it still fails, stop and ask the user — so a tool stuck on the same error cannot spin the (uncapped) loop indefinitely.
 - Every tool call is written to the `tool_calls` table as it happens; a row lives and dies with its transcript turn — the decay engine's transcript GC reaps it together with the turn once that turn falls below the compaction watermark and is no longer cited by any live episode.
  
 ### Compaction
