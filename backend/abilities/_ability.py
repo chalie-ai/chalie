@@ -142,6 +142,9 @@ class Ability(ABC):
             )
         if cls.__module__.startswith("abilities.") and not probe.get_search_tooltip():
             raise TypeError(f"{cls.__name__}.get_search_tooltip() must be non-empty")
+        follow_up = probe.get_follow_up()
+        if not isinstance(follow_up, str):
+            raise TypeError(f"{cls.__name__}.get_follow_up() must return str")
 
     # ── Metadata getters — every concrete ability implements all five ──────────
 
@@ -164,6 +167,20 @@ class Ability(ABC):
     @abstractmethod
     def get_search_tooltip(self) -> str:
         ...
+
+    def get_follow_up(self) -> str:
+        """A standing next-step nudge appended to this tool's SUCCESSFUL result.
+
+        Default ``""`` — no nudge. Override on a tool whose success routinely leaves
+        the model one obvious, loop-safe step short of a complete answer
+        (search→read, news→cross-reference): return a short instruction and the
+        dispatcher wraps it in a ``[follow_up_instruction]…[end:follow_up_instruction]``
+        block placed INSIDE the envelope (after any rich-media block, before the
+        closing ``[end:tool]``), on success only. Static text (no ``self.mp`` /
+        params), so it is identical for every successful call and validated at
+        import like the other metadata getters.
+        """
+        return ""
 
     @abstractmethod
     def get_parameters(self) -> dict[str, object]:
