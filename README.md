@@ -48,6 +48,8 @@ Most AI tools forget you the moment you close the tab. Chalie runs on your own m
 
 We ran ten models — frontier and open-weight — through the same battery of real tasks and scored how well each *drives* Chalie. A 31B open model you can run under your desk landed in the front pack, ahead of a 550B one. Size wasn't the story; the chassis was. → [Read the benchmark](https://chalie.ai/blog/2026-06-23-ten-models-one-assistant/)
 
+<p align="center"><img src="docs/assets/chalie-benchmark.png" alt="Benchmark leaderboard — average score (out of 10) for how well each of ten models drives Chalie: GLM-5.2 9.02, GLM-5.1 8.83, Gemini 3.5 Flash 8.07, Gemma-4 31B 7.35, MiniMax-M3 7.25, DeepSeek-V4 Flash 7.03, GPT-OSS 120B 6.03, Nemotron-3 Nano 3.26, Nemotron-Ultra 550B 2.86, Qwen3-Next 80B 2.00" width="100%"></p>
+
 ## Install
 
 **Fastest start** — the wizard picks your provider on first boot:
