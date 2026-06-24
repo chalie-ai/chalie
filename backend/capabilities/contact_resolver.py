@@ -1,13 +1,17 @@
 """ContactResolver — passive people index from IMAP and CardDAV data.
 
-Two storage formats coexist under ``kind='user_specific'``:
+Two storage formats coexist under ``kind='contact'``:
 
 * **IMAP senders** (lightweight): ``key='contact:<email>'``,
   ``value='<display_name>'``.  Written by :func:`index_person`.
 * **CardDAV profiles** (rich): ``key='contact:<Display Name>'``,
   ``value='<JSON profile object>'``.  Written by :func:`index_contact_profile`.
 
-:func:`resolve` transparently handles both formats.
+Contacts live in their own data_graph kind (``kind='contact'``) rather than the
+shared ``user_specific`` namespace so contact reads (:func:`resolve`, the
+contacts ability's ``list``/``get``) can be scoped to ``kind='contact'`` and
+never get crowded out of a shared top-N recall/fetch window by unrelated user
+facts / traits. :func:`resolve` transparently handles both storage formats.
 """
 
 from __future__ import annotations
@@ -45,7 +49,7 @@ def index_person(email: str, name: str | None = None, source: str = "unknown") -
         return
     try:
         _dgs().store(
-            kind="user_specific",
+            kind="contact",
             key=f"{_CONTACT_KEY_PREFIX}{email.strip().lower()}",
             value=display,
             source=source,
@@ -65,7 +69,7 @@ def index_contact_profile(profile: dict[str, object], source: str = "carddav") -
         return
     try:
         _dgs().store(
-            kind="user_specific",
+            kind="contact",
             key=f"{_CONTACT_KEY_PREFIX}{fn}",
             value=json.dumps(profile, ensure_ascii=False),
             source=source,
@@ -76,8 +80,6 @@ def index_contact_profile(profile: dict[str, object], source: str = "carddav") -
 
 def _parse_contact_row(key: str, raw_value: str) -> dict[str, object] | None:
     """Parse a single data_graph row into a contact dict."""
-    if not key.startswith(_CONTACT_KEY_PREFIX):
-        return None
     try:
         profile = json.loads(raw_value)
         if isinstance(profile, dict):
@@ -90,13 +92,16 @@ def _parse_contact_row(key: str, raw_value: str) -> dict[str, object] | None:
 
 def resolve(identifier: str, limit: int = 5) -> list[dict[str, object]]:
     """Look up person entries matching *identifier* via RRF across key/value vec + FTS5.
+
+    Scoped to ``kind='contact'`` so non-contact user facts / traits sharing the
+    data_graph cannot crowd a real contact out of the top-N window.
     """
     if not identifier or not str(identifier).strip():
         return []
     try:
         rows = _dgs().recall(
             query=identifier.strip(),
-            kinds=["user_specific"],
+            kinds=["contact"],
             limit=limit,
         )
         contacts = []

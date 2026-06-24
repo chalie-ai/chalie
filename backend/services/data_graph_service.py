@@ -29,6 +29,13 @@ KIND_MISC = 'misc'
 KIND_DOCUMENT = 'document'
 KIND_BEHAVIORAL_PATTERN = 'behavioral_pattern'
 KIND_PLACE = 'place'
+# Contacts (CardDAV profiles + IMAP sender identities) get their own kind so
+# contact reads can be scoped to kind='contact' and never get crowded out of a
+# shared top-N recall/fetch window by unrelated user facts / traits. Without
+# isolation, a freshly synced card can lose the top-5 recall race against a
+# bloated user_specific namespace and the contacts ability reports a false
+# not-found (the model then fabricates from memory).
+KIND_CONTACT = 'contact'
 # 'discovery' is the proactive-research lane: timely findings the subconscious
 # research loop turns up about the user's interests. Recallable like any fact (it
 # joins generic data_graph recall + the turn-0 flashback) but ephemeral — it
@@ -40,7 +47,7 @@ KIND_DISCOVERY = 'discovery'
 # the hole where any channel could write any kind.
 VALID_KINDS = frozenset({
     KIND_USER_SPECIFIC, KIND_SYSTEM, KIND_MISC,
-    KIND_DOCUMENT, KIND_BEHAVIORAL_PATTERN, KIND_PLACE, KIND_DISCOVERY,
+    KIND_DOCUMENT, KIND_BEHAVIORAL_PATTERN, KIND_PLACE, KIND_CONTACT, KIND_DISCOVERY,
 })
 
 _SELECT_ACTIVE_BY_KIND_KEY_SQL = (
@@ -88,6 +95,10 @@ _KIND_POLICY: dict[str, dict[str, object]] = {
     # reinforced on re-save of same coords, superseded when the user renames/moves a
     # place, only removed on explicit user request. Low decay, moderate salience floor.
     KIND_PLACE:              {'ttl_days': None,  'reinforce': True,  'contradiction': 'cosine_supersede', 'deletion': 'explicit', 'd_base': 0.05, 'salience_floor': 0.5},
+    # contact: CardDAV profiles + IMAP sender identities. Persistent, reinforced
+    # on re-sync, no contradiction reconciliation (each card is authoritative),
+    # soft-deleted so a removed card lingers briefly for its decay window.
+    KIND_CONTACT:            {'ttl_days': None,  'reinforce': True,  'contradiction': None,               'deletion': 'soft',     'd_base': 0.1,  'salience_floor': 0.3},
     # discovery: timely research findings from the proactive loop. Each is an
     # independent item (no contradiction reconciliation); reinforced if re-found,
     # decays like a user trait so it fades after ~2 weeks, soft-deleted on forget.

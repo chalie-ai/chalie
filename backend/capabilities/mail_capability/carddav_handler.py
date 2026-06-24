@@ -204,7 +204,7 @@ class CarddavHandler:
             return {"contacts": matches, "count": len(matches)}
 
         try:
-            rows = _dgs().fetch(kinds=["user_specific"], order_by="key ASC", limit=limit)
+            rows = _dgs().fetch(kinds=["contact"], order_by="key ASC", limit=limit)
             contacts: list[dict[str, object]] = []
             for r in rows:
                 parsed = _parse_contact_row(cast(str, r.get("key", "")), cast(str, r.get("value", "")))

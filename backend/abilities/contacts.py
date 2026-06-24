@@ -145,7 +145,7 @@ class ContactsAbility(CapabilityAbility):
             contacts = resolve(query, limit=limit)
         else:
             rows = self._dgs().fetch(
-                kinds=["user_specific"], order_by="key ASC", limit=limit
+                kinds=["contact"], order_by="key ASC", limit=limit
             )
             contacts = [
                 c
