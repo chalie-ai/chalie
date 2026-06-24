@@ -27,7 +27,7 @@ chalie     # → http://localhost:31025
 
 ## Why Chalie is different
 
-Most AI tools forget you the moment you close the tab. Chalie is a **continuous reasoning engine** that runs on your own machine: it remembers what matters and lets the rest decay, works in the background while you're away, and acts only behind an **Allow / Ask / Deny** policy spanning you, its own background work, and other agents. One SQLite file, credentials encrypted at rest, zero telemetry, encrypted whole-instance backup — no Redis, no Postgres, no queue, just one Python process.
+Most AI tools forget you the moment you close the tab. Chalie runs on your own machine as a **reasoning engine that keeps working while you step away**: it remembers what matters and lets the rest decay, and acts only behind an **Allow / Ask / Deny** policy spanning you, its own background work, and other agents. One SQLite file, credentials encrypted at rest, zero telemetry, encrypted whole-instance backup — no Redis, no Postgres, no queue, just one Python process.
 
 ## What it can do today
 
