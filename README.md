@@ -23,7 +23,7 @@ chalie     # → http://localhost:31025
 
 > **Beta — on purpose.** It's `v1.0.0-beta` because the bar is software you'd trust with your own life's admin, and it isn't all the way there yet. Hit a sharp edge? [Open an issue](https://github.com/chalie-ai/chalie/issues) — we respond fast.
 
-<!-- VISUAL: dark-theme capture of Chalie working a task live → docs/assets/chalie-dark.png, then embed here -->
+<p align="center"><img src="docs/assets/chalie-dark.png" alt="Chalie working a task, live" width="820"></p>
 
 ## Why Chalie is different
 
