@@ -1,49 +1,40 @@
 """
-CodeEvalAbility — Restricted Python scratchpad.
+CodeEvalAbility — TypeScript / JavaScript one-shot sandbox.
 
-Runs user-supplied Python in a RestrictedPython sandbox. No file I/O,
-no subprocess, no imports. Pre-loaded safe modules: math, statistics,
-json, decimal, fractions, itertools, functools, collections.
+Runs model-supplied TypeScript (or JavaScript) in a Deno sandbox with zero
+permissions: no network, no file system, no env, no subprocess — only pure
+computation and ``console.log``. The sandbox is a fresh ``deno run`` process
+fed the code on stdin; it exits (and is disposed) the moment the script
+finishes, whether the code was correct or not.
 
-Execution happens in a separate (``spawn``) process with a hard 10-minute
-wall-clock cap. The subprocess is the only way to force-kill arbitrary
-CPU-bound code (e.g. ``while True``) — a thread cannot be interrupted, and
-SIGALRM only fires on the main thread. ``spawn`` (not ``fork``) avoids
-inheriting locks from the multithreaded server.
+Deno is the single-binary sandbox: built-in TypeScript compiler, no
+package.json, no node_modules, permission-gated by default. ``--no-prompt``
+turns a missing permission into a hard ``NotCapable`` error instead of
+blocking on a prompt nobody can answer, so a script that reaches for the
+network or disk fails loudly with the reason on stderr rather than hanging.
+
+Execution uses ``subprocess.run`` with a wall-clock ``timeout``: on timeout
+the process is killed and an actionable error is returned so the ACT loop
+never hangs. stdout and stderr are captured separately so the model branches
+on ``exit_code`` exactly as it would on ``node script.js``.
 """
 
-import collections
-import decimal
-import fractions
-import functools
-import itertools
-import json
 import logging
-import math
-import multiprocessing
-import operator
-import statistics
+import shutil
+import subprocess
 import time
-import traceback
-from queue import Empty
 from typing import TYPE_CHECKING, ClassVar, cast
-
-if TYPE_CHECKING:
-    from collections.abc import Callable
-    from typing import Protocol, TypedDict
-
-    class _TruncMeta(TypedDict, total=False):
-        truncated: bool
-
-    class _Callable(Protocol):
-        def __call__(self) -> str: ...
-
-from RestrictedPython import compile_restricted, safe_builtins, safe_globals
-from RestrictedPython.PrintCollector import PrintCollector
 
 from abilities._ability import Ability
 from abilities._params import Keys
 from abilities._result import ToolResult, truncate
+
+if TYPE_CHECKING:
+    from collections.abc import Mapping
+    from typing import TypedDict
+
+    class _TruncMeta(TypedDict, total=False):
+        truncated: bool
 
 logger = logging.getLogger(__name__)
 
@@ -51,35 +42,9 @@ logger = logging.getLogger(__name__)
 # ``meta truncated=true`` instead of silently dropping output.
 _MAX_OUTPUT_CHARS = 100 * 1024
 
-# Sandbox identity. Module-level so the picklable worker (``spawn``) and its
-# helpers reference them without carrying a class instance across the boundary.
-_FILENAME = "<scratchpad>"
-_PRINT_VAR = "_print"
-
-
-def _guarded_getattr(obj: object, name: str) -> object:
-    if name.startswith("_"):
-        raise AttributeError(f"Access to '{name}' is not permitted in the sandbox")
-    return getattr(obj, name)
-
-
-# RestrictedPython rewrites ``x += 1`` into ``x = _inplacevar_("+=", x, 1)`` but,
-# unlike Zope's AccessControl, ships no runtime ``_inplacevar_`` — so every
-# augmented assignment is dead in the sandbox without one. Dispatch the op string
-# to the matching in-place ``operator`` builtin (the same table guarded_inplacevar
-# uses); only Name targets reach here, attribute/subscript targets are rejected by
-# RestrictedPython at compile time.
-_INPLACE_OPS: "dict[str, Callable[[object, object], object]]" = {
-    "+=": operator.iadd, "-=": operator.isub, "*=": operator.imul,
-    "/=": operator.itruediv, "//=": operator.ifloordiv, "%=": operator.imod,
-    "**=": operator.ipow, ">>=": operator.irshift, "<<=": operator.ilshift,
-    "&=": operator.iand, "^=": operator.ixor, "|=": operator.ior,
-    "@=": operator.imatmul,
-}
-
-
-def _inplacevar(op: str, var: object, expr: object) -> object:
-    return _INPLACE_OPS[op](var, expr)
+# The Deno binary name resolved once at import; resolved lazily on first run so
+# a missing binary surfaces as an actionable runtime error, not an import crash.
+_DENO_BIN = "deno"
 
 
 class CodeEvalAbility(Ability):
@@ -92,14 +57,18 @@ class CodeEvalAbility(Ability):
         return "code_eval"
 
     def get_summary(self) -> str:
-        return "Run Python code in a restricted sandbox to compute formulas, verify logic, and perform precise calculations."
+        return (
+            "Run TypeScript or JavaScript in a sandboxed Deno runtime to compute "
+            "formulas, verify logic, and perform precise calculations. Use "
+            "console.log to emit results."
+        )
 
     def get_examples(self) -> list[str]:
         return [
             "calculate the exact monthly payment on a mortgage at 6.5% over 30 years",
             "verify this mathematical formula for me",
             "what is the compound interest on $10,000 at 4% for 15 years",
-            "run this Python snippet and tell me the output",
+            "run this JavaScript snippet and tell me the output",
             "calculate the standard deviation of these numbers",
             "compute the fibonacci sequence up to the 20th term",
             "convert 37.5°C to Fahrenheit precisely",
@@ -107,7 +76,7 @@ class CodeEvalAbility(Ability):
         ]
 
     def get_search_tooltip(self) -> str:
-        return "Python code execution"
+        return "TypeScript / JavaScript code execution"
 
     def get_parameters(self) -> dict[str, object]:
         return self._PARAMETERS
@@ -118,10 +87,11 @@ class CodeEvalAbility(Ability):
             Keys.code: {
                 "type": "string",
                 "description": (
-                    "Python code to execute. Use print() to emit results. "
-                    "import is unavailable; these modules are pre-loaded and usable "
-                    "without importing: math, statistics, json, decimal, fractions, "
-                    "itertools, functools, collections."
+                    "TypeScript or JavaScript to execute. Use console.log to emit "
+                    "results. The sandbox has zero permissions: no network, no "
+                    "file system, no subprocess. Math, JSON, Array, and the rest "
+                    "of the standard JS/TS built-in globals are available; "
+                    "imports are blocked."
                 ),
             },
         },
@@ -132,55 +102,38 @@ class CodeEvalAbility(Ability):
     # LLM receives in place of a silent empty success, which previously caused it
     # to retry the same call until the iteration wall.
     _ERR_NO_CODE = (
-        "You need to provide python code to be executed. "
-        "Pass the Python you want to run in the `code` parameter."
+        "You need to provide code to be executed. "
+        "Pass the TypeScript or JavaScript you want to run in the `code` parameter."
     )
     _ERR_NO_OUTPUT = (
         "Your code did not produce any output. "
-        "Ensure you use `print` on whatever you want outputted / returned"
+        "Ensure you use `console.log` on whatever you want outputted / returned."
     )
     _ERR_TIMEOUT = (
         "Your code was stopped because it ran longer than 10 minutes. "
         "This usually means an infinite loop or an operation that is too "
         "large — check your loop conditions or reduce the amount of work."
     )
+    _ERR_NO_DENO = (
+        "The JavaScript sandbox runtime (Deno) is not installed, so the code "
+        "could not be run."
+    )
     _ERR_CRASHED = (
         "The code could not be run: the sandbox process exited unexpectedly "
         "without returning a result."
     )
 
-    # Hard wall-clock cap on a single execution, and how often the parent polls
-    # the result queue while waiting (so an early crash is detected promptly
-    # instead of waiting out the full cap).
+    # Hard wall-clock cap on a single execution.
     _EXEC_TIMEOUT_S = 600
-    _POLL_INTERVAL_S = 2.0
-
-    # Pre-built restricted globals — assembled once at import time.
-    _RESTRICTED_GLOBALS: ClassVar[dict[str, object]] = {
-        **safe_globals,
-        "__builtins__": safe_builtins,
-        "_print_": PrintCollector,
-        "_getattr_": _guarded_getattr,
-        "_getiter_": iter,
-        "_getitem_": lambda obj, key: obj[key],
-        "_inplacevar_": _inplacevar,
-        "math": math,
-        "statistics": statistics,
-        "json": json,
-        "decimal": decimal,
-        "fractions": fractions,
-        "itertools": itertools,
-        "functools": functools,
-        "collections": collections,
-    }
 
     def run(self, params: dict[str, object]) -> ToolResult:
-        """Run the supplied Python under a hard 10-minute cap and return a
-        CPython-faithful run result: anything that RAN comes back as ``ok`` with a
-        branchable ``exit_code`` (exactly how ``python script.py`` behaves), so the
-        model can branch on it rather than parse prose. Errors are reserved for
-        harness failures (missing code, no output, timeout, sandbox crash) — never
-        a silent empty success the LLM would misread as 'done' and retry.
+        """Run the supplied TypeScript/JavaScript under a hard 10-minute cap and
+        return a run result: anything that RAN comes back as ``ok`` with a
+        branchable ``exit_code`` (exactly how ``deno run script.ts`` behaves), so
+        the model can branch on it rather than parse prose. Errors are reserved
+        for harness failures (missing code, no output, timeout, no runtime,
+        sandbox crash) — never a silent empty success the LLM would misread as
+        'done' and retry.
 
         Dispatched calls never reach the residue guard below: argument
         sanitisation strips a whitespace-only ``code`` to ``""`` before the
@@ -192,69 +145,65 @@ class CodeEvalAbility(Ability):
             return ToolResult.err(
                 self._ERR_NO_CODE,
                 code="missing-params",
-                hint="pass the Python you want to run in the `code` parameter.",
+                hint="pass the TypeScript or JavaScript you want to run in the `code` parameter.",
             )
         return self._execute_with_cap(code)
 
     def _execute_with_cap(self, code: str) -> ToolResult:
-        """Run the sandboxed code in a separate process with a hard wall-clock cap,
-        then assemble the ToolResult in THIS (parent) process. A subprocess is the
-        only way to force-kill arbitrary CPU-bound code (e.g. ``while True``) — a
-        thread cannot be interrupted. On timeout the process is terminated and an
-        actionable error is returned so the LLM can correct course instead of the
-        ACT loop hanging forever. The worker only computes the raw streams; the
-        parent owns ``duration_ms``, truncation, and the no-output guardrail."""
-        ctx = multiprocessing.get_context("spawn")
-        result_queue = ctx.Queue()
-        proc = ctx.Process(
-            target=_sandbox_worker, args=(code, result_queue), daemon=True,
-        )
+        """Run the sandboxed code in a fresh Deno process with a hard wall-clock
+        cap, then assemble the ToolResult. ``subprocess.run`` blocks until the
+        process exits — so the sandbox is disposed automatically the moment the
+        script finishes, whether the code was correct or not. On timeout the
+        process is killed and an actionable error is returned so the ACT loop
+        never hangs forever.
+
+        ``deno run --no-config --no-prompt -`` reads the code from stdin and runs
+        it as TypeScript. ``--no-config`` ignores any local ``deno.json``;
+        ``--no-prompt`` turns a missing permission into a hard ``NotCapable``
+        error rather than blocking on an interactive prompt nobody can answer."""
+        if shutil.which(_DENO_BIN) is None:
+            return ToolResult.err(
+                self._ERR_NO_DENO,
+                code="no-runtime",
+                hint="install Deno so the JavaScript sandbox can execute code.",
+            )
+
         started = time.monotonic()
-        proc.start()
-
-        deadline = started + self._EXEC_TIMEOUT_S
-        result = None
-        while True:
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                break
-            try:
-                # Read BEFORE join so a large (untruncated) result never
-                # deadlocks the queue feeder thread against proc.join().
-                result = result_queue.get(timeout=min(self._POLL_INTERVAL_S, remaining))
-                break
-            except Empty:
-                if not proc.is_alive():
-                    break  # finished or crashed without producing a result
-
-        if result is not None:
-            proc.join()
-            duration_ms = int((time.monotonic() - started) * 1000)
-            return self._assemble(result, duration_ms)
-        if proc.is_alive():
-            proc.terminate()
-            proc.join()
+        try:
+            completed = subprocess.run(  # noqa: S603 — fixed argv, no shell
+                [_DENO_BIN, "run", "--no-config", "--no-prompt", "-"],
+                input=code,
+                capture_output=True,
+                text=True,
+                timeout=self._EXEC_TIMEOUT_S,
+            )
+        except subprocess.TimeoutExpired:
             return ToolResult.err(
                 self._ERR_TIMEOUT,
                 code="timeout",
                 hint="reduce the amount of work or run on a smaller input.",
             )
-        proc.join()
-        return ToolResult.err(
-            self._ERR_CRASHED,
-            code="sandbox-crashed",
-            hint="retry, or simplify the code so it runs within the sandbox.",
+        except OSError:
+            return ToolResult.err(
+                self._ERR_CRASHED,
+                code="sandbox-crashed",
+                hint="retry, or simplify the code so it runs within the sandbox.",
+            )
+
+        duration_ms = int((time.monotonic() - started) * 1000)
+        return self._assemble(
+            completed.stdout, completed.stderr, completed.returncode, duration_ms
         )
 
-    def _assemble(self, raw: dict[str, object], duration_ms: int) -> ToolResult:
-        """Turn the worker's raw ``{stdout, stderr, exit_code}`` dict into the
-        sealed ToolResult: clip each stream via the shared truncate primitive
-        (``meta truncated=true`` when either was clipped), enforce the no-output
-        guardrail (ran cleanly but printed nothing → an actionable error, not a
+    def _assemble(
+        self, stdout: str, stderr: str, exit_code: int, duration_ms: int
+    ) -> "ToolResult":
+        """Clip each stream via the shared truncate primitive (``meta
+        truncated=true`` when either was clipped), enforce the no-output
+        guardrail (ran cleanly but printed nothing -> an actionable error, not a
         silent empty success), and otherwise return a branchable run result."""
-        stdout, clipped_out = truncate(cast(str, raw["stdout"]), _MAX_OUTPUT_CHARS)
-        stderr, clipped_err = truncate(cast(str, raw["stderr"]), _MAX_OUTPUT_CHARS)
-        exit_code = cast(int, raw["exit_code"])
+        stdout, clipped_out = truncate(stdout, _MAX_OUTPUT_CHARS)
+        stderr, clipped_err = truncate(stderr, _MAX_OUTPUT_CHARS)
 
         # Ran to completion with a clean exit but emitted nothing: the model would
         # read empty success as 'done' and retry the identical call until the
@@ -263,7 +212,7 @@ class CodeEvalAbility(Ability):
             return ToolResult.err(
                 self._ERR_NO_OUTPUT,
                 code="no-output",
-                hint="use print() on whatever you want returned.",
+                hint="use console.log() on whatever you want returned.",
             )
 
         meta: "_TruncMeta" = {"truncated": True} if (clipped_out or clipped_err) else {}
@@ -276,48 +225,3 @@ class CodeEvalAbility(Ability):
             },
             **meta,
         )
-
-
-def _compile_and_run(code: str) -> dict[str, object]:
-    """Compile and execute *code* in fresh restricted globals, returning a raw
-    ``{stdout, stderr, exit_code}`` dict (no ToolResult — the parent assembles
-    that). A syntax error or a runtime exception is a CPython-faithful
-    ``exit_code`` 1 with the full traceback on ``stderr`` and any partial prints
-    preserved on ``stdout``; a clean run is ``exit_code`` 0."""
-    try:
-        byte_code = compile_restricted(code, filename=_FILENAME, mode="exec")
-    except SyntaxError:
-        return {"stdout": "", "stderr": traceback.format_exc(), "exit_code": 1}
-
-    # Fresh globals copy per call so state never leaks between executions.
-    exec_globals = dict(CodeEvalAbility._RESTRICTED_GLOBALS)
-    exec_locals: dict[str, object] = {}
-
-    try:
-        exec(byte_code, exec_globals, exec_locals)
-    except Exception:
-        # Sandbox boundary: surface the full trace AND any partial print output
-        # (stdout) separately so the model branches on exit_code rather than
-        # parsing a single blob. The dispatcher logs the outcome; nothing swallowed.
-        return {
-            "stdout": _captured(exec_locals),
-            "stderr": traceback.format_exc(),
-            "exit_code": 1,
-        }
-
-    return {"stdout": _captured(exec_locals), "stderr": "", "exit_code": 0}
-
-
-def _captured(exec_locals: dict[str, object]) -> str:
-    collector = exec_locals.get(_PRINT_VAR)
-    return cast("_Callable", collector)() if collector is not None else ""
-
-
-def _sandbox_worker(code: str, result_queue: "multiprocessing.Queue[dict[str, object]]") -> None:
-    """Entry point for the sandbox subprocess: compile and execute *code*, then
-    put the raw ``{stdout, stderr, exit_code}`` dict on *result_queue*. Module-level
-    so it is picklable under the ``spawn`` start method, and a plain dict (not a
-    ToolResult) so the parent owns duration/truncation/guardrail assembly. Runs in
-    its own process so a runaway loop can be force-terminated by the parent — a
-    thread cannot be killed."""
-    result_queue.put(_compile_and_run(code))

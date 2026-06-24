@@ -323,6 +323,52 @@ _setup_venv() {
   _info "Note: The embedding model (~400 MB) downloads on first 'chalie start', not now"
 }
 
+# ─── Deno (code_eval sandbox runtime) ───────────────────────────────────────
+_install_deno() {
+  _section "Deno Sandbox Runtime"
+  local deno_bin="$CHALIE_BIN/deno"
+  if [[ -x "$deno_bin" ]] && "$deno_bin" --version >/dev/null 2>&1; then
+    _ok "Deno already installed ($("$deno_bin" --version | head -1))"
+    return 0
+  fi
+
+  local os arch tmpdir archive url
+  os="$(_detect_os)"
+  arch="$(_detect_arch)"
+  # Deno release asset naming: deno-{arch}-apple-{os}.zip / deno-{arch}-unknown-linux-gnu.zip
+  case "$os/$arch" in
+    darwin/amd64)  archive="deno-x86_64-apple-darwin.zip" ;;
+    darwin/arm64)  archive="deno-aarch64-apple-darwin.zip" ;;
+    linux/amd64)   archive="deno-x86_64-unknown-linux-gnu.zip" ;;
+    linux/arm64)   archive="deno-aarch64-unknown-linux-gnu.zip" ;;
+    *)
+      _warn "No Deno build for $os/$arch — the code_eval sandbox will be unavailable"
+      return 0
+      ;;
+  esac
+  url="https://github.com/denoland/deno/releases/latest/download/$archive"
+
+  mkdir -p "$CHALIE_BIN"
+  tmpdir="$(mktemp -d)"
+  _info "Downloading Deno ($os/$arch)…"
+  if ! curl -fsSL "$url" -o "$tmpdir/deno.zip"; then
+    _warn "Deno download failed — the code_eval sandbox will be unavailable"
+    rm -rf "$tmpdir"
+    return 0
+  fi
+  if command -v unzip >/dev/null 2>&1; then
+    unzip -o -q "$tmpdir/deno.zip" -d "$tmpdir"
+  else
+    _warn "unzip not found — cannot extract Deno; the code_eval sandbox will be unavailable"
+    rm -rf "$tmpdir"
+    return 0
+  fi
+  mv -f "$tmpdir/deno" "$deno_bin"
+  chmod +x "$deno_bin"
+  rm -rf "$tmpdir"
+  _ok "Deno installed ($("$deno_bin" --version | head -1))"
+}
+
 # ─── Install CLI Wrapper ─────────────────────────────────────────────────────
 _install_cli() {
   _section "CLI Wrapper"
@@ -484,6 +530,7 @@ main() {
   _ensure_uv
   _download_release
   _setup_venv
+  _install_deno
   _install_cli
   _print_success
 
