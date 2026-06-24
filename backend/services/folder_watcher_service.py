@@ -192,9 +192,8 @@ class FolderWatcherService:
 
     def trigger_scan(self, folder_id: str) -> None:
         """Request an out-of-schedule immediate scan for a watched folder."""
-        from services.memory_store import MemoryStore
-        store = MemoryStore()
-        store.set(f"watcher:scan_now:{folder_id}", "1", ex=600)
+        from services.memory_client import MemoryClientService
+        MemoryClientService.create_connection().set(f"watcher:scan_now:{folder_id}", "1", ex=600)
 
     # ─────────────────────────────────────────────
     # Directory browsing
@@ -255,8 +254,8 @@ class FolderWatcherService:
 
     def is_scan_requested(self, folder_id: str) -> bool:
         """Check if an immediate scan was requested via trigger_scan()."""
-        from services.memory_store import MemoryStore
-        store = MemoryStore()
+        from services.memory_client import MemoryClientService
+        store = MemoryClientService.create_connection()
         val = store.get(f"watcher:scan_now:{folder_id}")
         if val:
             store.delete(f"watcher:scan_now:{folder_id}")
@@ -265,8 +264,8 @@ class FolderWatcherService:
 
     def scan_folder(self, folder: Dict[str, object]) -> Dict[str, object]:
         """Scan a watched folder for changes."""
-        from services.memory_store import MemoryStore
-        store = MemoryStore()
+        from services.memory_client import MemoryClientService
+        store = MemoryClientService.create_connection()
         lock_key = f"watcher:scanning:{folder['id']}"
 
         # Skip if already scanning
@@ -598,8 +597,8 @@ class FolderWatcherService:
 
     def _clear_scan_cache(self, folder_id: str) -> None:
         """Clear the MemoryStore scan-state cache for a folder."""
-        from services.memory_store import MemoryStore
-        store = MemoryStore()
+        from services.memory_client import MemoryClientService
+        store = MemoryClientService.create_connection()
         store.delete(f"watcher:state:{folder_id}")
         store.delete(f"watcher:scan_now:{folder_id}")
 
