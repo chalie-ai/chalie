@@ -212,6 +212,31 @@ def test_cancel_by_message_removes_row(db: sqlite3.Connection, chat_mp: MP) -> N
     assert cast("dict[str, object]", _row(db, item_id))["status"] == "cancelled"
 
 
+def test_update_cancels_target_and_recreates_with_new_values(db: sqlite3.Connection, chat_mp: MP) -> None:
+    """``update`` is a compose of cancel→create: the original ``item_id`` is flipped
+    to cancelled and a fresh pending row carries the new message + due_at."""
+    create = ToolDispatcher(chat_mp).dispatch(
+        "schedule",
+        {"action": "create", "message": "Call the plumber",
+         "due_at": "tomorrow 3pm", "act_summary": "x"},
+    )
+    old_id = cast(str, cast("dict[str, object]", _parse_body(create)["record"])["id"])
+
+    out = ToolDispatcher(chat_mp).dispatch(
+        "schedule",
+        {"action": "update", "item_id": old_id,
+         "message": "Call the electrician", "due_at": "tomorrow 5pm", "act_summary": "x"},
+    )
+    new_id = cast(str, cast("dict[str, object]", _parse_body(out)["record"])["id"])
+
+    assert "[schedule(status=success" in out
+    assert cast("dict[str, object]", _row(db, old_id))["status"] == "cancelled"
+    assert new_id != old_id
+    new_row = cast("dict[str, object]", _row(db, new_id))
+    assert new_row["status"] == "pending"
+    assert new_row["message"] == "Call the electrician"
+
+
 def test_cancel_without_target_errors_with_cancel_target_required(db: sqlite3.Connection, chat_mp: MP) -> None:
     """``cancel`` needs ``item_id`` OR ``message`` — an either/or the pre-gate map
     cannot express (ACTION_REQUIRED["cancel"] == ()), so the guard lives in run()
