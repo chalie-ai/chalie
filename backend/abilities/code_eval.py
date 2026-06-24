@@ -30,7 +30,6 @@ from abilities._params import Keys
 from abilities._result import ToolResult, truncate
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping
     from typing import TypedDict
 
     class _TruncMeta(TypedDict, total=False):
