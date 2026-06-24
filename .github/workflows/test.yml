@@ -1,0 +1,29 @@
+name: Test & Type Gate
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  unit:
+    name: Unit suite + mypy
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: backend/pyproject.toml
+
+      - name: Install backend (editable)
+        run: pip install -e backend
+
+      - name: Unit tests + strict typing gate
+        run: python -m pytest -m unit -q
+        working-directory: backend
