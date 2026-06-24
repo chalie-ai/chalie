@@ -69,12 +69,12 @@ class SearchExpanderService:
 
         while True:
             self._event.wait()
+            self._event.clear()
             while True:
                 item = self._dequeue()
                 if item is None:
                     break
                 self._process(item)
-            self._event.clear()
 
     # ── Private: queue ────────────────────────────────────────────────────────
 
