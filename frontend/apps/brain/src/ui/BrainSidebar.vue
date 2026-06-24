@@ -93,10 +93,16 @@ const NAV: NavItem[] = [
   { id: 'link-device', label: 'Link device', icon: Smartphone, group: 'system' },
 ];
 
-const cognitionItems = computed(() => NAV.filter((n) => n.group === 'cognition'));
-// Link-device is an in-development feature; hide it unless the backend reports it on.
-const systemItems = computed(() =>
-  NAV.filter((n) => n.group === 'system' && (n.id !== 'link-device' || shell.internalDev)),
+// Both nav groups render from one template; link-device is an in-development feature hidden unless the backend reports it on.
+const NAV_GROUPS: { title: string; group: NavItem['group'] }[] = [
+  { title: 'Cognition', group: 'cognition' },
+  { title: 'System', group: 'system' },
+];
+const navGroups = computed(() =>
+  NAV_GROUPS.map((g) => ({
+    ...g,
+    items: NAV.filter((n) => n.group === g.group && (n.id !== 'link-device' || shell.internalDev)),
+  })),
 );
 
 const activeSection = computed(() => route.path.split('/')[1] || 'providers');
@@ -138,9 +144,9 @@ function isExpanded(item: NavItem): boolean {
         <span>Add a provider to unlock the full dashboard.</span>
       </div>
 
-      <div class="nav-group">
-        <div v-if="!shell.sidebarCollapsed" class="nav-group-title">Cognition</div>
-        <template v-for="item in cognitionItems" :key="item.id">
+      <div v-for="g in navGroups" :key="g.group" class="nav-group">
+        <div v-if="!shell.sidebarCollapsed" class="nav-group-title">{{ g.title }}</div>
+        <template v-for="item in g.items" :key="item.id">
           <div :data-section="item.id">
             <button
               :class="['nav-item', { active: isActive(item) }]"
@@ -165,24 +171,6 @@ function isExpanded(item: NavItem): boolean {
                 </button>
               </div>
             </div>
-          </div>
-        </template>
-      </div>
-
-      <div class="nav-group">
-        <div v-if="!shell.sidebarCollapsed" class="nav-group-title">System</div>
-        <template v-for="item in systemItems" :key="item.id">
-          <div :data-section="item.id">
-            <button
-              :class="['nav-item', { active: isActive(item) }]"
-              :data-nav="item.id"
-              :data-expanded="isExpanded(item)"
-              @click="navigate(item.id, item.sub ? item.sub[0].id : null)"
-            >
-              <span class="nav-icon"><component :is="item.icon" :size="18" /></span>
-              <span class="nav-label">{{ item.label }}</span>
-              <span v-if="item.sub" class="nav-chev"><ChevronRight :size="14" /></span>
-            </button>
           </div>
         </template>
       </div>
