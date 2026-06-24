@@ -26,7 +26,7 @@ from services.data_graph_service import (
     _l2_dist_to_cosine,
 )
 from services.database_service import DatabaseService, get_shared_db_service
-from services.embedding_service import EmbeddingService
+from services.embedding_service import EmbeddingService, get_embedding_service
 from services.embedding_utils import pack_embedding
 
 _BATCH_SIZE = 32
@@ -413,7 +413,7 @@ def main() -> None:
         print("DRY RUN — no changes will be written.\n")
 
     db = get_shared_db_service()
-    emb_service = EmbeddingService()
+    emb_service = get_embedding_service()
     lut_conn = _open_lut()
 
     print(f"Opened LUT: {_CONCEPT_LUT_PATH}")

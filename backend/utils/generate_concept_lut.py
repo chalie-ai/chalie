@@ -15,7 +15,7 @@ import yaml
 # backend/ must be on sys.path so services.* imports resolve
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from services.embedding_service import EmbeddingService
+from services.embedding_service import EmbeddingService, get_embedding_service
 from services.embedding_utils import pack_embedding
 from services.file_mapper_service import FileMapperService
 
@@ -121,7 +121,7 @@ def main() -> None:
     concepts = _read_concepts(_YAML_PATH)
     print(f"Found {len(concepts)} labels (canonical_keys + aliases) — loading embedding model...")
 
-    emb_service = EmbeddingService()
+    emb_service = get_embedding_service()
 
     conn = sqlite3.connect(str(_DB_PATH))
     try:

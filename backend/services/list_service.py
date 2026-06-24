@@ -21,12 +21,12 @@ logger = logging.getLogger(__name__)
 def embed_list(list_id: str, name: str, db: Optional[DatabaseService] = None) -> None:
     """Generate an embedding for the list name and store it in lists_vec. Non-fatal."""
     try:
-        from services.embedding_service import EmbeddingService
+        from services.embedding_service import get_embedding_service
         from services.embedding_utils import pack_embedding
         if db is None:
             from services.database_service import get_shared_db_service
             db = get_shared_db_service()
-        embedding = EmbeddingService().generate_embedding(name)
+        embedding = get_embedding_service().generate_embedding(name)
         packed = pack_embedding(embedding)
         with db.connection() as conn:
             cursor = conn.cursor()

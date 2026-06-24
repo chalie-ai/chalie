@@ -60,7 +60,7 @@ _SEED_ACTION = "recall"
 #: Cosine similarity at/above which the new message is treated as a continuation
 #: of the running conversation and the flashback is SKIPPED. Embeddings are
 #: L2-normalised, so dot product == cosine. Calibrated to the active embedding
-#: model (``gte-modernbert-base`` — ``embedding_service._MODEL_ID``): the median
+#: model (``gte-modernbert-base`` — ``EmbeddingService._MODEL_ID``): the median
 #: pairwise cosine on this corpus is
 #: ~0.55, so "closer than a typical unrelated pair" is the natural continuation
 #: boundary. (The 0.80-0.85 figure cited in early design notes was the p99 of an

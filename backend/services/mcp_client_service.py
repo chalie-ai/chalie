@@ -688,7 +688,7 @@ class McpClientService:
             # at module initialisation time.  EmbeddingService depends on
             # McpClientService indirectly (via find_tools); importing at call
             # site breaks the cycle cleanly.
-            from services.embedding_service import EmbeddingService  # noqa: PLC0415
+            from services.embedding_service import get_embedding_service  # noqa: PLC0415
             from services.embedding_utils import pack_embedding  # noqa: PLC0415
 
             server = self.get_server(server_id)
@@ -720,7 +720,7 @@ class McpClientService:
                 summary = r["summary"] or ""
                 texts.append(f"{display_words}. {summary}" if summary else display_words)
 
-            embeddings = EmbeddingService().generate_embeddings_batch(texts)
+            embeddings = get_embedding_service().generate_embeddings_batch(texts)
 
             conn = _open_tools_db()
             try:

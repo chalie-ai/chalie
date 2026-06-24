@@ -30,8 +30,8 @@ def run_preflight() -> dict[str, dict[str, object]]:
 
     # Embedding ONNX session — distinguishes "still warming up" from "broken".
     try:
-        from services import embedding_service
-        if embedding_service._session is not None:
+        from services.embedding_service import get_embedding_service
+        if get_embedding_service().is_loaded:
             components['embeddings'] = {'status': 'ok'}
         else:
             try:

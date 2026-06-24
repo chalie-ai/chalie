@@ -75,10 +75,9 @@ def _load_associations(conn: sqlite3.Connection) -> "list[dict[str, object]]":
 
 def _index_new_skill(conn: sqlite3.Connection, skill_id: int, title: str, use_for: str, tags: str) -> None:
     try:
-        from services.embedding_service import EmbeddingService
+        from services.embedding_service import get_embedding_service
         from utils.build_skills_db import index_skill
-        emb_service = EmbeddingService()
-        index_skill(conn, emb_service, skill_id, title, use_for, tags)
+        index_skill(conn, get_embedding_service(), skill_id, title, use_for, tags)
     except Exception as exc:
         logger.error("[SKILLS API] Failed to index skill %d: %s", skill_id, exc)
         raise

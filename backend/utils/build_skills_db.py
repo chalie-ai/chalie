@@ -12,7 +12,7 @@ import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from services.embedding_service import EmbeddingService  # noqa: E402
+from services.embedding_service import EmbeddingService, get_embedding_service  # noqa: E402
 from services.embedding_utils import pack_embedding  # noqa: E402
 from services.file_mapper_service import FileMapperService  # noqa: E402
 
@@ -228,7 +228,7 @@ def _build(db_path: Path, sha_path: Path) -> None:
     curated_skills = _load_skills()
     print(f"Found {len(curated_skills)} curated skills — building {db_path.name}...")
 
-    emb_service = EmbeddingService() if curated_skills else None
+    emb_service = get_embedding_service() if curated_skills else None
 
     db_path.parent.mkdir(parents=True, exist_ok=True)
 

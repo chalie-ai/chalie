@@ -112,11 +112,11 @@ class SearchableAbility(Ability, ABC):
         """Pack an embedding for the vector rung; ``None`` (logged) on any failure
         so the rung degrades to empty rather than raising."""
         try:
-            from services.embedding_service import EmbeddingService
+            from services.embedding_service import get_embedding_service
             from services.embedding_utils import pack_embedding
             return cast(
                 "bytes",
-                pack_embedding(EmbeddingService().generate_embedding(" ".join(terms), mp=self.mp)),
+                pack_embedding(get_embedding_service().generate_embedding(" ".join(terms), mp=self.mp)),
             )
         except Exception as exc:
             logger.warning("%s embedding failed (vector rung skipped): %s", self._LOG_PREFIX, exc)

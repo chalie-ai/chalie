@@ -1,7 +1,7 @@
 import sqlite3
 import sys
 
-from services.embedding_service import EmbeddingService
+from services.embedding_service import get_embedding_service
 from services.embedding_utils import pack_embedding
 from services.file_mapper_service import FileMapperService
 
@@ -33,7 +33,7 @@ def main() -> None:
             sys.exit(1)
 
         print(f"Found {len(examples)} examples — loading embedding model...")
-        emb_service = EmbeddingService()
+        emb_service = get_embedding_service()
 
         # Drop existing embeddings table if present (idempotent rebuild)
         conn.execute("DROP TABLE IF EXISTS example_embeddings")

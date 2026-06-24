@@ -63,8 +63,8 @@ class TestLutKnnLookup:
     """End-to-end KNN lookup tests against the real LUT asset."""
 
     def _embed(self, text: str) -> list[float]:
-        from services.embedding_service import EmbeddingService
-        return EmbeddingService().generate_embedding(text)
+        from services.embedding_service import get_embedding_service
+        return get_embedding_service().generate_embedding(text)
 
     def test_canonical_key_matches_itself(self) -> None:
         """Embedding of a canonical key should hit that same key with cos ≥ threshold."""

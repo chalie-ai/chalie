@@ -12,7 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from abilities._ability import Ability  # noqa: E402
 from abilities._registry import AbilityRegistry  # noqa: E402
-from services.embedding_service import EmbeddingService  # noqa: E402
+from services.embedding_service import EmbeddingService, get_embedding_service  # noqa: E402
 from services.embedding_utils import pack_embedding  # noqa: E402
 from services.file_mapper_service import FileMapperService  # noqa: E402
 
@@ -146,7 +146,7 @@ def _build(db_path: Path, sha_path: Path) -> None:
     abilities = [a for a in AbilityRegistry.all() if a.DISCOVERABLE]
     print(f"Found {len(abilities)} abilities — building {db_path.name}...")
 
-    emb_service = EmbeddingService() if abilities else None
+    emb_service = get_embedding_service() if abilities else None
 
     # Always delete and rebuild from scratch. The DB is a build artifact —
     # incremental DROP/CREATE is pointless and fails when FTS5 is corrupted.

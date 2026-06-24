@@ -372,8 +372,12 @@ def _warmup_models() -> None:
     except Exception as e:
         logger.warning(f"[Startup] Voice warm-up skipped: {e}")
     try:
-        from services.embedding_service import _get_session_and_tokenizer as _embed_warm
-        _t.Thread(target=_embed_warm, name="embed-warmup", daemon=True).start()
+        from services.embedding_service import get_embedding_service as _get_emb_svc
+        _t.Thread(
+            target=lambda: _get_emb_svc().ensure_loaded(),
+            name="embed-warmup",
+            daemon=True,
+        ).start()
     except Exception as e:
         logger.warning(f"[Startup] Embedding warm-up skipped: {e}")
 

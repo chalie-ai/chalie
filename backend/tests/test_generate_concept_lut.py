@@ -22,9 +22,9 @@ def _canonical_keys_from_yaml() -> set[str]:
 
 def _encoder_available() -> bool:
     try:
-        from services.embedding_service import EmbeddingService
+        from services.embedding_service import get_embedding_service
 
-        EmbeddingService().generate_embeddings_batch(["probe"])
+        get_embedding_service().generate_embeddings_batch(["probe"])
         return True
     except Exception:
         return False

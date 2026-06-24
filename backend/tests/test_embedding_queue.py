@@ -14,8 +14,8 @@ from services.embedding_service import get_embedding_service, EmbeddingService
 # Model must be present; skip rather than trigger a 300MB download in CI.
 
 def _model_available() -> bool:
-    from services.embedding_service import _model_dir
-    return (_model_dir() / "onnx" / "model.onnx").exists()
+    from services.embedding_service import get_embedding_service
+    return (get_embedding_service()._model_dir() / "onnx" / "model.onnx").exists()
 
 
 _SKIP = pytest.mark.skipif(

@@ -54,8 +54,8 @@ def rank_results(query: str, results: list[dict[str, object]]) -> list[dict[str,
         return results
 
     try:
-        from services.embedding_service import EmbeddingService
-        svc = EmbeddingService()
+        from services.embedding_service import get_embedding_service
+        svc = get_embedding_service()
 
         query_vec: np.ndarray = svc.generate_embedding_np(query)
 
@@ -87,8 +87,8 @@ def rank_results(query: str, results: list[dict[str, object]]) -> list[dict[str,
 def route_query(query: str) -> list[dict[str, object]]:
     """Route query to best providers. Returns [{"name", "score"}, ...] or []."""
     try:
-        from services.embedding_service import EmbeddingService
-        vec = EmbeddingService().generate_embedding(query)
+        from services.embedding_service import get_embedding_service
+        vec = get_embedding_service().generate_embedding(query)
     except Exception as e:
         logger.warning('[SEARCH] embedding failed: %s', e)
         return []

@@ -254,10 +254,9 @@ def _handle_create(params: dict[str, object]) -> ToolResult:
         )
         skill_id: int = cast("int", conn.execute("SELECT last_insert_rowid()").fetchone()[0])
 
-        from services.embedding_service import EmbeddingService
+        from services.embedding_service import get_embedding_service
         from utils.build_skills_db import index_skill
-        emb_service = EmbeddingService()
-        index_skill(conn, emb_service, skill_id, title, use_for, tags)
+        index_skill(conn, get_embedding_service(), skill_id, title, use_for, tags)
 
         conn.commit()
 
@@ -319,10 +318,9 @@ def _handle_edit(params: dict[str, object]) -> ToolResult:
 
         remove_search_entries(conn, skill_id)
 
-        from services.embedding_service import EmbeddingService
+        from services.embedding_service import get_embedding_service
         from utils.build_skills_db import index_skill
-        emb_service = EmbeddingService()
-        index_skill(conn, emb_service, skill_id, title, cast("str", updated_meta["use_for"]), cast("str", updated_meta["tags"]))
+        index_skill(conn, get_embedding_service(), skill_id, title, cast("str", updated_meta["use_for"]), cast("str", updated_meta["tags"]))
 
         conn.commit()
 

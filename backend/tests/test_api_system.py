@@ -371,10 +371,10 @@ class TestSystemAPI:
             broken_store.ping.side_effect = Exception('store down')
             store = broken_store
 
-        # Load the real ONNX embedding model so the /ready endpoint sees _session
-        # as non-None and reports 'ok'. No mock — we verify the real model works.
-        from services.embedding_service import _get_session_and_tokenizer
-        _get_session_and_tokenizer()
+        # Load the real ONNX embedding model so the /ready endpoint sees is_loaded
+        # as True and reports 'ok'. No mock — we verify the real model works.
+        from services.embedding_service import get_embedding_service
+        get_embedding_service().ensure_loaded()
 
         # Patch ONNX service to report ready
         mock_onnx_svc = MagicMock()
