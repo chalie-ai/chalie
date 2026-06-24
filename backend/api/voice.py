@@ -107,7 +107,7 @@ _VOICE_AVAILABLE = not _VOICE_MISSING_MODULES
 
 _VOICE_INSTALL_HINT = (
     "Voice dependencies are not installed. Run "
-    "`uv pip install -e backend[voice]` (or relaunch with "
+    "`uv pip install --system -e backend[voice]` (or relaunch with "
     "`./run.sh` — failed installs auto-retry on next launch)."
 )
 

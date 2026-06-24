@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # run.sh — Canonical Chalie launcher (dev, installer, Docker)
 #
-# Handles venv resolution, core dep sync via uv, then hands off to run.py.
+# Resolves a Python interpreter, syncs core deps, then hands off to run.py.
 # Voice and playwright are managed at runtime by RuntimeDepsService.
 #
 # Usage:
@@ -32,26 +32,21 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-# ─── Python + Venv Resolution ────────────────────────────────────────────────
+# ─── Python Resolution ───────────────────────────────────────────────────────
 # Priority:
 #   1. Already in an activated venv (VIRTUAL_ENV is set)
 #   2. CHALIE_VENV env var — set by the installed `chalie` CLI wrapper
-#   3. .venv/ in repo root — local dev venv (already in .gitignore)
-#   4. ~/.chalie/venv — installed user running from a source clone
-#   5. None found — create .venv/ in repo root
+#   3. ~/.chalie/venv — installed user running from a source clone
+#   4. System python3 — local dev (deps installed via `pip install --user`)
 
 if [[ -n "${VIRTUAL_ENV:-}" ]]; then
   PYTHON="$VIRTUAL_ENV/bin/python"
 elif [[ -n "${CHALIE_VENV:-}" ]] && [[ -d "$CHALIE_VENV" ]]; then
   PYTHON="$CHALIE_VENV/bin/python"
-elif [[ -d "$SCRIPT_DIR/.venv" ]]; then
-  PYTHON="$SCRIPT_DIR/.venv/bin/python"
 elif [[ -d "$HOME/.chalie/venv" ]]; then
   PYTHON="$HOME/.chalie/venv/bin/python"
 else
-  echo "→ No virtual environment found. Creating .venv/ …"
-  python3 -m venv "$SCRIPT_DIR/.venv"
-  PYTHON="$SCRIPT_DIR/.venv/bin/python"
+  PYTHON="$(command -v python3)"
 fi
 
 # ─── Dep Sync ────────────────────────────────────────────────────────────────
@@ -61,7 +56,7 @@ fi
 if command -v uv >/dev/null 2>&1; then
   _install() { uv pip install --python "$PYTHON" "$@"; }
 else
-  _install() { "$PYTHON" -m pip install "$@"; }
+  _install() { "$PYTHON" -m pip install --user "$@"; }
 fi
 
 _install -e "$SCRIPT_DIR/backend"
