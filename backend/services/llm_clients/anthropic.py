@@ -46,6 +46,7 @@ from services.provider_api import (
     RateLimitError,
     ResponseOverLimitError,
     ProviderResponseError,
+    ProviderTimeoutError,
     ThinkingLevel,
 )
 
@@ -143,8 +144,10 @@ class AnthropicClient(ProviderClient):
     def _get_client(self) -> "_anthropic_mod.Anthropic":
         import anthropic
         from services.llm_service import _resolve_api_key, _app_user_agent  # noqa: PLC0415
+        from services.providers import PROVIDER_CALL_TIMEOUT_S  # noqa: PLC0415
         return anthropic.Anthropic(
             api_key=_resolve_api_key(self._config),
+            timeout=PROVIDER_CALL_TIMEOUT_S,
             default_headers={"User-Agent": _app_user_agent()},
         )
 
@@ -170,7 +173,6 @@ class AnthropicClient(ProviderClient):
     def send(self, dto: ProviderApiRequest) -> ProviderApiResponse:
         """Transform DTO → Anthropic Messages API → ProviderApiResponse."""
         import anthropic  # noqa: PLC0415
-        from services.llm_service import _call_with_retry  # noqa: PLC0415 -- retry helper
 
         # Compute max_tokens using the window already known to Providers.send().
         # The window is not available here; use the DTO's explicit value if set,
@@ -200,15 +202,9 @@ class AnthropicClient(ProviderClient):
             try:
                 return cast("Callable[..., _anthropic_mod.types.Message]", client.messages.create)(**create_kwargs)
             except anthropic.RateLimitError as exc:
-                retry_after = None
-                if hasattr(exc, 'response') and exc.response is not None:
-                    ra = exc.response.headers.get('retry-after')
-                    if ra:
-                        try:
-                            retry_after = float(ra)
-                        except (ValueError, TypeError):
-                            pass
-                raise RateLimitError(str(exc), retry_after=retry_after, provider='anthropic') from exc
+                raise RateLimitError(str(exc), provider='anthropic') from exc
+            except anthropic.APITimeoutError as exc:
+                raise ProviderTimeoutError(str(exc), provider='anthropic') from exc
             except (anthropic.BadRequestError, anthropic.APIError) as exc:
                 # VERIFIED: anthropic._exceptions.RequestTooLargeError subclasses
                 # anthropic.APIError with class-level status_code == 413.
@@ -229,7 +225,7 @@ class AnthropicClient(ProviderClient):
                     )
                 raise ProviderResponseError(str(exc), response_code=status or 0, provider='anthropic') from exc
 
-        response = cast("_anthropic_mod.types.Message", _call_with_retry(_call))
+        response = _call()
         latency_ms = int((time.time() - start) * 1000)
         text, tool_calls, thinking_block = _parse_content_blocks(response.content)
         stop_reason = response.stop_reason

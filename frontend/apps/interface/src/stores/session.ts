@@ -580,6 +580,9 @@ export const useSessionStore = defineStore('session', {
         case 'quick_tip':
           useNotificationsStore().handleTip(data as unknown as TipState);
           return true;
+        case 'provider_retry':
+          showToast((data as { message?: string }).message ?? 'The AI provider had a problem — retrying…');
+          return true;
         default:
           return false;
       }

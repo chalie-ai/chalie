@@ -1,9 +1,8 @@
 """LLM service utilities — shared helpers used by the thin provider clients.
 
-This module retains shared utilities (estimate_tokens, _call_with_retry,
-_app_user_agent, _resolve_api_key, _strip_think_blocks,
-_parse_retry_after, _is_thinking_rejection) after the main client
-classes — and the message converters — were moved to
+This module retains shared utilities (estimate_tokens, _app_user_agent,
+_resolve_api_key, _strip_think_blocks, _is_thinking_rejection) after the
+main client classes — and the message converters — were moved to
 ``services/llm_clients/*``.
 
 The main client classes and their callers were migrated to the new
@@ -12,9 +11,8 @@ no backward-compat re-export shims remain.
 """
 
 import re
-import time
 import logging
-from typing import TYPE_CHECKING, Callable, Optional, cast
+from typing import cast
 
 logger = logging.getLogger(__name__)
 
@@ -52,47 +50,6 @@ def estimate_tokens(text: str) -> int:
     if not text:
         return 0
     return int(len(text.split()) * 1.3)
-
-
-def _call_with_retry(fn: Callable[[], object], max_retries: int = 2, backoff: float = 1.0) -> object:
-    """Rate limits (RateLimitError) are retried once with a short wait if
-    the provider includes a Retry-After header (capped at 10s). If no
-    header is present, the error propagates immediately."""
-    from services.provider_api import RateLimitError  # noqa: PLC0415
-    attempt = 0
-    while attempt <= max_retries:
-        try:
-            return fn()
-        except RateLimitError as e:
-            if e.retry_after and e.retry_after <= 10.0:
-                logger.warning(
-                    "Rate limited by %s (Retry-After %.0fs). Retrying once...",
-                    e.provider or 'provider', e.retry_after,
-                )
-                time.sleep(e.retry_after)
-                return fn()
-            raise
-        except Exception as e:
-            if attempt == max_retries:
-                raise
-            wait = backoff * (2 ** attempt)
-            logger.warning("LLM call failed (attempt %d): %s. Retrying in %ss...", attempt + 1, e, wait)
-            time.sleep(wait)
-            attempt += 1
-    if TYPE_CHECKING:  # mypy: loop always returns or raises; end is unreachable
-        raise RuntimeError("_call_with_retry: unreachable")
-
-
-def _parse_retry_after(exc: BaseException) -> Optional[float]:
-    """Extract the Retry-After header value from an HTTP exception, or return None."""
-    if hasattr(exc, 'response') and exc.response is not None:
-        ra = exc.response.headers.get('retry-after')
-        if ra:
-            try:
-                return float(ra)
-            except (ValueError, TypeError) as parse_err:
-                logger.debug("[LLM] Could not parse Retry-After header value %r: %s", ra, parse_err)
-    return None
 
 
 def _is_thinking_rejection(exc: BaseException, create_kwargs: dict[str, object]) -> bool:

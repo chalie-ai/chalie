@@ -726,3 +726,38 @@ body.speaker-user #ambientBloom {
   .input-dock   { background: var(--scrim-fallback); }
   .connection-banner { background: rgba(40, 20, 20, 0.95); }
 }
+
+// Transient toast (showToast): undo confirmations + provider-retry notices.
+// Theme vars resolve per data-theme, so one rule covers dark and light.
+.chalie-toast {
+  position: fixed;
+  left: 50%;
+  bottom: var(--space-xl);
+  transform: translate(-50%, 1rem);
+  z-index: 2000;
+  display: flex;
+  align-items: center;
+  gap: var(--space-md);
+  max-width: min(90vw, 28rem);
+  padding: var(--space-sm) var(--space-md);
+  background: var(--bg-surface-2);
+  color: var(--text-primary);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-card);
+  font-size: var(--font-size-sm);
+  opacity: 0;
+  transition: opacity var(--duration-normal) var(--ease-out),
+              transform var(--duration-normal) var(--ease-out);
+}
+.chalie-toast--visible { opacity: 1; transform: translate(-50%, 0); }
+.chalie-toast__undo {
+  border: 0;
+  background: none;
+  color: var(--accent-primary);
+  font-weight: 600;
+  cursor: pointer;
+}
+@media (prefers-reduced-motion: reduce) {
+  .chalie-toast { transition: none; }
+}

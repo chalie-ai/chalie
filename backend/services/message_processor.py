@@ -17,9 +17,15 @@ from services.time_formatter_service import TimeFormatterService
 
 if TYPE_CHECKING:
     from services.processor_config import ProcessorConfig
-    from services.provider_api import ProviderApiRequest
+    from services.provider_api import ProviderApiRequest, ProviderApiResponse
 
 logger = logging.getLogger(__name__)
+
+# Total provider-send attempts per ACT step (the original try + resends). The
+# provider layer never retries; this is the ONE retry policy. On a provider
+# failure the MessageProcessor resends the exact same request, up to this many
+# attempts, then terminates the turn.
+_MAX_PROVIDER_ATTEMPTS = 3
 
 # Per-channel turn serialisation: every turn runs under its channel's lock (see
 # _run), so two same-channel turns can never both advance the turn cursor or fire
@@ -389,7 +395,7 @@ class MessageProcessor:
         if self.cancel_event.is_set():
             return ""
         try:
-            response = self.providers.send(self._build_send_dto())
+            response = self._send_with_retry(self._build_send_dto())
         except (RequestOverCapError, ResponseOverLimitError):
             self._dispatch_compaction()
             return self._continue(post_compaction=True)._step()
@@ -401,6 +407,53 @@ class MessageProcessor:
         self._emit_interim(formatted)
         self._dispatch_tools(response.tool_calls)
         return self._continue()._step()
+
+    def _send_with_retry(self, dto: "ProviderApiRequest") -> "ProviderApiResponse":
+        """Send through the provider chokepoint, resending the SAME request on failure.
+
+        The provider layer never retries — any failure (timeout, rate limit,
+        transport, bad response) bubbles up here. We resend the exact same dto up
+        to _MAX_PROVIDER_ATTEMPTS times. RequestOverCapError/ResponseOverLimitError
+        are size signals, not provider failures, so they pass straight through to
+        the caller's compaction path. After the final failure the turn is
+        terminated with a user-facing ProviderRetriesExhaustedError.
+        """
+        from services.provider_api import (  # noqa: PLC0415
+            ProviderRetriesExhaustedError, RequestOverCapError, ResponseOverLimitError,
+        )
+
+        last_exc: Exception | None = None
+        for attempt in range(1, _MAX_PROVIDER_ATTEMPTS + 1):
+            try:
+                return self.providers.send(dto)
+            except (RequestOverCapError, ResponseOverLimitError):
+                raise
+            except Exception as exc:  # noqa: BLE001 — every provider failure is retriable here
+                last_exc = exc
+                if self.cancel_event.is_set():
+                    raise
+                logger.warning(
+                    "[MP] provider send failed (attempt %d/%d) channel=%s: %s",
+                    attempt, _MAX_PROVIDER_ATTEMPTS, self._cfg.channel, exc,
+                )
+                if attempt < _MAX_PROVIDER_ATTEMPTS:
+                    self._broadcast_provider_retry(attempt + 1)
+
+        logger.critical(
+            "[MP] provider send failed after %d attempts channel=%s — terminating turn: %s",
+            _MAX_PROVIDER_ATTEMPTS, self._cfg.channel, last_exc,
+        )
+        raise ProviderRetriesExhaustedError(
+            "The AI provider failed to respond after several attempts. "
+            "Please try again in a moment.",
+            provider=getattr(last_exc, "provider", ""),
+        ) from last_exc
+
+    def _broadcast_provider_retry(self, next_attempt: int) -> None:
+        """Tell a user-facing surface a provider resend is in progress (toast)."""
+        if self._cfg.broadcast_to == "user":
+            from api.chat import _broadcast_provider_retry  # noqa: PLC0415
+            _broadcast_provider_retry(next_attempt, _MAX_PROVIDER_ATTEMPTS)
 
     def _store_row(self, text: "str | None") -> str:
         """Persist this step's assistant row and advance the anchor its tool calls record against."""

@@ -162,9 +162,24 @@ class ProviderResponseError(ProviderError):
 
 
 class RateLimitError(ProviderResponseError):
-    """HTTP 429 — rate limit. Keeps retry_after for the retry helper."""
+    """HTTP 429 — rate limit. A typed provider error; not retried at this layer."""
 
-    def __init__(self, message: str, retry_after: Optional[float] = None,
-                 provider: str = "") -> None:
+    def __init__(self, message: str, provider: str = "") -> None:
         super().__init__(message, response_code=429, provider=provider)
-        self.retry_after = retry_after
+
+
+class ProviderTimeoutError(ProviderResponseError):
+    """The provider call exceeded PROVIDER_CALL_TIMEOUT_S at the HTTP boundary.
+
+    Every thin client maps its SDK's native timeout to this type. The provider
+    layer never retries; this (like any provider error) bubbles up to the
+    MessageProcessor, which owns the resend policy.
+    """
+
+
+class ProviderRetriesExhaustedError(ProviderResponseError):
+    """Raised by the MessageProcessor after every provider resend attempt failed.
+
+    Carries a clean, user-facing message: it is surfaced verbatim on user-facing
+    channels (chat error bubble / external-agent reply) once the turn terminates.
+    """

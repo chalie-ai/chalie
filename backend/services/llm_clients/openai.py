@@ -116,8 +116,10 @@ class OpenAIClient(ProviderClient):
     def _get_client(self) -> "_openai_mod.OpenAI":
         from openai import OpenAI  # noqa: PLC0415
         from services.llm_service import _resolve_api_key, _app_user_agent  # noqa: PLC0415
+        from services.providers import PROVIDER_CALL_TIMEOUT_S  # noqa: PLC0415
         kwargs: dict[str, object] = {
             'api_key': _resolve_api_key(self._config),
+            'timeout': PROVIDER_CALL_TIMEOUT_S,
             'default_headers': {
                 "HTTP-Referer": _APP_URL,
                 "X-Title": _APP_TITLE,
@@ -168,7 +170,8 @@ class OpenAIClient(ProviderClient):
     def send(self, dto: ProviderApiRequest) -> ProviderApiResponse:
         """Transform DTO → OpenAI Chat Completions API → ProviderApiResponse."""
         import openai as openai_mod  # noqa: PLC0415
-        from services.llm_service import _strip_think_blocks, _parse_retry_after, _is_thinking_rejection  # noqa: PLC0415
+        from services.llm_service import _strip_think_blocks, _is_thinking_rejection  # noqa: PLC0415
+        from services.provider_api import ProviderTimeoutError  # noqa: PLC0415
 
         client = self._get_client()
         start = time.time()
@@ -189,8 +192,9 @@ class OpenAIClient(ProviderClient):
             try:
                 return cast("Callable[..., _openai_mod.types.chat.ChatCompletion]", client.chat.completions.create)(**create_kwargs)
             except openai_mod.RateLimitError as exc:
-                retry_after = _parse_retry_after(exc)
-                raise RateLimitError(str(exc), retry_after=retry_after, provider='openai') from exc
+                raise RateLimitError(str(exc), provider='openai') from exc
+            except openai_mod.APITimeoutError as exc:
+                raise ProviderTimeoutError(str(exc), provider='openai') from exc
             except (openai_mod.BadRequestError, openai_mod.APIError) as exc:
                 # Confirmed: OpenAI sends HTTP 400 with error.code == 'context_length_exceeded'
                 err_body = getattr(exc, 'body', None) or {}
@@ -211,8 +215,7 @@ class OpenAIClient(ProviderClient):
                 status = getattr(exc, 'status_code', 0)
                 raise ProviderResponseError(str(exc), response_code=status, provider='openai') from exc
 
-        from services.llm_service import _call_with_retry  # noqa: PLC0415
-        response = cast("_openai_mod.types.chat.ChatCompletion", _call_with_retry(_call))
+        response = _call()
         latency_ms = int((time.time() - start) * 1000)
 
         msg = response.choices[0].message
