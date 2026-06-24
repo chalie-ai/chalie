@@ -173,6 +173,21 @@ def _broadcast_interim(metadata: dict[str, object], content: str) -> None:
     })
 
 
+def _broadcast_provider_retry(attempt: int, max_attempts: int) -> None:
+    """Notify the user surface that a provider call failed and is being resent.
+
+    Fired from MessageProcessor._send_with_retry before each resend on the user
+    channel. The frontend renders this as a transient toast — the turn is still
+    in flight, so no error bubble and no ``done``.
+    """
+    WebSocketBroker().broadcast({
+        "type": "provider_retry",
+        "message": "The AI provider had a problem — retrying…",
+        "attempt": attempt,
+        "max_attempts": max_attempts,
+    })
+
+
 def _broadcast_turn_result(response: str, request_id: str, turn_start: float) -> None:
     """Shared by the foreground user turn and the background async-result synthesis
     so both surface a turn through the exact same WS event shape."""

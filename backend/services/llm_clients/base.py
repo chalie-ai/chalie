@@ -43,7 +43,8 @@ class ProviderClient(ABC):
         Raises:
             ResponseOverLimitError: provider rejected the payload for size.
             ProviderResponseError: other API or HTTP error.
-            RateLimitError: HTTP 429; carries retry_after when available.
+            RateLimitError: HTTP 429.
+            ProviderTimeoutError: the call exceeded PROVIDER_CALL_TIMEOUT_S.
         """
 
     @abstractmethod

@@ -16,7 +16,7 @@ import { useAmbientSensor } from '../../composables/useAmbientSensor';
 import { system } from '../../api/system';
 import type { AttachmentPreview as ConvoAttachmentPreview } from '../../stores/conversation';
 import ImageAttachStrip from '../upload/ImageAttachStrip.vue';
-import { FileText, Image, Plus, Mic, Send } from '@lucide/vue';
+import { FileText, Image, Plus, Mic, Send, X, AlertTriangle } from '@lucide/vue';
 
 const session = useSessionStore();
 const voiceStore = useVoiceStore();
@@ -24,7 +24,7 @@ const attachments = useAttachmentsStore();
 const contextUsage = useContextUsageStore();
 const ambient = useAmbientSensor();
 
-const { available: voiceAvailable, recorderState, recError } = storeToRefs(voiceStore);
+const { available: voiceAvailable, recorderState } = storeToRefs(voiceStore);
 const { level, levelLabel, usageDisplay } = storeToRefs(contextUsage);
 
 const THINKING_ITEMS = [
@@ -199,6 +199,19 @@ onBeforeUnmount(() => {
 
 <template>
   <footer class="input-dock">
+    <div v-if="session.errorMessage" class="dock-error" role="alert">
+      <AlertTriangle class="dock-error__icon" :size="18" aria-hidden="true" />
+      <span class="dock-error__text">{{ session.errorMessage }}</span>
+      <button
+        class="dock-error__close"
+        type="button"
+        aria-label="Dismiss error"
+        @click="session.errorMessage = null"
+      >
+        <X :size="16" />
+      </button>
+    </div>
+
     <ImageAttachStrip />
 
     <div
@@ -310,8 +323,6 @@ onBeforeUnmount(() => {
         <span class="context-indicator" title="Last request size / context window">{{ usageDisplay }}</span>
       </div>
     </div>
-
-    <p v-if="recError" id="voiceRecError" class="voice-rec-error">{{ recError }}</p>
 
     <!-- No capture attr: lets mobile show the standard OS picker (library +
          take-photo), WhatsApp-style. -->

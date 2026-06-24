@@ -1,7 +1,8 @@
 /**
  * Conversation spine store — the ordered `forms` array of discriminated-union
- * items (user / chalie / act / error). Components render the list; this store
- * owns all mutations.
+ * items (user / chalie / act). Errors are not feed rows: every error — turn,
+ * action, voice — funnels to `session.errorMessage` and renders as the one
+ * dock toast. Components render the list; this store owns all mutations.
  */
 import { defineStore } from 'pinia';
 import type { ConversationAttachment, ConversationMessage, ConversationSegment } from '../api/conversation';
@@ -74,13 +75,7 @@ export interface ActForm extends TurnTagged {
   collapsed: boolean;
 }
 
-export interface ErrorForm extends TurnTagged {
-  kind: 'error';
-  id: number;
-  message: string;
-}
-
-export type ConversationForm = UserForm | ChalieForm | ActForm | ErrorForm;
+export type ConversationForm = UserForm | ChalieForm | ActForm;
 
 /** A turn: a user form plus the assistant rows / act groups it produced. */
 export interface Turn {
@@ -213,12 +208,6 @@ export const useConversationStore = defineStore('conversation', {
       return id;
     },
 
-    appendError(message: string): number {
-      const id = nextId();
-      this.forms.push({ kind: 'error', id, message });
-      return id;
-    },
-
     /**
      * Settle a step's tool group when its prose / final reply lands: an empty
      * group — the up-front "thinking…" placeholder that never ran a tool — is
@@ -325,13 +314,6 @@ export const useConversationStore = defineStore('conversation', {
       };
       this.forms.splice(idx, 1, chalie);
       return id;
-    },
-
-    replaceActWithError(actId: number, message: string): void {
-      const idx = this.forms.findIndex((f) => f.id === actId);
-      if (idx === -1) return;
-      const id = nextId();
-      this.forms.splice(idx, 1, { kind: 'error', id, message });
     },
 
     /** Append history turns to the END of the spine (initial load). */

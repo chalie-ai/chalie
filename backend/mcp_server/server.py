@@ -151,6 +151,8 @@ def create_mcp_server(host: str = "0.0.0.0", port: int = _DEFAULT_PORT) -> FastM
             agent_name, project_or_task_name, loop_in_human, wrapper_id,
         )
 
+        from services.provider_api import ProviderRetriesExhaustedError  # noqa: PLC0415
+
         def _run() -> str:
             config = EAMPConfig(
                 agent_name=agent_name,
@@ -160,7 +162,10 @@ def create_mcp_server(host: str = "0.0.0.0", port: int = _DEFAULT_PORT) -> FastM
             )
             return MessageProcessor.process(message, config)
 
-        response = await asyncio.to_thread(_run)
+        try:
+            response = await asyncio.to_thread(_run)
+        except ProviderRetriesExhaustedError as exc:
+            return str(exc)
         return response or "(No response generated)"
 
     return mcp

@@ -2,14 +2,13 @@
 <script setup lang="ts">
 import { ref, watch, nextTick, onMounted, onBeforeUnmount } from 'vue';
 import { useConversationStore } from '../../stores/conversation';
-import type { ConversationForm, UserForm, ChalieForm, ActForm, ErrorForm } from '../../stores/conversation';
+import type { ConversationForm, UserForm, ChalieForm, ActForm } from '../../stores/conversation';
 import { useSessionStore } from '../../stores/session';
 import { useAutoscroll } from '../../composables/useAutoscroll';
 import UserBubble from './UserBubble.vue';
 import ChalieBubble from './ChalieBubble.vue';
 import ActCycle from './ActCycle.vue';
 import ActCycleGroup from './ActCycleGroup.vue';
-import ErrorFormVue from './ErrorForm.vue';
 
 const conversationStore = useConversationStore();
 const session = useSessionStore();
@@ -125,10 +124,6 @@ onBeforeUnmount(() => {
           <ActCycle
             v-else-if="row.form.kind === 'act'"
             :form="(row.form as ActForm)"
-          />
-          <ErrorFormVue
-            v-else-if="row.form.kind === 'error'"
-            :form="(row.form as ErrorForm)"
           />
         </template>
       </template>

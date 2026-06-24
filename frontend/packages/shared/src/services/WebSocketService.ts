@@ -56,6 +56,9 @@ export type WsPushType =
   | 'subagent_end'
   | 'thought'
   | 'response'
+  // A provider call failed mid-turn and the backend is resending; surfaces show
+  // a transient toast. The turn is still in flight (no error bubble, no `done`).
+  | 'provider_retry'
   // Echo: server re-broadcasts every user message so surfaces stay in sync; the
   // sender drops its own via echo_id, peers render the bubble.
   | 'user_message';

@@ -43,6 +43,10 @@ export const useSessionStore = defineStore('session', {
     /** Captured text from the last user turn (for requestStop restore). */
     _lastUserText: '',
 
+    /** Turn-level provider/quota error, surfaced as a closable toast above the
+     *  input dock. Null when there is nothing to show. */
+    errorMessage: null as string | null,
+
     historyOffset: 0,
     historyLoading: false,
     historyExhausted: false,
@@ -304,7 +308,7 @@ export const useSessionStore = defineStore('session', {
               convo.resolveAct(this._activeActId);
               this._activeActId = null;
             }
-            convo.appendError(data.message);
+            this.errorMessage = data.message;
             const d = data as { auth_failed?: boolean };
             if (d.auth_failed) this._onAuthFailure?.();
           },
@@ -422,7 +426,8 @@ export const useSessionStore = defineStore('session', {
           });
         },
         onError: (data) => {
-          convo.replaceActWithError(actId, data.message);
+          convo.resolveAct(actId);
+          this.errorMessage = data.message;
         },
         onDone: () => {
           this._activeActId = null;
@@ -579,6 +584,9 @@ export const useSessionStore = defineStore('session', {
           return true;
         case 'quick_tip':
           useNotificationsStore().handleTip(data as unknown as TipState);
+          return true;
+        case 'provider_retry':
+          showToast((data as { message?: string }).message ?? 'The AI provider had a problem — retrying…');
           return true;
         default:
           return false;

@@ -102,7 +102,7 @@
   display: none;
 }
 
-// Chalie glyph now lives inline in the footer (meta) row; ErrorForm keeps a header
+// Chalie glyph now lives inline in the footer (meta) row.
 .speech-form--chalie .speech-form__meta .sender-glyph,
 .speech-form--chalie .speech-form__header .sender-glyph {
   position: static;
@@ -281,15 +281,6 @@
 
 .speech-form__speak-btn:hover {
   color: var(--dusk-blue);
-}
-
-.speech-form--error {
-  background: color-mix(in oklab, var(--error) 8%, transparent);
-  border-color: color-mix(in oklab, var(--error) 20%, transparent);
-}
-
-.speech-form--error .speech-form__text {
-  color: var(--error);
 }
 
 // Escalation form (critic)

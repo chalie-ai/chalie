@@ -20,8 +20,8 @@ Native size-rejection signal — VERIFIED (google-genai 1.65.0):
 
   Residual gap: Gemini may produce a token-limit 400 with a message phrasing
   not in _TOKEN_LIMIT_STRINGS.  If the string-match misses, the exception
-  falls through to the bare ``raise``, is retried by _call_with_retry, then
-  propagates as an unhandled exception — the turn dies without compaction.
+  falls through to the bare ``raise`` and propagates to the MessageProcessor,
+  which resends — the turn dies without compaction only after retries exhaust.
   This is an improvement over the old GeminiService which had NO token-limit
   catch at all (confirmed: git show 88421fc0^:backend/services/llm_service.py
   shows no size-rejection handler in GeminiService.send_messages).
@@ -101,6 +101,7 @@ from services.provider_api import (
     RateLimitError,
     ResponseOverLimitError,
     ProviderResponseError,
+    ProviderTimeoutError,
     ThinkingLevel,
 )
 
@@ -198,9 +199,14 @@ class GeminiClient(ProviderClient):
 
     def _get_client(self, genai: "_Genai") -> "_GenaiClient":
         from services.llm_service import _resolve_api_key, _app_user_agent  # noqa: PLC0415
+        from services.providers import PROVIDER_CALL_TIMEOUT_S  # noqa: PLC0415
         return genai.Client(
             api_key=_resolve_api_key(self._config),
-            http_options={"headers": {"User-Agent": _app_user_agent()}},
+            # HttpOptions.timeout is in milliseconds.
+            http_options={
+                "timeout": PROVIDER_CALL_TIMEOUT_S * 1000,
+                "headers": {"User-Agent": _app_user_agent()},
+            },
         )
 
     def _thinking_native(self, genai: "_Genai", level: ThinkingLevel, cfg: "_GenCfg") -> None:
@@ -268,6 +274,11 @@ class GeminiClient(ProviderClient):
                 config=genai.types.GenerateContentConfig(**gen_cfg),
             )
         except Exception as exc:
+            # google-genai does not wrap transport errors — an httpx read/connect
+            # timeout propagates raw. Fail fast so the retry helper does not loop.
+            import httpx  # noqa: PLC0415
+            if isinstance(exc, httpx.TimeoutException):
+                raise ProviderTimeoutError(f"Gemini request timed out: {exc}", provider='gemini') from exc
             exc_code = getattr(exc, 'code', None)
             exc_status = getattr(exc, 'status', None) or ''
             exc_str = str(exc).lower()
@@ -276,7 +287,7 @@ class GeminiClient(ProviderClient):
             # SDK raises ClientError with code=429, status='RESOURCE_EXHAUSTED'.
             # Kept '429' in str(exc) as belt-and-suspenders for SDK version drift.
             if exc_code == 429 or exc_status == 'RESOURCE_EXHAUSTED' or '429' in str(exc):
-                raise RateLimitError(str(exc), retry_after=None, provider='gemini') from exc
+                raise RateLimitError(str(exc), provider='gemini') from exc
 
             # HTTP 5xx — transient server error.
             if exc_code is not None and exc_code >= 500:
@@ -324,7 +335,6 @@ class GeminiClient(ProviderClient):
 
     def send(self, dto: ProviderApiRequest) -> ProviderApiResponse:
         """Transform DTO → Gemini generate_content API → ProviderApiResponse."""
-        from services.llm_service import _call_with_retry  # noqa: PLC0415
         genai = self._get_sdk()
         client = self._get_client(genai)
         start = time.time()
@@ -332,9 +342,7 @@ class GeminiClient(ProviderClient):
         contents = _gemini_convert_messages(dto.messages)
         gen_cfg = self._build_gen_config(genai, dto.system, dto.tools, dto.thinking_mode)
 
-        response = _call_with_retry(
-            lambda: self._generate_with_fallback(client, genai, contents, gen_cfg)
-        )
+        response = self._generate_with_fallback(client, genai, contents, gen_cfg)
         latency_ms = int((time.time() - start) * 1000)
         text, tool_calls, finish_reason = self._parse_response(cast("_GenResponse", response))
 

@@ -546,7 +546,7 @@ def _test_api_provider(config: "dict[str, object]", platform: str, model: str, s
     try:
         test_config = {
             'platform': platform, 'model': model,
-            'api_key': api_key, 'max_tokens': 1, 'timeout': 10,
+            'api_key': api_key, 'max_tokens': 1,
         }
         host = config.get('host')
         if host:
