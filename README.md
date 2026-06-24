@@ -5,7 +5,7 @@
 <h1 align="center">Chalie</h1>
 
 <p align="center">
-  <strong>Life, handled.</strong><br>
+  <strong>It thinks while you're not looking.</strong><br>
   An open-source personal AI that runs on your own machine — it remembers what matters, works while you're away, and asks before it acts.
 </p>
 
@@ -23,7 +23,7 @@ chalie     # → http://localhost:31025
 
 > **Beta — on purpose.** It's `v1.0.0-beta` because the bar is software you'd trust with your own life's admin, and it isn't all the way there yet. Hit a sharp edge? [Open an issue](https://github.com/chalie-ai/chalie/issues) — we respond fast.
 
-<p align="center"><img src="docs/assets/chalie-dark.png" alt="Chalie working a task, live" width="820"></p>
+<p align="center"><img src="docs/assets/chalie-hero.png" alt="How Chalie works — it perceives, remembers, reasons, and acts on your behalf, behind an Allow / Ask / Deny gate" width="100%"></p>
 
 ## Why Chalie is different
 
