@@ -1,7 +1,9 @@
 """
 ScheduleAbility — Native innate skill for reminders and scheduled tasks.
 
-Backed by SQLite (scheduled_items table). Provides create, list, search, and cancel actions.
+Backed by SQLite (scheduled_items table). Provides create, list, search, cancel, and update actions.
+``update`` is a thin compose: it cancels the target ``item_id`` then creates a fresh item from the
+remaining params — no bespoke UPDATE path to keep in sync with create's validation.
 All DB access via get_shared_db_service() (lazy import inside function).
 
 ``due_at`` accepts natural language ("tomorrow 9am", "in 2 hours") OR ISO 8601.
@@ -112,7 +114,7 @@ def query_items(
     return [dict(zip(columns, row)) for row in rows]
 
 
-_ACTIONS = ("create", "list", "search", "cancel")
+_ACTIONS = ("create", "list", "search", "cancel", "update")
 
 
 class ScheduleAbility(Ability):
@@ -127,6 +129,7 @@ class ScheduleAbility(Ability):
         "list": (),
         "search": (Keys.query,),
         "cancel": (),
+        "update": (Keys.item_id, Keys.message),
     }
 
     def get_name(self) -> str:
@@ -161,7 +164,7 @@ class ScheduleAbility(Ability):
         "properties": {
             Keys.action: {
                 "type": "string",
-                "enum": ["create", "list", "search", "cancel"],
+                "enum": ["create", "list", "search", "cancel", "update"],
                 "description": (
                     "The scheduler action to perform. If the user wants a short "
                     "ephemeral countdown (e.g. 'set a 5 minute timer', 'start a "
@@ -222,7 +225,11 @@ class ScheduleAbility(Ability):
             },
             Keys.item_id: {
                 "type": "string",
-                "description": "Optional for cancel: exact ID returned at create time. Prefer this when known.",
+                "description": (
+                    "Optional for cancel: exact ID returned at create time. Prefer this when known. "
+                    "Required for update: the existing item to replace — pass the new message/due_at/"
+                    "recurrence alongside it and the old item is cancelled and recreated with the new values."
+                ),
             },
             Keys.time_range: {
                 "type": "string",
@@ -276,6 +283,13 @@ class ScheduleAbility(Ability):
             return _search(self, params, self.mp)
         if action == "cancel":
             return _cancel(params)
+        if action == "update":
+            # Compose, don't duplicate: retire the target then recreate from the
+            # same params. Cancelling first clears create's pending-dedup guard so
+            # a same-message time change isn't swallowed as a duplicate.
+            _cancel(params)
+            channel = getattr(getattr(self.mp, "config", None), "channel", "") or ""
+            return _create(channel, params, self._PAST_DUE_GRACE_SECONDS)
 
         # Unreachable in practice (ACTION_REQUIRED pre-gates unknown actions);
         # kept as a self-correcting belt-and-braces error.
