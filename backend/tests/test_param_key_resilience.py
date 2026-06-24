@@ -369,3 +369,129 @@ def test_web_search_query_canonical_untouched_by_goal_ladder() -> None:
     )
 
     assert healed == {Keys.query: "latest fusion energy developments"}
+
+
+# ── C1 synonym-registry expansion: representative heals across distinct tools ───
+#
+# Each drives the live ``KeyHealer.heal`` against the REAL shipping ability's
+# declared schema (the same ``get_parameters()`` the dispatcher reads at the seam).
+# Asserted at the seam, not end-to-end, because ``run()`` would spawn a live network
+# call / browser / delegate a unit test must never start (the discipline the
+# web_browse tests above establish). The discriminator is the healed key landing on
+# the canonical the tool declares — the only proof the variant ladder resolved.
+
+
+def test_search_keyword_alias_heals_to_query() -> None:
+    """``keyword`` is a variant of ``query``; ``search`` declares ``query`` (not
+    ``keyword``), so ``keyword`` heals to ``query`` at the seam."""
+    search = _shipping_ability("search")
+
+    healed = KeyHealer().heal({"keyword": "python asyncio"}, search.get_parameters())
+
+    assert healed == {Keys.query: "python asyncio"}
+
+
+def test_bash_cmd_alias_heals_to_command() -> None:
+    """``cmd`` is a variant of ``command``; ``bash`` declares ``command``."""
+    bash = _shipping_ability("bash")
+
+    healed = KeyHealer().heal({"cmd": "ls -la"}, bash.get_parameters())
+
+    assert healed == {Keys.command: "ls -la"}
+
+
+def test_limit_n_alias_heals_to_limit() -> None:
+    """``n`` is a variant of ``limit``; ``contacts`` declares ``limit`` (alongside
+    ``query`` and ``identifier``). The heal lands on the declared ``limit`` canonical,
+    and the declared ``query`` / ``identifier`` keys pass through verbatim."""
+    contacts = _shipping_ability("contacts")
+
+    healed = KeyHealer().heal({"action": "list", "query": "alice", "n": 5}, contacts.get_parameters())
+
+    assert healed[Keys.limit] == 5
+    assert healed[Keys.query] == "alice"
+    assert healed[Keys.action] == "list"
+
+
+def test_email_recipient_alias_heals_to_to() -> None:
+    """``recipient`` is a variant of ``to``; ``email`` declares ``to``."""
+    email = _shipping_ability("email")
+
+    healed = KeyHealer().heal(
+        {"action": "send", "recipient": "alice@example.com"}, email.get_parameters()
+    )
+
+    assert healed[Keys.to] == "alice@example.com"
+    assert healed[Keys.action] == "send"
+
+
+def test_list_id_ladder_still_resolves_regression() -> None:
+    """The pre-existing ``list`` ladder (``id`` → ``list``) must still resolve when
+    the tool declares ``list``. ``list`` declares ``list`` (not ``id``), so ``id``
+    heals to ``list`` — unchanged by the C1 expansion (non-regression guard on an
+    existing ladder)."""
+    list_ab = _shipping_ability("list")
+
+    healed = KeyHealer().heal({"action": "view", "id": "abc"}, list_ab.get_parameters())
+
+    assert healed[Keys.list] == "abc"
+    assert healed[Keys.action] == "view"
+
+
+def test_uid_ladder_resolves_email_id_to_uid() -> None:
+    """The new ``uid`` ladder resolves its own tokens (``email_id``) to ``uid`` for
+    ``email``, which declares ``uid`` (not ``email_id``)."""
+    email = _shipping_ability("email")
+
+    healed = KeyHealer().heal({"action": "read", "email_id": "abc123"}, email.get_parameters())
+
+    assert healed[Keys.uid] == "abc123"
+    assert healed[Keys.action] == "read"
+
+
+def test_calendar_declared_summary_and_title_keep_their_own_keys() -> None:
+    """``calendar`` declares BOTH ``summary`` and ``title``; the ``name`` ladder
+    lists ``title`` as a variant. The declared param always wins as itself, so a
+    model emitting ``title`` literally keeps ``title`` (never rewritten to ``name``)
+    — and ``summary`` survives literally too. Proves the declared-canonical-first
+    rule is undisturbed by the expansion."""
+    calendar = _shipping_ability("calendar")
+
+    healed = KeyHealer().heal(
+        {"action": "create_event", "summary": "Meeting", "title": "Board"}, calendar.get_parameters()
+    )
+
+    assert healed[Keys.summary] == "Meeting"
+    assert healed[Keys.title] == "Board"
+    assert healed[Keys.action] == "create_event"
+
+
+def test_email_body_and_keyword_both_keep_their_own_keys_no_cross_shadow() -> None:
+    """``email`` declares BOTH ``body`` and ``keyword``; the ``text`` variant lives
+    on ``body`` (not ``keyword``, per the email mis-route fix). A model emitting
+    ``body`` and ``keyword`` literally keeps both — neither is rewritten to the other,
+    and the dropped-from-``keyword`` ``text`` variant does not shadow ``keyword``."""
+    email = _shipping_ability("email")
+
+    healed = KeyHealer().heal(
+        {"action": "search", "body": "Hello", "keyword": "invoice"}, email.get_parameters()
+    )
+
+    assert healed[Keys.body] == "Hello"
+    assert healed[Keys.keyword] == "invoice"
+    assert healed[Keys.action] == "search"
+
+
+def test_email_text_heals_to_body_not_keyword() -> None:
+    """The ``text`` variant is registered under ``body`` only (not ``keyword``) so
+    that an email send/draft emitting ``text`` (meaning the message body) heals to
+    ``body`` — the high-stakes target — not the search-only ``keyword``. ``email``
+    declares both ``body`` and ``keyword``; the heal lands on the declared ``body``."""
+    email = _shipping_ability("email")
+
+    healed = KeyHealer().heal(
+        {"action": "send", "to": "x@x", "subject": "y", "text": "hello body"}, email.get_parameters()
+    )
+
+    assert healed[Keys.body] == "hello body"
+    assert Keys.keyword not in healed
