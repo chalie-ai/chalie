@@ -6,24 +6,10 @@
 #
 #     http://www.apache.org/licenses/LICENSE-2.0
 
-"""Shared ONNX Runtime session factory with automatic provider fallback.
+"""Shared ONNX Runtime session factory — CPU-only.
 
-One chokepoint so every ONNX-using service picks the same provider for the
-installed wheel (CPU, CUDA, or ROCm) without hardcoding provider lists. The
-installer decides which wheel lands on disk; this module decides which
-execution provider actually runs each session and degrades to CPU on failure.
-
-Policy:
-    1. Default providers = ``ort.get_available_providers()`` — the wheel
-       exposes whichever accelerators it was built with, in preference order.
-    2. Drop ``CoreMLExecutionProvider`` for models whose weight tensors exceed
-       Metal's 16384-dim 2D-texture ceiling; ORT's CoreML EP partitions such
-       ops into hundreds of CPU sub-graphs and blows VSZ by >20 GB.
-    3. ``CPUExecutionProvider`` is appended last when missing, guaranteeing
-       node-level fallback inside ORT itself.
-    4. If session construction raises with the preferred set, retry once with
-       CPU only and log both attempts.
-
+One chokepoint so every ONNX-using service builds sessions consistently.
+The CPU execution provider is always used; no accelerator variants exist.
 Runtime inference failures (mid-session) are the caller's responsibility —
 this helper only covers construction.
 """
@@ -32,93 +18,30 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import TYPE_CHECKING, List, Optional, Union
+from typing import TYPE_CHECKING, Union
 
 if TYPE_CHECKING:
     from onnxruntime import InferenceSession
 
 logger = logging.getLogger(__name__)
 
-# Apple's Metal feature set caps a 2D-texture dimension at 16384 across every
-# Mac (Intel, M1–M4, all tiers). ORT's CoreML EP honours the limit by
-# partitioning offending ops into CPU sub-graphs, which for wide embedders
-# (e.g. ModernBERT's 50368×768 embedding table) produces hundreds of
-# partitions and jetsam-SIGKILLs lower-RAM Macs. Check dims up-front and drop
-# CoreML when we can prove the model trips the limit.
-METAL_TEXTURE_LIMIT = 16384
-
 CPU_PROVIDER = "CPUExecutionProvider"
-COREML_PROVIDER = "CoreMLExecutionProvider"
-
-
-def _model_fits_coreml(model_path: Path, limit: int = METAL_TEXTURE_LIMIT) -> bool:
-    """True when every weight tensor dim is within CoreML's Metal limit.
-
-    Fail-open on inspection errors: return True so the caller keeps CoreML and
-    lets ORT decide at session load. The alternative — silently dropping
-    CoreML on every model when ``onnx`` is missing — punishes the happy path.
-    """
-    try:
-        import onnx
-        m = onnx.load(str(model_path), load_external_data=False)
-        return not any(d > limit for init in m.graph.initializer for d in init.dims)
-    except Exception as e:
-        logger.debug("CoreML shape pre-check skipped (%s: %s)", type(e).__name__, e)
-        return True
-
-
-def choose_providers(model_path: Optional[Union[Path, str]] = None) -> List[str]:
-    import onnxruntime as ort
-
-    providers = list(ort.get_available_providers())
-
-    if model_path is not None and COREML_PROVIDER in providers:
-        if not _model_fits_coreml(Path(model_path)):
-            providers = [p for p in providers if p != COREML_PROVIDER]
-            logger.info(
-                "Dropped %s: %s has weight dim > %d (Metal 2D-texture ceiling)",
-                COREML_PROVIDER, Path(model_path).name, METAL_TEXTURE_LIMIT,
-            )
-
-    if CPU_PROVIDER not in providers:
-        providers.append(CPU_PROVIDER)
-
-    return providers
 
 
 def build_session(
     model_path: Union[Path, str],
     sess_options: object = None,
-    providers: Optional[List[str]] = None,
     *,
     log_prefix: str = "[ONNX]",
 ) -> 'InferenceSession':
     import onnxruntime as ort
 
     model_path = Path(model_path)
-    chosen = list(providers) if providers is not None else choose_providers(model_path)
-    opts = (
-        sess_options
-        if sess_options is not None
-        else ort.SessionOptions()
-    )
+    opts = sess_options if sess_options is not None else ort.SessionOptions()
 
-    try:
-        session = ort.InferenceSession(str(model_path), sess_options=opts, providers=chosen)
-        logger.info(
-            "%s session ready (%s, providers=%s)",
-            log_prefix, model_path.name, session.get_providers(),
-        )
-        return session
-    except Exception as e:
-        if chosen == [CPU_PROVIDER]:
-            raise
-        logger.warning(
-            "%s providers=%s failed (%s: %s) — retrying CPU-only",
-            log_prefix, chosen, type(e).__name__, e,
-        )
-        session = ort.InferenceSession(
-            str(model_path), sess_options=opts, providers=[CPU_PROVIDER]
-        )
-        logger.info("%s CPU fallback session ready (%s)", log_prefix, model_path.name)
-        return session
+    session = ort.InferenceSession(str(model_path), sess_options=opts, providers=[CPU_PROVIDER])
+    logger.info(
+        "%s session ready (%s, providers=%s)",
+        log_prefix, model_path.name, session.get_providers(),
+    )
+    return session

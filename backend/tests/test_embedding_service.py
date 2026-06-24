@@ -5,19 +5,12 @@ data/models/gte-modernbert-base/onnx/model.onnx). They exist to catch
 regressions in the ONNX pipeline end-to-end: load, tokenize, infer, normalize.
 """
 
-from typing import cast
-
 import numpy as np
-import onnxruntime as ort
-import pytest
 
 from services.embedding_service import (
     EmbeddingService,
     get_embedding_service,
-    _build_session,
     _get_session_and_tokenizer,
-    _model_dir,
-    _COMPILING_EPS,
 )
 
 
@@ -95,45 +88,3 @@ class TestEmbeddingServiceONNX:
 
     def test_get_embedding_service_returns_singleton(self) -> None:
         assert get_embedding_service() is get_embedding_service()
-
-
-class TestCompilingEpCachePrime:
-    """Compiling EPs (CoreML/CUDA/TRT/ROCm) cannot co-exist with graph serialization —
-    ``_build_session`` must prime the optimized cache via a CPU-only pass first,
-    then open the real session from the written graph."""
-
-    @pytest.mark.skipif(
-        not any(ep in _COMPILING_EPS for ep in ort.get_available_providers()),
-        reason="No compiling EP available — prime-pass code path is unreachable here.",
-    )
-    def test_prime_pass_writes_cache_and_loads_session(self) -> None:
-        onnx_path = _model_dir() / "onnx" / "model.onnx"
-        ort_ver = ort.__version__.replace(".", "_")
-        optimized_path = _model_dir() / "onnx" / f"model.optimized.{ort_ver}.onnx"
-
-        if not onnx_path.exists():
-            pytest.skip("Base model.onnx not cached — skip to avoid 300MB download.")
-
-        backup_path = optimized_path.with_suffix(".onnx.primebackup")
-        # Restart from a clean slate so the prime branch actually fires.
-        if optimized_path.exists():
-            if backup_path.exists():
-                backup_path.unlink()
-            optimized_path.rename(backup_path)
-
-        try:
-            session, _ = _build_session()
-            try:
-                assert optimized_path.exists(), (
-                    "prime pass should have written the optimized graph to disk"
-                )
-                # Session must come up — historically crashed mid-construction on Mac.
-                assert cast(ort.InferenceSession, session).get_providers(), "session loaded with at least one provider"
-            finally:
-                del session
-        finally:
-            # Drop the freshly-produced cache and restore the original (if any).
-            if optimized_path.exists():
-                optimized_path.unlink()
-            if backup_path.exists():
-                backup_path.rename(optimized_path)

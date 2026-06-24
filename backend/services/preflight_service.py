@@ -3,9 +3,7 @@
 Exercises each runtime dependency (SQLite, MemoryStore, the embedding ONNX
 session, and the classifier heads) and reports a verified per-component status.
 Pure inspection — it emits no log lines, so the 2-second ``/ready`` poll never
-floods the Cognition → Errors panel. The single actionable ERROR line for a
-broken runtime is logged once at boot by
-:meth:`services.runtime_deps_service.RuntimeDepsService.ensure_onnxruntime`.
+floods the Cognition → Errors panel.
 """
 
 
@@ -30,21 +28,20 @@ def run_preflight() -> dict[str, dict[str, object]]:
     except Exception as e:
         components['memory_store'] = {'status': 'error', 'message': str(e)}
 
-    # Embedding ONNX session — distinguishes "still warming up" from "runtime
-    # broken". A null session with a failed self-heal is a terminal error (the
-    # hint), not the eternal 'loading' the probe used to report.
+    # Embedding ONNX session — distinguishes "still warming up" from "broken".
     try:
         from services import embedding_service
-        from services.runtime_deps_service import RuntimeDepsService
         if embedding_service._session is not None:
             components['embeddings'] = {'status': 'ok'}
-        elif RuntimeDepsService.onnxruntime_status() == 'failed':
-            components['embeddings'] = {
-                'status': 'error',
-                'message': RuntimeDepsService.onnxruntime_hint() or 'onnxruntime unavailable',
-            }
         else:
-            components['embeddings'] = {'status': 'loading'}
+            try:
+                import onnxruntime  # noqa: F401
+                components['embeddings'] = {'status': 'loading'}
+            except Exception as e:
+                components['embeddings'] = {
+                    'status': 'error',
+                    'message': f'onnxruntime failed to import: {e} — reinstall the venv',
+                }
     except Exception as e:
         components['embeddings'] = {'status': 'error', 'message': str(e)}
 

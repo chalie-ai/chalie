@@ -74,10 +74,8 @@ def readiness_check() -> ResponseReturnValue:
     """Readiness probe — 200 only when SQLite, MemoryStore, embeddings, and ONNX are ready.
 
     Delegates to the read-only :func:`services.preflight_service.run_preflight`.
-    The onnxruntime CPU self-heal and its actionable ERROR hint run once at boot
-    (``RuntimeDepsService.ensure_onnxruntime``); this probe only reports state, so
-    a broken runtime surfaces as ``embeddings: {status: error, message: <hint>}``
-    rather than the eternal ``loading`` it reported before.
+    A broken onnxruntime surfaces as ``embeddings: {status: error, message: <hint>}``
+    rather than the eternal ``loading`` state.
     """
     from services.preflight_service import run_preflight
     components = run_preflight()

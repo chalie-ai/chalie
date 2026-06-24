@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING, List, Optional, cast
 
 import numpy as np
 
-from services.onnx_session import CPU_PROVIDER, build_session, choose_providers
+from services.onnx_session import build_session
 
 if TYPE_CHECKING:
     from services.memory_store import MemoryStore
@@ -41,17 +41,6 @@ _model_lock = threading.Lock()
 _CACHE_TTL = 3600
 _CACHE_PREFIX = 'emb:'
 
-# Execution providers that compile graph subgraphs into backend-specific binaries
-# and therefore cannot round-trip back to ONNX — the optimized-graph serializer
-# bails out on any compiled node. When one of these is in the chosen EP list,
-# the optimized cache must be written via a CPU-only prime pass instead.
-_COMPILING_EPS = frozenset({
-    "CoreMLExecutionProvider",
-    "CUDAExecutionProvider",
-    "TensorrtExecutionProvider",
-    "ROCMExecutionProvider",
-})
-
 
 def _model_dir() -> Path:
     from services.file_mapper_service import FileMapperService
@@ -73,7 +62,7 @@ def _resolve_thread_count() -> int:
     return min(4, max(2, cpu // 2))
 
 
-def _build_session(providers: Optional[List[str]] = None) -> tuple[object, Path]:
+def _build_session() -> tuple[object, Path]:
     import onnxruntime as ort
     from huggingface_hub import hf_hub_download
 
@@ -91,27 +80,6 @@ def _build_session(providers: Optional[List[str]] = None) -> tuple[object, Path]
             logger.error(f"[EMBEDDING] Failed to download model: {e}")
             raise
 
-    chosen = list(providers) if providers is not None else choose_providers(onnx_path)
-
-    # ORT refuses to serialize a graph once a compiling EP (CoreML/CUDA/TRT/ROCm)
-    # has claimed nodes — session construction crashes mid-way when
-    # ``optimized_model_filepath`` is set. Prime the cache with a throwaway
-    # CPU-only session first, then open the real session from the written graph.
-    # One-off cost on first boot per ORT version; no-op on CPU-only hosts.
-    if not optimized_path.exists() and any(ep in _COMPILING_EPS for ep in chosen):
-        logger.info(
-            f"[EMBEDDING] Priming optimized graph via CPU-only pass (ORT {ort.__version__})"
-        )
-        prime_opts = ort.SessionOptions()
-        prime_opts.intra_op_num_threads = _resolve_thread_count()
-        prime_opts.inter_op_num_threads = 1
-        prime_opts.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_EXTENDED
-        prime_opts.optimized_model_filepath = str(optimized_path)
-        prime_sess = ort.InferenceSession(
-            str(onnx_path), sess_options=prime_opts, providers=[CPU_PROVIDER]
-        )
-        del prime_sess
-
     opts = ort.SessionOptions()
     opts.intra_op_num_threads = _resolve_thread_count()
     opts.inter_op_num_threads = 1
@@ -128,17 +96,9 @@ def _build_session(providers: Optional[List[str]] = None) -> tuple[object, Path]
         opts.optimized_model_filepath = str(optimized_path)
 
     session = build_session(
-        load_path, sess_options=opts, providers=chosen, log_prefix="[EMBEDDING]"
+        load_path, sess_options=opts, log_prefix="[EMBEDDING]"
     )
     return session, onnx_path
-
-
-def _rebuild_session_cpu_only() -> object:
-    global _session
-    with _model_lock:
-        session, _ = _build_session(providers=[CPU_PROVIDER])
-        _session = session
-        return session
 
 
 def _get_session_and_tokenizer() -> tuple[object, object]:
@@ -207,20 +167,7 @@ def _encode_batch(texts: List[str]) -> np.ndarray:
     if "token_type_ids" in _input_names:
         feed["token_type_ids"] = np.zeros_like(input_ids)
 
-    try:
-        outputs = cast(_IS, session).run(None, feed)
-    except Exception as e:
-        # Accelerated providers (CoreML, CUDA, etc.) can init cleanly but fail
-        # on specific runtime shapes/tokens. Rebuild once as CPU-only and retry.
-        if cast(_IS, session).get_providers() != ["CPUExecutionProvider"]:
-            logger.warning(
-                f"[EMBEDDING] Inference failed on {cast(_IS, session).get_providers()}: {e}. "
-                f"Rebuilding session as CPU-only for the rest of this process."
-            )
-            session = _rebuild_session_cpu_only()
-            outputs = cast(_IS, session).run(None, feed)
-        else:
-            raise
+    outputs = cast(_IS, session).run(None, feed)
 
     # Use pre-pooled output if available, otherwise mean pool last_hidden_state
     if "sentence_embedding" in _output_names:
