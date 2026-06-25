@@ -138,8 +138,13 @@ export const useSessionStore = defineStore('session', {
 
       // chalie:silent-action — rich-card interactions, no chat bubble. Caller
       // supplies optional onMessage/onError/onDone for optimistic card UI.
+      // Guarded by isSending like the named <action> path (sendAction): a silent
+      // action calls ws.sendAction → ws.abort() which overwrites the shared
+      // chatCallbacks slot, dropping the in-flight chat turn's onDone that
+      // resets isSending. Blocking it mid-turn keeps the turn's done alive.
       _busUnbinds.push(
         on('chalie:silent-action', (detail) => {
+          if (this.isSending) return;
           const d = detail as {
             payload?: Record<string, unknown>;
             onMessage?: (data: WsMessageEvent) => void;
