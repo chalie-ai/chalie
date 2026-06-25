@@ -4,7 +4,6 @@ Reuses the ``thread_gist`` index (KNN + FTS) built in workstream D.
 """
 
 import logging
-from typing import cast
 
 from flask import Blueprint, jsonify, request
 from flask.typing import ResponseReturnValue

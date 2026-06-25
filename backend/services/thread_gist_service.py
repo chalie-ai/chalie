@@ -12,7 +12,7 @@ from __future__ import annotations
 import logging
 import re
 import sqlite3
-from typing import TYPE_CHECKING, Optional, cast
+from typing import Optional, cast
 
 from services._fts_delete import fts5_external_delete
 from services.database_service import get_shared_db_service
