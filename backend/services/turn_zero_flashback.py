@@ -213,7 +213,10 @@ class TurnZeroFlashback:
         """
         from services import compaction_persistence  # noqa: PLC0415
 
-        row = compaction_persistence.get_compaction(cast("ProcessorConfig", self._mp.config).channel)
+        row = compaction_persistence.get_compaction(
+            cast("ProcessorConfig", self._mp.config).channel,
+            cast("int | None", getattr(self._mp, "turn_id", None)),
+        )
         if not row:
             return ""
         doc = (cast("str", row.get("compacted_text")) or "").strip()

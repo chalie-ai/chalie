@@ -200,18 +200,22 @@ def test_broadcast_turn_result_pairs_span_after_assistant_row_persisted(db: sqli
 def test_transcript_gc_reaps_tool_calls_of_obsolete_turns_only(db: sqlite3.Connection) -> None:
     """A tool_calls row lives and dies with its turn — no separate clock.
 
-    Drives the real decay entry point (the all-channels transcript GC) and pins
-    every side of the unified rule in one run:
+    Thread-scoped compaction (workstream C): the watermark keys off
+    (channel, turn_id), so GC reaps rows below the watermark IN THE THREAD that
+    was compacted. Drives the real decay entry point (the all-channels
+    transcript GC) and pins every side of the unified rule in one run:
       * below watermark + uncited       -> the turn AND its tool_calls are reaped
       * below watermark + episode-cited  -> both survive (evidence never orphaned)
       * above the watermark              -> both survive (still live history)
     """
     channel = "user"
 
-    # Two old turns through the production writer; one tool call recorded on each
-    # via ActTrail.record — the only production tool_calls write path.
-    obsolete = Transcript.write_input_row(channel, "user", "obsolete turn with a tool call")
-    cited = Transcript.write_input_row(channel, "user", "turn an episode still cites")
+    # One thread with multiple rows: an obsolete turn, a cited turn, then a
+    # compaction watermark written INTO the thread (the production compactor
+    # passes turn_id so the checkpoint lands in the thread it compacted).
+    turn_id = 1
+    obsolete = Transcript.write_input_row(channel, "user", "obsolete turn with a tool call", turn_id=turn_id)
+    cited = Transcript.write_input_row(channel, "user", "turn an episode still cites", turn_id=turn_id)
     ActTrail().record(tool_name="weather", params={"location": "Valletta"}, result=_RICH_RESULT, transcript_id=obsolete)
     ActTrail().record(tool_name="memory", params={}, result="recalled fact", transcript_id=cited)
 
@@ -222,11 +226,13 @@ def test_transcript_gc_reaps_tool_calls_of_obsolete_turns_only(db: sqlite3.Conne
     )
     db.commit()
 
-    # The compaction watermark row, written exactly as the compactor does.
-    Transcript.write_input_row(channel, "compaction", "## Voice\nliving checkpoint")
+    # The compaction watermark row, written INTO the thread exactly as the
+    # thread-scoped compactor does (turn_id passed so the checkpoint lands in
+    # the thread it compacted). Its own id is the watermark.
+    Transcript.write_input_row(channel, "compaction", "## Voice\nliving checkpoint", turn_id=turn_id)
 
-    # A post-watermark turn with its own tool call — still live, must survive.
-    live = Transcript.write_input_row(channel, "user", "post-watermark turn")
+    # A post-watermark row in the SAME thread — still live, must survive.
+    live = Transcript.write_input_row(channel, "user", "post-watermark turn", turn_id=turn_id)
     ActTrail().record(tool_name="search", params={}, result="fresh result", transcript_id=live)
 
     # Real decay entry point — the all-channels discovery path, same as prod.

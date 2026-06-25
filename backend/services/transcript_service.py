@@ -461,11 +461,10 @@ class Transcript:
             from services.database_service import get_shared_db_service
             db = get_shared_db_service()
 
-            # Resolve each channel's compaction watermark through the single
-            # canonical source — compaction_persistence.get_compaction reads the
-            # latest role='compaction' transcript row, whose own id IS the
-            # watermark. The all-channels discovery uses that SAME source so the
-            # two can never silently drift apart again ().
+            # Thread-scoped compaction (workstream C): watermarks key off
+            # (channel, turn_id). Discover every (channel, turn_id) pair that
+            # carries a compaction row, then resolve its watermark through the
+            # canonical source so the two can never drift apart.
             if channel:
                 channels = [channel]
             else:
@@ -474,17 +473,27 @@ class Transcript:
                         "SELECT DISTINCT channel FROM transcript WHERE role = 'compaction'"
                     ).fetchall()]
 
-            watermarks = []
+            # Each entry is (channel, turn_id, watermark) — turn_id is None for
+            # legacy/housekeeping compaction rows, scoped to the thread otherwise.
+            watermarks: list[tuple[str, "int | None", int]] = []
             for ch in channels:
-                row = compaction_persistence.get_compaction(ch)
-                if row:
-                    watermarks.append((ch, row['compacted_up_to_id']))
+                with db.connection() as conn:
+                    pairs = conn.execute(
+                        "SELECT DISTINCT turn_id FROM transcript "
+                        "WHERE channel = ? AND role = 'compaction'",
+                        (ch,),
+                    ).fetchall()
+                for (tid,) in pairs:
+                    tid_int = int(tid) if tid is not None else None
+                    row = compaction_persistence.get_compaction(ch, tid_int)
+                    if row:
+                        watermarks.append((ch, tid_int, cast("int", row['compacted_up_to_id'])))
 
             with db.connection() as conn:
                 cursor = conn.cursor()
                 total_deleted = 0
 
-                for t, watermark in watermarks:
+                for t, tid, watermark in watermarks:
                     if not watermark:
                         continue
 
@@ -507,14 +516,20 @@ class Transcript:
                         except Exception:
                             pass
 
-                    # Find transcript IDs below watermark that are not referenced
-                    cursor.execute(
-                        """
-                        SELECT id FROM transcript
-                        WHERE channel = ? AND id < ?
-                        """,
-                        (t, watermark),
-                    )
+                    # Find transcript IDs below the thread's watermark. When the
+                    # compaction is thread-scoped, only rows of THAT thread below
+                    # the watermark are GC candidates; the legacy channel-wide
+                    # path (tid None) sweeps the whole channel.
+                    if tid is not None:
+                        cursor.execute(
+                            "SELECT id FROM transcript WHERE channel = ? AND turn_id = ? AND id < ?",
+                            (t, tid, watermark),
+                        )
+                    else:
+                        cursor.execute(
+                            "SELECT id FROM transcript WHERE channel = ? AND id < ?",
+                            (t, watermark),
+                        )
                     candidate_rows = cursor.fetchall()
 
                     to_delete_ids = []
@@ -547,7 +562,7 @@ class Transcript:
             # not stay invisible. info, never debug.
             logger.info(
                 f"{LOG_PREFIX} Transcript GC: deleted {total_deleted} unlinked "
-                f"entries across {len(watermarks)} watermarked channel(s)"
+                f"entries across {len(watermarks)} watermarked thread(s)"
             )
             return total_deleted
 

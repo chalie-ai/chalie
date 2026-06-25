@@ -43,6 +43,11 @@ class TestTranscriptGC:
     ) -> None:
         """One decay pass deletes only the unreferenced pre-watermark rows.
 
+        Thread-scoped compaction (workstream C): the watermark keys off
+        (channel, turn_id), so the compaction row is written INTO the thread
+        (turn_id passed, exactly as the thread-scoped compactor does) and GC
+        reaps rows below it IN THAT THREAD.
+
         Pins both sides of the contract in a single run:
           * below watermark + unreferenced  -> deleted
           * below watermark + episode-cited -> survives (evidence never orphaned)
@@ -50,11 +55,13 @@ class TestTranscriptGC:
           * above the watermark             -> survives (still live history)
         """
         channel = "user"
+        turn_id = 1
 
-        # Older conversation rows — the prod writer that opens every turn.
-        r1 = Transcript.write_input_row(channel, "user", "first old message")
-        r2 = Transcript.write_input_row(channel, "user", "old message cited by an episode")
-        r3 = Transcript.write_input_row(channel, "user", "third old message")
+        # Older conversation rows in ONE thread — the prod writer that opens
+        # every turn. Replies carry the existing turn_id (workstream B).
+        r1 = Transcript.write_input_row(channel, "user", "first old message", turn_id=turn_id)
+        r2 = Transcript.write_input_row(channel, "user", "old message cited by an episode", turn_id=turn_id)
+        r3 = Transcript.write_input_row(channel, "user", "third old message", turn_id=turn_id)
 
         # A live episode cites r2 — GC must never reap an episode's evidence.
         db.execute(
@@ -64,15 +71,16 @@ class TestTranscriptGC:
         )
         db.commit()
 
-        # The compaction watermark row, written EXACTLY as chat_history_compactor
-        # does (write_input_row(channel, 'compaction', summary)); its own id is
-        # the watermark the GC must discover.
+        # The compaction watermark row, written INTO the thread exactly as the
+        # thread-scoped compactor does (turn_id passed so the checkpoint lands in
+        # the thread it compacted); its own id is the watermark the GC must
+        # discover for this (channel, turn_id) pair.
         watermark = Transcript.write_input_row(
-            channel, "compaction", "## Voice\nliving checkpoint"
+            channel, "compaction", "## Voice\nliving checkpoint", turn_id=turn_id
         )
 
-        # A newer row, written after the watermark — must survive.
-        r4 = Transcript.write_input_row(channel, "user", "post-watermark message")
+        # A newer row in the SAME thread, written after the watermark — must survive.
+        r4 = Transcript.write_input_row(channel, "user", "post-watermark message", turn_id=turn_id)
 
         # Drive the real decay entry point: no channel arg -> the all-channels
         # discovery path that the regression broke.

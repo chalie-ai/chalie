@@ -385,7 +385,7 @@ class MessageProcessor:
 
     def _build_send_messages(self) -> list[dict[str, object]]:
         """Build the single-element user-message list, with checkpoint wrapper and config image."""
-        user = _wrap_with_checkpoint(self._cfg.channel, self._cfg.get_user_prompt(self))
+        user = _wrap_with_checkpoint(self._cfg.channel, self._cfg.get_user_prompt(self), self.turn_id)
         message: dict[str, object] = {"role": "user", "content": user}
         img = self._cfg.get_image(self)
         if img is not None:
@@ -579,17 +579,22 @@ class MessageProcessor:
             )
 
     def _previous_rows(self) -> list[dict[str, object]]:
-        """Watermark-bounded transcript rows for this channel, EXCLUDING the current turn."""
+        """Watermark-bounded transcript rows for this thread — ONLY the active
+        thread's history (workstream C). When ``self.turn_id`` is set the read
+        is scoped to ``(channel, turn_id)``; a ``None`` turn_id (housekeeping
+        channels that never allocate a thread) keeps the legacy channel-wide read."""
         if self._cfg.suppress_history:
             return []
         from services import compaction_persistence  # noqa: PLC0415
         from services.transcript_service import Transcript  # noqa: PLC0415
+        if self.turn_id is not None:
+            compaction = compaction_persistence.get_compaction(self._cfg.channel, self.turn_id)
+            watermark = cast("int", compaction["compacted_up_to_id"]) if compaction else 0
+            rows = Transcript.by_turn(self._cfg.channel, self.turn_id)
+            return [r for r in rows if cast("int", r.get("id") or 0) > watermark]
         compaction = compaction_persistence.get_compaction(self._cfg.channel)
         watermark = cast("int", compaction["compacted_up_to_id"]) if compaction else 0
-        rows = Transcript.get_recent(self._cfg.channel, since_id=watermark)
-        if self.turn_id is None:
-            return rows
-        return [r for r in rows if cast("int", r.get("turn_id") or 0) < self.turn_id]
+        return Transcript.get_recent(self._cfg.channel, since_id=watermark)
 
     def get_previous_messages(self, drop_oldest: int = 0) -> str:
         """Render the ## Previous Messages block from _previous_rows()."""
@@ -620,19 +625,22 @@ class MessageProcessor:
         return "\n".join(lines)
 
     def _dispatch_compaction(self) -> None:
-        """Fire chat-history compaction through the normal tool-dispatch chokepoint."""
+        """Fire chat-history compaction through the normal tool-dispatch chokepoint.
+
+        Thread-scoped (workstream C): the before/after watermark reads key off
+        ``(channel, turn_id)`` so each thread carries its own checkpoint."""
         from abilities._dispatcher import ToolDispatcher  # noqa: PLC0415
         from services import compaction_persistence  # noqa: PLC0415
         from services.transcript_service import Transcript  # noqa: PLC0415
 
-        before = compaction_persistence.get_compaction(self._cfg.channel)
+        before = compaction_persistence.get_compaction(self._cfg.channel, self.turn_id)
         before_id = cast("int", before["compacted_up_to_id"]) if before else 0
 
         ToolDispatcher(self).dispatch(
             "chat_history_compactor", {"act_summary": "Compacting conversation"}
         )
 
-        after = compaction_persistence.get_compaction(self._cfg.channel)
+        after = compaction_persistence.get_compaction(self._cfg.channel, self.turn_id)
         after_id = cast("int", after["compacted_up_to_id"]) if after else 0
         if after_id <= before_id:
             return
@@ -650,11 +658,14 @@ class MessageProcessor:
 _MISSING_TS_PLACEHOLDER = '????-??-?? ??:??'
 
 
-def _wrap_with_checkpoint(channel: str, user_body: str) -> str:
-    """Wrap the user-message body with a ### Checkpoint envelope when a compaction exists."""
+def _wrap_with_checkpoint(channel: str, user_body: str, turn_id: "int | None" = None) -> str:
+    """Wrap the user-message body with a ### Checkpoint envelope when a compaction exists.
+
+    ``turn_id`` scopes the checkpoint to the active thread (workstream C); ``None``
+    keeps the legacy channel-wide read."""
     from services import compaction_persistence
 
-    row = compaction_persistence.get_compaction(channel)
+    row = compaction_persistence.get_compaction(channel, turn_id)
     if not row or not (compacted := cast('str', row.get('compacted_text') or '').strip()):
         return user_body
     return (

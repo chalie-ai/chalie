@@ -21,6 +21,7 @@ from services.provider_cache_service import ProviderCacheService
 if TYPE_CHECKING:
     class _CompactionParent(Protocol):
         _compaction_kept_rows: int
+        turn_id: "int | None"
         def _previous_rows(self) -> list[object]: ...
         def get_previous_messages(self, *, drop_oldest: int = ...) -> str: ...
         class _Providers(Protocol):

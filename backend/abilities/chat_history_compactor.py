@@ -26,6 +26,7 @@ if TYPE_CHECKING:
 
     class _CompactionParent(Protocol):
         _compaction_kept_rows: int
+        turn_id: "int | None"
 
         def _previous_rows(self) -> list[object]: ...
         def get_previous_messages(self, *, drop_oldest: int = ...) -> str: ...
@@ -86,10 +87,12 @@ class ChatHistoryCompactor(Ability):
 
         mp = cast("_CompactionParent", self.mp)
         channel = mp.config.channel
+        turn_id = getattr(mp, "turn_id", None)
 
         # Carry forward the prior checkpoint so continuity chains across
         # compactions instead of restarting from the recent tail each time.
-        prior_row = compaction_persistence.get_compaction(channel)
+        # Thread-scoped (workstream C): the prior checkpoint belongs to THIS thread.
+        prior_row = compaction_persistence.get_compaction(channel, turn_id)
         prior = (cast(str, prior_row.get("compacted_text")) or "").strip() if prior_row else ""
 
         combined = self._fit_compaction_input(mp, prior)
@@ -106,14 +109,16 @@ class ChatHistoryCompactor(Ability):
         summary = (MessageProcessor.process(combined, ChatHistoryCompactionConfig()) or "").strip()
         if not summary:
             logger.warning(
-                "[chat_history_compactor] empty summary on channel=%s; advancing watermark anyway",
-                channel,
+                "[chat_history_compactor] empty summary on channel=%s turn=%s; advancing watermark anyway",
+                channel, turn_id,
             )
 
-        # The model's output IS the checkpoint — write it verbatim. The new
-        # transcript row's own id becomes the watermark (advances unconditionally
-        # on a non-empty backlog → no silent no-write, no infinite loop).
-        Transcript.write_input_row(channel, "compaction", summary)
+        # The model's output IS the checkpoint — write it verbatim INTO the thread.
+        # The new transcript row's own id becomes the watermark (advances
+        # unconditionally on a non-empty backlog → no silent no-write, no infinite
+        # loop). Writing with turn_id keeps the checkpoint inside the thread so the
+        # thread-scoped get_compaction re-keys from (channel, turn_id).
+        Transcript.write_input_row(channel, "compaction", summary, turn_id=turn_id)
         return ToolResult.ok("Chat history compacted.", rows_compacted=rows_compacted)
 
     @staticmethod
