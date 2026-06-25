@@ -20,16 +20,15 @@ SESSION_TTL = 30 * 24 * 60 * 60  # 30 days in seconds
 SESSION_KEY_PREFIX = 'auth_session:'
 
 
-def _persist_session_to_sqlite(token: str) -> None:
+def _persist_session_to_sqlite(token: str, username: str | None) -> None:
     """Write session to SQLite so it survives MemoryStore wipes (restart)."""
     try:
         from services.database_service import get_shared_db_service
         db = get_shared_db_service()
-        utc_now().isoformat()
         db.execute(
-            """INSERT OR REPLACE INTO auth_sessions (token, created_at, expires_at)
-               VALUES (?, ?, datetime('now', '+30 days'))""",
-            (token, utc_now().isoformat())
+            """INSERT OR REPLACE INTO auth_sessions (token, username, created_at, expires_at)
+               VALUES (?, ?, ?, datetime('now', '+30 days'))""",
+            (token, username, utc_now().isoformat())
         )
     except Exception as e:
         logger.error(f"[Session] SQLite persist failed: {e}")
@@ -69,7 +68,7 @@ def _validate_session_in_sqlite(token: str) -> bool:
         return False
 
 
-def create_session(response: Response) -> str:
+def create_session(response: Response, username: str | None = None) -> str:
     """Generates a cryptographically secure random token, stores it in both
     MemoryStore (fast path) and SQLite (durable), and attaches the
     ``chalie_session`` HTTP-only cookie to the given response object."""
@@ -79,7 +78,7 @@ def create_session(response: Response) -> str:
     store = MemoryClientService.create_connection()
     store.setex(f"{SESSION_KEY_PREFIX}{token}", SESSION_TTL, "1")
 
-    _persist_session_to_sqlite(token)
+    _persist_session_to_sqlite(token, username)
 
     secure = os.environ.get('COOKIE_SECURE', 'false').lower() == 'true'
     response.set_cookie(
@@ -92,6 +91,40 @@ def create_session(response: Response) -> str:
     )
     logger.info("[Session] Created new session")
     return token
+
+
+def purge_user_sessions(username: str) -> None:
+    """Destroy every session belonging to ``username`` (both MemoryStore and
+    SQLite). Called on login so a freshly re-authenticated user evicts any
+    previously-issued token — e.g. one obtained by an attacker — instead of
+    letting it run out its full TTL."""
+    from services.memory_client import MemoryClientService
+
+    try:
+        from services.database_service import get_shared_db_service
+        db = get_shared_db_service()
+        rows = db.fetch_all(
+            "SELECT token FROM auth_sessions WHERE username = ?",
+            (username,)
+        )
+    except Exception as e:
+        logger.error("[Session] SQLite purge lookup failed: %s", e)
+        rows = []
+
+    if not rows:
+        return
+
+    store = MemoryClientService.create_connection()
+    tokens = [str(row["token"]) for row in rows]
+    for token in tokens:
+        store.delete(f"{SESSION_KEY_PREFIX}{token}")
+
+    try:
+        db.execute("DELETE FROM auth_sessions WHERE username = ?", (username,))
+    except Exception as e:
+        logger.error("[Session] SQLite purge delete failed: %s", e)
+
+    logger.info("[Session] Purged %d prior session(s) for user '%s'", len(rows), username)
 
 
 def validate_session(request: Request) -> bool:

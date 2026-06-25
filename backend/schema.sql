@@ -76,11 +76,13 @@ CREATE VIRTUAL TABLE IF NOT EXISTS episodes_fts USING fts5(
 -- ────────────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS auth_sessions (
     token TEXT PRIMARY KEY,
+    username TEXT,
     created_at TEXT NOT NULL,
     expires_at TEXT NOT NULL
 );
 
 CREATE INDEX IF NOT EXISTS idx_auth_sessions_expires ON auth_sessions(expires_at);
+CREATE INDEX IF NOT EXISTS idx_auth_sessions_username ON auth_sessions(username);
 
 -- ────────────────────────────────────────────────────────────────
 -- VAULT — envelope-encryption key store
