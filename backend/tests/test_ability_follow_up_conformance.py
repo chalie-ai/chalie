@@ -169,36 +169,45 @@ def test_subclass_returning_non_str_raises_typeerror_at_import() -> None:
     """``Ability.__init_subclass__`` probes ``get_follow_up()`` on a throwaway
     mp=None instance at class-body evaluation time; a subclass returning a non-str
     raises ``TypeError`` at import, not at call. Drives the real
-    ``__init_subclass__`` path — defining the class evaluates it.
+    ``__init_subclass__`` path — the factory's class-body statement evaluates it.
 
     A concrete (non-synthetic) class is required: ``_SYNTHETIC`` skips ALL
     metadata probes (the early return in ``__init_subclass__``), so the follow_up
     probe would never fire. The class provides full valid metadata so the probes
     before it pass, isolating the follow_up check."""
-
     with pytest.raises(TypeError, match="get_follow_up.*must return str"):
+        _bad_follow_up_cls()
 
-        class _BadFollowUp(Ability):
-            def get_name(self) -> str:
-                return "bad_follow_up"
 
-            def get_summary(self) -> str:
-                return "probe"
+def _bad_follow_up_cls() -> type[Ability]:
+    """Build and return a concrete ``Ability`` subclass whose ``get_follow_up``
+    returns an ``int`` — defining the class body fires ``__init_subclass__``,
+    which raises ``TypeError`` before the class is ever created. The factory
+    makes the class-body evaluation an explicit call so static analysis sees
+    the class as used (it is: the raise IS the assertion)."""
+    class _BadFollowUp(Ability):
+        def get_name(self) -> str:
+            return "bad_follow_up"
 
-            def get_examples(self) -> list[str]:
-                return ["a"] * 6
+        def get_summary(self) -> str:
+            return "probe"
 
-            def get_search_tooltip(self) -> str:
-                return "probe"
+        def get_examples(self) -> list[str]:
+            return ["a"] * 6
 
-            def get_parameters(self) -> dict[str, object]:
-                return {"type": "object", "properties": {}, "required": []}
+        def get_search_tooltip(self) -> str:
+            return "probe"
 
-            def run(self, params: dict[str, object]) -> ToolResult:
-                return ToolResult.ok("x")
+        def get_parameters(self) -> dict[str, object]:
+            return {"type": "object", "properties": {}, "required": []}
 
-            def get_follow_up(self) -> str:
-                return cast(str, 123)  # mypy accepts the cast; the runtime probe catches the int
+        def run(self, params: dict[str, object]) -> ToolResult:
+            return ToolResult.ok("x")
+
+        def get_follow_up(self) -> str:
+            return cast(str, 123)  # mypy accepts the cast; the runtime probe catches the int
+
+    return _BadFollowUp
 
 
 def test_subclass_with_default_follow_up_is_safe() -> None:
