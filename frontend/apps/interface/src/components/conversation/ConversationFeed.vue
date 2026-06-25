@@ -9,6 +9,7 @@ import UserBubble from './UserBubble.vue';
 import ChalieBubble from './ChalieBubble.vue';
 import ActCycle from './ActCycle.vue';
 import ActCycleGroup from './ActCycleGroup.vue';
+import ThreadReplyBox from './ThreadReplyBox.vue';
 
 const conversationStore = useConversationStore();
 const session = useSessionStore();
@@ -31,6 +32,14 @@ function groupRows(forms: ConversationForm[]): RenderRow[] {
     }
   }
   return rows;
+}
+
+/** Extract the turn_id shared by all forms in a turn (null for legacy rows). */
+function threadTurnId(turn: { forms: ConversationForm[] }): number | null {
+  for (const f of turn.forms) {
+    if (f.turnId != null) return f.turnId;
+  }
+  return null;
 }
 
 const feedRef = ref<HTMLElement | null>(null);
@@ -127,6 +136,12 @@ onBeforeUnmount(() => {
           />
         </template>
       </template>
+      <!-- Per-thread reply box: only on threads with a known turn_id (not legacy
+           NULL-turn_id singletons) and not while a turn is in-flight. -->
+      <ThreadReplyBox
+        v-if="threadTurnId(turn) != null && !session.isSending"
+        :turn-id="threadTurnId(turn)!"
+      />
     </div>
   </main>
 </template>

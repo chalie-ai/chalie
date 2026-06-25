@@ -96,11 +96,13 @@ class MessageProcessor:
         self.config: "ProcessorConfig | None" = None
         self._active_tools: list[str] = []
         self._uid: int | None = None
-        # Per-channel monotonic turn boundary, allocated atomically when _setup
-        # writes the input row. Every call opens its OWN turn (an async tool result
-        # or delegate return is a NEW turn). The act-trail and previous-messages
-        # history render by it; tool_calls derive it via a join on the input row.
-        self.turn_id: int | None = None
+        # Per-channel monotonic turn boundary — redefined as the *thread* id. A
+        # thread-starter has ``thread_id=None`` and _setup allocates a fresh one;
+        # a reply has ``thread_id`` set (from metadata) and _setup appends to it.
+        # Every step in the chain shares it (propagated via _continue). The
+        # act-trail and previous-messages history render by it; tool_calls derive
+        # it via a join on the input row.
+        self.turn_id: "int | None" = cast("int | None", self._metadata.get("thread_id"))
         # User thinking-level override (None = auto/gate decides). 'medium'/'high'
         # bypass the gate and are forced on every send via Providers.send.
         self.thinking_override: str | None = None
@@ -266,8 +268,10 @@ class MessageProcessor:
         if not self._cfg.skip_input_row:
             self.uid = Transcript.write_input_row(
                 self._cfg.channel, self._cfg.role, self._raw_input,
+                turn_id=self.turn_id,
             )
-            self.turn_id = Transcript.turn_id_of_row(self.uid)
+            if self.turn_id is None:
+                self.turn_id = Transcript.turn_id_of_row(self.uid)
             self.anchor = self.uid
             if self.turn_id is not None:
                 self._chain_turn_ids.add(self.turn_id)

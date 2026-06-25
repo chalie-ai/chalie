@@ -1,4 +1,4 @@
-"""Conversation blueprint — GET /conversation/recent."""
+"""Conversation blueprint — GET /conversation/recent, /conversation/threads, /conversation/thread/<turn_id>."""
 
 import logging
 import sqlite3
@@ -12,6 +12,8 @@ from services.rich_media_parser import parse as _parse_rich_media, resolve_tool_
 
 logger = logging.getLogger(__name__)
 conversation_bp = Blueprint('conversation', __name__)
+
+_THREAD_EXCLUDE = ('subagent_return', 'compaction')
 
 
 def _fetch_tool_calls_for_transcripts(conn: sqlite3.Connection, transcript_ids: list[int]) -> list[dict[str, object]]:
@@ -71,26 +73,15 @@ def _fetch_attachments_for_transcripts(conn: sqlite3.Connection, transcript_ids:
     return by_id
 
 
-def get_recent_history(limit: int = 12, offset: int = 0) -> tuple[list[dict[str, object]], bool, int]:
+def _rows_to_messages(rows: list[dict[str, object]]) -> list[dict[str, object]]:
+    """Project raw transcript rows (oldest-first) into the conversation message
+    shape — attachments for user rows, tool-call chips + rich-media segments for
+    assistant rows. Shared by recent-history, thread-list and thread-expand."""
     from services.database_service import get_shared_db_service
-    from services.transcript_service import Transcript
-
-    # Paginate by TURN, not by row. Under the chain model a turn is many rows
-    # (input → step rows that emitted the tools → final synthesis row), so a
-    # row LIMIT would collapse the page onto the latest turn. recent_turns picks
-    # whole turns (NULL-safe for legacy rows) and returns their rows oldest-first.
-    rows, has_more, turns_returned = Transcript.recent_turns(
-        'user', exclude_roles=('subagent_return', 'compaction'),
-        limit=limit, offset=offset,
-    )
-    if not rows:
-        return [], has_more, turns_returned
 
     messages: list[dict[str, object]] = []
     db = get_shared_db_service()
     with db.connection() as conn:
-        # Re-render uploaded attachments on refresh: batch-fetch the doc links for
-        # every user row in this page (the live blob: preview is gone after reload).
         attachments_by_id = _fetch_attachments_for_transcripts(
             conn, [cast("int", r['id']) for r in rows if r['role'] == 'user']
         )
@@ -112,10 +103,6 @@ def get_recent_history(limit: int = 12, offset: int = 0) -> tuple[list[dict[str,
                 if attachments:
                     msg["attachments"] = attachments
             else:
-                # Per-row chips: the tools THIS row emitted (anchored to its own
-                # id), each with the ability's persisted act_summary — the blue
-                # box the frontend prints. The framework compaction marker never
-                # surfaces as a chip.
                 own_calls = _fetch_tool_calls_for_transcripts(conn, [transcript_id])
                 chips = [
                     {"tool_name": c["tool_name"], "summary": c["summary"]}
@@ -124,9 +111,6 @@ def get_recent_history(limit: int = 12, offset: int = 0) -> tuple[list[dict[str,
                 ]
                 if chips:
                     msg["tool_calls"] = chips
-                # Segments: rich-media spans live on the final row but the tool
-                # ran on a step row, so pair TURN-WIDE — gather every tool call
-                # across the turn's transcript rows, then parse THIS row's content.
                 turn_calls = _fetch_tool_calls_for_transcripts(conn, _resolve_ids(transcript_id, conn))
                 segments = _parse_rich_media(str(content), turn_calls)
                 if not segments and content:
@@ -134,7 +118,19 @@ def get_recent_history(limit: int = 12, offset: int = 0) -> tuple[list[dict[str,
                 msg["segments"] = segments
             messages.append(msg)
 
-    return messages, has_more, turns_returned
+    return messages
+
+
+def get_recent_history(limit: int = 12, offset: int = 0) -> tuple[list[dict[str, object]], bool, int]:
+    from services.transcript_service import Transcript
+
+    rows, has_more, turns_returned = Transcript.recent_turns(
+        'user', exclude_roles=_THREAD_EXCLUDE,
+        limit=limit, offset=offset,
+    )
+    if not rows:
+        return [], has_more, turns_returned
+    return _rows_to_messages(rows), has_more, turns_returned
 
 
 @conversation_bp.route('/conversation/recent', methods=['GET'])
@@ -151,3 +147,41 @@ def conversation_recent() -> ResponseReturnValue:
 
     messages, has_more, turns_returned = get_recent_history(limit, offset)
     return jsonify({"messages": messages, "has_more": has_more, "turns_returned": turns_returned})
+
+
+@conversation_bp.route('/conversation/threads', methods=['GET'])
+@require_session
+def conversation_threads() -> ResponseReturnValue:
+    """List threads (turns) with collapsed metadata — the thread feed.
+
+    Returns the ``limit`` most-recently-active threads, each with a preview
+    (first content), row count, last activity timestamp and turn_id. Scroll-up
+    pagination via ``offset``.
+    """
+    from services.transcript_service import Transcript
+
+    try:
+        limit = max(1, min(120, int(request.args.get("limit", 50))))
+    except (ValueError, TypeError):
+        limit = 50
+    try:
+        offset = max(0, int(request.args.get("offset", 0)))
+    except (ValueError, TypeError):
+        offset = 0
+
+    threads, has_more, threads_returned = Transcript.recent_threads(
+        'user', exclude_roles=_THREAD_EXCLUDE, limit=limit, offset=offset,
+    )
+    return jsonify({"threads": threads, "has_more": has_more, "threads_returned": threads_returned})
+
+
+@conversation_bp.route('/conversation/thread/<int:turn_id>', methods=['GET'])
+@require_session
+def conversation_thread(turn_id: int) -> ResponseReturnValue:
+    """Fetch the full row set of one thread (turn_id) — the expand-on-click
+    payload that hydrates the collapsed preview into the full conversation."""
+    from services.transcript_service import Transcript
+
+    rows = Transcript.thread_rows('user', turn_id, exclude_roles=_THREAD_EXCLUDE)
+    messages = _rows_to_messages(rows)
+    return jsonify({"messages": messages, "turn_id": turn_id})

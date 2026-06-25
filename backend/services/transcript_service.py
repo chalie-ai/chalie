@@ -321,6 +321,100 @@ class Transcript:
 
 
     @staticmethod
+    def recent_threads(
+        channel: str, *, exclude_roles: tuple[str, ...] = (),
+        limit: int = 50, offset: int = 0,
+    ) -> tuple[list[dict[str, object]], bool, int]:
+        """Thread-level metadata for the collapsed feed: one summary row per
+        thread (turn_id), ordered by last activity (MAX(created_at) / MAX(id)).
+
+        Returns ``(threads, has_more, threads_returned)`` where each thread dict
+        carries ``turn_id``, ``last_activity_at`` (MAX(created_at)), ``last_row_id``
+        (MAX(id) — the recency key), ``row_count`` and ``first_content`` (the
+        earliest non-compaction row's content, truncated — the collapsed preview).
+        Legacy NULL-turn_id rows each form their own singleton thread via
+        ``_TURN_KEY``.
+        """
+        from services.database_service import get_shared_db_service
+
+        role_filter = "".join(" AND role != ?" for _ in exclude_roles)
+        db = get_shared_db_service()
+        with db.connection() as conn:
+            page_keys = [
+                r[0] for r in conn.execute(
+                    f"SELECT {_TURN_KEY} AS k FROM transcript "
+                    f"WHERE channel = ?{role_filter} "
+                    f"GROUP BY k ORDER BY MAX(id) DESC LIMIT ? OFFSET ?",
+                    (channel, *exclude_roles, limit, offset),
+                ).fetchall()
+            ]
+        if not page_keys:
+            return [], False, 0
+
+        placeholders = ",".join("?" * len(page_keys))
+        with db.connection() as conn:
+            meta_rows = conn.execute(
+                f"SELECT {_TURN_KEY} AS k, MAX(id) AS last_id, MAX(created_at) AS last_ts, "
+                f"COUNT(*) AS cnt FROM transcript "
+                f"WHERE channel = ?{role_filter} AND {_TURN_KEY} IN ({placeholders}) "
+                f"GROUP BY k",
+                (channel, *exclude_roles, *page_keys),
+            ).fetchall()
+            first_rows = conn.execute(
+                f"SELECT {_TURN_KEY} AS k, content FROM transcript "
+                f"WHERE channel = ?{role_filter} AND {_TURN_KEY} IN ({placeholders}) "
+                f"AND role != 'compaction' "
+                f"GROUP BY k ORDER BY MIN(id) ASC",
+                (channel, *exclude_roles, *page_keys),
+            ).fetchall()
+
+        meta: dict[int, dict[str, object]] = {}
+        for r in meta_rows:
+            key = int(r[0])
+            meta[key] = {
+                "turn_id": key if key > 0 else None,
+                "last_activity_at": r[2],
+                "last_row_id": int(r[1]),
+                "row_count": int(r[3]),
+            }
+        first_content: dict[int, str] = {}
+        for r in first_rows:
+            key = int(r[0])
+            first_content[key] = cast("str", r[1] or "")[:200]
+
+        threads = []
+        for k in page_keys:
+            key = int(k)
+            m = meta.get(key, {})
+            threads.append({
+                "turn_id": key if key > 0 else None,
+                "last_activity_at": m.get("last_activity_at"),
+                "last_row_id": m.get("last_row_id", 0),
+                "row_count": m.get("row_count", 0),
+                "preview": first_content.get(key, ""),
+            })
+
+        threads.sort(key=lambda t: cast("int", t.get("last_row_id") or 0), reverse=True)
+        threads_returned = len(threads)
+        has_more = Transcript.count_turns(channel, exclude_roles=exclude_roles) > offset + threads_returned
+        return threads, has_more, threads_returned
+
+
+    @staticmethod
+    def thread_rows(
+        channel: str, turn_id: int, *, exclude_roles: tuple[str, ...] = (),
+    ) -> list[dict[str, object]]:
+        """Every row of one ``(channel, turn_id)`` thread — the expand-on-click
+        fetch. Excludes compaction/subagent_return by default so the feed view is
+        clean; callers that need the full row set use ``by_turn`` directly."""
+        role_filter = "".join(" AND role != ?" for _ in exclude_roles)
+        return Transcript._select(
+            f"channel = ?{role_filter} AND turn_id = ?",
+            (channel, *exclude_roles, turn_id),
+        )
+
+
+    @staticmethod
     def distinct_channels() -> list[str]:
         """Every channel present in the transcript (migration discovery). Empty on error."""
         try:
@@ -882,16 +976,21 @@ class Transcript:
 
 
     @staticmethod
-    def write_input_row(channel: str, role: str, content: str) -> int:
-        """Write a turn's anchoring input row, opening the next turn.
+    def write_input_row(
+        channel: str, role: str, content: str, *, turn_id: "int | None" = None,
+    ) -> int:
+        """Write a turn's anchoring input row, opening the next turn (or appending
+        to an existing thread).
 
-        turn_id is the per-channel monotonic turn boundary. Every input row opens a
-        fresh turn — there is no caller-supplied turn_id: fresh user / external
-        input, an async re-entry and a compaction checkpoint each open their OWN
-        turn. The next value, ``MAX(turn_id)+1`` for the channel, is computed inside
-        the INSERT so the allocation is atomic with the write — no read-then-insert
-        race when two same-channel turns open concurrently. Read it back with
-        :func:`turn_id_of_row`.
+        turn_id is the per-channel monotonic turn boundary — redefined as the
+        *thread* id: a thread-starter allocates a new turn_id; a reply appends rows
+        carrying the **existing** turn_id. When ``turn_id`` is None (thread-starter),
+        the next value, ``MAX(turn_id)+1`` for the channel, is computed inside the
+        INSERT so the allocation is atomic with the write — no read-then-insert
+        race when two same-channel turns open concurrently. When ``turn_id`` is
+        supplied (reply), that value is written verbatim — no allocation. Read the
+        allocated value back with :func:`turn_id_of_row` (only needed on the
+        thread-starter path; the reply path already knows its turn_id).
         """
         from services.database_service import get_shared_db_service
 
@@ -904,10 +1003,10 @@ class Transcript:
                 INSERT INTO transcript (channel, role, content, xml_migrated,
                                         location_lat, location_lon, location_name, turn_id)
                 VALUES (?, ?, ?, 1, ?, ?, ?,
-                        (SELECT COALESCE(MAX(turn_id), 0) + 1
-                         FROM transcript WHERE channel = ?))
+                        COALESCE(?, (SELECT COALESCE(MAX(turn_id), 0) + 1
+                                     FROM transcript WHERE channel = ?)))
                 """,
-                (channel, role, content, lat, lon, loc_name, channel),
+                (channel, role, content, lat, lon, loc_name, turn_id, channel),
             )
             row_id = cursor.lastrowid
             cursor.close()

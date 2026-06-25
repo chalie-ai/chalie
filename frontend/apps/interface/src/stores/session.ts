@@ -144,6 +144,7 @@ export const useSessionStore = defineStore('session', {
       source: 'text' | 'voice' = 'text',
       files: File[] = [],
       previews: AttachmentPreview[] = [],
+      threadId: number | null = null,
     ): Promise<void> {
       if (!text && !files.length) return;
 
@@ -160,7 +161,7 @@ export const useSessionStore = defineStore('session', {
           }
         }
         this._activeActId = null;
-        this._startTurn(text, source, false);
+        this._startTurn(text, source, false, [], [], threadId);
         return;
       }
 
@@ -168,11 +169,12 @@ export const useSessionStore = defineStore('session', {
 
       const userFormId = convo.appendUser(text || '[File attached]', previews, {
         inWorkingMemory: true,
+        turnId: threadId,
       });
       this._lastUserFormId = userFormId;
       this._lastUserText = text;
 
-      this._startTurn(text || '[File attached]', source, false, files, previews);
+      this._startTurn(text || '[File attached]', source, false, files, previews, threadId);
     },
 
     /**
@@ -185,6 +187,7 @@ export const useSessionStore = defineStore('session', {
       showUserBubble: boolean,
       files: File[] = [],
       previews: AttachmentPreview[] = [],
+      threadId: number | null = null,
     ): void {
       const convo = useConversationStore();
       const ws = getWebSocket();
@@ -192,6 +195,7 @@ export const useSessionStore = defineStore('session', {
       if (showUserBubble) {
         const uid = convo.appendUser(text || '[File attached]', previews, {
           inWorkingMemory: true,
+          turnId: threadId,
         });
         this._lastUserFormId = uid;
         this._lastUserText = text;
@@ -313,6 +317,7 @@ export const useSessionStore = defineStore('session', {
           },
         },
         files,
+        threadId,
       );
     },
 

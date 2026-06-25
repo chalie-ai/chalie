@@ -43,6 +43,15 @@ export interface ConversationMessage {
   tool_calls?: { tool_name: string; summary: string }[];
 }
 
+/** Collapsed thread metadata returned by /conversation/threads. */
+export interface ConversationThread {
+  turn_id: number | null;
+  last_activity_at: string | null;
+  last_row_id: number;
+  row_count: number;
+  preview: string;
+}
+
 export const conversation = {
   /**
    * GET /conversation/recent — `offset` counts back whole TURNS (not rows) from
@@ -56,5 +65,26 @@ export const conversation = {
     const q = new URLSearchParams({ limit: String(limit) });
     if (offset != null) q.set('offset', String(offset));
     return api.get(`/conversation/recent?${q.toString()}`);
+  },
+
+  /**
+   * GET /conversation/threads — collapsed thread metadata for the thread feed.
+   * Returns the `limit` most-recently-active threads; `threads_returned` advances
+   * pagination.
+   */
+  threads(
+    limit = 50,
+    offset?: number,
+  ): Promise<{ threads: ConversationThread[]; has_more: boolean; threads_returned: number }> {
+    const q = new URLSearchParams({ limit: String(limit) });
+    if (offset != null) q.set('offset', String(offset));
+    return api.get(`/conversation/threads?${q.toString()}`);
+  },
+
+  /**
+   * GET /conversation/thread/<turn_id> — full row set of one thread (expand).
+   */
+  thread(turnId: number): Promise<{ messages: ConversationMessage[]; turn_id: number }> {
+    return api.get(`/conversation/thread/${turnId}`);
   },
 };

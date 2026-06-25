@@ -307,7 +307,13 @@ export class WebSocketService {
     this.chatCallbacks = null;
   }
 
-  send(text: string, source: 'text' | 'voice', callbacks: ChatCallbacks = {}, files: File[] = []): void {
+  send(
+    text: string,
+    source: 'text' | 'voice',
+    callbacks: ChatCallbacks = {},
+    files: File[] = [],
+    threadId: number | null = null,
+  ): void {
     this.chatCallbacks = callbacks;
     if (!this.isConnected) {
       callbacks.onError?.({ message: 'Not connected. Please wait...', recoverable: true });
@@ -315,7 +321,7 @@ export class WebSocketService {
       this.chatCallbacks = null;
       return;
     }
-    this.postChat(text, source, files, this.mintEchoId());
+    this.postChat(text, source, files, this.mintEchoId(), threadId);
   }
 
   /**
@@ -357,11 +363,12 @@ export class WebSocketService {
     });
   }
 
-  private postChat(text: string, source: string, files: File[], echoId: string): void {
+  private postChat(text: string, source: string, files: File[], echoId: string, threadId: number | null): void {
     const form = new FormData();
     form.append('text', text);
     form.append('source', source);
     form.append('echo_id', echoId);
+    if (threadId != null) form.append('thread_id', String(threadId));
     for (const file of files) form.append('files', file, file.name);
     fetch(this.buildHttpUrl('/chat'), {
       method: 'POST',

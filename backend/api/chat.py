@@ -237,6 +237,9 @@ def deliver_async_result(mp: object, result_text: str, cancel_event: threading.E
     The delegate's ``cancel_event`` is threaded into the synthesis turn so the
     Processes-panel stop control aborts a spiralling delegate at the next chain
     boundary (the processor returns "" and self-cleans when it is set).
+
+    Inherits the originating turn's ``thread_id`` so the synthesised reply lands
+    in the same thread the delegate was spawned from.
     """
     from services.message_processor import MessageProcessor  # noqa: PLC0415
 
@@ -248,18 +251,17 @@ def deliver_async_result(mp: object, result_text: str, cancel_event: threading.E
     synth_config = config.with_hidden_input()
     # Clone the originating metadata but suppress the input row and drop
     # attachments — they were already ingested on the originating turn and must
-    # not re-upload on the synthesis turn.
+    # not re-upload on the synthesis turn. Inherit the originating thread id so
+    # the synthesised reply lands in the same thread.
     metadata = dict(getattr(mp, "_metadata", None) or {})
     metadata["hidden_input"] = True
     metadata["attachments"] = []
+    thread_id = getattr(mp, "turn_id", None)
+    if thread_id is not None:
+        metadata["thread_id"] = thread_id
     request_id = str(uuid.uuid4())
     turn_start = time.time()
 
-    # The backgrounded result lands as a NEW turn on the channel: the
-    # MessageProcessor advances the turn cursor itself. With skip_input_row set
-    # (hidden_input), _setup writes no input row and the synthesised reply is the
-    # turn's end message — write_assistant_row allocates its own turn_id at write
-    # time. Broadcast through the same pipeline as a foreground reply.
     response = MessageProcessor.process(result_text, synth_config, metadata, cancel_event=cancel_event)
     if cancel_event.is_set():
         return
@@ -271,11 +273,17 @@ def dispatch_message(
     source: str = "text",
     attachments: list[object] | None = None,
     hidden_input: bool = False,
+    thread_id: "int | None" = None,
 ) -> None:
     """If an ACT loop is already in-flight, cancels it, concatenates the original
     message with the new one (separated by two newlines), and starts a fresh turn
     with the combined text. The cancelled turn's DB rows are cleaned up by
     _cleanup_cancelled() in the processor.
+
+    ``thread_id`` appends to an existing thread instead of opening a new one; the
+    reply's input row carries the supplied thread_id so all its rows share it.
+    A mid-turn interrupt with ``thread_id`` set cancels the active turn and starts
+    a new reply to the SAME thread (the thread boundary is preserved).
     """
     attachments = attachments or []
 
@@ -286,10 +294,13 @@ def dispatch_message(
         text = original + "\n\n" + text
         logger.info("[Chat API] Mid-turn message — cancelled active UMP, combined text")
 
-    _start_turn(text, source, attachments, hidden_input)
+    _start_turn(text, source, attachments, hidden_input, thread_id=thread_id)
 
 
-def _start_turn(text: str, source: str, attachments: list[object], hidden_input: bool = False) -> str:
+def _start_turn(
+    text: str, source: str, attachments: list[object], hidden_input: bool = False,
+    *, thread_id: "int | None" = None,
+) -> str:
     from configs.channels import UserConfig  # noqa: PLC0415
 
     request_id = str(uuid.uuid4())
@@ -312,6 +323,8 @@ def _start_turn(text: str, source: str, attachments: list[object], hidden_input:
         "channel": "user",
         "hidden_input": hidden_input,
     }
+    if thread_id is not None:
+        metadata["thread_id"] = thread_id
 
     config = UserConfig(metadata)
     cancel_event = threading.Event()
@@ -385,6 +398,14 @@ def post_chat() -> ResponseReturnValue:
     echo_id = request.form.get("echo_id") or ""
     attachments = _stage_chat_uploads(cast(Sequence[object], request.files.getlist("files")[:10]))
 
+    raw_thread_id = request.form.get("thread_id") or ""
+    thread_id: "int | None" = None
+    if raw_thread_id:
+        try:
+            thread_id = int(raw_thread_id)
+        except (ValueError, TypeError):
+            thread_id = None
+
     if not text and not attachments:
         return jsonify({"status": "error", "reason": "message required"}), 400
 
@@ -395,7 +416,7 @@ def post_chat() -> ResponseReturnValue:
     # sender ignores its own echo via echo_id; peers render the bubble).
     _broadcast_user_echo(text, echo_id)
 
-    dispatch_message(text, source=source, attachments=attachments)
+    dispatch_message(text, source=source, attachments=attachments, thread_id=thread_id)
     return jsonify({"status": "accepted"}), 202
 
 
