@@ -77,9 +77,9 @@ def untrusted_https_server() -> object:
             return
 
     server = http.server.HTTPServer(("127.0.0.1", 0), _Handler)
-    server.socket = ssl.wrap_socket(  # noqa: S502 — self-signed by design
-        server.socket, certfile=str(cert), keyfile=str(key), server_side=True,
-    )
+    ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)  # ssl.wrap_socket removed in 3.12; SSLContext works 3.11+
+    ctx.load_cert_chain(certfile=str(cert), keyfile=str(key))
+    server.socket = ctx.wrap_socket(server.socket, server_side=True)
     port = server.server_address[1]
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
