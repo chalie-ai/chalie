@@ -215,7 +215,7 @@ def register() -> "ResponseReturnValue":
 
         # Create session and set cookie
         resp = make_response(jsonify({"ok": True, "vault_state": "unlocked"}), 201)
-        create_session(resp)
+        create_session(resp, username)
         return resp
     except Exception as e:
         logger.error(f"[REST API] Register error: {e}")
@@ -248,7 +248,7 @@ def login() -> "ResponseReturnValue":
     """
     try:
         from services.database_service import get_shared_db_service
-        from services.auth_session_service import create_session
+        from services.auth_session_service import create_session, purge_user_sessions
         from services.vault_service import (
             get_vault_service, OUTCOME_UNRECOVERABLE,
         )
@@ -277,6 +277,10 @@ def login() -> "ResponseReturnValue":
             if not row or not check_password_hash(row[0], password):
                 return jsonify({"error": "Invalid credentials"}), 401
 
+        # Invalidate every prior session for this user before minting a new one,
+        # so a stolen/old token cannot outlive the re-authentication.
+        purge_user_sessions(username)
+
         # The password is now verified against the account hash. Open the vault
         # with it, recovering from a filesystem backup if the live vault_config
         # row is missing or corrupt. If neither the row nor any backup
@@ -293,7 +297,7 @@ def login() -> "ResponseReturnValue":
                 jsonify({"ok": True, "vault_state": "locked"}),
                 200,
             )
-            create_session(resp)
+            create_session(resp, username)
             return resp
 
         if outcome == OUTCOME_UNRECOVERABLE:
@@ -319,7 +323,7 @@ def login() -> "ResponseReturnValue":
             jsonify({"ok": True, "vault_state": vault_state}),
             200,
         )
-        create_session(resp)
+        create_session(resp, username)
         return resp
     except Exception as e:
         logger.error(f"[REST API] Login error: {e}")
