@@ -31,34 +31,26 @@ def _drain_capability_alerts(store: MemoryStore) -> None:
         logger.debug("[WS] Failed to scan capability alerts: %s", exc)
 
 
-def _authenticate_ws(flask_request: object) -> bool:
-    """Authenticate a ``/ws`` handshake.
-
-    Cookie session first (the browser path, unchanged). If that fails, fall back
-    to the bearer token supplied as the ``?token=`` query arg — the mobile app
-    cannot send a cookie over a WebSocket, so it passes the raw wrapper token in
-    the URL. ``validate_bearer`` expects an ``Authorization: Bearer`` header, so
-    the query token is wrapped into that header form before reuse. A missing or
-    invalid token yields no wrapper id => caller closes the handshake unchanged.
-    """
+def _validate_cookie_session(flask_request: object) -> bool:
+    """The browser path: a signed session cookie rides the HTTP upgrade."""
     from flask import Request
     from services.auth_session_service import validate_session
-    from services.feature_flags import internal_dev_enabled
 
-    if validate_session(cast("Request", flask_request)):
-        return True
+    return validate_session(cast(Request, flask_request))
 
-    # Bearer-over-WS (the ``?token=`` arg) is a native-client-only path; with
-    # in-development features disabled the handshake stays cookie-only.
-    if not internal_dev_enabled():
-        return False
 
-    token = cast("Request", flask_request).args.get("token", "")
-    if not token:
-        return False
-
+def _validate_bearer_frame(token: str) -> bool:
+    """The native-client path: a raw wrapper token arrives as the first WS
+    frame (``{"type":"auth","token":...}``) instead of in the URL, so it never
+    leaks into reverse-proxy/access logs or ``Referer``. ``validate_bearer``
+    expects an ``Authorization: Bearer`` header, so the frame token is wrapped
+    into that header form before reuse."""
+    from flask import Request
     from services.wrapper_auth_service import WrapperAuthService
     from services.database_service import get_shared_db_service
+
+    if not token:
+        return False
 
     bearer_request = cast(Request, Request.from_values(
         headers={"Authorization": "Bearer " + token}
@@ -72,19 +64,25 @@ def _authenticate_ws(flask_request: object) -> bool:
 
 def _ws_handler(ws: object) -> None:
     from flask import request as flask_request
+    from services.feature_flags import internal_dev_enabled
 
     broker = WebSocketBroker()
+    ws_typed = cast(_WS, ws)
 
-    if not _authenticate_ws(flask_request):
-        try:
-            cast(_WS, ws).send(json.dumps({"type": "error", "message": "Unauthorized"}))
-        except Exception:
-            pass
-        try:
-            cast(_WS, ws).close()
-        except Exception as exc:
-            logger.debug("[WS] Close after auth failure failed: %s", exc)
-        return
+    # Cookie session first (the browser path) — checked at handshake time, as
+    # before. A native client has no cookie, so it authenticates with the first
+    # WS frame instead of a query-string token (see ``_handshake_bearer``).
+    if not _validate_cookie_session(flask_request):
+        if not internal_dev_enabled() or not _handshake_bearer(ws_typed):
+            try:
+                ws_typed.send(json.dumps({"type": "error", "message": "Unauthorized"}))
+            except Exception:
+                pass
+            try:
+                ws_typed.close()
+            except Exception as exc:
+                logger.debug("[WS] Close after auth failure failed: %s", exc)
+            return
 
     connection_id = str(uuid.uuid4())
     set_correlation_id(connection_id)
@@ -96,7 +94,6 @@ def _ws_handler(ws: object) -> None:
     store = MemoryClientService.create_connection()
     _drain_capability_alerts(store)
 
-    ws_typed = cast(_WS, ws)
     try:
         while True:
             raw = ws_typed.receive(timeout=60)
@@ -108,6 +105,30 @@ def _ws_handler(ws: object) -> None:
         logger.debug("[WS] Connection closed: %s", exc)
     finally:
         broker.disconnect(cast(_WebSocket, ws))
+
+
+def _handshake_bearer(ws: _WS) -> bool:
+    """Native-client auth: wait for the first WS frame, expect
+    ``{"type":"auth","token":"<raw>"}``, validate the bearer, and close the
+    handshake on any other outcome. The token travels in a frame, never in the
+    URL, so it cannot leak into reverse-proxy/access logs or ``Referer``."""
+    try:
+        raw = ws.receive(timeout=10)
+    except Exception as exc:
+        logger.debug("[WS] Auth frame receive failed: %s", exc)
+        return False
+    if raw is None:
+        return False
+    try:
+        payload = json.loads(raw)
+    except (ValueError, TypeError):
+        return False
+    if not isinstance(payload, dict) or payload.get("type") != "auth":
+        return False
+    token = payload.get("token")
+    if not isinstance(token, str):
+        return False
+    return _validate_bearer_frame(token)
 
 
 def register_websocket(sock: "Sock") -> None:
