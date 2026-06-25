@@ -253,7 +253,7 @@ class ToolDispatcher:
         # the real work ran; the delivered async result is produced by
         # AsyncDelegateRunner, outside this seam). Empty default => nothing
         # appended, so the 24 non-overriding abilities are byte-identical to today.
-        follow_up = ability.get_follow_up() if (not run_async and tr.status == "success") else ""
+        follow_up = ability.get_follow_up(tr) if (not run_async and tr.status == "success") else ""
         rendered = self._render(tool_name, tr, ordinal, follow_up=follow_up)
         emitter.emit({"type": "act_tool_end", "name": tool_name, "id": call_id, "ok": tr.status == "success"})
         return rendered

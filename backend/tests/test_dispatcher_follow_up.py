@@ -198,7 +198,7 @@ def _overriding_ability() -> Ability:
         def run(self, params: dict[str, object]) -> ToolResult:
             return ToolResult.ok("ok")
 
-        def get_follow_up(self) -> str:
+        def get_follow_up(self, tr: ToolResult) -> str:
             return _FOLLOW_UP_TEXT
 
     return _FollowUpAbility()
@@ -244,7 +244,7 @@ def test_execute_omits_follow_up_on_sync_error(db: sqlite3.Connection) -> None:
         def run(self, params: dict[str, object]) -> ToolResult:
             raise ToolParamError("bad", code="invalid-param", hint="fix it")
 
-        def get_follow_up(self) -> str:
+        def get_follow_up(self, tr: ToolResult) -> str:
             return _FOLLOW_UP_TEXT
 
     allow_policy(db, "follow_up_error_probe", "chat")

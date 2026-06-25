@@ -69,9 +69,12 @@ class WebBrowseAbility(Ability):
     def get_search_tooltip(self) -> str:
         return "delegate an interactive web-browsing task"
 
-    def get_follow_up(self) -> str:
-        """View a saved screenshot or read the browsed page's full text."""
-        return "If a screenshot was saved and you need to answer something about what's on the page, view it with vision(image=<doc_id>) instead of re-browsing. To pull the full text of a page the agent reached, use read on its URL."
+    def get_follow_up(self, tr: ToolResult) -> str:
+        """Pull the full text of a page the agent reached.
+
+        Screenshots already ride back described (see :meth:`_with_screenshots`),
+        so the only standing next step is reading a page's full text."""
+        return "To get a full textual version of this page call the `read` tool."
 
     _PARAMETERS: ClassVar[dict[str, object]] = {
         "type": "object",
@@ -109,13 +112,25 @@ class WebBrowseAbility(Ability):
 
     @staticmethod
     def _with_screenshots(tr: ToolResult, shots: list[tuple[str, str]]) -> ToolResult:
-        """Mechanical, not prompt-dependent: the caller receives every doc_id
-        even when the delegate forgets to mention its screenshots."""
+        """Mechanical, not prompt-dependent: each screenshot rides back already
+        DESCRIBED. Ingest ran every capture through vision (browser._screenshot →
+        document pipeline), storing the description as the document's clean_text;
+        we surface it inline here — exactly as the raw browser tool hands its own
+        caller a described page — so the model sees what each page shows without a
+        separate vision call, even when the delegate forgot to mention a shot."""
         if tr.status != "success" or not shots:
             return tr
-        lines = "\n".join(f"- doc_id={doc_id} ({url})" for doc_id, url in shots)
+        from services.database_service import get_shared_db_service  # noqa: PLC0415
+        from services.document_service import DocumentService  # noqa: PLC0415
+
+        doc_svc = DocumentService(get_shared_db_service())
+        blocks = []
+        for doc_id, url in shots:
+            doc = doc_svc.get_document(doc_id)
+            vision = (doc.get("clean_text") if doc else "") or "(description unavailable)"
+            blocks.append(f"- {url} (doc_id={doc_id}):\n{vision}")
+        joined = "\n\n".join(blocks)
         return ToolResult.ok(
-            f"{tr.body}\n\nScreenshots saved as documents "
-            f"(view one with vision(image=<doc_id>)):\n{lines}",
+            f"{tr.body}\n\nScreenshots captured this run (each already described):\n{joined}",
             screenshots=len(shots),
         )

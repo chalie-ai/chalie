@@ -58,7 +58,11 @@ class WebDownloadAbility(Ability):
         return "web_download"
 
     def get_summary(self) -> str:
-        return "Download a file from the internet to a temporary location for later reading or processing."
+        return (
+            "Download a file from the internet to a temporary location for later "
+            "reading or processing. Use in conjunction with the `read` tool to then "
+            "get the file's contents into context."
+        )
 
     def get_examples(self) -> list[str]:
         return [
@@ -73,9 +77,12 @@ class WebDownloadAbility(Ability):
     def get_search_tooltip(self) -> str:
         return "File download from URL"
 
-    def get_follow_up(self) -> str:
-        """Read or attach the downloaded file's contents before acting."""
-        return "The file is now at the returned path but its contents are not yet in context. If you need what's inside, use read on that path to extract the text, or attach it with document for the user."
+    def get_follow_up(self, tr: ToolResult) -> str:
+        """Read the downloaded file's content straight from its path."""
+        path = tr.body.get("path") if isinstance(tr.body, dict) else None
+        if not path:
+            return ""
+        return f"File downloaded. Use the `read({path})` tool to fetch its content."
 
     _PARAMETERS: ClassVar[dict[str, object]] = {
         "type": "object",

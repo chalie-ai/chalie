@@ -142,7 +142,7 @@ class Ability(ABC):
             )
         if cls.__module__.startswith("abilities.") and not probe.get_search_tooltip():
             raise TypeError(f"{cls.__name__}.get_search_tooltip() must be non-empty")
-        follow_up = probe.get_follow_up()
+        follow_up = probe.get_follow_up(ToolResult.ok(""))
         if not isinstance(follow_up, str):
             raise TypeError(f"{cls.__name__}.get_follow_up() must return str")
 
@@ -168,17 +168,24 @@ class Ability(ABC):
     def get_search_tooltip(self) -> str:
         ...
 
-    def get_follow_up(self) -> str:
+    def get_follow_up(self, tr: "ToolResult") -> str:
         """A standing next-step nudge appended to this tool's SUCCESSFUL result.
 
         Default ``""`` — no nudge. Override on a tool whose success routinely leaves
         the model one obvious, loop-safe step short of a complete answer
-        (search→read, news→cross-reference): return a short instruction and the
-        dispatcher wraps it in a ``[follow_up_instruction]…[end:follow_up_instruction]``
-        block placed INSIDE the envelope (after any rich-media block, before the
-        closing ``[end:tool]``), on success only. Static text (no ``self.mp`` /
-        params), so it is identical for every successful call and validated at
-        import like the other metadata getters.
+        (search→read, find_tools→call the activated tool): return a short
+        instruction and the dispatcher wraps it in a
+        ``[follow_up_instruction]…[end:follow_up_instruction]`` block placed INSIDE
+        the envelope (after any rich-media block, before the closing
+        ``[end:tool]``), on success only.
+
+        ``tr`` is the SUCCESS :class:`ToolResult` being rendered, so an override can
+        interpolate live values straight from the result the model already sees
+        (the downloaded ``path``, the activated tool ``name``, the anchor
+        ``date_time``) — present-in-context data lifts compliance over a generic
+        nudge. An override that needs data the result lacks MUST degrade to ``""``;
+        it is probed at import on an empty ``ToolResult`` and so must never assume a
+        shape. No ``self.mp`` — the nudge is request-agnostic.
         """
         return ""
 

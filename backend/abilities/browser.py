@@ -63,10 +63,6 @@ class BrowserAbility(Ability):
     def get_search_tooltip(self) -> str:
         return "interactive web browser"
 
-    def get_follow_up(self) -> str:
-        """Have vision read a captured screenshot doc_id."""
-        return "If you just captured a screenshot, it is stored as a doc_id you cannot see directly — call vision with that image id to read what it shows. Otherwise the returned page text/changed diff is your result; act on it."
-
     _PARAMETERS: ClassVar[dict[str, object]] = {
         "type": "object",
         "properties": {

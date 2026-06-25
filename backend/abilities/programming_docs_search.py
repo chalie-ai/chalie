@@ -519,9 +519,14 @@ class ProgrammingDocsSearchAbility(Ability):
     def get_search_tooltip(self) -> str:
         return "programming docs search"
 
-    def get_follow_up(self) -> str:
-        """Pull full page text from a sibling candidate URL if needed."""
-        return "This returns one fetched excerpt plus sibling candidate URLs (empty excerpt). If the top excerpt does not fully answer the question, use `read` on one of the other candidate URLs to pull its full page text before answering."
+    def get_follow_up(self, tr: ToolResult) -> str:
+        """Read the full document behind the capped excerpt."""
+        rows = tr.body if isinstance(tr.body, list) else []
+        first = rows[0] if rows and isinstance(rows[0], dict) else None
+        url = first.get("url") if first else None
+        if not url:
+            return ""
+        return f"The excerpt is capped. Use the `read({url})` tool to fetch the full document contents."
 
     # The enum is DERIVED from the source table, so a schema-obedient model can
     # never name a language the ability then rejects as unknown — the schema and
