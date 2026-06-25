@@ -48,11 +48,12 @@
   align-self: stretch;
   width: 100%;
   max-width: 100%;
-}
-
-.speech-form--user .speech-form__text {
+  // Text renders directly in this bubble (no .speech-form__text wrapper), so the
+  // whitespace/weight/break rules live here — pre-wrap preserves the newlines the
+  // composer inserts (Enter adds a newline; only the send button submits).
   white-space: pre-wrap;
   font-weight: 600;
+  word-break: break-word;
 }
 
 // Hover lift (pointer devices only)
