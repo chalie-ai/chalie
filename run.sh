@@ -64,11 +64,33 @@ _install -e "$SCRIPT_DIR/backend"
 # ─── Launch ──────────────────────────────────────────────────────────────────
 # Loop: Python exits with code 42 to request a restart (e.g. after in-place update).
 # Any other exit code passes through normally.
+#
+# Signal forwarding: when run as PID 1 (e.g. under Docker), bash does not forward
+# SIGTERM to its children, so the graceful-shutdown handlers installed in
+# consumer.py would never fire and `docker stop` would SIGKILL after the grace
+# period. The trap below propagates SIGTERM to the active Python child so its
+# own handler can drain the WAL write-queue and stop workers cleanly.
+_CHILD_PID=""
+_forward_term() {
+  [[ -n "$_CHILD_PID" ]] && kill -TERM "$_CHILD_PID" 2>/dev/null || true
+}
+trap _forward_term TERM INT
+
 while true; do
   # set -e would kill the script on run.py's non-zero exit before we could
   # read it, defeating the restart loop. Capture via `||` (exempt from errexit).
   _EXIT=0
-  "$PYTHON" "$SCRIPT_DIR/backend/run.py" --port="$_PORT" --host="$_HOST" || _EXIT=$?
+  "$PYTHON" "$SCRIPT_DIR/backend/run.py" --port="$_PORT" --host="$_HOST" &
+  _CHILD_PID=$!
+  # `wait` returns >128 immediately when interrupted by a trapped signal (bash
+  # SIGNALS) — the trap forwards SIGTERM but control would otherwise fall through
+  # and exit while the child is still draining. Re-wait until the child is truly
+  # reaped so its graceful-shutdown handler completes before we exit (and tini
+  # tears the container down). The final `wait` yields the child's real exit code.
+  while kill -0 "$_CHILD_PID" 2>/dev/null; do
+    wait "$_CHILD_PID" && _EXIT=0 || _EXIT=$?
+  done
+  _CHILD_PID=""
   if [[ "$_EXIT" -ne 42 ]]; then
     exit $_EXIT
   fi
