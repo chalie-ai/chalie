@@ -46,10 +46,18 @@ threading.excepthook = _thread_excepthook
 class WorkerManager:
     """Master supervisor for managing worker threads."""
 
+    # Per-worker respawn backoff + circuit-breaker (see check_health).
+    _RETRY_BASE_DELAY_S = 5.0     # first backoff delay; doubles each consecutive death
+    _RETRY_MAX_DELAY_S = 300.0    # cap backoff at 5 minutes
+    _MAX_FAILURES = 6             # consecutive deaths before the circuit-breaker trips
+
     def __init__(self) -> None:
         self.threads: Dict[str, threading.Thread] = {}
         self.service_definitions: List[Tuple[str, Callable[[], None]]] = []
         self.running = True
+        self._failure_counts: Dict[str, int] = {}
+        self._next_retry_at: Dict[str, float] = {}
+        self._tripped: set[str] = set()
 
     def register_service(self, worker_id: str, worker_func: Callable[[], None]) -> None:
         self.service_definitions.append((worker_id, worker_func))
@@ -82,13 +90,50 @@ class WorkerManager:
                 logging.error(f"[Manager] Failed to spawn service '{worker_id}': {e}")
 
     def check_health(self) -> None:
-        """Check service thread health and restart dead threads."""
+        """Check service thread health and restart dead threads.
+
+        A dead worker is only respawned once its per-worker backoff window has
+        elapsed; each consecutive death doubles the delay (capped) and, after
+        ``_MAX_FAILURES`` consecutive deaths, the circuit-breaker trips and the
+        worker is abandoned for the lifetime of the process — preventing a
+        deterministically-fatal worker from looping forever (log flooding, CPU
+        churn, repeated import side effects). Failure counters reset the moment
+        a respawned worker stays alive past one health-check tick.
+        """
+        now = time.monotonic()
         for worker_id, worker_func in self.service_definitions:
             try:
                 t = self.threads.get(worker_id)
-                if not t or not t.is_alive():
-                    logging.warning(f"[Manager] Service {worker_id} is dead. Restarting...")
-                    self.spawn_service(worker_id, worker_func)
+                if t and t.is_alive():
+                    # A worker that survived since its last respawn clears its failures.
+                    self._failure_counts.pop(worker_id, None)
+                    self._next_retry_at.pop(worker_id, None)
+                    continue
+
+                if worker_id in self._tripped:
+                    continue
+
+                due = self._next_retry_at.get(worker_id)
+                if due is not None and now < due:
+                    continue
+
+                failures = self._failure_counts.get(worker_id, 0)
+                if failures >= self._MAX_FAILURES:
+                    logging.error(
+                        f"[Manager] Circuit-breaker tripped for {worker_id} after "
+                        f"{failures} consecutive deaths; abandoning respawns"
+                    )
+                    self._tripped.add(worker_id)
+                    continue
+
+                delay = min(self._RETRY_BASE_DELAY_S * (2 ** failures), self._RETRY_MAX_DELAY_S)
+                logging.warning(
+                    f"[Manager] Service {worker_id} is dead. Restarting "
+                    f"(attempt {failures + 1}/{self._MAX_FAILURES}, next backoff {delay:.0f}s)..."
+                )
+                self.spawn_service(worker_id, worker_func)
+                self._failure_counts[worker_id] = failures + 1
+                self._next_retry_at[worker_id] = now + delay
             except Exception as e:
                 logging.error(f"[Manager] Health check failed for service {worker_id}: {e}")
 
