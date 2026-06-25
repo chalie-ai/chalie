@@ -16,7 +16,7 @@ ARG BRANCH=
 ARG TAG=
 
 RUN apt-get update \
- && apt-get install -y --no-install-recommends curl ca-certificates bash tar \
+ && apt-get install -y --no-install-recommends curl ca-certificates bash tar tini \
  && rm -rf /var/lib/apt/lists/* \
  && curl -fsSL https://raw.githubusercontent.com/chalie-ai/chalie/main/installer/install.sh -o /tmp/install.sh \
  && bash /tmp/install.sh ${BRANCH:+--branch="$BRANCH"} ${TAG:+--tag="$TAG"} \
@@ -30,5 +30,11 @@ EXPOSE 31025
 
 # Voice and playwright are installed at runtime by RuntimeDepsService
 # based on user settings — not baked into the image.
-ENTRYPOINT ["bash", "/root/.chalie/app/run.sh"]
+#
+# tini as PID 1 reaps orphaned threads/zombies and forwards signals to the
+# bash entrypoint; run.sh's TERM/INT trap then forwards to the Python child
+# so the graceful-shutdown handlers in consumer.py actually fire on
+# `docker stop` instead of relying on SIGKILL after the grace period.
+ENTRYPOINT ["tini", "--", "bash", "/root/.chalie/app/run.sh"]
+STOPSIGNAL SIGTERM
 CMD ["--port=31025", "--host=0.0.0.0"]
