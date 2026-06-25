@@ -36,6 +36,12 @@ _SCHEDULED_SOURCE = "scheduled"
 # named ``scheduled-work-<item_id>``.
 _SCHEDULED_WORK_THREAD_PREFIX = "scheduled-work"
 
+# Daemon-thread name prefix for offloaded scheduled-item embedding. The poll
+# loop is mid-transaction claiming/marking items on its thread-local
+# connection; a nested ``db.connection()`` would commit mid-loop and break the
+# claim atomicity. Embedding runs on its own thread to get a fresh connection.
+_SCHEDULED_EMBED_THREAD_PREFIX = "scheduled-embed"
+
 # How a fired scheduled prompt's worked result is framed when it is handed to
 # the user-facing turn that actually surfaces (Stage 2). The placeholder is
 # filled with the work loop's synthesis.
@@ -200,7 +206,17 @@ def _poll_and_fire() -> None:
                             now_iso, item.get("group_id") or item["id"],
                             1 if item.get("is_prompt") else 0,
                         ))
-                        embed_scheduled_item(next_id, item["message"])
+                        # Offload embedding to a daemon thread: embed_scheduled_item
+                        # re-enters the shared thread-local connection and would
+                        # commit the in-progress 'fired' UPDATE mid-loop, breaking
+                        # claim atomicity. A separate thread gets its own
+                        # thread-local connection.
+                        threading.Thread(
+                            target=embed_scheduled_item,
+                            args=(next_id, item["message"]),
+                            daemon=True,
+                            name=f"{_SCHEDULED_EMBED_THREAD_PREFIX}-{next_id}",
+                        ).start()
 
                 except Exception as e:
                     logger.error(f"{LOG_PREFIX} Failed to fire {item['id']}: {e}")
