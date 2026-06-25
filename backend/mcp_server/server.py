@@ -179,7 +179,12 @@ def _build_app(mcp: FastMCP) -> Starlette:
 
 
 def run_mcp_server() -> None:
-    """Run the MCP server (blocking). Intended as a WorkerManager service."""
+    """Run the MCP server (blocking). Intended as a WorkerManager service.
+
+    The bind host inherits the main app's ``--host`` (via ``runtime_config``)
+    unless an explicit ``mcp_server_host`` setting overrides it, so locking the
+    REST API to loopback also keeps the MCP port off the LAN.
+    """
     from services.settings_service import SettingsService
     from services.database_service import get_shared_db_service
 
@@ -197,13 +202,20 @@ def run_mcp_server() -> None:
     except (ValueError, TypeError):
         port = _DEFAULT_PORT
 
+    host_setting = settings.get("mcp_server_host")
+    if host_setting and host_setting.strip():
+        host = host_setting.strip()
+    else:
+        import runtime_config
+        host = str(runtime_config.get("host", "0.0.0.0"))
+
     _ensure_mcp_token(db)
 
-    logger.info("[MCP] Starting MCP server on port %d", port)
-    mcp = create_mcp_server(host="0.0.0.0", port=port)
+    logger.info("[MCP] Starting MCP server on %s:%d", host, port)
+    mcp = create_mcp_server(host=host, port=port)
     app = _build_app(mcp)
 
-    uvicorn.run(app, host="0.0.0.0", port=port, log_level="info")
+    uvicorn.run(app, host=host, port=port, log_level="info")
 
 
 def _ensure_mcp_token(db: DatabaseService) -> None:

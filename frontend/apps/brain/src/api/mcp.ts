@@ -18,6 +18,7 @@ import { api } from '@chalie/shared';
 export interface McpServerConfig {
   enabled?: boolean;
   port?: number;
+  host?: string;
   token?: string | null;
   [key: string]: unknown;
 }
