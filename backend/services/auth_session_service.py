@@ -5,6 +5,7 @@ MemoryStore is checked first for speed; SQLite is the fallback that
 survives container restarts. Cookie: ``chalie_session`` (HTTP-only,
 SameSite=Lax).
 """
+import hashlib
 import os
 import secrets
 import logging
@@ -20,16 +21,24 @@ SESSION_TTL = 30 * 24 * 60 * 60  # 30 days in seconds
 SESSION_KEY_PREFIX = 'auth_session:'
 
 
+def _hash_session_token(raw_token: str) -> str:
+    """SHA-256 of the raw session token; the SQLite row stores only the hash."""
+    return hashlib.sha256(raw_token.encode('utf-8')).hexdigest()
+
+
 def _persist_session_to_sqlite(token: str) -> None:
-    """Write session to SQLite so it survives MemoryStore wipes (restart)."""
+    """Write session to SQLite so it survives MemoryStore wipes (restart).
+
+    Only the SHA-256 hash of the token is persisted — never the raw token —
+    mirroring the wrapper-auth path so a DB leak cannot yield live tokens.
+    """
     try:
         from services.database_service import get_shared_db_service
         db = get_shared_db_service()
-        utc_now().isoformat()
         db.execute(
             """INSERT OR REPLACE INTO auth_sessions (token, created_at, expires_at)
                VALUES (?, ?, datetime('now', '+30 days'))""",
-            (token, utc_now().isoformat())
+            (_hash_session_token(token), utc_now().isoformat())
         )
     except Exception as e:
         logger.error(f"[Session] SQLite persist failed: {e}")
@@ -40,7 +49,7 @@ def _delete_session_from_sqlite(token: str) -> None:
     try:
         from services.database_service import get_shared_db_service
         db = get_shared_db_service()
-        db.execute("DELETE FROM auth_sessions WHERE token = ?", (token,))
+        db.execute("DELETE FROM auth_sessions WHERE token = ?", (_hash_session_token(token),))
     except Exception as e:
         logger.debug(f"[Session] SQLite delete failed: {e}")
 
@@ -54,7 +63,7 @@ def _validate_session_in_sqlite(token: str) -> bool:
             """SELECT token FROM auth_sessions
                WHERE token = ? AND expires_at > datetime('now')
                LIMIT 1""",
-            (token,)
+            (_hash_session_token(token),)
         )
         if rows:
             # Rehydrate MemoryStore so subsequent requests are fast
