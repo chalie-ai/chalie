@@ -5,7 +5,7 @@
  * WS single-owner rule: send/stop go through the session store; this component
  * never touches the WebSocket directly.
  */
-import { ref, computed, onMounted, onBeforeUnmount, nextTick } from 'vue';
+import { ref, computed, onMounted, onBeforeUnmount, nextTick, watch } from 'vue';
 import { storeToRefs } from 'pinia';
 import { on } from '../../composables/useEventBus';
 import { useSessionStore } from '../../stores/session';
@@ -14,6 +14,7 @@ import { useAttachmentsStore } from '../../stores/attachments';
 import { useContextUsageStore } from '../../stores/contextUsage';
 import { useAmbientSensor } from '../../composables/useAmbientSensor';
 import { system } from '../../api/system';
+import { lsGet, lsSet } from '../../utils/storage';
 import type { AttachmentPreview as ConvoAttachmentPreview } from '../../stores/conversation';
 import ImageAttachStrip from '../upload/ImageAttachStrip.vue';
 import { FileText, Image, Plus, Mic, Send, X, AlertTriangle } from '@lucide/vue';
@@ -35,6 +36,12 @@ const THINKING_ITEMS = [
 
 const textareaRef = ref<HTMLTextAreaElement | null>(null);
 const text = ref('');
+
+// Restore draft: persisted on every change so a reload/close/navigate recovers it.
+const DRAFT_KEY = 'chalie:draft';
+const stored = lsGet(DRAFT_KEY);
+if (stored) text.value = stored;
+watch(text, (v) => lsSet(DRAFT_KEY, v));
 
 const attachMenuOpen = ref(false);
 const attachBtnRef = ref<HTMLButtonElement | null>(null);
@@ -135,6 +142,16 @@ function onWindowScroll(): void {
   if (attachMenuOpen.value) attachMenuOpen.value = false;
 }
 
+// Raw File objects are structurally non-persistable, so the only loss the
+// draft-restoration above doesn't cover is a discard of pending attachments.
+// Warn on beforeunload so an accidental reload/close/navigate confirms first.
+function onBeforeUnload(e: BeforeUnloadEvent): void {
+  if (attachments.getFiles().length > 0) {
+    e.preventDefault();
+    e.returnValue = '';
+  }
+}
+
 function onTurnInterrupted(e: Event): void {
   const detail = (e as CustomEvent<{ text: string }>).detail;
   text.value = detail.text ?? '';
@@ -170,6 +187,7 @@ onMounted(() => {
   _unsubVoiceTranscript = on('chalie:voice-transcript', onVoiceTranscript);
   document.addEventListener('click', onDocumentClick);
   globalThis.addEventListener('scroll', onWindowScroll, { passive: true });
+  globalThis.addEventListener('beforeunload', onBeforeUnload);
 
   // Behavioral signals: typing cadence feeds the ambient snapshot.
   if (textareaRef.value) ambient.bindTypingInput(textareaRef.value);
@@ -193,6 +211,7 @@ onBeforeUnmount(() => {
   _unsubVoiceTranscript?.();
   document.removeEventListener('click', onDocumentClick);
   globalThis.removeEventListener('scroll', onWindowScroll);
+  globalThis.removeEventListener('beforeunload', onBeforeUnload);
   voiceStore.destroyRecorder();
 });
 </script>
