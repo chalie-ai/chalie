@@ -6,7 +6,6 @@ import threading
 from typing import TYPE_CHECKING, cast
 
 import requests
-from requests.exceptions import SSLError
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -40,12 +39,7 @@ def _get_session(url: str, username: str, password: str, verify_ssl: bool) -> tu
     login_url = f"{url.rstrip('/')}/api/auth/login"
     body: dict[str, str | bool] = {"username": username, "password": password, "rememberMe": True}
 
-    try:
-        resp = session.post(login_url, json=body, verify=verify_ssl, timeout=_TIMEOUT)
-    except SSLError:
-        logger.debug("SSL verification failed for %s, retrying without", url)
-        resp = session.post(login_url, json=body, verify=False, timeout=_TIMEOUT)
-
+    resp = session.post(login_url, json=body, verify=verify_ssl, timeout=_TIMEOUT)
     if not resp.ok:
         safe_body = resp.text[:300].replace("\n", " ").replace("\r", " ")
         logger.warning(
@@ -66,14 +60,6 @@ def _invalidate_session(url: str, username: str = "") -> None:
 # ── Core request helper ──────────────────────────────────────────────────────
 
 
-def _ssl_call(fn: "Callable[..., requests.Response]", *args: object, verify_ssl: bool, url: str, **kwargs: object) -> requests.Response:
-    try:
-        return fn(*args, verify=verify_ssl, **kwargs)
-    except SSLError:
-        logger.debug("SSL verification failed for %s, retrying without", url)
-        return fn(*args, verify=False, **kwargs)
-
-
 def _request(
     method: str,
     url: str,
@@ -91,7 +77,7 @@ def _request(
 
     if api_key:
         fn = cast("Callable[..., requests.Response]", getattr(requests, method))
-        resp = _ssl_call(fn, full_url, headers=_auth_headers(api_key), verify_ssl=verify_ssl, url=url, **kwargs)
+        resp = fn(full_url, headers=_auth_headers(api_key), verify=verify_ssl, **kwargs)
         resp.raise_for_status()
         return resp
 
@@ -103,7 +89,7 @@ def _request(
         headers: dict[str, str] = {"Content-Type": "application/json"}
         if needs_csrf:
             headers["X-CSRF-Token"] = tok
-        return _ssl_call(cast("Callable[..., requests.Response]", getattr(sess, method)), full_url, headers=headers, verify_ssl=verify_ssl, url=url, **kwargs)
+        return cast("Callable[..., requests.Response]", getattr(sess, method))(full_url, headers=headers, verify=verify_ssl, **kwargs)
 
     resp = _session_call(session, csrf)
 
