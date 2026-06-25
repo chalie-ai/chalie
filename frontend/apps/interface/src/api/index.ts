@@ -6,7 +6,6 @@
  */
 
 export { conversation } from './conversation';
-export { moments } from './moments';
 export { voice } from './voice';
 export { scheduler } from './scheduler';
 export { system } from './system';

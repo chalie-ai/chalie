@@ -211,7 +211,7 @@
   letter-spacing: 0.04em;
 }
 
-// Action buttons (remember/speak) pushed to the right of the footer row
+// Action buttons (speak) pushed to the right of the footer row
 .speech-form__actions {
   display: flex;
   align-items: center;
@@ -228,38 +228,6 @@
   color: var(--text-tertiary);
   opacity: 0.85;
   letter-spacing: 0.04em;
-}
-
-.speech-form__remember-btn {
-  background: none;
-  border: none;
-  color: var(--text-tertiary);
-  cursor: pointer;
-  padding: var(--space-xs);
-  border-radius: var(--radius-sm);
-  transition: color var(--duration-fast), box-shadow var(--duration-fast);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 24px;
-  height: 24px;
-}
-
-.speech-form__remember-btn svg { width: 24px; height: 24px; }
-
-.speech-form__remember-btn:hover {
-  color: var(--accent-primary);
-}
-
-.speech-form__remember-btn--active {
-  color: var(--accent-primary);
-  box-shadow: 0 0 8px color-mix(in oklab, var(--violet) 35%, transparent) !important;
-  cursor: default;
-}
-
-.speech-form__remember-btn:disabled:not(.speech-form__remember-btn--active) {
-  opacity: 0.5;
-  cursor: default;
 }
 
 .speech-form__speak-btn {

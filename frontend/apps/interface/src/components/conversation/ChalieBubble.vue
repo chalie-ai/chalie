@@ -1,20 +1,15 @@
 <script setup lang="ts">
-import { ref, computed } from 'vue';
+import { computed } from 'vue';
 import type { ChalieForm } from '../../stores/conversation';
 import { chalieFormPlaintext, useConversationStore } from '../../stores/conversation';
 import { renderMarkup } from '../../composables/useMarkup';
 import { emit } from '../../composables/useEventBus';
-import { Star, Volume2 } from '@lucide/vue';
+import { Volume2 } from '@lucide/vue';
 import SegmentRenderer from './SegmentRenderer.vue';
 
 const conversationStore = useConversationStore();
 
 const props = defineProps<{ form: ChalieForm }>();
-
-// Prevents double-fire of the remember click.
-const pinned = ref(false);
-// Glow lands AFTER the 150ms delay (button disables immediately, --active later).
-const pinActive = ref(false);
 
 const MODE_LABELS: Record<string, string> = {
   ACT: 'acting',
@@ -29,15 +24,6 @@ const speakText = computed(() => chalieFormPlaintext(props.form));
 // Remember/speak controls live only on the turn's LAST Chalie row — a turn may
 // span several assistant rows, and the controls act on the whole turn.
 const isLastInTurn = computed(() => conversationStore.isLastChalieInTurn(props.form.id));
-
-function onRemember(): void {
-  if (pinned.value) return;
-  pinned.value = true;
-  setTimeout(() => {
-    emit('chalie:pin-moment', { content: conversationStore.turnSpeechText(props.form.id) });
-    pinActive.value = true;
-  }, 150);
-}
 
 // Speak plays the WHOLE turn (every Chalie row), not just this row.
 function onSpeak(): void {
@@ -71,17 +57,6 @@ function onSpeak(): void {
       <span v-if="modeBadgeLabel" class="meta-mode-badge">{{ modeBadgeLabel }}</span>
 
       <div class="speech-form__actions">
-        <button
-          class="speech-form__remember-btn"
-          :class="{ 'speech-form__remember-btn--active': pinActive }"
-          aria-label="Remember this"
-          type="button"
-          :disabled="pinned"
-          @click="onRemember"
-        >
-          <Star :size="14" />
-        </button>
-
         <button
           v-if="speakText"
           class="speech-form__speak-btn"

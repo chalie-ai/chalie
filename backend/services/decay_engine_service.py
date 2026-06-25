@@ -50,16 +50,6 @@ _RW_EPSILON = 0.0001
 # salience_service.compute_salience), so the salience→weight ratio divides by 10.
 _MAX_SALIENCE = 10
 
-# Legacy data_graph ``kind='moment'`` rows left by the now-deleted 6h moment
-# worker. Moments moved to the dedicated ``moments`` table, so these are wiped on
-# every cycle. Standing (not one-shot): after the wipe no producer remains, so
-# subsequent passes match zero rows and the step is a no-op.
-_LEGACY_MOMENT_KIND = "moment"
-# Legacy moment rows were indexed in data_graph_fts (external-content over
-# data_graph) with the column order (key, value, kind, search_queries); the
-# FTS5 external-delete idiom needs those values, read BEFORE the base row goes.
-_DG_FTS_TABLE = "data_graph_fts"
-
 # parse_utc returns this exact value when an anchor string is unparseable; we
 # detect it to skip corrupt rows loudly instead of decaying them to 0.0.
 _PARSE_SENTINEL = datetime.min.replace(tzinfo=timezone.utc)
@@ -93,7 +83,6 @@ class DecayEngineService:
         episodic_count = self._decay_episodic()
         episodes_deleted = self._delete_expired_episodes()
         data_graph_count = self._decay_data_graph()
-        legacy_moments_wiped = self._wipe_legacy_data_graph_moments()
         transcript_cleaned = self._cleanup_transcript()
 
         logger.info(
@@ -102,7 +91,6 @@ class DecayEngineService:
             f"episodic={episodic_count} updated, "
             f"episodes_deleted={episodes_deleted}, "
             f"data_graph={data_graph_count} updated, "
-            f"legacy_moments_wiped={legacy_moments_wiped}, "
             f"transcript_cleaned={transcript_cleaned}"
         )
 
@@ -286,38 +274,6 @@ class DecayEngineService:
                 db.close_pool()
         except Exception as e:
             logger.error(f"[DECAY ENGINE] Data graph decay failed: {e}")
-            return 0
-
-    def _wipe_legacy_data_graph_moments(self) -> int:
-        try:
-            from .database_service import get_shared_db_service
-
-            db_service = get_shared_db_service()
-            try:
-                with db_service.connection() as conn:
-                    rows = conn.execute(
-                        "SELECT rowid, key, value, kind, search_queries FROM data_graph "
-                        "WHERE kind = ?",
-                        (_LEGACY_MOMENT_KIND,),
-                    ).fetchall()
-                    for rowid, key, value, kind, search_queries in rows:
-                        fts5_external_delete(conn, _DG_FTS_TABLE, rowid, {
-                            "key": key,
-                            "value": value,
-                            "kind": kind,
-                            "search_queries": search_queries,
-                        })
-                        conn.execute("DELETE FROM data_graph WHERE rowid = ?", (rowid,))
-                        conn.execute("DELETE FROM data_graph_key_vec WHERE rowid = ?", (rowid,))
-                        conn.execute("DELETE FROM data_graph_value_vec WHERE rowid = ?", (rowid,))
-                    deleted = len(rows)
-                if deleted:
-                    logger.info(f"[DECAY ENGINE] Wiped {deleted} legacy data_graph kind='moment' rows")
-                return deleted
-            finally:
-                db_service.close_pool()
-        except Exception as e:
-            logger.exception(f"[DECAY ENGINE] Legacy moment wipe failed: {e}")
             return 0
 
     def _cleanup_transcript(self) -> int:

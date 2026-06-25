@@ -1,9 +1,8 @@
 <script setup lang="ts">
-import { onMounted, onBeforeUnmount, ref } from 'vue';
+import { onMounted, onBeforeUnmount } from 'vue';
 import { platform, isTauri, useTheme } from '@chalie/shared';
 import { useSessionStore } from './stores/session';
 import { useVoiceStore } from './stores/voice';
-import { on } from './composables/useEventBus';
 import { useHeartbeat } from './composables/useHeartbeat';
 import { useAmbientSensor } from './composables/useAmbientSensor';
 import AmbientCanvas from './components/layout/AmbientCanvas.vue';
@@ -11,7 +10,6 @@ import PresenceBar from './components/layout/PresenceBar.vue';
 import ConversationFeed from './components/conversation/ConversationFeed.vue';
 import InputDock from './components/layout/InputDock.vue';
 import LoadingOverlay from './components/layout/LoadingOverlay.vue';
-import MomentSearchDialog from './components/overlays/MomentSearchDialog.vue';
 import PermissionStack from './components/overlays/PermissionStack.vue';
 import TaskDrawer from './components/overlays/TaskDrawer.vue';
 import QuickTipCard from './components/overlays/QuickTipCard.vue';
@@ -22,10 +20,6 @@ import UnlockVault from './components/layout/UnlockVault.vue';
 const { init: initTheme } = useTheme();
 const session = useSessionStore();
 const voiceStore = useVoiceStore();
-
-const recallRef = ref<InstanceType<typeof MomentSearchDialog> | null>(null);
-
-let _unbindRecall: (() => void) | null = null;
 
 // Single auth-failure redirect — wired to BOTH the session store (turn-level
 // auth_failed) and the heartbeat (periodic /auth/status). Mirrors the router gate.
@@ -53,10 +47,6 @@ onMounted(() => {
     void platform.requestNotificationPermission();
   }
 
-  _unbindRecall = on('chalie:open-recall', () => {
-    recallRef.value?.open();
-  });
-
   // Heartbeat also surfaces auth expiry via /auth/status.
   const heartbeat = useHeartbeat();
   heartbeat.onAuthFailure(handleAuthFailure);
@@ -66,7 +56,6 @@ onMounted(() => {
 });
 
 onBeforeUnmount(() => {
-  _unbindRecall?.();
   useHeartbeat().stop();
   useAmbientSensor().destroy();
 });
@@ -90,12 +79,11 @@ onBeforeUnmount(() => {
   <div id="overlayRoot"></div>
 
   <!-- PermissionStack teleports into #permStack; the rest self-render and
-       self-subscribe to bus events. MomentSearchDialog also exposes open() for recall. -->
+       self-subscribe to bus events. -->
   <PermissionStack />
   <TaskDrawer />
   <QuickTipCard />
   <UpdatePrompt />
   <VoicePlayerDialog />
-  <MomentSearchDialog ref="recallRef" />
   <UnlockVault />
 </template>

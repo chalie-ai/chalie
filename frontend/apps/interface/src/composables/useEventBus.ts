@@ -5,14 +5,11 @@
 
 export interface ChalieEventMap {
   'chalie:theme-changed': { theme: 'dark' | 'light' };
-  'chalie:pin-moment': { content?: string };
   'chalie:speak-message': { text: string };
   'chalie:voice-transcript': { text: string };
   'chalie:action': Record<string, unknown>;
   'chalie:silent-action': Record<string, unknown>;
   'chalie:attention': Record<string, unknown>;
-  /** Recall button → App.vue opens the moment-search dialog (no payload). */
-  'chalie:open-recall': Record<string, never>;
 }
 
 export function emit<K extends keyof ChalieEventMap>(

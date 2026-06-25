@@ -13,7 +13,6 @@ Acceptance items:
        seeded superseded fact gets valid_to set (bi-temporal invariant).
   (H)  >=50 apex leaves trigger roll-up: a level-1 super-episode exists, children
        tombstoned + consolidated_into pointing at the parent.
-  (I)  Zero data_graph rows with kind='moment' remain after tick 1.
   (RS) Restart-safety: one tick drains a partial backlog; the progress cursor
        (facts_extracted_at) is durable across a fresh service instance; the
        remainder drains on a second tick; at most one item is re-processed.
@@ -257,7 +256,7 @@ def _seed_apex_cluster_raw(
 _LEGACY_DATA_GRAPH_DDL = """
 CREATE TABLE data_graph (
     id                INTEGER PRIMARY KEY AUTOINCREMENT,
-    kind              TEXT NOT NULL CHECK(kind IN ('user_specific','system','misc','moment')),
+    kind              TEXT NOT NULL CHECK(kind IN ('user_specific','system','misc')),
     key               TEXT NOT NULL,
     value             TEXT,
     storage_strength  REAL NOT NULL DEFAULT 0.5,
@@ -399,17 +398,6 @@ def _build_old_shape_db(tmp_path: pathlib.Path) -> "tuple[DatabaseService, dict[
             "INSERT INTO data_graph (id, kind, key, value, first_seen_at, active) "
             "VALUES (12, 'user_specific', 'hobby', 'hiking', ?, 1)",
             ("2026-02-01T00:00:00+00:00",),
-        )
-        # (I) Legacy kind='moment' rows that should be wiped by the decay step.
-        conn.execute(
-            "INSERT INTO data_graph (id, kind, key, value, first_seen_at, active) "
-            "VALUES (20, 'moment', 'moment_text', 'User mentioned cats', "
-            "datetime('now'), 1)"
-        )
-        conn.execute(
-            "INSERT INTO data_graph (id, kind, key, value, first_seen_at, active) "
-            "VALUES (21, 'moment', 'moment_text', 'User asked about weather', "
-            "datetime('now'), 1)"
         )
 
         # ── memory_recall_log → legacy shape (8 radius cols, no floor_cut_count) ─
@@ -666,15 +654,6 @@ class TestFullJumpConvergence:
                         assert cast("tuple[object, ...]", child_row)[1] is not None, (
                             f"child {child_id} must be tombstoned after roll-up"
                         )
-
-            # ── (I) Assert: legacy kind='moment' rows wiped ───────────────────
-            moment_count = cast("tuple[object, ...]", _qry1(
-                "SELECT COUNT(*) FROM data_graph WHERE kind='moment'"
-            ))[0]
-            assert moment_count == 0, (
-                f"decay step must wipe all legacy kind='moment' data_graph rows; "
-                f"{moment_count} remain"
-            )
 
         finally:
             old_db.close_pool()

@@ -399,8 +399,7 @@ class TurnZeroFlashback:
     def _build_flashback_block(self, query: str) -> str:
         """Assemble the curated flashback: ≤5 fact bullets + ≤3 dated episodes.
 
-        Facts come from the live data-graph lane (moments excluded by the lane
-        itself); episodes come from the seed recall (``caller='seed'`` — frozen
+        Facts come from the live data-graph lane; episodes come from the seed recall (``caller='seed'`` — frozen
         contract) with super-episodes preferred. Returns the rendered block, or a
         short "no relevant memory" line when both lanes are empty so the recorded
         seed row is still honest.

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Star, Clock, Brain, Sun, Moon } from '@lucide/vue';
+import { Clock, Brain, Sun, Moon } from '@lucide/vue';
 import { storeToRefs } from 'pinia';
 import { useSessionStore } from '../../stores/session';
 import { useTasksStore } from '../../stores/tasks';
@@ -34,15 +34,6 @@ function handleSettings(): void {
       alt="Chalie"
     />
     <div class="presence-bar__right">
-      <button
-        id="recallBtn"
-        class="btn-icon"
-        aria-label="Recall"
-        title="Recall"
-        @click="emit('chalie:open-recall', {})"
-      >
-        <Star :size="18" />
-      </button>
       <button
         v-if="totalCount > 0"
         id="taskDrawerBtn"

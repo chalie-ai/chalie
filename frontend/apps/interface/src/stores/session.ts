@@ -11,7 +11,6 @@ import type { WsInboundEvent, WsPushEvent, WsMessageEvent } from '@chalie/shared
 import { on } from '../composables/useEventBus';
 import { extractText } from '../composables/useMarkup';
 import { conversation } from '../api/conversation';
-import { moments } from '../api/moments';
 import { getHost } from '../api/index';
 import { showToast } from '../utils/toast';
 import { useConversationStore } from './conversation';
@@ -26,9 +25,6 @@ import { useAmbientSensor } from '../composables/useAmbientSensor';
 
 /** Guard: init() must be idempotent (HMR / Vue StrictMode). */
 let _initialized = false;
-
-/** Last pin-moment timestamp (ms) — 250ms debounce. */
-let _pinDebounce = 0;
 
 /** Unbind fns for event-bus listeners registered in init() (for future cleanup). */
 const _busUnbinds: Array<() => void> = [];
@@ -108,31 +104,6 @@ export const useSessionStore = defineStore('session', {
             (payload as { payload?: Record<string, unknown> }).payload ??
             (payload as Record<string, unknown>);
           void this.sendAction(p);
-        }),
-      );
-
-      // chalie:pin-moment — Remember button: 250ms debounce, single POST
-      // /moments, then a "Remembered" toast with an Undo action (POST
-      // /moments/<id>/forget). No confirmation dialog — recall is a separate UI.
-      _busUnbinds.push(
-        on('chalie:pin-moment', (detail) => {
-          const text = (detail as { content?: string }).content ?? '';
-          if (!text) return;
-          const now = Date.now();
-          if (now - _pinDebounce < 250) return;
-          _pinDebounce = now;
-          void moments
-            .pin(text)
-            .then((res) => {
-              const transcriptId = res.item?.transcript_id ?? null;
-              showToast(
-                res.duplicate ? 'Already remembered' : 'Remembered',
-                transcriptId != null ? () => void moments.forget(transcriptId) : null,
-              );
-            })
-            .catch((err: unknown) => {
-              console.warn('[Session] pin moment failed:', err);
-            });
         }),
       );
 
