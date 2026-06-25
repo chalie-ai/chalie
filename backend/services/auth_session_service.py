@@ -141,7 +141,17 @@ def destroy_session(request: Request, response: Response) -> None:
         store = MemoryClientService.create_connection()
         store.delete(f"{SESSION_KEY_PREFIX}{token}")
         _delete_session_from_sqlite(token)
-    response.delete_cookie(SESSION_COOKIE_NAME)
+    # Mirror the create-side attributes (Secure/SameSite/HttpOnly/Path):
+    # browsers only clear a cookie when the expiring Set-Cookie matches them,
+    # so logout must resolve Secure the same way create_session does or the
+    # cookie survives over HTTPS.
+    response.delete_cookie(
+        SESSION_COOKIE_NAME,
+        path='/',
+        httponly=True,
+        samesite='Lax',
+        secure=_resolve_cookie_secure(),
+    )
     logger.info("[Session] Destroyed session")
 
 
