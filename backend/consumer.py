@@ -65,6 +65,16 @@ class WorkerManager:
                 worker_func()
             except Exception:
                 logging.exception(f"[Manager] Service {worker_id} crashed")
+            finally:
+                # Close this thread's SQLite connection so dead workers don't
+                # leak thread-local handles (issue #1903). SQLite objects may
+                # only be touched by their owning thread, which is still live
+                # here; closing now avoids a ResourceWarning / stale WAL handle.
+                try:
+                    from services.database_service import close_thread_connection
+                    close_thread_connection()
+                except Exception:
+                    pass
 
         t = threading.Thread(target=_run, daemon=True, name=worker_id)
         t.start()
