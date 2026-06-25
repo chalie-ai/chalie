@@ -9,7 +9,7 @@ import os
 import secrets
 import logging
 
-from flask import Request, Response
+from flask import Request, Response, has_request_context, request
 
 from services.time_utils import utc_now
 
@@ -81,7 +81,7 @@ def create_session(response: Response) -> str:
 
     _persist_session_to_sqlite(token)
 
-    secure = os.environ.get('COOKIE_SECURE', 'false').lower() == 'true'
+    secure = _resolve_cookie_secure()
     response.set_cookie(
         SESSION_COOKIE_NAME,
         token,
@@ -92,6 +92,24 @@ def create_session(response: Response) -> str:
     )
     logger.info("[Session] Created new session")
     return token
+
+
+def _resolve_cookie_secure() -> bool:
+    """Decide whether the session cookie carries the ``Secure`` flag.
+
+    ``COOKIE_SECURE`` env var: ``true`` forces Secure on, ``false`` forces it
+    off (plaintext HTTP dev), and ``auto`` (default) derives it from the active
+    request scheme — Secure over HTTPS, off over HTTP. Out of a request
+    context (e.g. tests minting tokens directly) HTTP semantics are assumed.
+    """
+    setting = os.environ.get('COOKIE_SECURE', 'auto').lower()
+    if setting == 'true':
+        return True
+    if setting == 'false':
+        return False
+    if has_request_context():
+        return request.scheme == 'https'
+    return False
 
 
 def validate_session(request: Request) -> bool:
