@@ -82,7 +82,14 @@ while true; do
   _EXIT=0
   "$PYTHON" "$SCRIPT_DIR/backend/run.py" --port="$_PORT" --host="$_HOST" &
   _CHILD_PID=$!
-  wait "$_CHILD_PID" || _EXIT=$?
+  # `wait` returns >128 immediately when interrupted by a trapped signal (bash
+  # SIGNALS) — the trap forwards SIGTERM but control would otherwise fall through
+  # and exit while the child is still draining. Re-wait until the child is truly
+  # reaped so its graceful-shutdown handler completes before we exit (and tini
+  # tears the container down). The final `wait` yields the child's real exit code.
+  while kill -0 "$_CHILD_PID" 2>/dev/null; do
+    wait "$_CHILD_PID" && _EXIT=0 || _EXIT=$?
+  done
   _CHILD_PID=""
   if [[ "$_EXIT" -ne 42 ]]; then
     exit $_EXIT
