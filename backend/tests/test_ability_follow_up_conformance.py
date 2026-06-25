@@ -41,6 +41,90 @@ _SHIPPING = sorted(
 )
 _SHIPPING_NAMES = [a.get_name() for a in _SHIPPING]
 
+# The verbatim follow-up text each of the 15 overriding abilities returns. The
+# dispatcher appends this to the tool's successful wire envelope inside a
+# [follow_up_instruction]…[end:follow_up_instruction] block; the 24
+# non-overriding abilities inherit "" and emit nothing.
+_FOLLOW_UPS: dict[str, str] = {
+    "search": (
+        "These are titles and snippets, not full content. If a result looks promising, "
+        "use `read` on its url to fetch the full page before quoting it or stating its "
+        "claims as fact."
+    ),
+    "news": (
+        "Before stating any headline as fact, cross-reference it with `web_search` or "
+        "`search` — news results can be stale or one-sided. Quote the verbatim "
+        "title/source/url rather than re-prosing."
+    ),
+    "document": (
+        "search and list only return document ids, names and snippets, not full text. "
+        "If you need the actual content of a result, call document again with "
+        "action=view and that id."
+    ),
+    "email": (
+        "search results are snippets only, not the full message. If you need the "
+        "complete body of an email before acting on it, call email again with "
+        "action=read and that uid."
+    ),
+    "search_files": (
+        "This located files (and at most a few matched lines per file). If you need a "
+        "file's full contents, use `read` on its path rather than re-grepping for "
+        "more lines."
+    ),
+    "web_download": (
+        "The file is now at the returned path but its contents are not yet in context. "
+        "If you need what's inside, use read on that path to extract the text, or "
+        "attach it with document for the user."
+    ),
+    "programming_docs_search": (
+        "This returns one fetched excerpt plus sibling candidate URLs (empty excerpt). "
+        "If the top excerpt does not fully answer the question, use `read` on one of "
+        "the other candidate URLs to pull its full page text before answering."
+    ),
+    "find_tools": (
+        "If a tool you needed was just activated, call it now to do the work — the "
+        "discovered tools are live for this turn. Don't re-run discovery for a tool "
+        "you already have active."
+    ),
+    "mcp_manager": (
+        "If you just added or enabled a server and now need one of its remote tools, "
+        "call `find_tools` to surface and activate it for this turn before you try to "
+        "use it."
+    ),
+    "browser": (
+        "If you just captured a screenshot, it is stored as a doc_id you cannot see "
+        "directly — call vision with that image id to read what it shows. Otherwise "
+        "the returned page text/changed diff is your result; act on it."
+    ),
+    "web_browse": (
+        "If a screenshot was saved and you need to answer something about what's on "
+        "the page, view it with vision(image=<doc_id>) instead of re-browsing. To pull "
+        "the full text of a page the agent reached, use read on its URL."
+    ),
+    "web_search": (
+        "This synthesis is summarized from its sources. Before stating a key claim as "
+        "fact, open a cited source with read to confirm the exact detail; if a source "
+        "needs login or interaction to see, use web_browse."
+    ),
+    "contacts": (
+        "If the user wanted to actually reach this person and you now have their email "
+        "address, you can use the email tool to draft or send them a message."
+    ),
+    "review_tool_calls": (
+        "This lists past tool calls with params clipped to ~120 chars and no full "
+        "results. If you need the exact wording a user or assistant used in that "
+        "window, use `review_transcript` for the same timestamp to read the "
+        "untruncated messages."
+    ),
+    "ubiquiti": (
+        "If you are about to control or update a device, client, or rule but lack its "
+        "MAC or id, run the matching list action first (list_devices, list_clients, "
+        "list_wifi, list_port_forwards, list_traffic_rules) to get a valid identifier."
+    ),
+}
+_OVERRIDE_NAMES = sorted(_FOLLOW_UPS)
+_NON_OVERRIDE_NAMES = [n for n in _SHIPPING_NAMES if n not in _FOLLOW_UPS]
+
 
 @pytest.mark.parametrize("name", _SHIPPING_NAMES)
 def test_get_follow_up_returns_str(name: str) -> None:
@@ -52,13 +136,33 @@ def test_get_follow_up_returns_str(name: str) -> None:
     assert isinstance(ability.get_follow_up(), str), f"{name}.get_follow_up() is not str"
 
 
-@pytest.mark.parametrize("name", _SHIPPING_NAMES)
-def test_get_follow_up_is_empty_at_c2_baseline(name: str) -> None:
-    """At C2 (no overrides exist yet) every shipping ability returns ``""``. This
-    is the baseline; later stages refine it to assert the exact-text overrides
-    alongside the empty-string non-overriders."""
+@pytest.mark.parametrize("name", _OVERRIDE_NAMES)
+def test_overriding_ability_returns_exact_verbatim_follow_up(name: str) -> None:
+    """Each of the 15 overriding abilities returns its exact spec verbatim text
+    (byte-for-byte). Pinned so a future edit cannot silently change a tool's
+    nudge without failing this sweep."""
     ability = next(a for a in _SHIPPING if a.get_name() == name)
-    assert ability.get_follow_up() == "", f"{name}.get_follow_up() is non-empty at C2"
+    assert ability.get_follow_up() == _FOLLOW_UPS[name], (
+        f"{name}.get_follow_up() diverged from the spec verbatim text"
+    )
+
+
+@pytest.mark.parametrize("name", _NON_OVERRIDE_NAMES)
+def test_non_overriding_ability_returns_empty_follow_up(name: str) -> None:
+    """Every non-overriding ability returns ``""`` — so no ability can silently
+    grow an un-reviewed nudge. The full enumerated 24 (15+24=39 spec-coverage;
+    the live shipping count is 38, so this asserts the actual complement)."""
+    ability = next(a for a in _SHIPPING if a.get_name() == name)
+    assert ability.get_follow_up() == "", f"{name}.get_follow_up() is unexpectedly non-empty"
+
+
+def test_follow_up_split_is_complete() -> None:
+    """The 15 overrides + the non-overriding remainder partition the shipping
+    registry — a new ability that ships without a deliberate override-or-not
+    decision lands in neither list and trips this guard, forcing the author to
+    classify it."""
+    assert set(_OVERRIDE_NAMES).isdisjoint(_NON_OVERRIDE_NAMES)
+    assert sorted(set(_SHIPPING_NAMES)) == sorted(set(_OVERRIDE_NAMES) | set(_NON_OVERRIDE_NAMES))
 
 
 def test_subclass_returning_non_str_raises_typeerror_at_import() -> None:

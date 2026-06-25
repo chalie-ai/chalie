@@ -61,6 +61,10 @@ class FindToolsAbility(SearchableAbility):
     def get_search_tooltip(self) -> str:
         return "discover available tools"
 
+    def get_follow_up(self) -> str:
+        """Urge the model to invoke a freshly-activated tool now."""
+        return "If a tool you needed was just activated, call it now to do the work — the discovered tools are live for this turn. Don't re-run discovery for a tool you already have active."
+
     def get_parameters(self) -> dict[str, object]:
         return self._PARAMETERS
 

@@ -63,6 +63,10 @@ class NewsAbility(Ability):
     def get_search_tooltip(self) -> str:
         return "news article search"
 
+    def get_follow_up(self) -> str:
+        """Cross-check a headline before stating it as fact."""
+        return "Before stating any headline as fact, cross-reference it with `web_search` or `search` — news results can be stale or one-sided. Quote the verbatim title/source/url rather than re-prosing."
+
     _PARAMETERS: ClassVar[dict[str, object]] = {
         "type": "object",
         "properties": {

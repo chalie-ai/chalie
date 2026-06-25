@@ -85,6 +85,10 @@ class ContactsAbility(CapabilityAbility):
     def get_search_tooltip(self) -> str:
         return "contact book"
 
+    def get_follow_up(self) -> str:
+        """Offer to email the contact now that their address is known."""
+        return "If the user wanted to actually reach this person and you now have their email address, you can use the email tool to draft or send them a message."
+
     def get_parameters(self) -> dict[str, object]:
         return self._PARAMETERS
 

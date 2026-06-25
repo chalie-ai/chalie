@@ -69,6 +69,10 @@ class WebBrowseAbility(Ability):
     def get_search_tooltip(self) -> str:
         return "delegate an interactive web-browsing task"
 
+    def get_follow_up(self) -> str:
+        """View a saved screenshot or read the browsed page's full text."""
+        return "If a screenshot was saved and you need to answer something about what's on the page, view it with vision(image=<doc_id>) instead of re-browsing. To pull the full text of a page the agent reached, use read on its URL."
+
     _PARAMETERS: ClassVar[dict[str, object]] = {
         "type": "object",
         "properties": {

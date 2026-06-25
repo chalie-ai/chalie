@@ -98,6 +98,10 @@ class SearchFilesAbility(Ability):
     def get_search_tooltip(self) -> str:
         return "Find files by name or content"
 
+    def get_follow_up(self) -> str:
+        """Point the model to read a located file's full contents."""
+        return "This located files (and at most a few matched lines per file). If you need a file's full contents, use `read` on its path rather than re-grepping for more lines."
+
     _PARAMETERS: ClassVar[dict[str, object]] = {
         "type": "object",
         "properties": {

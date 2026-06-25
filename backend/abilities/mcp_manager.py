@@ -91,6 +91,10 @@ class McpManagerAbility(Ability):
     def get_search_tooltip(self) -> str:
         return "connect to a remote MCP server"
 
+    def get_follow_up(self) -> str:
+        """Surface a newly-added server's remote tools before use."""
+        return "If you just added or enabled a server and now need one of its remote tools, call `find_tools` to surface and activate it for this turn before you try to use it."
+
     _PARAMETERS: ClassVar[dict[str, object]] = {
         "type": "object",
         "properties": {

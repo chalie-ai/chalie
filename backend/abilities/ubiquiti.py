@@ -159,6 +159,10 @@ class UbiquitiAbility(CapabilityAbility):
     def get_search_tooltip(self) -> str:
         return "UniFi network control"
 
+    def get_follow_up(self) -> str:
+        """Tell the model to list devices/clients before mutating by id."""
+        return "If you are about to control or update a device, client, or rule but lack its MAC or id, run the matching list action first (list_devices, list_clients, list_wifi, list_port_forwards, list_traffic_rules) to get a valid identifier."
+
     def get_parameters(self) -> dict[str, object]:
         return self._PARAMETERS
 

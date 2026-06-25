@@ -77,6 +77,10 @@ class WebSearchAbility(Ability):
     def get_search_tooltip(self) -> str:
         return "delegate a focused web search"
 
+    def get_follow_up(self) -> str:
+        """Confirm a key claim by reading a cited source."""
+        return "This synthesis is summarized from its sources. Before stating a key claim as fact, open a cited source with read to confirm the exact detail; if a source needs login or interaction to see, use web_browse."
+
     _PARAMETERS: ClassVar[dict[str, object]] = {
         "type": "object",
         "properties": {

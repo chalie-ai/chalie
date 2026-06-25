@@ -44,6 +44,10 @@ class ReviewToolCallsAbility(ReviewWindowAbility):
     def get_search_tooltip(self) -> str:
         return "inspect past tool calls"
 
+    def get_follow_up(self) -> str:
+        """Direct the model to the untruncated transcript by timestamp."""
+        return "This lists past tool calls with params clipped to ~120 chars and no full results. If you need the exact wording a user or assistant used in that window, use `review_transcript` for the same timestamp to read the untruncated messages."
+
     _PARAMETERS: ClassVar[dict[str, object]] = {
         "type": "object",
         "properties": {

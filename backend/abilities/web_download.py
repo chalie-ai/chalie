@@ -73,6 +73,10 @@ class WebDownloadAbility(Ability):
     def get_search_tooltip(self) -> str:
         return "File download from URL"
 
+    def get_follow_up(self) -> str:
+        """Read or attach the downloaded file's contents before acting."""
+        return "The file is now at the returned path but its contents are not yet in context. If you need what's inside, use read on that path to extract the text, or attach it with document for the user."
+
     _PARAMETERS: ClassVar[dict[str, object]] = {
         "type": "object",
         "properties": {
