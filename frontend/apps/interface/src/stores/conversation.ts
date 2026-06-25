@@ -168,7 +168,9 @@ export const useConversationStore = defineStore('conversation', {
     isThreadActive(): (lastActivityAt: string | null) => boolean {
       return (lastActivityAt) => {
         if (!lastActivityAt) return false;
-        const ts = new Date(lastActivityAt).getTime();
+        // SQLite stores naive UTC ("YYYY-MM-DD HH:MM:SS"); mark it as UTC so the
+        // browser doesn't read it as local time.
+        const ts = new Date(`${lastActivityAt.replace(' ', 'T')}Z`).getTime();
         if (Number.isNaN(ts)) return false;
         return Date.now() - ts < 3_600_000;
       };
@@ -486,13 +488,6 @@ export const useConversationStore = defineStore('conversation', {
       if (!item) return;
       if (item.expanded) this.collapseThread(turnId);
       else await this.expandThread(turnId);
-    },
-
-    /** True when a live turn is in-flight (forms exist without a matching thread list item). */
-    hasLiveTurn(): boolean {
-      // A live turn has forms with turnId not present in any thread list item.
-      const known = new Set(this.threads.map((t) => t.turn_id).filter((t): t is number => t != null));
-      return this.forms.some((f) => f.turnId != null && !known.has(f.turnId));
     },
 
     /**

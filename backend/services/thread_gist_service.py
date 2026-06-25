@@ -15,16 +15,13 @@ import sqlite3
 from typing import Optional, cast
 
 from services._fts_delete import fts5_external_delete
+from services.data_graph_service import _l2_dist_to_cosine
 from services.database_service import get_shared_db_service
 from services.embedding_service import get_embedding_service
 from services.embedding_utils import pack_embedding
 
 logger = logging.getLogger(__name__)
 LOG_PREFIX = "[THREAD GIST]"
-
-
-def _l2_dist_to_cosine(distance: float) -> float:
-    return max(0.0, 1.0 - (distance ** 2 / 2.0))
 
 
 class ThreadGistService:
@@ -79,20 +76,6 @@ class ThreadGistService:
         if row:
             fts5_external_delete(conn, "thread_gist_fts", gist_id, {"summary": cast(str, row[0])})
 
-    def get(self, channel: str, turn_id: int) -> Optional[str]:
-        """The current gist for one thread, or None."""
-        try:
-            db = get_shared_db_service()
-            with db.connection() as conn:
-                row = conn.execute(
-                    "SELECT summary FROM thread_gist WHERE channel = ? AND turn_id = ?",
-                    (channel, turn_id),
-                ).fetchone()
-            return cast(str, row[0]) if row else None
-        except Exception as exc:
-            logger.debug("%s get failed for %s turn=%s: %s", LOG_PREFIX, channel, turn_id, exc)
-            return None
-
     def bulk_get(self, channel: str, turn_ids: list[int]) -> dict[int, str]:
         """Gists for a batch of turn_ids — the thread feed's collapsed summaries.
 
@@ -114,67 +97,45 @@ class ThreadGistService:
             logger.debug("%s bulk_get failed for %s: %s", LOG_PREFIX, channel, exc)
             return {}
 
+    def _candidates(self, query: str, limit: int) -> dict[int, dict[str, object]]:
+        """Hybrid KNN+FTS candidate rowids with per-signal scores — the shared
+        retrieval body behind both ``pollinate`` and ``search``."""
+        query_emb = get_embedding_service().generate_embedding(query)
+        query_blob = pack_embedding(query_emb) if query_emb else None
+        candidates: dict[int, dict[str, object]] = {}
+        with get_shared_db_service().connection() as conn:
+            cur = conn.cursor()
+            if query_blob is not None:
+                try:
+                    cur.execute(
+                        "SELECT rowid, distance FROM thread_gist_vec "
+                        "WHERE embedding MATCH ? AND k = ? ORDER BY distance",
+                        (query_blob, limit * 3),
+                    )
+                    for rowid, dist in cur.fetchall():
+                        cos = _l2_dist_to_cosine(dist)
+                        candidates.setdefault(rowid, {"cos": 0.0, "fts": 0.0})
+                        candidates[rowid]["cos"] = max(cast(float, candidates[rowid]["cos"]), cos)
+                except Exception as exc:
+                    logger.debug("%s vec search failed (non-fatal): %s", LOG_PREFIX, exc)
+            self._fts_search(cur, candidates, query)
+            cur.close()
+        return candidates
+
     def pollinate(self, channel: str, active_turn_id: int, query: str, *, limit: int = 5) -> list[dict[str, object]]:
         """Top-N related gists excluding the active thread — cross-thread pollination."""
         try:
-            query_emb = get_embedding_service().generate_embedding(query)
-            query_blob = pack_embedding(query_emb) if query_emb else None
-            candidates: dict[int, dict[str, object]] = {}
-            db = get_shared_db_service()
-            with db.connection() as conn:
-                cur = conn.cursor()
-                if query_blob is not None:
-                    try:
-                        cur.execute(
-                            "SELECT rowid, distance FROM thread_gist_vec "
-                            "WHERE embedding MATCH ? AND k = ? ORDER BY distance",
-                            (query_blob, limit * 3),
-                        )
-                        for rowid, dist in cur.fetchall():
-                            cos = _l2_dist_to_cosine(dist)
-                            candidates.setdefault(rowid, {"cos": 0.0, "fts": 0.0})
-                            candidates[rowid]["cos"] = max(cast(float, candidates[rowid]["cos"]), cos)
-                    except Exception as exc:
-                        logger.debug("%s vec search failed (non-fatal): %s", LOG_PREFIX, exc)
-                self._fts_search(cur, candidates, query)
-                cur.close()
-
-            if not candidates:
-                return []
-            results = self._score_and_fetch(channel, active_turn_id, candidates, limit)
-            return results
+            candidates = self._candidates(query, limit)
+            return self._score_and_fetch(channel, active_turn_id, candidates, limit) if candidates else []
         except Exception as exc:
             logger.warning("%s pollinate failed: %s", LOG_PREFIX, exc)
             return []
 
-    def search(self, query: str, *, channel: Optional[str] = None, limit: int = 10) -> list[dict[str, object]]:
+    def search(self, query: str, *, limit: int = 10) -> list[dict[str, object]]:
         """Hybrid KNN+FTS search over all thread gists — the thread-search endpoint."""
         try:
-            query_emb = get_embedding_service().generate_embedding(query)
-            query_blob = pack_embedding(query_emb) if query_emb else None
-            candidates: dict[int, dict[str, object]] = {}
-            db = get_shared_db_service()
-            with db.connection() as conn:
-                cur = conn.cursor()
-                if query_blob is not None:
-                    try:
-                        cur.execute(
-                            "SELECT rowid, distance FROM thread_gist_vec "
-                            "WHERE embedding MATCH ? AND k = ? ORDER BY distance",
-                            (query_blob, limit * 3),
-                        )
-                        for rowid, dist in cur.fetchall():
-                            cos = _l2_dist_to_cosine(dist)
-                            candidates.setdefault(rowid, {"cos": 0.0, "fts": 0.0})
-                            candidates[rowid]["cos"] = max(cast(float, candidates[rowid]["cos"]), cos)
-                    except Exception as exc:
-                        logger.debug("%s vec search failed (non-fatal): %s", LOG_PREFIX, exc)
-                self._fts_search(cur, candidates, query)
-                cur.close()
-
-            if not candidates:
-                return []
-            return self._score_and_fetch(None, None, candidates, limit)
+            candidates = self._candidates(query, limit)
+            return self._score_and_fetch(None, None, candidates, limit) if candidates else []
         except Exception as exc:
             logger.warning("%s search failed: %s", LOG_PREFIX, exc)
             return []
