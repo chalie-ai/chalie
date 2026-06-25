@@ -98,7 +98,7 @@ onBeforeUnmount(() => {
 <template>
   <main id="conversationFeed" ref="feedRef" class="conversation-spine">
     <div v-if="session.historyLoading" class="history-loader">
-      <span class="history-loader__spinner" aria-label="Loading history" role="status" />
+      <output class="history-loader__spinner" aria-label="Loading history" />
     </div>
 
     <div v-if="session.historyExhausted" class="history-end-pill">

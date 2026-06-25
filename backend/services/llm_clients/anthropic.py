@@ -58,6 +58,37 @@ _THINKING_BUDGETS: dict[str, int] = {
 }
 
 
+def _assistant_tool_block(msg: "_Msg") -> "_Msg":
+    content: "list[_Msg]" = []
+    text = msg.get('content', '')
+    if text:
+        content.append({"type": "text", "text": text})
+    for tc in cast("list[_Msg]", msg['tool_calls']):
+        content.append({
+            "type": "tool_use",
+            "id": tc['id'],
+            "name": tc['name'],
+            "input": tc['input'],
+        })
+    return {"role": "assistant", "content": content}
+
+
+def _image_block(msg: "_Msg") -> "_Msg":
+    img = cast("_Msg", msg.get('image'))
+    blocks: "list[_Msg]" = []
+    if msg.get('content'):
+        blocks.append({"type": "text", "text": msg['content']})
+    blocks.append({
+        "type": "image",
+        "source": {
+            "type": "base64",
+            "media_type": img['mime_type'],
+            "data": img['data'],
+        },
+    })
+    return {"role": msg['role'], "content": blocks}
+
+
 def _anthropic_convert_messages(messages: "list[_Msg]") -> "list[_Msg]":
     """Convert normalised messages to Anthropic's content-block format.
 
@@ -69,18 +100,7 @@ def _anthropic_convert_messages(messages: "list[_Msg]") -> "list[_Msg]":
     while i < len(messages):
         msg = messages[i]
         if msg['role'] == 'assistant' and msg.get('tool_calls'):
-            content: "list[_Msg]" = []
-            text = msg.get('content', '')
-            if text:
-                content.append({"type": "text", "text": text})
-            for tc in cast("list[_Msg]", msg['tool_calls']):
-                content.append({
-                    "type": "tool_use",
-                    "id": tc['id'],
-                    "name": tc['name'],
-                    "input": tc['input'],
-                })
-            result.append({"role": "assistant", "content": content})
+            result.append(_assistant_tool_block(msg))
         elif msg['role'] == 'tool':
             tool_results: "list[_Msg]" = []
             while i < len(messages) and messages[i]['role'] == 'tool':
@@ -93,23 +113,10 @@ def _anthropic_convert_messages(messages: "list[_Msg]") -> "list[_Msg]":
                 i += 1
             result.append({"role": "user", "content": tool_results})
             continue
+        elif msg.get('image'):
+            result.append(_image_block(msg))
         else:
-            img = cast("_Msg", msg.get('image'))
-            if img:
-                blocks: "list[_Msg]" = []
-                if msg.get('content'):
-                    blocks.append({"type": "text", "text": msg['content']})
-                blocks.append({
-                    "type": "image",
-                    "source": {
-                        "type": "base64",
-                        "media_type": img['mime_type'],
-                        "data": img['data'],
-                    },
-                })
-                result.append({"role": msg['role'], "content": blocks})
-            else:
-                result.append(msg)
+            result.append(msg)
         i += 1
     return result
 
@@ -170,10 +177,37 @@ class AnthropicClient(ProviderClient):
             return {'thinking': {'type': 'enabled', 'budget_tokens': budget}}
         return {}
 
+    def _invoke_create(self, client: "_anthropic_mod.Anthropic", create_kwargs: dict[str, object]) -> "_anthropic_mod.types.Message":
+        """Call messages.create, mapping SDK errors to provider errors with a thinking-retry fallback."""
+        import anthropic  # noqa: PLC0415
+        try:
+            return cast("Callable[..., _anthropic_mod.types.Message]", client.messages.create)(**create_kwargs)
+        except anthropic.RateLimitError as exc:
+            raise RateLimitError(str(exc), provider='anthropic') from exc
+        except anthropic.APITimeoutError as exc:
+            raise ProviderTimeoutError(str(exc), provider='anthropic') from exc
+        except (anthropic.BadRequestError, anthropic.APIError) as exc:
+            # VERIFIED: anthropic._exceptions.RequestTooLargeError subclasses
+            # anthropic.APIError with class-level status_code == 413.
+            # getattr(exc, 'status_code', None) returns 413 for that class.
+            status = getattr(exc, 'status_code', None)
+            if status == 413:
+                raise ResponseOverLimitError(
+                    f"Anthropic rejected payload (HTTP 413): {exc}",
+                    response_code=413, provider='anthropic',
+                ) from exc
+            if 'thinking' in str(exc).lower() and 'thinking' in create_kwargs:
+                logger.info(
+                    "[THINKING] native flag rejected by provider=anthropic model=%s — retried without",
+                    self.model,
+                )
+                return cast("Callable[..., _anthropic_mod.types.Message]", client.messages.create)(
+                    **{k: v for k, v in create_kwargs.items() if k != 'thinking'}
+                )
+            raise ProviderResponseError(str(exc), response_code=status or 0, provider='anthropic') from exc
+
     def send(self, dto: ProviderApiRequest) -> ProviderApiResponse:
         """Transform DTO → Anthropic Messages API → ProviderApiResponse."""
-        import anthropic  # noqa: PLC0415
-
         # Compute max_tokens using the window already known to Providers.send().
         # The window is not available here; use the DTO's explicit value if set,
         # else fall back to a safe ceiling matching the old _MAX_TOKENS.
@@ -198,34 +232,7 @@ class AnthropicClient(ProviderClient):
             **self._thinking_native(dto.thinking_mode, max_out),
         }
 
-        def _call() -> "_anthropic_mod.types.Message":
-            try:
-                return cast("Callable[..., _anthropic_mod.types.Message]", client.messages.create)(**create_kwargs)
-            except anthropic.RateLimitError as exc:
-                raise RateLimitError(str(exc), provider='anthropic') from exc
-            except anthropic.APITimeoutError as exc:
-                raise ProviderTimeoutError(str(exc), provider='anthropic') from exc
-            except (anthropic.BadRequestError, anthropic.APIError) as exc:
-                # VERIFIED: anthropic._exceptions.RequestTooLargeError subclasses
-                # anthropic.APIError with class-level status_code == 413.
-                # getattr(exc, 'status_code', None) returns 413 for that class.
-                status = getattr(exc, 'status_code', None)
-                if status == 413:
-                    raise ResponseOverLimitError(
-                        f"Anthropic rejected payload (HTTP 413): {exc}",
-                        response_code=413, provider='anthropic',
-                    ) from exc
-                if 'thinking' in str(exc).lower() and 'thinking' in create_kwargs:
-                    logger.info(
-                        "[THINKING] native flag rejected by provider=anthropic model=%s — retried without",
-                        self.model,
-                    )
-                    return cast("Callable[..., _anthropic_mod.types.Message]", client.messages.create)(
-                        **{k: v for k, v in create_kwargs.items() if k != 'thinking'}
-                    )
-                raise ProviderResponseError(str(exc), response_code=status or 0, provider='anthropic') from exc
-
-        response = _call()
+        response = self._invoke_create(client, create_kwargs)
         latency_ms = int((time.time() - start) * 1000)
         text, tool_calls, thinking_block = _parse_content_blocks(response.content)
         stop_reason = response.stop_reason

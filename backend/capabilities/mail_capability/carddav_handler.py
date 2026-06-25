@@ -105,19 +105,23 @@ class CarddavHandler:
             except Exception as exc:
                 logger.warning("[carddav] could not fetch cards from address book: %s", exc)
                 continue
-
-            for card in cards:
-                try:
-                    raw = _extract_vcard_data(card)
-                    if not raw:
-                        continue
-                    contact = self.parse_vcard(raw)
-                    if contact:
-                        contacts.append(contact)
-                except Exception as exc:
-                    logger.debug("[carddav] skipping malformed card: %s", exc)
+            contacts.extend(self._parse_cards(cards))
 
         logger.info("[carddav] synced %d contacts", len(contacts))
+        return contacts
+
+    def _parse_cards(self, cards: list[object]) -> list[dict[str, object]]:
+        contacts: list[dict[str, object]] = []
+        for card in cards:
+            try:
+                raw = _extract_vcard_data(card)
+                if not raw:
+                    continue
+                contact = self.parse_vcard(raw)
+                if contact:
+                    contacts.append(contact)
+            except Exception as exc:
+                logger.debug("[carddav] skipping malformed card: %s", exc)
         return contacts
 
     # -----------------------------------------------------------------------

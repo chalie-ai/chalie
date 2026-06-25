@@ -437,6 +437,7 @@ def _resolve_due_at(params: dict[str, object], past_due_grace: int) -> tuple[dat
 
 
 _VALID_RECURRENCES = ("daily", "weekly", "monthly", "weekdays", "hourly")
+_INTERVAL_RECURRENCE_KEY = "interval:N"
 
 
 def _validate_recurrence(params: dict[str, object]) -> tuple[str | None, ToolResult | None]:
@@ -454,21 +455,21 @@ def _validate_recurrence(params: dict[str, object]) -> tuple[str | None, ToolRes
                 "interval recurrence must be 'interval:N' where N is 1–1440.",
                 code="invalid-recurrence",
                 hint="use e.g. 'interval:30' for every 30 minutes.",
-                valid=(*_VALID_RECURRENCES, "interval:N"),
+                valid=(*_VALID_RECURRENCES, _INTERVAL_RECURRENCE_KEY),
             )
         if not (1 <= mins <= 1440):
             return None, ToolResult.err(
                 f"interval minutes must be 1–1440, got {mins}.",
                 code="invalid-recurrence",
                 hint="use an interval between 1 and 1440 minutes.",
-                valid=(*_VALID_RECURRENCES, "interval:N"),
+                valid=(*_VALID_RECURRENCES, _INTERVAL_RECURRENCE_KEY),
             )
         return f"interval:{mins}", None
     return None, ToolResult.err(
         f"Unknown recurrence {recurrence!r}.",
         code="invalid-recurrence",
         hint="omit for one-time, or use one of the valid keywords below.",
-        valid=(*_VALID_RECURRENCES, "interval:N"),
+        valid=(*_VALID_RECURRENCES, _INTERVAL_RECURRENCE_KEY),
     )
 
 

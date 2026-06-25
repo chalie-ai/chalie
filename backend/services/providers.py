@@ -3,7 +3,6 @@
 import json
 import logging
 import threading
-import time
 from typing import TYPE_CHECKING, cast
 
 if TYPE_CHECKING:
@@ -93,10 +92,8 @@ class Providers:
                 model=getattr(client, 'model', ''),
             )
 
-        t0 = time.monotonic()
         response = client.send(dto)
-        wall_ms = int((time.monotonic() - t0) * 1000)
-        self._log_after_call(dto, response, wall_ms)
+        self._log_after_call(dto, response)
         return response
 
     def measure(self, dto: "ProviderApiRequest") -> int:
@@ -124,37 +121,14 @@ class Providers:
 
     # ── Telemetry ────────────────────────────────────────────────────────────
 
-    def _log_after_call(self, dto: "ProviderApiRequest", response: "ProviderApiResponse", wall_ms: int | None = None) -> None:
+    def _log_after_call(self, dto: "ProviderApiRequest", response: "ProviderApiResponse") -> None:
         """Write the LLM request log file and persist per-call token accounting."""
         # Per-call token accounting (was LoggingLLMService._log_llm_call).
         # job_name is carried on the DTO via the _job_name metadata key (set
         # by MessageProcessor.send() and the probe callers).
         job_name = getattr(dto, '_job_name', None) or ''
-        usage_class = getattr(dto, '_usage_class', None) or 'chat'
         if job_name:
-            try:
-                from services.llm_call_log_service import log_call  # noqa: PLC0415
-                log_call(
-                    job_name=job_name,
-                    provider=getattr(response, 'provider', 'unknown'),
-                    model=getattr(response, 'model', 'unknown'),
-                    tokens_input=getattr(response, 'tokens_input', 0) or 0,
-                    tokens_output=getattr(response, 'tokens_output', 0) or 0,
-                    tokens_cache_read=getattr(response, 'tokens_cache_read', 0) or 0,
-                    tokens_cache_create=getattr(response, 'tokens_cache_create', 0) or 0,
-                    tokens_thinking=getattr(response, 'tokens_thinking', 0) or 0,
-                    latency_ms=getattr(response, 'latency_ms', 0) or 0,
-                    usage_class=usage_class,
-                )
-            except Exception as exc:
-                global _log_call_warned  # noqa: PLW0603
-                with _log_call_warn_lock:
-                    first = not _log_call_warned
-                    _log_call_warned = True
-                if first:
-                    logger.warning("[LLM LOG] log_call failed (non-fatal): %s", exc)
-                else:
-                    logger.debug("[LLM LOG] log_call failed (non-fatal): %s", exc)
+            self._log_token_accounting(dto, response, job_name)
 
         # File-based request log (verbatim prompt/response log).
         try:
@@ -170,6 +144,28 @@ class Providers:
             )
         except Exception as exc:
             logger.debug("[LLM LOG] log_llm_request failed: %s", exc, exc_info=True)
+
+    def _log_token_accounting(self, dto: "ProviderApiRequest", response: "ProviderApiResponse", job_name: str) -> None:
+        try:
+            from services.llm_call_log_service import log_call  # noqa: PLC0415
+            log_call(
+                job_name=job_name,
+                provider=getattr(response, 'provider', 'unknown'),
+                model=getattr(response, 'model', 'unknown'),
+                tokens_input=getattr(response, 'tokens_input', 0) or 0,
+                tokens_output=getattr(response, 'tokens_output', 0) or 0,
+                tokens_cache_read=getattr(response, 'tokens_cache_read', 0) or 0,
+                tokens_cache_create=getattr(response, 'tokens_cache_create', 0) or 0,
+                tokens_thinking=getattr(response, 'tokens_thinking', 0) or 0,
+                latency_ms=getattr(response, 'latency_ms', 0) or 0,
+                usage_class=getattr(dto, '_usage_class', None) or 'chat',
+            )
+        except Exception as exc:
+            global _log_call_warned  # noqa: PLW0603
+            with _log_call_warn_lock:
+                first = not _log_call_warned
+                _log_call_warned = True
+            logger.warning("[LLM LOG] log_call failed (non-fatal): %s", exc) if first else logger.debug("[LLM LOG] log_call failed (non-fatal): %s", exc)
 
     @staticmethod
     def _record_send_counters(proc: object) -> None:

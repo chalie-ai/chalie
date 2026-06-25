@@ -129,39 +129,51 @@ _TOKEN_LIMIT_STRINGS = frozenset({
 })
 
 
+def _gemini_tool_response(msg: dict[str, object]) -> dict[str, object]:
+    return {
+        "role": "user",
+        "parts": [{
+            "function_response": {
+                "name": msg.get('name', ''),
+                "response": {"content": msg.get('content', '')},
+            }
+        }],
+    }
+
+
+def _gemini_assistant_parts(msg: dict[str, object]) -> dict[str, object]:
+    parts: list[dict[str, object]] = []
+    text = msg.get('content', '')
+    if text:
+        parts.append({"text": text})
+    for tc in cast(list[dict[str, object]], msg['tool_calls']):
+        parts.append({
+            "function_call": {"name": tc['name'], "args": tc['input']},
+        })
+    return {"role": "model", "parts": parts}
+
+
+def _gemini_plain_parts(msg: dict[str, object], role: str) -> dict[str, object]:
+    parts: list[dict[str, object]] = [{"text": msg.get('content', '')}]
+    img = msg.get('image')
+    if img:
+        parts.append({
+            "inline_data": {"mime_type": cast(dict[str, object], img)['mime_type'], "data": cast(dict[str, object], img)['data']},
+        })
+    return {"role": role, "parts": parts}
+
+
 def _gemini_convert_messages(messages: list[dict[str, object]]) -> list[dict[str, object]]:
     """Convert normalised messages to Gemini content format."""
     result: list[dict[str, object]] = []
     for msg in messages:
         role = "model" if msg['role'] == 'assistant' else cast(str, msg['role'])
         if msg['role'] == 'tool':
-            result.append({
-                "role": "user",
-                "parts": [{
-                    "function_response": {
-                        "name": msg.get('name', ''),
-                        "response": {"content": msg.get('content', '')},
-                    }
-                }],
-            })
+            result.append(_gemini_tool_response(msg))
         elif msg['role'] == 'assistant' and msg.get('tool_calls'):
-            parts: list[dict[str, object]] = []
-            text = msg.get('content', '')
-            if text:
-                parts.append({"text": text})
-            for tc in cast(list[dict[str, object]], msg['tool_calls']):
-                parts.append({
-                    "function_call": {"name": tc['name'], "args": tc['input']},
-                })
-            result.append({"role": "model", "parts": parts})
+            result.append(_gemini_assistant_parts(msg))
         else:
-            parts = [{"text": msg.get('content', '')}]
-            img = msg.get('image')
-            if img:
-                parts.append({
-                    "inline_data": {"mime_type": cast(dict[str, object], img)['mime_type'], "data": cast(dict[str, object], img)['data']},
-                })
-            result.append({"role": role, "parts": parts})
+            result.append(_gemini_plain_parts(msg, role))
     return result
 
 
@@ -257,6 +269,61 @@ class GeminiClient(ProviderClient):
         finish_reason = str(candidate.finish_reason) if candidate and candidate.finish_reason else None
         return '\n'.join(text_parts), tool_calls or None, finish_reason
 
+    def _classify_and_raise(self, exc: Exception, gen_cfg: "_GenCfg") -> bool:
+        """Map a google-genai exception to a provider error, or signal thinking-fallback.
+
+        Returns ``True`` when the caller should perform the thinking-retry; raises
+        a provider error for every other error class.
+        """
+        exc_code = getattr(exc, 'code', None)
+        exc_status = getattr(exc, 'status', None) or ''
+        exc_str = str(exc).lower()
+
+        # HTTP 429 — rate limit.
+        # SDK raises ClientError with code=429, status='RESOURCE_EXHAUSTED'.
+        # Kept '429' in str(exc) as belt-and-suspenders for SDK version drift.
+        if exc_code == 429 or exc_status == 'RESOURCE_EXHAUSTED' or '429' in str(exc):
+            raise RateLimitError(str(exc), provider='gemini') from exc
+
+        # HTTP 5xx — transient server error.
+        if exc_code is not None and exc_code >= 500:
+            raise ProviderResponseError(
+                f"Gemini server error: {exc}", response_code=exc_code, provider='gemini',
+            ) from exc
+
+        # HTTP 400 / INVALID_ARGUMENT — may be a token-limit rejection.
+        # Primary: structured code + status confirms this is a 400 INVALID_ARGUMENT.
+        # Secondary: message string narrows to size-related errors; a bare
+        # code==400 check would over-trigger (covers wrong params, regions, etc.).
+        # If the string-match misses, log a WARNING so the set can be extended.
+        if exc_code == 400 and exc_status == 'INVALID_ARGUMENT':
+            exc_msg = (getattr(exc, 'message', None) or '').lower()
+            if any(s in exc_msg for s in _TOKEN_LIMIT_STRINGS):
+                raise ResponseOverLimitError(
+                    f"Gemini rejected payload (token limit): {exc}",
+                    response_code=400, provider='gemini',
+                ) from exc
+            logger.warning(
+                "[GeminiClient] 400 INVALID_ARGUMENT not matched as token-limit "
+                "(msg=%r); propagating. Add matching string to _TOKEN_LIMIT_STRINGS "
+                "if this is a size rejection.",
+                getattr(exc, 'message', str(exc))[:200],
+            )
+            raise ProviderResponseError(
+                f"Gemini 400 INVALID_ARGUMENT: {exc}", response_code=400, provider='gemini',
+            ) from exc
+
+        # Thinking fallback: retry without thinking_config on rejection.
+        if 'thinking_config' in gen_cfg and (
+            'thinking' in exc_str or 'unsupported' in exc_str
+        ):
+            logger.info(
+                "[THINKING] native flag rejected by provider=gemini model=%s — retried without",
+                self.model,
+            )
+            return True
+        raise
+
     def _generate_with_fallback(self, client: "_GenaiClient", genai: "_Genai", contents: object, gen_cfg: "_GenCfg") -> object:
         """Execute generate_content, handling errors and thinking fallback.
 
@@ -279,52 +346,7 @@ class GeminiClient(ProviderClient):
             import httpx  # noqa: PLC0415
             if isinstance(exc, httpx.TimeoutException):
                 raise ProviderTimeoutError(f"Gemini request timed out: {exc}", provider='gemini') from exc
-            exc_code = getattr(exc, 'code', None)
-            exc_status = getattr(exc, 'status', None) or ''
-            exc_str = str(exc).lower()
-
-            # HTTP 429 — rate limit.
-            # SDK raises ClientError with code=429, status='RESOURCE_EXHAUSTED'.
-            # Kept '429' in str(exc) as belt-and-suspenders for SDK version drift.
-            if exc_code == 429 or exc_status == 'RESOURCE_EXHAUSTED' or '429' in str(exc):
-                raise RateLimitError(str(exc), provider='gemini') from exc
-
-            # HTTP 5xx — transient server error.
-            if exc_code is not None and exc_code >= 500:
-                raise ProviderResponseError(
-                    f"Gemini server error: {exc}", response_code=exc_code, provider='gemini',
-                ) from exc
-
-            # HTTP 400 / INVALID_ARGUMENT — may be a token-limit rejection.
-            # Primary: structured code + status confirms this is a 400 INVALID_ARGUMENT.
-            # Secondary: message string narrows to size-related errors; a bare
-            # code==400 check would over-trigger (covers wrong params, regions, etc.).
-            # If the string-match misses, log a WARNING so the set can be extended.
-            if exc_code == 400 and exc_status == 'INVALID_ARGUMENT':
-                exc_msg = (getattr(exc, 'message', None) or '').lower()
-                if any(s in exc_msg for s in _TOKEN_LIMIT_STRINGS):
-                    raise ResponseOverLimitError(
-                        f"Gemini rejected payload (token limit): {exc}",
-                        response_code=400, provider='gemini',
-                    ) from exc
-                logger.warning(
-                    "[GeminiClient] 400 INVALID_ARGUMENT not matched as token-limit "
-                    "(msg=%r); propagating. Add matching string to _TOKEN_LIMIT_STRINGS "
-                    "if this is a size rejection.",
-                    getattr(exc, 'message', str(exc))[:200],
-                )
-                raise ProviderResponseError(
-                    f"Gemini 400 INVALID_ARGUMENT: {exc}", response_code=400, provider='gemini',
-                ) from exc
-
-            # Thinking fallback: retry without thinking_config on rejection.
-            if 'thinking_config' in gen_cfg and (
-                'thinking' in exc_str or 'unsupported' in exc_str
-            ):
-                logger.info(
-                    "[THINKING] native flag rejected by provider=gemini model=%s — retried without",
-                    self.model,
-                )
+            if self._classify_and_raise(exc, gen_cfg):
                 fallback = {k: v for k, v in gen_cfg.items() if k != 'thinking_config'}
                 return client.models.generate_content(
                     model=self.model,

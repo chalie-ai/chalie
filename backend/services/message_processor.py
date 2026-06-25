@@ -11,7 +11,7 @@
 import logging
 import re
 import threading
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, TypeAlias, cast
 
 from services.time_formatter_service import TimeFormatterService
 
@@ -20,6 +20,8 @@ if TYPE_CHECKING:
     from services.provider_api import ProviderApiRequest, ProviderApiResponse
 
 logger = logging.getLogger(__name__)
+
+_OptStr: TypeAlias = "str | None"
 
 # Total provider-send attempts per ACT step (the original try + resends). The
 # provider layer never retries; this is the ONE retry policy. On a provider
@@ -347,8 +349,8 @@ class MessageProcessor:
         tools = AbilityRegistry.build_tools(self)
 
         thinking_str = resolve_thinking_mode(
-            cast("str | None", getattr(self.config, "thinking_mode", None)),
-            cast("str | None", getattr(self, "thinking_override", None)),
+            cast(_OptStr, getattr(self.config, "thinking_mode", None)),
+            cast(_OptStr, getattr(self, "thinking_override", None)),
             self.thinking_level,
         )
         try:
@@ -455,7 +457,7 @@ class MessageProcessor:
             from api.chat import _broadcast_provider_retry  # noqa: PLC0415
             _broadcast_provider_retry(next_attempt, _MAX_PROVIDER_ATTEMPTS)
 
-    def _store_row(self, text: "str | None") -> str:
+    def _store_row(self, text: _OptStr) -> str:
         """Persist this step's assistant row and advance the anchor its tool calls record against."""
         formatted = self._format_response(text or "")
         if self._cfg.skip_transcript:
@@ -517,7 +519,7 @@ class MessageProcessor:
                 child.active_tools.append("review_transcript")
         return child
 
-    def _format_response(self, text: "str | None") -> str:
+    def _format_response(self, text: _OptStr) -> str:
         """Normalise assistant text before it is persisted or broadcast."""
         if self._cfg.broadcast_to == "user":
             from services.markup import markdown_to_html  # noqa: PLC0415
@@ -594,7 +596,7 @@ class MessageProcessor:
             return ""
         lines: list[str] = []
         for entry in entries:
-            ts = _format_ts(cast("str | None", entry.get("created_at")), row_kind="transcript", row_id=cast("int | None", entry.get("id")))
+            ts = _format_ts(cast(_OptStr, entry.get("created_at")), row_kind="transcript", row_id=cast("int | None", entry.get("id")))
             raw_role = cast("str", entry.get("role") or "unknown")
             role_label = "Assistant" if raw_role == "assistant" else raw_role
             content = cast("str", entry.get("content") or "").replace("\n", " ").strip()

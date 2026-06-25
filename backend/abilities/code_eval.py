@@ -169,7 +169,7 @@ class CodeEvalAbility(Ability):
 
         started = time.monotonic()
         try:
-            completed = subprocess.run(  # noqa: S603 — fixed argv, no shell
+            completed = subprocess.run(  # noqa: S603 -- fixed argv, no shell
                 [_DENO_BIN, "run", "--no-config", "--no-prompt", "-"],
                 input=code,
                 capture_output=True,
