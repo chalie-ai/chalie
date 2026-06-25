@@ -21,6 +21,7 @@ from configs.channels.geo_pattern import GeoConfig
 from configs.channels.pattern import PatternConfig, _pattern_existing_patterns_block
 from configs.channels.scheduled import ScheduledConfig
 from configs.channels.skill_suggestion import SkillSuggestionConfig
+from configs.channels.thread_gist import ThreadGistConfig
 from configs.channels.super_episode import (
     SuperEpisodeConfig,
     _collect_transcript_ids,
@@ -45,6 +46,7 @@ __all__ = [
     "ScheduledConfig",
     "SkillSuggestionConfig",
     "SuperEpisodeConfig",
+    "ThreadGistConfig",
     "UserConfig",
     "UserSummaryConfig",
     "_collect_transcript_ids",

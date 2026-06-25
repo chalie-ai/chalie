@@ -165,6 +165,16 @@ class UserConfig(ProcessorConfig):
             turn_line += " " + nudge_tag
         parts.append(turn_line)
 
+        # 4b. Cross-thread related gists (workstream D) — surfaced pre-turn
+        #     alongside the turn-0 flashback block below. Top-5 KNN over
+        #     thread_gist excluding the active thread.
+        try:
+            related = _related_thread_gists(mp)
+            if related:
+                parts.append(related)
+        except Exception as exc:
+            _log.debug("[UMP] related thread gists failed: %s", exc)
+
         # 5. ACT loop trail (empty before any tools have run; carries the turn-0
         #    memory seed once it has fired).
         try:
@@ -175,3 +185,19 @@ class UserConfig(ProcessorConfig):
             _log.debug("[UMP] _render_act_trail failed: %s", exc)
 
         return "\n".join(parts)
+
+
+def _related_thread_gists(mp: "MessageProcessor") -> str:
+    """Top-5 cross-thread gists for the active thread (workstream D)."""
+    turn_id = getattr(mp, "turn_id", None)
+    if turn_id is None:
+        return ""
+    from services.thread_gist_service import get_thread_gist_service  # noqa: PLC0415
+    channel = cast("ProcessorConfig", mp.config).channel
+    hits = get_thread_gist_service().pollinate(channel, cast("int", turn_id), mp._raw_input, limit=5)
+    if not hits:
+        return ""
+    lines = ["## Related Threads"]
+    for h in hits:
+        lines.append(f"- {cast(str, h.get('summary', ''))}")
+    return "\n".join(lines)

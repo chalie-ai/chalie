@@ -281,6 +281,17 @@ class MessageProcessor:
 
         self._seed_turn_zero()
 
+        # Workstream D — fire the per-thread gist delegate MP once the thread's
+        # turn_id is known. Only on the user channel (where turn_id is allocated
+        # by the input row above); the _continue path sets skip_input_row=True so
+        # this branch never re-fires for a continuation.
+        if self._cfg.channel == "user" and self.turn_id is not None and not self._cfg.skip_input_row:
+            try:
+                from services.thread_gist_message_processor import maybe_ingest_gist  # noqa: PLC0415
+                maybe_ingest_gist(self._cfg.channel, self.turn_id)
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("[MP] thread gist fire failed (non-fatal): %s", exc)
+
     def _seed_turn_zero(self) -> None:
         """Framework-issued tool calls fired once before iteration 0."""
         from abilities._dispatcher import ToolDispatcher  # noqa: PLC0415
