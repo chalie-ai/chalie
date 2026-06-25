@@ -53,7 +53,7 @@
   // composer inserts (Enter adds a newline; only the send button submits).
   white-space: pre-wrap;
   font-weight: 600;
-  word-break: break-word;
+  overflow-wrap: break-word;
 }
 
 // Hover lift (pointer devices only)
