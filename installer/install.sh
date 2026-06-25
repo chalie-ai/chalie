@@ -21,6 +21,8 @@ GITHUB_API="https://api.github.com/repos/$CHALIE_REPO/releases/latest"
 # Installer flags (parsed from args)
 _BRANCH=""
 _TAG=""
+_CHECKSUM=""
+_INSECURE=false
 
 # ─── Colours ────────────────────────────────────────────────────────────────
 _reset="\033[0m"
@@ -54,6 +56,9 @@ _parse_args() {
       --branch)                _BRANCH="$2"; shift 2 ;;
       --tag=*)                 _TAG="${arg#--tag=}"; shift ;;
       --tag)                   _TAG="$2"; shift 2 ;;
+      --checksum=*)            _CHECKSUM="${arg#--checksum=}"; shift ;;
+      --checksum)              _CHECKSUM="$2"; shift 2 ;;
+      --insecure)              _INSECURE=true; shift ;;
       --disable-default-tools) shift ;; # deprecated, ignored — tools are bundled in the repo
       *) shift ;;
     esac
@@ -181,6 +186,62 @@ _install_build_deps() {
   _ok "Build dependencies ready"
 }
 
+# ─── Integrity Verification ────────────────────────────────────────────────
+_sha256_file() {
+  local file="$1"
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$file" | cut -d' ' -f1
+  elif command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 "$file" | cut -d' ' -f1
+  else
+    _error "Neither sha256sum nor shasum is available — cannot verify integrity."
+    exit 1
+  fi
+}
+
+# Resolve the expected SHA256 for the downloaded tarball, in priority order:
+#   1. Explicit --checksum=HEX (caller pins it; fail-closed if it mismatches).
+#   2. Published sidecar at releases/download/<ref>/chalie-<ref>.tar.gz.sha256.
+#   3. "" (empty) → no checksum available; rely on HTTPS-only posture.
+_resolve_checksum() {
+  local ref="$1"
+  if [[ -n "$_CHECKSUM" ]]; then
+    echo "$_CHECKSUM"
+    return
+  fi
+  local sidecar_url="https://github.com/$CHALIE_REPO/releases/download/$ref/chalie-$ref.tar.gz.sha256"
+  local sum
+  sum="$(curl -fsSL "$sidecar_url" 2>/dev/null | head -1 | awk '{print $1}')" || true
+  if [[ -n "$sum" && "$sum" =~ ^[0-9a-f]{64}$ ]]; then
+    echo "$sum"
+  else
+    echo ""
+  fi
+}
+
+# Verify a downloaded tarball against an expected SHA256. Empty expected →
+# warn and proceed (no sidecar published for this ref; TLS-only posture).
+_verify_tarball() {
+  local tarball="$1" expected="$2" ref="$3"
+  if [[ -z "$expected" ]]; then
+    if [[ "$_INSECURE" != true ]]; then
+      _warn "No checksum published for '$ref' — proceeding with TLS-only verification."
+    fi
+    return 0
+  fi
+  local actual
+  actual="$(_sha256_file "$tarball")"
+  if [[ "$actual" != "$expected" ]]; then
+    _error "Integrity check FAILED for '$ref'."
+    _error "  expected: $expected"
+    _error "  actual:   $actual"
+    _error "The downloaded archive does not match its published checksum."
+    _error "This may indicate a truncated download or a compromised origin."
+    exit 1
+  fi
+  _ok "Integrity verified (sha256: ${actual:0:12}…)"
+}
+
 # ─── Download Latest Release ────────────────────────────────────────────────
 _fetch_latest_tag() {
   local tag
@@ -246,6 +307,13 @@ _download_release() {
     rm -rf "$tmp_dir"
     exit 1
   fi
+
+  # Integrity: verify SHA256 against an explicit pin or a published sidecar.
+  # Fail-closed on mismatch; absent checksum → TLS-only warning (preserves the
+  # conventional curl|bash posture for refs that predate the checksum sidecar).
+  local expected_checksum
+  expected_checksum="$(_resolve_checksum "$ref")"
+  _verify_tarball "$tarball" "$expected_checksum" "$ref"
 
   # Remove old managed source directories before extraction so deleted files
   # from previous versions don't linger. data/ is user state — never touched.

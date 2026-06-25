@@ -58,3 +58,21 @@ jobs:
           else
             echo "No changes to commit"
           fi
+
+  # Publish a SHA256 sidecar of the release source tarball so install.sh can
+  # verify the archive it downloads (issue #1910). GitHub source archives are
+  # byte-deterministic, so the checksum computed at release time matches the
+  # archive install.sh fetches from refs/tags/<tag>.tar.gz.
+  publish-checksum:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fetch and checksum the release tarball
+        run: |
+          TAG="${{ github.ref_name }}"
+          curl -fsSL "https://github.com/${{ github.repository }}/archive/refs/tags/${TAG}.tar.gz" -o "chalie-${TAG}.tar.gz"
+          sha256sum "chalie-${TAG}.tar.gz" | awk '{print $1"  chalie-'${TAG}'.tar.gz"}' > "chalie-${TAG}.tar.gz.sha256"
+
+      - name: Upload checksum sidecar to the release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: chalie-*.tar.gz.sha256
