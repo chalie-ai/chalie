@@ -10,14 +10,17 @@
 token across both surfaces it talks to:
 
   * the WebSocket handshake, where a mobile socket cannot carry a cookie, so it
-    passes the raw token as the ``?token=`` query parameter on ``/ws``; and
+    presents the raw token as the FIRST WS frame
+    (``{"type":"auth","token":...}``) on ``/ws`` — never in the URL, so the
+    credential cannot leak into reverse-proxy/access logs, ``Referer``, or
+    history; and
   * ordinary HTTP requests, where the same token rides ``Authorization: Bearer``.
 
 These exercise the REAL production path with zero mocks:
   * the real ``WrapperAuthService.create_token`` mints the token (the exact call
     ``POST /api/wrappers`` makes), persisted in the real ``db`` SQLite fixture;
   * the real ``validate_session`` runs first and genuinely fails (no cookie),
-    so the bearer fallback is genuinely exercised;
+    so the bearer-first-frame fallback is genuinely exercised;
   * a real consumer object at the WS boundary fulfils the same
     ``send(raw)`` / ``close()`` / ``receive()`` contract the browser socket
     fulfils — the same pattern as test_websocket_broadcast_fanout.py;
@@ -25,9 +28,9 @@ These exercise the REAL production path with zero mocks:
     proves the token authenticates an HTTP request too.
 
 Against the pre-fix handler (cookie-only ``validate_session`` at
-websocket.py:40, no ``?token=`` fallback) the bearer-only handshake is closed
-``Unauthorized`` — ``test_ws_handshake_accepts_bearer_token_query_param`` fails
-RED. It passes GREEN once the fallback lands.
+websocket.py:40, no bearer fallback) the bearer-only handshake is closed
+``Unauthorized`` — ``test_ws_handshake_accepts_bearer_token_first_frame`` fails
+RED. It passes GREEN once the first-frame fallback lands.
 """
 
 import json
@@ -52,14 +55,15 @@ def _enable_internal_dev(monkeypatch: pytest.MonkeyPatch) -> None:
 class _BoundarySocket:
     """A real consumer at the WS boundary — the same ``send`` / ``close`` /
     ``receive`` contract the production browser socket fulfils. Records sent
-    frames and whether it was closed. ``receive`` returns ``None`` once (so the
-    handler's loop emits a single ping) then raises to end the loop, mirroring a
-    browser socket that drops the connection."""
+    frames and whether it was closed. ``receive`` yields a programmable sequence
+    of inbound frames (the auth frame first, then ``None`` for one broker ping)
+    then raises to end the loop, mirroring a browser socket that drops the
+    connection."""
 
-    def __init__(self) -> None:
+    def __init__(self, inbound: list[str | None] | None = None) -> None:
         self.sent: list[str] = []
         self.closed = False
-        self._receives = 0
+        self._receives = list(inbound or [])
 
     def send(self, raw: str) -> None:
         self.sent.append(raw)
@@ -67,11 +71,10 @@ class _BoundarySocket:
     def close(self) -> None:
         self.closed = True
 
-    def receive(self, timeout: int = 60) -> None:
-        self._receives += 1
-        if self._receives == 1:
-            return None  # triggers one broker ping, then we end the loop
-        raise RuntimeError("socket closed")
+    def receive(self, timeout: int = 60) -> str | None:
+        if not self._receives:
+            raise RuntimeError("socket closed")
+        return self._receives.pop(0)
 
     def sent_types(self) -> list[str]:
         return [cast(str, json.loads(m).get("type")) for m in self.sent]
@@ -100,14 +103,18 @@ def _mint_token(name: str) -> str:
     return raw_token
 
 
-def test_ws_handshake_accepts_bearer_token_query_param(
+def _auth_frame(raw: str) -> str:
+    return json.dumps({"type": "auth", "token": raw})
+
+
+def test_ws_handshake_accepts_bearer_token_first_frame(
     db: sqlite3.Connection, broker: WebSocketBroker
 ) -> None:
-    """A handshake carrying a valid raw token as ``/ws?token=<raw>`` (no cookie,
-    as a mobile socket has) must authenticate: the handler must NOT send the
-    ``Unauthorized`` error frame and must NOT close the socket, and the
-    connection must be registered with the broker. Pre-fix the cookie-only check
-    closes it — RED here."""
+    """A handshake with NO cookie (as a mobile socket has) that presents a valid
+    raw token as its first WS frame must authenticate: the handler must NOT send
+    the ``Unauthorized`` error frame and must NOT close the socket, and the
+    connection must be registered with the broker. The URL carries no token.
+    Pre-fix the cookie-only check closes it — RED here."""
     from api import create_app
     from api.websocket import _ws_handler
 
@@ -115,22 +122,23 @@ def test_ws_handshake_accepts_bearer_token_query_param(
 
     app = create_app()
     app.config["TESTING"] = True
-    socket = _BoundarySocket()
+    # Auth frame first, then None (one broker ping), then the loop ends.
+    socket = _BoundarySocket([_auth_frame(raw), None])
 
-    with app.test_request_context("/ws?token=" + raw):
+    with app.test_request_context("/ws"):
         _ws_handler(socket)
 
     assert not socket.closed, (
-        "the handshake carried a valid bearer token via ?token= but the socket "
-        "was closed — the bearer fallback did not run"
+        "the handshake carried a valid bearer token in its first frame but the "
+        "socket was closed — the bearer fallback did not run"
     )
     assert "error" not in socket.sent_types(), (
-        "an Unauthorized error frame was sent despite a valid ?token=; the only "
-        f"frame on a healthy handshake is the broker ping. Got: {socket.sent_types()}"
+        "an Unauthorized error frame was sent despite a valid first-frame token; "
+        f"the only frame on a healthy handshake is the broker ping. Got: {socket.sent_types()}"
     )
     # The broker's connect() + broadcast({"type": "ping"}) runs inside the
     # handler's loop; the finally block disconnects cleanly on loop exit (the
-    # _BoundarySocket.receive() raises on the 2nd call to end the loop).  So
+    # _BoundarySocket.receive() raises once the inbound queue drains).  So
     # after the handler returns the socket is no longer in _connections — correct
     # production behaviour.  We prove it WAS registered by the fact the ping
     # frame was delivered to it (the broker only fans out to registered sockets).
@@ -143,21 +151,32 @@ def test_ws_handshake_accepts_bearer_token_query_param(
 def test_ws_handshake_rejects_missing_and_invalid_token(
     db: sqlite3.Connection, broker: WebSocketBroker
 ) -> None:
-    """One common path / self-no-op: no cookie AND no usable token => the
-    existing Unauthorized close fires unchanged. Covers a token-less handshake
-    and a garbage ``?token=`` — neither must authenticate."""
+    """No cookie AND no usable first frame => the existing Unauthorized close
+    fires unchanged. Covers a token-less handshake (no auth frame at all), a
+    garbage token, a non-auth frame, and a malformed frame — none must
+    authenticate, and no token may appear in the URL."""
     from api import create_app
     from api.websocket import _ws_handler
 
     app = create_app()
     app.config["TESTING"] = True
 
-    for url in ("/ws", "/ws?token=not-a-real-token"):
-        socket = _BoundarySocket()
+    cases: list[tuple[str, _BoundarySocket]] = [
+        # No auth frame — receive() returns nothing usable; the handler's
+        # _handshake_bearer times out/raises and closes.
+        ("/ws", _BoundarySocket([])),
+        # Garbage token in a well-formed auth frame.
+        ("/ws", _BoundarySocket([_auth_frame("not-a-real-token")])),
+        # A non-auth first frame (e.g. a stray pong) must not authenticate.
+        ("/ws", _BoundarySocket([json.dumps({"type": "pong"})])),
+        # A malformed first frame.
+        ("/ws", _BoundarySocket(["not-json"])),
+    ]
+    for url, socket in cases:
         with app.test_request_context(url):
             _ws_handler(socket)
         assert socket.closed, (
-            f"handshake {url!r} carried no valid auth and must be closed"
+            f"handshake {url!r} carried no valid auth frame and must be closed"
         )
         assert "error" in socket.sent_types(), (
             f"handshake {url!r} must receive the Unauthorized error frame; got "
@@ -167,6 +186,31 @@ def test_ws_handshake_rejects_missing_and_invalid_token(
             f"an unauthenticated handshake {url!r} must NOT be registered with "
             f"the broker — no ping may be delivered. Got: {socket.sent_types()}"
         )
+
+
+def test_ws_handshake_url_carries_no_token(
+    db: sqlite3.Connection, broker: WebSocketBroker
+) -> None:
+    """The bearer token must NEVER appear in the request URL — that is the
+    regression this suite guards. A valid first-frame handshake authenticates
+    while the request path stays a bare ``/ws`` with no query string."""
+    from api import create_app
+    from api.websocket import _ws_handler
+    from flask import request as flask_request
+
+    raw = _mint_token("Mobile — url hygiene")
+
+    app = create_app()
+    app.config["TESTING"] = True
+    socket = _BoundarySocket([_auth_frame(raw), None])
+
+    with app.test_request_context("/ws"):
+        _ws_handler(socket)
+        assert "token" not in flask_request.args, (
+            "the bearer token must not travel in the URL query string — it "
+            f"leaks into logs/Referer. Saw ?{flask_request.query_string.decode()}"
+        )
+    assert not socket.closed
 
 
 def test_same_minted_token_authenticates_http_bearer_request(

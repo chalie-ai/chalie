@@ -147,9 +147,10 @@ export class WebSocketService {
     return host ? host.replace(/\/$/, '') : globalThis.location.origin;
   }
   private buildWsUrl(): string {
-    const token = this.getToken();
-    const query = token ? '?token=' + encodeURIComponent(token) : '';
-    return this.baseUrl().replace(/^http/, 'ws') + '/ws' + query;
+    // The bearer token is NOT carried in the URL — a query-string credential
+    // leaks into reverse-proxy/access logs, Referer, and history. The native
+    // client sends it as the first WS frame instead (see ``connect``).
+    return this.baseUrl().replace(/^http/, 'ws') + '/ws';
   }
   private buildHttpUrl(path: string): string {
     return this.baseUrl() + path;
@@ -197,6 +198,16 @@ export class WebSocketService {
       this.reconnectDelay = 1000;
       this.lastInboundAt = Date.now();
       this.startLivenessWatch();
+      // Native clients have no cookie, so they present the bearer token as the
+      // first WS frame — never in the URL. The web (cookie) path sends none.
+      const token = this.getToken();
+      if (token) {
+        try {
+          ws.send(JSON.stringify({ type: 'auth', token }));
+        } catch {
+          /* frame send failure surfaces as onclose → reconnect */
+        }
+      }
       try {
         this.connectHandler?.();
       } catch {
