@@ -15,7 +15,7 @@ Callers: ``MessageProcessor._previous_rows`` (watermark for `id >
 watermark` reads), ``MessageProcessor._wrap_with_checkpoint`` (checkpoint
 envelope prepend), ``transcript_service.cleanup_unlinked_entries``
 (watermark-bounded cleanup), ``api.system`` compaction observability
-(Brain read-only view), ``turn_zero_flashback._living_doc_now``.
+(Brain read-only view).
 """
 
 import logging

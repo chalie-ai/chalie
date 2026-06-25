@@ -110,7 +110,7 @@ const activeSub = computed(() => route.path.split('/')[2] || '');
 
 function navigate(section: string, sub: string | null = null): void {
   if (shell.providersOnly && section !== 'providers') return;
-  void router.push({ path: sub ? `/${section}/${sub}` : `/${section}` });
+  router.push({ path: sub ? `/${section}/${sub}` : `/${section}` });
   if (window.innerWidth <= 900) shell.closeMobileSidebar();
 }
 

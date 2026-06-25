@@ -13,10 +13,22 @@ from werkzeug.security import generate_password_hash, check_password_hash
 
 if TYPE_CHECKING:
     from flask.typing import ResponseReturnValue
+    from services.wrapper_rate_limiter import WrapperRateLimiter
 
 logger = logging.getLogger(__name__)
 
 user_auth_bp = Blueprint('user_auth', __name__)
+
+
+_LOGIN_RATE_LIMIT = 10   # attempts
+_LOGIN_RATE_WINDOW = 60  # seconds
+
+
+def _get_login_rate_limiter() -> "WrapperRateLimiter":
+    from services.wrapper_rate_limiter import WrapperRateLimiter
+    return WrapperRateLimiter(
+        limit=_LOGIN_RATE_LIMIT, window_seconds=_LOGIN_RATE_WINDOW
+    )
 
 
 def _reconnect_capabilities() -> None:
@@ -261,6 +273,9 @@ def login() -> "ResponseReturnValue":
         # Validation
         if not username or not password:
             return jsonify({"error": "Username and password required"}), 400
+
+        if not _get_login_rate_limiter().is_allowed(request.remote_addr or "unknown"):
+            return jsonify({"error": "Too many login attempts. Try again later."}), 429
 
         db = get_shared_db_service()
 

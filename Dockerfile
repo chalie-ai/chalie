@@ -15,10 +15,14 @@ FROM python:3.12-slim
 ARG BRANCH=
 ARG TAG=
 
-RUN apt-get update \
+# Fetch the installer at the same pinned ref as the app tarball so tagged
+# builds don't silently drift from main's installer. Falls back to main only
+# when neither --tag nor --branch is given (the API-resolved latest case).
+RUN installer_ref="${TAG:-${BRANCH:-main}}" \
+ && apt-get update \
  && apt-get install -y --no-install-recommends curl ca-certificates bash tar \
  && rm -rf /var/lib/apt/lists/* \
- && curl -fsSL https://raw.githubusercontent.com/chalie-ai/chalie/main/installer/install.sh -o /tmp/install.sh \
+ && curl -fsSL "https://raw.githubusercontent.com/chalie-ai/chalie/${installer_ref}/installer/install.sh" -o /tmp/install.sh \
  && bash /tmp/install.sh ${BRANCH:+--branch="$BRANCH"} ${TAG:+--tag="$TAG"} \
  && rm /tmp/install.sh
 

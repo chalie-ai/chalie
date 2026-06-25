@@ -537,8 +537,8 @@ class DataGraphService:
                 rowid = cast(tuple[int, str, str], _schedule_emb_args or _schedule_d2q_args)[0]
                 _ses.enqueue("data_graph", rowid)
             return result
-        except Exception as e:
-            logger.error("[DATA GRAPH] upsert_fact failed for key='%s': %s", key, e)
+        except Exception:
+            logger.exception("[DATA GRAPH] upsert_fact failed for key='%s'", key)
             return None
 
     # ── store() ───────────────────────────────────────────────────────
@@ -556,115 +556,21 @@ class DataGraphService:
         try:
             with self.db.connection() as conn:
                 cursor = conn.cursor()
-                cursor.execute(
-                    _SELECT_ACTIVE_BY_KIND_KEY_SQL,
-                    (kind, key)
-                )
+                cursor.execute(_SELECT_ACTIVE_BY_KIND_KEY_SQL, (kind, key))
                 existing = cursor.fetchone()
                 cursor.close()
 
                 now_iso = utc_now().isoformat()
 
                 if existing:
-                    existing_dict = self._row_to_dict(existing)
-                    row_id = cast(int, cast(dict[str, object], existing_dict)['id'])
-                    old_value = cast(str, cast(dict[str, object], existing_dict).get('value') or '')
-                    new_value = value or ''
-                    existing_date = cast(str, (
-                        cast(dict[str, object], existing_dict).get("last_confirmed_at")
-                        or cast(dict[str, object], existing_dict).get("first_seen_at")
-                        or ""
-                    ))[:10] or None
-
-                    if new_value.lower().strip() == old_value.lower().strip():
-                        if policy['reinforce']:
-                            self._reinforce_row(conn, row_id, cast(dict[str, object], existing_dict), now_iso)
-                        row = self._fetch_row_by_id(conn, row_id)
-                        result = self._make_store_result(
-                            "reinforced", key, key, None, value, None,
-                            None, existing_date, row,
-                        )
-                    else:
-                        contradiction_mode = policy.get('contradiction')
-                        existing_req = _StoreRequest(kind, key, value, source)
-
-                        if contradiction_mode == 'lut_canonicalize':
-                            # Exact-key match: existing row found → apply rule based on LUT lookup.
-                            # LUT only consulted to determine the rule for this key.
-                            key_emb = self._generate_embedding(key)
-                            lut_hit = self._lookup_concept_lut(key_emb) if key_emb else None
-                            rule = cast(Optional[str], lut_hit['rule']) if lut_hit else None
-
-                            if lut_hit and rule == 'coexist':
-                                # Coexist with existing same key — insert additive (different value)
-                                row, _schedule_emb_args, _schedule_d2q_args = self._insert_new_row(
-                                    conn, existing_req, now_iso
-                                )
-                                all_vals = self._fetch_coexist_values(conn, kind, key)
-                                result = self._make_store_result(
-                                    "appended", key, key, rule, value, None,
-                                    all_vals, existing_date, row,
-                                )
-                            elif lut_hit and rule == 'immutable':
-                                result = self._make_store_result(
-                                    "conflict", key, key, rule, value, old_value,
-                                    None, existing_date, existing_dict,
-                                )
-                                self._log_immutable_conflict(key)
-                            else:
-                                # No LUT hit for this key or embedding unavailable — temporal default.
-                                # Miss was already recorded on the first write (new-row path).
-                                row, _schedule_emb_args, _schedule_d2q_args = cast(
-                                    tuple[dict[str, object], Optional[tuple[int, str, str]], Optional[tuple[int, str, str]]],
-                                    self._apply_temporal_supersession(conn, cast(dict[str, object], existing_dict), existing_req, now_iso)
-                                )
-                                result = self._make_store_result(
-                                    "superseded", key, key, rule, value, old_value,
-                                    None, existing_date, row,
-                                )
-
-                        elif contradiction_mode == 'cosine_supersede':
-                            # System kind: exact-key match with different value → temporal supersession
-                            row, _schedule_emb_args, _schedule_d2q_args = cast(
-                                tuple[dict[str, object], Optional[tuple[int, str, str]], Optional[tuple[int, str, str]]],
-                                self._apply_temporal_supersession(conn, cast(dict[str, object], existing_dict), existing_req, now_iso)
-                            )
-                            result = self._make_store_result(
-                                "superseded", key, key, None, value, old_value,
-                                None, existing_date, row,
-                            )
-
-                        else:
-                            # None policy — insert directly (additive)
-                            row, _schedule_emb_args, _schedule_d2q_args = self._insert_new_row(
-                                conn, existing_req, now_iso
-                            )
-                            result = self._make_store_result(
-                                "created", key, key, None, value, None,
-                                None, None, row,
-                            )
+                    existing_dict = cast(dict[str, object], self._row_to_dict(existing))
+                    result, _schedule_emb_args, _schedule_d2q_args = self._store_existing_row(
+                        conn, existing_dict, kind, key, value, source, now_iso, policy,
+                    )
                 else:
-                    # No existing row with this exact key — run canonicalization paths
-                    contradiction_mode = policy.get('contradiction')
-                    store_req = _StoreRequest(kind, key, value, source)
-
-                    if contradiction_mode == 'lut_canonicalize':
-                        result, _schedule_emb_args, _schedule_d2q_args = self._store_user_specific_new(
-                            conn, store_req, now_iso
-                        )
-
-                    elif contradiction_mode == 'cosine_supersede':
-                        result, _schedule_emb_args, _schedule_d2q_args = self._store_system_new(
-                            conn, store_req, now_iso
-                        )
-
-                    else:
-                        row, _schedule_emb_args, _schedule_d2q_args = self._insert_new_row(
-                            conn, store_req, now_iso
-                        )
-                        result = self._make_store_result(
-                            "created", key, key, None, value, None, None, None, row,
-                        )
+                    result, _schedule_emb_args, _schedule_d2q_args = self._store_new_row(
+                        conn, kind, key, value, source, now_iso, policy,
+                    )
 
             # Enqueue for SearchExpanderService AFTER connection exits (row committed).
             # SES absorbs both _schedule_embeddings (key_vec/value_vec backfill) and
@@ -679,6 +585,78 @@ class DataGraphService:
         except Exception as e:
             logger.error("[DATA GRAPH] store failed for kind=%s key='%s': %s", kind, key, e)
             return None
+
+    def _store_existing_row(
+        self, conn: sqlite3.Connection, existing_dict: dict[str, object],
+        kind: str, key: str, value: str, source: Optional[str], now_iso: str,
+        policy: dict[str, object],
+    ) -> tuple[Optional[dict[str, object]], Optional[tuple[int, str, str]], Optional[tuple[int, str, str]]]:
+        row_id = cast(int, existing_dict['id'])
+        old_value = cast(str, existing_dict.get('value') or '')
+        existing_date = self._row_date(existing_dict)
+        emb_args: Optional[tuple[int, str, str]] = None
+        d2q_args: Optional[tuple[int, str, str]] = None
+
+        if (value or '').lower().strip() == old_value.lower().strip():
+            if policy['reinforce']:
+                self._reinforce_row(conn, row_id, existing_dict, now_iso)
+            row = self._fetch_row_by_id(conn, row_id)
+            return self._make_store_result("reinforced", key, key, None, value, None, None, existing_date, row), None, None
+
+        contradiction_mode = policy.get('contradiction')
+        req = _StoreRequest(kind, key, value, source)
+
+        if contradiction_mode == 'lut_canonicalize':
+            return self._store_existing_lut(conn, existing_dict, kind, key, value, old_value, existing_date, req, now_iso)
+        if contradiction_mode == 'cosine_supersede':
+            row, emb_args, d2q_args = cast(
+                tuple[dict[str, object], Optional[tuple[int, str, str]], Optional[tuple[int, str, str]]],
+                self._apply_temporal_supersession(conn, existing_dict, req, now_iso),
+            )
+            return self._make_store_result("superseded", key, key, None, value, old_value, None, existing_date, row), emb_args, d2q_args
+
+        row, emb_args, d2q_args = self._insert_new_row(conn, req, now_iso)
+        return self._make_store_result("created", key, key, None, value, None, None, None, row), emb_args, d2q_args
+
+    def _store_existing_lut(
+        self, conn: sqlite3.Connection, existing_dict: dict[str, object],
+        kind: str, key: str, value: str, old_value: str, existing_date: Optional[str],
+        req: '_StoreRequest', now_iso: str,
+    ) -> tuple[Optional[dict[str, object]], Optional[tuple[int, str, str]], Optional[tuple[int, str, str]]]:
+        key_emb = self._generate_embedding(key)
+        lut_hit = self._lookup_concept_lut(key_emb) if key_emb else None
+        rule = cast(Optional[str], lut_hit['rule']) if lut_hit else None
+        emb_args: Optional[tuple[int, str, str]] = None
+        d2q_args: Optional[tuple[int, str, str]] = None
+
+        if lut_hit and rule == 'coexist':
+            row, emb_args, d2q_args = self._insert_new_row(conn, req, now_iso)
+            all_vals = self._fetch_coexist_values(conn, kind, key)
+            return self._make_store_result("appended", key, key, rule, value, None, all_vals, existing_date, row), emb_args, d2q_args
+        if lut_hit and rule == 'immutable':
+            self._log_immutable_conflict(key)
+            return self._make_store_result("conflict", key, key, rule, value, old_value, None, existing_date, existing_dict), None, None
+
+        row, emb_args, d2q_args = cast(
+            tuple[dict[str, object], Optional[tuple[int, str, str]], Optional[tuple[int, str, str]]],
+            self._apply_temporal_supersession(conn, existing_dict, req, now_iso),
+        )
+        return self._make_store_result("superseded", key, key, rule, value, old_value, None, existing_date, row), emb_args, d2q_args
+
+    def _store_new_row(
+        self, conn: sqlite3.Connection, kind: str, key: str, value: str, source: Optional[str],
+        now_iso: str, policy: dict[str, object],
+    ) -> tuple[Optional[dict[str, object]], Optional[tuple[int, str, str]], Optional[tuple[int, str, str]]]:
+        contradiction_mode = policy.get('contradiction')
+        req = _StoreRequest(kind, key, value, source)
+
+        if contradiction_mode == 'lut_canonicalize':
+            return self._store_user_specific_new(conn, req, now_iso)
+        if contradiction_mode == 'cosine_supersede':
+            return self._store_system_new(conn, req, now_iso)
+
+        row, emb_args, d2q_args = self._insert_new_row(conn, req, now_iso)
+        return self._make_store_result("created", key, key, None, value, None, None, None, row), emb_args, d2q_args
 
     def _make_store_result(
         self,
@@ -1094,26 +1072,29 @@ class DataGraphService:
                 n_row = cursor.fetchone()
                 if not n_row:
                     continue
-                n_dict = self._row_to_dict(n_row)
-
-                multiplier = _EDGE_TYPE_MULTIPLIER.get(edge_type, 1.0)
-                n_score = cast(float, seed['composite_score']) * cast(float, strength) * multiplier
-                if cast(dict[str, object], n_dict).get('kind') != seed.get('kind'):
-                    n_score *= 1.2
-                if out_degree > 10:
-                    n_score /= math.sqrt(out_degree)
-
-                neighbour_id = cast(int, cast(dict[str, object], n_dict).get('id'))
-                if neighbour_id not in expansion or cast(float, expansion[neighbour_id]['composite_score']) < n_score:
-                    cast(dict[str, object], n_dict)['composite_score'] = n_score
-                    cast(dict[str, object], n_dict)['cos_score'] = cast(float, seed.get('cos_score', 0.0)) / 2.0
-                    expansion[neighbour_id] = cast(dict[str, object], n_dict)
+                self._expand_seed_neighbour(seed, n_row, edge_type, strength, out_degree, expansion)
 
         all_candidates: dict[int, dict[str, object]] = {cast(int, d['id']): d for d in top_k}
         for nid, nd in expansion.items():
             if nid not in all_candidates:
                 all_candidates[nid] = nd
         return sorted(all_candidates.values(), key=lambda x: cast(float, x['composite_score']), reverse=True)[:limit]
+
+    def _expand_seed_neighbour(
+        self, seed: dict[str, object], n_row: object, edge_type: object, strength: object,
+        out_degree: int, expansion: dict[int, dict[str, object]],
+    ) -> None:
+        n_dict = cast(dict[str, object], self._row_to_dict(n_row))
+        n_score = cast(float, seed['composite_score']) * cast(float, strength) * _EDGE_TYPE_MULTIPLIER.get(cast(str, edge_type), 1.0)
+        if n_dict.get('kind') != seed.get('kind'):
+            n_score *= 1.2
+        if out_degree > 10:
+            n_score /= math.sqrt(out_degree)
+        neighbour_id = cast(int, n_dict.get('id'))
+        if neighbour_id not in expansion or cast(float, expansion[neighbour_id]['composite_score']) < n_score:
+            n_dict['composite_score'] = n_score
+            n_dict['cos_score'] = cast(float, seed.get('cos_score', 0.0)) / 2.0
+            expansion[neighbour_id] = n_dict
 
     @staticmethod
     def _build_kind_filter(kinds: Optional[list[str]]) -> tuple[str, list[object]]:
@@ -1502,7 +1483,7 @@ class DataGraphService:
             with self.db.connection() as conn:
                 cursor = conn.cursor()
                 total_updated += self._decay_live_facts(cursor, now, one_hour_ago)
-                total_updated += self._decay_superseded_facts(cursor, now)
+                total_updated += self._decay_superseded_facts(cursor)
                 cursor.close()
 
                 total_updated += self._delete_superseded_facts(conn, now)
@@ -1519,6 +1500,7 @@ class DataGraphService:
     def _decay_live_facts(self, cursor: sqlite3.Cursor, now: datetime, one_hour_ago: str) -> int:
         """Absolute power-law decay of live (active) facts with a TTL policy."""
         updated = 0
+        now_ts = now.timestamp()
         for kind, policy in _KIND_POLICY.items():
             if policy['ttl_days'] is None:
                 continue
@@ -1533,25 +1515,10 @@ class DataGraphService:
                   AND active=1
                   AND last_confirmed_at < ?
             """, (kind, one_hour_ago))
-            rows = cursor.fetchall()
 
-            for rowid, rw, confirmed_at_str in rows:
-                if not confirmed_at_str:
-                    continue
-                try:
-                    confirmed_ts = parse_utc(confirmed_at_str).timestamp()
-                except Exception:
-                    continue
-
-                age_days = (now.timestamp() - confirmed_ts) / 86400.0
-                if age_days <= 0:
-                    continue
-
-                # Power-law absolute level: rw = max(1, age)^(-d_base) — not a
-                # multiplier; it directly sets the weight from how old the fact
-                # is since last confirmation, so the cycle is idempotent.
-                new_rw = max(salience_floor, max(1.0, age_days) ** (-d_base))
-                if abs(new_rw - rw) > _RW_DECAY_EPSILON:
+            for rowid, rw, confirmed_at_str in cursor.fetchall():
+                new_rw = self._compute_decayed_rw(confirmed_at_str, now_ts, d_base, salience_floor)
+                if new_rw is not None and abs(new_rw - rw) > _RW_DECAY_EPSILON:
                     cursor.execute(
                         "UPDATE data_graph SET retrieval_weight=? WHERE rowid=?",
                         (new_rw, rowid),
@@ -1559,7 +1526,23 @@ class DataGraphService:
                     updated += 1
         return updated
 
-    def _decay_superseded_facts(self, cursor: sqlite3.Cursor, now: datetime) -> int:
+    @staticmethod
+    def _compute_decayed_rw(confirmed_at_str: Optional[str], now_ts: float, d_base: float, salience_floor: float) -> Optional[float]:
+        if not confirmed_at_str:
+            return None
+        try:
+            confirmed_ts = parse_utc(confirmed_at_str).timestamp()
+        except Exception:
+            return None
+        age_days = (now_ts - confirmed_ts) / 86400.0
+        if age_days <= 0:
+            return None
+        # Power-law absolute level: rw = max(1, age)^(-d_base) — not a
+        # multiplier; it directly sets the weight from how old the fact
+        # is since last confirmation, so the cycle is idempotent.
+        return cast(float, max(salience_floor, max(1.0, age_days) ** (-d_base)))
+
+    def _decay_superseded_facts(self, cursor: sqlite3.Cursor) -> int:
         """Drop superseded facts to a near-zero weight so they stop resurfacing.
 
         A superseded fact has been invalidated by a newer one (``valid_to`` set
