@@ -172,6 +172,14 @@ def conversation_threads() -> ResponseReturnValue:
     threads, has_more, threads_returned = Transcript.recent_threads(
         'user', exclude_roles=_THREAD_EXCLUDE, limit=limit, offset=offset,
     )
+    if threads:
+        from services.thread_gist_service import get_thread_gist_service  # noqa: PLC0415
+        gist_turn_ids = [cast("int", t["turn_id"]) for t in threads if t.get("turn_id") is not None]
+        gists = get_thread_gist_service().bulk_get('user', gist_turn_ids)
+        for t in threads:
+            tid = t.get("turn_id")
+            if tid is not None:
+                t["gist"] = gists.get(cast("int", tid))
     return jsonify({"threads": threads, "has_more": has_more, "threads_returned": threads_returned})
 
 

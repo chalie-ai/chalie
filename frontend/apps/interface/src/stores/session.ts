@@ -43,9 +43,9 @@ export const useSessionStore = defineStore('session', {
      *  input dock. Null when there is nothing to show. */
     errorMessage: null as string | null,
 
-    historyOffset: 0,
     historyLoading: false,
-    historyExhausted: false,
+    /** True while a thread expand fetch is in-flight (drives the spinner). */
+    threadExpanding: false,
 
     /** Registered auth-failure callback (set by App bootstrap). */
     _onAuthFailure: null as (() => void) | null,
@@ -413,55 +413,73 @@ export const useSessionStore = defineStore('session', {
     },
 
     /**
-     * Load (or paginate) conversation history. Guards against concurrent loads
-     * and exhaustion. Initial load (offset=0) appends turns + emits force-scroll;
-     * paginated loads (offset>0) prepend.
+     * Load (or paginate) the thread list. Initial load fetches 50 most-recent
+     * collapsed threads; scroll-up pagination prepends 50 more. Expanded threads
+     * keep their forms in the conversation store and are excluded from the
+     * collapsed rows.
      */
     async loadRecentConversation(): Promise<void> {
-      if (this.historyLoading || this.historyExhausted) return;
+      const convo = useConversationStore();
+      if (convo.threadsExhausted || this.historyLoading) return;
       this.historyLoading = true;
 
-      const LIMIT = 12;
-      const MAX_TURNS = 120;
-      const convo = useConversationStore();
+      const LIMIT = 50;
+      const isInitialLoad = convo.threadsOffset === 0;
 
       try {
-        const data = await conversation.recent(
-          LIMIT,
-          this.historyOffset > 0 ? this.historyOffset : undefined,
-        );
-        const messages = data.messages ?? [];
+        const data = await conversation.threads(LIMIT, convo.threadsOffset > 0 ? convo.threadsOffset : undefined);
+        const items = data.threads ?? [];
 
-        if (messages.length === 0 && this.historyOffset === 0) {
-          this.historyExhausted = true;
+        if (items.length === 0 && convo.threadsOffset === 0) {
+          convo.threadsExhausted = true;
           return;
         }
 
-        const isInitialLoad = this.historyOffset === 0;
         if (isInitialLoad) {
-          convo.appendTurns(messages);
+          convo.appendThreadList(items);
         } else {
-          convo.prependTurns(messages);
+          convo.prependThreadList(items);
         }
 
-        this.historyOffset += data.turns_returned;
+        convo.threadsOffset += data.threads_returned;
 
-        if (!data.has_more || this.historyOffset >= MAX_TURNS) {
-          this.historyExhausted = true;
+        if (!data.has_more) {
+          convo.threadsExhausted = true;
         }
 
-        if (isInitialLoad && messages.length > 0) {
+        if (isInitialLoad && items.length > 0) {
           document.dispatchEvent(new CustomEvent('session:history-initial-loaded'));
         }
       } catch (err) {
         if (err instanceof AuthError) {
           this._onAuthFailure?.();
         } else {
-          console.error('[Session] Failed to load conversation history:', err);
+          console.error('[Session] Failed to load thread list:', err);
         }
       } finally {
         this.historyLoading = false;
       }
+    },
+
+    /** Expand a thread (fetch its full rows). */
+    async expandThread(turnId: number): Promise<void> {
+      const convo = useConversationStore();
+      this.threadExpanding = true;
+      try {
+        await convo.expandThread(turnId);
+      } finally {
+        this.threadExpanding = false;
+      }
+    },
+
+    /** Collapse a thread (drop its forms). */
+    collapseThread(turnId: number): void {
+      useConversationStore().collapseThread(turnId);
+    },
+
+    /** Search threads — delegates to the conversation API. */
+    async searchThreads(q: string) {
+      return conversation.searchThreads(q);
     },
 
     /**

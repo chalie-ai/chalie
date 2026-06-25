@@ -5,7 +5,8 @@
  * dock toast. Components render the list; this store owns all mutations.
  */
 import { defineStore } from 'pinia';
-import type { ConversationAttachment, ConversationMessage, ConversationSegment } from '../api/conversation';
+import type { ConversationAttachment, ConversationMessage, ConversationSegment, ConversationThread } from '../api/conversation';
+import { conversation as convoApi } from '../api/conversation';
 import { extractText } from '../composables/useMarkup';
 
 export interface AttachmentPreview {
@@ -83,6 +84,13 @@ export interface Turn {
   forms: ConversationForm[];
 }
 
+/** Collapsed thread row in the thread-list feed. */
+export interface ThreadListItem extends ConversationThread {
+  /** True once the thread's full rows have been loaded into `forms`. */
+  expanded: boolean;
+  loading: boolean;
+}
+
 /**
  * Plain-text (TTS / remember) for one Chalie form — segments concatenated, else
  * the single text path, both markup-stripped. Shared by the speak/remember
@@ -104,19 +112,38 @@ function nextId(): number {
 export const useConversationStore = defineStore('conversation', {
   state: () => ({
     forms: [] as ConversationForm[],
+    /** Collapsed thread metadata from /conversation/threads — the thread feed. */
+    threads: [] as ThreadListItem[],
+    /** Total threads seen across all loaded pages — advances pagination. */
+    threadsOffset: 0,
+    threadsExhausted: false,
   }),
 
   getters: {
     /**
+     * Collapsed turn_ids (thread list items not expanded). Forms belonging to
+     * these are excluded from `turns` so collapsed threads render as gist rows.
+     */
+    collapsedTurnIds(state): Set<number | null> {
+      const ids = new Set<number | null>();
+      for (const t of state.threads) {
+        if (!t.expanded && t.turn_id != null) ids.add(t.turn_id);
+      }
+      return ids;
+    },
+    /**
      * Group forms into turns. History forms carry `turnId`, so a boundary is any
      * change of it — this keeps a compaction-continuation turn (assistant rows,
      * no leading user row) as its own group. Live forms have no `turnId` and
-     * fall back to: a turn starts at each user form.
+     * fall back to: a turn starts at each user form. Forms belonging to a
+     * collapsed thread list item are excluded — they render as gist rows.
      */
     turns(state): Turn[] {
+      const collapsed = this.collapsedTurnIds;
       const groups: Turn[] = [];
       let key: number | null | undefined;
       for (const f of state.forms) {
+        if (f.turnId != null && collapsed.has(f.turnId)) continue;
         const boundary =
           groups.length === 0 ||
           (f.turnId != null ? f.turnId !== key : f.kind === 'user');
@@ -133,6 +160,18 @@ export const useConversationStore = defineStore('conversation', {
         if (f.kind === 'act') return f.id;
       }
       return null;
+    },
+    /**
+     * True when a thread's last activity was within the 1-hour active window.
+     * Display/ordering only — no behavioral branch (spec §4.B).
+     */
+    isThreadActive(): (lastActivityAt: string | null) => boolean {
+      return (lastActivityAt) => {
+        if (!lastActivityAt) return false;
+        const ts = new Date(lastActivityAt).getTime();
+        if (Number.isNaN(ts)) return false;
+        return Date.now() - ts < 3_600_000;
+      };
     },
     /** Id of the most recent chalie form, or null. */
     activeChalieFormId(state): number | null {
@@ -316,23 +355,6 @@ export const useConversationStore = defineStore('conversation', {
       return id;
     },
 
-    /** Append history turns to the END of the spine (initial load). */
-    appendTurns(messages: ConversationMessage[]): void {
-      for (const msg of messages) {
-        this._appendMessage(msg, true);
-      }
-    },
-
-    /**
-     * Prepend history turns to the START of the spine (scroll-up pagination).
-     * Iterated in reverse so indices stay stable.
-     */
-    prependTurns(messages: ConversationMessage[]): void {
-      for (let i = messages.length - 1; i >= 0; i--) {
-        this._prependMessage(messages[i], false);
-      }
-    },
-
     /**
      * Concatenated plaintext of every Chalie form in `formId`'s turn — so speak
      * on any bubble plays the whole turn, not just the row clicked.
@@ -395,36 +417,107 @@ export const useConversationStore = defineStore('conversation', {
       return out;
     },
 
-    _appendMessage(msg: ConversationMessage, inWorkingMemory: boolean): void {
-      if (msg.role === 'user') {
-        const attachments = this._attachmentsFor(msg);
-        this.appendUser(msg.content, attachments, { inWorkingMemory, turnId: msg.turn_id });
-        return;
-      }
-      for (const form of this._assistantForms(msg, inWorkingMemory)) {
-        this.forms.push(form);
+    // ---- Thread-list feed (workstream F) ----
+
+    /** Append collapsed thread metadata from a /conversation/threads page. */
+    appendThreadList(items: ConversationThread[]): void {
+      for (const t of items) {
+        this.threads.push({ ...t, expanded: false, loading: false });
       }
     },
 
-    _prependMessage(msg: ConversationMessage, inWorkingMemory: boolean): void {
-      if (msg.role === 'user') {
-        const attachments = this._attachmentsFor(msg);
-        const id = nextId();
-        this.forms.unshift({
-          kind: 'user',
-          id,
-          text: msg.content,
-          attachments,
-          inWorkingMemory,
-          turnId: msg.turn_id,
-        });
-        return;
+    /** Prepend collapsed thread metadata from a paginated /conversation/threads page. */
+    prependThreadList(items: ConversationThread[]): void {
+      for (let i = items.length - 1; i >= 0; i--) {
+        this.threads.unshift({ ...items[i], expanded: false, loading: false });
       }
-      // Unshift in reverse so the prose bubble ends up before its tool group.
-      const forms = this._assistantForms(msg, inWorkingMemory);
-      for (let i = forms.length - 1; i >= 0; i--) {
-        this.forms.unshift(forms[i]);
+    },
+
+    /** Expand a collapsed thread: fetch its full rows and insert into `forms`. */
+    async expandThread(turnId: number): Promise<void> {
+      const item = this.threads.find((t) => t.turn_id === turnId);
+      if (!item || item.expanded || item.loading) return;
+      item.loading = true;
+      try {
+        const data = await convoApi.thread(turnId);
+        const messages = data.messages ?? [];
+        // Insert the thread's forms at the correct position — after the last
+        // form of the previous expanded thread and before the first form of the
+        // next expanded thread. Find insertion index by scanning `forms` for the
+        // boundary: we insert before the first form whose turnId is greater than
+        // turnId (or at the end).
+        const forms: ConversationForm[] = [];
+        for (const msg of messages) {
+          if (msg.role === 'user') {
+            const attachments = this._attachmentsFor(msg);
+            forms.push({
+              kind: 'user',
+              id: nextId(),
+              text: msg.content,
+              attachments,
+              inWorkingMemory: true,
+              turnId: msg.turn_id,
+            });
+          } else {
+            for (const f of this._assistantForms(msg, true)) forms.push(f);
+          }
+        }
+        // Insert forms into the forms array at the right position.
+        const insertIdx = this._threadInsertIndex(turnId);
+        this.forms.splice(insertIdx, 0, ...forms);
+        item.expanded = true;
+      } finally {
+        item.loading = false;
       }
+    },
+
+    /** Collapse an expanded thread: remove its forms from `forms`. */
+    collapseThread(turnId: number): void {
+      const item = this.threads.find((t) => t.turn_id === turnId);
+      if (!item || !item.expanded) return;
+      this.forms = this.forms.filter((f) => f.turnId !== turnId);
+      item.expanded = false;
+    },
+
+    /** Toggle expand/collapse for a thread. */
+    async toggleThread(turnId: number | null): Promise<void> {
+      if (turnId == null) return;
+      const item = this.threads.find((t) => t.turn_id === turnId);
+      if (!item) return;
+      if (item.expanded) this.collapseThread(turnId);
+      else await this.expandThread(turnId);
+    },
+
+    /** True when a live turn is in-flight (forms exist without a matching thread list item). */
+    hasLiveTurn(): boolean {
+      // A live turn has forms with turnId not present in any thread list item.
+      const known = new Set(this.threads.map((t) => t.turn_id).filter((t): t is number => t != null));
+      return this.forms.some((f) => f.turnId != null && !known.has(f.turnId));
+    },
+
+    /**
+     * Find the insertion index in `forms` for a thread's rows. Threads render in
+     * the same order as the thread list (most-recent first). Forms for a thread
+     * go before any form whose turnId maps to a thread that's earlier in the
+     * list (higher recency).
+     */
+    _threadInsertIndex(turnId: number): number {
+      // Build a map of turnId → list position for expanded threads.
+      const expandedOrder = new Map<number, number>();
+      for (let i = 0; i < this.threads.length; i++) {
+        const t = this.threads[i];
+        if (t.turn_id != null && t.expanded) expandedOrder.set(t.turn_id, i);
+      }
+      const myOrder = expandedOrder.get(turnId) ?? this.threads.findIndex((t) => t.turn_id === turnId);
+      // Find the first form belonging to a thread that comes AFTER this thread
+      // in the list — insert before it.
+      for (let i = 0; i < this.forms.length; i++) {
+        const fTurn = this.forms[i].turnId;
+        if (fTurn == null) continue;
+        const fOrder = expandedOrder.get(fTurn);
+        if (fOrder != null && fOrder > myOrder) return i;
+      }
+      return this.forms.length;
     },
   },
 });

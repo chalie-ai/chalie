@@ -93,6 +93,27 @@ class ThreadGistService:
             logger.debug("%s get failed for %s turn=%s: %s", LOG_PREFIX, channel, turn_id, exc)
             return None
 
+    def bulk_get(self, channel: str, turn_ids: list[int]) -> dict[int, str]:
+        """Gists for a batch of turn_ids — the thread feed's collapsed summaries.
+
+        Returns ``{turn_id: summary}`` for every turn_id that has a gist.
+        """
+        if not turn_ids:
+            return {}
+        try:
+            db = get_shared_db_service()
+            placeholders = ",".join("?" * len(turn_ids))
+            with db.connection() as conn:
+                rows = conn.execute(
+                    f"SELECT turn_id, summary FROM thread_gist "
+                    f"WHERE channel = ? AND turn_id IN ({placeholders})",
+                    (channel, *turn_ids),
+                ).fetchall()
+            return {int(r[0]): cast(str, r[1]) for r in rows}
+        except Exception as exc:
+            logger.debug("%s bulk_get failed for %s: %s", LOG_PREFIX, channel, exc)
+            return {}
+
     def pollinate(self, channel: str, active_turn_id: int, query: str, *, limit: int = 5) -> list[dict[str, object]]:
         """Top-N related gists excluding the active thread — cross-thread pollination."""
         try:

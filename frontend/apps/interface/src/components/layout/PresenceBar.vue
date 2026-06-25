@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Clock, Brain, Sun, Moon } from '@lucide/vue';
+import { Clock, Brain, Sun, Moon, Search } from '@lucide/vue';
 import { storeToRefs } from 'pinia';
 import { useSessionStore } from '../../stores/session';
 import { useTasksStore } from '../../stores/tasks';
@@ -19,6 +19,10 @@ function handleThemeToggle(): void {
   emit('chalie:theme-changed', { theme: theme.value });
 }
 
+function handleSearch(): void {
+  emit('chalie:open-thread-search', undefined);
+}
+
 /** Settings button → open the Brain admin dashboard via the platform adapter. */
 function handleSettings(): void {
   platform.openBrain();
@@ -34,6 +38,15 @@ function handleSettings(): void {
       alt="Chalie"
     />
     <div class="presence-bar__right">
+      <button
+        id="threadSearchBtn"
+        class="btn-icon"
+        aria-label="Search threads"
+        title="Search threads"
+        @click="handleSearch"
+      >
+        <Search :size="18" aria-hidden="true" />
+      </button>
       <button
         v-if="totalCount > 0"
         id="taskDrawerBtn"

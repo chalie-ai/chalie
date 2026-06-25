@@ -50,6 +50,17 @@ export interface ConversationThread {
   last_row_id: number;
   row_count: number;
   preview: string;
+  /** Per-thread one-sentence gist (from thread_gist), null when not yet generated. */
+  gist?: string | null;
+}
+
+/** A single search result from GET /threads/search. */
+export interface ThreadSearchResult {
+  turn_id: number;
+  channel: string;
+  summary: string;
+  updated_at: string;
+  score: number;
 }
 
 export const conversation = {
@@ -86,5 +97,18 @@ export const conversation = {
    */
   thread(turnId: number): Promise<{ messages: ConversationMessage[]; turn_id: number }> {
     return api.get(`/conversation/thread/${turnId}`);
+  },
+
+  /**
+   * GET /threads/search?q= — semantic + full-text search over thread gists.
+   * Returns thread id + gist + score for the search UI.
+   */
+  searchThreads(
+    q: string,
+    limit = 10,
+  ): Promise<{ results: ThreadSearchResult[]; query: string }> {
+    const params = new URLSearchParams({ q });
+    if (limit !== 10) params.set('limit', String(limit));
+    return api.get(`/threads/search?${params.toString()}`);
   },
 };
