@@ -258,7 +258,7 @@ export const useSessionStore = defineStore('session', {
                 convo.resolveAct(this._activeActId);
                 this._activeActId = null;
               }
-              if (d.content) convo.appendChalie(d.content, { ts: d.timestamp ?? '' });
+              if (d.content) convo.appendChalie(d.content, { ts: d.timestamp ?? '' }, { turnId: threadId });
               return;
             }
 
@@ -305,8 +305,11 @@ export const useSessionStore = defineStore('session', {
                 segments: responseMeta.segments,
                 ts: responseMeta.timestamp,
                 duration_ms: responseMeta.duration_ms,
-              });
+              }, { turnId: threadId });
             }
+            // Tag this turn's forms with the backend-allocated turn_id and register
+            // it as its own (expanded) thread → reply box + collapse + grouping.
+            if (data.turn_id != null) convo.bindLiveTurn(data.turn_id);
             useAmbientSensor().recordResponse();
             this.isSending = false;
             document.dispatchEvent(new CustomEvent('session:turn-done'));
@@ -437,6 +440,12 @@ export const useSessionStore = defineStore('session', {
 
         if (isInitialLoad) {
           convo.appendThreadList(items);
+          // Threads active within the last hour render expanded.
+          for (const t of items) {
+            if (t.turn_id != null && convo.isThreadActive(t.last_activity_at)) {
+              void convo.expandThread(t.turn_id);
+            }
+          }
         } else {
           convo.prependThreadList(items);
         }

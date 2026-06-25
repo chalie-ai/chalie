@@ -2,12 +2,11 @@
      plus the live in-flight turn. Drives thread-list pagination. -->
 <script setup lang="ts">
 import { ref, computed, watch, nextTick, onMounted, onBeforeUnmount } from 'vue';
-import { ChevronRight, Loader2 } from '@lucide/vue';
+import { ChevronRight } from '@lucide/vue';
 import { useConversationStore } from '../../stores/conversation';
 import type { ConversationForm, UserForm, ChalieForm, ActForm, ThreadListItem } from '../../stores/conversation';
 import { useSessionStore } from '../../stores/session';
 import { useAutoscroll } from '../../composables/useAutoscroll';
-import { emit } from '../../composables/useEventBus';
 import UserBubble from './UserBubble.vue';
 import ChalieBubble from './ChalieBubble.vue';
 import ActCycle from './ActCycle.vue';
@@ -126,10 +125,6 @@ function onCollapse(turnId: number): void {
   session.collapseThread(turnId);
 }
 
-function openSearch(): void {
-  emit('chalie:open-thread-search', undefined);
-}
-
 // Deep watch (not count-only): narration/pill growth inside an in-flight ACT
 // form leaves forms.length unchanged, so a shallow watch would stop following
 // the trail mid-cycle. flush:'post' lets scrollToBottom measure settled height;
@@ -240,14 +235,6 @@ onBeforeUnmount(() => {
         />
       </div>
     </template>
-
-    <!-- Search trigger (replaces the deleted recall dialog). -->
-    <button class="thread-search-btn" type="button" @click="openSearch">
-      <span class="thread-search-btn__icon" aria-hidden="true">
-        <Loader2 :size="14" />
-      </span>
-      <span class="thread-search-btn__label">Search threads</span>
-    </button>
   </main>
 </template>
 
@@ -387,32 +374,5 @@ onBeforeUnmount(() => {
 
 .thread-row__collapse-btn:hover {
   color: var(--text-secondary);
-}
-
-/* Search trigger button (replaces deleted recall dialog). */
-.thread-search-btn {
-  display: flex;
-  align-items: center;
-  gap: var(--space-sm);
-  margin: var(--space-lg) auto;
-  padding: var(--space-sm) var(--space-lg);
-  background: var(--bg-surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-full);
-  color: var(--text-secondary);
-  font-size: var(--font-size-sm);
-  cursor: pointer;
-  transition: border-color var(--duration-fast), color var(--duration-fast);
-}
-
-.thread-search-btn:hover {
-  border-color: color-mix(in oklab, var(--violet) 30%, transparent);
-  color: var(--accent-primary);
-}
-
-.thread-search-btn__icon {
-  display: flex;
-  align-items: center;
-  opacity: 0.7;
 }
 </style>

@@ -200,10 +200,12 @@ def _broadcast_turn_result(response: str, request_id: str, turn_start: float) ->
     # function the /conversation/recent refresh path uses, so both paths pair
     # span tags with tool_calls identically.
     transcript_ids: list[int] = []
+    turn_id: "int | None" = None
     try:
         from services.transcript_service import Transcript  # noqa: PLC0415
         rows = Transcript.get_recent("user", limit=1)
         if rows:
+            turn_id = cast("int | None", rows[-1].get("turn_id"))
             from services.database_service import get_shared_db_service  # noqa: PLC0415
             from services.rich_media_parser import resolve_tool_call_transcript_ids  # noqa: PLC0415
             with get_shared_db_service().connection() as conn:
@@ -226,7 +228,7 @@ def _broadcast_turn_result(response: str, request_id: str, turn_start: float) ->
 
     elapsed_ms = int((time.time() - turn_start) * 1000)
     broker.broadcast(message_evt)
-    broker.broadcast({"type": "done", "duration_ms": elapsed_ms})
+    broker.broadcast({"type": "done", "duration_ms": elapsed_ms, "turn_id": turn_id})
 
 
 def deliver_async_result(mp: object, result_text: str, cancel_event: threading.Event) -> None:

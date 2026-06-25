@@ -125,6 +125,31 @@ def test_turn_broadcast_reaches_all_open_surfaces(db: sqlite3.Connection, broker
         assert message["exchange_id"] == "req-fanout"
 
 
+def test_done_event_carries_the_turns_thread_id(db: sqlite3.Connection, broker: WebSocketBroker) -> None:
+    """The ``done`` event must carry the ``turn_id`` of the just-finished turn —
+    this is the round-trip that lets the live feed promote the turn into its own
+    thread (reply box + grouping). Without it the frontend tags every live turn
+    null and they collapse into one flat conversation."""
+    db.execute(
+        "INSERT INTO transcript (channel, role, content, turn_id, xml_migrated) "
+        "VALUES ('user', 'user', 'Book the flight', 7, 1)",
+        (),
+    )
+    db.commit()
+
+    surface = _Surface()
+    broker.connect(surface)
+
+    from api.chat import _broadcast_turn_result
+
+    _broadcast_turn_result("Booked.", "req-thread", time.time())
+
+    done = next(m for m in surface.received if m["type"] == "done")
+    assert done["turn_id"] == 7, (
+        f"the 'done' event must carry the turn's thread id (7); got {done.get('turn_id')!r}"
+    )
+
+
 # ── B. Targeted disconnect: closing one surface keeps the others live ───────────
 
 

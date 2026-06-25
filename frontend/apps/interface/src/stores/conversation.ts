@@ -220,7 +220,7 @@ export const useConversationStore = defineStore('conversation', {
     appendChalie(
       textOrContent: string,
       meta: ChalieMeta,
-      opts?: { escalation?: boolean; inWorkingMemory?: boolean },
+      opts?: { escalation?: boolean; inWorkingMemory?: boolean; turnId?: number | null },
     ): number {
       const id = nextId();
       const form: ChalieForm = {
@@ -231,6 +231,7 @@ export const useConversationStore = defineStore('conversation', {
         meta,
         escalation: opts?.escalation ?? false,
         inWorkingMemory: opts?.inWorkingMemory ?? true,
+        turnId: opts?.turnId,
       };
       this.forms.push(form);
       return id;
@@ -426,6 +427,37 @@ export const useConversationStore = defineStore('conversation', {
       for (const t of items) {
         this.threads.push({ ...t, expanded: false, loading: false });
       }
+    },
+
+    /**
+     * Promote the just-finished live turn into its own thread: tag every still-
+     * untagged form with the allocated `turnId` (the backend `done` event carries
+     * it) and register an expanded, active ThreadListItem. Without this, every
+     * live turn's forms stay turn_id-less and collapse into one flat `liveTurn`
+     * with no reply box — so the feed reads as one giant thread. Idempotent: a
+     * reply turn whose forms already carry `turnId` only ensures the item exists.
+     */
+    bindLiveTurn(turnId: number): void {
+      let preview = '';
+      for (const f of this.forms) {
+        if (f.turnId == null) {
+          f.turnId = turnId;
+          if (f.kind === 'user' && !preview) preview = f.text;
+        }
+      }
+      if (this.threads.some((t) => t.turn_id === turnId)) return;
+      // SQLite naive-UTC shape ("YYYY-MM-DD HH:MM:SS") so isThreadActive reads it.
+      const nowUtc = new Date().toISOString().slice(0, 19).replace('T', ' ');
+      this.threads.push({
+        turn_id: turnId,
+        last_activity_at: nowUtc,
+        last_row_id: 0,
+        row_count: 0,
+        preview,
+        gist: null,
+        expanded: true,
+        loading: false,
+      });
     },
 
     /** Prepend collapsed thread metadata from a paginated /conversation/threads page. */

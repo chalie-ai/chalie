@@ -35,6 +35,8 @@ export interface WsErrorEvent {
 export interface WsDoneEvent {
   type: 'done';
   duration_ms: number;
+  /** turn_id (thread) the just-finished turn was persisted under; null for legacy/untracked turns. */
+  turn_id?: number | null;
 }
 export interface WsPingEvent {
   type: 'ping';
@@ -83,7 +85,7 @@ export interface ChatCallbacks {
   onMessage?: (data: WsMessageEvent) => void;
   onNarration?: (data: WsActNarrationEvent) => void;
   onError?: (data: { message: string; recoverable?: boolean }) => void;
-  onDone?: (data: { duration_ms: number }) => void;
+  onDone?: (data: { duration_ms: number; turn_id?: number | null }) => void;
   onToolStart?: (data: WsActToolStartEvent) => void;
   onToolEnd?: (data: WsActToolEndEvent) => void;
 }
