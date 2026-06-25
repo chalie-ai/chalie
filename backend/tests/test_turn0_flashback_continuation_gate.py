@@ -1,15 +1,16 @@
-"""Feature tests for turn-0 flashback + continuation gate + render.
+"""Feature tests for turn-0 flashback + terse gate + continuation gate + render.
 
-The gate (in ``MessageProcessor._seed_turn_zero``) fires the auto memory recall
-only on session start or topic shift, and skips it for continuation messages
-whose embedding sits close to the running conversation centroid.
+The gates (in ``MessageProcessor._seed_turn_zero``) fire the auto memory recall
+only on session start or a substantive topic shift. A terse message is skipped
+outright — it signals an active conversation (the model already holds the full
+thread in context) and carries no topic to recall against. A substantive
+continuation whose embedding sits close to the running conversation centroid is
+skipped by the centroid gate. The query the seed recalls with is the raw user
+message — no rewriting, no steering.
 
 Observable: ``memory_recall_log`` rows with ``caller='seed'`` (schema.sql:447).
 Each test drives sequential turns sharing the persisted transcript and counts
 seed rows the gate let through.
-
-Status (RED-first): ``_seed_turn_zero`` currently fires unconditionally. Tests
-2/3/4/5 FAIL at HEAD; tests 1 and 6 are regression pins that may be GREEN now.
 """
 
 import json
@@ -71,18 +72,6 @@ def _unit(index: int, dim: int = _VEC_DIM) -> list[float]:
     return v
 
 
-def _write_compaction(channel: str, body: str) -> None:
-    """Persist a compaction row (role='compaction') so the terse-message gate can
-    read the '- Now -' section when composing the embed text."""
-    db = get_shared_db_service()
-    with db.connection() as conn:
-        conn.execute(
-            "INSERT INTO transcript (channel, role, content) VALUES (?, 'compaction', ?)",
-            (channel, body),
-        )
-        conn.commit()
-
-
 # ── 1. Flashback fires on session start ──────────────────────────────────────
 
 
@@ -102,20 +91,25 @@ def test_flashback_fires_on_session_start(db: sqlite3.Connection) -> None:
 
 
 def test_continuation_message_does_not_refire_flashback(db: sqlite3.Connection) -> None:
-    """A continuation on the same topic embeds close to the centroid; the gate
-    must SKIP the flashback - no new caller='seed' row beyond the session-start."""
+    """A substantive continuation on the same topic embeds close to the centroid;
+    the centroid gate must SKIP the flashback - no new caller='seed' row beyond
+    the session-start. The message is deliberately non-terse so it exercises the
+    embedding gate, not the terse short-circuit."""
     # Turn 1: session start — flashback fires (centroid is now established).
     _new_turn(
         "can you help me plan the family trip to Gozo and book the ferry"
     )._seed_turn_zero()
     assert _seed_count(db) == 1, "session-start flashback should have fired"
 
-    # Turn 2: a bare continuation of the SAME thread. Close to centroid → skip.
-    _new_turn("yes, do that")._seed_turn_zero()
+    # Turn 2: a substantive continuation of the SAME thread (non-terse, so the
+    # terse gate does not short-circuit it). Close to centroid → skip.
+    _new_turn(
+        "yes please go ahead and book that Gozo ferry for the family trip"
+    )._seed_turn_zero()
 
     assert _seed_count(db) == 1, (
         "continuation message re-fired the flashback — the centroid gate let a "
-        "second caller='seed' row through for 'yes, do that'"
+        "second caller='seed' row through for an on-topic continuation"
     )
 
 
@@ -144,61 +138,30 @@ def test_topic_shift_refires_flashback(db: sqlite3.Connection) -> None:
     )
 
 
-# ── 4. Terse message resolves topic via living-doc 'Now' ─────────────────────
+# ── 4. Terse message always skips, even on an apparent topic shift ────────────
 
 
-def test_terse_message_resolves_topic_via_living_doc_now(db: sqlite3.Connection) -> None:
-    """A terse message carries no topic alone; the gate composes its embed with
-    the compaction '- Now -' section. Proof: the same terse message ('yes please')
-    against the same centroid yields DIFFERENT decisions depending only on '- Now -':
-    continuation Now -> SKIP; shifted Now (unrelated deadline) -> RE-FIRE."""
-    # --- Branch A: 'Now' continues the established topic → terse should SKIP.
+def test_terse_message_always_skips_flashback(db: sqlite3.Connection) -> None:
+    """A terse message signals an active conversation (the model already holds the
+    full thread in context) and carries no topic to recall against, so the
+    flashback is skipped outright — regardless of whether it would otherwise read
+    as a topic shift. Proof: a terse message that is lexically a HARD topic shift
+    away from the established centroid still does NOT add a caller='seed' row,
+    showing the terse gate short-circuits before the centroid gate."""
+    # Establish a centroid firmly about the Gozo trip.
     _new_turn(
         "can you help me plan the family trip to Gozo and book the ferry"
     )._seed_turn_zero()
-    base_a = _seed_count(db)
-    _write_compaction(
-        "user",
-        "- Person — User is planning a family holiday.\n"
-        "- Now — User is finalising the Gozo ferry booking and hotel for the family trip.\n"
-        "- Last — User asked about the ferry.\n",
-    )
-    _new_turn("yes please")._seed_turn_zero()
-    fired_when_now_matches = _seed_count(db) - base_a
+    base = _seed_count(db)
 
-    assert fired_when_now_matches == 0, (
-        "terse message re-fired even though the living-doc 'Now' kept it on-topic "
-        "— the 'Now' composite was not used to keep it near the centroid"
-    )
+    # Terse turn that is a hard topic shift ('nginx TLS' has nothing to do with
+    # the Gozo centroid). The centroid gate alone would RE-FIRE on it; terseness
+    # must skip it first.
+    _new_turn("nginx TLS now")._seed_turn_zero()
 
-    # --- Branch B: identical terse message, but 'Now' has shifted → RE-FIRE.
-    # Fresh conversation state so the centroid is the SAME single Gozo turn.
-    # tool_calls.transcript_id is an un-cascaded FK onto transcript(id)
-    # (schema.sql:518), so the act-trail rows Branch A recorded must be cleared
-    # before the transcript rows they reference.
-    db.execute("DELETE FROM tool_calls")
-    db.execute("DELETE FROM transcript")
-    db.execute("DELETE FROM memory_recall_log")
-    db.commit()
-
-    _new_turn(
-        "can you help me plan the family trip to Gozo and book the ferry"
-    )._seed_turn_zero()
-    base_b = _seed_count(db)
-    _write_compaction(
-        "user",
-        "- Person — User is a backend engineer.\n"
-        "- Now — User is debugging a production nginx TLS outage on the home server "
-        "before a hard deadline.\n"
-        "- Last — User mentioned the server.\n",
-    )
-    _new_turn("yes please")._seed_turn_zero()
-    fired_when_now_shifted = _seed_count(db) - base_b
-
-    assert fired_when_now_shifted == 1, (
-        "terse message did NOT re-fire even though the living-doc 'Now' had shifted "
-        "to an unrelated topic — the 'Now' section was ignored when building the "
-        "terse-message embed"
+    assert _seed_count(db) == base, (
+        "terse message fired the flashback — terseness must skip recall outright "
+        "even on an apparent topic shift"
     )
 
 
@@ -235,7 +198,12 @@ def test_seed_renders_curated_block_not_json(db: sqlite3.Connection) -> None:
         embedding=_unit(7),
     )
 
-    _new_turn("remind me about the Gozo ferry booking")._seed_turn_zero()
+    # Non-terse (≥8 tokens) so the terse gate does not skip the seed; every
+    # content token still appears in the episode gist above so the FTS lane
+    # (which ANDs the query terms) surfaces it under the 256-dim harness.
+    _new_turn(
+        "remind me about the Gozo ferry booking for the family trip on Saturday"
+    )._seed_turn_zero()
 
     injected = _last_seed_result(db)
     assert injected is not None, "the session-start seed recorded no memory call"

@@ -163,10 +163,13 @@ def test_turn_zero_flashback_renders_the_full_untruncated_gist(db: sqlite3.Conne
 
     # Drive the real session-start flashback exactly where it fires in the ACT
     # loop: a fresh UserConfig MessageProcessor with an input row written.
+    # Non-terse (≥8 tokens) so the seed's terse gate does not skip it; every
+    # content token appears in the gist above so the recall surfaces the episode.
+    query = "remind me about the Gozo ferry booking for the family trip on Saturday"
     mp = object.__new__(MessageProcessor)
-    MessageProcessor.__init__(mp, "remind me about the Gozo ferry booking", {})
+    MessageProcessor.__init__(mp, query, {})
     mp.config = UserConfig()
-    mp.uid = Transcript.write_input_row("user", "user", "remind me about the Gozo ferry booking")
+    mp.uid = Transcript.write_input_row("user", "user", query)
     mp.active_tools = list(mp.config.always_available or [])
     mp._seed_turn_zero()
 
