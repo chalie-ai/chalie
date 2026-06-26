@@ -373,7 +373,7 @@ onBeforeUnmount(() => {
 .thread-card {
   display: flex;
   flex-direction: column;
-  max-height: 50vh;
+  max-height: 70vh;
   margin: 0 calc(-1 * var(--spine-pad-x));
   border: none;
   border-bottom: 1px solid var(--border);

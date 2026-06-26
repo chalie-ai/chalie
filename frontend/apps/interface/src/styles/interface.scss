@@ -286,9 +286,8 @@ body.speaker-user #ambientBloom {
   // Exposed so full-bleed children (thread rows/cards) can cancel it with a
   // negative margin that tracks the responsive padding below.
   --spine-pad-x: var(--space-lg);
-  width: 95vw;
-  max-width: 95vw;
-  margin: 0 auto;
+  width: 100%;
+  max-width: 100%;
   padding: calc(56px + var(--space-xl)) var(--spine-pad-x) calc(80px + var(--space-xl));
   display: flex;
   flex-direction: column;
@@ -316,12 +315,32 @@ body.speaker-user #ambientBloom {
 }
 
 // Inline variant — the same composer rendered in-flow inside a thread card
-// instead of pinned to the viewport footer.
+// instead of pinned to the viewport footer. Full-bleed: no wrapper padding so
+// the recessed box and its top border span the whole card width.
 .input-dock--inline {
   position: static;
   z-index: auto;
-  padding: var(--space-sm) var(--space-md) var(--space-md);
+  padding: 0;
   background: none;
+}
+
+// Inline reply box: a recessed full-width band — darker than the card (matches
+// the page base), square, separated by a single top border. No pill, shadow or
+// blur. Content is inset to --spine-pad-x so it lines up with the card body.
+.input-dock--inline .input-dock__inner {
+  background: var(--bg);
+  border: none;
+  border-top: 1px solid var(--border);
+  border-radius: 0;
+  box-shadow: none;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  padding: var(--space-xs) var(--spine-pad-x);
+}
+
+// No pill glow on focus; the top border alone picks up the violet tint.
+.input-dock--inline .input-dock__inner:focus-within {
+  box-shadow: none;
 }
 
 .input-dock__outer {
@@ -336,7 +355,7 @@ body.speaker-user #ambientBloom {
 // The footer caps controls at --dock-width to match its centred input box;
 // inline the box runs full width, so the controls must too or their edges
 // (think mode / context) drift inward of the input box boundaries.
-.input-dock--inline .dock-controls { max-width: none; }
+.input-dock--inline .dock-controls { max-width: none; padding: 0 var(--spine-pad-x); }
 
 // Closable error toast that floats just above the compose box. Themed for both
 // dark and light via tokens; the red tint sits on the card, never on the icon.
@@ -393,7 +412,7 @@ body.speaker-user #ambientBloom {
   background: var(--bg-surface-2);
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-full);
-  padding: var(--space-sm) var(--space-md);
+  padding: var(--space-xs) var(--space-md);
   backdrop-filter: blur(20px) saturate(120%);
   -webkit-backdrop-filter: blur(20px) saturate(120%);
   box-shadow: var(--shadow-card);
