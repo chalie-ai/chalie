@@ -44,6 +44,12 @@ function threadTurnId(turn: { forms: ConversationForm[] }): number | null {
   return null;
 }
 
+/** True while this thread has a live (unresolved) ACT group — i.e. Chalie is
+ *  mid-loop on it. Drives the header spinner + pulsing title. */
+function isLooping(forms: ConversationForm[]): boolean {
+  return forms.some((f) => f.kind === 'act' && !f.collapsed);
+}
+
 const feedRef = ref<HTMLElement | null>(null);
 
 const { scrollToBottom, forceScrollToBottom } = useAutoscroll(feedRef);
@@ -116,11 +122,6 @@ function onThreadClick(thread: ThreadListItem): void {
   void session.expandThread(thread.turn_id!);
 }
 
-function onCollapsedReply(thread: ThreadListItem): void {
-  if (thread.loading) return;
-  void session.expandThread(thread.turn_id!);
-}
-
 function onCollapse(turnId: number): void {
   session.collapseThread(turnId);
 }
@@ -185,14 +186,6 @@ onBeforeUnmount(() => {
           <span v-if="entry.thread.gist" class="thread-row__gist">{{ entry.thread.gist }}</span>
           <span v-else class="thread-row__gist thread-row__gist--placeholder">{{ entry.thread.preview || 'Conversation' }}</span>
         </div>
-        <button
-          class="thread-row__reply-btn"
-          type="button"
-          aria-label="Reply in thread"
-          @click.stop="onCollapsedReply(entry.thread)"
-        >
-          Reply
-        </button>
       </div>
 
       <!-- Expanded thread: a self-contained card. The header names what started
@@ -204,17 +197,25 @@ onBeforeUnmount(() => {
         class="thread-card"
         :class="{ 'thread-card--active': entry.thread && conversationStore.isThreadActive(entry.thread.last_activity_at) }"
       >
-        <header v-if="threadTurnId(entry.turn) != null" class="thread-card__head">
-          <span class="thread-card__starter">{{ entry.thread?.gist || entry.thread?.preview || 'Thread' }}</span>
-          <button
-            class="thread-card__collapse"
-            type="button"
-            aria-label="Collapse thread"
-            @click="onCollapse(threadTurnId(entry.turn)!)"
-          >
-            <ChevronDown :size="15" aria-hidden="true" />
-            <span>Collapse</span>
-          </button>
+        <header
+          v-if="threadTurnId(entry.turn) != null"
+          class="thread-card__head"
+          role="button"
+          tabindex="0"
+          aria-label="Collapse thread"
+          @click="onCollapse(threadTurnId(entry.turn)!)"
+          @keydown.enter="onCollapse(threadTurnId(entry.turn)!)"
+        >
+          <output
+            v-if="isLooping(entry.turn.forms)"
+            class="thread-card__spinner"
+            aria-label="Working"
+          />
+          <ChevronDown v-else class="thread-card__caret" :size="15" aria-hidden="true" />
+          <span
+            class="thread-card__starter"
+            :class="{ 'thread-card__starter--loading': isLooping(entry.turn.forms) }"
+          >{{ entry.thread?.gist || entry.thread?.preview || 'Thread' }}</span>
         </header>
         <div class="thread-card__body">
           <!-- Same .turn flex grouping the flat feed uses, so replies keep the
@@ -366,22 +367,6 @@ onBeforeUnmount(() => {
   color: var(--text-secondary);
 }
 
-.thread-row__reply-btn {
-  flex-shrink: 0;
-  background: transparent;
-  border: 1px solid color-mix(in oklab, var(--violet) 25%, transparent);
-  color: var(--accent-primary);
-  font-size: 0.72rem;
-  padding: 3px 10px;
-  border-radius: var(--radius-full);
-  cursor: pointer;
-  transition: background var(--duration-fast);
-}
-
-.thread-row__reply-btn:hover {
-  background: color-mix(in oklab, var(--violet) 10%, transparent);
-}
-
 /* Expanded thread — a contained card grouping a starter message with its
    replies, visually distinct from the flat collapsed rows around it. */
 .thread-card {
@@ -396,6 +381,7 @@ onBeforeUnmount(() => {
   border-left: 3px solid var(--violet);
 }
 
+/* The whole header is the expand/collapse affordance — click it to collapse. */
 .thread-card__head {
   display: flex;
   align-items: center;
@@ -403,6 +389,28 @@ onBeforeUnmount(() => {
   padding: var(--space-sm) var(--space-md);
   background: color-mix(in oklab, var(--violet) 5%, transparent);
   border-bottom: 1px solid var(--border);
+  cursor: pointer;
+  transition: background var(--duration-fast);
+}
+
+.thread-card__head:hover {
+  background: color-mix(in oklab, var(--violet) 9%, transparent);
+}
+
+.thread-card__caret {
+  flex-shrink: 0;
+  color: var(--text-tertiary);
+}
+
+/* Live-loop affordance: a small spinner replaces the caret while a step runs. */
+.thread-card__spinner {
+  flex-shrink: 0;
+  width: 13px;
+  height: 13px;
+  border: 2px solid color-mix(in oklab, var(--violet) 25%, transparent);
+  border-top-color: var(--violet);
+  border-radius: 50%;
+  animation: history-spin 0.7s linear infinite;
 }
 
 .thread-card__starter {
@@ -416,23 +424,14 @@ onBeforeUnmount(() => {
   text-overflow: ellipsis;
 }
 
-.thread-card__collapse {
-  flex-shrink: 0;
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  background: transparent;
-  border: 1px solid color-mix(in oklab, var(--violet) 25%, transparent);
-  color: var(--accent-primary);
-  font-size: 0.72rem;
-  padding: 3px 10px;
-  border-radius: var(--radius-full);
-  cursor: pointer;
-  transition: background var(--duration-fast);
+/* Gentle opacity oscillation signals the thread is actively working. */
+.thread-card__starter--loading {
+  animation: thread-pulse 1.4s ease-in-out infinite;
 }
 
-.thread-card__collapse:hover {
-  background: color-mix(in oklab, var(--violet) 10%, transparent);
+@keyframes thread-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.55; }
 }
 
 /* Just a frame: the inner .turn carries the flex layout, gap and alignment. */

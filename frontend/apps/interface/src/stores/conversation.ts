@@ -237,14 +237,17 @@ export const useConversationStore = defineStore('conversation', {
       return id;
     },
 
-    /** Create a new (live, expanded) ACT tool-group and return its id. */
-    appendAct(): number {
+    /** Create a new (live, expanded) ACT tool-group and return its id. A thread
+     *  reply tags it with the thread's turn_id so the live trail renders inside
+     *  that thread; a new thread leaves it null until bindLiveTurn assigns one. */
+    appendAct(turnId: number | null = null): number {
       const id = nextId();
       const form: ActForm = {
         kind: 'act',
         id,
         tools: [],
         collapsed: false,
+        turnId,
       };
       this.forms.push(form);
       return id;

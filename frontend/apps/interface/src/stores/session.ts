@@ -204,7 +204,7 @@ export const useSessionStore = defineStore('session', {
       // Open the ACT group up-front: an empty live group is the "thinking…"
       // placeholder (logo + stop affordance). The step's first tool_start lands
       // its pill in place; a tool-free turn evicts the empty group on resolve.
-      this._activeActId = convo.appendAct();
+      this._activeActId = convo.appendAct(threadId);
 
       // Capture the FINAL turn result across onMessage(final) / onDone — interim
       // steps render immediately and are never cached.
@@ -228,7 +228,7 @@ export const useSessionStore = defineStore('session', {
           // preceding interim message.
           onToolStart: (data) => {
             const d = data as { id?: string; name?: string; summary?: string };
-            if (this._activeActId == null) this._activeActId = convo.appendAct();
+            if (this._activeActId == null) this._activeActId = convo.appendAct(threadId);
             convo.appendToolPill(this._activeActId, d.id ?? '', d.name ?? '', d.summary);
           },
 
