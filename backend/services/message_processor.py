@@ -274,6 +274,9 @@ class MessageProcessor:
             )
             if self.turn_id is None:
                 self.turn_id = Transcript.turn_id_of_row(self.uid)
+                if self._cfg.broadcast_to == "user" and self.turn_id is not None:
+                    from api.chat import _broadcast_turn_started  # noqa: PLC0415
+                    _broadcast_turn_started(self.turn_id)
             self.anchor = self.uid
             if self.turn_id is not None:
                 self._chain_turn_ids.add(self.turn_id)

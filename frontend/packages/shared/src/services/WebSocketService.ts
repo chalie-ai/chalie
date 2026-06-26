@@ -38,6 +38,12 @@ export interface WsDoneEvent {
   /** turn_id (thread) the just-finished turn was persisted under; null for legacy/untracked turns. */
   turn_id?: number | null;
 }
+export interface WsTurnStartedEvent {
+  type: 'turn_started';
+  /** turn_id (thread) allocated for the in-flight thread-starter, emitted the
+   *  moment its input row is written — ahead of the ACT loop and `done`. */
+  turn_id: number;
+}
 export interface WsPingEvent {
   type: 'ping';
 }
@@ -77,6 +83,7 @@ export type WsInboundEvent =
   | WsMessageEvent
   | WsErrorEvent
   | WsDoneEvent
+  | WsTurnStartedEvent
   | WsPingEvent
   | WsPushEvent;
 
@@ -86,6 +93,7 @@ export interface ChatCallbacks {
   onNarration?: (data: WsActNarrationEvent) => void;
   onError?: (data: { message: string; recoverable?: boolean }) => void;
   onDone?: (data: { duration_ms: number; turn_id?: number | null }) => void;
+  onTurnStarted?: (data: WsTurnStartedEvent) => void;
   onToolStart?: (data: WsActToolStartEvent) => void;
   onToolEnd?: (data: WsActToolEndEvent) => void;
 }
@@ -434,6 +442,9 @@ export class WebSocketService {
           return;
         case 'message':
           this.chatCallbacks.onMessage?.(data);
+          return;
+        case 'turn_started':
+          this.chatCallbacks.onTurnStarted?.(data);
           return;
         case 'error':
           this.chatCallbacks.onError?.(data);

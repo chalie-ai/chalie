@@ -192,10 +192,17 @@ export const useSessionStore = defineStore('session', {
       const convo = useConversationStore();
       const ws = getWebSocket();
 
+      // A reply knows its thread up-front; a new thread learns its id from the
+      // backend's `turn_started` mid-flight. Tracking it in one mutable means
+      // every form this turn appends carries the id once known, so they group
+      // under — and render inside — the same thread card (header + reply dock)
+      // without waiting for `done`.
+      let liveTurnId = threadId;
+
       if (showUserBubble) {
         const uid = convo.appendUser(text || '[File attached]', previews, {
           inWorkingMemory: true,
-          turnId: threadId,
+          turnId: liveTurnId,
         });
         this._lastUserFormId = uid;
         this._lastUserText = text;
@@ -204,7 +211,7 @@ export const useSessionStore = defineStore('session', {
       // Open the ACT group up-front: an empty live group is the "thinking…"
       // placeholder (logo + stop affordance). The step's first tool_start lands
       // its pill in place; a tool-free turn evicts the empty group on resolve.
-      this._activeActId = convo.appendAct(threadId);
+      this._activeActId = convo.appendAct(liveTurnId);
 
       // Capture the FINAL turn result across onMessage(final) / onDone — interim
       // steps render immediately and are never cached.
@@ -226,9 +233,18 @@ export const useSessionStore = defineStore('session', {
           // Use d.id (NOT d.call_id) — frame is act_tool_start { type,name,id,summary }.
           // Lazily open the step's tool group; its prose already landed via the
           // preceding interim message.
+          // Bind the new thread the moment its turn_id is allocated (input row
+          // write), so the card header and reply dock render live. Replies
+          // already carry their id; the gate keeps this to thread-starters.
+          onTurnStarted: (data) => {
+            if (liveTurnId != null) return;
+            liveTurnId = data.turn_id;
+            convo.bindLiveTurn(data.turn_id);
+          },
+
           onToolStart: (data) => {
             const d = data as { id?: string; name?: string; summary?: string };
-            if (this._activeActId == null) this._activeActId = convo.appendAct(threadId);
+            if (this._activeActId == null) this._activeActId = convo.appendAct(liveTurnId);
             convo.appendToolPill(this._activeActId, d.id ?? '', d.name ?? '', d.summary);
           },
 
@@ -258,7 +274,7 @@ export const useSessionStore = defineStore('session', {
                 convo.resolveAct(this._activeActId);
                 this._activeActId = null;
               }
-              if (d.content) convo.appendChalie(d.content, { ts: d.timestamp ?? '' }, { turnId: threadId });
+              if (d.content) convo.appendChalie(d.content, { ts: d.timestamp ?? '' }, { turnId: liveTurnId });
               return;
             }
 
@@ -305,10 +321,11 @@ export const useSessionStore = defineStore('session', {
                 segments: responseMeta.segments,
                 ts: responseMeta.timestamp,
                 duration_ms: responseMeta.duration_ms,
-              }, { turnId: threadId });
+              }, { turnId: liveTurnId });
             }
-            // Tag this turn's forms with the backend-allocated turn_id and register
-            // it as its own (expanded) thread → reply box + collapse + grouping.
+            // Fallback bind: `turn_started` already bound a new thread mid-flight,
+            // so this is idempotent there; it still covers paths that emit the id
+            // only on `done` (e.g. a frame missed before the surface was sending).
             if (data.turn_id != null) convo.bindLiveTurn(data.turn_id);
             useAmbientSensor().recordResponse();
             this.isSending = false;

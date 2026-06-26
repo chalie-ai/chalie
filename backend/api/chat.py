@@ -173,6 +173,16 @@ def _broadcast_interim(metadata: dict[str, object], content: str) -> None:
     })
 
 
+def _broadcast_turn_started(turn_id: int) -> None:
+    """Announce a thread-starter's allocated ``turn_id`` the instant its input
+    row is written — before the ACT loop runs. The surface binds the in-flight
+    thread immediately, so a new thread's card header and reply dock render live
+    instead of only appearing once the turn finishes. The ``done`` event carries
+    the same id as an idempotent fallback for paths that miss this frame.
+    """
+    WebSocketBroker().broadcast({"type": "turn_started", "turn_id": turn_id})
+
+
 def _broadcast_provider_retry(attempt: int, max_attempts: int) -> None:
     """Notify the user surface that a provider call failed and is being resent.
 
