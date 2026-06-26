@@ -1,3 +1,13 @@
+<script lang="ts">
+import { ref } from 'vue';
+
+// Shared across every mounted dock. The footer dock and an open thread's reply
+// dock both render at once, so the focus-routed handlers (voice transcript,
+// interrupt-restore) and the pending-attachment strip act on the dock the user
+// is composing in — otherwise one voice transcript would paste into both.
+const activeDockKey = ref<string>('main');
+</script>
+
 <script setup lang="ts">
 /**
  * InputDock — compose / send / stop, plus the full peripheral controls.
@@ -5,7 +15,7 @@
  * WS single-owner rule: send/stop go through the session store; this component
  * never touches the WebSocket directly.
  */
-import { ref, computed, onMounted, onBeforeUnmount, nextTick, watch } from 'vue';
+import { computed, onMounted, onBeforeUnmount, nextTick, watch } from 'vue';
 import { storeToRefs } from 'pinia';
 import { on } from '../../composables/useEventBus';
 import { useSessionStore } from '../../stores/session';
@@ -26,6 +36,14 @@ import { FileText, Image, Plus, Mic, Send, X, AlertTriangle } from '@lucide/vue'
  * `turnId` and renders in-flow inside its thread card.
  */
 const props = withDefaults(defineProps<{ turnId?: number | null }>(), { turnId: null });
+
+// Stable id for this dock so focus routing can tell the footer ('main') from a
+// thread reply apart. Becomes the active dock on any interaction (focus/pointer).
+const dockKey = props.turnId != null ? `t${props.turnId}` : 'main';
+const isActiveDock = computed(() => activeDockKey.value === dockKey);
+function markActive(): void {
+  activeDockKey.value = dockKey;
+}
 
 const session = useSessionStore();
 const voiceStore = useVoiceStore();
@@ -162,6 +180,7 @@ function onBeforeUnload(e: BeforeUnloadEvent): void {
 }
 
 function onTurnInterrupted(e: Event): void {
+  if (!isActiveDock.value) return;
   const detail = (e as CustomEvent<{ text: string }>).detail;
   text.value = detail.text ?? '';
   nextTick(() => {
@@ -179,6 +198,7 @@ let _unsubVoiceTranscript: (() => void) | null = null;
 
 /** Paste the voice transcript into the compose textarea for review — does NOT auto-send. */
 function onVoiceTranscript({ text: transcript }: { text: string }): void {
+  if (!isActiveDock.value) return;
   text.value = transcript;
   nextTick(() => {
     grow();
@@ -221,12 +241,22 @@ onBeforeUnmount(() => {
   document.removeEventListener('click', onDocumentClick);
   globalThis.removeEventListener('scroll', onWindowScroll);
   globalThis.removeEventListener('beforeunload', onBeforeUnload);
-  voiceStore.destroyRecorder();
+  // Hand focus routing back to the footer when an inline dock collapses.
+  if (activeDockKey.value === dockKey) activeDockKey.value = 'main';
+  // The recorder is a shared singleton — only the permanent footer dock tears it
+  // down, so collapsing a thread mid-recording can't kill it under the footer.
+  if (props.turnId == null) voiceStore.destroyRecorder();
 });
 </script>
 
 <template>
-  <footer class="input-dock" :class="{ 'input-dock--inline': turnId != null }">
+  <footer
+    class="input-dock"
+    :class="{ 'input-dock--inline': turnId != null }"
+    :data-turn-id="turnId"
+    @focusin="markActive"
+    @pointerdown="markActive"
+  >
     <div v-if="session.errorMessage" class="dock-error" role="alert">
       <AlertTriangle class="dock-error__icon" :size="18" aria-hidden="true" />
       <span class="dock-error__text">{{ session.errorMessage }}</span>
@@ -240,7 +270,9 @@ onBeforeUnmount(() => {
       </button>
     </div>
 
-    <ImageAttachStrip />
+    <!-- Attachments are a shared store; render the pending strip only in the
+         active dock so the footer and an open thread don't show duplicates. -->
+    <ImageAttachStrip v-if="isActiveDock" />
 
     <div
       id="attachMenu"

@@ -356,6 +356,12 @@ onBeforeUnmount(() => {
   font-style: italic;
 }
 
+/* The faint tertiary reads as washed-out on the dark surface — lift the gist
+   preview to the secondary tone so it stays legible. */
+[data-theme='dark'] .thread-row__gist--placeholder {
+  color: var(--text-secondary);
+}
+
 .thread-row__reply-btn {
   flex-shrink: 0;
   background: transparent;
@@ -425,10 +431,11 @@ onBeforeUnmount(() => {
   background: color-mix(in oklab, var(--violet) 10%, transparent);
 }
 
-/* The reply line: replies hang off a thread spine, Slack-style. */
+/* The reply column. A flex column so user bubbles can align right
+   (.user-message uses align-self: flex-end). */
 .thread-card__body {
+  display: flex;
+  flex-direction: column;
   padding: var(--space-md);
-  border-left: 2px solid color-mix(in oklab, var(--violet) 18%, transparent);
-  margin-left: var(--space-md);
 }
 </style>

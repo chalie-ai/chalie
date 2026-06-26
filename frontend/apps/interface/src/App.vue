@@ -2,7 +2,6 @@
 import { onMounted, onBeforeUnmount } from 'vue';
 import { platform, isTauri, useTheme } from '@chalie/shared';
 import { useSessionStore } from './stores/session';
-import { useConversationStore } from './stores/conversation';
 import { useVoiceStore } from './stores/voice';
 import { useHeartbeat } from './composables/useHeartbeat';
 import { useAmbientSensor } from './composables/useAmbientSensor';
@@ -21,7 +20,6 @@ import UnlockVault from './components/layout/UnlockVault.vue';
 
 const { init: initTheme } = useTheme();
 const session = useSessionStore();
-const conversation = useConversationStore();
 const voiceStore = useVoiceStore();
 
 // Single auth-failure redirect — wired to BOTH the session store (turn-level
@@ -75,10 +73,12 @@ onBeforeUnmount(() => {
 
   <ConversationFeed />
 
-  <!-- Footer composer for starting a new thread. While a thread is open its
-       reply composer (the same component) is the single live instance, so the
-       footer hides to avoid two docks contending for the shared singletons. -->
-  <InputDock v-if="conversation.expandedTurnId == null" />
+  <!-- Footer composer for starting a new thread — always present. It is the
+       same component as a thread's inline reply; only the turn_id differs (null
+       here scaffolds a new thread). Multiple docks share global stores, so the
+       focus-routed handlers (voice/interrupt/attach strip) target the active
+       dock only — see InputDock. -->
+  <InputDock />
 
   <!-- Teleport targets for dialogs / permission cards -->
   <div id="permStack" class="permission-stack"></div>

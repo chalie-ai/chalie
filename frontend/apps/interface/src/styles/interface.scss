@@ -330,6 +330,10 @@ body.speaker-user #ambientBloom {
 }
 
 .input-dock--inline .input-dock__outer { max-width: none; }
+// The footer caps controls at --dock-width to match its centred input box;
+// inline the box runs full width, so the controls must too or their edges
+// (think mode / context) drift inward of the input box boundaries.
+.input-dock--inline .dock-controls { max-width: none; }
 
 // Closable error toast that floats just above the compose box. Themed for both
 // dark and light via tokens; the red tint sits on the card, never on the icon.

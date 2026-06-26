@@ -131,11 +131,6 @@ export const useConversationStore = defineStore('conversation', {
       }
       return ids;
     },
-    /** turn_id of the single open thread (accordion: at most one), or null. */
-    expandedTurnId(state): number | null {
-      const open = state.threads.find((t) => t.expanded && t.turn_id != null);
-      return open?.turn_id ?? null;
-    },
     /**
      * Group forms into turns. History forms carry `turnId`, so a boundary is any
      * change of it — this keeps a compaction-continuation turn (assistant rows,
