@@ -217,26 +217,30 @@ onBeforeUnmount(() => {
           </button>
         </header>
         <div class="thread-card__body">
-          <template v-for="row in groupRows(entry.turn.forms)" :key="row.id">
-            <ActCycleGroup
-              v-if="row.type === 'act-group'"
-              :forms="row.forms"
-            />
-            <template v-else>
-              <UserBubble
-                v-if="row.form.kind === 'user'"
-                :form="(row.form as UserForm)"
+          <!-- Same .turn flex grouping the flat feed uses, so replies keep the
+               main-chat spacing/alignment — the card is only a frame around it. -->
+          <div class="turn">
+            <template v-for="row in groupRows(entry.turn.forms)" :key="row.id">
+              <ActCycleGroup
+                v-if="row.type === 'act-group'"
+                :forms="row.forms"
               />
-              <ChalieBubble
-                v-else-if="row.form.kind === 'chalie'"
-                :form="(row.form as ChalieForm)"
-              />
-              <ActCycle
-                v-else-if="row.form.kind === 'act'"
-                :form="(row.form as ActForm)"
-              />
+              <template v-else>
+                <UserBubble
+                  v-if="row.form.kind === 'user'"
+                  :form="(row.form as UserForm)"
+                />
+                <ChalieBubble
+                  v-else-if="row.form.kind === 'chalie'"
+                  :form="(row.form as ChalieForm)"
+                />
+                <ActCycle
+                  v-else-if="row.form.kind === 'act'"
+                  :form="(row.form as ActForm)"
+                />
+              </template>
             </template>
-          </template>
+          </div>
         </div>
         <!-- Reply composer — the same dock, only difference is supplying the
              thread's turn_id. Hidden on legacy NULL-turn_id singletons. -->
@@ -431,11 +435,8 @@ onBeforeUnmount(() => {
   background: color-mix(in oklab, var(--violet) 10%, transparent);
 }
 
-/* The reply column. A flex column so user bubbles can align right
-   (.user-message uses align-self: flex-end). */
+/* Just a frame: the inner .turn carries the flex layout, gap and alignment. */
 .thread-card__body {
-  display: flex;
-  flex-direction: column;
   padding: var(--space-md);
 }
 </style>
