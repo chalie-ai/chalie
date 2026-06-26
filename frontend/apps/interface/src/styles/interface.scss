@@ -312,6 +312,15 @@ body.speaker-user #ambientBloom {
   transition: background 420ms ease;
 }
 
+// Inline variant — the same composer rendered in-flow inside a thread card
+// instead of pinned to the viewport footer.
+.input-dock--inline {
+  position: static;
+  z-index: auto;
+  padding: var(--space-sm) var(--space-md) var(--space-md);
+  background: none;
+}
+
 .input-dock__outer {
   max-width: var(--dock-width);
   margin: 0 auto;
@@ -319,6 +328,8 @@ body.speaker-user #ambientBloom {
   align-items: stretch;
   gap: 0;
 }
+
+.input-dock--inline .input-dock__outer { max-width: none; }
 
 // Closable error toast that floats just above the compose box. Themed for both
 // dark and light via tokens; the red tint sits on the card, never on the icon.

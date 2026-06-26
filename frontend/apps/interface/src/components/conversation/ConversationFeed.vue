@@ -2,7 +2,7 @@
      plus the live in-flight turn. Drives thread-list pagination. -->
 <script setup lang="ts">
 import { ref, computed, watch, nextTick, onMounted, onBeforeUnmount } from 'vue';
-import { ChevronRight } from '@lucide/vue';
+import { ChevronRight, ChevronDown } from '@lucide/vue';
 import { useConversationStore } from '../../stores/conversation';
 import type { ConversationForm, UserForm, ChalieForm, ActForm, ThreadListItem } from '../../stores/conversation';
 import { useSessionStore } from '../../stores/session';
@@ -11,7 +11,7 @@ import UserBubble from './UserBubble.vue';
 import ChalieBubble from './ChalieBubble.vue';
 import ActCycle from './ActCycle.vue';
 import ActCycleGroup from './ActCycleGroup.vue';
-import ThreadReplyBox from './ThreadReplyBox.vue';
+import InputDock from '../layout/InputDock.vue';
 
 const conversationStore = useConversationStore();
 const session = useSessionStore();
@@ -65,7 +65,7 @@ const liveTurn = computed(() => {
 // render groups following the thread list order.
 type FeedEntry =
   | { kind: 'collapsed'; thread: ThreadListItem }
-  | { kind: 'expanded'; turn: { id: number; forms: ConversationForm[] } };
+  | { kind: 'expanded'; turn: { id: number; forms: ConversationForm[] }; thread: ThreadListItem | null };
 
 const feedEntries = computed<FeedEntry[]>(() => {
   const entries: FeedEntry[] = [];
@@ -73,14 +73,14 @@ const feedEntries = computed<FeedEntry[]>(() => {
     if (t.expanded) {
       // Find the forms for this thread.
       const forms = conversationStore.forms.filter((f) => f.turnId === t.turn_id);
-      if (forms.length) entries.push({ kind: 'expanded', turn: { id: forms[0].id, forms } });
+      if (forms.length) entries.push({ kind: 'expanded', turn: { id: forms[0].id, forms }, thread: t });
       else entries.push({ kind: 'collapsed', thread: t });
     } else {
       entries.push({ kind: 'collapsed', thread: t });
     }
   }
-  // Live turn (in-flight) renders at the end.
-  if (liveTurn.value) entries.push({ kind: 'expanded', turn: liveTurn.value });
+  // Live turn (in-flight) renders at the end — no thread row yet.
+  if (liveTurn.value) entries.push({ kind: 'expanded', turn: liveTurn.value, thread: null });
   return entries;
 });
 
@@ -195,45 +195,56 @@ onBeforeUnmount(() => {
         </button>
       </div>
 
-      <!-- Expanded thread: full forms + reply box. -->
-      <div v-else class="turn">
-        <template v-for="row in groupRows(entry.turn.forms)" :key="row.id">
-          <ActCycleGroup
-            v-if="row.type === 'act-group'"
-            :forms="row.forms"
-          />
-          <template v-else>
-            <UserBubble
-              v-if="row.form.kind === 'user'"
-              :form="(row.form as UserForm)"
+      <!-- Expanded thread: a self-contained card. The header names what started
+           the thread and carries the collapse control; the body holds the
+           starter message and its replies; the shared composer (the dock with a
+           turn_id) replies into the thread. -->
+      <section
+        v-else
+        class="thread-card"
+        :class="{ 'thread-card--active': entry.thread && conversationStore.isThreadActive(entry.thread.last_activity_at) }"
+      >
+        <header v-if="threadTurnId(entry.turn) != null" class="thread-card__head">
+          <span class="thread-card__starter">{{ entry.thread?.gist || entry.thread?.preview || 'Thread' }}</span>
+          <button
+            class="thread-card__collapse"
+            type="button"
+            aria-label="Collapse thread"
+            @click="onCollapse(threadTurnId(entry.turn)!)"
+          >
+            <ChevronDown :size="15" aria-hidden="true" />
+            <span>Collapse</span>
+          </button>
+        </header>
+        <div class="thread-card__body">
+          <template v-for="row in groupRows(entry.turn.forms)" :key="row.id">
+            <ActCycleGroup
+              v-if="row.type === 'act-group'"
+              :forms="row.forms"
             />
-            <ChalieBubble
-              v-else-if="row.form.kind === 'chalie'"
-              :form="(row.form as ChalieForm)"
-            />
-            <ActCycle
-              v-else-if="row.form.kind === 'act'"
-              :form="(row.form as ActForm)"
-            />
+            <template v-else>
+              <UserBubble
+                v-if="row.form.kind === 'user'"
+                :form="(row.form as UserForm)"
+              />
+              <ChalieBubble
+                v-else-if="row.form.kind === 'chalie'"
+                :form="(row.form as ChalieForm)"
+              />
+              <ActCycle
+                v-else-if="row.form.kind === 'act'"
+                :form="(row.form as ActForm)"
+              />
+            </template>
           </template>
-        </template>
-        <!-- Collapse button for expanded threads with a known turn_id. -->
-        <button
-          v-if="threadTurnId(entry.turn) != null && !session.isSending"
-          class="thread-row__collapse-btn"
-          type="button"
-          aria-label="Collapse thread"
-          @click="onCollapse(threadTurnId(entry.turn)!)"
-        >
-          Collapse
-        </button>
-        <!-- Per-thread reply box: only on threads with a known turn_id (not legacy
-             NULL-turn_id singletons) and not while a turn is in-flight. -->
-        <ThreadReplyBox
-          v-if="threadTurnId(entry.turn) != null && !session.isSending"
+        </div>
+        <!-- Reply composer — the same dock, only difference is supplying the
+             thread's turn_id. Hidden on legacy NULL-turn_id singletons. -->
+        <InputDock
+          v-if="threadTurnId(entry.turn) != null"
           :turn-id="threadTurnId(entry.turn)!"
         />
-      </div>
+      </section>
     </template>
   </main>
 </template>
@@ -361,18 +372,63 @@ onBeforeUnmount(() => {
   background: color-mix(in oklab, var(--violet) 10%, transparent);
 }
 
-.thread-row__collapse-btn {
-  align-self: flex-start;
-  background: transparent;
-  border: none;
-  color: var(--text-tertiary);
-  font-size: 0.72rem;
-  cursor: pointer;
-  padding: var(--space-xs) 0;
-  margin-top: var(--space-xs);
+/* Expanded thread — a contained card grouping a starter message with its
+   replies, visually distinct from the flat collapsed rows around it. */
+.thread-card {
+  margin: var(--space-md) 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--bg-surface);
+  overflow: hidden;
 }
 
-.thread-row__collapse-btn:hover {
+.thread-card--active {
+  border-left: 3px solid var(--violet);
+}
+
+.thread-card__head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  padding: var(--space-sm) var(--space-md);
+  background: color-mix(in oklab, var(--violet) 5%, transparent);
+  border-bottom: 1px solid var(--border);
+}
+
+.thread-card__starter {
+  flex: 1;
+  min-width: 0;
+  font-size: var(--font-size-sm);
+  font-weight: 600;
   color: var(--text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.thread-card__collapse {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: transparent;
+  border: 1px solid color-mix(in oklab, var(--violet) 25%, transparent);
+  color: var(--accent-primary);
+  font-size: 0.72rem;
+  padding: 3px 10px;
+  border-radius: var(--radius-full);
+  cursor: pointer;
+  transition: background var(--duration-fast);
+}
+
+.thread-card__collapse:hover {
+  background: color-mix(in oklab, var(--violet) 10%, transparent);
+}
+
+/* The reply line: replies hang off a thread spine, Slack-style. */
+.thread-card__body {
+  padding: var(--space-md);
+  border-left: 2px solid color-mix(in oklab, var(--violet) 18%, transparent);
+  margin-left: var(--space-md);
 }
 </style>

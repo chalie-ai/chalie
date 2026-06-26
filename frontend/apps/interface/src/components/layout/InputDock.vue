@@ -19,6 +19,14 @@ import type { AttachmentPreview as ConvoAttachmentPreview } from '../../stores/c
 import ImageAttachStrip from '../upload/ImageAttachStrip.vue';
 import { FileText, Image, Plus, Mic, Send, X, AlertTriangle } from '@lucide/vue';
 
+/**
+ * `turnId` is the only thing that distinguishes a thread reply from a main-dock
+ * send: set, it appends to that thread; null (the dock default), the chat API
+ * scaffolds a new thread. The dock is fixed to the footer; an inline reply sets
+ * `turnId` and renders in-flow inside its thread card.
+ */
+const props = withDefaults(defineProps<{ turnId?: number | null }>(), { turnId: null });
+
 const session = useSessionStore();
 const voiceStore = useVoiceStore();
 const attachments = useAttachmentsStore();
@@ -38,7 +46,8 @@ const textareaRef = ref<HTMLTextAreaElement | null>(null);
 const text = ref('');
 
 // Restore draft: persisted on every change so a reload/close/navigate recovers it.
-const DRAFT_KEY = 'chalie:draft';
+// Keyed per thread so a reply draft never bleeds into the main composer.
+const DRAFT_KEY = props.turnId != null ? `chalie:draft:t${props.turnId}` : 'chalie:draft';
 const stored = lsGet(DRAFT_KEY);
 if (stored) text.value = stored;
 watch(text, (v) => lsSet(DRAFT_KEY, v));
@@ -91,7 +100,7 @@ async function handleSend(): Promise<void> {
   await nextTick();
   grow();
 
-  await session.sendMessage(trimmed, 'text', files, previews);
+  await session.sendMessage(trimmed, 'text', files, previews, props.turnId);
 
   if (!wasSending) attachments.clear();
 
@@ -217,7 +226,7 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <footer class="input-dock">
+  <footer class="input-dock" :class="{ 'input-dock--inline': turnId != null }">
     <div v-if="session.errorMessage" class="dock-error" role="alert">
       <AlertTriangle class="dock-error__icon" :size="18" aria-hidden="true" />
       <span class="dock-error__text">{{ session.errorMessage }}</span>
@@ -288,7 +297,7 @@ onBeforeUnmount(() => {
           ref="textareaRef"
           v-model="text"
           class="input-dock__textarea"
-          placeholder="Talk to Chalie..."
+          :placeholder="turnId != null ? 'Reply in thread…' : 'Talk to Chalie...'"
           rows="1"
           @input="grow"
         ></textarea>

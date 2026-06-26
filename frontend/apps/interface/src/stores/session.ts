@@ -440,12 +440,12 @@ export const useSessionStore = defineStore('session', {
 
         if (isInitialLoad) {
           convo.appendThreadList(items);
-          // Threads active within the last hour render expanded.
-          for (const t of items) {
-            if (t.turn_id != null && convo.isThreadActive(t.last_activity_at)) {
-              void convo.expandThread(t.turn_id);
-            }
-          }
+          // Accordion: open only the single most-recent active thread (the feed is
+          // chronological, so it is the last active one in the list).
+          const newestActive = [...convo.threads]
+            .reverse()
+            .find((t) => t.turn_id != null && convo.isThreadActive(t.last_activity_at));
+          if (newestActive?.turn_id != null) void convo.expandThread(newestActive.turn_id);
         } else {
           convo.prependThreadList(items);
         }

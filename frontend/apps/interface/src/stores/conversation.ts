@@ -131,6 +131,11 @@ export const useConversationStore = defineStore('conversation', {
       }
       return ids;
     },
+    /** turn_id of the single open thread (accordion: at most one), or null. */
+    expandedTurnId(state): number | null {
+      const open = state.threads.find((t) => t.expanded && t.turn_id != null);
+      return open?.turn_id ?? null;
+    },
     /**
      * Group forms into turns. History forms carry `turnId`, so a boundary is any
      * change of it — this keeps a compaction-continuation turn (assistant rows,
@@ -422,9 +427,13 @@ export const useConversationStore = defineStore('conversation', {
 
     // ---- Thread-list feed (workstream F) ----
 
-    /** Append collapsed thread metadata from a /conversation/threads page. */
+    /**
+     * Append a /conversation/threads page (newest-first from the API) as the
+     * initial feed. The feed reads chronologically — oldest at the top, newest at
+     * the bottom — so the page is reversed before it is pushed.
+     */
     appendThreadList(items: ConversationThread[]): void {
-      for (const t of items) {
+      for (const t of [...items].reverse()) {
         this.threads.push({ ...t, expanded: false, loading: false });
       }
     },
@@ -446,6 +455,10 @@ export const useConversationStore = defineStore('conversation', {
         }
       }
       if (this.threads.some((t) => t.turn_id === turnId)) return;
+      // Accordion: a new live thread opens expanded, so close any other open one.
+      for (const t of this.threads) {
+        if (t.expanded && t.turn_id != null && t.turn_id !== turnId) this.collapseThread(t.turn_id);
+      }
       // SQLite naive-UTC shape ("YYYY-MM-DD HH:MM:SS") so isThreadActive reads it.
       const nowUtc = new Date().toISOString().slice(0, 19).replace('T', ' ');
       this.threads.push({
@@ -460,10 +473,14 @@ export const useConversationStore = defineStore('conversation', {
       });
     },
 
-    /** Prepend collapsed thread metadata from a paginated /conversation/threads page. */
+    /**
+     * Prepend an older /conversation/threads page (newest-first from the API)
+     * above the current feed, keeping the chronological order: the page's oldest
+     * thread lands at the very top.
+     */
     prependThreadList(items: ConversationThread[]): void {
-      for (let i = items.length - 1; i >= 0; i--) {
-        this.threads.unshift({ ...items[i], expanded: false, loading: false });
+      for (const t of items) {
+        this.threads.unshift({ ...t, expanded: false, loading: false });
       }
     },
 
@@ -471,6 +488,10 @@ export const useConversationStore = defineStore('conversation', {
     async expandThread(turnId: number): Promise<void> {
       const item = this.threads.find((t) => t.turn_id === turnId);
       if (!item || item.expanded || item.loading) return;
+      // Accordion: opening a thread closes every other open one.
+      for (const t of this.threads) {
+        if (t.expanded && t.turn_id != null && t.turn_id !== turnId) this.collapseThread(t.turn_id);
+      }
       item.loading = true;
       try {
         const data = await convoApi.thread(turnId);
@@ -524,9 +545,9 @@ export const useConversationStore = defineStore('conversation', {
 
     /**
      * Find the insertion index in `forms` for a thread's rows. Threads render in
-     * the same order as the thread list (most-recent first). Forms for a thread
-     * go before any form whose turnId maps to a thread that's earlier in the
-     * list (higher recency).
+     * the same order as the thread list (chronological — newest last). Forms for
+     * a thread go before any form whose turnId maps to a thread that's later in
+     * the list, keeping `forms` aligned with the thread order whatever it is.
      */
     _threadInsertIndex(turnId: number): number {
       // Build a map of turnId → list position for expanded threads.
