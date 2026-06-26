@@ -49,6 +49,45 @@
   color: var(--text-primary);
 }
 
+// Collapsed long message: clamp to 5 lines with a soft fade hinting at more text
+// below. The fade resolves to the feed background (--bg) so it matches both the
+// dark and light themes — the text sits on the page, not on a panel.
+.user-text--clamped {
+  display: -webkit-box;
+  -webkit-line-clamp: 5;
+  line-clamp: 5;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  position: relative;
+}
+
+.user-text--clamped::after {
+  content: '';
+  position: absolute;
+  inset-inline: 0;
+  bottom: 0;
+  height: 2.4em;
+  background: linear-gradient(to bottom, transparent, var(--bg));
+  pointer-events: none;
+}
+
+.user-text__toggle {
+  align-self: flex-start;
+  padding: 0;
+  border: none;
+  background: none;
+  cursor: pointer;
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  letter-spacing: 0.01em;
+  color: var(--text-tertiary);
+  transition: color 150ms ease;
+}
+
+.user-text__toggle:hover {
+  color: var(--accent-primary);
+}
+
 // Hard no-shadow guard inside bubbles
 .speech-form,
 .speech-form *,

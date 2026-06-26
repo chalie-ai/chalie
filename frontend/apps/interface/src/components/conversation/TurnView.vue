@@ -117,30 +117,28 @@ function onReply(): void {
 .msg-row__body {
   flex: 1;
   min-width: 0;
-  padding-top: 3px;
 }
 
 .msg-avatar {
   width: var(--avatar-size);
   height: var(--avatar-size);
-  border-radius: 50%;
   display: grid;
   place-items: center;
   flex-shrink: 0;
-  overflow: hidden;
 }
 
-.msg-avatar--chalie {
-  box-shadow: 0 0 14px color-mix(in oklab, var(--violet) 30%, transparent);
-}
-
+// Chalie's mark is the bare gradient logo — no badge, no glow, no clip — so the
+// transparent icon reads as the brand itself on both the dark and light scrims.
 .msg-avatar--chalie img {
   width: 100%;
   height: 100%;
-  object-fit: cover;
+  object-fit: contain;
 }
 
+// Only the generic person avatar is a clipped circular badge.
 .msg-avatar--user {
+  border-radius: 50%;
+  overflow: hidden;
   background: var(--bg-surface-2);
   border: 1px solid var(--border-strong);
   color: var(--text-secondary);
