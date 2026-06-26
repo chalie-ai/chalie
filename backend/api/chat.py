@@ -268,6 +268,10 @@ def deliver_async_result(mp: object, result_text: str, cancel_event: threading.E
     metadata = dict(getattr(mp, "_metadata", None) or {})
     metadata["hidden_input"] = True
     metadata["attachments"] = []
+    # A delegate→main continuation appends to the originating turn but is NOT a
+    # genuine user fork reply — drop any inherited is_thread_reply so it reads the
+    # MAIN spine, never the FORK view.
+    metadata.pop("is_thread_reply", None)
     thread_id = getattr(mp, "turn_id", None)
     if thread_id is not None:
         metadata["thread_id"] = thread_id
@@ -337,6 +341,10 @@ def _start_turn(
     }
     if thread_id is not None:
         metadata["thread_id"] = thread_id
+        # Genuine user reply INTO a thread → FORK view. This is
+        # the ONLY producer of is_thread_reply; the async-delivery path (which
+        # reuses thread_id for a delegate→main continuation) explicitly drops it.
+        metadata["is_thread_reply"] = True
 
     config = UserConfig(metadata)
     cancel_event = threading.Event()

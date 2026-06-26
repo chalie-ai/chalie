@@ -563,6 +563,30 @@ CREATE INDEX IF NOT EXISTS idx_tool_calls_transcript ON tool_calls(transcript_id
 CREATE INDEX IF NOT EXISTS idx_tool_calls_created ON tool_calls(created_at DESC);
 
 -- ────────────────────────────────────────────────────────────────
+-- COMPACTIONS — the living checkpoint per conversation view, off the
+-- transcript spine. A compaction is NOT a transcript row: keeping it
+-- in its own table means firing one never moves a turn_id, so the
+-- turn boundary stays stable across a mid-turn collapse.
+--
+-- Two-axis watermark (one table, two scopes by for_turn_id):
+--   • MAIN  view → for_turn_id IS NULL; compacted_up_to is a turn_id
+--     (the spine read cuts turns whose turn_id <= compacted_up_to).
+--   • FORK  view → for_turn_id = T; compacted_up_to is a transcript.id
+--     (the thread read cuts rows of turn T whose id <= compacted_up_to).
+-- Different axes never collide, so a MAIN compaction can't hide a fork
+-- reply and a FORK compaction can't hide the spine.
+-- ────────────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS compactions (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    channel         TEXT NOT NULL,
+    for_turn_id     INTEGER,
+    compacted_up_to INTEGER NOT NULL,
+    content         TEXT NOT NULL,
+    created_at      TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS ix_compactions_scope ON compactions(channel, for_turn_id, id);
+
+-- ────────────────────────────────────────────────────────────────
 -- TRANSCRIPT DOCS — many-to-many link of a transcript turn to the
 -- document(s) attached to it.  Lets the chat re-render uploaded
 -- images/files on page refresh (the live preview is a browser-only

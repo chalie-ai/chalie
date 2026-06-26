@@ -6,8 +6,14 @@ it programmatically when a compaction limit is reached (``_dispatch_compaction``
 exactly like the memory.recall turn-0 seed and the thinking pass. It fires its own
 MessageProcessor.process() loop with ChatHistoryCompactionConfig, reads the parent
 channel's ``get_previous_messages()`` from the bound ``mp``, and writes the model's
-output VERBATIM to the transcript as ``role='compaction'`` — that row's own id is
-the new watermark, so the next ``_previous_rows()`` read returns nothing through it.
+output VERBATIM into the ``compactions`` table — never a transcript
+row, so firing never moves a ``turn_id`` and the turn boundary survives.
+
+The checkpoint is scoped to the parent's VIEW: a FORK reply writes ``for_turn_id =
+turn_id`` and its watermark is the max transcript.id of the folded rows; the MAIN
+spine writes ``for_turn_id = NULL`` and its watermark is the max turn_id. Each axis
+is exactly what the matching ``_previous_rows`` read cuts on, so the next read
+returns nothing through the watermark.
 
 No tags, no parser: whatever the model writes IS the new checkpoint. The watermark
 ALWAYS advances on a non-empty history, so compaction can never silently no-op into
@@ -27,8 +33,9 @@ if TYPE_CHECKING:
     class _CompactionParent(Protocol):
         _compaction_kept_rows: int
         turn_id: "int | None"
+        _forked: bool
 
-        def _previous_rows(self) -> list[object]: ...
+        def _previous_rows(self) -> list[dict[str, object]]: ...
         def get_previous_messages(self, *, drop_oldest: int = ...) -> str: ...
 
         class _Providers(Protocol):
@@ -83,16 +90,16 @@ class ChatHistoryCompactor(Ability):
     def run(self, params: dict[str, object]) -> ToolResult:
         from services.message_processor import MessageProcessor  # noqa: PLC0415
         from services import compaction_persistence  # noqa: PLC0415
-        from services.transcript_service import Transcript  # noqa: PLC0415
 
         mp = cast("_CompactionParent", self.mp)
         channel = mp.config.channel
-        turn_id = getattr(mp, "turn_id", None)
+        # The checkpoint axis follows the parent's view: FORK → its thread, MAIN →
+        # the spine (NULL). Used for both the prior read and the new write.
+        for_turn_id = mp.turn_id if mp._forked else None
 
         # Carry forward the prior checkpoint so continuity chains across
         # compactions instead of restarting from the recent tail each time.
-        # Thread-scoped (workstream C): the prior checkpoint belongs to THIS thread.
-        prior_row = compaction_persistence.get_compaction(channel, turn_id)
+        prior_row = compaction_persistence.get_compaction(channel, for_turn_id)
         prior = (cast(str, prior_row.get("compacted_text")) or "").strip() if prior_row else ""
 
         combined = self._fit_compaction_input(mp, prior)
@@ -109,16 +116,21 @@ class ChatHistoryCompactor(Ability):
         summary = (MessageProcessor.process(combined, ChatHistoryCompactionConfig()) or "").strip()
         if not summary:
             logger.warning(
-                "[chat_history_compactor] empty summary on channel=%s turn=%s; advancing watermark anyway",
-                channel, turn_id,
+                "[chat_history_compactor] empty summary on channel=%s scope=%s; advancing watermark anyway",
+                channel, for_turn_id,
             )
 
-        # The model's output IS the checkpoint — write it verbatim INTO the thread.
-        # The new transcript row's own id becomes the watermark (advances
-        # unconditionally on a non-empty backlog → no silent no-write, no infinite
-        # loop). Writing with turn_id keeps the checkpoint inside the thread so the
-        # thread-scoped get_compaction re-keys from (channel, turn_id).
-        Transcript.write_input_row(channel, "compaction", summary, turn_id=turn_id)
+        # The model's output IS the checkpoint — write it verbatim into the
+        # compactions table. The watermark covers everything just read (the full
+        # _previous_rows, not the kept subset) so a rare drop-oldest stays covered
+        # and the next read returns nothing through it. Axis follows the view: a
+        # FORK stores the max transcript.id, the MAIN spine the max turn_id.
+        rows = mp._previous_rows()
+        compacted_up_to = (
+            max(cast(int, r["id"]) for r in rows) if mp._forked
+            else max(cast(int, r["turn_id"]) for r in rows if r["turn_id"] is not None)
+        )
+        compaction_persistence.write_compaction(channel, for_turn_id, compacted_up_to, summary)
         return ToolResult.ok("Chat history compacted.", rows_compacted=rows_compacted)
 
     @staticmethod

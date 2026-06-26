@@ -1,219 +1,249 @@
-"""Feature tests for thread-scoped context + compaction (workstream C).
+"""Feature tests for the thread context & compaction model.
 
-Drives the real production paths — ``_previous_rows``, ``get_compaction``,
-``_wrap_with_checkpoint``, and the compactor's thread-scoped write — against
-the real test DB with zero mocks. Pins the invariants that make thread-scoped
-context work:
+Zero mocks. Every test drives the real context-assembly hot path against the
+migrated test DB using the SAME factories production uses: the transcript
+writers (``write_input_row`` / ``write_assistant_row``), the tool-call writer
+(``ActTrail.record``), the compaction writer
+(``compaction_persistence.write_compaction``), the real read+render seam
+(``MessageProcessor.get_previous_messages`` → ``_previous_rows``), the real
+checkpoint-envelope seam (``_wrap_with_checkpoint``), the real cancellation
+cleanup (``_cleanup_cancelled``) and the real production config (``UserConfig``).
 
-1. ``_previous_rows`` returns ONLY the active thread's rows — no cross-thread
-   leakage (the core context-scoping invariant).
-2. ``get_compaction(channel, turn_id)`` is thread-scoped: a compaction in
-   thread A is invisible to thread B.
-3. ``_wrap_with_checkpoint`` wraps with the THREAD's compaction, not another
-   thread's.
-4. The compactor writes its checkpoint row INTO the thread (turn_id preserved)
-   so the thread-scoped watermark re-keys from ``(channel, turn_id)``.
-5. The compactor's prior-checkpoint carry-forward is thread-scoped.
+The model has two views, both keyed on ``turn_id`` and pivoted on settle0 — a
+turn's first assistant row carrying no model-driven tool:
+
+* MAIN spine (a fresh message): every settled turn's opening exchange (rows
+  ``id <= settle0``), across turns, cut on the *turn_id* axis by the MAIN
+  watermark.
+* FORK read (a genuine reply into a thread): that turn's rows from settle0 up,
+  cut on the *transcript.id* axis by the FORK watermark, dropping the live reply.
+
+Both watermark axes live in the dedicated ``compactions`` table and never
+collide: a MAIN compaction can't hide a fork reply, a FORK compaction can't
+hide the spine.
+
+Coverage boundary: the compactor's ``run()`` fires a real LLM to author the
+summary text, so summary *generation* is out of scope for these deterministic
+tests. These tests pin the deterministic half — the watermark cut and the
+envelope — by driving ``write_compaction`` (the exact persistence call ``run()``
+makes once the LLM returns) and the real read seams.
 """
-import sqlite3
 from typing import cast
 
 import pytest
 
+from configs.channels import UserConfig
 from services import compaction_persistence
-from services.transcript_service import Transcript
+from services.act_trail import ActTrail
+from services.message_processor import MessageProcessor, _wrap_with_checkpoint
+from services.transcript_service import Transcript, _SPINE_TURN_LIMIT
+
+pytestmark = pytest.mark.unit
+
+_CH = "user"
 
 
-def _seed_thread(question: str, *answers: str) -> int:
-    """Open a new thread (turn_id=None → fresh allocation) and append its rows."""
-    input_id = Transcript.write_input_row('user', 'user', question)
+def _settled_turn(question: str, *, answer: str,
+                  steps: tuple[tuple[str, str], ...] = ()) -> tuple[int, int, int]:
+    """Seed one settled turn; return ``(turn_id, input_id, settle_id)``.
+
+    ``steps`` are pre-settle tool-bearing assistant rows — each ``(text, tool)``
+    records a real (non-internal) tool call, which demotes the row below
+    settle0. ``answer`` is the final no-tool assistant row = the turn's settle0.
+    """
+    input_id = Transcript.write_input_row(_CH, "user", question)
     turn_id = Transcript.turn_id_of_row(input_id)
-    for ans in answers:
-        Transcript.write_assistant_row('user', ans, turn_id=turn_id)
-    return turn_id
+    for text, tool in steps:
+        step_id = Transcript.write_assistant_row(_CH, text, turn_id=turn_id)
+        ActTrail().record(tool_name=tool, params={}, result="ok", transcript_id=step_id)
+    settle_id = Transcript.write_assistant_row(_CH, answer, turn_id=turn_id)
+    return turn_id, input_id, settle_id
 
 
-def _seed_compaction(channel: str, turn_id: int, summary: str) -> int:
-    """Write a compaction row INTO a thread — the production compactor's path."""
-    return Transcript.write_input_row(channel, 'compaction', summary, turn_id=turn_id)
+def _reply(turn_id: int, question: str, *, answer: str) -> tuple[int, int]:
+    """Append a settled reply continuation into an existing thread; return
+    ``(reply_input_id, reply_settle_id)`` — both above the thread's settle0."""
+    reply_in = Transcript.write_input_row(_CH, "user", question, turn_id=turn_id)
+    reply_settle = Transcript.write_assistant_row(_CH, answer, turn_id=turn_id)
+    return reply_in, reply_settle
 
 
-@pytest.mark.unit
-class TestThreadScopedContext:
-
-    def test_previous_rows_returns_only_active_thread(self, db: sqlite3.Connection) -> None:
-        """_previous_rows scoped to turn_id returns ONLY that thread's rows.
-        Thread B's rows are invisible to thread A — the core context invariant."""
-        from services.message_processor import MessageProcessor
-        from tests.helpers import make_stub_config
-
-        t1 = _seed_thread('Hello from thread 1', 'Reply 1')
-        _seed_thread('Hello from thread 2', 'Reply 2', 'Reply 2b')
-
-        mp = object.__new__(MessageProcessor)
-        MessageProcessor.__init__(mp, 'next message', None)
-        mp.config = make_stub_config(channel='user')
-        mp.turn_id = t1
-
-        rows = mp._previous_rows()
-        contents = [cast("str", r['content']) for r in rows]
-        assert 'Hello from thread 1' in contents
-        assert 'Reply 1' in contents
-        assert 'Hello from thread 2' not in contents, "thread 2 must not leak into thread 1's context"
-        assert 'Reply 2b' not in contents
-
-    def test_previous_rows_excludes_compaction_row_via_watermark(self, db: sqlite3.Connection) -> None:
-        """A compaction row in the thread acts as the watermark: rows at/below it
-        are excluded from _previous_rows, rows after it survive."""
-        from services.message_processor import MessageProcessor
-        from tests.helpers import make_stub_config
-
-        t1 = _seed_thread('old q', 'old a')
-        _seed_compaction('user', t1, 'checkpoint summary')
-        Transcript.write_input_row('user', 'user', 'post-compaction reply', turn_id=t1)
-        Transcript.write_assistant_row('user', 'post-compaction answer', turn_id=t1)
-
-        mp = object.__new__(MessageProcessor)
-        MessageProcessor.__init__(mp, 'next', None)
-        mp.config = make_stub_config(channel='user')
-        mp.turn_id = t1
-
-        rows = mp._previous_rows()
-        contents = [cast("str", r['content']) for r in rows]
-        assert 'post-compaction reply' in contents
-        assert 'post-compaction answer' in contents
-        assert 'checkpoint summary' not in contents, "compaction row itself excluded"
-        assert 'old q' not in contents, "pre-watermark rows excluded"
-        assert 'old a' not in contents
-
-    def test_previous_rows_none_turn_id_is_channel_wide(self, db: sqlite3.Connection) -> None:
-        """A None turn_id (housekeeping channel) keeps the legacy channel-wide read
-        — the fallback path for channels that never allocate a thread."""
-        from services.message_processor import MessageProcessor
-        from tests.helpers import make_stub_config
-
-        _seed_thread('thread A', 'A reply')
-        _seed_thread('thread B', 'B reply')
-
-        mp = object.__new__(MessageProcessor)
-        MessageProcessor.__init__(mp, 'housekeeping', None)
-        mp.config = make_stub_config(channel='user')
-        mp.turn_id = None
-
-        rows = mp._previous_rows()
-        contents = [cast("str", r['content']) for r in rows]
-        assert 'thread A' in contents
-        assert 'thread B' in contents, "None turn_id reads channel-wide (legacy fallback)"
+def _main_mp() -> MessageProcessor:
+    """A fresh-message processor — MAIN view (``_forked`` False, ``turn_id`` None)."""
+    mp = MessageProcessor("a fresh message", None)
+    mp.config = UserConfig()
+    return mp
 
 
-@pytest.mark.unit
-class TestThreadScopedCompaction:
-
-    def test_get_compaction_thread_scoped(self, db: sqlite3.Connection) -> None:
-        """get_compaction(channel, turn_id) returns the compaction for THAT thread
-        only — a compaction in thread A is invisible to thread B."""
-        t1 = _seed_thread('thread 1 q', 'thread 1 a')
-        t2 = _seed_thread('thread 2 q', 'thread 2 a')
-        _seed_compaction('user', t1, 'thread 1 checkpoint')
-
-        row1 = compaction_persistence.get_compaction('user', t1)
-        row2 = compaction_persistence.get_compaction('user', t2)
-        assert row1 is not None
-        assert cast("str", row1['compacted_text']) == 'thread 1 checkpoint'
-        assert row2 is None, "thread 2 has no compaction — thread 1's must not leak"
-
-    def test_get_compaction_none_turn_id_is_channel_wide(self, db: sqlite3.Connection) -> None:
-        """get_compaction(channel, None) returns the channel-wide latest compaction
-        (legacy/housekeeping path)."""
-        t1 = _seed_thread('thread 1 q', 'thread 1 a')
-        _seed_compaction('user', t1, 'channel checkpoint')
-        Transcript.write_input_row('user', 'compaction', 'legacy checkpoint')
-
-        row = compaction_persistence.get_compaction('user', None)
-        assert row is not None
-        assert cast("str", row['compacted_text']) == 'legacy checkpoint'
-
-    def test_get_compaction_returns_none_for_unknown_thread(self, db: sqlite3.Connection) -> None:
-        """A turn_id with no compaction row returns None — no false watermark."""
-        t1 = _seed_thread('thread 1 q', 'thread 1 a')
-        _seed_compaction('user', t1, 'thread 1 checkpoint')
-
-        assert compaction_persistence.get_compaction('user', 999) is None
-
-    def test_get_compaction_returns_latest_by_id_in_thread(self, db: sqlite3.Connection) -> None:
-        """When a thread has multiple compaction rows, the latest (highest id) is
-        the watermark — the same MAX(id) semantics as the legacy channel-wide read."""
-        t1 = _seed_thread('thread 1 q', 'thread 1 a')
-        _seed_compaction('user', t1, 'old checkpoint')
-        newer = _seed_compaction('user', t1, 'new checkpoint')
-
-        row = compaction_persistence.get_compaction('user', t1)
-        assert row is not None
-        assert cast("int", row['compacted_up_to_id']) == newer
-        assert cast("str", row['compacted_text']) == 'new checkpoint'
+def _fork_mp(turn_id: int, live_input_id: int) -> MessageProcessor:
+    """A genuine reply into ``turn_id`` — FORK view, with the live reply's own
+    input id as the upper bound (``self.uid``) so it renders separately."""
+    mp = MessageProcessor("a reply into the thread", {"is_thread_reply": True, "thread_id": turn_id})
+    mp.config = UserConfig()
+    mp.uid = live_input_id
+    return mp
 
 
-@pytest.mark.unit
-class TestThreadScopedCheckpoint:
+class TestMainSpine:
 
-    def test_wrap_with_checkpoint_uses_thread_compaction(self, db: sqlite3.Connection) -> None:
-        """_wrap_with_checkpoint(channel, body, turn_id) wraps with the THREAD's
-        compaction, not another thread's."""
-        from services.message_processor import _wrap_with_checkpoint
+    def test_spine_emits_opening_exchanges_and_excludes_fork_continuations(self, db: object) -> None:
+        """The MAIN spine renders each settled turn's opening exchange (input +
+        pre-settle steps + settle0) across turns, and excludes rows past settle0
+        — a fork continuation never leaks onto the spine."""
+        _settled_turn("first question", answer="first answer",
+                      steps=(("let me look that up", "search_files"),))
+        t2, _, _ = _settled_turn("second question", answer="second answer")
+        _reply(t2, "a later reply into turn two", answer="the reply answer")
 
-        t1 = _seed_thread('thread 1 q', 'thread 1 a')
-        t2 = _seed_thread('thread 2 q', 'thread 2 a')
-        _seed_compaction('user', t1, 'thread 1 checkpoint text')
-        _seed_compaction('user', t2, 'thread 2 checkpoint text')
+        rendered = _main_mp().get_previous_messages()
 
-        result1 = _wrap_with_checkpoint('user', 'current body', t1)
-        result2 = _wrap_with_checkpoint('user', 'current body', t2)
-        assert 'thread 1 checkpoint text' in result1
-        assert 'thread 2 checkpoint text' not in result1, "thread 2's checkpoint leaked into thread 1"
-        assert 'thread 2 checkpoint text' in result2
-        assert 'thread 1 checkpoint text' not in result2
+        assert "first question" in rendered
+        assert "let me look that up" in rendered, "pre-settle step is part of the opening exchange"
+        assert "first answer" in rendered
+        assert "second question" in rendered
+        assert "second answer" in rendered
+        assert "a later reply into turn two" not in rendered, "fork continuation must not enter the spine"
+        assert "the reply answer" not in rendered
 
-    def test_wrap_with_checkpoint_no_compaction_returns_body(self, db: sqlite3.Connection) -> None:
-        """When the thread has no compaction, the body is returned unwrapped."""
-        from services.message_processor import _wrap_with_checkpoint
+    def test_compaction_drops_absorbed_turns_and_is_channel_isolated(self, db: object) -> None:
+        """A MAIN compaction advances the turn-axis watermark: turns at/below it
+        are absorbed (dropped from the spine), later turns remain. Another
+        channel's rows + compaction never enter the user spine."""
+        _settled_turn("question one", answer="answer one")
+        t2, _, _ = _settled_turn("question two", answer="answer two")
+        _settled_turn("question three", answer="answer three")
+        # Noise on another channel — must never reach the user spine or its watermark.
+        other_in = Transcript.write_input_row("dmn", "user", "other channel question")
+        other_t = Transcript.turn_id_of_row(other_in)
+        Transcript.write_assistant_row("dmn", "other channel answer", turn_id=other_t)
+        compaction_persistence.write_compaction("dmn", None, other_t, "OTHER-CKPT")
 
-        t1 = _seed_thread('thread 1 q', 'thread 1 a')
-        result = _wrap_with_checkpoint('user', 'plain body', t1)
-        assert result == 'plain body'
+        before = _main_mp().get_previous_messages()
+        assert "question one" in before and "question three" in before
 
-    def test_wrap_with_checkpoint_none_turn_id_is_channel_wide(self, db: sqlite3.Connection) -> None:
-        """_wrap_with_checkpoint(channel, body, None) uses the channel-wide
-        compaction (legacy fallback)."""
-        from services.message_processor import _wrap_with_checkpoint
+        compaction_persistence.write_compaction(_CH, None, t2, "USER-CKPT")
+        after = _main_mp().get_previous_messages()
 
-        Transcript.write_input_row('user', 'compaction', 'channel-wide checkpoint')
-        result = _wrap_with_checkpoint('user', 'current body', None)
-        assert 'channel-wide checkpoint' in result
+        assert "question one" not in after, "turn 1 absorbed by the watermark"
+        assert "question two" not in after, "turn 2 absorbed (watermark inclusive on the turn axis)"
+        assert "question three" in after, "turn 3 is past the watermark — still on the spine"
+        assert "other channel question" not in after, "another channel never enters the user spine"
+
+    def test_spine_is_bounded_to_the_recent_turn_window(self, db: object) -> None:
+        """A cold (no-watermark) spine read is bounded to the most-recent
+        ``_SPINE_TURN_LIMIT`` settled turns, so an un-checkpointed history can't
+        blow the context cap. The oldest turn past the window is dropped; every
+        turn inside it still renders."""
+        for i in range(_SPINE_TURN_LIMIT + 1):
+            _settled_turn(f"question {i:02d}", answer=f"answer {i:02d}")
+
+        rendered = _main_mp().get_previous_messages()
+
+        assert "question 00" not in rendered, "the oldest turn falls outside the recent-turn window"
+        assert "question 01" in rendered, "the first turn inside the window renders"
+        assert f"question {_SPINE_TURN_LIMIT:02d}" in rendered, "the newest turn renders"
 
 
-@pytest.mark.unit
-class TestCompactorWritesIntoThread:
+class TestForkRead:
 
-    def test_compaction_row_carries_thread_turn_id(self, db: sqlite3.Connection) -> None:
-        """A compaction row written with turn_id lands IN the thread — the
-        thread-scoped get_compaction re-keys from (channel, turn_id)."""
-        t1 = _seed_thread('thread 1 q', 'thread 1 a')
-        cid = _seed_compaction('user', t1, 'thread 1 checkpoint')
+    def test_fork_floors_at_settle0_and_drops_below_floor_and_live_reply(self, db: object) -> None:
+        """The FORK read floors at the turn's settle0 (the fork anchor), includes
+        prior settled continuations, and excludes both below-floor main-owned rows
+        and the live reply's own rows."""
+        t, _, _ = _settled_turn("thread question", answer="thread answer",
+                                steps=(("thinking it through", "search_files"),))
+        _reply(t, "first follow-up", answer="first follow-up answer")
+        live_in = Transcript.write_input_row(_CH, "user", "the live reply", turn_id=t)
 
-        row = Transcript.by_turn('user', t1)
-        compaction_rows = [r for r in row if r['role'] == 'compaction']
-        assert len(compaction_rows) == 1
-        assert cast("int", compaction_rows[0]['id']) == cid
-        assert cast("int", compaction_rows[0]['turn_id']) == t1, "compaction row must carry the thread's turn_id"
+        rendered = _fork_mp(t, live_in).get_previous_messages()
 
-    def test_compaction_in_one_thread_does_not_affect_another(self, db: sqlite3.Connection) -> None:
-        """Compacting thread 1 does not create a watermark for thread 2 — each
-        thread carries its own checkpoint independently."""
-        t1 = _seed_thread('thread 1 q', 'thread 1 a')
-        t2 = _seed_thread('thread 2 q', 'thread 2 a')
-        _seed_compaction('user', t1, 'thread 1 checkpoint')
+        assert "thread answer" in rendered, "settle0 (the fork anchor) is the floor and is included"
+        assert "first follow-up" in rendered, "prior settled continuation is included"
+        assert "first follow-up answer" in rendered
+        assert "thinking it through" not in rendered, "pre-settle0 main-owned row is below the fork floor"
+        assert "thread question" not in rendered, "the turn's input row is below settle0 — excluded"
+        assert "the live reply" not in rendered, "the live reply renders separately, not in history"
 
-        row1 = compaction_persistence.get_compaction('user', t1)
-        row2 = compaction_persistence.get_compaction('user', t2)
-        assert row1 is not None
-        assert row2 is None, "thread 2 unaffected by thread 1's compaction"
+    def test_watermark_cuts_fork_read_without_touching_the_spine(self, db: object) -> None:
+        """A FORK compaction (transcript.id axis) drops the continuation up to its
+        watermark for the fork read, but does NOT advance the spine's turn-axis
+        watermark — the spine still shows both turns' opening exchanges."""
+        _settled_turn("alpha question", answer="alpha answer")
+        t2, _, _ = _settled_turn("beta question", answer="beta answer")
+        _, r_settle = _reply(t2, "beta follow-up", answer="beta follow-up answer")
+        _reply(t2, "beta second follow-up", answer="beta second answer")
+        live_in = Transcript.write_input_row(_CH, "user", "beta live reply", turn_id=t2)
+
+        compaction_persistence.write_compaction(_CH, t2, r_settle, "FORK checkpoint")
+
+        fork_rendered = _fork_mp(t2, live_in).get_previous_messages()
+        assert "beta second follow-up" in fork_rendered, "rows above the fork watermark survive"
+        assert "beta second answer" in fork_rendered
+        assert "beta follow-up answer" not in fork_rendered, "row at the fork watermark is folded"
+        assert "beta answer" not in fork_rendered, "settle0 anchor below the watermark is folded"
+
+        main_rendered = _main_mp().get_previous_messages()
+        assert "alpha question" in main_rendered, "fork checkpoint did not move the spine watermark"
+        assert "beta question" in main_rendered
+
+
+class TestTwoAxisIndependence:
+
+    def test_main_watermark_hides_turn_from_spine_but_not_from_its_fork_read(self, db: object) -> None:
+        """A MAIN compaction absorbs a turn from the spine (turn-axis) yet the SAME
+        turn read as a FORK is untouched — its own id-axis watermark is 0, so the
+        anchor + continuation are all there. The two axes do not collide."""
+        _settled_turn("turn one question", answer="turn one answer")
+        t2, _, _ = _settled_turn("turn two question", answer="turn two answer")
+        _reply(t2, "turn two follow-up", answer="turn two follow-up answer")
+        live_in = Transcript.write_input_row(_CH, "user", "live reply into turn two", turn_id=t2)
+        _settled_turn("turn three question", answer="turn three answer")
+
+        compaction_persistence.write_compaction(_CH, None, t2, "MAIN checkpoint")
+
+        main_rendered = _main_mp().get_previous_messages()
+        assert "turn three question" in main_rendered
+        assert "turn one question" not in main_rendered
+        assert "turn two question" not in main_rendered, "turn 2 absorbed from the spine"
+
+        fork_rendered = _fork_mp(t2, live_in).get_previous_messages()
+        assert "turn two answer" in fork_rendered, "settle0 anchor survives — fork axis is independent"
+        assert "turn two follow-up" in fork_rendered, "continuation survives the MAIN watermark"
+        assert "turn two follow-up answer" in fork_rendered
+
+    def test_checkpoint_envelope_reads_the_views_own_axis(self, db: object) -> None:
+        """``_wrap_with_checkpoint`` wraps with the compaction on the SAME axis the
+        view reads: ``None`` (spine) sees the MAIN checkpoint, ``turn_id`` (fork)
+        sees the FORK checkpoint — never each other's."""
+        t, _, settle = _settled_turn("envelope question", answer="envelope answer")
+        compaction_persistence.write_compaction(_CH, None, t, "MAIN-CKPT-TEXT")
+        compaction_persistence.write_compaction(_CH, t, settle, "FORK-CKPT-TEXT")
+
+        main_wrapped = _wrap_with_checkpoint(_CH, "the current body", None)
+        fork_wrapped = _wrap_with_checkpoint(_CH, "the current body", t)
+
+        assert "### Checkpoint" in main_wrapped
+        assert "MAIN-CKPT-TEXT" in main_wrapped
+        assert "FORK-CKPT-TEXT" not in main_wrapped, "MAIN envelope must read only the for_turn_id IS NULL axis"
+
+        assert "FORK-CKPT-TEXT" in fork_wrapped
+        assert "MAIN-CKPT-TEXT" not in fork_wrapped, "FORK envelope must read only its own thread axis"
+        assert "the current body" in fork_wrapped
+
+
+class TestForkReplyCancellation:
+
+    def test_cancel_purges_only_its_own_rows_by_id_floor(self, db: object) -> None:
+        """A cancelled fork reply purges only ITS own rows (``id >= self.uid``) —
+        the pre-existing thread it replied into survives untouched."""
+        t, _, _ = _settled_turn("pre-existing question", answer="pre-existing answer")
+        reply_in = Transcript.write_input_row(_CH, "user", "the cancelled reply", turn_id=t)
+        Transcript.write_assistant_row(_CH, "half-written response", turn_id=t)
+
+        _fork_mp(t, reply_in)._cleanup_cancelled()
+
+        surviving = [cast("str", r["content"]) for r in Transcript.by_turn(_CH, t)]
+        assert "pre-existing question" in surviving, "the thread predating the reply must survive"
+        assert "pre-existing answer" in surviving
+        assert "the cancelled reply" not in surviving, "the cancelled reply's own input row is purged"
+        assert "half-written response" not in surviving, "the cancelled reply's own step is purged"

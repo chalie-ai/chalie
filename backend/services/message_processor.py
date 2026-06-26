@@ -105,6 +105,12 @@ class MessageProcessor:
         # act-trail and previous-messages history render by it; tool_calls derive
         # it via a join on the input row.
         self.turn_id: "int | None" = cast("int | None", self._metadata.get("thread_id"))
+        # View mode. True ⇒ this is a genuine user reply INTO a
+        # thread → FORK read (the turn's settle0-floored continuation) and a fork-
+        # scoped checkpoint. Driven by a dedicated metadata key set ONLY by the
+        # user-reply path, NEVER raw ``thread_id`` presence — a delegate reply
+        # routed into a main turn reuses ``thread_id`` and must stay MAIN.
+        self._forked: bool = bool(self._metadata.get("is_thread_reply"))
         # User thinking-level override (None = auto/gate decides). 'medium'/'high'
         # bypass the gate and are forced on every send via Providers.send.
         self.thinking_override: str | None = None
@@ -117,9 +123,6 @@ class MessageProcessor:
         # The transcript row this step's tool calls anchor to. Defaults to the
         # input row; a tool-bearing step advances it to its OWN step row.
         self.anchor: int | None = None
-        # Every turn_id this chain opened — a mid-turn compaction splits the turn,
-        # so cancellation cleanup must sweep them all. Shared by reference via _continue.
-        self._chain_turn_ids: set[int] = set()
         # Set on a continuation MP spawned AFTER a mid-turn compaction: the model
         # lost its working context, so the user prompt prepends a recovery banner.
         self.post_compaction_continuation: bool = False
@@ -278,8 +281,6 @@ class MessageProcessor:
                     from api.chat import _broadcast_turn_started  # noqa: PLC0415
                     _broadcast_turn_started(self.turn_id)
             self.anchor = self.uid
-            if self.turn_id is not None:
-                self._chain_turn_ids.add(self.turn_id)
 
         if self._cfg.channel == "user":
             self._run_thinking_gate()
@@ -401,7 +402,10 @@ class MessageProcessor:
 
     def _build_send_messages(self) -> list[dict[str, object]]:
         """Build the single-element user-message list, with checkpoint wrapper and config image."""
-        user = _wrap_with_checkpoint(self._cfg.channel, self._cfg.get_user_prompt(self), self.turn_id)
+        user = _wrap_with_checkpoint(
+            self._cfg.channel, self._cfg.get_user_prompt(self),
+            self.turn_id if self._forked else None,
+        )
         message: dict[str, object] = {"role": "user", "content": user}
         img = self._cfg.get_image(self)
         if img is not None:
@@ -485,8 +489,6 @@ class MessageProcessor:
         row_id = Transcript.write_assistant_row(self._cfg.channel, formatted, turn_id=self.turn_id)
         if self.turn_id is None:
             self.turn_id = Transcript.turn_id_of_row(row_id)
-            if self.turn_id is not None:
-                self._chain_turn_ids.add(self.turn_id)
         self.anchor = row_id
         return formatted
 
@@ -523,7 +525,6 @@ class MessageProcessor:
         child.turn_id = self.turn_id
         child.anchor = self.uid
         child.active_tools = self.active_tools            # SAME list
-        child._chain_turn_ids = self._chain_turn_ids      # SAME set
         child._rich_media_ordinals = getattr(self, "_rich_media_ordinals", None)
         child.cancel_event = self.cancel_event            # SAME Event
         child.thinking_level = getattr(self, "thinking_level", "low")
@@ -562,55 +563,59 @@ class MessageProcessor:
         return formatted
 
     def _cleanup_cancelled(self) -> None:
-        """Delete every transcript + tool_calls row of the cancelled chain, across every turn."""
-        turn_ids = {t for t in (self._chain_turn_ids or ({self.turn_id} if self.turn_id is not None else set())) if t is not None}
-        if not turn_ids:
+        """Delete the cancelled chain's OWN rows from this turn — those at or above
+        the chain's first row (``self.uid``). A fork reply shares its turn_id with
+        the thread it replies into, so deleting the whole turn would wipe history
+        that predates the reply; the id floor confines the purge to what THIS chain
+        wrote. ``uid`` None (no input row written yet) ⇒ floor 0 ⇒ the turn is this
+        chain's alone (a starter / skip-input continuation) and clears whole."""
+        if self.turn_id is None:
             return
-        channel = self._cfg.channel
+        channel, floor = self._cfg.channel, self.uid or 0
         try:
             from services.database_service import get_shared_db_service  # noqa: PLC0415
             db = get_shared_db_service()
             with db.connection() as conn:
-                for tid in sorted(turn_ids):
-                    conn.execute(
-                        "DELETE FROM tool_calls WHERE transcript_id IN "
-                        "(SELECT id FROM transcript WHERE channel = ? AND turn_id = ?)",
-                        (channel, tid),
-                    )
-                    conn.execute(
-                        "DELETE FROM transcript WHERE channel = ? AND turn_id = ?",
-                        (channel, tid),
-                    )
+                conn.execute(
+                    "DELETE FROM tool_calls WHERE transcript_id IN "
+                    "(SELECT id FROM transcript WHERE channel = ? AND turn_id = ? AND id >= ?)",
+                    (channel, self.turn_id, floor),
+                )
+                conn.execute(
+                    "DELETE FROM transcript WHERE channel = ? AND turn_id = ? AND id >= ?",
+                    (channel, self.turn_id, floor),
+                )
             logger.info(
-                "[MessageProcessor] %s: cleaned up cancelled chain (turn_ids=%s)",
-                channel,
-                sorted(turn_ids),
+                "[MessageProcessor] %s: cleaned up cancelled chain (turn_id=%s, id>=%s)",
+                channel, self.turn_id, floor,
             )
         except Exception as exc:
             logger.warning(
-                "[MessageProcessor] %s: failed to clean up cancelled chain (turn_ids=%s): %s",
-                channel,
-                sorted(turn_ids),
-                exc,
+                "[MessageProcessor] %s: failed to clean up cancelled chain (turn_id=%s): %s",
+                channel, self.turn_id, exc,
             )
 
     def _previous_rows(self) -> list[dict[str, object]]:
-        """Watermark-bounded transcript rows for this thread — ONLY the active
-        thread's history (workstream C). When ``self.turn_id`` is set the read
-        is scoped to ``(channel, turn_id)``; a ``None`` turn_id (housekeeping
-        channels that never allocate a thread) keeps the legacy channel-wide read."""
+        """previous_messages for this turn's view.
+
+        FORK (a genuine reply into thread T): the turn's settle0-floored
+        continuation above the fork's transcript-id watermark, dropping the live
+        reply's own rows (``id < self.uid``, which render separately). MAIN
+        (everything else): the multi-turn spine above the main turn_id watermark.
+        Each view reads its own checkpoint axis via ``get_compaction(channel,
+        for_turn_id)`` — ``turn_id`` for a fork, ``None`` for the spine."""
         if self._cfg.suppress_history:
             return []
         from services import compaction_persistence  # noqa: PLC0415
         from services.transcript_service import Transcript  # noqa: PLC0415
-        if self.turn_id is not None:
-            compaction = compaction_persistence.get_compaction(self._cfg.channel, self.turn_id)
-            watermark = cast("int", compaction["compacted_up_to_id"]) if compaction else 0
-            rows = Transcript.by_turn(self._cfg.channel, self.turn_id)
-            return [r for r in rows if cast("int", r.get("id") or 0) > watermark]
-        compaction = compaction_persistence.get_compaction(self._cfg.channel)
-        watermark = cast("int", compaction["compacted_up_to_id"]) if compaction else 0
-        return Transcript.get_recent(self._cfg.channel, since_id=watermark)
+        channel = self._cfg.channel
+        if self._forked and self.turn_id is not None:
+            compaction = compaction_persistence.get_compaction(channel, self.turn_id)
+            watermark = cast("int", compaction["compacted_up_to"]) if compaction else 0
+            return Transcript.fork_rows(channel, self.turn_id, watermark, self.uid)
+        compaction = compaction_persistence.get_compaction(channel, None)
+        watermark = cast("int", compaction["compacted_up_to"]) if compaction else 0
+        return Transcript.main_spine(channel, watermark)
 
     def get_previous_messages(self, drop_oldest: int = 0) -> str:
         """Render the ## Previous Messages block from _previous_rows()."""
@@ -643,27 +648,15 @@ class MessageProcessor:
     def _dispatch_compaction(self) -> None:
         """Fire chat-history compaction through the normal tool-dispatch chokepoint.
 
-        Thread-scoped (workstream C): the before/after watermark reads key off
-        ``(channel, turn_id)`` so each thread carries its own checkpoint."""
+        The compactor scopes its own checkpoint by view (``mp._forked``) and writes
+        it into the ``compactions`` table — off the transcript spine, so firing
+        never moves ``turn_id`` and the turn boundary survives a mid-turn collapse.
+        The post-compaction continuation re-reads ``_previous_rows`` against the
+        fresh watermark; nothing here needs to inspect the result."""
         from abilities._dispatcher import ToolDispatcher  # noqa: PLC0415
-        from services import compaction_persistence  # noqa: PLC0415
-        from services.transcript_service import Transcript  # noqa: PLC0415
-
-        before = compaction_persistence.get_compaction(self._cfg.channel, self.turn_id)
-        before_id = cast("int", before["compacted_up_to_id"]) if before else 0
-
         ToolDispatcher(self).dispatch(
             "chat_history_compactor", {"act_summary": "Compacting conversation"}
         )
-
-        after = compaction_persistence.get_compaction(self._cfg.channel, self.turn_id)
-        after_id = cast("int", after["compacted_up_to_id"]) if after else 0
-        if after_id <= before_id:
-            return
-        new_turn = Transcript.turn_id_of_row(after_id)
-        if new_turn is not None:
-            self.turn_id = new_turn
-            self._chain_turn_ids.add(new_turn)
 
 
 # ── Module-private helpers ────────────────────────────────────────────────────
@@ -674,14 +667,14 @@ class MessageProcessor:
 _MISSING_TS_PLACEHOLDER = '????-??-?? ??:??'
 
 
-def _wrap_with_checkpoint(channel: str, user_body: str, turn_id: "int | None" = None) -> str:
-    """Wrap the user-message body with a ### Checkpoint envelope when a compaction exists.
-
-    ``turn_id`` scopes the checkpoint to the active thread (workstream C); ``None``
-    keeps the legacy channel-wide read."""
+def _wrap_with_checkpoint(channel: str, user_body: str, for_turn_id: "int | None") -> str:
+    """Wrap the user-message body with a ### Checkpoint envelope when a compaction
+    exists for this view's scope: ``for_turn_id`` is the thread id
+    for a FORK reply, ``None`` for the MAIN spine — the same axis the matching
+    ``_previous_rows`` read uses, so the envelope and the history never disagree."""
     from services import compaction_persistence
 
-    row = compaction_persistence.get_compaction(channel, turn_id)
+    row = compaction_persistence.get_compaction(channel, for_turn_id)
     if not row or not (compacted := cast('str', row.get('compacted_text') or '').strip()):
         return user_body
     return (

@@ -190,7 +190,6 @@ class PatternConfig(ProcessorConfig):
                 after_id=self._window_start,
                 before_id=self._window_end,
                 require_content=True,
-                exclude_roles=("compaction",),
             )
             if not rows:
                 return "(no transcripts in window)"

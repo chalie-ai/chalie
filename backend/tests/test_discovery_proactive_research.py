@@ -137,22 +137,23 @@ def test_discovery_step_fires_persists_run_then_throttles(db: sqlite3.Connection
     call proves the 6h self-throttle.
     """
     from services.data_graph_service import get_data_graph_service, KIND_SYSTEM
-    from services.transcript_service import Transcript
     from services.time_utils import utc_now
     from services.subconscious_worker import (
         SubconsciousWorker,
         _DISCOVERY_TIMESTAMP,
         _DISCOVERY_INTERVAL,
     )
-    from services import discovery_runs
+    from services import discovery_runs, compaction_persistence
 
     summary = "The user is a space-exploration enthusiast building an observatory."
     compacted = "Yesterday we discussed the James Webb telescope's latest imagery."
     answer = "I noticed JWST released fresh deep-field images — worth a look when you're free."
 
-    # Grounding, seeded via the same paths the worker reads at dispatch time.
+    # Grounding, seeded via the same paths the worker reads at dispatch time: the
+    # MAIN checkpoint lives in the compactions table (for_turn_id None), exactly
+    # what get_compaction("user", None) returns at dispatch.
     get_data_graph_service().store(kind=KIND_SYSTEM, key="user_summary", value=summary, source="test:seed")
-    Transcript.append("user", "compaction", compacted)
+    compaction_persistence.write_compaction("user", None, 1, compacted)
 
     # Force the clock due so the step fires regardless of any prior run state.
     _DISCOVERY_TIMESTAMP.persist(utc_now() - _DISCOVERY_INTERVAL - timedelta(minutes=1))

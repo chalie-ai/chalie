@@ -593,7 +593,7 @@ class SubconsciousWorker:
         # background-loop rows (dmn writes many) would advance the delta past the
         # _MIN_DELTA trigger and fire spurious pattern passes the load discards.
         from services.transcript_service import Transcript  # noqa: PLC0415
-        latest = Transcript.latest_id(["user"], exclude_roles=("compaction",)) or 0
+        latest = Transcript.latest_id(["user"]) or 0
 
         delta = latest - cursor
         if delta < _MIN_DELTA:
@@ -703,7 +703,7 @@ class SubconsciousWorker:
             # user geo-activity channels advance the cursor, so a located row on
             # a muted channel can never fire the geo pass.
             from services.transcript_service import Transcript  # noqa: PLC0415
-            latest = Transcript.latest_id(["user"], require_location=True, exclude_roles=("compaction",)) or 0
+            latest = Transcript.latest_id(["user"], require_location=True) or 0
         except Exception as exc:
             logger.debug(f"{LOG_PREFIX} geo_patterns no db: {exc}")
             return "skip: no db"
@@ -757,7 +757,7 @@ class SubconsciousWorker:
         from services.compaction_persistence import get_compaction  # noqa: PLC0415
         from services.message_processor import MessageProcessor  # noqa: PLC0415
 
-        compaction = get_compaction("user")
+        compaction = get_compaction("user", None)
         MessageProcessor.process(
             DISCOVERY_PROMPT,
             DiscoveryConfig(),

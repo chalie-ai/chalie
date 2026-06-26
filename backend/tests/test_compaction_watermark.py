@@ -2,7 +2,6 @@ import sqlite3
 from typing import TYPE_CHECKING, cast
 
 import pytest
-from services import compaction_persistence
 from services.transcript_service import Transcript
 from services.database_service import get_shared_db_service
 
@@ -13,38 +12,28 @@ pytestmark = pytest.mark.integration
 
 
 def _clear(db: sqlite3.Connection, channel: str) -> None:
+    db.execute(
+        "DELETE FROM tool_calls WHERE transcript_id IN "
+        "(SELECT id FROM transcript WHERE channel = ?)",
+        (channel,),
+    )
     db.execute("DELETE FROM transcript WHERE channel = ?", (channel,))
     db.commit()
 
 
-def test_get_compaction_reads_transcript_role_compaction(db: sqlite3.Connection) -> None:
-    ch = "test_wm"
-    _clear(db, ch)
-    Transcript.write_input_row(ch, "user", "hello one")
-    Transcript.write_input_row(ch, "assistant", "reply one")
-    cid = Transcript.write_input_row(ch, "compaction", "SUMMARY: one happened")
+def _settled_turn(channel: str, contents: list[str]) -> None:
+    """One settled turn through the production writers: a user opener, ``len-2``
+    tool-bearing assistant steps (a real tool keeps each below settle0), and a
+    no-tool answer (settle0). Every row lands in the MAIN spine the over-cap /
+    fit checks read, so the seeded history actually reaches the request DTO."""
+    from services.act_trail import ActTrail
 
-    row = compaction_persistence.get_compaction(ch)
-    assert row is not None
-    assert row["compacted_text"] == "SUMMARY: one happened"
-    assert row["compacted_up_to_id"] == cid  # the row's OWN id is the watermark
-    _clear(db, ch)
-
-
-def test_previous_rows_excludes_through_watermark_and_has_no_limit(db: sqlite3.Connection) -> None:
-    ch = "test_wm2"
-    _clear(db, ch)
-    for i in range(25):  # >20 — proves the old limit=20 bug is gone
-        Transcript.write_input_row(ch, "user", f"msg {i}")
-    cid = Transcript.write_input_row(ch, "compaction", "checkpoint")
-    after = Transcript.write_input_row(ch, "user", "after compaction")
-
-    rows = Transcript.get_recent(ch, since_id=cid)
-    ids = [cast(int, r["id"]) for r in rows]
-    assert after in ids
-    assert cid not in ids               # watermark row itself excluded
-    assert all(i > cid for i in ids)    # nothing at/below the watermark
-    _clear(db, ch)
+    in_id = Transcript.write_input_row(channel, "user", contents[0])
+    tid = Transcript.turn_id_of_row(in_id)
+    for text in contents[1:-1]:
+        step = Transcript.write_assistant_row(channel, text, turn_id=tid)
+        ActTrail().record(tool_name="search_files", params={}, result="", transcript_id=step)
+    Transcript.write_assistant_row(channel, contents[-1], turn_id=tid)
 
 
 def test_get_context_limit_reads_declared_max_tokens_capped() -> None:
@@ -105,11 +94,11 @@ def test_measure_true_when_full_request_reaches_threshold(db: sqlite3.Connection
     ch = "user"
     _clear(db, ch)
     # estimate_tokens counts WORDS (split * 1.3), so rows must be word-rich:
-    # 40 rows * ~400 words * 1.3 ≈ 20.8k tok, overflowing the 12k cap.
+    # 40 spine rows * ~400 words * 1.3 ≈ 20.8k tok, overflowing the 12k cap. One
+    # settled turn carries them all so the whole backlog reaches the request DTO.
     n_rows = 40
     big = " ".join(f"w{j}" for j in range(400))
-    for i in range(n_rows):
-        Transcript.write_input_row(ch, "user", f"row{i:03d} {big}")
+    _settled_turn(ch, [f"row{i:03d} {big}" for i in range(n_rows)])
     _seed_selected_ollama(db, 20000)
     ProviderCacheService.invalidate()
 
@@ -139,8 +128,7 @@ def test_measure_false_when_request_fits(db: sqlite3.Connection) -> None:
 
     ch = "user"
     _clear(db, ch)
-    for i in range(3):
-        Transcript.write_input_row(ch, "user", f"short {i}")
+    _settled_turn(ch, [f"short {i}" for i in range(3)])
     _seed_selected_ollama(db, 20000)
     ProviderCacheService.invalidate()
 
@@ -172,8 +160,7 @@ def test_send_raises_request_over_cap_without_calling_provider(db: sqlite3.Conne
     ch = "user"
     _clear(db, ch)
     big = " ".join(f"w{j}" for j in range(400))
-    for i in range(40):
-        Transcript.write_input_row(ch, "user", f"row{i:03d} {big}")
+    _settled_turn(ch, [f"row{i:03d} {big}" for i in range(40)])
     _seed_selected_ollama(db, 20000)
     ProviderCacheService.invalidate()
 
@@ -206,8 +193,7 @@ def test_fit_compaction_input_drops_oldest_until_bare_request_fits(db: sqlite3.C
     _clear(db, ch)
     n_rows = 40
     big = " ".join(f"w{j}" for j in range(400))
-    for i in range(n_rows):
-        Transcript.write_input_row(ch, "user", f"row{i:03d} {big}")
+    _settled_turn(ch, [f"row{i:03d} {big}" for i in range(n_rows)])
     _seed_selected_ollama(db, 20000)
     ProviderCacheService.invalidate()
 
@@ -249,8 +235,7 @@ def test_fit_compaction_input_no_drop_when_bare_request_fits(db: sqlite3.Connect
 
     ch = "user"
     _clear(db, ch)
-    for i in range(3):
-        Transcript.write_input_row(ch, "user", f"short {i}")
+    _settled_turn(ch, [f"short {i}" for i in range(3)])
     _seed_selected_ollama(db, 20000)
     ProviderCacheService.invalidate()
 

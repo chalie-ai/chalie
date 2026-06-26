@@ -4,7 +4,7 @@ compactor's genuine behaviour tests (rows_compacted surface, broadcast guard)
 that have no coverage elsewhere."""
 
 import sqlite3
-from typing import TYPE_CHECKING, Protocol, cast
+from typing import TYPE_CHECKING, cast
 
 import pytest
 
@@ -14,28 +14,24 @@ from abilities.chat_history_compactor import (
 )
 from abilities._compaction_config import CompactionConfig
 from configs.channels import UserConfig
+from services.act_trail import ActTrail
 from services.transcript_service import Transcript
 from services.message_processor import MessageProcessor
 from services.provider_cache_service import ProviderCacheService
 
 if TYPE_CHECKING:
-    class _CompactionParent(Protocol):
-        _compaction_kept_rows: int
-        turn_id: "int | None"
-        def _previous_rows(self) -> list[object]: ...
-        def get_previous_messages(self, *, drop_oldest: int = ...) -> str: ...
-        class _Providers(Protocol):
-            def get_context_limit(self) -> int: ...
-            def measure(self, dto: object) -> int: ...
-        providers: _Providers
-        class _Config(Protocol):
-            channel: str
-        config: _Config
+    # Reuse the compactor's own parent contract — no duplicate Protocol.
+    from abilities.chat_history_compactor import _CompactionParent
 
 pytestmark = pytest.mark.unit
 
 
 def _clear(db: sqlite3.Connection, channel: str) -> None:
+    db.execute(
+        "DELETE FROM tool_calls WHERE transcript_id IN "
+        "(SELECT id FROM transcript WHERE channel = ?)",
+        (channel,),
+    )
     db.execute("DELETE FROM transcript WHERE channel = ?", (channel,))
     db.commit()
 
@@ -65,19 +61,27 @@ def _make_mp(raw_input: str, channel: str) -> MessageProcessor:
 
 
 def test_fit_compaction_input_surfaces_kept_row_count(db: sqlite3.Connection) -> None:
-    """The compaction result's ``rows_compacted`` must reflect the actual count of kept transcript rows."""
+    """The compaction result's ``rows_compacted`` must reflect the actual count of
+    kept transcript rows — the settled spine the next read will cut on."""
     ch = "user"
     _clear(db, ch)
     _seed_offline_provider_cap_zero(db)
-    n_rows = 5
-    for i in range(n_rows):
-        Transcript.write_input_row(ch, "user", f"row{i:03d}")
+    # Two settled turns on the spine. Turn one: input + a pre-settle working step
+    # (a real tool demotes it below settle0) + the no-tool answer (settle0). Turn
+    # two: input + answer. Five rows the main spine surfaces to the compactor.
+    in1 = Transcript.write_input_row(ch, "user", "first question")
+    t1 = Transcript.turn_id_of_row(in1)
+    step = Transcript.write_assistant_row(ch, "a working step", turn_id=t1)
+    ActTrail().record(tool_name="search_files", params={}, result="ok", transcript_id=step)
+    Transcript.write_assistant_row(ch, "first answer", turn_id=t1)
+    in2 = Transcript.write_input_row(ch, "user", "second question")
+    Transcript.write_assistant_row(ch, "second answer", turn_id=Transcript.turn_id_of_row(in2))
     mp = _make_mp("compact", ch)
     try:
         combined = ChatHistoryCompactor._fit_compaction_input(cast("_CompactionParent", mp), "")
-        assert combined is not None  # there is a backlog to compact
+        assert combined is not None  # there is a settled backlog to compact
         # The kept-row count is surfaced on the parent for run() to read.
-        assert getattr(mp, "_compaction_kept_rows", None) == n_rows
+        assert getattr(mp, "_compaction_kept_rows", None) == 5
     finally:
         ProviderCacheService.invalidate()
         _clear(db, ch)

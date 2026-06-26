@@ -60,10 +60,6 @@ LIKE_DELEGATE = "delegate:%"
 # fact extraction; this constant is the shared default for the pattern pass.
 PROVENANCE_PATTERN_MATCH = "pattern_match"
 
-# Roles excluded from every user-activity reader: compaction rows are written on
-# a parent's channel but are housekeeping artefacts, never user behaviour.
-ROLE_COMPACTION = "compaction"
-
 
 @dataclass(frozen=True)
 class Profile:
@@ -213,10 +209,6 @@ def janitor_protected_sql(column: str = "channel") -> str:
     cutoff; protecting every episode-producing channel keeps that memory.
     """
     return _allowlist_sql(column, lambda p: p.extract_episodes)
-
-
-def non_compaction_sql(column: str = "role") -> str:
-    return f"{column} != '{ROLE_COMPACTION}'"
 
 
 def consolidating_exact_channels() -> list[str]:

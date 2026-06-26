@@ -49,6 +49,27 @@ _COLS = (
 # becomes its own singleton turn in correct chronological order.
 _TURN_KEY = "COALESCE(turn_id, -id)"
 
+# settle0 — the FIRST assistant row of a turn whose tool_calls carry NO
+# model-driven tool. The two internally-dispatched passes (chat_history_compactor,
+# thinking) DO record a tool_calls row but are not model tools, so they never
+# demote a settle. The orchestrator ends a turn on the first no-tool response, so
+# "first no-model-tool assistant" IS the turn's settle by construction. The
+# predicate scans the row aliased ``t``; every reader that uses it binds
+# ``*_INTERNAL_TOOLS`` in textual order after its own scope params.
+_INTERNAL_TOOLS: tuple[str, ...] = ("chat_history_compactor", "thinking")
+_SETTLE_PREDICATE = (
+    "t.role = 'assistant' AND NOT EXISTS (SELECT 1 FROM tool_calls tc "
+    "WHERE tc.transcript_id = t.id AND tc.tool_name NOT IN "
+    f"({','.join('?' * len(_INTERNAL_TOOLS))}))"
+)
+
+# Cold-start bound for the MAIN spine read: at watermark 0 (no checkpoint yet)
+# the spine would otherwise pull every turn and blow the context cap before a
+# checkpoint can form. Cap it to the most-recent N turns' exchanges (matches the
+# feed's recent_turns page); compaction then advances the watermark on the first
+# cap trip and the bound stops biting.
+_SPINE_TURN_LIMIT = 12
+
 
 class Transcript:
     """Static read/write surface for the transcript table. All access goes
@@ -195,6 +216,81 @@ class Transcript:
 
 
     @staticmethod
+    def settle0(channel: str, turn_id: int) -> int | None:
+        """``id`` of the turn's settle0 — its first no-model-tool assistant row
+        (see ``_SETTLE_PREDICATE``), or None for a turn that has not settled yet
+        (in-progress/failed). settle0 is the boundary between a turn's main
+        exchange and its fork continuation: the shared pivot of the two views."""
+        from services.database_service import get_shared_db_service
+        db = get_shared_db_service()
+        with db.connection() as conn:
+            row = conn.execute(
+                f"SELECT MIN(t.id) FROM transcript t "
+                f"WHERE t.channel = ? AND t.turn_id = ? AND {_SETTLE_PREDICATE}",
+                (channel, turn_id, *_INTERNAL_TOOLS),
+            ).fetchone()
+        return int(row[0]) if row and row[0] is not None else None
+
+
+    @staticmethod
+    def main_spine(channel: str, after_turn_id: int, *,
+                   limit: int = _SPINE_TURN_LIMIT) -> list[dict[str, object]]:
+        """The MAIN view's previous_messages — the multi-turn spine.
+
+        For each settled turn with ``turn_id > after_turn_id`` (the main watermark,
+        a turn_id), emit the opening exchange: rows with ``id <= settle0(turn)``.
+        Fork continuations (rows past settle0) never reach the spine; in-progress
+        turns (no settle) are skipped, so the live turn is excluded without a
+        special case. Bounded to the most-recent ``limit`` turns so a cold
+        (watermark-0) read can't blow the cap before a checkpoint forms. Rows are
+        id-ordered — chronological for the spine, since each turn's opening
+        exchange is written contiguously before the next turn starts (fork
+        replies, which append later high ids, are exactly what the cut excludes)."""
+        settle = (
+            "(SELECT MIN(t.id) FROM transcript t WHERE t.channel = transcript.channel "
+            f"AND t.turn_id = transcript.turn_id AND {_SETTLE_PREDICATE})"
+        )
+        recent = (
+            "SELECT t.turn_id FROM transcript t "
+            f"WHERE t.channel = ? AND t.turn_id > ? AND {_SETTLE_PREDICATE} "
+            "GROUP BY t.turn_id ORDER BY t.turn_id DESC LIMIT ?"
+        )
+        where = f"channel = ? AND turn_id > ? AND id <= {settle} AND turn_id IN ({recent})"
+        params = (
+            channel, after_turn_id, *_INTERNAL_TOOLS,         # outer scope + correlated settle
+            channel, after_turn_id, *_INTERNAL_TOOLS, limit,  # recent-turns subquery
+        )
+        return Transcript._select(where, params)
+
+
+    @staticmethod
+    def fork_rows(channel: str, turn_id: int, watermark: int,
+                  before_id: int | None) -> list[dict[str, object]]:
+        """The FORK view's previous_messages for one thread.
+
+        Emit turn ``turn_id``'s rows from its settle0 floor up: ``settle0 <= id``
+        (the forked-from anchor plus the continuation) AND ``id > watermark`` (the
+        fork's transcript-id checkpoint axis) AND ``id < before_id`` — the last
+        bound drops the current reply's own rows so the live message isn't rendered
+        twice (it renders separately), mirroring how the spine skips its in-progress
+        turn. ``before_id`` None ⇒ no upper bound."""
+        settle = (
+            "(SELECT MIN(t.id) FROM transcript t "
+            f"WHERE t.channel = ? AND t.turn_id = ? AND {_SETTLE_PREDICATE})"
+        )
+        where = (
+            f"channel = ? AND turn_id = ? AND id >= {settle} "
+            "AND id > ? AND id < COALESCE(?, 9223372036854775807)"
+        )
+        params = (
+            channel, turn_id,                       # outer scope
+            channel, turn_id, *_INTERNAL_TOOLS,     # correlated settle
+            watermark, before_id,
+        )
+        return Transcript._select(where, params)
+
+
+    @staticmethod
     def by_time(channels: list[str], lo: str, hi: str) -> list[dict[str, object]]:
         """Rows whose ``created_at`` falls in ``[lo, hi]`` for the given channels —
         review_transcript's ±N-minute re-read. Bounds are ISO datetime strings."""
@@ -331,7 +427,7 @@ class Transcript:
         Returns ``(threads, has_more, threads_returned)`` where each thread dict
         carries ``turn_id``, ``last_activity_at`` (MAX(created_at)), ``last_row_id``
         (MAX(id) — the recency key), ``row_count`` and ``first_content`` (the
-        earliest non-compaction row's content, truncated — the collapsed preview).
+        earliest row's content, truncated — the collapsed preview).
         Legacy NULL-turn_id rows each form their own singleton thread via
         ``_TURN_KEY``.
         """
@@ -363,7 +459,6 @@ class Transcript:
             first_rows = conn.execute(
                 f"SELECT {_TURN_KEY} AS k, content FROM transcript "
                 f"WHERE channel = ?{role_filter} AND {_TURN_KEY} IN ({placeholders}) "
-                f"AND role != 'compaction' "
                 f"GROUP BY k ORDER BY MIN(id) ASC",
                 (channel, *exclude_roles, *page_keys),
             ).fetchall()
@@ -456,119 +551,139 @@ class Transcript:
 
     @staticmethod
     def cleanup_unlinked_entries(channel: str | None = None) -> int:
+        """Scope-aware transcript GC. Discovers compacted scopes from the
+        ``compactions`` table and, per turn, deletes only rows a checkpoint has
+        folded — partitioned at the turn's settle0:
+
+        * **main-owned** rows (``id < settle0``) — deletable once main absorbs the
+          turn (``turn_id <= main_watermark``, the turn_id axis);
+        * **fork-owned** rows (``settle0 < id <= fork_watermark``) — deletable once
+          the fork's own transcript-id checkpoint passes them.
+
+        It is the intersection, not the union: a fork compacting past settle0 must
+        not delete the opening pair the main spine still needs. settle0 itself is
+        never collected — the fork read re-derives it on every read, so deleting it
+        would shift the boundary and corrupt a partially-compacted fork. Episode-
+        cited rows are always preserved. Best-effort: 0 on error."""
         try:
-            from services import compaction_persistence
             from services.database_service import get_shared_db_service
             db = get_shared_db_service()
 
-            # Thread-scoped compaction (workstream C): watermarks key off
-            # (channel, turn_id). Discover every (channel, turn_id) pair that
-            # carries a compaction row, then resolve its watermark through the
-            # canonical source so the two can never drift apart.
             if channel:
                 channels = [channel]
             else:
                 with db.connection() as conn:
                     channels = [r[0] for r in conn.execute(
-                        "SELECT DISTINCT channel FROM transcript WHERE role = 'compaction'"
+                        "SELECT DISTINCT channel FROM compactions"
                     ).fetchall()]
 
-            # Each entry is (channel, turn_id, watermark) — turn_id is None for
-            # legacy/housekeeping compaction rows, scoped to the thread otherwise.
-            watermarks: list[tuple[str, "int | None", int]] = []
-            for ch in channels:
-                with db.connection() as conn:
-                    pairs = conn.execute(
-                        "SELECT DISTINCT turn_id FROM transcript "
-                        "WHERE channel = ? AND role = 'compaction'",
-                        (ch,),
-                    ).fetchall()
-                for (tid,) in pairs:
-                    tid_int = int(tid) if tid is not None else None
-                    row = compaction_persistence.get_compaction(ch, tid_int)
-                    if row:
-                        watermarks.append((ch, tid_int, cast("int", row['compacted_up_to_id'])))
-
-            with db.connection() as conn:
-                cursor = conn.cursor()
-                total_deleted = 0
-
-                for t, tid, watermark in watermarks:
-                    if not watermark:
-                        continue
-
-                    # Collect transcript IDs referenced by any episode for this topic
-                    cursor.execute(
-                        """
-                        SELECT transcript_ids FROM episodes
-                        WHERE channel = ? AND deleted_at IS NULL
-                          AND transcript_ids IS NOT NULL AND transcript_ids != '[]'
-                        """,
-                        (t,),
-                    )
-                    referenced_ids: set[int] = set()
-                    import json as _json
-                    for ep_row in cursor.fetchall():
-                        try:
-                            ids = _json.loads(ep_row[0])
-                            if isinstance(ids, list):
-                                referenced_ids.update(int(i) for i in ids if i is not None)
-                        except Exception:
-                            pass
-
-                    # Find transcript IDs below the thread's watermark. When the
-                    # compaction is thread-scoped, only rows of THAT thread below
-                    # the watermark are GC candidates; the legacy channel-wide
-                    # path (tid None) sweeps the whole channel.
-                    if tid is not None:
-                        cursor.execute(
-                            "SELECT id FROM transcript WHERE channel = ? AND turn_id = ? AND id < ?",
-                            (t, tid, watermark),
-                        )
-                    else:
-                        cursor.execute(
-                            "SELECT id FROM transcript WHERE channel = ? AND id < ?",
-                            (t, watermark),
-                        )
-                    candidate_rows = cursor.fetchall()
-
-                    to_delete_ids = []
-                    for (entry_id,) in candidate_rows:
-                        if entry_id not in referenced_ids:
-                            to_delete_ids.append(entry_id)
-
-                    if not to_delete_ids:
-                        continue
-
-                    id_placeholders = ','.join('?' * len(to_delete_ids))
-                    # Children before parent: tool_calls FK-references transcript
-                    # with no ON DELETE CASCADE, so an obsolete turn's audit rows
-                    # must go first. A tool call is dead the moment its turn is —
-                    # there is no separate tool-call retention clock any more.
-                    cursor.execute(
-                        f"DELETE FROM tool_calls WHERE transcript_id IN ({id_placeholders})",
-                        to_delete_ids,
-                    )
-                    cursor.execute(
-                        f"DELETE FROM transcript WHERE id IN ({id_placeholders})",
-                        to_delete_ids,
-                    )
-                    total_deleted += len(to_delete_ids)
-
-                cursor.close()
-
+            total_deleted = sum(Transcript._gc_channel(ch) for ch in channels)
             # Always log the count — a steady 0 across channels is the signature
-            # of a watermark/discovery regression (the  no-op) and must
-            # not stay invisible. info, never debug.
+            # of a watermark/discovery regression and must not stay invisible.
             logger.info(
-                f"{LOG_PREFIX} Transcript GC: deleted {total_deleted} unlinked "
-                f"entries across {len(watermarks)} watermarked thread(s)"
+                f"{LOG_PREFIX} Transcript GC: deleted {total_deleted} folded "
+                f"entries across {len(channels)} channel(s)"
             )
             return total_deleted
-
         except Exception as e:
             logger.warning(f"{LOG_PREFIX} cleanup_unlinked_entries failed: {e}")
             return 0
+
+
+    @staticmethod
+    def _gc_channel(channel: str) -> int:
+        """Delete one channel's folded rows under the two-axis watermark."""
+        from services.database_service import get_shared_db_service
+        db = get_shared_db_service()
+
+        # Latest watermark per scope: main (for_turn_id NULL → turn_id axis) plus
+        # one per fork (for_turn_id = T → transcript.id axis).
+        with db.connection() as conn:
+            scope_rows = conn.execute(
+                "SELECT c.for_turn_id, c.compacted_up_to FROM compactions c "
+                "WHERE c.channel = ? AND c.id = (SELECT MAX(c2.id) FROM compactions c2 "
+                "WHERE c2.channel = c.channel AND c2.for_turn_id IS c.for_turn_id)",
+                (channel,),
+            ).fetchall()
+        main_wm: int | None = None
+        fork_wm: dict[int, int] = {}
+        for for_tid, up_to in scope_rows:
+            if for_tid is None:
+                main_wm = int(up_to)
+            else:
+                fork_wm[int(for_tid)] = int(up_to)
+
+        # Candidate turns: every fork-compacted turn, plus every main-absorbed turn
+        # that still carries a main-owned row below its settle0 (the correlated
+        # settle subquery bounds the main sweep to turns with something to delete).
+        candidate_turns: set[int] = set(fork_wm)
+        if main_wm is not None:
+            settle = (
+                "(SELECT MIN(t.id) FROM transcript t WHERE t.channel = transcript.channel "
+                f"AND t.turn_id = transcript.turn_id AND {_SETTLE_PREDICATE})"
+            )
+            with db.connection() as conn:
+                candidate_turns.update(int(r[0]) for r in conn.execute(
+                    "SELECT DISTINCT transcript.turn_id FROM transcript "
+                    f"WHERE channel = ? AND turn_id IS NOT NULL AND turn_id <= ? AND id < {settle}",
+                    (channel, main_wm, *_INTERNAL_TOOLS),
+                ).fetchall())
+
+        cited = Transcript._episode_cited_ids(channel)
+        deleted = 0
+        for tid in candidate_turns:
+            settle_id = Transcript.settle0(channel, tid)
+            if settle_id is None:
+                continue  # unsettled turn — its boundary is undefined, leave it whole
+            main_absorbed = main_wm is not None and tid <= main_wm
+            fwm = fork_wm.get(tid)
+            with db.connection() as conn:
+                ids = [int(r[0]) for r in conn.execute(
+                    "SELECT id FROM transcript WHERE channel = ? AND turn_id = ?",
+                    (channel, tid),
+                ).fetchall()]
+            dead = [
+                rid for rid in ids
+                if rid not in cited and (
+                    (rid < settle_id and main_absorbed)
+                    or (settle_id < rid and fwm is not None and rid <= fwm)
+                )
+            ]
+            if not dead:
+                continue
+            ph = ','.join('?' * len(dead))
+            # Children before parent: tool_calls FK-references transcript with no
+            # ON DELETE CASCADE, so a folded row's audit rows go first.
+            with db.connection() as conn:
+                conn.execute(f"DELETE FROM tool_calls WHERE transcript_id IN ({ph})", dead)
+                conn.execute(f"DELETE FROM transcript WHERE id IN ({ph})", dead)
+            deleted += len(dead)
+        return deleted
+
+
+    @staticmethod
+    def _episode_cited_ids(channel: str) -> set[int]:
+        """Transcript ids cited by any live episode of the channel — GC never
+        deletes a row an episode still points at."""
+        import json
+        from services.database_service import get_shared_db_service
+        db = get_shared_db_service()
+        with db.connection() as conn:
+            rows = conn.execute(
+                "SELECT transcript_ids FROM episodes WHERE channel = ? "
+                "AND deleted_at IS NULL AND transcript_ids IS NOT NULL "
+                "AND transcript_ids != '[]'",
+                (channel,),
+            ).fetchall()
+        cited: set[int] = set()
+        for (blob,) in rows:
+            try:
+                ids = json.loads(blob)
+            except Exception:
+                continue
+            if isinstance(ids, list):
+                cited.update(int(i) for i in ids if i is not None)
+        return cited
 
 
     # ── Internal helpers ─────────────────────────────────────────────────
@@ -612,7 +727,6 @@ class Transcript:
                     SELECT COUNT(*)
                     FROM transcript
                     WHERE channel = ?
-                      AND role != 'compaction'
                       AND id > COALESCE(
                           (SELECT MAX(transcript_id_end)
                            FROM episodes
@@ -662,7 +776,7 @@ class Transcript:
                         SELECT id, role, content, tool_name, created_at,
                                location_lat, location_lon, location_name
                         FROM transcript
-                        WHERE channel = ? AND id <= ? AND role != 'compaction'
+                        WHERE channel = ? AND id <= ?
                         ORDER BY id DESC
                         LIMIT ?
                         """,
@@ -1075,12 +1189,10 @@ class Transcript:
         """The most recent input-row content on a channel — the post-compaction
         continuation's "the user query was: …".
 
-        An input row is any NON-assistant, NON-compaction row: there are many input
-        roles (user / proactive_thought / external_agent / vision / …), so we exclude
-        the two output-shaped roles rather than hardcode role='user'. Compaction
-        checkpoints are written via write_input_row(channel, 'compaction', …) so they
-        ARE non-assistant rows and must be excluded explicitly. Ordered by monotonic
-        id (not created_at — one-second granularity ties). Returns None on an empty
+        An input row is any NON-assistant row: there are many input roles (user /
+        proactive_thought / external_agent / vision / …), so we exclude the one
+        output-shaped role rather than hardcode role='user'. Ordered by monotonic id
+        (not created_at — one-second granularity ties). Returns None on an empty
         channel."""
         from services.database_service import get_shared_db_service
 
@@ -1088,7 +1200,7 @@ class Transcript:
         with db.connection() as conn:
             row = conn.execute(
                 "SELECT content FROM transcript "
-                "WHERE channel = ? AND role != 'assistant' AND role != 'compaction' "
+                "WHERE channel = ? AND role != 'assistant' "
                 "ORDER BY id DESC LIMIT 1",
                 (channel,),
             ).fetchone()

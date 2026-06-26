@@ -13,7 +13,7 @@ from services.rich_media_parser import parse as _parse_rich_media, resolve_tool_
 logger = logging.getLogger(__name__)
 conversation_bp = Blueprint('conversation', __name__)
 
-_THREAD_EXCLUDE = ('subagent_return', 'compaction')
+_THREAD_EXCLUDE = ('subagent_return',)
 
 
 def _fetch_tool_calls_for_transcripts(conn: sqlite3.Connection, transcript_ids: list[int]) -> list[dict[str, object]]:

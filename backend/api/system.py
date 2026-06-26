@@ -318,13 +318,16 @@ def observability_compaction() -> ResponseReturnValue:
     """
     try:
         from services import compaction_persistence, locale_service
-        record = compaction_persistence.get_compaction('user')
+        # MAIN-spine checkpoint: for_turn_id NULL. Read-only Brain
+        # panel — the spine watermark is now a turn_id; the JSON key keeps its
+        # name so the existing Brain view needs no change.
+        record = compaction_persistence.get_compaction('user', None)
         if not record:
             return jsonify({'compaction': None}), 200
         return jsonify({
             'compaction': {
                 'summary': record['compacted_text'],
-                'compacted_up_to_id': record['compacted_up_to_id'],
+                'compacted_up_to_id': record['compacted_up_to'],
                 'compacted_at': locale_service.format_date(cast(str, record['created_at']), for_ui=True),
             },
         }), 200

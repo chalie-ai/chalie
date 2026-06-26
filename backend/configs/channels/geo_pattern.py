@@ -24,7 +24,6 @@ def _geo_pattern_load_transcript_block(window_start: int, window_end: int) -> st
             before_id=window_end,
             require_location=True,
             require_content=True,
-            exclude_roles=("compaction",),
         )
         if not rows:
             return "(no location-tagged transcripts in window)"

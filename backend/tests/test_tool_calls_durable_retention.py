@@ -23,6 +23,7 @@ from typing import cast
 
 import pytest
 
+from services import compaction_persistence
 from services.act_trail import ActTrail
 from services.decay_engine_service import DecayEngineService
 from services.transcript_service import Transcript
@@ -200,40 +201,44 @@ def test_broadcast_turn_result_pairs_span_after_assistant_row_persisted(db: sqli
 def test_transcript_gc_reaps_tool_calls_of_obsolete_turns_only(db: sqlite3.Connection) -> None:
     """A tool_calls row lives and dies with its turn — no separate clock.
 
-    Thread-scoped compaction (workstream C): the watermark keys off
-    (channel, turn_id), so GC reaps rows below the watermark IN THE THREAD that
-    was compacted. Drives the real decay entry point (the all-channels
+    Two-axis compaction: a MAIN checkpoint absorbs a turn on the
+    turn_id axis, and GC reaps that turn's rows below settle0 (its opening
+    exchange). A tool_calls audit row is reaped exactly when its anchoring
+    transcript row is. Drives the real decay entry point (the all-channels
     transcript GC) and pins every side of the unified rule in one run:
-      * below watermark + uncited       -> the turn AND its tool_calls are reaped
-      * below watermark + episode-cited  -> both survive (evidence never orphaned)
-      * above the watermark              -> both survive (still live history)
+      * below settle0 + uncited + absorbed -> the row AND its tool_calls are reaped
+      * below settle0 + episode-cited       -> both survive (evidence never orphaned)
+      * a later un-absorbed turn            -> both survive (still live history)
     """
     channel = "user"
 
-    # One thread with multiple rows: an obsolete turn, a cited turn, then a
-    # compaction watermark written INTO the thread (the production compactor
-    # passes turn_id so the checkpoint lands in the thread it compacted).
-    turn_id = 1
-    obsolete = Transcript.write_input_row(channel, "user", "obsolete turn with a tool call", turn_id=turn_id)
-    cited = Transcript.write_input_row(channel, "user", "turn an episode still cites", turn_id=turn_id)
+    # Turn 1 — absorbed. Two tool-bearing assistant steps sit below settle0: one
+    # un-cited (reaped), one episode-cited (kept). The no-tool answer is settle0.
+    in1 = Transcript.write_input_row(channel, "user", "obsolete turn opener")
+    t1 = Transcript.turn_id_of_row(in1)
+    obsolete = Transcript.write_assistant_row(channel, "obsolete working step", turn_id=t1)
+    cited = Transcript.write_assistant_row(channel, "a step an episode still cites", turn_id=t1)
     ActTrail().record(tool_name="weather", params={"location": "Valletta"}, result=_RICH_RESULT, transcript_id=obsolete)
     ActTrail().record(tool_name="memory", params={}, result="recalled fact", transcript_id=cited)
+    Transcript.write_assistant_row(channel, "obsolete turn answer", turn_id=t1)
 
-    # A live episode cites the second turn — the GC must protect its tool call too.
+    # A live episode cites the second step — the GC must protect its tool call too.
     db.execute(
         "INSERT INTO episodes (id, gist, salience, channel, transcript_ids) VALUES (?, ?, ?, ?, ?)",
-        ("ep-cite", "covers the cited turn", 5, channel, json.dumps([cited])),
+        ("ep-cite", "covers the cited step", 5, channel, json.dumps([cited])),
     )
     db.commit()
 
-    # The compaction watermark row, written INTO the thread exactly as the
-    # thread-scoped compactor does (turn_id passed so the checkpoint lands in
-    # the thread it compacted). Its own id is the watermark.
-    Transcript.write_input_row(channel, "compaction", "## Voice\nliving checkpoint", turn_id=turn_id)
+    # The MAIN checkpoint on the turn_id axis (for_turn_id None) — the production
+    # write_compaction the compactor fires once the LLM returns.
+    compaction_persistence.write_compaction(channel, None, t1, "## Voice\nliving checkpoint")
 
-    # A post-watermark row in the SAME thread — still live, must survive.
-    live = Transcript.write_input_row(channel, "user", "post-watermark turn", turn_id=turn_id)
+    # Turn 2 — opened after the watermark; turn_id > main_wm, so un-absorbed.
+    in2 = Transcript.write_input_row(channel, "user", "post-watermark turn")
+    t2 = Transcript.turn_id_of_row(in2)
+    live = Transcript.write_assistant_row(channel, "fresh working step", turn_id=t2)
     ActTrail().record(tool_name="search", params={}, result="fresh result", transcript_id=live)
+    Transcript.write_assistant_row(channel, "post-watermark answer", turn_id=t2)
 
     # Real decay entry point — the all-channels discovery path, same as prod.
     DecayEngineService()._cleanup_transcript()
