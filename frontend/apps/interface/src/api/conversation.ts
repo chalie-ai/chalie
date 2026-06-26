@@ -52,6 +52,9 @@ export interface ConversationThread {
   preview: string;
   /** Per-thread one-sentence gist (from thread_gist), null when not yet generated. */
   gist?: string | null;
+  /** Unread reply count — drives the pill's "N new" badge. Absent until the
+   *  backend tracks per-thread read state; the badge stays hidden until then. */
+  unread?: number;
 }
 
 /** A single search result from GET /threads/search. */

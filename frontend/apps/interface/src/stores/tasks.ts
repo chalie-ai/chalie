@@ -1,7 +1,7 @@
 /**
  * Tasks store — reminders (GET /scheduler?status=pending, filtered to items with
  * a due_at) + active delegates (GET /chat/subagents/active, each a full snapshot
- * a Processes row renders). Live updates arrive via applyDriftEvent() from the
+ * an Activity row renders). Live updates arrive via applyDriftEvent() from the
  * session store.
  */
 import { defineStore } from 'pinia';

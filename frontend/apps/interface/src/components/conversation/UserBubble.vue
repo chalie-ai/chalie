@@ -39,7 +39,7 @@ function open(att: AttachmentPreview): void {
     class="user-message"
     :class="{ 'message--faded': form.inWorkingMemory === false }"
   >
-    <div v-if="showText" class="speech-form speech-form--user">{{ form.text }}</div>
+    <div v-if="showText" class="user-text">{{ form.text }}</div>
 
     <!-- Attachments live OUTSIDE the bubble, below it: a condensed, right-aligned
          list in the act-trail idiom. Click an image to preview, a doc to download. -->

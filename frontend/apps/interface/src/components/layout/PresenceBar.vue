@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { onMounted, onBeforeUnmount } from 'vue';
 import { Clock, Brain, Sun, Moon, Search } from '@lucide/vue';
 import { storeToRefs } from 'pinia';
 import { useSessionStore } from '../../stores/session';
@@ -23,6 +24,17 @@ function handleSearch(): void {
   emit('chalie:open-thread-search', undefined);
 }
 
+// ⌘K / Ctrl+K opens thread search from anywhere.
+function onKeydown(e: KeyboardEvent): void {
+  if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
+    e.preventDefault();
+    handleSearch();
+  }
+}
+
+onMounted(() => document.addEventListener('keydown', onKeydown));
+onBeforeUnmount(() => document.removeEventListener('keydown', onKeydown));
+
 /** Settings button → open the Brain admin dashboard via the platform adapter. */
 function handleSettings(): void {
   platform.openBrain();
@@ -42,7 +54,7 @@ function handleSettings(): void {
         id="threadSearchBtn"
         class="btn-icon"
         aria-label="Search threads"
-        title="Search threads"
+        title="Search threads (⌘K)"
         @click="handleSearch"
       >
         <Search :size="18" aria-hidden="true" />
@@ -51,8 +63,8 @@ function handleSettings(): void {
         v-if="totalCount > 0"
         id="taskDrawerBtn"
         class="btn-icon task-drawer-trigger"
-        aria-label="Active processes"
-        title="Active processes"
+        aria-label="Activity"
+        title="Activity"
         @click="tasks.open()"
       >
         <Clock :size="18" aria-hidden="true" />

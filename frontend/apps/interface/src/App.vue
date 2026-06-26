@@ -8,6 +8,7 @@ import { useAmbientSensor } from './composables/useAmbientSensor';
 import AmbientCanvas from './components/layout/AmbientCanvas.vue';
 import PresenceBar from './components/layout/PresenceBar.vue';
 import ConversationFeed from './components/conversation/ConversationFeed.vue';
+import ThreadPanel from './components/conversation/ThreadPanel.vue';
 import InputDock from './components/layout/InputDock.vue';
 import LoadingOverlay from './components/layout/LoadingOverlay.vue';
 import PermissionStack from './components/overlays/PermissionStack.vue';
@@ -79,6 +80,10 @@ onBeforeUnmount(() => {
        focus-routed handlers (voice/interrupt/attach strip) target the active
        dock only — see InputDock. -->
   <InputDock />
+
+  <!-- Slide-over thread panel — opens over the feed when a pill or Reply action
+       sets session.panelThreadId; carries its own reply dock. -->
+  <ThreadPanel />
 
   <!-- Teleport targets for dialogs / permission cards -->
   <div id="permStack" class="permission-stack"></div>

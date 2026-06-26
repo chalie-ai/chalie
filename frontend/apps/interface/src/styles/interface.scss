@@ -314,9 +314,9 @@ body.speaker-user #ambientBloom {
   transition: background 420ms ease;
 }
 
-// Inline variant — the same composer rendered in-flow inside a thread card
-// instead of pinned to the viewport footer. Full-bleed: no wrapper padding so
-// the recessed box and its top border span the whole card width.
+// Inline variant — the same composer rendered in-flow at the foot of the thread
+// panel instead of pinned to the viewport footer. Full-bleed: no wrapper padding
+// so the recessed box and its top border span the whole panel width.
 .input-dock--inline {
   position: static;
   z-index: auto;
@@ -324,9 +324,9 @@ body.speaker-user #ambientBloom {
   background: none;
 }
 
-// Inline reply box: a recessed full-width band — darker than the card (matches
+// Inline reply box: a recessed full-width band — darker than the panel (matches
 // the page base), square, separated by a single top border. No pill, shadow or
-// blur. Content is inset to --spine-pad-x so it lines up with the card body.
+// blur. Content is inset to --spine-pad-x so it lines up with the panel body.
 .input-dock--inline .input-dock__inner {
   background: var(--bg);
   border: none;
@@ -787,7 +787,7 @@ body.speaker-user #ambientBloom {
   :root { --dock-width: 90vw; }
   .input-dock { padding: var(--space-sm) 0; }
   // ...but the in-thread composer must keep its side padding, or it touches the
-  // thread-card border (it is full-width inside the card, not a centred 90vw box).
+  // panel edge (it is full-width inside the panel, not a centred 90vw box).
   .input-dock--inline { padding: var(--space-sm) var(--space-md) var(--space-md); }
 
   .presence-bar { padding: 0 var(--space-md); }

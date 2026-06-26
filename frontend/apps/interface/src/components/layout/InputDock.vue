@@ -32,8 +32,8 @@ import { FileText, Image, Plus, Mic, Send, X, AlertTriangle } from '@lucide/vue'
 /**
  * `turnId` is the only thing that distinguishes a thread reply from a main-dock
  * send: set, it appends to that thread; null (the dock default), the chat API
- * scaffolds a new thread. The dock is fixed to the footer; an inline reply sets
- * `turnId` and renders in-flow inside its thread card.
+ * scaffolds a new thread. The footer dock is fixed; the thread panel's reply
+ * dock sets `turnId` and renders in-flow at the foot of the panel.
  */
 const props = withDefaults(defineProps<{ turnId?: number | null }>(), { turnId: null });
 

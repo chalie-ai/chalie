@@ -92,9 +92,9 @@ export interface ThreadListItem extends ConversationThread {
 }
 
 /**
- * Plain-text (TTS / remember) for one Chalie form — segments concatenated, else
- * the single text path, both markup-stripped. Shared by the speak/remember
- * buttons and turn-level speech aggregation so the two never diverge.
+ * Plain-text (TTS) for one Chalie form — segments concatenated, else the single
+ * text path, both markup-stripped. Shared by the speak button and turn-level
+ * speech aggregation so the two never diverge.
  */
 export function chalieFormPlaintext(form: ChalieForm): string {
   const segs = form.meta.segments ?? form.segments;
@@ -185,8 +185,8 @@ export const useConversationStore = defineStore('conversation', {
     },
     /**
      * True when `formId` is the LAST Chalie row in its turn. A turn can hold
-     * several assistant rows; the per-turn remember/speak controls appear once,
-     * on that final row, so they act on the whole turn.
+     * several assistant rows; the per-turn footer controls appear once, on that
+     * final row, so they act on the whole turn.
      */
     isLastChalieInTurn(): (formId: number) => boolean {
       return (formId) => {

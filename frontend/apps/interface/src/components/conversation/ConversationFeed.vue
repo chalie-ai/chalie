@@ -1,57 +1,18 @@
-<!-- Renders the thread-list feed: collapsed gist rows + expanded threads,
-     plus the live in-flight turn. Drives thread-list pagination. -->
+<!-- Renders the thread feed: single-exchange turns inline as Weave avatar rows,
+     every other thread as a collapsed Thread pill, plus the live in-flight turn.
+     Pills and the reply action open the thread in the slide-over panel. -->
 <script setup lang="ts">
 import { ref, computed, watch, nextTick, onMounted, onBeforeUnmount } from 'vue';
-import { ChevronRight, ChevronDown } from '@lucide/vue';
 import { useConversationStore } from '../../stores/conversation';
-import type { ConversationForm, UserForm, ChalieForm, ActForm, ThreadListItem } from '../../stores/conversation';
+import type { ConversationForm, ThreadListItem } from '../../stores/conversation';
 import { useSessionStore } from '../../stores/session';
 import { useAutoscroll } from '../../composables/useAutoscroll';
-import UserBubble from './UserBubble.vue';
-import ChalieBubble from './ChalieBubble.vue';
-import ActCycle from './ActCycle.vue';
-import ActCycleGroup from './ActCycleGroup.vue';
-import InputDock from '../layout/InputDock.vue';
+import TurnView from './TurnView.vue';
 
 const conversationStore = useConversationStore();
 const session = useSessionStore();
 
-// Consecutive superseded ACT cycles fold into one group; everything else
-// (including a live, non-collapsed act) renders on its own.
-type RenderRow =
-  | { type: 'single'; id: number; form: ConversationForm }
-  | { type: 'act-group'; id: number; forms: ActForm[] };
-
-function groupRows(forms: ConversationForm[]): RenderRow[] {
-  const rows: RenderRow[] = [];
-  for (const form of forms) {
-    const last = rows[rows.length - 1];
-    if (form.kind === 'act' && form.collapsed) {
-      if (last?.type === 'act-group') last.forms.push(form);
-      else rows.push({ type: 'act-group', id: form.id, forms: [form] });
-    } else {
-      rows.push({ type: 'single', id: form.id, form });
-    }
-  }
-  return rows;
-}
-
-/** Extract the turn_id shared by all forms in a turn (null for legacy rows). */
-function threadTurnId(turn: { forms: ConversationForm[] }): number | null {
-  for (const f of turn.forms) {
-    if (f.turnId != null) return f.turnId;
-  }
-  return null;
-}
-
-/** True while this thread has a live (unresolved) ACT group — i.e. Chalie is
- *  mid-loop on it. Drives the header spinner + pulsing title. */
-function isLooping(forms: ConversationForm[]): boolean {
-  return forms.some((f) => f.kind === 'act' && !f.collapsed);
-}
-
 const feedRef = ref<HTMLElement | null>(null);
-
 const { scrollToBottom, forceScrollToBottom } = useAutoscroll(feedRef);
 
 // Live turn: forms not belonging to any known thread (in-flight).
@@ -63,32 +24,47 @@ const liveTurnForms = computed<ConversationForm[]>(() => {
 const liveTurn = computed(() => {
   if (!liveTurnForms.value.length) return null;
   const forms = liveTurnForms.value;
-  const id = forms[0].id;
-  return { id, forms };
+  return { id: forms[0].id, forms };
 });
 
-// The ordered feed: interleave collapsed thread rows and expanded thread
-// render groups following the thread list order.
+// A thread renders INLINE (Weave avatar rows) only when it is a single exchange
+// — one user message — and is not currently held open in the panel. Everything
+// else collapses to a Thread pill. The live in-flight turn is always inline.
 type FeedEntry =
-  | { kind: 'collapsed'; thread: ThreadListItem }
-  | { kind: 'expanded'; turn: { id: number; forms: ConversationForm[] }; thread: ThreadListItem | null };
+  | { kind: 'pill'; thread: ThreadListItem }
+  | { kind: 'inline'; id: number; forms: ConversationForm[] };
 
 const feedEntries = computed<FeedEntry[]>(() => {
   const entries: FeedEntry[] = [];
   for (const t of conversationStore.threads) {
-    if (t.expanded) {
-      // Find the forms for this thread.
-      const forms = conversationStore.forms.filter((f) => f.turnId === t.turn_id);
-      if (forms.length) entries.push({ kind: 'expanded', turn: { id: forms[0].id, forms }, thread: t });
-      else entries.push({ kind: 'collapsed', thread: t });
+    const forms = t.expanded ? conversationStore.forms.filter((f) => f.turnId === t.turn_id) : [];
+    const singleExchange = forms.filter((f) => f.kind === 'user').length === 1;
+    if (forms.length && singleExchange && t.turn_id !== session.panelThreadId) {
+      entries.push({ kind: 'inline', id: forms[0].id, forms });
     } else {
-      entries.push({ kind: 'collapsed', thread: t });
+      entries.push({ kind: 'pill', thread: t });
     }
   }
-  // Live turn (in-flight) renders at the end — no thread row yet.
-  if (liveTurn.value) entries.push({ kind: 'expanded', turn: liveTurn.value, thread: null });
+  if (liveTurn.value) entries.push({ kind: 'inline', id: liveTurn.value.id, forms: liveTurn.value.forms });
   return entries;
 });
+
+/** Pill status drives its border, dot and badge. `new` once the backend tracks
+ *  unread replies; `thread` while inside the 1-hour active window; else idle. */
+function pillStatus(t: ThreadListItem): 'new' | 'thread' | 'idle' {
+  if (t.unread) return 'new';
+  if (conversationStore.isThreadActive(t.last_activity_at)) return 'thread';
+  return 'idle';
+}
+
+function onPillClick(thread: ThreadListItem): void {
+  if (thread.loading || thread.turn_id == null) return;
+  void session.openThreadPanel(thread.turn_id);
+}
+
+function onReply(turnId: number): void {
+  void session.openThreadPanel(turnId);
+}
 
 // History pagination: on scroll within 150px of the top (and not already
 // loading/exhausted), anchor-preserve then paginate.
@@ -115,15 +91,6 @@ async function _onScrollPaginate(): Promise<void> {
   } finally {
     _paginating = false;
   }
-}
-
-function onThreadClick(thread: ThreadListItem): void {
-  if (thread.loading) return;
-  void session.expandThread(thread.turn_id!);
-}
-
-function onCollapse(turnId: number): void {
-  session.collapseThread(turnId);
 }
 
 // Deep watch (not count-only): narration/pill growth inside an in-flight ACT
@@ -159,97 +126,41 @@ onBeforeUnmount(() => {
       <span class="history-end-pill__label">End of thread history</span>
     </div>
 
-    <!-- Thread feed: collapsed gist rows + expanded threads, in list order. -->
-    <template v-for="entry in feedEntries" :key="entry.kind === 'collapsed' ? `t-${entry.thread.turn_id}` : `e-${entry.turn.id}`">
-      <!-- Collapsed thread: one-line gist row. Active threads expand on click;
-           inactive (>1hr) threads show the gist only. -->
-      <div
-        v-if="entry.kind === 'collapsed'"
-        class="thread-row"
-        :class="{ 'thread-row--active': conversationStore.isThreadActive(entry.thread.last_activity_at) }"
-      >
+    <template v-for="entry in feedEntries" :key="entry.kind === 'pill' ? `p-${entry.thread.turn_id}` : `i-${entry.id}`">
+      <!-- Collapsed thread → Weave pill: fork glyph + label + gist + status. -->
+      <div v-if="entry.kind === 'pill'" class="feed-pill-row">
         <button
-          class="thread-row__expand"
+          class="thread-pill"
+          :class="`thread-pill--${pillStatus(entry.thread)}`"
           type="button"
-          :aria-label="'Expand thread'"
           :disabled="entry.thread.loading"
-          @click="onThreadClick(entry.thread)"
+          @click="onPillClick(entry.thread)"
         >
-          <ChevronRight
-            class="thread-row__caret"
-            :class="{ 'thread-row__caret--spin': entry.thread.loading }"
-            :size="14"
-            aria-hidden="true"
-          />
+          <span class="thread-pill__icon" aria-hidden="true">
+            <svg
+              width="13"
+              height="13"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            >
+              <circle cx="6" cy="5" r="2.5" />
+              <circle cx="18" cy="19" r="2.5" />
+              <path d="M6 7.5v5a4 4 0 0 0 4 4h4.5" />
+            </svg>
+          </span>
+          <span class="thread-pill__label">Thread</span>
+          <span class="thread-pill__summary">{{ entry.thread.gist || entry.thread.preview || 'Conversation' }}</span>
+          <span class="thread-pill__dot" aria-hidden="true" />
+          <span v-if="entry.thread.unread" class="thread-pill__badge">{{ entry.thread.unread }} new</span>
         </button>
-        <div class="thread-row__body" @click="onThreadClick(entry.thread)">
-          <span v-if="entry.thread.gist" class="thread-row__gist">{{ entry.thread.gist }}</span>
-          <span v-else class="thread-row__gist thread-row__gist--placeholder">{{ entry.thread.preview || 'Conversation' }}</span>
-        </div>
       </div>
 
-      <!-- Expanded thread: a self-contained card. The header names what started
-           the thread and carries the collapse control; the body holds the
-           starter message and its replies; the shared composer (the dock with a
-           turn_id) replies into the thread. -->
-      <section
-        v-else
-        class="thread-card"
-        :class="{ 'thread-card--active': entry.thread && conversationStore.isThreadActive(entry.thread.last_activity_at) }"
-      >
-        <header
-          v-if="threadTurnId(entry.turn) != null"
-          class="thread-card__head"
-          role="button"
-          tabindex="0"
-          aria-label="Collapse thread"
-          @click="onCollapse(threadTurnId(entry.turn)!)"
-          @keydown.enter="onCollapse(threadTurnId(entry.turn)!)"
-        >
-          <output
-            v-if="isLooping(entry.turn.forms)"
-            class="thread-card__spinner"
-            aria-label="Working"
-          />
-          <ChevronDown v-else class="thread-card__caret" :size="15" aria-hidden="true" />
-          <span
-            class="thread-card__starter"
-            :class="{ 'thread-card__starter--loading': isLooping(entry.turn.forms) }"
-          >{{ entry.thread?.gist || entry.thread?.preview || 'Thread' }}</span>
-        </header>
-        <div class="thread-card__body">
-          <!-- Same .turn flex grouping the flat feed uses, so replies keep the
-               main-chat spacing/alignment — the card is only a frame around it. -->
-          <div class="turn">
-            <template v-for="row in groupRows(entry.turn.forms)" :key="row.id">
-              <ActCycleGroup
-                v-if="row.type === 'act-group'"
-                :forms="row.forms"
-              />
-              <template v-else>
-                <UserBubble
-                  v-if="row.form.kind === 'user'"
-                  :form="(row.form as UserForm)"
-                />
-                <ChalieBubble
-                  v-else-if="row.form.kind === 'chalie'"
-                  :form="(row.form as ChalieForm)"
-                />
-                <ActCycle
-                  v-else-if="row.form.kind === 'act'"
-                  :form="(row.form as ActForm)"
-                />
-              </template>
-            </template>
-          </div>
-        </div>
-        <!-- Reply composer — the same dock, only difference is supplying the
-             thread's turn_id. Hidden on legacy NULL-turn_id singletons. -->
-        <InputDock
-          v-if="threadTurnId(entry.turn) != null"
-          :turn-id="threadTurnId(entry.turn)!"
-        />
-      </section>
+      <!-- Single-exchange or live turn → inline avatar rows. -->
+      <TurnView v-else :forms="entry.forms" @reply="onReply" />
     </template>
   </main>
 </template>
@@ -290,162 +201,96 @@ onBeforeUnmount(() => {
   letter-spacing: 0.04em;
 }
 
-/* Collapsed thread row — one-line gist. Full-bleed, flush list: side borders
-   and radius dropped, rows separated only by a hairline divider with no gap. */
-.thread-row {
-  display: flex;
+/* Thread pill — a collapsed fork off the conversation. Indented to sit under the
+   message column (past the avatar gutter), centred at the dock width. */
+.feed-pill-row {
+  width: 100%;
+  max-width: var(--dock-width);
+  margin: 14px auto 0;
+  padding-left: calc(var(--avatar-size) + 18px);
+}
+
+.thread-pill {
+  display: inline-flex;
   align-items: center;
-  gap: var(--space-sm);
-  padding: var(--space-sm) var(--spine-pad-x);
-  margin: 0 calc(-1 * var(--spine-pad-x));
-  background: var(--bg-surface);
-  border-bottom: 1px solid var(--border);
-  transition: background var(--duration-fast) ease;
-}
-
-.thread-row:hover {
-  background: color-mix(in oklab, var(--violet) 4%, transparent);
-}
-
-/* Active (within the 1-hour window): a faint tint instead of a side border. */
-.thread-row--active {
-  background: color-mix(in oklab, var(--violet) 5%, var(--bg-surface));
-}
-
-.thread-row__expand {
-  flex-shrink: 0;
-  width: 24px;
-  height: 24px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: transparent;
-  border: none;
+  gap: 9px;
+  max-width: 100%;
+  padding: 6px 12px 6px 7px;
+  border-radius: 11px;
+  background: var(--bg-surface-2);
+  border: 1px solid var(--border-strong);
   cursor: pointer;
-  color: var(--text-tertiary);
-  border-radius: var(--radius-sm);
-  transition: color var(--duration-fast);
+  transition: background var(--duration-fast) ease, border-color var(--duration-fast) ease;
 }
 
-.thread-row__expand:hover {
-  color: var(--accent-primary);
+.thread-pill:hover {
+  background: color-mix(in oklab, var(--violet) 7%, var(--bg-surface-2));
 }
 
-.thread-row__caret {
-  transition: transform 180ms var(--ease-out);
+.thread-pill:disabled {
+  cursor: default;
+  opacity: 0.6;
 }
 
-.thread-row__caret--spin {
-  animation: history-spin 0.7s linear infinite;
-}
+.thread-pill--new { border-color: color-mix(in oklab, var(--status-main) 40%, transparent); }
+.thread-pill--thread { border-color: color-mix(in oklab, var(--violet) 35%, transparent); }
 
-.thread-row__body {
-  flex: 1;
-  min-width: 0;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-}
-
-.thread-row__gist {
-  font-size: var(--font-size-sm);
-  color: var(--text-secondary);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  line-height: 1.5;
-}
-
-.thread-row__gist--placeholder {
-  color: var(--text-tertiary);
-  font-style: italic;
-}
-
-/* The faint tertiary reads as washed-out on the dark surface — lift the gist
-   preview to the secondary tone so it stays legible. */
-[data-theme='dark'] .thread-row__gist--placeholder {
-  color: var(--text-secondary);
-}
-
-/* Expanded thread — full-bleed flat container (no side borders/radius, matching
-   the collapsed rows). Capped at half the viewport: the body scrolls and the
-   reply dock stays pinned to the bottom. */
-.thread-card {
-  display: flex;
-  flex-direction: column;
-  max-height: 70vh;
-  margin: 0 calc(-1 * var(--spine-pad-x));
-  border: none;
-  border-bottom: 1px solid var(--border);
-  background: var(--bg-surface);
-}
-
-.thread-card--active {
-  background: color-mix(in oklab, var(--violet) 4%, var(--bg-surface));
-}
-
-/* The whole header is the expand/collapse affordance — click it to collapse.
-   Pinned at the top of the card; the body scrolls beneath it. */
-.thread-card__head {
-  flex: none;
-  display: flex;
-  align-items: center;
-  gap: var(--space-sm);
-  padding: var(--space-sm) var(--spine-pad-x);
-  background: color-mix(in oklab, var(--violet) 5%, transparent);
-  border-bottom: 1px solid var(--border);
-  cursor: pointer;
-  transition: background var(--duration-fast);
-}
-
-.thread-card__head:hover {
-  background: color-mix(in oklab, var(--violet) 9%, transparent);
-}
-
-.thread-card__caret {
+.thread-pill__icon {
   flex-shrink: 0;
-  color: var(--text-tertiary);
+  width: 22px;
+  height: 22px;
+  border-radius: 7px;
+  display: grid;
+  place-items: center;
+  background: color-mix(in oklab, var(--violet) 18%, transparent);
+  color: var(--violet);
 }
 
-/* Live-loop affordance: a small spinner replaces the caret while a step runs. */
-.thread-card__spinner {
+.thread-pill__label {
   flex-shrink: 0;
-  width: 13px;
-  height: 13px;
-  border: 2px solid color-mix(in oklab, var(--violet) 25%, transparent);
-  border-top-color: var(--violet);
-  border-radius: 50%;
-  animation: history-spin 0.7s linear infinite;
-}
-
-.thread-card__starter {
-  flex: 1;
-  min-width: 0;
-  font-size: var(--font-size-sm);
+  font-size: 13px;
   font-weight: 600;
-  color: var(--text-secondary);
+  color: var(--text-primary);
+}
+
+.thread-pill__summary {
+  min-width: 0;
+  font-size: 13px;
+  color: var(--text-tertiary);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
-/* Gentle opacity oscillation signals the thread is actively working. */
-.thread-card__starter--loading {
-  animation: thread-pulse 1.4s ease-in-out infinite;
+.thread-pill__dot {
+  flex-shrink: 0;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
 }
 
-@keyframes thread-pulse {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.55; }
+.thread-pill--new .thread-pill__dot {
+  background: var(--status-new);
+  box-shadow: 0 0 10px color-mix(in oklab, var(--status-new) 60%, transparent);
 }
 
-/* Scroll region: grows to fill the capped card and scrolls its overflow, so the
-   header stays pinned above and the reply dock pinned below. The inner .turn
-   carries the flex layout, gap and alignment. */
-.thread-card__body {
-  flex: 1 1 auto;
-  min-height: 0;
-  overflow-y: auto;
-  padding: var(--space-md) var(--spine-pad-x);
+.thread-pill--thread .thread-pill__dot {
+  background: var(--violet);
+  box-shadow: 0 0 8px color-mix(in oklab, var(--violet) 40%, transparent);
+}
+
+.thread-pill--idle .thread-pill__dot {
+  background: transparent;
+  border: 1.5px solid color-mix(in oklab, var(--text-primary) 30%, transparent);
+}
+
+.thread-pill__badge {
+  flex-shrink: 0;
+  font-size: 10px;
+  font-weight: 600;
+  padding: 1px 7px;
+  border-radius: 9px;
+  background: color-mix(in oklab, var(--status-main) 16%, transparent);
+  color: color-mix(in oklab, var(--status-main) 70%, var(--text-primary));
 }
 </style>

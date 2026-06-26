@@ -69,25 +69,18 @@ function onKeydown(e: KeyboardEvent): void {
   if (e.key === 'Escape' && visible.value) close();
 }
 
-/** Click a result: expand the thread in the feed and close the dialog. */
+/** Click a result: open the thread in the slide-over panel and close the dialog. */
 async function onResultClick(result: ThreadSearchResult): Promise<void> {
   close();
-  // Ensure the thread is in the list (it may be beyond the loaded pages).
-  const existing = conversationStore.threads.find((t) => t.turn_id === result.turn_id);
-  if (!existing) {
-    // Load more threads until found or exhausted.
-    while (!conversationStore.threadsExhausted && !conversationStore.threads.some((t) => t.turn_id === result.turn_id)) {
-      await session.loadRecentConversation();
-    }
+  // Pull the thread into the list if it sits beyond the loaded pages, so the
+  // panel header can show its gist; the panel loads the rows by turn_id itself.
+  while (
+    !conversationStore.threadsExhausted &&
+    !conversationStore.threads.some((t) => t.turn_id === result.turn_id)
+  ) {
+    await session.loadRecentConversation();
   }
-  const item = conversationStore.threads.find((t) => t.turn_id === result.turn_id);
-  if (item && !item.expanded) {
-    await session.expandThread(result.turn_id);
-    nextTick(() => {
-      const el = document.querySelector(`[data-turn-id="${result.turn_id}"]`);
-      el?.scrollIntoView({ behavior: 'smooth', block: 'center' });
-    });
-  }
+  await session.openThreadPanel(result.turn_id);
 }
 
 onMounted(() => {
@@ -297,7 +290,7 @@ onBeforeUnmount(() => {
   gap: var(--space-md);
   font-size: 0.72rem;
   color: var(--text-tertiary);
-  font-family: 'JetBrains Mono', 'Fira Code', ui-monospace, monospace;
+  font-family: var(--font-mono);
 }
 
 .search-result__turn {

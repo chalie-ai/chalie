@@ -47,6 +47,10 @@ export const useSessionStore = defineStore('session', {
     /** True while a thread expand fetch is in-flight (drives the spinner). */
     threadExpanding: false,
 
+    /** turn_id of the thread shown in the slide-over panel, or null when closed.
+     *  A pill opens the panel; the main feed dims behind it. */
+    panelThreadId: null as number | null,
+
     /** Registered auth-failure callback (set by App bootstrap). */
     _onAuthFailure: null as (() => void) | null,
   }),
@@ -501,6 +505,23 @@ export const useSessionStore = defineStore('session', {
     /** Collapse a thread (drop its forms). */
     collapseThread(turnId: number): void {
       useConversationStore().collapseThread(turnId);
+    },
+
+    /** Open a thread in the slide-over panel, loading its rows on first open.
+     *  The panel id is set first so it slides in immediately and shows its own
+     *  loader while the rows fetch. */
+    async openThreadPanel(turnId: number): Promise<void> {
+      this.panelThreadId = turnId;
+      const convo = useConversationStore();
+      if (!convo.threads.find((t) => t.turn_id === turnId)?.expanded) {
+        await this.expandThread(turnId);
+      }
+    },
+
+    /** Close the slide-over panel. Forms stay loaded so the thread can fall
+     *  back to its inline/pill render in the main feed. */
+    closeThreadPanel(): void {
+      this.panelThreadId = null;
     },
 
     /** Search threads — delegates to the conversation API. */

@@ -1,9 +1,8 @@
 <script setup lang="ts">
 /**
- * Processes drawer — slide-out panel with two stacked sections:
- *   top    · scheduled reminders (the existing scheduler list)
- *   bottom · active delegates (backgrounded tool calls), one row each
- * separated by a minimal divider when both are present.
+ * Activity drawer — a slide-out panel that merges everything Chalie is doing or
+ * is about to do into one list: scheduled items (the pending scheduler list) and
+ * active delegates (backgrounded tool calls), one row each, no section split.
  *
  * A delegate row shows the model's summary of what it's doing (bold title), the
  * delegate's tool name (subtitle), and a foot row with a live elapsed timer on
@@ -148,7 +147,7 @@ async function stopSubagent(subId: string): Promise<void> {
   try {
     await scheduler.subagentStop(subId);
   } catch (err) {
-    console.warn('[ProcessesDrawer] delegate stop request failed:', err);
+    console.warn('[ActivityDrawer] delegate stop request failed:', err);
     stopping.value.delete(subId); // surface the failure: let the user retry
   }
 }
@@ -195,14 +194,14 @@ onBeforeUnmount(() => {
     ref="drawerRef"
     class="task-drawer hidden"
     role="complementary"
-    aria-label="Active processes"
+    aria-label="Activity"
   >
     <div class="task-drawer__header">
-      <h2 class="task-drawer__title">Processes</h2>
+      <h2 class="task-drawer__title">Activity</h2>
       <button
         id="taskDrawerClose"
         class="btn-icon task-drawer__close"
-        aria-label="Close processes panel"
+        aria-label="Close activity panel"
         @click="tasks.close()"
       >
         <X :size="16" aria-hidden="true" />
@@ -210,7 +209,7 @@ onBeforeUnmount(() => {
     </div>
 
     <div id="taskDrawerList" class="task-drawer__list">
-      <!-- Top: scheduled reminders -->
+      <!-- Scheduled items — what Chalie is set to do later -->
       <template v-if="hasReminders">
         <div
           v-for="r in reminders"
@@ -222,13 +221,7 @@ onBeforeUnmount(() => {
         </div>
       </template>
 
-      <!-- Minimal divider between the two sections -->
-      <div
-        v-if="hasReminders && hasSubagents"
-        class="task-drawer__section-divider"
-      ></div>
-
-      <!-- Bottom: active delegates -->
+      <!-- Active delegates — what Chalie is doing right now -->
       <template v-if="hasSubagents">
         <div
           v-for="sa in subagentList"
@@ -449,12 +442,6 @@ onBeforeUnmount(() => {
   font-size: 11px;
   font-style: italic;
   color: var(--text-secondary);
-}
-
-.task-drawer__section-divider {
-  height: 1px;
-  background: var(--border);
-  margin: 8px 16px;
 }
 
 .task-drawer__hint {

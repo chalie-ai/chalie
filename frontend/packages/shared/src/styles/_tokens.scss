@@ -39,6 +39,20 @@
   --magenta:                #FF2FD1;
   --cyan:                   #00F0FF;
 
+  /* Thread status palette: speaker / fork-state / activity signals. The first
+     two alias the brand colours so they re-resolve per theme; --status-main is
+     the muted-magenta main-conversation dot, overridden for light below. */
+  --status-new:             var(--magenta);
+  --status-thinking:        var(--violet);
+  --status-main:            #c46aa6;
+
+  /* Message-row geometry + the mono stack. --font-mono is the name ~15 rich-card
+     rules already reference via fallback but nothing defined; declaring it here
+     resolves them and replaces the stack hardcoded on the conversation surface.
+     Theme-agnostic, so it lives only here and cascades to light. */
+  --avatar-size:            32px;
+  --font-mono:              'JetBrains Mono', 'Fira Code', ui-monospace, SFMono-Regular, Menlo, monospace;
+
   --accent-primary:         var(--violet);
   --accent-secondary:       var(--magenta);
   --accent-tertiary:        var(--cyan);
@@ -114,6 +128,10 @@
   --violet-hover:           #5B2DD8;
   --magenta:                #DB1FAF;
   --cyan:                   #0098A8;
+
+  /* --status-new/-thinking re-resolve via --magenta/--violet above; only the
+     bespoke main-dot needs a paper-readable muted magenta. */
+  --status-main:            #A8508E;
 
   --accent-primary:         var(--violet);
   --accent-secondary:       var(--magenta);
