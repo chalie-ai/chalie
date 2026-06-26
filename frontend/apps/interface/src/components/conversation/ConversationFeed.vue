@@ -290,26 +290,26 @@ onBeforeUnmount(() => {
   letter-spacing: 0.04em;
 }
 
-/* Collapsed thread row — one-line gist with expand/reply affordances. */
+/* Collapsed thread row — one-line gist. Full-bleed, flush list: side borders
+   and radius dropped, rows separated only by a hairline divider with no gap. */
 .thread-row {
   display: flex;
   align-items: center;
   gap: var(--space-sm);
-  padding: var(--space-sm) var(--space-md);
-  margin: var(--space-xs) 0;
-  border-radius: var(--radius-sm);
+  padding: var(--space-sm) var(--spine-pad-x);
+  margin: 0 calc(-1 * var(--spine-pad-x));
   background: var(--bg-surface);
-  border: 1px solid var(--border);
-  transition: border-color var(--duration-fast) ease, background var(--duration-fast) ease;
+  border-bottom: 1px solid var(--border);
+  transition: background var(--duration-fast) ease;
 }
 
 .thread-row:hover {
-  border-color: color-mix(in oklab, var(--violet) 25%, transparent);
   background: color-mix(in oklab, var(--violet) 4%, transparent);
 }
 
+/* Active (within the 1-hour window): a faint tint instead of a side border. */
 .thread-row--active {
-  border-left: 2px solid var(--violet);
+  background: color-mix(in oklab, var(--violet) 5%, var(--bg-surface));
 }
 
 .thread-row__expand {
@@ -367,26 +367,31 @@ onBeforeUnmount(() => {
   color: var(--text-secondary);
 }
 
-/* Expanded thread — a contained card grouping a starter message with its
-   replies, visually distinct from the flat collapsed rows around it. */
+/* Expanded thread — full-bleed flat container (no side borders/radius, matching
+   the collapsed rows). Capped at half the viewport: the body scrolls and the
+   reply dock stays pinned to the bottom. */
 .thread-card {
-  margin: var(--space-md) 0;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
+  display: flex;
+  flex-direction: column;
+  max-height: 50vh;
+  margin: 0 calc(-1 * var(--spine-pad-x));
+  border: none;
+  border-bottom: 1px solid var(--border);
   background: var(--bg-surface);
-  overflow: hidden;
 }
 
 .thread-card--active {
-  border-left: 3px solid var(--violet);
+  background: color-mix(in oklab, var(--violet) 4%, var(--bg-surface));
 }
 
-/* The whole header is the expand/collapse affordance — click it to collapse. */
+/* The whole header is the expand/collapse affordance — click it to collapse.
+   Pinned at the top of the card; the body scrolls beneath it. */
 .thread-card__head {
+  flex: none;
   display: flex;
   align-items: center;
   gap: var(--space-sm);
-  padding: var(--space-sm) var(--space-md);
+  padding: var(--space-sm) var(--spine-pad-x);
   background: color-mix(in oklab, var(--violet) 5%, transparent);
   border-bottom: 1px solid var(--border);
   cursor: pointer;
@@ -434,8 +439,13 @@ onBeforeUnmount(() => {
   50% { opacity: 0.55; }
 }
 
-/* Just a frame: the inner .turn carries the flex layout, gap and alignment. */
+/* Scroll region: grows to fill the capped card and scrolls its overflow, so the
+   header stays pinned above and the reply dock pinned below. The inner .turn
+   carries the flex layout, gap and alignment. */
 .thread-card__body {
-  padding: var(--space-md);
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding: var(--space-md) var(--spine-pad-x);
 }
 </style>

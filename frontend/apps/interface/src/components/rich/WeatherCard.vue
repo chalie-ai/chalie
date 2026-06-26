@@ -173,7 +173,7 @@ const hourCells = computed<HourCell[]>(() => {
 
 .weather-card__sky {
   position: relative;
-  height: 220px;
+  min-height: 220px;
   overflow: hidden;
   isolation: isolate;
 }
@@ -302,9 +302,11 @@ const hourCells = computed<HourCell[]>(() => {
   }
 }
 
+/* In normal flow (not absolute) so the sky grows to fit a long caption instead
+   of clipping it. min-height keeps the art visible when the caption is short. */
 .weather-card__overlay {
-  position: absolute;
-  inset: 0;
+  position: relative;
+  min-height: 220px;
   display: grid;
   grid-template-rows: 1fr auto;
   padding: 18px 22px;

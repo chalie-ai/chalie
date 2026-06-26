@@ -283,10 +283,13 @@ body.speaker-user #ambientBloom {
 .conversation-spine {
   position: relative;
   z-index: 10;
+  // Exposed so full-bleed children (thread rows/cards) can cancel it with a
+  // negative margin that tracks the responsive padding below.
+  --spine-pad-x: var(--space-lg);
   width: 95vw;
   max-width: 95vw;
   margin: 0 auto;
-  padding: calc(56px + var(--space-xl)) var(--space-lg) calc(80px + var(--space-xl));
+  padding: calc(56px + var(--space-xl)) var(--spine-pad-x) calc(80px + var(--space-xl));
   display: flex;
   flex-direction: column;
   min-height: 100vh;
@@ -754,8 +757,9 @@ body.speaker-user #ambientBloom {
   .conversation-spine {
     width: 100%;
     max-width: 100%;
-    padding-left: var(--space-md);
-    padding-right: var(--space-md);
+    --spine-pad-x: var(--space-md);
+    padding-left: var(--spine-pad-x);
+    padding-right: var(--spine-pad-x);
   }
 
   // Input box (and its trays, via --dock-width) span 90% of the viewport,

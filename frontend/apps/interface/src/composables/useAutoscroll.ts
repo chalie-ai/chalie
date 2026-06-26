@@ -23,6 +23,22 @@ export function useAutoscroll(feedRef: Ref<HTMLElement | null>) {
   });
 
   /**
+   * Expanded thread cards cap at 50vh and scroll their own body, so the latest
+   * reply lives inside `.thread-card__body`, not the window. Pin each body to
+   * its bottom. `force` overrides the per-body guard that otherwise leaves a
+   * body alone once the user has scrolled up within it (reading that thread's
+   * history), so live appends follow the trail without yanking a reader.
+   */
+  function _pinCardBodies(force: boolean): void {
+    const spine = feedRef.value;
+    if (!spine) return;
+    for (const body of spine.querySelectorAll<HTMLElement>('.thread-card__body')) {
+      const atBottom = body.scrollHeight - body.scrollTop - body.clientHeight < 100;
+      if (force || atBottom) body.scrollTop = body.scrollHeight;
+    }
+  }
+
+  /**
    * Smooth scroll to bottom on incremental appends, but ONLY if the user hasn't
    * scrolled up (so reading history isn't yanked). The rAF defers measurement
    * until the just-appended nodes are laid out.
@@ -31,6 +47,7 @@ export function useAutoscroll(feedRef: Ref<HTMLElement | null>) {
     if (userScrolledUp.value) return;
     requestAnimationFrame(() => {
       window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' });
+      _pinCardBodies(false);
     });
   }
 
@@ -44,6 +61,7 @@ export function useAutoscroll(feedRef: Ref<HTMLElement | null>) {
 
     const scroll = (): void => {
       window.scrollTo({ top: document.body.scrollHeight, behavior: 'instant' });
+      _pinCardBodies(true);
     };
 
     requestAnimationFrame(() => {
