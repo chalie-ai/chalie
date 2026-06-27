@@ -131,11 +131,13 @@ def serialize_turn(channel: str, turn_id: int) -> dict[str, object]:
     refetch all flow through here, so one fetch fully determines a turn's render
     with no signal memory.
 
-    Returns the WHOLE turn (no settle0 floor) projected into messages, with the
-    settle0 row tagged ``settled: 0`` (the only main-spine presentation cut), the
-    collapsed-feed metadata (gist, preview, last activity) and the turn-level
-    render state (``working`` — unsettled/in-flight — and ``duration_ms``,
-    derived from the row span) folded in."""
+    Returns the WHOLE turn (no settle0 floor) projected into messages, with every
+    row PAST settle0 tagged ``thread_message: true`` — the reply continuation the
+    main spine drops (it renders only through settle0) and whose mere presence
+    makes the turn a thread (the feed shows the opener). The collapsed-feed
+    metadata (gist, preview, last activity) and the turn-level render state
+    (``working`` — unsettled/in-flight — and ``duration_ms``, derived from the row
+    span) are folded in."""
     from services.transcript_service import Transcript
     from services.thread_gist_service import get_thread_gist_service
     from services.time_utils import parse_utc
@@ -145,9 +147,8 @@ def serialize_turn(channel: str, turn_id: int) -> dict[str, object]:
 
     settle = Transcript.settle0(channel, turn_id)
     for m in messages:
-        if settle is not None and m["id"] == str(settle):
-            m["settled"] = 0
-            break
+        if settle is not None and int(cast("str", m["id"])) > settle:
+            m["thread_message"] = True
 
     duration_ms = 0
     if len(rows) >= 2:

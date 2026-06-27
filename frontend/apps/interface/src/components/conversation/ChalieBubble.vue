@@ -9,9 +9,10 @@ import SegmentRenderer from './SegmentRenderer.vue';
 
 const conversationStore = useConversationStore();
 
-const props = withDefaults(defineProps<{ form: ChalieForm; canReply?: boolean }>(), {
-  canReply: false,
-});
+const props = withDefaults(
+  defineProps<{ form: ChalieForm; isLast?: boolean; canReply?: boolean }>(),
+  { isLast: false, canReply: false },
+);
 
 const emit = defineEmits<{ reply: [] }>();
 
@@ -24,10 +25,6 @@ const MODE_LABELS: Record<string, string> = {
 const modeBadgeLabel = computed(() => MODE_LABELS[props.form.meta.mode ?? ''] ?? '');
 
 const speakText = computed(() => chalieFormPlaintext(props.form));
-
-// Footer controls live only on the turn's LAST Chalie row — a turn may span
-// several assistant rows, and they act on the whole turn.
-const isLastInTurn = computed(() => conversationStore.isLastChalieInTurn(props.form.id));
 
 // Speak plays the WHOLE turn (every Chalie row), not just this row.
 function onSpeak(): void {
@@ -54,7 +51,7 @@ function onSpeak(): void {
     />
 
     <!-- Footer lives only on the turn's LAST Chalie row; interim rows carry no meta. -->
-    <div v-if="isLastInTurn" class="speech-form__meta">
+    <div v-if="isLast" class="speech-form__meta">
       <span class="speech-form__timestamp">{{ form.meta.ts ?? '' }}</span>
 
       <span v-if="modeBadgeLabel" class="meta-mode-badge">{{ modeBadgeLabel }}</span>

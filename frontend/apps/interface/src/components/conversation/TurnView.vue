@@ -29,6 +29,16 @@ const turnId = computed<number | null>(() => {
   return null;
 });
 
+// Footer controls (timestamp/speak/reply) live once, on the LAST Chalie row of
+// the rendered set — local to THIS view, so the spine (rows through settle0) and
+// the panel (the whole thread) each anchor the footer to their own last row.
+const lastChalieId = computed<number | null>(() => {
+  for (let i = props.forms.length - 1; i >= 0; i--) {
+    if (props.forms[i].kind === 'chalie') return props.forms[i].id;
+  }
+  return null;
+});
+
 // The spinner is no rendered form — it is derived from the turn's `working`
 // signal. Append a transient ActForm anchor whose placeholder is the latest
 // `tool_invoked` summary; ActCycle renders it as the live step.
@@ -101,6 +111,7 @@ function onReply(): void {
           <ChalieBubble
             v-else-if="row.form.kind === 'chalie'"
             :form="(row.form as ChalieForm)"
+            :is-last="row.form.id === lastChalieId"
             :can-reply="canReply"
             @reply="onReply"
           />

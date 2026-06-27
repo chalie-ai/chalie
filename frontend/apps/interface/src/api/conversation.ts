@@ -42,11 +42,11 @@ export interface ConversationMessage {
    */
   tool_calls?: { tool_name: string; summary: string }[];
   /**
-   * Marks the settle0 row — the main-spine cut point (the first assistant row
-   * with no model-driven tool). Set (to 0) on that one row only; a backend
-   * presentation marker the live feed does not need for rendering.
+   * Set (true) on every row PAST this turn's settle0 — the reply continuation.
+   * The main spine drops these (it renders only through settle0); a turn that
+   * has any of them is a thread, so the feed shows its opener.
    */
-  settled?: number;
+  thread_message?: boolean;
 }
 
 /** Collapsed thread metadata returned by /api/threads. */

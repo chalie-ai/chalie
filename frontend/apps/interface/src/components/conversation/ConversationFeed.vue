@@ -1,6 +1,7 @@
-<!-- Renders the thread feed: single-exchange turns inline as Weave avatar rows,
-     every other thread as a collapsed Thread pill, plus the live in-flight turn.
-     Pills and the reply action open the thread in the slide-over panel. -->
+<!-- Renders the conversation spine: EVERY turn inline as Weave avatar rows (its
+     rows through settle0), plus the live in-flight turn. A turn with replies past
+     settle0 also gets a Thread opener beneath it; the opener and the reply action
+     open the thread in the slide-over panel. Threads never collapse the spine. -->
 <script setup lang="ts">
 import { ref, computed, watch, nextTick, onMounted, onBeforeUnmount } from 'vue';
 import { useConversationStore } from '../../stores/conversation';
@@ -27,30 +28,31 @@ const liveTurn = computed(() => {
   return { id: forms[0].id, forms };
 });
 
-// A thread renders INLINE (Weave avatar rows) only when it is a single exchange
-// — one user message — and is not currently held open in the panel. Everything
-// else collapses to a Thread pill. The live in-flight turn is always inline.
-type FeedEntry =
-  | { kind: 'pill'; thread: ThreadListItem }
-  | { kind: 'inline'; id: number; forms: ConversationForm[]; working: boolean };
+// Every turn renders inline. Its spine forms are the rows through settle0 (the
+// reply continuation — thread_message forms — is dropped); a turn that HAS any
+// such reply also carries a Thread opener (`thread` non-null). The live in-flight
+// turn is inline with no opener.
+type FeedEntry = {
+  id: number;
+  forms: ConversationForm[];
+  working: boolean;
+  thread: ThreadListItem | null;
+};
 
 const feedEntries = computed<FeedEntry[]>(() => {
   const entries: FeedEntry[] = [];
   for (const t of conversationStore.threads) {
-    const forms = t.expanded ? conversationStore.forms.filter((f) => f.turnId === t.turn_id) : [];
-    const singleExchange = forms.filter((f) => f.kind === 'user').length === 1;
-    if (forms.length && singleExchange && t.turn_id !== session.panelThreadId) {
-      // A bound turn's spinner is driven by its own `working` signal (isTurnWorking
-      // inside TurnView); only the unbound live turn below needs the prop.
-      entries.push({ kind: 'inline', id: forms[0].id, forms, working: false });
-    } else {
-      entries.push({ kind: 'pill', thread: t });
-    }
+    const all = conversationStore.forms.filter((f) => f.turnId === t.turn_id);
+    const spine = all.filter((f) => !f.threadMessage);
+    if (!spine.length) continue; // not yet hydrated — fills in on batch load
+    // A bound turn's spinner is driven by its own `working` signal (isTurnWorking
+    // inside TurnView); only the unbound live turn below needs the prop.
+    entries.push({ id: spine[0].id, forms: spine, working: false, thread: all.length > spine.length ? t : null });
   }
   // The live turn has no turn_id yet, so its spinner can't come from isTurnWorking
   // — drive it from this surface's send guard until `working` binds the thread.
   if (liveTurn.value) {
-    entries.push({ kind: 'inline', id: liveTurn.value.id, forms: liveTurn.value.forms, working: session.isSending });
+    entries.push({ id: liveTurn.value.id, forms: liveTurn.value.forms, working: session.isSending, thread: null });
   }
   return entries;
 });
@@ -64,7 +66,7 @@ function pillStatus(t: ThreadListItem): 'new' | 'thread' | 'idle' {
 }
 
 function onPillClick(thread: ThreadListItem): void {
-  if (thread.loading || thread.turn_id == null) return;
+  if (thread.turn_id == null) return;
   void session.openThreadPanel(thread.turn_id);
 }
 
@@ -132,14 +134,17 @@ onBeforeUnmount(() => {
       <span class="history-end-pill__label">End of thread history</span>
     </div>
 
-    <template v-for="entry in feedEntries" :key="entry.kind === 'pill' ? `p-${entry.thread.turn_id}` : `i-${entry.id}`">
-      <!-- Collapsed thread → Weave pill: fork glyph + label + gist + status. -->
-      <div v-if="entry.kind === 'pill'" class="feed-pill-row">
+    <template v-for="entry in feedEntries" :key="`i-${entry.id}`">
+      <!-- The turn's rows through settle0 — always inline, never collapsed. -->
+      <TurnView :forms="entry.forms" :working="entry.working" @reply="onReply" />
+
+      <!-- Thread opener: a turn with replies past settle0 gets a Weave pill that
+           opens the full thread in the slide-over panel. -->
+      <div v-if="entry.thread" class="feed-pill-row">
         <button
           class="thread-pill"
           :class="`thread-pill--${pillStatus(entry.thread)}`"
           type="button"
-          :disabled="entry.thread.loading"
           @click="onPillClick(entry.thread)"
         >
           <span class="thread-pill__icon" aria-hidden="true">
@@ -164,9 +169,6 @@ onBeforeUnmount(() => {
           <span v-if="entry.thread.unread" class="thread-pill__badge">{{ entry.thread.unread }} new</span>
         </button>
       </div>
-
-      <!-- Single-exchange or live turn → inline avatar rows. -->
-      <TurnView v-else :forms="entry.forms" :working="entry.working" @reply="onReply" />
     </template>
   </main>
 </template>

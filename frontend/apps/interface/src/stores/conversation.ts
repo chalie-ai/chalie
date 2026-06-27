@@ -43,7 +43,7 @@ export interface ToolPill {
  * with no leading user row is still its own group). Live forms leave it unset
  * and fall back to user-form-boundary grouping.
  */
-type TurnTagged = { turnId?: number | null };
+type TurnTagged = { turnId?: number | null; threadMessage?: boolean };
 
 export interface UserForm extends TurnTagged {
   kind: 'user';
@@ -91,12 +91,9 @@ export interface Turn {
   forms: ConversationForm[];
 }
 
-/** Collapsed thread row in the thread-list feed. */
-export interface ThreadListItem extends ConversationThread {
-  /** True once the thread's full rows have been loaded into `forms`. */
-  expanded: boolean;
-  loading: boolean;
-}
+/** Thread row in the feed — metadata for the opener; the rows themselves live
+ *  in `forms`. */
+export type ThreadListItem = ConversationThread;
 
 /**
  * Plain-text (TTS) for one Chalie form — segments concatenated, else the single
@@ -137,29 +134,15 @@ export const useConversationStore = defineStore('conversation', {
 
   getters: {
     /**
-     * Collapsed turn_ids (thread list items not expanded). Forms belonging to
-     * these are excluded from `turns` so collapsed threads render as gist rows.
-     */
-    collapsedTurnIds(state): Set<number | null> {
-      const ids = new Set<number | null>();
-      for (const t of state.threads) {
-        if (!t.expanded && t.turn_id != null) ids.add(t.turn_id);
-      }
-      return ids;
-    },
-    /**
      * Group forms into turns. History forms carry `turnId`, so a boundary is any
      * change of it — this keeps a compaction-continuation turn (assistant rows,
      * no leading user row) as its own group. Live forms have no `turnId` and
-     * fall back to: a turn starts at each user form. Forms belonging to a
-     * collapsed thread list item are excluded — they render as gist rows.
+     * fall back to: a turn starts at each user form.
      */
     turns(state): Turn[] {
-      const collapsed = this.collapsedTurnIds;
       const groups: Turn[] = [];
       let key: number | null | undefined;
       for (const f of state.forms) {
-        if (f.turnId != null && collapsed.has(f.turnId)) continue;
         const boundary =
           groups.length === 0 ||
           (f.turnId != null ? f.turnId !== key : f.kind === 'user');
@@ -198,18 +181,6 @@ export const useConversationStore = defineStore('conversation', {
         if (f.kind === 'chalie') return f.id;
       }
       return null;
-    },
-    /**
-     * True when `formId` is the LAST Chalie row in its turn. A turn can hold
-     * several assistant rows; the per-turn footer controls appear once, on that
-     * final row, so they act on the whole turn.
-     */
-    isLastChalieInTurn(): (formId: number) => boolean {
-      return (formId) => {
-        const turn = this.turns.find((t) => t.forms.some((f) => f.id === formId));
-        const chalie = turn?.forms.filter((f) => f.kind === 'chalie') ?? [];
-        return chalie.length > 0 && chalie[chalie.length - 1].id === formId;
-      };
     },
   },
 
@@ -412,18 +383,21 @@ export const useConversationStore = defineStore('conversation', {
     parseTurn(block: ConversationTurnBlock): ConversationForm[] {
       const forms: ConversationForm[] = [];
       for (const msg of block.messages) {
-        if (msg.role === 'user') {
-          forms.push({
-            kind: 'user',
-            id: nextId(),
-            text: msg.content,
-            attachments: this._attachmentsFor(msg),
-            inWorkingMemory: true,
-            turnId: msg.turn_id,
-          });
-        } else {
-          for (const f of this._assistantForms(msg, true)) forms.push(f);
-        }
+        const made: ConversationForm[] =
+          msg.role === 'user'
+            ? [{
+                kind: 'user',
+                id: nextId(),
+                text: msg.content,
+                attachments: this._attachmentsFor(msg),
+                inWorkingMemory: true,
+                turnId: msg.turn_id,
+              }]
+            : this._assistantForms(msg, true);
+        // Every row past settle0 is a thread reply — the spine drops these; their
+        // presence is what makes the turn a thread (the opener appears).
+        if (msg.thread_message) for (const f of made) f.threadMessage = true;
+        forms.push(...made);
       }
       return forms;
     },
@@ -493,17 +467,17 @@ export const useConversationStore = defineStore('conversation', {
      */
     appendThreadList(items: ConversationThread[]): void {
       for (const t of [...items].reverse()) {
-        this.threads.push({ ...t, expanded: false, loading: false });
+        this.threads.push({ ...t });
       }
     },
 
     /**
      * Promote the just-finished live turn into its own thread: tag every still-
      * untagged form with the allocated `turnId` (the backend `done` event carries
-     * it) and register an expanded, active ThreadListItem. Without this, every
-     * live turn's forms stay turn_id-less and collapse into one flat `liveTurn`
-     * with no reply box — so the feed reads as one giant thread. Idempotent: a
-     * reply turn whose forms already carry `turnId` only ensures the item exists.
+     * it) and register a ThreadListItem. Without this, every live turn's forms
+     * stay turn_id-less and collapse into one flat `liveTurn` with no reply box —
+     * so the feed reads as one giant thread. Idempotent: a reply turn whose forms
+     * already carry `turnId` only ensures the item exists.
      */
     bindLiveTurn(turnId: number): void {
       let preview = '';
@@ -514,10 +488,6 @@ export const useConversationStore = defineStore('conversation', {
         }
       }
       if (this.threads.some((t) => t.turn_id === turnId)) return;
-      // Accordion: a new live thread opens expanded, so close any other open one.
-      for (const t of this.threads) {
-        if (t.expanded && t.turn_id != null && t.turn_id !== turnId) this.collapseThread(t.turn_id);
-      }
       // SQLite naive-UTC shape ("YYYY-MM-DD HH:MM:SS") so isThreadActive reads it.
       const nowUtc = new Date().toISOString().slice(0, 19).replace('T', ' ');
       this.threads.push({
@@ -527,8 +497,6 @@ export const useConversationStore = defineStore('conversation', {
         row_count: 0,
         preview,
         gist: null,
-        expanded: true,
-        loading: false,
       });
     },
 
@@ -539,50 +507,14 @@ export const useConversationStore = defineStore('conversation', {
      */
     prependThreadList(items: ConversationThread[]): void {
       for (const t of items) {
-        this.threads.unshift({ ...t, expanded: false, loading: false });
+        this.threads.unshift({ ...t });
       }
     },
 
-    /** Expand a collapsed thread. The page's blocks are batch-hydrated on load,
-     *  so the forms are usually already present and expanding is instant; a
-     *  thread outside the loaded pages (deep-link) is fetched on demand.
-     *  Collapse/expand is presentational — the forms stay put. */
-    async expandThread(turnId: number): Promise<void> {
-      const item = this.threads.find((t) => t.turn_id === turnId);
-      if (!item || item.expanded || item.loading) return;
-      // Accordion: opening a thread closes every other open one.
-      for (const t of this.threads) {
-        if (t.expanded && t.turn_id != null && t.turn_id !== turnId) this.collapseThread(t.turn_id);
-      }
-      if (this.forms.some((f) => f.turnId === turnId)) {
-        item.expanded = true;
-        return;
-      }
-      item.loading = true;
-      try {
-        await this.refetchTurn(turnId);
-        item.expanded = true;
-      } finally {
-        item.loading = false;
-      }
-    },
-
-    /** Collapse an expanded thread — presentational only. The forms stay in the
-     *  store (batch-hydrated, kept for instant re-expand); the feed renders the
-     *  pill from thread metadata and `collapsedTurnIds` hides the forms. */
-    collapseThread(turnId: number): void {
-      const item = this.threads.find((t) => t.turn_id === turnId);
-      if (!item || !item.expanded) return;
-      item.expanded = false;
-    },
-
-    /** Toggle expand/collapse for a thread. */
-    async toggleThread(turnId: number | null): Promise<void> {
-      if (turnId == null) return;
-      const item = this.threads.find((t) => t.turn_id === turnId);
-      if (!item) return;
-      if (item.expanded) this.collapseThread(turnId);
-      else await this.expandThread(turnId);
+    /** True once a turn's rows are in `forms` (batch-hydrated on load or fetched
+     *  for a deep-link open). */
+    isHydrated(turnId: number): boolean {
+      return this.forms.some((f) => f.turnId === turnId);
     },
   },
 });

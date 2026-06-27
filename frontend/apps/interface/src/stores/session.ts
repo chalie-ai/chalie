@@ -46,11 +46,12 @@ export const useSessionStore = defineStore('session', {
     errorMessage: null as string | null,
 
     historyLoading: false,
-    /** True while a thread expand fetch is in-flight (drives the spinner). */
+    /** True while a deep-link thread fetch is in-flight (drives the panel
+     *  spinner on first open of a thread outside the loaded pages). */
     threadExpanding: false,
 
     /** turn_id of the thread shown in the slide-over panel, or null when closed.
-     *  A pill opens the panel; the main feed dims behind it. */
+     *  The opener button opens the panel; the main feed dims behind it. */
     panelThreadId: null as number | null,
 
     /** Registered auth-failure callback (set by App bootstrap). */
@@ -363,16 +364,6 @@ export const useSessionStore = defineStore('session', {
           for (const block of blocks) convo.upsertTurn(block);
         }
 
-        // Accordion: open only the single most-recent active thread (the feed is
-        // chronological, so it is the last active one in the list). Forms are
-        // already hydrated by the batch, so this just flips the inline view on.
-        if (isInitialLoad) {
-          const newestActive = [...convo.threads]
-            .reverse()
-            .find((t) => t.turn_id != null && convo.isThreadActive(t.last_activity_at));
-          if (newestActive?.turn_id != null) void convo.expandThread(newestActive.turn_id);
-        }
-
         convo.threadsOffset += data.threads_returned;
 
         if (!data.has_more) {
@@ -393,30 +384,19 @@ export const useSessionStore = defineStore('session', {
       }
     },
 
-    /** Expand a thread (fetch its full rows). */
-    async expandThread(turnId: number): Promise<void> {
-      const convo = useConversationStore();
-      this.threadExpanding = true;
-      try {
-        await convo.expandThread(turnId);
-      } finally {
-        this.threadExpanding = false;
-      }
-    },
-
-    /** Collapse a thread (drop its forms). */
-    collapseThread(turnId: number): void {
-      useConversationStore().collapseThread(turnId);
-    },
-
     /** Open a thread in the slide-over panel, loading its rows on first open.
      *  The panel id is set first so it slides in immediately and shows its own
-     *  loader while the rows fetch. */
+     *  loader; an already-hydrated thread (batch-loaded) opens instantly, a
+     *  deep-link one fetches on demand. */
     async openThreadPanel(turnId: number): Promise<void> {
       this.panelThreadId = turnId;
       const convo = useConversationStore();
-      if (!convo.threads.find((t) => t.turn_id === turnId)?.expanded) {
-        await this.expandThread(turnId);
+      if (convo.isHydrated(turnId)) return;
+      this.threadExpanding = true;
+      try {
+        await convo.refetchTurn(turnId);
+      } finally {
+        this.threadExpanding = false;
       }
     },
 
