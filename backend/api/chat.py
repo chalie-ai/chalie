@@ -36,8 +36,8 @@ import time
 import uuid
 from typing import TYPE_CHECKING, Sequence, cast
 
-from flask import Blueprint, jsonify, request
-from flask.typing import ResponseReturnValue
+from flask import request
+from flask_restx import Namespace, Resource
 
 from .auth import require_auth
 from services.locale_service import CHAT_TIMESTAMP_FMT, format_date
@@ -52,7 +52,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-chat_bp = Blueprint("chat", __name__)
+chat_bp = Namespace("chat", description="Chat operations")
 
 # ── Active UMP turn tracking ─────────────────────────────────────────────────
 
@@ -373,185 +373,202 @@ def _broadcast_user_echo(text: str, echo_id: str) -> None:
     })
 
 
-@chat_bp.route("/chat", methods=["POST"])
-@require_auth
-def post_chat() -> ResponseReturnValue:
-    """Files are staged to temp paths and ingested via document.upload (by PATH, never bytes) at turn 0.
-
-    Response arrives asynchronously via WebSocketBroker.broadcast().
-    """
-    text = (request.form.get("text") or "").strip()
-    source = request.form.get("source") or "text"
-    echo_id = request.form.get("echo_id") or ""
-    attachments = _stage_chat_uploads(cast(Sequence[object], request.files.getlist("files")[:10]))
-
-    if not text and not attachments:
-        return jsonify({"status": "error", "reason": "message required"}), 400
-
-    if not text and attachments:
-        text = "[File attached]"
-
-    # Echo the user message to every open surface so they all show it (the
-    # sender ignores its own echo via echo_id; peers render the bubble).
-    _broadcast_user_echo(text, echo_id)
-
-    dispatch_message(text, source=source, attachments=attachments)
-    return jsonify({"status": "accepted"}), 202
-
-
-@chat_bp.route("/chat/interrupt", methods=["POST"])
-@require_auth
-def post_chat_interrupt() -> ResponseReturnValue:
-    """The cancelled turn deletes its own transcript and tool_call rows — no data persists for an interrupted turn.
-
-    Always returns HTTP 200.
-    """
+def _interrupt_active_turn() -> tuple[dict[str, object], int]:
+    """Shared logic for POST /chat/interrupt and POST /chat/stop."""
     proc = _get_active_ump()
     if proc is not None:
         proc.cancel()
         logger.info("[Chat API] Interrupt signal delivered to active UMP turn")
-        return jsonify({"ok": True, "interrupted": True}), 200
-    return jsonify({"ok": True, "reason": "no_active_turn"}), 200
+        return {"ok": True, "interrupted": True}, 200
+    return {"ok": True, "reason": "no_active_turn"}, 200
 
 
-@chat_bp.route("/chat/stop", methods=["POST"])
-@require_auth
-def post_chat_stop() -> ResponseReturnValue:
-    """Deprecated alias for POST /chat/interrupt. New callers should use POST /chat/interrupt instead."""
-    return post_chat_interrupt()
+@chat_bp.route("/chat")
+class ChatResource(Resource):
+    @require_auth
+    @chat_bp.response(202, "Accepted")
+    def post(self):
+        """Files are staged to temp paths and ingested via document.upload (by PATH, never bytes) at turn 0.
+
+        Response arrives asynchronously via WebSocketBroker.broadcast().
+        """
+        text = (request.form.get("text") or "").strip()
+        source = request.form.get("source") or "text"
+        echo_id = request.form.get("echo_id") or ""
+        attachments = _stage_chat_uploads(cast(Sequence[object], request.files.getlist("files")[:10]))
+
+        if not text and not attachments:
+            return {"status": "error", "reason": "message required"}, 400
+
+        if not text and attachments:
+            text = "[File attached]"
+
+        # Echo the user message to every open surface so they all show it (the
+        # sender ignores its own echo via echo_id; peers render the bubble).
+        _broadcast_user_echo(text, echo_id)
+
+        dispatch_message(text, source=source, attachments=attachments)
+        return {"status": "accepted"}, 202
 
 
-@chat_bp.route("/chat/subagents/active", methods=["GET"])
-@require_auth
-def get_active_subagents() -> ResponseReturnValue:
-    """Hydrates the Processes panel on page load/reconnect, since WS push events
-    are missed while the client is disconnected. Each row carries the tool name,
-    the model's summary of what the delegate is doing, and when it started.
-    """
-    from services.async_delegate_runner import async_delegate_runner
+@chat_bp.route("/chat/interrupt")
+class ChatInterruptResource(Resource):
+    @require_auth
+    @chat_bp.response(200, "OK")
+    def post(self):
+        """The cancelled turn deletes its own transcript and tool_call rows — no data persists for an interrupted turn.
 
-    return jsonify({"subagents": async_delegate_runner.active()}), 200
-
-
-@chat_bp.route("/chat/subagent/<sub_id>/stop", methods=["POST"])
-@require_auth
-def post_subagent_stop(sub_id: str) -> ResponseReturnValue:
-    """Cooperatively cancel a running async delegate.
-
-    Delegates to async_delegate_runner.cancel(). The delegate's cancel_event
-    is set; the ACT loop exits at the next iteration boundary.
-
-    Always returns HTTP 200.
-
-    Response JSON:
-        {ok: true, cancelled: true}         — stop signal delivered
-        {ok: true, reason: "not_found"}     — sub_id not in active registry
-    """
-    from services.async_delegate_runner import async_delegate_runner
-
-    if async_delegate_runner.cancel(sub_id):
-        logger.info("[Chat API] Stop signal delivered to delegate %s", safe(sub_id[:8]))
-        return jsonify({"ok": True, "cancelled": True}), 200
-    return jsonify({"ok": True, "reason": "not_found"}), 200
+        Always returns HTTP 200.
+        """
+        return _interrupt_active_turn()
 
 
-@chat_bp.route("/action", methods=["POST"])
-@require_auth
-def post_action() -> ResponseReturnValue:
-    """Response arrives asynchronously via WebSocketBroker.broadcast()."""
-    body = request.get_json(silent=True) or {}
-    skill = body.get("skill") or ""
-    if not skill:
-        return jsonify({"error": "Missing 'skill' in action payload"}), 400
+@chat_bp.route("/chat/stop")
+class ChatStopResource(Resource):
+    @require_auth
+    @chat_bp.response(200, "OK")
+    def post(self):
+        """Deprecated alias for POST /chat/interrupt. New callers should use POST /chat/interrupt instead."""
+        return _interrupt_active_turn()
 
-    action_start = time.time()
 
-    def _run_action() -> None:
-        broker = WebSocketBroker()
-        try:
-            from abilities._dispatcher import ToolDispatcher  # noqa: PLC0415
-            from services.processor_config import ProcessorConfig  # noqa: PLC0415
+@chat_bp.route("/chat/subagents/active")
+class ActiveSubagentsResource(Resource):
+    @require_auth
+    @chat_bp.response(200, "OK")
+    def get(self):
+        """Hydrates the Processes panel on page load/reconnect, since WS push events
+        are missed while the client is disconnected. Each row carries the tool name,
+        the model's summary of what the delegate is doing, and when it started.
+        """
+        from services.async_delegate_runner import async_delegate_runner
 
-            params = {k: v for k, v in body.items() if k != "skill"}
+        return {"subagents": async_delegate_runner.active()}, 200
 
-            broker.broadcast({"type": "status", "stage": "processing"})
 
-            # Build a minimal flat-path context for action-button dispatches.
-            # ToolDispatcher requires an mp-like object with config, uid,
-            # cancel_event.  broadcast_to=None keeps these
-            # dispatches silent (no live WS events for action buttons).
-            # ProcessorConfig is abstract, so action-button dispatch needs a
-            # concrete subclass; no ACT loop runs here, so the three prompt
-            # builders are never invoked — they return "" to satisfy the base.
-            class _ActionButtonConfig(ProcessorConfig):
-                def __init__(self) -> None:
-                    super().__init__(
-                        channel="action_button",
-                        role="action_button",
-                        policy_channel=ProcessorConfig.PolicyChannel.CHAT,
-                        always_available=[],
-                        skip_transcript=True,
-                        skip_input_row=True,
-                        suppress_history=True,
-                        broadcast_to=None,
-                        memory_seed=False,
-                    )
+@chat_bp.route("/chat/subagent/<sub_id>/stop")
+class SubagentStopResource(Resource):
+    @require_auth
+    @chat_bp.response(200, "OK")
+    def post(self, sub_id: str):
+        """Cooperatively cancel a running async delegate.
 
-                def get_user_definition(self, mp: object) -> str:
-                    return ""
+        Delegates to async_delegate_runner.cancel(). The delegate's cancel_event
+        is set; the ACT loop exits at the next iteration boundary.
 
-                def get_user_prompt(self, mp: object) -> str:
-                    return ""
+        Always returns HTTP 200.
 
-                def get_system_prompt(self, mp: object) -> str:
-                    return ""
+        Response JSON:
+            {ok: true, cancelled: true}         — stop signal delivered
+            {ok: true, reason: "not_found"}     — sub_id not in active registry
+        """
+        from services.async_delegate_runner import async_delegate_runner
 
-            _action_config = _ActionButtonConfig()
+        if async_delegate_runner.cancel(sub_id):
+            logger.info("[Chat API] Stop signal delivered to delegate %s", safe(sub_id[:8]))
+            return {"ok": True, "cancelled": True}, 200
+        return {"ok": True, "reason": "not_found"}, 200
 
-            class _ActionCtx:
-                config = _action_config
-                uid = None
-                cancel_event = threading.Event()
 
-            ctx = _ActionCtx()
-            result_text = ToolDispatcher(ctx).dispatch(skill, params)
+@chat_bp.route("/action")
+class ActionResource(Resource):
+    @require_auth
+    @chat_bp.response(202, "Accepted")
+    def post(self):
+        """Response arrives asynchronously via WebSocketBroker.broadcast()."""
+        body = request.get_json(silent=True) or {}
+        skill = body.get("skill") or ""
+        if not skill:
+            return {"error": "Missing 'skill' in action payload"}, 400
 
-            if result_text.startswith("Unknown tool:"):
+        action_start = time.time()
+
+        def _run_action() -> None:
+            broker = WebSocketBroker()
+            try:
+                from abilities._dispatcher import ToolDispatcher  # noqa: PLC0415
+                from services.processor_config import ProcessorConfig  # noqa: PLC0415
+
+                params = {k: v for k, v in body.items() if k != "skill"}
+
+                broker.broadcast({"type": "status", "stage": "processing"})
+
+                # Build a minimal flat-path context for action-button dispatches.
+                # ToolDispatcher requires an mp-like object with config, uid,
+                # cancel_event.  broadcast_to=None keeps these
+                # dispatches silent (no live WS events for action buttons).
+                # ProcessorConfig is abstract, so action-button dispatch needs a
+                # concrete subclass; no ACT loop runs here, so the three prompt
+                # builders are never invoked — they return "" to satisfy the base.
+                class _ActionButtonConfig(ProcessorConfig):
+                    def __init__(self) -> None:
+                        super().__init__(
+                            channel="action_button",
+                            role="action_button",
+                            policy_channel=ProcessorConfig.PolicyChannel.CHAT,
+                            always_available=[],
+                            skip_transcript=True,
+                            skip_input_row=True,
+                            suppress_history=True,
+                            broadcast_to=None,
+                            memory_seed=False,
+                        )
+
+                    def get_user_definition(self, mp: object) -> str:
+                        return ""
+
+                    def get_user_prompt(self, mp: object) -> str:
+                        return ""
+
+                    def get_system_prompt(self, mp: object) -> str:
+                        return ""
+
+                _action_config = _ActionButtonConfig()
+
+                class _ActionCtx:
+                    config = _action_config
+                    uid = None
+                    cancel_event = threading.Event()
+
+                ctx = _ActionCtx()
+                result_text = ToolDispatcher(ctx).dispatch(skill, params)
+
+                if result_text.startswith("Unknown tool:"):
+                    broker.broadcast({
+                        "type": "error",
+                        "message": f"Unknown skill: {skill}",
+                        "recoverable": True,
+                    })
+                    broker.broadcast({"type": "done", "duration_ms": 0})
+                    return
+
+                elapsed_ms = int((time.time() - action_start) * 1000)
+                content = sanitize(result_text or "Done.")
+
+                message_evt: dict[str, object] = {
+                    "type": "message",
+                    "content": content,
+                    "topic": "",
+                    "mode": "ACT",
+                    "confidence": 0.95,
+                    "exchange_id": "",
+                    "metrics": {},
+                    "timestamp": format_date(utc_now(), CHAT_TIMESTAMP_FMT, for_ui=True) or "",
+                }
+                message_evt["segments"] = SegmentService.build(content, [])
+                broker.broadcast(message_evt)
+                broker.broadcast({"type": "done", "duration_ms": elapsed_ms})
+
+            except Exception as exc:
+                logger.exception("[Chat API] Action handler error: %s", exc)
                 broker.broadcast({
                     "type": "error",
-                    "message": f"Unknown skill: {skill}",
+                    "message": str(exc),
                     "recoverable": True,
                 })
                 broker.broadcast({"type": "done", "duration_ms": 0})
-                return
 
-            elapsed_ms = int((time.time() - action_start) * 1000)
-            content = sanitize(result_text or "Done.")
+        thread = threading.Thread(target=_run_action, daemon=True, name=f"action-{skill}")
+        thread.start()
 
-            message_evt: dict[str, object] = {
-                "type": "message",
-                "content": content,
-                "topic": "",
-                "mode": "ACT",
-                "confidence": 0.95,
-                "exchange_id": "",
-                "metrics": {},
-                "timestamp": format_date(utc_now(), CHAT_TIMESTAMP_FMT, for_ui=True) or "",
-            }
-            message_evt["segments"] = SegmentService.build(content, [])
-            broker.broadcast(message_evt)
-            broker.broadcast({"type": "done", "duration_ms": elapsed_ms})
-
-        except Exception as exc:
-            logger.exception("[Chat API] Action handler error: %s", exc)
-            broker.broadcast({
-                "type": "error",
-                "message": str(exc),
-                "recoverable": True,
-            })
-            broker.broadcast({"type": "done", "duration_ms": 0})
-
-    thread = threading.Thread(target=_run_action, daemon=True, name=f"action-{skill}")
-    thread.start()
-
-    return jsonify({"status": "accepted"}), 202
+        return {"status": "accepted"}, 202

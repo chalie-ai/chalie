@@ -1,17 +1,17 @@
-"""Conversation blueprint — GET /conversation/recent."""
+"""Conversation namespace — GET /conversation/recent."""
 
 import logging
 import sqlite3
 from typing import cast
-from flask import Blueprint, request, jsonify
-from flask.typing import ResponseReturnValue
+from flask import request
+from flask_restx import Namespace, Resource
 
 from .auth import require_session
 from services.locale_service import CHAT_TIMESTAMP_FMT, format_date
 from services.rich_media_parser import parse as _parse_rich_media, resolve_tool_call_transcript_ids as _resolve_ids
 
 logger = logging.getLogger(__name__)
-conversation_bp = Blueprint('conversation', __name__)
+conversation_bp = Namespace('conversation', description='Conversation history')
 
 
 def _fetch_tool_calls_for_transcripts(conn: sqlite3.Connection, transcript_ids: list[int]) -> list[dict[str, object]]:
@@ -137,17 +137,19 @@ def get_recent_history(limit: int = 12, offset: int = 0) -> tuple[list[dict[str,
     return messages, has_more, turns_returned
 
 
-@conversation_bp.route('/conversation/recent', methods=['GET'])
-@require_session
-def conversation_recent() -> ResponseReturnValue:
-    try:
-        limit = max(1, min(120, int(request.args.get("limit", 12))))
-    except (ValueError, TypeError):
-        limit = 12
-    try:
-        offset = max(0, int(request.args.get("offset", 0)))
-    except (ValueError, TypeError):
-        offset = 0
+@conversation_bp.route('/conversation/recent')
+class ConversationRecentResource(Resource):
+    @require_session
+    @conversation_bp.response(200, "Recent conversation history")
+    def get(self):
+        try:
+            limit = max(1, min(120, int(request.args.get("limit", 12))))
+        except (ValueError, TypeError):
+            limit = 12
+        try:
+            offset = max(0, int(request.args.get("offset", 0)))
+        except (ValueError, TypeError):
+            offset = 0
 
-    messages, has_more, turns_returned = get_recent_history(limit, offset)
-    return jsonify({"messages": messages, "has_more": has_more, "turns_returned": turns_returned})
+        messages, has_more, turns_returned = get_recent_history(limit, offset)
+        return {"messages": messages, "has_more": has_more, "turns_returned": turns_returned}

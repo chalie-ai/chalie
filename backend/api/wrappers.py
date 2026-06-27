@@ -1,20 +1,20 @@
 import logging
 from typing import TYPE_CHECKING, cast
 
-from flask import Blueprint, g, jsonify, request
+from flask import g, request
 
+from flask_restx import Namespace, Resource
 from .auth import require_auth, _cookie_only
 from services.log_utils import safe
 
 if TYPE_CHECKING:
-    from flask.typing import ResponseReturnValue
     from services.wrapper_auth_service import WrapperAuthService
 
 logger = logging.getLogger(__name__)
 
 _ERR_WRAPPER_NOT_FOUND = "Wrapper not found"
 
-wrappers_bp = Blueprint("wrappers", __name__, url_prefix="/api/wrappers")
+wrappers_bp = Namespace("wrappers", description="Wrapper token management", path="/api/wrappers")
 
 
 # ---------------------------------------------------------------------------
@@ -31,156 +31,108 @@ def _get_service() -> "WrapperAuthService":
 # POST /api/wrappers — create wrapper token
 # ---------------------------------------------------------------------------
 
-@wrappers_bp.route("", methods=["POST"])
-@require_auth
-@_cookie_only
-def create_wrapper() -> "ResponseReturnValue":
-    """Create a new external wrapper token.
+@wrappers_bp.route("")
+@wrappers_bp.response(201, "Wrapper created")
+@wrappers_bp.response(200, "List of wrappers")
+class WrapperRootResource(Resource):
+    @require_auth
+    @_cookie_only
+    def post(self):
+        """Create a new external wrapper token."""
+        body = request.get_json(silent=True) or {}
+        name = (body.get("name") or "").strip()
+        if not name:
+            return {"error": "name is required"}, 400
 
-    Body (JSON):
-        name (str, required): Human-readable label.
-        capabilities (dict, optional): Signals/intents the wrapper may emit.
-        permissions (dict, optional): API operations the wrapper may call.
-        metadata (dict, optional): Version, description, etc.
+        capabilities = body.get("capabilities") or {}
+        permissions = body.get("permissions") or {}
+        metadata = body.get("metadata") or {}
 
-    Returns:
-        201 with ``{wrapper_id, token}`` — ``token`` is shown **once** and not
-        recoverable.
-        400 if ``name`` is missing or blank.
-    """
-    body = request.get_json(silent=True) or {}
-    name = (body.get("name") or "").strip()
-    if not name:
-        return jsonify({"error": "name is required"}), 400
+        if not isinstance(capabilities, (dict, list)):
+            return {"error": "capabilities must be a JSON object or array"}, 400
+        if not isinstance(permissions, dict):
+            return {"error": "permissions must be a JSON object"}, 400
+        if not isinstance(metadata, dict):
+            return {"error": "metadata must be a JSON object"}, 400
 
-    capabilities = body.get("capabilities") or {}
-    permissions = body.get("permissions") or {}
-    metadata = body.get("metadata") or {}
+        svc = _get_service()
+        raw_token, wrapper_id = svc.create_token(
+            name=name,
+            capabilities=cast("dict[str, object]", capabilities),
+            permissions=cast("dict[str, object]", permissions),
+            metadata=cast("dict[str, object]", metadata),
+        )
 
-    # Accept list or dict for capabilities — stored as JSON metadata only,
-    # never used in permission-checking logic.
-    if not isinstance(capabilities, (dict, list)):
-        return jsonify({"error": "capabilities must be a JSON object or array"}), 400
-    if not isinstance(permissions, dict):
-        return jsonify({"error": "permissions must be a JSON object"}), 400
-    if not isinstance(metadata, dict):
-        return jsonify({"error": "metadata must be a JSON object"}), 400
+        logger.info("[Wrappers API] Created wrapper token: %s name=%r", wrapper_id, name)
+        return {"wrapper_id": wrapper_id, "token": raw_token}, 201
 
-    svc = _get_service()
-    raw_token, wrapper_id = svc.create_token(
-        name=name,
-        capabilities=cast("dict[str, object]", capabilities),
-        permissions=cast("dict[str, object]", permissions),
-        metadata=cast("dict[str, object]", metadata),
-    )
-
-    logger.info("[Wrappers API] Created wrapper token: %s name=%r", wrapper_id, name)
-    return jsonify({"wrapper_id": wrapper_id, "token": raw_token}), 201
-
-
-# ---------------------------------------------------------------------------
-# GET /api/wrappers — list active wrappers
-# ---------------------------------------------------------------------------
-
-@wrappers_bp.route("", methods=["GET"])
-@require_auth
-def list_wrappers() -> "ResponseReturnValue":
-    """List all non-revoked wrapper tokens.
-
-    Returns:
-        200 with ``{wrappers: [...]}`` where each item contains ``wrapper_id``,
-        ``name``, ``capabilities``, ``permissions``, ``metadata``,
-        ``last_seen_at``, and ``created_at``.
-    """
-    svc = _get_service()
-    wrappers = svc.list_wrappers()
-    return jsonify({"wrappers": wrappers}), 200
+    @require_auth
+    def get(self):
+        """List all non-revoked wrapper tokens."""
+        svc = _get_service()
+        wrappers = svc.list_wrappers()
+        return {"wrappers": wrappers}, 200
 
 
 # ---------------------------------------------------------------------------
 # GET /api/wrappers/<id> — get wrapper details
+# DELETE /api/wrappers/<id> — revoke token
 # ---------------------------------------------------------------------------
 
-@wrappers_bp.route("/<wrapper_id>", methods=["GET"])
-@require_auth
-def get_wrapper(wrapper_id: str) -> "ResponseReturnValue":
-    """Get details for a single wrapper token.
+@wrappers_bp.route("/<wrapper_id>")
+@wrappers_bp.response(200, "Wrapper details")
+@wrappers_bp.response(404, "Wrapper not found")
+@wrappers_bp.param("wrapper_id", "str", "Wrapper identifier")
+class WrapperItemResource(Resource):
+    @require_auth
+    def get(self, wrapper_id: str):
+        """Get details for a single wrapper token."""
+        svc = _get_service()
+        wrapper = svc.get_wrapper(wrapper_id)
+        if wrapper is None:
+            return {"error": _ERR_WRAPPER_NOT_FOUND}, 404
+        return wrapper, 200
 
-    Args:
-        wrapper_id: The stable wrapper identifier (path parameter).
+    @require_auth
+    def delete(self, wrapper_id: str):
+        """Revoke a wrapper token."""
+        svc = _get_service()
+        revoked = svc.revoke(wrapper_id)
+        if not revoked:
+            return {"error": _ERR_WRAPPER_NOT_FOUND}, 404
 
-    Returns:
-        200 with the wrapper dict, or 404 if not found / revoked.
-    """
-    svc = _get_service()
-    wrapper = svc.get_wrapper(wrapper_id)
-    if wrapper is None:
-        return jsonify({"error": _ERR_WRAPPER_NOT_FOUND}), 404
-    return jsonify(wrapper), 200
+        logger.info("[Wrappers API] Revoked wrapper: %s", safe(wrapper_id))
+        return {"ok": True}, 200
 
 
 # ---------------------------------------------------------------------------
 # PUT /api/wrappers/<id>/capabilities — update capabilities
 # ---------------------------------------------------------------------------
 
-@wrappers_bp.route("/<wrapper_id>/capabilities", methods=["PUT"])
-@require_auth
-def update_capabilities(wrapper_id: str) -> "ResponseReturnValue":
-    """Replace the capabilities payload for a wrapper.
+@wrappers_bp.route("/<wrapper_id>/capabilities")
+@wrappers_bp.response(200, "Capabilities updated")
+@wrappers_bp.response(400, "Invalid capabilities")
+@wrappers_bp.response(403, "Forbidden")
+@wrappers_bp.response(404, "Wrapper not found")
+@wrappers_bp.param("wrapper_id", "str", "Wrapper identifier")
+class WrapperCapabilitiesResource(Resource):
+    @require_auth
+    def put(self, wrapper_id: str):
+        """Replace the capabilities payload for a wrapper."""
+        caller_id = getattr(g, "wrapper_id", None)
+        if caller_id is not None and caller_id != wrapper_id:
+            return {"error": "Bearer token may only update its own capabilities"}, 403
 
-    Bearers may only update their **own** wrapper (``g.wrapper_id`` must match).
-    Cookie-authenticated requests (human in UI) may update any wrapper.
+        body = request.get_json(silent=True) or {}
+        capabilities = body.get("capabilities")
+        if capabilities is None or not isinstance(capabilities, (dict, list)):
+            return {"error": "capabilities must be a JSON object or array"}, 400
 
-    Args:
-        wrapper_id: The stable wrapper identifier (path parameter).
+        svc = _get_service()
+        updated = svc.update_capabilities(wrapper_id, cast("dict[str, object]", capabilities))
+        if not updated:
+            return {"error": _ERR_WRAPPER_NOT_FOUND}, 404
 
-    Body (JSON):
-        capabilities (dict, required): New capabilities payload.
-
-    Returns:
-        200 with ``{ok: true}`` on success.
-        400 if ``capabilities`` is missing or not an object.
-        403 if a bearer token attempts to update another wrapper.
-        404 if the wrapper does not exist or is revoked.
-    """
-    # Bearer auth: can only update own wrapper
-    caller_id = getattr(g, "wrapper_id", None)
-    if caller_id is not None and caller_id != wrapper_id:
-        return jsonify({"error": "Bearer token may only update its own capabilities"}), 403
-
-    body = request.get_json(silent=True) or {}
-    capabilities = body.get("capabilities")
-    if capabilities is None or not isinstance(capabilities, (dict, list)):
-        return jsonify({"error": "capabilities must be a JSON object or array"}), 400
-
-    svc = _get_service()
-    updated = svc.update_capabilities(wrapper_id, cast("dict[str, object]", capabilities))
-    if not updated:
-        return jsonify({"error": _ERR_WRAPPER_NOT_FOUND}), 404
-
-    return jsonify({"ok": True}), 200
+        return {"ok": True}, 200
 
 
-# ---------------------------------------------------------------------------
-# DELETE /api/wrappers/<id> — revoke token
-# ---------------------------------------------------------------------------
-
-@wrappers_bp.route("/<wrapper_id>", methods=["DELETE"])
-@require_auth
-def revoke_wrapper(wrapper_id: str) -> "ResponseReturnValue":
-    """Revoke a wrapper token.
-
-    Args:
-        wrapper_id: The stable wrapper identifier (path parameter).
-
-    Returns:
-        200 with ``{ok: true}`` on success.
-        404 if the wrapper does not exist or is already revoked.
-    """
-    svc = _get_service()
-    revoked = svc.revoke(wrapper_id)
-    if not revoked:
-        return jsonify({"error": _ERR_WRAPPER_NOT_FOUND}), 404
-
-    logger.info("[Wrappers API] Revoked wrapper: %s", safe(wrapper_id))
-    return jsonify({"ok": True}), 200

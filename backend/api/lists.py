@@ -2,12 +2,12 @@ import logging
 from datetime import datetime
 from typing import TYPE_CHECKING, cast
 
-from flask import Blueprint, jsonify, request
+from flask import request
+from flask_restx import Namespace, Resource
 
 from .auth import require_session
 
 if TYPE_CHECKING:
-    from flask.typing import ResponseReturnValue
     from services.list_service import ListService
 
 logger = logging.getLogger(__name__)
@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 _ERR_INTERNAL = "Internal server error"
 _ERR_NOT_FOUND = "Not found"
 
-lists_bp = Blueprint("lists", __name__)
+lists_bp = Namespace("lists", description="List operations")
 
 
 # ---------------------------------------------------------------------------
@@ -76,175 +76,219 @@ def _validate_items(items: object) -> "tuple[list[str] | None, str | None]":
 # Routes
 # ---------------------------------------------------------------------------
 
-@lists_bp.route("/lists", methods=["GET"])
-@require_session
-def get_lists() -> "ResponseReturnValue":
-    try:
-        svc = _get_list_service()
-        lists = svc.get_all_lists()
-        return jsonify({"items": [_serialize_list(lst) for lst in lists]})
-    except Exception as e:
-        logger.error(f"[LISTS API] get_lists error: {e}")
-        return jsonify({"error": _ERR_INTERNAL}), 500
+@lists_bp.route("/lists")
+class ListsResource(Resource):
+    @require_session
+    @lists_bp.response(200, "Success")
+    @lists_bp.response(500, "Internal server error")
+    def get(self):
+        try:
+            svc = _get_list_service()
+            lists = svc.get_all_lists()
+            return {"items": [_serialize_list(lst) for lst in lists]}
+        except Exception as e:
+            logger.error(f"[LISTS API] get_lists error: {e}")
+            return {"error": _ERR_INTERNAL}, 500
+
+    @require_session
+    @lists_bp.response(201, "Created")
+    @lists_bp.response(400, "Bad request")
+    @lists_bp.response(409, "Conflict")
+    @lists_bp.response(500, "Internal server error")
+    def post(self):
+        data = request.get_json(silent=True) or {}
+        name, err = _validate_name(data.get("name"))
+        if err:
+            return {"error": err}, 400
+
+        list_type = (data.get("list_type") or "checklist").strip()
+
+        try:
+            svc = _get_list_service()
+            list_id = svc.create_list(cast(str, name), list_type=list_type)
+            lst = svc.get_list(list_id)
+            cast("dict[str, object]", lst)["items"] = [_serialize_item(cast("dict[str, object]", i)) for i in cast("list[object]", cast("dict[str, object]", lst).get("items", []))]
+            return {"item": _serialize_list(cast("dict[str, object]", lst))}, 201
+        except ValueError as e:
+            return {"error": str(e)}, 409
+        except Exception as e:
+            logger.error(f"[LISTS API] create_list error: {e}")
+            return {"error": _ERR_INTERNAL}, 500
 
 
-@lists_bp.route("/lists", methods=["POST"])
-@require_session
-def create_list() -> "ResponseReturnValue":
-    data = request.get_json(silent=True) or {}
-    name, err = _validate_name(data.get("name"))
-    if err:
-        return jsonify({"error": err}), 400
+@lists_bp.route("/lists/<list_id>")
+class ListResource(Resource):
+    @require_session
+    @lists_bp.param("list_id", "string", "List id")
+    @lists_bp.response(200, "Success")
+    @lists_bp.response(404, "Not found")
+    @lists_bp.response(500, "Internal server error")
+    def get(self, list_id: str):
+        try:
+            svc = _get_list_service()
+            lst = svc.get_list(list_id)
+            if lst is None:
+                return {"error": _ERR_NOT_FOUND}, 404
+            lst = dict(lst)
+            lst["items"] = [_serialize_item(cast("dict[str, object]", i)) for i in cast("list[object]", lst.get("items", []))]
+            return {"item": _serialize_list(lst)}
+        except Exception as e:
+            logger.error(f"[LISTS API] get_list error: {e}")
+            return {"error": _ERR_INTERNAL}, 500
 
-    list_type = (data.get("list_type") or "checklist").strip()
-
-    try:
-        svc = _get_list_service()
-        list_id = svc.create_list(cast(str, name), list_type=list_type)
-        lst = svc.get_list(list_id)
-        cast("dict[str, object]", lst)["items"] = [_serialize_item(cast("dict[str, object]", i)) for i in cast("list[object]", cast("dict[str, object]", lst).get("items", []))]
-        return jsonify({"item": _serialize_list(cast("dict[str, object]", lst))}), 201
-    except ValueError as e:
-        return jsonify({"error": str(e)}), 409
-    except Exception as e:
-        logger.error(f"[LISTS API] create_list error: {e}")
-        return jsonify({"error": _ERR_INTERNAL}), 500
-
-
-@lists_bp.route("/lists/<list_id>", methods=["GET"])
-@require_session
-def get_list(list_id: str) -> "ResponseReturnValue":
-    try:
-        svc = _get_list_service()
-        lst = svc.get_list(list_id)
-        if lst is None:
-            return jsonify({"error": _ERR_NOT_FOUND}), 404
-        lst = dict(lst)
-        lst["items"] = [_serialize_item(cast("dict[str, object]", i)) for i in cast("list[object]", lst.get("items", []))]
-        return jsonify({"item": _serialize_list(lst)})
-    except Exception as e:
-        logger.error(f"[LISTS API] get_list error: {e}")
-        return jsonify({"error": _ERR_INTERNAL}), 500
+    @require_session
+    @lists_bp.param("list_id", "string", "List id")
+    @lists_bp.response(200, "Success")
+    @lists_bp.response(404, "Not found")
+    @lists_bp.response(500, "Internal server error")
+    def delete(self, list_id: str):
+        try:
+            svc = _get_list_service()
+            ok = svc.delete_list(list_id)
+            if not ok:
+                return {"error": _ERR_NOT_FOUND}, 404
+            return {"ok": True}
+        except Exception as e:
+            logger.error(f"[LISTS API] delete_list error: {e}")
+            return {"error": _ERR_INTERNAL}, 500
 
 
-@lists_bp.route("/lists/<list_id>/rename", methods=["PUT"])
-@require_session
-def rename_list(list_id: str) -> "ResponseReturnValue":
-    data = request.get_json(silent=True) or {}
-    name, err = _validate_name(data.get("name"))
-    if err:
-        return jsonify({"error": err}), 400
+@lists_bp.route("/lists/<list_id>/rename")
+class ListRenameResource(Resource):
+    @require_session
+    @lists_bp.param("list_id", "string", "List id")
+    @lists_bp.response(200, "Success")
+    @lists_bp.response(400, "Bad request")
+    @lists_bp.response(404, "Not found")
+    @lists_bp.response(500, "Internal server error")
+    def put(self, list_id: str):
+        data = request.get_json(silent=True) or {}
+        name, err = _validate_name(data.get("name"))
+        if err:
+            return {"error": err}, 400
 
-    try:
-        svc = _get_list_service()
-        ok = svc.rename_list(list_id, cast(str, name))
-        if not ok:
-            return jsonify({"error": "Not found or name already in use"}), 404
-        return jsonify({"ok": True})
-    except Exception as e:
-        logger.error(f"[LISTS API] rename_list error: {e}")
-        return jsonify({"error": _ERR_INTERNAL}), 500
-
-
-@lists_bp.route("/lists/<list_id>", methods=["DELETE"])
-@require_session
-def delete_list(list_id: str) -> "ResponseReturnValue":
-    try:
-        svc = _get_list_service()
-        ok = svc.delete_list(list_id)
-        if not ok:
-            return jsonify({"error": _ERR_NOT_FOUND}), 404
-        return jsonify({"ok": True})
-    except Exception as e:
-        logger.error(f"[LISTS API] delete_list error: {e}")
-        return jsonify({"error": _ERR_INTERNAL}), 500
+        try:
+            svc = _get_list_service()
+            ok = svc.rename_list(list_id, cast(str, name))
+            if not ok:
+                return {"error": "Not found or name already in use"}, 404
+            return {"ok": True}
+        except Exception as e:
+            logger.error(f"[LISTS API] rename_list error: {e}")
+            return {"error": _ERR_INTERNAL}, 500
 
 
-@lists_bp.route("/lists/<list_id>/items", methods=["POST"])
-@require_session
-def add_items(list_id: str) -> "ResponseReturnValue":
-    data = request.get_json(silent=True) or {}
-    items, err = _validate_items(data.get("items"))
-    if err:
-        return jsonify({"error": err}), 400
+@lists_bp.route("/lists/<list_id>/items")
+class ListItemsResource(Resource):
+    @require_session
+    @lists_bp.param("list_id", "string", "List id")
+    @lists_bp.response(200, "Success")
+    @lists_bp.response(400, "Bad request")
+    @lists_bp.response(404, "Not found")
+    @lists_bp.response(500, "Internal server error")
+    def post(self, list_id: str):
+        data = request.get_json(silent=True) or {}
+        items, err = _validate_items(data.get("items"))
+        if err:
+            return {"error": err}, 400
 
-    try:
-        svc = _get_list_service()
-        if svc.get_list(list_id) is None:
-            return jsonify({"error": _ERR_NOT_FOUND}), 404
-        added = svc.add_items(list_id, cast("list[str]", items))
-        return jsonify({"added": added})
-    except Exception as e:
-        logger.error(f"[LISTS API] add_items error: {e}")
-        return jsonify({"error": _ERR_INTERNAL}), 500
+        try:
+            svc = _get_list_service()
+            if svc.get_list(list_id) is None:
+                return {"error": _ERR_NOT_FOUND}, 404
+            added = svc.add_items(list_id, cast("list[str]", items))
+            return {"added": added}
+        except Exception as e:
+            logger.error(f"[LISTS API] add_items error: {e}")
+            return {"error": _ERR_INTERNAL}, 500
 
-
-@lists_bp.route("/lists/<list_id>/items", methods=["DELETE"])
-@require_session
-def clear_items(list_id: str) -> "ResponseReturnValue":
-    try:
-        svc = _get_list_service()
-        count = svc.clear_list(list_id)
-        if count == -1:
-            return jsonify({"error": _ERR_NOT_FOUND}), 404
-        return jsonify({"cleared": count})
-    except Exception as e:
-        logger.error(f"[LISTS API] clear_items error: {e}")
-        return jsonify({"error": _ERR_INTERNAL}), 500
-
-
-@lists_bp.route("/lists/<list_id>/items/batch", methods=["DELETE"])
-@require_session
-def remove_items(list_id: str) -> "ResponseReturnValue":
-    data = request.get_json(silent=True) or {}
-    items, err = _validate_items(data.get("items"))
-    if err:
-        return jsonify({"error": err}), 400
-
-    try:
-        svc = _get_list_service()
-        if svc.get_list(list_id) is None:
-            return jsonify({"error": _ERR_NOT_FOUND}), 404
-        removed = svc.remove_items(list_id, cast("list[str]", items))
-        return jsonify({"removed": removed})
-    except Exception as e:
-        logger.error(f"[LISTS API] remove_items error: {e}")
-        return jsonify({"error": _ERR_INTERNAL}), 500
+    @require_session
+    @lists_bp.param("list_id", "string", "List id")
+    @lists_bp.response(200, "Success")
+    @lists_bp.response(404, "Not found")
+    @lists_bp.response(500, "Internal server error")
+    def delete(self, list_id: str):
+        try:
+            svc = _get_list_service()
+            count = svc.clear_list(list_id)
+            if count == -1:
+                return {"error": _ERR_NOT_FOUND}, 404
+            return {"cleared": count}
+        except Exception as e:
+            logger.error(f"[LISTS API] clear_items error: {e}")
+            return {"error": _ERR_INTERNAL}, 500
 
 
-@lists_bp.route("/lists/<list_id>/items/check", methods=["PUT"])
-@require_session
-def check_items(list_id: str) -> "ResponseReturnValue":
-    data = request.get_json(silent=True) or {}
-    items, err = _validate_items(data.get("items"))
-    if err:
-        return jsonify({"error": err}), 400
+@lists_bp.route("/lists/<list_id>/items/batch")
+class ListItemsBatchResource(Resource):
+    @require_session
+    @lists_bp.param("list_id", "string", "List id")
+    @lists_bp.response(200, "Success")
+    @lists_bp.response(400, "Bad request")
+    @lists_bp.response(404, "Not found")
+    @lists_bp.response(500, "Internal server error")
+    def delete(self, list_id: str):
+        data = request.get_json(silent=True) or {}
+        items, err = _validate_items(data.get("items"))
+        if err:
+            return {"error": err}, 400
 
-    try:
-        svc = _get_list_service()
-        if svc.get_list(list_id) is None:
-            return jsonify({"error": _ERR_NOT_FOUND}), 404
-        checked = svc.check_items(list_id, cast("list[str]", items))
-        return jsonify({"checked": checked})
-    except Exception as e:
-        logger.error(f"[LISTS API] check_items error: {e}")
-        return jsonify({"error": _ERR_INTERNAL}), 500
+        try:
+            svc = _get_list_service()
+            if svc.get_list(list_id) is None:
+                return {"error": _ERR_NOT_FOUND}, 404
+            removed = svc.remove_items(list_id, cast("list[str]", items))
+            return {"removed": removed}
+        except Exception as e:
+            logger.error(f"[LISTS API] remove_items error: {e}")
+            return {"error": _ERR_INTERNAL}, 500
 
 
-@lists_bp.route("/lists/<list_id>/items/uncheck", methods=["PUT"])
-@require_session
-def uncheck_items(list_id: str) -> "ResponseReturnValue":
-    data = request.get_json(silent=True) or {}
-    items, err = _validate_items(data.get("items"))
-    if err:
-        return jsonify({"error": err}), 400
+@lists_bp.route("/lists/<list_id>/items/check")
+class ListItemsCheckResource(Resource):
+    @require_session
+    @lists_bp.param("list_id", "string", "List id")
+    @lists_bp.response(200, "Success")
+    @lists_bp.response(400, "Bad request")
+    @lists_bp.response(404, "Not found")
+    @lists_bp.response(500, "Internal server error")
+    def put(self, list_id: str):
+        data = request.get_json(silent=True) or {}
+        items, err = _validate_items(data.get("items"))
+        if err:
+            return {"error": err}, 400
 
-    try:
-        svc = _get_list_service()
-        if svc.get_list(list_id) is None:
-            return jsonify({"error": _ERR_NOT_FOUND}), 404
-        unchecked = svc.uncheck_items(list_id, cast("list[str]", items))
-        return jsonify({"unchecked": unchecked})
-    except Exception as e:
-        logger.error(f"[LISTS API] uncheck_items error: {e}")
-        return jsonify({"error": _ERR_INTERNAL}), 500
+        try:
+            svc = _get_list_service()
+            if svc.get_list(list_id) is None:
+                return {"error": _ERR_NOT_FOUND}, 404
+            checked = svc.check_items(list_id, cast("list[str]", items))
+            return {"checked": checked}
+        except Exception as e:
+            logger.error(f"[LISTS API] check_items error: {e}")
+            return {"error": _ERR_INTERNAL}, 500
+
+
+@lists_bp.route("/lists/<list_id>/items/uncheck")
+class ListItemsUncheckResource(Resource):
+    @require_session
+    @lists_bp.param("list_id", "string", "List id")
+    @lists_bp.response(200, "Success")
+    @lists_bp.response(400, "Bad request")
+    @lists_bp.response(404, "Not found")
+    @lists_bp.response(500, "Internal server error")
+    def put(self, list_id: str):
+        data = request.get_json(silent=True) or {}
+        items, err = _validate_items(data.get("items"))
+        if err:
+            return {"error": err}, 400
+
+        try:
+            svc = _get_list_service()
+            if svc.get_list(list_id) is None:
+                return {"error": _ERR_NOT_FOUND}, 404
+            unchecked = svc.uncheck_items(list_id, cast("list[str]", items))
+            return {"unchecked": unchecked}
+        except Exception as e:
+            logger.error(f"[LISTS API] uncheck_items error: {e}")
+            return {"error": _ERR_INTERNAL}, 500

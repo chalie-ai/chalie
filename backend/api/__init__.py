@@ -1,6 +1,6 @@
 """
-REST API package — Flask app factory with Blueprint registration, WebSocket,
-and static file serving (replaces nginx).
+REST API package — Flask-RESTx app factory with Namespace auto-discovery,
+WebSocket, and static file serving (replaces nginx).
 """
 
 import importlib
@@ -11,6 +11,7 @@ from pathlib import Path
 from flask import Flask, Blueprint, Response, redirect, send_from_directory
 from flask.typing import ResponseReturnValue
 from flask_cors import CORS
+from flask_restx import Api, Namespace
 
 from services.file_mapper_service import FileMapperService
 from .auth import require_session as require_session
@@ -18,6 +19,13 @@ from .auth import internal_only
 
 
 logger = logging.getLogger(__name__)
+
+api = Api(
+    title="Chalie API",
+    version="1.0",
+    description="REST API for the Chalie personal intelligence layer",
+    doc="/swagger/",
+)
 
 
 # ---------------------------------------------------------------------------
@@ -43,13 +51,12 @@ mimetypes.add_type('text/css', '.css')
 mimetypes.add_type('text/html', '.html')
 
 
-def _register_blueprints(app: Flask) -> None:
-    """Auto-discover and register every Blueprint defined in this package.
+def _register_namespaces(app: Flask) -> None:
+    """Auto-discover and register every Namespace defined in this package.
 
-    Walks `backend/api/*.py`, imports each module, and registers any top-level
-    `Blueprint` instance it exposes. Modules without a Blueprint (e.g. `auth`,
-    `websocket`) are skipped silently. Drop a new `foo.py` exposing `foo_bp`
-    in this folder and it lights up on next boot — no edits here required.
+    Walks ``backend/api/*.py``, imports each module, and registers any top-level
+    ``Namespace`` instance on the central ``Api`` object. Modules without a
+    Namespace (e.g. ``auth``, ``websocket``) are skipped silently.
     """
     package = importlib.import_module(__name__)
     seen: set[int] = set()
@@ -58,11 +65,18 @@ def _register_blueprints(app: Flask) -> None:
             continue
         module = importlib.import_module(f"{__name__}.{module_info.name}")
         for attr_name, attr in vars(module).items():
-            if not isinstance(attr, Blueprint) or id(attr) in seen:
-                continue
-            app.register_blueprint(attr)
-            seen.add(id(attr))
-            logger.info("[REST API] Registered %s.%s", module_info.name, attr_name)
+            if isinstance(attr, Namespace) and id(attr) not in seen:
+                api.add_namespace(attr)
+                seen.add(id(attr))
+                logger.info("[REST API] Registered %s.%s", module_info.name, attr_name)
+        # Also register plain Blueprints (gateway etc.) that are not Namespaces
+        for attr_name, attr in vars(module).items():
+            if isinstance(attr, Blueprint) and not isinstance(attr, Namespace) and id(attr) not in seen:
+                app.register_blueprint(attr)
+                seen.add(id(attr))
+                logger.info("[REST API] Registered blueprint %s.%s", module_info.name, attr_name)
+
+    api.init_app(app)
 
 
 def _configure_app(app: Flask) -> None:
@@ -164,11 +178,11 @@ def _register_static_routes(app: Flask) -> None:
 
 
 def create_app() -> Flask:
-    """Create and configure Flask application with all blueprints."""
+    """Create and configure Flask application with all namespaces and routes."""
     app = Flask(__name__)
 
     _configure_app(app)
-    _register_blueprints(app)
+    _register_namespaces(app)
 
     # WebSocket endpoint (replaces SSE for chat + drift)
     from flask_sock import Sock
@@ -179,5 +193,5 @@ def create_app() -> Flask:
     # ── Static file serving (replaces nginx) ─────────────────────────
     _register_static_routes(app)
 
-    logger.info("[REST API] All blueprints + WebSocket + static serving registered")
+    logger.info("[REST API] All namespaces + WebSocket + static serving registered")
     return app

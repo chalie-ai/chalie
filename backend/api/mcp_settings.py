@@ -9,18 +9,18 @@
 import logging
 from typing import TYPE_CHECKING
 
-from flask import Blueprint, jsonify, request
+from flask import request
+from flask_restx import Namespace, Resource
 
 from .auth import require_session
 
 if TYPE_CHECKING:
-    from flask.typing import ResponseReturnValue
     from services.settings_service import SettingsService
     from services.wrapper_auth_service import WrapperAuthService
 
 logger = logging.getLogger(__name__)
 
-mcp_settings_bp = Blueprint("mcp_settings", __name__, url_prefix="/api/mcp-server")
+mcp_settings_bp = Namespace("mcp_settings", description="MCP server settings", path="/api/mcp-server")
 
 
 def _get_services() -> "tuple[SettingsService, WrapperAuthService, object]":
@@ -32,75 +32,79 @@ def _get_services() -> "tuple[SettingsService, WrapperAuthService, object]":
     return SettingsService(db), WrapperAuthService(db), db
 
 
-@mcp_settings_bp.route("", methods=["GET"])
-@require_session
-def get_mcp_settings() -> "ResponseReturnValue":
-    settings, auth_svc, _ = _get_services()
+@mcp_settings_bp.route("")
+class McpSettingsResource(Resource):
+    @require_session
+    @mcp_settings_bp.response(200, "Success")
+    def get(self):
+        settings, auth_svc, _ = _get_services()
 
-    enabled = settings.get("mcp_server_enabled")
-    port = settings.get("mcp_server_port") or "8462"
-    wrapper_id = settings.get("mcp_server_token_wrapper_id")
+        enabled = settings.get("mcp_server_enabled")
+        port = settings.get("mcp_server_port") or "8462"
+        wrapper_id = settings.get("mcp_server_token_wrapper_id")
 
-    token_display = None
-    if wrapper_id:
-        wrapper = auth_svc.get_wrapper(wrapper_id)
-        if wrapper:
-            token_display = _get_stored_token(settings)
+        token_display = None
+        if wrapper_id:
+            wrapper = auth_svc.get_wrapper(wrapper_id)
+            if wrapper:
+                token_display = _get_stored_token(settings)
 
-    return jsonify({
-        "enabled": enabled is None or str(enabled).lower() not in ("false", "0", "no"),
-        "port": int(port) if port and port.isdigit() else 8462,
-        "token": token_display,
-        "wrapper_id": wrapper_id,
-    })
+        return {
+            "enabled": enabled is None or str(enabled).lower() not in ("false", "0", "no"),
+            "port": int(port) if port and port.isdigit() else 8462,
+            "token": token_display,
+            "wrapper_id": wrapper_id,
+        }
+
+    @require_session
+    @mcp_settings_bp.response(200, "Success")
+    @mcp_settings_bp.response(400, "Bad request")
+    def put(self):
+        settings, _, _ = _get_services()
+        data = request.get_json(silent=True) or {}
+
+        if "enabled" in data:
+            settings.set("mcp_server_enabled", "true" if data["enabled"] else "false")
+
+        if "port" in data:
+            port_val = data["port"]
+            try:
+                port_int = int(port_val)
+                if 1024 <= port_int <= 65535:
+                    settings.set("mcp_server_port", str(port_int))
+                else:
+                    return {"error": "Port must be between 1024 and 65535"}, 400
+            except (ValueError, TypeError):
+                return {"error": "Invalid port number"}, 400
+
+        return {"success": True}
 
 
-@mcp_settings_bp.route("", methods=["PUT"])
-@require_session
-def update_mcp_settings() -> "ResponseReturnValue":
-    settings, _, _ = _get_services()
-    data = request.get_json(silent=True) or {}
+@mcp_settings_bp.route("/regenerate-token")
+class RegenerateTokenResource(Resource):
+    @require_session
+    @mcp_settings_bp.response(200, "Success")
+    def post(self):
+        settings, auth_svc, _ = _get_services()
 
-    if "enabled" in data:
-        settings.set("mcp_server_enabled", "true" if data["enabled"] else "false")
+        old_wrapper_id = settings.get("mcp_server_token_wrapper_id")
+        if old_wrapper_id:
+            auth_svc.revoke(old_wrapper_id)
 
-    if "port" in data:
-        port_val = data["port"]
-        try:
-            port_int = int(port_val)
-            if 1024 <= port_int <= 65535:
-                settings.set("mcp_server_port", str(port_int))
-            else:
-                return jsonify({"error": "Port must be between 1024 and 65535"}), 400
-        except (ValueError, TypeError):
-            return jsonify({"error": "Invalid port number"}), 400
+        raw_token, wrapper_id = auth_svc.create_token(
+            name="MCP Server (External Agents)",
+            capabilities={"signals": [], "intents": ["talk_to_chalie"]},
+            permissions={"query": ["*"], "update": ["*"], "broadcast": False},
+            wrapper_id_override=f"__mcp_server_{_short_id()}__",
+        )
 
-    return jsonify({"success": True})
+        settings.set("mcp_server_token_wrapper_id", wrapper_id)
+        settings.set("mcp_server_token", raw_token)
 
-
-@mcp_settings_bp.route("/regenerate-token", methods=["POST"])
-@require_session
-def regenerate_token() -> "ResponseReturnValue":
-    settings, auth_svc, _ = _get_services()
-
-    old_wrapper_id = settings.get("mcp_server_token_wrapper_id")
-    if old_wrapper_id:
-        auth_svc.revoke(old_wrapper_id)
-
-    raw_token, wrapper_id = auth_svc.create_token(
-        name="MCP Server (External Agents)",
-        capabilities={"signals": [], "intents": ["talk_to_chalie"]},
-        permissions={"query": ["*"], "update": ["*"], "broadcast": False},
-        wrapper_id_override=f"__mcp_server_{_short_id()}__",
-    )
-
-    settings.set("mcp_server_token_wrapper_id", wrapper_id)
-    settings.set("mcp_server_token", raw_token)
-
-    return jsonify({
-        "token": raw_token,
-        "wrapper_id": wrapper_id,
-    })
+        return {
+            "token": raw_token,
+            "wrapper_id": wrapper_id,
+        }
 
 
 def _get_stored_token(settings: "SettingsService") -> str | None:

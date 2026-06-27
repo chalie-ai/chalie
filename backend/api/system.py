@@ -1,5 +1,5 @@
 """
-System blueprint — /health, /metrics, /system/status, /system/observability/* endpoints.
+System namespace — /health, /metrics, /system/status, /system/observability/* endpoints.
 """
 
 import json
@@ -7,8 +7,8 @@ import logging
 import os
 from typing import TYPE_CHECKING, cast
 
-from flask import Blueprint, jsonify, request
-from flask.typing import ResponseReturnValue
+from flask import request
+from flask_restx import Namespace, Resource
 
 from .auth import require_session
 from services.time_utils import utc_now
@@ -19,16 +19,16 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-system_bp = Blueprint('system', __name__)
+system_bp = Namespace('system', description='System operations')
 
 # Signal source for telemetry signals absorbed by WorldState from health pings.
 _SIGNAL_SOURCE_HEALTH = '/health'
 
 
-def _ok_response() -> ResponseReturnValue:
+def _ok_response() -> tuple[dict[str, object], int]:
     """Standard health response body — used by both GET and POST."""
     from consumer import APP_VERSION
-    return jsonify({"status": "ok", "version": APP_VERSION}), 200
+    return {"status": "ok", "version": APP_VERSION}, 200
 
 
 def _mirror_telemetry_to_world_state(svc: "ClientContextService", data: dict[str, object]) -> None:
@@ -55,98 +55,109 @@ def _persist_heartbeat(data: dict[str, object]) -> None:
         logger.warning(f"[HEALTH] Failed to mirror telemetry to WorldState: {ws_err}")
 
 
-@system_bp.route('/health', methods=['GET', 'POST'])
-def health_check() -> ResponseReturnValue:
-    """Health check endpoint (no auth required). POST saves client context."""
-    if request.method != 'POST':
+@system_bp.route('/health')
+class HealthResource(Resource):
+    @system_bp.response(200, "OK")
+    def get(self):
+        """Health check endpoint (no auth required)."""
         return _ok_response()
-    try:
-        data = request.get_json() or {}
-        if data:
-            _persist_heartbeat(data)
-    except Exception as e:
-        logger.warning(f"[HEALTH] Failed to save client context: {e}")
-    return _ok_response()
 
-
-@system_bp.route('/ready', methods=['GET'])
-def readiness_check() -> ResponseReturnValue:
-    """Readiness probe — 200 only when SQLite, MemoryStore, embeddings, and ONNX are ready.
-
-    Delegates to the read-only :func:`services.preflight_service.run_preflight`.
-    The onnxruntime CPU self-heal and its actionable ERROR hint run once at boot
-    (``RuntimeDepsService.ensure_onnxruntime``); this probe only reports state, so
-    a broken runtime surfaces as ``embeddings: {status: error, message: <hint>}``
-    rather than the eternal ``loading`` it reported before.
-    """
-    from services.preflight_service import run_preflight
-    components = run_preflight()
-    ready = all(c.get('status') == 'ok' for c in components.values())
-    return jsonify({'ready': ready, **components}), (200 if ready else 503)
-
-
-@system_bp.route('/metrics', methods=['GET'])
-@require_session
-def metrics_endpoint() -> ResponseReturnValue:
-    """Metrics dashboard endpoint."""
-    try:
-        from services.metrics_service import MetricsService
-        metrics = MetricsService()
-        data = metrics.get_dashboard_data()
-        return jsonify(data), 200
-    except Exception as e:
-        logger.error(f"[REST API] Metrics error: {e}")
-        return jsonify({"error": "Failed to retrieve metrics"}), 500
-
-
-@system_bp.route('/system/status', methods=['GET'])
-@require_session
-def system_status() -> ResponseReturnValue:
-    """Comprehensive system health and diagnostics."""
-    try:
-        from services.memory_client import MemoryClientService
-        from services.database_service import get_shared_db_service
-
-        store = MemoryClientService.create_connection()
-        result: dict[str, object] = {"status": "ok", "memory": {}, "storage": {}}
-
-        # MemoryStore health
+    @system_bp.response(200, "OK")
+    def post(self):
+        """Health check endpoint (no auth required). POST saves client context."""
         try:
-            store.ping()
-            # Count memory store keys
-            cast(dict[str, object], result["memory"])["working_memory_keys"] = len(store.keys("working_memory:*"))
-            cast(dict[str, object], result["memory"])["gist_keys"] = len(store.keys("gist_index:*"))
-            cast(dict[str, object], result["memory"])["fact_keys"] = len(store.keys("fact_index:*"))
+            data = request.get_json() or {}
+            if data:
+                _persist_heartbeat(data)
         except Exception as e:
-            result["status"] = "degraded"
-            result["memory_store_error"] = str(e)
+            logger.warning(f"[HEALTH] Failed to save client context: {e}")
+        return _ok_response()
 
-        # SQLite counts
+
+@system_bp.route('/ready')
+class ReadinessResource(Resource):
+    @system_bp.response(200, "Ready")
+    def get(self):
+        """Readiness probe — 200 only when SQLite, MemoryStore, embeddings, and ONNX are ready.
+
+        Delegates to the read-only :func:`services.preflight_service.run_preflight`.
+        The onnxruntime CPU self-heal and its actionable ERROR hint run once at boot
+        (``RuntimeDepsService.ensure_onnxruntime``); this probe only reports state, so
+        a broken runtime surfaces as ``embeddings: {status: error, message: <hint>}``
+        rather than the eternal ``loading`` it reported before.
+        """
+        from services.preflight_service import run_preflight
+        components = run_preflight()
+        ready = all(c.get('status') == 'ok' for c in components.values())
+        return {'ready': ready, **components}, (200 if ready else 503)
+
+
+@system_bp.route('/metrics')
+class MetricsResource(Resource):
+    @require_session
+    @system_bp.response(200, "OK")
+    def get(self):
+        """Metrics dashboard endpoint."""
         try:
-            db = get_shared_db_service()
-            with db.connection() as conn:
-                cursor = conn.cursor()
-                for table_label, query in [
-                    ("episodes", "SELECT COUNT(*) FROM episodes"),
-                    ("concepts", "SELECT COUNT(*) FROM data_graph WHERE kind = 'user_specific' AND deleted_at IS NULL AND active=1"),
-                    ("traits", "SELECT COUNT(*) FROM data_graph WHERE kind = 'user_specific' AND deleted_at IS NULL AND active=1"),
-                ]:
-                    try:
-                        cursor.execute(query)
-                        row = cursor.fetchone()
-                        cast(dict[str, object], result["storage"])[table_label] = row[0] if row else 0
-                    except Exception as e:
-                        logger.warning(f"[SYSTEM] Count query failed for '{table_label}': {e}")
-                        cast(dict[str, object], result["storage"])[table_label] = -1
+            from services.metrics_service import MetricsService
+            metrics = MetricsService()
+            data = metrics.get_dashboard_data()
+            return data, 200
         except Exception as e:
-            result["status"] = "degraded"
-            result["database_error"] = str(e)
+            logger.error(f"[REST API] Metrics error: {e}")
+            return {"error": "Failed to retrieve metrics"}, 500
 
-        return jsonify(result), 200
 
-    except Exception as e:
-        logger.error(f"[REST API] System status error: {e}")
-        return jsonify({"status": "error", "message": str(e)}), 500
+@system_bp.route('/system/status')
+class SystemStatusResource(Resource):
+    @require_session
+    @system_bp.response(200, "OK")
+    def get(self):
+        """Comprehensive system health and diagnostics."""
+        try:
+            from services.memory_client import MemoryClientService
+            from services.database_service import get_shared_db_service
+
+            store = MemoryClientService.create_connection()
+            result: dict[str, object] = {"status": "ok", "memory": {}, "storage": {}}
+
+            # MemoryStore health
+            try:
+                store.ping()
+                # Count memory store keys
+                cast(dict[str, object], result["memory"])["working_memory_keys"] = len(store.keys("working_memory:*"))
+                cast(dict[str, object], result["memory"])["gist_keys"] = len(store.keys("gist_index:*"))
+                cast(dict[str, object], result["memory"])["fact_keys"] = len(store.keys("fact_index:*"))
+            except Exception as e:
+                result["status"] = "degraded"
+                result["memory_store_error"] = str(e)
+
+            # SQLite counts
+            try:
+                db = get_shared_db_service()
+                with db.connection() as conn:
+                    cursor = conn.cursor()
+                    for table_label, query in [
+                        ("episodes", "SELECT COUNT(*) FROM episodes"),
+                        ("concepts", "SELECT COUNT(*) FROM data_graph WHERE kind = 'user_specific' AND deleted_at IS NULL AND active=1"),
+                        ("traits", "SELECT COUNT(*) FROM data_graph WHERE kind = 'user_specific' AND deleted_at IS NULL AND active=1"),
+                    ]:
+                        try:
+                            cursor.execute(query)
+                            row = cursor.fetchone()
+                            cast(dict[str, object], result["storage"])[table_label] = row[0] if row else 0
+                        except Exception as e:
+                            logger.warning(f"[SYSTEM] Count query failed for '{table_label}': {e}")
+                            cast(dict[str, object], result["storage"])[table_label] = -1
+            except Exception as e:
+                result["status"] = "degraded"
+                result["database_error"] = str(e)
+
+            return result, 200
+
+        except Exception as e:
+            logger.error(f"[REST API] System status error: {e}")
+            return {"status": "error", "message": str(e)}, 500
 
 
 # ─────────────────────────────────────────────
@@ -162,272 +173,290 @@ _VALID_SOURCES = {'episodes', 'user', 'system'}
 _RESEARCH_LIST_LIMIT = 100
 
 
-@system_bp.route('/system/observability/records', methods=['GET'])
-@require_session
-def observability_records() -> ResponseReturnValue:
-    """Paginated record browser for episodes, user, and system memory sources."""
-    try:
-        source = request.args.get('source', '')
-        if source not in _VALID_SOURCES:
-            return jsonify({"error": "invalid source"}), 400
-
-        raw_offset = request.args.get('offset', '0')
+@system_bp.route('/system/observability/records')
+class ObservabilityRecordsResource(Resource):
+    @require_session
+    @system_bp.response(200, "OK")
+    def get(self):
+        """Paginated record browser for episodes, user, and system memory sources."""
         try:
-            offset = int(raw_offset)
-        except (ValueError, TypeError):
-            return jsonify({"error": "invalid offset"}), 400
-        if offset < 0:
-            return jsonify({"error": "invalid offset"}), 400
+            source = request.args.get('source', '')
+            if source not in _VALID_SOURCES:
+                return {"error": "invalid source"}, 400
 
-        q = (request.args.get('q', '') or '')[:200]
+            raw_offset = request.args.get('offset', '0')
+            try:
+                offset = int(raw_offset)
+            except (ValueError, TypeError):
+                return {"error": "invalid offset"}, 400
+            if offset < 0:
+                return {"error": "invalid offset"}, 400
 
-        from services.database_service import get_shared_db_service
-        db = get_shared_db_service()
+            q = (request.args.get('q', '') or '')[:200]
 
-        if source == 'episodes':
-            rows = db.fetch_all(
-                "SELECT created_at AS created, "
-                "COALESCE(last_relevant_at, created_at) AS last_accessed, "
-                "gist AS value, location_name "
-                "FROM episodes "
-                "WHERE deleted_at IS NULL "
-                "AND (? = '' OR gist LIKE ?) "
-                "ORDER BY COALESCE(last_relevant_at, created_at) DESC, created_at DESC "
-                "LIMIT ? OFFSET ?",
-                (q, f"%{q}%", _RECORDS_LIMIT, offset),
-            )
-        else:
-            kind = 'user_specific' if source == 'user' else 'system'
-            rows = db.fetch_all(
-                "SELECT first_seen_at AS created, last_accessed_at AS last_accessed, "
-                "key, value "
-                "FROM data_graph "
-                "WHERE kind = ? AND active = 1 AND deleted_at IS NULL "
-                "AND (? = '' OR key LIKE ? OR value LIKE ?) "
-                "ORDER BY last_accessed_at IS NULL, last_accessed_at DESC, first_seen_at DESC "
-                "LIMIT ? OFFSET ?",
-                (kind, q, f"%{q}%", f"%{q}%", _RECORDS_LIMIT, offset),
-            )
+            from services.database_service import get_shared_db_service
+            db = get_shared_db_service()
 
-        rows = rows or []
-        serialised = []
-        for r in rows:
-            row: dict[str, object] = {
-                'created': r['created'],
-                'last_accessed': r['last_accessed'],
-                'value': r['value'],
-            }
             if source == 'episodes':
-                row['location'] = r.get('location_name') or ''
+                rows = db.fetch_all(
+                    "SELECT created_at AS created, "
+                    "COALESCE(last_relevant_at, created_at) AS last_accessed, "
+                    "gist AS value, location_name "
+                    "FROM episodes "
+                    "WHERE deleted_at IS NULL "
+                    "AND (? = '' OR gist LIKE ?) "
+                    "ORDER BY COALESCE(last_relevant_at, created_at) DESC, created_at DESC "
+                    "LIMIT ? OFFSET ?",
+                    (q, f"%{q}%", _RECORDS_LIMIT, offset),
+                )
             else:
-                row['key'] = r['key']
-            serialised.append(row)
-        return jsonify({
-            'generated_at': _now_iso(),
-            'source': source,
-            'rows': serialised,
-            'offset': offset,
-            'limit': _RECORDS_LIMIT,
-            'returned': len(rows),
-            'has_more': len(rows) == _RECORDS_LIMIT,
-        }), 200
-    except Exception as e:
-        logger.error(f"[REST API] observability/records error: {e}")
-        return jsonify({"error": "Failed to retrieve records"}), 500
+                kind = 'user_specific' if source == 'user' else 'system'
+                rows = db.fetch_all(
+                    "SELECT first_seen_at AS created, last_accessed_at AS last_accessed, "
+                    "key, value "
+                    "FROM data_graph "
+                    "WHERE kind = ? AND active = 1 AND deleted_at IS NULL "
+                    "AND (? = '' OR key LIKE ? OR value LIKE ?) "
+                    "ORDER BY last_accessed_at IS NULL, last_accessed_at DESC, first_seen_at DESC "
+                    "LIMIT ? OFFSET ?",
+                    (kind, q, f"%{q}%", f"%{q}%", _RECORDS_LIMIT, offset),
+                )
 
-
-@system_bp.route('/system/observability/tools', methods=['GET'])
-@require_session
-def observability_tools() -> ResponseReturnValue:
-    """Tool usage counts from tool_calls — count + last_used per tool."""
-    try:
-        from services.database_service import get_shared_db_service
-        db = get_shared_db_service()
-        rows = db.fetch_all(
-            "SELECT tool_name, COUNT(*) AS count, MAX(created_at) AS last_used_at "
-            "FROM tool_calls "
-            "WHERE tool_name NOT IN ('compaction', 'tool_compaction', 'trail_compaction', "
-            "'chat_history_compactor', 'thinking') "
-            "GROUP BY tool_name "
-            "ORDER BY last_used_at DESC"
-        )
-        tools = [
-            {
-                'tool_name': r['tool_name'],
-                'count': r['count'],
-                'last_used_at': r['last_used_at'],
-            }
-            for r in (rows or [])
-        ]
-        return jsonify({'generated_at': _now_iso(), 'tools': tools}), 200
-    except Exception as e:
-        logger.error(f"[REST API] observability/tools error: {e}")
-        return jsonify({"error": "Failed to retrieve tool data"}), 500
-
-
-
-@system_bp.route('/system/observability/token-usage', methods=['GET'])
-@require_session
-def observability_token_usage() -> ResponseReturnValue:
-    """Token usage aggregated by time window, model, provider, and usage class.
-
-    Query params:
-        window: hour | day | week | month | lifetime (default: day)
-        usage_class: chat | subagent | subconscious (optional filter)
-    """
-    from services.llm_call_log_service import get_token_usage, VALID_WINDOWS
-    window = request.args.get('window', 'day')
-    if window not in VALID_WINDOWS:
-        return jsonify({'error': f"Invalid window '{window}'. Use: {', '.join(sorted(VALID_WINDOWS))}"}), 400
-    usage_class = request.args.get('usage_class') or None
-    try:
-        data = get_token_usage(window=window, usage_class=usage_class)
-        return jsonify(data), 200
-    except Exception as e:
-        logger.error(f"[REST API] observability/token-usage error: {e}")
-        return jsonify({"error": "Failed to retrieve token usage data"}), 500
-
-
-
-@system_bp.route('/system/observability/world-state', methods=['GET'])
-@require_session
-def observability_world_state() -> ResponseReturnValue:
-    """World state as seen by the ACT loop — rendered block + raw inputs."""
-    from services.world_state import world_state, _fetch_schedule_rows
-    from services.heartbeat_service import heartbeat_service
-
-    return jsonify({
-        "rendered": world_state.render(),
-        "inputs": {
-            "telemetry": heartbeat_service.read(),
-            "signals": world_state.get("signals"),
-            "schedule": _fetch_schedule_rows(),
-        },
-    }), 200
-
-
-@system_bp.route('/system/observability/compaction', methods=['GET'])
-@require_session
-def observability_compaction() -> ResponseReturnValue:
-    """Continuity-compaction synthesis for the chat ('user') channel.
-
-    Returns the durable summary the ACT loop carries forward after a
-    context-overflow compaction — the same text prepended to the
-    UserMessageProcessor prompt in place of the older turns. Read-only.
-    Returns ``{"compaction": null}`` when no compaction has run yet.
-    """
-    try:
-        from services import compaction_persistence, locale_service
-        record = compaction_persistence.get_compaction('user')
-        if not record:
-            return jsonify({'compaction': None}), 200
-        return jsonify({
-            'compaction': {
-                'summary': record['compacted_text'],
-                'compacted_up_to_id': record['compacted_up_to_id'],
-                'compacted_at': locale_service.format_date(cast(str, record['created_at']), for_ui=True),
-            },
-        }), 200
-    except Exception:
-        logger.exception("[REST API] observability/compaction error")
-        return jsonify({"error": "Failed to retrieve compaction summary"}), 500
-
-
-@system_bp.route('/system/observability/research', methods=['GET'])
-@require_session
-def observability_research() -> ResponseReturnValue:
-    """Newest-first list of proactive-research (Auto Research) runs.
-
-    Each row is one execution of the background research loop: when it ran and a
-    preview of what it surfaced. Read-only.
-    """
-    try:
-        from services import discovery_runs
-        return jsonify({
-            'generated_at': _now_iso(),
-            'runs': discovery_runs.list_runs(_RESEARCH_LIST_LIMIT),
-        }), 200
-    except Exception:
-        logger.exception("[REST API] observability/research error")
-        return jsonify({"error": "Failed to retrieve research runs"}), 500
-
-
-@system_bp.route('/system/observability/research/<int:run_id>', methods=['GET'])
-@require_session
-def observability_research_detail(run_id: int) -> ResponseReturnValue:
-    """One Auto Research run: the grounding it ran against plus its full output.
-
-    ``transcript`` is the loop's assistant output, read live from the transcript
-    by turn and joined into one blob — no tool calls, no input. 404 when the id
-    is unknown. Read-only.
-    """
-    try:
-        from services import discovery_runs
-        run = discovery_runs.get_run_detail(run_id)
-        if run is None:
-            return jsonify({"error": "not found"}), 404
-        return jsonify({'generated_at': _now_iso(), 'run': run}), 200
-    except Exception:
-        logger.exception("[REST API] observability/research detail error")
-        return jsonify({"error": "Failed to retrieve research run"}), 500
-
-
-@system_bp.route('/system/observability/write-queue', methods=['GET'])
-@require_session
-def observability_write_queue() -> ResponseReturnValue:
-    """Write queue runtime statistics.
-
-    Returns a JSON snapshot of the :class:`~services.write_queue_service.WriteQueueService`
-    singleton covering current backlog depth, completed writes, and error
-    count since process start.
-
-    Responses:
-        200: JSON object with keys ``queue_size`` (int), ``processed`` (int),
-             and ``errors`` (int).
-        500: JSON error object if the write-queue service is unavailable.
-    """
-    try:
-        from services.write_queue_service import get_write_queue
-        stats = get_write_queue().get_stats()
-        return jsonify(stats), 200
-    except Exception as e:
-        logger.error(f"[REST API] observability/write-queue error: {e}")
-        return jsonify({"error": "Failed to retrieve write queue stats"}), 500
-
-
-@system_bp.route('/system/observability/telemetry', methods=['GET'])
-@require_session
-def observability_telemetry() -> ResponseReturnValue:
-    """Telemetry event summary across all tracked event types.
-
-    Returns a per-event-type breakdown produced by the process-level
-    :class:`~services.telemetry_service.TelemetryCollector` singleton.
-    Each key in the response body corresponds to one of the seven canonical
-    telemetry event types (e.g. ``memory_recall``, ``act_loop_complete``).
-    All types are present even when no events have been recorded yet.
-
-    The response is wrapped with a ``generated_at`` ISO 8601 timestamp so
-    callers can detect a stale/cached response.
-
-    Responses:
-        200: JSON object structured as::
-
-                {
-                    "generated_at": "<ISO-8601>",
-                    "memory_recall": {"count": 42, "recent": [...]},
-                    "context_assembly": {"count": 7, "recent": [...]},
-                    ...
+            rows = rows or []
+            serialised = []
+            for r in rows:
+                row: dict[str, object] = {
+                    'created': r['created'],
+                    'last_accessed': r['last_accessed'],
+                    'value': r['value'],
                 }
+                if source == 'episodes':
+                    row['location'] = r.get('location_name') or ''
+                else:
+                    row['key'] = r['key']
+                serialised.append(row)
+            return {
+                'generated_at': _now_iso(),
+                'source': source,
+                'rows': serialised,
+                'offset': offset,
+                'limit': _RECORDS_LIMIT,
+                'returned': len(rows),
+                'has_more': len(rows) == _RECORDS_LIMIT,
+            }, 200
+        except Exception as e:
+            logger.error(f"[REST API] observability/records error: {e}")
+            return {"error": "Failed to retrieve records"}, 500
 
-        500: JSON error object if the telemetry collector is unavailable.
-    """
-    try:
-        from services.telemetry_service import get_telemetry_collector
-        summary = get_telemetry_collector().get_summary()
-        return jsonify({"generated_at": _now_iso(), **summary}), 200
-    except Exception as e:
-        logger.error(f"[REST API] observability/telemetry error: {e}")
-        return jsonify({"error": "Failed to retrieve telemetry summary"}), 500
+
+@system_bp.route('/system/observability/tools')
+class ObservabilityToolsResource(Resource):
+    @require_session
+    @system_bp.response(200, "OK")
+    def get(self):
+        """Tool usage counts from tool_calls — count + last_used per tool."""
+        try:
+            from services.database_service import get_shared_db_service
+            db = get_shared_db_service()
+            rows = db.fetch_all(
+                "SELECT tool_name, COUNT(*) AS count, MAX(created_at) AS last_used_at "
+                "FROM tool_calls "
+                "WHERE tool_name NOT IN ('compaction', 'tool_compaction', 'trail_compaction', "
+                "'chat_history_compactor', 'thinking') "
+                "GROUP BY tool_name "
+                "ORDER BY last_used_at DESC"
+            )
+            tools = [
+                {
+                    'tool_name': r['tool_name'],
+                    'count': r['count'],
+                    'last_used_at': r['last_used_at'],
+                }
+                for r in (rows or [])
+            ]
+            return {'generated_at': _now_iso(), 'tools': tools}, 200
+        except Exception as e:
+            logger.error(f"[REST API] observability/tools error: {e}")
+            return {"error": "Failed to retrieve tool data"}, 500
+
+
+
+@system_bp.route('/system/observability/token-usage')
+class ObservabilityTokenUsageResource(Resource):
+    @require_session
+    @system_bp.response(200, "OK")
+    def get(self):
+        """Token usage aggregated by time window, model, provider, and usage class.
+
+        Query params:
+            window: hour | day | week | month | lifetime (default: day)
+            usage_class: chat | subagent | subconscious (optional filter)
+        """
+        from services.llm_call_log_service import get_token_usage, VALID_WINDOWS
+        window = request.args.get('window', 'day')
+        if window not in VALID_WINDOWS:
+            return {'error': f"Invalid window '{window}'. Use: {', '.join(sorted(VALID_WINDOWS))}"}, 400
+        usage_class = request.args.get('usage_class') or None
+        try:
+            data = get_token_usage(window=window, usage_class=usage_class)
+            return data, 200
+        except Exception as e:
+            logger.error(f"[REST API] observability/token-usage error: {e}")
+            return {"error": "Failed to retrieve token usage data"}, 500
+
+
+
+@system_bp.route('/system/observability/world-state')
+class ObservabilityWorldStateResource(Resource):
+    @require_session
+    @system_bp.response(200, "OK")
+    def get(self):
+        """World state as seen by the ACT loop — rendered block + raw inputs."""
+        from services.world_state import world_state, _fetch_schedule_rows
+        from services.heartbeat_service import heartbeat_service
+
+        return {
+            "rendered": world_state.render(),
+            "inputs": {
+                "telemetry": heartbeat_service.read(),
+                "signals": world_state.get("signals"),
+                "schedule": _fetch_schedule_rows(),
+            },
+        }, 200
+
+
+@system_bp.route('/system/observability/compaction')
+class ObservabilityCompactionResource(Resource):
+    @require_session
+    @system_bp.response(200, "OK")
+    def get(self):
+        """Continuity-compaction synthesis for the chat ('user') channel.
+
+        Returns the durable summary the ACT loop carries forward after a
+        context-overflow compaction — the same text prepended to the
+        UserMessageProcessor prompt in place of the older turns. Read-only.
+        Returns ``{"compaction": null}`` when no compaction has run yet.
+        """
+        try:
+            from services import compaction_persistence, locale_service
+            record = compaction_persistence.get_compaction('user')
+            if not record:
+                return {'compaction': None}, 200
+            return {
+                'compaction': {
+                    'summary': record['compacted_text'],
+                    'compacted_up_to_id': record['compacted_up_to_id'],
+                    'compacted_at': locale_service.format_date(cast(str, record['created_at']), for_ui=True),
+                },
+            }, 200
+        except Exception:
+            logger.exception("[REST API] observability/compaction error")
+            return {"error": "Failed to retrieve compaction summary"}, 500
+
+
+@system_bp.route('/system/observability/research')
+class ObservabilityResearchResource(Resource):
+    @require_session
+    @system_bp.response(200, "OK")
+    def get(self):
+        """Newest-first list of proactive-research (Auto Research) runs.
+
+        Each row is one execution of the background research loop: when it ran and a
+        preview of what it surfaced. Read-only.
+        """
+        try:
+            from services import discovery_runs
+            return {
+                'generated_at': _now_iso(),
+                'runs': discovery_runs.list_runs(_RESEARCH_LIST_LIMIT),
+            }, 200
+        except Exception:
+            logger.exception("[REST API] observability/research error")
+            return {"error": "Failed to retrieve research runs"}, 500
+
+
+@system_bp.route('/system/observability/research/<int:run_id>')
+class ObservabilityResearchDetailResource(Resource):
+    @require_session
+    @system_bp.response(200, "OK")
+    def get(self, run_id: int):
+        """One Auto Research run: the grounding it ran against plus its full output.
+
+        ``transcript`` is the loop's assistant output, read live from the transcript
+        by turn and joined into one blob — no tool calls, no input. 404 when the id
+        is unknown. Read-only.
+        """
+        try:
+            from services import discovery_runs
+            run = discovery_runs.get_run_detail(run_id)
+            if run is None:
+                return {"error": "not found"}, 404
+            return {'generated_at': _now_iso(), 'run': run}, 200
+        except Exception:
+            logger.exception("[REST API] observability/research detail error")
+            return {"error": "Failed to retrieve research run"}, 500
+
+
+@system_bp.route('/system/observability/write-queue')
+class ObservabilityWriteQueueResource(Resource):
+    @require_session
+    @system_bp.response(200, "OK")
+    def get(self):
+        """Write queue runtime statistics.
+
+        Returns a JSON snapshot of the :class:`~services.write_queue_service.WriteQueueService`
+        singleton covering current backlog depth, completed writes, and error
+        count since process start.
+
+        Responses:
+            200: JSON object with keys ``queue_size`` (int), ``processed`` (int),
+                 and ``errors`` (int).
+            500: JSON error object if the write-queue service is unavailable.
+        """
+        try:
+            from services.write_queue_service import get_write_queue
+            stats = get_write_queue().get_stats()
+            return stats, 200
+        except Exception as e:
+            logger.error(f"[REST API] observability/write-queue error: {e}")
+            return {"error": "Failed to retrieve write queue stats"}, 500
+
+
+@system_bp.route('/system/observability/telemetry')
+class ObservabilityTelemetryResource(Resource):
+    @require_session
+    @system_bp.response(200, "OK")
+    def get(self):
+        """Telemetry event summary across all tracked event types.
+
+        Returns a per-event-type breakdown produced by the process-level
+        :class:`~services.telemetry_service.TelemetryCollector` singleton.
+        Each key in the response body corresponds to one of the seven canonical
+        telemetry event types (e.g. ``memory_recall``, ``act_loop_complete``).
+        All types are present even when no events have been recorded yet.
+
+        The response is wrapped with a ``generated_at`` ISO 8601 timestamp so
+        callers can detect a stale/cached response.
+
+        Responses:
+            200: JSON object structured as::
+
+                    {
+                        "generated_at": "<ISO-8601>",
+                        "memory_recall": {"count": 42, "recent": [...]},
+                        "context_assembly": {"count": 7, "recent": [...]},
+                        ...
+                    }
+
+            500: JSON error object if the telemetry collector is unavailable.
+        """
+        try:
+            from services.telemetry_service import get_telemetry_collector
+            summary = get_telemetry_collector().get_summary()
+            return {"generated_at": _now_iso(), **summary}, 200
+        except Exception as e:
+            logger.error(f"[REST API] observability/telemetry error: {e}")
+            return {"error": "Failed to retrieve telemetry summary"}, 500
 
 
 _LOG_TAIL_BYTES = 256 * 1024   # 256 KB tail read — never loads the full file
@@ -469,113 +498,122 @@ def _tail_error_lines() -> list[dict[str, object]]:
     return errors[:_ERROR_CAP]
 
 
-@system_bp.route('/system/observability/errors', methods=['GET'])
-@require_session
-def observability_errors() -> ResponseReturnValue:
-    """Recent ERROR and CRITICAL log lines from /tmp/chalie.log, newest first.
+@system_bp.route('/system/observability/errors')
+class ObservabilityErrorsResource(Resource):
+    @require_session
+    @system_bp.response(200, "OK")
+    def get(self):
+        """Recent ERROR and CRITICAL log lines from /tmp/chalie.log, newest first.
 
-    Reads only the last ~256 KB of the log file to avoid loading unbounded content.
-    Written by utils.logger.Logger.start() (backend/utils/logger.py).
-    """
-    try:
-        return jsonify({"generated_at": _now_iso(), "errors": _tail_error_lines()}), 200
-    except Exception as e:
-        logger.error(f"[REST API] observability/errors error: {e}")
-        return jsonify({"error": "Failed to retrieve error log"}), 500
+        Reads only the last ~256 KB of the log file to avoid loading unbounded content.
+        Written by utils.logger.Logger.start() (backend/utils/logger.py).
+        """
+        try:
+            return {"generated_at": _now_iso(), "errors": _tail_error_lines()}, 200
+        except Exception as e:
+            logger.error(f"[REST API] observability/errors error: {e}")
+            return {"error": "Failed to retrieve error log"}, 500
 
 
 # ──────────────────────────────────────────────
 # In-place update endpoints
 # ──────────────────────────────────────────────
 
-@system_bp.route('/system/update/check', methods=['GET'])
-@require_session
-def update_check() -> ResponseReturnValue:
-    try:
-        from services.app_update_service import AppUpdateService
-        info = AppUpdateService().check_for_update()
-        return jsonify(info), 200
-    except Exception as e:
-        logger.error(f"[REST API] update/check error: {e}")
-        return jsonify({"error": "Failed to check for updates"}), 500
+@system_bp.route('/system/update/check')
+class UpdateCheckResource(Resource):
+    @require_session
+    @system_bp.response(200, "OK")
+    def get(self):
+        try:
+            from services.app_update_service import AppUpdateService
+            info = AppUpdateService().check_for_update()
+            return info, 200
+        except Exception as e:
+            logger.error(f"[REST API] update/check error: {e}")
+            return {"error": "Failed to check for updates"}, 500
 
 
-@system_bp.route('/system/update/apply', methods=['POST'])
-@require_session
-def update_apply() -> ResponseReturnValue:
-    try:
-        from services.app_update_service import AppUpdateService
-        data = request.get_json(silent=True) or {}
-        tag = data.get('tag')
-        if not tag:
-            return jsonify({"ok": False, "message": "Missing 'tag' parameter"}), 400
+@system_bp.route('/system/update/apply')
+class UpdateApplyResource(Resource):
+    @require_session
+    @system_bp.response(200, "OK")
+    def post(self):
+        try:
+            from services.app_update_service import AppUpdateService
+            data = request.get_json(silent=True) or {}
+            tag = data.get('tag')
+            if not tag:
+                return {"ok": False, "message": "Missing 'tag' parameter"}, 400
 
-        svc = AppUpdateService()
-        result = svc.apply_update(tag)
+            svc = AppUpdateService()
+            result = svc.apply_update(tag)
 
-        if result.get('ok'):
-            svc.request_restart()
+            if result.get('ok'):
+                svc.request_restart()
 
-        return jsonify(result), 200
-    except Exception as e:
-        logger.error(f"[REST API] update/apply error: {e}")
-        return jsonify({"ok": False, "message": f"Update failed: {e}"}), 500
+            return result, 200
+        except Exception as e:
+            logger.error(f"[REST API] update/apply error: {e}")
+            return {"ok": False, "message": f"Update failed: {e}"}, 500
 
 
 # Settings endpoints
 # ──────────────────────────────────────────────
 
-@system_bp.route('/system/context-usage', methods=['GET'])
-@require_session
-def get_context_usage() -> ResponseReturnValue:
-    """Last user-turn request size + context window for the composer indicator.
+@system_bp.route('/system/context-usage')
+class ContextUsageResource(Resource):
+    @require_session
+    @system_bp.response(200, "OK")
+    def get(self):
+        """Last user-turn request size + context window for the composer indicator.
 
-    ``last_request_tokens`` is the provider-reported ``tokens_input`` of the most
-    recent main-conversation call (``job_name='user:user'`` — NOT every
-    usage_class='chat' row, which would also include the thinking pre-pass and
-    each web_search/web_browse delegate iteration, making the indicator
-    oscillate); ``context_window`` is the selected provider's ``max_tokens``.
-    Either is null when unknown — the endpoint never raises so a transient miss
-    can't break the composer.
-    """
-    from services.llm_call_log_service import get_last_chat_request_tokens
-    from services.provider_cache_service import ProviderCacheService
-    last = get_last_chat_request_tokens()
-    selected = ProviderCacheService.get_selected_provider() or {}
-    return jsonify({
-        "last_request_tokens": last,
-        "context_window": selected.get('max_tokens'),
-    })
-
-
-@system_bp.route('/system/settings/<key>', methods=['GET'])
-@require_session
-def get_setting(key: str) -> ResponseReturnValue:
-    from services.settings_service import SettingsService
-    from services.database_service import get_shared_db_service
-    try:
-        svc = SettingsService(get_shared_db_service())
-        value = svc.get(key)
-        return jsonify({"key": key, "value": value})
-    except Exception as e:
-        logger.error(f"[REST API] get setting error: {e}")
-        return jsonify({"error": "Failed to get setting"}), 500
+        ``last_request_tokens`` is the provider-reported ``tokens_input`` of the most
+        recent main-conversation call (``job_name='user:user'`` — NOT every
+        usage_class='chat' row, which would also include the thinking pre-pass and
+        each web_search/web_browse delegate iteration, making the indicator
+        oscillate); ``context_window`` is the selected provider's ``max_tokens``.
+        Either is null when unknown — the endpoint never raises so a transient miss
+        can't break the composer.
+        """
+        from services.llm_call_log_service import get_last_chat_request_tokens
+        from services.provider_cache_service import ProviderCacheService
+        last = get_last_chat_request_tokens()
+        selected = ProviderCacheService.get_selected_provider() or {}
+        return {
+            "last_request_tokens": last,
+            "context_window": selected.get('max_tokens'),
+        }
 
 
-@system_bp.route('/system/settings/<key>', methods=['PUT'])
-@require_session
-def set_setting(key: str) -> ResponseReturnValue:
-    from services.settings_service import SettingsService
-    from services.database_service import get_shared_db_service
-    data = request.get_json(silent=True) or {}
-    value = data.get('value', '')
-    try:
-        svc = SettingsService(get_shared_db_service())
-        if not value:
-            svc.delete(key)
-        else:
-            svc.set(key, str(value))
-        return jsonify({"key": key, "value": value or None})
-    except Exception as e:
-        logger.error(f"[REST API] set setting error: {e}")
-        return jsonify({"error": "Failed to save setting"}), 500
+@system_bp.route('/system/settings/<key>')
+class SettingsResource(Resource):
+    @require_session
+    @system_bp.response(200, "OK")
+    def get(self, key: str):
+        from services.settings_service import SettingsService
+        from services.database_service import get_shared_db_service
+        try:
+            svc = SettingsService(get_shared_db_service())
+            value = svc.get(key)
+            return {"key": key, "value": value}
+        except Exception as e:
+            logger.error(f"[REST API] get setting error: {e}")
+            return {"error": "Failed to get setting"}, 500
+
+    @require_session
+    @system_bp.response(200, "OK")
+    def put(self, key: str):
+        from services.settings_service import SettingsService
+        from services.database_service import get_shared_db_service
+        data = request.get_json(silent=True) or {}
+        value = data.get('value', '')
+        try:
+            svc = SettingsService(get_shared_db_service())
+            if not value:
+                svc.delete(key)
+            else:
+                svc.set(key, str(value))
+            return {"key": key, "value": value or None}
+        except Exception as e:
+            logger.error(f"[REST API] set setting error: {e}")
+            return {"error": "Failed to save setting"}, 500

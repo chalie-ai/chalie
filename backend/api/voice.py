@@ -30,11 +30,11 @@ import tempfile
 import threading
 from typing import TYPE_CHECKING, cast
 
-from flask import Blueprint, Response, request, jsonify
+from flask import Response, request
+from flask_restx import Namespace, Resource
 
 if TYPE_CHECKING:
     from typing import Protocol
-    from flask.typing import ResponseReturnValue
 
     class _KokoroModel(Protocol):
         def create(self, text: str, voice: str, speed: float, lang: str) -> "tuple[object, int]": ...
@@ -46,7 +46,7 @@ from .auth import require_auth
 
 logger = logging.getLogger(__name__)
 
-voice_bp = Blueprint("voice", __name__)
+voice_bp = Namespace("voice", description="Voice (STT + TTS) operations")
 
 # ── Constants (hardcoded — no env vars) ─────────────────────────────────────
 
@@ -121,21 +121,21 @@ def _voice_unavailable_payload() -> "dict[str, object]":
     }
 
 
-def _loading_or_missing_response() -> "ResponseReturnValue":
+def _loading_or_missing_response() -> "tuple[dict, int]":
     """503 with a precise ``reason`` and ``Retry-After`` so the client can decide
     whether to auto-retry (transient cold-start) or give up (missing files)."""
     missing = _missing_model_files()
     if missing:
-        return jsonify({
+        return {
             "error": "Voice models not installed",
             "reason": "models_missing",
             "missing": missing,
             "hint": "Enable voice in Settings to download voice models.",
-        }), 503
-    return jsonify({
+        }, 503
+    return {
         "error": "Models still loading",
         "reason": "loading",
-    }), 503, {"Retry-After": "3"}
+    }, 503
 
 
 def _missing_model_files() -> list[str]:
@@ -594,135 +594,134 @@ def _transcribe_sync(data: bytes) -> str:
 
 # ── Routes ──────────────────────────────────────────────────────────────────
 
-@voice_bp.route("/voice/health", methods=["GET"])
-@require_auth
-def voice_health() -> "ResponseReturnValue":
-    """Voice service health check.
+@voice_bp.route("/voice/health")
+@voice_bp.response(200, "Health status")
+class VoiceHealthResource(Resource):
+    @require_auth
+    def get(self):
+        """Voice service health check."""
+        if not _VOICE_AVAILABLE:
+            return {
+                "status": "unavailable",
+                "reason": "deps_missing",
+                "missing": list(_VOICE_MISSING_MODULES),
+                "hint": _VOICE_INSTALL_HINT,
+            }, 200
 
-    Returns ``status`` ∈ {``ok``, ``loading``, ``unavailable``}. When models
-    or deps are missing the response also carries ``reason`` + ``missing`` +
-    ``hint`` so the UI can surface actionable install guidance.
-    """
-    if not _VOICE_AVAILABLE:
-        return jsonify({
-            "status": "unavailable",
-            "reason": "deps_missing",
-            "missing": list(_VOICE_MISSING_MODULES),
-            "hint": _VOICE_INSTALL_HINT,
-        }), 200
+        if _models_loaded:
+            return {"status": "ok"}, 200
+        if _models_loading:
+            return {"status": "loading"}, 200
 
-    if _models_loaded:
-        return jsonify({"status": "ok"}), 200
-    if _models_loading:
-        return jsonify({"status": "loading"}), 200
+        missing_files = _missing_model_files()
+        if missing_files:
+            return {
+                "status": "unavailable",
+                "reason": "models_missing",
+                "missing": missing_files,
+                "hint": "Enable voice in Settings to download voice models.",
+            }, 200
 
-    missing_files = _missing_model_files()
-    if missing_files:
-        return jsonify({
-            "status": "unavailable",
-            "reason": "models_missing",
-            "missing": missing_files,
-            "hint": "Enable voice in Settings to download voice models.",
-        }), 200
-
-    threading.Thread(target=_ensure_models, daemon=True).start()
-    return jsonify({"status": "loading"}), 200
+        threading.Thread(target=_ensure_models, daemon=True).start()
+        return {"status": "loading"}, 200
 
 
-@voice_bp.route("/voice/synthesize", methods=["POST"])
-@require_auth
-def voice_synthesize() -> "ResponseReturnValue":
-    if not _VOICE_AVAILABLE:
-        return jsonify(_voice_unavailable_payload()), 503
+@voice_bp.route("/voice/synthesize")
+@voice_bp.response(200, "Audio WAV")
+@voice_bp.response(400, "Missing text")
+@voice_bp.response(503, "Voice unavailable")
+class VoiceSynthesizeResource(Resource):
+    @require_auth
+    def post(self):
+        if not _VOICE_AVAILABLE:
+            return _voice_unavailable_payload(), 503
 
-    if not _ensure_models():
-        return _loading_or_missing_response()
+        if not _ensure_models():
+            return _loading_or_missing_response()
 
-    data = request.get_json(silent=True) or {}
-    text = _clean_for_tts((data.get("text") or "").strip())
+        data = request.get_json(silent=True) or {}
+        text = _clean_for_tts((data.get("text") or "").strip())
 
-    if not text:
-        return jsonify({"error": "Text is required"}), 400
+        if not text:
+            return {"error": "Text is required"}, 400
 
-    chunks = _segment_for_tts(text)
-    logger.info(
-        "[Voice] synthesize: len=%d chunks=%d head=%r",
-        len(text), len(chunks), text[:80],
-    )
+        chunks = _segment_for_tts(text)
+        logger.info(
+            "[Voice] synthesize: len=%d chunks=%d head=%r",
+            len(text), len(chunks), text[:80],
+        )
 
-    try:
-        if len(chunks) == 1:
-            with _tts_lock:
-                samples, sr = cast("_KokoroModel", _kokoro).create(
-                    chunks[0], voice=TTS_VOICE, speed=1.0, lang=TTS_LANG,
-                )
-        else:
-            import numpy as np
-            all_samples: list[object] = []
-            sr = None
-            with _tts_lock:
-                for i, chunk in enumerate(chunks):
-                    chunk_samples, chunk_sr = cast("_KokoroModel", _kokoro).create(
-                        chunk, voice=TTS_VOICE, speed=1.0, lang=TTS_LANG,
-                    )
-                    if sr is None:
-                        sr = chunk_sr
-                    all_samples.append(chunk_samples)
-                    if i < len(chunks) - 1:
-                        pad_len = int(_TTS_SILENCE_PAD_SECONDS * sr)
-                        all_samples.append(np.zeros(pad_len, dtype=cast("np.ndarray[tuple[int], np.dtype[np.float32]]", chunk_samples).dtype))
-            samples = np.concatenate(cast("list[np.ndarray[tuple[int], np.dtype[np.float32]]]", all_samples))
-    except Exception as e:
-        logger.error("[Voice] TTS synthesis failed: %s", e)
-        return jsonify({"error": "TTS synthesis failed"}), 500
-
-    wav_bytes = _audio_to_wav_bytes(samples, cast(int, sr))
-    return Response(
-        wav_bytes,
-        mimetype="audio/wav",
-        headers={
-            "Content-Length": str(len(wav_bytes)),
-            "Cache-Control": "no-cache",
-        },
-    )
-
-
-@voice_bp.route("/voice/transcribe", methods=["POST"])
-@require_auth
-def voice_transcribe() -> "ResponseReturnValue":
-    if not _VOICE_AVAILABLE:
-        return jsonify(_voice_unavailable_payload()), 503
-
-    # Validate the request shape BEFORE waiting on model load — a malformed
-    # upload should get a 400 instantly instead of stalling on cold-start
-    # phonemizer/ONNX initialisation.
-    if "file" not in request.files:
-        return jsonify({"error": "No file uploaded"}), 400
-
-    file = request.files["file"]
-    data = file.read()
-
-    if not data:
-        return jsonify({"error": "Empty file"}), 400
-
-    duration = _wav_duration_seconds(data)
-    if duration <= 0.0:
-        # _wav_duration_seconds returns 0.0 on malformed/non-WAV input.
-        # Reject before we hand the bytes to Moonshine so the user gets a
-        # clear error instead of a downstream load_audio crash.
-        return jsonify({"error": "Malformed or unsupported WAV file"}), 400
-    if duration > MAX_AUDIO_SECONDS:
-        return jsonify({
-            "error": f"Audio exceeds {MAX_AUDIO_SECONDS}s limit ({duration:.1f}s)"
-        }), 400
-
-    if not _ensure_models():
-        return _loading_or_missing_response()
-
-    with _stt_lock:
         try:
-            text = _transcribe_sync(data)
-            return jsonify({"text": text})
+            if len(chunks) == 1:
+                with _tts_lock:
+                    samples, sr = cast("_KokoroModel", _kokoro).create(
+                        chunks[0], voice=TTS_VOICE, speed=1.0, lang=TTS_LANG,
+                    )
+            else:
+                import numpy as np
+                all_samples: list[object] = []
+                sr = None
+                with _tts_lock:
+                    for i, chunk in enumerate(chunks):
+                        chunk_samples, chunk_sr = cast("_KokoroModel", _kokoro).create(
+                            chunk, voice=TTS_VOICE, speed=1.0, lang=TTS_LANG,
+                        )
+                        if sr is None:
+                            sr = chunk_sr
+                        all_samples.append(chunk_samples)
+                        if i < len(chunks) - 1:
+                            pad_len = int(_TTS_SILENCE_PAD_SECONDS * sr)
+                            all_samples.append(np.zeros(pad_len, dtype=cast("np.ndarray[tuple[int], np.dtype[np.float32]]", chunk_samples).dtype))
+                samples = np.concatenate(cast("list[np.ndarray[tuple[int], np.dtype[np.float32]]]", all_samples))
         except Exception as e:
-            logger.error("[Voice] STT error: %s", e)
-            return jsonify({"error": "Transcription failed"}), 500
+            logger.error("[Voice] TTS synthesis failed: %s", e)
+            return {"error": "TTS synthesis failed"}, 500
+
+        wav_bytes = _audio_to_wav_bytes(samples, cast(int, sr))
+        return Response(
+            wav_bytes,
+            mimetype="audio/wav",
+            headers={
+                "Content-Length": str(len(wav_bytes)),
+                "Cache-Control": "no-cache",
+            },
+        )
+
+
+@voice_bp.route("/voice/transcribe")
+@voice_bp.response(200, "Transcription text")
+@voice_bp.response(400, "Invalid upload")
+@voice_bp.response(503, "Voice unavailable")
+class VoiceTranscribeResource(Resource):
+    @require_auth
+    def post(self):
+        if not _VOICE_AVAILABLE:
+            return _voice_unavailable_payload(), 503
+
+        if "file" not in request.files:
+            return {"error": "No file uploaded"}, 400
+
+        file = request.files["file"]
+        data = file.read()
+
+        if not data:
+            return {"error": "Empty file"}, 400
+
+        duration = _wav_duration_seconds(data)
+        if duration <= 0.0:
+            return {"error": "Malformed or unsupported WAV file"}, 400
+        if duration > MAX_AUDIO_SECONDS:
+            return {
+                "error": f"Audio exceeds {MAX_AUDIO_SECONDS}s limit ({duration:.1f}s)"
+            }, 400
+
+        if not _ensure_models():
+            return _loading_or_missing_response()
+
+        with _stt_lock:
+            try:
+                text = _transcribe_sync(data)
+                return {"text": text}
+            except Exception as e:
+                logger.error("[Voice] STT error: %s", e)
+                return {"error": "Transcription failed"}, 500

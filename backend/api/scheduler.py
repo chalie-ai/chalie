@@ -15,21 +15,20 @@ import logging
 from datetime import datetime
 from typing import TYPE_CHECKING, cast
 
-from flask import Blueprint, jsonify, request
+from flask import request
 
+from flask_restx import Namespace, Resource
 from .auth import require_session
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
-
-    from flask.typing import ResponseReturnValue
 
 logger = logging.getLogger(__name__)
 
 _ERR_INTERNAL = "Internal server error"
 _ERR_NOT_PENDING = "Not found or item is not pending"
 
-scheduler_bp = Blueprint("scheduler", __name__)
+scheduler_bp = Namespace("scheduler", description="Scheduled item management")
 
 _VALID_STATUSES = {"pending", "fired", "failed", "cancelled"}
 _VALID_TYPES = {"notification", "prompt"}
@@ -152,350 +151,350 @@ def _row_to_dict(row: "Iterable[object]", cols: "list[str]") -> "dict[str, objec
 # Routes
 # ---------------------------------------------------------------------------
 
-@scheduler_bp.route("/scheduler", methods=["GET"])
-@require_session
-def list_scheduler() -> "ResponseReturnValue":
-    """List scheduled items with optional status filter and pagination."""
-    status_filter = request.args.get("status", "all").strip()
-    include_hidden = request.args.get("include_hidden", "").lower() == "true"
-    try:
-        limit = min(int(request.args.get("limit", 50)), 200)
-        offset = max(int(request.args.get("offset", 0)), 0)
-    except (ValueError, TypeError):
-        return jsonify({"error": "limit and offset must be integers"}), 400
+@scheduler_bp.route("/scheduler")
+@scheduler_bp.response(200, "List of scheduled items")
+@scheduler_bp.response(201, "Item created")
+class SchedulerListResource(Resource):
+    @require_session
+    def get(self):
+        """List scheduled items with optional status filter and pagination."""
+        status_filter = request.args.get("status", "all").strip()
+        include_hidden = request.args.get("include_hidden", "").lower() == "true"
+        try:
+            limit = min(int(request.args.get("limit", 50)), 200)
+            offset = max(int(request.args.get("offset", 0)), 0)
+        except (ValueError, TypeError):
+            return {"error": "limit and offset must be integers"}, 400
 
-    try:
-        from services.database_service import get_shared_db_service
-        db = get_shared_db_service()
+        try:
+            from services.database_service import get_shared_db_service
+            db = get_shared_db_service()
 
-        cols = ["id", "item_type", "message", "due_at", "recurrence",
-                "window_start", "window_end", "status", "channel",
-                "created_by_session", "created_at", "last_fired_at", "group_id", "is_prompt",
-                "source", "external_uid"]
+            cols = ["id", "item_type", "message", "due_at", "recurrence",
+                    "window_start", "window_end", "status", "channel",
+                    "created_by_session", "created_at", "last_fired_at", "group_id", "is_prompt",
+                    "source", "external_uid"]
 
-        conditions: list[str] = []
-        params: list[object] = []
+            conditions: list[str] = []
+            params: list[object] = []
 
-        if status_filter != "all":
-            if status_filter not in _VALID_STATUSES:
-                return jsonify({"error": f"status must be one of: all, {', '.join(sorted(_VALID_STATUSES))}"}), 400
-            conditions.append("status = ?")
-            params.append(status_filter)
+            if status_filter != "all":
+                if status_filter not in _VALID_STATUSES:
+                    return {"error": f"status must be one of: all, {', '.join(sorted(_VALID_STATUSES))}"}, 400
+                conditions.append("status = ?")
+                params.append(status_filter)
 
-        if not include_hidden:
-            conditions.append("COALESCE(hidden, 0) = 0")
+            if not include_hidden:
+                conditions.append("COALESCE(hidden, 0) = 0")
 
-        where_clause = ("WHERE " + " AND ".join(conditions)) if conditions else ""
+            where_clause = ("WHERE " + " AND ".join(conditions)) if conditions else ""
 
-        with db.connection() as conn:
-            cursor = conn.cursor()
+            with db.connection() as conn:
+                cursor = conn.cursor()
 
-            # Total count
-            cursor.execute(
-                f"SELECT COUNT(*) FROM scheduled_items {where_clause}",
-                params
-            )
-            total = cursor.fetchone()[0]
-
-            # Ordered results: pending first, then by due_at DESC
-            cursor.execute(
-                f"""
-                SELECT {', '.join(cols)}
-                FROM scheduled_items
-                {where_clause}
-                ORDER BY
-                    CASE WHEN status = 'pending' THEN 0 ELSE 1 END,
-                    due_at DESC
-                LIMIT ? OFFSET ?
-                """,
-                params + [limit, offset]
-            )
-            rows = cursor.fetchall()
-
-        items = [_serialize_item(_row_to_dict(r, cols)) for r in rows]
-        return jsonify({"items": items, "total": total, "limit": limit, "offset": offset})
-
-    except Exception as e:
-        logger.error(f"[SCHEDULER API] list error: {e}")
-        return jsonify({"error": _ERR_INTERNAL}), 500
-
-
-@scheduler_bp.route("/scheduler", methods=["POST"])
-@require_session
-def create_scheduler() -> "ResponseReturnValue":
-    """Create a new scheduled item."""
-    data = request.get_json(silent=True) or {}
-    clean, err = _validate_item(data, require_future=True)
-    if err:
-        return jsonify({"error": err}), 400
-
-    item_id = uuid.uuid4().hex[:8]
-    from services.time_utils import utc_now
-    now = utc_now()
-
-    try:
-        from services.database_service import get_shared_db_service
-        db = get_shared_db_service()
-
-        cols = ["id", "item_type", "message", "due_at", "recurrence",
-                "window_start", "window_end", "status", "channel",
-                "created_by_session", "created_at", "last_fired_at", "group_id", "is_prompt"]
-
-        with db.connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute(
-                """
-                INSERT INTO scheduled_items
-                  (id, item_type, message, due_at, recurrence,
-                   window_start, window_end, status, channel,
-                   created_by_session, created_at, group_id, is_prompt)
-                VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?)
-                """,
-                (
-                    item_id,
-                    cast("dict[str, object]", clean)["item_type"],
-                    cast("dict[str, object]", clean)["message"],
-                    cast(datetime, cast("dict[str, object]", clean)["due_at"]).isoformat(),
-                    cast("dict[str, object]", clean)["recurrence"],
-                    cast("dict[str, object]", clean)["window_start"],
-                    cast("dict[str, object]", clean)["window_end"],
-                    data.get("channel", "general"),
-                    None,  # created_by_session — not available in dashboard context
-                    now.isoformat(),
-                    item_id,  # group_id = own id (root of a new series)
-                    cast("dict[str, object]", clean)["is_prompt"],
+                cursor.execute(
+                    f"SELECT COUNT(*) FROM scheduled_items {where_clause}",
+                    params
                 )
-            )
+                total = cursor.fetchone()[0]
 
-            # SELECT back the inserted row (SQLite has no RETURNING)
-            cursor.execute(
-                f"SELECT {', '.join(cols)} FROM scheduled_items WHERE id = ?",
-                (item_id,)
-            )
-            row = cursor.fetchone()
-            conn.commit()
+                cursor.execute(
+                    f"""
+                    SELECT {', '.join(cols)}
+                    FROM scheduled_items
+                    {where_clause}
+                    ORDER BY
+                        CASE WHEN status = 'pending' THEN 0 ELSE 1 END,
+                        due_at DESC
+                    LIMIT ? OFFSET ?
+                    """,
+                    params + [limit, offset]
+                )
+                rows = cursor.fetchall()
 
-        # Embed for semantic world state retrieval — fire-and-forget background thread
-        # (non-fatal: world state salience degrades gracefully without embedding)
-        def _embed() -> None:
-            try:
-                from services.scheduler_service import embed_scheduled_item
-                embed_scheduled_item(item_id, cast(str, cast("dict[str, object]", clean)["message"]), db)
-            except Exception as emb_err:
-                logger.warning(f"[SCHEDULER API] Embedding failed (non-fatal): {emb_err}")
-        import threading
-        threading.Thread(target=_embed, daemon=True, name="scheduler-embed").start()
+            items = [_serialize_item(_row_to_dict(r, cols)) for r in rows]
+            return {"items": items, "total": total, "limit": limit, "offset": offset}
 
-        item = _serialize_item(_row_to_dict(row, cols))
-        return jsonify({"item": item}), 201
+        except Exception as e:
+            logger.error(f"[SCHEDULER API] list error: {e}")
+            return {"error": _ERR_INTERNAL}, 500
 
-    except Exception as e:
-        logger.error(f"[SCHEDULER API] create error: {e}")
-        return jsonify({"error": _ERR_INTERNAL}), 500
-
-
-@scheduler_bp.route("/scheduler/history", methods=["DELETE"])
-@require_session
-def prune_history() -> "ResponseReturnValue":
-    """Delete fired/failed/cancelled items older than N days (default 30)."""
-    try:
-        older_than_days = max(int(request.args.get("older_than_days", 30)), 1)
-    except (ValueError, TypeError):
-        return jsonify({"error": "older_than_days must be a positive integer"}), 400
-
-    try:
-        from services.database_service import get_shared_db_service
-        db = get_shared_db_service()
-
-        with db.connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute(
-                """
-                DELETE FROM scheduled_items
-                WHERE status IN ('fired', 'failed', 'cancelled')
-                  AND created_at < datetime('now', ? || ' days')
-                """,
-                (str(-older_than_days),)
-            )
-            deleted = cursor.rowcount
-            conn.commit()
-
-        return jsonify({"deleted": deleted})
-
-    except Exception as e:
-        logger.error(f"[SCHEDULER API] prune history error: {e}")
-        return jsonify({"error": _ERR_INTERNAL}), 500
-
-
-@scheduler_bp.route("/scheduler/group/<group_id>", methods=["GET"])
-@require_session
-def get_scheduler_group(group_id: str) -> "ResponseReturnValue":
-    """Return fire history for a recurring schedule group (newest first, max 50)."""
-    try:
-        limit = min(int(request.args.get("limit", 10)), 50)
-    except (ValueError, TypeError):
-        limit = 10
-
-    try:
-        from services.database_service import get_shared_db_service
-        db = get_shared_db_service()
-
-        cols = ["id", "item_type", "message", "due_at", "recurrence",
-                "window_start", "window_end", "status", "channel",
-                "created_by_session", "created_at", "last_fired_at", "group_id", "is_prompt"]
-
-        with db.connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute(
-                f"""
-                SELECT {', '.join(cols)}
-                FROM scheduled_items
-                WHERE group_id = ?
-                ORDER BY due_at DESC
-                LIMIT ?
-                """,
-                (group_id, limit)
-            )
-            rows = cursor.fetchall()
-
-        items = [_serialize_item(_row_to_dict(r, cols)) for r in rows]
-        return jsonify({"items": items})
-
-    except Exception as e:
-        logger.error(f"[SCHEDULER API] group fires error: {e}")
-        return jsonify({"error": _ERR_INTERNAL}), 500
-
-
-@scheduler_bp.route("/scheduler/<item_id>", methods=["GET"])
-@require_session
-def get_scheduler_item(item_id: str) -> "ResponseReturnValue":
-    """Fetch a single scheduled item by ID."""
-    try:
-        from services.database_service import get_shared_db_service
-        db = get_shared_db_service()
-
-        cols = ["id", "item_type", "message", "due_at", "recurrence",
-                "window_start", "window_end", "status", "channel",
-                "created_by_session", "created_at", "last_fired_at", "group_id", "is_prompt"]
-
-        with db.connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute(
-                f"SELECT {', '.join(cols)} FROM scheduled_items WHERE id = ?",
-                (item_id,)
-            )
-            row = cursor.fetchone()
-
-        if not row:
-            return jsonify({"error": "Not found"}), 404
-
-        return jsonify({"item": _serialize_item(_row_to_dict(row, cols))})
-
-    except Exception as e:
-        logger.error(f"[SCHEDULER API] get item error: {e}")
-        return jsonify({"error": _ERR_INTERNAL}), 500
-
-
-@scheduler_bp.route("/scheduler/<item_id>", methods=["PUT"])
-@require_session
-def update_scheduler_item(item_id: str) -> "ResponseReturnValue":
-    """Update a pending scheduled item."""
-    try:
-        from services.database_service import get_shared_db_service
-        db = get_shared_db_service()
-
-        cols = ["id", "item_type", "message", "due_at", "recurrence",
-                "window_start", "window_end", "status", "channel",
-                "created_by_session", "created_at", "last_fired_at", "group_id", "is_prompt"]
-
-        with db.connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute(
-                "SELECT id FROM scheduled_items WHERE id = ? AND status = 'pending'",
-                (item_id,)
-            )
-            if not cursor.fetchone():
-                return jsonify({"error": _ERR_NOT_PENDING}), 404
-
+    @require_session
+    def post(self):
+        """Create a new scheduled item."""
         data = request.get_json(silent=True) or {}
         clean, err = _validate_item(data, require_future=True)
         if err:
-            return jsonify({"error": err}), 400
+            return {"error": err}, 400
 
-        with db.connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute(
-                """
-                UPDATE scheduled_items
-                SET item_type = ?,
-                    message = ?,
-                    due_at = ?,
-                    recurrence = ?,
-                    window_start = ?,
-                    window_end = ?,
-                    is_prompt = ?
-                WHERE id = ? AND status = 'pending'
-                """,
-                (
-                    cast("dict[str, object]", clean)["item_type"],
-                    cast("dict[str, object]", clean)["message"],
-                    cast(datetime, cast("dict[str, object]", clean)["due_at"]).isoformat(),
-                    cast("dict[str, object]", clean)["recurrence"],
-                    cast("dict[str, object]", clean)["window_start"],
-                    cast("dict[str, object]", clean)["window_end"],
-                    cast("dict[str, object]", clean)["is_prompt"],
-                    item_id,
+        item_id = uuid.uuid4().hex[:8]
+        from services.time_utils import utc_now
+        now = utc_now()
+
+        try:
+            from services.database_service import get_shared_db_service
+            db = get_shared_db_service()
+
+            cols = ["id", "item_type", "message", "due_at", "recurrence",
+                    "window_start", "window_end", "status", "channel",
+                    "created_by_session", "created_at", "last_fired_at", "group_id", "is_prompt"]
+
+            with db.connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    """
+                    INSERT INTO scheduled_items
+                      (id, item_type, message, due_at, recurrence,
+                       window_start, window_end, status, channel,
+                       created_by_session, created_at, group_id, is_prompt)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        item_id,
+                        cast("dict[str, object]", clean)["item_type"],
+                        cast("dict[str, object]", clean)["message"],
+                        cast(datetime, cast("dict[str, object]", clean)["due_at"]).isoformat(),
+                        cast("dict[str, object]", clean)["recurrence"],
+                        cast("dict[str, object]", clean)["window_start"],
+                        cast("dict[str, object]", clean)["window_end"],
+                        data.get("channel", "general"),
+                        None,
+                        now.isoformat(),
+                        item_id,
+                        cast("dict[str, object]", clean)["is_prompt"],
+                    )
                 )
-            )
 
-            if cursor.rowcount == 0:
+                cursor.execute(
+                    f"SELECT {', '.join(cols)} FROM scheduled_items WHERE id = ?",
+                    (item_id,)
+                )
+                row = cursor.fetchone()
                 conn.commit()
-                return jsonify({"error": _ERR_NOT_PENDING}), 404
 
-            # SELECT back the updated row (SQLite has no RETURNING)
-            cursor.execute(
-                f"SELECT {', '.join(cols)} FROM scheduled_items WHERE id = ?",
-                (item_id,)
-            )
-            row = cursor.fetchone()
-            conn.commit()
+            def _embed() -> None:
+                try:
+                    from services.scheduler_service import embed_scheduled_item
+                    embed_scheduled_item(item_id, cast(str, cast("dict[str, object]", clean)["message"]), db)
+                except Exception as emb_err:
+                    logger.warning(f"[SCHEDULER API] Embedding failed (non-fatal): {emb_err}")
+            import threading
+            threading.Thread(target=_embed, daemon=True, name="scheduler-embed").start()
 
-        if not row:
-            return jsonify({"error": _ERR_NOT_PENDING}), 404
+            item = _serialize_item(_row_to_dict(row, cols))
+            return {"item": item}, 201
 
-        return jsonify({"item": _serialize_item(_row_to_dict(row, cols))})
-
-    except Exception as e:
-        logger.error(f"[SCHEDULER API] update error: {e}")
-        return jsonify({"error": _ERR_INTERNAL}), 500
+        except Exception as e:
+            logger.error(f"[SCHEDULER API] create error: {e}")
+            return {"error": _ERR_INTERNAL}, 500
 
 
-@scheduler_bp.route("/scheduler/<item_id>", methods=["DELETE"])
-@require_session
-def cancel_scheduler_item(item_id: str) -> "ResponseReturnValue":
-    """Cancel a pending scheduled item (sets status to 'cancelled')."""
-    try:
-        from services.database_service import get_shared_db_service
-        db = get_shared_db_service()
+@scheduler_bp.route("/scheduler/history")
+@scheduler_bp.response(200, "History pruned")
+class SchedulerHistoryResource(Resource):
+    @require_session
+    def delete(self):
+        """Delete fired/failed/cancelled items older than N days (default 30)."""
+        try:
+            older_than_days = max(int(request.args.get("older_than_days", 30)), 1)
+        except (ValueError, TypeError):
+            return {"error": "older_than_days must be a positive integer"}, 400
 
-        with db.connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute(
-                """
-                UPDATE scheduled_items
-                SET status = 'cancelled'
-                WHERE id = ? AND status = 'pending'
-                """,
-                (item_id,)
-            )
-            affected = cursor.rowcount
-            conn.commit()
+        try:
+            from services.database_service import get_shared_db_service
+            db = get_shared_db_service()
 
-        if affected == 0:
-            return jsonify({"error": _ERR_NOT_PENDING}), 404
+            with db.connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    """
+                    DELETE FROM scheduled_items
+                    WHERE status IN ('fired', 'failed', 'cancelled')
+                      AND created_at < datetime('now', ? || ' days')
+                    """,
+                    (str(-older_than_days),)
+                )
+                deleted = cursor.rowcount
+                conn.commit()
 
-        return jsonify({"status": "cancelled", "id": item_id})
+            return {"deleted": deleted}
 
-    except Exception as e:
-        logger.error(f"[SCHEDULER API] cancel error: {e}")
-        return jsonify({"error": _ERR_INTERNAL}), 500
+        except Exception as e:
+            logger.error(f"[SCHEDULER API] prune history error: {e}")
+            return {"error": _ERR_INTERNAL}, 500
+
+
+@scheduler_bp.route("/scheduler/group/<group_id>")
+@scheduler_bp.response(200, "Group items")
+@scheduler_bp.param("group_id", "str", "Group identifier")
+class SchedulerGroupResource(Resource):
+    @require_session
+    def get(self, group_id: str):
+        """Return fire history for a recurring schedule group (newest first, max 50)."""
+        try:
+            limit = min(int(request.args.get("limit", 10)), 50)
+        except (ValueError, TypeError):
+            limit = 10
+
+        try:
+            from services.database_service import get_shared_db_service
+            db = get_shared_db_service()
+
+            cols = ["id", "item_type", "message", "due_at", "recurrence",
+                    "window_start", "window_end", "status", "channel",
+                    "created_by_session", "created_at", "last_fired_at", "group_id", "is_prompt"]
+
+            with db.connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    f"""
+                    SELECT {', '.join(cols)}
+                    FROM scheduled_items
+                    WHERE group_id = ?
+                    ORDER BY due_at DESC
+                    LIMIT ?
+                    """,
+                    (group_id, limit)
+                )
+                rows = cursor.fetchall()
+
+            items = [_serialize_item(_row_to_dict(r, cols)) for r in rows]
+            return {"items": items}
+
+        except Exception as e:
+            logger.error(f"[SCHEDULER API] group fires error: {e}")
+            return {"error": _ERR_INTERNAL}, 500
+
+
+@scheduler_bp.route("/scheduler/<item_id>")
+@scheduler_bp.response(200, "Item details")
+@scheduler_bp.response(404, "Not found")
+@scheduler_bp.param("item_id", "str", "Item identifier")
+class SchedulerItemResource(Resource):
+    @require_session
+    def get(self, item_id: str):
+        """Fetch a single scheduled item by ID."""
+        try:
+            from services.database_service import get_shared_db_service
+            db = get_shared_db_service()
+
+            cols = ["id", "item_type", "message", "due_at", "recurrence",
+                    "window_start", "window_end", "status", "channel",
+                    "created_by_session", "created_at", "last_fired_at", "group_id", "is_prompt"]
+
+            with db.connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    f"SELECT {', '.join(cols)} FROM scheduled_items WHERE id = ?",
+                    (item_id,)
+                )
+                row = cursor.fetchone()
+
+            if not row:
+                return {"error": "Not found"}, 404
+
+            return {"item": _serialize_item(_row_to_dict(row, cols))}
+
+        except Exception as e:
+            logger.error(f"[SCHEDULER API] get item error: {e}")
+            return {"error": _ERR_INTERNAL}, 500
+
+    @require_session
+    def put(self, item_id: str):
+        """Update a pending scheduled item."""
+        try:
+            from services.database_service import get_shared_db_service
+            db = get_shared_db_service()
+
+            cols = ["id", "item_type", "message", "due_at", "recurrence",
+                    "window_start", "window_end", "status", "channel",
+                    "created_by_session", "created_at", "last_fired_at", "group_id", "is_prompt"]
+
+            with db.connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    "SELECT id FROM scheduled_items WHERE id = ? AND status = 'pending'",
+                    (item_id,)
+                )
+                if not cursor.fetchone():
+                    return {"error": _ERR_NOT_PENDING}, 404
+
+            data = request.get_json(silent=True) or {}
+            clean, err = _validate_item(data, require_future=True)
+            if err:
+                return {"error": err}, 400
+
+            with db.connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    """
+                    UPDATE scheduled_items
+                    SET item_type = ?,
+                        message = ?,
+                        due_at = ?,
+                        recurrence = ?,
+                        window_start = ?,
+                        window_end = ?,
+                        is_prompt = ?
+                    WHERE id = ? AND status = 'pending'
+                    """,
+                    (
+                        cast("dict[str, object]", clean)["item_type"],
+                        cast("dict[str, object]", clean)["message"],
+                        cast(datetime, cast("dict[str, object]", clean)["due_at"]).isoformat(),
+                        cast("dict[str, object]", clean)["recurrence"],
+                        cast("dict[str, object]", clean)["window_start"],
+                        cast("dict[str, object]", clean)["window_end"],
+                        cast("dict[str, object]", clean)["is_prompt"],
+                        item_id,
+                    )
+                )
+
+                if cursor.rowcount == 0:
+                    conn.commit()
+                    return {"error": _ERR_NOT_PENDING}, 404
+
+                cursor.execute(
+                    f"SELECT {', '.join(cols)} FROM scheduled_items WHERE id = ?",
+                    (item_id,)
+                )
+                row = cursor.fetchone()
+                conn.commit()
+
+            if not row:
+                return {"error": _ERR_NOT_PENDING}, 404
+
+            return {"item": _serialize_item(_row_to_dict(row, cols))}
+
+        except Exception as e:
+            logger.error(f"[SCHEDULER API] update error: {e}")
+            return {"error": _ERR_INTERNAL}, 500
+
+    @require_session
+    def delete(self, item_id: str):
+        """Cancel a pending scheduled item (sets status to 'cancelled')."""
+        try:
+            from services.database_service import get_shared_db_service
+            db = get_shared_db_service()
+
+            with db.connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    """
+                    UPDATE scheduled_items
+                    SET status = 'cancelled'
+                    WHERE id = ? AND status = 'pending'
+                    """,
+                    (item_id,)
+                )
+                affected = cursor.rowcount
+                conn.commit()
+
+            if affected == 0:
+                return {"error": _ERR_NOT_PENDING}, 404
+
+            return {"status": "cancelled", "id": item_id}
+
+        except Exception as e:
+            logger.error(f"[SCHEDULER API] cancel error: {e}")
+            return {"error": _ERR_INTERNAL}, 500

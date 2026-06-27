@@ -35,18 +35,18 @@ import logging
 import uuid
 from typing import TYPE_CHECKING, cast
 
-from flask import Blueprint, g, jsonify, request
+from flask import g, request
+from flask_restx import Namespace, Resource
 
 from .auth import require_auth
 
 if TYPE_CHECKING:
-    from flask.typing import ResponseReturnValue
     from services.wrapper_auth_service import WrapperAuthService
     from services.wrapper_rate_limiter import WrapperRateLimiter
 
 logger = logging.getLogger(__name__)
 
-signals_bp = Blueprint("signals", __name__, url_prefix="/api/signals")
+signals_bp = Namespace("signals", description="External signal ingestion", path="/api/signals")
 
 # Maximum signals accepted in a single batch request
 _BATCH_MAX = 50
@@ -156,117 +156,125 @@ def _build_and_emit(validated: "dict[str, object]", wrapper_id: str) -> str:
 # POST /api/signals — single signal
 # ---------------------------------------------------------------------------
 
-@signals_bp.route("", methods=["POST"])
-@require_auth
-def ingest_signal() -> "ResponseReturnValue":
-    """Ingest a single signal into world state (zero LLM).
+@signals_bp.route("")
+class SignalResource(Resource):
+    @require_auth
+    @signals_bp.response(202, "Accepted")
+    @signals_bp.response(400, "Bad request")
+    @signals_bp.response(403, "Forbidden")
+    @signals_bp.response(429, "Rate limit exceeded")
+    def post(self):
+        """Ingest a single signal into world state (zero LLM).
 
-    Body (JSON):
-        signal_type (str, required): Identifies the type of signal.
-        content (str, required): Human-readable signal content / description.
-        source (str, optional): Identifies the originating system.  Defaults
-            to the wrapper_id (or ``'__chat_ui__'`` for cookie auth).
-        topic (str | null, optional): Conversation topic hint.
-        activation_energy (float 0–1, optional): Salience weight.  Higher
-            values make the signal persist longer in world state.  Default 0.5.
-        metadata (dict | null, optional): Arbitrary key-value context.
+        Body (JSON):
+            signal_type (str, required): Identifies the type of signal.
+            content (str, required): Human-readable signal content / description.
+            source (str, optional): Identifies the originating system.  Defaults
+                to the wrapper_id (or ``'__chat_ui__'`` for cookie auth).
+            topic (str | null, optional): Conversation topic hint.
+            activation_energy (float 0–1, optional): Salience weight.  Higher
+                values make the signal persist longer in world state.  Default 0.5.
+            metadata (dict | null, optional): Arbitrary key-value context.
 
-    Returns:
-        202 ``{"ok": true, "signal_id": "<uuid>"}`` on success.
-        400 if validation fails.
-        403 if the wrapper is not permitted to emit this signal_type.
-        429 if the rate limit is exceeded.
-    """
-    wrapper_id = _effective_wrapper_id()
-    body = request.get_json(silent=True) or {}
+        Returns:
+            202 ``{"ok": true, "signal_id": "<uuid>"}`` on success.
+            400 if validation fails.
+            403 if the wrapper is not permitted to emit this signal_type.
+            429 if the rate limit is exceeded.
+        """
+        wrapper_id = _effective_wrapper_id()
+        body = request.get_json(silent=True) or {}
 
-    validated, err = _validate_signal(body)
-    if err:
-        return jsonify({"error": err}), 400
+        validated, err = _validate_signal(body)
+        if err:
+            return {"error": err}, 400
 
-    # Capability check for bearer-authenticated callers
-    if not _check_signal_capability(wrapper_id, cast(str, cast("dict[str, object]", validated)["signal_type"])):
-        return jsonify({
-            "error": f"wrapper is not permitted to emit signal type '{cast('dict[str, object]', validated)['signal_type']}'"
-        }), 403
+        # Capability check for bearer-authenticated callers
+        if not _check_signal_capability(wrapper_id, cast(str, cast("dict[str, object]", validated)["signal_type"])):
+            return {
+                "error": f"wrapper is not permitted to emit signal type '{cast('dict[str, object]', validated)['signal_type']}'"
+            }, 403
 
-    # Rate limit check
-    limiter = _get_rate_limiter()
-    if not limiter.is_allowed(wrapper_id):
-        return jsonify({"error": "rate limit exceeded"}), 429
+        # Rate limit check
+        limiter = _get_rate_limiter()
+        if not limiter.is_allowed(wrapper_id):
+            return {"error": "rate limit exceeded"}, 429
 
-    signal_id = _build_and_emit(cast("dict[str, object]", validated), wrapper_id)
-    return jsonify({"ok": True, "signal_id": signal_id}), 202
+        signal_id = _build_and_emit(cast("dict[str, object]", validated), wrapper_id)
+        return {"ok": True, "signal_id": signal_id}, 202
 
 
 # ---------------------------------------------------------------------------
 # POST /api/signals/batch — batch ingest
 # ---------------------------------------------------------------------------
 
-@signals_bp.route("/batch", methods=["POST"])
-@require_auth
-def ingest_signals_batch() -> "ResponseReturnValue":
-    """Ingest up to 50 signals in a single request.
+@signals_bp.route("/batch")
+class SignalBatchResource(Resource):
+    @require_auth
+    @signals_bp.response(200, "Success")
+    @signals_bp.response(400, "Bad request")
+    def post(self):
+        """Ingest up to 50 signals in a single request.
 
-    Body (JSON):
-        Array of signal objects (same schema as the single-signal endpoint).
+        Body (JSON):
+            Array of signal objects (same schema as the single-signal endpoint).
 
-    Each signal is validated and capability-checked independently.  Valid
-    signals are emitted even when others in the batch fail.  Rate limit
-    checking applies per-signal; once the limit is hit, remaining signals in
-    the batch are rejected with a rate-limit error.
+        Each signal is validated and capability-checked independently.  Valid
+        signals are emitted even when others in the batch fail.  Rate limit
+        checking applies per-signal; once the limit is hit, remaining signals in
+        the batch are rejected with a rate-limit error.
 
-    Returns:
-        200 ``{"accepted": N, "rejected": M, "errors": [...]}``
-        ``errors`` is a list of ``{"index": I, "error": "..."}`` objects.
-        400 if the request body is not a JSON array.
-    """
-    wrapper_id = _effective_wrapper_id()
-    body = request.get_json(silent=True)
+        Returns:
+            200 ``{"accepted": N, "rejected": M, "errors": [...]}``
+            ``errors`` is a list of ``{"index": I, "error": "..."}`` objects.
+            400 if the request body is not a JSON array.
+        """
+        wrapper_id = _effective_wrapper_id()
+        body = request.get_json(silent=True)
 
-    if not isinstance(body, list):
-        return jsonify({"error": "request body must be a JSON array"}), 400
+        if not isinstance(body, list):
+            return {"error": "request body must be a JSON array"}, 400
 
-    if len(body) > _BATCH_MAX:
-        return jsonify({
-            "error": f"batch exceeds maximum size of {_BATCH_MAX} signals"
-        }), 400
+        if len(body) > _BATCH_MAX:
+            return {
+                "error": f"batch exceeds maximum size of {_BATCH_MAX} signals"
+            }, 400
 
-    limiter = _get_rate_limiter()
-    accepted = 0
-    rejected = 0
-    errors: list[dict[str, object]] = []
+        limiter = _get_rate_limiter()
+        accepted = 0
+        rejected = 0
+        errors: list[dict[str, object]] = []
 
-    for idx, item in enumerate(body):
-        # Validate
-        validated, err = _validate_signal(item)
-        if err:
-            rejected += 1
-            errors.append({"index": idx, "error": err})
-            continue
+        for idx, item in enumerate(body):
+            # Validate
+            validated, err = _validate_signal(item)
+            if err:
+                rejected += 1
+                errors.append({"index": idx, "error": err})
+                continue
 
-        # Capability check
-        if not _check_signal_capability(wrapper_id, cast(str, cast("dict[str, object]", validated)["signal_type"])):
-            rejected += 1
-            errors.append({
-                "index": idx,
-                "error": f"wrapper is not permitted to emit signal type '{cast('dict[str, object]', validated)['signal_type']}'",
-            })
-            continue
+            # Capability check
+            if not _check_signal_capability(wrapper_id, cast(str, cast("dict[str, object]", validated)["signal_type"])):
+                rejected += 1
+                errors.append({
+                    "index": idx,
+                    "error": f"wrapper is not permitted to emit signal type '{cast('dict[str, object]', validated)['signal_type']}'",
+                })
+                continue
 
-        # Rate limit
-        if not limiter.is_allowed(wrapper_id):
-            rejected += 1
-            errors.append({"index": idx, "error": "rate limit exceeded"})
-            continue
+            # Rate limit
+            if not limiter.is_allowed(wrapper_id):
+                rejected += 1
+                errors.append({"index": idx, "error": "rate limit exceeded"})
+                continue
 
-        # Emit
-        try:
-            _build_and_emit(cast("dict[str, object]", validated), wrapper_id)
-            accepted += 1
-        except Exception as exc:
-            logger.exception("[Signals API] Batch emit error at index %d: %s", idx, exc)
-            rejected += 1
-            errors.append({"index": idx, "error": "internal error during signal emission"})
+            # Emit
+            try:
+                _build_and_emit(cast("dict[str, object]", validated), wrapper_id)
+                accepted += 1
+            except Exception as exc:
+                logger.exception("[Signals API] Batch emit error at index %d: %s", idx, exc)
+                rejected += 1
+                errors.append({"index": idx, "error": "internal error during signal emission"})
 
-    return jsonify({"accepted": accepted, "rejected": rejected, "errors": errors}), 200
+        return {"accepted": accepted, "rejected": rejected, "errors": errors}, 200

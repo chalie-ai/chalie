@@ -17,17 +17,18 @@ import tempfile
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from flask import Blueprint, jsonify, request, send_file
+from flask import request, send_file
 from werkzeug.utils import secure_filename
 
+from flask_restx import Namespace, Resource
 from .auth import require_session
 
 if TYPE_CHECKING:
-    from flask.typing import ResponseReturnValue
+    pass
 
 logger = logging.getLogger(__name__)
 
-snapshot_bp = Blueprint("snapshot", __name__, url_prefix="/api/snapshot")
+snapshot_bp = Namespace("snapshot", description="Snapshot export/import", path="/api/snapshot")
 
 # Per-route ceiling for the import upload. A real snapshot is gigabytes, so the
 # global 50 MB MAX_CONTENT_LENGTH (api/__init__.py) would 413 it; setting the
@@ -37,70 +38,68 @@ _SNAPSHOT_MAX_UPLOAD_BYTES = 50 * 1024 ** 3  # 50 GiB — bounds disk-fill, not 
 _DEFAULT_UPLOAD_NAME = "snapshot.zip"
 
 
-@snapshot_bp.route("/export", methods=["POST"])
-@require_session
-def snapshot_export() -> "ResponseReturnValue":
-    try:
-        body = request.get_json(silent=True) or {}
-        password = body.get("password") or None
+@snapshot_bp.route("/export")
+@snapshot_bp.response(200, "Snapshot exported")
+@snapshot_bp.response(500, "Export failed")
+class SnapshotExportResource(Resource):
+    @require_session
+    def post(self):
+        try:
+            body = request.get_json(silent=True) or {}
+            password = body.get("password") or None
 
-        from services.snapshot_service import SnapshotService
-        zip_path = SnapshotService().export(password=password)
+            from services.snapshot_service import SnapshotService
+            zip_path = SnapshotService().export(password=password)
 
-        return send_file(
-            str(zip_path),
-            mimetype="application/zip",
-            as_attachment=True,
-            download_name=zip_path.name,
-        )
-    except Exception as e:
-        logger.exception(f"[REST API] snapshot/export error: {e}")
-        return jsonify({"error": "Snapshot export failed"}), 500
+            return send_file(
+                str(zip_path),
+                mimetype="application/zip",
+                as_attachment=True,
+                download_name=zip_path.name,
+            )
+        except Exception as e:
+            logger.exception(f"[REST API] snapshot/export error: {e}")
+            return {"error": "Snapshot export failed"}, 500
 
 
-@snapshot_bp.route("/import", methods=["POST"])
-@require_session
-def snapshot_import() -> "ResponseReturnValue":
-    """Stage an uploaded snapshot and request a restart to apply it.
+@snapshot_bp.route("/import")
+@snapshot_bp.response(200, "Snapshot imported")
+@snapshot_bp.response(400, "Import failed")
+class SnapshotImportResource(Resource):
+    @require_session
+    def post(self):
+        """Stage an uploaded snapshot and request a restart to apply it.
 
-    Restore is destructive (full wipe-and-replace at next boot); the staging
-    step runs the schema-downgrade guard and verifies checksums, raising loudly
-    on a bad password, corrupt zip, or unsafe schema before anything is staged.
-    """
-    # FIRST statement: lift the global 50 MB cap for this route only, before any
-    # lazy access to request.files / request.form parses the body (§5.1).
-    request.max_content_length = _SNAPSHOT_MAX_UPLOAD_BYTES
+        Restore is destructive (full wipe-and-replace at next boot); the staging
+        step runs the schema-downgrade guard and verifies checksums, raising loudly
+        on a bad password, corrupt zip, or unsafe schema before anything is staged.
+        """
+        request.max_content_length = _SNAPSHOT_MAX_UPLOAD_BYTES
 
-    if "file" not in request.files:
-        return jsonify({"error": "No snapshot file uploaded"}), 400
+        if "file" not in request.files:
+            return {"error": "No snapshot file uploaded"}, 400
 
-    uploaded = request.files["file"]
-    password = request.form.get("password") or None
+        uploaded = request.files["file"]
+        password = request.form.get("password") or None
 
-    # Bound before the try so the except clause can name SnapshotError even if
-    # uploaded.save() raises OSError before stage_import() is reached.
-    from services.snapshot_service import SnapshotError, SnapshotService
+        from services.snapshot_service import SnapshotError, SnapshotService
 
-    tmp_dir = Path(tempfile.mkdtemp(prefix="chalie-snapshot-upload-"))
-    try:
-        safe_name = secure_filename(uploaded.filename or _DEFAULT_UPLOAD_NAME)
-        upload_path = tmp_dir / safe_name
-        uploaded.save(str(upload_path))
-        SnapshotService().stage_import(upload_path, password)
-    except SnapshotError as e:
-        # Curated, admin-facing rejection (bad manifest, checksum, schema guard).
-        logger.warning(f"[REST API] snapshot/import rejected: {e}")
-        return jsonify({"error": str(e)}), 400
-    except Exception as e:
-        # Raw text (pyzipper password detail, sqlite/OS paths) stays server-side
-        # only — the caller gets a generic message, mirroring _safe_validation_msg.
-        logger.exception(f"[REST API] snapshot/import staging error: {e}")
-        return jsonify({"error": "Snapshot import failed"}), 400
-    finally:
-        import shutil
-        shutil.rmtree(str(tmp_dir), ignore_errors=True)
+        tmp_dir = Path(tempfile.mkdtemp(prefix="chalie-snapshot-upload-"))
+        try:
+            safe_name = secure_filename(uploaded.filename or _DEFAULT_UPLOAD_NAME)
+            upload_path = tmp_dir / safe_name
+            uploaded.save(str(upload_path))
+            SnapshotService().stage_import(upload_path, password)
+        except SnapshotError as e:
+            logger.warning(f"[REST API] snapshot/import rejected: {e}")
+            return {"error": str(e)}, 400
+        except Exception as e:
+            logger.exception(f"[REST API] snapshot/import staging error: {e}")
+            return {"error": "Snapshot import failed"}, 400
+        finally:
+            import shutil
+            shutil.rmtree(str(tmp_dir), ignore_errors=True)
 
-    # Staging succeeded — restart so apply_pending() runs before the DB opens.
-    from services.restart_service import request_restart
-    request_restart()
-    return jsonify({"ok": True, "restarting": True}), 200
+        from services.restart_service import request_restart
+        request_restart()
+        return {"ok": True, "restarting": True}, 200

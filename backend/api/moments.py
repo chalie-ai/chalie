@@ -19,14 +19,14 @@ frontend ``extractPlaintext``, so the two plaintext projections line up.
 import logging
 from typing import TYPE_CHECKING, cast
 
-from flask import Blueprint, g, jsonify, request
+from flask import g, request
+from flask_restx import Namespace, Resource
 
 from .auth import require_session
 from services.markup import extract_plaintext
 from services.time_utils import parse_utc
 
 if TYPE_CHECKING:
-    from flask.typing import ResponseReturnValue
     from services.moments_service import MomentsService
     from services.database_service import DatabaseService
 
@@ -45,7 +45,7 @@ _USER_CHANNEL = "user"
 # How many recent assistant turns to scan when resolving a pin by message text.
 _RESOLVE_SCAN_LIMIT = 200
 
-moments_bp = Blueprint("moments", __name__)
+moments_bp = Namespace("moments", description="Moment (pinned turn) operations")
 
 
 # ---------------------------------------------------------------------------
@@ -123,79 +123,94 @@ def _resolve_assistant_turn_by_text(db: "DatabaseService", message_text: str) ->
 # Routes
 # ---------------------------------------------------------------------------
 
-@moments_bp.route("/moments", methods=["POST"])
-@require_session
-def create_moment() -> "ResponseReturnValue":
-    if not request.is_json:
-        return jsonify({"error": "Content-Type must be application/json"}), 400
+@moments_bp.route("/moments")
+class MomentsResource(Resource):
+    @require_session
+    @moments_bp.response(200, "Success")
+    @moments_bp.response(201, "Created")
+    @moments_bp.response(400, "Bad request")
+    @moments_bp.response(404, "Not found")
+    @moments_bp.response(500, "Internal server error")
+    def post(self):
+        if not request.is_json:
+            return {"error": "Content-Type must be application/json"}, 400
 
-    data = request.get_json() or {}
-    raw_transcript_id = data.get("transcript_id")
-    message_text = (data.get("message_text") or "").strip()
-    note = data.get("note")
+        data = request.get_json() or {}
+        raw_transcript_id = data.get("transcript_id")
+        message_text = (data.get("message_text") or "").strip()
+        note = data.get("note")
 
-    db = _get_db()
-    moments = _get_moments()
+        db = _get_db()
+        moments = _get_moments()
 
-    if raw_transcript_id:
+        if raw_transcript_id:
+            try:
+                transcript_id = int(raw_transcript_id)
+            except (TypeError, ValueError):
+                return {"error": "transcript_id must be an integer"}, 400
+
+            turn = _fetch_transcript_row(db, transcript_id)
+            if turn is None:
+                return {"error": "Transcript row not found"}, 404
+            if turn['role'] != 'assistant':
+                return {"error": "Only assistant turns can be pinned as moments"}, 400
+        elif message_text:
+            turn = _resolve_assistant_turn_by_text(db, message_text)
+            if turn is None:
+                return {"error": "No matching assistant message found"}, 404
+            transcript_id = cast(int, turn['id'])
+        else:
+            return {"error": "transcript_id or message_text is required"}, 400
+
+        already_exists = moments.find_by_transcript(transcript_id) is not None
+        row = moments.store(transcript_id, cast(str, turn['content']), note=cast("str | None", note))
+
+        status = 200 if already_exists else 201
+        return {"item": _serialize_moment(cast("dict[str, object]", row)), "duplicate": already_exists}, status
+
+    @require_session
+    @moments_bp.response(200, "Success")
+    @moments_bp.response(500, "Internal server error")
+    def get(self):
         try:
-            transcript_id = int(raw_transcript_id)
-        except (TypeError, ValueError):
-            return jsonify({"error": "transcript_id must be an integer"}), 400
-
-        turn = _fetch_transcript_row(db, transcript_id)
-        if turn is None:
-            return jsonify({"error": "Transcript row not found"}), 404
-        if turn['role'] != 'assistant':
-            return jsonify({"error": "Only assistant turns can be pinned as moments"}), 400
-    elif message_text:
-        turn = _resolve_assistant_turn_by_text(db, message_text)
-        if turn is None:
-            return jsonify({"error": "No matching assistant message found"}), 404
-        transcript_id = cast(int, turn['id'])
-    else:
-        return jsonify({"error": "transcript_id or message_text is required"}), 400
-
-    already_exists = moments.find_by_transcript(transcript_id) is not None
-    row = moments.store(transcript_id, cast(str, turn['content']), note=cast("str | None", note))
-
-    status = 200 if already_exists else 201
-    return jsonify({"item": _serialize_moment(cast("dict[str, object]", row)), "duplicate": already_exists}), status
+            rows = _get_moments().list_all()
+            return {"items": [_serialize_moment(cast("dict[str, object]", r)) for r in rows]}
+        except Exception as e:
+            logger.exception(f"[MOMENTS API] list_moments error: {e}")
+            return {"error": _ERR_INTERNAL}, 500
 
 
-@moments_bp.route("/moments", methods=["GET"])
-@require_session
-def list_moments() -> "ResponseReturnValue":
-    try:
-        rows = _get_moments().list_all()
-        return jsonify({"items": [_serialize_moment(cast("dict[str, object]", r)) for r in rows]})
-    except Exception as e:
-        logger.exception(f"[MOMENTS API] list_moments error: {e}")
-        return jsonify({"error": _ERR_INTERNAL}), 500
+@moments_bp.route("/moments/<int:transcript_id>/forget")
+class MomentForgetResource(Resource):
+    @require_session
+    @moments_bp.param("transcript_id", "int", "Transcript row id of the moment to forget")
+    @moments_bp.response(200, "Success")
+    @moments_bp.response(404, "Not found")
+    @moments_bp.response(500, "Internal server error")
+    def post(self, transcript_id: int):
+        try:
+            if not _get_moments().delete_by_transcript(transcript_id):
+                return {"error": "Moment not found"}, 404
+            return {"ok": True}
+        except Exception as e:
+            logger.exception(f"[MOMENTS API] forget_moment error: {e}")
+            return {"error": _ERR_INTERNAL}, 500
 
 
-@moments_bp.route("/moments/<int:transcript_id>/forget", methods=["POST"])
-@require_session
-def forget_moment(transcript_id: int) -> "ResponseReturnValue":
-    try:
-        if not _get_moments().delete_by_transcript(transcript_id):
-            return jsonify({"error": "Moment not found"}), 404
-        return jsonify({"ok": True})
-    except Exception as e:
-        logger.exception(f"[MOMENTS API] forget_moment error: {e}")
-        return jsonify({"error": _ERR_INTERNAL}), 500
+@moments_bp.route("/moments/search")
+class MomentsSearchResource(Resource):
+    @require_session
+    @moments_bp.response(200, "Success")
+    @moments_bp.response(400, "Bad request")
+    @moments_bp.response(500, "Internal server error")
+    def get(self):
+        query = (request.args.get("q") or "").strip()
+        if not query:
+            return {"error": "Query parameter 'q' is required"}, 400
 
-
-@moments_bp.route("/moments/search", methods=["GET"])
-@require_session
-def search_moments() -> "ResponseReturnValue":
-    query = (request.args.get("q") or "").strip()
-    if not query:
-        return jsonify({"error": "Query parameter 'q' is required"}), 400
-
-    try:
-        rows = _get_moments().search(query)
-        return jsonify({"items": [_serialize_moment(cast("dict[str, object]", r)) for r in rows]})
-    except Exception as e:
-        logger.exception(f"[MOMENTS API] search_moments error: {e}")
-        return jsonify({"error": _ERR_INTERNAL}), 500
+        try:
+            rows = _get_moments().search(query)
+            return {"items": [_serialize_moment(cast("dict[str, object]", r)) for r in rows]}
+        except Exception as e:
+            logger.exception(f"[MOMENTS API] search_moments error: {e}")
+            return {"error": _ERR_INTERNAL}, 500

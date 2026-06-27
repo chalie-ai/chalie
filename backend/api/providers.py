@@ -10,14 +10,14 @@ from typing import TYPE_CHECKING, cast
 from urllib.parse import urlparse
 
 import requests as req
-from flask import Blueprint, jsonify, request
+from flask import request
 
+from flask_restx import Namespace, Resource
 from services.provider_db_service import PROVIDER_IN_USE_MSG
 
 from .auth import require_session
 
 if TYPE_CHECKING:
-    from flask.typing import ResponseReturnValue
     from services.provider_db_service import ProviderDbService
 
 logger = logging.getLogger(__name__)
@@ -45,7 +45,7 @@ def _safe_validation_msg(exc: ValueError) -> str:
         return msg
     return "Invalid provider configuration"
 
-providers_bp = Blueprint('providers', __name__, url_prefix='/providers')
+providers_bp = Namespace('providers', description='Provider management', path='/providers')
 
 # SSRF hard denies — cloud metadata, link-local, and common cloud-provider
 # private endpoints. Loopback and RFC1918 ranges are allowed (local-first app).
@@ -308,178 +308,172 @@ def get_provider_service() -> "ProviderDbService":
     return ProviderDbService(db)
 
 
-@providers_bp.route('', methods=['GET'])
-@require_session
-def list_providers() -> "ResponseReturnValue":
-    """Omit ``api_key`` from output."""
-    try:
-        service = get_provider_service()
-        providers = service.list_providers_summary()
-        return jsonify({"providers": providers}), 200
-    except Exception as e:
-        logger.error(f"[REST API] Failed to list providers: {e}")
-        return jsonify({"error": "Failed to list providers"}), 500
-
-
-@providers_bp.route('/catalog', methods=['GET'])
-@require_session
-def list_catalog_providers() -> "ResponseReturnValue":
-    """Return the curated provider presets for the setup wizard.
-
-    Each preset maps a popular provider onto an existing Chalie platform plus a
-    pre-fillable base URL — see :mod:`services.provider_catalog_service`.
-    """
-    try:
-        from services.provider_catalog_service import get_catalog
-        return jsonify({"catalog": get_catalog()}), 200
-    except Exception as e:
-        logger.exception(f"[REST API] Failed to load provider catalog: {e}")
-        return jsonify({"error": "Failed to load provider catalog"}), 500
-
-
-@providers_bp.route('', methods=['POST'])
-@require_session
-def create_provider() -> "ResponseReturnValue":
-    try:
-        data = request.get_json()
-        if not data:
-            return jsonify({"error": "Request body is required"}), 400
-
-        # Require name + platform + (model or models)
-        if "name" not in data:
-            return jsonify({"error": "Missing required field: name"}), 400
-        if "platform" not in data:
-            return jsonify({"error": "Missing required field: platform"}), 400
-        if "model" not in data and "models" not in data:
-            return jsonify({"error": "Missing required field: model or models"}), 400
-
-        service = get_provider_service()
-        provider = cast("dict[str, object]", service.create_provider(data))
-
-        # Invalidate provider cache
+@providers_bp.route('')
+@providers_bp.response(200, "List of providers")
+@providers_bp.response(201, "Provider created")
+class ProviderListResource(Resource):
+    @require_session
+    def get(self):
+        """Omit ``api_key`` from output."""
         try:
-            from services.provider_cache_service import ProviderCacheService
-            ProviderCacheService.invalidate()
+            service = get_provider_service()
+            providers = service.list_providers_summary()
+            return {"providers": providers}, 200
         except Exception as e:
-            logger.warning(f"[REST API] Failed to invalidate provider cache: {e}")
+            logger.error(f"[REST API] Failed to list providers: {e}")
+            return {"error": "Failed to list providers"}, 500
 
-        # Omit api_key value
-        if provider.get("api_key"):
-            provider["api_key"] = "***"
-
-        return jsonify({"provider": provider}), 201
-    except ValueError as e:
-        logger.warning(f"[REST API] Provider validation error: {e}")
-        return jsonify({"error": _safe_validation_msg(e)}), 400
-    except sqlite3.IntegrityError as e:
-        logger.warning(f"[REST API] Provider name conflict: {e}")
-        return jsonify({"error": _DUPLICATE_NAME_MSG}), 409
-    except Exception as e:
-        logger.error(f"[REST API] Failed to create provider: {e}")
-        return jsonify({"error": "Failed to create provider"}), 500
-
-
-@providers_bp.route('/<int:provider_id>', methods=['GET'])
-@require_session
-def get_provider(provider_id: int) -> "ResponseReturnValue":
-    try:
-        service = get_provider_service()
-        provider = service.get_provider_by_id(provider_id)
-
-        if not provider:
-            return jsonify({"error": _ERR_PROVIDER_NOT_FOUND}), 404
-
-        # Omit api_key value
-        if provider.get("api_key"):
-            provider["api_key"] = "***"
-
-        return jsonify({"provider": provider}), 200
-    except Exception as e:
-        logger.error(f"[REST API] Failed to get provider: {e}")
-        return jsonify({"error": "Failed to get provider"}), 500
-
-
-@providers_bp.route('/<int:provider_id>', methods=['PUT'])
-@require_session
-def update_provider(provider_id: int) -> "ResponseReturnValue":
-    try:
-        data = request.get_json()
-        if not data:
-            return jsonify({"error": "Request body is required"}), 400
-
-        service = get_provider_service()
-        provider = cast("dict[str, object]", service.update_provider(provider_id, data))
-
-        # Invalidate provider cache
+    @require_session
+    def post(self):
         try:
-            from services.provider_cache_service import ProviderCacheService
-            ProviderCacheService.invalidate()
+            data = request.get_json()
+            if not data:
+                return {"error": "Request body is required"}, 400
+
+            if "name" not in data:
+                return {"error": "Missing required field: name"}, 400
+            if "platform" not in data:
+                return {"error": "Missing required field: platform"}, 400
+            if "model" not in data and "models" not in data:
+                return {"error": "Missing required field: model or models"}, 400
+
+            service = get_provider_service()
+            provider = cast("dict[str, object]", service.create_provider(data))
+
+            try:
+                from services.provider_cache_service import ProviderCacheService
+                ProviderCacheService.invalidate()
+            except Exception as e:
+                logger.warning(f"[REST API] Failed to invalidate provider cache: {e}")
+
+            if provider.get("api_key"):
+                provider["api_key"] = "***"
+
+            return {"provider": provider}, 201
+        except ValueError as e:
+            logger.warning(f"[REST API] Provider validation error: {e}")
+            return {"error": _safe_validation_msg(e)}, 400
+        except sqlite3.IntegrityError as e:
+            logger.warning(f"[REST API] Provider name conflict: {e}")
+            return {"error": _DUPLICATE_NAME_MSG}, 409
         except Exception as e:
-            logger.warning(f"[REST API] Failed to invalidate provider cache: {e}")
-
-        # Omit api_key value
-        if provider.get("api_key"):
-            provider["api_key"] = "***"
-
-        return jsonify({"provider": provider}), 200
-    except ValueError as e:
-        logger.warning(f"[REST API] Provider validation error: {e}")
-        return jsonify({"error": _safe_validation_msg(e)}), 400
-    except sqlite3.IntegrityError as e:
-        logger.warning(f"[REST API] Provider name conflict: {e}")
-        return jsonify({"error": _DUPLICATE_NAME_MSG}), 409
-    except Exception as e:
-        logger.error(f"[REST API] Failed to update provider: {e}")
-        return jsonify({"error": "Failed to update provider"}), 500
+            logger.error(f"[REST API] Failed to create provider: {e}")
+            return {"error": "Failed to create provider"}, 500
 
 
-@providers_bp.route('/<int:provider_id>', methods=['DELETE'])
-@require_session
-def delete_provider(provider_id: int) -> "ResponseReturnValue":
-    try:
-        service = get_provider_service()
-        service.delete_provider(provider_id)
-
-        # Invalidate provider cache
+@providers_bp.route('/catalog')
+@providers_bp.response(200, "Provider catalog")
+class ProviderCatalogResource(Resource):
+    @require_session
+    def get(self):
+        """Return the curated provider presets for the setup wizard."""
         try:
-            from services.provider_cache_service import ProviderCacheService
-            ProviderCacheService.invalidate()
+            from services.provider_catalog_service import get_catalog
+            return {"catalog": get_catalog()}, 200
         except Exception as e:
-            logger.warning(f"[REST API] Failed to invalidate provider cache: {e}")
-
-        return jsonify({"status": "deleted"}), 200
-    except ValueError as e:
-        logger.warning(f"[REST API] Cannot delete provider {provider_id}: {e}")
-        return jsonify({"error": _safe_validation_msg(e)}), 409
-    except Exception as e:
-        logger.error(f"[REST API] Failed to delete provider: {e}")
-        return jsonify({"error": "Failed to delete provider"}), 500
+            logger.exception(f"[REST API] Failed to load provider catalog: {e}")
+            return {"error": "Failed to load provider catalog"}, 500
 
 
-@providers_bp.route('/list-models', methods=['POST'])
-@require_session
-def list_models() -> "ResponseReturnValue":
-    """Always returns HTTP 200 — failures in body ``error`` field. Credentials POSTed (not query param) to keep out of access logs."""
-    body = request.get_json(silent=True) or {}
-    platform = (body.get('platform') or '').strip().lower()
-    if platform == 'ollama':
-        models, err = _fetch_ollama_models(body.get('host') or '')
-    elif platform == 'openai':
-        models, err = _fetch_openai_models((body.get('api_key') or '').strip())
-    elif platform == 'anthropic':
-        models, err = _fetch_anthropic_models((body.get('api_key') or '').strip())
-    elif platform == 'gemini':
-        models, err = _fetch_gemini_models((body.get('api_key') or '').strip())
-    elif platform == 'openai_compatible':
-        models, err = _fetch_openai_compatible_models(
-            body.get('host') or '', (body.get('api_key') or '').strip(),
-        )
-    else:
-        return jsonify({"models": [], "error": f"Unsupported platform '{platform}'"}), 400
+@providers_bp.route('/<int:provider_id>')
+@providers_bp.response(200, "Provider details")
+@providers_bp.response(404, "Provider not found")
+@providers_bp.param("provider_id", "int", "Provider ID")
+class ProviderResource(Resource):
+    @require_session
+    def get(self, provider_id: int):
+        try:
+            service = get_provider_service()
+            provider = service.get_provider_by_id(provider_id)
 
-    if err is not None:
-        return jsonify({"models": [], "error": err}), 200
-    return jsonify({"models": models, "error": None}), 200
+            if not provider:
+                return {"error": _ERR_PROVIDER_NOT_FOUND}, 404
+
+            if provider.get("api_key"):
+                provider["api_key"] = "***"
+
+            return {"provider": provider}, 200
+        except Exception as e:
+            logger.error(f"[REST API] Failed to get provider: {e}")
+            return {"error": "Failed to get provider"}, 500
+
+    @require_session
+    def put(self, provider_id: int):
+        try:
+            data = request.get_json()
+            if not data:
+                return {"error": "Request body is required"}, 400
+
+            service = get_provider_service()
+            provider = cast("dict[str, object]", service.update_provider(provider_id, data))
+
+            try:
+                from services.provider_cache_service import ProviderCacheService
+                ProviderCacheService.invalidate()
+            except Exception as e:
+                logger.warning(f"[REST API] Failed to invalidate provider cache: {e}")
+
+            if provider.get("api_key"):
+                provider["api_key"] = "***"
+
+            return {"provider": provider}, 200
+        except ValueError as e:
+            logger.warning(f"[REST API] Provider validation error: {e}")
+            return {"error": _safe_validation_msg(e)}, 400
+        except sqlite3.IntegrityError as e:
+            logger.warning(f"[REST API] Provider name conflict: {e}")
+            return {"error": _DUPLICATE_NAME_MSG}, 409
+        except Exception as e:
+            logger.error(f"[REST API] Failed to update provider: {e}")
+            return {"error": "Failed to update provider"}, 500
+
+    @require_session
+    def delete(self, provider_id: int):
+        try:
+            service = get_provider_service()
+            service.delete_provider(provider_id)
+
+            try:
+                from services.provider_cache_service import ProviderCacheService
+                ProviderCacheService.invalidate()
+            except Exception as e:
+                logger.warning(f"[REST API] Failed to invalidate provider cache: {e}")
+
+            return {"status": "deleted"}, 200
+        except ValueError as e:
+            logger.warning(f"[REST API] Cannot delete provider {provider_id}: {e}")
+            return {"error": _safe_validation_msg(e)}, 409
+        except Exception as e:
+            logger.error(f"[REST API] Failed to delete provider: {e}")
+            return {"error": "Failed to delete provider"}, 500
+
+
+@providers_bp.route('/list-models')
+@providers_bp.response(200, "Model list")
+class ProviderListModelsResource(Resource):
+    @require_session
+    def post(self):
+        """List available models for a given platform."""
+        body = request.get_json(silent=True) or {}
+        platform = (body.get('platform') or '').strip().lower()
+        if platform == 'ollama':
+            models, err = _fetch_ollama_models(body.get('host') or '')
+        elif platform == 'openai':
+            models, err = _fetch_openai_models((body.get('api_key') or '').strip())
+        elif platform == 'anthropic':
+            models, err = _fetch_anthropic_models((body.get('api_key') or '').strip())
+        elif platform == 'gemini':
+            models, err = _fetch_gemini_models((body.get('api_key') or '').strip())
+        elif platform == 'openai_compatible':
+            models, err = _fetch_openai_compatible_models(
+                body.get('host') or '', (body.get('api_key') or '').strip(),
+            )
+        else:
+            return {"models": [], "error": f"Unsupported platform '{platform}'"}, 400
+
+        if err is not None:
+            return {"models": [], "error": err}, 200
+        return {"models": models, "error": None}, 200
 
 
 def _map_api_error(error_str: str, platform: str, model: str) -> str:
@@ -499,13 +493,13 @@ def _map_api_error(error_str: str, platform: str, model: str) -> str:
     return error_str[:300]
 
 
-def _test_ollama_provider(config: "dict[str, object]", model: str, start: float) -> "ResponseReturnValue":
+def _test_ollama_provider(config: "dict[str, object]", model: str, start: float) -> "tuple[dict, int]":
     import time
     available, err = _fetch_ollama_models(cast(str, config.get('host', '')))
     latency_ms = int((time.time() - start) * 1000)
 
     if err is not None:
-        return jsonify({"success": False, "error": err}), 200
+        return {"success": False, "error": err}, 200
 
     available_names = [cast(str, m['id']) for m in (available or [])]
     model_base = model.split(':')[0]
@@ -515,33 +509,33 @@ def _test_ollama_provider(config: "dict[str, object]", model: str, start: float)
     )
 
     if not model_found and not available_names:
-        return jsonify({
+        return {
             "success": True, "model": model, "latency_ms": latency_ms,
             "message": "Connected to Ollama (no models installed yet)"
-        }), 200
+        }, 200
 
     if not model_found:
-        return jsonify({
+        return {
             "success": False,
             "error": f"Model '{model}' not found on this Ollama instance.",
             "hint": f"Run: ollama pull {model}  ·  Available: {', '.join(available_names[:5])}"
-        }), 200
+        }, 200
 
-    return jsonify({
+    return {
         "success": True, "model": model, "latency_ms": latency_ms,
         "message": f"Connected · {len(available_names)} model(s) available"
-    }), 200
+    }, 200
 
 
-def _test_api_provider(config: "dict[str, object]", platform: str, model: str, start: float) -> "ResponseReturnValue":
+def _test_api_provider(config: "dict[str, object]", platform: str, model: str, start: float) -> "tuple[dict, int]":
     import time
     api_key = config.get('api_key')
     if not api_key:
-        return jsonify({
+        return {
             "success": False,
             "error": "API key is required to test this provider",
             "hint": "Enter your API key in the field above"
-        }), 200
+        }, 200
 
     try:
         test_config = {
@@ -564,207 +558,208 @@ def _test_api_provider(config: "dict[str, object]", platform: str, model: str, s
         )
         client.send(dto)
         latency_ms = int((time.time() - start) * 1000)
-        return jsonify({
+        return {
             "success": True, "model": model, "latency_ms": latency_ms,
             "message": "Connected successfully"
-        }), 200
+        }, 200
     except Exception as e:
         error_msg = _map_api_error(str(e), platform, model)
-        return jsonify({"success": False, "error": error_msg}), 200
+        return {"success": False, "error": error_msg}, 200
 
 
-@providers_bp.route('/test', methods=['POST'])
-@require_session
-def test_provider() -> "ResponseReturnValue":
-    import time
+@providers_bp.route('/test')
+@providers_bp.response(200, "Test result")
+class ProviderTestResource(Resource):
+    @require_session
+    def post(self):
+        import time
 
-    try:
-        data = request.get_json() or {}
-        provider_id = data.get('provider_id')
+        try:
+            data = request.get_json() or {}
+            provider_id = data.get('provider_id')
 
-        # Start from stored provider config if an ID is given
-        config: dict[str, object] = {}
-        if provider_id:
-            service = get_provider_service()
-            stored = service.get_provider_by_id(int(provider_id))
-            if not stored:
-                return jsonify({"success": False, "error": _ERR_PROVIDER_NOT_FOUND}), 200
-            config = {k: v for k, v in stored.items() if v is not None}
+            config: dict[str, object] = {}
+            if provider_id:
+                service = get_provider_service()
+                stored = service.get_provider_by_id(int(provider_id))
+                if not stored:
+                    return {"success": False, "error": _ERR_PROVIDER_NOT_FOUND}, 200
+                config = {k: v for k, v in stored.items() if v is not None}
 
-        # Overlay fields from request body (so a new api_key / host can be tested)
-        for field in ('platform', 'model', 'host', 'api_key'):
-            val = data.get(field)
-            if val:
-                config[field] = val
+            for field in ('platform', 'model', 'host', 'api_key'):
+                val = data.get(field)
+                if val:
+                    config[field] = val
 
-        platform = cast("str | None", config.get('platform'))
-        model = cast("str | None", config.get('model'))
+            platform = cast("str | None", config.get('platform'))
+            model = cast("str | None", config.get('model'))
 
-        if not platform:
-            return jsonify({"success": False, "error": "Platform is required"}), 200
-        if not model:
-            return jsonify({"success": False, "error": "Model is required"}), 200
+            if not platform:
+                return {"success": False, "error": "Platform is required"}, 200
+            if not model:
+                return {"success": False, "error": "Model is required"}, 200
 
-        start = time.time()
+            start = time.time()
 
-        if platform == 'ollama':
-            return _test_ollama_provider(config, model, start)
-        else:
+            if platform == 'ollama':
+                return _test_ollama_provider(config, model, start)
             return _test_api_provider(config, platform, model, start)
 
-    except Exception as e:
-        logger.error(f"[REST API] Provider test failed unexpectedly: {e}")
-        return jsonify({"success": False, "error": "Test failed unexpectedly"}), 500
-
-
-@providers_bp.route('/selected', methods=['GET'])
-@require_session
-def get_selected_provider() -> "ResponseReturnValue":
-    try:
-        service = get_provider_service()
-        provider = service.get_selected_provider()
-        if not provider:
-            return jsonify({"provider": None}), 200
-        # Omit api_key value
-        if provider.get("api_key"):
-            provider["api_key"] = "***"
-        return jsonify({"provider": provider}), 200
-    except Exception as e:
-        logger.error(f"[REST API] Failed to get selected provider: {e}")
-        return jsonify({"error": "Failed to get selected provider"}), 500
-
-
-@providers_bp.route('/selected', methods=['PUT'])
-@require_session
-def set_selected_provider() -> "ResponseReturnValue":
-    try:
-        data = request.get_json()
-        if not data or "provider_id" not in data:
-            return jsonify({"error": "Request body must contain 'provider_id'"}), 400
-
-        provider_id = data["provider_id"]
-        service = get_provider_service()
-
-        # Validate the provider exists
-        provider = service.get_provider_by_id(int(provider_id))
-        if not provider:
-            return jsonify({"error": _ERR_PROVIDER_NOT_FOUND}), 404
-
-        service.set_selected_provider(int(provider_id))
-
-        # Invalidate provider cache
-        try:
-            from services.provider_cache_service import ProviderCacheService
-            ProviderCacheService.invalidate()
         except Exception as e:
-            logger.warning(f"[REST API] Failed to invalidate provider cache: {e}")
-
-        # Omit api_key value
-        if provider.get("api_key"):
-            provider["api_key"] = "***"
-
-        return jsonify({"provider": provider}), 200
-    except ValueError as e:
-        logger.warning(f"[REST API] Provider validation error: {e}")
-        return jsonify({"error": _safe_validation_msg(e)}), 400
-    except Exception as e:
-        logger.error(f"[REST API] Failed to set selected provider: {e}")
-        return jsonify({"error": "Failed to set selected provider"}), 500
+            logger.error(f"[REST API] Provider test failed unexpectedly: {e}")
+            return {"success": False, "error": "Test failed unexpectedly"}, 500
 
 
-@providers_bp.route('/vision', methods=['GET'])
-@require_session
-def get_vision_provider() -> "ResponseReturnValue":
-    try:
-        service = get_provider_service()
-        status = service.get_vision_provider_status()
-        provider = cast("dict[str, object] | None", status['provider'])
-        if provider and provider.get('api_key'):
-            provider['api_key'] = '***'
-        return jsonify({'provider': provider, 'source': status['source']}), 200
-    except Exception:
-        logger.exception("[REST API] Failed to get vision provider")
-        return jsonify({"error": "Failed to get vision provider"}), 500
+@providers_bp.route('/selected')
+@providers_bp.response(200, "Selected provider")
+@providers_bp.response(400, "Missing provider_id")
+@providers_bp.response(404, "Provider not found")
+class ProviderSelectedResource(Resource):
+    @require_session
+    def get(self):
+        try:
+            service = get_provider_service()
+            provider = service.get_selected_provider()
+            if not provider:
+                return {"provider": None}, 200
+            if provider.get("api_key"):
+                provider["api_key"] = "***"
+            return {"provider": provider}, 200
+        except Exception as e:
+            logger.error(f"[REST API] Failed to get selected provider: {e}")
+            return {"error": "Failed to get selected provider"}, 500
+
+    @require_session
+    def put(self):
+        try:
+            data = request.get_json()
+            if not data or "provider_id" not in data:
+                return {"error": "Request body must contain 'provider_id'"}, 400
+
+            provider_id = data["provider_id"]
+            service = get_provider_service()
+
+            provider = service.get_provider_by_id(int(provider_id))
+            if not provider:
+                return {"error": _ERR_PROVIDER_NOT_FOUND}, 404
+
+            service.set_selected_provider(int(provider_id))
+
+            try:
+                from services.provider_cache_service import ProviderCacheService
+                ProviderCacheService.invalidate()
+            except Exception as e:
+                logger.warning(f"[REST API] Failed to invalidate provider cache: {e}")
+
+            if provider.get("api_key"):
+                provider["api_key"] = "***"
+
+            return {"provider": provider}, 200
+        except ValueError as e:
+            logger.warning(f"[REST API] Provider validation error: {e}")
+            return {"error": _safe_validation_msg(e)}, 400
+        except Exception as e:
+            logger.error(f"[REST API] Failed to set selected provider: {e}")
+            return {"error": "Failed to set selected provider"}, 500
 
 
-@providers_bp.route('/vision', methods=['PUT'])
-@require_session
-def set_vision_provider() -> "ResponseReturnValue":
-    try:
-        data = request.get_json() or {}
-        if 'provider_id' not in data:
-            return jsonify({"error": "Request body must contain 'provider_id'"}), 400
+@providers_bp.route('/vision')
+@providers_bp.response(200, "Vision provider")
+@providers_bp.response(400, "Invalid request")
+@providers_bp.response(404, "Provider not found")
+class ProviderVisionResource(Resource):
+    @require_session
+    def get(self):
+        try:
+            service = get_provider_service()
+            status = service.get_vision_provider_status()
+            provider = cast("dict[str, object] | None", status['provider'])
+            if provider and provider.get('api_key'):
+                provider['api_key'] = '***'
+            return {'provider': provider, 'source': status['source']}, 200
+        except Exception:
+            logger.exception("[REST API] Failed to get vision provider")
+            return {"error": "Failed to get vision provider"}, 500
 
-        service = get_provider_service()
-        pid = data['provider_id']
+    @require_session
+    def put(self):
+        try:
+            data = request.get_json() or {}
+            if 'provider_id' not in data:
+                return {"error": "Request body must contain 'provider_id'"}, 400
 
-        if pid is None:
-            service.set_vision_provider(None)
-            return jsonify({'provider': None, 'source': 'none'}), 200
+            service = get_provider_service()
+            pid = data['provider_id']
 
-        provider = service.get_provider_by_id(int(pid))
-        if not provider:
-            return jsonify({"error": _ERR_PROVIDER_NOT_FOUND}), 404
-        if not provider.get('supports_vision'):
-            return jsonify({"error": "Provider does not support vision"}), 400
+            if pid is None:
+                service.set_vision_provider(None)
+                return {'provider': None, 'source': 'none'}, 200
 
-        service.set_vision_provider(int(pid))
-        if provider.get('api_key'):
-            provider['api_key'] = '***'
-        return jsonify({'provider': provider, 'source': 'explicit'}), 200
-    except (ValueError, TypeError):
-        return jsonify({"error": "Invalid provider_id"}), 400
-    except Exception:
-        logger.exception("[REST API] Failed to set vision provider")
-        return jsonify({"error": "Failed to set vision provider"}), 500
+            provider = service.get_provider_by_id(int(pid))
+            if not provider:
+                return {"error": _ERR_PROVIDER_NOT_FOUND}, 404
+            if not provider.get('supports_vision'):
+                return {"error": "Provider does not support vision"}, 400
 
-
-@providers_bp.route('/delegate', methods=['GET'])
-@require_session
-def get_delegate_provider() -> "ResponseReturnValue":
-    """Return the configured delegate provider + resolution source ('auto'|'explicit'|'none')."""
-    try:
-        service = get_provider_service()
-        status = service.get_delegate_provider_status()
-        provider = cast("dict[str, object] | None", status['provider'])
-        if provider and provider.get('api_key'):
-            provider['api_key'] = '***'
-        return jsonify({'provider': provider, 'source': status['source']}), 200
-    except Exception:
-        logger.exception("[REST API] Failed to get delegate provider")
-        return jsonify({"error": "Failed to get delegate provider"}), 500
+            service.set_vision_provider(int(pid))
+            if provider.get('api_key'):
+                provider['api_key'] = '***'
+            return {'provider': provider, 'source': 'explicit'}, 200
+        except (ValueError, TypeError):
+            return {"error": "Invalid provider_id"}, 400
+        except Exception:
+            logger.exception("[REST API] Failed to set vision provider")
+            return {"error": "Failed to set vision provider"}, 500
 
 
-@providers_bp.route('/delegate', methods=['PUT'])
-@require_session
-def set_delegate_provider() -> "ResponseReturnValue":
-    """Set or clear the delegate provider ID. Clearing falls back to main provider (no 'Disabled' state)."""
-    try:
-        data = request.get_json() or {}
-        if 'provider_id' not in data:
-            return jsonify({"error": "Request body must contain 'provider_id'"}), 400
-
-        service = get_provider_service()
-        pid = data['provider_id']
-
-        if pid is None:
-            service.set_delegate_provider(None)
+@providers_bp.route('/delegate')
+@providers_bp.response(200, "Delegate provider")
+@providers_bp.response(400, "Invalid request")
+@providers_bp.response(404, "Provider not found")
+class ProviderDelegateResource(Resource):
+    @require_session
+    def get(self):
+        """Return the configured delegate provider + resolution source."""
+        try:
+            service = get_provider_service()
             status = service.get_delegate_provider_status()
             provider = cast("dict[str, object] | None", status['provider'])
             if provider and provider.get('api_key'):
                 provider['api_key'] = '***'
-            return jsonify({'provider': provider, 'source': status['source']}), 200
+            return {'provider': provider, 'source': status['source']}, 200
+        except Exception:
+            logger.exception("[REST API] Failed to get delegate provider")
+            return {"error": "Failed to get delegate provider"}, 500
 
-        provider = service.get_provider_by_id(int(pid))
-        if not provider:
-            return jsonify({"error": _ERR_PROVIDER_NOT_FOUND}), 404
+    @require_session
+    def put(self):
+        """Set or clear the delegate provider ID."""
+        try:
+            data = request.get_json() or {}
+            if 'provider_id' not in data:
+                return {"error": "Request body must contain 'provider_id'"}, 400
 
-        service.set_delegate_provider(int(pid))
-        if provider.get('api_key'):
-            provider['api_key'] = '***'
-        return jsonify({'provider': provider, 'source': 'explicit'}), 200
-    except (ValueError, TypeError):
-        return jsonify({"error": "Invalid provider_id"}), 400
-    except Exception:
-        logger.exception("[REST API] Failed to set delegate provider")
-        return jsonify({"error": "Failed to set delegate provider"}), 500
+            service = get_provider_service()
+            pid = data['provider_id']
+
+            if pid is None:
+                service.set_delegate_provider(None)
+                status = service.get_delegate_provider_status()
+                provider = cast("dict[str, object] | None", status['provider'])
+                if provider and provider.get('api_key'):
+                    provider['api_key'] = '***'
+                return {'provider': provider, 'source': status['source']}, 200
+
+            provider = service.get_provider_by_id(int(pid))
+            if not provider:
+                return {"error": _ERR_PROVIDER_NOT_FOUND}, 404
+
+            service.set_delegate_provider(int(pid))
+            if provider.get('api_key'):
+                provider['api_key'] = '***'
+            return {'provider': provider, 'source': 'explicit'}, 200
+        except (ValueError, TypeError):
+            return {"error": "Invalid provider_id"}, 400
+        except Exception:
+            logger.exception("[REST API] Failed to set delegate provider")
+            return {"error": "Failed to set delegate provider"}, 500

@@ -20,14 +20,14 @@ Permission model:
 import logging
 from typing import TYPE_CHECKING, cast
 
-from flask import Blueprint, g, jsonify, request
+from flask import g, request
+from flask_restx import Namespace, Resource
 
 from .auth import require_auth
 from services.log_utils import safe
 
 if TYPE_CHECKING:
     from typing import Protocol
-    from flask.typing import ResponseReturnValue
     from services.wrapper_auth_service import WrapperAuthService
 
     class _ERS(Protocol):
@@ -35,7 +35,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-query_bp = Blueprint("query", __name__, url_prefix="/api/query")
+query_bp = Namespace("query", description="Cognitive state query endpoints", path="/api/query")
 
 
 # ---------------------------------------------------------------------------
@@ -75,8 +75,8 @@ def _check_query_permission(slice_name: str) -> bool:
         return False
 
 
-def _permission_denied(slice_name: str) -> "ResponseReturnValue":
-    return jsonify({"error": f"Not permitted to query '{slice_name}'"}), 403
+def _permission_denied(slice_name: str) -> tuple[dict[str, object], int]:
+    return {"error": f"Not permitted to query '{slice_name}'"}, 403
 
 
 # ---------------------------------------------------------------------------
@@ -182,74 +182,80 @@ def _dispatch_slice(slice_name: str) -> "dict[str, object]":
 # GET /api/query/relevance
 # ---------------------------------------------------------------------------
 
-@query_bp.route("/relevance", methods=["GET"])
-@require_auth
-def get_relevance() -> "ResponseReturnValue":
-    """Returns 403 if bearer token lacks ``"relevance"`` query permission."""
-    if not _check_query_permission("relevance"):
-        return _permission_denied("relevance")
+@query_bp.route("/relevance")
+class RelevanceResource(Resource):
+    @require_auth
+    @query_bp.response(200, "OK")
+    def get(self):
+        """Returns 403 if bearer token lacks ``"relevance"`` query permission."""
+        if not _check_query_permission("relevance"):
+            return _permission_denied("relevance")
 
-    q = (request.args.get("q") or "").strip()
-    return jsonify(_slice_relevance(q)), 200
+        q = (request.args.get("q") or "").strip()
+        return _slice_relevance(q), 200
 
 
 # ---------------------------------------------------------------------------
 # GET /api/query/memory
 # ---------------------------------------------------------------------------
 
-@query_bp.route("/memory", methods=["GET"])
-@require_auth
-def get_memory() -> "ResponseReturnValue":
-    """Returns 403 if bearer token lacks ``"memory"`` query permission."""
-    if not _check_query_permission("memory"):
-        return _permission_denied("memory")
+@query_bp.route("/memory")
+class MemoryResource(Resource):
+    @require_auth
+    @query_bp.response(200, "OK")
+    def get(self):
+        """Returns 403 if bearer token lacks ``"memory"`` query permission."""
+        if not _check_query_permission("memory"):
+            return _permission_denied("memory")
 
-    q = (request.args.get("q") or "").strip()
-    try:
-        k = int(request.args.get("k", 5))
-        k = max(1, min(k, 20))
-    except (TypeError, ValueError):
-        k = 5
+        q = (request.args.get("q") or "").strip()
+        try:
+            k = int(request.args.get("k", 5))
+            k = max(1, min(k, 20))
+        except (TypeError, ValueError):
+            k = 5
 
-    return jsonify(_slice_memory(q, k)), 200
+        return _slice_memory(q, k), 200
 
 
 # ---------------------------------------------------------------------------
 # POST /api/query/composite
 # ---------------------------------------------------------------------------
 
-@query_bp.route("/composite", methods=["POST"])
-@require_auth
-def get_composite() -> "ResponseReturnValue":
-    """Each slice is checked independently against the bearer's query permissions.
-    Denied slices are listed in the ``denied`` array. Cookie-authenticated
-    requests are always fully permitted. Returns 200 even if all slices are denied.
-    """
-    body = request.get_json(silent=True) or {}
-    slices = body.get("slices")
-    if slices is None or not isinstance(slices, list):
-        return jsonify({"error": "'slices' must be a JSON array"}), 400
+@query_bp.route("/composite")
+class CompositeResource(Resource):
+    @require_auth
+    @query_bp.response(200, "OK")
+    def post(self):
+        """Each slice is checked independently against the bearer's query permissions.
+        Denied slices are listed in the ``denied`` array. Cookie-authenticated
+        requests are always fully permitted. Returns 200 even if all slices are denied.
+        """
+        body = request.get_json(silent=True) or {}
+        slices = body.get("slices")
+        if slices is None or not isinstance(slices, list):
+            return {"error": "'slices' must be a JSON array"}, 400
 
-    results: dict[str, object] = {}
-    denied: list[str] = []
-    errors: list[str] = []
+        results: dict[str, object] = {}
+        denied: list[str] = []
+        errors: list[str] = []
 
-    for raw_slice in slices:
-        if not isinstance(raw_slice, str) or not raw_slice.strip():
-            continue
+        for raw_slice in slices:
+            if not isinstance(raw_slice, str) or not raw_slice.strip():
+                continue
 
-        # Derive the base name for permission checking (before any ":" param)
-        base_name = raw_slice.partition(":")[0].strip().lower()
+            # Derive the base name for permission checking (before any ":" param)
+            base_name = raw_slice.partition(":")[0].strip().lower()
 
-        if not _check_query_permission(base_name):
-            denied.append(raw_slice)
-            continue
+            if not _check_query_permission(base_name):
+                denied.append(raw_slice)
+                continue
 
-        try:
-            payload = _dispatch_slice(raw_slice)
-            results[raw_slice] = payload
-        except Exception as e:
-            logger.warning("[Query API] composite slice '%s' failed: %s", safe(raw_slice), e)
-            errors.append(raw_slice)
+            try:
+                payload = _dispatch_slice(raw_slice)
+                results[raw_slice] = payload
+            except Exception as e:
+                logger.warning("[Query API] composite slice '%s' failed: %s", safe(raw_slice), e)
+                errors.append(raw_slice)
 
-    return jsonify({"results": results, "denied": denied, "errors": errors}), 200
+        return {"results": results, "denied": denied, "errors": errors}, 200
