@@ -37,6 +37,7 @@ import uuid
 from typing import TYPE_CHECKING, Sequence, cast
 
 from flask import request
+from flask.typing import ResponseReturnValue
 from flask_restx import Namespace, Resource
 
 from .auth import require_auth
@@ -387,7 +388,7 @@ def _interrupt_active_turn() -> tuple[dict[str, object], int]:
 class ChatResource(Resource):
     @require_auth
     @chat_bp.response(202, "Accepted")
-    def post(self):
+    def post(self) -> ResponseReturnValue:
         """Files are staged to temp paths and ingested via document.upload (by PATH, never bytes) at turn 0.
 
         Response arrives asynchronously via WebSocketBroker.broadcast().
@@ -415,7 +416,7 @@ class ChatResource(Resource):
 class ChatInterruptResource(Resource):
     @require_auth
     @chat_bp.response(200, "OK")
-    def post(self):
+    def post(self) -> ResponseReturnValue:
         """The cancelled turn deletes its own transcript and tool_call rows — no data persists for an interrupted turn.
 
         Always returns HTTP 200.
@@ -427,7 +428,7 @@ class ChatInterruptResource(Resource):
 class ChatStopResource(Resource):
     @require_auth
     @chat_bp.response(200, "OK")
-    def post(self):
+    def post(self) -> ResponseReturnValue:
         """Deprecated alias for POST /chat/interrupt. New callers should use POST /chat/interrupt instead."""
         return _interrupt_active_turn()
 
@@ -436,7 +437,7 @@ class ChatStopResource(Resource):
 class ActiveSubagentsResource(Resource):
     @require_auth
     @chat_bp.response(200, "OK")
-    def get(self):
+    def get(self) -> ResponseReturnValue:
         """Hydrates the Processes panel on page load/reconnect, since WS push events
         are missed while the client is disconnected. Each row carries the tool name,
         the model's summary of what the delegate is doing, and when it started.
@@ -450,7 +451,7 @@ class ActiveSubagentsResource(Resource):
 class SubagentStopResource(Resource):
     @require_auth
     @chat_bp.response(200, "OK")
-    def post(self, sub_id: str):
+    def post(self, sub_id: str) -> ResponseReturnValue:
         """Cooperatively cancel a running async delegate.
 
         Delegates to async_delegate_runner.cancel(). The delegate's cancel_event
@@ -474,7 +475,7 @@ class SubagentStopResource(Resource):
 class ActionResource(Resource):
     @require_auth
     @chat_bp.response(202, "Accepted")
-    def post(self):
+    def post(self) -> ResponseReturnValue:
         """Response arrives asynchronously via WebSocketBroker.broadcast()."""
         body = request.get_json(silent=True) or {}
         skill = body.get("skill") or ""

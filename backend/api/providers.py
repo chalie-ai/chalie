@@ -11,6 +11,7 @@ from urllib.parse import urlparse
 
 import requests as req
 from flask import request
+from flask.typing import ResponseReturnValue
 
 from flask_restx import Namespace, Resource
 from services.provider_db_service import PROVIDER_IN_USE_MSG
@@ -313,7 +314,7 @@ def get_provider_service() -> "ProviderDbService":
 @providers_bp.response(201, "Provider created")
 class ProviderListResource(Resource):
     @require_session
-    def get(self):
+    def get(self) -> ResponseReturnValue:
         """Omit ``api_key`` from output."""
         try:
             service = get_provider_service()
@@ -324,7 +325,7 @@ class ProviderListResource(Resource):
             return {"error": "Failed to list providers"}, 500
 
     @require_session
-    def post(self):
+    def post(self) -> ResponseReturnValue:
         try:
             data = request.get_json()
             if not data:
@@ -365,7 +366,7 @@ class ProviderListResource(Resource):
 @providers_bp.response(200, "Provider catalog")
 class ProviderCatalogResource(Resource):
     @require_session
-    def get(self):
+    def get(self) -> ResponseReturnValue:
         """Return the curated provider presets for the setup wizard."""
         try:
             from services.provider_catalog_service import get_catalog
@@ -381,7 +382,7 @@ class ProviderCatalogResource(Resource):
 @providers_bp.param("provider_id", "int", "Provider ID")
 class ProviderResource(Resource):
     @require_session
-    def get(self, provider_id: int):
+    def get(self, provider_id: int) -> ResponseReturnValue:
         try:
             service = get_provider_service()
             provider = service.get_provider_by_id(provider_id)
@@ -398,7 +399,7 @@ class ProviderResource(Resource):
             return {"error": "Failed to get provider"}, 500
 
     @require_session
-    def put(self, provider_id: int):
+    def put(self, provider_id: int) -> ResponseReturnValue:
         try:
             data = request.get_json()
             if not data:
@@ -428,7 +429,7 @@ class ProviderResource(Resource):
             return {"error": "Failed to update provider"}, 500
 
     @require_session
-    def delete(self, provider_id: int):
+    def delete(self, provider_id: int) -> ResponseReturnValue:
         try:
             service = get_provider_service()
             service.delete_provider(provider_id)
@@ -452,7 +453,7 @@ class ProviderResource(Resource):
 @providers_bp.response(200, "Model list")
 class ProviderListModelsResource(Resource):
     @require_session
-    def post(self):
+    def post(self) -> ResponseReturnValue:
         """List available models for a given platform."""
         body = request.get_json(silent=True) or {}
         platform = (body.get('platform') or '').strip().lower()
@@ -493,7 +494,7 @@ def _map_api_error(error_str: str, platform: str, model: str) -> str:
     return error_str[:300]
 
 
-def _test_ollama_provider(config: "dict[str, object]", model: str, start: float) -> "tuple[dict, int]":
+def _test_ollama_provider(config: "dict[str, object]", model: str, start: float) -> "tuple[dict[str, object], int]":
     import time
     available, err = _fetch_ollama_models(cast(str, config.get('host', '')))
     latency_ms = int((time.time() - start) * 1000)
@@ -527,7 +528,7 @@ def _test_ollama_provider(config: "dict[str, object]", model: str, start: float)
     }, 200
 
 
-def _test_api_provider(config: "dict[str, object]", platform: str, model: str, start: float) -> "tuple[dict, int]":
+def _test_api_provider(config: "dict[str, object]", platform: str, model: str, start: float) -> "tuple[dict[str, object], int]":
     import time
     api_key = config.get('api_key')
     if not api_key:
@@ -571,7 +572,7 @@ def _test_api_provider(config: "dict[str, object]", platform: str, model: str, s
 @providers_bp.response(200, "Test result")
 class ProviderTestResource(Resource):
     @require_session
-    def post(self):
+    def post(self) -> ResponseReturnValue:
         import time
 
         try:
@@ -616,7 +617,7 @@ class ProviderTestResource(Resource):
 @providers_bp.response(404, "Provider not found")
 class ProviderSelectedResource(Resource):
     @require_session
-    def get(self):
+    def get(self) -> ResponseReturnValue:
         try:
             service = get_provider_service()
             provider = service.get_selected_provider()
@@ -630,7 +631,7 @@ class ProviderSelectedResource(Resource):
             return {"error": "Failed to get selected provider"}, 500
 
     @require_session
-    def put(self):
+    def put(self) -> ResponseReturnValue:
         try:
             data = request.get_json()
             if not data or "provider_id" not in data:
@@ -669,7 +670,7 @@ class ProviderSelectedResource(Resource):
 @providers_bp.response(404, "Provider not found")
 class ProviderVisionResource(Resource):
     @require_session
-    def get(self):
+    def get(self) -> ResponseReturnValue:
         try:
             service = get_provider_service()
             status = service.get_vision_provider_status()
@@ -682,7 +683,7 @@ class ProviderVisionResource(Resource):
             return {"error": "Failed to get vision provider"}, 500
 
     @require_session
-    def put(self):
+    def put(self) -> ResponseReturnValue:
         try:
             data = request.get_json() or {}
             if 'provider_id' not in data:
@@ -718,7 +719,7 @@ class ProviderVisionResource(Resource):
 @providers_bp.response(404, "Provider not found")
 class ProviderDelegateResource(Resource):
     @require_session
-    def get(self):
+    def get(self) -> ResponseReturnValue:
         """Return the configured delegate provider + resolution source."""
         try:
             service = get_provider_service()
@@ -732,7 +733,7 @@ class ProviderDelegateResource(Resource):
             return {"error": "Failed to get delegate provider"}, 500
 
     @require_session
-    def put(self):
+    def put(self) -> ResponseReturnValue:
         """Set or clear the delegate provider ID."""
         try:
             data = request.get_json() or {}

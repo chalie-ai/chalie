@@ -15,6 +15,7 @@ from datetime import datetime
 from typing import TYPE_CHECKING
 
 from flask import Response, request, stream_with_context
+from flask.typing import ResponseReturnValue
 from flask_restx import Namespace, Resource
 
 from services.time_utils import utc_now
@@ -92,7 +93,7 @@ class DataSummaryResource(Resource):
     @require_session
     @privacy_bp.response(200, "Data summary")
     @privacy_bp.response(500, "Failed to retrieve data summary")
-    def get(self):
+    def get(self) -> ResponseReturnValue:
         try:
             from services.database_service import get_shared_db_service
             from services.memory_client import MemoryClientService
@@ -141,7 +142,7 @@ class DataSummaryResource(Resource):
 class ExportDataResource(Resource):
     @require_session
     @privacy_bp.response(200, "Data export (streaming JSON)")
-    def get(self):
+    def get(self) -> ResponseReturnValue:
 
         user_data_tables = [
             "episodes",
@@ -251,7 +252,7 @@ class DeleteAllResource(Resource):
     @privacy_bp.response(200, "Data deleted")
     @privacy_bp.response(400, "Confirmation header required")
     @privacy_bp.response(500, "Failed to delete data")
-    def delete(self):
+    def delete(self) -> ResponseReturnValue:
         confirm = request.headers.get("X-Confirm-Delete", "")
         if confirm != "yes":
             return {"error": "Requires X-Confirm-Delete: yes header"}, 400

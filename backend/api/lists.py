@@ -3,6 +3,7 @@ from datetime import datetime
 from typing import TYPE_CHECKING, cast
 
 from flask import request
+from flask.typing import ResponseReturnValue
 from flask_restx import Namespace, Resource
 
 from .auth import require_session
@@ -81,7 +82,7 @@ class ListsResource(Resource):
     @require_session
     @lists_bp.response(200, "Success")
     @lists_bp.response(500, "Internal server error")
-    def get(self):
+    def get(self) -> ResponseReturnValue:
         try:
             svc = _get_list_service()
             lists = svc.get_all_lists()
@@ -95,7 +96,7 @@ class ListsResource(Resource):
     @lists_bp.response(400, "Bad request")
     @lists_bp.response(409, "Conflict")
     @lists_bp.response(500, "Internal server error")
-    def post(self):
+    def post(self) -> ResponseReturnValue:
         data = request.get_json(silent=True) or {}
         name, err = _validate_name(data.get("name"))
         if err:
@@ -123,7 +124,7 @@ class ListResource(Resource):
     @lists_bp.response(200, "Success")
     @lists_bp.response(404, "Not found")
     @lists_bp.response(500, "Internal server error")
-    def get(self, list_id: str):
+    def get(self, list_id: str) -> ResponseReturnValue:
         try:
             svc = _get_list_service()
             lst = svc.get_list(list_id)
@@ -141,7 +142,7 @@ class ListResource(Resource):
     @lists_bp.response(200, "Success")
     @lists_bp.response(404, "Not found")
     @lists_bp.response(500, "Internal server error")
-    def delete(self, list_id: str):
+    def delete(self, list_id: str) -> ResponseReturnValue:
         try:
             svc = _get_list_service()
             ok = svc.delete_list(list_id)
@@ -161,7 +162,7 @@ class ListRenameResource(Resource):
     @lists_bp.response(400, "Bad request")
     @lists_bp.response(404, "Not found")
     @lists_bp.response(500, "Internal server error")
-    def put(self, list_id: str):
+    def put(self, list_id: str) -> ResponseReturnValue:
         data = request.get_json(silent=True) or {}
         name, err = _validate_name(data.get("name"))
         if err:
@@ -186,7 +187,7 @@ class ListItemsResource(Resource):
     @lists_bp.response(400, "Bad request")
     @lists_bp.response(404, "Not found")
     @lists_bp.response(500, "Internal server error")
-    def post(self, list_id: str):
+    def post(self, list_id: str) -> ResponseReturnValue:
         data = request.get_json(silent=True) or {}
         items, err = _validate_items(data.get("items"))
         if err:
@@ -207,7 +208,7 @@ class ListItemsResource(Resource):
     @lists_bp.response(200, "Success")
     @lists_bp.response(404, "Not found")
     @lists_bp.response(500, "Internal server error")
-    def delete(self, list_id: str):
+    def delete(self, list_id: str) -> ResponseReturnValue:
         try:
             svc = _get_list_service()
             count = svc.clear_list(list_id)
@@ -227,7 +228,7 @@ class ListItemsBatchResource(Resource):
     @lists_bp.response(400, "Bad request")
     @lists_bp.response(404, "Not found")
     @lists_bp.response(500, "Internal server error")
-    def delete(self, list_id: str):
+    def delete(self, list_id: str) -> ResponseReturnValue:
         data = request.get_json(silent=True) or {}
         items, err = _validate_items(data.get("items"))
         if err:
@@ -252,7 +253,7 @@ class ListItemsCheckResource(Resource):
     @lists_bp.response(400, "Bad request")
     @lists_bp.response(404, "Not found")
     @lists_bp.response(500, "Internal server error")
-    def put(self, list_id: str):
+    def put(self, list_id: str) -> ResponseReturnValue:
         data = request.get_json(silent=True) or {}
         items, err = _validate_items(data.get("items"))
         if err:
@@ -277,7 +278,7 @@ class ListItemsUncheckResource(Resource):
     @lists_bp.response(400, "Bad request")
     @lists_bp.response(404, "Not found")
     @lists_bp.response(500, "Internal server error")
-    def put(self, list_id: str):
+    def put(self, list_id: str) -> ResponseReturnValue:
         data = request.get_json(silent=True) or {}
         items, err = _validate_items(data.get("items"))
         if err:

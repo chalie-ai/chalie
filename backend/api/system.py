@@ -8,6 +8,7 @@ import os
 from typing import TYPE_CHECKING, cast
 
 from flask import request
+from flask.typing import ResponseReturnValue
 from flask_restx import Namespace, Resource
 
 from .auth import require_session
@@ -58,12 +59,12 @@ def _persist_heartbeat(data: dict[str, object]) -> None:
 @system_bp.route('/health')
 class HealthResource(Resource):
     @system_bp.response(200, "OK")
-    def get(self):
+    def get(self) -> ResponseReturnValue:
         """Health check endpoint (no auth required)."""
         return _ok_response()
 
     @system_bp.response(200, "OK")
-    def post(self):
+    def post(self) -> ResponseReturnValue:
         """Health check endpoint (no auth required). POST saves client context."""
         try:
             data = request.get_json() or {}
@@ -77,7 +78,7 @@ class HealthResource(Resource):
 @system_bp.route('/ready')
 class ReadinessResource(Resource):
     @system_bp.response(200, "Ready")
-    def get(self):
+    def get(self) -> ResponseReturnValue:
         """Readiness probe — 200 only when SQLite, MemoryStore, embeddings, and ONNX are ready.
 
         Delegates to the read-only :func:`services.preflight_service.run_preflight`.
@@ -96,7 +97,7 @@ class ReadinessResource(Resource):
 class MetricsResource(Resource):
     @require_session
     @system_bp.response(200, "OK")
-    def get(self):
+    def get(self) -> ResponseReturnValue:
         """Metrics dashboard endpoint."""
         try:
             from services.metrics_service import MetricsService
@@ -112,7 +113,7 @@ class MetricsResource(Resource):
 class SystemStatusResource(Resource):
     @require_session
     @system_bp.response(200, "OK")
-    def get(self):
+    def get(self) -> ResponseReturnValue:
         """Comprehensive system health and diagnostics."""
         try:
             from services.memory_client import MemoryClientService
@@ -177,7 +178,7 @@ _RESEARCH_LIST_LIMIT = 100
 class ObservabilityRecordsResource(Resource):
     @require_session
     @system_bp.response(200, "OK")
-    def get(self):
+    def get(self) -> ResponseReturnValue:
         """Paginated record browser for episodes, user, and system memory sources."""
         try:
             source = request.args.get('source', '')
@@ -253,7 +254,7 @@ class ObservabilityRecordsResource(Resource):
 class ObservabilityToolsResource(Resource):
     @require_session
     @system_bp.response(200, "OK")
-    def get(self):
+    def get(self) -> ResponseReturnValue:
         """Tool usage counts from tool_calls — count + last_used per tool."""
         try:
             from services.database_service import get_shared_db_service
@@ -285,7 +286,7 @@ class ObservabilityToolsResource(Resource):
 class ObservabilityTokenUsageResource(Resource):
     @require_session
     @system_bp.response(200, "OK")
-    def get(self):
+    def get(self) -> ResponseReturnValue:
         """Token usage aggregated by time window, model, provider, and usage class.
 
         Query params:
@@ -310,7 +311,7 @@ class ObservabilityTokenUsageResource(Resource):
 class ObservabilityWorldStateResource(Resource):
     @require_session
     @system_bp.response(200, "OK")
-    def get(self):
+    def get(self) -> ResponseReturnValue:
         """World state as seen by the ACT loop — rendered block + raw inputs."""
         from services.world_state import world_state, _fetch_schedule_rows
         from services.heartbeat_service import heartbeat_service
@@ -329,7 +330,7 @@ class ObservabilityWorldStateResource(Resource):
 class ObservabilityCompactionResource(Resource):
     @require_session
     @system_bp.response(200, "OK")
-    def get(self):
+    def get(self) -> ResponseReturnValue:
         """Continuity-compaction synthesis for the chat ('user') channel.
 
         Returns the durable summary the ACT loop carries forward after a
@@ -358,7 +359,7 @@ class ObservabilityCompactionResource(Resource):
 class ObservabilityResearchResource(Resource):
     @require_session
     @system_bp.response(200, "OK")
-    def get(self):
+    def get(self) -> ResponseReturnValue:
         """Newest-first list of proactive-research (Auto Research) runs.
 
         Each row is one execution of the background research loop: when it ran and a
@@ -379,7 +380,7 @@ class ObservabilityResearchResource(Resource):
 class ObservabilityResearchDetailResource(Resource):
     @require_session
     @system_bp.response(200, "OK")
-    def get(self, run_id: int):
+    def get(self, run_id: int) -> ResponseReturnValue:
         """One Auto Research run: the grounding it ran against plus its full output.
 
         ``transcript`` is the loop's assistant output, read live from the transcript
@@ -401,7 +402,7 @@ class ObservabilityResearchDetailResource(Resource):
 class ObservabilityWriteQueueResource(Resource):
     @require_session
     @system_bp.response(200, "OK")
-    def get(self):
+    def get(self) -> ResponseReturnValue:
         """Write queue runtime statistics.
 
         Returns a JSON snapshot of the :class:`~services.write_queue_service.WriteQueueService`
@@ -426,7 +427,7 @@ class ObservabilityWriteQueueResource(Resource):
 class ObservabilityTelemetryResource(Resource):
     @require_session
     @system_bp.response(200, "OK")
-    def get(self):
+    def get(self) -> ResponseReturnValue:
         """Telemetry event summary across all tracked event types.
 
         Returns a per-event-type breakdown produced by the process-level
@@ -502,7 +503,7 @@ def _tail_error_lines() -> list[dict[str, object]]:
 class ObservabilityErrorsResource(Resource):
     @require_session
     @system_bp.response(200, "OK")
-    def get(self):
+    def get(self) -> ResponseReturnValue:
         """Recent ERROR and CRITICAL log lines from /tmp/chalie.log, newest first.
 
         Reads only the last ~256 KB of the log file to avoid loading unbounded content.
@@ -523,7 +524,7 @@ class ObservabilityErrorsResource(Resource):
 class UpdateCheckResource(Resource):
     @require_session
     @system_bp.response(200, "OK")
-    def get(self):
+    def get(self) -> ResponseReturnValue:
         try:
             from services.app_update_service import AppUpdateService
             info = AppUpdateService().check_for_update()
@@ -537,7 +538,7 @@ class UpdateCheckResource(Resource):
 class UpdateApplyResource(Resource):
     @require_session
     @system_bp.response(200, "OK")
-    def post(self):
+    def post(self) -> ResponseReturnValue:
         try:
             from services.app_update_service import AppUpdateService
             data = request.get_json(silent=True) or {}
@@ -564,7 +565,7 @@ class UpdateApplyResource(Resource):
 class ContextUsageResource(Resource):
     @require_session
     @system_bp.response(200, "OK")
-    def get(self):
+    def get(self) -> ResponseReturnValue:
         """Last user-turn request size + context window for the composer indicator.
 
         ``last_request_tokens`` is the provider-reported ``tokens_input`` of the most
@@ -589,7 +590,7 @@ class ContextUsageResource(Resource):
 class SettingsResource(Resource):
     @require_session
     @system_bp.response(200, "OK")
-    def get(self, key: str):
+    def get(self, key: str) -> ResponseReturnValue:
         from services.settings_service import SettingsService
         from services.database_service import get_shared_db_service
         try:
@@ -602,7 +603,7 @@ class SettingsResource(Resource):
 
     @require_session
     @system_bp.response(200, "OK")
-    def put(self, key: str):
+    def put(self, key: str) -> ResponseReturnValue:
         from services.settings_service import SettingsService
         from services.database_service import get_shared_db_service
         data = request.get_json(silent=True) or {}

@@ -6,6 +6,7 @@ import logging
 from typing import TYPE_CHECKING, cast
 
 from flask import request
+from flask.typing import ResponseReturnValue
 from flask_restx import Namespace, Resource
 
 from .auth import require_session
@@ -23,7 +24,7 @@ class PersonalityResource(Resource):
     @require_session
     @personality_bp.response(200, "Personality tuple")
     @personality_bp.response(500, "Failed to get personality")
-    def get(self):
+    def get(self) -> ResponseReturnValue:
         try:
             from services.personality.personality_service import personality_service
 
@@ -37,7 +38,7 @@ class PersonalityResource(Resource):
     @personality_bp.response(200, "Personality updated")
     @personality_bp.response(400, "Validation error")
     @personality_bp.response(500, "Failed to set personality")
-    def put(self):
+    def put(self) -> ResponseReturnValue:
         try:
             data = request.get_json(silent=True) or {}
             raw = data.get('tuple')

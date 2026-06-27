@@ -10,6 +10,7 @@ import sqlite3
 from typing import TYPE_CHECKING
 
 from flask import request
+from flask.typing import ResponseReturnValue
 from flask_restx import Namespace, Resource
 
 from utils.skills_io import (
@@ -92,7 +93,7 @@ def _index_new_skill(conn: sqlite3.Connection, skill_id: int, title: str, use_fo
 class SkillsListResource(Resource):
     @require_session
     @skills_bp.response(200, "OK")
-    def get(self):
+    def get(self) -> ResponseReturnValue:
         if not SKILLS_DB_PATH.exists():
             return {"skills": [], "associations": []}, 200
 
@@ -116,7 +117,7 @@ class SkillsListResource(Resource):
 
     @require_session
     @skills_bp.response(201, "Created")
-    def post(self):
+    def post(self) -> ResponseReturnValue:
         data = request.get_json(silent=True) or {}
         title = (data.get("title") or "").strip()
         use_for = (data.get("use_for") or "").strip()
@@ -180,7 +181,7 @@ class SkillsListResource(Resource):
 class SkillItemResource(Resource):
     @require_session
     @skills_bp.response(200, "OK")
-    def put(self, skill_id: int):
+    def put(self, skill_id: int) -> ResponseReturnValue:
         data = request.get_json(silent=True) or {}
 
         if not SKILLS_DB_PATH.exists():
@@ -239,7 +240,7 @@ class SkillItemResource(Resource):
 
     @require_session
     @skills_bp.response(200, "OK")
-    def delete(self, skill_id: int):
+    def delete(self, skill_id: int) -> ResponseReturnValue:
         if not SKILLS_DB_PATH.exists():
             return {"error": "skills database unavailable"}, 503
 
@@ -279,7 +280,7 @@ class SkillItemResource(Resource):
 class SkillToggleResource(Resource):
     @require_session
     @skills_bp.response(200, "OK")
-    def put(self, skill_id: int):
+    def put(self, skill_id: int) -> ResponseReturnValue:
         if not SKILLS_DB_PATH.exists():
             return {"error": "skills database unavailable"}, 503
 
@@ -309,7 +310,7 @@ class SkillToggleResource(Resource):
 class SkillCopyResource(Resource):
     @require_session
     @skills_bp.response(201, "Created")
-    def post(self, skill_id: int):
+    def post(self, skill_id: int) -> ResponseReturnValue:
         if not SKILLS_DB_PATH.exists():
             return {"error": "skills database unavailable"}, 503
 

@@ -36,6 +36,7 @@ import uuid
 from typing import TYPE_CHECKING, cast
 
 from flask import g, request
+from flask.typing import ResponseReturnValue
 from flask_restx import Namespace, Resource
 
 from .auth import require_auth
@@ -163,7 +164,7 @@ class SignalResource(Resource):
     @signals_bp.response(400, "Bad request")
     @signals_bp.response(403, "Forbidden")
     @signals_bp.response(429, "Rate limit exceeded")
-    def post(self):
+    def post(self) -> ResponseReturnValue:
         """Ingest a single signal into world state (zero LLM).
 
         Body (JSON):
@@ -213,7 +214,7 @@ class SignalBatchResource(Resource):
     @require_auth
     @signals_bp.response(200, "Success")
     @signals_bp.response(400, "Bad request")
-    def post(self):
+    def post(self) -> ResponseReturnValue:
         """Ingest up to 50 signals in a single request.
 
         Body (JSON):

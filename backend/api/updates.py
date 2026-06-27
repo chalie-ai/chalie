@@ -19,6 +19,7 @@ import uuid
 from typing import TYPE_CHECKING
 
 from flask import g, request
+from flask.typing import ResponseReturnValue
 
 from flask_restx import Namespace, Resource
 from .auth import require_auth
@@ -36,7 +37,7 @@ updates_bp = Namespace("updates", description="State mutation endpoints", path="
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _check_update_permission(update_type: str) -> "tuple[dict, int] | None":
+def _check_update_permission(update_type: str) -> "tuple[dict[str, object], int] | None":
     """Return a 403 response if the bearer wrapper lacks the required permission.
 
     For cookie-authenticated requests (``g.wrapper_id is None``) this function
@@ -70,7 +71,7 @@ def _get_db() -> object:
 @updates_bp.response(422, "Rejected by validation rules")
 class BeliefResource(Resource):
     @require_auth
-    def post(self):
+    def post(self) -> ResponseReturnValue:
         """Set or correct a user trait (belief update)."""
         denied = _check_update_permission("belief")
         if denied is not None:
@@ -123,7 +124,7 @@ class BeliefResource(Resource):
 @updates_bp.response(403, "Insufficient permissions")
 class MemoryResource(Resource):
     @require_auth
-    def post(self):
+    def post(self) -> ResponseReturnValue:
         """Encode a memory (episodic/semantic)."""
         denied = _check_update_permission("memory")
         if denied is not None:
@@ -177,7 +178,7 @@ class MemoryResource(Resource):
 @updates_bp.response(403, "Insufficient permissions")
 class FeedbackResource(Resource):
     @require_auth
-    def post(self):
+    def post(self) -> ResponseReturnValue:
         """Report intent execution outcome (feedback update)."""
         denied = _check_update_permission("feedback")
         if denied is not None:

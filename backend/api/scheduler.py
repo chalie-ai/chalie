@@ -16,6 +16,7 @@ from datetime import datetime
 from typing import TYPE_CHECKING, cast
 
 from flask import request
+from flask.typing import ResponseReturnValue
 
 from flask_restx import Namespace, Resource
 from .auth import require_session
@@ -156,7 +157,7 @@ def _row_to_dict(row: "Iterable[object]", cols: "list[str]") -> "dict[str, objec
 @scheduler_bp.response(201, "Item created")
 class SchedulerListResource(Resource):
     @require_session
-    def get(self):
+    def get(self) -> ResponseReturnValue:
         """List scheduled items with optional status filter and pagination."""
         status_filter = request.args.get("status", "all").strip()
         include_hidden = request.args.get("include_hidden", "").lower() == "true"
@@ -220,7 +221,7 @@ class SchedulerListResource(Resource):
             return {"error": _ERR_INTERNAL}, 500
 
     @require_session
-    def post(self):
+    def post(self) -> ResponseReturnValue:
         """Create a new scheduled item."""
         data = request.get_json(silent=True) or {}
         clean, err = _validate_item(data, require_future=True)
@@ -293,7 +294,7 @@ class SchedulerListResource(Resource):
 @scheduler_bp.response(200, "History pruned")
 class SchedulerHistoryResource(Resource):
     @require_session
-    def delete(self):
+    def delete(self) -> ResponseReturnValue:
         """Delete fired/failed/cancelled items older than N days (default 30)."""
         try:
             older_than_days = max(int(request.args.get("older_than_days", 30)), 1)
@@ -329,7 +330,7 @@ class SchedulerHistoryResource(Resource):
 @scheduler_bp.param("group_id", "str", "Group identifier")
 class SchedulerGroupResource(Resource):
     @require_session
-    def get(self, group_id: str):
+    def get(self, group_id: str) -> ResponseReturnValue:
         """Return fire history for a recurring schedule group (newest first, max 50)."""
         try:
             limit = min(int(request.args.get("limit", 10)), 50)
@@ -372,7 +373,7 @@ class SchedulerGroupResource(Resource):
 @scheduler_bp.param("item_id", "str", "Item identifier")
 class SchedulerItemResource(Resource):
     @require_session
-    def get(self, item_id: str):
+    def get(self, item_id: str) -> ResponseReturnValue:
         """Fetch a single scheduled item by ID."""
         try:
             from services.database_service import get_shared_db_service
@@ -400,7 +401,7 @@ class SchedulerItemResource(Resource):
             return {"error": _ERR_INTERNAL}, 500
 
     @require_session
-    def put(self, item_id: str):
+    def put(self, item_id: str) -> ResponseReturnValue:
         """Update a pending scheduled item."""
         try:
             from services.database_service import get_shared_db_service
@@ -471,7 +472,7 @@ class SchedulerItemResource(Resource):
             return {"error": _ERR_INTERNAL}, 500
 
     @require_session
-    def delete(self, item_id: str):
+    def delete(self, item_id: str) -> ResponseReturnValue:
         """Cancel a pending scheduled item (sets status to 'cancelled')."""
         try:
             from services.database_service import get_shared_db_service

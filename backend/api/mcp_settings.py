@@ -10,6 +10,7 @@ import logging
 from typing import TYPE_CHECKING
 
 from flask import request
+from flask.typing import ResponseReturnValue
 from flask_restx import Namespace, Resource
 
 from .auth import require_session
@@ -36,7 +37,7 @@ def _get_services() -> "tuple[SettingsService, WrapperAuthService, object]":
 class McpSettingsResource(Resource):
     @require_session
     @mcp_settings_bp.response(200, "Success")
-    def get(self):
+    def get(self) -> ResponseReturnValue:
         settings, auth_svc, _ = _get_services()
 
         enabled = settings.get("mcp_server_enabled")
@@ -59,7 +60,7 @@ class McpSettingsResource(Resource):
     @require_session
     @mcp_settings_bp.response(200, "Success")
     @mcp_settings_bp.response(400, "Bad request")
-    def put(self):
+    def put(self) -> ResponseReturnValue:
         settings, _, _ = _get_services()
         data = request.get_json(silent=True) or {}
 
@@ -84,7 +85,7 @@ class McpSettingsResource(Resource):
 class RegenerateTokenResource(Resource):
     @require_session
     @mcp_settings_bp.response(200, "Success")
-    def post(self):
+    def post(self) -> ResponseReturnValue:
         settings, auth_svc, _ = _get_services()
 
         old_wrapper_id = settings.get("mcp_server_token_wrapper_id")

@@ -6,6 +6,7 @@ import logging
 from typing import TYPE_CHECKING, cast
 
 from flask import request, jsonify
+from flask.typing import ResponseReturnValue
 from flask_restx import Namespace, Resource
 from services.database_service import text
 from .auth import require_auth, _cookie_only, internal_only
@@ -76,7 +77,7 @@ def _get_vault_state() -> str:
 class AuthStatusResource(Resource):
     @user_auth_bp.response(200, "Auth status")
     @user_auth_bp.response(500, "Failed to check auth status")
-    def get(self):
+    def get(self) -> ResponseReturnValue:
         """Check whether master account exists, providers are configured, and
         user has session.
 
@@ -147,7 +148,7 @@ class UsernameResource(Resource):
     @user_auth_bp.response(200, "Username")
     @user_auth_bp.response(404, "No master account")
     @user_auth_bp.response(500, "Failed to read username")
-    def get(self):
+    def get(self) -> ResponseReturnValue:
         """Return the master account LOGIN username for the authenticated dashboard
         session — the credential the device's UnlockVault screen submits to
         POST /auth/login. Cookie-session only; a wrapper bearer must not read it.
@@ -174,7 +175,7 @@ class RegisterResource(Resource):
     @user_auth_bp.response(400, "Validation error")
     @user_auth_bp.response(409, "Master account already exists")
     @user_auth_bp.response(500, "Failed to create account")
-    def post(self):
+    def post(self) -> ResponseReturnValue:
         """Create master account. Fails (409) if one exists. Sets session cookie on success.
 
         On success the vault is initialised with the master password and immediately
@@ -253,7 +254,7 @@ class LoginResource(Resource):
     @user_auth_bp.response(401, "Invalid credentials")
     @user_auth_bp.response(429, "Too many login attempts")
     @user_auth_bp.response(500, "Failed to authenticate")
-    def post(self):
+    def post(self) -> ResponseReturnValue:
         """Verify credentials and set session cookie. Returns 401 on invalid credentials.
 
         After the password is verified against the account hash, the vault is opened
@@ -363,7 +364,7 @@ class LoginResource(Resource):
 class LogoutResource(Resource):
     @user_auth_bp.response(200, "Logged out")
     @user_auth_bp.response(500, "Failed to logout")
-    def post(self):
+    def post(self) -> ResponseReturnValue:
         """Invalidate the current session and clear the cookie.
 
         Seals the vault by clearing the in-memory DEK before destroying the session

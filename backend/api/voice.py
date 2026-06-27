@@ -31,6 +31,7 @@ import threading
 from typing import TYPE_CHECKING, cast
 
 from flask import Response, jsonify, make_response, request
+from flask.typing import ResponseReturnValue
 from flask_restx import Namespace, Resource
 
 if TYPE_CHECKING:
@@ -600,7 +601,7 @@ def _transcribe_sync(data: bytes) -> str:
 @voice_bp.response(200, "Health status")
 class VoiceHealthResource(Resource):
     @require_auth
-    def get(self):
+    def get(self) -> ResponseReturnValue:
         """Voice service health check."""
         if not _VOICE_AVAILABLE:
             return {
@@ -634,7 +635,7 @@ class VoiceHealthResource(Resource):
 @voice_bp.response(503, "Voice unavailable")
 class VoiceSynthesizeResource(Resource):
     @require_auth
-    def post(self):
+    def post(self) -> ResponseReturnValue:
         if not _VOICE_AVAILABLE:
             return _voice_unavailable_payload(), 503
 
@@ -696,7 +697,7 @@ class VoiceSynthesizeResource(Resource):
 @voice_bp.response(503, "Voice unavailable")
 class VoiceTranscribeResource(Resource):
     @require_auth
-    def post(self):
+    def post(self) -> ResponseReturnValue:
         if not _VOICE_AVAILABLE:
             return _voice_unavailable_payload(), 503
 

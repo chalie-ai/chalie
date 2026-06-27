@@ -22,6 +22,7 @@ import logging
 from typing import TYPE_CHECKING, cast
 
 from flask import request
+from flask.typing import ResponseReturnValue
 
 from flask_restx import Namespace, Resource
 from services.vault_service import VaultLockedError
@@ -80,7 +81,7 @@ def _get_last_sync_at(cap_id: str) -> str | None:
 @capabilities_bp.response(200, "List of capabilities")
 class CapabilityListResource(Resource):
     @require_auth
-    def get(self):
+    def get(self) -> ResponseReturnValue:
         try:
             caps = _load_caps()
             result = []
@@ -108,7 +109,7 @@ class CapabilityListResource(Resource):
 @capabilities_bp.param("cap_id", "str", "Capability identifier")
 class CapabilityDetailResource(Resource):
     @require_auth
-    def get(self, cap_id: str):
+    def get(self, cap_id: str) -> ResponseReturnValue:
         """Password fields are excluded — only non-secret fields are returned."""
         try:
             caps = _load_caps()
@@ -151,7 +152,7 @@ class CapabilityDetailResource(Resource):
 @capabilities_bp.param("cap_id", "str", "Capability identifier")
 class CapabilitySetupResource(Resource):
     @require_auth
-    def post(self, cap_id: str):
+    def post(self, cap_id: str) -> ResponseReturnValue:
         """Connect a capability with credentials."""
         try:
             caps = _load_caps()
@@ -200,7 +201,7 @@ class CapabilitySetupResource(Resource):
 @capabilities_bp.param("cap_id", "str", "Capability identifier")
 class CapabilityDisconnectResource(Resource):
     @require_auth
-    def post(self, cap_id: str):
+    def post(self, cap_id: str) -> ResponseReturnValue:
         """Disconnect a capability."""
         try:
             caps = _load_caps()
@@ -223,7 +224,7 @@ class CapabilityDisconnectResource(Resource):
 @capabilities_bp.param("cap_id", "str", "Capability identifier")
 class CapabilityStatusResource(Resource):
     @require_auth
-    def get(self, cap_id: str):
+    def get(self, cap_id: str) -> ResponseReturnValue:
         """Get connectivity and error status for a capability."""
         try:
             caps = _load_caps()

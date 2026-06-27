@@ -2,6 +2,7 @@ import logging
 from typing import TYPE_CHECKING, cast
 
 from flask import request
+from flask.typing import ResponseReturnValue
 from flask_restx import Namespace, Resource
 
 from .auth import require_session
@@ -20,7 +21,7 @@ class MemorySearchResource(Resource):
     @memory_bp.response(200, "Search results")
     @memory_bp.response(400, "Missing query")
     @memory_bp.response(500, "Failed to search memory")
-    def get(self):
+    def get(self) -> ResponseReturnValue:
         query = request.args.get("q", "").strip()
         if not query:
             return {"error": "Missing 'q' query parameter"}, 400

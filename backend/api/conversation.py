@@ -4,6 +4,7 @@ import logging
 import sqlite3
 from typing import cast
 from flask import request
+from flask.typing import ResponseReturnValue
 from flask_restx import Namespace, Resource
 
 from .auth import require_session
@@ -141,7 +142,7 @@ def get_recent_history(limit: int = 12, offset: int = 0) -> tuple[list[dict[str,
 class ConversationRecentResource(Resource):
     @require_session
     @conversation_bp.response(200, "Recent conversation history")
-    def get(self):
+    def get(self) -> ResponseReturnValue:
         try:
             limit = max(1, min(120, int(request.args.get("limit", 12))))
         except (ValueError, TypeError):

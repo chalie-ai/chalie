@@ -8,6 +8,7 @@ import logging
 from typing import TYPE_CHECKING
 
 from flask import g, request
+from flask.typing import ResponseReturnValue
 
 from flask_restx import Namespace, Resource
 from .auth import require_session
@@ -45,7 +46,7 @@ def _get_intent_service() -> IntentService:
 @intents_bp.response(400, "Invalid limit")
 class IntentListResource(Resource):
     @require_session
-    def get(self):
+    def get(self) -> ResponseReturnValue:
         wrapper_id = _effective_wrapper_id()
 
         try:
@@ -71,7 +72,7 @@ class IntentListResource(Resource):
 @intents_bp.param("intent_id", "str", "Intent identifier")
 class IntentDetailResource(Resource):
     @require_session
-    def get(self, intent_id: str):
+    def get(self, intent_id: str) -> ResponseReturnValue:
         """Returns 404 if the intent does not exist or has expired."""
         svc = _get_intent_service()
         intent = svc.get_intent(intent_id)
@@ -92,7 +93,7 @@ class IntentDetailResource(Resource):
 @intents_bp.param("intent_id", "str", "Intent identifier")
 class IntentAckResource(Resource):
     @require_session
-    def post(self, intent_id: str):
+    def post(self, intent_id: str) -> ResponseReturnValue:
         """Acknowledge receipt of an intent."""
         wrapper_id = _effective_wrapper_id()
         svc = _get_intent_service()
@@ -115,7 +116,7 @@ class IntentAckResource(Resource):
 @intents_bp.param("intent_id", "str", "Intent identifier")
 class IntentResolveResource(Resource):
     @require_session
-    def post(self, intent_id: str):
+    def post(self, intent_id: str) -> ResponseReturnValue:
         body = request.get_json(silent=True)
         if not isinstance(body, dict):
             return {"error": "request body must be a JSON object"}, 400

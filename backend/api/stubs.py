@@ -3,6 +3,7 @@ Stub namespace — future endpoints that return 501 Not Implemented.
 """
 
 from flask_restx import Namespace, Resource
+from flask.typing import ResponseReturnValue
 
 from .auth import require_session
 
@@ -16,7 +17,7 @@ _NOT_IMPLEMENTED = ({"error": "Not implemented", "planned": True}, 501)
 class CalendarStubResource(Resource):
     @require_session
     @stubs_bp.response(501, "Not implemented")
-    def get(self, subpath: str | None = None):
+    def get(self, subpath: str | None = None) -> ResponseReturnValue:
         """Return 501 Not Implemented for all calendar endpoints.
 
         Placeholder for future calendar integration.  Accepts an optional
@@ -38,7 +39,7 @@ class CalendarStubResource(Resource):
 class NotificationsDigestStubResource(Resource):
     @require_session
     @stubs_bp.response(501, "Not implemented")
-    def get(self):
+    def get(self) -> ResponseReturnValue:
         """Return 501 Not Implemented for the notifications digest endpoint.
 
         Placeholder for a future aggregated notifications digest feed.
@@ -55,7 +56,7 @@ class NotificationsDigestStubResource(Resource):
 class IntegrationsMessagesStubResource(Resource):
     @require_session
     @stubs_bp.response(501, "Not implemented")
-    def get(self, subpath: str | None = None):
+    def get(self, subpath: str | None = None) -> ResponseReturnValue:
         """Return 501 Not Implemented for all integrations message-listing endpoints.
 
         Placeholder for future third-party messaging integration.  Accepts an
@@ -76,7 +77,7 @@ class IntegrationsMessagesStubResource(Resource):
 class IntegrationsReplyStubResource(Resource):
     @require_session
     @stubs_bp.response(501, "Not implemented")
-    def post(self):
+    def post(self) -> ResponseReturnValue:
         """Return 501 Not Implemented for the integrations message-reply endpoint.
 
         Placeholder for a future API to send replies via integrated messaging
@@ -93,7 +94,7 @@ class IntegrationsReplyStubResource(Resource):
 class PermissionsStubResource(Resource):
     @require_session
     @stubs_bp.response(501, "Not implemented")
-    def get(self):
+    def get(self) -> ResponseReturnValue:
         """Return 501 Not Implemented for the permissions endpoint.
 
         Placeholder for a future fine-grained permissions / capability query API.

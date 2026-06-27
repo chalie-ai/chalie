@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from flask import request, send_file
+from flask.typing import ResponseReturnValue
 from werkzeug.utils import secure_filename
 
 from flask_restx import Namespace, Resource
@@ -43,7 +44,7 @@ _DEFAULT_UPLOAD_NAME = "snapshot.zip"
 @snapshot_bp.response(500, "Export failed")
 class SnapshotExportResource(Resource):
     @require_session
-    def post(self):
+    def post(self) -> ResponseReturnValue:
         try:
             body = request.get_json(silent=True) or {}
             password = body.get("password") or None
@@ -67,7 +68,7 @@ class SnapshotExportResource(Resource):
 @snapshot_bp.response(400, "Import failed")
 class SnapshotImportResource(Resource):
     @require_session
-    def post(self):
+    def post(self) -> ResponseReturnValue:
         """Stage an uploaded snapshot and request a restart to apply it.
 
         Restore is destructive (full wipe-and-replace at next boot); the staging

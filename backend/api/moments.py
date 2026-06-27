@@ -20,6 +20,7 @@ import logging
 from typing import TYPE_CHECKING, cast
 
 from flask import g, request
+from flask.typing import ResponseReturnValue
 from flask_restx import Namespace, Resource
 
 from .auth import require_session
@@ -131,7 +132,7 @@ class MomentsResource(Resource):
     @moments_bp.response(400, "Bad request")
     @moments_bp.response(404, "Not found")
     @moments_bp.response(500, "Internal server error")
-    def post(self):
+    def post(self) -> ResponseReturnValue:
         if not request.is_json:
             return {"error": "Content-Type must be application/json"}, 400
 
@@ -171,7 +172,7 @@ class MomentsResource(Resource):
     @require_session
     @moments_bp.response(200, "Success")
     @moments_bp.response(500, "Internal server error")
-    def get(self):
+    def get(self) -> ResponseReturnValue:
         try:
             rows = _get_moments().list_all()
             return {"items": [_serialize_moment(cast("dict[str, object]", r)) for r in rows]}
@@ -187,7 +188,7 @@ class MomentForgetResource(Resource):
     @moments_bp.response(200, "Success")
     @moments_bp.response(404, "Not found")
     @moments_bp.response(500, "Internal server error")
-    def post(self, transcript_id: int):
+    def post(self, transcript_id: int) -> ResponseReturnValue:
         try:
             if not _get_moments().delete_by_transcript(transcript_id):
                 return {"error": "Moment not found"}, 404
@@ -203,7 +204,7 @@ class MomentsSearchResource(Resource):
     @moments_bp.response(200, "Success")
     @moments_bp.response(400, "Bad request")
     @moments_bp.response(500, "Internal server error")
-    def get(self):
+    def get(self) -> ResponseReturnValue:
         query = (request.args.get("q") or "").strip()
         if not query:
             return {"error": "Query parameter 'q' is required"}, 400

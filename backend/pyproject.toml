@@ -115,6 +115,12 @@ ignore_missing_imports = true
 # closer to a hard-typed language. strict_bytes forbids the implicit
 # str/bytes/bytearray promiscuity mypy otherwise tolerates.
 strict_bytes = true
+# Local type stubs for untyped third-party deps. flask_restx ships no py.typed,
+# so without this mypy treats Resource/Namespace/Api as Any — which then trips
+# `disallow_subclassing_any` and `disallow_untyped_decorators` on every API
+# module. The stubs file is .pyi (not .py), so the no-Any/no-# type: ignore gates
+# (which walk .py only) don't apply to it.
+mypy_path = "stubs"
 
 [tool.setuptools]
 # backend/ is not an importable package — it's run directly via run.py.

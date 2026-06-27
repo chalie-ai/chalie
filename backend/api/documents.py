@@ -29,6 +29,7 @@ from datetime import datetime
 from typing import TYPE_CHECKING, cast
 
 from flask import request, send_file
+from flask.typing import ResponseReturnValue
 
 from flask_restx import Namespace, Resource
 from services.file_mapper_service import FileMapperService
@@ -201,7 +202,7 @@ def _run_upload_extraction(doc_id: str) -> None:
 @documents_bp.response(201, "Document uploaded")
 class UploadDocumentResource(Resource):
     @require_session
-    def post(self):
+    def post(self) -> ResponseReturnValue:
         """Upload and ingest a document."""
         if 'file' not in request.files:
             return {"error": "No file provided"}, 400
@@ -275,7 +276,7 @@ class UploadDocumentResource(Resource):
 @documents_bp.response(200, "List of documents")
 class ListDocumentsResource(Resource):
     @require_session
-    def get(self):
+    def get(self) -> ResponseReturnValue:
         include_deleted = request.args.get('include_deleted', 'false').lower() == 'true'
         try:
             svc = _get_document_service()
@@ -292,7 +293,7 @@ class ListDocumentsResource(Resource):
 @documents_bp.param("doc_id", "str", "Document identifier")
 class DocumentResource(Resource):
     @require_session
-    def get(self, doc_id: str):
+    def get(self, doc_id: str) -> ResponseReturnValue:
         """Get document metadata + first N data_graph artifact previews."""
         try:
             svc = _get_document_service()
@@ -315,7 +316,7 @@ class DocumentResource(Resource):
             return {"error": _ERR_INTERNAL}, 500
 
     @require_session
-    def delete(self, doc_id: str):
+    def delete(self, doc_id: str) -> ResponseReturnValue:
         try:
             svc = _get_document_service()
             ok = svc.soft_delete(doc_id)
@@ -333,7 +334,7 @@ class DocumentResource(Resource):
 @documents_bp.param("doc_id", "str", "Document identifier")
 class DocumentContentResource(Resource):
     @require_session
-    def get(self, doc_id: str):
+    def get(self, doc_id: str) -> ResponseReturnValue:
         """Get full document text reconstructed from data_graph artifacts."""
         try:
             svc = _get_document_service()
@@ -366,7 +367,7 @@ class DocumentContentResource(Resource):
 @documents_bp.param("doc_id", "str", "Document identifier")
 class DocumentDownloadResource(Resource):
     @require_session
-    def get(self, doc_id: str):
+    def get(self, doc_id: str) -> ResponseReturnValue:
         try:
             svc = _get_document_service()
             doc = svc.get_document(doc_id)
@@ -399,7 +400,7 @@ class DocumentDownloadResource(Resource):
 @documents_bp.param("doc_id", "str", "Document identifier")
 class DocumentPreviewResource(Resource):
     @require_session
-    def get(self, doc_id: str):
+    def get(self, doc_id: str) -> ResponseReturnValue:
         """Stream file for inline browser preview."""
         try:
             svc = _get_document_service()
@@ -433,7 +434,7 @@ class DocumentPreviewResource(Resource):
 @documents_bp.param("doc_id", "str", "Document identifier")
 class DocumentClassifyResource(Resource):
     @require_session
-    def put(self, doc_id: str):
+    def put(self, doc_id: str) -> ResponseReturnValue:
         """Update document classification metadata."""
         try:
             svc = _get_document_service()
@@ -460,7 +461,7 @@ class DocumentClassifyResource(Resource):
 @documents_bp.param("field", "str", "Classification field name")
 class DocumentGroupsResource(Resource):
     @require_session
-    def get(self, field: str):
+    def get(self, field: str) -> ResponseReturnValue:
         """Get unique classification groups for a field."""
         try:
             svc = _get_document_service()
@@ -477,7 +478,7 @@ class DocumentGroupsResource(Resource):
 @documents_bp.param("doc_id", "str", "Document identifier")
 class DocumentRestoreResource(Resource):
     @require_session
-    def post(self, doc_id: str):
+    def post(self, doc_id: str) -> ResponseReturnValue:
         try:
             svc = _get_document_service()
             ok = svc.restore(doc_id)
@@ -495,7 +496,7 @@ class DocumentRestoreResource(Resource):
 @documents_bp.param("doc_id", "str", "Document identifier")
 class DocumentPurgeResource(Resource):
     @require_session
-    def delete(self, doc_id: str):
+    def delete(self, doc_id: str) -> ResponseReturnValue:
         try:
             svc = _get_document_service()
             ok = svc.hard_delete(doc_id)
@@ -511,7 +512,7 @@ class DocumentPurgeResource(Resource):
 @documents_bp.response(200, "Search results")
 class DocumentSearchResource(Resource):
     @require_session
-    def get(self):
+    def get(self) -> ResponseReturnValue:
         """Search across document artifacts in data_graph."""
         q_raw = request.args.get('q', None)
         if q_raw is None:
@@ -552,7 +553,7 @@ class DocumentSearchResource(Resource):
 @documents_bp.param("doc_id", "str", "Document identifier")
 class DocumentConfirmResource(Resource):
     @require_session
-    def post(self, doc_id: str):
+    def post(self, doc_id: str) -> ResponseReturnValue:
         try:
             svc = _get_document_service()
             doc = svc.get_document(doc_id)
@@ -576,7 +577,7 @@ class DocumentConfirmResource(Resource):
 @documents_bp.param("doc_id", "str", "Document identifier")
 class DocumentAugmentResource(Resource):
     @require_session
-    def post(self, doc_id: str):
+    def post(self, doc_id: str) -> ResponseReturnValue:
         try:
             svc = _get_document_service()
             doc = svc.get_document(doc_id)
@@ -616,7 +617,7 @@ class DocumentAugmentResource(Resource):
 @documents_bp.param("doc_id", "str", "Document identifier")
 class DocumentSupersedeResource(Resource):
     @require_session
-    def post(self, doc_id: str):
+    def post(self, doc_id: str) -> ResponseReturnValue:
         try:
             svc = _get_document_service()
 
@@ -657,7 +658,7 @@ def _get_watcher_service() -> "FolderWatcherService":
 @documents_bp.response(201, "Watched folder created")
 class WatchedFoldersResource(Resource):
     @require_session
-    def get(self):
+    def get(self) -> ResponseReturnValue:
         try:
             svc = _get_watcher_service()
             folders = svc.get_all_folders()
@@ -667,7 +668,7 @@ class WatchedFoldersResource(Resource):
             return {"error": _ERR_INTERNAL}, 500
 
     @require_session
-    def post(self):
+    def post(self) -> ResponseReturnValue:
         data = request.get_json(silent=True) or {}
         folder_path = (data.get('folder_path') or '').strip()
 
@@ -702,7 +703,7 @@ class WatchedFoldersResource(Resource):
 @documents_bp.param("folder_id", "str", "Folder identifier")
 class WatchedFolderResource(Resource):
     @require_session
-    def put(self, folder_id: str):
+    def put(self, folder_id: str) -> ResponseReturnValue:
         data = request.get_json(silent=True) or {}
         try:
             svc = _get_watcher_service()
@@ -719,7 +720,7 @@ class WatchedFolderResource(Resource):
             return {"error": _ERR_INTERNAL}, 500
 
     @require_session
-    def delete(self, folder_id: str):
+    def delete(self, folder_id: str) -> ResponseReturnValue:
         delete_documents = request.args.get('delete_documents', 'false').lower() == 'true'
         try:
             svc = _get_watcher_service()
@@ -738,7 +739,7 @@ class WatchedFolderResource(Resource):
 @documents_bp.param("folder_id", "str", "Folder identifier")
 class WatchedFolderScanResource(Resource):
     @require_session
-    def post(self, folder_id: str):
+    def post(self, folder_id: str) -> ResponseReturnValue:
         try:
             svc = _get_watcher_service()
             folder = svc.get_folder(folder_id)
@@ -756,7 +757,7 @@ class WatchedFolderScanResource(Resource):
 @documents_bp.response(200, "Directory listing")
 class WatchedFolderBrowseResource(Resource):
     @require_session
-    def post(self):
+    def post(self) -> ResponseReturnValue:
         data = request.get_json(silent=True) or {}
         path = data.get('path')
 

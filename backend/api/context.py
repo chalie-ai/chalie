@@ -4,6 +4,7 @@ import logging
 from typing import TYPE_CHECKING, cast
 
 from flask_restx import Namespace, Resource
+from flask.typing import ResponseReturnValue
 
 from api.auth import require_auth
 
@@ -19,7 +20,7 @@ context_bp = Namespace("context", description="Ambient context", path="/api/cont
 class ContextResource(Resource):
     @require_auth
     @context_bp.response(200, "Context")
-    def get(self):
+    def get(self) -> ResponseReturnValue:
         """Location is city-level, never raw GPS."""
         result: dict[str, object] = {}
 

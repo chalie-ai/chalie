@@ -7,6 +7,7 @@ import threading
 from typing import TYPE_CHECKING, cast
 
 from flask import request
+from flask.typing import ResponseReturnValue
 from flask_restx import Namespace, Resource
 
 from .auth import require_session
@@ -53,7 +54,7 @@ class PoliciesResource(Resource):
     @require_session
     @policies_bp.response(200, "Success")
     @policies_bp.response(500, "Internal server error")
-    def get(self):
+    def get(self) -> ResponseReturnValue:
         try:
             from services.database_service import get_shared_db_service
             from services.policy_manager import PolicyManager
@@ -68,7 +69,7 @@ class PoliciesResource(Resource):
     @policies_bp.response(200, "Success")
     @policies_bp.response(400, "Bad request")
     @policies_bp.response(500, "Internal server error")
-    def put(self):
+    def put(self) -> ResponseReturnValue:
         try:
             data = request.get_json(silent=True) or {}
             if not all(k in data for k in ('channel', 'permission', 'setting')):
@@ -88,7 +89,7 @@ class PoliciesResetResource(Resource):
     @require_session
     @policies_bp.response(200, "Success")
     @policies_bp.response(500, "Internal server error")
-    def post(self):
+    def post(self) -> ResponseReturnValue:
         """Re-apply the static seed (wipe + reseed)."""
         try:
             from services.database_service import get_shared_db_service
@@ -106,7 +107,7 @@ class PoliciesRespondResource(Resource):
     @policies_bp.response(200, "Success")
     @policies_bp.response(400, "Bad request")
     @policies_bp.response(500, "Internal server error")
-    def post(self):
+    def post(self) -> ResponseReturnValue:
         """Wake the blocked ACT dispatch thread with the user's allow/deny decision.
 
         The ACT loop thread is parked on threading.Event.wait() inside
@@ -138,7 +139,7 @@ class PoliciesBlockedResource(Resource):
     @require_session
     @policies_bp.response(200, "Success")
     @policies_bp.response(500, "Internal server error")
-    def get(self):
+    def get(self) -> ResponseReturnValue:
         try:
             limit = request.args.get('limit', 50, type=int)
             from services.database_service import get_shared_db_service
@@ -153,7 +154,7 @@ class PoliciesBlockedResource(Resource):
     @require_session
     @policies_bp.response(200, "Success")
     @policies_bp.response(500, "Internal server error")
-    def delete(self):
+    def delete(self) -> ResponseReturnValue:
         """Clear all entries from the blocked log."""
         try:
             from services.database_service import get_shared_db_service

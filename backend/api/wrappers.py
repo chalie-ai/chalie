@@ -2,6 +2,7 @@ import logging
 from typing import TYPE_CHECKING, cast
 
 from flask import g, request
+from flask.typing import ResponseReturnValue
 
 from flask_restx import Namespace, Resource
 from .auth import require_auth, _cookie_only
@@ -37,7 +38,7 @@ def _get_service() -> "WrapperAuthService":
 class WrapperRootResource(Resource):
     @require_auth
     @_cookie_only
-    def post(self):
+    def post(self) -> ResponseReturnValue:
         """Create a new external wrapper token."""
         body = request.get_json(silent=True) or {}
         name = (body.get("name") or "").strip()
@@ -67,7 +68,7 @@ class WrapperRootResource(Resource):
         return {"wrapper_id": wrapper_id, "token": raw_token}, 201
 
     @require_auth
-    def get(self):
+    def get(self) -> ResponseReturnValue:
         """List all non-revoked wrapper tokens."""
         svc = _get_service()
         wrappers = svc.list_wrappers()
@@ -85,7 +86,7 @@ class WrapperRootResource(Resource):
 @wrappers_bp.param("wrapper_id", "str", "Wrapper identifier")
 class WrapperItemResource(Resource):
     @require_auth
-    def get(self, wrapper_id: str):
+    def get(self, wrapper_id: str) -> ResponseReturnValue:
         """Get details for a single wrapper token."""
         svc = _get_service()
         wrapper = svc.get_wrapper(wrapper_id)
@@ -94,7 +95,7 @@ class WrapperItemResource(Resource):
         return wrapper, 200
 
     @require_auth
-    def delete(self, wrapper_id: str):
+    def delete(self, wrapper_id: str) -> ResponseReturnValue:
         """Revoke a wrapper token."""
         svc = _get_service()
         revoked = svc.revoke(wrapper_id)
@@ -117,7 +118,7 @@ class WrapperItemResource(Resource):
 @wrappers_bp.param("wrapper_id", "str", "Wrapper identifier")
 class WrapperCapabilitiesResource(Resource):
     @require_auth
-    def put(self, wrapper_id: str):
+    def put(self, wrapper_id: str) -> ResponseReturnValue:
         """Replace the capabilities payload for a wrapper."""
         caller_id = getattr(g, "wrapper_id", None)
         if caller_id is not None and caller_id != wrapper_id:

@@ -13,6 +13,7 @@ import logging
 from typing import cast
 
 from flask import request
+from flask.typing import ResponseReturnValue
 from flask_restx import Namespace, Resource
 
 from .auth import require_session
@@ -34,14 +35,14 @@ def _svc() -> McpClientService:
 class ServerListResource(Resource):
     @require_session
     @mcp_clients_bp.response(200, "Success")
-    def get(self):
+    def get(self) -> ResponseReturnValue:
         servers = _svc().list_servers()
         return servers, 200
 
     @require_session
     @mcp_clients_bp.response(200, "Success")
     @mcp_clients_bp.response(400, "Bad request")
-    def post(self):
+    def post(self) -> ResponseReturnValue:
         body = request.get_json(silent=True) or {}
         name = (body.get("name") or "").strip()
         host = (body.get("host") or "").strip()
@@ -80,7 +81,7 @@ class ServerListResource(Resource):
 class DiscoverableResource(Resource):
     @require_session
     @mcp_clients_bp.response(200, "Success")
-    def get(self):
+    def get(self) -> ResponseReturnValue:
         names = _svc().get_online_mcp_tool_names()
         return {"tools": names, "count": len(names)}, 200
 
@@ -94,7 +95,7 @@ class ServerResource(Resource):
     @mcp_clients_bp.response(200, "Success")
     @mcp_clients_bp.response(400, "Bad request")
     @mcp_clients_bp.response(404, "Server not found")
-    def put(self, server_id: str):
+    def put(self, server_id: str) -> ResponseReturnValue:
         body = request.get_json(silent=True) or {}
         updates = {k: v for k, v in body.items() if k in ("name", "host", "headers", "enabled")}
         if not updates:
@@ -108,7 +109,7 @@ class ServerResource(Resource):
     @require_session
     @mcp_clients_bp.response(200, "Success")
     @mcp_clients_bp.response(404, "Server not found")
-    def delete(self, server_id: str):
+    def delete(self, server_id: str) -> ResponseReturnValue:
         try:
             _svc().delete_server(server_id)
         except LookupError:
@@ -124,7 +125,7 @@ class ServerTestResource(Resource):
     @require_session
     @mcp_clients_bp.response(200, "Success")
     @mcp_clients_bp.response(404, "Server not found")
-    def post(self, server_id: str):
+    def post(self, server_id: str) -> ResponseReturnValue:
         svc = _svc()
         if svc.get_server(server_id) is None:
             return {"error": f"Server not found: {server_id}"}, 404
@@ -140,7 +141,7 @@ class ServerToolsResource(Resource):
     @require_session
     @mcp_clients_bp.response(200, "Success")
     @mcp_clients_bp.response(404, "Server not found")
-    def get(self, server_id: str):
+    def get(self, server_id: str) -> ResponseReturnValue:
         svc = _svc()
         if svc.get_server(server_id) is None:
             return {"error": f"Server not found: {server_id}"}, 404

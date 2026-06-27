@@ -2,6 +2,7 @@ import logging
 from typing import TYPE_CHECKING
 
 from flask import request
+from flask.typing import ResponseReturnValue
 from flask_restx import Namespace, Resource
 
 from .auth import require_session
@@ -26,7 +27,7 @@ def _get_services() -> "SettingsService":
 class VoiceSettingsResource(Resource):
     @require_session
     @voice_settings_bp.response(200, "Voice settings")
-    def get(self):
+    def get(self) -> ResponseReturnValue:
         from services.runtime_deps_service import RuntimeDepsService
 
         settings = _get_services()
@@ -42,7 +43,7 @@ class VoiceSettingsResource(Resource):
     @require_session
     @voice_settings_bp.response(200, "Voice settings updated")
     @voice_settings_bp.response(400, "Missing enabled field")
-    def put(self):
+    def put(self) -> ResponseReturnValue:
         from services.runtime_deps_service import RuntimeDepsService
 
         body = request.get_json(force=True)

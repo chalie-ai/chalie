@@ -21,6 +21,7 @@ import logging
 from typing import TYPE_CHECKING, cast
 
 from flask import g, request
+from flask.typing import ResponseReturnValue
 from flask_restx import Namespace, Resource
 
 from .auth import require_auth
@@ -186,7 +187,7 @@ def _dispatch_slice(slice_name: str) -> "dict[str, object]":
 class RelevanceResource(Resource):
     @require_auth
     @query_bp.response(200, "OK")
-    def get(self):
+    def get(self) -> ResponseReturnValue:
         """Returns 403 if bearer token lacks ``"relevance"`` query permission."""
         if not _check_query_permission("relevance"):
             return _permission_denied("relevance")
@@ -203,7 +204,7 @@ class RelevanceResource(Resource):
 class MemoryResource(Resource):
     @require_auth
     @query_bp.response(200, "OK")
-    def get(self):
+    def get(self) -> ResponseReturnValue:
         """Returns 403 if bearer token lacks ``"memory"`` query permission."""
         if not _check_query_permission("memory"):
             return _permission_denied("memory")
@@ -226,7 +227,7 @@ class MemoryResource(Resource):
 class CompositeResource(Resource):
     @require_auth
     @query_bp.response(200, "OK")
-    def post(self):
+    def post(self) -> ResponseReturnValue:
         """Each slice is checked independently against the bearer's query permissions.
         Denied slices are listed in the ``denied`` array. Cookie-authenticated
         requests are always fully permitted. Returns 200 even if all slices are denied.
