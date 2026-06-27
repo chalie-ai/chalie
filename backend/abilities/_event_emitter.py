@@ -1,17 +1,16 @@
 """ActEventEmitter — the single gate for ACT-loop WebSocket events.
 
 A MessageProcessor whose config carries a ``broadcast_to`` target streams live
-ACT tool start/end events to the UI; a background loop (``broadcast_to=None``)
-stays silent. This object encapsulates that one gate so every emit site shares
-the same rule and a dead socket never breaks the loop.
+ACT signals to the UI; a background loop (``broadcast_to=None``) stays silent.
+This object encapsulates that one gate so every emit site shares the same rule
+and a dead socket never breaks the loop.
 
-Constructed per-config by the tool dispatcher, this emitter carries only the
-tool ``act_tool_start`` / ``act_tool_end`` events. Mid-turn assistant prose is
-a separate concern: under the recursive turn chain each step that
-makes tool calls broadcasts its prose live as an interim ``message`` event
-(``MessageProcessor._emit_interim``) and persists it as its own transcript row
-(``_store_row``), so a single turn produces multiple assistant rows — one per
-step — not one end message at the end.
+Constructed per-config by the tool dispatcher, this emitter carries the
+transient ``tool_invoked`` signal — the live 'using X' line, never persisted.
+The completed tool's act-trail is delivered separately: ``_store_row`` persists
+each chain step's assistant row and fires ``turn_updated``, on which the surface
+refetches the whole turn block, so render state always comes from the DB, never
+from a remembered event.
 """
 
 from __future__ import annotations

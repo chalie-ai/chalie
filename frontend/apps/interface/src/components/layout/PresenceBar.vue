@@ -1,6 +1,5 @@
 <script setup lang="ts">
-import { onMounted, onBeforeUnmount } from 'vue';
-import { Clock, Brain, Sun, Moon, Search } from '@lucide/vue';
+import { Clock, Brain, Sun, Moon } from '@lucide/vue';
 import { storeToRefs } from 'pinia';
 import { useSessionStore } from '../../stores/session';
 import { useTasksStore } from '../../stores/tasks';
@@ -20,21 +19,6 @@ function handleThemeToggle(): void {
   emit('chalie:theme-changed', { theme: theme.value });
 }
 
-function handleSearch(): void {
-  emit('chalie:open-thread-search', undefined);
-}
-
-// ⌘K / Ctrl+K opens thread search from anywhere.
-function onKeydown(e: KeyboardEvent): void {
-  if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
-    e.preventDefault();
-    handleSearch();
-  }
-}
-
-onMounted(() => document.addEventListener('keydown', onKeydown));
-onBeforeUnmount(() => document.removeEventListener('keydown', onKeydown));
-
 /** Settings button → open the Brain admin dashboard via the platform adapter. */
 function handleSettings(): void {
   platform.openBrain();
@@ -50,15 +34,6 @@ function handleSettings(): void {
       alt="Chalie"
     />
     <div class="presence-bar__right">
-      <button
-        id="threadSearchBtn"
-        class="btn-icon"
-        aria-label="Search threads"
-        title="Search threads (⌘K)"
-        @click="handleSearch"
-      >
-        <Search :size="18" aria-hidden="true" />
-      </button>
       <button
         v-if="totalCount > 0"
         id="taskDrawerBtn"

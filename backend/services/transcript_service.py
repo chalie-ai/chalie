@@ -65,9 +65,8 @@ _SETTLE_PREDICATE = (
 
 # Cold-start bound for the MAIN spine read: at watermark 0 (no checkpoint yet)
 # the spine would otherwise pull every turn and blow the context cap before a
-# checkpoint can form. Cap it to the most-recent N turns' exchanges (matches the
-# feed's recent_turns page); compaction then advances the watermark on the first
-# cap trip and the bound stops biting.
+# checkpoint can form. Cap it to the most-recent N turns' exchanges; compaction
+# then advances the watermark on the first cap trip and the bound stops biting.
 _SPINE_TURN_LIMIT = 12
 
 
@@ -266,28 +265,20 @@ class Transcript:
     @staticmethod
     def fork_rows(channel: str, turn_id: int, watermark: int,
                   before_id: int | None) -> list[dict[str, object]]:
-        """The FORK view's previous_messages for one thread.
+        """The THREAD view's previous_messages for one thread — the whole turn.
 
-        Emit turn ``turn_id``'s rows from its settle0 floor up: ``settle0 <= id``
-        (the forked-from anchor plus the continuation) AND ``id > watermark`` (the
-        fork's transcript-id checkpoint axis) AND ``id < before_id`` — the last
-        bound drops the current reply's own rows so the live message isn't rendered
-        twice (it renders separately), mirroring how the spine skips its in-progress
-        turn. ``before_id`` None ⇒ no upper bound."""
-        settle = (
-            "(SELECT MIN(t.id) FROM transcript t "
-            f"WHERE t.channel = ? AND t.turn_id = ? AND {_SETTLE_PREDICATE})"
-        )
+        Emit EVERY row of turn ``turn_id`` with ``id > watermark`` (the thread's
+        transcript-id checkpoint axis) AND ``id < before_id`` — the upper bound
+        drops the current reply's own rows so the live message isn't rendered twice
+        (it renders separately), mirroring how the spine skips its in-progress turn.
+        ``before_id`` None ⇒ no upper bound. No ``settle0`` floor: a thread is the
+        whole turn — opening user message and pre-settle interims included — so read
+        and render are both trivial (paint every row of the ``turn_id``)."""
         where = (
-            f"channel = ? AND turn_id = ? AND id >= {settle} "
+            "channel = ? AND turn_id = ? "
             "AND id > ? AND id < COALESCE(?, 9223372036854775807)"
         )
-        params = (
-            channel, turn_id,                       # outer scope
-            channel, turn_id, *_INTERNAL_TOOLS,     # correlated settle
-            watermark, before_id,
-        )
-        return Transcript._select(where, params)
+        return Transcript._select(where, (channel, turn_id, watermark, before_id))
 
 
     @staticmethod
@@ -379,47 +370,9 @@ class Transcript:
 
 
     @staticmethod
-    def recent_turns(channel: str, *, exclude_roles: tuple[str, ...] = (),
-                     limit: int = 12, offset: int = 0,
-                     ) -> tuple[list[dict[str, object]], bool, int]:
-        """The conversation feed's turn-paginated history. A turn is many rows under
-        the chain model (), so paginate by turn, never by row. Picks the
-        newest ``limit`` turn keys, then returns ALL their rows oldest-first.
-        Returns ``(rows, has_more, turns_returned)``."""
-        from services.database_service import get_shared_db_service
-
-        role_filter = "".join(" AND role != ?" for _ in exclude_roles)
-        db = get_shared_db_service()
-        with db.connection() as conn:
-            # Newest turns by their LAST row's id — the only recency measure that
-            # holds for both chain turns (positive turn_id) and legacy rows (where
-            # _TURN_KEY=-id would invert the order if sorted directly).
-            page_keys = [
-                r[0] for r in conn.execute(
-                    f"SELECT {_TURN_KEY} AS k FROM transcript "
-                    f"WHERE channel = ?{role_filter} "
-                    f"GROUP BY k ORDER BY MAX(id) DESC LIMIT ? OFFSET ?",
-                    (channel, *exclude_roles, limit, offset),
-                ).fetchall()
-            ]
-        if not page_keys:
-            return [], False, 0
-        # Display oldest-first: legacy rows (turn_id NULL→0) tie below every chain
-        # turn and fall back to id order; chain rows stay grouped by turn_id.
-        messages = Transcript._select(
-            f"channel = ?{role_filter} AND {_TURN_KEY} IN ({Transcript._in(len(page_keys))})",
-            (channel, *exclude_roles, *page_keys),
-            order_by="COALESCE(turn_id, 0) ASC, id ASC",
-        )
-        turns_returned = len(page_keys)
-        has_more = Transcript.count_turns(channel, exclude_roles=exclude_roles) > offset + turns_returned
-        return messages, has_more, turns_returned
-
-
-    @staticmethod
     def recent_threads(
         channel: str, *, exclude_roles: tuple[str, ...] = (),
-        limit: int = 50, offset: int = 0,
+        limit: int = 20, offset: int = 0,
     ) -> tuple[list[dict[str, object]], bool, int]:
         """Thread-level metadata for the collapsed feed: one summary row per
         thread (turn_id), ordered by last activity (MAX(created_at) / MAX(id)).
@@ -553,17 +506,18 @@ class Transcript:
     def cleanup_unlinked_entries(channel: str | None = None) -> int:
         """Scope-aware transcript GC. Discovers compacted scopes from the
         ``compactions`` table and, per turn, deletes only rows a checkpoint has
-        folded — partitioned at the turn's settle0:
+        folded — the **intersection** of the two scopes that can read a row:
 
-        * **main-owned** rows (``id < settle0``) — deletable once main absorbs the
-          turn (``turn_id <= main_watermark``, the turn_id axis);
-        * **fork-owned** rows (``settle0 < id <= fork_watermark``) — deletable once
-          the fork's own transcript-id checkpoint passes them.
+        * **MAIN** reads each turn's opening exchange (``id <= settle0``) until it
+          absorbs the turn (``turn_id <= main_watermark``, the turn_id axis);
+        * **THREAD** (a forked turn — one with any row past settle0) reads the
+          WHOLE turn (``id > fork_watermark``, the transcript-id axis), so it owns
+          even the pre-settle0 head the main spine also reads.
 
-        It is the intersection, not the union: a fork compacting past settle0 must
-        not delete the opening pair the main spine still needs. settle0 itself is
-        never collected — the fork read re-derives it on every read, so deleting it
-        would shift the boundary and corrupt a partially-compacted fork. Episode-
+        A row dies only when BOTH are done with it: a thread compacting past its
+        early rows must not delete the head the main spine still needs, and main
+        absorbing a turn must not delete rows its live thread still reads. settle0
+        itself is never collected — the spine re-derives it on every read. Episode-
         cited rows are always preserved. Best-effort: 0 on error."""
         try:
             from services.database_service import get_shared_db_service
@@ -642,12 +596,19 @@ class Transcript:
                     "SELECT id FROM transcript WHERE channel = ? AND turn_id = ?",
                     (channel, tid),
                 ).fetchall()]
+            # A forked turn (any row past settle0) reads as the WHOLE turn, so the
+            # thread owns every row above its watermark — including the pre-settle0
+            # head main also reads. A row dies only when BOTH scopes are done: main
+            # needs id <= settle0 until it absorbs the turn; the thread needs
+            # id > its fork watermark (fork_floor; 0 ⇒ never compacted ⇒ keeps
+            # everything). settle0 is re-derived every read, so it is never collected.
+            is_forked = any(rid > settle_id for rid in ids)
+            fork_floor = fwm if fwm is not None else 0
             dead = [
                 rid for rid in ids
-                if rid not in cited and (
-                    (rid < settle_id and main_absorbed)
-                    or (settle_id < rid and fwm is not None and rid <= fwm)
-                )
+                if rid not in cited and rid != settle_id
+                and (rid > settle_id or main_absorbed)
+                and (not is_forked or rid <= fork_floor)
             ]
             if not dead:
                 continue
@@ -1170,7 +1131,7 @@ class Transcript:
 
         Powers chat-attachment persistence across page refresh: the live preview is a
         browser-only blob: URL, so on reload the rebuild (api.conversation
-        .get_recent_history) joins this table to re-render the image/file from
+        .serialize_turn) joins this table to re-render the image/file from
         /documents/<id>/preview.  INSERT OR IGNORE keeps it idempotent against the
         composite primary key.  Called from message_processor._seed_upload_attachment.
         """

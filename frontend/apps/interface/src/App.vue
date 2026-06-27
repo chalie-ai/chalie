@@ -15,7 +15,6 @@ import PermissionStack from './components/overlays/PermissionStack.vue';
 import TaskDrawer from './components/overlays/TaskDrawer.vue';
 import QuickTipCard from './components/overlays/QuickTipCard.vue';
 import UpdatePrompt from './components/overlays/UpdatePrompt.vue';
-import ThreadSearchDialog from './components/overlays/ThreadSearchDialog.vue';
 import VoicePlayerDialog from './components/voice/VoicePlayerDialog.vue';
 import UnlockVault from './components/layout/UnlockVault.vue';
 
@@ -95,7 +94,6 @@ onBeforeUnmount(() => {
   <TaskDrawer />
   <QuickTipCard />
   <UpdatePrompt />
-  <ThreadSearchDialog />
   <VoicePlayerDialog />
   <UnlockVault />
 </template>

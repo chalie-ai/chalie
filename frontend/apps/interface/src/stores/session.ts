@@ -13,8 +13,8 @@ import { extractText } from '../composables/useMarkup';
 import { conversation } from '../api/conversation';
 import { getHost } from '../api/index';
 import { showToast } from '../utils/toast';
-import { useConversationStore } from './conversation';
-import type { AttachmentPreview } from './conversation';
+import { useConversationStore, chalieFormPlaintext } from './conversation';
+import type { AttachmentPreview, ChalieForm } from './conversation';
 import type { ConversationSegment } from '../api/conversation';
 import { useTasksStore } from './tasks';
 import { useNotificationsStore } from './notifications';
@@ -32,9 +32,11 @@ const _busUnbinds: Array<() => void> = [];
 export const useSessionStore = defineStore('session', {
   state: () => ({
     isSending: false,
-    /** Id of the active ACT form while a turn is in-flight. */
-    _activeActId: null as number | null,
-    /** Id of the last user form (for mid-ACT restore on requestStop). */
+    /** turn_id of the turn THIS surface is sending — claimed on its `working`
+     *  signal, cleared on its `done`. Disambiguates own vs peer turns so a peer's
+     *  broadcast `done` can't release this surface's send guard. */
+    _liveTurnId: null as number | null,
+    /** Id of the optimistic user form (for mid-ACT concatenate + requestStop restore). */
     _lastUserFormId: null as number | null,
     /** Captured text from the last user turn (for requestStop restore). */
     _lastUserText: '',
@@ -71,14 +73,13 @@ export const useSessionStore = defineStore('session', {
 
       ws.onDisconnect(() => {
         conn.setConnected(false);
+        // A mid-turn drop strands the spinner: the turn's `done` now lands on the
+        // dead socket and is never resent, so clear this surface's working turn or
+        // the anchor hangs. The rows persisted server-side reload on reconnect.
+        if (this._liveTurnId != null) useConversationStore().setWorking(this._liveTurnId, false);
+        this._liveTurnId = null;
+        this._lastUserFormId = null;
         this.isSending = false;
-        // A mid-turn drop strands the live act group: the turn's done now lands
-        // on the dead socket and is never resent, so collapse it here or the
-        // "thinking…" spinner hangs forever.
-        if (this._activeActId != null) {
-          useConversationStore().resolveAct(this._activeActId);
-          this._activeActId = null;
-        }
       });
 
       ws.onDrift((data: WsPushEvent) => {
@@ -119,7 +120,7 @@ export const useSessionStore = defineStore('session', {
             payload?: Record<string, unknown>;
             onMessage?: (data: WsMessageEvent) => void;
             onError?: (data: { message: string; recoverable?: boolean }) => void;
-            onDone?: (data: { duration_ms: number }) => void;
+            onDone?: (data: { duration_ms?: number }) => void;
           };
           if (!d.payload) return;
           getWebSocket().sendAction(d.payload, {
@@ -139,9 +140,14 @@ export const useSessionStore = defineStore('session', {
     },
 
     /**
-     * Main send orchestrator. Mid-ACT path: when a turn is in-flight, append the
-     * new text to the existing user form, drop the partial turn, and restart —
-     * the backend cancels the active turn, concatenates, and starts fresh.
+     * Send a user turn. Signal-only: the optimistic user bubble renders instantly;
+     * everything else — the spinner, the rows, the reply — flows back through the
+     * broadcast `working`/`turn_updated`/`done` signals (→ routeDrift → refetch).
+     *
+     * Mid-ACT path: a turn is already in flight, so the backend cancels it,
+     * concatenates this text onto the original, and restarts as a FRESH turn. We
+     * reflect the combined text in the live bubble, tear down the cancelled turn's
+     * render, and let the new turn's `working` signal rebind a fresh thread.
      */
     async sendMessage(
       text: string,
@@ -153,196 +159,79 @@ export const useSessionStore = defineStore('session', {
       if (!text && !files.length) return;
 
       const convo = useConversationStore();
+      const ws = getWebSocket();
+      const body = text || '[File attached]';
 
       if (this.isSending) {
-        if (this._lastUserFormId != null) {
-          const uidx = convo.forms.findIndex((f) => f.id === this._lastUserFormId);
-          if (uidx !== -1) {
-            const uform = convo.forms[uidx];
-            if (uform.kind === 'user') uform.text += '\n\n' + text;
-            // Drop the partial turn rendering (interim bubbles + tool groups).
-            convo.forms.splice(uidx + 1);
-          }
+        const u = this._lastUserFormId != null
+          ? convo.forms.find((f) => f.id === this._lastUserFormId)
+          : undefined;
+        if (u?.kind === 'user') {
+          u.text += '\n\n' + body;
+          this._lastUserText = u.text;
+          u.turnId = null; // orphan so dropLiveTurn keeps the bubble for the rebind
         }
-        this._activeActId = null;
-        this._startTurn(text, source, false, [], [], threadId);
+        if (this._liveTurnId != null) {
+          convo.dropLiveTurn(this._liveTurnId);
+          this._liveTurnId = null;
+        }
+        // Backend concatenates server-side, so resend only the new text.
+        ws.send(text, source, (m) => this._onSendFailure(m), [], threadId);
         return;
       }
 
       this.isSending = true;
-
-      const userFormId = convo.appendUser(text || '[File attached]', previews, {
+      this._liveTurnId = threadId; // null for a new thread — claimed on `working`
+      this._lastUserText = text;
+      this._lastUserFormId = convo.appendUser(body, previews, {
         inWorkingMemory: true,
         turnId: threadId,
       });
-      this._lastUserFormId = userFormId;
-      this._lastUserText = text;
-
-      this._startTurn(text || '[File attached]', source, false, files, previews, threadId);
+      ws.send(body, source, (m) => this._onSendFailure(m), files, threadId);
     },
 
-    /**
-     * Wire and launch a turn. `showUserBubble` is true only for re-entries where
-     * sendMessage hasn't already appended the user form.
-     */
-    _startTurn(
-      text: string,
-      source: 'text' | 'voice',
-      showUserBubble: boolean,
-      files: File[] = [],
-      previews: AttachmentPreview[] = [],
-      threadId: number | null = null,
-    ): void {
+    /** A local send failure (offline / POST rejected) — no signal will ever
+     *  arrive, so release this surface's guard and surface the message. */
+    _onSendFailure(message: string): void {
+      this.errorMessage = message;
+      if (this._liveTurnId != null) useConversationStore().setWorking(this._liveTurnId, false);
+      this._liveTurnId = null;
+      this._lastUserFormId = null;
+      this.isSending = false;
+    },
+
+    /** `done(turn_id)` — settle the turn. Clear its spinner; release this
+     *  surface's send guard only when its OWN turn finished (peers' `done`
+     *  broadcasts must not). Fire ambient + autoscroll, and an OS notification
+     *  for the final reply when the tab is unfocused. */
+    async _finishTurn(turnId: number | null): Promise<void> {
       const convo = useConversationStore();
-      const ws = getWebSocket();
-
-      // A reply knows its thread up-front; a new thread learns its id from the
-      // backend's `turn_started` mid-flight. Tracking it in one mutable means
-      // every form this turn appends carries the id once known, so they group
-      // under — and render inside — the same thread card (header + reply dock)
-      // without waiting for `done`.
-      let liveTurnId = threadId;
-
-      if (showUserBubble) {
-        const uid = convo.appendUser(text || '[File attached]', previews, {
-          inWorkingMemory: true,
-          turnId: liveTurnId,
-        });
-        this._lastUserFormId = uid;
-        this._lastUserText = text;
+      const id = turnId ?? this._liveTurnId;
+      if (id != null) convo.setWorking(id, false);
+      if (id != null && id === this._liveTurnId) {
+        this._liveTurnId = null;
+        this._lastUserFormId = null;
+        this.isSending = false;
       }
+      useAmbientSensor().recordResponse();
+      document.dispatchEvent(new CustomEvent('session:turn-done'));
 
-      // Open the ACT group up-front: an empty live group is the "thinking…"
-      // placeholder (logo + stop affordance). The step's first tool_start lands
-      // its pill in place; a tool-free turn evicts the empty group on resolve.
-      this._activeActId = convo.appendAct(liveTurnId);
+      if (id != null && !document.hasFocus()) {
+        await convo.refetchTurn(id);
+        const chalie = convo.forms.filter(
+          (f): f is ChalieForm => f.kind === 'chalie' && f.turnId === id,
+        );
+        const last = chalie[chalie.length - 1];
+        if (last) this._notifyBackground(chalieFormPlaintext(last));
+      }
+    },
 
-      // Capture the FINAL turn result across onMessage(final) / onDone — interim
-      // steps render immediately and are never cached.
-      let responseContent = '';
-      let responseMeta: {
-        topic?: string;
-        exchange_id?: string;
-        mode?: string;
-        confidence?: number;
-        segments?: ConversationSegment[];
-        timestamp?: string;
-        duration_ms?: number;
-      } = {};
-
-      ws.send(
-        text,
-        source,
-        {
-          // Use d.id (NOT d.call_id) — frame is act_tool_start { type,name,id,summary }.
-          // Lazily open the step's tool group; its prose already landed via the
-          // preceding interim message.
-          // Bind the new thread the moment its turn_id is allocated (input row
-          // write), so the card header and reply dock render live. Replies
-          // already carry their id; the gate keeps this to thread-starters.
-          onTurnStarted: (data) => {
-            if (liveTurnId != null) return;
-            liveTurnId = data.turn_id;
-            convo.bindLiveTurn(data.turn_id);
-          },
-
-          onToolStart: (data) => {
-            const d = data as { id?: string; name?: string; summary?: string };
-            if (this._activeActId == null) this._activeActId = convo.appendAct(liveTurnId);
-            convo.appendToolPill(this._activeActId, d.id ?? '', d.name ?? '', d.summary);
-          },
-
-          // act_tool_end has no duration field — pass ms=0, resolveToolPill
-          // computes client elapsed.
-          onToolEnd: (data) => {
-            const d = data as { id?: string; ok?: boolean };
-            convo.resolveToolPill(d.id ?? '', 0, !!d.ok);
-          },
-
-          onMessage: (data) => {
-            const d = data as WsMessageEvent & {
-              content?: string;
-              topic?: string;
-              exchange_id?: string;
-              mode?: string;
-              confidence?: number;
-              segments?: ConversationSegment[];
-              timestamp?: string;
-            };
-
-            if (d.interim) {
-              // Interim prose: supersede the previous step (collapse its tool
-              // group), then render this step's bubble; the next onToolStart
-              // opens a fresh group beneath it.
-              if (this._activeActId != null) {
-                convo.resolveAct(this._activeActId);
-                this._activeActId = null;
-              }
-              if (d.content) convo.appendChalie(d.content, { ts: d.timestamp ?? '' }, { turnId: liveTurnId });
-              return;
-            }
-
-            // Final result — cached, rendered on done so duration_ms lands on the
-            // bubble (also carries turn-wide rich-media segments).
-            responseContent = d.content ?? '';
-            responseMeta = {
-              topic: d.topic,
-              exchange_id: d.exchange_id,
-              mode: d.mode ?? '',
-              confidence: d.confidence ?? 0,
-              segments: d.segments,
-              timestamp: d.timestamp ?? '',
-            };
-          },
-
-          onError: (data) => {
-            // Turn-level errors (provider failure, quota/429) are NOT auth events:
-            // collapse the in-flight step and surface the error as its own form.
-            // Only data.auth_failed redirects to login.
-            if (this._activeActId != null) {
-              convo.resolveAct(this._activeActId);
-              this._activeActId = null;
-            }
-            this.errorMessage = data.message;
-            const d = data as { auth_failed?: boolean };
-            if (d.auth_failed) this._onAuthFailure?.();
-          },
-
-          onDone: (data) => {
-            responseMeta.duration_ms = data.duration_ms;
-            // Settle the final step before the reply lands beneath it: collapse
-            // its tools, or evict the bare "thinking…" placeholder if none ran.
-            if (this._activeActId != null) {
-              convo.resolveAct(this._activeActId);
-              this._activeActId = null;
-            }
-            if (responseContent || responseMeta.segments?.length) {
-              convo.appendChalie(responseContent, {
-                topic: responseMeta.topic,
-                exchange_id: responseMeta.exchange_id,
-                mode: responseMeta.mode,
-                confidence: responseMeta.confidence,
-                segments: responseMeta.segments,
-                ts: responseMeta.timestamp,
-                duration_ms: responseMeta.duration_ms,
-              }, { turnId: liveTurnId });
-            }
-            // Fallback bind: `turn_started` already bound a new thread mid-flight,
-            // so this is idempotent there; it still covers paths that emit the id
-            // only on `done` (e.g. a frame missed before the surface was sending).
-            if (data.turn_id != null) convo.bindLiveTurn(data.turn_id);
-            useAmbientSensor().recordResponse();
-            this.isSending = false;
-            document.dispatchEvent(new CustomEvent('session:turn-done'));
-
-            if (responseContent && !document.hasFocus()) {
-              this._notifyBackground(responseContent);
-            }
-          },
-        },
-        files,
-        threadId,
-      );
+    /** Turn-level error (provider failure, quota/429) — surface it as the one dock
+     *  toast. Not an act row: the following `done` clears the spinner. Only
+     *  `auth_failed` redirects to login. */
+    _handleTurnError(data: WsPushEvent): void {
+      this.errorMessage = (data as { message?: string }).message ?? 'Something went wrong.';
+      if ((data as { auth_failed?: boolean }).auth_failed) this._onAuthFailure?.();
     },
 
     /**
@@ -359,20 +248,22 @@ export const useSessionStore = defineStore('session', {
       // fallback when the form is gone.
       let restoredText = this._lastUserText;
       if (this._lastUserFormId != null) {
-        const uidx = convo.forms.findIndex((f) => f.id === this._lastUserFormId);
-        if (uidx !== -1) {
-          const uform = convo.forms[uidx];
-          if (uform.kind === 'user') restoredText = uform.text;
-          convo.forms.splice(uidx);
-        }
-        this._lastUserFormId = null;
+        const u = convo.forms.find((f) => f.id === this._lastUserFormId);
+        if (u?.kind === 'user') restoredText = u.text;
       }
-      this._activeActId = null;
+
+      // Undo the whole turn: its forms + thread shell + working state. dropLiveTurn
+      // clears a bound turn; the explicit filter catches a new thread that never
+      // bound (no `working` signal yet), whose bubble is still turn_id-less.
+      if (this._liveTurnId != null) convo.dropLiveTurn(this._liveTurnId);
+      if (this._lastUserFormId != null) {
+        convo.forms = convo.forms.filter((f) => f.id !== this._lastUserFormId);
+      }
+      this._liveTurnId = null;
+      this._lastUserFormId = null;
       this._lastUserText = '';
 
-      // Abort WS callbacks so stale events are ignored.
       ws.abort();
-
       this.isSending = false;
 
       document.dispatchEvent(
@@ -410,7 +301,6 @@ export const useSessionStore = defineStore('session', {
 
       this.isSending = true;
       const actId = convo.appendAct();
-      this._activeActId = actId;
 
       ws.sendAction(payload, {
         onMessage: (data) => {
@@ -430,15 +320,14 @@ export const useSessionStore = defineStore('session', {
           this.errorMessage = data.message;
         },
         onDone: () => {
-          this._activeActId = null;
           this.isSending = false;
         },
       });
     },
 
     /**
-     * Load (or paginate) the thread list. Initial load fetches 50 most-recent
-     * collapsed threads; scroll-up pagination prepends 50 more. Expanded threads
+     * Load (or paginate) the thread list. Initial load fetches the 20 most-recent
+     * collapsed threads; scroll-up pagination prepends 20 more. Expanded threads
      * keep their forms in the conversation store and are excluded from the
      * collapsed rows.
      */
@@ -447,7 +336,7 @@ export const useSessionStore = defineStore('session', {
       if (convo.threadsExhausted || this.historyLoading) return;
       this.historyLoading = true;
 
-      const LIMIT = 50;
+      const LIMIT = 20;
       const isInitialLoad = convo.threadsOffset === 0;
 
       try {
@@ -459,16 +348,29 @@ export const useSessionStore = defineStore('session', {
           return;
         }
 
+        if (isInitialLoad) convo.appendThreadList(items);
+        else convo.prependThreadList(items);
+
+        // Hydrate the page in one round-trip — gather the page's ids from the
+        // minimal-metadata list, batch-fetch the full blocks, and loop
+        // upsertTurn. The thread items already render as pills from the metadata;
+        // the blocks fill in the forms so expand (and the panel) are instant.
+        const pageIds = items
+          .map((t) => t.turn_id)
+          .filter((id): id is number => id != null);
+        if (pageIds.length) {
+          const { blocks } = await conversation.batch(pageIds);
+          for (const block of blocks) convo.upsertTurn(block);
+        }
+
+        // Accordion: open only the single most-recent active thread (the feed is
+        // chronological, so it is the last active one in the list). Forms are
+        // already hydrated by the batch, so this just flips the inline view on.
         if (isInitialLoad) {
-          convo.appendThreadList(items);
-          // Accordion: open only the single most-recent active thread (the feed is
-          // chronological, so it is the last active one in the list).
           const newestActive = [...convo.threads]
             .reverse()
             .find((t) => t.turn_id != null && convo.isThreadActive(t.last_activity_at));
           if (newestActive?.turn_id != null) void convo.expandThread(newestActive.turn_id);
-        } else {
-          convo.prependThreadList(items);
         }
 
         convo.threadsOffset += data.threads_returned;
@@ -524,11 +426,6 @@ export const useSessionStore = defineStore('session', {
       this.panelThreadId = null;
     },
 
-    /** Search threads — delegates to the conversation API. */
-    async searchThreads(q: string) {
-      return conversation.searchThreads(q);
-    },
-
     /**
      * Route a drift push event. Routing order is load-bearing:
      *   1. Simple content-free types  2. 'thought' (bypasses send-guard)
@@ -536,6 +433,7 @@ export const useSessionStore = defineStore('session', {
      *   5. 'notification'  6. 'response' / 'escalation' / 'drift' → appendChalie
      */
     routeDrift(data: WsPushEvent): void {
+      if (this._routeTurnSignal(data)) return;
       if (this._routeSimpleEvent(data)) return;
 
       const content = (data as { content?: string }).content ?? '';
@@ -603,6 +501,43 @@ export const useSessionStore = defineStore('session', {
 
       // Step 6: response / escalation / drift.
       this._renderContentEvent(data, content);
+    },
+
+    /**
+     * Turn-lifecycle signals — stateless and turn-addressed. Each is broadcast to
+     * EVERY surface; only the surface that owns the turn (`_liveTurnId`) releases
+     * its send guard on `done`. Returns true when handled.
+     *   working(id)      → claim + bind + spinner on
+     *   tool_invoked(id) → transient loading sub-text (NO fetch)
+     *   turn_updated(id) → fetch the block + atomic monotonic replace
+     *   done(id)         → spinner off + settle
+     *   error            → one dock toast (a `done` follows to clear the spinner)
+     */
+    _routeTurnSignal(data: WsPushEvent): boolean {
+      const convo = useConversationStore();
+      const turnId = (data as { turn_id?: number | null }).turn_id ?? null;
+      switch (data.type as string) {
+        case 'working':
+          if (turnId == null) return true;
+          if (this.isSending && this._liveTurnId == null) this._liveTurnId = turnId;
+          convo.bindLiveTurn(turnId);
+          convo.setWorking(turnId, true);
+          return true;
+        case 'tool_invoked':
+          if (turnId != null) convo.setLiveSummary(turnId, (data as { summary?: string }).summary ?? '');
+          return true;
+        case 'turn_updated':
+          if (turnId != null) void convo.refetchTurn(turnId);
+          return true;
+        case 'done':
+          void this._finishTurn(turnId);
+          return true;
+        case 'error':
+          this._handleTurnError(data);
+          return true;
+        default:
+          return false;
+      }
     },
 
     /** Route content-free event types; returns true when handled. */

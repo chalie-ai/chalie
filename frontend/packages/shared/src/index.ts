@@ -7,7 +7,6 @@ export type {
   WsPushEvent,
   WsPushType,
   WsMessageEvent,
-  ChatCallbacks,
   ActionCallbacks,
 } from './services/WebSocketService';
 export { getHost, setHost, getToken, setToken, getUsername, setUsername } from './config/host';

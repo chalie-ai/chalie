@@ -1,9 +1,9 @@
-"""ThreadGistConfig — delegate channel that produces a one-sentence gist per thread.
+"""ThreadGistConfig — delegate channel that produces a one-line thread label.
 
-Fired fire-and-forget on every received user message (workstream D). The MP
-reads only that thread's user messages from the DB (no carried state), sends a
-single delegate call, and the daemon target persists the resulting gist via
-``ThreadGistService.upsert``. No tools, no act trail, no transcript row.
+Fired once when a turn first grows into a thread (the first user reply past its
+settle0). The MP reads only that thread's user messages from the DB (no carried
+state), sends a single delegate call, and the daemon target persists the label
+via ``ThreadGistService.upsert``. No tools, no act trail, no transcript row.
 """
 
 from __future__ import annotations

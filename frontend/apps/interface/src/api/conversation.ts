@@ -18,16 +18,16 @@ export interface ConversationSegment {
   synthesis?: string;
 }
 
-/** A single turn returned by /conversation/recent. */
+/** One row inside a turn block (see ConversationTurnBlock.messages). */
 export interface ConversationMessage {
   id: string;
   role: 'user' | 'assistant';
   content: string;
   timestamp: string;
   /**
-   * The turn this row belongs to — under the chain model a turn is many rows
-   * (input → steps → synthesis) sharing one `turn_id`; the feed groups by this.
-   * Null for legacy rows written before turn tracking existed.
+   * The turn this row belongs to — a turn (thread) is many rows (input → steps →
+   * synthesis → replies) sharing one `turn_id`; the feed groups by this. Null for
+   * legacy rows written before turn tracking existed.
    */
   turn_id: number | null;
   /** Present on user turns when attachments were uploaded. */
@@ -41,9 +41,15 @@ export interface ConversationMessage {
    * beneath the row, mirroring how the live path collapses a superseded step.
    */
   tool_calls?: { tool_name: string; summary: string }[];
+  /**
+   * Marks the settle0 row — the main-spine cut point (the first assistant row
+   * with no model-driven tool). Set (to 0) on that one row only; a backend
+   * presentation marker the live feed does not need for rendering.
+   */
+  settled?: number;
 }
 
-/** Collapsed thread metadata returned by /conversation/threads. */
+/** Collapsed thread metadata returned by /api/threads. */
 export interface ConversationThread {
   turn_id: number | null;
   last_activity_at: string | null;
@@ -57,61 +63,50 @@ export interface ConversationThread {
   unread?: number;
 }
 
-/** A single search result from GET /threads/search. */
-export interface ThreadSearchResult {
+/**
+ * One turn's full block. The single-turn read, every batch entry, and the
+ * WS-refetch all return this exact shape (see backend `serialize_turn`): one
+ * fetch fully determines a turn's render — its rows plus the collapsed-pill
+ * metadata (gist/preview/last activity) and turn-level render state — with no
+ * signal memory.
+ */
+export interface ConversationTurnBlock {
   turn_id: number;
-  channel: string;
-  summary: string;
-  updated_at: string;
-  score: number;
+  /** One-sentence gist (thread_gist), null until generated. */
+  gist: string | null;
+  /** First row's content, clipped — the collapsed-pill preview. */
+  preview: string;
+  last_activity_at: string | null;
+  /** True while the turn is unsettled/in-flight (no settle0 row yet). */
+  working: boolean;
+  /** Row-span duration in ms (0 for a single-row turn). */
+  duration_ms: number;
+  messages: ConversationMessage[];
 }
 
 export const conversation = {
   /**
-   * GET /conversation/recent — `offset` counts back whole TURNS (not rows) from
-   * the newest (limit 1–120); `turns_returned` reports the page size so the
-   * caller advances pagination by turns.
-   */
-  recent(
-    limit = 12,
-    offset?: number,
-  ): Promise<{ messages: ConversationMessage[]; has_more: boolean; turns_returned: number }> {
-    const q = new URLSearchParams({ limit: String(limit) });
-    if (offset != null) q.set('offset', String(offset));
-    return api.get(`/conversation/recent?${q.toString()}`);
-  },
-
-  /**
-   * GET /conversation/threads — collapsed thread metadata for the thread feed.
-   * Returns the `limit` most-recently-active threads; `threads_returned` advances
-   * pagination.
+   * GET /api/threads — collapsed thread metadata for the feed (id +
+   * gist/preview/last activity). Returns the `limit` most-recently-active
+   * threads; `threads_returned` advances pagination.
    */
   threads(
-    limit = 50,
+    limit = 20,
     offset?: number,
   ): Promise<{ threads: ConversationThread[]; has_more: boolean; threads_returned: number }> {
     const q = new URLSearchParams({ limit: String(limit) });
     if (offset != null) q.set('offset', String(offset));
-    return api.get(`/conversation/threads?${q.toString()}`);
+    return api.get(`/api/threads?${q.toString()}`);
   },
 
-  /**
-   * GET /conversation/thread/<turn_id> — full row set of one thread (expand).
-   */
-  thread(turnId: number): Promise<{ messages: ConversationMessage[]; turn_id: number }> {
-    return api.get(`/conversation/thread/${turnId}`);
+  /** GET /api/thread/<turn_id> — one turn's full block (expand + WS refetch). */
+  thread(turnId: number): Promise<ConversationTurnBlock> {
+    return api.get(`/api/thread/${turnId}`);
   },
 
-  /**
-   * GET /threads/search?q= — semantic + full-text search over thread gists.
-   * Returns thread id + gist + score for the search UI.
-   */
-  searchThreads(
-    q: string,
-    limit = 10,
-  ): Promise<{ results: ThreadSearchResult[]; query: string }> {
-    const params = new URLSearchParams({ q });
-    if (limit !== 10) params.set('limit', String(limit));
-    return api.get(`/threads/search?${params.toString()}`);
+  /** POST /api/threads/batch — many blocks in one round-trip, a pure
+   *  concatenation of the single-turn getter over the given ids. */
+  batch(turnIds: number[]): Promise<{ blocks: ConversationTurnBlock[] }> {
+    return api.post('/api/threads/batch', { turn_ids: turnIds });
   },
 };

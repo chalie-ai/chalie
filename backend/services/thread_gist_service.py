@@ -1,92 +1,51 @@
-"""ThreadGistService — persist + retrieve per-thread one-sentence gists.
+"""ThreadGistService — persist + batch-read per-thread one-line labels.
 
-Stores one current gist per ``(channel, turn_id)`` in ``thread_gist``, with a
-companion ``thread_gist_vec`` (sqlite-vec KNN) and ``thread_gist_fts`` (FTS5)
-index mirroring the episodes/documents pattern. Cross-thread pollination
-surfaces the top-N related gists (excluding the active thread) for context
-assembly; ``search`` reuses the same index for the thread-search endpoint.
+Stores one current label per ``(channel, turn_id)`` in ``thread_gist``. The
+label is a pure FE affordance shown on a collapsed thread pill — it carries no
+memory or retrieval significance (no embedding, no search index).
 """
 
 from __future__ import annotations
 
 import logging
-import re
-import sqlite3
 from typing import Optional, cast
 
-from services._fts_delete import fts5_external_delete
-from services.data_graph_service import _l2_dist_to_cosine
 from services.database_service import get_shared_db_service
-from services.embedding_service import get_embedding_service
-from services.embedding_utils import pack_embedding
 
 logger = logging.getLogger(__name__)
 LOG_PREFIX = "[THREAD GIST]"
 
 
 class ThreadGistService:
-    """Static-style service: upsert + search over the thread_gist index."""
+    """Upsert + batch-read the one-line thread-label index."""
 
     def upsert(self, channel: str, turn_id: int, summary: str) -> None:
-        """Persist (or replace) the gist for one thread, embedding + FTS-syncing it."""
+        """Persist (or replace) the label for one thread."""
         summary = (summary or "").strip()
         if not summary:
             return
         try:
-            embedding = get_embedding_service().generate_embedding(summary)
-            blob = pack_embedding(embedding)
-            db = get_shared_db_service()
-            with db.connection() as conn:
-                cur = conn.cursor()
-                cur.execute(
-                    "SELECT id FROM thread_gist WHERE channel = ? AND turn_id = ?",
-                    (channel, turn_id),
+            with get_shared_db_service().connection() as conn:
+                conn.execute(
+                    "INSERT INTO thread_gist (channel, turn_id, summary, updated_at) "
+                    "VALUES (?, ?, ?, datetime('now')) "
+                    "ON CONFLICT(channel, turn_id) DO UPDATE SET "
+                    "summary = excluded.summary, updated_at = excluded.updated_at",
+                    (channel, turn_id, summary),
                 )
-                existing = cur.fetchone()
-                if existing:
-                    gist_id = cast(int, existing[0])
-                    self._delete_fts(conn, gist_id, cur)
-                    cur.execute(
-                        "UPDATE thread_gist SET summary = ?, updated_at = datetime('now') "
-                        "WHERE id = ?",
-                        (summary, gist_id),
-                    )
-                else:
-                    cur.execute(
-                        "INSERT INTO thread_gist (channel, turn_id, summary) VALUES (?, ?, ?)",
-                        (channel, turn_id, summary),
-                    )
-                    gist_id = cast(int, cur.lastrowid)
-                if blob is not None:
-                    cur.execute(
-                        "INSERT OR REPLACE INTO thread_gist_vec(rowid, embedding) VALUES (?, ?)",
-                        (gist_id, blob),
-                    )
-                cur.execute(
-                    "INSERT INTO thread_gist_fts(rowid, summary) VALUES (?, ?)",
-                    (gist_id, summary),
-                )
-                cur.close()
         except Exception as exc:
             logger.warning("%s upsert failed for %s turn=%s: %s", LOG_PREFIX, channel, turn_id, exc)
 
-    def _delete_fts(self, conn: sqlite3.Connection, gist_id: int, cur: sqlite3.Cursor) -> None:
-        cur.execute("SELECT summary FROM thread_gist WHERE id = ?", (gist_id,))
-        row = cur.fetchone()
-        if row:
-            fts5_external_delete(conn, "thread_gist_fts", gist_id, {"summary": cast(str, row[0])})
-
     def bulk_get(self, channel: str, turn_ids: list[int]) -> dict[int, str]:
-        """Gists for a batch of turn_ids — the thread feed's collapsed summaries.
+        """Labels for a batch of turn_ids — the thread feed's collapsed summaries.
 
-        Returns ``{turn_id: summary}`` for every turn_id that has a gist.
+        Returns ``{turn_id: summary}`` for every turn_id that has a label.
         """
         if not turn_ids:
             return {}
         try:
-            db = get_shared_db_service()
             placeholders = ",".join("?" * len(turn_ids))
-            with db.connection() as conn:
+            with get_shared_db_service().connection() as conn:
                 rows = conn.execute(
                     f"SELECT turn_id, summary FROM thread_gist "
                     f"WHERE channel = ? AND turn_id IN ({placeholders})",
@@ -96,102 +55,6 @@ class ThreadGistService:
         except Exception as exc:
             logger.debug("%s bulk_get failed for %s: %s", LOG_PREFIX, channel, exc)
             return {}
-
-    def _candidates(self, query: str, limit: int) -> dict[int, dict[str, object]]:
-        """Hybrid KNN+FTS candidate rowids with per-signal scores — the shared
-        retrieval body behind both ``pollinate`` and ``search``."""
-        query_emb = get_embedding_service().generate_embedding(query)
-        query_blob = pack_embedding(query_emb) if query_emb else None
-        candidates: dict[int, dict[str, object]] = {}
-        with get_shared_db_service().connection() as conn:
-            cur = conn.cursor()
-            if query_blob is not None:
-                try:
-                    cur.execute(
-                        "SELECT rowid, distance FROM thread_gist_vec "
-                        "WHERE embedding MATCH ? AND k = ? ORDER BY distance",
-                        (query_blob, limit * 3),
-                    )
-                    for rowid, dist in cur.fetchall():
-                        cos = _l2_dist_to_cosine(dist)
-                        candidates.setdefault(rowid, {"cos": 0.0, "fts": 0.0})
-                        candidates[rowid]["cos"] = max(cast(float, candidates[rowid]["cos"]), cos)
-                except Exception as exc:
-                    logger.debug("%s vec search failed (non-fatal): %s", LOG_PREFIX, exc)
-            self._fts_search(cur, candidates, query)
-            cur.close()
-        return candidates
-
-    def pollinate(self, channel: str, active_turn_id: int, query: str, *, limit: int = 5) -> list[dict[str, object]]:
-        """Top-N related gists excluding the active thread — cross-thread pollination."""
-        try:
-            candidates = self._candidates(query, limit)
-            return self._score_and_fetch(channel, active_turn_id, candidates, limit) if candidates else []
-        except Exception as exc:
-            logger.warning("%s pollinate failed: %s", LOG_PREFIX, exc)
-            return []
-
-    def search(self, query: str, *, limit: int = 10) -> list[dict[str, object]]:
-        """Hybrid KNN+FTS search over all thread gists — the thread-search endpoint."""
-        try:
-            candidates = self._candidates(query, limit)
-            return self._score_and_fetch(None, None, candidates, limit) if candidates else []
-        except Exception as exc:
-            logger.warning("%s search failed: %s", LOG_PREFIX, exc)
-            return []
-
-    def _fts_search(self, cur: sqlite3.Cursor, candidates: dict[int, dict[str, object]], query: str) -> None:
-        try:
-            fts_query = re.sub(r"[^\w\s]", "", query).strip()
-            if not fts_query:
-                return
-            terms = " OR ".join(f'"{w}"*' for w in fts_query.split() if w)
-            if not terms:
-                return
-            cur.execute(
-                "SELECT rowid, rank FROM thread_gist_fts "
-                "WHERE thread_gist_fts MATCH ? ORDER BY rank LIMIT 30",
-                (terms,),
-            )
-            for rowid, _rank in cur.fetchall():
-                candidates.setdefault(rowid, {"cos": 0.0, "fts": 0.0})
-                candidates[rowid]["fts"] = 1.0
-        except Exception as exc:
-            logger.debug("%s FTS search failed (non-fatal): %s", LOG_PREFIX, exc)
-
-    def _score_and_fetch(
-        self,
-        channel: Optional[str],
-        active_turn_id: Optional[int],
-        candidates: dict[int, dict[str, object]],
-        limit: int,
-    ) -> list[dict[str, object]]:
-        db = get_shared_db_service()
-        scored: list[dict[str, object]] = []
-        with db.connection() as conn:
-            cur = conn.cursor()
-            for rowid, sigs in candidates.items():
-                cur.execute(
-                    "SELECT id, channel, turn_id, summary, updated_at FROM thread_gist WHERE id = ?",
-                    (rowid,),
-                )
-                row = cur.fetchone()
-                if not row:
-                    continue
-                gist_channel, gist_turn_id = cast(str, row[1]), cast(int, row[2])
-                if channel is not None and gist_channel == channel and active_turn_id is not None and gist_turn_id == active_turn_id:
-                    continue
-                composite = cast(float, sigs["cos"]) + 0.3 * cast(float, sigs["fts"])
-                scored.append({
-                    "turn_id": gist_turn_id,
-                    "channel": gist_channel,
-                    "summary": cast(str, row[3]),
-                    "updated_at": cast(str, row[4]),
-                    "score": composite,
-                })
-            cur.close()
-        scored.sort(key=lambda d: cast(float, d["score"]), reverse=True)
-        return scored[:limit]
 
 
 _instance: Optional[ThreadGistService] = None

@@ -386,9 +386,9 @@ CREATE VIRTUAL TABLE IF NOT EXISTS scheduled_items_vec USING vec0(embedding floa
 CREATE VIRTUAL TABLE IF NOT EXISTS lists_vec USING vec0(embedding float[768]);
 
 -- ────────────────────────────────────────────────────────────────
--- THREAD GIST — one-sentence summary per conversation thread, embedded
--- for cross-thread pollination (KNN) and thread search (FTS).
--- thread_gist_vec / thread_gist_fts mirror the episodes/documents pattern.
+-- THREAD GIST — one-line label for a conversation thread (a turn that has
+-- grown past its settle0). Pure FE affordance shown on the collapsed thread
+-- pill; no embedding, no search index.
 -- ────────────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS thread_gist (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -401,18 +401,6 @@ CREATE TABLE IF NOT EXISTS thread_gist (
 );
 
 CREATE INDEX IF NOT EXISTS idx_thread_gist_channel_turn ON thread_gist(channel, turn_id);
-
-CREATE VIRTUAL TABLE IF NOT EXISTS thread_gist_vec USING vec0(embedding float[768]);
-CREATE VIRTUAL TABLE IF NOT EXISTS thread_gist_fts USING fts5(
-    summary, content='thread_gist', content_rowid='rowid'
-);
-
--- Cascade: DELETE thread_gist row → purge its vec row. FTS rows are purged
--- in Python via fts5_external_delete (the external-content safe idiom).
-CREATE TRIGGER IF NOT EXISTS thread_gist_vec_sync
-    AFTER DELETE ON thread_gist BEGIN
-    DELETE FROM thread_gist_vec WHERE rowid = OLD.id;
-END;
 
 -- ────────────────────────────────────────────────────────────────
 -- WRAPPER TOKENS — bearer auth for external programmatic access

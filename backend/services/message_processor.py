@@ -277,24 +277,27 @@ class MessageProcessor:
             )
             if self.turn_id is None:
                 self.turn_id = Transcript.turn_id_of_row(self.uid)
-                if self._cfg.broadcast_to == "user" and self.turn_id is not None:
-                    from api.chat import _broadcast_turn_started  # noqa: PLC0415
-                    _broadcast_turn_started(self.turn_id)
             self.anchor = self.uid
+            # Bind the live turn the instant its input row is written — for a new
+            # thread (turn_id just allocated) AND a reply (turn_id pre-set).
+            if self._cfg.broadcast_to == "user" and self.turn_id is not None:
+                from api.chat import _broadcast_working  # noqa: PLC0415
+                _broadcast_working(self.turn_id)
 
         if self._cfg.channel == "user":
             self._run_thinking_gate()
 
         self._seed_turn_zero()
 
-        # Workstream D — fire the per-thread gist delegate MP once the thread's
-        # turn_id is known. Only on the user channel (where turn_id is allocated
-        # by the input row above); the _continue path sets skip_input_row=True so
-        # this branch never re-fires for a continuation.
-        if self._cfg.channel == "user" and self.turn_id is not None and not self._cfg.skip_input_row:
+        # Label a turn once it first grows into a thread — i.e. on the first user
+        # reply past its settle0 (``_forked``). Fire the gist delegate only when no
+        # label exists yet, so a thread is summarized exactly once, at birth.
+        if self._forked and self.turn_id is not None:
             try:
-                from services.thread_gist_message_processor import maybe_ingest_gist  # noqa: PLC0415
-                maybe_ingest_gist(self._cfg.channel, self.turn_id)
+                from services.thread_gist_service import get_thread_gist_service  # noqa: PLC0415
+                if not get_thread_gist_service().bulk_get(self._cfg.channel, [self.turn_id]):
+                    from services.thread_gist_message_processor import maybe_ingest_gist  # noqa: PLC0415
+                    maybe_ingest_gist(self._cfg.channel, self.turn_id)
             except Exception as exc:  # noqa: BLE001
                 logger.debug("[MP] thread gist fire failed (non-fatal): %s", exc)
 
@@ -428,7 +431,6 @@ class MessageProcessor:
         formatted = self._store_row(response.text)
         if not response.tool_calls:
             return self._end_turn(formatted)
-        self._emit_interim(formatted)
         self._dispatch_tools(response.tool_calls)
         return self._continue()._step()
 
@@ -490,22 +492,12 @@ class MessageProcessor:
         if self.turn_id is None:
             self.turn_id = Transcript.turn_id_of_row(row_id)
         self.anchor = row_id
+        # Persistence boundary: every chain step and the final synthesis land here.
+        # Signal the surface to refetch the turn block (it coalesces by turn_id).
+        if self._cfg.broadcast_to == "user" and self.turn_id is not None:
+            from api.chat import _broadcast_turn_updated  # noqa: PLC0415
+            _broadcast_turn_updated(self.turn_id)
         return formatted
-
-    def _emit_interim(self, formatted: str) -> None:
-        """Broadcast a tool-bearing step's boundary frame live on the user channel.
-
-        Fires once per tool-bearing step (the no-tool step ends the turn before
-        reaching here). The frame IS the per-step boundary the surface renders
-        on: it collapses the prior step's tool group and opens the next. Emit it
-        even when the step has no prose — an empty interim still delimits the
-        step (the surface self-no-ops the empty bubble), and without it the
-        next step's tools pile into the prior group and the whole turn reads as
-        one ever-growing ACT loop. Do NOT re-add a ``formatted.strip()`` guard.
-        """
-        if self._cfg.broadcast_to == "user":
-            from api.chat import _broadcast_interim  # noqa: PLC0415
-            _broadcast_interim(self._metadata, formatted)
 
     def _dispatch_tools(self, tool_calls: list[dict[str, object]]) -> None:
         """Dispatch one step's tool calls in order through the chokepoint."""
@@ -598,12 +590,12 @@ class MessageProcessor:
     def _previous_rows(self) -> list[dict[str, object]]:
         """previous_messages for this turn's view.
 
-        FORK (a genuine reply into thread T): the turn's settle0-floored
-        continuation above the fork's transcript-id watermark, dropping the live
-        reply's own rows (``id < self.uid``, which render separately). MAIN
-        (everything else): the multi-turn spine above the main turn_id watermark.
-        Each view reads its own checkpoint axis via ``get_compaction(channel,
-        for_turn_id)`` — ``turn_id`` for a fork, ``None`` for the spine."""
+        THREAD (a genuine reply into thread T): the WHOLE turn above the thread's
+        transcript-id watermark, dropping the live reply's own rows (``id <
+        self.uid``, which render separately). MAIN (everything else): the
+        multi-turn spine above the main turn_id watermark. Each view reads its own
+        checkpoint axis via ``get_compaction(channel, for_turn_id)`` — ``turn_id``
+        for a thread, ``None`` for the spine."""
         if self._cfg.suppress_history:
             return []
         from services import compaction_persistence  # noqa: PLC0415

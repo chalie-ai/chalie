@@ -26,7 +26,6 @@ from __future__ import annotations
 import json
 import logging
 from typing import TYPE_CHECKING, Callable, cast
-from uuid import uuid4
 
 # AbilityRegistry resolves native tool names; PolicyManager gates the allow path.
 # Neither imports this module, so both import normally — no alias/patch hack.
@@ -219,12 +218,13 @@ class ToolDispatcher:
         run_async = bool(params.pop("async", False))
         config = getattr(self._mp, "config", None)
         emitter = ActEventEmitter(config)
-        call_id = uuid4().hex[:12]
         tool_name = ability.get_name()
+        # Transient live 'using X' line — NOT persisted. The completed tool's
+        # act-trail lands via the next assistant-row turn_updated → refetch.
         emitter.emit({
-            "type": "act_tool_start",
+            "type": "tool_invoked",
+            "turn_id": getattr(self._mp, "turn_id", None),
             "name": tool_name,
-            "id": call_id,
             "summary": act_summary,
         })
 
@@ -248,9 +248,7 @@ class ToolDispatcher:
         if tr.rich is not None and getattr(config, "broadcast_to", None) == "user":
             ordinal = self._next_ordinal(tool_name)
 
-        rendered = self._render(tool_name, tr, ordinal)
-        emitter.emit({"type": "act_tool_end", "name": tool_name, "id": call_id, "ok": tr.status == "success"})
-        return rendered
+        return self._render(tool_name, tr, ordinal)
 
     # ── Action pre-validation (ACTION_REQUIRED) ────────────────────────────────
 

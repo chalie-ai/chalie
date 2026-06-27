@@ -1,4 +1,9 @@
-"""Conversation blueprint — GET /conversation/recent, /conversation/threads, /conversation/thread/<turn_id>."""
+"""Conversation blueprint — the thread feed.
+
+GET /api/threads — id list + collapsed metadata (gist, preview, last activity).
+GET /api/thread/<turn_id> — one turn's full block (the WS-refetch + expand read).
+POST /api/threads/batch — many blocks, a pure concatenation of the single-turn getter.
+"""
 
 import logging
 import sqlite3
@@ -121,35 +126,46 @@ def _rows_to_messages(rows: list[dict[str, object]]) -> list[dict[str, object]]:
     return messages
 
 
-def get_recent_history(limit: int = 12, offset: int = 0) -> tuple[list[dict[str, object]], bool, int]:
+def serialize_turn(channel: str, turn_id: int) -> dict[str, object]:
+    """The single turn-block getter — the REST single/batch reads and the WS
+    refetch all flow through here, so one fetch fully determines a turn's render
+    with no signal memory.
+
+    Returns the WHOLE turn (no settle0 floor) projected into messages, with the
+    settle0 row tagged ``settled: 0`` (the only main-spine presentation cut), the
+    collapsed-feed metadata (gist, preview, last activity) and the turn-level
+    render state (``working`` — unsettled/in-flight — and ``duration_ms``,
+    derived from the row span) folded in."""
     from services.transcript_service import Transcript
+    from services.thread_gist_service import get_thread_gist_service
+    from services.time_utils import parse_utc
 
-    rows, has_more, turns_returned = Transcript.recent_turns(
-        'user', exclude_roles=_THREAD_EXCLUDE,
-        limit=limit, offset=offset,
-    )
-    if not rows:
-        return [], has_more, turns_returned
-    return _rows_to_messages(rows), has_more, turns_returned
+    rows = Transcript.thread_rows(channel, turn_id, exclude_roles=_THREAD_EXCLUDE)
+    messages = _rows_to_messages(rows)
+
+    settle = Transcript.settle0(channel, turn_id)
+    for m in messages:
+        if settle is not None and m["id"] == str(settle):
+            m["settled"] = 0
+            break
+
+    duration_ms = 0
+    if len(rows) >= 2:
+        span = parse_utc(cast("str", rows[-1]["created_at"])) - parse_utc(cast("str", rows[0]["created_at"]))
+        duration_ms = int(span.total_seconds() * 1000)
+
+    return {
+        "turn_id": turn_id,
+        "gist": get_thread_gist_service().bulk_get(channel, [turn_id]).get(turn_id),
+        "preview": cast("str", rows[0]["content"] or "")[:200] if rows else "",
+        "last_activity_at": rows[-1]["created_at"] if rows else None,
+        "working": settle is None,
+        "duration_ms": duration_ms,
+        "messages": messages,
+    }
 
 
-@conversation_bp.route('/conversation/recent', methods=['GET'])
-@require_session
-def conversation_recent() -> ResponseReturnValue:
-    try:
-        limit = max(1, min(120, int(request.args.get("limit", 12))))
-    except (ValueError, TypeError):
-        limit = 12
-    try:
-        offset = max(0, int(request.args.get("offset", 0)))
-    except (ValueError, TypeError):
-        offset = 0
-
-    messages, has_more, turns_returned = get_recent_history(limit, offset)
-    return jsonify({"messages": messages, "has_more": has_more, "turns_returned": turns_returned})
-
-
-@conversation_bp.route('/conversation/threads', methods=['GET'])
+@conversation_bp.route('/api/threads', methods=['GET'])
 @require_session
 def conversation_threads() -> ResponseReturnValue:
     """List threads (turns) with collapsed metadata — the thread feed.
@@ -161,9 +177,9 @@ def conversation_threads() -> ResponseReturnValue:
     from services.transcript_service import Transcript
 
     try:
-        limit = max(1, min(120, int(request.args.get("limit", 50))))
+        limit = max(1, min(120, int(request.args.get("limit", 20))))
     except (ValueError, TypeError):
-        limit = 50
+        limit = 20
     try:
         offset = max(0, int(request.args.get("offset", 0)))
     except (ValueError, TypeError):
@@ -183,13 +199,18 @@ def conversation_threads() -> ResponseReturnValue:
     return jsonify({"threads": threads, "has_more": has_more, "threads_returned": threads_returned})
 
 
-@conversation_bp.route('/conversation/thread/<int:turn_id>', methods=['GET'])
+@conversation_bp.route('/api/thread/<int:turn_id>', methods=['GET'])
 @require_session
 def conversation_thread(turn_id: int) -> ResponseReturnValue:
-    """Fetch the full row set of one thread (turn_id) — the expand-on-click
-    payload that hydrates the collapsed preview into the full conversation."""
-    from services.transcript_service import Transcript
+    """One turn's full block — the WS-refetch + expand-on-click read."""
+    return jsonify(serialize_turn('user', turn_id))
 
-    rows = Transcript.thread_rows('user', turn_id, exclude_roles=_THREAD_EXCLUDE)
-    messages = _rows_to_messages(rows)
-    return jsonify({"messages": messages, "turn_id": turn_id})
+
+@conversation_bp.route('/api/threads/batch', methods=['POST'])
+@require_session
+def conversation_threads_batch() -> ResponseReturnValue:
+    """Many turn blocks in one round-trip — a pure concatenation of the single
+    -turn getter over the requested ids (the FE paginates the feed ~20/page)."""
+    body = request.get_json(silent=True) or {}
+    turn_ids = cast("list[int]", body.get("turn_ids") or [])
+    return jsonify({"blocks": [serialize_turn('user', int(t)) for t in turn_ids]})

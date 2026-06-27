@@ -18,17 +18,16 @@ These tests exercise the REAL production path with zero mocks:
   * the real ``WebSocketBroker`` process-wide singleton (the broadcast channel),
   * real consumer objects at the WS boundary (the same ``send(raw)`` contract the
     browser socket fulfils — exactly the pattern the broker calls in production),
-  * the real per-turn delivery tail ``api.chat._broadcast_turn_result``.
+  * the real user-message echo tail ``api.chat._broadcast_user_echo``.
 
 Before the multi-surface fix the broker held a single socket reference and a
 second connection overwrote the first, so only the most-recently-connected
-surface received anything — ``test_turn_broadcast_reaches_all_open_surfaces``
+surface received anything — ``test_disconnect_removes_only_the_closed_surface``
 fails RED against that code and passes GREEN with the connection-set broker.
 """
 
 import json
 import sqlite3
-import time
 from collections.abc import Generator
 from typing import cast
 
@@ -40,17 +39,6 @@ pytestmark = pytest.mark.unit
 
 
 # ── helpers ───────────────────────────────────────────────────────────────────
-
-
-def _seed_user_input(db: sqlite3.Connection, content: str) -> int:
-    """Persist a user-input transcript row the way production does, so
-    ``_broadcast_turn_result`` resolves the turn's transcript id off it."""
-    db.execute(
-        "INSERT INTO transcript (channel, role, content, xml_migrated) "
-        "VALUES ('user', 'user', ?, 1)",
-        (content,),
-    )
-    return cast(int, db.execute("SELECT last_insert_rowid()").fetchone()[0])
 
 
 class _Surface:
@@ -91,63 +79,6 @@ def broker() -> Generator[WebSocketBroker, None, None]:
     finally:
         with b._lock:
             b._connections.clear()
-
-
-# ── A. Fan-out: a turn result reaches every open surface ────────────────────────
-
-
-def test_turn_broadcast_reaches_all_open_surfaces(db: sqlite3.Connection, broker: WebSocketBroker) -> None:
-    """Two surfaces are open for the one user. A completed turn broadcast via the
-    real ``_broadcast_turn_result`` must deliver the ``message`` AND ``done``
-    events to BOTH — not just whichever connected last."""
-    _seed_user_input(db, "What's the plan for today?")
-    db.commit()
-
-    phone = _Surface()
-    laptop = _Surface()
-    broker.connect(phone)
-    broker.connect(laptop)
-
-    from api.chat import _broadcast_turn_result
-
-    _broadcast_turn_result("Here is the plan.", "req-fanout", time.time())
-
-    for surface, name in ((phone, "phone"), (laptop, "laptop")):
-        assert "message" in surface.types(), (
-            f"{name} surface never received the turn 'message' event — fan-out "
-            f"dropped it. Got: {surface.types()}"
-        )
-        assert "done" in surface.types(), (
-            f"{name} surface never received the 'done' event. Got: {surface.types()}"
-        )
-        message = next(m for m in surface.received if m["type"] == "message")
-        assert message["content"] == "Here is the plan."
-        assert message["exchange_id"] == "req-fanout"
-
-
-def test_done_event_carries_the_turns_thread_id(db: sqlite3.Connection, broker: WebSocketBroker) -> None:
-    """The ``done`` event must carry the ``turn_id`` of the just-finished turn —
-    this is the round-trip that lets the live feed promote the turn into its own
-    thread (reply box + grouping). Without it the frontend tags every live turn
-    null and they collapse into one flat conversation."""
-    db.execute(
-        "INSERT INTO transcript (channel, role, content, turn_id, xml_migrated) "
-        "VALUES ('user', 'user', 'Book the flight', 7, 1)",
-        (),
-    )
-    db.commit()
-
-    surface = _Surface()
-    broker.connect(surface)
-
-    from api.chat import _broadcast_turn_result
-
-    _broadcast_turn_result("Booked.", "req-thread", time.time())
-
-    done = next(m for m in surface.received if m["type"] == "done")
-    assert done["turn_id"] == 7, (
-        f"the 'done' event must carry the turn's thread id (7); got {done.get('turn_id')!r}"
-    )
 
 
 # ── B. Targeted disconnect: closing one surface keeps the others live ───────────

@@ -1,30 +1,8 @@
 import type { GetHost } from './types';
 
 // Server → client inbound events, discriminated on `type`.
-export interface WsStatusEvent {
-  type: 'status';
-  stage: string;
-}
-export interface WsActNarrationEvent {
-  type: 'act_narration';
-  [k: string]: unknown;
-}
-export interface WsActToolStartEvent {
-  type: 'act_tool_start';
-  [k: string]: unknown;
-}
-export interface WsActToolEndEvent {
-  type: 'act_tool_end';
-  [k: string]: unknown;
-}
 export interface WsMessageEvent {
   type: 'message';
-  /**
-   * True for a chain step's interim assistant prose: text streams ahead of the
-   * step's tool batch with NO trailing `done`. Absent/false on the final turn
-   * result, which carries the rich segments and is followed by `done`.
-   */
-  interim?: boolean;
   [k: string]: unknown;
 }
 export interface WsErrorEvent {
@@ -34,22 +12,24 @@ export interface WsErrorEvent {
 }
 export interface WsDoneEvent {
   type: 'done';
-  duration_ms: number;
-  /** turn_id (thread) the just-finished turn was persisted under; null for legacy/untracked turns. */
+  /** Action channel carries a measured duration; the turn-channel signal omits it. */
+  duration_ms?: number;
+  /** turn_id (thread) the just-finished turn was persisted under; null for
+   *  untracked turns. Present on the turn-channel `done` signal only. */
   turn_id?: number | null;
-}
-export interface WsTurnStartedEvent {
-  type: 'turn_started';
-  /** turn_id (thread) allocated for the in-flight thread-starter, emitted the
-   *  moment its input row is written — ahead of the ACT loop and `done`. */
-  turn_id: number;
 }
 export interface WsPingEvent {
   type: 'ping';
 }
 
-/** Push/drift family. */
+/** Push family — broadcast to every surface, routed through the drift handler
+ *  with no per-request binding. Includes the turn-channel signals
+ *  (`working`/`turn_updated`/`tool_invoked`): the surface reacts by refetching
+ *  the turn block over REST, so these frames carry only ids, never prose. */
 export type WsPushType =
+  | 'working'
+  | 'turn_updated'
+  | 'tool_invoked'
   | 'drift'
   | 'task'
   | 'reminder'
@@ -76,32 +56,19 @@ export interface WsPushEvent {
 }
 
 export type WsInboundEvent =
-  | WsStatusEvent
-  | WsActNarrationEvent
-  | WsActToolStartEvent
-  | WsActToolEndEvent
   | WsMessageEvent
   | WsErrorEvent
   | WsDoneEvent
-  | WsTurnStartedEvent
   | WsPingEvent
   | WsPushEvent;
 
-export interface ChatCallbacks {
-  onStatus?: (stage: string) => void;
-  onMessage?: (data: WsMessageEvent) => void;
-  onNarration?: (data: WsActNarrationEvent) => void;
-  onError?: (data: { message: string; recoverable?: boolean }) => void;
-  onDone?: (data: { duration_ms: number; turn_id?: number | null }) => void;
-  onTurnStarted?: (data: WsTurnStartedEvent) => void;
-  onToolStart?: (data: WsActToolStartEvent) => void;
-  onToolEnd?: (data: WsActToolEndEvent) => void;
-}
-
+/** Action channel (rich-card button → POST /action) is the only per-request
+ *  binding left: it sets these callbacks for the optimistic card render. The
+ *  user-turn channel is signal-only (see WsPushType) and never binds. */
 export interface ActionCallbacks {
   onMessage?: (data: WsMessageEvent) => void;
   onError?: (data: { message: string; recoverable?: boolean }) => void;
-  onDone?: (data: { duration_ms: number }) => void;
+  onDone?: (data: { duration_ms?: number }) => void;
 }
 
 type Timer = ReturnType<typeof setTimeout>;
@@ -117,7 +84,7 @@ export class WebSocketService {
   private reconnectDelay = 1000;
   private readonly maxReconnectDelay = 30000;
   private reconnectTimer: Timer | null = null;
-  private chatCallbacks: (ChatCallbacks & ActionCallbacks) | null = null;
+  private chatCallbacks: ActionCallbacks | null = null;
   private driftHandler: ((data: WsPushEvent) => void) | null = null;
   private anyHandler: ((data: WsInboundEvent) => void) | null = null;
   private disconnectHandler: (() => void) | null = null;
@@ -263,9 +230,10 @@ export class WebSocketService {
     return this.connected && this.ws?.readyState === WebSocket.OPEN;
   }
 
-  /** Connection lost: drop the in-flight turn's callbacks before notifying
-   *  listeners. The turn's done went to the dead socket and is never resent, so
-   *  a lingering closure would otherwise swallow an unrelated turn's done. */
+  /** Connection lost: drop any in-flight action's callbacks before notifying
+   *  listeners. Its done went to the dead socket and is never resent, so a
+   *  lingering closure would otherwise swallow a later action's done. The turn
+   *  channel is signal-only — surfaces resync by refetching on reconnect. */
   private notifyDisconnect(): void {
     this.chatCallbacks = null;
     this.disconnectHandler?.();
@@ -328,21 +296,23 @@ export class WebSocketService {
     this.chatCallbacks = null;
   }
 
+  /** Fire a user turn. Signal-only: the turn's render flows entirely through the
+   *  broadcast `working`/`turn_updated`/`done` signals (→ drift handler → REST
+   *  refetch), so no callbacks are bound. `onSendFailure` reports ONLY a local
+   *  send failure (offline / POST rejected) — the case where no signal will ever
+   *  arrive — so the surface can release its send guard. */
   send(
     text: string,
     source: 'text' | 'voice',
-    callbacks: ChatCallbacks = {},
+    onSendFailure: (message: string) => void = () => { /* no-op */ },
     files: File[] = [],
     threadId: number | null = null,
   ): void {
-    this.chatCallbacks = callbacks;
     if (!this.isConnected) {
-      callbacks.onError?.({ message: 'Not connected. Please wait...', recoverable: true });
-      callbacks.onDone?.({ duration_ms: 0 });
-      this.chatCallbacks = null;
+      onSendFailure('Not connected. Please wait...');
       return;
     }
-    this.postChat(text, source, files, this.mintEchoId(), threadId);
+    this.postChat(text, source, files, this.mintEchoId(), threadId, onSendFailure);
   }
 
   /**
@@ -384,7 +354,14 @@ export class WebSocketService {
     });
   }
 
-  private postChat(text: string, source: string, files: File[], echoId: string, threadId: number | null): void {
+  private postChat(
+    text: string,
+    source: string,
+    files: File[],
+    echoId: string,
+    threadId: number | null,
+    onSendFailure: (message: string) => void,
+  ): void {
     const form = new FormData();
     form.append('text', text);
     form.append('source', source);
@@ -397,9 +374,7 @@ export class WebSocketService {
       headers: { ...this.authHeaders() },
       body: form,
     }).catch(() => {
-      this.chatCallbacks?.onError?.({ message: 'Chat request failed.', recoverable: true });
-      this.chatCallbacks?.onDone?.({ duration_ms: 0 });
-      this.chatCallbacks = null;
+      onSendFailure('Chat request failed.');
     });
   }
 
@@ -426,25 +401,15 @@ export class WebSocketService {
       this.driftHandler?.(data as WsPushEvent);
       return;
     }
+    // Only the action channel binds callbacks (sendAction). A user turn is
+    // signal-only, so its message/error/done frames fall through to the drift
+    // handler, which refetches the turn block. The turn-channel signals
+    // (working/turn_updated/tool_invoked) are never in this switch and always
+    // fall through.
     if (this.chatCallbacks) {
       switch (data.type) {
-        case 'status':
-          this.chatCallbacks.onStatus?.(data.stage);
-          return;
-        case 'act_narration':
-          this.chatCallbacks.onNarration?.(data);
-          return;
-        case 'act_tool_start':
-          this.chatCallbacks.onToolStart?.(data);
-          return;
-        case 'act_tool_end':
-          this.chatCallbacks.onToolEnd?.(data);
-          return;
         case 'message':
           this.chatCallbacks.onMessage?.(data);
-          return;
-        case 'turn_started':
-          this.chatCallbacks.onTurnStarted?.(data);
           return;
         case 'error':
           this.chatCallbacks.onError?.(data);

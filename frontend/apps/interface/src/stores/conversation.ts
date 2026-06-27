@@ -5,7 +5,7 @@
  * dock toast. Components render the list; this store owns all mutations.
  */
 import { defineStore } from 'pinia';
-import type { ConversationAttachment, ConversationMessage, ConversationSegment, ConversationThread } from '../api/conversation';
+import type { ConversationAttachment, ConversationMessage, ConversationSegment, ConversationThread, ConversationTurnBlock } from '../api/conversation';
 import { conversation as convoApi } from '../api/conversation';
 import { extractText } from '../composables/useMarkup';
 
@@ -74,6 +74,13 @@ export interface ActForm extends TurnTagged {
    * the tool-name pill and running timer are dropped, leaving the act summaries.
    */
   collapsed: boolean;
+  /**
+   * Sub-text for a live working anchor — the transient `tool_invoked` summary
+   * ("Searching files…"), shown under the spinner while the turn runs. Set only
+   * on the synthetic anchor TurnView renders for a working turn; falls back to
+   * "thinking…" when empty.
+   */
+  placeholder?: string;
 }
 
 export type ConversationForm = UserForm | ChalieForm | ActForm;
@@ -112,11 +119,20 @@ function nextId(): number {
 export const useConversationStore = defineStore('conversation', {
   state: () => ({
     forms: [] as ConversationForm[],
-    /** Collapsed thread metadata from /conversation/threads — the thread feed. */
+    /** Collapsed thread metadata from /api/threads — the thread feed. */
     threads: [] as ThreadListItem[],
     /** Total threads seen across all loaded pages — advances pagination. */
     threadsOffset: 0,
     threadsExhausted: false,
+    /** turn_ids currently in flight (the `working` signal is on, no `done` yet) —
+     *  drives the spinner anchor. Independent of the rows, which arrive via fetch. */
+    workingTurnIds: new Set<number>(),
+    /** Transient per-turn `tool_invoked` summary ("Searching files…"), shown under
+     *  the working anchor. Dropped when the turn settles (setWorking false). */
+    liveSummaries: {} as Record<number, string>,
+    /** Highest row id rendered per turn — the monotonic guard that drops a stale
+     *  or out-of-order refetch so a slow response can't overwrite a newer one. */
+    turnVersions: {} as Record<number, number>,
   }),
 
   getters: {
@@ -153,13 +169,13 @@ export const useConversationStore = defineStore('conversation', {
       }
       return groups;
     },
-    /** Id of the most recent act form, or null. */
-    activeActFormId(state): number | null {
-      for (let i = state.forms.length - 1; i >= 0; i--) {
-        const f = state.forms[i];
-        if (f.kind === 'act') return f.id;
-      }
-      return null;
+    /** True while `turnId`'s `working` signal is on (spinner anchor visible). */
+    isTurnWorking(state): (turnId: number | null) => boolean {
+      return (turnId) => turnId != null && state.workingTurnIds.has(turnId);
+    },
+    /** Transient `tool_invoked` summary for `turnId` (empty when none). */
+    liveSummaryFor(state): (turnId: number | null) => string {
+      return (turnId) => (turnId != null ? state.liveSummaries[turnId] ?? '' : '');
     },
     /**
      * True when a thread's last activity was within the 1-hour active window.
@@ -266,52 +282,6 @@ export const useConversationStore = defineStore('conversation', {
       else this.forms.splice(idx, 1);
     },
 
-    appendToolPill(actId: number, id: string, name: string, summary?: string): void {
-      const form = this._findAct(actId);
-      if (!form) return;
-      if (!id) return; // guard matches renderer.js
-      const pill: ToolPill = {
-        id,
-        name,
-        summary,
-        startedAt: Date.now(),
-        resolved: false,
-      };
-      form.tools.push(pill);
-    },
-
-    /**
-     * Enforces a 150ms minimum visible duration. When `ms` is 0, falls back to
-     * client-measured elapsed (from pill.startedAt).
-     */
-    resolveToolPill(pillId: string, ms: number, ok: boolean): void {
-      if (!pillId) return;
-      for (const form of this.forms) {
-        if (form.kind !== 'act') continue;
-        const pill = form.tools.find((t) => t.id === pillId);
-        if (!pill) continue;
-
-        const elapsed = pill.startedAt ? Date.now() - pill.startedAt : 200;
-        const wait = Math.max(0, 150 - elapsed);
-        const effectiveMs = ms > 0 ? ms : (pill.startedAt ? Date.now() - pill.startedAt : 0);
-
-        setTimeout(() => {
-          // Re-locate: forms array may have shifted.
-          for (const f of this.forms) {
-            if (f.kind !== 'act') continue;
-            const p = f.tools.find((t) => t.id === pillId);
-            if (p) {
-              p.ms = effectiveMs;
-              p.ok = ok;
-              p.resolved = true;
-              break;
-            }
-          }
-        }, wait);
-        break;
-      }
-    },
-
     /**
      * Replace an ACT form with the final Chalie response. A no-content message
      * simply removes the ACT form.
@@ -375,11 +345,6 @@ export const useConversationStore = defineStore('conversation', {
         .join(' ');
     },
 
-    _findAct(actId: number): ActForm | undefined {
-      const form = this.forms.find((f) => f.id === actId);
-      return form?.kind === 'act' ? form : undefined;
-    },
-
     _attachmentsFor(msg: ConversationMessage): AttachmentPreview[] {
       return (msg.attachments ?? []).map((a: ConversationAttachment) => ({
         filename: a.filename,
@@ -423,10 +388,106 @@ export const useConversationStore = defineStore('conversation', {
       return out;
     },
 
+    // ---- Turn lifecycle signals ----
+
+    /** Flip a turn's spinner on/off. Settling also drops its transient summary. */
+    setWorking(turnId: number, on: boolean): void {
+      if (on) {
+        this.workingTurnIds.add(turnId);
+      } else {
+        this.workingTurnIds.delete(turnId);
+        delete this.liveSummaries[turnId];
+      }
+    },
+
+    /** Write the transient `tool_invoked` summary straight onto the anchor — no
+     *  fetch: a step in progress never triggers a refetch. */
+    setLiveSummary(turnId: number, summary: string): void {
+      this.liveSummaries[turnId] = summary;
+    },
+
+    /** Project one turn block into ordered forms — the user row then each
+     *  assistant row's prose + collapsed tool group. Shared by live refetch and
+     *  thread expand so both paths render identically. */
+    parseTurn(block: ConversationTurnBlock): ConversationForm[] {
+      const forms: ConversationForm[] = [];
+      for (const msg of block.messages) {
+        if (msg.role === 'user') {
+          forms.push({
+            kind: 'user',
+            id: nextId(),
+            text: msg.content,
+            attachments: this._attachmentsFor(msg),
+            inWorkingMemory: true,
+            turnId: msg.turn_id,
+          });
+        } else {
+          for (const f of this._assistantForms(msg, true)) forms.push(f);
+        }
+      }
+      return forms;
+    },
+
+    /**
+     * Atomic block replacement for one turn: drop the turn's current forms and
+     * splice in the freshly-parsed block at its turn_id-ordered slot. A monotonic
+     * row-id guard drops a stale/out-of-order payload so a slow fetch can't undo a
+     * newer one; an equal version re-applies (idempotent self-heal). The matching
+     * thread item's collapsed metadata is refreshed from the same block. Working
+     * state is untouched — that is the `working`/`done` signals' job.
+     */
+    upsertTurn(block: ConversationTurnBlock): void {
+      let version = 0;
+      for (const m of block.messages) {
+        const n = parseInt(m.id, 10);
+        if (n > version) version = n;
+      }
+      if ((this.turnVersions[block.turn_id] ?? -1) > version) return;
+      this.turnVersions[block.turn_id] = version;
+
+      const incoming = this.parseTurn(block);
+      this.forms = this.forms.filter((f) => f.turnId !== block.turn_id);
+      this.forms.splice(this._turnInsertIndex(block.turn_id), 0, ...incoming);
+
+      const item = this.threads.find((t) => t.turn_id === block.turn_id);
+      if (item) {
+        item.last_activity_at = block.last_activity_at;
+        item.preview = block.preview;
+        item.gist = block.gist;
+      }
+    },
+
+    /** Fetch one turn block and upsert it — the single read behind both the WS
+     *  `turn_updated` refetch and thread expand. */
+    async refetchTurn(turnId: number): Promise<void> {
+      this.upsertTurn(await convoApi.thread(turnId));
+    },
+
+    /** Tear down an aborted/superseded live turn — its forms, thread shell and
+     *  all signal state — leaving the feed clean. */
+    dropLiveTurn(turnId: number): void {
+      this.forms = this.forms.filter((f) => f.turnId !== turnId);
+      this.threads = this.threads.filter((t) => t.turn_id !== turnId);
+      this.workingTurnIds.delete(turnId);
+      delete this.liveSummaries[turnId];
+      delete this.turnVersions[turnId];
+    },
+
+    /** Slot for a turn's forms in turn_id order (spine order is turn_id, not
+     *  arrival) — before the first form of a later turn or any unbound live
+     *  form, else at the end. */
+    _turnInsertIndex(turnId: number): number {
+      for (let i = 0; i < this.forms.length; i++) {
+        const t = this.forms[i].turnId;
+        if (t == null || t > turnId) return i;
+      }
+      return this.forms.length;
+    },
+
     // ---- Thread-list feed (workstream F) ----
 
     /**
-     * Append a /conversation/threads page (newest-first from the API) as the
+     * Append a /api/threads page (newest-first from the API) as the
      * initial feed. The feed reads chronologically — oldest at the top, newest at
      * the bottom — so the page is reversed before it is pushed.
      */
@@ -472,7 +533,7 @@ export const useConversationStore = defineStore('conversation', {
     },
 
     /**
-     * Prepend an older /conversation/threads page (newest-first from the API)
+     * Prepend an older /api/threads page (newest-first from the API)
      * above the current feed, keeping the chronological order: the page's oldest
      * thread lands at the very top.
      */
@@ -482,7 +543,10 @@ export const useConversationStore = defineStore('conversation', {
       }
     },
 
-    /** Expand a collapsed thread: fetch its full rows and insert into `forms`. */
+    /** Expand a collapsed thread. The page's blocks are batch-hydrated on load,
+     *  so the forms are usually already present and expanding is instant; a
+     *  thread outside the loaded pages (deep-link) is fetched on demand.
+     *  Collapse/expand is presentational — the forms stay put. */
     async expandThread(turnId: number): Promise<void> {
       const item = this.threads.find((t) => t.turn_id === turnId);
       if (!item || item.expanded || item.loading) return;
@@ -490,45 +554,25 @@ export const useConversationStore = defineStore('conversation', {
       for (const t of this.threads) {
         if (t.expanded && t.turn_id != null && t.turn_id !== turnId) this.collapseThread(t.turn_id);
       }
+      if (this.forms.some((f) => f.turnId === turnId)) {
+        item.expanded = true;
+        return;
+      }
       item.loading = true;
       try {
-        const data = await convoApi.thread(turnId);
-        const messages = data.messages ?? [];
-        // Insert the thread's forms at the correct position — after the last
-        // form of the previous expanded thread and before the first form of the
-        // next expanded thread. Find insertion index by scanning `forms` for the
-        // boundary: we insert before the first form whose turnId is greater than
-        // turnId (or at the end).
-        const forms: ConversationForm[] = [];
-        for (const msg of messages) {
-          if (msg.role === 'user') {
-            const attachments = this._attachmentsFor(msg);
-            forms.push({
-              kind: 'user',
-              id: nextId(),
-              text: msg.content,
-              attachments,
-              inWorkingMemory: true,
-              turnId: msg.turn_id,
-            });
-          } else {
-            for (const f of this._assistantForms(msg, true)) forms.push(f);
-          }
-        }
-        // Insert forms into the forms array at the right position.
-        const insertIdx = this._threadInsertIndex(turnId);
-        this.forms.splice(insertIdx, 0, ...forms);
+        await this.refetchTurn(turnId);
         item.expanded = true;
       } finally {
         item.loading = false;
       }
     },
 
-    /** Collapse an expanded thread: remove its forms from `forms`. */
+    /** Collapse an expanded thread — presentational only. The forms stay in the
+     *  store (batch-hydrated, kept for instant re-expand); the feed renders the
+     *  pill from thread metadata and `collapsedTurnIds` hides the forms. */
     collapseThread(turnId: number): void {
       const item = this.threads.find((t) => t.turn_id === turnId);
       if (!item || !item.expanded) return;
-      this.forms = this.forms.filter((f) => f.turnId !== turnId);
       item.expanded = false;
     },
 
@@ -539,31 +583,6 @@ export const useConversationStore = defineStore('conversation', {
       if (!item) return;
       if (item.expanded) this.collapseThread(turnId);
       else await this.expandThread(turnId);
-    },
-
-    /**
-     * Find the insertion index in `forms` for a thread's rows. Threads render in
-     * the same order as the thread list (chronological — newest last). Forms for
-     * a thread go before any form whose turnId maps to a thread that's later in
-     * the list, keeping `forms` aligned with the thread order whatever it is.
-     */
-    _threadInsertIndex(turnId: number): number {
-      // Build a map of turnId → list position for expanded threads.
-      const expandedOrder = new Map<number, number>();
-      for (let i = 0; i < this.threads.length; i++) {
-        const t = this.threads[i];
-        if (t.turn_id != null && t.expanded) expandedOrder.set(t.turn_id, i);
-      }
-      const myOrder = expandedOrder.get(turnId) ?? this.threads.findIndex((t) => t.turn_id === turnId);
-      // Find the first form belonging to a thread that comes AFTER this thread
-      // in the list — insert before it.
-      for (let i = 0; i < this.forms.length; i++) {
-        const fTurn = this.forms[i].turnId;
-        if (fTurn == null) continue;
-        const fOrder = expandedOrder.get(fTurn);
-        if (fOrder != null && fOrder > myOrder) return i;
-      }
-      return this.forms.length;
     },
   },
 });

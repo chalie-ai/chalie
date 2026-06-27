@@ -4,17 +4,46 @@
 <script setup lang="ts">
 import { computed } from 'vue';
 import { User } from '@lucide/vue';
+import { useConversationStore } from '../../stores/conversation';
 import type { ConversationForm, UserForm, ChalieForm, ActForm } from '../../stores/conversation';
 import UserBubble from './UserBubble.vue';
 import ChalieBubble from './ChalieBubble.vue';
 import ActCycle from './ActCycle.vue';
 import ActCycleGroup from './ActCycleGroup.vue';
 
-const props = withDefaults(defineProps<{ forms: ConversationForm[]; canReply?: boolean }>(), {
-  canReply: true,
-});
+const props = withDefaults(
+  defineProps<{ forms: ConversationForm[]; canReply?: boolean; working?: boolean }>(),
+  { canReply: true, working: false },
+);
 
 const emit = defineEmits<{ reply: [turnId: number] }>();
+
+const convo = useConversationStore();
+
+// Sentinel id for the synthetic working anchor — negative so it never collides
+// with a store-minted form id.
+const WORKING_ANCHOR_ID = -1;
+
+const turnId = computed<number | null>(() => {
+  for (const f of props.forms) if (f.turnId != null) return f.turnId;
+  return null;
+});
+
+// The spinner is no rendered form — it is derived from the turn's `working`
+// signal. Append a transient ActForm anchor whose placeholder is the latest
+// `tool_invoked` summary; ActCycle renders it as the live step.
+const displayForms = computed<ConversationForm[]>(() => {
+  if (!(props.working || convo.isTurnWorking(turnId.value))) return props.forms;
+  const anchor: ActForm = {
+    kind: 'act',
+    id: WORKING_ANCHOR_ID,
+    tools: [],
+    collapsed: false,
+    turnId: turnId.value,
+    placeholder: convo.liveSummaryFor(turnId.value),
+  };
+  return [...props.forms, anchor];
+});
 
 // Consecutive superseded ACT cycles fold into one group; everything else
 // (including a live, non-collapsed act) renders on its own row.
@@ -25,7 +54,7 @@ type AvatarRow = RowBase & { role: 'user' | 'chalie'; showAvatar: boolean };
 
 const rows = computed<AvatarRow[]>(() => {
   const grouped: RowBase[] = [];
-  for (const form of props.forms) {
+  for (const form of displayForms.value) {
     const last = grouped[grouped.length - 1];
     if (form.kind === 'act' && form.collapsed) {
       if (last?.type === 'act-group') last.forms.push(form);
@@ -41,11 +70,6 @@ const rows = computed<AvatarRow[]>(() => {
     prevRole = role;
     return annotated;
   });
-});
-
-const turnId = computed<number | null>(() => {
-  for (const f of props.forms) if (f.turnId != null) return f.turnId;
-  return null;
 });
 
 function onReply(): void {

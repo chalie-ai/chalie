@@ -9,8 +9,8 @@ cross-step invariants that make the thread model work:
    new allocation.
 3. Transcript.recent_threads returns collapsed metadata ordered by recency.
 4. Transcript.thread_rows returns the full row set of one thread.
-5. The conversation API endpoints (/conversation/threads, /conversation/thread/<id>)
-   project the real DB rows through the same pipeline as /conversation/recent.
+5. The conversation API endpoints (/api/threads, /api/thread/<id>)
+   project the real DB rows through the shared _rows_to_messages pipeline.
 """
 import sqlite3
 from typing import cast
@@ -117,7 +117,7 @@ class TestThreadDataModel:
         assert messages[1]['turn_id'] == t1
 
     def test_recent_threads_pagination(self, db: sqlite3.Connection) -> None:
-        """recent_threads paginates by thread, same as recent_turns."""
+        """recent_threads paginates by thread, one summary row per turn_id."""
         for i in range(5):
             _seed_thread(f'Q{i}', f'A{i}')
 

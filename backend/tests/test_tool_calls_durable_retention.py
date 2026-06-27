@@ -10,7 +10,7 @@
 
 Two guarantees, both pinned against the production hot path:
   * Rich-card rendering: a recorded tool_calls row survives its turn so
-    SegmentService / the live broadcast can build the rich segment from it.
+    SegmentService can build the rich segment from it.
   * Unified retention: a tool_calls audit row lives and dies with its transcript
     turn. The transcript GC reaps it exactly when it reaps the turn — below the
     compaction watermark and uncited by any live episode. The old standalone
@@ -119,80 +119,6 @@ def test_tool_calls_row_survives_turn_and_segment_service_builds_rich_card(db: s
     assert rich[0]["synthesis"] == "Sunny, 27°C."
     assert cast(dict[str, object], rich[0]["payload"])["location"] == "Valletta, MT"
     assert cast(dict[str, object], rich[0]["payload"])["temperature_c"] == pytest.approx(27.0)
-
-
-# ── B2. Live broadcast path: span pairs with tool_calls after assistant persist ──
-
-
-def test_broadcast_turn_result_pairs_span_after_assistant_row_persisted(db: sqlite3.Connection) -> None:
-    """The live WS broadcast must pair the span tag with the turn's tool_calls
-    even though the assistant row is already persisted when it runs.
-
-    Regression (observed live 2026-06-12, transcript 6263): _broadcast_turn_result
-    resolved the turn's transcript id via get_recent("user", limit=1), which
-    returns the newest channel row of ANY role — the just-persisted assistant
-    row, not the user row tool_calls are keyed to.  The tool_calls fetch came
-    back empty, the span became an orphan, and the card degraded to plain text
-    on the live path (page refresh rendered fine).  The fix resolves backwards
-    from the assistant row via resolve_tool_call_transcript_ids — the same
-    shared function the refresh path uses.
-    """
-    import time
-
-    # Chain model: the tool anchors to the assistant STEP row, the synthesis span
-    # lands on the FINAL row, and all three rows share the turn_id the input row
-    # opened. _broadcast_turn_result resolves TURN-WIDE from the newest channel
-    # row (the final assistant row) so the final-row span pairs with the step
-    # row's tool. Seeded through the production writers + ActTrail.record — the
-    # same path the live chain takes.
-    uid = Transcript.write_input_row("user", "user", "What's the weather in Valletta?")
-    turn = Transcript.turn_id_of_row(uid)
-    step_id = Transcript.write_assistant_row("user", "Let me check the weather.", turn_id=turn)
-    ActTrail().record(
-        tool_name="weather",
-        params={"location": "Valletta"},
-        result=_RICH_RESULT,
-        transcript_id=step_id,
-    )
-
-    # Final synthesis row persisted BEFORE the broadcast runs — reproducing the
-    # live ordering where the newest channel row is the turn's final assistant row.
-    assistant_content = "<span id='weather_1'>Sunny, 27°C.</span>"
-    Transcript.write_assistant_row("user", assistant_content, turn_id=turn)
-
-    # Real consumer at the WS boundary: the broker pushes JSON strings to the
-    # connected object exactly as it does to the browser connection.
-    received: list[dict[str, object]] = []
-
-    class _Receiver:
-        def send(self, raw: str) -> None:
-            received.append(json.loads(raw))
-
-    from services.websocket_broker import WebSocketBroker
-
-    broker = WebSocketBroker()
-    receiver = _Receiver()
-    broker.connect(receiver)
-    try:
-        from api.chat import _broadcast_turn_result
-
-        _broadcast_turn_result(assistant_content, "req-test", time.time())
-    finally:
-        broker.disconnect(receiver)
-
-    messages = [m for m in received if m.get("type") == "message"]
-    assert len(messages) == 1, f"Expected 1 message event, got: {received}"
-    rich = [s for s in cast(list[dict[str, object]], messages[0]["segments"]) if s["type"] == "rich"]
-    assert len(rich) == 1, (
-        f"Expected 1 rich segment on the live broadcast, got segments: "
-        f"{messages[0]['segments']}. If 0, the transcript-id resolution picked "
-        "the assistant row again and the span orphaned (the live-path regression "
-        "is back)."
-    )
-    assert rich[0]["tag"] == "weather_1"
-    assert cast(dict[str, object], rich[0]["payload"])["location"] == "Valletta, MT"
-    done = [m for m in received if m.get("type") == "done"]
-    assert len(done) == 1, "broadcast must still emit the done event"
 
 
 # ── C. Unified retention: tool_calls die with their transcript turn ───────────

@@ -32,7 +32,7 @@ const liveTurn = computed(() => {
 // else collapses to a Thread pill. The live in-flight turn is always inline.
 type FeedEntry =
   | { kind: 'pill'; thread: ThreadListItem }
-  | { kind: 'inline'; id: number; forms: ConversationForm[] };
+  | { kind: 'inline'; id: number; forms: ConversationForm[]; working: boolean };
 
 const feedEntries = computed<FeedEntry[]>(() => {
   const entries: FeedEntry[] = [];
@@ -40,12 +40,18 @@ const feedEntries = computed<FeedEntry[]>(() => {
     const forms = t.expanded ? conversationStore.forms.filter((f) => f.turnId === t.turn_id) : [];
     const singleExchange = forms.filter((f) => f.kind === 'user').length === 1;
     if (forms.length && singleExchange && t.turn_id !== session.panelThreadId) {
-      entries.push({ kind: 'inline', id: forms[0].id, forms });
+      // A bound turn's spinner is driven by its own `working` signal (isTurnWorking
+      // inside TurnView); only the unbound live turn below needs the prop.
+      entries.push({ kind: 'inline', id: forms[0].id, forms, working: false });
     } else {
       entries.push({ kind: 'pill', thread: t });
     }
   }
-  if (liveTurn.value) entries.push({ kind: 'inline', id: liveTurn.value.id, forms: liveTurn.value.forms });
+  // The live turn has no turn_id yet, so its spinner can't come from isTurnWorking
+  // — drive it from this surface's send guard until `working` binds the thread.
+  if (liveTurn.value) {
+    entries.push({ kind: 'inline', id: liveTurn.value.id, forms: liveTurn.value.forms, working: session.isSending });
+  }
   return entries;
 });
 
@@ -160,7 +166,7 @@ onBeforeUnmount(() => {
       </div>
 
       <!-- Single-exchange or live turn → inline avatar rows. -->
-      <TurnView v-else :forms="entry.forms" @reply="onReply" />
+      <TurnView v-else :forms="entry.forms" :working="entry.working" @reply="onReply" />
     </template>
   </main>
 </template>

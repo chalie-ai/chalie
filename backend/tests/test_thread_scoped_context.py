@@ -9,17 +9,18 @@ writers (``write_input_row`` / ``write_assistant_row``), the tool-call writer
 checkpoint-envelope seam (``_wrap_with_checkpoint``), the real cancellation
 cleanup (``_cleanup_cancelled``) and the real production config (``UserConfig``).
 
-The model has two views, both keyed on ``turn_id`` and pivoted on settle0 — a
-turn's first assistant row carrying no model-driven tool:
+The model has two views, both keyed on ``turn_id``:
 
 * MAIN spine (a fresh message): every settled turn's opening exchange (rows
-  ``id <= settle0``), across turns, cut on the *turn_id* axis by the MAIN
-  watermark.
-* FORK read (a genuine reply into a thread): that turn's rows from settle0 up,
-  cut on the *transcript.id* axis by the FORK watermark, dropping the live reply.
+  ``id <= settle0`` — a turn's first assistant row carrying no model-driven
+  tool), across turns, cut on the *turn_id* axis by the MAIN watermark.
+* THREAD read (a genuine reply into a thread): that turn's WHOLE row set — the
+  opening user message, pre-settle interims, settle0 and every continuation —
+  cut on the *transcript.id* axis by the THREAD watermark, dropping the live
+  reply. No settle0 floor.
 
 Both watermark axes live in the dedicated ``compactions`` table and never
-collide: a MAIN compaction can't hide a fork reply, a FORK compaction can't
+collide: a MAIN compaction can't hide a thread reply, a THREAD compaction can't
 hide the spine.
 
 Coverage boundary: the compactor's ``run()`` fires a real LLM to author the
@@ -146,10 +147,10 @@ class TestMainSpine:
 
 class TestForkRead:
 
-    def test_fork_floors_at_settle0_and_drops_below_floor_and_live_reply(self, db: object) -> None:
-        """The FORK read floors at the turn's settle0 (the fork anchor), includes
-        prior settled continuations, and excludes both below-floor main-owned rows
-        and the live reply's own rows."""
+    def test_thread_read_is_the_whole_turn_minus_the_live_reply(self, db: object) -> None:
+        """The THREAD read is the entire turn — opening user message, pre-settle
+        interims, settle0 and every settled continuation — with no settle0 floor;
+        only the live reply's own rows are excluded (they render separately)."""
         t, _, _ = _settled_turn("thread question", answer="thread answer",
                                 steps=(("thinking it through", "search_files"),))
         _reply(t, "first follow-up", answer="first follow-up answer")
@@ -157,11 +158,11 @@ class TestForkRead:
 
         rendered = _fork_mp(t, live_in).get_previous_messages()
 
-        assert "thread answer" in rendered, "settle0 (the fork anchor) is the floor and is included"
+        assert "thread question" in rendered, "the opening user message is part of the whole turn"
+        assert "thinking it through" in rendered, "pre-settle interim is part of the whole turn"
+        assert "thread answer" in rendered, "settle0 is included"
         assert "first follow-up" in rendered, "prior settled continuation is included"
         assert "first follow-up answer" in rendered
-        assert "thinking it through" not in rendered, "pre-settle0 main-owned row is below the fork floor"
-        assert "thread question" not in rendered, "the turn's input row is below settle0 — excluded"
         assert "the live reply" not in rendered, "the live reply renders separately, not in history"
 
     def test_watermark_cuts_fork_read_without_touching_the_spine(self, db: object) -> None:

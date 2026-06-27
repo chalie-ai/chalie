@@ -10,7 +10,7 @@ test('backend readiness resolves through the typed ApiClient', async ({ page }) 
 test('unauthenticated API call is rejected (401)', async ({ page }) => {
   await page.goto('/');
   const status = await page.evaluate(async () => {
-    const r = await fetch('/conversation/recent?limit=1', { credentials: 'omit' });
+    const r = await fetch('/api/threads?limit=1', { credentials: 'omit' });
     return r.status;
   });
   expect(status).toBe(401);

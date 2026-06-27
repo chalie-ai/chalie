@@ -23,11 +23,11 @@ Design:
 
   User-channel messages flow through MessageProcessor.process() with the
   UserConfig ProcessorConfig subclass — no MessageProcessor subclass.
-  Live output is gated by broadcast_to='user' on the config: each chain step
-  broadcasts its interim assistant text via _broadcast_interim() and
-  ToolDispatcher.dispatch() emits live tool events, both fired only when
-  broadcast_to is set; the turn's end message is broadcast by
-  _broadcast_turn_result() once the chain returns (AC-28).
+  Live output is signal-only, gated by broadcast_to='user': the surface holds
+  no event memory and refetches turn blocks over REST. _broadcast_working()
+  binds the live turn, _broadcast_turn_updated() fires at each assistant-row
+  write so the surface refetches, tool_invoked carries the transient 'using X'
+  line, and _broadcast_done() releases the working state once the chain returns.
 """
 
 import logging
@@ -104,7 +104,6 @@ def _run_chat_background(
     config: "ProcessorConfig",
     metadata: dict[str, object],
     request_id: str,
-    turn_start: float,
 ) -> None:
     """Clears the active UMP reference BEFORE broadcasting done so the frontend
     can immediately POST /chat without racing a still-set active_ump."""
@@ -112,9 +111,7 @@ def _run_chat_background(
 
     broker = WebSocketBroker()
     try:
-        response = MessageProcessor.process(
-            raw_input, config, metadata, cancel_event=cancel_event
-        )
+        MessageProcessor.process(raw_input, config, metadata, cancel_event=cancel_event)
 
         # Cancelled turn — skip broadcast entirely. The replacement turn
         # (started by dispatch_message) owns the WS event stream now.
@@ -125,7 +122,7 @@ def _run_chat_background(
         # Clear the active UMP BEFORE broadcasting done so the frontend can
         # immediately POST /chat without racing a still-set active_ump.
         _clear_active_ump(turn)
-        _broadcast_turn_result(response, request_id, turn_start)
+        _broadcast_done()
 
     except Exception as exc:
         logger.exception("[Chat API] UMP error for %s: %s", request_id, exc)
@@ -136,51 +133,25 @@ def _run_chat_background(
                 "message": str(exc),
                 "recoverable": False,
             })
-            broker.broadcast({
-                "type": "done",
-                "duration_ms": int((time.time() - turn_start) * 1000),
-            })
+            _broadcast_done()
     finally:
         _clear_active_ump(turn)
 
 
-def _broadcast_interim(metadata: dict[str, object], content: str) -> None:
-    """Broadcast a chain step's interim assistant text on the user channel.
-
-    Fired from MessageProcessor._emit_interim the moment the model emits a
-    tool-bearing step, so the surface shows assistant prose and tool batches
-    interleaved live within the turn. The text is already markdown→HTML
-    normalised; we sanitise and emit a ``message`` event identical in shape to
-    the final turn result but flagged ``interim`` and WITHOUT a trailing
-    ``done`` — the chain is still running. The step's tools have not been
-    dispatched yet, so the segment is plain text (no rich-media pairing here;
-    that lands on the final row, resolved turn-wide).
-    """
-    broker = WebSocketBroker()
-    safe_content = sanitize(content or "")
-    exchange_id = (metadata or {}).get("exchange_id") or (metadata or {}).get("uuid") or ""
-    broker.broadcast({
-        "type": "message",
-        "content": safe_content,
-        "topic": "user",
-        "mode": "UNIFIED",
-        "confidence": 1.0,
-        "exchange_id": exchange_id,
-        "metrics": {},
-        "interim": True,
-        "segments": [{"type": "text", "content": safe_content}],
-        "timestamp": format_date(utc_now(), CHAT_TIMESTAMP_FMT, for_ui=True) or "",
-    })
+def _broadcast_working(turn_id: int) -> None:
+    """Signal that a turn is in flight, keyed by its id. Fired the instant the
+    input row is written (turn_id known) for both a new thread and a reply, so the
+    surface binds the live turn and shows its working state. Signal-only — the
+    surface fetches the turn's content on ``turn_updated``; this carries no prose."""
+    WebSocketBroker().broadcast({"type": "working", "turn_id": turn_id})
 
 
-def _broadcast_turn_started(turn_id: int) -> None:
-    """Announce a thread-starter's allocated ``turn_id`` the instant its input
-    row is written — before the ACT loop runs. The surface binds the in-flight
-    thread immediately, so a new thread's card header and reply dock render live
-    instead of only appearing once the turn finishes. The ``done`` event carries
-    the same id as an idempotent fallback for paths that miss this frame.
-    """
-    WebSocketBroker().broadcast({"type": "turn_started", "turn_id": turn_id})
+def _broadcast_turn_updated(turn_id: int) -> None:
+    """Signal that a turn's persisted rows changed — fired at each assistant-row
+    write boundary (every chain step and the final synthesis). Signal-only: the
+    surface refetches the turn block (coalescing concurrent fires by turn_id) and
+    atomically replaces it. The transient 'using X' line rides ``tool_invoked``."""
+    WebSocketBroker().broadcast({"type": "turn_updated", "turn_id": turn_id})
 
 
 def _broadcast_provider_retry(attempt: int, max_attempts: int) -> None:
@@ -198,47 +169,20 @@ def _broadcast_provider_retry(attempt: int, max_attempts: int) -> None:
     })
 
 
-def _broadcast_turn_result(response: str, request_id: str, turn_start: float) -> None:
-    """Shared by the foreground user turn and the background async-result synthesis
-    so both surface a turn through the exact same WS event shape."""
-    broker = WebSocketBroker()
-
-    # Pair the final row's rich-media spans with the tools that produced them.
-    # By broadcast time the assistant reply is persisted, so the newest channel
-    # row is the turn's final assistant row. Resolve TURN-WIDE from it — the span
-    # sits on the final row but the tool ran on a step row — via the same shared
-    # function the /conversation/recent refresh path uses, so both paths pair
-    # span tags with tool_calls identically.
-    transcript_ids: list[int] = []
+def _broadcast_done() -> None:
+    """Release the turn's working state — the terminal signal, shared by the
+    foreground turn and the background async-result synthesis. The content is
+    already on the surface via the final ``turn_updated`` → refetch; this only
+    flips working off, keyed by the just-finished turn's id (the newest user row)."""
     turn_id: "int | None" = None
     try:
         from services.transcript_service import Transcript  # noqa: PLC0415
         rows = Transcript.get_recent("user", limit=1)
         if rows:
             turn_id = cast("int | None", rows[-1].get("turn_id"))
-            from services.database_service import get_shared_db_service  # noqa: PLC0415
-            from services.rich_media_parser import resolve_tool_call_transcript_ids  # noqa: PLC0415
-            with get_shared_db_service().connection() as conn:
-                transcript_ids = resolve_tool_call_transcript_ids(cast(int, rows[-1]["id"]), conn)
     except Exception as exc:
-        logger.debug("[Chat API] transcript_id lookup failed: %s", exc)
-
-    content = sanitize(response or "")
-    message_evt: dict[str, object] = {
-        "type": "message",
-        "content": content,
-        "topic": "user",
-        "mode": "UNIFIED",
-        "confidence": 1.0,
-        "exchange_id": request_id,
-        "metrics": {},
-        "timestamp": format_date(utc_now(), CHAT_TIMESTAMP_FMT, for_ui=True) or "",
-    }
-    message_evt["segments"] = SegmentService.build(content, transcript_ids)
-
-    elapsed_ms = int((time.time() - turn_start) * 1000)
-    broker.broadcast(message_evt)
-    broker.broadcast({"type": "done", "duration_ms": elapsed_ms, "turn_id": turn_id})
+        logger.debug("[Chat API] done turn_id lookup failed: %s", exc)
+    WebSocketBroker().broadcast({"type": "done", "turn_id": turn_id})
 
 
 def deliver_async_result(mp: object, result_text: str, cancel_event: threading.Event) -> None:
@@ -275,13 +219,10 @@ def deliver_async_result(mp: object, result_text: str, cancel_event: threading.E
     thread_id = getattr(mp, "turn_id", None)
     if thread_id is not None:
         metadata["thread_id"] = thread_id
-    request_id = str(uuid.uuid4())
-    turn_start = time.time()
-
-    response = MessageProcessor.process(result_text, synth_config, metadata, cancel_event=cancel_event)
+    MessageProcessor.process(result_text, synth_config, metadata, cancel_event=cancel_event)
     if cancel_event.is_set():
         return
-    _broadcast_turn_result(response, request_id, turn_start)
+    _broadcast_done()
 
 
 def dispatch_message(
@@ -320,16 +261,12 @@ def _start_turn(
     from configs.channels import UserConfig  # noqa: PLC0415
 
     request_id = str(uuid.uuid4())
-    turn_start = time.time()
 
     try:
         from services.world_state import world_state, Signal  # noqa: PLC0415
         world_state.absorb(Signal(source="http_chat", kind="user_message", payload={"text": text[:200]}))
     except Exception as exc:
         logger.debug("[Chat API] world_state.absorb failed: %s", exc)
-
-    broker = WebSocketBroker()
-    broker.broadcast({"type": "status", "stage": "processing"})
 
     metadata: dict[str, object] = {
         "uuid": request_id,
@@ -353,7 +290,7 @@ def _start_turn(
 
     thread = threading.Thread(
         target=_run_chat_background,
-        args=(turn, cancel_event, text, config, metadata, request_id, turn_start),
+        args=(turn, cancel_event, text, config, metadata, request_id),
         daemon=True,
         name=f"chat-{request_id[:8]}",
     )
@@ -514,8 +451,6 @@ def post_action() -> ResponseReturnValue:
             from services.processor_config import ProcessorConfig  # noqa: PLC0415
 
             params = {k: v for k, v in body.items() if k != "skill"}
-
-            broker.broadcast({"type": "status", "stage": "processing"})
 
             # Build a minimal flat-path context for action-button dispatches.
             # ToolDispatcher requires an mp-like object with config, uid,

@@ -10,7 +10,6 @@ export interface ChalieEventMap {
   'chalie:action': Record<string, unknown>;
   'chalie:silent-action': Record<string, unknown>;
   'chalie:attention': Record<string, unknown>;
-  'chalie:open-thread-search': void;
 }
 
 export function emit<K extends keyof ChalieEventMap>(
