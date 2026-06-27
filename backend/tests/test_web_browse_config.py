@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import os
 import sqlite3
+import tempfile
 from typing import cast
 
 import pytest
@@ -85,7 +87,8 @@ def test_screenshot_doc_ids_survive_session_close_into_the_callers_answer(db: sq
     # back inline (the agent sees the page without a separate vision call).
     doc_svc = DocumentService(get_shared_db_service())
     doc_svc.create_document(
-        "screenshot-example.png", "image/png", 10, "/tmp/x.png", "deadbeef",
+        "screenshot-example.png", "image/png", 10,
+        os.path.join(tempfile.gettempdir(), "x.png"), "deadbeef",
         source_type="screenshot", doc_id="ab12cd34",
     )
     doc_svc.update_clean_text("ab12cd34", "The page header reads Example Domain.")

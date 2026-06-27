@@ -27,12 +27,19 @@ the real registered ability.
 
 from __future__ import annotations
 
+import os
+import tempfile
+
 import pytest
 
 from abilities._registry import AbilityRegistry
 from abilities._result import ToolResult
 
 pytestmark = pytest.mark.unit
+
+# Mirror web_download's real destination root (tempfile.gettempdir()/chalie_downloads)
+# so the representative path is faithful — not a hardcoded publicly-writable literal.
+_DL_PATH = os.path.join(tempfile.gettempdir(), "chalie_downloads", "x", "file.pdf")
 
 # name → (representative success ToolResult, the live value the nudge must echo).
 _CASES: dict[str, tuple[ToolResult, str]] = {
@@ -45,8 +52,8 @@ _CASES: dict[str, tuple[ToolResult, str]] = {
         "`weather` is now available. Call `find_tools` with `weather`",
     ),
     "web_download": (
-        ToolResult.ok({"path": "/tmp/x/file.pdf", "bytes": 1, "content_type": "application/pdf"}),
-        "`read(/tmp/x/file.pdf)`",
+        ToolResult.ok({"path": _DL_PATH, "bytes": 1, "content_type": "application/pdf"}),
+        f"`read({_DL_PATH})`",
     ),
     "review_tool_calls": (
         ToolResult.ok([{"iter": 1}], anchor="2026-04-07T14:30:00+00:00"),
