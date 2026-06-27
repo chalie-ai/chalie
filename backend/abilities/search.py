@@ -73,6 +73,10 @@ class SearchAbility(Ability):
     def get_search_tooltip(self) -> str:
         return "web and knowledge search"
 
+    def get_follow_up(self, tr: ToolResult) -> str:
+        """Nudge to fetch a promising result's full page before quoting it."""
+        return "For the pages that are aligned with your query, use the `read(url=…)` tool with that result's url to get the full content of the page before quoting it or stating its claims as fact."
+
     def get_parameters(self) -> dict[str, object]:
         return {
             "type": "object",

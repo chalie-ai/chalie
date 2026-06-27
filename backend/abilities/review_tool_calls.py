@@ -13,6 +13,7 @@ declares only the windowed ``tool_calls`` SELECT and the structured row shape.
 from typing import ClassVar
 
 from abilities._params import Keys
+from abilities._result import ToolResult
 from abilities._review_window import ReviewWindowAbility
 
 # Tool-call params summaries can be large; clip so one row stays a single readable
@@ -43,6 +44,17 @@ class ReviewToolCallsAbility(ReviewWindowAbility):
 
     def get_search_tooltip(self) -> str:
         return "inspect past tool calls"
+
+    def get_follow_up(self, tr: ToolResult) -> str:
+        """Direct the model to the untruncated transcript for the same window."""
+        anchor = tr.meta.get("anchor")
+        if not anchor:
+            return ""
+        return (
+            "Params are clipped to ~120 chars and full results are omitted. For the "
+            "exact wording a user or assistant used in that window, call "
+            f"`review_transcript(date_time={anchor})` to read the untruncated messages."
+        )
 
     _PARAMETERS: ClassVar[dict[str, object]] = {
         "type": "object",

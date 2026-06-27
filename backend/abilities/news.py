@@ -63,6 +63,10 @@ class NewsAbility(Ability):
     def get_search_tooltip(self) -> str:
         return "news article search"
 
+    def get_follow_up(self, tr: ToolResult) -> str:
+        """Pivot to web search when the headlines miss the user's intent."""
+        return "If the results don't match the context you're looking for, pivot to using the `search` tool to get data from other sources online."
+
     _PARAMETERS: ClassVar[dict[str, object]] = {
         "type": "object",
         "properties": {
