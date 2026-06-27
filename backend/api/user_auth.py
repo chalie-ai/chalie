@@ -17,7 +17,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-user_auth_bp = Namespace('user_auth', description='Master account authentication')
+user_auth_bp = Namespace('user_auth', description='Master account authentication', path='/auth')
 
 
 _LOGIN_RATE_LIMIT = 10   # attempts
@@ -72,7 +72,7 @@ def _get_vault_state() -> str:
         return "uninitialized"
 
 
-@user_auth_bp.route('/auth/status')
+@user_auth_bp.route('/status')
 class AuthStatusResource(Resource):
     @user_auth_bp.response(200, "Auth status")
     @user_auth_bp.response(500, "Failed to check auth status")
@@ -139,7 +139,7 @@ class AuthStatusResource(Resource):
             return {"error": "Failed to check auth status"}, 500
 
 
-@user_auth_bp.route('/auth/username')
+@user_auth_bp.route('/username')
 class UsernameResource(Resource):
     @internal_only
     @require_auth
@@ -168,7 +168,7 @@ class UsernameResource(Resource):
             return {"error": "Failed to read username"}, 500
 
 
-@user_auth_bp.route('/auth/register')
+@user_auth_bp.route('/register')
 class RegisterResource(Resource):
     @user_auth_bp.response(201, "Account created")
     @user_auth_bp.response(400, "Validation error")
@@ -246,7 +246,7 @@ class RegisterResource(Resource):
             return {"error": "Failed to create account"}, 500
 
 
-@user_auth_bp.route('/auth/login')
+@user_auth_bp.route('/login')
 class LoginResource(Resource):
     @user_auth_bp.response(200, "Login successful")
     @user_auth_bp.response(400, "Validation error")
@@ -359,7 +359,7 @@ class LoginResource(Resource):
             return {"error": "Failed to authenticate"}, 500
 
 
-@user_auth_bp.route('/auth/logout')
+@user_auth_bp.route('/logout')
 class LogoutResource(Resource):
     @user_auth_bp.response(200, "Logged out")
     @user_auth_bp.response(500, "Failed to logout")

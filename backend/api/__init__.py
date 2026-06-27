@@ -20,13 +20,6 @@ from .auth import internal_only
 
 logger = logging.getLogger(__name__)
 
-api = Api(
-    title="Chalie API",
-    version="1.0",
-    description="REST API for the Chalie personal intelligence layer",
-    doc="/swagger/",
-)
-
 
 # ---------------------------------------------------------------------------
 # MIME type registration (cross-platform safety net)
@@ -51,11 +44,11 @@ mimetypes.add_type('text/css', '.css')
 mimetypes.add_type('text/html', '.html')
 
 
-def _register_namespaces(app: Flask) -> None:
+def _register_namespaces(app: Flask, api: Api) -> None:
     """Auto-discover and register every Namespace defined in this package.
 
     Walks ``backend/api/*.py``, imports each module, and registers any top-level
-    ``Namespace`` instance on the central ``Api`` object. Modules without a
+    ``Namespace`` instance on the given ``Api`` object. Modules without a
     Namespace (e.g. ``auth``, ``websocket``) are skipped silently.
     """
     package = importlib.import_module(__name__)
@@ -76,7 +69,9 @@ def _register_namespaces(app: Flask) -> None:
                 seen.add(id(attr))
                 logger.info("[REST API] Registered blueprint %s.%s", module_info.name, attr_name)
 
-    api.init_app(app)
+    # api.init_app() is deferred to create_app(): RESTx registers its own root
+    # '/' route during init, which would shadow the SPA's '/' handler. Init must
+    # run AFTER the static routes so the SPA wins the '/' match.
 
 
 def _configure_app(app: Flask) -> None:
@@ -181,8 +176,18 @@ def create_app() -> Flask:
     """Create and configure Flask application with all namespaces and routes."""
     app = Flask(__name__)
 
+    # A fresh Api per app keeps create_app() a true factory: the test suite
+    # builds many apps, and a module-level Api would re-register routes onto an
+    # already-served app (Flask forbids add_url_rule after the first request).
+    api = Api(
+        title="Chalie API",
+        version="1.0",
+        description="REST API for the Chalie personal intelligence layer",
+        doc="/swagger/",
+    )
+
     _configure_app(app)
-    _register_namespaces(app)
+    _register_namespaces(app, api)
 
     # WebSocket endpoint (replaces SSE for chat + drift)
     from flask_sock import Sock
@@ -192,6 +197,10 @@ def create_app() -> Flask:
 
     # ── Static file serving (replaces nginx) ─────────────────────────
     _register_static_routes(app)
+
+    # Flush RESTx namespaces onto the app LAST so its root '/' route is added
+    # after the SPA '/' handler — the SPA must win the '/' match (see above).
+    api.init_app(app)
 
     logger.info("[REST API] All namespaces + WebSocket + static serving registered")
     return app

@@ -6,7 +6,7 @@ from flask_restx import Namespace, Resource
 
 from .auth import require_session
 
-stubs_bp = Namespace('stubs', description='Future endpoints (not implemented)')
+stubs_bp = Namespace('stubs', description='Future endpoints (not implemented)', path='/')
 
 _NOT_IMPLEMENTED = ({"error": "Not implemented", "planned": True}, 501)
 

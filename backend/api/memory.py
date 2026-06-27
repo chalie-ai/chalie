@@ -11,10 +11,10 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-memory_bp = Namespace('memory', description='Memory search')
+memory_bp = Namespace('memory', description='Memory search', path='/memory')
 
 
-@memory_bp.route('/memory/search')
+@memory_bp.route('/search')
 class MemorySearchResource(Resource):
     @require_session
     @memory_bp.response(200, "Search results")

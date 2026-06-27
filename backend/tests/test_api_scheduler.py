@@ -5,10 +5,10 @@ from typing import cast
 from unittest.mock import patch
 
 import pytest
-from flask import Flask
 from flask.testing import FlaskClient
 
 from api.scheduler import scheduler_bp
+from tests.restx_test_app import mount_namespace
 
 
 def _future_iso(hours: int = 1) -> str:
@@ -66,8 +66,7 @@ class TestSchedulerAPI:
 
     @pytest.fixture
     def client(self, db: sqlite3.Connection) -> FlaskClient:
-        app = Flask(__name__)
-        app.register_blueprint(scheduler_bp)
+        app = mount_namespace(scheduler_bp)
         app.config["TESTING"] = True
         return app.test_client()
 

@@ -12,10 +12,10 @@ import logging
 from pathlib import Path
 
 import pytest
-from flask import Flask
 
 import api.system as system_module
 from api.system import system_bp
+from tests.restx_test_app import mount_namespace
 from utils.logger import (
     LOG_FILE_MAX_ENTRIES,
     _ChalieJsonFormatter,
@@ -104,8 +104,7 @@ class TestCountCappedRotation:
 
         monkeypatch.setattr(system_module, "_LOG_FILE_PATH", str(log_file))
         monkeypatch.setattr("services.auth_session_service.validate_session", lambda *_a, **_k: True)
-        app = Flask(__name__)
-        app.register_blueprint(system_bp)
+        app = mount_namespace(system_bp)
         app.config["TESTING"] = True
 
         with app.test_client() as tc:

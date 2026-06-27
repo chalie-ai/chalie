@@ -52,7 +52,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-chat_bp = Namespace("chat", description="Chat operations")
+chat_bp = Namespace("chat", description="Chat operations", path="/")
 
 # ── Active UMP turn tracking ─────────────────────────────────────────────────
 

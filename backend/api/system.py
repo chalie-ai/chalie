@@ -19,7 +19,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-system_bp = Namespace('system', description='System operations')
+system_bp = Namespace('system', description='System operations', path='/')
 
 # Signal source for telemetry signals absorbed by WorldState from health pings.
 _SIGNAL_SOURCE_HEALTH = '/health'

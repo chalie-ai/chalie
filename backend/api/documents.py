@@ -45,7 +45,7 @@ _ERR_INTERNAL = "Internal server error"
 _ERR_NOT_FOUND = "Not found"
 _ERR_FILE_NOT_FOUND = "File not found on disk"
 
-documents_bp = Namespace("documents", description="Document operations")
+documents_bp = Namespace("documents", description="Document operations", path="/documents")
 
 # Fallback when an uploaded name reduces to nothing safe (e.g. ".." or
 # non-ASCII-only). secure_filename returns '' in those cases.
@@ -197,7 +197,7 @@ def _run_upload_extraction(doc_id: str) -> None:
 # Routes
 # ---------------------------------------------------------------------------
 
-@documents_bp.route("/documents/upload")
+@documents_bp.route("/upload")
 @documents_bp.response(201, "Document uploaded")
 class UploadDocumentResource(Resource):
     @require_session
@@ -271,7 +271,7 @@ class UploadDocumentResource(Resource):
                 pass
 
 
-@documents_bp.route("/documents")
+@documents_bp.route("")
 @documents_bp.response(200, "List of documents")
 class ListDocumentsResource(Resource):
     @require_session
@@ -286,7 +286,7 @@ class ListDocumentsResource(Resource):
             return {"error": _ERR_INTERNAL}, 500
 
 
-@documents_bp.route("/documents/<doc_id>")
+@documents_bp.route("/<doc_id>")
 @documents_bp.response(200, "Document details")
 @documents_bp.response(404, "Not found")
 @documents_bp.param("doc_id", "str", "Document identifier")
@@ -327,7 +327,7 @@ class DocumentResource(Resource):
             return {"error": _ERR_INTERNAL}, 500
 
 
-@documents_bp.route("/documents/<doc_id>/content")
+@documents_bp.route("/<doc_id>/content")
 @documents_bp.response(200, "Document content")
 @documents_bp.response(404, "Not found")
 @documents_bp.param("doc_id", "str", "Document identifier")
@@ -360,7 +360,7 @@ class DocumentContentResource(Resource):
             return {"error": _ERR_INTERNAL}, 500
 
 
-@documents_bp.route("/documents/<doc_id>/download")
+@documents_bp.route("/<doc_id>/download")
 @documents_bp.response(200, "File download")
 @documents_bp.response(404, "Not found")
 @documents_bp.param("doc_id", "str", "Document identifier")
@@ -393,7 +393,7 @@ class DocumentDownloadResource(Resource):
             return {"error": _ERR_INTERNAL}, 500
 
 
-@documents_bp.route("/documents/<doc_id>/preview")
+@documents_bp.route("/<doc_id>/preview")
 @documents_bp.response(200, "File preview")
 @documents_bp.response(404, "Not found")
 @documents_bp.param("doc_id", "str", "Document identifier")
@@ -427,7 +427,7 @@ class DocumentPreviewResource(Resource):
             return {"error": _ERR_INTERNAL}, 500
 
 
-@documents_bp.route("/documents/<doc_id>/classify")
+@documents_bp.route("/<doc_id>/classify")
 @documents_bp.response(200, "Classification updated")
 @documents_bp.response(404, "Not found")
 @documents_bp.param("doc_id", "str", "Document identifier")
@@ -455,7 +455,7 @@ class DocumentClassifyResource(Resource):
             return {"error": _ERR_INTERNAL}, 500
 
 
-@documents_bp.route("/documents/groups/<field>")
+@documents_bp.route("/groups/<field>")
 @documents_bp.response(200, "Classification groups")
 @documents_bp.param("field", "str", "Classification field name")
 class DocumentGroupsResource(Resource):
@@ -471,7 +471,7 @@ class DocumentGroupsResource(Resource):
             return {"error": _ERR_INTERNAL}, 500
 
 
-@documents_bp.route("/documents/<doc_id>/restore")
+@documents_bp.route("/<doc_id>/restore")
 @documents_bp.response(200, "Document restored")
 @documents_bp.response(404, "Not found or not deleted")
 @documents_bp.param("doc_id", "str", "Document identifier")
@@ -489,7 +489,7 @@ class DocumentRestoreResource(Resource):
             return {"error": _ERR_INTERNAL}, 500
 
 
-@documents_bp.route("/documents/<doc_id>/purge")
+@documents_bp.route("/<doc_id>/purge")
 @documents_bp.response(200, "Document purged")
 @documents_bp.response(404, "Not found")
 @documents_bp.param("doc_id", "str", "Document identifier")
@@ -507,7 +507,7 @@ class DocumentPurgeResource(Resource):
             return {"error": _ERR_INTERNAL}, 500
 
 
-@documents_bp.route("/documents/search")
+@documents_bp.route("/search")
 @documents_bp.response(200, "Search results")
 class DocumentSearchResource(Resource):
     @require_session
@@ -545,7 +545,7 @@ class DocumentSearchResource(Resource):
             return {"error": "Search failed"}, 500
 
 
-@documents_bp.route("/documents/<doc_id>/confirm")
+@documents_bp.route("/<doc_id>/confirm")
 @documents_bp.response(200, "Document confirmed")
 @documents_bp.response(400, "Not awaiting confirmation")
 @documents_bp.response(404, "Not found")
@@ -569,7 +569,7 @@ class DocumentConfirmResource(Resource):
             return {"error": _ERR_INTERNAL}, 500
 
 
-@documents_bp.route("/documents/<doc_id>/augment")
+@documents_bp.route("/<doc_id>/augment")
 @documents_bp.response(200, "Document augmented")
 @documents_bp.response(400, "Invalid state or missing context")
 @documents_bp.response(404, "Not found")
@@ -609,7 +609,7 @@ class DocumentAugmentResource(Resource):
             return {"error": _ERR_INTERNAL}, 500
 
 
-@documents_bp.route("/documents/<doc_id>/supersede")
+@documents_bp.route("/<doc_id>/supersede")
 @documents_bp.response(200, "Document superseded")
 @documents_bp.response(400, "Missing old_id")
 @documents_bp.response(404, "Not found")
@@ -652,7 +652,7 @@ def _get_watcher_service() -> "FolderWatcherService":
     return FolderWatcherService(get_shared_db_service())
 
 
-@documents_bp.route("/documents/watched-folders")
+@documents_bp.route("/watched-folders")
 @documents_bp.response(200, "List of watched folders")
 @documents_bp.response(201, "Watched folder created")
 class WatchedFoldersResource(Resource):
@@ -696,7 +696,7 @@ class WatchedFoldersResource(Resource):
             return {"error": _ERR_INTERNAL}, 500
 
 
-@documents_bp.route("/documents/watched-folders/<folder_id>")
+@documents_bp.route("/watched-folders/<folder_id>")
 @documents_bp.response(200, "Watched folder updated")
 @documents_bp.response(404, "Not found")
 @documents_bp.param("folder_id", "str", "Folder identifier")
@@ -732,7 +732,7 @@ class WatchedFolderResource(Resource):
             return {"error": _ERR_INTERNAL}, 500
 
 
-@documents_bp.route("/documents/watched-folders/<folder_id>/scan")
+@documents_bp.route("/watched-folders/<folder_id>/scan")
 @documents_bp.response(200, "Scan triggered")
 @documents_bp.response(404, "Not found")
 @documents_bp.param("folder_id", "str", "Folder identifier")
@@ -752,7 +752,7 @@ class WatchedFolderScanResource(Resource):
             return {"error": _ERR_INTERNAL}, 500
 
 
-@documents_bp.route("/documents/watched-folders/browse")
+@documents_bp.route("/watched-folders/browse")
 @documents_bp.response(200, "Directory listing")
 class WatchedFolderBrowseResource(Resource):
     @require_session

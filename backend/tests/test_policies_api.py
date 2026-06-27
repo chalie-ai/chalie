@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING
 import pytest
 
 import api.policies as mod
+from tests.restx_test_app import mount_namespace
 
 if TYPE_CHECKING:
     from flask.testing import FlaskClient
@@ -15,7 +16,6 @@ pytestmark = pytest.mark.unit
 
 @pytest.fixture()
 def client(monkeypatch: pytest.MonkeyPatch) -> "FlaskClient":
-    from flask import Flask
     conn = sqlite3.connect(":memory:")
     conn.row_factory = sqlite3.Row
     conn.executescript(
@@ -41,8 +41,7 @@ def client(monkeypatch: pytest.MonkeyPatch) -> "FlaskClient":
     # function-local import, so patch THAT to bypass auth (same approach as conftest).
     monkeypatch.setattr("services.auth_session_service.validate_session", lambda *a, **k: True)
 
-    app = Flask(__name__)
-    app.register_blueprint(mod.policies_bp)
+    app = mount_namespace(mod.policies_bp)
     return app.test_client()
 
 
@@ -66,7 +65,6 @@ def test_put_single_upsert(client: "FlaskClient") -> None:
 
 @pytest.fixture()
 def mcp_client(monkeypatch: pytest.MonkeyPatch) -> "FlaskClient":
-    from flask import Flask
     conn = sqlite3.connect(":memory:")
     conn.row_factory = sqlite3.Row
     conn.executescript(
@@ -94,8 +92,7 @@ def mcp_client(monkeypatch: pytest.MonkeyPatch) -> "FlaskClient":
     monkeypatch.setattr("services.mcp_client_service.get_shared_db_service", lambda: _FakeDB())
     monkeypatch.setattr("services.auth_session_service.validate_session", lambda *a, **k: True)
 
-    app = Flask(__name__)
-    app.register_blueprint(mod.policies_bp)
+    app = mount_namespace(mod.policies_bp)
     return app.test_client()
 
 

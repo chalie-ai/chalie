@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 _ERR_INTERNAL = "Internal server error"
 _ERR_NOT_FOUND = "Not found"
 
-lists_bp = Namespace("lists", description="List operations")
+lists_bp = Namespace("lists", description="List operations", path="/lists")
 
 
 # ---------------------------------------------------------------------------
@@ -76,7 +76,7 @@ def _validate_items(items: object) -> "tuple[list[str] | None, str | None]":
 # Routes
 # ---------------------------------------------------------------------------
 
-@lists_bp.route("/lists")
+@lists_bp.route("")
 class ListsResource(Resource):
     @require_session
     @lists_bp.response(200, "Success")
@@ -116,7 +116,7 @@ class ListsResource(Resource):
             return {"error": _ERR_INTERNAL}, 500
 
 
-@lists_bp.route("/lists/<list_id>")
+@lists_bp.route("/<list_id>")
 class ListResource(Resource):
     @require_session
     @lists_bp.param("list_id", "string", "List id")
@@ -153,7 +153,7 @@ class ListResource(Resource):
             return {"error": _ERR_INTERNAL}, 500
 
 
-@lists_bp.route("/lists/<list_id>/rename")
+@lists_bp.route("/<list_id>/rename")
 class ListRenameResource(Resource):
     @require_session
     @lists_bp.param("list_id", "string", "List id")
@@ -178,7 +178,7 @@ class ListRenameResource(Resource):
             return {"error": _ERR_INTERNAL}, 500
 
 
-@lists_bp.route("/lists/<list_id>/items")
+@lists_bp.route("/<list_id>/items")
 class ListItemsResource(Resource):
     @require_session
     @lists_bp.param("list_id", "string", "List id")
@@ -219,7 +219,7 @@ class ListItemsResource(Resource):
             return {"error": _ERR_INTERNAL}, 500
 
 
-@lists_bp.route("/lists/<list_id>/items/batch")
+@lists_bp.route("/<list_id>/items/batch")
 class ListItemsBatchResource(Resource):
     @require_session
     @lists_bp.param("list_id", "string", "List id")
@@ -244,7 +244,7 @@ class ListItemsBatchResource(Resource):
             return {"error": _ERR_INTERNAL}, 500
 
 
-@lists_bp.route("/lists/<list_id>/items/check")
+@lists_bp.route("/<list_id>/items/check")
 class ListItemsCheckResource(Resource):
     @require_session
     @lists_bp.param("list_id", "string", "List id")
@@ -269,7 +269,7 @@ class ListItemsCheckResource(Resource):
             return {"error": _ERR_INTERNAL}, 500
 
 
-@lists_bp.route("/lists/<list_id>/items/uncheck")
+@lists_bp.route("/<list_id>/items/uncheck")
 class ListItemsUncheckResource(Resource):
     @require_session
     @lists_bp.param("list_id", "string", "List id")

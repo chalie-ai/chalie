@@ -16,9 +16,9 @@ from typing import TYPE_CHECKING
 
 import pytest
 from unittest.mock import patch
-from flask import Flask
 
 from api.documents import documents_bp
+from tests.restx_test_app import mount_namespace
 from services.file_mapper_service import FileMapperService
 
 if TYPE_CHECKING:
@@ -31,8 +31,7 @@ class TestDocumentsAPI:
 
     @pytest.fixture
     def client(self) -> "FlaskClient":
-        app = Flask(__name__)
-        app.register_blueprint(documents_bp)
+        app = mount_namespace(documents_bp)
         app.config["TESTING"] = True
         return app.test_client()
 

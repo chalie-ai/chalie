@@ -12,10 +12,10 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-context_bp = Namespace("context", description="Ambient context")
+context_bp = Namespace("context", description="Ambient context", path="/api/context")
 
 
-@context_bp.route("/api/context")
+@context_bp.route("")
 class ContextResource(Resource):
     @require_auth
     @context_bp.response(200, "Context")

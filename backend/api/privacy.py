@@ -26,7 +26,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-privacy_bp = Namespace('privacy', description='Privacy data controls')
+privacy_bp = Namespace('privacy', description='Privacy data controls', path='/privacy')
 
 # Ordered list of user-data tables for the nuclear delete operation.
 # Children must appear before parents to satisfy FK constraints.
@@ -87,7 +87,7 @@ def _serialize_row(row: dict[str, object]) -> dict[str, object]:
     return result
 
 
-@privacy_bp.route('/privacy/data-summary')
+@privacy_bp.route('/data-summary')
 class DataSummaryResource(Resource):
     @require_session
     @privacy_bp.response(200, "Data summary")
@@ -137,7 +137,7 @@ class DataSummaryResource(Resource):
             return {"error": "Failed to retrieve data summary"}, 500
 
 
-@privacy_bp.route('/privacy/export')
+@privacy_bp.route('/export')
 class ExportDataResource(Resource):
     @require_session
     @privacy_bp.response(200, "Data export (streaming JSON)")
@@ -245,7 +245,7 @@ class ExportDataResource(Resource):
         return response
 
 
-@privacy_bp.route('/privacy/delete-all')
+@privacy_bp.route('/delete-all')
 class DeleteAllResource(Resource):
     @require_session
     @privacy_bp.response(200, "Data deleted")

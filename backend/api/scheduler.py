@@ -28,7 +28,7 @@ logger = logging.getLogger(__name__)
 _ERR_INTERNAL = "Internal server error"
 _ERR_NOT_PENDING = "Not found or item is not pending"
 
-scheduler_bp = Namespace("scheduler", description="Scheduled item management")
+scheduler_bp = Namespace("scheduler", description="Scheduled item management", path="/scheduler")
 
 _VALID_STATUSES = {"pending", "fired", "failed", "cancelled"}
 _VALID_TYPES = {"notification", "prompt"}
@@ -151,7 +151,7 @@ def _row_to_dict(row: "Iterable[object]", cols: "list[str]") -> "dict[str, objec
 # Routes
 # ---------------------------------------------------------------------------
 
-@scheduler_bp.route("/scheduler")
+@scheduler_bp.route("")
 @scheduler_bp.response(200, "List of scheduled items")
 @scheduler_bp.response(201, "Item created")
 class SchedulerListResource(Resource):
@@ -289,7 +289,7 @@ class SchedulerListResource(Resource):
             return {"error": _ERR_INTERNAL}, 500
 
 
-@scheduler_bp.route("/scheduler/history")
+@scheduler_bp.route("/history")
 @scheduler_bp.response(200, "History pruned")
 class SchedulerHistoryResource(Resource):
     @require_session
@@ -324,7 +324,7 @@ class SchedulerHistoryResource(Resource):
             return {"error": _ERR_INTERNAL}, 500
 
 
-@scheduler_bp.route("/scheduler/group/<group_id>")
+@scheduler_bp.route("/group/<group_id>")
 @scheduler_bp.response(200, "Group items")
 @scheduler_bp.param("group_id", "str", "Group identifier")
 class SchedulerGroupResource(Resource):
@@ -366,7 +366,7 @@ class SchedulerGroupResource(Resource):
             return {"error": _ERR_INTERNAL}, 500
 
 
-@scheduler_bp.route("/scheduler/<item_id>")
+@scheduler_bp.route("/<item_id>")
 @scheduler_bp.response(200, "Item details")
 @scheduler_bp.response(404, "Not found")
 @scheduler_bp.param("item_id", "str", "Item identifier")

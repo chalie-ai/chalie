@@ -30,7 +30,7 @@ import tempfile
 import threading
 from typing import TYPE_CHECKING, cast
 
-from flask import Response, request
+from flask import Response, jsonify, make_response, request
 from flask_restx import Namespace, Resource
 
 if TYPE_CHECKING:
@@ -46,7 +46,7 @@ from .auth import require_auth
 
 logger = logging.getLogger(__name__)
 
-voice_bp = Namespace("voice", description="Voice (STT + TTS) operations")
+voice_bp = Namespace("voice", description="Voice (STT + TTS) operations", path="/voice")
 
 # ── Constants (hardcoded — no env vars) ─────────────────────────────────────
 
@@ -121,21 +121,23 @@ def _voice_unavailable_payload() -> "dict[str, object]":
     }
 
 
-def _loading_or_missing_response() -> "tuple[dict, int]":
+def _loading_or_missing_response() -> "Response":
     """503 with a precise ``reason`` and ``Retry-After`` so the client can decide
     whether to auto-retry (transient cold-start) or give up (missing files)."""
     missing = _missing_model_files()
     if missing:
-        return {
+        return make_response(jsonify({
             "error": "Voice models not installed",
             "reason": "models_missing",
             "missing": missing,
             "hint": "Enable voice in Settings to download voice models.",
-        }, 503
-    return {
+        }), 503)
+    resp = make_response(jsonify({
         "error": "Models still loading",
         "reason": "loading",
-    }, 503
+    }), 503)
+    resp.headers["Retry-After"] = "3"
+    return resp
 
 
 def _missing_model_files() -> list[str]:
@@ -594,7 +596,7 @@ def _transcribe_sync(data: bytes) -> str:
 
 # ── Routes ──────────────────────────────────────────────────────────────────
 
-@voice_bp.route("/voice/health")
+@voice_bp.route("/health")
 @voice_bp.response(200, "Health status")
 class VoiceHealthResource(Resource):
     @require_auth
@@ -626,7 +628,7 @@ class VoiceHealthResource(Resource):
         return {"status": "loading"}, 200
 
 
-@voice_bp.route("/voice/synthesize")
+@voice_bp.route("/synthesize")
 @voice_bp.response(200, "Audio WAV")
 @voice_bp.response(400, "Missing text")
 @voice_bp.response(503, "Voice unavailable")
@@ -688,7 +690,7 @@ class VoiceSynthesizeResource(Resource):
         )
 
 
-@voice_bp.route("/voice/transcribe")
+@voice_bp.route("/transcribe")
 @voice_bp.response(200, "Transcription text")
 @voice_bp.response(400, "Invalid upload")
 @voice_bp.response(503, "Voice unavailable")

@@ -45,7 +45,7 @@ _USER_CHANNEL = "user"
 # How many recent assistant turns to scan when resolving a pin by message text.
 _RESOLVE_SCAN_LIMIT = 200
 
-moments_bp = Namespace("moments", description="Moment (pinned turn) operations")
+moments_bp = Namespace("moments", description="Moment (pinned turn) operations", path="/moments")
 
 
 # ---------------------------------------------------------------------------
@@ -123,7 +123,7 @@ def _resolve_assistant_turn_by_text(db: "DatabaseService", message_text: str) ->
 # Routes
 # ---------------------------------------------------------------------------
 
-@moments_bp.route("/moments")
+@moments_bp.route("")
 class MomentsResource(Resource):
     @require_session
     @moments_bp.response(200, "Success")
@@ -180,7 +180,7 @@ class MomentsResource(Resource):
             return {"error": _ERR_INTERNAL}, 500
 
 
-@moments_bp.route("/moments/<int:transcript_id>/forget")
+@moments_bp.route("/<int:transcript_id>/forget")
 class MomentForgetResource(Resource):
     @require_session
     @moments_bp.param("transcript_id", "int", "Transcript row id of the moment to forget")
@@ -197,7 +197,7 @@ class MomentForgetResource(Resource):
             return {"error": _ERR_INTERNAL}, 500
 
 
-@moments_bp.route("/moments/search")
+@moments_bp.route("/search")
 class MomentsSearchResource(Resource):
     @require_session
     @moments_bp.response(200, "Success")

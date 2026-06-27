@@ -11,7 +11,7 @@ from services.locale_service import CHAT_TIMESTAMP_FMT, format_date
 from services.rich_media_parser import parse as _parse_rich_media, resolve_tool_call_transcript_ids as _resolve_ids
 
 logger = logging.getLogger(__name__)
-conversation_bp = Namespace('conversation', description='Conversation history')
+conversation_bp = Namespace('conversation', description='Conversation history', path='/conversation')
 
 
 def _fetch_tool_calls_for_transcripts(conn: sqlite3.Connection, transcript_ids: list[int]) -> list[dict[str, object]]:
@@ -137,7 +137,7 @@ def get_recent_history(limit: int = 12, offset: int = 0) -> tuple[list[dict[str,
     return messages, has_more, turns_returned
 
 
-@conversation_bp.route('/conversation/recent')
+@conversation_bp.route('/recent')
 class ConversationRecentResource(Resource):
     @require_session
     @conversation_bp.response(200, "Recent conversation history")

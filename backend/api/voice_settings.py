@@ -11,7 +11,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-voice_settings_bp = Namespace("voice_settings", description="Voice settings", url_prefix="/api/voice-settings")
+voice_settings_bp = Namespace("voice_settings", description="Voice settings", path="/api/voice-settings")
 
 
 def _get_services() -> "SettingsService":

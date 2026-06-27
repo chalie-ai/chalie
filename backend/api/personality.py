@@ -15,7 +15,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-personality_bp = Namespace('personality', description='Personality tuple', url_prefix='/settings')
+personality_bp = Namespace('personality', description='Personality tuple', path='/settings')
 
 
 @personality_bp.route('/personality')

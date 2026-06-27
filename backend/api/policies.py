@@ -48,7 +48,7 @@ def _tag_display_rows(rows: "list[dict[str, str]]") -> None:
             r['label'] = humanize_segment(action or _base)
 
 
-@policies_bp.route('/')
+@policies_bp.route('')
 class PoliciesResource(Resource):
     @require_session
     @policies_bp.response(200, "Success")
