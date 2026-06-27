@@ -19,7 +19,7 @@ table; until then a thread simply reads its full history.
 
 Idempotent — safe to run more than once.
 
-Usage: ``python backend/migrations/migration_002_compactions_table.py [DB_PATH]``
+Usage: ``python backend/migrations/migration_002_compactions_table.py``
 """
 
 import os
@@ -76,5 +76,4 @@ def apply(db_path: str) -> None:
 
 
 if __name__ == "__main__":
-    _path = sys.argv[1] if len(sys.argv) > 1 else str(FileMapperService.get_db_path())
-    apply(_path)
+    apply(str(FileMapperService.get_db_path()))

@@ -568,13 +568,14 @@ CREATE INDEX IF NOT EXISTS idx_tool_calls_created ON tool_calls(created_at DESC)
 -- in its own table means firing one never moves a turn_id, so the
 -- turn boundary stays stable across a mid-turn collapse.
 --
--- Two-axis watermark (one table, two scopes by for_turn_id):
---   • MAIN  view → for_turn_id IS NULL; compacted_up_to is a turn_id
---     (the spine read cuts turns whose turn_id <= compacted_up_to).
---   • FORK  view → for_turn_id = T; compacted_up_to is a transcript.id
---     (the thread read cuts rows of turn T whose id <= compacted_up_to).
--- Different axes never collide, so a MAIN compaction can't hide a fork
--- reply and a FORK compaction can't hide the spine.
+-- Two-axis watermark — one table, two scopes told apart by for_turn_id.
+-- A MAIN-view checkpoint leaves for_turn_id empty and stores a turn id in
+-- compacted_up_to, so the spine read drops every turn at or before that id.
+-- A FORK-view checkpoint sets for_turn_id to its thread and stores a
+-- transcript row id, so the thread read drops that thread's rows at or
+-- before it. The two scopes sit on different axes and never collide, so a
+-- MAIN checkpoint can't hide a fork reply and a FORK checkpoint can't hide
+-- the spine.
 -- ────────────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS compactions (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
