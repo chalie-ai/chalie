@@ -148,7 +148,7 @@ def serialize_turn(channel: str, turn_id: int) -> dict[str, object]:
     from services.thread_gist_service import get_thread_gist_service
     from services.time_utils import parse_utc
 
-    rows = Transcript.thread_rows(channel, turn_id, exclude_roles=_THREAD_EXCLUDE)
+    rows = Transcript.by_turn(channel, turn_id)
     messages = _rows_to_messages(rows)
 
     settle = Transcript.settle0(channel, turn_id)

@@ -33,11 +33,12 @@ from typing import cast
 
 import pytest
 
+from api.conversation import serialize_turn
 from configs.channels import UserConfig
 from services import compaction_persistence
 from services.act_trail import ActTrail
 from services.message_processor import MessageProcessor, _wrap_with_checkpoint
-from services.transcript_service import Transcript, _SPINE_TURN_LIMIT
+from services.transcript_service import Transcript
 
 pytestmark = pytest.mark.unit
 
@@ -130,19 +131,19 @@ class TestMainSpine:
         assert "question three" in after, "turn 3 is past the watermark — still on the spine"
         assert "other channel question" not in after, "another channel never enters the user spine"
 
-    def test_spine_is_bounded_to_the_recent_turn_window(self, db: object) -> None:
-        """A cold (no-watermark) spine read is bounded to the most-recent
-        ``_SPINE_TURN_LIMIT`` settled turns, so an un-checkpointed history can't
-        blow the context cap. The oldest turn past the window is dropped; every
-        turn inside it still renders."""
-        for i in range(_SPINE_TURN_LIMIT + 1):
+    def test_cold_spine_renders_every_un_checkpointed_turn(self, db: object) -> None:
+        """The watermark is the only spine bound: with no checkpoint yet, every
+        settled turn renders — nothing has been folded into a summary, so nothing
+        may be silently dropped. Compaction fires on the 90% context trip and
+        advances the watermark, which is what then trims the tail."""
+        for i in range(15):
             _settled_turn(f"question {i:02d}", answer=f"answer {i:02d}")
 
         rendered = _main_mp().get_previous_messages()
 
-        assert "question 00" not in rendered, "the oldest turn falls outside the recent-turn window"
-        assert "question 01" in rendered, "the first turn inside the window renders"
-        assert f"question {_SPINE_TURN_LIMIT:02d}" in rendered, "the newest turn renders"
+        assert "question 00" in rendered, "the oldest un-checkpointed turn still renders"
+        assert "question 07" in rendered, "a middle turn renders"
+        assert "question 14" in rendered, "the newest turn renders"
 
 
 class TestForkRead:
@@ -248,3 +249,27 @@ class TestForkReplyCancellation:
         assert "pre-existing answer" in surviving
         assert "the cancelled reply" not in surviving, "the cancelled reply's own input row is purged"
         assert "half-written response" not in surviving, "the cancelled reply's own step is purged"
+
+
+class TestSerializeTurnWatermark:
+
+    def test_serialize_turn_returns_full_turn_ignoring_compaction(self, db: object) -> None:
+        """serialize_turn (REST GET /api/thread/<id>) returns EVERY row of the turn
+        regardless of any thread compaction checkpoint — the REST feed has full
+        fidelity; the watermark only governs the LLM context window (FORK read)."""
+        t, _, _ = _settled_turn("opening question", answer="opening answer")
+        _, r_settle = _reply(t, "first follow-up", answer="first follow-up answer")
+        Transcript.write_input_row(_CH, "user", "second follow-up", turn_id=t)
+        Transcript.write_assistant_row(_CH, "second follow-up answer", turn_id=t)
+
+        # Write a thread compaction checkpoint — REST must ignore it.
+        compaction_persistence.write_compaction(_CH, t, r_settle, "THREAD-CKPT")
+
+        result = serialize_turn(_CH, t)
+        messages = cast("list[dict[str, object]]", result["messages"])
+        contents = [cast("str", m["content"]) for m in messages]
+        assert "opening question" in contents, "rows below the watermark must still be present"
+        assert "opening answer" in contents
+        assert "first follow-up answer" in contents, "row at the watermark must still be present"
+        assert "second follow-up" in contents, "rows above the watermark must be present"
+        assert "second follow-up answer" in contents

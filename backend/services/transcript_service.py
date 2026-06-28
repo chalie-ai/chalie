@@ -63,13 +63,6 @@ _SETTLE_PREDICATE = (
     f"({','.join('?' * len(_INTERNAL_TOOLS))}))"
 )
 
-# Cold-start bound for the MAIN spine read: at watermark 0 (no checkpoint yet)
-# the spine would otherwise pull every turn and blow the context cap before a
-# checkpoint can form. Cap it to the most-recent N turns' exchanges; compaction
-# then advances the watermark on the first cap trip and the bound stops biting.
-_SPINE_TURN_LIMIT = 12
-
-
 class Transcript:
     """Static read/write surface for the transcript table. All access goes
     through ``Transcript.<method>`` — no free functions, no instances."""
@@ -208,9 +201,14 @@ class Transcript:
 
 
     @staticmethod
-    def by_turn(channel: str, turn_id: int) -> list[dict[str, object]]:
-        """Every row of one ``(channel, turn_id)`` — a turn is many rows under the
-        chain model. id-only callers read the ``id`` field off the uniform shape."""
+    def by_turn(channel: str, turn_id: int | None = None) -> list[dict[str, object]]:
+        """The one getter. ``turn_id`` given → every row of that ``(channel,
+        turn_id)`` (a turn is many rows under the chain model); ``turn_id`` None →
+        the whole channel spine, every turn oldest-first. No watermark, no settle0,
+        no role filter — consumers mutate the returned rows in Python. id-only
+        callers read the ``id`` field off the uniform shape."""
+        if turn_id is None:
+            return Transcript._select("channel = ?", (channel,))
         return Transcript._select("channel = ? AND turn_id = ?", (channel, turn_id))
 
 
@@ -232,53 +230,27 @@ class Transcript:
 
 
     @staticmethod
-    def main_spine(channel: str, after_turn_id: int, *,
-                   limit: int = _SPINE_TURN_LIMIT) -> list[dict[str, object]]:
-        """The MAIN view's previous_messages — the multi-turn spine.
+    def drop_post_settle0(rows: list[dict[str, object]], channel: str) -> list[dict[str, object]]:
+        """Spine mutator: keep only rows up to and including settle0 per turn.
 
-        For each settled turn with ``turn_id > after_turn_id`` (the main watermark,
-        a turn_id), emit the opening exchange: rows with ``id <= settle0(turn)``.
-        Fork continuations (rows past settle0) never reach the spine; in-progress
-        turns (no settle) are skipped, so the live turn is excluded without a
-        special case. Bounded to the most-recent ``limit`` turns so a cold
-        (watermark-0) read can't blow the cap before a checkpoint forms. Rows are
-        id-ordered — chronological for the spine, since each turn's opening
-        exchange is written contiguously before the next turn starts (fork
-        replies, which append later high ids, are exactly what the cut excludes)."""
-        settle = (
-            "(SELECT MIN(t.id) FROM transcript t WHERE t.channel = transcript.channel "
-            f"AND t.turn_id = transcript.turn_id AND {_SETTLE_PREDICATE})"
-        )
-        recent = (
-            "SELECT t.turn_id FROM transcript t "
-            f"WHERE t.channel = ? AND t.turn_id > ? AND {_SETTLE_PREDICATE} "
-            "GROUP BY t.turn_id ORDER BY t.turn_id DESC LIMIT ?"
-        )
-        where = f"channel = ? AND turn_id > ? AND id <= {settle} AND turn_id IN ({recent})"
-        params = (
-            channel, after_turn_id, *_INTERNAL_TOOLS,         # outer scope + correlated settle
-            channel, after_turn_id, *_INTERNAL_TOOLS, limit,  # recent-turns subquery
-        )
-        return Transcript._select(where, params)
-
-
-    @staticmethod
-    def fork_rows(channel: str, turn_id: int, watermark: int,
-                  before_id: int | None) -> list[dict[str, object]]:
-        """The THREAD view's previous_messages for one thread — the whole turn.
-
-        Emit EVERY row of turn ``turn_id`` with ``id > watermark`` (the thread's
-        transcript-id checkpoint axis) AND ``id < before_id`` — the upper bound
-        drops the current reply's own rows so the live message isn't rendered twice
-        (it renders separately), mirroring how the spine skips its in-progress turn.
-        ``before_id`` None ⇒ no upper bound. No ``settle0`` floor: a thread is the
-        whole turn — opening user message and pre-settle interims included — so read
-        and render are both trivial (paint every row of the ``turn_id``)."""
-        where = (
-            "channel = ? AND turn_id = ? "
-            "AND id > ? AND id < COALESCE(?, 9223372036854775807)"
-        )
-        return Transcript._select(where, (channel, turn_id, watermark, before_id))
+        Accepts multi-turn input (the MAIN loop passes all turns' rows at once).
+        One batched query resolves settle0 for all distinct turn_ids — no N+1.
+        In-progress turns (no settle0 in the result) are dropped entirely."""
+        if not rows:
+            return []
+        tids = list({int(cast(int, r["turn_id"])) for r in rows})
+        ph = ",".join("?" * len(tids))
+        from services.database_service import get_shared_db_service  # noqa: PLC0415
+        db = get_shared_db_service()
+        with db.connection() as conn:
+            s0_rows = conn.execute(
+                f"SELECT t.turn_id, MIN(t.id) FROM transcript t "
+                f"WHERE t.channel = ? AND t.turn_id IN ({ph}) AND {_SETTLE_PREDICATE} "
+                f"GROUP BY t.turn_id",
+                (channel, *tids, *_INTERNAL_TOOLS),
+            ).fetchall()
+        s0_map: dict[int, int] = {int(r[0]): int(r[1]) for r in s0_rows}
+        return [r for r in rows if int(cast(int, r["id"])) <= s0_map.get(int(cast(int, r["turn_id"])), -1)]
 
 
     @staticmethod
@@ -446,20 +418,6 @@ class Transcript:
         threads_returned = len(threads)
         has_more = Transcript.count_turns(channel, exclude_roles=exclude_roles) > offset + threads_returned
         return threads, has_more, threads_returned
-
-
-    @staticmethod
-    def thread_rows(
-        channel: str, turn_id: int, *, exclude_roles: tuple[str, ...] = (),
-    ) -> list[dict[str, object]]:
-        """Every row of one ``(channel, turn_id)`` thread — the expand-on-click
-        fetch. Excludes compaction/subagent_return by default so the feed view is
-        clean; callers that need the full row set use ``by_turn`` directly."""
-        role_filter = "".join(" AND role != ?" for _ in exclude_roles)
-        return Transcript._select(
-            f"channel = ?{role_filter} AND turn_id = ?",
-            (channel, *exclude_roles, turn_id),
-        )
 
 
     @staticmethod

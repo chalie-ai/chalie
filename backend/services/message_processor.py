@@ -597,12 +597,12 @@ class MessageProcessor:
     def _previous_rows(self) -> list[dict[str, object]]:
         """previous_messages for this turn's view.
 
-        THREAD (a genuine reply into thread T): the WHOLE turn above the thread's
-        transcript-id watermark, dropping the live reply's own rows (``id <
-        self.uid``, which render separately). MAIN (everything else): the
-        multi-turn spine above the main turn_id watermark. Each view reads its own
-        checkpoint axis via ``get_compaction(channel, for_turn_id)`` — ``turn_id``
-        for a thread, ``None`` for the spine."""
+        Both views call the one getter (``by_turn``) and mutate its rows here;
+        each reads its own compaction record (``for_turn_id`` axis).
+        THREAD: that turn's rows above its transcript-id watermark, minus the live
+        reply's own rows (``id >= self.uid``, which render separately).
+        MAIN: the whole channel spine, dropping turns at/below the main watermark
+        (a turn_id) and every row past each turn's settle0."""
         if self._cfg.suppress_history:
             return []
         from services import compaction_persistence  # noqa: PLC0415
@@ -610,11 +610,14 @@ class MessageProcessor:
         channel = self._cfg.channel
         if self._forked and self.turn_id is not None:
             compaction = compaction_persistence.get_compaction(channel, self.turn_id)
-            watermark = cast("int", compaction["compacted_up_to"]) if compaction else 0
-            return Transcript.fork_rows(channel, self.turn_id, watermark, self.uid)
+            wm = cast("int", compaction["compacted_up_to"]) if compaction else 0
+            upper = self.uid if self.uid is not None else 9223372036854775807
+            return [r for r in Transcript.by_turn(channel, self.turn_id) if wm < int(cast("int", r["id"])) < upper]
         compaction = compaction_persistence.get_compaction(channel, None)
-        watermark = cast("int", compaction["compacted_up_to"]) if compaction else 0
-        return Transcript.main_spine(channel, watermark)
+        wm = cast("int", compaction["compacted_up_to"]) if compaction else 0
+        rows = [r for r in Transcript.by_turn(channel)
+                if r["turn_id"] is not None and int(cast("int", r["turn_id"])) > wm]
+        return Transcript.drop_post_settle0(rows, channel)
 
     def get_previous_messages(self, drop_oldest: int = 0) -> str:
         """Render the ## Previous Messages block from _previous_rows()."""

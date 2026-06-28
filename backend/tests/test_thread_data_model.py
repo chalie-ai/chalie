@@ -8,7 +8,7 @@ cross-step invariants that make the thread model work:
 2. A reply (turn_id supplied) appends rows carrying the EXISTING turn_id — no
    new allocation.
 3. Transcript.recent_threads returns collapsed metadata ordered by recency.
-4. Transcript.thread_rows returns the full row set of one thread.
+4. Transcript.by_turn returns the full row set of one thread.
 5. The conversation API endpoints (/api/threads, /api/thread/<id>)
    project the real DB rows through the shared _rows_to_messages pipeline.
 """
@@ -81,33 +81,31 @@ class TestThreadDataModel:
         assert threads[1]['row_count'] == 2, "t1 has 1 input + 1 assistant = 2 rows"
         assert 'Second question' in cast("str", threads[0]['preview'])
 
-    def test_thread_rows_returns_full_thread(self, db: sqlite3.Connection) -> None:
-        """thread_rows returns every row of one thread, oldest-first — the
+    def test_by_turn_returns_full_thread(self, db: sqlite3.Connection) -> None:
+        """by_turn returns every row of one thread, oldest-first — the
         expand-on-click payload."""
         t1 = _seed_thread('Q1', 'A1a', 'A1b')
         _seed_thread('Q2', 'A2')  # different thread, must not appear
 
-        rows = Transcript.thread_rows('user', t1)
+        rows = Transcript.by_turn('user', t1)
         assert len(rows) == 3
         assert [r['content'] for r in rows] == ['Q1', 'A1a', 'A1b']
         assert all(r['turn_id'] == t1 for r in rows)
 
-    def test_thread_rows_excludes_compaction_via_api(self, db: sqlite3.Connection) -> None:
-        """The conversation API endpoint excludes compaction rows — the feed view
-        stays clean. thread_rows itself takes an exclude_roles tuple."""
+    def test_by_turn_returns_all_roles_including_compaction(self, db: sqlite3.Connection) -> None:
+        """by_turn returns all rows unconditionally — the REST endpoint exposes
+        every transcript row so callers have full fidelity."""
         t1 = _seed_thread('Q1', 'A1')
         Transcript.write_input_row('user', 'compaction', 'compacted text', turn_id=t1)
 
-        rows = Transcript.thread_rows('user', t1, exclude_roles=('compaction',))
-        assert all(r['role'] != 'compaction' for r in rows), "compaction excluded when requested"
-        full = Transcript.by_turn('user', t1)
-        assert any(r['role'] == 'compaction' for r in full), "by_turn includes compaction"
+        rows = Transcript.by_turn('user', t1)
+        assert any(r['role'] == 'compaction' for r in rows), "by_turn includes all roles"
 
-    def test_rows_to_messages_projects_thread_rows(self, db: sqlite3.Connection) -> None:
-        """_rows_to_messages (the shared projection) correctly maps thread_rows
+    def test_rows_to_messages_projects_by_turn(self, db: sqlite3.Connection) -> None:
+        """_rows_to_messages (the shared projection) correctly maps by_turn
         into the conversation message shape — the same path the API endpoints use."""
         t1 = _seed_thread('Hello', 'Hi there!')
-        rows = Transcript.thread_rows('user', t1)
+        rows = Transcript.by_turn('user', t1)
         messages = _rows_to_messages(rows)
         assert len(messages) == 2
         assert messages[0]['role'] == 'user'
