@@ -36,7 +36,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-query_bp = Namespace("query", description="Cognitive state query endpoints", path="/api/query")
+query_ns = Namespace("query", description="Cognitive state query endpoints", path="/api/query")
 
 
 # ---------------------------------------------------------------------------
@@ -183,10 +183,10 @@ def _dispatch_slice(slice_name: str) -> "dict[str, object]":
 # GET /api/query/relevance
 # ---------------------------------------------------------------------------
 
-@query_bp.route("/relevance")
+@query_ns.route("/relevance")
 class RelevanceResource(Resource):
     @require_auth
-    @query_bp.response(200, "OK")
+    @query_ns.response(200, "OK")
     def get(self) -> ResponseReturnValue:
         """Returns 403 if bearer token lacks ``"relevance"`` query permission."""
         if not _check_query_permission("relevance"):
@@ -200,10 +200,10 @@ class RelevanceResource(Resource):
 # GET /api/query/memory
 # ---------------------------------------------------------------------------
 
-@query_bp.route("/memory")
+@query_ns.route("/memory")
 class MemoryResource(Resource):
     @require_auth
-    @query_bp.response(200, "OK")
+    @query_ns.response(200, "OK")
     def get(self) -> ResponseReturnValue:
         """Returns 403 if bearer token lacks ``"memory"`` query permission."""
         if not _check_query_permission("memory"):
@@ -223,10 +223,10 @@ class MemoryResource(Resource):
 # POST /api/query/composite
 # ---------------------------------------------------------------------------
 
-@query_bp.route("/composite")
+@query_ns.route("/composite")
 class CompositeResource(Resource):
     @require_auth
-    @query_bp.response(200, "OK")
+    @query_ns.response(200, "OK")
     def post(self) -> ResponseReturnValue:
         """Each slice is checked independently against the bearer's query permissions.
         Denied slices are listed in the ``denied`` array. Cookie-authenticated

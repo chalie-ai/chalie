@@ -47,7 +47,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-signals_bp = Namespace("signals", description="External signal ingestion", path="/api/signals")
+signals_ns = Namespace("signals", description="External signal ingestion", path="/api/signals")
 
 # Maximum signals accepted in a single batch request
 _BATCH_MAX = 50
@@ -157,13 +157,13 @@ def _build_and_emit(validated: "dict[str, object]", wrapper_id: str) -> str:
 # POST /api/signals — single signal
 # ---------------------------------------------------------------------------
 
-@signals_bp.route("")
+@signals_ns.route("")
 class SignalResource(Resource):
     @require_auth
-    @signals_bp.response(202, "Accepted")
-    @signals_bp.response(400, "Bad request")
-    @signals_bp.response(403, "Forbidden")
-    @signals_bp.response(429, "Rate limit exceeded")
+    @signals_ns.response(202, "Accepted")
+    @signals_ns.response(400, "Bad request")
+    @signals_ns.response(403, "Forbidden")
+    @signals_ns.response(429, "Rate limit exceeded")
     def post(self) -> ResponseReturnValue:
         """Ingest a single signal into world state (zero LLM).
 
@@ -209,11 +209,11 @@ class SignalResource(Resource):
 # POST /api/signals/batch — batch ingest
 # ---------------------------------------------------------------------------
 
-@signals_bp.route("/batch")
+@signals_ns.route("/batch")
 class SignalBatchResource(Resource):
     @require_auth
-    @signals_bp.response(200, "Success")
-    @signals_bp.response(400, "Bad request")
+    @signals_ns.response(200, "Success")
+    @signals_ns.response(400, "Bad request")
     def post(self) -> ResponseReturnValue:
         """Ingest up to 50 signals in a single request.
 

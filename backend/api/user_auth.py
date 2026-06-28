@@ -18,7 +18,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-user_auth_bp = Namespace('user_auth', description='Master account authentication', path='/auth')
+user_auth_ns = Namespace('user_auth', description='Master account authentication', path='/auth')
 
 
 _LOGIN_RATE_LIMIT = 10   # attempts
@@ -73,10 +73,10 @@ def _get_vault_state() -> str:
         return "uninitialized"
 
 
-@user_auth_bp.route('/status')
+@user_auth_ns.route('/status')
 class AuthStatusResource(Resource):
-    @user_auth_bp.response(200, "Auth status")
-    @user_auth_bp.response(500, "Failed to check auth status")
+    @user_auth_ns.response(200, "Auth status")
+    @user_auth_ns.response(500, "Failed to check auth status")
     def get(self) -> ResponseReturnValue:
         """Check whether master account exists, providers are configured, and
         user has session.
@@ -140,14 +140,14 @@ class AuthStatusResource(Resource):
             return {"error": "Failed to check auth status"}, 500
 
 
-@user_auth_bp.route('/username')
+@user_auth_ns.route('/username')
 class UsernameResource(Resource):
     @internal_only
     @require_auth
     @_cookie_only
-    @user_auth_bp.response(200, "Username")
-    @user_auth_bp.response(404, "No master account")
-    @user_auth_bp.response(500, "Failed to read username")
+    @user_auth_ns.response(200, "Username")
+    @user_auth_ns.response(404, "No master account")
+    @user_auth_ns.response(500, "Failed to read username")
     def get(self) -> ResponseReturnValue:
         """Return the master account LOGIN username for the authenticated dashboard
         session — the credential the device's UnlockVault screen submits to
@@ -169,12 +169,12 @@ class UsernameResource(Resource):
             return {"error": "Failed to read username"}, 500
 
 
-@user_auth_bp.route('/register')
+@user_auth_ns.route('/register')
 class RegisterResource(Resource):
-    @user_auth_bp.response(201, "Account created")
-    @user_auth_bp.response(400, "Validation error")
-    @user_auth_bp.response(409, "Master account already exists")
-    @user_auth_bp.response(500, "Failed to create account")
+    @user_auth_ns.response(201, "Account created")
+    @user_auth_ns.response(400, "Validation error")
+    @user_auth_ns.response(409, "Master account already exists")
+    @user_auth_ns.response(500, "Failed to create account")
     def post(self) -> ResponseReturnValue:
         """Create master account. Fails (409) if one exists. Sets session cookie on success.
 
@@ -247,13 +247,13 @@ class RegisterResource(Resource):
             return {"error": "Failed to create account"}, 500
 
 
-@user_auth_bp.route('/login')
+@user_auth_ns.route('/login')
 class LoginResource(Resource):
-    @user_auth_bp.response(200, "Login successful")
-    @user_auth_bp.response(400, "Validation error")
-    @user_auth_bp.response(401, "Invalid credentials")
-    @user_auth_bp.response(429, "Too many login attempts")
-    @user_auth_bp.response(500, "Failed to authenticate")
+    @user_auth_ns.response(200, "Login successful")
+    @user_auth_ns.response(400, "Validation error")
+    @user_auth_ns.response(401, "Invalid credentials")
+    @user_auth_ns.response(429, "Too many login attempts")
+    @user_auth_ns.response(500, "Failed to authenticate")
     def post(self) -> ResponseReturnValue:
         """Verify credentials and set session cookie. Returns 401 on invalid credentials.
 
@@ -360,10 +360,10 @@ class LoginResource(Resource):
             return {"error": "Failed to authenticate"}, 500
 
 
-@user_auth_bp.route('/logout')
+@user_auth_ns.route('/logout')
 class LogoutResource(Resource):
-    @user_auth_bp.response(200, "Logged out")
-    @user_auth_bp.response(500, "Failed to logout")
+    @user_auth_ns.response(200, "Logged out")
+    @user_auth_ns.response(500, "Failed to logout")
     def post(self) -> ResponseReturnValue:
         """Invalidate the current session and clear the cookie.
 

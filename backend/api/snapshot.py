@@ -7,7 +7,7 @@ requests an internal restart so the staged restore is applied at the next boot
 ``run.py``). Both routes are session-gated like the other admin blueprints.
 
 Auto-registered by ``api.__init__._register_blueprints`` (top-level
-``snapshot_bp`` honouring its own ``url_prefix``) — no ``__init__`` edit needed.
+``snapshot_ns`` honouring its own ``url_prefix``) — no ``__init__`` edit needed.
 Depends on ``services.snapshot_service.SnapshotService`` (engine) and
 ``services.restart_service.request_restart`` (restart).
 """
@@ -29,7 +29,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-snapshot_bp = Namespace("snapshot", description="Snapshot export/import", path="/api/snapshot")
+snapshot_ns = Namespace("snapshot", description="Snapshot export/import", path="/api/snapshot")
 
 # Per-route ceiling for the import upload. A real snapshot is gigabytes, so the
 # global 50 MB MAX_CONTENT_LENGTH (api/__init__.py) would 413 it; setting the
@@ -39,9 +39,9 @@ _SNAPSHOT_MAX_UPLOAD_BYTES = 50 * 1024 ** 3  # 50 GiB — bounds disk-fill, not 
 _DEFAULT_UPLOAD_NAME = "snapshot.zip"
 
 
-@snapshot_bp.route("/export")
-@snapshot_bp.response(200, "Snapshot exported")
-@snapshot_bp.response(500, "Export failed")
+@snapshot_ns.route("/export")
+@snapshot_ns.response(200, "Snapshot exported")
+@snapshot_ns.response(500, "Export failed")
 class SnapshotExportResource(Resource):
     @require_session
     def post(self) -> ResponseReturnValue:
@@ -63,9 +63,9 @@ class SnapshotExportResource(Resource):
             return {"error": "Snapshot export failed"}, 500
 
 
-@snapshot_bp.route("/import")
-@snapshot_bp.response(200, "Snapshot imported")
-@snapshot_bp.response(400, "Import failed")
+@snapshot_ns.route("/import")
+@snapshot_ns.response(200, "Snapshot imported")
+@snapshot_ns.response(400, "Import failed")
 class SnapshotImportResource(Resource):
     @require_session
     def post(self) -> ResponseReturnValue:

@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 
 _ERR_WRAPPER_NOT_FOUND = "Wrapper not found"
 
-wrappers_bp = Namespace("wrappers", description="Wrapper token management", path="/api/wrappers")
+wrappers_ns = Namespace("wrappers", description="Wrapper token management", path="/api/wrappers")
 
 
 # ---------------------------------------------------------------------------
@@ -32,9 +32,9 @@ def _get_service() -> "WrapperAuthService":
 # POST /api/wrappers — create wrapper token
 # ---------------------------------------------------------------------------
 
-@wrappers_bp.route("")
-@wrappers_bp.response(201, "Wrapper created")
-@wrappers_bp.response(200, "List of wrappers")
+@wrappers_ns.route("")
+@wrappers_ns.response(201, "Wrapper created")
+@wrappers_ns.response(200, "List of wrappers")
 class WrapperRootResource(Resource):
     @require_auth
     @_cookie_only
@@ -80,10 +80,10 @@ class WrapperRootResource(Resource):
 # DELETE /api/wrappers/<id> — revoke token
 # ---------------------------------------------------------------------------
 
-@wrappers_bp.route("/<wrapper_id>")
-@wrappers_bp.response(200, "Wrapper details")
-@wrappers_bp.response(404, "Wrapper not found")
-@wrappers_bp.param("wrapper_id", "str", "Wrapper identifier")
+@wrappers_ns.route("/<wrapper_id>")
+@wrappers_ns.response(200, "Wrapper details")
+@wrappers_ns.response(404, "Wrapper not found")
+@wrappers_ns.param("wrapper_id", "str", "Wrapper identifier")
 class WrapperItemResource(Resource):
     @require_auth
     def get(self, wrapper_id: str) -> ResponseReturnValue:
@@ -110,12 +110,12 @@ class WrapperItemResource(Resource):
 # PUT /api/wrappers/<id>/capabilities — update capabilities
 # ---------------------------------------------------------------------------
 
-@wrappers_bp.route("/<wrapper_id>/capabilities")
-@wrappers_bp.response(200, "Capabilities updated")
-@wrappers_bp.response(400, "Invalid capabilities")
-@wrappers_bp.response(403, "Forbidden")
-@wrappers_bp.response(404, "Wrapper not found")
-@wrappers_bp.param("wrapper_id", "str", "Wrapper identifier")
+@wrappers_ns.route("/<wrapper_id>/capabilities")
+@wrappers_ns.response(200, "Capabilities updated")
+@wrappers_ns.response(400, "Invalid capabilities")
+@wrappers_ns.response(403, "Forbidden")
+@wrappers_ns.response(404, "Wrapper not found")
+@wrappers_ns.param("wrapper_id", "str", "Wrapper identifier")
 class WrapperCapabilitiesResource(Resource):
     @require_auth
     def put(self, wrapper_id: str) -> ResponseReturnValue:

@@ -7,16 +7,16 @@ from flask.typing import ResponseReturnValue
 
 from .auth import require_session
 
-stubs_bp = Namespace('stubs', description='Future endpoints (not implemented)', path='/')
+stubs_ns = Namespace('stubs', description='Future endpoints (not implemented)', path='/')
 
 _NOT_IMPLEMENTED = ({"error": "Not implemented", "planned": True}, 501)
 
 
-@stubs_bp.route('/calendar')
-@stubs_bp.route('/calendar/<path:subpath>')
+@stubs_ns.route('/calendar')
+@stubs_ns.route('/calendar/<path:subpath>')
 class CalendarStubResource(Resource):
     @require_session
-    @stubs_bp.response(501, "Not implemented")
+    @stubs_ns.response(501, "Not implemented")
     def get(self, subpath: str | None = None) -> ResponseReturnValue:
         """Return 501 Not Implemented for all calendar endpoints.
 
@@ -35,10 +35,10 @@ class CalendarStubResource(Resource):
         return _NOT_IMPLEMENTED[0], _NOT_IMPLEMENTED[1]
 
 
-@stubs_bp.route('/notifications/digest')
+@stubs_ns.route('/notifications/digest')
 class NotificationsDigestStubResource(Resource):
     @require_session
-    @stubs_bp.response(501, "Not implemented")
+    @stubs_ns.response(501, "Not implemented")
     def get(self) -> ResponseReturnValue:
         """Return 501 Not Implemented for the notifications digest endpoint.
 
@@ -51,11 +51,11 @@ class NotificationsDigestStubResource(Resource):
         return _NOT_IMPLEMENTED[0], _NOT_IMPLEMENTED[1]
 
 
-@stubs_bp.route('/integrations/messages')
-@stubs_bp.route('/integrations/messages/<path:subpath>')
+@stubs_ns.route('/integrations/messages')
+@stubs_ns.route('/integrations/messages/<path:subpath>')
 class IntegrationsMessagesStubResource(Resource):
     @require_session
-    @stubs_bp.response(501, "Not implemented")
+    @stubs_ns.response(501, "Not implemented")
     def get(self, subpath: str | None = None) -> ResponseReturnValue:
         """Return 501 Not Implemented for all integrations message-listing endpoints.
 
@@ -73,10 +73,10 @@ class IntegrationsMessagesStubResource(Resource):
         return _NOT_IMPLEMENTED[0], _NOT_IMPLEMENTED[1]
 
 
-@stubs_bp.route('/integrations/messages/reply')
+@stubs_ns.route('/integrations/messages/reply')
 class IntegrationsReplyStubResource(Resource):
     @require_session
-    @stubs_bp.response(501, "Not implemented")
+    @stubs_ns.response(501, "Not implemented")
     def post(self) -> ResponseReturnValue:
         """Return 501 Not Implemented for the integrations message-reply endpoint.
 
@@ -90,10 +90,10 @@ class IntegrationsReplyStubResource(Resource):
         return _NOT_IMPLEMENTED[0], _NOT_IMPLEMENTED[1]
 
 
-@stubs_bp.route('/permissions')
+@stubs_ns.route('/permissions')
 class PermissionsStubResource(Resource):
     @require_session
-    @stubs_bp.response(501, "Not implemented")
+    @stubs_ns.response(501, "Not implemented")
     def get(self) -> ResponseReturnValue:
         """Return 501 Not Implemented for the permissions endpoint.
 

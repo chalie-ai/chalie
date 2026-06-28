@@ -41,7 +41,7 @@ def client(monkeypatch: pytest.MonkeyPatch) -> "FlaskClient":
     # function-local import, so patch THAT to bypass auth (same approach as conftest).
     monkeypatch.setattr("services.auth_session_service.validate_session", lambda *a, **k: True)
 
-    app = mount_namespace(mod.policies_bp)
+    app = mount_namespace(mod.policies_ns)
     return app.test_client()
 
 
@@ -92,7 +92,7 @@ def mcp_client(monkeypatch: pytest.MonkeyPatch) -> "FlaskClient":
     monkeypatch.setattr("services.mcp_client_service.get_shared_db_service", lambda: _FakeDB())
     monkeypatch.setattr("services.auth_session_service.validate_session", lambda *a, **k: True)
 
-    app = mount_namespace(mod.policies_bp)
+    app = mount_namespace(mod.policies_ns)
     return app.test_client()
 
 

@@ -46,7 +46,7 @@ _USER_CHANNEL = "user"
 # How many recent assistant turns to scan when resolving a pin by message text.
 _RESOLVE_SCAN_LIMIT = 200
 
-moments_bp = Namespace("moments", description="Moment (pinned turn) operations", path="/moments")
+moments_ns = Namespace("moments", description="Moment (pinned turn) operations", path="/moments")
 
 
 # ---------------------------------------------------------------------------
@@ -124,14 +124,14 @@ def _resolve_assistant_turn_by_text(db: "DatabaseService", message_text: str) ->
 # Routes
 # ---------------------------------------------------------------------------
 
-@moments_bp.route("")
+@moments_ns.route("")
 class MomentsResource(Resource):
     @require_session
-    @moments_bp.response(200, "Success")
-    @moments_bp.response(201, "Created")
-    @moments_bp.response(400, "Bad request")
-    @moments_bp.response(404, "Not found")
-    @moments_bp.response(500, "Internal server error")
+    @moments_ns.response(200, "Success")
+    @moments_ns.response(201, "Created")
+    @moments_ns.response(400, "Bad request")
+    @moments_ns.response(404, "Not found")
+    @moments_ns.response(500, "Internal server error")
     def post(self) -> ResponseReturnValue:
         if not request.is_json:
             return {"error": "Content-Type must be application/json"}, 400
@@ -170,8 +170,8 @@ class MomentsResource(Resource):
         return {"item": _serialize_moment(cast("dict[str, object]", row)), "duplicate": already_exists}, status
 
     @require_session
-    @moments_bp.response(200, "Success")
-    @moments_bp.response(500, "Internal server error")
+    @moments_ns.response(200, "Success")
+    @moments_ns.response(500, "Internal server error")
     def get(self) -> ResponseReturnValue:
         try:
             rows = _get_moments().list_all()
@@ -181,13 +181,13 @@ class MomentsResource(Resource):
             return {"error": _ERR_INTERNAL}, 500
 
 
-@moments_bp.route("/<int:transcript_id>/forget")
+@moments_ns.route("/<int:transcript_id>/forget")
 class MomentForgetResource(Resource):
     @require_session
-    @moments_bp.param("transcript_id", "int", "Transcript row id of the moment to forget")
-    @moments_bp.response(200, "Success")
-    @moments_bp.response(404, "Not found")
-    @moments_bp.response(500, "Internal server error")
+    @moments_ns.param("transcript_id", "int", "Transcript row id of the moment to forget")
+    @moments_ns.response(200, "Success")
+    @moments_ns.response(404, "Not found")
+    @moments_ns.response(500, "Internal server error")
     def post(self, transcript_id: int) -> ResponseReturnValue:
         try:
             if not _get_moments().delete_by_transcript(transcript_id):
@@ -198,12 +198,12 @@ class MomentForgetResource(Resource):
             return {"error": _ERR_INTERNAL}, 500
 
 
-@moments_bp.route("/search")
+@moments_ns.route("/search")
 class MomentsSearchResource(Resource):
     @require_session
-    @moments_bp.response(200, "Success")
-    @moments_bp.response(400, "Bad request")
-    @moments_bp.response(500, "Internal server error")
+    @moments_ns.response(200, "Success")
+    @moments_ns.response(400, "Bad request")
+    @moments_ns.response(500, "Internal server error")
     def get(self) -> ResponseReturnValue:
         query = (request.args.get("q") or "").strip()
         if not query:

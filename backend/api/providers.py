@@ -46,7 +46,7 @@ def _safe_validation_msg(exc: ValueError) -> str:
         return msg
     return "Invalid provider configuration"
 
-providers_bp = Namespace('providers', description='Provider management', path='/providers')
+providers_ns = Namespace('providers', description='Provider management', path='/providers')
 
 # SSRF hard denies — cloud metadata, link-local, and common cloud-provider
 # private endpoints. Loopback and RFC1918 ranges are allowed (local-first app).
@@ -309,9 +309,9 @@ def get_provider_service() -> "ProviderDbService":
     return ProviderDbService(db)
 
 
-@providers_bp.route('')
-@providers_bp.response(200, "List of providers")
-@providers_bp.response(201, "Provider created")
+@providers_ns.route('')
+@providers_ns.response(200, "List of providers")
+@providers_ns.response(201, "Provider created")
 class ProviderListResource(Resource):
     @require_session
     def get(self) -> ResponseReturnValue:
@@ -362,8 +362,8 @@ class ProviderListResource(Resource):
             return {"error": "Failed to create provider"}, 500
 
 
-@providers_bp.route('/catalog')
-@providers_bp.response(200, "Provider catalog")
+@providers_ns.route('/catalog')
+@providers_ns.response(200, "Provider catalog")
 class ProviderCatalogResource(Resource):
     @require_session
     def get(self) -> ResponseReturnValue:
@@ -376,10 +376,10 @@ class ProviderCatalogResource(Resource):
             return {"error": "Failed to load provider catalog"}, 500
 
 
-@providers_bp.route('/<int:provider_id>')
-@providers_bp.response(200, "Provider details")
-@providers_bp.response(404, "Provider not found")
-@providers_bp.param("provider_id", "int", "Provider ID")
+@providers_ns.route('/<int:provider_id>')
+@providers_ns.response(200, "Provider details")
+@providers_ns.response(404, "Provider not found")
+@providers_ns.param("provider_id", "int", "Provider ID")
 class ProviderResource(Resource):
     @require_session
     def get(self, provider_id: int) -> ResponseReturnValue:
@@ -449,8 +449,8 @@ class ProviderResource(Resource):
             return {"error": "Failed to delete provider"}, 500
 
 
-@providers_bp.route('/list-models')
-@providers_bp.response(200, "Model list")
+@providers_ns.route('/list-models')
+@providers_ns.response(200, "Model list")
 class ProviderListModelsResource(Resource):
     @require_session
     def post(self) -> ResponseReturnValue:
@@ -568,8 +568,8 @@ def _test_api_provider(config: "dict[str, object]", platform: str, model: str, s
         return {"success": False, "error": error_msg}, 200
 
 
-@providers_bp.route('/test')
-@providers_bp.response(200, "Test result")
+@providers_ns.route('/test')
+@providers_ns.response(200, "Test result")
 class ProviderTestResource(Resource):
     @require_session
     def post(self) -> ResponseReturnValue:
@@ -611,10 +611,10 @@ class ProviderTestResource(Resource):
             return {"success": False, "error": "Test failed unexpectedly"}, 500
 
 
-@providers_bp.route('/selected')
-@providers_bp.response(200, "Selected provider")
-@providers_bp.response(400, "Missing provider_id")
-@providers_bp.response(404, "Provider not found")
+@providers_ns.route('/selected')
+@providers_ns.response(200, "Selected provider")
+@providers_ns.response(400, "Missing provider_id")
+@providers_ns.response(404, "Provider not found")
 class ProviderSelectedResource(Resource):
     @require_session
     def get(self) -> ResponseReturnValue:
@@ -664,10 +664,10 @@ class ProviderSelectedResource(Resource):
             return {"error": "Failed to set selected provider"}, 500
 
 
-@providers_bp.route('/vision')
-@providers_bp.response(200, "Vision provider")
-@providers_bp.response(400, "Invalid request")
-@providers_bp.response(404, "Provider not found")
+@providers_ns.route('/vision')
+@providers_ns.response(200, "Vision provider")
+@providers_ns.response(400, "Invalid request")
+@providers_ns.response(404, "Provider not found")
 class ProviderVisionResource(Resource):
     @require_session
     def get(self) -> ResponseReturnValue:
@@ -713,10 +713,10 @@ class ProviderVisionResource(Resource):
             return {"error": "Failed to set vision provider"}, 500
 
 
-@providers_bp.route('/delegate')
-@providers_bp.response(200, "Delegate provider")
-@providers_bp.response(400, "Invalid request")
-@providers_bp.response(404, "Provider not found")
+@providers_ns.route('/delegate')
+@providers_ns.response(200, "Delegate provider")
+@providers_ns.response(400, "Invalid request")
+@providers_ns.response(404, "Provider not found")
 class ProviderDelegateResource(Resource):
     @require_session
     def get(self) -> ResponseReturnValue:

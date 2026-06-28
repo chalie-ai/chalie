@@ -21,7 +21,7 @@ from services.mcp_client_service import McpClientService
 
 logger = logging.getLogger(__name__)
 
-mcp_clients_bp = Namespace("mcp_clients", description="Outbound MCP server management", path="/api/mcp-clients")
+mcp_clients_ns = Namespace("mcp_clients", description="Outbound MCP server management", path="/api/mcp-clients")
 
 
 def _svc() -> McpClientService:
@@ -31,17 +31,17 @@ def _svc() -> McpClientService:
 # ── GET/POST /api/mcp-clients ─────────────────────────────────────────────────
 
 
-@mcp_clients_bp.route("/")
+@mcp_clients_ns.route("/")
 class ServerListResource(Resource):
     @require_session
-    @mcp_clients_bp.response(200, "Success")
+    @mcp_clients_ns.response(200, "Success")
     def get(self) -> ResponseReturnValue:
         servers = _svc().list_servers()
         return servers, 200
 
     @require_session
-    @mcp_clients_bp.response(200, "Success")
-    @mcp_clients_bp.response(400, "Bad request")
+    @mcp_clients_ns.response(200, "Success")
+    @mcp_clients_ns.response(400, "Bad request")
     def post(self) -> ResponseReturnValue:
         body = request.get_json(silent=True) or {}
         name = (body.get("name") or "").strip()
@@ -77,10 +77,10 @@ class ServerListResource(Resource):
 # ── GET /api/mcp-clients/discoverable ────────────────────────────────────────
 
 
-@mcp_clients_bp.route("/discoverable")
+@mcp_clients_ns.route("/discoverable")
 class DiscoverableResource(Resource):
     @require_session
-    @mcp_clients_bp.response(200, "Success")
+    @mcp_clients_ns.response(200, "Success")
     def get(self) -> ResponseReturnValue:
         names = _svc().get_online_mcp_tool_names()
         return {"tools": names, "count": len(names)}, 200
@@ -89,12 +89,12 @@ class DiscoverableResource(Resource):
 # ── PUT/DELETE /api/mcp-clients/<id> ─────────────────────────────────────────
 
 
-@mcp_clients_bp.route("/<server_id>")
+@mcp_clients_ns.route("/<server_id>")
 class ServerResource(Resource):
     @require_session
-    @mcp_clients_bp.response(200, "Success")
-    @mcp_clients_bp.response(400, "Bad request")
-    @mcp_clients_bp.response(404, "Server not found")
+    @mcp_clients_ns.response(200, "Success")
+    @mcp_clients_ns.response(400, "Bad request")
+    @mcp_clients_ns.response(404, "Server not found")
     def put(self, server_id: str) -> ResponseReturnValue:
         body = request.get_json(silent=True) or {}
         updates = {k: v for k, v in body.items() if k in ("name", "host", "headers", "enabled")}
@@ -107,8 +107,8 @@ class ServerResource(Resource):
         return server, 200
 
     @require_session
-    @mcp_clients_bp.response(200, "Success")
-    @mcp_clients_bp.response(404, "Server not found")
+    @mcp_clients_ns.response(200, "Success")
+    @mcp_clients_ns.response(404, "Server not found")
     def delete(self, server_id: str) -> ResponseReturnValue:
         try:
             _svc().delete_server(server_id)
@@ -120,11 +120,11 @@ class ServerResource(Resource):
 # ── POST /api/mcp-clients/<id>/test ──────────────────────────────────────────
 
 
-@mcp_clients_bp.route("/<server_id>/test")
+@mcp_clients_ns.route("/<server_id>/test")
 class ServerTestResource(Resource):
     @require_session
-    @mcp_clients_bp.response(200, "Success")
-    @mcp_clients_bp.response(404, "Server not found")
+    @mcp_clients_ns.response(200, "Success")
+    @mcp_clients_ns.response(404, "Server not found")
     def post(self, server_id: str) -> ResponseReturnValue:
         svc = _svc()
         if svc.get_server(server_id) is None:
@@ -136,11 +136,11 @@ class ServerTestResource(Resource):
 # ── GET /api/mcp-clients/<id>/tools ──────────────────────────────────────────
 
 
-@mcp_clients_bp.route("/<server_id>/tools")
+@mcp_clients_ns.route("/<server_id>/tools")
 class ServerToolsResource(Resource):
     @require_session
-    @mcp_clients_bp.response(200, "Success")
-    @mcp_clients_bp.response(404, "Server not found")
+    @mcp_clients_ns.response(200, "Success")
+    @mcp_clients_ns.response(404, "Server not found")
     def get(self, server_id: str) -> ResponseReturnValue:
         svc = _svc()
         if svc.get_server(server_id) is None:

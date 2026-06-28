@@ -53,7 +53,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-chat_bp = Namespace("chat", description="Chat operations", path="/")
+chat_ns = Namespace("chat", description="Chat operations", path="/")
 
 # ── Active UMP turn tracking ─────────────────────────────────────────────────
 
@@ -384,10 +384,10 @@ def _interrupt_active_turn() -> tuple[dict[str, object], int]:
     return {"ok": True, "reason": "no_active_turn"}, 200
 
 
-@chat_bp.route("/chat")
+@chat_ns.route("/chat")
 class ChatResource(Resource):
     @require_auth
-    @chat_bp.response(202, "Accepted")
+    @chat_ns.response(202, "Accepted")
     def post(self) -> ResponseReturnValue:
         """Files are staged to temp paths and ingested via document.upload (by PATH, never bytes) at turn 0.
 
@@ -412,10 +412,10 @@ class ChatResource(Resource):
         return {"status": "accepted"}, 202
 
 
-@chat_bp.route("/chat/interrupt")
+@chat_ns.route("/chat/interrupt")
 class ChatInterruptResource(Resource):
     @require_auth
-    @chat_bp.response(200, "OK")
+    @chat_ns.response(200, "OK")
     def post(self) -> ResponseReturnValue:
         """The cancelled turn deletes its own transcript and tool_call rows — no data persists for an interrupted turn.
 
@@ -424,19 +424,19 @@ class ChatInterruptResource(Resource):
         return _interrupt_active_turn()
 
 
-@chat_bp.route("/chat/stop")
+@chat_ns.route("/chat/stop")
 class ChatStopResource(Resource):
     @require_auth
-    @chat_bp.response(200, "OK")
+    @chat_ns.response(200, "OK")
     def post(self) -> ResponseReturnValue:
         """Deprecated alias for POST /chat/interrupt. New callers should use POST /chat/interrupt instead."""
         return _interrupt_active_turn()
 
 
-@chat_bp.route("/chat/subagents/active")
+@chat_ns.route("/chat/subagents/active")
 class ActiveSubagentsResource(Resource):
     @require_auth
-    @chat_bp.response(200, "OK")
+    @chat_ns.response(200, "OK")
     def get(self) -> ResponseReturnValue:
         """Hydrates the Processes panel on page load/reconnect, since WS push events
         are missed while the client is disconnected. Each row carries the tool name,
@@ -447,10 +447,10 @@ class ActiveSubagentsResource(Resource):
         return {"subagents": async_delegate_runner.active()}, 200
 
 
-@chat_bp.route("/chat/subagent/<sub_id>/stop")
+@chat_ns.route("/chat/subagent/<sub_id>/stop")
 class SubagentStopResource(Resource):
     @require_auth
-    @chat_bp.response(200, "OK")
+    @chat_ns.response(200, "OK")
     def post(self, sub_id: str) -> ResponseReturnValue:
         """Cooperatively cancel a running async delegate.
 
@@ -471,10 +471,10 @@ class SubagentStopResource(Resource):
         return {"ok": True, "reason": "not_found"}, 200
 
 
-@chat_bp.route("/action")
+@chat_ns.route("/action")
 class ActionResource(Resource):
     @require_auth
-    @chat_bp.response(202, "Accepted")
+    @chat_ns.response(202, "Accepted")
     def post(self) -> ResponseReturnValue:
         """Response arrives asynchronously via WebSocketBroker.broadcast()."""
         body = request.get_json(silent=True) or {}

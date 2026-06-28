@@ -7,7 +7,7 @@ from unittest.mock import patch
 import pytest
 from flask.testing import FlaskClient
 
-from api.scheduler import scheduler_bp
+from api.scheduler import scheduler_ns
 from tests.restx_test_app import mount_namespace
 
 
@@ -66,7 +66,7 @@ class TestSchedulerAPI:
 
     @pytest.fixture
     def client(self, db: sqlite3.Connection) -> FlaskClient:
-        app = mount_namespace(scheduler_bp)
+        app = mount_namespace(scheduler_ns)
         app.config["TESTING"] = True
         return app.test_client()
 

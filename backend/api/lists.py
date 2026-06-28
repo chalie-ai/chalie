@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 _ERR_INTERNAL = "Internal server error"
 _ERR_NOT_FOUND = "Not found"
 
-lists_bp = Namespace("lists", description="List operations", path="/lists")
+lists_ns = Namespace("lists", description="List operations", path="/lists")
 
 
 # ---------------------------------------------------------------------------
@@ -77,11 +77,11 @@ def _validate_items(items: object) -> "tuple[list[str] | None, str | None]":
 # Routes
 # ---------------------------------------------------------------------------
 
-@lists_bp.route("")
+@lists_ns.route("")
 class ListsResource(Resource):
     @require_session
-    @lists_bp.response(200, "Success")
-    @lists_bp.response(500, "Internal server error")
+    @lists_ns.response(200, "Success")
+    @lists_ns.response(500, "Internal server error")
     def get(self) -> ResponseReturnValue:
         try:
             svc = _get_list_service()
@@ -92,10 +92,10 @@ class ListsResource(Resource):
             return {"error": _ERR_INTERNAL}, 500
 
     @require_session
-    @lists_bp.response(201, "Created")
-    @lists_bp.response(400, "Bad request")
-    @lists_bp.response(409, "Conflict")
-    @lists_bp.response(500, "Internal server error")
+    @lists_ns.response(201, "Created")
+    @lists_ns.response(400, "Bad request")
+    @lists_ns.response(409, "Conflict")
+    @lists_ns.response(500, "Internal server error")
     def post(self) -> ResponseReturnValue:
         data = request.get_json(silent=True) or {}
         name, err = _validate_name(data.get("name"))
@@ -117,13 +117,13 @@ class ListsResource(Resource):
             return {"error": _ERR_INTERNAL}, 500
 
 
-@lists_bp.route("/<list_id>")
+@lists_ns.route("/<list_id>")
 class ListResource(Resource):
     @require_session
-    @lists_bp.param("list_id", "string", "List id")
-    @lists_bp.response(200, "Success")
-    @lists_bp.response(404, "Not found")
-    @lists_bp.response(500, "Internal server error")
+    @lists_ns.param("list_id", "string", "List id")
+    @lists_ns.response(200, "Success")
+    @lists_ns.response(404, "Not found")
+    @lists_ns.response(500, "Internal server error")
     def get(self, list_id: str) -> ResponseReturnValue:
         try:
             svc = _get_list_service()
@@ -138,10 +138,10 @@ class ListResource(Resource):
             return {"error": _ERR_INTERNAL}, 500
 
     @require_session
-    @lists_bp.param("list_id", "string", "List id")
-    @lists_bp.response(200, "Success")
-    @lists_bp.response(404, "Not found")
-    @lists_bp.response(500, "Internal server error")
+    @lists_ns.param("list_id", "string", "List id")
+    @lists_ns.response(200, "Success")
+    @lists_ns.response(404, "Not found")
+    @lists_ns.response(500, "Internal server error")
     def delete(self, list_id: str) -> ResponseReturnValue:
         try:
             svc = _get_list_service()
@@ -154,14 +154,14 @@ class ListResource(Resource):
             return {"error": _ERR_INTERNAL}, 500
 
 
-@lists_bp.route("/<list_id>/rename")
+@lists_ns.route("/<list_id>/rename")
 class ListRenameResource(Resource):
     @require_session
-    @lists_bp.param("list_id", "string", "List id")
-    @lists_bp.response(200, "Success")
-    @lists_bp.response(400, "Bad request")
-    @lists_bp.response(404, "Not found")
-    @lists_bp.response(500, "Internal server error")
+    @lists_ns.param("list_id", "string", "List id")
+    @lists_ns.response(200, "Success")
+    @lists_ns.response(400, "Bad request")
+    @lists_ns.response(404, "Not found")
+    @lists_ns.response(500, "Internal server error")
     def put(self, list_id: str) -> ResponseReturnValue:
         data = request.get_json(silent=True) or {}
         name, err = _validate_name(data.get("name"))
@@ -179,14 +179,14 @@ class ListRenameResource(Resource):
             return {"error": _ERR_INTERNAL}, 500
 
 
-@lists_bp.route("/<list_id>/items")
+@lists_ns.route("/<list_id>/items")
 class ListItemsResource(Resource):
     @require_session
-    @lists_bp.param("list_id", "string", "List id")
-    @lists_bp.response(200, "Success")
-    @lists_bp.response(400, "Bad request")
-    @lists_bp.response(404, "Not found")
-    @lists_bp.response(500, "Internal server error")
+    @lists_ns.param("list_id", "string", "List id")
+    @lists_ns.response(200, "Success")
+    @lists_ns.response(400, "Bad request")
+    @lists_ns.response(404, "Not found")
+    @lists_ns.response(500, "Internal server error")
     def post(self, list_id: str) -> ResponseReturnValue:
         data = request.get_json(silent=True) or {}
         items, err = _validate_items(data.get("items"))
@@ -204,10 +204,10 @@ class ListItemsResource(Resource):
             return {"error": _ERR_INTERNAL}, 500
 
     @require_session
-    @lists_bp.param("list_id", "string", "List id")
-    @lists_bp.response(200, "Success")
-    @lists_bp.response(404, "Not found")
-    @lists_bp.response(500, "Internal server error")
+    @lists_ns.param("list_id", "string", "List id")
+    @lists_ns.response(200, "Success")
+    @lists_ns.response(404, "Not found")
+    @lists_ns.response(500, "Internal server error")
     def delete(self, list_id: str) -> ResponseReturnValue:
         try:
             svc = _get_list_service()
@@ -220,14 +220,14 @@ class ListItemsResource(Resource):
             return {"error": _ERR_INTERNAL}, 500
 
 
-@lists_bp.route("/<list_id>/items/batch")
+@lists_ns.route("/<list_id>/items/batch")
 class ListItemsBatchResource(Resource):
     @require_session
-    @lists_bp.param("list_id", "string", "List id")
-    @lists_bp.response(200, "Success")
-    @lists_bp.response(400, "Bad request")
-    @lists_bp.response(404, "Not found")
-    @lists_bp.response(500, "Internal server error")
+    @lists_ns.param("list_id", "string", "List id")
+    @lists_ns.response(200, "Success")
+    @lists_ns.response(400, "Bad request")
+    @lists_ns.response(404, "Not found")
+    @lists_ns.response(500, "Internal server error")
     def delete(self, list_id: str) -> ResponseReturnValue:
         data = request.get_json(silent=True) or {}
         items, err = _validate_items(data.get("items"))
@@ -245,14 +245,14 @@ class ListItemsBatchResource(Resource):
             return {"error": _ERR_INTERNAL}, 500
 
 
-@lists_bp.route("/<list_id>/items/check")
+@lists_ns.route("/<list_id>/items/check")
 class ListItemsCheckResource(Resource):
     @require_session
-    @lists_bp.param("list_id", "string", "List id")
-    @lists_bp.response(200, "Success")
-    @lists_bp.response(400, "Bad request")
-    @lists_bp.response(404, "Not found")
-    @lists_bp.response(500, "Internal server error")
+    @lists_ns.param("list_id", "string", "List id")
+    @lists_ns.response(200, "Success")
+    @lists_ns.response(400, "Bad request")
+    @lists_ns.response(404, "Not found")
+    @lists_ns.response(500, "Internal server error")
     def put(self, list_id: str) -> ResponseReturnValue:
         data = request.get_json(silent=True) or {}
         items, err = _validate_items(data.get("items"))
@@ -270,14 +270,14 @@ class ListItemsCheckResource(Resource):
             return {"error": _ERR_INTERNAL}, 500
 
 
-@lists_bp.route("/<list_id>/items/uncheck")
+@lists_ns.route("/<list_id>/items/uncheck")
 class ListItemsUncheckResource(Resource):
     @require_session
-    @lists_bp.param("list_id", "string", "List id")
-    @lists_bp.response(200, "Success")
-    @lists_bp.response(400, "Bad request")
-    @lists_bp.response(404, "Not found")
-    @lists_bp.response(500, "Internal server error")
+    @lists_ns.param("list_id", "string", "List id")
+    @lists_ns.response(200, "Success")
+    @lists_ns.response(400, "Bad request")
+    @lists_ns.response(404, "Not found")
+    @lists_ns.response(500, "Internal server error")
     def put(self, list_id: str) -> ResponseReturnValue:
         data = request.get_json(silent=True) or {}
         items, err = _validate_items(data.get("items"))

@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 
 _ERR_INTENT_NOT_FOUND = "intent not found"
 
-intents_bp = Namespace("intents", description="Intent management", path="/api/intents")
+intents_ns = Namespace("intents", description="Intent management", path="/api/intents")
 
 
 # ---------------------------------------------------------------------------
@@ -41,9 +41,9 @@ def _get_intent_service() -> IntentService:
 # GET /api/intents — list pending intents
 # ---------------------------------------------------------------------------
 
-@intents_bp.route("")
-@intents_bp.response(200, "List of pending intents")
-@intents_bp.response(400, "Invalid limit")
+@intents_ns.route("")
+@intents_ns.response(200, "List of pending intents")
+@intents_ns.response(400, "Invalid limit")
 class IntentListResource(Resource):
     @require_session
     def get(self) -> ResponseReturnValue:
@@ -66,10 +66,10 @@ class IntentListResource(Resource):
 # GET /api/intents/<id> — get single intent
 # ---------------------------------------------------------------------------
 
-@intents_bp.route("/<intent_id>")
-@intents_bp.response(200, "Intent details")
-@intents_bp.response(404, "Intent not found")
-@intents_bp.param("intent_id", "str", "Intent identifier")
+@intents_ns.route("/<intent_id>")
+@intents_ns.response(200, "Intent details")
+@intents_ns.response(404, "Intent not found")
+@intents_ns.param("intent_id", "str", "Intent identifier")
 class IntentDetailResource(Resource):
     @require_session
     def get(self, intent_id: str) -> ResponseReturnValue:
@@ -87,10 +87,10 @@ class IntentDetailResource(Resource):
 # POST /api/intents/<id>/ack — acknowledge receipt
 # ---------------------------------------------------------------------------
 
-@intents_bp.route("/<intent_id>/ack")
-@intents_bp.response(200, "Intent acknowledged")
-@intents_bp.response(404, "Intent not found")
-@intents_bp.param("intent_id", "str", "Intent identifier")
+@intents_ns.route("/<intent_id>/ack")
+@intents_ns.response(200, "Intent acknowledged")
+@intents_ns.response(404, "Intent not found")
+@intents_ns.param("intent_id", "str", "Intent identifier")
 class IntentAckResource(Resource):
     @require_session
     def post(self, intent_id: str) -> ResponseReturnValue:
@@ -109,11 +109,11 @@ class IntentAckResource(Resource):
 # POST /api/intents/<id>/resolve — report execution result
 # ---------------------------------------------------------------------------
 
-@intents_bp.route("/<intent_id>/resolve")
-@intents_bp.response(200, "Intent resolved")
-@intents_bp.response(400, "Invalid request")
-@intents_bp.response(404, "Intent not found")
-@intents_bp.param("intent_id", "str", "Intent identifier")
+@intents_ns.route("/<intent_id>/resolve")
+@intents_ns.response(200, "Intent resolved")
+@intents_ns.response(400, "Invalid request")
+@intents_ns.response(404, "Intent not found")
+@intents_ns.param("intent_id", "str", "Intent identifier")
 class IntentResolveResource(Resource):
     @require_session
     def post(self, intent_id: str) -> ResponseReturnValue:

@@ -46,7 +46,7 @@ _ERR_INTERNAL = "Internal server error"
 _ERR_NOT_FOUND = "Not found"
 _ERR_FILE_NOT_FOUND = "File not found on disk"
 
-documents_bp = Namespace("documents", description="Document operations", path="/documents")
+documents_ns = Namespace("documents", description="Document operations", path="/documents")
 
 # Fallback when an uploaded name reduces to nothing safe (e.g. ".." or
 # non-ASCII-only). secure_filename returns '' in those cases.
@@ -198,8 +198,8 @@ def _run_upload_extraction(doc_id: str) -> None:
 # Routes
 # ---------------------------------------------------------------------------
 
-@documents_bp.route("/upload")
-@documents_bp.response(201, "Document uploaded")
+@documents_ns.route("/upload")
+@documents_ns.response(201, "Document uploaded")
 class UploadDocumentResource(Resource):
     @require_session
     def post(self) -> ResponseReturnValue:
@@ -272,8 +272,8 @@ class UploadDocumentResource(Resource):
                 pass
 
 
-@documents_bp.route("")
-@documents_bp.response(200, "List of documents")
+@documents_ns.route("")
+@documents_ns.response(200, "List of documents")
 class ListDocumentsResource(Resource):
     @require_session
     def get(self) -> ResponseReturnValue:
@@ -287,10 +287,10 @@ class ListDocumentsResource(Resource):
             return {"error": _ERR_INTERNAL}, 500
 
 
-@documents_bp.route("/<doc_id>")
-@documents_bp.response(200, "Document details")
-@documents_bp.response(404, "Not found")
-@documents_bp.param("doc_id", "str", "Document identifier")
+@documents_ns.route("/<doc_id>")
+@documents_ns.response(200, "Document details")
+@documents_ns.response(404, "Not found")
+@documents_ns.param("doc_id", "str", "Document identifier")
 class DocumentResource(Resource):
     @require_session
     def get(self, doc_id: str) -> ResponseReturnValue:
@@ -328,10 +328,10 @@ class DocumentResource(Resource):
             return {"error": _ERR_INTERNAL}, 500
 
 
-@documents_bp.route("/<doc_id>/content")
-@documents_bp.response(200, "Document content")
-@documents_bp.response(404, "Not found")
-@documents_bp.param("doc_id", "str", "Document identifier")
+@documents_ns.route("/<doc_id>/content")
+@documents_ns.response(200, "Document content")
+@documents_ns.response(404, "Not found")
+@documents_ns.param("doc_id", "str", "Document identifier")
 class DocumentContentResource(Resource):
     @require_session
     def get(self, doc_id: str) -> ResponseReturnValue:
@@ -361,10 +361,10 @@ class DocumentContentResource(Resource):
             return {"error": _ERR_INTERNAL}, 500
 
 
-@documents_bp.route("/<doc_id>/download")
-@documents_bp.response(200, "File download")
-@documents_bp.response(404, "Not found")
-@documents_bp.param("doc_id", "str", "Document identifier")
+@documents_ns.route("/<doc_id>/download")
+@documents_ns.response(200, "File download")
+@documents_ns.response(404, "Not found")
+@documents_ns.param("doc_id", "str", "Document identifier")
 class DocumentDownloadResource(Resource):
     @require_session
     def get(self, doc_id: str) -> ResponseReturnValue:
@@ -394,10 +394,10 @@ class DocumentDownloadResource(Resource):
             return {"error": _ERR_INTERNAL}, 500
 
 
-@documents_bp.route("/<doc_id>/preview")
-@documents_bp.response(200, "File preview")
-@documents_bp.response(404, "Not found")
-@documents_bp.param("doc_id", "str", "Document identifier")
+@documents_ns.route("/<doc_id>/preview")
+@documents_ns.response(200, "File preview")
+@documents_ns.response(404, "Not found")
+@documents_ns.param("doc_id", "str", "Document identifier")
 class DocumentPreviewResource(Resource):
     @require_session
     def get(self, doc_id: str) -> ResponseReturnValue:
@@ -428,10 +428,10 @@ class DocumentPreviewResource(Resource):
             return {"error": _ERR_INTERNAL}, 500
 
 
-@documents_bp.route("/<doc_id>/classify")
-@documents_bp.response(200, "Classification updated")
-@documents_bp.response(404, "Not found")
-@documents_bp.param("doc_id", "str", "Document identifier")
+@documents_ns.route("/<doc_id>/classify")
+@documents_ns.response(200, "Classification updated")
+@documents_ns.response(404, "Not found")
+@documents_ns.param("doc_id", "str", "Document identifier")
 class DocumentClassifyResource(Resource):
     @require_session
     def put(self, doc_id: str) -> ResponseReturnValue:
@@ -456,9 +456,9 @@ class DocumentClassifyResource(Resource):
             return {"error": _ERR_INTERNAL}, 500
 
 
-@documents_bp.route("/groups/<field>")
-@documents_bp.response(200, "Classification groups")
-@documents_bp.param("field", "str", "Classification field name")
+@documents_ns.route("/groups/<field>")
+@documents_ns.response(200, "Classification groups")
+@documents_ns.param("field", "str", "Classification field name")
 class DocumentGroupsResource(Resource):
     @require_session
     def get(self, field: str) -> ResponseReturnValue:
@@ -472,10 +472,10 @@ class DocumentGroupsResource(Resource):
             return {"error": _ERR_INTERNAL}, 500
 
 
-@documents_bp.route("/<doc_id>/restore")
-@documents_bp.response(200, "Document restored")
-@documents_bp.response(404, "Not found or not deleted")
-@documents_bp.param("doc_id", "str", "Document identifier")
+@documents_ns.route("/<doc_id>/restore")
+@documents_ns.response(200, "Document restored")
+@documents_ns.response(404, "Not found or not deleted")
+@documents_ns.param("doc_id", "str", "Document identifier")
 class DocumentRestoreResource(Resource):
     @require_session
     def post(self, doc_id: str) -> ResponseReturnValue:
@@ -490,10 +490,10 @@ class DocumentRestoreResource(Resource):
             return {"error": _ERR_INTERNAL}, 500
 
 
-@documents_bp.route("/<doc_id>/purge")
-@documents_bp.response(200, "Document purged")
-@documents_bp.response(404, "Not found")
-@documents_bp.param("doc_id", "str", "Document identifier")
+@documents_ns.route("/<doc_id>/purge")
+@documents_ns.response(200, "Document purged")
+@documents_ns.response(404, "Not found")
+@documents_ns.param("doc_id", "str", "Document identifier")
 class DocumentPurgeResource(Resource):
     @require_session
     def delete(self, doc_id: str) -> ResponseReturnValue:
@@ -508,8 +508,8 @@ class DocumentPurgeResource(Resource):
             return {"error": _ERR_INTERNAL}, 500
 
 
-@documents_bp.route("/search")
-@documents_bp.response(200, "Search results")
+@documents_ns.route("/search")
+@documents_ns.response(200, "Search results")
 class DocumentSearchResource(Resource):
     @require_session
     def get(self) -> ResponseReturnValue:
@@ -546,11 +546,11 @@ class DocumentSearchResource(Resource):
             return {"error": "Search failed"}, 500
 
 
-@documents_bp.route("/<doc_id>/confirm")
-@documents_bp.response(200, "Document confirmed")
-@documents_bp.response(400, "Not awaiting confirmation")
-@documents_bp.response(404, "Not found")
-@documents_bp.param("doc_id", "str", "Document identifier")
+@documents_ns.route("/<doc_id>/confirm")
+@documents_ns.response(200, "Document confirmed")
+@documents_ns.response(400, "Not awaiting confirmation")
+@documents_ns.response(404, "Not found")
+@documents_ns.param("doc_id", "str", "Document identifier")
 class DocumentConfirmResource(Resource):
     @require_session
     def post(self, doc_id: str) -> ResponseReturnValue:
@@ -570,11 +570,11 @@ class DocumentConfirmResource(Resource):
             return {"error": _ERR_INTERNAL}, 500
 
 
-@documents_bp.route("/<doc_id>/augment")
-@documents_bp.response(200, "Document augmented")
-@documents_bp.response(400, "Invalid state or missing context")
-@documents_bp.response(404, "Not found")
-@documents_bp.param("doc_id", "str", "Document identifier")
+@documents_ns.route("/<doc_id>/augment")
+@documents_ns.response(200, "Document augmented")
+@documents_ns.response(400, "Invalid state or missing context")
+@documents_ns.response(404, "Not found")
+@documents_ns.param("doc_id", "str", "Document identifier")
 class DocumentAugmentResource(Resource):
     @require_session
     def post(self, doc_id: str) -> ResponseReturnValue:
@@ -610,11 +610,11 @@ class DocumentAugmentResource(Resource):
             return {"error": _ERR_INTERNAL}, 500
 
 
-@documents_bp.route("/<doc_id>/supersede")
-@documents_bp.response(200, "Document superseded")
-@documents_bp.response(400, "Missing old_id")
-@documents_bp.response(404, "Not found")
-@documents_bp.param("doc_id", "str", "Document identifier")
+@documents_ns.route("/<doc_id>/supersede")
+@documents_ns.response(200, "Document superseded")
+@documents_ns.response(400, "Missing old_id")
+@documents_ns.response(404, "Not found")
+@documents_ns.param("doc_id", "str", "Document identifier")
 class DocumentSupersedeResource(Resource):
     @require_session
     def post(self, doc_id: str) -> ResponseReturnValue:
@@ -653,9 +653,9 @@ def _get_watcher_service() -> "FolderWatcherService":
     return FolderWatcherService(get_shared_db_service())
 
 
-@documents_bp.route("/watched-folders")
-@documents_bp.response(200, "List of watched folders")
-@documents_bp.response(201, "Watched folder created")
+@documents_ns.route("/watched-folders")
+@documents_ns.response(200, "List of watched folders")
+@documents_ns.response(201, "Watched folder created")
 class WatchedFoldersResource(Resource):
     @require_session
     def get(self) -> ResponseReturnValue:
@@ -697,10 +697,10 @@ class WatchedFoldersResource(Resource):
             return {"error": _ERR_INTERNAL}, 500
 
 
-@documents_bp.route("/watched-folders/<folder_id>")
-@documents_bp.response(200, "Watched folder updated")
-@documents_bp.response(404, "Not found")
-@documents_bp.param("folder_id", "str", "Folder identifier")
+@documents_ns.route("/watched-folders/<folder_id>")
+@documents_ns.response(200, "Watched folder updated")
+@documents_ns.response(404, "Not found")
+@documents_ns.param("folder_id", "str", "Folder identifier")
 class WatchedFolderResource(Resource):
     @require_session
     def put(self, folder_id: str) -> ResponseReturnValue:
@@ -733,10 +733,10 @@ class WatchedFolderResource(Resource):
             return {"error": _ERR_INTERNAL}, 500
 
 
-@documents_bp.route("/watched-folders/<folder_id>/scan")
-@documents_bp.response(200, "Scan triggered")
-@documents_bp.response(404, "Not found")
-@documents_bp.param("folder_id", "str", "Folder identifier")
+@documents_ns.route("/watched-folders/<folder_id>/scan")
+@documents_ns.response(200, "Scan triggered")
+@documents_ns.response(404, "Not found")
+@documents_ns.param("folder_id", "str", "Folder identifier")
 class WatchedFolderScanResource(Resource):
     @require_session
     def post(self, folder_id: str) -> ResponseReturnValue:
@@ -753,8 +753,8 @@ class WatchedFolderScanResource(Resource):
             return {"error": _ERR_INTERNAL}, 500
 
 
-@documents_bp.route("/watched-folders/browse")
-@documents_bp.response(200, "Directory listing")
+@documents_ns.route("/watched-folders/browse")
+@documents_ns.response(200, "Directory listing")
 class WatchedFolderBrowseResource(Resource):
     @require_session
     def post(self) -> ResponseReturnValue:

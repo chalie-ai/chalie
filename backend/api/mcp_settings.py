@@ -21,7 +21,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-mcp_settings_bp = Namespace("mcp_settings", description="MCP server settings", path="/api/mcp-server")
+mcp_settings_ns = Namespace("mcp_settings", description="MCP server settings", path="/api/mcp-server")
 
 
 def _get_services() -> "tuple[SettingsService, WrapperAuthService, object]":
@@ -33,10 +33,10 @@ def _get_services() -> "tuple[SettingsService, WrapperAuthService, object]":
     return SettingsService(db), WrapperAuthService(db), db
 
 
-@mcp_settings_bp.route("")
+@mcp_settings_ns.route("")
 class McpSettingsResource(Resource):
     @require_session
-    @mcp_settings_bp.response(200, "Success")
+    @mcp_settings_ns.response(200, "Success")
     def get(self) -> ResponseReturnValue:
         settings, auth_svc, _ = _get_services()
 
@@ -58,8 +58,8 @@ class McpSettingsResource(Resource):
         }
 
     @require_session
-    @mcp_settings_bp.response(200, "Success")
-    @mcp_settings_bp.response(400, "Bad request")
+    @mcp_settings_ns.response(200, "Success")
+    @mcp_settings_ns.response(400, "Bad request")
     def put(self) -> ResponseReturnValue:
         settings, _, _ = _get_services()
         data = request.get_json(silent=True) or {}
@@ -81,10 +81,10 @@ class McpSettingsResource(Resource):
         return {"success": True}
 
 
-@mcp_settings_bp.route("/regenerate-token")
+@mcp_settings_ns.route("/regenerate-token")
 class RegenerateTokenResource(Resource):
     @require_session
-    @mcp_settings_bp.response(200, "Success")
+    @mcp_settings_ns.response(200, "Success")
     def post(self) -> ResponseReturnValue:
         settings, auth_svc, _ = _get_services()
 

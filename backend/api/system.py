@@ -20,7 +20,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-system_bp = Namespace('system', description='System operations', path='/')
+system_ns = Namespace('system', description='System operations', path='/')
 
 # Signal source for telemetry signals absorbed by WorldState from health pings.
 _SIGNAL_SOURCE_HEALTH = '/health'
@@ -56,14 +56,14 @@ def _persist_heartbeat(data: dict[str, object]) -> None:
         logger.warning(f"[HEALTH] Failed to mirror telemetry to WorldState: {ws_err}")
 
 
-@system_bp.route('/health')
+@system_ns.route('/health')
 class HealthResource(Resource):
-    @system_bp.response(200, "OK")
+    @system_ns.response(200, "OK")
     def get(self) -> ResponseReturnValue:
         """Health check endpoint (no auth required)."""
         return _ok_response()
 
-    @system_bp.response(200, "OK")
+    @system_ns.response(200, "OK")
     def post(self) -> ResponseReturnValue:
         """Health check endpoint (no auth required). POST saves client context."""
         try:
@@ -75,9 +75,9 @@ class HealthResource(Resource):
         return _ok_response()
 
 
-@system_bp.route('/ready')
+@system_ns.route('/ready')
 class ReadinessResource(Resource):
-    @system_bp.response(200, "Ready")
+    @system_ns.response(200, "Ready")
     def get(self) -> ResponseReturnValue:
         """Readiness probe — 200 only when SQLite, MemoryStore, embeddings, and ONNX are ready.
 
@@ -93,10 +93,10 @@ class ReadinessResource(Resource):
         return {'ready': ready, **components}, (200 if ready else 503)
 
 
-@system_bp.route('/metrics')
+@system_ns.route('/metrics')
 class MetricsResource(Resource):
     @require_session
-    @system_bp.response(200, "OK")
+    @system_ns.response(200, "OK")
     def get(self) -> ResponseReturnValue:
         """Metrics dashboard endpoint."""
         try:
@@ -109,10 +109,10 @@ class MetricsResource(Resource):
             return {"error": "Failed to retrieve metrics"}, 500
 
 
-@system_bp.route('/system/status')
+@system_ns.route('/system/status')
 class SystemStatusResource(Resource):
     @require_session
-    @system_bp.response(200, "OK")
+    @system_ns.response(200, "OK")
     def get(self) -> ResponseReturnValue:
         """Comprehensive system health and diagnostics."""
         try:
@@ -174,10 +174,10 @@ _VALID_SOURCES = {'episodes', 'user', 'system'}
 _RESEARCH_LIST_LIMIT = 100
 
 
-@system_bp.route('/system/observability/records')
+@system_ns.route('/system/observability/records')
 class ObservabilityRecordsResource(Resource):
     @require_session
-    @system_bp.response(200, "OK")
+    @system_ns.response(200, "OK")
     def get(self) -> ResponseReturnValue:
         """Paginated record browser for episodes, user, and system memory sources."""
         try:
@@ -250,10 +250,10 @@ class ObservabilityRecordsResource(Resource):
             return {"error": "Failed to retrieve records"}, 500
 
 
-@system_bp.route('/system/observability/tools')
+@system_ns.route('/system/observability/tools')
 class ObservabilityToolsResource(Resource):
     @require_session
-    @system_bp.response(200, "OK")
+    @system_ns.response(200, "OK")
     def get(self) -> ResponseReturnValue:
         """Tool usage counts from tool_calls — count + last_used per tool."""
         try:
@@ -282,10 +282,10 @@ class ObservabilityToolsResource(Resource):
 
 
 
-@system_bp.route('/system/observability/token-usage')
+@system_ns.route('/system/observability/token-usage')
 class ObservabilityTokenUsageResource(Resource):
     @require_session
-    @system_bp.response(200, "OK")
+    @system_ns.response(200, "OK")
     def get(self) -> ResponseReturnValue:
         """Token usage aggregated by time window, model, provider, and usage class.
 
@@ -307,10 +307,10 @@ class ObservabilityTokenUsageResource(Resource):
 
 
 
-@system_bp.route('/system/observability/world-state')
+@system_ns.route('/system/observability/world-state')
 class ObservabilityWorldStateResource(Resource):
     @require_session
-    @system_bp.response(200, "OK")
+    @system_ns.response(200, "OK")
     def get(self) -> ResponseReturnValue:
         """World state as seen by the ACT loop — rendered block + raw inputs."""
         from services.world_state import world_state, _fetch_schedule_rows
@@ -326,10 +326,10 @@ class ObservabilityWorldStateResource(Resource):
         }, 200
 
 
-@system_bp.route('/system/observability/compaction')
+@system_ns.route('/system/observability/compaction')
 class ObservabilityCompactionResource(Resource):
     @require_session
-    @system_bp.response(200, "OK")
+    @system_ns.response(200, "OK")
     def get(self) -> ResponseReturnValue:
         """Continuity-compaction synthesis for the chat ('user') channel.
 
@@ -355,10 +355,10 @@ class ObservabilityCompactionResource(Resource):
             return {"error": "Failed to retrieve compaction summary"}, 500
 
 
-@system_bp.route('/system/observability/research')
+@system_ns.route('/system/observability/research')
 class ObservabilityResearchResource(Resource):
     @require_session
-    @system_bp.response(200, "OK")
+    @system_ns.response(200, "OK")
     def get(self) -> ResponseReturnValue:
         """Newest-first list of proactive-research (Auto Research) runs.
 
@@ -376,10 +376,10 @@ class ObservabilityResearchResource(Resource):
             return {"error": "Failed to retrieve research runs"}, 500
 
 
-@system_bp.route('/system/observability/research/<int:run_id>')
+@system_ns.route('/system/observability/research/<int:run_id>')
 class ObservabilityResearchDetailResource(Resource):
     @require_session
-    @system_bp.response(200, "OK")
+    @system_ns.response(200, "OK")
     def get(self, run_id: int) -> ResponseReturnValue:
         """One Auto Research run: the grounding it ran against plus its full output.
 
@@ -398,10 +398,10 @@ class ObservabilityResearchDetailResource(Resource):
             return {"error": "Failed to retrieve research run"}, 500
 
 
-@system_bp.route('/system/observability/write-queue')
+@system_ns.route('/system/observability/write-queue')
 class ObservabilityWriteQueueResource(Resource):
     @require_session
-    @system_bp.response(200, "OK")
+    @system_ns.response(200, "OK")
     def get(self) -> ResponseReturnValue:
         """Write queue runtime statistics.
 
@@ -423,10 +423,10 @@ class ObservabilityWriteQueueResource(Resource):
             return {"error": "Failed to retrieve write queue stats"}, 500
 
 
-@system_bp.route('/system/observability/telemetry')
+@system_ns.route('/system/observability/telemetry')
 class ObservabilityTelemetryResource(Resource):
     @require_session
-    @system_bp.response(200, "OK")
+    @system_ns.response(200, "OK")
     def get(self) -> ResponseReturnValue:
         """Telemetry event summary across all tracked event types.
 
@@ -499,10 +499,10 @@ def _tail_error_lines() -> list[dict[str, object]]:
     return errors[:_ERROR_CAP]
 
 
-@system_bp.route('/system/observability/errors')
+@system_ns.route('/system/observability/errors')
 class ObservabilityErrorsResource(Resource):
     @require_session
-    @system_bp.response(200, "OK")
+    @system_ns.response(200, "OK")
     def get(self) -> ResponseReturnValue:
         """Recent ERROR and CRITICAL log lines from /tmp/chalie.log, newest first.
 
@@ -520,10 +520,10 @@ class ObservabilityErrorsResource(Resource):
 # In-place update endpoints
 # ──────────────────────────────────────────────
 
-@system_bp.route('/system/update/check')
+@system_ns.route('/system/update/check')
 class UpdateCheckResource(Resource):
     @require_session
-    @system_bp.response(200, "OK")
+    @system_ns.response(200, "OK")
     def get(self) -> ResponseReturnValue:
         try:
             from services.app_update_service import AppUpdateService
@@ -534,10 +534,10 @@ class UpdateCheckResource(Resource):
             return {"error": "Failed to check for updates"}, 500
 
 
-@system_bp.route('/system/update/apply')
+@system_ns.route('/system/update/apply')
 class UpdateApplyResource(Resource):
     @require_session
-    @system_bp.response(200, "OK")
+    @system_ns.response(200, "OK")
     def post(self) -> ResponseReturnValue:
         try:
             from services.app_update_service import AppUpdateService
@@ -561,10 +561,10 @@ class UpdateApplyResource(Resource):
 # Settings endpoints
 # ──────────────────────────────────────────────
 
-@system_bp.route('/system/context-usage')
+@system_ns.route('/system/context-usage')
 class ContextUsageResource(Resource):
     @require_session
-    @system_bp.response(200, "OK")
+    @system_ns.response(200, "OK")
     def get(self) -> ResponseReturnValue:
         """Last user-turn request size + context window for the composer indicator.
 
@@ -586,10 +586,10 @@ class ContextUsageResource(Resource):
         }
 
 
-@system_bp.route('/system/settings/<key>')
+@system_ns.route('/system/settings/<key>')
 class SettingsResource(Resource):
     @require_session
-    @system_bp.response(200, "OK")
+    @system_ns.response(200, "OK")
     def get(self, key: str) -> ResponseReturnValue:
         from services.settings_service import SettingsService
         from services.database_service import get_shared_db_service
@@ -602,7 +602,7 @@ class SettingsResource(Resource):
             return {"error": "Failed to get setting"}, 500
 
     @require_session
-    @system_bp.response(200, "OK")
+    @system_ns.response(200, "OK")
     def put(self, key: str) -> ResponseReturnValue:
         from services.settings_service import SettingsService
         from services.database_service import get_shared_db_service

@@ -30,7 +30,7 @@ from tests.restx_test_app import mount_namespace
 
 import services.database_service as _db_mod
 import services.vault_service as _vault_mod
-from api.user_auth import user_auth_bp
+from api.user_auth import user_auth_ns
 from services.database_service import DatabaseService
 from services.file_mapper_service import FileMapperService
 from services.vault_service import _vault_state
@@ -80,7 +80,7 @@ def redirect_backup_paths(secure_dir: Path, monkeypatch: pytest.MonkeyPatch) -> 
 
 @pytest.fixture
 def auth_client(db: sqlite3.Connection, store: object, redirect_backup_paths: None) -> Iterator[tuple[FlaskClient, sqlite3.Connection]]:
-    app = mount_namespace(user_auth_bp)
+    app = mount_namespace(user_auth_ns)
     app.secret_key = secrets.token_hex(32)
     app.config["TESTING"] = True
     with app.test_client() as client:

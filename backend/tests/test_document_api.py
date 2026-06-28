@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING
 import pytest
 from unittest.mock import patch
 
-from api.documents import documents_bp
+from api.documents import documents_ns
 from tests.restx_test_app import mount_namespace
 from services.file_mapper_service import FileMapperService
 
@@ -31,7 +31,7 @@ class TestDocumentsAPI:
 
     @pytest.fixture
     def client(self) -> "FlaskClient":
-        app = mount_namespace(documents_bp)
+        app = mount_namespace(documents_ns)
         app.config["TESTING"] = True
         return app.test_client()
 

@@ -7,7 +7,7 @@ import pytest
 from flask.testing import FlaskClient
 
 import api.system as system_module
-from api.system import system_bp
+from api.system import system_ns
 from tests.restx_test_app import mount_namespace
 
 
@@ -30,7 +30,7 @@ def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[tuple[Fl
         lambda *_args, **_kwargs: True,
     )
 
-    app = mount_namespace(system_bp)
+    app = mount_namespace(system_ns)
     app.config["TESTING"] = True  # Disables exception propagation only; project has no Flask-WTF/CSRF middleware
 
     with app.test_client() as tc:

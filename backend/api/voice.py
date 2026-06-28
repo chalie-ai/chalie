@@ -47,7 +47,7 @@ from .auth import require_auth
 
 logger = logging.getLogger(__name__)
 
-voice_bp = Namespace("voice", description="Voice (STT + TTS) operations", path="/voice")
+voice_ns = Namespace("voice", description="Voice (STT + TTS) operations", path="/voice")
 
 # ── Constants (hardcoded — no env vars) ─────────────────────────────────────
 
@@ -597,8 +597,8 @@ def _transcribe_sync(data: bytes) -> str:
 
 # ── Routes ──────────────────────────────────────────────────────────────────
 
-@voice_bp.route("/health")
-@voice_bp.response(200, "Health status")
+@voice_ns.route("/health")
+@voice_ns.response(200, "Health status")
 class VoiceHealthResource(Resource):
     @require_auth
     def get(self) -> ResponseReturnValue:
@@ -629,10 +629,10 @@ class VoiceHealthResource(Resource):
         return {"status": "loading"}, 200
 
 
-@voice_bp.route("/synthesize")
-@voice_bp.response(200, "Audio WAV")
-@voice_bp.response(400, "Missing text")
-@voice_bp.response(503, "Voice unavailable")
+@voice_ns.route("/synthesize")
+@voice_ns.response(200, "Audio WAV")
+@voice_ns.response(400, "Missing text")
+@voice_ns.response(503, "Voice unavailable")
 class VoiceSynthesizeResource(Resource):
     @require_auth
     def post(self) -> ResponseReturnValue:
@@ -691,10 +691,10 @@ class VoiceSynthesizeResource(Resource):
         )
 
 
-@voice_bp.route("/transcribe")
-@voice_bp.response(200, "Transcription text")
-@voice_bp.response(400, "Invalid upload")
-@voice_bp.response(503, "Voice unavailable")
+@voice_ns.route("/transcribe")
+@voice_ns.response(200, "Transcription text")
+@voice_ns.response(400, "Invalid upload")
+@voice_ns.response(503, "Voice unavailable")
 class VoiceTranscribeResource(Resource):
     @require_auth
     def post(self) -> ResponseReturnValue:

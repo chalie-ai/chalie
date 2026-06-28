@@ -17,7 +17,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-policies_bp = Namespace('policies', description='Per-action permission control', path='/api/policies')
+policies_ns = Namespace('policies', description='Per-action permission control', path='/api/policies')
 
 
 def _tag_display_rows(rows: "list[dict[str, str]]") -> None:
@@ -49,11 +49,11 @@ def _tag_display_rows(rows: "list[dict[str, str]]") -> None:
             r['label'] = humanize_segment(action or _base)
 
 
-@policies_bp.route('')
+@policies_ns.route('')
 class PoliciesResource(Resource):
     @require_session
-    @policies_bp.response(200, "Success")
-    @policies_bp.response(500, "Internal server error")
+    @policies_ns.response(200, "Success")
+    @policies_ns.response(500, "Internal server error")
     def get(self) -> ResponseReturnValue:
         try:
             from services.database_service import get_shared_db_service
@@ -66,9 +66,9 @@ class PoliciesResource(Resource):
             return {"error": "Failed to load policies"}, 500
 
     @require_session
-    @policies_bp.response(200, "Success")
-    @policies_bp.response(400, "Bad request")
-    @policies_bp.response(500, "Internal server error")
+    @policies_ns.response(200, "Success")
+    @policies_ns.response(400, "Bad request")
+    @policies_ns.response(500, "Internal server error")
     def put(self) -> ResponseReturnValue:
         try:
             data = request.get_json(silent=True) or {}
@@ -84,11 +84,11 @@ class PoliciesResource(Resource):
             return {"error": "Failed to update policies"}, 500
 
 
-@policies_bp.route('/reset')
+@policies_ns.route('/reset')
 class PoliciesResetResource(Resource):
     @require_session
-    @policies_bp.response(200, "Success")
-    @policies_bp.response(500, "Internal server error")
+    @policies_ns.response(200, "Success")
+    @policies_ns.response(500, "Internal server error")
     def post(self) -> ResponseReturnValue:
         """Re-apply the static seed (wipe + reseed)."""
         try:
@@ -101,12 +101,12 @@ class PoliciesResetResource(Resource):
             return {"error": "Failed to reset policies"}, 500
 
 
-@policies_bp.route('/respond')
+@policies_ns.route('/respond')
 class PoliciesRespondResource(Resource):
     @require_session
-    @policies_bp.response(200, "Success")
-    @policies_bp.response(400, "Bad request")
-    @policies_bp.response(500, "Internal server error")
+    @policies_ns.response(200, "Success")
+    @policies_ns.response(400, "Bad request")
+    @policies_ns.response(500, "Internal server error")
     def post(self) -> ResponseReturnValue:
         """Wake the blocked ACT dispatch thread with the user's allow/deny decision.
 
@@ -134,11 +134,11 @@ class PoliciesRespondResource(Resource):
             return {"error": "Failed to resolve permission gate"}, 500
 
 
-@policies_bp.route('/blocked')
+@policies_ns.route('/blocked')
 class PoliciesBlockedResource(Resource):
     @require_session
-    @policies_bp.response(200, "Success")
-    @policies_bp.response(500, "Internal server error")
+    @policies_ns.response(200, "Success")
+    @policies_ns.response(500, "Internal server error")
     def get(self) -> ResponseReturnValue:
         try:
             limit = request.args.get('limit', 50, type=int)
@@ -152,8 +152,8 @@ class PoliciesBlockedResource(Resource):
             return {"error": "Failed to load blocked log"}, 500
 
     @require_session
-    @policies_bp.response(200, "Success")
-    @policies_bp.response(500, "Internal server error")
+    @policies_ns.response(200, "Success")
+    @policies_ns.response(500, "Internal server error")
     def delete(self) -> ResponseReturnValue:
         """Clear all entries from the blocked log."""
         try:

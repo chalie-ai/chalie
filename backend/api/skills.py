@@ -31,7 +31,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-skills_bp = Namespace("skills", description="Brain Skills tab API", path="/api/skills")
+skills_ns = Namespace("skills", description="Brain Skills tab API", path="/api/skills")
 
 
 # ── Internal helpers ───────────────────────────────────────────────────────────
@@ -89,10 +89,10 @@ def _index_new_skill(conn: sqlite3.Connection, skill_id: int, title: str, use_fo
 # ── Endpoints ──────────────────────────────────────────────────────────────────
 
 
-@skills_bp.route("")
+@skills_ns.route("")
 class SkillsListResource(Resource):
     @require_session
-    @skills_bp.response(200, "OK")
+    @skills_ns.response(200, "OK")
     def get(self) -> ResponseReturnValue:
         if not SKILLS_DB_PATH.exists():
             return {"skills": [], "associations": []}, 200
@@ -116,7 +116,7 @@ class SkillsListResource(Resource):
             return {"error": "Failed to load skills"}, 500
 
     @require_session
-    @skills_bp.response(201, "Created")
+    @skills_ns.response(201, "Created")
     def post(self) -> ResponseReturnValue:
         data = request.get_json(silent=True) or {}
         title = (data.get("title") or "").strip()
@@ -177,10 +177,10 @@ class SkillsListResource(Resource):
             return {"error": "Failed to create skill"}, 500
 
 
-@skills_bp.route("/<int:skill_id>")
+@skills_ns.route("/<int:skill_id>")
 class SkillItemResource(Resource):
     @require_session
-    @skills_bp.response(200, "OK")
+    @skills_ns.response(200, "OK")
     def put(self, skill_id: int) -> ResponseReturnValue:
         data = request.get_json(silent=True) or {}
 
@@ -239,7 +239,7 @@ class SkillItemResource(Resource):
             return {"error": "Failed to update skill"}, 500
 
     @require_session
-    @skills_bp.response(200, "OK")
+    @skills_ns.response(200, "OK")
     def delete(self, skill_id: int) -> ResponseReturnValue:
         if not SKILLS_DB_PATH.exists():
             return {"error": "skills database unavailable"}, 503
@@ -276,10 +276,10 @@ class SkillItemResource(Resource):
             return {"error": "Failed to delete skill"}, 500
 
 
-@skills_bp.route("/<int:skill_id>/toggle")
+@skills_ns.route("/<int:skill_id>/toggle")
 class SkillToggleResource(Resource):
     @require_session
-    @skills_bp.response(200, "OK")
+    @skills_ns.response(200, "OK")
     def put(self, skill_id: int) -> ResponseReturnValue:
         if not SKILLS_DB_PATH.exists():
             return {"error": "skills database unavailable"}, 503
@@ -306,10 +306,10 @@ class SkillToggleResource(Resource):
             return {"error": "Failed to toggle skill"}, 500
 
 
-@skills_bp.route("/<int:skill_id>/copy")
+@skills_ns.route("/<int:skill_id>/copy")
 class SkillCopyResource(Resource):
     @require_session
-    @skills_bp.response(201, "Created")
+    @skills_ns.response(201, "Created")
     def post(self, skill_id: int) -> ResponseReturnValue:
         if not SKILLS_DB_PATH.exists():
             return {"error": "skills database unavailable"}, 503

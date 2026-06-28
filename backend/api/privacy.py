@@ -27,7 +27,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-privacy_bp = Namespace('privacy', description='Privacy data controls', path='/privacy')
+privacy_ns = Namespace('privacy', description='Privacy data controls', path='/privacy')
 
 # Ordered list of user-data tables for the nuclear delete operation.
 # Children must appear before parents to satisfy FK constraints.
@@ -88,11 +88,11 @@ def _serialize_row(row: dict[str, object]) -> dict[str, object]:
     return result
 
 
-@privacy_bp.route('/data-summary')
+@privacy_ns.route('/data-summary')
 class DataSummaryResource(Resource):
     @require_session
-    @privacy_bp.response(200, "Data summary")
-    @privacy_bp.response(500, "Failed to retrieve data summary")
+    @privacy_ns.response(200, "Data summary")
+    @privacy_ns.response(500, "Failed to retrieve data summary")
     def get(self) -> ResponseReturnValue:
         try:
             from services.database_service import get_shared_db_service
@@ -138,10 +138,10 @@ class DataSummaryResource(Resource):
             return {"error": "Failed to retrieve data summary"}, 500
 
 
-@privacy_bp.route('/export')
+@privacy_ns.route('/export')
 class ExportDataResource(Resource):
     @require_session
-    @privacy_bp.response(200, "Data export (streaming JSON)")
+    @privacy_ns.response(200, "Data export (streaming JSON)")
     def get(self) -> ResponseReturnValue:
 
         user_data_tables = [
@@ -246,12 +246,12 @@ class ExportDataResource(Resource):
         return response
 
 
-@privacy_bp.route('/delete-all')
+@privacy_ns.route('/delete-all')
 class DeleteAllResource(Resource):
     @require_session
-    @privacy_bp.response(200, "Data deleted")
-    @privacy_bp.response(400, "Confirmation header required")
-    @privacy_bp.response(500, "Failed to delete data")
+    @privacy_ns.response(200, "Data deleted")
+    @privacy_ns.response(400, "Confirmation header required")
+    @privacy_ns.response(500, "Failed to delete data")
     def delete(self) -> ResponseReturnValue:
         confirm = request.headers.get("X-Confirm-Delete", "")
         if confirm != "yes":

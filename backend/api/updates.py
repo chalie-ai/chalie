@@ -30,7 +30,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-updates_bp = Namespace("updates", description="State mutation endpoints", path="/api/updates")
+updates_ns = Namespace("updates", description="State mutation endpoints", path="/api/updates")
 
 
 # ---------------------------------------------------------------------------
@@ -64,11 +64,11 @@ def _get_db() -> object:
 # POST /api/updates/belief
 # ---------------------------------------------------------------------------
 
-@updates_bp.route("/belief")
-@updates_bp.response(200, "Belief updated")
-@updates_bp.response(400, "Missing key/value")
-@updates_bp.response(403, "Insufficient permissions")
-@updates_bp.response(422, "Rejected by validation rules")
+@updates_ns.route("/belief")
+@updates_ns.response(200, "Belief updated")
+@updates_ns.response(400, "Missing key/value")
+@updates_ns.response(403, "Insufficient permissions")
+@updates_ns.response(422, "Rejected by validation rules")
 class BeliefResource(Resource):
     @require_auth
     def post(self) -> ResponseReturnValue:
@@ -118,10 +118,10 @@ class BeliefResource(Resource):
 # POST /api/updates/memory
 # ---------------------------------------------------------------------------
 
-@updates_bp.route("/memory")
-@updates_bp.response(200, "Memory stored")
-@updates_bp.response(400, "Missing content")
-@updates_bp.response(403, "Insufficient permissions")
+@updates_ns.route("/memory")
+@updates_ns.response(200, "Memory stored")
+@updates_ns.response(400, "Missing content")
+@updates_ns.response(403, "Insufficient permissions")
 class MemoryResource(Resource):
     @require_auth
     def post(self) -> ResponseReturnValue:
@@ -172,10 +172,10 @@ class MemoryResource(Resource):
 # POST /api/updates/feedback
 # ---------------------------------------------------------------------------
 
-@updates_bp.route("/feedback")
-@updates_bp.response(200, "Feedback recorded")
-@updates_bp.response(400, "Missing intent_id/outcome")
-@updates_bp.response(403, "Insufficient permissions")
+@updates_ns.route("/feedback")
+@updates_ns.response(200, "Feedback recorded")
+@updates_ns.response(400, "Missing intent_id/outcome")
+@updates_ns.response(403, "Insufficient permissions")
 class FeedbackResource(Resource):
     @require_auth
     def post(self) -> ResponseReturnValue:

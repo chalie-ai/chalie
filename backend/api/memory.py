@@ -12,15 +12,15 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-memory_bp = Namespace('memory', description='Memory search', path='/memory')
+memory_ns = Namespace('memory', description='Memory search', path='/memory')
 
 
-@memory_bp.route('/search')
+@memory_ns.route('/search')
 class MemorySearchResource(Resource):
     @require_session
-    @memory_bp.response(200, "Search results")
-    @memory_bp.response(400, "Missing query")
-    @memory_bp.response(500, "Failed to search memory")
+    @memory_ns.response(200, "Search results")
+    @memory_ns.response(400, "Missing query")
+    @memory_ns.response(500, "Failed to search memory")
     def get(self) -> ResponseReturnValue:
         query = request.args.get("q", "").strip()
         if not query:

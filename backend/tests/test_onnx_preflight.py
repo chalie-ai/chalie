@@ -23,7 +23,7 @@ import pytest
 from flask.testing import FlaskClient
 
 import api.system as system_module
-from api.system import system_bp
+from api.system import system_ns
 from tests.restx_test_app import mount_namespace
 from services import embedding_service
 from services.runtime_deps_service import RuntimeDepsService
@@ -73,7 +73,7 @@ def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[tuple[Fl
         "services.auth_session_service.validate_session",
         lambda *_a, **_k: True,
     )
-    app = mount_namespace(system_bp)
+    app = mount_namespace(system_ns)
     app.config["TESTING"] = True
     with app.test_client() as tc:
         yield tc, log_file

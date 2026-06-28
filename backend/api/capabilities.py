@@ -43,7 +43,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-capabilities_bp = Namespace("capabilities", description="Capability management", path="/api/capabilities")
+capabilities_ns = Namespace("capabilities", description="Capability management", path="/api/capabilities")
 
 
 # ---------------------------------------------------------------------------
@@ -77,8 +77,8 @@ def _get_last_sync_at(cap_id: str) -> str | None:
 # ---------------------------------------------------------------------------
 
 
-@capabilities_bp.route("")
-@capabilities_bp.response(200, "List of capabilities")
+@capabilities_ns.route("")
+@capabilities_ns.response(200, "List of capabilities")
 class CapabilityListResource(Resource):
     @require_auth
     def get(self) -> ResponseReturnValue:
@@ -103,10 +103,10 @@ class CapabilityListResource(Resource):
             return {"error": "Failed to list capabilities"}, 500
 
 
-@capabilities_bp.route("/<cap_id>")
-@capabilities_bp.response(200, "Capability details")
-@capabilities_bp.response(404, "Capability not found")
-@capabilities_bp.param("cap_id", "str", "Capability identifier")
+@capabilities_ns.route("/<cap_id>")
+@capabilities_ns.response(200, "Capability details")
+@capabilities_ns.response(404, "Capability not found")
+@capabilities_ns.param("cap_id", "str", "Capability identifier")
 class CapabilityDetailResource(Resource):
     @require_auth
     def get(self, cap_id: str) -> ResponseReturnValue:
@@ -144,12 +144,12 @@ class CapabilityDetailResource(Resource):
             return {"error": "Internal error fetching capability"}, 500
 
 
-@capabilities_bp.route("/<cap_id>/setup")
-@capabilities_bp.response(200, "Capability connected")
-@capabilities_bp.response(400, "Setup failed")
-@capabilities_bp.response(401, "Vault locked")
-@capabilities_bp.response(404, "Capability not found")
-@capabilities_bp.param("cap_id", "str", "Capability identifier")
+@capabilities_ns.route("/<cap_id>/setup")
+@capabilities_ns.response(200, "Capability connected")
+@capabilities_ns.response(400, "Setup failed")
+@capabilities_ns.response(401, "Vault locked")
+@capabilities_ns.response(404, "Capability not found")
+@capabilities_ns.param("cap_id", "str", "Capability identifier")
 class CapabilitySetupResource(Resource):
     @require_auth
     def post(self, cap_id: str) -> ResponseReturnValue:
@@ -195,10 +195,10 @@ class CapabilitySetupResource(Resource):
             return {"error": "Internal error during capability setup"}, 500
 
 
-@capabilities_bp.route("/<cap_id>/disconnect")
-@capabilities_bp.response(200, "Capability disconnected")
-@capabilities_bp.response(404, "Capability not found")
-@capabilities_bp.param("cap_id", "str", "Capability identifier")
+@capabilities_ns.route("/<cap_id>/disconnect")
+@capabilities_ns.response(200, "Capability disconnected")
+@capabilities_ns.response(404, "Capability not found")
+@capabilities_ns.param("cap_id", "str", "Capability identifier")
 class CapabilityDisconnectResource(Resource):
     @require_auth
     def post(self, cap_id: str) -> ResponseReturnValue:
@@ -218,10 +218,10 @@ class CapabilityDisconnectResource(Resource):
             return {"error": "Internal error during capability disconnect"}, 500
 
 
-@capabilities_bp.route("/<cap_id>/status")
-@capabilities_bp.response(200, "Capability status")
-@capabilities_bp.response(404, "Capability not found")
-@capabilities_bp.param("cap_id", "str", "Capability identifier")
+@capabilities_ns.route("/<cap_id>/status")
+@capabilities_ns.response(200, "Capability status")
+@capabilities_ns.response(404, "Capability not found")
+@capabilities_ns.param("cap_id", "str", "Capability identifier")
 class CapabilityStatusResource(Resource):
     @require_auth
     def get(self, cap_id: str) -> ResponseReturnValue:

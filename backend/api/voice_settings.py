@@ -12,7 +12,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-voice_settings_bp = Namespace("voice_settings", description="Voice settings", path="/api/voice-settings")
+voice_settings_ns = Namespace("voice_settings", description="Voice settings", path="/api/voice-settings")
 
 
 def _get_services() -> "SettingsService":
@@ -23,10 +23,10 @@ def _get_services() -> "SettingsService":
     return SettingsService(db)
 
 
-@voice_settings_bp.route("")
+@voice_settings_ns.route("")
 class VoiceSettingsResource(Resource):
     @require_session
-    @voice_settings_bp.response(200, "Voice settings")
+    @voice_settings_ns.response(200, "Voice settings")
     def get(self) -> ResponseReturnValue:
         from services.runtime_deps_service import RuntimeDepsService
 
@@ -41,8 +41,8 @@ class VoiceSettingsResource(Resource):
         }
 
     @require_session
-    @voice_settings_bp.response(200, "Voice settings updated")
-    @voice_settings_bp.response(400, "Missing enabled field")
+    @voice_settings_ns.response(200, "Voice settings updated")
+    @voice_settings_ns.response(400, "Missing enabled field")
     def put(self) -> ResponseReturnValue:
         from services.runtime_deps_service import RuntimeDepsService
 

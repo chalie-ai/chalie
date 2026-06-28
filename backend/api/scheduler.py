@@ -29,7 +29,7 @@ logger = logging.getLogger(__name__)
 _ERR_INTERNAL = "Internal server error"
 _ERR_NOT_PENDING = "Not found or item is not pending"
 
-scheduler_bp = Namespace("scheduler", description="Scheduled item management", path="/scheduler")
+scheduler_ns = Namespace("scheduler", description="Scheduled item management", path="/scheduler")
 
 _VALID_STATUSES = {"pending", "fired", "failed", "cancelled"}
 _VALID_TYPES = {"notification", "prompt"}
@@ -152,9 +152,9 @@ def _row_to_dict(row: "Iterable[object]", cols: "list[str]") -> "dict[str, objec
 # Routes
 # ---------------------------------------------------------------------------
 
-@scheduler_bp.route("")
-@scheduler_bp.response(200, "List of scheduled items")
-@scheduler_bp.response(201, "Item created")
+@scheduler_ns.route("")
+@scheduler_ns.response(200, "List of scheduled items")
+@scheduler_ns.response(201, "Item created")
 class SchedulerListResource(Resource):
     @require_session
     def get(self) -> ResponseReturnValue:
@@ -290,8 +290,8 @@ class SchedulerListResource(Resource):
             return {"error": _ERR_INTERNAL}, 500
 
 
-@scheduler_bp.route("/history")
-@scheduler_bp.response(200, "History pruned")
+@scheduler_ns.route("/history")
+@scheduler_ns.response(200, "History pruned")
 class SchedulerHistoryResource(Resource):
     @require_session
     def delete(self) -> ResponseReturnValue:
@@ -325,9 +325,9 @@ class SchedulerHistoryResource(Resource):
             return {"error": _ERR_INTERNAL}, 500
 
 
-@scheduler_bp.route("/group/<group_id>")
-@scheduler_bp.response(200, "Group items")
-@scheduler_bp.param("group_id", "str", "Group identifier")
+@scheduler_ns.route("/group/<group_id>")
+@scheduler_ns.response(200, "Group items")
+@scheduler_ns.param("group_id", "str", "Group identifier")
 class SchedulerGroupResource(Resource):
     @require_session
     def get(self, group_id: str) -> ResponseReturnValue:
@@ -367,10 +367,10 @@ class SchedulerGroupResource(Resource):
             return {"error": _ERR_INTERNAL}, 500
 
 
-@scheduler_bp.route("/<item_id>")
-@scheduler_bp.response(200, "Item details")
-@scheduler_bp.response(404, "Not found")
-@scheduler_bp.param("item_id", "str", "Item identifier")
+@scheduler_ns.route("/<item_id>")
+@scheduler_ns.response(200, "Item details")
+@scheduler_ns.response(404, "Not found")
+@scheduler_ns.param("item_id", "str", "Item identifier")
 class SchedulerItemResource(Resource):
     @require_session
     def get(self, item_id: str) -> ResponseReturnValue:
