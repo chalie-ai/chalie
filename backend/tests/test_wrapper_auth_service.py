@@ -2,7 +2,7 @@ import json
 import sqlite3
 from typing import cast
 import pytest
-from unittest.mock import MagicMock
+from flask import Flask, request
 
 from services.wrapper_auth_service import WrapperAuthService, _hash_token
 
@@ -15,14 +15,13 @@ def svc(db: sqlite3.Connection) -> WrapperAuthService:
     return WrapperAuthService()
 
 
-def _make_flask_request(authorization_header: str = "") -> MagicMock:
-    req = MagicMock()
-    headers_mock = MagicMock()
-    headers_mock.get = lambda key, default="": (
-        authorization_header if key == "Authorization" else default
-    )
-    req.headers = headers_mock
-    return req
+@pytest.fixture(scope="session")
+def app() -> Flask:
+    """The real production Flask app (``create_app``). Its request context yields a
+    genuine Werkzeug ``Request``, so ``validate_bearer`` parses real headers off the
+    real production object — no mock standing in for Flask's header API."""
+    from api import create_app
+    return create_app()
 
 
 class TestCreateToken:
@@ -53,17 +52,23 @@ class TestCreateToken:
 
 
 class TestValidateBearer:
-    def test_valid_token_returns_wrapper_id(self, svc: WrapperAuthService) -> None:
+    def test_valid_token_returns_wrapper_id_and_slides_last_seen(
+        self, svc: WrapperAuthService, app: Flask, db: sqlite3.Connection
+    ) -> None:
         raw, wid = svc.create_token("W1")
-        req = _make_flask_request(f"Bearer {raw}")
-        assert svc.validate_bearer(req) == wid
+        with app.test_request_context(headers={"Authorization": f"Bearer {raw}"}):
+            assert svc.validate_bearer(request) == wid
+        # Downstream effect: a successful validation slides last_seen_at off NULL.
+        row = db.execute(
+            "SELECT last_seen_at FROM wrapper_tokens WHERE wrapper_id = ?", (wid,)
+        ).fetchone()
+        assert row[0] is not None
 
-
-    def test_revoked_token_returns_none(self, svc: WrapperAuthService) -> None:
+    def test_revoked_token_returns_none(self, svc: WrapperAuthService, app: Flask) -> None:
         raw, wid = svc.create_token("W1")
         svc.revoke(wid)
-        req = _make_flask_request(f"Bearer {raw}")
-        assert svc.validate_bearer(req) is None
+        with app.test_request_context(headers={"Authorization": f"Bearer {raw}"}):
+            assert svc.validate_bearer(request) is None
 
 
 class TestCheckPermission:
