@@ -125,6 +125,8 @@ class ChatHistoryCompactor(Ability):
         # _previous_rows, not the kept subset) so a rare drop-oldest stays covered
         # and the next read returns nothing through it. Axis follows the view: a
         # FORK stores the max transcript.id, the MAIN spine the max turn_id.
+        # This advance only holds because _previous_rows returns rows ABOVE the
+        # prior watermark — keep that contract (its flow narrative spells out why).
         rows = mp._previous_rows()
         compacted_up_to = (
             max(cast(int, r["id"]) for r in rows) if mp._forked

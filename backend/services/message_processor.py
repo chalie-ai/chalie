@@ -595,14 +595,45 @@ class MessageProcessor:
             )
 
     def _previous_rows(self) -> list[dict[str, object]]:
-        """previous_messages for this turn's view.
+        """The LLM ``previous_messages`` row set for this turn's view — and the hub
+        of the read+compaction flow. Read this whole docstring before adding any
+        new read path; no single function here is correct in isolation — they only
+        make sense composed:
 
-        Both views call the one getter (``by_turn``) and mutate its rows here;
-        each reads its own compaction record (``for_turn_id`` axis).
-        THREAD: that turn's rows above its transcript-id watermark, minus the live
-        reply's own rows (``id >= self.uid``, which render separately).
-        MAIN: the whole channel spine, dropping turns at/below the main watermark
-        (a turn_id) and every row past each turn's settle0."""
+          one getter      ``Transcript.by_turn(channel, turn_id=None)`` —
+                          turn_id → that turn's rows (a thread); None → the whole
+                          channel spine in ONE query. No filtering; raw rows.
+          consumers       mutate the rows HERE, in Python (never in SQL): keep rows
+                          ABOVE the watermark; MAIN also drops each turn's rows past
+                          settle0 via ``Transcript.drop_post_settle0``.
+          watermark       ``compaction_persistence.get_compaction(channel,
+                          for_turn_id)`` — two axes that never collide: MAIN
+                          (for_turn_id=None) is a *turn_id*; FORK (for_turn_id=T) is
+                          a *transcript.id* within T.
+          summary ⊕ tail  the rows returned here are the live tail ABOVE the
+                          watermark; everything BELOW it is already carried as prose
+                          by the checkpoint summary that ``_wrap_with_checkpoint``
+                          prepends. Model context = summary(≤wm) ⊕ these rows(>wm).
+          writer          ``chat_history_compactor.run`` folds *these* rows into the
+                          summary and advances the watermark to their max id/turn_id.
+                          That "always advances" guarantee is WHY this read keeps
+                          id>wm and never id≤wm: keep id≤wm and the compactor re-folds
+                          already-folded rows and livelocks.
+
+        THREAD (``self._forked`` + turn_id): that turn's rows above its transcript-id
+        watermark, minus the live reply's own rows (``id >= self.uid``, which render
+        separately). MAIN: the whole channel spine, dropping turns at/below the main
+        watermark (a turn_id) and every row past each turn's settle0. The watermark
+        is the ONLY spine bound — no turn-count cap (it would silently drop
+        un-summarised turns).
+
+        Forbidden — alternate paths tried and rejected; do NOT reintroduce them:
+        a second getter (e.g. assembling the spine from ``recent_threads`` + a
+        per-turn ``by_turn`` loop — ``recent_threads`` is for the threads feed
+        only); pushing the watermark/settle0 filter into SQL or getter params;
+        capping the turn count (the watermark is the sole spine bound; a cap
+        silently drops un-summarised turns); or inverting the comparator to keep
+        rows at/below the watermark."""
         if self._cfg.suppress_history:
             return []
         from services import compaction_persistence  # noqa: PLC0415
@@ -673,7 +704,12 @@ def _wrap_with_checkpoint(channel: str, user_body: str, for_turn_id: "int | None
     """Wrap the user-message body with a ### Checkpoint envelope when a compaction
     exists for this view's scope: ``for_turn_id`` is the thread id
     for a FORK reply, ``None`` for the MAIN spine — the same axis the matching
-    ``_previous_rows`` read uses, so the envelope and the history never disagree."""
+    ``_previous_rows`` read uses, so the envelope and the history never disagree.
+
+    This summary IS the reconstruction of everything at/below the watermark; it
+    pairs with the live tail above the watermark that ``_previous_rows`` returns
+    (model context = summary(≤wm) ⊕ tail(>wm)). See the flow narrative on
+    ``MessageProcessor._previous_rows``."""
     from services import compaction_persistence
 
     row = compaction_persistence.get_compaction(channel, for_turn_id)

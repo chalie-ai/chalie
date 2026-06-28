@@ -206,7 +206,13 @@ class Transcript:
         turn_id)`` (a turn is many rows under the chain model); ``turn_id`` None →
         the whole channel spine, every turn oldest-first. No watermark, no settle0,
         no role filter — consumers mutate the returned rows in Python. id-only
-        callers read the ``id`` field off the uniform shape."""
+        callers read the ``id`` field off the uniform shape.
+
+        This is the chokepoint of the read+compaction flow — never add a second
+        getter, a per-turn loop, or push filtering in here. The whole flow (getter
+        → consumer mutations → two-axis watermark → checkpoint summary → writer) is
+        narrated on ``MessageProcessor._previous_rows``; read it before changing
+        any read path."""
         if turn_id is None:
             return Transcript._select("channel = ?", (channel,))
         return Transcript._select("channel = ? AND turn_id = ?", (channel, turn_id))
@@ -235,7 +241,10 @@ class Transcript:
 
         Accepts multi-turn input (the MAIN loop passes all turns' rows at once).
         One batched query resolves settle0 for all distinct turn_ids — no N+1.
-        In-progress turns (no settle0 in the result) are dropped entirely."""
+        In-progress turns (no settle0 in the result) are dropped entirely.
+
+        This is one of the Python mutations the MAIN view applies to ``by_turn``'s
+        raw rows — see the flow narrative on ``MessageProcessor._previous_rows``."""
         if not rows:
             return []
         tids = list({int(cast(int, r["turn_id"])) for r in rows})
