@@ -278,11 +278,18 @@ class MessageProcessor:
             if self.turn_id is None:
                 self.turn_id = Transcript.turn_id_of_row(self.uid)
             self.anchor = self.uid
-            # Bind the live turn the instant its input row is written — for a new
-            # thread (turn_id just allocated) AND a reply (turn_id pre-set).
+            # Announce the turn the instant its input row is written — ONE site,
+            # branched on the user-reply discriminator (spec §6.1): a new thread
+            # (``not _forked`` — turn_id just allocated) emits ``created`` to
+            # carry the fresh id to the surface; a reply (``_forked`` — turn_id
+            # pre-set, already known to the surface) emits ``working``.
             if self._cfg.broadcast_to == "user" and self.turn_id is not None:
-                from api.chat import _broadcast_working  # noqa: PLC0415
-                _broadcast_working(self.turn_id)
+                if self._forked:
+                    from api.chat import _broadcast_working  # noqa: PLC0415
+                    _broadcast_working(self.turn_id)
+                else:
+                    from api.chat import _broadcast_created  # noqa: PLC0415
+                    _broadcast_created(self.turn_id)
 
         if self._cfg.channel == "user":
             self._run_thinking_gate()

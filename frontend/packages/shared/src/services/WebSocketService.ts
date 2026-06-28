@@ -366,9 +366,12 @@ export class WebSocketService {
     form.append('text', text);
     form.append('source', source);
     form.append('echo_id', echoId);
-    if (threadId != null) form.append('thread_id', String(threadId));
     for (const file of files) form.append('files', file, file.name);
-    fetch(this.buildHttpUrl('/chat'), {
+    // turn_id is PATH-only (§6.2): create → POST /api/thread, reply → POST
+    // /api/thread/<turn_id>. Both return 201 empty; the turn surfaces via the
+    // created/working → turn_updated signals → REST pull (no inline content).
+    const path = threadId != null ? `/api/thread/${threadId}` : '/api/thread';
+    fetch(this.buildHttpUrl(path), {
       method: 'POST',
       credentials: 'same-origin',
       headers: { ...this.authHeaders() },

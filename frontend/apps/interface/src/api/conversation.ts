@@ -104,9 +104,11 @@ export const conversation = {
     return api.get(`/api/thread/${turnId}`);
   },
 
-  /** POST /api/threads/batch — many blocks in one round-trip, a pure
-   *  concatenation of the single-turn getter over the given ids. */
+  /** GET /api/threads/batch?id[]= — many blocks in one round-trip, a pure
+   *  concatenation of the single-turn getter over the given ids (a read → GET). */
   batch(turnIds: number[]): Promise<{ blocks: ConversationTurnBlock[] }> {
-    return api.post('/api/threads/batch', { turn_ids: turnIds });
+    const q = new URLSearchParams();
+    for (const id of turnIds) q.append('id[]', String(id));
+    return api.get(`/api/threads/batch?${q.toString()}`);
   },
 };

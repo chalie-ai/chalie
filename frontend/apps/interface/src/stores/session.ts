@@ -487,7 +487,10 @@ export const useSessionStore = defineStore('session', {
      * Turn-lifecycle signals — stateless and turn-addressed. Each is broadcast to
      * EVERY surface; only the surface that owns the turn (`_liveTurnId`) releases
      * its send guard on `done`. Returns true when handled.
-     *   working(id)      → claim + bind + spinner on
+     *   created(id)      → carries a NEW thread's allocated id: claim it onto the
+     *                      optimistic live turn (unbound until now), bind, spinner on
+     *   working(id)      → an EXISTING turn (reply, id already known) (re)activates:
+     *                      bind (idempotent) + spinner on
      *   tool_invoked(id) → transient loading sub-text (NO fetch)
      *   turn_updated(id) → fetch the block + atomic monotonic replace
      *   done(id)         → spinner off + settle
@@ -497,8 +500,11 @@ export const useSessionStore = defineStore('session', {
       const convo = useConversationStore();
       const turnId = (data as { turn_id?: number | null }).turn_id ?? null;
       switch (data.type as string) {
+        case 'created':
         case 'working':
           if (turnId == null) return true;
+          // A new thread's optimistic turn is still unbound — claim its allocated
+          // id (created). A reply already carries _liveTurnId from sendMessage.
           if (this.isSending && this._liveTurnId == null) this._liveTurnId = turnId;
           convo.bindLiveTurn(turnId);
           convo.setWorking(turnId, true);

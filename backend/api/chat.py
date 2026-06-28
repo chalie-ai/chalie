@@ -138,11 +138,20 @@ def _run_chat_background(
         _clear_active_ump(turn)
 
 
+def _broadcast_created(turn_id: int) -> None:
+    """Announce a freshly-allocated turn_id for a NEW thread (the non-reply send,
+    ``not _forked``). Fired the instant the input row's turn_id is allocated — the
+    ONLY way the just-allocated id reaches the surface, since the send response
+    carries no id (spec §6.1/§6.2). The surface binds its optimistic main-spine
+    placeholder to this id and pulls content on ``turn_updated``."""
+    WebSocketBroker().broadcast({"type": "created", "turn_id": turn_id})
+
+
 def _broadcast_working(turn_id: int) -> None:
-    """Signal that a turn is in flight, keyed by its id. Fired the instant the
-    input row is written (turn_id known) for both a new thread and a reply, so the
-    surface binds the live turn and shows its working state. Signal-only — the
-    surface fetches the turn's content on ``turn_updated``; this carries no prose."""
+    """Signal that processing (re)starts on an EXISTING turn — a reply send
+    (``_forked``) or a reactivation. The surface already knows the turn_id (the
+    reply path's URL), so this just flips that turn's pill + panel to the working
+    state. Signal-only — content arrives on ``turn_updated`` (spec §6.1)."""
     WebSocketBroker().broadcast({"type": "working", "turn_id": turn_id})
 
 

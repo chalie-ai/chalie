@@ -1,8 +1,14 @@
-"""Conversation blueprint — the thread feed.
+"""Conversation blueprint — the `thread` REST resource, addressed by turn_id (§6.2).
 
-GET /api/threads — id list + collapsed metadata (gist, preview, last activity).
-GET /api/thread/<turn_id> — one turn's full block (the WS-refetch + expand read).
-POST /api/threads/batch — many blocks, a pure concatenation of the single-turn getter.
+POST /api/thread             — create a new thread (allocates a fresh turn_id).
+GET  /api/thread/<turn_id>   — one turn's full block (the WS-refetch + expand read).
+POST /api/thread/<turn_id>   — reply into an existing thread (rows append to turn_id).
+GET  /api/threads            — id list + collapsed metadata (gist, preview, last activity).
+GET  /api/threads/batch?id[]=— many blocks, a pure concatenation of the single-turn getter.
+
+Reads are GET, sends are POST; turn_id is path-only, never in the body. Both sends
+return 201 with an empty body — fire-and-acknowledge: the turn surfaces via the
+`created`/`working` → `turn_updated` signals → REST pull, never inline (§6.1/§6.8).
 """
 
 import logging
@@ -207,11 +213,53 @@ def conversation_thread(turn_id: int) -> ResponseReturnValue:
     return jsonify(serialize_turn('user', turn_id))
 
 
-@conversation_bp.route('/api/threads/batch', methods=['POST'])
+@conversation_bp.route('/api/threads/batch', methods=['GET'])
 @require_session
 def conversation_threads_batch() -> ResponseReturnValue:
     """Many turn blocks in one round-trip — a pure concatenation of the single
-    -turn getter over the requested ids (the FE paginates the feed ~20/page)."""
-    body = request.get_json(silent=True) or {}
-    turn_ids = cast("list[int]", body.get("turn_ids") or [])
-    return jsonify({"blocks": [serialize_turn('user', int(t)) for t in turn_ids]})
+    -turn getter over the requested ids (the FE paginates the feed ~20/page). A
+    read, so a GET with a repeated ``id[]`` query param (spec §6.2)."""
+    return jsonify({"blocks": [serialize_turn('user', int(t)) for t in request.args.getlist("id[]")]})
+
+
+@conversation_bp.route('/api/thread', methods=['POST'])
+@require_session
+def thread_create() -> ResponseReturnValue:
+    """Create a new thread — the Thread-Starter compose. Allocates a fresh turn_id
+    in the worker's ``_setup()`` (``not _forked`` → main spine). Fire-and-
+    acknowledge: 201 empty body; the turn surfaces via the ``created`` signal →
+    REST pull (§6.2). turn_id is never returned inline."""
+    return _send(None)
+
+
+@conversation_bp.route('/api/thread/<int:turn_id>', methods=['POST'])
+@require_session
+def thread_reply(turn_id: int) -> ResponseReturnValue:
+    """Reply into an existing thread — rows append carrying the path ``turn_id``
+    (no new allocation). The path is the sole thread discriminator (turn_id is
+    never in the body); supplying it drives the user-reply metadata key →
+    ``_forked`` (§3.3). Fire-and-acknowledge: 201 empty body; activity surfaces
+    via the ``working`` signal → REST pull (§6.2)."""
+    return _send(turn_id)
+
+
+def _send(turn_id: "int | None") -> ResponseReturnValue:
+    """Shared body of both send endpoints — the one chat-dispatch chokepoint. A
+    ``None`` turn_id starts a new thread; an int appends to it. Mirrors the legacy
+    /chat body (text/source/echo_id/files) but takes turn_id from the path, never
+    the form."""
+    from api.chat import dispatch_message, _stage_chat_uploads, _broadcast_user_echo  # noqa: PLC0415
+
+    text = (request.form.get("text") or "").strip()
+    source = request.form.get("source") or "text"
+    echo_id = request.form.get("echo_id") or ""
+    attachments = _stage_chat_uploads(cast("list[object]", request.files.getlist("files")[:10]))
+
+    if not text and not attachments:
+        return jsonify({"status": "error", "reason": "message required"}), 400
+    if not text:
+        text = "[File attached]"
+
+    _broadcast_user_echo(text, echo_id)
+    dispatch_message(text, source=source, attachments=attachments, thread_id=turn_id)
+    return "", 201
