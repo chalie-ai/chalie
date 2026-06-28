@@ -135,7 +135,6 @@ class WrapperAuthService:
 
             {
                 "query":     ["memory", "threads"],   # readable resources
-                "update":    ["memory"],               # writable resources
                 "broadcast": true                      # may push events
             }
         """
