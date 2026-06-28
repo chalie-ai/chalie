@@ -35,17 +35,10 @@ from flask.typing import ResponseReturnValue
 from flask_restx import Namespace, Resource
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
-    from typing import ParamSpec, Protocol, TypeVar
-
-    P = ParamSpec("P")
-    R = TypeVar("R")
+    from typing import Protocol
 
     class _KokoroModel(Protocol):
         def create(self, text: str, voice: str, speed: float, lang: str) -> "tuple[object, int]": ...
-
-    class _NsWithProduces(Protocol):
-        def produces(self, mimetypes: list[str]) -> "Callable[[Callable[P, R]], Callable[P, R]]": ...
 
 from services.file_mapper_service import FileMapperService
 from services.markup import extract_plaintext, markdown_to_html
@@ -668,7 +661,7 @@ class VoiceHealthResource(Resource):
 class VoiceSynthesizeResource(Resource):
     @require_auth
     @voice_ns.expect(_V["TtsRequest"])
-    @cast("_NsWithProduces", voice_ns).produces(["audio/wav"])
+    @voice_ns.produces(["audio/wav"])
     @voice_ns.response(200, "Synthesized speech (audio/wav)")
     @voice_ns.response(503, "Voice unavailable (deps or models missing/loading)", model=_V["VoiceUnavailable"])
     @voice_ns.response(422, "Text is required or validation failed", model=_V["Error"])
