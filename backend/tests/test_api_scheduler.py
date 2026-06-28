@@ -15,12 +15,7 @@ def _future_iso(hours: int = 1) -> str:
     return (datetime.now(timezone.utc) + timedelta(hours=hours)).isoformat()
 
 
-def _past_iso(hours: int = 1) -> str:
-    return (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
-
-
 def _insert_item(db: sqlite3.Connection, **overrides: object) -> str:
-
     now = datetime.now(timezone.utc).isoformat()
     defaults: dict[str, object] = dict(
         id="abc12345",
@@ -62,7 +57,7 @@ def _insert_item(db: sqlite3.Connection, **overrides: object) -> str:
 
 @pytest.mark.unit
 class TestSchedulerAPI:
-    """Tests for every scheduler blueprint route."""
+    """Tests for every scheduler namespace route."""
 
     @pytest.fixture
     def client(self, db: sqlite3.Connection) -> FlaskClient:
@@ -72,9 +67,7 @@ class TestSchedulerAPI:
 
     @pytest.fixture(autouse=True)
     def bypass_auth(self) -> Iterator[None]:
-        with patch(
-            "services.auth_session_service.validate_session", return_value=True
-        ):
+        with patch("services.auth_session_service.validate_session", return_value=True):
             yield
 
     @pytest.fixture(autouse=True)
@@ -85,7 +78,7 @@ class TestSchedulerAPI:
 
     # ----- GET /scheduler -----
 
-    def test_list_returns_items_with_pagination(self, client: FlaskClient, db: sqlite3.Connection) -> None:
+    def test_list_returns_items_as_bare_list(self, client: FlaskClient, db: sqlite3.Connection) -> None:
         _insert_item(db, id="item1")
         _insert_item(db, id="item2", group_id="item2")
 
@@ -93,11 +86,8 @@ class TestSchedulerAPI:
 
         assert resp.status_code == 200
         body = resp.get_json()
-        assert "items" in body
-        assert body["total"] == 2
-        assert "limit" in body
-        assert "offset" in body
-        assert len(body["items"]) == 2
+        assert isinstance(body, list)
+        assert len(body) == 2
 
     # ----- POST /scheduler -----
 
@@ -109,10 +99,9 @@ class TestSchedulerAPI:
 
         assert resp.status_code == 201
         body = resp.get_json()
-        assert body["item"]["message"] == "Buy groceries"
-        assert body["item"]["status"] == "pending"
+        assert body["message"] == "Buy groceries"
+        assert body["status"] == "pending"
 
-        # Verify the row actually exists in the database
         row = db.execute(
             "SELECT * FROM scheduled_items WHERE message = ?",
             ("Buy groceries",),
@@ -140,7 +129,7 @@ class TestSchedulerAPI:
             f"{resp.get_json()}"
         )
 
-    def test_create_window_on_non_hourly_returns_400(self, client: FlaskClient, db: sqlite3.Connection) -> None:
+    def test_create_window_on_non_hourly_returns_422(self, client: FlaskClient, db: sqlite3.Connection) -> None:
         resp = client.post(
             "/scheduler",
             json={
@@ -152,8 +141,8 @@ class TestSchedulerAPI:
             },
         )
 
-        assert resp.status_code == 400
-        assert "hourly" in resp.get_json()["error"]
+        assert resp.status_code == 422
+        assert "hourly" in str(resp.get_json())
 
     # ----- GET /scheduler/<id> -----
 
@@ -164,8 +153,8 @@ class TestSchedulerAPI:
 
         assert resp.status_code == 200
         body = resp.get_json()
-        assert body["item"]["id"] == "xyz99999"
-        assert body["item"]["status"] == "pending"
+        assert body["id"] == "xyz99999"
+        assert body["status"] == "pending"
 
     # ----- PUT /scheduler/<id> -----
 
@@ -183,10 +172,9 @@ class TestSchedulerAPI:
 
         assert resp.status_code == 200
         body = resp.get_json()
-        assert body["item"]["message"] == "Updated message"
-        assert body["item"]["item_type"] == "prompt"
+        assert body["message"] == "Updated message"
+        assert body["item_type"] == "prompt"
 
-        # Verify actual DB state
         row = db.execute(
             "SELECT message, item_type FROM scheduled_items WHERE id = ?",
             ("upd00001",),
@@ -215,12 +203,9 @@ class TestSchedulerAPI:
 
         resp = client.delete("/scheduler/cancel01")
 
-        assert resp.status_code == 200
-        body = resp.get_json()
-        assert body["status"] == "cancelled"
-        assert body["id"] == "cancel01"
+        assert resp.status_code == 204
+        assert resp.data == b""
 
-        # Verify actual DB state
         row = db.execute(
             "SELECT status FROM scheduled_items WHERE id = ?",
             ("cancel01",),
@@ -229,10 +214,7 @@ class TestSchedulerAPI:
 
     # ----- DELETE /scheduler/history -----
 
-    def test_prune_history_returns_deleted_count(self, client: FlaskClient, db: sqlite3.Connection) -> None:
-        # Insert 7 old, non-pending items that qualify for pruning.
-        # The blueprint deletes WHERE status IN ('fired','failed','cancelled')
-        # AND created_at < datetime('now', '-30 days')
+    def test_prune_history(self, client: FlaskClient, db: sqlite3.Connection) -> None:
         old_date = (datetime.now(timezone.utc) - timedelta(days=60)).isoformat()
         for i in range(7):
             _insert_item(
@@ -245,10 +227,7 @@ class TestSchedulerAPI:
 
         resp = client.delete("/scheduler/history")
 
-        assert resp.status_code == 200
-        body = resp.get_json()
-        assert body["deleted"] == 7
+        assert resp.status_code == 204
 
-        # Verify all rows are gone
         count = db.execute("SELECT COUNT(*) FROM scheduled_items").fetchone()[0]
         assert count == 0

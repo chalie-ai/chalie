@@ -78,6 +78,9 @@ def _configure_app(app: Flask) -> None:
     """Apply Flask config, proxy middleware, and CORS to a new app instance."""
     app.config['MAX_CONTENT_LENGTH'] = 50 * 1024 * 1024
     app.config['SEND_FILE_MAX_AGE_DEFAULT'] = 0
+    # Emit every registered DTO in the OpenAPI definitions; nested-envelope
+    # shapes (a list of associations inside a result DTO) otherwise dangle.
+    app.config['RESTX_INCLUDE_ALL_MODELS'] = True
 
     from werkzeug.middleware.proxy_fix import ProxyFix
     setattr(app, 'wsgi_app', ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_prefix=1))
