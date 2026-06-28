@@ -315,32 +315,11 @@ body.speaker-user #ambientBloom {
 }
 
 // Inline variant — the same composer rendered in-flow at the foot of the thread
-// panel instead of pinned to the viewport footer. Full-bleed: no wrapper padding
-// so the recessed box and its top border span the whole panel width.
+// panel instead of pinned to the viewport footer. Identical look to the main
+// dock; only un-pinned so it sits at the bottom of the panel's flex column.
 .input-dock--inline {
   position: static;
   z-index: auto;
-  padding: 0;
-  background: none;
-}
-
-// Inline reply box: a recessed full-width band — darker than the panel (matches
-// the page base), square, separated by a single top border. No pill, shadow or
-// blur. Content is inset to --spine-pad-x so it lines up with the panel body.
-.input-dock--inline .input-dock__inner {
-  background: var(--bg);
-  border: none;
-  border-top: 1px solid var(--border);
-  border-radius: 0;
-  box-shadow: none;
-  backdrop-filter: none;
-  -webkit-backdrop-filter: none;
-  padding: var(--space-xs) var(--spine-pad-x);
-}
-
-// No pill glow on focus; the top border alone picks up the violet tint.
-.input-dock--inline .input-dock__inner:focus-within {
-  box-shadow: none;
 }
 
 .input-dock__outer {
@@ -350,12 +329,6 @@ body.speaker-user #ambientBloom {
   align-items: stretch;
   gap: 0;
 }
-
-.input-dock--inline .input-dock__outer { max-width: none; }
-// The footer caps controls at --dock-width to match its centred input box;
-// inline the box runs full width, so the controls must too or their edges
-// (think mode / context) drift inward of the input box boundaries.
-.input-dock--inline .dock-controls { max-width: none; padding: 0 var(--spine-pad-x); }
 
 // Closable error toast that floats just above the compose box. Themed for both
 // dark and light via tokens; the red tint sits on the card, never on the icon.
@@ -786,9 +759,6 @@ body.speaker-user #ambientBloom {
   // box is exactly 90vw, not 90vw minus the padding.
   :root { --dock-width: 90vw; }
   .input-dock { padding: var(--space-sm) 0; }
-  // ...but the in-thread composer must keep its side padding, or it touches the
-  // panel edge (it is full-width inside the panel, not a centred 90vw box).
-  .input-dock--inline { padding: var(--space-sm) var(--space-md) var(--space-md); }
 
   .presence-bar { padding: 0 var(--space-md); }
 
