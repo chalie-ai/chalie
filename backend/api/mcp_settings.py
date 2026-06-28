@@ -94,8 +94,6 @@ class RegenerateTokenResource(Resource):
 
         raw_token, wrapper_id = auth_svc.create_token(
             name="MCP Server (External Agents)",
-            capabilities={"signals": []},
-            permissions={"query": ["*"], "broadcast": False},
             wrapper_id_override=f"__mcp_server_{_short_id()}__",
         )
 

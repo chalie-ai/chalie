@@ -67,7 +67,7 @@ class TestAuthUsername:
         # readable by a wrapper token. (No master_account row needed: the guard
         # rejects before the handler's SELECT.)
         raw_token, _wrapper_id = WrapperAuthService().create_token(
-            name="auth-username-test", permissions={},
+            name="auth-username-test",
         )
         resp = _make_client().get(
             '/auth/username', headers={"Authorization": f"Bearer {raw_token}"},

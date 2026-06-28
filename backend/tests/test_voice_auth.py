@@ -65,7 +65,7 @@ class TestVoiceEndpointsRejectUnauthenticated:
 class TestVoiceEndpointsAllowAuthenticated:
     def test_health_with_bearer_reaches_handler(self, db: sqlite3.Connection) -> None:
         raw_token, _wrapper_id = WrapperAuthService().create_token(
-            name="voice-auth-test", permissions={},
+            name="voice-auth-test",
         )
         resp = _make_client().get(
             '/voice/health', headers={"Authorization": f"Bearer {raw_token}"},

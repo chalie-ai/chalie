@@ -1,7 +1,7 @@
 import logging
 from typing import TYPE_CHECKING, cast
 
-from flask import g, request
+from flask import request
 from flask.typing import ResponseReturnValue
 
 from flask_restx import Namespace, Resource
@@ -45,22 +45,13 @@ class WrapperRootResource(Resource):
         if not name:
             return {"error": "name is required"}, 400
 
-        capabilities = body.get("capabilities") or {}
-        permissions = body.get("permissions") or {}
         metadata = body.get("metadata") or {}
-
-        if not isinstance(capabilities, (dict, list)):
-            return {"error": "capabilities must be a JSON object or array"}, 400
-        if not isinstance(permissions, dict):
-            return {"error": "permissions must be a JSON object"}, 400
         if not isinstance(metadata, dict):
             return {"error": "metadata must be a JSON object"}, 400
 
         svc = _get_service()
         raw_token, wrapper_id = svc.create_token(
             name=name,
-            capabilities=cast("dict[str, object]", capabilities),
-            permissions=cast("dict[str, object]", permissions),
             metadata=cast("dict[str, object]", metadata),
         )
 
@@ -104,36 +95,4 @@ class WrapperItemResource(Resource):
 
         logger.info("[Wrappers API] Revoked wrapper: %s", safe(wrapper_id))
         return {"ok": True}, 200
-
-
-# ---------------------------------------------------------------------------
-# PUT /api/wrappers/<id>/capabilities — update capabilities
-# ---------------------------------------------------------------------------
-
-@wrappers_ns.route("/<wrapper_id>/capabilities")
-@wrappers_ns.response(200, "Capabilities updated")
-@wrappers_ns.response(400, "Invalid capabilities")
-@wrappers_ns.response(403, "Forbidden")
-@wrappers_ns.response(404, "Wrapper not found")
-@wrappers_ns.param("wrapper_id", "str", "Wrapper identifier")
-class WrapperCapabilitiesResource(Resource):
-    @require_auth
-    def put(self, wrapper_id: str) -> ResponseReturnValue:
-        """Replace the capabilities payload for a wrapper."""
-        caller_id = getattr(g, "wrapper_id", None)
-        if caller_id is not None and caller_id != wrapper_id:
-            return {"error": "Bearer token may only update its own capabilities"}, 403
-
-        body = request.get_json(silent=True) or {}
-        capabilities = body.get("capabilities")
-        if capabilities is None or not isinstance(capabilities, (dict, list)):
-            return {"error": "capabilities must be a JSON object or array"}, 400
-
-        svc = _get_service()
-        updated = svc.update_capabilities(wrapper_id, cast("dict[str, object]", capabilities))
-        if not updated:
-            return {"error": _ERR_WRAPPER_NOT_FOUND}, 404
-
-        return {"ok": True}, 200
-
 

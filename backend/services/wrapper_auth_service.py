@@ -33,8 +33,6 @@ class WrapperAuthService:
     def create_token(
         self,
         name: str,
-        capabilities: Optional[dict[str, object]] = None,
-        permissions: Optional[dict[str, object]] = None,
         metadata: Optional[dict[str, object]] = None,
         wrapper_id_override: Optional[str] = None,
     ) -> tuple[str, str]:
@@ -48,8 +46,6 @@ class WrapperAuthService:
         record_id = str(uuid.uuid4())
         now = utc_now().isoformat()
 
-        capabilities = capabilities or {}
-        permissions = permissions or {}
         metadata = metadata or {}
 
         with self._db.connection() as conn:
@@ -57,17 +53,14 @@ class WrapperAuthService:
             cursor.execute(
                 """
                 INSERT INTO wrapper_tokens
-                    (id, name, token_hash, wrapper_id, capabilities,
-                     permissions, metadata, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    (id, name, token_hash, wrapper_id, metadata, created_at)
+                VALUES (?, ?, ?, ?, ?, ?)
                 """,
                 (
                     record_id,
                     name,
                     token_hash,
                     wrapper_id,
-                    json.dumps(capabilities),
-                    json.dumps(permissions),
                     json.dumps(metadata),
                     now,
                 ),
@@ -125,32 +118,6 @@ class WrapperAuthService:
         return wrapper_id
 
     # ------------------------------------------------------------------
-    # Permission checks
-    # ------------------------------------------------------------------
-
-    def check_permission(self, wrapper_id: str, operation: str, resource: str) -> bool:
-        """Check whether a wrapper may perform ``operation`` on ``resource``.
-
-        Permission structure::
-
-            {
-                "query":     ["memory", "threads"],   # readable resources
-                "broadcast": true                      # may push events
-            }
-        """
-        wrapper = self.get_wrapper(wrapper_id)
-        if wrapper is None:
-            return False
-
-        perms = cast("dict[str, object]", wrapper.get("permissions", {}))
-
-        if operation == "broadcast":
-            return bool(perms.get("broadcast", False))
-
-        allowed_resources = cast("list[str]", perms.get(operation, []))
-        return resource in allowed_resources
-
-    # ------------------------------------------------------------------
     # Revocation
     # ------------------------------------------------------------------
 
@@ -184,8 +151,7 @@ class WrapperAuthService:
             cursor = conn.cursor()
             cursor.execute(
                 """
-                SELECT id, wrapper_id, name, capabilities, permissions,
-                       metadata, last_seen_at, created_at
+                SELECT id, wrapper_id, name, metadata, last_seen_at, created_at
                 FROM wrapper_tokens
                 WHERE revoked_at IS NULL
                 ORDER BY created_at ASC
@@ -201,8 +167,7 @@ class WrapperAuthService:
             cursor = conn.cursor()
             cursor.execute(
                 """
-                SELECT id, wrapper_id, name, capabilities, permissions,
-                       metadata, last_seen_at, created_at
+                SELECT id, wrapper_id, name, metadata, last_seen_at, created_at
                 FROM wrapper_tokens
                 WHERE wrapper_id = ?
                   AND revoked_at IS NULL
@@ -216,23 +181,6 @@ class WrapperAuthService:
             return None
         return self._row_to_dict(row)
 
-    def update_capabilities(self, wrapper_id: str, capabilities: dict[str, object]) -> bool:
-        with self._db.connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute(
-                """
-                UPDATE wrapper_tokens
-                SET capabilities = ?
-                WHERE wrapper_id = ?
-                  AND revoked_at IS NULL
-                """,
-                (json.dumps(capabilities), wrapper_id),
-            )
-            affected = cursor.rowcount
-            cursor.close()
-
-        return affected > 0
-
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
@@ -243,9 +191,7 @@ class WrapperAuthService:
             "id": row[0],
             "wrapper_id": row[1],
             "name": row[2],
-            "capabilities": parse_json_column(row[3]),
-            "permissions": parse_json_column(row[4]),
-            "metadata": parse_json_column(row[5]),
-            "last_seen_at": row[6],
-            "created_at": row[7],
+            "metadata": parse_json_column(row[3]),
+            "last_seen_at": row[4],
+            "created_at": row[5],
         }
