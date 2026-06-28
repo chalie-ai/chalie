@@ -8,6 +8,7 @@
 
 
 
+import logging
 import sqlite3
 
 import pytest
@@ -54,22 +55,29 @@ def test_round_trips_a_real_tool_calls_row(db: sqlite3.Connection) -> None:
     assert ActTrail.render(rows[0]) == '[weather] {"location": "Malta"} → sunny, 27°C'
     assert ActTrail.render(rows[1]) == "[chat_history_compactor] {} → summarised the trail"
 
+    # The anchor filter is load-bearing: a sibling transcript_id that owns no
+    # tool_calls reads back empty, even though THIS transcript has two rows. A
+    # dropped/loosened WHERE clause would leak these two into the unknown read.
+    assert trail.fetch_by_transcript_id(transcript_id + 1) == []
 
-def test_record_is_a_silent_noop_without_a_transcript_id(db: sqlite3.Connection) -> None:
-    """Delegates with skip_transcript pass transcript_id=None; the NOT NULL FK
-    means record must skip rather than raise (spec §4c / F2)."""
+
+def test_record_is_a_silent_noop_without_a_transcript_id(
+    db: sqlite3.Connection, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Delegates that skip the transcript pass transcript_id=None; the NOT NULL
+    FK means record must short-circuit on the guard BEFORE the write — not let a
+    NULL insert raise and get swallowed by the non-fatal except. A clean skip
+    logs nothing at WARNING; a swallowed IntegrityError would."""
     before = db.execute("SELECT COUNT(*) FROM tool_calls").fetchone()[0]
 
-    ActTrail().record(
-        tool_name="web_search",
-        params={"query": "anything"},
-        result="…",
-        transcript_id=None,
-    )
+    with caplog.at_level(logging.WARNING):
+        ActTrail().record(
+            tool_name="web_search",
+            params={"query": "anything"},
+            result="…",
+            transcript_id=None,
+        )
 
     after = db.execute("SELECT COUNT(*) FROM tool_calls").fetchone()[0]
     assert after == before
-
-
-def test_fetch_returns_empty_for_an_unknown_transcript(db: sqlite3.Connection) -> None:
-    assert ActTrail().fetch_by_transcript_id(999999) == []
+    assert [r for r in caplog.records if r.levelno >= logging.WARNING] == []

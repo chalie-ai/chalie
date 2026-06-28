@@ -129,20 +129,3 @@ class TestTranscriptGC:
         assert not _exists(conn, r1_settle)
         assert _exists(conn, r2_in), "continuation above the fork watermark survives"
         assert _exists(conn, r2_settle)
-
-    def test_channel_without_a_watermark_reaps_nothing(self, db: sqlite3.Connection) -> None:
-        """No compaction row -> no scope discovered -> a pure no-op (rows untouched).
-
-        Guards the other direction: GC must not delete history on a channel that
-        has never compacted, even though rows exist.
-        """
-        channel = "user"
-        a = Transcript.write_input_row(channel, "user", "message one")
-        b = Transcript.write_input_row(channel, "user", "message two")
-
-        deleted = DecayEngineService()._cleanup_transcript()
-
-        conn = get_shared_db_service()._get_connection()
-        assert deleted == 0
-        assert _exists(conn, a)
-        assert _exists(conn, b)

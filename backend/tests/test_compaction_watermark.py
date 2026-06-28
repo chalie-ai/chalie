@@ -3,7 +3,6 @@ from typing import TYPE_CHECKING, cast
 
 import pytest
 from services.transcript_service import Transcript
-from services.database_service import get_shared_db_service
 
 if TYPE_CHECKING:
     from abilities.chat_history_compactor import _CompactionParent  # noqa: F401
@@ -36,34 +35,27 @@ def _settled_turn(channel: str, contents: list[str]) -> None:
     Transcript.write_assistant_row(channel, contents[-1], turn_id=tid)
 
 
-def test_get_context_limit_reads_declared_max_tokens_capped() -> None:
+def test_get_context_limit_reads_declared_max_tokens_capped(db: sqlite3.Connection) -> None:
     from services.message_processor import MessageProcessor
     from configs.channels import UserConfig
     from services.providers import MAX_CONTEXT_WINDOW
-    from services.provider_db_service import ProviderDbService
     from services.provider_cache_service import ProviderCacheService
-    db = get_shared_db_service()
-    svc = ProviderDbService(db)
-    sel = svc.get_selected_provider()
-    if not sel:
-        pytest.skip("no active provider in this env")
-    pid = sel["id"]
-    original = sel.get("max_tokens")
+
+    # Seed a real selected provider through the production providers/settings
+    # tables (zero network — get_context_limit only reads the declared max_tokens).
+    pid = _seed_selected_ollama(db, 8000)
+    ProviderCacheService.invalidate()
+
     mp = object.__new__(MessageProcessor)
     MessageProcessor.__init__(mp, "hi", None)
     mp.config = UserConfig()
     try:
-        with db.connection() as conn:
-            conn.execute("UPDATE providers SET max_tokens = 8000 WHERE id = ?", (pid,))
-        ProviderCacheService.invalidate()
         assert mp.providers.get_context_limit() == 8000          # declared value honoured
-        with db.connection() as conn:
-            conn.execute("UPDATE providers SET max_tokens = 999999 WHERE id = ?", (pid,))
+        db.execute("UPDATE providers SET max_tokens = 999999 WHERE id = ?", (pid,))
+        db.commit()
         ProviderCacheService.invalidate()
         assert mp.providers.get_context_limit() == MAX_CONTEXT_WINDOW   # capped at 200k
     finally:
-        with db.connection() as conn:
-            conn.execute("UPDATE providers SET max_tokens = ? WHERE id = ?", (original, pid))
         ProviderCacheService.invalidate()
 
 
@@ -276,20 +268,26 @@ def test_fit_compaction_input_returns_none_when_no_history(db: sqlite3.Connectio
         _clear(db, ch)
 
 
-def test_substitute_provider_content_field_uses_mp_providers() -> None:
+def test_substitute_provider_content_field_uses_mp_providers(db: sqlite3.Connection) -> None:
     from configs.channels._common import substitute_provider_content_field, _CONTENT_FIELD_PLACEHOLDER
     from services.message_processor import MessageProcessor
     from configs.channels import UserConfig
+    from services.provider_cache_service import ProviderCacheService
+
+    # Seed a real selected Ollama provider — its client class declares
+    # CONTENT_FIELD_LABEL = "message.content", the live label the substitution
+    # must resolve to (no skip, no network).
+    _seed_selected_ollama(db, 20000)
+    ProviderCacheService.invalidate()
+
     mp = object.__new__(MessageProcessor)
     MessageProcessor.__init__(mp, "hi", None)
     mp.config = UserConfig()
-    # real stack: needs a configured provider whose class declares CONTENT_FIELD_LABEL
     try:
         label = mp.providers.selected_provider().CONTENT_FIELD_LABEL
-    except Exception:
-        label = None
-    if not label:
-        pytest.skip("no active provider with a CONTENT_FIELD_LABEL in this env")
-    out = substitute_provider_content_field(f"write into {_CONTENT_FIELD_PLACEHOLDER}", mp)
-    assert _CONTENT_FIELD_PLACEHOLDER not in out          # placeholder replaced
-    assert label in out                                    # replaced with the active provider's real label
+        out = substitute_provider_content_field(f"write into {_CONTENT_FIELD_PLACEHOLDER}", mp)
+        assert _CONTENT_FIELD_PLACEHOLDER not in out      # placeholder replaced
+        assert label in out                                # replaced with the active provider's real label
+        assert label == "message.content"                 # the seeded provider's declared field
+    finally:
+        ProviderCacheService.invalidate()

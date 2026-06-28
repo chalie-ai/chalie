@@ -132,38 +132,6 @@ def test_broadcast_prunes_dead_surface_and_keeps_delivering(db: sqlite3.Connecti
 # ── D. User-message echo: every open surface sees the message that was sent ─────
 
 
-def test_user_message_echo_reaches_all_surfaces_with_echo_id(broker: WebSocketBroker) -> None:
-    """When one surface sends a message, the server echoes it on the shared
-    channel via the real ``_broadcast_user_echo``. Every open surface must
-    receive a ``user_message`` frame carrying the verbatim text AND the
-    ``echo_id`` — the id is what lets the originating surface ignore its own
-    echo (it already rendered the bubble) while peers render it.
-    """
-    phone = _Surface()
-    laptop = _Surface()
-    broker.connect(phone)
-    broker.connect(laptop)
-
-    from api.chat import _broadcast_user_echo
-
-    _broadcast_user_echo("Move dinner to 8pm", "echo-abc-123")
-
-    for surface, name in ((phone, "phone"), (laptop, "laptop")):
-        echoes = [m for m in surface.received if m.get("type") == "user_message"]
-        assert len(echoes) == 1, (
-            f"{name} surface must receive exactly one user_message echo; got "
-            f"{surface.types()}"
-        )
-        assert echoes[0]["content"] == "Move dinner to 8pm", (
-            f"{name} surface must receive the verbatim message text (a user bubble "
-            "renders escaped plain text, so it is NOT sanitized/altered)"
-        )
-        assert echoes[0]["echo_id"] == "echo-abc-123", (
-            f"{name} surface must receive the echo_id so the sender can de-dup; "
-            f"got {echoes[0]}"
-        )
-
-
 def test_post_thread_endpoint_broadcasts_user_echo_to_all_surfaces(
     authed_client: tuple[object, sqlite3.Connection, object], broker: WebSocketBroker
 ) -> None:

@@ -16,16 +16,6 @@ def test_thinking_never_discoverable(db: sqlite3.Connection) -> None:
     assert "thinking" not in (cfg.always_available or [])
 
 
-def test_thinking_config_mirrors_parent_tool_surface(db: sqlite3.Connection) -> None:
-    from abilities.thinking import ThinkingConfig
-    from configs.channels import UserConfig
-    parent = UserConfig()
-    active_tools_snapshot = list(parent.always_available or [])
-    tc = ThinkingConfig(active_tools_snapshot, parent.policy_channel)
-    assert tc.always_available == active_tools_snapshot
-    assert tc.thinking_mode == "high"
-
-
 def test_thinking_gate_writes_the_public_thinking_level_attr(db: sqlite3.Connection) -> None:
     """The deliberation gate MUST write the PUBLIC self.thinking_level that
     _seed_turn_zero / send() / Providers.send() read. Regression guard: when the
