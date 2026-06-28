@@ -234,7 +234,7 @@ class ListService:
             return None
 
         try:
-            items = self._active_items(list_row['id'])
+            items = self._active_items(cast(str, list_row['id']))
             return {
                 **list_row,
                 'items': items,

@@ -102,7 +102,7 @@ class ListResource(Resource):
         lst = _get_list_service().get_list(list_id)
         if lst is None:
             return _error("Not found", 404)
-        return _list_dto(cast("dict[str, object]", lst))
+        return _list_dto(lst)
 
     @require_session
     @lists_ns.param("list_id", "List id")
@@ -121,7 +121,7 @@ class ListResource(Resource):
             return _error("A list with this name already exists.", 409)
         if lst is None:
             return _error("Not found", 404)
-        return _list_dto(cast("dict[str, object]", lst))
+        return _list_dto(lst)
 
     @require_session
     @lists_ns.param("list_id", "List id")
@@ -149,7 +149,7 @@ class ListItemsResource(Resource):
         items = _get_list_service().get_items(list_id)
         if items is None:
             return _error("Not found", 404)
-        return [_item_dto(cast("dict[str, object]", it)) for it in items]
+        return [_item_dto(it) for it in items]
 
     @require_session
     @lists_ns.param("list_id", "List id")
@@ -163,7 +163,7 @@ class ListItemsResource(Resource):
         item = _get_list_service().add_item(list_id, dto.content)
         if item is None:
             return _error("Not found", 404)
-        return _item_dto(cast("dict[str, object]", item))
+        return _item_dto(item)
 
 
 @lists_ns.route("/<list_id>/items/<item_id>")
@@ -184,7 +184,7 @@ class ListItemResource(Resource):
         )
         if item is None:
             return _error("Not found", 404)
-        return _item_dto(cast("dict[str, object]", item))
+        return _item_dto(item)
 
     @require_session
     @lists_ns.param("list_id", "List id")
