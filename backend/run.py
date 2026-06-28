@@ -195,6 +195,23 @@ def _run_startup_migrations(database_service: "DatabaseService") -> None:
     except Exception as _mig_err:
         logger.warning(f"[Startup] Transcript migration skipped: {_mig_err}")
 
+    # One-time compactions-table migration — purge legacy role='compaction'
+    # transcript rows now that compaction state lives in its own table. Runs after
+    # the rebuild above (which leaves those rows in place). Idempotent; sentinel
+    # gates it to one run per database.
+    try:
+        _compaction_sentinel = _os.path.join(
+            _os.path.dirname(database_service.db_path),
+            '.compactions-table-migration-v1.done',
+        )
+        if not _os.path.exists(_compaction_sentinel):
+            from migrations.migration_002_compactions_table import apply as _apply_compactions
+            _apply_compactions(database_service.db_path)
+            with open(_compaction_sentinel, 'w') as _f:
+                _f.write('done')
+    except Exception as _comp_err:
+        logger.warning(f"[Startup] compactions-table migration skipped: {_comp_err}")
+
     # Drop zombie invoked_by column
     try:
         _drop_sentinel = _os.path.join(
