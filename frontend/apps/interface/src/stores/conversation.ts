@@ -461,6 +461,17 @@ export const useConversationStore = defineStore('conversation', {
     // ---- Thread-list feed (workstream F) ----
 
     /**
+     * Thread search — the same /api/threads getter with a `q` filter (capped at
+     * 5 server-side). Returns matches without touching the feed; the search
+     * overlay renders them ephemerally and discards them on close.
+     */
+    async searchThreads(query: string): Promise<ThreadListItem[]> {
+      const trimmed = query.trim();
+      if (!trimmed) return [];
+      return (await convoApi.threads(5, undefined, trimmed)).threads;
+    },
+
+    /**
      * Append a /api/threads page (newest-first from the API) as the
      * initial feed. The feed reads chronologically — oldest at the top, newest at
      * the bottom — so the page is reversed before it is pushed.

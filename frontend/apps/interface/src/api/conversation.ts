@@ -88,15 +88,18 @@ export const conversation = {
   /**
    * GET /api/threads — collapsed thread metadata for the feed (id +
    * gist/preview/last activity). Returns the `limit` most-recently-active
-   * threads; `threads_returned` advances pagination.
+   * threads; `threads_returned` advances pagination. With `query`, the same
+   * getter filters to matching threads (the search overlay's source).
    */
   threads(
     limit = 20,
     offset?: number,
+    query?: string,
   ): Promise<{ threads: ConversationThread[]; has_more: boolean; threads_returned: number }> {
-    const q = new URLSearchParams({ limit: String(limit) });
-    if (offset != null) q.set('offset', String(offset));
-    return api.get(`/api/threads?${q.toString()}`);
+    const params = new URLSearchParams({ limit: String(limit) });
+    if (offset != null) params.set('offset', String(offset));
+    if (query) params.set('q', query);
+    return api.get(`/api/threads?${params.toString()}`);
   },
 
   /** GET /api/thread/<turn_id> — one turn's full block (expand + WS refetch). */

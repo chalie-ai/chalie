@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Clock, Brain, Sun, Moon } from '@lucide/vue';
+import { Clock, Brain, Search, Sun, Moon } from '@lucide/vue';
 import { storeToRefs } from 'pinia';
 import { useSessionStore } from '../../stores/session';
 import { useTasksStore } from '../../stores/tasks';
@@ -34,6 +34,15 @@ function handleSettings(): void {
       alt="Chalie"
     />
     <div class="presence-bar__right">
+      <button
+        id="searchBtn"
+        class="btn-icon"
+        aria-label="Search threads"
+        title="Search threads (⌘K)"
+        @click="session.openSearch()"
+      >
+        <Search :size="18" aria-hidden="true" />
+      </button>
       <button
         v-if="totalCount > 0"
         id="taskDrawerBtn"

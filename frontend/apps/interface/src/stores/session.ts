@@ -54,6 +54,10 @@ export const useSessionStore = defineStore('session', {
      *  The opener button opens the panel; the main feed dims behind it. */
     panelThreadId: null as number | null,
 
+    /** True while the thread-search overlay is open (Cmd/Ctrl-K or the top-bar
+     *  search button). The overlay self-fetches; this is pure open/close state. */
+    searchOpen: false,
+
     /** Registered auth-failure callback (set by App bootstrap). */
     _onAuthFailure: null as (() => void) | null,
   }),
@@ -404,6 +408,14 @@ export const useSessionStore = defineStore('session', {
      *  back to its inline/pill render in the main feed. */
     closeThreadPanel(): void {
       this.panelThreadId = null;
+    },
+
+    /** Open / close the thread-search overlay. */
+    openSearch(): void {
+      this.searchOpen = true;
+    },
+    closeSearch(): void {
+      this.searchOpen = false;
     },
 
     /**

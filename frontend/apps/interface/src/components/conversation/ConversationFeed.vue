@@ -154,13 +154,13 @@ onBeforeUnmount(() => {
               viewBox="0 0 24 24"
               fill="none"
               stroke="currentColor"
-              stroke-width="2"
+              stroke-width="2.2"
               stroke-linecap="round"
               stroke-linejoin="round"
             >
-              <circle cx="6" cy="5" r="2.5" />
-              <circle cx="18" cy="19" r="2.5" />
-              <path d="M6 7.5v5a4 4 0 0 0 4 4h4.5" />
+              <circle cx="6" cy="6" r="3" />
+              <circle cx="18" cy="18" r="3" />
+              <path d="M6 9c0 6 6 3 6 9" />
             </svg>
           </span>
           <span class="thread-pill__label">Thread</span>
@@ -251,7 +251,7 @@ onBeforeUnmount(() => {
   display: grid;
   place-items: center;
   background: color-mix(in oklab, var(--violet) 18%, transparent);
-  color: var(--violet);
+  color: var(--violet-light);
 }
 
 .thread-pill__label {
@@ -277,9 +277,10 @@ onBeforeUnmount(() => {
   border-radius: 50%;
 }
 
+/* Inline (in-pill) the unread dot is the muted rose — NOT the bright magenta;
+   that glow is reserved for the activity rail / search dots. */
 .thread-pill--new .thread-pill__dot {
-  background: var(--status-new);
-  box-shadow: 0 0 10px color-mix(in oklab, var(--status-new) 60%, transparent);
+  background: var(--status-main);
 }
 
 .thread-pill--thread .thread-pill__dot {

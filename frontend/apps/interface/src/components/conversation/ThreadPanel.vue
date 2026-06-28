@@ -57,111 +57,126 @@ function onKeydown(e: KeyboardEvent): void {
   if (e.key === 'Escape' && open.value) close();
 }
 
-// Lock the page behind the panel so a background scroll can't bleed through the
-// dimmed strip.
-watch(open, (isOpen) => {
-  document.body.style.overflow = isOpen ? 'hidden' : '';
-});
-
 onMounted(() => document.addEventListener('keydown', onKeydown));
-onBeforeUnmount(() => {
-  document.removeEventListener('keydown', onKeydown);
-  document.body.style.overflow = '';
-});
+onBeforeUnmount(() => document.removeEventListener('keydown', onKeydown));
 </script>
 
 <template>
   <Transition name="thread-panel">
-    <div v-if="open" class="thread-panel-overlay" @click.self="close">
-      <aside class="thread-panel" role="dialog" aria-modal="true" :aria-label="heading">
-        <header class="thread-panel__header">
-          <button
-            class="thread-panel__back"
-            type="button"
-            aria-label="Back to conversation"
-            @click="close"
-          >
-            <ArrowLeft :size="18" />
-          </button>
-          <span class="thread-panel__crumb-label">Thread</span>
-          <span class="thread-panel__crumb-title">{{ heading }}</span>
-        </header>
+    <aside
+      v-if="open"
+      class="thread-panel"
+      role="dialog"
+      aria-modal="true"
+      :aria-label="heading"
+    >
+      <header class="thread-panel__header">
+        <button
+          class="thread-panel__back"
+          type="button"
+          aria-label="Back to conversation"
+          @click="close"
+        >
+          <ArrowLeft :size="16" />
+          <span>Chalie</span>
+        </button>
+        <div class="thread-panel__divider" aria-hidden="true" />
+        <svg
+          class="thread-panel__fork-glyph"
+          width="14"
+          height="14"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="var(--violet-light)"
+          stroke-width="2.2"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          aria-hidden="true"
+        >
+          <circle cx="6" cy="6" r="3" />
+          <circle cx="18" cy="18" r="3" />
+          <path d="M6 9c0 6 6 3 6 9" />
+        </svg>
+        <span class="thread-panel__title">Thread: {{ heading }}</span>
+      </header>
 
-        <div ref="bodyRef" class="thread-panel__body">
-          <div v-if="showLoader" class="thread-panel__loader">
-            <output class="thread-panel__spinner" aria-label="Loading thread" />
-          </div>
-          <TurnView v-else :forms="panelForms" :can-reply="false" />
+      <div ref="bodyRef" class="thread-panel__body">
+        <div v-if="showLoader" class="thread-panel__loader">
+          <output class="thread-panel__spinner" aria-label="Loading thread" />
         </div>
+        <TurnView v-else :forms="panelForms" :can-reply="false" />
+      </div>
 
-        <InputDock v-if="session.panelThreadId != null" :turn-id="session.panelThreadId" />
-      </aside>
-    </div>
+      <InputDock v-if="session.panelThreadId != null" :turn-id="session.panelThreadId" />
+    </aside>
   </Transition>
 </template>
 
 <style scoped lang="scss">
-.thread-panel-overlay {
-  position: fixed;
-  inset: 0;
-  z-index: 150;
-  display: flex;
-  justify-content: flex-end;
-  // Dimmed sliver of the main conversation shows through on the left.
-  background: color-mix(in oklab, var(--bg) 55%, transparent);
-  backdrop-filter: blur(6px) saturate(120%);
-  -webkit-backdrop-filter: blur(6px) saturate(120%);
-}
-
 .thread-panel {
+  position: fixed;
+  top: 56px;
+  right: 0;
+  bottom: 0;
   width: 95%;
-  height: 100%;
+  // Above the base feed + footer dock (both z-index:100, dimmed behind the
+  // panel) but below true modals (search overlay, permission cards).
+  z-index: 120;
   display: flex;
   flex-direction: column;
   background: var(--bg);
-  border-left: 1px solid var(--border-strong);
-  box-shadow: -24px 0 60px color-mix(in oklab, #000 40%, transparent);
+  border-left: 1px solid var(--border);
+  border-radius: 16px 0 0 16px;
+  box-shadow: -26px 0 64px rgba(0, 0, 0, 0.6);
+  overflow: hidden;
 }
 
 .thread-panel__header {
   flex-shrink: 0;
   display: flex;
   align-items: center;
-  gap: var(--space-sm);
-  padding: var(--space-md) var(--space-lg);
+  gap: 11px;
+  height: 46px;
+  padding: 0 26px;
   border-bottom: 1px solid var(--border);
 }
 
 .thread-panel__back {
   display: flex;
   align-items: center;
-  justify-content: center;
-  width: 30px;
-  height: 30px;
+  gap: 7px;
+  margin-left: -4px;
+  padding: 5px 9px 5px 6px;
   border: none;
   border-radius: 8px;
   background: none;
-  color: var(--text-secondary);
+  color: var(--text-tertiary);
+  font: 500 13px Inter, system-ui, sans-serif;
   cursor: pointer;
   transition: color var(--duration-fast), background var(--duration-fast);
 }
 
 .thread-panel__back:hover {
   color: var(--text-primary);
-  background: color-mix(in oklab, var(--text-primary) 7%, transparent);
+  background: var(--border);
 }
 
-.thread-panel__crumb-label {
+.thread-panel__divider {
+  width: 1px;
+  height: 16px;
+  background: var(--border-strong);
   flex-shrink: 0;
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--violet);
 }
 
-.thread-panel__crumb-title {
+.thread-panel__fork-glyph {
+  flex-shrink: 0;
+}
+
+.thread-panel__title {
+  font: 600 14px Inter, system-ui, sans-serif;
+  letter-spacing: -0.01em;
+  color: var(--text-primary);
   min-width: 0;
-  font-size: 13px;
-  color: var(--text-tertiary);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -195,30 +210,27 @@ onBeforeUnmount(() => {
   }
 }
 
-// Slide-in: the overlay scrim fades, the panel slides from the right.
-.thread-panel-enter-active,
+// Slide-in: panel slides from right using the canonical panelSlide keyframe
+// defined in interface.scss (translateX(48px) → 0). Leave transition handles unmount.
+.thread-panel-enter-active {
+  animation: panelSlide 0.4s var(--ease-out);
+}
+
 .thread-panel-leave-active {
-  transition: opacity 200ms ease;
+  transition: opacity 200ms ease, transform 200ms ease;
 }
 
-.thread-panel-enter-active .thread-panel,
-.thread-panel-leave-active .thread-panel {
-  transition: transform 280ms cubic-bezier(0.22, 1, 0.36, 1);
-}
-
-.thread-panel-enter-from,
 .thread-panel-leave-to {
   opacity: 0;
-}
-
-.thread-panel-enter-from .thread-panel,
-.thread-panel-leave-to .thread-panel {
-  transform: translateX(100%);
+  transform: translateX(48px);
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .thread-panel-enter-active .thread-panel,
-  .thread-panel-leave-active .thread-panel {
+  .thread-panel-enter-active {
+    animation: none;
+  }
+
+  .thread-panel-leave-active {
     transition: none;
   }
 }

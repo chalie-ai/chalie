@@ -15,7 +15,7 @@
   --bs-danger-rgb:          251, 113, 133;
   --bs-warning:             #fbbf24;
   --bs-warning-rgb:         251, 191, 36;
-  --bs-body-bg:             #06080e;
+  --bs-body-bg:             #07070b;
   --bs-body-color:          #eae6f2;
   --bs-body-font-family:    'Inter', system-ui, sans-serif;
   --bs-body-font-size:      0.9375rem;
@@ -36,6 +36,7 @@
   /* Radiant tokens: backward-compat + Chalie-specific aliases */
   --violet:                 #8A5CFF;
   --violet-hover:           #9B6FFF;
+  --violet-light:           #bda4ff;   /* fork glyph, thinking badge, "scheduled" pill */
   --magenta:                #FF2FD1;
   --cyan:                   #00F0FF;
 
@@ -56,18 +57,18 @@
   --accent-primary:         var(--violet);
   --accent-secondary:       var(--magenta);
   --accent-tertiary:        var(--cyan);
-  --bg:                     #06080e;
+  --bg:                     #07070b;
   --bg-2:                   #0d0f18;
   --bg-surface:             rgba(255, 255, 255, 0.03);
-  --bg-surface-2:           rgba(255, 255, 255, 0.05);
+  --bg-surface-2:           rgba(255, 255, 255, 0.06);
   --bg-input:               rgba(255, 255, 255, 0.05);
   --bg-user:                rgba(138, 92, 255, 0.07);
   --bg-chalie:              rgba(255, 255, 255, 0.025);
   --text:                   #eae6f2;
   --text-primary:           #eae6f2;
-  --text-secondary:         rgba(234, 230, 242, 0.58);
-  --text-muted:             rgba(234, 230, 242, 0.50);
-  --text-tertiary:          rgba(234, 230, 242, 0.30);
+  --text-secondary:         rgba(234, 230, 242, 0.72);
+  --text-muted:             rgba(234, 230, 242, 0.38);
+  --text-tertiary:          rgba(234, 230, 242, 0.50);
   --border:                 rgba(255, 255, 255, 0.07);
   --border-subtle:          rgba(255, 255, 255, 0.07);
   --border-strong:          rgba(255, 255, 255, 0.12);
@@ -77,7 +78,7 @@
   --warning-banner-text:    #e89c50;
   --ease-out:               cubic-bezier(0.16, 1, 0.3, 1);
 
-  --shadow-card:            0 1px 0 rgba(255,255,255,0.03) inset, 0 12px 40px rgba(0,0,0,0.35);
+  --shadow-card:            0 12px 40px rgba(0,0,0,0.35);
   --grain-opacity:          0.04;
   --grain-blend:            overlay;
 
@@ -90,6 +91,8 @@
   --scrim-top:              rgba(6, 8, 14, 0.92);
   --scrim-dock:             rgba(6, 8, 14, 0.92);
   --scrim-fallback:         rgba(6, 8, 14, 0.98);
+  /* Full-screen modal scrim — the search overlay dims the whole app behind it. */
+  --scrim-overlay:          rgba(3, 4, 8, 0.66);
 
   /* Legacy aliases kept for backward compat */
   --accent:                 var(--violet);
@@ -126,6 +129,7 @@
 
   --violet:                 #6E3DEB;
   --violet-hover:           #5B2DD8;
+  --violet-light:           #7C58D8;   /* paper-readable violet for fork glyph / pills */
   --magenta:                #DB1FAF;
   --cyan:                   #0098A8;
 
@@ -167,6 +171,7 @@
   --scrim-top:              rgba(246, 244, 241, 0.88);
   --scrim-dock:             rgba(246, 244, 241, 0.92);
   --scrim-fallback:         rgba(246, 244, 241, 0.98);
+  --scrim-overlay:          rgba(26, 22, 38, 0.38);
 
   --bg-card:                var(--bg-surface);
 }

@@ -329,7 +329,7 @@ onBeforeUnmount(() => {
           ref="textareaRef"
           v-model="text"
           class="input-dock__textarea"
-          :placeholder="turnId != null ? 'Reply in thread…' : 'Start new thread...'"
+          :placeholder="turnId != null ? 'Reply in this thread…' : 'Talk to Chalie…'"
           rows="1"
           @input="grow"
         ></textarea>
