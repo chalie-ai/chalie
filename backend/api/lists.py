@@ -1,27 +1,33 @@
-import logging
+"""Lists namespace — clean nested id-addressed CRUD on Pydantic DTOs.
+
+Two resources (lists, items), each pure CRUD, each DTO-typed through the
+foundation boundary decorators (``@expects``/``@responds``). This is the
+reference namespace: the shape here is the template every other namespace copies.
+"""
+
+from __future__ import annotations
+
 from datetime import datetime
 from typing import TYPE_CHECKING, cast
 
-from flask import request
 from flask.typing import ResponseReturnValue
 from flask_restx import Namespace, Resource
 
 from .auth import require_session
+from .dto import Error, expects, register_dto, responds
+from .dto.list import List, ListCreate, ListUpdate
+from .dto.list_item import ItemCreate, ItemUpdate, ListItem
 
 if TYPE_CHECKING:
     from services.list_service import ListService
 
-logger = logging.getLogger(__name__)
-
-_ERR_INTERNAL = "Internal server error"
-_ERR_NOT_FOUND = "Not found"
 
 lists_ns = Namespace("lists", description="List operations", path="/lists")
 
+register_dto(lists_ns, List, ListCreate, ListUpdate, ListItem, ItemCreate, ItemUpdate, Error)
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
+_L = lists_ns.models
+
 
 def _get_list_service() -> "ListService":
     from services.database_service import get_shared_db_service
@@ -29,267 +35,164 @@ def _get_list_service() -> "ListService":
     return ListService(get_shared_db_service())
 
 
-def _serialize_dt(val: object) -> object:
-    if isinstance(val, datetime):
-        return val.isoformat()
-    return val
+def _error(message: str, status: int) -> ResponseReturnValue:
+    """Build a uniform non-2xx ``Error`` body carrying its own status code."""
+    return Error(error=message).model_dump(mode="json"), status
 
 
-def _serialize_list(lst: "dict[str, object]") -> "dict[str, object]":
-    out = dict(lst)
-    for field in ("updated_at", "created_at"):
-        if field in out:
-            out[field] = _serialize_dt(out[field])
-    return out
+def _list_dto(row: dict[str, object]) -> List:
+    return List(
+        id=cast(str, row['id']),
+        name=cast(str, row['name']),
+        list_type=cast(str, row['list_type']),
+        created_at=cast(datetime, row['created_at']),
+        updated_at=cast(datetime, row['updated_at']),
+        item_count=cast(int, row['item_count']),
+        checked_count=cast(int, row['checked_count']),
+    )
 
 
-def _serialize_item(item: "dict[str, object]") -> "dict[str, object]":
-    out = dict(item)
-    for field in ("added_at", "updated_at"):
-        if field in out:
-            out[field] = _serialize_dt(out[field])
-    return out
-
-
-def _validate_name(name: "str | None") -> "tuple[str | None, str | None]":
-    name = (name or "").strip()
-    if not name:
-        return None, "name is required"
-    if len(name) > 200:
-        return None, "name must be 200 characters or fewer"
-    return name, None
-
-
-def _validate_items(items: object) -> "tuple[list[str] | None, str | None]":
-    if not isinstance(items, list) or not items:
-        return None, "items must be a non-empty array"
-    cleaned = []
-    for item in items:
-        if not isinstance(item, str) or not item.strip():
-            return None, "each item must be a non-empty string"
-        if len(item.strip()) > 500:
-            return None, "each item must be 500 characters or fewer"
-        cleaned.append(item.strip())
-    return cleaned, None
+def _item_dto(row: dict[str, object]) -> ListItem:
+    return ListItem(
+        id=cast(str, row['id']),
+        content=cast(str, row['content']),
+        checked=cast(bool, row['checked']),
+        position=cast(int, row['position']),
+        added_at=cast(datetime, row['added_at']),
+        updated_at=cast(datetime, row['updated_at']),
+    )
 
 
 # ---------------------------------------------------------------------------
-# Routes
+# Lists resource
 # ---------------------------------------------------------------------------
 
 @lists_ns.route("")
 class ListsResource(Resource):
     @require_session
-    @lists_ns.response(200, "Success")
-    @lists_ns.response(500, "Internal server error")
-    def get(self) -> ResponseReturnValue:
-        try:
-            svc = _get_list_service()
-            lists = svc.get_all_lists()
-            return {"items": [_serialize_list(lst) for lst in lists]}
-        except Exception as e:
-            logger.error(f"[LISTS API] get_lists error: {e}")
-            return {"error": _ERR_INTERNAL}, 500
+    @lists_ns.response(200, "All lists", model=_L["List"])
+    @responds(List, code=200)
+    def get(self) -> list[List]:
+        return [_list_dto(row) for row in _get_list_service().get_all_lists()]
 
     @require_session
-    @lists_ns.response(201, "Created")
-    @lists_ns.response(400, "Bad request")
-    @lists_ns.response(409, "Conflict")
-    @lists_ns.response(500, "Internal server error")
-    def post(self) -> ResponseReturnValue:
-        data = request.get_json(silent=True) or {}
-        name, err = _validate_name(data.get("name"))
-        if err:
-            return {"error": err}, 400
-
-        list_type = (data.get("list_type") or "checklist").strip()
-
+    @lists_ns.expect(_L["ListCreate"])
+    @lists_ns.response(201, "Created", model=_L["List"])
+    @lists_ns.response(409, "A list with this name already exists", model=_L["Error"])
+    @lists_ns.response(422, "Validation failed", model=_L["Error"])
+    @responds(List, code=201)
+    @expects(ListCreate)
+    def post(self, dto: ListCreate) -> List | ResponseReturnValue:
+        svc = _get_list_service()
         try:
-            svc = _get_list_service()
-            list_id = svc.create_list(cast(str, name), list_type=list_type)
-            lst = svc.get_list(list_id)
-            cast("dict[str, object]", lst)["items"] = [_serialize_item(cast("dict[str, object]", i)) for i in cast("list[object]", cast("dict[str, object]", lst).get("items", []))]
-            return {"item": _serialize_list(cast("dict[str, object]", lst))}, 201
-        except ValueError as e:
-            return {"error": str(e)}, 409
-        except Exception as e:
-            logger.error(f"[LISTS API] create_list error: {e}")
-            return {"error": _ERR_INTERNAL}, 500
+            list_id = svc.create_list(dto.name, list_type=dto.list_type)
+        except ValueError:
+            return _error("A list with this name already exists.", 409)
+        return _list_dto(cast("dict[str, object]", svc.get_list(list_id)))
 
 
 @lists_ns.route("/<list_id>")
 class ListResource(Resource):
     @require_session
-    @lists_ns.param("list_id", "string", "List id")
-    @lists_ns.response(200, "Success")
-    @lists_ns.response(404, "Not found")
-    @lists_ns.response(500, "Internal server error")
-    def get(self, list_id: str) -> ResponseReturnValue:
-        try:
-            svc = _get_list_service()
-            lst = svc.get_list(list_id)
-            if lst is None:
-                return {"error": _ERR_NOT_FOUND}, 404
-            lst = dict(lst)
-            lst["items"] = [_serialize_item(cast("dict[str, object]", i)) for i in cast("list[object]", lst.get("items", []))]
-            return {"item": _serialize_list(lst)}
-        except Exception as e:
-            logger.error(f"[LISTS API] get_list error: {e}")
-            return {"error": _ERR_INTERNAL}, 500
+    @lists_ns.param("list_id", "List id")
+    @lists_ns.response(200, "The list", model=_L["List"])
+    @lists_ns.response(404, "Not found", model=_L["Error"])
+    @responds(List, code=200)
+    def get(self, list_id: str) -> List | ResponseReturnValue:
+        lst = _get_list_service().get_list(list_id)
+        if lst is None:
+            return _error("Not found", 404)
+        return _list_dto(cast("dict[str, object]", lst))
 
     @require_session
-    @lists_ns.param("list_id", "string", "List id")
-    @lists_ns.response(200, "Success")
-    @lists_ns.response(404, "Not found")
-    @lists_ns.response(500, "Internal server error")
-    def delete(self, list_id: str) -> ResponseReturnValue:
+    @lists_ns.param("list_id", "List id")
+    @lists_ns.expect(_L["ListUpdate"])
+    @lists_ns.response(200, "Updated list", model=_L["List"])
+    @lists_ns.response(404, "Not found", model=_L["Error"])
+    @lists_ns.response(409, "A list with this name already exists", model=_L["Error"])
+    @lists_ns.response(422, "Validation failed", model=_L["Error"])
+    @responds(List, code=200)
+    @expects(ListUpdate)
+    def put(self, list_id: str, dto: ListUpdate) -> List | ResponseReturnValue:
+        svc = _get_list_service()
         try:
-            svc = _get_list_service()
-            ok = svc.delete_list(list_id)
-            if not ok:
-                return {"error": _ERR_NOT_FOUND}, 404
-            return {"ok": True}
-        except Exception as e:
-            logger.error(f"[LISTS API] delete_list error: {e}")
-            return {"error": _ERR_INTERNAL}, 500
+            lst = svc.update_list(list_id, name=dto.name, list_type=dto.list_type)
+        except ValueError:
+            return _error("A list with this name already exists.", 409)
+        if lst is None:
+            return _error("Not found", 404)
+        return _list_dto(cast("dict[str, object]", lst))
 
-
-@lists_ns.route("/<list_id>/rename")
-class ListRenameResource(Resource):
     @require_session
-    @lists_ns.param("list_id", "string", "List id")
-    @lists_ns.response(200, "Success")
-    @lists_ns.response(400, "Bad request")
-    @lists_ns.response(404, "Not found")
-    @lists_ns.response(500, "Internal server error")
-    def put(self, list_id: str) -> ResponseReturnValue:
-        data = request.get_json(silent=True) or {}
-        name, err = _validate_name(data.get("name"))
-        if err:
-            return {"error": err}, 400
+    @lists_ns.param("list_id", "List id")
+    @lists_ns.response(204, "Deleted")
+    @lists_ns.response(404, "Not found", model=_L["Error"])
+    @responds(code=204)
+    def delete(self, list_id: str) -> None | ResponseReturnValue:
+        if not _get_list_service().delete_list(list_id):
+            return _error("Not found", 404)
+        return None
 
-        try:
-            svc = _get_list_service()
-            ok = svc.rename_list(list_id, cast(str, name))
-            if not ok:
-                return {"error": "Not found or name already in use"}, 404
-            return {"ok": True}
-        except Exception as e:
-            logger.error(f"[LISTS API] rename_list error: {e}")
-            return {"error": _ERR_INTERNAL}, 500
 
+# ---------------------------------------------------------------------------
+# Items sub-resource (addressed by item id)
+# ---------------------------------------------------------------------------
 
 @lists_ns.route("/<list_id>/items")
 class ListItemsResource(Resource):
     @require_session
-    @lists_ns.param("list_id", "string", "List id")
-    @lists_ns.response(200, "Success")
-    @lists_ns.response(400, "Bad request")
-    @lists_ns.response(404, "Not found")
-    @lists_ns.response(500, "Internal server error")
-    def post(self, list_id: str) -> ResponseReturnValue:
-        data = request.get_json(silent=True) or {}
-        items, err = _validate_items(data.get("items"))
-        if err:
-            return {"error": err}, 400
-
-        try:
-            svc = _get_list_service()
-            if svc.get_list(list_id) is None:
-                return {"error": _ERR_NOT_FOUND}, 404
-            added = svc.add_items(list_id, cast("list[str]", items))
-            return {"added": added}
-        except Exception as e:
-            logger.error(f"[LISTS API] add_items error: {e}")
-            return {"error": _ERR_INTERNAL}, 500
+    @lists_ns.param("list_id", "List id")
+    @lists_ns.response(200, "All items", model=_L["ListItem"])
+    @lists_ns.response(404, "List not found", model=_L["Error"])
+    @responds(ListItem, code=200)
+    def get(self, list_id: str) -> list[ListItem] | ResponseReturnValue:
+        items = _get_list_service().get_items(list_id)
+        if items is None:
+            return _error("Not found", 404)
+        return [_item_dto(cast("dict[str, object]", it)) for it in items]
 
     @require_session
-    @lists_ns.param("list_id", "string", "List id")
-    @lists_ns.response(200, "Success")
-    @lists_ns.response(404, "Not found")
-    @lists_ns.response(500, "Internal server error")
-    def delete(self, list_id: str) -> ResponseReturnValue:
-        try:
-            svc = _get_list_service()
-            count = svc.clear_list(list_id)
-            if count == -1:
-                return {"error": _ERR_NOT_FOUND}, 404
-            return {"cleared": count}
-        except Exception as e:
-            logger.error(f"[LISTS API] clear_items error: {e}")
-            return {"error": _ERR_INTERNAL}, 500
+    @lists_ns.param("list_id", "List id")
+    @lists_ns.expect(_L["ItemCreate"])
+    @lists_ns.response(201, "Created item", model=_L["ListItem"])
+    @lists_ns.response(404, "List not found", model=_L["Error"])
+    @lists_ns.response(422, "Validation failed", model=_L["Error"])
+    @responds(ListItem, code=201)
+    @expects(ItemCreate)
+    def post(self, list_id: str, dto: ItemCreate) -> ListItem | ResponseReturnValue:
+        item = _get_list_service().add_item(list_id, dto.content)
+        if item is None:
+            return _error("Not found", 404)
+        return _item_dto(cast("dict[str, object]", item))
 
 
-@lists_ns.route("/<list_id>/items/batch")
-class ListItemsBatchResource(Resource):
+@lists_ns.route("/<list_id>/items/<item_id>")
+class ListItemResource(Resource):
     @require_session
-    @lists_ns.param("list_id", "string", "List id")
-    @lists_ns.response(200, "Success")
-    @lists_ns.response(400, "Bad request")
-    @lists_ns.response(404, "Not found")
-    @lists_ns.response(500, "Internal server error")
-    def delete(self, list_id: str) -> ResponseReturnValue:
-        data = request.get_json(silent=True) or {}
-        items, err = _validate_items(data.get("items"))
-        if err:
-            return {"error": err}, 400
+    @lists_ns.param("list_id", "List id")
+    @lists_ns.param("item_id", "Item id")
+    @lists_ns.expect(_L["ItemUpdate"])
+    @lists_ns.response(200, "Updated item", model=_L["ListItem"])
+    @lists_ns.response(404, "Not found", model=_L["Error"])
+    @lists_ns.response(422, "Validation failed", model=_L["Error"])
+    @responds(ListItem, code=200)
+    @expects(ItemUpdate)
+    def put(self, list_id: str, item_id: str, dto: ItemUpdate) -> ListItem | ResponseReturnValue:
+        item = _get_list_service().update_item(
+            list_id, item_id,
+            content=dto.content, checked=dto.checked, position=dto.position,
+        )
+        if item is None:
+            return _error("Not found", 404)
+        return _item_dto(cast("dict[str, object]", item))
 
-        try:
-            svc = _get_list_service()
-            if svc.get_list(list_id) is None:
-                return {"error": _ERR_NOT_FOUND}, 404
-            removed = svc.remove_items(list_id, cast("list[str]", items))
-            return {"removed": removed}
-        except Exception as e:
-            logger.error(f"[LISTS API] remove_items error: {e}")
-            return {"error": _ERR_INTERNAL}, 500
-
-
-@lists_ns.route("/<list_id>/items/check")
-class ListItemsCheckResource(Resource):
     @require_session
-    @lists_ns.param("list_id", "string", "List id")
-    @lists_ns.response(200, "Success")
-    @lists_ns.response(400, "Bad request")
-    @lists_ns.response(404, "Not found")
-    @lists_ns.response(500, "Internal server error")
-    def put(self, list_id: str) -> ResponseReturnValue:
-        data = request.get_json(silent=True) or {}
-        items, err = _validate_items(data.get("items"))
-        if err:
-            return {"error": err}, 400
-
-        try:
-            svc = _get_list_service()
-            if svc.get_list(list_id) is None:
-                return {"error": _ERR_NOT_FOUND}, 404
-            checked = svc.check_items(list_id, cast("list[str]", items))
-            return {"checked": checked}
-        except Exception as e:
-            logger.error(f"[LISTS API] check_items error: {e}")
-            return {"error": _ERR_INTERNAL}, 500
-
-
-@lists_ns.route("/<list_id>/items/uncheck")
-class ListItemsUncheckResource(Resource):
-    @require_session
-    @lists_ns.param("list_id", "string", "List id")
-    @lists_ns.response(200, "Success")
-    @lists_ns.response(400, "Bad request")
-    @lists_ns.response(404, "Not found")
-    @lists_ns.response(500, "Internal server error")
-    def put(self, list_id: str) -> ResponseReturnValue:
-        data = request.get_json(silent=True) or {}
-        items, err = _validate_items(data.get("items"))
-        if err:
-            return {"error": err}, 400
-
-        try:
-            svc = _get_list_service()
-            if svc.get_list(list_id) is None:
-                return {"error": _ERR_NOT_FOUND}, 404
-            unchecked = svc.uncheck_items(list_id, cast("list[str]", items))
-            return {"unchecked": unchecked}
-        except Exception as e:
-            logger.error(f"[LISTS API] uncheck_items error: {e}")
-            return {"error": _ERR_INTERNAL}, 500
+    @lists_ns.param("list_id", "List id")
+    @lists_ns.param("item_id", "Item id")
+    @lists_ns.response(204, "Deleted")
+    @lists_ns.response(404, "Not found", model=_L["Error"])
+    @responds(code=204)
+    def delete(self, list_id: str, item_id: str) -> None | ResponseReturnValue:
+        if not _get_list_service().delete_item(list_id, item_id):
+            return _error("Not found", 404)
+        return None

@@ -59,6 +59,9 @@ dependencies = [
     "nltk>=3.8",
     "feedparser>=6.0.0",
     "nh3>=0.2.0",
+    # DTO boundary layer (backend/api/dto/): validates inbound requests and
+    # serializes outbound responses on a single typed contract.
+    "pydantic>=2.6",
     "rapidfuzz>=3.0.0",
     "mcp>=1.24.0",
     "uvicorn>=0.34.0",

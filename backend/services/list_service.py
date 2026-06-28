@@ -175,38 +175,72 @@ class ListService:
             logger.error(f"[LISTS] rename_list failed: {e}")
             return False
 
+    def update_list(
+        self,
+        list_id: str,
+        *,
+        name: Optional[str] = None,
+        list_type: Optional[str] = None,
+    ) -> Optional[Dict[str, object]]:
+        """Partial update of a list by id. Returns the updated list (with items),
+        ``None`` if the list is missing, or raises ``ValueError`` on name collision."""
+        list_row = self._get_list_row(list_id)
+        if not list_row:
+            return None
+
+        if name is not None and name != list_row['name']:
+            existing = self._find_by_name(name)
+            if existing and existing['id'] != list_id:
+                raise ValueError(f"A list named '{name}' already exists.")
+
+        sets: List[str] = []
+        params: List[object] = []
+        if name is not None:
+            sets.append("name = ?")
+            params.append(name)
+        if list_type is not None:
+            sets.append("list_type = ?")
+            params.append(list_type)
+        if not sets:
+            return self.get_list(list_id)
+
+        sets.append("updated_at = datetime('now')")
+        params.append(list_id)
+        try:
+            def _update(_sets: List[str] = sets, _params: List[object] = params,
+                        _db: DatabaseService = self.db) -> None:
+                with _db.connection() as conn:
+                    cursor = conn.cursor()
+                    cursor.execute(
+                        f"UPDATE lists SET {', '.join(_sets)} "
+                        "WHERE id = ? AND deleted_at IS NULL",
+                        tuple(_params),
+                    )
+                    cursor.close()
+
+            self._write_queue.submit_sync(_update)
+            if name is not None and name != list_row['name']:
+                embed_list(list_id, name, db=self.db)
+            logger.info("[LISTS] Updated list '%s' (id=%s)", safe(name or list_row['name']), list_id)
+            return self.get_list(list_id)
+        except Exception as e:
+            logger.error(f"[LISTS] update_list failed: {e}")
+            return None
+
     def get_list(self, list_id: str) -> Optional[Dict[str, object]]:
-        """Get a list with its active items; None if not found."""
+        """Get a list with its active items and derived counts; None if not found."""
         list_row = self._get_list_row(list_id)
         if not list_row:
             return None
 
         try:
-            with self.db.connection() as conn:
-                cursor = conn.cursor()
-                cursor.execute("""
-                    SELECT id, content, checked, position, added_at, updated_at
-                    FROM list_items
-                    WHERE list_id = ? AND removed_at IS NULL
-                    ORDER BY position ASC, added_at ASC
-                """, (list_row['id'],))
-                rows = cursor.fetchall()
-                cursor.close()
-
-            items = [
-                {
-                    'id': row[0],
-                    'content': row[1],
-                    'checked': row[2],
-                    'position': row[3],
-                    'added_at': row[4],
-                    'updated_at': row[5],
-                }
-                for row in rows
-            ]
-
-            return {**list_row, 'items': items}
-
+            items = self._active_items(list_row['id'])
+            return {
+                **list_row,
+                'items': items,
+                'item_count': len(items),
+                'checked_count': sum(1 for it in items if it['checked']),
+            }
         except Exception as e:
             logger.error(f"[LISTS] get_list failed: {e}")
             return None
@@ -221,13 +255,14 @@ class ListService:
                         l.id,
                         l.name,
                         l.list_type,
+                        l.created_at,
                         l.updated_at,
                         SUM(CASE WHEN li.removed_at IS NULL AND li.id IS NOT NULL THEN 1 ELSE 0 END) AS item_count,
                         SUM(CASE WHEN li.removed_at IS NULL AND li.checked THEN 1 ELSE 0 END)        AS checked_count
                     FROM lists l
                     LEFT JOIN list_items li ON li.list_id = l.id
                     WHERE l.deleted_at IS NULL
-                    GROUP BY l.id, l.name, l.list_type, l.updated_at
+                    GROUP BY l.id, l.name, l.list_type, l.created_at, l.updated_at
                     ORDER BY l.updated_at DESC
                 """)
                 rows = cursor.fetchall()
@@ -238,9 +273,10 @@ class ListService:
                     'id': row[0],
                     'name': row[1],
                     'list_type': row[2],
-                    'updated_at': row[3],
-                    'item_count': row[4] or 0,
-                    'checked_count': row[5] or 0,
+                    'created_at': row[3],
+                    'updated_at': row[4],
+                    'item_count': row[5] or 0,
+                    'checked_count': row[6] or 0,
                 }
                 for row in rows
             ]
@@ -415,7 +451,157 @@ class ListService:
             logger.error(f"[LISTS] _set_checked failed: {e}")
             return 0
 
+    # Item operations (id-addressed) — REST CRUD surface
+
+    def get_items(self, list_id: str) -> Optional[List[Dict[str, object]]]:
+        """Active items for a list ordered by position; None if the list is missing."""
+        if not self._get_list_row(list_id):
+            return None
+        try:
+            return [{**it, 'checked': bool(it['checked'])} for it in self._active_items(list_id)]
+        except Exception as e:
+            logger.error(f"[LISTS] get_items failed: {e}")
+            return None
+
+    def add_item(self, list_id: str, content: str) -> Optional[Dict[str, object]]:
+        """Insert one item at the end of the list; return the new item row, or None if the list is missing."""
+        list_row = self._get_list_row(list_id)
+        if not list_row:
+            return None
+        try:
+            def _insert(_id: str = list_id, _content: str = content, _db: DatabaseService = self.db) -> str:
+                with _db.connection() as conn:
+                    cursor = conn.cursor()
+                    cursor.execute(
+                        "SELECT COALESCE(MAX(position), -1) FROM list_items "
+                        "WHERE list_id = ? AND removed_at IS NULL",
+                        (_id,),
+                    )
+                    position = cursor.fetchone()[0] + 1
+                    item_id = secrets.token_hex(4)
+                    cursor.execute(
+                        "INSERT INTO list_items (id, list_id, content, position, added_at, updated_at) "
+                        "VALUES (?, ?, ?, ?, datetime('now'), datetime('now'))",
+                        (item_id, _id, _content, position),
+                    )
+                    cursor.close()
+                    return item_id
+
+            item_id = cast(str, self._write_queue.submit_sync(_insert))
+            self._touch_list(list_id)
+            logger.info("[LISTS] Added item to list '%s' (id=%s)", safe(list_row['name']), item_id)
+            return self._get_item_row(list_id, item_id)
+        except Exception as e:
+            logger.error(f"[LISTS] add_item failed: {e}")
+            return None
+
+    def update_item(
+        self,
+        list_id: str,
+        item_id: str,
+        *,
+        content: Optional[str] = None,
+        checked: Optional[bool] = None,
+        position: Optional[int] = None,
+    ) -> Optional[Dict[str, object]]:
+        """Partial update of an item by id; return the updated row, or None if not found."""
+        if self._get_item_row(list_id, item_id) is None:
+            return None
+
+        sets: List[str] = []
+        params: List[object] = []
+        if content is not None:
+            sets.append("content = ?")
+            params.append(content)
+        if checked is not None:
+            sets.append("checked = ?")
+            params.append(1 if checked else 0)
+        if position is not None:
+            sets.append("position = ?")
+            params.append(position)
+        if not sets:
+            return self._get_item_row(list_id, item_id)
+
+        sets.append("updated_at = datetime('now')")
+        params.extend([item_id, list_id])
+        try:
+            def _update(_sets: List[str] = sets, _params: List[object] = params,
+                        _db: DatabaseService = self.db) -> None:
+                with _db.connection() as conn:
+                    cursor = conn.cursor()
+                    cursor.execute(
+                        f"UPDATE list_items SET {', '.join(_sets)} "
+                        "WHERE id = ? AND list_id = ? AND removed_at IS NULL",
+                        tuple(_params),
+                    )
+                    cursor.close()
+
+            self._write_queue.submit_sync(_update)
+            self._touch_list(list_id)
+            return self._get_item_row(list_id, item_id)
+        except Exception as e:
+            logger.error(f"[LISTS] update_item failed: {e}")
+            return None
+
+    def delete_item(self, list_id: str, item_id: str) -> bool:
+        """Soft-remove one item by id; True on success, False if not found."""
+        if self._get_item_row(list_id, item_id) is None:
+            return False
+        try:
+            def _soft_remove(_item_id: str = item_id, _list_id: str = list_id,
+                             _db: DatabaseService = self.db) -> None:
+                with _db.connection() as conn:
+                    cursor = conn.cursor()
+                    cursor.execute(
+                        "UPDATE list_items SET removed_at = datetime('now'), updated_at = datetime('now') "
+                        "WHERE id = ? AND list_id = ? AND removed_at IS NULL",
+                        (_item_id, _list_id),
+                    )
+                    cursor.close()
+
+            self._write_queue.submit_sync(_soft_remove)
+            self._touch_list(list_id)
+            logger.info("[LISTS] Removed item %s from list %s", item_id, list_id)
+            return True
+        except Exception as e:
+            logger.error(f"[LISTS] delete_item failed: {e}")
+            return False
+
     # Internal helpers
+
+    def _active_items(self, list_id: str) -> List[Dict[str, object]]:
+        """Active items for a list ordered by position (raw DB column values)."""
+        with self.db.connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT id, content, checked, position, added_at, updated_at "
+                "FROM list_items WHERE list_id = ? AND removed_at IS NULL "
+                "ORDER BY position ASC, added_at ASC",
+                (list_id,),
+            )
+            rows = cursor.fetchall()
+            cursor.close()
+        return [
+            {'id': row[0], 'content': row[1], 'checked': row[2], 'position': row[3],
+             'added_at': row[4], 'updated_at': row[5]}
+            for row in rows
+        ]
+
+    def _get_item_row(self, list_id: str, item_id: str) -> Optional[Dict[str, object]]:
+        """Fetch one active item by id; None if missing."""
+        with self.db.connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT id, content, checked, position, added_at, updated_at "
+                "FROM list_items WHERE id = ? AND list_id = ? AND removed_at IS NULL",
+                (item_id, list_id),
+            )
+            row = cursor.fetchone()
+            cursor.close()
+        if not row:
+            return None
+        return {'id': row[0], 'content': row[1], 'checked': bool(row[2]),
+                'position': row[3], 'added_at': row[4], 'updated_at': row[5]}
 
     def _get_list_row(self, list_id: str) -> Optional[Dict[str, object]]:
         """Resolve an active list by exact ID. Returns dict or None."""
@@ -425,7 +611,7 @@ class ListService:
             with self.db.connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute("""
-                    SELECT id, name, list_type, updated_at
+                    SELECT id, name, list_type, created_at, updated_at
                     FROM lists
                     WHERE id = ? AND deleted_at IS NULL
                 """, (list_id,))
@@ -433,7 +619,8 @@ class ListService:
                 cursor.close()
 
             if row:
-                return {'id': row[0], 'name': row[1], 'list_type': row[2], 'updated_at': row[3]}
+                return {'id': row[0], 'name': row[1], 'list_type': row[2],
+                        'created_at': row[3], 'updated_at': row[4]}
             return None
 
         except Exception as e:
