@@ -55,8 +55,6 @@ class ToolDispatcher:
     ``dispatch()`` is the single chokepoint: match → bind → gate
     (PolicyManager.wrap) → execute → render → record. The gated work runs in
     ``_execute()`` (emit → async-decision → run → render → emit).
-
-    Spec §5 / AC-4.
     """
 
     def __init__(self, mp: object, key_healer: "KeyHealer | None" = None) -> None:
@@ -76,7 +74,7 @@ class ToolDispatcher:
         → record → return a STRING. Records EVERY outcome (allow result, block,
         unknown) so the rendered trail tells the model what happened and it does
         not retry a blocked tool forever. No cancel check — the loop guards
-        cancel_event one line before calling this. Spec §5.
+        cancel_event one line before calling this.
         """
         from services.message_processor import _sanitize_llm_args  # noqa: PLC0415
 
@@ -214,7 +212,7 @@ class ToolDispatcher:
 
         Reads the bound parent off ``ability.mp`` (set by _bind()). act_summary
         (popped from params by dispatch()) is the WS tooltip; it is NOT a run()
-        argument. Spec §4.0 / §4.2 / D5.
+        argument.
         """
         run_async = bool(params.pop("async", False))
         config = getattr(self._mp, "config", None)
@@ -231,7 +229,7 @@ class ToolDispatcher:
         if run_async:
             # AsyncDelegateRunner owns the daemon-thread lifecycle + the captured
             # mp it delivers through; it returns the placeholder immediately so
-            # this ACT iteration is never blocked (spec §4.0 / §4.4). The
+            # this ACT iteration is never blocked. The
             # placeholder is prose the model reads while the real work runs.
             from services.async_delegate_runner import async_delegate_runner  # noqa: PLC0415
             placeholder = async_delegate_runner.spawn(ability, params, self._mp, act_summary)
@@ -314,8 +312,6 @@ class ToolDispatcher:
         rendered canonically with its code/hint/valid. A raised exception becomes
         ``code=unhandled-exception`` (with the VaultLockedError friendly message).
         A non-ToolResult return value HARD-FAILS as ``code=non-canonical-result``.
-
-        Spec §4.2 / I13.
         """
         try:
             ctx = ClientContext.current()

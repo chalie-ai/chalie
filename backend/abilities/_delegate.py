@@ -8,7 +8,7 @@
 
 """Shared helpers for delegate tools (subagent-as-tools).
 
-Spec §5b / §10f.  Each delegate tool is a standalone Ability that builds its
+Each delegate tool is a standalone Ability that builds its
 OWN ProcessorConfig inside run() and calls MessageProcessor.process().  There
 is NO subclass, NO SUBAGENT_TYPES registry, and NO make_subagent_config()
 factory — only these small shared primitives.

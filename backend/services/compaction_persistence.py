@@ -1,6 +1,6 @@
 """Pure SQL helpers for compaction state.
 
-The canonical watermark home (design §3.6) is the transcript table: a row
+The canonical watermark home is the transcript table: a row
 with role='compaction' whose OWN id is the watermark (compacted_up_to_id).
 Downstream `id > watermark` reads naturally exclude that row and everything
 before it.

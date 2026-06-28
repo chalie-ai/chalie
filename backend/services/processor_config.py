@@ -29,8 +29,8 @@ class ProcessorConfig(ABC):
     """True → the framework ``async`` boolean is exposed on every tool's schema
     for this channel, letting the model run a call in the background and receive
     the result as a later turn.  Only a push channel with a durable session can
-    honour a deferred result, so this is False everywhere except UserConfig
-    (§4.0 / §4.8d).  It gates schema *exposure* only — never routing."""
+    honour a deferred result, so this is False everywhere except UserConfig.
+    It gates schema *exposure* only — never routing."""
 
     uses_vision_provider: ClassVar[bool] = False
     """True -> Providers._resolve reads the brain's Vision Provider from the DB
@@ -87,21 +87,21 @@ class ProcessorConfig(ABC):
 
     suppress_history: bool
     """True → get_previous_messages() returns '' (housekeeping loops).
-    Set on all channels except UMP and ExternalAgent (§2 / AC-26)."""
+    Set on all channels except UMP and ExternalAgent."""
 
     # ── Live output (declarative, not a hook) ─────────────────────────────────
 
     broadcast_to: str | None
     """None = silent.  Non-None = stream live tool events to this channel and
     deliver the turn's end message there.  Only UserConfig sets this ('user');
-    all others leave it None (AC-28)."""
+    all others leave it None."""
 
     # ── Turn-0 auto-seed (declarative, not a hook) ────────────────────────────
 
     memory_seed: bool
     """True → fire the memory recall tool (action='recall') once on turn 0.
     Attachments are NOT a flag: presence of metadata['attachments'] auto-fires
-    document.upload per file on turn 0 (AC-30 / AC-31)."""
+    document.upload per file on turn 0."""
 
     # ── After-turn hooks — empty tuple = no-op ───────────────────────────────
 
@@ -110,7 +110,7 @@ class ProcessorConfig(ABC):
     run once after the assistant row is persisted.  Empty tuple = no-op.  Hooks
     are mutually independent and failure-isolated — see services/post_turn_hook.py
     and MessageProcessor._end_turn.  This is the ONLY hook surface on
-    ProcessorConfig (AC-32 / §4.8)."""
+    ProcessorConfig."""
 
     # ── Prompt builders (abstract — one implementation per channel) ───────────
 

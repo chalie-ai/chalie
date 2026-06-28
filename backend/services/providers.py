@@ -169,7 +169,7 @@ class Providers:
 
     @staticmethod
     def _record_send_counters(proc: object) -> None:
-        """Record per-send, per-channel turn counters (spec §4e)."""
+        """Record per-send, per-channel turn counters."""
         try:
             channel = getattr(getattr(proc, 'config', None), 'channel', '') or ''
             from services.metrics_service import MetricsService  # noqa: PLC0415

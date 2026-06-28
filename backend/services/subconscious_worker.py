@@ -24,8 +24,8 @@ LOG_PREFIX = "[SUBCONSCIOUS]"
 
 # ── Tunables (env-overridable) ────────────────────────────────────────────────
 
-DEFAULT_TICK_SEC = 300              # 5 minutes — spec §5.1
-DEFAULT_IDLE_WINDOW_SEC = 1800      # 30 minutes — spec §5.2 user-active gate
+DEFAULT_TICK_SEC = 300              # 5 minutes
+DEFAULT_IDLE_WINDOW_SEC = 1800      # 30 minutes — user-active gate
 
 _MEMORY_KEY_LAST_FIRED = "subconscious:last_fired_at"
 _DG_KEY_LAST_FIRED = "subconscious_last_fired_at"
@@ -60,7 +60,7 @@ _DMN_SYNTHESIS_KEYS = ('user_summary', 'user_summary_long')
 # so a large backlog drains over several ticks instead of stalling one tick.
 _SUMMARIZATION_CLUSTER_BUDGET = 5
 
-# Fact-extraction step budget (§F / spec §4.6 mechanism 3). The backlog of
+# Fact-extraction step budget. The backlog of
 # episodes WHERE facts_extracted_at IS NULL drains at a fixed per-tick budget,
 # measured in LLM calls so the tick stays bounded regardless of backlog size:
 # one extraction call per episode, capped here. A fresh instance processes

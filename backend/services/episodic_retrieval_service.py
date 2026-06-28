@@ -49,7 +49,7 @@ _MAX_TRAVERSAL_DEPTH = APEX_TRAVERSAL_MAX_DEPTH
 # so a bad timestamp degrades the recency term loudly instead of crashing.
 _PARSE_SENTINEL = datetime.min.replace(tzinfo=timezone.utc)
 
-# Vector KNN depth pulled per query (spec §4.5: collapsed-tree KNN k=50).
+# Vector KNN depth pulled per query (collapsed-tree KNN k=50).
 _VECTOR_KNN_K = 50
 
 # Composite scores are scaled into a 0-100-ish band for the memory skill's
@@ -67,7 +67,7 @@ _SALIENCE_SCALE = 10.0
 
 # Relative score floor: a candidate must score at least this fraction of the
 # top candidate's score to survive. Below it, it is DROPPED (never padded to k).
-# Tuned for precision-over-recall on the turn-0 hot path (spec §1.3).
+# Tuned for precision-over-recall on the turn-0 hot path.
 _RELATIVE_SCORE_FLOOR = 0.5
 
 
@@ -439,7 +439,7 @@ def _recency(ep: dict[str, object], now: datetime) -> float:
 
 
 def _importance(ep: dict[str, object]) -> float:
-    """Importance term: salience/10 × retrieval_weight (spec §4.5)."""
+    """Importance term: salience/10 × retrieval_weight."""
     salience_norm = float(cast(float, ep.get('salience') or 5)) / _SALIENCE_SCALE
     retrieval_w = float(cast(float, ep.get('retrieval_weight') or 1.0))
     return salience_norm * retrieval_w
@@ -472,7 +472,7 @@ def _rerank_composite(episodes: list[dict[str, object]]) -> list[dict[str, objec
 
     where ``relevance`` is the stronger of the two normalised lane signals,
     ``recency`` is an exp half-life ≈ 14d term on ``last_relevant_at``, and
-    ``importance`` is ``salience/10 × retrieval_weight`` (spec §4.5).
+    ``importance`` is ``salience/10 × retrieval_weight``.
 
     A RELATIVE floor then drops every candidate scoring below
     ``_RELATIVE_SCORE_FLOOR × top_score`` — survivors only, never padded to *k*.
@@ -505,7 +505,7 @@ def _rerank_composite(episodes: list[dict[str, object]]) -> list[dict[str, objec
 def _promote_to_apex(union: list[dict[str, object]]) -> list[dict[str, object]]:
     """Hydrate each matched hit into a full episode row for the collapsed tree.
 
-    Collapsed-tree retrieval (spec §4.5, RAPTOR collapsed-traversal): episodes
+    Collapsed-tree retrieval (RAPTOR collapsed-traversal): episodes
     at ALL hierarchy levels — leaves, super-episodes, era digests — compete in
     one candidate pool. A matched row is therefore surfaced AS-IS at its own
     level; it is no longer walked up to its apex (which discarded leaves and

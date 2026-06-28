@@ -27,7 +27,7 @@ Design:
   broadcasts its interim assistant text via _broadcast_interim() and
   ToolDispatcher.dispatch() emits live tool events, both fired only when
   broadcast_to is set; the turn's end message is broadcast by
-  _broadcast_turn_result() once the chain returns (AC-28).
+  _broadcast_turn_result() once the chain returns.
 """
 
 import logging
