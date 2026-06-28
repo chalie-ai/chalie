@@ -78,7 +78,7 @@ class TestChatHistory:
     def test_subagent_return_role_hidden_from_recent_history(self, db: sqlite3.Connection) -> None:
         """subagent_return rows must be hidden from user-visible chat history.
 
-        Plan §Q-spec-1: 'subagent_return' role is internal async-delivery — only the
+        'subagent_return' role is internal async-delivery — only the
         synthesised response reaches the chat, not the raw subagent envelope.
         """
         db.execute(

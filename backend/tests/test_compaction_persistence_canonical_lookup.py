@@ -1,6 +1,6 @@
 """Unit tests for compaction_persistence.get_compaction() canonical SQL lookup.
 
-Storage model (design §3.6): the compaction summary lives in the transcript
+Storage model: the compaction summary lives in the transcript
 table as a row with role='compaction' whose OWN id is the watermark
 (compacted_up_to_id). There is no status/success/failure concept — _compact()
 only ever writes a row when summary extraction succeeds, so a persisted row is

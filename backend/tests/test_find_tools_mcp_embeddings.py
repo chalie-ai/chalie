@@ -193,7 +193,7 @@ class TestEmbeddingsSurviveHeartbeatSync:
         The vectors must STILL be queryable because embed_server_tools keys
         mcp_tool_vectors by the stable tool_name (not by the volatile id).
 
-        ID-churn strategy (§11 adjudication):
+        ID-churn strategy:
         SQLite (INTEGER PRIMARY KEY, no AUTOINCREMENT) reuses freed rowids 1..N when a
         table is otherwise empty.  In a single-server isolated DB, taskie's DELETE+INSERT
         would get back ids 1..4 — making ids_before == ids_after and the precondition

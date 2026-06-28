@@ -238,7 +238,7 @@ class TestGetPreviousMessagesWindowFit:
 # _wrap_with_checkpoint — real DB tests
 #
 # The checkpoint summary is read from the canonical watermark home: a transcript
-# row with role='compaction' (design §3.6, get_compaction). Seed it via the
+# row with role='compaction' (via get_compaction). Seed it via the
 # production factory transcript_service.write_input_row — the exact call _compact()
 # makes — never a hand-rolled INSERT or the retired tool_calls audit-row model.
 # =============================================================================

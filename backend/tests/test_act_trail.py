@@ -57,7 +57,7 @@ def test_round_trips_a_real_tool_calls_row(db: sqlite3.Connection) -> None:
 
 def test_record_is_a_silent_noop_without_a_transcript_id(db: sqlite3.Connection) -> None:
     """Delegates with skip_transcript pass transcript_id=None; the NOT NULL FK
-    means record must skip rather than raise (spec §4c / F2)."""
+    means record must skip rather than raise."""
     before = db.execute("SELECT COUNT(*) FROM tool_calls").fetchone()[0]
 
     ActTrail().record(

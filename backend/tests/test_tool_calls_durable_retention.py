@@ -250,7 +250,7 @@ def test_review_tool_calls_excludes_narration_rows(db: sqlite3.Connection) -> No
     a normal tool call in the same window must be present.
 
     Narration rows (tool_name='narration') are mid-loop LLM text blobs.
-    Decision 4 keeps them in tool_calls for the trail but filters them from
+    They are kept in tool_calls for the trail but filtered from
     review_tool_calls so they do not pollute the user-facing tool audit.
     """
     from abilities._dispatcher import ToolDispatcher

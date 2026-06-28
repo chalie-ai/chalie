@@ -6,7 +6,7 @@
 #
 #     http://www.apache.org/licenses/LICENSE-2.0
 
-"""Feature test for the PostTurnHook failure-isolation contract (§4.8).
+"""Feature test for the PostTurnHook failure-isolation contract.
 
 Drives the real production after-turn path — ``MessageProcessor._end_turn`` —
 against the real test database with the real production hook
@@ -88,7 +88,7 @@ def _read_summary(db: sqlite3.Connection) -> dict[str, object]:
 
 def test_exploding_sibling_does_not_block_real_hook(db: sqlite3.Connection) -> None:
     """A saboteur hook raising first must not stop PersistUserSummaryHook from
-    writing both user_summary rows to data_graph (§4.8 failure isolation)."""
+    writing both user_summary rows to data_graph (failure isolation)."""
     saboteur = _ExplodingHook()
     mp = _make_processor((saboteur, PersistUserSummaryHook()))
 

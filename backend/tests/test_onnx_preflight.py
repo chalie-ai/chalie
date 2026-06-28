@@ -85,7 +85,7 @@ class TestOnnxRuntimeHint:
 
     def test_libcudart_failure_yields_cuda_hint(self) -> None:
         hint = RuntimeDepsService._onnxruntime_hint_for(_LIBCUDART_ERR)
-        # The parsed CUDA major (spec §D) pinpoints the wheel↔host mismatch for the operator.
+        # The parsed CUDA major pinpoints the wheel↔host mismatch for the operator.
         assert "libcudart.so.13" in hint
         assert "CUDA 13" in hint
         assert "CPU" in hint  # tells the operator the automatic fallback runs on CPU

@@ -6,19 +6,19 @@
 #
 #     http://www.apache.org/licenses/LICENSE-2.0
 
-"""Feature tests for per-call async (spec §4.0 / §4.1 / §4.8d — P4).
+"""Feature tests for per-call async.
 
 The framework ``async`` boolean is exposed on a tool's schema ONLY on a
 ``SUPPORTS_ASYNC`` channel (UserConfig) — never on a delegate/system
 channel (DmnConfig) and never when there is no live processor.  This is the
-schema-exposure gate, not a routing gate (§4.8d).
+schema-exposure gate, not a routing gate.
 
 The async LLM follow-up turn delivery — and the on-cancel "cancelled by the
 user" notice turn — is exercised end-to-end where a real model is available,
 not here.  This test proves the *decision* and the
 *non-blocking* contract without firing the LLM: the captured mp carries no
 config, so the post-run delivery bails at ``deliver_async_result``'s no-config
-guard instead of synthesising a turn (§4.4).
+guard instead of synthesising a turn.
 """
 
 import threading

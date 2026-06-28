@@ -260,7 +260,7 @@ class TestSystemAPI:
 
     @staticmethod
     def _seed_compaction(db: sqlite3.Connection, *, channel: str, summary: str, created_at: str) -> object:
-        """Seed a compaction summary the way production does (design §3.6): a
+        """Seed a compaction summary the way production does: a
         transcript row with role='compaction' whose OWN id is the watermark.
 
         Replaces the retired tool_calls audit-row model — compaction state now
@@ -294,7 +294,7 @@ class TestSystemAPI:
         comp = resp.get_json()['compaction']
         assert comp is not None
         assert comp['summary'] == 'Earlier turns condensed here.'
-        # The watermark IS the compaction row's own id (design §3.6).
+        # The watermark IS the compaction row's own id.
         assert comp['compacted_up_to_id'] == watermark
         # Timestamp is pre-formatted server-side; tests have no telemetry → UTC.
         assert comp['compacted_at'] == '2026-01-01 00:00'

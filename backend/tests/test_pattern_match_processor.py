@@ -642,7 +642,7 @@ class TestGeoPassProvenance:
     def test_geo_pass_skips_when_located_rows_are_on_muted_channel(
         self, db: sqlite3.Connection, store: object
     ) -> None:
-        """Channel filter (anchor J): location-tagged rows on a NON-user-activity"""
+        """Channel filter: location-tagged rows on a NON-user-activity"""
         from services.source_profiles import profile_for
         from services.subconscious_worker import SubconsciousWorker
 

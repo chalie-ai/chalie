@@ -266,7 +266,7 @@ class TestSnapshotRejections:
         """A snapshot whose chalie.db carries a column the running build's
         schema.sql does NOT declare would force convergence to DROP user data on
         restore. stage_import must block it with a loud typed error and stage
-        nothing (§3.8). The stray column is added to the snapshot's OWN chalie.db
+        nothing. The stray column is added to the snapshot's OWN chalie.db
         via real sqlite3 — no production test hook."""
         from services.snapshot_service import SnapshotService
 
@@ -338,7 +338,7 @@ class TestSnapshotRollbackAndLimits:
 
         # Induce a real failure: make one staged artifact unreadable so the
         # targeted swap raises mid-flight. The staging dir lives under the
-        # pending-restore path (§3.5); find a staged file and strip its perms.
+        # pending-restore path; find a staged file and strip its perms.
         staged_root = FileMapperService.get_data_path(".pending-restore")
         staged_files = [p for p in staged_root.rglob("*") if p.is_file()]
         assert staged_files, "stage_import must have extracted artifacts to stage"
@@ -363,7 +363,7 @@ class TestSnapshotRollbackAndLimits:
 
     def test_import_over_50mb_reaches_snapshot_logic_not_413(self, instance: Path, client: "FlaskClient") -> None:
         """A ~60 MB upload must NOT be rejected with HTTP 413 by the global cap —
-        proving the per-route MAX_CONTENT_LENGTH bypass (§5.1). The junk zip has
+        proving the per-route MAX_CONTENT_LENGTH bypass. The junk zip has
         no valid manifest, so a WORKING endpoint then fails the manifest/checksum
         check LOUDLY with a snapshot-level 4xx error envelope. The two assertions
         together are RED until the endpoint exists: status must be 'not 413' AND

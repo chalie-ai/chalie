@@ -99,7 +99,7 @@ def _worker() -> SubconsciousWorker:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# Cross-pollination recall (Decision 1 / §3.9)
+# Cross-pollination recall
 # ══════════════════════════════════════════════════════════════════════════════
 
 def _new_user_turn(text: str) -> object:
@@ -122,7 +122,7 @@ def _new_user_turn(text: str) -> object:
 def test_user_turn_recall_cross_pollinates_across_producing_channels(db: sqlite3.Connection, store: object) -> None:
     """A flashback recall on a USER turn must surface episodes stored from every
     episode-producing channel — user, dmn AND external-agent — because memory is
-    one corpus that cross-pollinates (Decision 1). Before this change a user turn
+    one corpus that cross-pollinates. Before this change a user turn
     only saw its own channel's episodes, so dmn's HEAVY reflections were
     write-only.
 
@@ -238,14 +238,14 @@ def test_fact_extraction_tags_provenance_with_origin_channel(db: sqlite3.Connect
     )
 
 
-# NOTE — decay-janitor HEAVY-channel protection (anchor G) is covered in its own
+# NOTE — decay-janitor HEAVY-channel protection is covered in its own
 # home, tests/test_decay_engine_service.py::TestFossilJanitor, which 
 # updates from the old "non-user → reaped" contract to "non-episode-producing →
 # reaped, HEAVY protected". It is not duplicated here.
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# Consolidation generalization (anchor D / §3.6 — the +293 highest-risk change)
+# Consolidation generalization — the highest-risk change
 # ══════════════════════════════════════════════════════════════════════════════
 
 def _sqlite_vec_available() -> bool:
@@ -476,7 +476,7 @@ def test_consolidation_is_per_channel_and_skips_muted_sources(db: sqlite3.Connec
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# Scheduled two-stage (Decision 2 / §4)
+# Scheduled two-stage
 # ══════════════════════════════════════════════════════════════════════════════
 
 def _join_threads(prefix: str, timeout: float = 15.0) -> None:
