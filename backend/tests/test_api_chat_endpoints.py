@@ -1,4 +1,4 @@
-"""Feature tests for api/chat.py HTTP contracts.
+"""Feature tests for the chat API HTTP contracts.
 
 Drives the real Flask app against a real SQLite database via authed_client.
 Pins synchronous endpoint contracts only; the async full-turn path (real UMP + LLM) is out of scope.
@@ -13,12 +13,12 @@ from flask.testing import FlaskClient
 @pytest.mark.unit
 class TestChatEndpoints:
 
-    def test_chat_empty_message_rejected_and_no_turn_started(self, authed_client: tuple[FlaskClient, sqlite3.Connection, object]) -> None:
-        """An empty POST /chat fails loud with 400/message required and must NOT
-        register a turn — a follow-up interrupt finds nothing in flight."""
+    def test_thread_empty_message_rejected_and_no_turn_started(self, authed_client: tuple[FlaskClient, sqlite3.Connection, object]) -> None:
+        """An empty POST /api/thread fails loud with 400/message required and must
+        NOT register a turn — a follow-up interrupt finds nothing in flight."""
         client, _db_conn, _store = authed_client
 
-        resp = client.post('/chat', data={'text': '   '})
+        resp = client.post('/api/thread', data={'text': '   '})
 
         assert resp.status_code == 400
         data = resp.get_json()
@@ -35,16 +35,6 @@ class TestChatEndpoints:
         client, _db_conn, _store = authed_client
 
         resp = client.post('/chat/interrupt')
-
-        assert resp.status_code == 200
-        assert resp.get_json() == {'ok': True, 'reason': 'no_active_turn'}
-
-    def test_chat_stop_is_alias_for_interrupt(self, authed_client: tuple[FlaskClient, sqlite3.Connection, object]) -> None:
-        """POST /chat/stop (deprecated alias) exists and handles the idle
-        state with the same contract as /chat/interrupt."""
-        client, _db_conn, _store = authed_client
-
-        resp = client.post('/chat/stop')
 
         assert resp.status_code == 200
         assert resp.get_json() == {'ok': True, 'reason': 'no_active_turn'}

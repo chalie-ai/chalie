@@ -164,18 +164,17 @@ def test_user_message_echo_reaches_all_surfaces_with_echo_id(broker: WebSocketBr
         )
 
 
-def test_post_chat_endpoint_broadcasts_user_echo_to_all_surfaces(
+def test_post_thread_endpoint_broadcasts_user_echo_to_all_surfaces(
     authed_client: tuple[object, sqlite3.Connection, object], broker: WebSocketBroker
 ) -> None:
-    """End-to-end via the REAL entry point: a ``POST /chat`` carrying ``echo_id``
-    must echo the message to every open surface before the turn runs.
+    """End-to-end via the REAL entry point: a ``POST /api/thread`` carrying
+    ``echo_id`` must echo the message to every open surface before the turn runs.
 
-    Drives the production Flask route (``post_chat``) against a real DB, with two
-    real surfaces connected to the real broker. The echo is broadcast
-    synchronously inside ``post_chat`` (before the background turn is spawned),
-    so both surfaces hold it by the time the 202 returns — proving the wiring
-    from the HTTP form field through to the fan-out the multi-surface sync
-    depends on.
+    Drives the production Flask route (``thread_create``) against a real DB, with
+    two real surfaces connected to the real broker. The echo is broadcast
+    synchronously inside ``_send`` (before the background turn is spawned), so
+    both surfaces hold it by the time the 201 returns — proving the wiring from
+    the HTTP form field through to the fan-out the multi-surface sync depends on.
     """
     from typing import cast as _cast
     from flask.testing import FlaskClient
@@ -188,11 +187,11 @@ def test_post_chat_endpoint_broadcasts_user_echo_to_all_surfaces(
     broker.connect(laptop)
 
     resp = client.post(
-        "/chat",
+        "/api/thread",
         data={"text": "What's on my calendar today?", "echo_id": "echo-endpoint-1"},
     )
-    assert resp.status_code == 202
-    assert resp.get_json() == {"status": "accepted"}
+    assert resp.status_code == 201
+    assert resp.data == b""
 
     # Cancel the spawned turn so no background processor lingers for later tests.
     client.post("/chat/interrupt")
@@ -201,7 +200,7 @@ def test_post_chat_endpoint_broadcasts_user_echo_to_all_surfaces(
         echoes = [m for m in surface.received if m.get("type") == "user_message"]
         assert len(echoes) == 1, (
             f"{name} surface must receive the user_message echo from the real "
-            f"POST /chat; got {surface.types()}"
+            f"POST /api/thread; got {surface.types()}"
         )
         assert echoes[0]["content"] == "What's on my calendar today?"
         assert echoes[0]["echo_id"] == "echo-endpoint-1"

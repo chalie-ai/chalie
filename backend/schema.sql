@@ -535,8 +535,8 @@ CREATE TABLE IF NOT EXISTS tool_calls (
     params        TEXT DEFAULT '{}',
     result        TEXT DEFAULT '',
     -- The ability's act_summary — the one-line "what I'm doing" the dispatcher
-    -- already streams live (act_tool_start). Persisting it lets the chat refresh
-    -- re-render each tool chip's blue summary box instead of dropping it on reload.
+    -- emits as `tool_invoked`. Persisting it lets the turn refetch re-render each
+    -- tool chip's blue summary box instead of dropping it on reload.
     summary       TEXT DEFAULT '',
     created_at    TEXT NOT NULL DEFAULT (datetime('now')),
     -- A tool call anchors ONLY to the transcript input row that drove it
@@ -580,8 +580,8 @@ CREATE INDEX IF NOT EXISTS ix_compactions_scope ON compactions(channel, for_turn
 -- document(s) attached to it.  Lets the chat re-render uploaded
 -- images/files on page refresh (the live preview is a browser-only
 -- blob: URL that dies on reload).  Written at the upload-seed point
--- (message_processor._seed_upload_attachment), read by
--- api.conversation.get_recent_history.  Composite PK dedups links and
+-- (message_processor._seed_upload_attachment), read by the thread
+-- serializer (api.conversation.serialize_turn).  Composite PK dedups links and
 -- serves the WHERE transcript_id IN (...) lookup (no separate index).
 -- ────────────────────────────────────────────────────────────────
 -- foreign_keys=ON is enforced (database_service.py), so both sides CASCADE:

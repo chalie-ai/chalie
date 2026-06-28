@@ -464,7 +464,7 @@ export const useSessionStore = defineStore('session', {
         return;
       }
 
-      // Step 3: 'response' while /chat is in-flight → ignore.
+      // Step 3: 'response' while a turn is in-flight → ignore.
       if ((data.type as string) === 'response' && this.isSending) return;
 
       // Step 4: background notify.

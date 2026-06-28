@@ -2,9 +2,6 @@
 Chat API — HTTP endpoints for client→server communication.
 
 Routes:
-  POST /chat               — receive a user message; always starts a new UMP
-                             turn. Returns 202 immediately; response arrives
-                             via WebSocketBroker.broadcast().
   POST /chat/interrupt     — cooperatively cancel the active UMP turn. The
                              cancelled turn deletes its own transcript and
                              tool_call rows. Returns 200 always with JSON body.
@@ -14,12 +11,16 @@ Routes:
   POST /chat/subagent/<sub_id>/stop — cooperatively cancel a running async
                              delegate by its sub_id. Returns 200 always.
 
+Send path:
+  User messages are sent via POST /api/thread (new thread) or
+  POST /api/thread/<turn_id> (reply) — see api/conversation.py. Both return
+  201 with an empty body; the turn surfaces via WS signals → REST pull.
+
 Design:
   WS is receive-only push (server→client). All client→server requests use
-  HTTP. The /chat endpoint always starts a new UMP turn. Mid-ACT user
-  messages are handled by the frontend: POST /chat/interrupt cancels the
-  active turn (which self-cleans its DB rows), then the frontend starts a
-  fresh turn with the combined original+new message text.
+  HTTP. Mid-ACT user messages are handled by the frontend: POST /chat/interrupt
+  cancels the active turn (which self-cleans its DB rows), then the frontend
+  starts a fresh turn with the combined original+new message text.
 
   User-channel messages flow through MessageProcessor.process() with the
   UserConfig ProcessorConfig subclass — no MessageProcessor subclass.
@@ -106,7 +107,7 @@ def _run_chat_background(
     request_id: str,
 ) -> None:
     """Clears the active UMP reference BEFORE broadcasting done so the frontend
-    can immediately POST /chat without racing a still-set active_ump."""
+    can immediately send a new turn without racing a still-set active_ump."""
     from services.message_processor import MessageProcessor  # noqa: PLC0415
 
     broker = WebSocketBroker()
@@ -120,7 +121,7 @@ def _run_chat_background(
             return
 
         # Clear the active UMP BEFORE broadcasting done so the frontend can
-        # immediately POST /chat without racing a still-set active_ump.
+        # immediately send a new turn without racing a still-set active_ump.
         _clear_active_ump(turn)
         _broadcast_done()
 
@@ -340,9 +341,9 @@ def _broadcast_user_echo(text: str, echo_id: str) -> None:
 
     The text is sent verbatim (the client renders a user bubble as escaped
     plain text), so the echoed bubble matches exactly what the sender typed.
-    Only user-typed messages enter through ``post_chat`` and reach this echo —
-    scheduled / external / async-synthesis turns do not, so no synthetic user
-    bubble is ever broadcast.
+    Only user-typed messages enter through the send endpoints and reach this
+    echo — scheduled / external / async-synthesis turns do not, so no synthetic
+    user bubble is ever broadcast.
     """
     WebSocketBroker().broadcast({
         "type": "user_message",
@@ -350,40 +351,6 @@ def _broadcast_user_echo(text: str, echo_id: str) -> None:
         "echo_id": echo_id,
         "timestamp": format_date(utc_now(), CHAT_TIMESTAMP_FMT, for_ui=True) or "",
     })
-
-
-@chat_bp.route("/chat", methods=["POST"])
-@require_auth
-def post_chat() -> ResponseReturnValue:
-    """Files are staged to temp paths and ingested via document.upload (by PATH, never bytes) at turn 0.
-
-    Response arrives asynchronously via WebSocketBroker.broadcast().
-    """
-    text = (request.form.get("text") or "").strip()
-    source = request.form.get("source") or "text"
-    echo_id = request.form.get("echo_id") or ""
-    attachments = _stage_chat_uploads(cast(Sequence[object], request.files.getlist("files")[:10]))
-
-    raw_thread_id = request.form.get("thread_id") or ""
-    thread_id: "int | None" = None
-    if raw_thread_id:
-        try:
-            thread_id = int(raw_thread_id)
-        except (ValueError, TypeError):
-            thread_id = None
-
-    if not text and not attachments:
-        return jsonify({"status": "error", "reason": "message required"}), 400
-
-    if not text and attachments:
-        text = "[File attached]"
-
-    # Echo the user message to every open surface so they all show it (the
-    # sender ignores its own echo via echo_id; peers render the bubble).
-    _broadcast_user_echo(text, echo_id)
-
-    dispatch_message(text, source=source, attachments=attachments, thread_id=thread_id)
-    return jsonify({"status": "accepted"}), 202
 
 
 @chat_bp.route("/chat/interrupt", methods=["POST"])
@@ -399,13 +366,6 @@ def post_chat_interrupt() -> ResponseReturnValue:
         logger.info("[Chat API] Interrupt signal delivered to active UMP turn")
         return jsonify({"ok": True, "interrupted": True}), 200
     return jsonify({"ok": True, "reason": "no_active_turn"}), 200
-
-
-@chat_bp.route("/chat/stop", methods=["POST"])
-@require_auth
-def post_chat_stop() -> ResponseReturnValue:
-    """Deprecated alias for POST /chat/interrupt. New callers should use POST /chat/interrupt instead."""
-    return post_chat_interrupt()
 
 
 @chat_bp.route("/chat/subagents/active", methods=["GET"])
