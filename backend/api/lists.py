@@ -28,6 +28,9 @@ register_dto(lists_ns, List, ListCreate, ListUpdate, ListItem, ItemCreate, ItemU
 
 _L = lists_ns.models
 
+_NOT_FOUND = "Not found"
+_NAME_TAKEN = "A list with this name already exists."
+
 
 def _get_list_service() -> "ListService":
     from services.database_service import get_shared_db_service
@@ -87,7 +90,7 @@ class ListsResource(Resource):
         try:
             list_id = svc.create_list(dto.name, list_type=dto.list_type)
         except ValueError:
-            return _error("A list with this name already exists.", 409)
+            return _error(_NAME_TAKEN, 409)
         return _list_dto(cast("dict[str, object]", svc.get_list(list_id)))
 
 
@@ -96,19 +99,19 @@ class ListResource(Resource):
     @require_session
     @lists_ns.param("list_id", "List id")
     @lists_ns.response(200, "The list", model=_L["List"])
-    @lists_ns.response(404, "Not found", model=_L["Error"])
+    @lists_ns.response(404, _NOT_FOUND, model=_L["Error"])
     @responds(List, code=200)
     def get(self, list_id: str) -> List | ResponseReturnValue:
         lst = _get_list_service().get_list(list_id)
         if lst is None:
-            return _error("Not found", 404)
+            return _error(_NOT_FOUND, 404)
         return _list_dto(lst)
 
     @require_session
     @lists_ns.param("list_id", "List id")
     @lists_ns.expect(_L["ListUpdate"])
     @lists_ns.response(200, "Updated list", model=_L["List"])
-    @lists_ns.response(404, "Not found", model=_L["Error"])
+    @lists_ns.response(404, _NOT_FOUND, model=_L["Error"])
     @lists_ns.response(409, "A list with this name already exists", model=_L["Error"])
     @lists_ns.response(422, "Validation failed", model=_L["Error"])
     @responds(List, code=200)
@@ -118,19 +121,19 @@ class ListResource(Resource):
         try:
             lst = svc.update_list(list_id, name=dto.name, list_type=dto.list_type)
         except ValueError:
-            return _error("A list with this name already exists.", 409)
+            return _error(_NAME_TAKEN, 409)
         if lst is None:
-            return _error("Not found", 404)
+            return _error(_NOT_FOUND, 404)
         return _list_dto(lst)
 
     @require_session
     @lists_ns.param("list_id", "List id")
     @lists_ns.response(204, "Deleted")
-    @lists_ns.response(404, "Not found", model=_L["Error"])
+    @lists_ns.response(404, _NOT_FOUND, model=_L["Error"])
     @responds(code=204)
     def delete(self, list_id: str) -> None | ResponseReturnValue:
         if not _get_list_service().delete_list(list_id):
-            return _error("Not found", 404)
+            return _error(_NOT_FOUND, 404)
         return None
 
 
@@ -143,26 +146,26 @@ class ListItemsResource(Resource):
     @require_session
     @lists_ns.param("list_id", "List id")
     @lists_ns.response(200, "All items", model=_L["ListItem"])
-    @lists_ns.response(404, "List not found", model=_L["Error"])
+    @lists_ns.response(404, _NOT_FOUND, model=_L["Error"])
     @responds(ListItem, code=200)
     def get(self, list_id: str) -> list[ListItem] | ResponseReturnValue:
         items = _get_list_service().get_items(list_id)
         if items is None:
-            return _error("Not found", 404)
+            return _error(_NOT_FOUND, 404)
         return [_item_dto(it) for it in items]
 
     @require_session
     @lists_ns.param("list_id", "List id")
     @lists_ns.expect(_L["ItemCreate"])
     @lists_ns.response(201, "Created item", model=_L["ListItem"])
-    @lists_ns.response(404, "List not found", model=_L["Error"])
+    @lists_ns.response(404, _NOT_FOUND, model=_L["Error"])
     @lists_ns.response(422, "Validation failed", model=_L["Error"])
     @responds(ListItem, code=201)
     @expects(ItemCreate)
     def post(self, list_id: str, dto: ItemCreate) -> ListItem | ResponseReturnValue:
         item = _get_list_service().add_item(list_id, dto.content)
         if item is None:
-            return _error("Not found", 404)
+            return _error(_NOT_FOUND, 404)
         return _item_dto(item)
 
 
@@ -173,7 +176,7 @@ class ListItemResource(Resource):
     @lists_ns.param("item_id", "Item id")
     @lists_ns.expect(_L["ItemUpdate"])
     @lists_ns.response(200, "Updated item", model=_L["ListItem"])
-    @lists_ns.response(404, "Not found", model=_L["Error"])
+    @lists_ns.response(404, _NOT_FOUND, model=_L["Error"])
     @lists_ns.response(422, "Validation failed", model=_L["Error"])
     @responds(ListItem, code=200)
     @expects(ItemUpdate)
@@ -183,16 +186,16 @@ class ListItemResource(Resource):
             content=dto.content, checked=dto.checked, position=dto.position,
         )
         if item is None:
-            return _error("Not found", 404)
+            return _error(_NOT_FOUND, 404)
         return _item_dto(item)
 
     @require_session
     @lists_ns.param("list_id", "List id")
     @lists_ns.param("item_id", "Item id")
     @lists_ns.response(204, "Deleted")
-    @lists_ns.response(404, "Not found", model=_L["Error"])
+    @lists_ns.response(404, _NOT_FOUND, model=_L["Error"])
     @responds(code=204)
     def delete(self, list_id: str, item_id: str) -> None | ResponseReturnValue:
         if not _get_list_service().delete_item(list_id, item_id):
-            return _error("Not found", 404)
+            return _error(_NOT_FOUND, 404)
         return None
