@@ -9,7 +9,6 @@ import AmbientCanvas from './components/layout/AmbientCanvas.vue';
 import PresenceBar from './components/layout/PresenceBar.vue';
 import ConversationFeed from './components/conversation/ConversationFeed.vue';
 import ThreadPanel from './components/conversation/ThreadPanel.vue';
-import ActivitySidebar from './components/conversation/ActivitySidebar.vue';
 import SearchOverlay from './components/overlays/SearchOverlay.vue';
 import InputDock from './components/layout/InputDock.vue';
 import LoadingOverlay from './components/layout/LoadingOverlay.vue';
@@ -96,10 +95,6 @@ onBeforeUnmount(() => {
        focus-routed handlers (voice/interrupt/attach strip) target the active
        dock only — see InputDock. -->
   <InputDock :class="{ 'weave-dimmed': baseDimmed }" />
-
-  <!-- Right-edge activity rail — one card per live/unread thread, folded out of
-       the mockup's floating notifications. Self-derives from the thread list. -->
-  <ActivitySidebar />
 
   <!-- Slide-over thread panel — opens over the feed when a pill or Reply action
        sets session.panelThreadId; carries its own reply dock. -->

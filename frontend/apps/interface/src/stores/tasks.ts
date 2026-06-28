@@ -8,12 +8,22 @@ import { defineStore } from 'pinia';
 import type { WsPushEvent } from '@chalie/shared';
 import { scheduler } from '../api/scheduler';
 import type { ScheduledItem, ActiveSubagent } from '../api/scheduler';
+import { useConversationStore } from './conversation';
 
 export type { ScheduledItem };
 
 export interface DriftTask {
   id?: string;
   [key: string]: unknown;
+}
+
+/** A live thread surfaced in the Activity drawer: an unread reply (`new`) or a
+ *  thread mid-reply within the active window (`thinking`). */
+export interface ThreadActivityItem {
+  turn_id: number;
+  label: string;
+  snippet: string;
+  kind: 'new' | 'thinking';
 }
 
 export const useTasksStore = defineStore('tasks', {
@@ -26,8 +36,27 @@ export const useTasksStore = defineStore('tasks', {
   }),
 
   getters: {
+    /** Live/unread threads as Activity rows — newest first; threads with no
+     *  turn_id (not yet bound) are skipped. Derived from the conversation feed. */
+    threadActivity(): ThreadActivityItem[] {
+      const convo = useConversationStore();
+      return convo.threads
+        .filter(
+          (t) =>
+            t.turn_id != null &&
+            ((t.unread ?? 0) > 0 || convo.isThreadActive(t.last_activity_at)),
+        )
+        .map((t) => ({
+          turn_id: t.turn_id as number,
+          label: t.gist || t.preview,
+          snippet: t.preview,
+          kind: ((t.unread ?? 0) > 0 ? 'new' : 'thinking') as ThreadActivityItem['kind'],
+        }))
+        .sort((a, b) => b.turn_id - a.turn_id);
+    },
+
     totalCount(state): number {
-      return state.reminders.length + state.subagents.size;
+      return state.reminders.length + state.subagents.size + this.threadActivity.length;
     },
   },
 

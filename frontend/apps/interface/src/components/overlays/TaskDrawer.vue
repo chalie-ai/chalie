@@ -19,6 +19,7 @@ import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue';
 import { Square, X } from '@lucide/vue';
 import { storeToRefs } from 'pinia';
 import { useTasksStore } from '../../stores/tasks';
+import { useSessionStore } from '../../stores/session';
 import { scheduler } from '../../api/scheduler';
 import type { ActiveSubagent } from '../../api/scheduler';
 import { webPlatformAdapter } from '@chalie/shared';
@@ -31,7 +32,14 @@ const TICK_INTERVAL_MS = 1_000;
 // ── Store ──────────────────────────────────────────────────────────────────────
 
 const tasks = useTasksStore();
-const { reminders, subagents, totalCount, isOpen } = storeToRefs(tasks);
+const session = useSessionStore();
+const { reminders, subagents, threadActivity, totalCount, isOpen } = storeToRefs(tasks);
+
+/** Open a thread's slide-over from its Activity row, then close the drawer. */
+function openThread(turnId: number): void {
+  session.openThreadPanel(turnId);
+  tasks.close();
+}
 
 // ── Local state ───────────────────────────────────────────────────────────────
 
@@ -209,6 +217,24 @@ onBeforeUnmount(() => {
     </div>
 
     <div id="taskDrawerList" class="task-drawer__list">
+      <!-- Live threads — unread replies or threads mid-reply. Clicking opens the
+           thread's slide-over. The mockup's floating notifications live here. -->
+      <template v-if="threadActivity.length">
+        <button
+          v-for="ta in threadActivity"
+          :key="`thread-${ta.turn_id}`"
+          class="task-drawer__thread"
+          :class="`task-drawer__thread--${ta.kind}`"
+          @click="openThread(ta.turn_id)"
+        >
+          <span class="task-drawer__thread-top">
+            <span class="task-drawer__thread-label">{{ ta.label }}</span>
+            <span class="task-drawer__thread-dot" :class="ta.kind" aria-hidden="true" />
+          </span>
+          <span class="task-drawer__thread-snippet">{{ ta.snippet }}</span>
+        </button>
+      </template>
+
       <!-- Scheduled items — what Chalie is set to do later -->
       <template v-if="hasReminders">
         <div
@@ -367,6 +393,75 @@ onBeforeUnmount(() => {
   font-size: 11px;
   color: var(--text-secondary);
   font-variant-numeric: tabular-nums;
+}
+
+// ── Thread-activity row ──────────────────────────────────────────────────────────
+// Live/unread threads, folded out of the mockup's floating notifications. A left
+// accent stripe (rose for unread, violet for thinking) tells the two apart.
+
+.task-drawer__thread {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border: none;
+  border-left: 2px solid transparent;
+  padding: 10px 16px;
+  cursor: pointer;
+
+  &:hover {
+    background: var(--surface-hover, rgba(128, 128, 128, 0.06));
+  }
+}
+
+.task-drawer__thread--new { border-left-color: var(--status-main); }
+.task-drawer__thread--thinking { border-left-color: var(--violet); }
+
+.task-drawer__thread-top {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.task-drawer__thread-label {
+  flex: 1;
+  min-width: 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.task-drawer__thread-dot {
+  flex-shrink: 0;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+
+  &.new {
+    background: var(--status-main);
+    box-shadow: 0 0 8px color-mix(in oklab, var(--status-main) 50%, transparent);
+  }
+
+  &.thinking {
+    background: var(--violet);
+    box-shadow: 0 0 10px color-mix(in oklab, var(--violet) 60%, transparent);
+    animation: pulseV 1.4s ease-in-out infinite;
+  }
+}
+
+.task-drawer__thread-snippet {
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: var(--text-secondary);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
 }
 
 // ── Delegate row ───────────────────────────────────────────────────────────────
