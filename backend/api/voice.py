@@ -1,5 +1,5 @@
 """
-Voice blueprint — STT + TTS via two single-purpose ONNX libraries.
+Voice namespace — STT + TTS via two single-purpose ONNX libraries.
 
 * TTS → ``kokoro_onnx.Kokoro`` (Kokoro v1.0 + espeak-ng phonemizer)
 * STT → ``moonshine_onnx.MoonshineOnnxModel`` (Moonshine base, ONNX)
@@ -35,19 +35,31 @@ from flask.typing import ResponseReturnValue
 from flask_restx import Namespace, Resource
 
 if TYPE_CHECKING:
-    from typing import Protocol
+    from collections.abc import Callable
+    from typing import ParamSpec, Protocol, TypeVar
+
+    P = ParamSpec("P")
+    R = TypeVar("R")
 
     class _KokoroModel(Protocol):
         def create(self, text: str, voice: str, speed: float, lang: str) -> "tuple[object, int]": ...
+
+    class _NsWithProduces(Protocol):
+        def produces(self, mimetypes: list[str]) -> "Callable[[Callable[P, R]], Callable[P, R]]": ...
 
 from services.file_mapper_service import FileMapperService
 from services.markup import extract_plaintext, markdown_to_html
 
 from .auth import require_auth
+from .dto import Error, expects, register_dto, responds
+from .dto.voice import Transcription, TtsRequest, VoiceHealth, VoiceUnavailable
 
 logger = logging.getLogger(__name__)
 
 voice_ns = Namespace("voice", description="Voice (STT + TTS) operations", path="/voice")
+
+register_dto(voice_ns, TtsRequest, Transcription, VoiceHealth, VoiceUnavailable, Error)
+_V = voice_ns.models
 
 # ── Constants (hardcoded — no env vars) ─────────────────────────────────────
 
@@ -597,56 +609,83 @@ def _transcribe_sync(data: bytes) -> str:
 
 # ── Routes ──────────────────────────────────────────────────────────────────
 
+
+def _error(message: str, status: int) -> ResponseReturnValue:
+    """Build a uniform non-2xx ``Error`` body carrying its own status code."""
+    return Error(error=message).model_dump(mode="json"), status
+
+
+def _health(
+    status: str,
+    reason: str | None = None,
+    missing: list[str] | None = None,
+    hint: str | None = None,
+) -> dict[str, object]:
+    """Serialize the always-200 readiness probe, dropping absent remediation fields.
+
+    The foundation responder does not exclude ``None``, so the probe is dumped
+    here with ``exclude_none`` to keep the ready body exactly ``{"status": "ok"}``.
+    """
+    return VoiceHealth(
+        status=status, reason=reason, missing=missing, hint=hint,
+    ).model_dump(exclude_none=True)
+
+
 @voice_ns.route("/health")
-@voice_ns.response(200, "Health status")
 class VoiceHealthResource(Resource):
     @require_auth
-    def get(self) -> ResponseReturnValue:
-        """Voice service health check."""
+    @voice_ns.response(200, "Voice readiness", model=_V["VoiceHealth"])
+    @responds(VoiceHealth, code=200)
+    def get(self) -> dict[str, object] | ResponseReturnValue:
+        """Voice service readiness probe (always 200; readiness is body-encoded)."""
         if not _VOICE_AVAILABLE:
-            return {
-                "status": "unavailable",
-                "reason": "deps_missing",
-                "missing": list(_VOICE_MISSING_MODULES),
-                "hint": _VOICE_INSTALL_HINT,
-            }, 200
+            return _health(
+                "unavailable",
+                reason="deps_missing",
+                missing=list(_VOICE_MISSING_MODULES),
+                hint=_VOICE_INSTALL_HINT,
+            )
 
         if _models_loaded:
-            return {"status": "ok"}, 200
+            return _health("ok")
         if _models_loading:
-            return {"status": "loading"}, 200
+            return _health("loading")
 
         missing_files = _missing_model_files()
         if missing_files:
-            return {
-                "status": "unavailable",
-                "reason": "models_missing",
-                "missing": missing_files,
-                "hint": "Enable voice in Settings to download voice models.",
-            }, 200
+            return _health(
+                "unavailable",
+                reason="models_missing",
+                missing=missing_files,
+                hint="Enable voice in Settings to download voice models.",
+            )
 
         threading.Thread(target=_ensure_models, daemon=True).start()
-        return {"status": "loading"}, 200
+        return _health("loading")
 
 
 @voice_ns.route("/synthesize")
-@voice_ns.response(200, "Audio WAV")
-@voice_ns.response(400, "Missing text")
-@voice_ns.response(503, "Voice unavailable")
 class VoiceSynthesizeResource(Resource):
     @require_auth
-    def post(self) -> ResponseReturnValue:
+    @voice_ns.expect(_V["TtsRequest"])
+    @cast("_NsWithProduces", voice_ns).produces(["audio/wav"])
+    @voice_ns.response(200, "Synthesized speech (audio/wav)")
+    @voice_ns.response(503, "Voice unavailable (deps or models missing/loading)", model=_V["VoiceUnavailable"])
+    @voice_ns.response(422, "Text is required or validation failed", model=_V["Error"])
+    @voice_ns.response(500, "TTS synthesis failed", model=_V["Error"])
+    @expects(TtsRequest)
+    def post(self, dto: TtsRequest) -> Response | ResponseReturnValue:
+        """Synthesize text into a single ``audio/wav`` blob."""
         if not _VOICE_AVAILABLE:
             return _voice_unavailable_payload(), 503
 
         if not _ensure_models():
             return _loading_or_missing_response()
 
-        data = request.get_json(silent=True) or {}
-        text = _clean_for_tts((data.get("text") or "").strip())
+        text = _clean_for_tts(dto.text.strip())
 
         if not text:
-            return {"error": "Text is required"}, 400
+            return _error("Text is required", 422)
 
         chunks = _segment_for_tts(text)
         logger.info(
@@ -678,7 +717,7 @@ class VoiceSynthesizeResource(Resource):
                 samples = np.concatenate(cast("list[np.ndarray[tuple[int], np.dtype[np.float32]]]", all_samples))
         except Exception as e:
             logger.error("[Voice] TTS synthesis failed: %s", e)
-            return {"error": "TTS synthesis failed"}, 500
+            return _error("TTS synthesis failed", 500)
 
         wav_bytes = _audio_to_wav_bytes(samples, cast(int, sr))
         return Response(
@@ -692,39 +731,39 @@ class VoiceSynthesizeResource(Resource):
 
 
 @voice_ns.route("/transcribe")
-@voice_ns.response(200, "Transcription text")
-@voice_ns.response(400, "Invalid upload")
-@voice_ns.response(503, "Voice unavailable")
 class VoiceTranscribeResource(Resource):
     @require_auth
-    def post(self) -> ResponseReturnValue:
+    @voice_ns.response(200, "Transcribed text", model=_V["Transcription"])
+    @voice_ns.response(503, "Voice unavailable (deps or models missing/loading)", model=_V["VoiceUnavailable"])
+    @voice_ns.response(422, "Invalid upload (missing/empty/malformed/too-long WAV)", model=_V["Error"])
+    @voice_ns.response(500, "Transcription failed", model=_V["Error"])
+    @responds(Transcription, code=200)
+    def post(self) -> Transcription | ResponseReturnValue:
+        """Transcribe a single uploaded WAV file into text."""
         if not _VOICE_AVAILABLE:
             return _voice_unavailable_payload(), 503
 
         if "file" not in request.files:
-            return {"error": "No file uploaded"}, 400
+            return _error("No file uploaded", 422)
 
         file = request.files["file"]
         data = file.read()
 
         if not data:
-            return {"error": "Empty file"}, 400
+            return _error("Empty file", 422)
 
         duration = _wav_duration_seconds(data)
         if duration <= 0.0:
-            return {"error": "Malformed or unsupported WAV file"}, 400
+            return _error("Malformed or unsupported WAV file", 422)
         if duration > MAX_AUDIO_SECONDS:
-            return {
-                "error": f"Audio exceeds {MAX_AUDIO_SECONDS}s limit ({duration:.1f}s)"
-            }, 400
+            return _error(f"Audio exceeds {MAX_AUDIO_SECONDS}s limit ({duration:.1f}s)", 422)
 
         if not _ensure_models():
             return _loading_or_missing_response()
 
         with _stt_lock:
             try:
-                text = _transcribe_sync(data)
-                return {"text": text}
+                return Transcription(text=_transcribe_sync(data))
             except Exception as e:
                 logger.error("[Voice] STT error: %s", e)
-                return {"error": "Transcription failed"}, 500
+                return _error("Transcription failed", 500)
