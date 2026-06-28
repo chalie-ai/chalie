@@ -48,12 +48,36 @@ class TestChatEndpoints:
         assert resp.status_code == 400
         assert 'skill' in resp.get_json()['error']
 
-    def test_action_with_skill_accepted(self, authed_client: tuple[FlaskClient, sqlite3.Connection, object]) -> None:
-        """POST /action with a skill returns 202 immediately — the result is
-        delivered asynchronously via WS, never in the HTTP response body."""
+    def test_action_unknown_skill_rejected_synchronously(self, authed_client: tuple[FlaskClient, sqlite3.Connection, object]) -> None:
+        """An unknown skill resolves synchronously to 400 in the HTTP body — the
+        result never crosses the WS bus."""
         client, _db_conn, _store = authed_client
 
         resp = client.post('/action', json={'skill': 'no-such-tool-xyz'})
 
-        assert resp.status_code == 202
-        assert resp.get_json() == {'status': 'accepted'}
+        assert resp.status_code == 400
+        assert 'Unknown skill' in resp.get_json()['error']
+
+    def test_action_real_skill_runs_synchronously_and_does_not_persist(self, authed_client: tuple[FlaskClient, sqlite3.Connection, object]) -> None:
+        """A rich-card action runs the real skill against the real DB and returns
+        its result inline: the body carries content/mode/duration, the list row is
+        really written, and NO transcript row is created — the action is a silent
+        mutation, not a conversation turn, and no data crosses the WS bus."""
+        client, db_conn, _store = authed_client
+        transcripts_before = db_conn.execute("SELECT COUNT(*) FROM transcript").fetchone()[0]
+
+        resp = client.post('/action', json={'skill': 'list', 'action': 'create', 'name': 'QA Groceries List'})
+
+        assert resp.status_code == 200
+        body = resp.get_json()
+        assert body['content']
+        assert body['mode'] == 'ACT'
+        assert isinstance(body['duration_ms'], int)
+
+        # Downstream proof the real skill ran end-to-end against the real DB.
+        row = db_conn.execute("SELECT name FROM lists WHERE name = ?", ('QA Groceries List',)).fetchone()
+        assert row is not None and row[0] == 'QA Groceries List'
+
+        # Silent mutation: a card action must NOT write a transcript turn.
+        transcripts_after = db_conn.execute("SELECT COUNT(*) FROM transcript").fetchone()[0]
+        assert transcripts_after == transcripts_before

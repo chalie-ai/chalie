@@ -15,7 +15,6 @@ import { getHost } from '../api/index';
 import { showToast } from '../utils/toast';
 import { useConversationStore, chalieFormPlaintext } from './conversation';
 import type { AttachmentPreview, ChalieForm } from './conversation';
-import type { ConversationSegment } from '../api/conversation';
 import { useTasksStore } from './tasks';
 import { useNotificationsStore } from './notifications';
 import type { TipState, UpdateState } from './notifications';
@@ -419,80 +418,20 @@ export const useSessionStore = defineStore('session', {
     },
 
     /**
-     * Route a drift push event. Routing order is load-bearing:
-     *   1. Simple content-free types  2. 'thought' (bypasses send-guard)
-     *   3. 'response' while sending → IGNORED  4. Background notify
-     *   5. 'notification'  6. 'response' / 'escalation' / 'drift' → appendChalie
+     * Route a drift push event. Turn signals and content-free events route first;
+     * the only push that still carries content is the scheduler `notification`
+     * (reminder/task-done) — it background-notifies, chimes unconditionally and
+     * refreshes the task strip. Every other frame is a signal handled above.
      */
     routeDrift(data: WsPushEvent): void {
       if (this._routeTurnSignal(data)) return;
       if (this._routeSimpleEvent(data)) return;
 
+      if (data.type !== 'notification') return;
       const content = (data as { content?: string }).content ?? '';
-      if (!content) return;
-
-      // Multi-surface sync — user echo. Own-surface echoes were dropped in
-      // WebSocketService (by echo_id), so this came from a DIFFERENT surface and
-      // has no bubble yet; render it so all surfaces match.
-      if ((data.type as string) === 'user_message') {
-        useConversationStore().appendUser(content, [], { inWorkingMemory: true });
-        return;
-      }
-
-      // Multi-surface sync — assistant reply (rule 2 of the echo+render model).
-      // The sending surface gets this via chat callbacks (never here); every
-      // OTHER surface lands here and renders a plain Chalie bubble.
-      if ((data.type as string) === 'message') {
-        const d = data as {
-          topic?: string;
-          exchange_id?: string;
-          mode?: string;
-          confidence?: number;
-          segments?: ConversationSegment[];
-          timestamp?: string;
-        };
-        this._notifyBackground(content);
-        useConversationStore().appendChalie(content, {
-          topic: d.topic,
-          exchange_id: d.exchange_id,
-          mode: d.mode ?? '',
-          confidence: d.confidence ?? 0,
-          segments: d.segments,
-          ts: d.timestamp || new Date().toISOString(),
-          type: 'message',
-        });
-        return;
-      }
-
-      // Step 2: thought bypasses the send-guard.
-      if ((data.type as string) === 'thought') {
-        useConversationStore().appendChalie(content, {
-          topic: (data as { topic?: string }).topic,
-          type: data.type,
-          ts: new Date().toISOString(),
-          mode: (data as { mode?: string }).mode ?? '',
-          confidence: (data as { confidence?: number }).confidence ?? 0,
-        });
-        return;
-      }
-
-      // Step 3: 'response' while a turn is in-flight → ignore.
-      if ((data.type as string) === 'response' && this.isSending) return;
-
-      // Step 4: background notify.
-      this._notifyBackground(content);
-
-      // Step 5: notification — scheduler fired (reminder/task done): chime
-      // UNCONDITIONALLY (no focus/permission gate, unlike step 4) and refresh
-      // the task strip.
-      if (data.type === 'notification') {
-        useNotificationsStore().chime();
-        void useTasksStore().loadActiveTasks();
-        return;
-      }
-
-      // Step 6: response / escalation / drift.
-      this._renderContentEvent(data, content);
+      if (content) this._notifyBackground(content);
+      useNotificationsStore().chime();
+      void useTasksStore().loadActiveTasks();
     },
 
     /**
@@ -520,6 +459,10 @@ export const useSessionStore = defineStore('session', {
           if (this.isSending && this._liveTurnId == null) this._liveTurnId = turnId;
           convo.bindLiveTurn(turnId);
           convo.setWorking(turnId, true);
+          // Pull the block so EVERY surface renders the user bubble from the API —
+          // the deleted user-echo's job, now signal-driven. The sender's optimistic
+          // forms reconcile via upsertTurn's monotonic, atomic re-splice.
+          void convo.refetchTurn(turnId);
           return true;
         case 'tool_invoked':
           if (turnId != null) convo.setLiveSummary(turnId, (data as { summary?: string }).summary ?? '');
@@ -565,21 +508,6 @@ export const useSessionStore = defineStore('session', {
         default:
           return false;
       }
-    },
-
-    /** Escalation gets an `escalation: true` flag (CSS `--escalation` modifier). */
-    _renderContentEvent(data: WsPushEvent, content: string): void {
-      useConversationStore().appendChalie(
-        content,
-        {
-          topic: (data as { topic?: string }).topic,
-          type: data.type,
-          ts: new Date().toISOString(),
-          mode: (data as { mode?: string }).mode ?? '',
-          confidence: (data as { confidence?: number }).confidence ?? 0,
-        },
-        { escalation: (data.type as string) === 'escalation' },
-      );
     },
 
     /** Fire a background notification when the tab is not focused. */

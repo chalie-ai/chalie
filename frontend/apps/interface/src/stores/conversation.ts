@@ -203,27 +203,6 @@ export const useConversationStore = defineStore('conversation', {
       return id;
     },
 
-    /** When `meta.segments` is set the form carries segments; otherwise `text`. */
-    appendChalie(
-      textOrContent: string,
-      meta: ChalieMeta,
-      opts?: { escalation?: boolean; inWorkingMemory?: boolean; turnId?: number | null },
-    ): number {
-      const id = nextId();
-      const form: ChalieForm = {
-        kind: 'chalie',
-        id,
-        text: meta.segments ? undefined : textOrContent,
-        segments: meta.segments,
-        meta,
-        escalation: opts?.escalation ?? false,
-        inWorkingMemory: opts?.inWorkingMemory ?? true,
-        turnId: opts?.turnId,
-      };
-      this.forms.push(form);
-      return id;
-    },
-
     /** Create a new (live, expanded) ACT tool-group and return its id. A thread
      *  reply tags it with the thread's turn_id so the live trail renders inside
      *  that thread; a new thread leaves it null until bindLiveTurn assigns one. */

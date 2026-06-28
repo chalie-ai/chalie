@@ -5,9 +5,9 @@ Routes:
   POST /chat/interrupt     — cooperatively cancel the active UMP turn. The
                              cancelled turn deletes its own transcript and
                              tool_call rows. Returns 200 always with JSON body.
-  POST /action             — receive an action button click; dispatches via
-                             ToolDispatcher.dispatch(). Returns 202 immediately;
-                             response arrives via WebSocketBroker.broadcast().
+  POST /action             — receive a rich-card control click; dispatches via
+                             ToolDispatcher.dispatch() and returns the result
+                             synchronously in the response body (no WS frame).
   POST /chat/subagent/<sub_id>/stop — cooperatively cancel a running async
                              delegate by its sub_id. Returns 200 always.
 
@@ -41,12 +41,9 @@ from flask import Blueprint, jsonify, request
 from flask.typing import ResponseReturnValue
 
 from .auth import require_auth
-from services.locale_service import CHAT_TIMESTAMP_FMT, format_date
 from services.log_utils import safe
 from services.markup import sanitize
-from services.time_utils import utc_now
 from services.websocket_broker import WebSocketBroker
-from services.segment_service import SegmentService
 
 if TYPE_CHECKING:
     from services.processor_config import ProcessorConfig
@@ -329,30 +326,6 @@ def _stage_chat_uploads(files: Sequence[object]) -> list[object]:
     return paths
 
 
-def _broadcast_user_echo(text: str, echo_id: str) -> None:
-    """Echo a just-received user message to every open surface.
-
-    Single user, many surfaces: the user may have Chalie open on several
-    devices/tabs at once, all of which must show the same conversation. The
-    surface that sent the message has already rendered it optimistically and
-    recognises its own ``echo_id`` to ignore this frame; every OTHER open
-    surface has no such bubble yet and renders one from this broadcast — so all
-    surfaces stay in sync.
-
-    The text is sent verbatim (the client renders a user bubble as escaped
-    plain text), so the echoed bubble matches exactly what the sender typed.
-    Only user-typed messages enter through the send endpoints and reach this
-    echo — scheduled / external / async-synthesis turns do not, so no synthetic
-    user bubble is ever broadcast.
-    """
-    WebSocketBroker().broadcast({
-        "type": "user_message",
-        "content": text or "",
-        "echo_id": echo_id,
-        "timestamp": format_date(utc_now(), CHAT_TIMESTAMP_FMT, for_ui=True) or "",
-    })
-
-
 @chat_bp.route("/chat/interrupt", methods=["POST"])
 @require_auth
 def post_chat_interrupt() -> ResponseReturnValue:
@@ -405,98 +378,68 @@ def post_subagent_stop(sub_id: str) -> ResponseReturnValue:
 @chat_bp.route("/action", methods=["POST"])
 @require_auth
 def post_action() -> ResponseReturnValue:
-    """Response arrives asynchronously via WebSocketBroker.broadcast()."""
+    """Rich-card control dispatch — runs the skill and returns its result inline.
+
+    A card action (checkbox, button) is a silent state mutation, not a conversation
+    turn: it never persists to the transcript and crosses no WS frame. The result
+    is returned synchronously so the calling card resolves its optimistic update
+    straight from the HTTP response — the WS bus stays signal-only."""
     body = request.get_json(silent=True) or {}
     skill = body.get("skill") or ""
     if not skill:
         return jsonify({"error": "Missing 'skill' in action payload"}), 400
 
     action_start = time.time()
+    try:
+        from abilities._dispatcher import ToolDispatcher  # noqa: PLC0415
+        from services.processor_config import ProcessorConfig  # noqa: PLC0415
 
-    def _run_action() -> None:
-        broker = WebSocketBroker()
-        try:
-            from abilities._dispatcher import ToolDispatcher  # noqa: PLC0415
-            from services.processor_config import ProcessorConfig  # noqa: PLC0415
+        params = {k: v for k, v in body.items() if k != "skill"}
 
-            params = {k: v for k, v in body.items() if k != "skill"}
+        # Build a minimal flat-path context for action-button dispatches.
+        # ToolDispatcher requires an mp-like object with config, uid,
+        # cancel_event.  broadcast_to=None keeps these dispatches silent.
+        # ProcessorConfig is abstract, so action-button dispatch needs a
+        # concrete subclass; no ACT loop runs here, so the three prompt
+        # builders are never invoked — they return "" to satisfy the base.
+        class _ActionButtonConfig(ProcessorConfig):
+            def __init__(self) -> None:
+                super().__init__(
+                    channel="action_button",
+                    role="action_button",
+                    policy_channel=ProcessorConfig.PolicyChannel.CHAT,
+                    always_available=[],
+                    skip_transcript=True,
+                    skip_input_row=True,
+                    suppress_history=True,
+                    broadcast_to=None,
+                    memory_seed=False,
+                )
 
-            # Build a minimal flat-path context for action-button dispatches.
-            # ToolDispatcher requires an mp-like object with config, uid,
-            # cancel_event.  broadcast_to=None keeps these
-            # dispatches silent (no live WS events for action buttons).
-            # ProcessorConfig is abstract, so action-button dispatch needs a
-            # concrete subclass; no ACT loop runs here, so the three prompt
-            # builders are never invoked — they return "" to satisfy the base.
-            class _ActionButtonConfig(ProcessorConfig):
-                def __init__(self) -> None:
-                    super().__init__(
-                        channel="action_button",
-                        role="action_button",
-                        policy_channel=ProcessorConfig.PolicyChannel.CHAT,
-                        always_available=[],
-                        skip_transcript=True,
-                        skip_input_row=True,
-                        suppress_history=True,
-                        broadcast_to=None,
-                        memory_seed=False,
-                    )
+            def get_user_definition(self, mp: object) -> str:
+                return ""
 
-                def get_user_definition(self, mp: object) -> str:
-                    return ""
+            def get_user_prompt(self, mp: object) -> str:
+                return ""
 
-                def get_user_prompt(self, mp: object) -> str:
-                    return ""
+            def get_system_prompt(self, mp: object) -> str:
+                return ""
 
-                def get_system_prompt(self, mp: object) -> str:
-                    return ""
+        class _ActionCtx:
+            config = _ActionButtonConfig()
+            uid = None
+            cancel_event = threading.Event()
 
-            _action_config = _ActionButtonConfig()
+        result_text = ToolDispatcher(_ActionCtx()).dispatch(skill, params)
+        if result_text.startswith("Unknown tool:"):
+            return jsonify({"error": f"Unknown skill: {skill}"}), 400
 
-            class _ActionCtx:
-                config = _action_config
-                uid = None
-                cancel_event = threading.Event()
-
-            ctx = _ActionCtx()
-            result_text = ToolDispatcher(ctx).dispatch(skill, params)
-
-            if result_text.startswith("Unknown tool:"):
-                broker.broadcast({
-                    "type": "error",
-                    "message": f"Unknown skill: {skill}",
-                    "recoverable": True,
-                })
-                broker.broadcast({"type": "done", "duration_ms": 0})
-                return
-
-            elapsed_ms = int((time.time() - action_start) * 1000)
-            content = sanitize(result_text or "Done.")
-
-            message_evt: dict[str, object] = {
-                "type": "message",
-                "content": content,
-                "topic": "",
-                "mode": "ACT",
-                "confidence": 0.95,
-                "exchange_id": "",
-                "metrics": {},
-                "timestamp": format_date(utc_now(), CHAT_TIMESTAMP_FMT, for_ui=True) or "",
-            }
-            message_evt["segments"] = SegmentService.build(content, [])
-            broker.broadcast(message_evt)
-            broker.broadcast({"type": "done", "duration_ms": elapsed_ms})
-
-        except Exception as exc:
-            logger.exception("[Chat API] Action handler error: %s", exc)
-            broker.broadcast({
-                "type": "error",
-                "message": str(exc),
-                "recoverable": True,
-            })
-            broker.broadcast({"type": "done", "duration_ms": 0})
-
-    thread = threading.Thread(target=_run_action, daemon=True, name=f"action-{skill}")
-    thread.start()
-
-    return jsonify({"status": "accepted"}), 202
+        return jsonify({
+            "content": sanitize(result_text or "Done."),
+            "mode": "ACT",
+            "confidence": 0.95,
+            "duration_ms": int((time.time() - action_start) * 1000),
+        }), 200
+    except Exception as exc:
+        logger.exception("[Chat API] Action handler error: %s", exc)
+        return jsonify({"error": str(exc)}), 500

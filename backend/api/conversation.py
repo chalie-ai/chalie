@@ -251,14 +251,12 @@ def thread_reply(turn_id: int) -> ResponseReturnValue:
 
 def _send(turn_id: "int | None") -> ResponseReturnValue:
     """Shared body of both send endpoints — the one chat-dispatch chokepoint. A
-    ``None`` turn_id starts a new thread; an int appends to it. Mirrors the legacy
-    /chat body (text/source/echo_id/files) but takes turn_id from the path, never
-    the form."""
-    from api.chat import dispatch_message, _stage_chat_uploads, _broadcast_user_echo  # noqa: PLC0415
+    ``None`` turn_id starts a new thread; an int appends to it. Reads the chat
+    body (text/source/files) but takes turn_id from the path, never the form."""
+    from api.chat import dispatch_message, _stage_chat_uploads  # noqa: PLC0415
 
     text = (request.form.get("text") or "").strip()
     source = request.form.get("source") or "text"
-    echo_id = request.form.get("echo_id") or ""
     attachments = _stage_chat_uploads(cast("list[object]", request.files.getlist("files")[:10]))
 
     if not text and not attachments:
@@ -266,6 +264,5 @@ def _send(turn_id: "int | None") -> ResponseReturnValue:
     if not text:
         text = "[File attached]"
 
-    _broadcast_user_echo(text, echo_id)
     dispatch_message(text, source=source, attachments=attachments, thread_id=turn_id)
     return "", 201

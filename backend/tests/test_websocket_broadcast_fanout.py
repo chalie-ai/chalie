@@ -17,8 +17,7 @@ so they all stay in sync.
 These tests exercise the REAL production path with zero mocks:
   * the real ``WebSocketBroker`` process-wide singleton (the broadcast channel),
   * real consumer objects at the WS boundary (the same ``send(raw)`` contract the
-    browser socket fulfils — exactly the pattern the broker calls in production),
-  * the real user-message echo tail ``api.chat._broadcast_user_echo``.
+    browser socket fulfils — exactly the pattern the broker calls in production).
 
 Before the multi-surface fix the broker held a single socket reference and a
 second connection overwrote the first, so only the most-recently-connected
@@ -127,48 +126,3 @@ def test_broadcast_prunes_dead_surface_and_keeps_delivering(db: sqlite3.Connecti
     assert healthy.types() == ["status", "status"], (
         f"the healthy surface must keep receiving after a peer was pruned; got {healthy.types()}"
     )
-
-
-# ── D. User-message echo: every open surface sees the message that was sent ─────
-
-
-def test_post_thread_endpoint_broadcasts_user_echo_to_all_surfaces(
-    authed_client: tuple[object, sqlite3.Connection, object], broker: WebSocketBroker
-) -> None:
-    """End-to-end via the REAL entry point: a ``POST /api/thread`` carrying
-    ``echo_id`` must echo the message to every open surface before the turn runs.
-
-    Drives the production Flask route (``thread_create``) against a real DB, with
-    two real surfaces connected to the real broker. The echo is broadcast
-    synchronously inside ``_send`` (before the background turn is spawned), so
-    both surfaces hold it by the time the 201 returns — proving the wiring from
-    the HTTP form field through to the fan-out the multi-surface sync depends on.
-    """
-    from typing import cast as _cast
-    from flask.testing import FlaskClient
-
-    client = _cast(FlaskClient, authed_client[0])
-
-    phone = _Surface()
-    laptop = _Surface()
-    broker.connect(phone)
-    broker.connect(laptop)
-
-    resp = client.post(
-        "/api/thread",
-        data={"text": "What's on my calendar today?", "echo_id": "echo-endpoint-1"},
-    )
-    assert resp.status_code == 201
-    assert resp.data == b""
-
-    # Cancel the spawned turn so no background processor lingers for later tests.
-    client.post("/chat/interrupt")
-
-    for surface, name in ((phone, "phone"), (laptop, "laptop")):
-        echoes = [m for m in surface.received if m.get("type") == "user_message"]
-        assert len(echoes) == 1, (
-            f"{name} surface must receive the user_message echo from the real "
-            f"POST /api/thread; got {surface.types()}"
-        )
-        assert echoes[0]["content"] == "What's on my calendar today?"
-        assert echoes[0]["echo_id"] == "echo-endpoint-1"
