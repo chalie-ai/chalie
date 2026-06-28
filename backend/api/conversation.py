@@ -179,21 +179,27 @@ def conversation_threads() -> ResponseReturnValue:
 
     Returns the ``limit`` most-recently-active threads, each with a preview
     (first content), row count, last activity timestamp and turn_id. Scroll-up
-    pagination via ``offset``.
+    pagination via ``offset``. A ``q`` query param turns the same feed into search
+    (§5.2): the page is keyword-filtered to threads with a matching user message and
+    capped at 5 — identical shape, no pagination.
     """
     from services.transcript_service import Transcript
 
-    try:
-        limit = max(1, min(120, int(request.args.get("limit", 20))))
-    except (ValueError, TypeError):
-        limit = 20
-    try:
-        offset = max(0, int(request.args.get("offset", 0)))
-    except (ValueError, TypeError):
-        offset = 0
+    query = request.args.get("q", "").strip()
+    if query:
+        limit, offset = 5, 0
+    else:
+        try:
+            limit = max(1, min(120, int(request.args.get("limit", 20))))
+        except (ValueError, TypeError):
+            limit = 20
+        try:
+            offset = max(0, int(request.args.get("offset", 0)))
+        except (ValueError, TypeError):
+            offset = 0
 
     threads, has_more, threads_returned = Transcript.recent_threads(
-        'user', exclude_roles=_THREAD_EXCLUDE, limit=limit, offset=offset,
+        'user', exclude_roles=_THREAD_EXCLUDE, limit=limit, offset=offset, query=query,
     )
     if threads:
         from services.thread_gist_service import get_thread_gist_service  # noqa: PLC0415

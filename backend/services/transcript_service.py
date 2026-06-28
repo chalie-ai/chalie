@@ -49,6 +49,22 @@ _COLS = (
 # becomes its own singleton turn in correct chronological order.
 _TURN_KEY = "COALESCE(turn_id, -id)"
 
+
+def _thread_query_filter(query: str) -> tuple[str, tuple[str, ...]]:
+    """The §5.2 search filter as a HAVING clause over a per-turn GROUP: keep only
+    threads carrying a user-role row whose content matches ``query`` (case-
+    insensitive substring). Empty query → no clause (the unfiltered feed). Shared by
+    ``recent_threads`` (the page) and ``count_turns`` (its ``has_more``) so search and
+    feed run one identical path."""
+    query = (query or "").strip()
+    if not query:
+        return "", ()
+    return (
+        " HAVING MAX(CASE WHEN role = 'user' AND content LIKE ? THEN 1 ELSE 0 END) = 1",
+        (f"%{query}%",),
+    )
+
+
 # settle0 — the FIRST assistant row of a turn whose tool_calls carry NO
 # model-driven tool. The two internally-dispatched passes (chat_history_compactor,
 # thinking) DO record a tool_calls row but are not model tools, so they never
@@ -331,18 +347,20 @@ class Transcript:
 
 
     @staticmethod
-    def count_turns(channel: str, *, exclude_roles: tuple[str, ...] = ()) -> int:
+    def count_turns(channel: str, *, exclude_roles: tuple[str, ...] = (), query: str = "") -> int:
         """Distinct turn count for a channel (NULL-safe ``_TURN_KEY``) — the single
-        source for the feed's ``has_more`` and the dashboard turn metric. 0 on error."""
+        source for the feed's ``has_more`` and the dashboard turn metric. A non-empty
+        ``query`` counts only threads matching the §5.2 search filter. 0 on error."""
         role_filter = "".join(" AND role != ?" for _ in exclude_roles)
+        having, having_params = _thread_query_filter(query)
         try:
             from services.database_service import get_shared_db_service
             db = get_shared_db_service()
             with db.connection() as conn:
                 row = conn.execute(
-                    f"SELECT COUNT(DISTINCT {_TURN_KEY}) FROM transcript "
-                    f"WHERE channel = ?{role_filter}",
-                    (channel, *exclude_roles),
+                    f"SELECT COUNT(*) FROM (SELECT 1 FROM transcript "
+                    f"WHERE channel = ?{role_filter} GROUP BY {_TURN_KEY}{having})",
+                    (channel, *exclude_roles, *having_params),
                 ).fetchone()
             return int(row[0]) if row and row[0] is not None else 0
         except Exception as e:
@@ -353,7 +371,7 @@ class Transcript:
     @staticmethod
     def recent_threads(
         channel: str, *, exclude_roles: tuple[str, ...] = (),
-        limit: int = 20, offset: int = 0,
+        limit: int = 20, offset: int = 0, query: str = "",
     ) -> tuple[list[dict[str, object]], bool, int]:
         """Thread-level metadata for the collapsed feed: one summary row per
         thread (turn_id), ordered by last activity (MAX(created_at) / MAX(id)).
@@ -364,18 +382,23 @@ class Transcript:
         earliest row's content, truncated — the collapsed preview).
         Legacy NULL-turn_id rows each form their own singleton thread via
         ``_TURN_KEY``.
+
+        A non-empty ``query`` turns the feed into search (§5.2): the page is
+        restricted to threads with a user-role row matching the keyword — same
+        rows, same ordering, same shape, just filtered (the caller caps the limit).
         """
         from services.database_service import get_shared_db_service
 
         role_filter = "".join(" AND role != ?" for _ in exclude_roles)
+        having, having_params = _thread_query_filter(query)
         db = get_shared_db_service()
         with db.connection() as conn:
             page_keys = [
                 r[0] for r in conn.execute(
                     f"SELECT {_TURN_KEY} AS k FROM transcript "
                     f"WHERE channel = ?{role_filter} "
-                    f"GROUP BY k ORDER BY MAX(id) DESC LIMIT ? OFFSET ?",
-                    (channel, *exclude_roles, limit, offset),
+                    f"GROUP BY k{having} ORDER BY MAX(id) DESC LIMIT ? OFFSET ?",
+                    (channel, *exclude_roles, *having_params, limit, offset),
                 ).fetchall()
             ]
         if not page_keys:
@@ -425,7 +448,9 @@ class Transcript:
 
         threads.sort(key=lambda t: cast("int", t.get("last_row_id") or 0), reverse=True)
         threads_returned = len(threads)
-        has_more = Transcript.count_turns(channel, exclude_roles=exclude_roles) > offset + threads_returned
+        has_more = Transcript.count_turns(
+            channel, exclude_roles=exclude_roles, query=query,
+        ) > offset + threads_returned
         return threads, has_more, threads_returned
 
 
