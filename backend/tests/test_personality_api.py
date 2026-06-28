@@ -107,8 +107,8 @@ class TestPersonalityAPIPutValidation:
             json={'tuple': [3, 0, 0, 0, 0]},
             content_type='application/json',
         )
-        assert resp.status_code == 400, (
-            f"Expected 400 for out-of-range step, got {resp.status_code}"
+        assert resp.status_code == 422, (
+            f"Expected 422 for out-of-range step, got {resp.status_code}"
         )
 
     def test_put_rejects_tuple_wrong_length(self, authed_client: tuple[FlaskClient, sqlite3.Connection, MemoryStore]) -> None:
@@ -118,8 +118,8 @@ class TestPersonalityAPIPutValidation:
             json={'tuple': [0, 0, 0, 0]},
             content_type='application/json',
         )
-        assert resp.status_code == 400, (
-            f"Expected 400 for 4-element tuple, got {resp.status_code}"
+        assert resp.status_code == 422, (
+            f"Expected 422 for 4-element tuple, got {resp.status_code}"
         )
 
     def test_put_rejects_non_list_tuple(self, authed_client: tuple[FlaskClient, sqlite3.Connection, MemoryStore]) -> None:
@@ -129,8 +129,8 @@ class TestPersonalityAPIPutValidation:
             json={'tuple': 'not-a-list'},
             content_type='application/json',
         )
-        assert resp.status_code == 400, (
-            f"Expected 400 for string 'tuple', got {resp.status_code}"
+        assert resp.status_code == 422, (
+            f"Expected 422 for string 'tuple', got {resp.status_code}"
         )
 
     def test_put_rejects_missing_tuple_field(self, authed_client: tuple[FlaskClient, sqlite3.Connection, MemoryStore]) -> None:
@@ -140,8 +140,8 @@ class TestPersonalityAPIPutValidation:
             json={},
             content_type='application/json',
         )
-        assert resp.status_code == 400, (
-            f"Expected 400 for missing 'tuple' field, got {resp.status_code}"
+        assert resp.status_code == 422, (
+            f"Expected 422 for missing 'tuple' field, got {resp.status_code}"
         )
 
     def test_put_rejects_bools_as_integers(self, authed_client: tuple[FlaskClient, sqlite3.Connection, MemoryStore]) -> None:
@@ -151,6 +151,6 @@ class TestPersonalityAPIPutValidation:
             json={'tuple': [True, False, 0, 0, 0]},
             content_type='application/json',
         )
-        assert resp.status_code == 400, (
-            f"Expected 400 for bool elements, got {resp.status_code}"
+        assert resp.status_code == 422, (
+            f"Expected 422 for bool elements, got {resp.status_code}"
         )
