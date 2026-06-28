@@ -386,21 +386,18 @@ CREATE VIRTUAL TABLE IF NOT EXISTS scheduled_items_vec USING vec0(embedding floa
 CREATE VIRTUAL TABLE IF NOT EXISTS lists_vec USING vec0(embedding float[768]);
 
 -- ────────────────────────────────────────────────────────────────
--- THREAD GIST — one-line label for a conversation thread (a turn that has
--- grown past its settle0). Pure FE affordance shown on the collapsed thread
--- pill; no embedding, no search index.
+-- THREAD GIST — one terse 3-5 word topical label per conversation thread (a
+-- turn grown past its settle0). Written once, on the first reply past settle0.
+-- Logical FK (channel, turn_id) → transcript; pure FE affordance, no embedding,
+-- no search index.
 -- ────────────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS thread_gist (
-    id          INTEGER PRIMARY KEY AUTOINCREMENT,
     channel     TEXT NOT NULL,
     turn_id     INTEGER NOT NULL,
-    summary     TEXT NOT NULL,
-    created_at  TEXT NOT NULL DEFAULT (datetime('now')),
-    updated_at  TEXT NOT NULL DEFAULT (datetime('now')),
-    UNIQUE(channel, turn_id)
+    gist        TEXT,
+    created_at  TEXT NOT NULL,
+    PRIMARY KEY (channel, turn_id)
 );
-
-CREATE INDEX IF NOT EXISTS idx_thread_gist_channel_turn ON thread_gist(channel, turn_id);
 
 -- ────────────────────────────────────────────────────────────────
 -- WRAPPER TOKENS — bearer auth for external programmatic access

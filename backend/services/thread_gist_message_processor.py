@@ -52,8 +52,8 @@ def _run_gist_processor(trigger_channel: str, trigger_turn_id: int) -> None:
         mp.thinking_level = "low"
         cast("_TriggerCtx", mp)._trigger_channel = trigger_channel
         cast("_TriggerCtx", mp)._trigger_turn_id = trigger_turn_id
-        summary = mp._run()
-        if summary:
-            get_thread_gist_service().upsert(trigger_channel, trigger_turn_id, summary)
+        gist = mp._run()
+        if gist:
+            get_thread_gist_service().upsert(trigger_channel, trigger_turn_id, gist)
     except Exception as exc:
         logger.warning("%s processor failed: %s", _LOG_PREFIX, exc)

@@ -1,9 +1,10 @@
-"""ThreadGistConfig — delegate channel that produces a one-line thread label.
+"""ThreadGistConfig — delegate channel that produces a terse topical thread label.
 
-Fired once when a turn first grows into a thread (the first user reply past its
-settle0). The MP reads only that thread's user messages from the DB (no carried
-state), sends a single delegate call, and the daemon target persists the label
-via ``ThreadGistService.upsert``. No tools, no act trail, no transcript row.
+Fired once when a turn first grows into a thread (the first reply past its
+settle0). The MP reads ONLY two non-assistant messages from the DB — the thread's
+opening message and the first message beyond settle0 (no carried state) — sends a
+single delegate call, and the daemon target persists the label via
+``ThreadGistService.upsert``. No tools, no act trail, no transcript row.
 """
 
 from __future__ import annotations
@@ -17,8 +18,11 @@ if TYPE_CHECKING:
 
 
 _THREAD_GIST_SYSTEM_PROMPT = (
-    "Create a terse one-line summary of what the user is discussing with the agent. "
-    "Return ONLY the summary sentence — no preamble, no quotes, no markdown."
+    "Name the subject matter of the two messages below in a very terse 3-5 word "
+    "topical label. Be direct and expressive but terse. Name the topic itself — do "
+    'NOT use framing like "the user asked" or "the user wants" '
+    '(e.g. "Mac Mini Research", "HN Post Feedback"). Return ONLY the label — no '
+    "preamble, no quotes, no markdown, no trailing punctuation."
 )
 
 
@@ -48,7 +52,8 @@ class ThreadGistConfig(ProcessorConfig):
         return _THREAD_GIST_SYSTEM_PROMPT
 
     def get_user_prompt(self, mp: "MessageProcessor") -> str:
-        """Derive the thread's user messages from the DB via trigger context."""
+        """Exactly two non-assistant messages from the DB via trigger context — the
+        thread's opening message and the first message beyond settle0."""
         from services.locale_service import CHAT_TIMESTAMP_FMT, format_date  # noqa: PLC0415
         from services.transcript_service import Transcript  # noqa: PLC0415
 
@@ -59,13 +64,20 @@ class ThreadGistConfig(ProcessorConfig):
 
         rows = [
             r for r in Transcript.by_turn(trigger_channel, trigger_turn_id)
-            if r.get("role") == "user"
+            if r.get("role") != "assistant"
         ]
         if not rows:
             return ""
 
+        settle = Transcript.settle0(trigger_channel, trigger_turn_id)
+        beyond = next(
+            (r for r in rows if settle is not None and cast("int", r.get("id")) > settle),
+            None,
+        )
+        picked = [rows[0]] + ([beyond] if beyond is not None and beyond is not rows[0] else [])
+
         lines = ["# User Message Prompt", "## User Messages"]
-        for r in rows:
+        for r in picked:
             ts = format_date(cast("str", r.get("created_at")), CHAT_TIMESTAMP_FMT, for_ui=True) or ""
             content = cast("str", r.get("content") or "").replace("\n", " ").strip()
             lines.append(f"[{ts}] {content}")
