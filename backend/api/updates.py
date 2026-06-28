@@ -1,11 +1,10 @@
 """
 Updates API — State mutation endpoints for external wrappers and the chat UI.
 
-Three classified update types, each with its own endpoint:
+Two classified update types, each with its own endpoint:
 
   POST /api/updates/belief  — set or correct a user trait
   POST /api/updates/memory  — encode an episodic/semantic memory
-  POST /api/updates/feedback — report intent execution outcome
 
 All endpoints require authentication (cookie session or bearer token).
 Bearer-authenticated requests are additionally checked against the wrapper's
@@ -13,7 +12,6 @@ Bearer-authenticated requests are additionally checked against the wrapper's
 bypass permission checks entirely.
 """
 
-import json
 import logging
 import uuid
 from typing import TYPE_CHECKING
@@ -165,52 +163,4 @@ class MemoryResource(Resource):
             return {"error": "Internal error encoding memory"}, 500
 
         logger.info("[Updates API] memory update: topic=%r salience=%d", topic, salience)
-        return {"ok": True}, 200
-
-
-# ---------------------------------------------------------------------------
-# POST /api/updates/feedback
-# ---------------------------------------------------------------------------
-
-@updates_ns.route("/feedback")
-@updates_ns.response(200, "Feedback recorded")
-@updates_ns.response(400, "Missing intent_id/outcome")
-@updates_ns.response(403, "Insufficient permissions")
-class FeedbackResource(Resource):
-    @require_auth
-    def post(self) -> ResponseReturnValue:
-        """Report intent execution outcome (feedback update)."""
-        denied = _check_update_permission("feedback")
-        if denied is not None:
-            return denied
-
-        body = request.get_json(silent=True) or {}
-        intent_id = (body.get("intent_id") or "").strip()
-        outcome = (body.get("outcome") or "").strip()
-
-        if not intent_id:
-            return {"error": "intent_id is required"}, 400
-        if not outcome:
-            return {"error": "outcome is required"}, 400
-
-        details = (body.get("details") or "").strip()
-
-        try:
-            from services.memory_client import MemoryClientService
-            from services.time_utils import utc_now
-
-            store = MemoryClientService.create_connection()
-            feedback_key = f"intent_feedback:{intent_id}"
-            record = {
-                "intent_id": intent_id,
-                "outcome": outcome,
-                "details": details,
-                "recorded_at": utc_now().isoformat(),
-            }
-            store.set(feedback_key, json.dumps(record), ex=86400)
-        except Exception as exc:
-            logger.error("[Updates API] feedback update failed: %s", exc)
-            return {"error": "Internal error recording feedback"}, 500
-
-        logger.info("[Updates API] feedback update: intent_id=%r outcome=%r", intent_id, outcome)
         return {"ok": True}, 200

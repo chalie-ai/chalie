@@ -44,7 +44,7 @@ class TestCreateToken:
         assert row[0] != raw
 
     def test_capabilities_round_trip(self, svc: WrapperAuthService, db: sqlite3.Connection) -> None:
-        caps: dict[str, object] = {"signals": ["context_change"], "intents": ["read_memory"]}
+        caps: dict[str, object] = {"signals": ["context_change", "location_change"]}
         _, wid = svc.create_token("W1", capabilities=caps)
         row = db.execute(
             "SELECT capabilities FROM wrapper_tokens WHERE wrapper_id = ?", (wid,)
@@ -99,7 +99,7 @@ class TestListAndGet:
 class TestUpdateCapabilities:
     def test_update_persists_new_capabilities(self, svc: WrapperAuthService) -> None:
         _, wid = svc.create_token("W1", capabilities=cast(dict[str, object], {"signals": ["old"]}))
-        new_caps: dict[str, object] = {"signals": ["new1", "new2"], "intents": ["write"]}
+        new_caps: dict[str, object] = {"signals": ["new1", "new2", "new3"]}
         svc.update_capabilities(wid, new_caps)
         result = svc.get_wrapper(wid)
         assert cast(dict[str, object], result)["capabilities"] == new_caps
