@@ -88,14 +88,6 @@ const canSend = computed(
   () => text.value.trim().length > 0 || attachments.getFiles().length > 0,
 );
 
-/** Auto-resize: reset height then cap at 120px. */
-function grow(): void {
-  const el = textareaRef.value;
-  if (!el) return;
-  el.style.height = 'auto';
-  el.style.height = Math.min(el.scrollHeight, 120) + 'px';
-}
-
 async function handleSend(): Promise<void> {
   const trimmed = text.value.trim();
 
@@ -107,7 +99,7 @@ async function handleSend(): Promise<void> {
     isImage: p.isImage,
   }));
 
-  // Guard here too so we don't clear/re-grow needlessly. Same gate as canSend.
+  // Guard here too so we don't clear needlessly. Same gate as canSend.
   if (!trimmed && files.length === 0) return;
 
   // Clear the image strip only when this actually dispatches a turn. When the
@@ -118,7 +110,6 @@ async function handleSend(): Promise<void> {
   // Clear textarea before awaiting so the UI feels instant.
   text.value = '';
   await nextTick();
-  grow();
 
   await session.sendMessage(trimmed, 'text', files, previews, props.turnId);
 
@@ -186,7 +177,6 @@ function onTurnInterrupted(e: Event): void {
   const detail = (e as CustomEvent<{ text: string }>).detail;
   text.value = detail.text ?? '';
   nextTick(() => {
-    grow();
     textareaRef.value?.focus();
     // Move cursor to end.
     const el = textareaRef.value;
@@ -206,7 +196,6 @@ function onEditQueued(e: Event): void {
   markActive();
   text.value = text.value ? `${text.value}\n${detail.text}` : detail.text;
   nextTick(() => {
-    grow();
     textareaRef.value?.focus();
     const el = textareaRef.value;
     if (el) el.selectionStart = el.selectionEnd = el.value.length;
@@ -220,7 +209,6 @@ function onVoiceTranscript({ text: transcript }: { text: string }): void {
   if (!isActiveDock.value) return;
   text.value = transcript;
   nextTick(() => {
-    grow();
     textareaRef.value?.focus();
     // Move cursor to end.
     const el = textareaRef.value;
@@ -353,9 +341,9 @@ onBeforeUnmount(() => {
           ref="textareaRef"
           v-model="text"
           class="input-dock__textarea"
+          :aria-label="turnId != null ? 'Reply in thread' : 'Message Chalie'"
           :placeholder="turnId != null ? 'Reply in this thread…' : 'Talk to Chalie…'"
           rows="1"
-          @input="grow"
         ></textarea>
 
         <button

@@ -54,7 +54,7 @@ async function startScan(): Promise<void> {
   color: var(--text-primary);
   text-align: center;
 }
-.link-device__title { font-size: 1.5rem; font-weight: 700; }
+.link-device__title { font-size: 1.5rem; font-weight: 600; }
 .link-device__hint { max-width: 28rem; color: var(--text-secondary); line-height: 1.5; }
 .link-device__scan {
   padding: var(--space-sm) var(--space-xl);

@@ -96,7 +96,7 @@ onBeforeUnmount(() => {
   border: 1px solid var(--border-subtle);
   text-align: center;
 }
-.unlock-vault__title { font-size: 1.35rem; font-weight: 700; color: var(--text-primary); }
+.unlock-vault__title { font-size: 1.35rem; font-weight: 600; color: var(--text-primary); }
 .unlock-vault__hint { color: var(--text-secondary); line-height: 1.5; }
 .unlock-vault__input {
   padding: var(--space-sm) var(--space-md);

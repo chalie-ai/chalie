@@ -164,8 +164,9 @@ async function submitCreate(): Promise<void> {
       </div>
       <form @submit.prevent="submitCreate">
         <div class="form-group">
-          <label>Title <span style="color:var(--error)">*</span></label>
+          <label for="skillTitle">Title <span class="text-error">*</span></label>
           <input
+            id="skillTitle"
             v-model="createTitle"
             type="text"
             placeholder="e.g. Track Package Delivery"
@@ -173,8 +174,9 @@ async function submitCreate(): Promise<void> {
           >
         </div>
         <div class="form-group">
-          <label>Use for <span style="color:var(--error)">*</span></label>
+          <label for="skillUseFor">Use for <span class="text-error">*</span></label>
           <input
+            id="skillUseFor"
             v-model="createUseFor"
             type="text"
             placeholder="One sentence: when should this skill be used?"
@@ -182,16 +184,18 @@ async function submitCreate(): Promise<void> {
           >
         </div>
         <div class="form-group">
-          <label>Tags</label>
+          <label for="skillTags">Tags</label>
           <input
+            id="skillTags"
             v-model="createTags"
             type="text"
             placeholder="logistics, tracking, delivery"
           >
         </div>
         <div class="form-group">
-          <label>Instructions <span style="color:var(--error)">*</span></label>
+          <label for="skillInstructions">Instructions <span class="text-error">*</span></label>
           <textarea
+            id="skillInstructions"
             v-model="createContent"
             rows="10"
             :placeholder="'1. First step (reference tools like `search`, `memory`)\n2. Second step\n3. Third step'"
@@ -211,8 +215,7 @@ async function submitCreate(): Promise<void> {
 
     <div
       v-if="userSkills.length === 0"
-      class="empty-state"
-      style="margin-bottom:24px;"
+      class="empty-state mb-lg"
     >
       <div class="empty-icon">
         <BookOpen :size="40" />
@@ -269,7 +272,7 @@ async function submitCreate(): Promise<void> {
           :class="{ 'skill-expanded': expandedId === skill.id }"
         >
           <div class="skill-card-header">
-            <div class="skill-card-title" style="cursor:pointer;" @click="toggleExpand(skill)">
+            <div class="skill-card-title clickable" @click="toggleExpand(skill)">
               <span class="skill-expand-icon">
                 <component :is="expandedId === skill.id ? ChevronDown : ChevronRight" :size="12" />
               </span>
@@ -316,7 +319,7 @@ async function submitCreate(): Promise<void> {
       </template>
     </div>
 
-    <h4 class="section-head" style="margin-top:32px;">Curated Skills</h4>
+    <h4 class="section-head mt-lg">Curated Skills</h4>
 
     <div v-if="curatedSkills.length === 0" class="empty-state">
       <p>No curated skills loaded.</p>
@@ -330,7 +333,7 @@ async function submitCreate(): Promise<void> {
         :class="{ 'skill-disabled': !skill.enabled, 'skill-expanded': expandedId === skill.id }"
       >
         <div class="skill-card-header">
-          <div class="skill-card-title" style="cursor:pointer;" @click="toggleExpand(skill)">
+          <div class="skill-card-title clickable" @click="toggleExpand(skill)">
             <span class="skill-expand-icon">
               <component :is="expandedId === skill.id ? ChevronDown : ChevronRight" :size="12" />
             </span>
@@ -378,7 +381,7 @@ async function submitCreate(): Promise<void> {
     </div>
 
     <template v-if="associations.length > 0">
-      <h4 class="section-head" style="margin-top:32px;">Skill Associations</h4>
+      <h4 class="section-head mt-lg">Skill Associations</h4>
       <p class="panel-desc">Patterns discovered from your behaviour, linked to skills.</p>
       <table class="records-table">
         <thead>
@@ -393,8 +396,8 @@ async function submitCreate(): Promise<void> {
           <tr v-for="(a, idx) in associations" :key="idx">
             <td><span class="badge badge-violet">{{ a.pattern_name }}</span></td>
             <td>{{ a.skill_title }}</td>
-            <td style="font-size:12px;color:var(--text-secondary);">{{ a.rule }}</td>
-            <td style="font-size:12px;color:var(--text-tertiary);">{{ formatDate(a.created_at) }}</td>
+            <td class="text-xs text-secondary">{{ a.rule }}</td>
+            <td class="text-xs text-tertiary">{{ formatDate(a.created_at) }}</td>
           </tr>
         </tbody>
       </table>

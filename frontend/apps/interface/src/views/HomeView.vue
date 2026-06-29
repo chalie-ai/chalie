@@ -23,7 +23,7 @@ onMounted(async () => {
 </script>
 
 <template>
-  <main data-testid="home" style="max-width: 640px; margin: 2rem auto; padding: 0 1rem">
+  <main data-testid="home" class="page-container">
     <BaseCard title="Chalie — Vue foundation">
       <p>
         Theme: <strong data-testid="theme">{{ theme }}</strong>
@@ -35,7 +35,7 @@ onMounted(async () => {
         Backend: <strong data-testid="ready">{{ ready }}</strong>
       </p>
       <BaseField v-model="note" data-testid="note" label="Scratch note" placeholder="type…" />
-      <div style="display: flex; gap: 0.5rem; margin-top: 1rem">
+      <div class="action-row">
         <BaseButton data-testid="toggle-theme" @click="toggle">Toggle theme</BaseButton>
         <BaseButton variant="ghost">Ghost</BaseButton>
       </div>

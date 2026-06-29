@@ -181,12 +181,13 @@ async function onUpload(event: Event): Promise<void> {
     ref="fileInput"
     type="file"
     accept=".pdf,.docx,.md,.txt,.csv,.zip"
-    style="display:none"
+    class="hidden"
+    aria-label="Upload document"
     @change="onUpload"
   >
 
   <template v-if="viewMode === 'detail'">
-    <div class="provider-form-page" style="max-width:none">
+    <div class="provider-form-page provider-form-page--full">
       <div class="form-page-header">
         <button class="btn btn-secondary btn-sm back-btn" @click="viewMode = 'list'">
           <ChevronLeft :size="14" /> Back

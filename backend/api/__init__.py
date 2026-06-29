@@ -102,7 +102,6 @@ def _deployment_origins() -> list[str]:
 def _configure_app(app: Flask) -> None:
     """Apply Flask config, proxy middleware, CORS, and baseline security headers to a new app instance."""
     app.config['MAX_CONTENT_LENGTH'] = 50 * 1024 * 1024
-    app.config['SEND_FILE_MAX_AGE_DEFAULT'] = 0
     # Emit every registered DTO in the OpenAPI definitions; nested-envelope
     # shapes (a list of associations inside a result DTO) otherwise dangle.
     app.config['RESTX_INCLUDE_ALL_MODELS'] = True
@@ -134,16 +133,33 @@ def _register_static_routes(app: Flask) -> None:
         dist/on-boarding/index.html, dist/pairing/index.html).
       • brain      →  apps/brain/dist      — admin SPA at '/brain/', auth-gated.
 
-    index.html documents are served no-cache (they point at hashed asset URLs);
-    SEND_FILE_MAX_AGE_DEFAULT=0 keeps hashed assets revalidating, which is correct
-    because a new build produces new filenames.
+    index.html documents are served no-cache (they point at hashed asset URLs).
+    Files under assets/ are content-hashed by Vite (a new build produces new
+    filenames), so they are served immutable with a 1-year max-age — safe to
+    cache forever with no staleness risk. All other paths fall back to the SPA
+    index document.
     """
     interface_dir = FileMapperService.get_frontend_path("apps", "interface", "dist")
     brain_dir = FileMapperService.get_frontend_path("apps", "brain", "dist")
 
+    _IMMUTABLE_CACHE = 'public, max-age=31536000, immutable'
+    _NO_CACHE = 'no-cache, no-store, must-revalidate'
+
     def _send_index(directory: Path, filename: str = 'index.html') -> Response:
         resp = send_from_directory(str(directory), filename)
-        resp.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate'
+        resp.headers['Cache-Control'] = _NO_CACHE
+        return resp
+
+    def _send_asset(directory: Path, filename: str) -> Response:
+        """Serve a file under assets/ with immutable long-term caching.
+
+        Vite content-hashes every asset filename, so the same content always
+        maps to the same URL and a new build produces new filenames — safe to
+        cache forever. Callers must confirm the file exists and resolves under
+        the assets/ subtree of *directory*.
+        """
+        resp = send_from_directory(str(directory), filename)
+        resp.headers['Cache-Control'] = _IMMUTABLE_CACHE
         return resp
 
     # ── Brain admin SPA (auth-gated, matches the legacy /brain/ gate) ─────
@@ -167,6 +183,8 @@ def _register_static_routes(app: Flask) -> None:
             return redirect(f'/login/?next=/brain/{filename}')
         candidate = brain_dir / filename
         if candidate.is_file():
+            if filename.startswith('assets/'):
+                return _send_asset(brain_dir, filename)
             return send_from_directory(str(brain_dir), filename)
         return _send_index(brain_dir)
 
@@ -204,6 +222,8 @@ def _register_static_routes(app: Flask) -> None:
     def interface_static(filename: str) -> ResponseReturnValue:
         candidate = interface_dir / filename
         if candidate.is_file():
+            if filename.startswith('assets/'):
+                return _send_asset(interface_dir, filename)
             return send_from_directory(str(interface_dir), filename)
         return _send_index(interface_dir)
 
