@@ -357,6 +357,7 @@ onBeforeUnmount(() => {
           v-model="text"
           class="input-dock__textarea"
           :style="{ height: taHeight }"
+          :aria-label="turnId != null ? 'Reply in thread' : 'Message Chalie'"
           :placeholder="turnId != null ? 'Reply in this thread…' : 'Talk to Chalie…'"
           rows="1"
           @input="grow"

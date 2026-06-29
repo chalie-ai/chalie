@@ -182,6 +182,7 @@ async function onUpload(event: Event): Promise<void> {
     type="file"
     accept=".pdf,.docx,.md,.txt,.csv,.zip"
     class="hidden"
+    aria-label="Upload document"
     @change="onUpload"
   >
 

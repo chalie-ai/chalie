@@ -164,8 +164,9 @@ async function submitCreate(): Promise<void> {
       </div>
       <form @submit.prevent="submitCreate">
         <div class="form-group">
-          <label>Title <span class="text-error">*</span></label>
+          <label for="skillTitle">Title <span class="text-error">*</span></label>
           <input
+            id="skillTitle"
             v-model="createTitle"
             type="text"
             placeholder="e.g. Track Package Delivery"
@@ -173,8 +174,9 @@ async function submitCreate(): Promise<void> {
           >
         </div>
         <div class="form-group">
-          <label>Use for <span class="text-error">*</span></label>
+          <label for="skillUseFor">Use for <span class="text-error">*</span></label>
           <input
+            id="skillUseFor"
             v-model="createUseFor"
             type="text"
             placeholder="One sentence: when should this skill be used?"
@@ -182,16 +184,18 @@ async function submitCreate(): Promise<void> {
           >
         </div>
         <div class="form-group">
-          <label>Tags</label>
+          <label for="skillTags">Tags</label>
           <input
+            id="skillTags"
             v-model="createTags"
             type="text"
             placeholder="logistics, tracking, delivery"
           >
         </div>
         <div class="form-group">
-          <label>Instructions <span class="text-error">*</span></label>
+          <label for="skillInstructions">Instructions <span class="text-error">*</span></label>
           <textarea
+            id="skillInstructions"
             v-model="createContent"
             rows="10"
             :placeholder="'1. First step (reference tools like `search`, `memory`)\n2. Second step\n3. Third step'"
