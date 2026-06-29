@@ -28,6 +28,7 @@ from flask import Response, request
 from flask.typing import ResponseReturnValue
 from pydantic import GetCoreSchemaHandler, ValidationError
 from pydantic_core import CoreSchema, core_schema
+from pydantic.json_schema import JsonSchemaValue
 from werkzeug.datastructures import FileStorage
 
 from .base import DTO
@@ -162,7 +163,7 @@ def _validate_file(value: object) -> FileStorage:
 
 
 class _FileStorageAnnotation:
-    """Pydantic core-schema hook so :data:`File` validates in any strict DTO."""
+    """Pydantic core-schema + json-schema hooks so :data:`File` validates and renders in any strict DTO."""
 
     @classmethod
     def __get_pydantic_core_schema__(
@@ -171,6 +172,17 @@ class _FileStorageAnnotation:
         handler: GetCoreSchemaHandler,
     ) -> CoreSchema:
         return core_schema.no_info_plain_validator_function(_validate_file)
+
+    @classmethod
+    def __get_pydantic_json_schema__(
+        cls,
+        core_schema: CoreSchema,
+        handler: GetCoreSchemaHandler,
+    ) -> JsonSchemaValue:
+        # Render as a binary string in OpenAPI — a multipart file upload is not a
+        # JSON-encodable value, but the schema must still resolve so register_dto
+        # can lift an UploadRequest-shaped DTO into the swagger definitions.
+        return {"type": "string", "format": "binary"}
 
 
 File = Annotated[FileStorage, _FileStorageAnnotation]

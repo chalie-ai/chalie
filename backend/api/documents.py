@@ -1,40 +1,78 @@
-"""
-Documents API — Upload, search, and manage documents.
+"""Documents namespace — upload, search, lifecycle, and watched-folder CRUD.
+
+Two resource families (documents, watched-folders) plus non-CRUD operations
+(file I/O, semantic search, lifecycle transitions) that stay as named endpoints
+but are DTO-typed through the foundation boundary decorators
+(``@expects``/``@responds``). Mutation/lifecycle endpoints return 204 no-body on
+success; errors normalize to 404/403/409/422. No hand-woven JSON envelopes or
+local datetime serializers — DTOs own the wire shape.
 
 Routes (all require session auth):
-  POST   /documents/upload         — multipart file upload
-  GET    /documents                — list all documents
-  GET    /documents/<id>           — document metadata + first N chunks
-  GET    /documents/<id>/content   — full extracted text (paginated)
-  GET    /documents/<id>/download  — download original file
-  DELETE /documents/<id>           — soft delete
-  POST   /documents/<id>/restore  — undo soft delete
-  DELETE /documents/<id>/purge    — immediate hard delete
-  GET    /documents/search         — semantic search across chunks
-  POST   /documents/<id>/confirm  — confirm document after synthesis review
-  POST   /documents/<id>/augment  — add user context and confirm
-
-  GET    /documents/watched-folders           — list watched folders
-  POST   /documents/watched-folders           — add watched folder
-  PUT    /documents/watched-folders/<id>      — update watched folder
-  DELETE /documents/watched-folders/<id>      — remove watched folder
+  POST   /documents/upload                  — multipart file upload
+  GET    /documents                         — list all documents
+  GET    /documents/<id>                    — document metadata + artifact previews
+  DELETE /documents/<id>                    — soft delete
+  GET    /documents/<id>/content            — full extracted text
+  GET    /documents/<id>/download           — download original file
+  GET    /documents/<id>/preview            — inline file preview
+  PUT    /documents/<id>/classify           — partial classification update
+  GET    /documents/groups/<field>          — classification groupings
+  POST   /documents/<id>/restore           — undo soft delete
+  DELETE /documents/<id>/purge             — immediate hard delete
+  GET    /documents/search                  — semantic search across artifacts
+  POST   /documents/<id>/confirm           — confirm after synthesis review
+  POST   /documents/<id>/augment           — add user context and confirm
+  POST   /documents/<id>/supersede         — mark as superseding a prior doc
+  GET    /documents/watched-folders         — list watched folders
+  POST   /documents/watched-folders         — add watched folder
+  PUT    /documents/watched-folders/<id>    — update watched folder
+  DELETE /documents/watched-folders/<id>    — remove watched folder
   POST   /documents/watched-folders/<id>/scan — trigger immediate scan
-  POST   /documents/watched-folders/browse    — browse host directories
+  POST   /documents/watched-folders/browse  — browse host directories
 """
+
+from __future__ import annotations
 
 import json
 import logging
 import os
+import uuid
 from datetime import datetime
 from typing import TYPE_CHECKING, cast
 
 from flask import request, send_file
 from flask.typing import ResponseReturnValue
-
 from flask_restx import Namespace, Resource
+
 from services.file_mapper_service import FileMapperService
 from services.filename_utils import safe_filename
 from .auth import require_session
+from .dto import Error, expects, register_dto, responds
+from .dto.document import (
+    ArtifactContent,
+    ArtifactPreview,
+    AugmentRequest,
+    ClassifyRequest,
+    ClassificationGroup,
+    Document,
+    DocumentContent,
+    DocumentDetail,
+    DuplicateRef,
+    SearchQuery,
+    SearchResponse,
+    SearchResult,
+    SupersedeRequest,
+    SupersedeResponse,
+    UploadRequest,
+    UploadResponse,
+)
+from .dto.watched_folder import (
+    BrowseRequest,
+    BrowseResponse,
+    WatchedFolder,
+    WatchedFolderCreate,
+    WatchedFolderUpdate,
+)
 
 if TYPE_CHECKING:
     from services.document_service import DocumentService
@@ -45,46 +83,75 @@ logger = logging.getLogger(__name__)
 _ERR_INTERNAL = "Internal server error"
 _ERR_NOT_FOUND = "Not found"
 _ERR_FILE_NOT_FOUND = "File not found on disk"
+_ERR_ALREADY_WATCHED = "This folder is already being watched"
 
 documents_ns = Namespace("documents", description="Document operations", path="/documents")
 
+register_dto(
+    documents_ns,
+    Document,
+    DocumentDetail,
+    ArtifactPreview,
+    ArtifactContent,
+    DocumentContent,
+    DuplicateRef,
+    UploadResponse,
+    UploadRequest,
+    ClassifyRequest,
+    AugmentRequest,
+    SupersedeRequest,
+    SupersedeResponse,
+    ClassificationGroup,
+    SearchResult,
+    SearchResponse,
+    SearchQuery,
+    WatchedFolder,
+    WatchedFolderCreate,
+    WatchedFolderUpdate,
+    BrowseRequest,
+    BrowseResponse,
+    Error,
+)
+
+_D = documents_ns.models
+
 # Fallback when an uploaded name reduces to nothing safe (e.g. ".." or
 # non-ASCII-only). secure_filename returns '' in those cases.
-_FALLBACK_DOCUMENT_NAME = 'unnamed_document'
+_FALLBACK_DOCUMENT_NAME = "unnamed_document"
 
 # Max upload size (50MB)
 MAX_FILE_SIZE = 50 * 1024 * 1024
 
 # Allowed MIME types
 ALLOWED_MIMES = {
-    'application/pdf',
-    'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-    'application/vnd.openxmlformats-officedocument.presentationml.presentation',
-    'text/html',
-    'text/plain',
-    'text/markdown',
-    'text/css',
-    'text/csv',
-    'text/xml',
-    'application/json',
-    'application/xml',
-    'image/jpeg',
-    'image/png',
-    'image/webp',
-    'image/gif',
+    "application/pdf",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    "text/html",
+    "text/plain",
+    "text/markdown",
+    "text/css",
+    "text/csv",
+    "text/xml",
+    "application/json",
+    "application/xml",
+    "image/jpeg",
+    "image/png",
+    "image/webp",
+    "image/gif",
 }
 
 # Allowed extensions (fallback for MIME detection)
 ALLOWED_EXTENSIONS = {
-    '.pdf', '.docx', '.pptx', '.html', '.htm', '.txt', '.md',
-    '.css', '.csv', '.xml', '.json',
-    '.py', '.js', '.ts', '.java', '.c', '.cpp', '.h', '.go', '.rs', '.rb',
-    '.jpg', '.jpeg', '.png', '.webp', '.gif',
+    ".pdf", ".docx", ".pptx", ".html", ".htm", ".txt", ".md",
+    ".css", ".csv", ".xml", ".json",
+    ".py", ".js", ".ts", ".java", ".c", ".cpp", ".h", ".go", ".rs", ".rb",
+    ".jpg", ".jpeg", ".png", ".webp", ".gif",
 }
 
 
 # ---------------------------------------------------------------------------
-# Helpers
+# Service accessors
 # ---------------------------------------------------------------------------
 
 def _get_document_service() -> "DocumentService":
@@ -93,22 +160,20 @@ def _get_document_service() -> "DocumentService":
     return DocumentService(get_shared_db_service())
 
 
-def _serialize_dt(val: object) -> object:
-    if isinstance(val, datetime):
-        return val.isoformat()
-    return val
+def _get_watcher_service() -> "FolderWatcherService":
+    from services.database_service import get_shared_db_service
+    from services.folder_watcher_service import FolderWatcherService
+    return FolderWatcherService(get_shared_db_service())
 
 
-def _serialize_doc(doc: "dict[str, object]") -> "dict[str, object]":
-    """Strips ``clean_text`` from list responses (too large)."""
-    out = dict(doc)
-    for field in ('created_at', 'updated_at', 'deleted_at', 'purge_after'):
-        if field in out:
-            out[field] = _serialize_dt(out[field])
-    # Don't send clean_text in list responses (too large)
-    out.pop('clean_text', None)
-    return out
+def _error(message: str, status: int) -> ResponseReturnValue:
+    """Build a uniform non-2xx ``Error`` body carrying its own status code."""
+    return Error(error=message).model_dump(mode="json"), status
 
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
 
 def _sanitize_filename(name: str) -> str:
     return safe_filename(name) or _FALLBACK_DOCUMENT_NAME
@@ -122,7 +187,7 @@ def _validate_file_path(full_path: str) -> bool:
 def _read_existing_metadata(svc: "DocumentService", doc_id: str) -> "dict[str, object]":
     """Read prior extracted_metadata so concurrent writes are not clobbered."""
     existing = svc.get_document(doc_id) or {}
-    meta = existing.get('extracted_metadata') or {}
+    meta = existing.get("extracted_metadata") or {}
     if isinstance(meta, str):
         try:
             return cast("dict[str, object]", json.loads(meta))
@@ -134,7 +199,7 @@ def _read_existing_metadata(svc: "DocumentService", doc_id: str) -> "dict[str, o
 def _derive_summary(text: str) -> str:
     """Extract up to a 500-char summary, truncated at the last sentence boundary after 200 chars."""
     summary = text[:500]
-    dot_pos = summary.rfind('. ')
+    dot_pos = summary.rfind(". ")
     if dot_pos > 200:
         return summary[:dot_pos + 1]
     return summary
@@ -145,7 +210,7 @@ def _mark_upload_failed(doc_id: str, error: str) -> None:
     try:
         from services.document_service import DocumentService
         from services.database_service import get_shared_db_service
-        DocumentService(get_shared_db_service()).update_status(doc_id, 'failed', error[:500])
+        DocumentService(get_shared_db_service()).update_status(doc_id, "failed", error[:500])
     except Exception:
         logger.exception(f"[DOCS API] Could not mark {doc_id} as failed")
 
@@ -162,21 +227,21 @@ def _run_upload_extraction(doc_id: str) -> None:
     if not doc:
         return
 
-    file_path = cast(str, doc.get('file_path', ''))
+    file_path = cast(str, doc.get("file_path", ""))
     if not file_path:
-        svc.update_status(doc_id, 'failed', 'No file path')
+        svc.update_status(doc_id, "failed", "No file path")
         return
 
     text = extract_text(str(FileMapperService.get_documents_path(file_path)))
-    is_image = cast(str, doc.get('mime_type') or '').startswith('image/')
+    is_image = cast(str, doc.get("mime_type") or "").startswith("image/")
     if not text:
         if is_image:
             # A textless image with no vision provider (e.g. a photo with no
             # words): persist 'ready' so it stays viewable / re-queryable via the
             # vision tool; there is simply nothing to index. NOT a failure.
-            svc.update_status(doc_id, 'ready', chunk_count=0)
+            svc.update_status(doc_id, "ready", chunk_count=0)
             return
-        svc.update_status(doc_id, 'failed', 'Text extraction returned empty')
+        svc.update_status(doc_id, "failed", "Text extraction returned empty")
         return
 
     artifact_count = create_document_artifacts(doc_id, text)
@@ -190,81 +255,71 @@ def _run_upload_extraction(doc_id: str) -> None:
         summary=_derive_summary(text),
         clean_text=text,
     )
-    svc.update_status(doc_id, 'ready', chunk_count=artifact_count)
+    svc.update_status(doc_id, "ready", chunk_count=artifact_count)
     logger.info(f"[DOCS API] Processed upload {doc_id}: {artifact_count} artifacts")
 
 
 # ---------------------------------------------------------------------------
-# Routes
+# Documents resource
 # ---------------------------------------------------------------------------
 
 @documents_ns.route("/upload")
-@documents_ns.response(201, "Document uploaded")
 class UploadDocumentResource(Resource):
     @require_session
-    def post(self) -> ResponseReturnValue:
+    @documents_ns.expect(_D["UploadRequest"])
+    @documents_ns.response(201, "Document uploaded", model=_D["UploadResponse"])
+    @documents_ns.response(400, "No file / unsupported type / empty / too large", model=_D["Error"])
+    @documents_ns.response(500, _ERR_INTERNAL, model=_D["Error"])
+    @responds(UploadResponse, code=201)
+    @expects(UploadRequest, source="form")
+    def post(self, dto: UploadRequest) -> UploadResponse | ResponseReturnValue:
         """Upload and ingest a document."""
-        if 'file' not in request.files:
-            return {"error": "No file provided"}, 400
-
-        file = request.files['file']
-        if not file.filename:
-            return {"error": "No filename provided"}, 400
-
-        original_name = _sanitize_filename(file.filename)
-
+        original_name = _sanitize_filename(dto.file.filename or "")
         ext = os.path.splitext(original_name)[1].lower()
         if ext and ext not in ALLOWED_EXTENSIONS:
-            return {"error": f"File type '{ext}' is not supported"}, 400
+            return _error(f"File type '{ext}' is not supported", 400)
 
-        import uuid
         from services.tmp_storage import new_tmp_path
         tmp_path = new_tmp_path(f"{uuid.uuid4().hex[:8]}_{original_name}")
         try:
-            file.save(tmp_path)
+            dto.file.save(tmp_path)
 
             size = os.path.getsize(tmp_path)
             if size > MAX_FILE_SIZE:
-                return {"error": f"File exceeds {MAX_FILE_SIZE // 1024 // 1024}MB limit"}, 400
+                return _error(f"File exceeds {MAX_FILE_SIZE // 1024 // 1024}MB limit", 400)
             if size == 0:
-                return {"error": "File is empty"}, 400
+                return _error("File is empty", 400)
 
             from abilities.document import ingest_file
             svc = _get_document_service()
             result = ingest_file(svc, tmp_path, name=original_name)
             if result.get("error"):
                 logger.error(f"[DOCS API] upload error: {result['error']}")
-                return {"error": "Upload failed"}, 500
+                return _error("Upload failed", 500)
 
             doc_id = cast(str, result["id"])
             file_hash = cast(str, result["hash"])
-
             duplicates = svc.find_duplicates(file_hash, None, 0, exclude_id=doc_id)
 
-            response: dict[str, object] = {
-                "id": doc_id,
-                "original_name": result["name"],
-                "status": result.get("status") or "pending",
-                "file_size": result["size"],
-                "file_hash": file_hash,
-            }
-
-            if duplicates:
-                response["duplicates"] = [
-                    {
-                        "id": d["id"],
-                        "original_name": d["original_name"],
-                        "match_type": d["match_type"],
-                        "created_at": _serialize_dt(d.get("created_at")),
-                    }
+            return UploadResponse(
+                id=doc_id,
+                original_name=cast(str, result["name"]),
+                status=cast(str, result.get("status") or "pending"),
+                file_size=cast(int, result["size"]),
+                file_hash=file_hash,
+                duplicates=[
+                    DuplicateRef(
+                        id=cast(str, d["id"]),
+                        original_name=cast(str, d["original_name"]),
+                        match_type=cast(str, d["match_type"]),
+                        created_at=cast("datetime | None", d.get("created_at")),
+                    )
                     for d in duplicates
-                ]
-
-            return response, 201
-
+                ] or None,
+            )
         except Exception as e:
             logger.error(f"[DOCS API] upload error: {e}")
-            return {"error": "Upload failed"}, 500
+            return _error("Upload failed", 500)
         finally:
             try:
                 os.remove(tmp_path)
@@ -273,502 +328,590 @@ class UploadDocumentResource(Resource):
 
 
 @documents_ns.route("")
-@documents_ns.response(200, "List of documents")
 class ListDocumentsResource(Resource):
     @require_session
-    def get(self) -> ResponseReturnValue:
-        include_deleted = request.args.get('include_deleted', 'false').lower() == 'true'
+    @documents_ns.param("include_deleted", "Include soft-deleted documents", type="boolean")
+    @documents_ns.response(200, "All documents", model=_D["Document"])
+    @documents_ns.response(500, _ERR_INTERNAL, model=_D["Error"])
+    @responds(Document, code=200)
+    def get(self) -> list[Document] | ResponseReturnValue:
+        """List all documents, optionally including soft-deleted ones."""
+        include_deleted = request.args.get("include_deleted", "false").lower() == "true"
         try:
             svc = _get_document_service()
-            docs = svc.get_all_documents(include_deleted=include_deleted)
-            return {"items": [_serialize_doc(d) for d in docs]}
+            return [_document_dto(row) for row in svc.get_all_documents(include_deleted=include_deleted)]
         except Exception as e:
             logger.error(f"[DOCS API] list error: {e}")
-            return {"error": _ERR_INTERNAL}, 500
+            return _error(_ERR_INTERNAL, 500)
 
 
 @documents_ns.route("/<doc_id>")
-@documents_ns.response(200, "Document details")
-@documents_ns.response(404, "Not found")
-@documents_ns.param("doc_id", "str", "Document identifier")
 class DocumentResource(Resource):
     @require_session
-    def get(self, doc_id: str) -> ResponseReturnValue:
+    @documents_ns.param("doc_id", "Document identifier")
+    @documents_ns.response(200, "Document details", model=_D["DocumentDetail"])
+    @documents_ns.response(404, _ERR_NOT_FOUND, model=_D["Error"])
+    @documents_ns.response(500, _ERR_INTERNAL, model=_D["Error"])
+    @responds(DocumentDetail, code=200)
+    def get(self, doc_id: str) -> DocumentDetail | ResponseReturnValue:
         """Get document metadata + first N data_graph artifact previews."""
         try:
             svc = _get_document_service()
             doc = svc.get_document(doc_id)
             if not doc:
-                return {"error": _ERR_NOT_FOUND}, 404
+                return _error(_ERR_NOT_FOUND, 404)
 
             from services.data_graph_service import get_data_graph_service
             dgs = get_data_graph_service()
             with dgs.db.connection() as conn:
                 rows = conn.execute(
-                    "SELECT key, substr(value, 1, 200) as preview FROM data_graph WHERE source=? AND active=1 ORDER BY key LIMIT 5",
-                    (f'document:{doc_id}',),
+                    "SELECT key, substr(value, 1, 200) as preview FROM data_graph "
+                    "WHERE source=? AND active=1 ORDER BY key LIMIT 5",
+                    (f"document:{doc_id}",),
                 ).fetchall()
-            result = _serialize_doc(doc)
-            result['artifacts'] = [{'key': r[0], 'preview': r[1]} for r in rows]
-            return {"item": result}
+            detail = _document_dto(doc)
+            return DocumentDetail(
+                **detail.model_dump(mode="python"),
+                artifacts=[ArtifactPreview(key=r[0], preview=r[1]) for r in rows],
+            )
         except Exception as e:
             logger.error(f"[DOCS API] get_document error: {e}")
-            return {"error": _ERR_INTERNAL}, 500
+            return _error(_ERR_INTERNAL, 500)
 
     @require_session
-    def delete(self, doc_id: str) -> ResponseReturnValue:
+    @documents_ns.param("doc_id", "Document identifier")
+    @documents_ns.response(204, "Soft deleted")
+    @documents_ns.response(404, _ERR_NOT_FOUND, model=_D["Error"])
+    @documents_ns.response(500, _ERR_INTERNAL, model=_D["Error"])
+    @responds(code=204)
+    def delete(self, doc_id: str) -> None | ResponseReturnValue:
+        """Soft delete a document."""
         try:
-            svc = _get_document_service()
-            ok = svc.soft_delete(doc_id)
-            if not ok:
-                return {"error": _ERR_NOT_FOUND}, 404
-            return {"ok": True}
+            if not _get_document_service().soft_delete(doc_id):
+                return _error(_ERR_NOT_FOUND, 404)
+            return None
         except Exception as e:
             logger.error(f"[DOCS API] delete error: {e}")
-            return {"error": _ERR_INTERNAL}, 500
+            return _error(_ERR_INTERNAL, 500)
 
 
 @documents_ns.route("/<doc_id>/content")
-@documents_ns.response(200, "Document content")
-@documents_ns.response(404, "Not found")
-@documents_ns.param("doc_id", "str", "Document identifier")
 class DocumentContentResource(Resource):
     @require_session
-    def get(self, doc_id: str) -> ResponseReturnValue:
+    @documents_ns.param("doc_id", "Document identifier")
+    @documents_ns.response(200, "Document content", model=_D["DocumentContent"])
+    @documents_ns.response(404, _ERR_NOT_FOUND, model=_D["Error"])
+    @documents_ns.response(500, _ERR_INTERNAL, model=_D["Error"])
+    @responds(DocumentContent, code=200)
+    def get(self, doc_id: str) -> DocumentContent | ResponseReturnValue:
         """Get full document text reconstructed from data_graph artifacts."""
         try:
             svc = _get_document_service()
-            doc = svc.get_document(doc_id)
-            if not doc:
-                return {"error": _ERR_NOT_FOUND}, 404
+            if not svc.get_document(doc_id):
+                return _error(_ERR_NOT_FOUND, 404)
 
             from services.data_graph_service import get_data_graph_service
             dgs = get_data_graph_service()
             with dgs.db.connection() as conn:
                 rows = conn.execute(
-                    "SELECT key, value FROM data_graph WHERE source=? AND active=1 ORDER BY key",
-                    (f'document:{doc_id}',),
+                    "SELECT key, value FROM data_graph "
+                    "WHERE source=? AND active=1 ORDER BY key",
+                    (f"document:{doc_id}",),
                 ).fetchall()
 
-            artifacts = [{'key': r[0], 'content': r[1]} for r in rows]
-            return {
-                "document_id": doc_id,
-                "total_artifacts": len(artifacts),
-                "artifacts": artifacts,
-            }
+            return DocumentContent(
+                document_id=doc_id,
+                total_artifacts=len(rows),
+                artifacts=[ArtifactContent(key=r[0], content=r[1]) for r in rows],
+            )
         except Exception as e:
             logger.error(f"[DOCS API] get_content error: {e}")
-            return {"error": _ERR_INTERNAL}, 500
+            return _error(_ERR_INTERNAL, 500)
 
 
 @documents_ns.route("/<doc_id>/download")
-@documents_ns.response(200, "File download")
-@documents_ns.response(404, "Not found")
-@documents_ns.param("doc_id", "str", "Document identifier")
+@documents_ns.produces(["application/octet-stream"])
 class DocumentDownloadResource(Resource):
     @require_session
+    @documents_ns.param("doc_id", "Document identifier")
+    @documents_ns.response(200, "File download")
+    @documents_ns.response(404, _ERR_NOT_FOUND, model=_D["Error"])
+    @documents_ns.response(500, _ERR_INTERNAL, model=_D["Error"])
+    @responds(code=200)
     def get(self, doc_id: str) -> ResponseReturnValue:
+        """Download the original file as an attachment."""
         try:
             svc = _get_document_service()
             doc = svc.get_document(doc_id)
             if not doc:
-                return {"error": _ERR_NOT_FOUND}, 404
+                return _error(_ERR_NOT_FOUND, 404)
 
-            if doc.get('watched_folder_id'):
-                full_path = cast(str, doc['file_path'])
-                if not os.path.isfile(os.path.realpath(full_path)):
-                    return {"error": _ERR_FILE_NOT_FOUND}, 404
-            else:
-                full_path = str(FileMapperService.get_documents_path(cast(str, doc['file_path'])))
-                if not _validate_file_path(full_path) or not os.path.exists(full_path):
-                    return {"error": _ERR_FILE_NOT_FOUND}, 404
+            full_path = _resolve_document_file(doc)
+            if full_path is None or not os.path.exists(full_path):
+                return _error(_ERR_FILE_NOT_FOUND, 404)
 
             return send_file(
                 full_path,
-                mimetype=cast(str, doc['mime_type']),
+                mimetype=cast(str, doc["mime_type"]),
                 as_attachment=True,
-                download_name=cast(str, doc['original_name']),
+                download_name=cast(str, doc["original_name"]),
             )
         except Exception as e:
             logger.error(f"[DOCS API] download error: {e}")
-            return {"error": _ERR_INTERNAL}, 500
+            return _error(_ERR_INTERNAL, 500)
 
 
 @documents_ns.route("/<doc_id>/preview")
-@documents_ns.response(200, "File preview")
-@documents_ns.response(404, "Not found")
-@documents_ns.param("doc_id", "str", "Document identifier")
+@documents_ns.produces(["application/octet-stream"])
 class DocumentPreviewResource(Resource):
     @require_session
+    @documents_ns.param("doc_id", "Document identifier")
+    @documents_ns.response(200, "File preview")
+    @documents_ns.response(404, _ERR_NOT_FOUND, model=_D["Error"])
+    @documents_ns.response(500, _ERR_INTERNAL, model=_D["Error"])
+    @responds(code=200)
     def get(self, doc_id: str) -> ResponseReturnValue:
-        """Stream file for inline browser preview."""
+        """Stream the file for inline browser preview."""
         try:
             svc = _get_document_service()
             doc = svc.get_document(doc_id)
             if not doc:
-                return {"error": _ERR_NOT_FOUND}, 404
+                return _error(_ERR_NOT_FOUND, 404)
 
-            if doc.get('watched_folder_id'):
-                full_path = cast(str, doc['file_path'])
-                if not os.path.isfile(os.path.realpath(full_path)):
-                    return {"error": _ERR_FILE_NOT_FOUND}, 404
-            else:
-                full_path = str(FileMapperService.get_documents_path(cast(str, doc['file_path'])))
-                if not _validate_file_path(full_path) or not os.path.exists(full_path):
-                    return {"error": _ERR_FILE_NOT_FOUND}, 404
+            full_path = _resolve_document_file(doc)
+            if full_path is None or not os.path.exists(full_path):
+                return _error(_ERR_FILE_NOT_FOUND, 404)
 
             return send_file(
                 full_path,
-                mimetype=cast(str, doc['mime_type']),
+                mimetype=cast(str, doc["mime_type"]),
                 as_attachment=False,
-                download_name=cast(str, doc['original_name']),
+                download_name=cast(str, doc["original_name"]),
             )
         except Exception as e:
             logger.error(f"[DOCS API] preview error: {e}")
-            return {"error": _ERR_INTERNAL}, 500
+            return _error(_ERR_INTERNAL, 500)
 
 
 @documents_ns.route("/<doc_id>/classify")
-@documents_ns.response(200, "Classification updated")
-@documents_ns.response(404, "Not found")
-@documents_ns.param("doc_id", "str", "Document identifier")
 class DocumentClassifyResource(Resource):
     @require_session
-    def put(self, doc_id: str) -> ResponseReturnValue:
+    @documents_ns.param("doc_id", "Document identifier")
+    @documents_ns.expect(_D["ClassifyRequest"])
+    @documents_ns.response(204, "Classification updated")
+    @documents_ns.response(404, _ERR_NOT_FOUND, model=_D["Error"])
+    @documents_ns.response(500, _ERR_INTERNAL, model=_D["Error"])
+    @responds(code=204)
+    @expects(ClassifyRequest)
+    def put(self, doc_id: str, dto: ClassifyRequest) -> None | ResponseReturnValue:
         """Update document classification metadata."""
         try:
             svc = _get_document_service()
-            doc = svc.get_document(doc_id)
-            if not doc:
-                return {"error": _ERR_NOT_FOUND}, 404
-
-            data = request.get_json() or {}
+            if not svc.get_document(doc_id):
+                return _error(_ERR_NOT_FOUND, 404)
             svc.update_classification(
                 doc_id,
-                category=data.get('category'),
-                project=data.get('project'),
-                doc_date=data.get('date'),
+                category=dto.category,
+                project=dto.project,
+                doc_date=dto.date,
                 lock=True,
             )
-            return {"status": "ok"}
+            return None
         except Exception as e:
             logger.error(f"[DOCS API] classify update error: {e}")
-            return {"error": _ERR_INTERNAL}, 500
+            return _error(_ERR_INTERNAL, 500)
 
 
 @documents_ns.route("/groups/<field>")
-@documents_ns.response(200, "Classification groups")
-@documents_ns.param("field", "str", "Classification field name")
+@documents_ns.param("field", "Classification field name")
 class DocumentGroupsResource(Resource):
     @require_session
-    def get(self, field: str) -> ResponseReturnValue:
+    @documents_ns.response(200, "Classification groups", model=_D["ClassificationGroup"])
+    @documents_ns.response(500, _ERR_INTERNAL, model=_D["Error"])
+    @responds(ClassificationGroup, code=200)
+    def get(self, field: str) -> list[ClassificationGroup] | ResponseReturnValue:
         """Get unique classification groups for a field."""
         try:
             svc = _get_document_service()
-            groups = svc.get_classification_groups(field)
-            return {"groups": groups}
+            return [
+                ClassificationGroup(value=cast(str, g["value"]), count=cast(int, g["count"]))
+                for g in svc.get_classification_groups(field)
+            ]
         except Exception as e:
             logger.error(f"[DOCS API] groups error: {e}")
-            return {"error": _ERR_INTERNAL}, 500
+            return _error(_ERR_INTERNAL, 500)
 
 
 @documents_ns.route("/<doc_id>/restore")
-@documents_ns.response(200, "Document restored")
-@documents_ns.response(404, "Not found or not deleted")
-@documents_ns.param("doc_id", "str", "Document identifier")
 class DocumentRestoreResource(Resource):
     @require_session
-    def post(self, doc_id: str) -> ResponseReturnValue:
+    @documents_ns.param("doc_id", "Document identifier")
+    @documents_ns.response(204, "Document restored")
+    @documents_ns.response(404, "Not found or not deleted", model=_D["Error"])
+    @documents_ns.response(500, _ERR_INTERNAL, model=_D["Error"])
+    @responds(code=204)
+    def post(self, doc_id: str) -> None | ResponseReturnValue:
+        """Undo a soft delete."""
         try:
-            svc = _get_document_service()
-            ok = svc.restore(doc_id)
-            if not ok:
-                return {"error": "Not found or not deleted"}, 404
-            return {"ok": True}
+            if not _get_document_service().restore(doc_id):
+                return _error("Not found or not deleted", 404)
+            return None
         except Exception as e:
             logger.error(f"[DOCS API] restore error: {e}")
-            return {"error": _ERR_INTERNAL}, 500
+            return _error(_ERR_INTERNAL, 500)
 
 
 @documents_ns.route("/<doc_id>/purge")
-@documents_ns.response(200, "Document purged")
-@documents_ns.response(404, "Not found")
-@documents_ns.param("doc_id", "str", "Document identifier")
 class DocumentPurgeResource(Resource):
     @require_session
-    def delete(self, doc_id: str) -> ResponseReturnValue:
+    @documents_ns.param("doc_id", "Document identifier")
+    @documents_ns.response(204, "Document purged")
+    @documents_ns.response(404, _ERR_NOT_FOUND, model=_D["Error"])
+    @documents_ns.response(500, _ERR_INTERNAL, model=_D["Error"])
+    @responds(code=204)
+    def delete(self, doc_id: str) -> None | ResponseReturnValue:
+        """Immediately hard delete a document."""
         try:
-            svc = _get_document_service()
-            ok = svc.hard_delete(doc_id)
-            if not ok:
-                return {"error": _ERR_NOT_FOUND}, 404
-            return {"ok": True}
+            if not _get_document_service().hard_delete(doc_id):
+                return _error(_ERR_NOT_FOUND, 404)
+            return None
         except Exception as e:
             logger.error(f"[DOCS API] purge error: {e}")
-            return {"error": _ERR_INTERNAL}, 500
+            return _error(_ERR_INTERNAL, 500)
 
 
 @documents_ns.route("/search")
-@documents_ns.response(200, "Search results")
 class DocumentSearchResource(Resource):
     @require_session
-    def get(self) -> ResponseReturnValue:
+    @documents_ns.param("q", "Search query", required=True)
+    @documents_ns.param("limit", "Max results (≤20)", type="integer")
+    @documents_ns.expect(_D["SearchQuery"])
+    @documents_ns.response(200, "Search results", model=_D["SearchResponse"])
+    @documents_ns.response(422, "Validation failed", model=_D["Error"])
+    @documents_ns.response(500, "Search failed", model=_D["Error"])
+    @responds(SearchResponse, code=200)
+    @expects(SearchQuery, source="args")
+    def get(self, dto: SearchQuery) -> SearchResponse | ResponseReturnValue:
         """Search across document artifacts in data_graph."""
-        q_raw = request.args.get('q', None)
-        if q_raw is None:
-            return {"error": "Query parameter 'q' is required"}, 400
-        query = q_raw.strip()
-        if not query:
-            return {"error": "Query cannot be empty"}, 400
-
-        limit = min(request.args.get('limit', 5, type=int), 20)
-
         try:
             from services.data_graph_service import get_data_graph_service, KIND_DOCUMENT
 
             dgs = get_data_graph_service()
-            results = dgs.recall(query, kinds=[KIND_DOCUMENT], limit=limit)
+            results = dgs.recall(dto.q, kinds=[KIND_DOCUMENT], limit=dto.limit)
 
-            serialized = []
-            for row in results:
-                source = cast(str, row.get('source', '') or '')
-                doc_id = source.split(':', 1)[1] if source.startswith('document:') else ''
-                serialized.append({
-                    'document_id': doc_id,
-                    'key': row.get('key', ''),
-                    'content': row.get('value', ''),
-                    'source': source,
-                })
-
-            return {"results": serialized, "query": query}
+            return SearchResponse(
+                results=[
+                    SearchResult(
+                        document_id=source.split(":", 1)[1] if (source := cast(str, row.get("source", "") or "")).startswith("document:") else "",
+                        key=cast(str, row.get("key", "")),
+                        content=cast(str, row.get("value", "")),
+                        source=source,
+                    )
+                    for row in results
+                ],
+                query=dto.q,
+            )
         except Exception as e:
             logger.error(f"[DOCS API] search error: {e}")
-            return {"error": "Search failed"}, 500
+            return _error("Search failed", 500)
 
 
 @documents_ns.route("/<doc_id>/confirm")
-@documents_ns.response(200, "Document confirmed")
-@documents_ns.response(400, "Not awaiting confirmation")
-@documents_ns.response(404, "Not found")
-@documents_ns.param("doc_id", "str", "Document identifier")
 class DocumentConfirmResource(Resource):
     @require_session
-    def post(self, doc_id: str) -> ResponseReturnValue:
+    @documents_ns.param("doc_id", "Document identifier")
+    @documents_ns.response(204, "Document confirmed")
+    @documents_ns.response(400, "Not awaiting confirmation", model=_D["Error"])
+    @documents_ns.response(404, _ERR_NOT_FOUND, model=_D["Error"])
+    @documents_ns.response(500, _ERR_INTERNAL, model=_D["Error"])
+    @responds(code=204)
+    def post(self, doc_id: str) -> None | ResponseReturnValue:
+        """Confirm a document after synthesis review."""
         try:
             svc = _get_document_service()
             doc = svc.get_document(doc_id)
             if not doc:
-                return {"error": _ERR_NOT_FOUND}, 404
-
-            if doc['status'] != 'awaiting_confirmation':
-                return {"error": "Document is not awaiting confirmation"}, 400
-
-            svc.update_status(doc_id, 'ready', chunk_count=cast(int, doc.get('chunk_count', 0)))
-            return {"ok": True, "status": "ready"}
+                return _error(_ERR_NOT_FOUND, 404)
+            if doc["status"] != "awaiting_confirmation":
+                return _error("Document is not awaiting confirmation", 400)
+            svc.update_status(doc_id, "ready", chunk_count=cast(int, doc.get("chunk_count", 0)))
+            return None
         except Exception as e:
             logger.error(f"[DOCS API] confirm error: {e}")
-            return {"error": _ERR_INTERNAL}, 500
+            return _error(_ERR_INTERNAL, 500)
 
 
 @documents_ns.route("/<doc_id>/augment")
-@documents_ns.response(200, "Document augmented")
-@documents_ns.response(400, "Invalid state or missing context")
-@documents_ns.response(404, "Not found")
-@documents_ns.param("doc_id", "str", "Document identifier")
 class DocumentAugmentResource(Resource):
     @require_session
-    def post(self, doc_id: str) -> ResponseReturnValue:
+    @documents_ns.param("doc_id", "Document identifier")
+    @documents_ns.expect(_D["AugmentRequest"])
+    @documents_ns.response(204, "Document augmented")
+    @documents_ns.response(400, "Invalid state", model=_D["Error"])
+    @documents_ns.response(404, _ERR_NOT_FOUND, model=_D["Error"])
+    @documents_ns.response(500, _ERR_INTERNAL, model=_D["Error"])
+    @responds(code=204)
+    @expects(AugmentRequest)
+    def post(self, doc_id: str, dto: AugmentRequest) -> None | ResponseReturnValue:
+        """Add user context to a document and confirm it."""
         try:
             svc = _get_document_service()
             doc = svc.get_document(doc_id)
             if not doc:
-                return {"error": _ERR_NOT_FOUND}, 404
+                return _error(_ERR_NOT_FOUND, 404)
+            if doc["status"] not in ("awaiting_confirmation", "ready"):
+                return _error("Document cannot be augmented in its current state", 400)
 
-            if doc['status'] not in ('awaiting_confirmation', 'ready'):
-                return {"error": "Document cannot be augmented in its current state"}, 400
-
-            data = request.get_json(silent=True) or {}
-            context = (data.get('context') or '').strip()
-            if not context:
-                return {"error": "Field 'context' is required"}, 400
-
-            metadata = cast("dict[str, object]", doc.get('extracted_metadata') or {})
-            metadata['_user_context'] = context
+            metadata = cast("dict[str, object]", doc.get("extracted_metadata") or {})
+            metadata["_user_context"] = dto.context
 
             svc.update_extracted_metadata(
                 doc_id,
                 metadata=metadata,
-                summary=cast(str, doc.get('summary', '')),
-                summary_embedding=cast("list[float] | None", doc.get('summary_embedding')),
+                summary=cast(str, doc.get("summary", "")),
+                summary_embedding=cast("list[float] | None", doc.get("summary_embedding")),
             )
 
-            if doc['status'] != 'ready':
-                svc.update_status(doc_id, 'ready', chunk_count=cast(int, doc.get('chunk_count', 0)))
-            return {"ok": True, "status": "ready"}
+            if doc["status"] != "ready":
+                svc.update_status(doc_id, "ready", chunk_count=cast(int, doc.get("chunk_count", 0)))
+            return None
         except Exception as e:
             logger.error(f"[DOCS API] augment error: {e}")
-            return {"error": _ERR_INTERNAL}, 500
+            return _error(_ERR_INTERNAL, 500)
 
 
 @documents_ns.route("/<doc_id>/supersede")
-@documents_ns.response(200, "Document superseded")
-@documents_ns.response(400, "Missing old_id")
-@documents_ns.response(404, "Not found")
-@documents_ns.param("doc_id", "str", "Document identifier")
 class DocumentSupersedeResource(Resource):
     @require_session
-    def post(self, doc_id: str) -> ResponseReturnValue:
+    @documents_ns.param("doc_id", "Document identifier")
+    @documents_ns.expect(_D["SupersedeRequest"])
+    @documents_ns.response(200, "Document superseded", model=_D["SupersedeResponse"])
+    @documents_ns.response(404, "New/Old document not found", model=_D["Error"])
+    @documents_ns.response(500, _ERR_INTERNAL, model=_D["Error"])
+    @responds(SupersedeResponse, code=200)
+    @expects(SupersedeRequest)
+    def post(self, doc_id: str, dto: SupersedeRequest) -> SupersedeResponse | ResponseReturnValue:
+        """Mark the new document as superseding a prior one."""
         try:
             svc = _get_document_service()
-
-            new_doc = svc.get_document(doc_id)
-            if not new_doc:
-                return {"error": "New document not found"}, 404
-
-            data = request.get_json(silent=True) or {}
-            old_id = (data.get('old_id') or '').strip()
-            if not old_id:
-                return {"error": "Field 'old_id' is required"}, 400
-
-            old_doc = svc.get_document(old_id)
-            if not old_doc:
-                return {"error": "Old document not found"}, 404
-
-            svc.set_supersedes(doc_id, old_id)
-            svc.soft_delete(old_id)
-
-            return {"ok": True, "supersedes_id": old_id}
+            if not svc.get_document(doc_id):
+                return _error("New document not found", 404)
+            if not svc.get_document(dto.old_id):
+                return _error("Old document not found", 404)
+            svc.set_supersedes(doc_id, dto.old_id)
+            svc.soft_delete(dto.old_id)
+            return SupersedeResponse(ok=True, supersedes_id=dto.old_id)
         except Exception as e:
             logger.error(f"[DOCS API] supersede error: {e}")
-            return {"error": _ERR_INTERNAL}, 500
+            return _error(_ERR_INTERNAL, 500)
 
 
 # ---------------------------------------------------------------------------
 # Watched Folders
 # ---------------------------------------------------------------------------
 
-def _get_watcher_service() -> "FolderWatcherService":
-    from services.database_service import get_shared_db_service
-    from services.folder_watcher_service import FolderWatcherService
-    return FolderWatcherService(get_shared_db_service())
-
-
 @documents_ns.route("/watched-folders")
-@documents_ns.response(200, "List of watched folders")
-@documents_ns.response(201, "Watched folder created")
 class WatchedFoldersResource(Resource):
     @require_session
-    def get(self) -> ResponseReturnValue:
+    @documents_ns.response(200, "All watched folders", model=_D["WatchedFolder"])
+    @documents_ns.response(500, _ERR_INTERNAL, model=_D["Error"])
+    @responds(WatchedFolder, code=200)
+    def get(self) -> list[WatchedFolder] | ResponseReturnValue:
+        """List all watched folders."""
         try:
-            svc = _get_watcher_service()
-            folders = svc.get_all_folders()
-            return {"items": folders}
+            return [_watched_folder_dto(row) for row in _get_watcher_service().get_all_folders()]
         except Exception as e:
             logger.error(f"[DOCS API] list watched folders error: {e}")
-            return {"error": _ERR_INTERNAL}, 500
+            return _error(_ERR_INTERNAL, 500)
 
     @require_session
-    def post(self) -> ResponseReturnValue:
-        data = request.get_json(silent=True) or {}
-        folder_path = (data.get('folder_path') or '').strip()
-
-        if not folder_path:
-            return {"error": "Field 'folder_path' is required"}, 400
-
+    @documents_ns.expect(_D["WatchedFolderCreate"])
+    @documents_ns.response(201, "Watched folder created", model=_D["WatchedFolder"])
+    @documents_ns.response(403, "Permission denied", model=_D["Error"])
+    @documents_ns.response(409, _ERR_ALREADY_WATCHED, model=_D["Error"])
+    @documents_ns.response(422, "Validation failed", model=_D["Error"])
+    @documents_ns.response(500, _ERR_INTERNAL, model=_D["Error"])
+    @responds(WatchedFolder, code=201)
+    @expects(WatchedFolderCreate)
+    def post(self, dto: WatchedFolderCreate) -> WatchedFolder | ResponseReturnValue:
+        """Register a new watched folder."""
         try:
-            svc = _get_watcher_service()
-            folder = svc.create_folder(
-                folder_path=folder_path,
-                label=data.get('label'),
-                file_patterns=data.get('file_patterns'),
-                ignore_patterns=data.get('ignore_patterns'),
-                recursive=data.get('recursive', True),
-                scan_interval=data.get('scan_interval', 300),
+            folder = _get_watcher_service().create_folder(
+                folder_path=dto.folder_path,
+                label=dto.label,
+                file_patterns=dto.file_patterns,
+                ignore_patterns=dto.ignore_patterns,
+                recursive=dto.recursive,
+                scan_interval=dto.scan_interval,
             )
-            return {"item": folder}, 201
+            return _watched_folder_dto(folder)
         except ValueError as e:
-            return {"error": str(e)}, 400
+            return _error(str(e), 422)
         except PermissionError as e:
-            return {"error": str(e)}, 403
+            return _error(str(e), 403)
         except Exception as e:
-            if 'UNIQUE constraint' in str(e):
-                return {"error": "This folder is already being watched"}, 409
+            if "UNIQUE constraint" in str(e):
+                return _error(_ERR_ALREADY_WATCHED, 409)
             logger.error(f"[DOCS API] create watched folder error: {e}")
-            return {"error": _ERR_INTERNAL}, 500
+            return _error(_ERR_INTERNAL, 500)
 
 
 @documents_ns.route("/watched-folders/<folder_id>")
-@documents_ns.response(200, "Watched folder updated")
-@documents_ns.response(404, "Not found")
-@documents_ns.param("folder_id", "str", "Folder identifier")
+@documents_ns.param("folder_id", "Folder identifier")
 class WatchedFolderResource(Resource):
     @require_session
-    def put(self, folder_id: str) -> ResponseReturnValue:
-        data = request.get_json(silent=True) or {}
+    @documents_ns.expect(_D["WatchedFolderUpdate"])
+    @documents_ns.response(200, "Updated folder", model=_D["WatchedFolder"])
+    @documents_ns.response(404, _ERR_NOT_FOUND, model=_D["Error"])
+    @documents_ns.response(403, "Permission denied", model=_D["Error"])
+    @documents_ns.response(422, "Validation failed", model=_D["Error"])
+    @documents_ns.response(500, _ERR_INTERNAL, model=_D["Error"])
+    @responds(WatchedFolder, code=200)
+    @expects(WatchedFolderUpdate)
+    def put(self, folder_id: str, dto: WatchedFolderUpdate) -> WatchedFolder | ResponseReturnValue:
+        """Partially update a watched folder's mutable fields."""
         try:
             svc = _get_watcher_service()
-            folder = svc.get_folder(folder_id)
-            if not folder:
-                return {"error": _ERR_NOT_FOUND}, 404
-
-            updated = svc.update_folder(folder_id, **data)
-            return {"item": updated}
-        except (ValueError, PermissionError) as e:
-            return {"error": str(e)}, 400
+            if not svc.get_folder(folder_id):
+                return _error(_ERR_NOT_FOUND, 404)
+            updates = dto.model_dump(exclude_none=True)
+            updated = svc.update_folder(folder_id, **updates)
+            if updated is None:
+                return _error(_ERR_NOT_FOUND, 404)
+            return _watched_folder_dto(updated)
+        except ValueError as e:
+            return _error(str(e), 422)
+        except PermissionError as e:
+            return _error(str(e), 403)
         except Exception as e:
             logger.error(f"[DOCS API] update watched folder error: {e}")
-            return {"error": _ERR_INTERNAL}, 500
+            return _error(_ERR_INTERNAL, 500)
 
     @require_session
-    def delete(self, folder_id: str) -> ResponseReturnValue:
-        delete_documents = request.args.get('delete_documents', 'false').lower() == 'true'
+    @documents_ns.param("delete_documents", "Also soft-delete the folder's documents", type="boolean")
+    @documents_ns.response(204, "Watched folder deleted")
+    @documents_ns.response(404, _ERR_NOT_FOUND, model=_D["Error"])
+    @documents_ns.response(500, _ERR_INTERNAL, model=_D["Error"])
+    @responds(code=204)
+    def delete(self, folder_id: str) -> None | ResponseReturnValue:
+        """Remove a watched folder, optionally soft-deleting its documents."""
+        delete_documents = request.args.get("delete_documents", "false").lower() == "true"
         try:
-            svc = _get_watcher_service()
-            ok = svc.delete_folder(folder_id, delete_documents=delete_documents)
-            if not ok:
-                return {"error": _ERR_NOT_FOUND}, 404
-            return {"ok": True}
+            if not _get_watcher_service().delete_folder(folder_id, delete_documents=delete_documents):
+                return _error(_ERR_NOT_FOUND, 404)
+            return None
         except Exception as e:
             logger.error(f"[DOCS API] delete watched folder error: {e}")
-            return {"error": _ERR_INTERNAL}, 500
+            return _error(_ERR_INTERNAL, 500)
 
 
 @documents_ns.route("/watched-folders/<folder_id>/scan")
-@documents_ns.response(200, "Scan triggered")
-@documents_ns.response(404, "Not found")
-@documents_ns.param("folder_id", "str", "Folder identifier")
+@documents_ns.param("folder_id", "Folder identifier")
 class WatchedFolderScanResource(Resource):
     @require_session
-    def post(self, folder_id: str) -> ResponseReturnValue:
+    @documents_ns.response(204, "Scan requested")
+    @documents_ns.response(404, _ERR_NOT_FOUND, model=_D["Error"])
+    @documents_ns.response(500, _ERR_INTERNAL, model=_D["Error"])
+    @responds(code=204)
+    def post(self, folder_id: str) -> None | ResponseReturnValue:
+        """Trigger an out-of-schedule immediate scan for a watched folder."""
         try:
             svc = _get_watcher_service()
-            folder = svc.get_folder(folder_id)
-            if not folder:
-                return {"error": _ERR_NOT_FOUND}, 404
-
+            if not svc.get_folder(folder_id):
+                return _error(_ERR_NOT_FOUND, 404)
             svc.trigger_scan(folder_id)
-            return {"ok": True, "message": "Scan requested"}
+            return None
         except Exception as e:
             logger.error(f"[DOCS API] trigger scan error: {e}")
-            return {"error": _ERR_INTERNAL}, 500
+            return _error(_ERR_INTERNAL, 500)
 
 
 @documents_ns.route("/watched-folders/browse")
-@documents_ns.response(200, "Directory listing")
 class WatchedFolderBrowseResource(Resource):
     @require_session
-    def post(self) -> ResponseReturnValue:
-        data = request.get_json(silent=True) or {}
-        path = data.get('path')
-
+    @documents_ns.expect(_D["BrowseRequest"])
+    @documents_ns.response(200, "Directory listing", model=_D["BrowseResponse"])
+    @documents_ns.response(403, "Permission denied", model=_D["Error"])
+    @documents_ns.response(422, "Invalid path", model=_D["Error"])
+    @documents_ns.response(500, _ERR_INTERNAL, model=_D["Error"])
+    @responds(BrowseResponse, code=200)
+    @expects(BrowseRequest)
+    def post(self, dto: BrowseRequest) -> BrowseResponse | ResponseReturnValue:
+        """Browse readable sub-directories at a host filesystem path."""
         try:
-            svc = _get_watcher_service()
-            result = svc.browse_directory(path)
-            return result
+            result = _get_watcher_service().browse_directory(dto.path)
+            return BrowseResponse(
+                current=cast(str, result["current"]),
+                parent=cast("str | None", result.get("parent")),
+                directories=cast("list[str]", result["directories"]),
+            )
         except ValueError as e:
-            return {"error": str(e)}, 400
+            return _error(str(e), 422)
         except PermissionError as e:
-            return {"error": str(e)}, 403
+            return _error(str(e), 403)
         except Exception as e:
             logger.error(f"[DOCS API] browse error: {e}")
-            return {"error": _ERR_INTERNAL}, 500
+            return _error(_ERR_INTERNAL, 500)
+
+
+# ---------------------------------------------------------------------------
+# DTO builders
+# ---------------------------------------------------------------------------
+
+def _document_dto(row: "dict[str, object]") -> Document:
+    """Build a :class:`Document` DTO from a service row dict."""
+    return Document(
+        id=cast(str, row["id"]),
+        original_name=cast(str, row["original_name"]),
+        mime_type=cast(str, row["mime_type"]),
+        file_size_bytes=cast(int, row["file_size_bytes"]),
+        file_path=cast(str, row["file_path"]),
+        file_hash=cast(str, row["file_hash"]),
+        page_count=cast("int | None", row.get("page_count")),
+        status=cast(str, row["status"]),
+        error_message=cast("str | None", row.get("error_message")),
+        chunk_count=cast("int | None", row.get("chunk_count")),
+        source_type=cast(str, row["source_type"]),
+        tags=cast("list[str]", row.get("tags") or []),
+        summary=cast("str | None", row.get("summary")),
+        extracted_metadata=cast("dict[str, object]", row.get("extracted_metadata") or {}),
+        supersedes_id=cast("str | None", row.get("supersedes_id")),
+        language=cast("str | None", row.get("language")),
+        fingerprint=cast("str | None", row.get("fingerprint")),
+        doc_category=cast("str | None", row.get("doc_category")),
+        doc_project=cast("str | None", row.get("doc_project")),
+        doc_date=cast("str | None", row.get("doc_date")),
+        meta_locked=bool(row.get("meta_locked")),
+        watched_folder_id=cast("str | None", row.get("watched_folder_id")),
+        created_at=cast("datetime", row["created_at"]),
+        updated_at=cast("datetime", row["updated_at"]),
+        deleted_at=cast("datetime | None", row.get("deleted_at")),
+        purge_after=cast("datetime | None", row.get("purge_after")),
+    )
+
+
+def _watched_folder_dto(row: "dict[str, object]") -> WatchedFolder:
+    """Build a :class:`WatchedFolder` DTO from a service row dict."""
+    return WatchedFolder(
+        id=cast(str, row["id"]),
+        folder_path=cast(str, row["folder_path"]),
+        label=cast("str | None", row.get("label")),
+        source_type=cast(str, row["source_type"]),
+        enabled=bool(cast(int, row.get("enabled"))),
+        file_patterns=cast("list[str]", row.get("file_patterns") or []),
+        ignore_patterns=cast("list[str]", row.get("ignore_patterns") or []),
+        recursive=bool(cast(int, row.get("recursive"))),
+        scan_interval=cast(int, row["scan_interval"]),
+        source_config=cast("dict[str, object]", row.get("source_config") or {}),
+        created_at=cast("datetime", row["created_at"]),
+        updated_at=cast("datetime", row["updated_at"]),
+    )
+
+
+def _resolve_document_file(doc: "dict[str, object]") -> "str | None":
+    """Resolve the on-disk path for a document, validating uploads stay in-root."""
+    if doc.get("watched_folder_id"):
+        full_path = cast(str, doc["file_path"])
+        return full_path if os.path.isfile(os.path.realpath(full_path)) else None
+    full_path = str(FileMapperService.get_documents_path(cast(str, doc["file_path"])))
+    return full_path if _validate_file_path(full_path) else None

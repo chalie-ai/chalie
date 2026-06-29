@@ -1,5 +1,5 @@
 """
-Tests for the Documents API blueprint.
+Tests for the Documents API namespace.
 
 Covers only deterministic, real-code paths: extension allowlist validation and
 the pure helpers (_sanitize_filename, _validate_file_path). The full document
@@ -110,14 +110,14 @@ class TestDocumentUploadRealStack:
 class TestDocumentSearchRealStack:
     """GET /documents/search query-param handling over the real DB + data_graph."""
 
-    def test_search_nonnumeric_limit_coerces_to_default_not_500(
+    def test_search_nonnumeric_limit_rejected_as_validation_error(
         self, authed_client: "tuple[FlaskClient, sqlite3.Connection, object]"
     ) -> None:
-        """A non-numeric ?limit must degrade to the default, not raise a 500.
+        """A non-numeric ?limit is a validation error (422), not a 500.
 
-        Drives the real endpoint through the real data_graph recall path. With a
-        raising int() parse the request 500s (ValueError); coercion to the
-        default makes the malformed request behave identically to limit=5.
+        The DTO boundary enforces ``limit`` as an int (≤20); a malformed value is
+        rejected up front by the ``@expects`` decorator's pydantic validation,
+        so the request never reaches the data_graph recall path.
         """
         client, _db_conn, _store = authed_client
 
@@ -125,9 +125,15 @@ class TestDocumentSearchRealStack:
         bad = client.get("/documents/search?q=quarterly+revenue&limit=abc")
 
         assert good.status_code == 200, good.get_data(as_text=True)
-        assert bad.status_code == 200, bad.get_data(as_text=True)
-        # 'abc' coerced to the default 5 → byte-identical outcome to limit=5.
-        assert bad.get_json() == good.get_json()
+        assert bad.status_code == 422, bad.get_data(as_text=True)
+
+    def test_search_missing_query_rejected(self, authed_client: "tuple[FlaskClient, sqlite3.Connection, object]") -> None:
+        """A missing ``q`` is rejected with 422 by the DTO boundary."""
+        client, _db_conn, _store = authed_client
+
+        resp = client.get("/documents/search")
+
+        assert resp.status_code == 422, resp.get_data(as_text=True)
 
 
 @pytest.mark.unit
