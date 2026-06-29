@@ -18,7 +18,7 @@ export interface DriftTask {
 }
 
 /** A live thread surfaced in the Activity drawer: an unread reply (`new`) or a
- *  thread mid-reply within the active window (`thinking`). */
+ *  thread whose reply is streaming right now (`thinking`). */
 export interface ThreadActivityItem {
   turn_id: number;
   label: string;
@@ -36,23 +36,27 @@ export const useTasksStore = defineStore('tasks', {
   }),
 
   getters: {
-    /** Live/unread threads as Activity rows — newest first; threads with no
-     *  turn_id (not yet bound) are skipped. Derived from the conversation feed. */
+    /** Live/unread threads as Activity rows — most recently active first; threads
+     *  with no turn_id (not yet bound) are skipped. The `thinking` pulse is the
+     *  real per-thread streaming signal (`isTurnWorking`, driven by the turn's
+     *  `working`/`done` WS signals), not a time window — it lights only while a
+     *  reply is actually in flight. `.filter` yields a fresh array, so the
+     *  `last_activity_at` sort never mutates the store. */
     threadActivity(): ThreadActivityItem[] {
       const convo = useConversationStore();
       return convo.threads
         .filter(
           (t) =>
             t.turn_id != null &&
-            ((t.unread ?? 0) > 0 || convo.isThreadActive(t.last_activity_at)),
+            ((t.unread ?? 0) > 0 || convo.isTurnWorking(t.turn_id)),
         )
+        .sort((a, b) => (b.last_activity_at ?? '').localeCompare(a.last_activity_at ?? ''))
         .map((t) => ({
           turn_id: t.turn_id as number,
           label: t.gist || t.preview,
           snippet: t.preview,
           kind: ((t.unread ?? 0) > 0 ? 'new' : 'thinking') as ThreadActivityItem['kind'],
-        }))
-        .sort((a, b) => b.turn_id - a.turn_id);
+        }));
     },
 
     totalCount(state): number {
