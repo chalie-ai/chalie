@@ -109,7 +109,8 @@ async function handleSend(): Promise<void> {
   // Guard here too so we don't clear/re-grow needlessly. Same gate as canSend.
   if (!trimmed && files.length === 0) return;
 
-  // Clear the image strip only on a fresh turn, not the mid-ACT append path —
+  // Clear the image strip only when this actually dispatches a turn. When the
+  // scope is busy the send is queued (text-only) and the attachments stay pending,
   // so capture send-mode before the store flips isSending.
   const wasSending = session.isSending;
 
@@ -194,6 +195,23 @@ function onTurnInterrupted(e: Event): void {
   });
 }
 
+/** A queued message was clicked for editing — route it to the dock that owns its
+ *  scope (footer for the spine, the panel dock for a thread), append it to any
+ *  draft, and focus. Matched by turn_id, not active state, so a spine click lands
+ *  in the footer even while a thread dock is focused. */
+function onEditQueued(e: Event): void {
+  const detail = (e as CustomEvent<{ turnId: number | null; text: string }>).detail;
+  if (detail.turnId !== props.turnId) return;
+  markActive();
+  text.value = text.value ? `${text.value}\n${detail.text}` : detail.text;
+  nextTick(() => {
+    grow();
+    textareaRef.value?.focus();
+    const el = textareaRef.value;
+    if (el) el.selectionStart = el.selectionEnd = el.value.length;
+  });
+}
+
 let _unsubVoiceTranscript: (() => void) | null = null;
 
 /** Paste the voice transcript into the compose textarea for review — does NOT auto-send. */
@@ -213,6 +231,7 @@ function onVoiceTranscript({ text: transcript }: { text: string }): void {
 
 onMounted(() => {
   document.addEventListener('session:turn-interrupted', onTurnInterrupted);
+  document.addEventListener('chalie:edit-queued', onEditQueued);
   _unsubVoiceTranscript = on('chalie:voice-transcript', onVoiceTranscript);
   document.addEventListener('click', onDocumentClick);
   globalThis.addEventListener('scroll', onWindowScroll, { passive: true });
@@ -237,6 +256,7 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
   document.removeEventListener('session:turn-interrupted', onTurnInterrupted);
+  document.removeEventListener('chalie:edit-queued', onEditQueued);
   _unsubVoiceTranscript?.();
   document.removeEventListener('click', onDocumentClick);
   globalThis.removeEventListener('scroll', onWindowScroll);

@@ -9,6 +9,7 @@ import { useSessionStore } from '../../stores/session';
 import { useConversationStore } from '../../stores/conversation';
 import type { ConversationForm } from '../../stores/conversation';
 import TurnView from './TurnView.vue';
+import QueuedMessages from './QueuedMessages.vue';
 import InputDock from '../layout/InputDock.vue';
 
 const session = useSessionStore();
@@ -104,7 +105,11 @@ onBeforeUnmount(() => document.removeEventListener('keydown', onKeydown));
         <div v-if="showLoader" class="thread-panel__loader">
           <output class="thread-panel__spinner" aria-label="Loading thread" />
         </div>
-        <TurnView v-else :forms="panelForms" :can-reply="false" />
+        <template v-else>
+          <TurnView :forms="panelForms" :can-reply="false" />
+          <!-- Thread-scoped queued sends — faded trailing turn, drains into this thread. -->
+          <QueuedMessages :thread-id="session.panelThreadId" />
+        </template>
       </div>
 
       <InputDock v-if="session.panelThreadId != null" :turn-id="session.panelThreadId" />

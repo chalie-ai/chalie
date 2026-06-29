@@ -15,6 +15,7 @@ import { getHost } from '../api/index';
 import { showToast } from '../utils/toast';
 import { useConversationStore, chalieFormPlaintext } from './conversation';
 import type { AttachmentPreview, ChalieForm } from './conversation';
+import { useQueueStore } from './queue';
 import { useTasksStore } from './tasks';
 import { useNotificationsStore } from './notifications';
 import type { TipState, UpdateState } from './notifications';
@@ -35,7 +36,7 @@ export const useSessionStore = defineStore('session', {
      *  signal, cleared on its `done`. Disambiguates own vs peer turns so a peer's
      *  broadcast `done` can't release this surface's send guard. */
     _liveTurnId: null as number | null,
-    /** Id of the optimistic user form (for mid-ACT concatenate + requestStop restore). */
+    /** Id of the optimistic user form (for the requestStop restore). */
     _lastUserFormId: null as number | null,
     /** Captured text from the last user turn (for requestStop restore). */
     _lastUserText: '',
@@ -148,10 +149,12 @@ export const useSessionStore = defineStore('session', {
      * everything else — the spinner, the rows, the reply — flows back through the
      * broadcast `working`/`updated`/`done` signals (→ routeDrift → refetch).
      *
-     * Mid-ACT path: a turn is already in flight, so the backend cancels it,
-     * concatenates this text onto the original, and restarts as a FRESH turn. We
-     * reflect the combined text in the live bubble, tear down the cancelled turn's
-     * render, and let the new turn's `working` signal rebind a fresh thread.
+     * Busy path: if this scope is working (the surface is single-flight, or the
+     * target thread's turn is still streaming in the background), the text is
+     * queued client-side instead of interrupting. It renders faded at the scope's
+     * tail and dispatches — as ONE newline-joined message — when the scope settles
+     * (_drainQueues). Queues are per-scope: the spine drains into a new spine turn,
+     * a thread into a reply on that turn.
      */
     async sendMessage(
       text: string,
@@ -166,21 +169,8 @@ export const useSessionStore = defineStore('session', {
       const ws = getWebSocket();
       const body = text || '[File attached]';
 
-      if (this.isSending) {
-        const u = this._lastUserFormId != null
-          ? convo.forms.find((f) => f.id === this._lastUserFormId)
-          : undefined;
-        if (u?.kind === 'user') {
-          u.text += '\n\n' + body;
-          this._lastUserText = u.text;
-          u.turnId = null; // orphan so dropLiveTurn keeps the bubble for the rebind
-        }
-        if (this._liveTurnId != null) {
-          convo.dropLiveTurn(this._liveTurnId);
-          this._liveTurnId = null;
-        }
-        // Backend concatenates server-side, so resend only the new text.
-        ws.send(text, source, (m) => this._onSendFailure(m), [], threadId);
+      if (this.isSending || (threadId != null && convo.isTurnWorking(threadId))) {
+        useQueueStore().enqueue(threadId, body);
         return;
       }
 
@@ -217,6 +207,7 @@ export const useSessionStore = defineStore('session', {
         this._lastUserFormId = null;
         this.isSending = false;
       }
+      this._drainQueues();
       useAmbientSensor().recordResponse();
       document.dispatchEvent(new CustomEvent('session:turn-done'));
 
@@ -227,6 +218,22 @@ export const useSessionStore = defineStore('session', {
         );
         const last = chalie[chalie.length - 1];
         if (last) this._notifyBackground(chalieFormPlaintext(last));
+      }
+    },
+
+    /** Dispatch one settled scope's queued messages. The surface is single-flight,
+     *  so drain at most one scope per call — the next scope follows on its own
+     *  `done`. A thread scope waits until its turn stops working; the spine drains
+     *  whenever the surface is free. Each scope ships as ONE newline-joined turn. */
+    _drainQueues(): void {
+      if (this.isSending) return;
+      const queue = useQueueStore();
+      const convo = useConversationStore();
+      for (const key of queue.pendingScopes) {
+        const threadId = key === 'main' ? null : Number(key.slice(1));
+        if (threadId != null && convo.isTurnWorking(threadId)) continue;
+        void this.sendMessage(queue.take(threadId), 'text', [], [], threadId);
+        return;
       }
     },
 
@@ -247,9 +254,8 @@ export const useSessionStore = defineStore('session', {
       const convo = useConversationStore();
       const ws = getWebSocket();
 
-      // Capture the user bubble's LIVE text: a mid-ACT append holds the
-      // concatenated "A\n\nB", not the original "A". _lastUserText is only a
-      // fallback when the form is gone.
+      // Restore the in-flight user bubble's text into the composer; _lastUserText
+      // is only the fallback for when that optimistic form is already gone.
       let restoredText = this._lastUserText;
       if (this._lastUserFormId != null) {
         const u = convo.forms.find((f) => f.id === this._lastUserFormId);
