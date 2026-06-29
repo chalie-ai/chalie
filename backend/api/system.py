@@ -1,5 +1,13 @@
-"""
-System namespace — /health, /metrics, /system/status, /system/observability/* endpoints.
+"""System namespace — /health, /ready, /metrics, /system/status, /system/observability/*.
+
+Read-only observability + diagnostics (not CRUD): 18 of 20 routes are GETs
+returning a status/diagnostic DTO or an opaque service-owned shape. The two
+mutating-ish routes (``POST /health`` heartbeat ingest, ``POST /system/update/apply``)
+are action endpoints kept at 200 (they return status/result, not a created
+resource). Datetimes serialize as ISO-8601 UTC via the foundation serializer — the
+local ``_now_iso()`` helper is deleted. Where a protected test pins an exact shape
+(records 400, degraded-200, non-ISO ``compacted_at``, raw telemetry/metrics),
+current behavior is preserved.
 """
 
 import json
@@ -11,38 +19,90 @@ from flask import request
 from flask.typing import ResponseReturnValue
 from flask_restx import Namespace, Resource
 
-from .auth import require_session
 from services.time_utils import utc_now
 from utils.logger import LOG_FILE_PATH as _LOG_FILE_PATH  # Written exclusively by utils/logger.py in the same process
+
+from .auth import require_session
+from .dto import Error, expects, register_dto, responds
+from .dto.context_usage import ContextUsage
+from .dto.health import ClientTelemetry, Health
+from .dto.observability_compaction import CompactionRecord, CompactionView
+from .dto.observability_errors import ErrorsList, LogError
+from .dto.observability_records import RecordsPage
+from .dto.observability_tools import ToolUsage, ToolUsageList
+from .dto.readiness import Readiness
+from .dto.research_run import ResearchRunDetail, ResearchRunsList
+from .dto.setting import Setting, SettingWrite, UpdateApplyRequest
+from .dto.system_status import SystemStatus
+from .dto.write_queue import WriteQueueStats
 
 if TYPE_CHECKING:
     from services.client_context_service import ClientContextService
 
 logger = logging.getLogger(__name__)
 
-system_ns = Namespace('system', description='System operations', path='/')
+system_ns = Namespace("system", description="System operations", path="/")
 
 # Signal source for telemetry signals absorbed by WorldState from health pings.
-_SIGNAL_SOURCE_HEALTH = '/health'
+_SIGNAL_SOURCE_HEALTH = "/health"
+
+# Records browser bounds + valid sources (invalid source is a preserved 400, not 422).
+_RECORDS_LIMIT = 250
+_VALID_SOURCES = {"episodes", "user", "system"}
+_RESEARCH_LIST_LIMIT = 100
+
+_LOG_TAIL_BYTES = 256 * 1024   # 256 KB tail read — never loads the full file
+_ERROR_LEVELS = frozenset({"ERROR", "CRITICAL"})
+_ERROR_CAP = 200
+
+register_dto(
+    system_ns,
+    Health,
+    ClientTelemetry,
+    Readiness,
+    SystemStatus,
+    RecordsPage,
+    ToolUsage,
+    ToolUsageList,
+    CompactionRecord,
+    CompactionView,
+    ResearchRunsList,
+    ResearchRunDetail,
+    WriteQueueStats,
+    LogError,
+    ErrorsList,
+    ContextUsage,
+    Setting,
+    SettingWrite,
+    UpdateApplyRequest,
+    Error,
+)
+
+_S = system_ns.models
 
 
-def _ok_response() -> tuple[dict[str, object], int]:
-    """Standard health response body — used by both GET and POST."""
+def _error(message: str, status: int) -> ResponseReturnValue:
+    """Build a uniform non-2xx ``Error`` body carrying its own status code."""
+    return Error(error=message).model_dump(mode="json"), status
+
+
+def _health() -> Health:
+    """Build the standard health response — status + running app version."""
     from consumer import APP_VERSION
-    return {"status": "ok", "version": APP_VERSION}, 200
+    return Health(status="ok", version=APP_VERSION)
 
 
 def _mirror_telemetry_to_world_state(svc: "ClientContextService", data: dict[str, object]) -> None:
     """Mirror persisted client telemetry into WorldState as Signals."""
     from services.world_state import world_state, Signal
     world_state.set("telemetry", svc.get() or data)
-    world_state.absorb(Signal(source=_SIGNAL_SOURCE_HEALTH, kind='heartbeat', payload=data))
-    device_class = data.get('device_class') or cast(dict[str, object], data.get('device') or {}).get('class')
+    world_state.absorb(Signal(source=_SIGNAL_SOURCE_HEALTH, kind="heartbeat", payload=data))
+    device_class = data.get("device_class") or cast(dict[str, object], data.get("device") or {}).get("class")
     if device_class:
-        world_state.absorb(Signal(source=_SIGNAL_SOURCE_HEALTH, kind='device', payload={'device_class': device_class}))
-    local_time = data.get('local_time')
+        world_state.absorb(Signal(source=_SIGNAL_SOURCE_HEALTH, kind="device", payload={"device_class": device_class}))
+    local_time = data.get("local_time")
     if local_time:
-        world_state.absorb(Signal(source=_SIGNAL_SOURCE_HEALTH, kind='local_time', payload={'local_time': local_time}))
+        world_state.absorb(Signal(source=_SIGNAL_SOURCE_HEALTH, kind="local_time", payload={"local_time": local_time}))
 
 
 def _persist_heartbeat(data: dict[str, object]) -> None:
@@ -56,28 +116,37 @@ def _persist_heartbeat(data: dict[str, object]) -> None:
         logger.warning(f"[HEALTH] Failed to mirror telemetry to WorldState: {ws_err}")
 
 
-@system_ns.route('/health')
+# ---------------------------------------------------------------------------
+# Liveness + readiness probes (public — no auth)
+# ---------------------------------------------------------------------------
+
+@system_ns.route("/health")
 class HealthResource(Resource):
-    @system_ns.response(200, "OK")
+    @system_ns.response(200, "OK", model=_S["Health"])
     def get(self) -> ResponseReturnValue:
         """Health check endpoint (no auth required)."""
-        return _ok_response()
+        return _health().model_dump(mode="json"), 200
 
-    @system_ns.response(200, "OK")
-    def post(self) -> ResponseReturnValue:
-        """Health check endpoint (no auth required). POST saves client context."""
+    @system_ns.expect(_S["ClientTelemetry"])
+    @system_ns.response(200, "OK", model=_S["Health"])
+    @responds(Health, code=200)
+    @expects(ClientTelemetry)
+    def post(self, dto: ClientTelemetry) -> Health:
+        """Health check endpoint (no auth required). POST saves client context (best-effort)."""
+        data = dto.model_dump(mode="json")
         try:
-            data = request.get_json() or {}
             if data:
                 _persist_heartbeat(data)
         except Exception as e:
             logger.warning(f"[HEALTH] Failed to save client context: {e}")
-        return _ok_response()
+        return _health()
 
 
-@system_ns.route('/ready')
+@system_ns.route("/ready")
 class ReadinessResource(Resource):
-    @system_ns.response(200, "Ready")
+    @system_ns.response(200, "Ready", model=_S["Readiness"])
+    @system_ns.response(503, "Not ready", model=_S["Readiness"])
+    @responds(Readiness, code=200)
     def get(self) -> ResponseReturnValue:
         """Readiness probe — 200 only when SQLite, MemoryStore, embeddings, and ONNX are ready.
 
@@ -89,49 +158,61 @@ class ReadinessResource(Resource):
         """
         from services.preflight_service import run_preflight
         components = run_preflight()
-        ready = all(c.get('status') == 'ok' for c in components.values())
-        return {'ready': ready, **components}, (200 if ready else 503)
+        ready = all(c.get("status") == "ok" for c in components.values())
+        dto = Readiness(ready=ready, **components)
+        # Variable status (200/503): return the pre-serialized body + code so the
+        # foundation serializer emits the exact component shapes the tests pin.
+        return dto.model_dump(mode="json"), (200 if ready else 503)
 
 
-@system_ns.route('/metrics')
+# ---------------------------------------------------------------------------
+# Metrics + system status
+# ---------------------------------------------------------------------------
+
+@system_ns.route("/metrics")
 class MetricsResource(Resource):
     @require_session
-    @system_ns.response(200, "OK")
+    @system_ns.response(200, "Metrics dashboard (opaque service-owned body)")
+    @system_ns.response(500, "Failed to retrieve metrics", model=_S["Error"])
+    @responds(code=200)
     def get(self) -> ResponseReturnValue:
-        """Metrics dashboard endpoint."""
+        """Metrics dashboard endpoint (raw passthrough — service-owned shape)."""
         try:
             from services.metrics_service import MetricsService
-            metrics = MetricsService()
-            data = metrics.get_dashboard_data()
-            return data, 200
+            return MetricsService().get_dashboard_data()
         except Exception as e:
             logger.error(f"[REST API] Metrics error: {e}")
-            return {"error": "Failed to retrieve metrics"}, 500
+            return _error("Failed to retrieve metrics", 500)
 
 
-@system_ns.route('/system/status')
+@system_ns.route("/system/status")
 class SystemStatusResource(Resource):
     @require_session
-    @system_ns.response(200, "OK")
-    def get(self) -> ResponseReturnValue:
+    @system_ns.response(200, "System health (ok or degraded — both 200)", model=_S["SystemStatus"])
+    @system_ns.response(500, "Status check failed", model=_S["Error"])
+    @responds(SystemStatus, code=200)
+    def get(self) -> SystemStatus | ResponseReturnValue:
         """Comprehensive system health and diagnostics."""
         try:
             from services.memory_client import MemoryClientService
             from services.database_service import get_shared_db_service
 
             store = MemoryClientService.create_connection()
-            result: dict[str, object] = {"status": "ok", "memory": {}, "storage": {}}
+            status = "ok"
+            memory: dict[str, object] = {}
+            storage: dict[str, object] = {}
+            memory_store_error: str | None = None
+            database_error: str | None = None
 
             # MemoryStore health
             try:
                 store.ping()
-                # Count memory store keys
-                cast(dict[str, object], result["memory"])["working_memory_keys"] = len(store.keys("working_memory:*"))
-                cast(dict[str, object], result["memory"])["gist_keys"] = len(store.keys("gist_index:*"))
-                cast(dict[str, object], result["memory"])["fact_keys"] = len(store.keys("fact_index:*"))
+                memory["working_memory_keys"] = len(store.keys("working_memory:*"))
+                memory["gist_keys"] = len(store.keys("gist_index:*"))
+                memory["fact_keys"] = len(store.keys("fact_index:*"))
             except Exception as e:
-                result["status"] = "degraded"
-                result["memory_store_error"] = str(e)
+                status = "degraded"
+                memory_store_error = str(e)
 
             # SQLite counts
             try:
@@ -146,59 +227,61 @@ class SystemStatusResource(Resource):
                         try:
                             cursor.execute(query)
                             row = cursor.fetchone()
-                            cast(dict[str, object], result["storage"])[table_label] = row[0] if row else 0
+                            storage[table_label] = row[0] if row else 0
                         except Exception as e:
                             logger.warning(f"[SYSTEM] Count query failed for '{table_label}': {e}")
-                            cast(dict[str, object], result["storage"])[table_label] = -1
+                            storage[table_label] = -1
             except Exception as e:
-                result["status"] = "degraded"
-                result["database_error"] = str(e)
+                status = "degraded"
+                database_error = str(e)
 
-            return result, 200
-
+            return SystemStatus(
+                status=status,
+                memory=memory,
+                storage=storage,
+                memory_store_error=memory_store_error,
+                database_error=database_error,
+            )
         except Exception as e:
             logger.error(f"[REST API] System status error: {e}")
-            return {"status": "error", "message": str(e)}, 500
+            return _error("System status check failed", 500)
 
 
 # ─────────────────────────────────────────────
 # Observability — cognitive legibility endpoints
 # ─────────────────────────────────────────────
 
-def _now_iso() -> str:
-    return utc_now().isoformat()
-
-
-_RECORDS_LIMIT = 250
-_VALID_SOURCES = {'episodes', 'user', 'system'}
-_RESEARCH_LIST_LIMIT = 100
-
-
-@system_ns.route('/system/observability/records')
+@system_ns.route("/system/observability/records")
 class ObservabilityRecordsResource(Resource):
     @require_session
-    @system_ns.response(200, "OK")
-    def get(self) -> ResponseReturnValue:
+    @system_ns.param("source", "episodes | user | system", _in="query", required=True)
+    @system_ns.param("offset", "Rows to skip (>=0)", _in="query")
+    @system_ns.param("q", "Substring filter", _in="query")
+    @system_ns.response(200, "Records page", model=_S["RecordsPage"])
+    @system_ns.response(400, "invalid source / invalid offset", model=_S["Error"])
+    @system_ns.response(500, "Failed to retrieve records", model=_S["Error"])
+    @responds(RecordsPage, code=200)
+    def get(self) -> RecordsPage | ResponseReturnValue:
         """Paginated record browser for episodes, user, and system memory sources."""
         try:
-            source = request.args.get('source', '')
+            source = request.args.get("source", "")
             if source not in _VALID_SOURCES:
-                return {"error": "invalid source"}, 400
+                return _error("invalid source", 400)
 
-            raw_offset = request.args.get('offset', '0')
+            raw_offset = request.args.get("offset", "0")
             try:
                 offset = int(raw_offset)
             except (ValueError, TypeError):
-                return {"error": "invalid offset"}, 400
+                return _error("invalid offset", 400)
             if offset < 0:
-                return {"error": "invalid offset"}, 400
+                return _error("invalid offset", 400)
 
-            q = (request.args.get('q', '') or '')[:200]
+            q = (request.args.get("q", "") or "")[:200]
 
             from services.database_service import get_shared_db_service
             db = get_shared_db_service()
 
-            if source == 'episodes':
+            if source == "episodes":
                 rows = db.fetch_all(
                     "SELECT created_at AS created, "
                     "COALESCE(last_relevant_at, created_at) AS last_accessed, "
@@ -211,7 +294,7 @@ class ObservabilityRecordsResource(Resource):
                     (q, f"%{q}%", _RECORDS_LIMIT, offset),
                 )
             else:
-                kind = 'user_specific' if source == 'user' else 'system'
+                kind = "user_specific" if source == "user" else "system"
                 rows = db.fetch_all(
                     "SELECT first_seen_at AS created, last_accessed_at AS last_accessed, "
                     "key, value "
@@ -224,37 +307,40 @@ class ObservabilityRecordsResource(Resource):
                 )
 
             rows = rows or []
-            serialised = []
+            serialised: list[dict[str, object]] = []
             for r in rows:
                 row: dict[str, object] = {
-                    'created': r['created'],
-                    'last_accessed': r['last_accessed'],
-                    'value': r['value'],
+                    "created": r["created"],
+                    "last_accessed": r["last_accessed"],
+                    "value": r["value"],
                 }
-                if source == 'episodes':
-                    row['location'] = r.get('location_name') or ''
+                if source == "episodes":
+                    row["location"] = r.get("location_name") or ""
                 else:
-                    row['key'] = r['key']
+                    row["key"] = r["key"]
                 serialised.append(row)
-            return {
-                'generated_at': _now_iso(),
-                'source': source,
-                'rows': serialised,
-                'offset': offset,
-                'limit': _RECORDS_LIMIT,
-                'returned': len(rows),
-                'has_more': len(rows) == _RECORDS_LIMIT,
-            }, 200
+
+            return RecordsPage(
+                generated_at=utc_now(),
+                source=source,
+                rows=serialised,
+                offset=offset,
+                limit=_RECORDS_LIMIT,
+                returned=len(rows),
+                has_more=len(rows) == _RECORDS_LIMIT,
+            )
         except Exception as e:
             logger.error(f"[REST API] observability/records error: {e}")
-            return {"error": "Failed to retrieve records"}, 500
+            return _error("Failed to retrieve records", 500)
 
 
-@system_ns.route('/system/observability/tools')
+@system_ns.route("/system/observability/tools")
 class ObservabilityToolsResource(Resource):
     @require_session
-    @system_ns.response(200, "OK")
-    def get(self) -> ResponseReturnValue:
+    @system_ns.response(200, "Tool usage list", model=_S["ToolUsageList"])
+    @system_ns.response(500, "Failed to retrieve tool data", model=_S["Error"])
+    @responds(ToolUsageList, code=200)
+    def get(self) -> ToolUsageList | ResponseReturnValue:
         """Tool usage counts from tool_calls — count + last_used per tool."""
         try:
             from services.database_service import get_shared_db_service
@@ -267,202 +353,171 @@ class ObservabilityToolsResource(Resource):
                 "GROUP BY tool_name "
                 "ORDER BY last_used_at DESC"
             )
-            tools = [
-                {
-                    'tool_name': r['tool_name'],
-                    'count': r['count'],
-                    'last_used_at': r['last_used_at'],
-                }
-                for r in (rows or [])
-            ]
-            return {'generated_at': _now_iso(), 'tools': tools}, 200
+            return ToolUsageList(
+                generated_at=utc_now(),
+                tools=[
+                    ToolUsage(
+                        tool_name=cast(str, r["tool_name"]),
+                        count=cast(int, r["count"]),
+                        last_used_at=cast(str, r["last_used_at"]),
+                    )
+                    for r in (rows or [])
+                ],
+            )
         except Exception as e:
             logger.error(f"[REST API] observability/tools error: {e}")
-            return {"error": "Failed to retrieve tool data"}, 500
+            return _error("Failed to retrieve tool data", 500)
 
 
-
-@system_ns.route('/system/observability/token-usage')
+@system_ns.route("/system/observability/token-usage")
 class ObservabilityTokenUsageResource(Resource):
     @require_session
-    @system_ns.response(200, "OK")
+    @system_ns.param("window", "hour | day | week | month | lifetime (default day)", _in="query")
+    @system_ns.param("usage_class", "chat | subagent | subconscious (optional filter)", _in="query")
+    @system_ns.response(200, "Token usage (opaque service-owned body)")
+    @system_ns.response(422, "Invalid window", model=_S["Error"])
+    @system_ns.response(500, "Failed to retrieve token usage data", model=_S["Error"])
+    @responds(code=200)
     def get(self) -> ResponseReturnValue:
-        """Token usage aggregated by time window, model, provider, and usage class.
-
-        Query params:
-            window: hour | day | week | month | lifetime (default: day)
-            usage_class: chat | subagent | subconscious (optional filter)
-        """
+        """Token usage aggregated by time window, model, provider, and usage class (raw passthrough)."""
         from services.llm_call_log_service import get_token_usage, VALID_WINDOWS
-        window = request.args.get('window', 'day')
+        window = request.args.get("window", "day")
         if window not in VALID_WINDOWS:
-            return {'error': f"Invalid window '{window}'. Use: {', '.join(sorted(VALID_WINDOWS))}"}, 400
-        usage_class = request.args.get('usage_class') or None
+            return _error(f"Invalid window '{window}'. Use: {', '.join(sorted(VALID_WINDOWS))}", 422)
+        usage_class = request.args.get("usage_class") or None
         try:
-            data = get_token_usage(window=window, usage_class=usage_class)
-            return data, 200
+            return get_token_usage(window=window, usage_class=usage_class)
         except Exception as e:
             logger.error(f"[REST API] observability/token-usage error: {e}")
-            return {"error": "Failed to retrieve token usage data"}, 500
+            return _error("Failed to retrieve token usage data", 500)
 
 
-
-@system_ns.route('/system/observability/world-state')
+@system_ns.route("/system/observability/world-state")
 class ObservabilityWorldStateResource(Resource):
     @require_session
-    @system_ns.response(200, "OK")
+    @system_ns.response(200, "World state (opaque service-owned body)")
+    @system_ns.response(500, "Failed to retrieve world state", model=_S["Error"])
+    @responds(code=200)
     def get(self) -> ResponseReturnValue:
-        """World state as seen by the ACT loop — rendered block + raw inputs."""
-        from services.world_state import world_state, _fetch_schedule_rows
-        from services.heartbeat_service import heartbeat_service
+        """World state as seen by the ACT loop — rendered block + raw inputs (raw passthrough)."""
+        try:
+            from services.world_state import world_state, _fetch_schedule_rows
+            from services.heartbeat_service import heartbeat_service
 
-        return {
-            "rendered": world_state.render(),
-            "inputs": {
-                "telemetry": heartbeat_service.read(),
-                "signals": world_state.get("signals"),
-                "schedule": _fetch_schedule_rows(),
-            },
-        }, 200
+            return {
+                "rendered": world_state.render(),
+                "inputs": {
+                    "telemetry": heartbeat_service.read(),
+                    "signals": world_state.get("signals"),
+                    "schedule": _fetch_schedule_rows(),
+                },
+            }
+        except Exception as e:
+            logger.error(f"[REST API] observability/world-state error: {e}")
+            return _error("Failed to retrieve world state", 500)
 
 
-@system_ns.route('/system/observability/compaction')
+@system_ns.route("/system/observability/compaction")
 class ObservabilityCompactionResource(Resource):
     @require_session
-    @system_ns.response(200, "OK")
-    def get(self) -> ResponseReturnValue:
-        """Continuity-compaction synthesis for the chat ('user') channel.
-
-        Returns the durable summary the ACT loop carries forward after a
-        context-overflow compaction — the same text prepended to the
-        UserMessageProcessor prompt in place of the older turns. Read-only.
-        Returns ``{"compaction": null}`` when no compaction has run yet.
-        """
+    @system_ns.response(200, "Compaction view", model=_S["CompactionView"])
+    @system_ns.response(500, "Failed to retrieve compaction summary", model=_S["Error"])
+    @responds(CompactionView, code=200)
+    def get(self) -> CompactionView | ResponseReturnValue:
+        """Continuity-compaction synthesis for the chat ('user') channel (read-only)."""
         try:
             from services import compaction_persistence, locale_service
-            record = compaction_persistence.get_compaction('user')
+            record = compaction_persistence.get_compaction("user")
             if not record:
-                return {'compaction': None}, 200
-            return {
-                'compaction': {
-                    'summary': record['compacted_text'],
-                    'compacted_up_to_id': record['compacted_up_to_id'],
-                    'compacted_at': locale_service.format_date(cast(str, record['created_at']), for_ui=True),
-                },
-            }, 200
+                return CompactionView(compaction=None)
+            return CompactionView(
+                compaction=CompactionRecord(
+                    summary=cast(str, record["compacted_text"]),
+                    compacted_up_to_id=cast(int, record["compacted_up_to_id"]),
+                    compacted_at=locale_service.format_date(cast(str, record["created_at"]), for_ui=True) or "",
+                ),
+            )
         except Exception:
             logger.exception("[REST API] observability/compaction error")
-            return {"error": "Failed to retrieve compaction summary"}, 500
+            return _error("Failed to retrieve compaction summary", 500)
 
 
-@system_ns.route('/system/observability/research')
+@system_ns.route("/system/observability/research")
 class ObservabilityResearchResource(Resource):
     @require_session
-    @system_ns.response(200, "OK")
-    def get(self) -> ResponseReturnValue:
-        """Newest-first list of proactive-research (Auto Research) runs.
-
-        Each row is one execution of the background research loop: when it ran and a
-        preview of what it surfaced. Read-only.
-        """
+    @system_ns.response(200, "Research runs list", model=_S["ResearchRunsList"])
+    @system_ns.response(500, "Failed to retrieve research runs", model=_S["Error"])
+    @responds(ResearchRunsList, code=200)
+    def get(self) -> ResearchRunsList | ResponseReturnValue:
+        """Newest-first list of proactive-research (Auto Research) runs (read-only)."""
         try:
             from services import discovery_runs
-            return {
-                'generated_at': _now_iso(),
-                'runs': discovery_runs.list_runs(_RESEARCH_LIST_LIMIT),
-            }, 200
+            return ResearchRunsList(
+                generated_at=utc_now(),
+                runs=discovery_runs.list_runs(_RESEARCH_LIST_LIMIT),
+            )
         except Exception:
             logger.exception("[REST API] observability/research error")
-            return {"error": "Failed to retrieve research runs"}, 500
+            return _error("Failed to retrieve research runs", 500)
 
 
-@system_ns.route('/system/observability/research/<int:run_id>')
+@system_ns.route("/system/observability/research/<int:run_id>")
+@system_ns.param("run_id", "Research run id", _in="path")
 class ObservabilityResearchDetailResource(Resource):
     @require_session
-    @system_ns.response(200, "OK")
-    def get(self, run_id: int) -> ResponseReturnValue:
-        """One Auto Research run: the grounding it ran against plus its full output.
-
-        ``transcript`` is the loop's assistant output, read live from the transcript
-        by turn and joined into one blob — no tool calls, no input. 404 when the id
-        is unknown. Read-only.
-        """
+    @system_ns.response(200, "Research run detail", model=_S["ResearchRunDetail"])
+    @system_ns.response(404, "Not found", model=_S["Error"])
+    @system_ns.response(500, "Failed to retrieve research run", model=_S["Error"])
+    @responds(ResearchRunDetail, code=200)
+    def get(self, run_id: int) -> ResearchRunDetail | ResponseReturnValue:
+        """One Auto Research run: the grounding it ran against plus its full output."""
         try:
             from services import discovery_runs
             run = discovery_runs.get_run_detail(run_id)
             if run is None:
-                return {"error": "not found"}, 404
-            return {'generated_at': _now_iso(), 'run': run}, 200
+                return _error("not found", 404)
+            return ResearchRunDetail(generated_at=utc_now(), run=run)
         except Exception:
             logger.exception("[REST API] observability/research detail error")
-            return {"error": "Failed to retrieve research run"}, 500
+            return _error("Failed to retrieve research run", 500)
 
 
-@system_ns.route('/system/observability/write-queue')
+@system_ns.route("/system/observability/write-queue")
 class ObservabilityWriteQueueResource(Resource):
     @require_session
-    @system_ns.response(200, "OK")
-    def get(self) -> ResponseReturnValue:
-        """Write queue runtime statistics.
-
-        Returns a JSON snapshot of the :class:`~services.write_queue_service.WriteQueueService`
-        singleton covering current backlog depth, completed writes, and error
-        count since process start.
-
-        Responses:
-            200: JSON object with keys ``queue_size`` (int), ``processed`` (int),
-                 and ``errors`` (int).
-            500: JSON error object if the write-queue service is unavailable.
-        """
+    @system_ns.response(200, "Write queue stats", model=_S["WriteQueueStats"])
+    @system_ns.response(500, "Failed to retrieve write queue stats", model=_S["Error"])
+    @responds(WriteQueueStats, code=200)
+    def get(self) -> WriteQueueStats | ResponseReturnValue:
+        """Write queue runtime statistics (backlog, completed writes, error count)."""
         try:
             from services.write_queue_service import get_write_queue
             stats = get_write_queue().get_stats()
-            return stats, 200
+            return WriteQueueStats(
+                queue_size=stats["queue_size"],
+                processed=stats["processed"],
+                errors=stats["errors"],
+            )
         except Exception as e:
             logger.error(f"[REST API] observability/write-queue error: {e}")
-            return {"error": "Failed to retrieve write queue stats"}, 500
+            return _error("Failed to retrieve write queue stats", 500)
 
 
-@system_ns.route('/system/observability/telemetry')
+@system_ns.route("/system/observability/telemetry")
 class ObservabilityTelemetryResource(Resource):
     @require_session
-    @system_ns.response(200, "OK")
+    @system_ns.response(200, "Telemetry summary (opaque, dynamic event-type keys)")
+    @system_ns.response(500, "Failed to retrieve telemetry summary", model=_S["Error"])
+    @responds(code=200)
     def get(self) -> ResponseReturnValue:
-        """Telemetry event summary across all tracked event types.
-
-        Returns a per-event-type breakdown produced by the process-level
-        :class:`~services.telemetry_service.TelemetryCollector` singleton.
-        Each key in the response body corresponds to one of the seven canonical
-        telemetry event types (e.g. ``memory_recall``, ``act_loop_complete``).
-        All types are present even when no events have been recorded yet.
-
-        The response is wrapped with a ``generated_at`` ISO 8601 timestamp so
-        callers can detect a stale/cached response.
-
-        Responses:
-            200: JSON object structured as::
-
-                    {
-                        "generated_at": "<ISO-8601>",
-                        "memory_recall": {"count": 42, "recent": [...]},
-                        "context_assembly": {"count": 7, "recent": [...]},
-                        ...
-                    }
-
-            500: JSON error object if the telemetry collector is unavailable.
-        """
+        """Telemetry event summary across all tracked event types (raw passthrough)."""
         try:
             from services.telemetry_service import get_telemetry_collector
             summary = get_telemetry_collector().get_summary()
-            return {"generated_at": _now_iso(), **summary}, 200
+            return {"generated_at": utc_now().isoformat(), **summary}
         except Exception as e:
             logger.error(f"[REST API] observability/telemetry error: {e}")
-            return {"error": "Failed to retrieve telemetry summary"}, 500
-
-
-_LOG_TAIL_BYTES = 256 * 1024   # 256 KB tail read — never loads the full file
-_ERROR_LEVELS = frozenset({"ERROR", "CRITICAL"})
-_ERROR_CAP = 200
+            return _error("Failed to retrieve telemetry summary", 500)
 
 
 def _tail_error_lines() -> list[dict[str, object]]:
@@ -499,122 +554,130 @@ def _tail_error_lines() -> list[dict[str, object]]:
     return errors[:_ERROR_CAP]
 
 
-@system_ns.route('/system/observability/errors')
+@system_ns.route("/system/observability/errors")
 class ObservabilityErrorsResource(Resource):
     @require_session
-    @system_ns.response(200, "OK")
-    def get(self) -> ResponseReturnValue:
-        """Recent ERROR and CRITICAL log lines from /tmp/chalie.log, newest first.
-
-        Reads only the last ~256 KB of the log file to avoid loading unbounded content.
-        Written by utils.logger.Logger.start() (backend/utils/logger.py).
-        """
+    @system_ns.response(200, "Recent error log lines", model=_S["ErrorsList"])
+    @system_ns.response(500, "Failed to retrieve error log", model=_S["Error"])
+    @responds(ErrorsList, code=200)
+    def get(self) -> ErrorsList | ResponseReturnValue:
+        """Recent ERROR and CRITICAL log lines from /tmp/chalie.log, newest first."""
         try:
-            return {"generated_at": _now_iso(), "errors": _tail_error_lines()}, 200
+            return ErrorsList(
+                generated_at=utc_now(),
+                errors=[
+                    LogError(
+                        timestamp=cast(str, e["timestamp"]),
+                        message=cast(str, e["message"]),
+                    )
+                    for e in _tail_error_lines()
+                ],
+            )
         except Exception as e:
             logger.error(f"[REST API] observability/errors error: {e}")
-            return {"error": "Failed to retrieve error log"}, 500
+            return _error("Failed to retrieve error log", 500)
 
 
 # ──────────────────────────────────────────────
 # In-place update endpoints
 # ──────────────────────────────────────────────
 
-@system_ns.route('/system/update/check')
+@system_ns.route("/system/update/check")
 class UpdateCheckResource(Resource):
     @require_session
-    @system_ns.response(200, "OK")
+    @system_ns.response(200, "Update info (opaque service-owned body)")
+    @system_ns.response(500, "Failed to check for updates", model=_S["Error"])
+    @responds(code=200)
     def get(self) -> ResponseReturnValue:
+        """Check for an available app update (raw passthrough)."""
         try:
             from services.app_update_service import AppUpdateService
-            info = AppUpdateService().check_for_update()
-            return info, 200
+            return AppUpdateService().check_for_update(), 200
         except Exception as e:
             logger.error(f"[REST API] update/check error: {e}")
-            return {"error": "Failed to check for updates"}, 500
+            return _error("Failed to check for updates", 500)
 
 
-@system_ns.route('/system/update/apply')
+@system_ns.route("/system/update/apply")
 class UpdateApplyResource(Resource):
     @require_session
-    @system_ns.response(200, "OK")
-    def post(self) -> ResponseReturnValue:
+    @system_ns.expect(_S["UpdateApplyRequest"])
+    @system_ns.response(200, "Update applied (opaque {ok,...} result)")
+    @system_ns.response(422, "Validation failed", model=_S["Error"])
+    @system_ns.response(500, "Update failed (opaque {ok,message} body)")
+    @responds(code=200)
+    @expects(UpdateApplyRequest)
+    def post(self, dto: UpdateApplyRequest) -> ResponseReturnValue:
+        """Apply a release update by tag, then request a restart (raw {ok,...} result)."""
         try:
             from services.app_update_service import AppUpdateService
-            data = request.get_json(silent=True) or {}
-            tag = data.get('tag')
-            if not tag:
-                return {"ok": False, "message": "Missing 'tag' parameter"}, 400
-
             svc = AppUpdateService()
-            result = svc.apply_update(tag)
-
-            if result.get('ok'):
+            result = svc.apply_update(dto.tag)
+            if result.get("ok"):
                 svc.request_restart()
-
             return result, 200
         except Exception as e:
             logger.error(f"[REST API] update/apply error: {e}")
             return {"ok": False, "message": f"Update failed: {e}"}, 500
 
 
+# ──────────────────────────────────────────────
 # Settings endpoints
 # ──────────────────────────────────────────────
 
-@system_ns.route('/system/context-usage')
+@system_ns.route("/system/context-usage")
 class ContextUsageResource(Resource):
     @require_session
-    @system_ns.response(200, "OK")
-    def get(self) -> ResponseReturnValue:
-        """Last user-turn request size + context window for the composer indicator.
-
-        ``last_request_tokens`` is the provider-reported ``tokens_input`` of the most
-        recent main-conversation call (``job_name='user:user'`` — NOT every
-        usage_class='chat' row, which would also include the thinking pre-pass and
-        each web_search/web_browse delegate iteration, making the indicator
-        oscillate); ``context_window`` is the selected provider's ``max_tokens``.
-        Either is null when unknown — the endpoint never raises so a transient miss
-        can't break the composer.
-        """
+    @system_ns.response(200, "Context usage", model=_S["ContextUsage"])
+    @responds(ContextUsage, code=200)
+    def get(self) -> ContextUsage:
+        """Last user-turn request size + context window for the composer indicator (never errors)."""
         from services.llm_call_log_service import get_last_chat_request_tokens
         from services.provider_cache_service import ProviderCacheService
         last = get_last_chat_request_tokens()
         selected = ProviderCacheService.get_selected_provider() or {}
-        return {
-            "last_request_tokens": last,
-            "context_window": selected.get('max_tokens'),
-        }
+        return ContextUsage(
+            last_request_tokens=last,
+            context_window=cast("int | None", selected.get("max_tokens")),
+        )
 
 
-@system_ns.route('/system/settings/<key>')
+@system_ns.route("/system/settings/<key>")
+@system_ns.param("key", "Setting key", _in="path")
 class SettingsResource(Resource):
     @require_session
-    @system_ns.response(200, "OK")
-    def get(self, key: str) -> ResponseReturnValue:
+    @system_ns.response(200, "Setting value", model=_S["Setting"])
+    @system_ns.response(500, "Failed to get setting", model=_S["Error"])
+    @responds(Setting, code=200)
+    def get(self, key: str) -> Setting | ResponseReturnValue:
+        """Read an opaque setting by key."""
         from services.settings_service import SettingsService
         from services.database_service import get_shared_db_service
         try:
             svc = SettingsService(get_shared_db_service())
-            value = svc.get(key)
-            return {"key": key, "value": value}
+            return Setting(key=key, value=svc.get(key))
         except Exception as e:
             logger.error(f"[REST API] get setting error: {e}")
-            return {"error": "Failed to get setting"}, 500
+            return _error("Failed to get setting", 500)
 
     @require_session
-    @system_ns.response(200, "OK")
-    def put(self, key: str) -> ResponseReturnValue:
+    @system_ns.expect(_S["SettingWrite"])
+    @system_ns.response(200, "Setting written (value or null on delete)", model=_S["Setting"])
+    @system_ns.response(500, "Failed to save setting", model=_S["Error"])
+    @responds(Setting, code=200)
+    @expects(SettingWrite)
+    def put(self, key: str, dto: SettingWrite) -> Setting | ResponseReturnValue:
+        """Write (or, on empty/falsey value, delete) an opaque setting."""
         from services.settings_service import SettingsService
         from services.database_service import get_shared_db_service
-        data = request.get_json(silent=True) or {}
-        value = data.get('value', '')
         try:
             svc = SettingsService(get_shared_db_service())
+            value = dto.value
             if not value:
                 svc.delete(key)
             else:
                 svc.set(key, str(value))
-            return {"key": key, "value": value or None}
+            return Setting(key=key, value=value or None)
         except Exception as e:
             logger.error(f"[REST API] set setting error: {e}")
-            return {"error": "Failed to save setting"}, 500
+            return _error("Failed to save setting", 500)
