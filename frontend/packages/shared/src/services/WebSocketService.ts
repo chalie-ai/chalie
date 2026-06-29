@@ -71,8 +71,8 @@ type Interval = ReturnType<typeof setInterval>;
 
 /**
  * WebSocket client — receive-only server→client push channel. Client→server
- * requests go over HTTP (POST /api/thread[/<turn_id>], /chat/interrupt, /action); the only
- * client→server WS frame is `pong`.
+ * requests go over HTTP (POST /api/thread[/<turn_id>], DELETE /api/thread/<turn_id>,
+ * POST /api/action); the only client→server WS frame is `pong`.
  */
 export class WebSocketService {
   private ws: WebSocket | null = null;

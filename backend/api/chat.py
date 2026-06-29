@@ -2,15 +2,12 @@
 Chat API — HTTP turn-control and rich-card action endpoints.
 
 Routes:
-  POST /api/chat/interrupt     — cooperatively cancel the active UMP turn. The
-                             cancelled turn deletes its own transcript and
-                             tool_call rows. Returns 200 always with JSON body.
-  GET  /api/chat/subagents/active — active async delegates for the Processes panel.
-  POST /api/chat/subagent/<sub_id>/stop — cooperatively cancel a running async
-                             delegate by its sub_id. Returns 200 always.
   POST /api/action             — receive a rich-card control click; dispatches via
                              ToolDispatcher.dispatch() and returns the result
                              synchronously in the response body (no WS frame).
+
+  Async-delegate (subagent) lifecycle lives in its own resource group —
+  GET /api/subagents and DELETE /api/subagent/<sub_id> (see api/subagents.py).
 
 Send path:
   User messages are sent via POST /api/thread (new thread) or
@@ -19,9 +16,14 @@ Send path:
 
 Design:
   WS is receive-only push (server→client). All client→server requests use HTTP.
-  Mid-ACT user messages are handled by the frontend: POST /chat/interrupt
-  cancels the active turn (which self-cleans its DB rows), then the frontend
-  starts a fresh turn with the combined original+new message text.
+  turn_id is the only handle: each send spawns an isolated turn on its own daemon
+  thread; the MessageProcessor allocates (new spine turn) or reuses (thread reply)
+  a turn_id and carries it end to end — every WS signal stamps it, so the surface
+  keys its updates on it and holds no shared "active turn" state. A second message
+  to a busy surface is never sent mid-turn: the frontend QUEUES it per turn_id and
+  dispatches once that turn's ``done`` arrives. Interrupt is the lone exception —
+  DELETE /api/thread/<turn_id> (see api/threads.py) cancels a running turn by
+  turn_id, which self-cleans its rows.
 
   User-channel messages flow through MessageProcessor.process() with the
   UserConfig ProcessorConfig subclass — no MessageProcessor subclass. Live
@@ -29,15 +31,16 @@ Design:
   holds no event memory and refetches turn blocks over REST. Every lifecycle
   signal (created/working/updated/done + the per-tool tool_called/tool_done
   timers) is emitted by MessageProcessor itself through its `broadcast`
-  chokepoint. The only signal originating here is the fallback error + done a
-  FAILED turn needs (it never reaches the processor's terminal).
+  chokepoint, including the terminal ``done`` on a FAILED turn (fired from the
+  live instance — it owns turn_id). The only signal originating here is the
+  channel-wide error toast that failed turn also needs.
 """
 
 import logging
 import threading
 import time
 import uuid
-from typing import Sequence, cast
+from typing import Sequence
 
 from flask.typing import ResponseReturnValue
 from flask_restx import Namespace, Resource
@@ -46,8 +49,6 @@ from .auth import require_auth
 from .dto import Error, expects, register_dto, responds
 from .dto.boundary import error
 from .dto.chat import ActionRequest, ActionResult
-from .dto.subagent import ActiveSubagents, Interrupted, SubagentStopResult
-from services.log_utils import safe
 from services.markup import sanitize
 from services.processor_config import ProcessorConfig
 from services.websocket_broker import WebSocketBroker
@@ -56,94 +57,41 @@ logger = logging.getLogger(__name__)
 
 chat_ns = Namespace("chat", description="Chat turn control and rich-card actions", path="/api")
 
-register_dto(chat_ns, ActionRequest, ActionResult, Interrupted, SubagentStopResult, ActiveSubagents, Error)
+register_dto(chat_ns, ActionRequest, ActionResult, Error)
 
 _M = chat_ns.models
-
-
-# ── Active UMP turn tracking ─────────────────────────────────────────────────
-
-_active_ump: "_ActiveTurn | None" = None
-_ump_lock = threading.Lock()
-
-
-def _get_active_ump() -> "_ActiveTurn | None":
-    with _ump_lock:
-        return _active_ump
-
-
-def _set_active_ump(proc: "_ActiveTurn") -> None:
-    global _active_ump
-    with _ump_lock:
-        _active_ump = proc
-
-
-def _clear_active_ump(turn: "_ActiveTurn") -> None:
-    global _active_ump
-    with _ump_lock:
-        if _active_ump is turn:
-            _active_ump = None
-
-
-class _ActiveTurn:
-    """Holds the cancel_event (so interrupt/stop endpoints can signal
-    cancellation) and the original raw_input (so dispatch_message can combine
-    mid-turn messages).
-    """
-
-    __slots__ = ("_cancel_event", "_raw_input")
-
-    def __init__(self, cancel_event: threading.Event, raw_input: str) -> None:
-        self._cancel_event = cancel_event
-        self._raw_input = raw_input
-
-    def cancel(self) -> None:
-        self._cancel_event.set()
 
 
 # ── Background helpers ────────────────────────────────────────────────────────
 
 
 def _run_chat_background(
-    turn: _ActiveTurn,
     cancel_event: threading.Event,
     raw_input: str,
     config: "ProcessorConfig",
     metadata: dict[str, object],
     request_id: str,
 ) -> None:
-    """Runs the user turn to completion. The surface's lifecycle signals
-    (created → working → updated → done, plus the per-tool timers) come from
-    MessageProcessor itself; only a turn that FAILS before reaching its terminal
-    needs the fallback error + done emitted here so the surface still drops its
-    working indicator. The active-UMP reference is cleared in ``finally`` (the
-    next statement after process() returns) — long before any surface, having
-    just received ``done`` over the socket, could round-trip a fresh send."""
+    """Runs the user turn to completion on its own daemon thread. The MessageProcessor
+    owns the whole lifecycle (created → working → updated → done, plus the per-tool
+    timers) and self-registers its cancel_event by turn_id, so it needs nothing from
+    here once started — including the terminal ``done`` on a FAILED turn, which the MP
+    fires from its live instance (it knows turn_id) before the exception reaches us. We
+    add only the channel-wide error toast; a cancelled turn (stop button) stays silent."""
     from services.message_processor import MessageProcessor  # noqa: PLC0415
 
     try:
         MessageProcessor.process(raw_input, config, metadata, cancel_event=cancel_event)
     except Exception as exc:
-        logger.exception("[Chat API] UMP error for %s: %s", request_id, exc)
-        # A failed turn never reached _end_turn, so no ``done`` fired — emit the
-        # error bubble and a terminal ``done`` (keyed by the newest user row, the
-        # turn that just failed) so the surface releases its working state. A
-        # cancelled turn is owned by its replacement and stays silent.
+        logger.exception("[Chat API] turn error for %s: %s", request_id, exc)
         if not cancel_event.is_set():
-            from services.transcript_service import Transcript  # noqa: PLC0415
-            rows = Transcript.get_recent("user", limit=1)
-            failed_turn = cast("int | None", rows[-1].get("turn_id")) if rows else None
-            broker = WebSocketBroker()
-            broker.broadcast({"type": "error", "message": "Turn failed unexpectedly", "recoverable": False})
-            broker.broadcast({"type": "done", "turn_id": failed_turn})
-    finally:
-        _clear_active_ump(turn)
+            WebSocketBroker().broadcast({"type": "error", "message": "Turn failed unexpectedly", "recoverable": False})
 
 
 def deliver_async_result(mp: object, result_text: str, cancel_event: threading.Event) -> None:
-    """Does NOT register _active_ump and does NOT go through dispatch_message /
-    _start_turn, so it never cancels or combines the user's in-flight foreground
-    turn — it simply appends another assistant turn.
+    """Appends another assistant turn for a finished async delegate — a plain
+    MessageProcessor.process() call, independent of any foreground turn (each runs
+    on its own thread, keyed by its own turn_id).
 
     The delegate's ``cancel_event`` is threaded into the synthesis turn so the
     Processes-panel stop control aborts a spiralling delegate at the next chain
@@ -186,26 +134,13 @@ def dispatch_message(
     hidden_input: bool = False,
     thread_id: "int | None" = None,
 ) -> None:
-    """If an ACT loop is already in-flight, cancels it, concatenates the original
-    message with the new one (separated by two newlines), and starts a fresh turn
-    with the combined text. The cancelled turn's DB rows are cleaned up by
-    _cleanup_cancelled() in the processor.
-
-    ``thread_id`` appends to an existing thread instead of opening a new one; the
-    reply's input row carries the supplied thread_id so all its rows share it.
-    A mid-turn interrupt with ``thread_id`` set cancels the active turn and starts
-    a new reply to the SAME thread (the thread boundary is preserved).
+    """Spawn an isolated turn for ``text``. ``thread_id`` appends to an existing
+    thread (its input row carries that turn_id so all the reply's rows share it);
+    absent, the processor allocates a fresh turn_id. There is no cross-surface
+    state — the frontend never sends into a busy surface (it queues per turn_id),
+    so a turn never has to cancel or combine with another.
     """
-    attachments = attachments or []
-
-    active = _get_active_ump()
-    if active is not None and not hidden_input:
-        original = getattr(active, "_raw_input", "") or ""
-        active.cancel()
-        text = original + "\n\n" + text
-        logger.info("[Chat API] Mid-turn message — cancelled active UMP, combined text")
-
-    _start_turn(text, source, attachments, hidden_input, thread_id=thread_id)
+    _start_turn(text, source, attachments or [], hidden_input, thread_id=thread_id)
 
 
 def _start_turn(
@@ -238,13 +173,14 @@ def _start_turn(
         metadata["is_thread_reply"] = True
 
     config = UserConfig(metadata)
+    # The processor self-registers this event by turn_id for DELETE /api/thread/
+    # <turn_id>; we keep a reference only so the error path can stay silent on a
+    # cancelled turn.
     cancel_event = threading.Event()
-    turn = _ActiveTurn(cancel_event=cancel_event, raw_input=text)
-    _set_active_ump(turn)
 
     thread = threading.Thread(
         target=_run_chat_background,
-        args=(turn, cancel_event, text, config, metadata, request_id),
+        args=(cancel_event, text, config, metadata, request_id),
         daemon=True,
         name=f"chat-{request_id[:8]}",
     )
@@ -268,16 +204,6 @@ def _stage_chat_uploads(files: Sequence[object]) -> list[object]:
         getattr(f, 'save')(tmp_path)
         paths.append(tmp_path)
     return paths
-
-
-def _interrupt_active_turn() -> Interrupted:
-    """Cancel the active UMP turn if one is running; always a 200 ack."""
-    proc = _get_active_ump()
-    if proc is not None:
-        proc.cancel()
-        logger.info("[Chat API] Interrupt signal delivered to active UMP turn")
-        return Interrupted(interrupted=True)
-    return Interrupted(reason="no_active_turn")
 
 
 # ── Action-button dispatch helpers ───────────────────────────────────────────
@@ -329,56 +255,6 @@ class _ActionCtx:
 
 
 # ── HTTP endpoints ────────────────────────────────────────────────────────────
-
-
-@chat_ns.route("/chat/interrupt")
-class ChatInterruptResource(Resource):
-    @require_auth
-    @chat_ns.response(200, "OK", model=_M["Interrupted"])
-    @responds(Interrupted)
-    def post(self) -> Interrupted:
-        """The cancelled turn deletes its own transcript and tool_call rows — no data persists for an interrupted turn.
-
-        Always returns HTTP 200.
-        """
-        return _interrupt_active_turn()
-
-
-@chat_ns.route("/chat/subagents/active")
-class ActiveSubagentsResource(Resource):
-    @require_auth
-    @chat_ns.response(200, "OK", model=_M["ActiveSubagents"])
-    @responds(ActiveSubagents)
-    def get(self) -> ActiveSubagents:
-        """Hydrates the Processes panel on page load/reconnect, since WS push events
-        are missed while the client is disconnected. Each row carries the tool name,
-        the model's summary of what the delegate is doing, and when it started.
-        """
-        from services.async_delegate_runner import async_delegate_runner  # noqa: PLC0415
-
-        return ActiveSubagents(subagents=async_delegate_runner.active())
-
-
-@chat_ns.route("/chat/subagent/<sub_id>/stop")
-class SubagentStopResource(Resource):
-    @require_auth
-    @chat_ns.param("sub_id", "Async delegate id")
-    @chat_ns.response(200, "OK", model=_M["SubagentStopResult"])
-    @responds(SubagentStopResult)
-    def post(self, sub_id: str) -> SubagentStopResult:
-        """Cooperatively cancel a running async delegate.
-
-        Delegates to async_delegate_runner.cancel(). The delegate's cancel_event
-        is set; the ACT loop exits at the next iteration boundary.
-
-        Always returns HTTP 200.
-        """
-        from services.async_delegate_runner import async_delegate_runner  # noqa: PLC0415
-
-        if async_delegate_runner.cancel(sub_id):
-            logger.info("[Chat API] Stop signal delivered to delegate %s", safe(sub_id[:8]))
-            return SubagentStopResult(cancelled=True)
-        return SubagentStopResult(reason="not_found")
 
 
 @chat_ns.route("/action")

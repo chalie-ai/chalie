@@ -23,16 +23,17 @@ class TestChatEndpoints:
         assert resp.status_code == 422
         assert resp.get_json()['error'] == 'message required'
 
-        # Cross-step proof: no UMP turn was registered for the empty message.
-        interrupt = client.post('/api/chat/interrupt')
+        # Cross-step proof: no turn was registered for the empty message, so
+        # interrupting any turn_id finds nothing in flight.
+        interrupt = client.delete('/api/thread/1')
         assert interrupt.status_code == 200
         assert interrupt.get_json() == {'ok': True, 'interrupted': None, 'reason': 'no_active_turn'}
 
-    def test_chat_interrupt_idle_returns_no_active_turn(self, authed_client: tuple[FlaskClient, sqlite3.Connection, object]) -> None:
-        """POST /chat/interrupt with no turn in flight returns 200 and says so."""
+    def test_thread_interrupt_idle_returns_no_active_turn(self, authed_client: tuple[FlaskClient, sqlite3.Connection, object]) -> None:
+        """DELETE /api/thread/<turn_id> with no turn in flight returns 200 and says so."""
         client, _db_conn, _store = authed_client
 
-        resp = client.post('/api/chat/interrupt')
+        resp = client.delete('/api/thread/1')
 
         assert resp.status_code == 200
         assert resp.get_json() == {'ok': True, 'interrupted': None, 'reason': 'no_active_turn'}

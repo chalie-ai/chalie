@@ -1,6 +1,6 @@
 /**
  * Tasks store — reminders (GET /scheduler?status=pending, filtered to items with
- * a due_at) + active delegates (GET /chat/subagents/active, each a full snapshot
+ * a due_at) + active delegates (GET /api/subagents, each a full snapshot
  * an Activity row renders). Live updates arrive via applyDriftEvent() from the
  * session store.
  */

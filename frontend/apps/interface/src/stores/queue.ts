@@ -8,8 +8,8 @@
  */
 import { defineStore } from 'pinia';
 
-/** Scope key: the main spine, or a thread by its turn_id. */
-function keyOf(threadId: number | null): string {
+/** Scope/lane key: the main spine, or a thread by its turn_id. */
+export function laneKey(threadId: number | null): string {
   return threadId == null ? 'main' : `t${threadId}`;
 }
 
@@ -22,7 +22,7 @@ export const useQueueStore = defineStore('queue', {
   getters: {
     /** The queued texts for a scope, in send order. */
     queuedFor(state): (threadId: number | null) => string[] {
-      return (threadId) => state.byScope[keyOf(threadId)] ?? [];
+      return (threadId) => state.byScope[laneKey(threadId)] ?? [];
     },
     /** Scope keys that hold at least one queued message — drives draining. */
     pendingScopes(state): string[] {
@@ -32,14 +32,14 @@ export const useQueueStore = defineStore('queue', {
 
   actions: {
     enqueue(threadId: number | null, text: string): void {
-      (this.byScope[keyOf(threadId)] ??= []).push(text);
+      (this.byScope[laneKey(threadId)] ??= []).push(text);
     },
     removeAt(threadId: number | null, index: number): void {
-      this.byScope[keyOf(threadId)]?.splice(index, 1);
+      this.byScope[laneKey(threadId)]?.splice(index, 1);
     },
     /** Take the whole scope's queue as ONE newline-joined message, clearing it. */
     take(threadId: number | null): string {
-      const k = keyOf(threadId);
+      const k = laneKey(threadId);
       const joined = (this.byScope[k] ?? []).join('\n');
       delete this.byScope[k];
       return joined;

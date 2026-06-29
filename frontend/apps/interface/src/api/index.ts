@@ -1,8 +1,8 @@
 /**
  * Typed REST endpoint wrappers over the generic ApiClient (@chalie/shared).
  *
- * Note: /chat, /chat/interrupt, and /action are owned by WebSocketService /
- * stores/session.ts and are NOT exposed here.
+ * Note: the send path, the DELETE /api/thread/<turn_id> interrupt, and /action are
+ * owned by WebSocketService / stores/session.ts and are NOT exposed here.
  */
 
 export { conversation } from './conversation';

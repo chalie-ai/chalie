@@ -4,6 +4,12 @@
  * Single WS owner rule: ONLY this store may touch WebSocketService handlers
  * (send/sendAction/abort/onDrift/onAny/onConnect/onDisconnect/connect/ensureAlive).
  * Everything else goes through this store or the event bus.
+ *
+ * Lane model: every independent conversation surface (the main spine + each
+ * open thread reply) is a "lane" keyed by laneKey(threadId). The four former
+ * global single-flight fields (isSending, _liveTurnId, _lastUserFormId,
+ * _lastUserText) are now per-lane so a working thread never blocks the spine
+ * and vice-versa.
  */
 import { defineStore } from 'pinia';
 import { getWebSocket, useConnectionStore, AuthError } from '@chalie/shared';
@@ -15,7 +21,7 @@ import { getHost } from '../api/index';
 import { showToast } from '../utils/toast';
 import { useConversationStore, chalieFormPlaintext } from './conversation';
 import type { AttachmentPreview, ChalieForm } from './conversation';
-import { useQueueStore } from './queue';
+import { useQueueStore, laneKey } from './queue';
 import { useTasksStore } from './tasks';
 import { useNotificationsStore } from './notifications';
 import type { TipState, UpdateState } from './notifications';
@@ -29,17 +35,24 @@ let _initialized = false;
 /** Unbind fns for event-bus listeners registered in init() (for future cleanup). */
 const _busUnbinds: Array<() => void> = [];
 
+const FILE_PLACEHOLDER = '[File attached]';
+
+interface LaneState {
+  /** Bound turn_id; null for a new main-spine turn until its `created` claims one. */
+  liveTurnId: number | null;
+  /** Id of the optimistic user form (for the requestStop restore). */
+  userFormId: number | null;
+  /** Captured text from the last user turn (for requestStop restore). */
+  userText: string;
+}
+
 export const useSessionStore = defineStore('session', {
   state: () => ({
-    isSending: false,
-    /** turn_id of the turn THIS surface is sending — claimed on its `working`
-     *  signal, cleared on its `done`. Disambiguates own vs peer turns so a peer's
-     *  broadcast `done` can't release this surface's send guard. */
-    _liveTurnId: null as number | null,
-    /** Id of the optimistic user form (for the requestStop restore). */
-    _lastUserFormId: null as number | null,
-    /** Captured text from the last user turn (for requestStop restore). */
-    _lastUserText: '',
+    /** Per-lane single-flight state. Key = laneKey(threadId). A key's presence
+     *  means that lane is actively sending. */
+    lanes: {} as Record<string, LaneState>,
+    /** True while a sendAction (ACT cycle) is in flight — not a lane turn. */
+    _actionBusy: false,
 
     /** Turn-level provider/quota error, surfaced as a closable toast above the
      *  input dock. Null when there is nothing to show. */
@@ -62,6 +75,15 @@ export const useSessionStore = defineStore('session', {
     _onAuthFailure: null as (() => void) | null,
   }),
 
+  getters: {
+    /**
+     * True when the MAIN spine is busy (lane present) or an ACT cycle is running.
+     * Consumed by PresenceBar (logo pulse) and ConversationFeed (live-turn spinner)
+     * — both mean "the main spine is doing something". Unchanged public shape.
+     */
+    isSending: (state): boolean => 'main' in state.lanes || state._actionBusy,
+  },
+
   actions: {
     /** Wire the WebSocket singleton and connect. Idempotent (HMR / StrictMode). */
     init(): void {
@@ -78,13 +100,15 @@ export const useSessionStore = defineStore('session', {
 
       ws.onDisconnect(() => {
         conn.setConnected(false);
-        // A mid-turn drop strands the spinner: the turn's `done` now lands on the
-        // dead socket and is never resent, so clear this surface's working turn or
-        // the anchor hangs. The rows persisted server-side reload on reconnect.
-        if (this._liveTurnId != null) useConversationStore().setWorking(this._liveTurnId, false);
-        this._liveTurnId = null;
-        this._lastUserFormId = null;
-        this.isSending = false;
+        // A mid-turn drop strands spinners: `done` lands on the dead socket and is
+        // never resent. Clear ALL lanes' working state so nothing hangs.
+        const convo = useConversationStore();
+        for (const k in this.lanes) {
+          const id = this.lanes[k].liveTurnId;
+          if (id != null) convo.setWorking(id, false);
+        }
+        this.lanes = {};
+        this._actionBusy = false;
       });
 
       ws.onDrift((data: WsPushEvent) => {
@@ -145,16 +169,25 @@ export const useSessionStore = defineStore('session', {
     },
 
     /**
+     * True when a given surface is currently busy — gates sends and drains.
+     * Main spine shares its surface with ACT cycles (no stable turn id);
+     * threads have a stable id plus the conversation working-set.
+     */
+    isLaneBusy(threadId: number | null): boolean {
+      return threadId == null
+        ? this.isSending
+        : laneKey(threadId) in this.lanes || useConversationStore().isTurnWorking(threadId);
+    },
+
+    /**
      * Send a user turn. Signal-only: the optimistic user bubble renders instantly;
      * everything else — the spinner, the rows, the reply — flows back through the
      * broadcast `working`/`updated`/`done` signals (→ routeDrift → refetch).
      *
-     * Busy path: if this scope is working (the surface is single-flight, or the
-     * target thread's turn is still streaming in the background), the text is
-     * queued client-side instead of interrupting. It renders faded at the scope's
-     * tail and dispatches — as ONE newline-joined message — when the scope settles
-     * (_drainQueues). Queues are per-scope: the spine drains into a new spine turn,
-     * a thread into a reply on that turn.
+     * Busy path: if this lane is working, the text is queued client-side instead
+     * of interrupting. It renders faded at the scope's tail and dispatches — as ONE
+     * newline-joined message — when the lane settles (_drainQueues). Each lane
+     * drains independently; a busy thread never blocks the spine and vice-versa.
      */
     async sendMessage(
       text: string,
@@ -165,42 +198,46 @@ export const useSessionStore = defineStore('session', {
     ): Promise<void> {
       if (!text && !files.length) return;
 
-      const convo = useConversationStore();
-      const ws = getWebSocket();
-      const body = text || '[File attached]';
+      const body = text || FILE_PLACEHOLDER;
 
-      if (this.isSending || (threadId != null && convo.isTurnWorking(threadId))) {
+      if (this.isLaneBusy(threadId)) {
         useQueueStore().enqueue(threadId, body);
         return;
       }
 
-      this.isSending = true;
-      this._liveTurnId = threadId; // null for a new thread — claimed on `working`
-      this._lastUserText = text;
-      this._lastUserFormId = convo.appendUser(body, previews, {
-        inWorkingMemory: true,
-        turnId: threadId,
-      });
-      ws.send(body, source, (m) => this._onSendFailure(m), files, threadId);
+      const convo = useConversationStore();
+      const key = laneKey(threadId);
+      this.lanes[key] = {
+        liveTurnId: threadId,   // null for a new spine turn — claimed on `created`
+        userFormId: convo.appendUser(body, previews, {
+          inWorkingMemory: true,
+          turnId: threadId,
+        }),
+        userText: text,
+      };
+      getWebSocket().send(body, source, (m) => this._onSendFailure(key, m), files, threadId);
     },
 
     /** A local send failure (offline / POST rejected) — no signal will ever
-     *  arrive, so release this surface's guard and surface the message. */
-    _onSendFailure(message: string): void {
+     *  arrive, so release this lane's guard and surface the message. */
+    _onSendFailure(key: string, message: string): void {
       this.errorMessage = message;
-      if (this._liveTurnId != null) useConversationStore().setWorking(this._liveTurnId, false);
-      this._liveTurnId = null;
-      this._lastUserFormId = null;
-      this.isSending = false;
+      const lane = this.lanes[key];
+      if (lane?.liveTurnId != null) useConversationStore().setWorking(lane.liveTurnId, false);
+      delete this.lanes[key];
     },
 
-    /** `done(turn_id)` — settle the turn. Clear its spinner; release this
-     *  surface's send guard only when its OWN turn finished (peers' `done`
-     *  broadcasts must not). Fire ambient + autoscroll, and an OS notification
-     *  for the final reply when the tab is unfocused. */
+    /** `done(turn_id)` — settle the turn. Clear its spinner; release the owning
+     *  lane only when ITS own turn finished (peers' `done` broadcasts must not).
+     *  Fire ambient + autoscroll, and an OS notification for the final reply when
+     *  the tab is unfocused. */
     async _finishTurn(turnId: number | null): Promise<void> {
       const convo = useConversationStore();
-      const id = turnId ?? this._liveTurnId;
+      const owningKey = this._laneOwning(turnId);
+      // Resolve id: a null turnId means it was the main spine's unbound turn; look
+      // it up from the lane record. For a known thread id, turnId is already it.
+      const id = turnId ?? (owningKey != null ? this.lanes[owningKey]?.liveTurnId ?? null : null);
+
       if (id != null) {
         // A forked thread that settled while the user is looking elsewhere keeps a
         // standing Activity card (blue `done`); one they're viewing, or a plain
@@ -208,11 +245,11 @@ export const useSessionStore = defineStore('session', {
         if (id !== this.panelThreadId && convo.isForkedThread(id)) convo.markThreadDone(id);
         else convo.setWorking(id, false);
       }
-      if (id != null && id === this._liveTurnId) {
-        this._liveTurnId = null;
-        this._lastUserFormId = null;
-        this.isSending = false;
-      }
+
+      // Release only the lane that OWNS this turn — peer `done` signals leave
+      // other lanes' guards intact.
+      if (owningKey != null) delete this.lanes[owningKey];
+
       this._drainQueues();
       useAmbientSensor().recordResponse();
       document.dispatchEvent(new CustomEvent('session:turn-done'));
@@ -227,20 +264,33 @@ export const useSessionStore = defineStore('session', {
       }
     },
 
-    /** Dispatch one settled scope's queued messages. The surface is single-flight,
-     *  so drain at most one scope per call — the next scope follows on its own
-     *  `done`. A thread scope waits until its turn stops working; the spine drains
-     *  whenever the surface is free. Each scope ships as ONE newline-joined turn. */
-    _drainQueues(): void {
-      if (this.isSending) return;
-      const queue = useQueueStore();
-      const convo = useConversationStore();
-      for (const key of queue.pendingScopes) {
-        const threadId = key === 'main' ? null : Number(key.slice(1));
-        if (threadId != null && convo.isTurnWorking(threadId)) continue;
-        void this.sendMessage(queue.take(threadId), 'text', [], [], threadId);
-        return;
+    /**
+     * Find the lane key that owns the given turnId — used to release ONLY the
+     * correct lane on `done` without disturbing peer lanes.
+     * Main spine's lane has liveTurnId=null initially, then claimed on `created`;
+     * thread lanes carry their id from the moment of send.
+     */
+    _laneOwning(turnId: number | null): string | null {
+      if ('main' in this.lanes && (turnId == null || this.lanes['main'].liveTurnId === turnId)) {
+        return 'main';
       }
+      for (const k in this.lanes) {
+        if (k !== 'main' && this.lanes[k].liveTurnId === turnId) return k;
+      }
+      return null;
+    },
+
+    /** Drain ALL pending scopes independently — each lane checks its own busy
+     *  state, so a working thread never blocks a free spine drain and vice-versa. */
+    _drainQueues(): void {
+      for (const key of useQueueStore().pendingScopes) this._drainLane(key);
+    },
+
+    _drainLane(key: string): void {
+      const threadId = key === 'main' ? null : Number(key.slice(1));
+      if (this.isLaneBusy(threadId)) return;
+      const text = useQueueStore().take(threadId);
+      if (text) void this.sendMessage(text, 'text', [], [], threadId);
     },
 
     /** Turn-level error (provider failure, quota/429) — surface it as the one dock
@@ -252,53 +302,64 @@ export const useSessionStore = defineStore('session', {
     },
 
     /**
-     * Stop + undo the whole in-flight turn (user message + everything the chain
-     * rendered after it). Emits 'session:turn-interrupted' so InputDock can
-     * restore the textarea value.
+     * Stop + undo the in-flight turn identified by `turnId` (user message +
+     * everything the chain rendered after it). The act-trail knows only the turn
+     * id, so its lane — the main spine vs a specific thread — is resolved here:
+     * the local lane is authoritative for a turn THIS client started (correct
+     * even before a thread's first reply rows land); for a turn we are only
+     * viewing, the turn's thread-nature still targets the right backend lane.
+     * Emits 'session:turn-interrupted' so InputDock can restore the textarea.
      */
-    async requestStop(): Promise<void> {
+    async requestStop(turnId: number | null = null): Promise<void> {
       const convo = useConversationStore();
       const ws = getWebSocket();
 
-      // Restore the in-flight user bubble's text into the composer; _lastUserText
+      const key = this._laneOwning(turnId);
+      const lane = key != null ? this.lanes[key] : undefined;
+      // The turn to cancel by id: the lane's bound id for a turn THIS client
+      // started, else the id we're viewing. null only for a brand-new spine turn
+      // not yet bound — no backend turn_id to target; the local undo below stands.
+      const stopId = lane?.liveTurnId ?? turnId;
+
+      // Restore the in-flight user bubble's text into the composer; lane.userText
       // is only the fallback for when that optimistic form is already gone.
-      let restoredText = this._lastUserText;
-      if (this._lastUserFormId != null) {
-        const u = convo.forms.find((f) => f.id === this._lastUserFormId);
+      let restoredText = lane?.userText ?? '';
+      if (lane?.userFormId != null) {
+        const u = convo.forms.find((f) => f.id === lane.userFormId);
         if (u?.kind === 'user') restoredText = u.text;
       }
 
       // Undo the whole turn: its forms + thread shell + working state. dropLiveTurn
       // clears a bound turn; the explicit filter catches a new thread that never
       // bound (no `working` signal yet), whose bubble is still turn_id-less.
-      if (this._liveTurnId != null) convo.dropLiveTurn(this._liveTurnId);
-      if (this._lastUserFormId != null) {
-        convo.forms = convo.forms.filter((f) => f.id !== this._lastUserFormId);
+      if (lane?.liveTurnId != null) convo.dropLiveTurn(lane.liveTurnId);
+      if (lane?.userFormId != null) {
+        convo.forms = convo.forms.filter((f) => f.id !== lane.userFormId);
       }
-      this._liveTurnId = null;
-      this._lastUserFormId = null;
-      this._lastUserText = '';
+      if (lane?.liveTurnId != null) convo.setWorking(lane.liveTurnId, false);
+      if (key != null) delete this.lanes[key];
 
       ws.abort();
-      this.isSending = false;
 
       document.dispatchEvent(
         new CustomEvent('session:turn-interrupted', { detail: { text: restoredText } }),
       );
 
-      await this._postInterrupt();
+      await this._postInterrupt(stopId);
     },
 
-    /** POST /chat/interrupt — best-effort, never throws. */
-    async _postInterrupt(): Promise<void> {
+    /** DELETE /api/thread/<turn_id> — best-effort interrupt, never throws. The
+     *  turn to cancel is the path; the backend signals that turn's cancel_event.
+     *  A still-unbound spine turn (null id) has no backend row yet — the local
+     *  undo in requestStop stands and we skip the call. */
+    async _postInterrupt(turnId: number | null = null): Promise<void> {
+      if (turnId == null) return;
       try {
         const host = getHost();
         const base = host ? host.replace(/\/$/, '') : '';
-        await fetch(base + '/api/chat/interrupt', {
-          method: 'POST',
+        await fetch(base + '/api/thread/' + turnId, {
+          method: 'DELETE',
           credentials: 'same-origin',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({}),
         });
       } catch {
         // Best-effort — swallow.
@@ -315,7 +376,7 @@ export const useSessionStore = defineStore('session', {
       const convo = useConversationStore();
       const ws = getWebSocket();
 
-      this.isSending = true;
+      this._actionBusy = true;
       const actId = convo.appendAct();
 
       ws.sendAction(payload, {
@@ -334,9 +395,10 @@ export const useSessionStore = defineStore('session', {
         onError: (data) => {
           convo.resolveAct(actId);
           this.errorMessage = data.message;
+          this._actionBusy = false;
         },
         onDone: () => {
-          this.isSending = false;
+          this._actionBusy = false;
         },
       });
     },
@@ -449,10 +511,10 @@ export const useSessionStore = defineStore('session', {
 
     /**
      * Turn-lifecycle signals — stateless and turn-addressed. Each is broadcast to
-     * EVERY surface; only the surface that owns the turn (`_liveTurnId`) releases
-     * its send guard on `done`. Returns true when handled.
+     * EVERY surface; only the surface that owns the turn releases its lane on
+     * `done`. Returns true when handled.
      *   created(id)        → carries a NEW thread's allocated id: claim it onto the
-     *                        optimistic live turn (unbound until now), bind, spinner on
+     *                        optimistic main lane (unbound until now), bind, spinner on
      *   working(id)        → an EXISTING turn (reply, id already known) (re)activates:
      *                        bind (idempotent) + spinner on
      *   tool_called(id…)   → push a live act-trail pill (name + summary) onto its
@@ -467,13 +529,16 @@ export const useSessionStore = defineStore('session', {
     _routeTurnSignal(data: WsPushEvent): boolean {
       const convo = useConversationStore();
       const turnId = (data as { turn_id?: number | null }).turn_id ?? null;
-      switch (data.type as string) {
+      const eventType = data.type as string;
+      switch (eventType) {
         case 'created':
         case 'working':
           if (turnId == null) return true;
-          // A new thread's optimistic turn is still unbound — claim its allocated
-          // id (created). A reply already carries _liveTurnId from sendMessage.
-          if (this.isSending && this._liveTurnId == null) this._liveTurnId = turnId;
+          // `created` = a NEW main-spine turn: claim its allocated id for the
+          // optimistic main lane (liveTurnId was null until now).
+          if (eventType === 'created' && 'main' in this.lanes && this.lanes['main'].liveTurnId == null) {
+            this.lanes['main'].liveTurnId = turnId;
+          }
           convo.bindLiveTurn(turnId);
           convo.setWorking(turnId, true);
           // Pull the block so EVERY surface renders the user bubble from the API —

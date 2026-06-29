@@ -49,6 +49,31 @@ def _channel_lock(channel: str) -> threading.Lock:
     return lock
 
 
+# turn_id → cancel_event for live turns. A turn registers its handle for the life
+# of its chain (see _setup/_run) so DELETE /api/thread/<turn_id> — a separate request
+# holding no in-memory reference to the turn — can cancel it by turn_id. This is the
+# ONLY cross-request state a turn keeps; lifecycle, continuation and broadcasts all
+# ride the live MP instance (turn_id is in memory, _continue threads it + the Event).
+_cancellers: "dict[int, threading.Event]" = {}
+_cancellers_guard = threading.Lock()
+
+
+def _register_canceller(turn_id: "int | None", event: threading.Event) -> None:
+    """Expose a running turn's cancel_event by turn_id; no-op for an unallocated turn."""
+    if turn_id is None:
+        return
+    with _cancellers_guard:
+        _cancellers[turn_id] = event
+
+
+def _unregister_canceller(turn_id: "int | None") -> None:
+    """Drop a turn's cancel handle when its chain ends; a None turn_id never held one."""
+    if turn_id is None:
+        return
+    with _cancellers_guard:
+        _cancellers.pop(turn_id, None)
+
+
 #: Parses the document id out of a rendered ``document.upload`` success envelope
 #: (structured ToolResult JSON ``{"id":"<hex>",...}``) so the turn-0 attachment
 #: seed can link transcript<->doc. A failed upload renders no ``"id":`` key.
@@ -256,7 +281,7 @@ class MessageProcessor:
         metadata: "dict[str, object] | None" = None,
         cancel_event: "threading.Event | None" = None,
     ) -> str:
-        """Single entry point: build an MP, run the turn under the channel lock, return text."""
+        """Single entry point: build an MP, run the turn under its lane lock, return text."""
         mp = MessageProcessor(raw_input, metadata)
         mp.config = config
         if cancel_event is not None:
@@ -265,19 +290,55 @@ class MessageProcessor:
         # would apply deliberation pressure to every turn the gate didn't run
         # (non-user channels) or that crashed, regressing simple recall/chit-chat.
         mp.thinking_level = "low"
-        from services.thinking_override_service import get_thinking_override
+        from services.thinking_override_service import get_thinking_override  # noqa: PLC0415
         mp.thinking_override = get_thinking_override()
         return mp._run()
 
+    @staticmethod
+    def interrupt(turn_id: "int | None") -> bool:
+        """Cancel the running turn with this id by setting its cancel_event; True if a
+        live turn was found (it then deletes its own rows and emits no error)."""
+        if turn_id is None:
+            return False
+        with _cancellers_guard:
+            event = _cancellers.get(turn_id)
+        if event is None:
+            return False
+        event.set()
+        return True
+
+    def _lock_key(self) -> str:
+        """Serialize turns within a surface, not across surfaces: the main spine and
+        each fork thread hold independent locks so they execute concurrently; two
+        turns on the same surface still serialize (shared turn cursor). Non-user
+        channels have no thread_id and collapse to one lock per channel as before."""
+        if self._forked:
+            return f"{self._cfg.channel}:t{self._metadata.get('thread_id')}"
+        return f"{self._cfg.channel}:main"
+
     def _run(self) -> str:
-        """Run the whole turn under the channel lock: setup, step chain, finalise."""
-        with _channel_lock(self._cfg.channel):
-            self._setup()
-            result = self._step()
-            if self.cancel_event.is_set():
-                self._cleanup_cancelled()
-                return ""
-            return result
+        """Run the whole turn under the surface lock: setup, step chain, finalise.
+        ``_setup`` registers this turn's cancel handle by turn_id (the only state
+        DELETE /api/thread/<turn_id> can reach it through); the ``finally`` drops it
+        once the whole chain — every ``_continue`` link runs inline here — ends."""
+        with _channel_lock(self._lock_key()):
+            try:
+                self._setup()
+                result = self._step()
+                if self.cancel_event.is_set():
+                    self._cleanup_cancelled()
+                    return ""
+                return result
+            except Exception:
+                # The turn died before _end_turn fired its terminal ``done``. Fire it
+                # here from the live instance (it owns turn_id in memory) so the surface
+                # drops its working indicator, then re-raise for the caller to log + toast.
+                # A cancelled turn took the ``return ""`` path above, so this is genuine
+                # failure only; the broadcast is BROADCASTS_STATE-gated, so silent off-user.
+                self.broadcast(self._WS_DONE_STATE, self.turn_id)
+                raise
+            finally:
+                _unregister_canceller(self.turn_id)
 
     def _setup(self) -> None:
         """Pre-chain, once per turn: seed active tools, open the turn, gate, seed turn 0."""
@@ -310,6 +371,10 @@ class MessageProcessor:
             # the state up). Both fire unconditionally — a fresh thread and a reply
             # take the identical path; the surface keys on its own current state.
             if self.turn_id is not None:
+                # Register the cancel handle BEFORE announcing the turn — the
+                # instant the surface learns the turn_id (via ``created``) it can
+                # DELETE /api/thread/<turn_id> against it, so the handle must exist.
+                _register_canceller(self.turn_id, self.cancel_event)
                 self.broadcast(self._WS_CREATED_STATE, self.turn_id)
                 self.broadcast(self._WS_WORKING_STATE, self.turn_id)
 

@@ -103,9 +103,8 @@ async function handleSend(): Promise<void> {
   if (!trimmed && files.length === 0) return;
 
   // Clear the image strip only when this actually dispatches a turn. When the
-  // scope is busy the send is queued (text-only) and the attachments stay pending,
-  // so capture send-mode before the store flips isSending.
-  const wasSending = session.isSending;
+  // lane is busy the send is queued (text-only) and the attachments stay pending.
+  const wasBusy = session.isLaneBusy(props.turnId);
 
   // Clear textarea before awaiting so the UI feels instant.
   text.value = '';
@@ -113,7 +112,7 @@ async function handleSend(): Promise<void> {
 
   await session.sendMessage(trimmed, 'text', files, previews, props.turnId);
 
-  if (!wasSending) attachments.clear();
+  if (!wasBusy) attachments.clear();
 
   textareaRef.value?.focus();
 }

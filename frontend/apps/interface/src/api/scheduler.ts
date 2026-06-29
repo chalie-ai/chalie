@@ -20,7 +20,7 @@ export interface ScheduledItem {
   external_uid: string | null;
 }
 
-/** An active delegate (backgrounded tool call) from /chat/subagents/active. */
+/** An active delegate (backgrounded tool call) from /api/subagents. */
 export interface ActiveSubagent {
   sub_id: string;
   /** The delegate's tool name — the row's subtitle. */
@@ -37,16 +37,16 @@ export const scheduler = {
     return api.get('/api/scheduler?status=pending');
   },
 
-  /** GET /api/chat/subagents/active — running async delegates. */
+  /** GET /api/subagents — running async delegates. */
   subagentsActive(): Promise<{ subagents: ActiveSubagent[] }> {
-    return api.get('/api/chat/subagents/active');
+    return api.get('/api/subagents');
   },
 
   /**
-   * POST /api/chat/subagent/<subId>/stop — cancel a running delegate. Returns
+   * DELETE /api/subagent/<subId> — cancel a running delegate. Returns
    * { ok, cancelled } on success, { ok, reason: 'not_found' } for unknown sub_id.
    */
   subagentStop(subId: string): Promise<{ ok: boolean; cancelled?: boolean; reason?: string }> {
-    return api.post(`/api/chat/subagent/${encodeURIComponent(subId)}/stop`, {});
+    return api.del(`/api/subagent/${encodeURIComponent(subId)}`);
   },
 };

@@ -4,12 +4,16 @@ Routes (mounted under ``/api``):
   GET  /api/threads            — collapsed thread feed (id + gist/preview/last activity).
   GET  /api/threads/batch      — many turn blocks in one round-trip (repeated ``id[]``).
   POST /api/thread             — create a new thread (allocates a fresh turn_id).
-  GET  /api/thread/<turn_id>   — one turn's full block (the WS-refetch + expand read).
-  POST /api/thread/<turn_id>   — reply into an existing thread (rows append to turn_id).
+  GET    /api/thread/<turn_id> — one turn's full block (the WS-refetch + expand read).
+  POST   /api/thread/<turn_id> — reply into an existing thread (rows append to turn_id).
+  DELETE /api/thread/<turn_id> — interrupt the running turn (the FE stop button).
 
-Reads are GET, sends are POST; turn_id is path-only, never in the body. Both sends
-return 201 with an empty body — fire-and-acknowledge: the turn surfaces via the
-``created``/``working`` → ``updated`` signals → REST pull, never inline.
+Reads are GET, sends are POST, interrupt is DELETE; turn_id is path-only, never in
+the body. Both sends return 201 with an empty body — fire-and-acknowledge: the turn
+surfaces via the ``created``/``working`` → ``updated`` signals → REST pull, never
+inline. The stop button can only call DELETE once it has a turn_id, and the
+``created`` signal hands it that id the instant the MessageProcessor is built — so
+the turn is interruptible for its entire working life.
 """
 
 import logging
@@ -27,6 +31,7 @@ from .dto.boundary import error
 from .dto.chip import Chip
 from .dto.message import Message
 from .dto.segment import Segment
+from .dto.subagent import Interrupted
 from .dto.thread import (
     ThreadBatch, ThreadFeed, ThreadFeedQuery, ThreadSendRequest, ThreadSummary, TurnBlock,
 )
@@ -40,7 +45,7 @@ threads_ns = Namespace("threads", description="Thread feed and per-turn blocks",
 register_dto(
     threads_ns,
     ThreadFeedQuery, ThreadSummary, ThreadFeed, TurnBlock, ThreadBatch, ThreadSendRequest,
-    Message, Attachment, Chip, Segment, Error,
+    Message, Attachment, Chip, Segment, Interrupted, Error,
 )
 _T = threads_ns.models
 
@@ -364,3 +369,21 @@ class ThreadItemResource(Resource):
         (no new allocation), which drives the user-reply FORK view. Fire-and
         -acknowledge: 201 empty body, activity surfaces via the ``working`` signal."""
         return _send(turn_id, dto)
+
+    @require_session
+    @threads_ns.param("turn_id", "Turn id")
+    @threads_ns.response(200, "Interrupt ack", model=_T["Interrupted"])
+    @responds(Interrupted)
+    def delete(self, turn_id: int) -> Interrupted:
+        """Interrupt the running turn for this turn_id — the FE stop button's call.
+        The turn cooperatively exits and deletes its own transcript + tool_call rows;
+        an idle/finished turn_id is a harmless ``no_active_turn`` ack. The id is the
+        same one ``created`` handed the surface, so no body or lookup is needed: the
+        live MessageProcessor self-registered its cancel handle under it (see
+        MessageProcessor.interrupt / _cancellers)."""
+        from services.message_processor import MessageProcessor  # noqa: PLC0415
+
+        if MessageProcessor.interrupt(turn_id):
+            logger.info("[Threads API] interrupt delivered to turn %s", turn_id)
+            return Interrupted(interrupted=True)
+        return Interrupted(reason="no_active_turn")

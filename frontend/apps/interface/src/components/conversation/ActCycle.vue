@@ -9,7 +9,8 @@ const props = defineProps<{ form: ActForm }>();
 const session = useSessionStore();
 
 function onStop(): void {
-  void session.requestStop();
+  // Pass the form's turnId so the correct lane is released; null = main spine.
+  void session.requestStop(props.form.turnId ?? null);
 }
 
 // Live timer: ticks ONLY while the step is live and a pill is unresolved; torn
