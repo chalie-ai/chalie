@@ -10,13 +10,22 @@ from typing import TYPE_CHECKING, cast
 from urllib.parse import urlparse
 
 import requests as req
-from flask import request
 from flask.typing import ResponseReturnValue
-
 from flask_restx import Namespace, Resource
+
 from services.provider_db_service import PROVIDER_IN_USE_MSG
 
 from .auth import require_session
+from .dto import Error, expects, register_dto, responds
+from .dto.provider import Provider, ProviderCreate, ProviderUpdate
+from .dto.provider_models import (
+    ListModelsRequest,
+    ListModelsResult,
+    ModelInfo,
+    ProviderTestRequest,
+    ProviderTestResult,
+)
+from .dto.provider_role import NullableProviderRef, ProviderRef, ProviderRole
 
 if TYPE_CHECKING:
     from services.provider_db_service import ProviderDbService
@@ -46,7 +55,19 @@ def _safe_validation_msg(exc: ValueError) -> str:
         return msg
     return "Invalid provider configuration"
 
+
 providers_ns = Namespace('providers', description='Provider management', path='/providers')
+
+register_dto(
+    providers_ns,
+    Provider, ProviderCreate, ProviderUpdate,
+    ProviderRef, NullableProviderRef, ProviderRole,
+    ListModelsRequest, ListModelsResult, ModelInfo,
+    ProviderTestRequest, ProviderTestResult,
+    Error,
+)
+
+_M = providers_ns.models
 
 # SSRF hard denies — cloud metadata, link-local, and common cloud-provider
 # private endpoints. Loopback and RFC1918 ranges are allowed (local-first app).
@@ -223,7 +244,7 @@ def _fetch_gemini_models(api_key: str) -> "tuple[list[dict[str, str | None]] | N
         models = []
         page_token = None
         for _ in range(_GEMINI_MAX_PAGES):
-            params = {'pageSize': 1000}
+            params: dict[str, str | int] = {'pageSize': 1000}
             if page_token:
                 params['pageToken'] = page_token
             r = req.get(
@@ -302,181 +323,6 @@ def _fetch_openai_compatible_models(host: str, api_key: str) -> "tuple[list[dict
         return None, "Failed to fetch models"
 
 
-def get_provider_service() -> "ProviderDbService":
-    from services.database_service import get_shared_db_service
-    from services.provider_db_service import ProviderDbService
-    db = get_shared_db_service()
-    return ProviderDbService(db)
-
-
-@providers_ns.route('')
-@providers_ns.response(200, "List of providers")
-@providers_ns.response(201, "Provider created")
-class ProviderListResource(Resource):
-    @require_session
-    def get(self) -> ResponseReturnValue:
-        """Omit ``api_key`` from output."""
-        try:
-            service = get_provider_service()
-            providers = service.list_providers_summary()
-            return {"providers": providers}, 200
-        except Exception as e:
-            logger.error(f"[REST API] Failed to list providers: {e}")
-            return {"error": "Failed to list providers"}, 500
-
-    @require_session
-    def post(self) -> ResponseReturnValue:
-        try:
-            data = request.get_json()
-            if not data:
-                return {"error": "Request body is required"}, 400
-
-            if "name" not in data:
-                return {"error": "Missing required field: name"}, 400
-            if "platform" not in data:
-                return {"error": "Missing required field: platform"}, 400
-            if "model" not in data and "models" not in data:
-                return {"error": "Missing required field: model or models"}, 400
-
-            service = get_provider_service()
-            provider = cast("dict[str, object]", service.create_provider(data))
-
-            try:
-                from services.provider_cache_service import ProviderCacheService
-                ProviderCacheService.invalidate()
-            except Exception as e:
-                logger.warning(f"[REST API] Failed to invalidate provider cache: {e}")
-
-            if provider.get("api_key"):
-                provider["api_key"] = "***"
-
-            return {"provider": provider}, 201
-        except ValueError as e:
-            logger.warning(f"[REST API] Provider validation error: {e}")
-            return {"error": _safe_validation_msg(e)}, 400
-        except sqlite3.IntegrityError as e:
-            logger.warning(f"[REST API] Provider name conflict: {e}")
-            return {"error": _DUPLICATE_NAME_MSG}, 409
-        except Exception as e:
-            logger.error(f"[REST API] Failed to create provider: {e}")
-            return {"error": "Failed to create provider"}, 500
-
-
-@providers_ns.route('/catalog')
-@providers_ns.response(200, "Provider catalog")
-class ProviderCatalogResource(Resource):
-    @require_session
-    def get(self) -> ResponseReturnValue:
-        """Return the curated provider presets for the setup wizard."""
-        try:
-            from services.provider_catalog_service import get_catalog
-            return {"catalog": get_catalog()}, 200
-        except Exception as e:
-            logger.exception(f"[REST API] Failed to load provider catalog: {e}")
-            return {"error": "Failed to load provider catalog"}, 500
-
-
-@providers_ns.route('/<int:provider_id>')
-@providers_ns.response(200, "Provider details")
-@providers_ns.response(404, "Provider not found")
-@providers_ns.param("provider_id", "int", "Provider ID")
-class ProviderResource(Resource):
-    @require_session
-    def get(self, provider_id: int) -> ResponseReturnValue:
-        try:
-            service = get_provider_service()
-            provider = service.get_provider_by_id(provider_id)
-
-            if not provider:
-                return {"error": _ERR_PROVIDER_NOT_FOUND}, 404
-
-            if provider.get("api_key"):
-                provider["api_key"] = "***"
-
-            return {"provider": provider}, 200
-        except Exception as e:
-            logger.error(f"[REST API] Failed to get provider: {e}")
-            return {"error": "Failed to get provider"}, 500
-
-    @require_session
-    def put(self, provider_id: int) -> ResponseReturnValue:
-        try:
-            data = request.get_json()
-            if not data:
-                return {"error": "Request body is required"}, 400
-
-            service = get_provider_service()
-            provider = cast("dict[str, object]", service.update_provider(provider_id, data))
-
-            try:
-                from services.provider_cache_service import ProviderCacheService
-                ProviderCacheService.invalidate()
-            except Exception as e:
-                logger.warning(f"[REST API] Failed to invalidate provider cache: {e}")
-
-            if provider.get("api_key"):
-                provider["api_key"] = "***"
-
-            return {"provider": provider}, 200
-        except ValueError as e:
-            logger.warning(f"[REST API] Provider validation error: {e}")
-            return {"error": _safe_validation_msg(e)}, 400
-        except sqlite3.IntegrityError as e:
-            logger.warning(f"[REST API] Provider name conflict: {e}")
-            return {"error": _DUPLICATE_NAME_MSG}, 409
-        except Exception as e:
-            logger.error(f"[REST API] Failed to update provider: {e}")
-            return {"error": "Failed to update provider"}, 500
-
-    @require_session
-    def delete(self, provider_id: int) -> ResponseReturnValue:
-        try:
-            service = get_provider_service()
-            service.delete_provider(provider_id)
-
-            try:
-                from services.provider_cache_service import ProviderCacheService
-                ProviderCacheService.invalidate()
-            except Exception as e:
-                logger.warning(f"[REST API] Failed to invalidate provider cache: {e}")
-
-            return {"status": "deleted"}, 200
-        except ValueError as e:
-            logger.warning(f"[REST API] Cannot delete provider {provider_id}: {e}")
-            return {"error": _safe_validation_msg(e)}, 409
-        except Exception as e:
-            logger.error(f"[REST API] Failed to delete provider: {e}")
-            return {"error": "Failed to delete provider"}, 500
-
-
-@providers_ns.route('/list-models')
-@providers_ns.response(200, "Model list")
-class ProviderListModelsResource(Resource):
-    @require_session
-    def post(self) -> ResponseReturnValue:
-        """List available models for a given platform."""
-        body = request.get_json(silent=True) or {}
-        platform = (body.get('platform') or '').strip().lower()
-        if platform == 'ollama':
-            models, err = _fetch_ollama_models(body.get('host') or '')
-        elif platform == 'openai':
-            models, err = _fetch_openai_models((body.get('api_key') or '').strip())
-        elif platform == 'anthropic':
-            models, err = _fetch_anthropic_models((body.get('api_key') or '').strip())
-        elif platform == 'gemini':
-            models, err = _fetch_gemini_models((body.get('api_key') or '').strip())
-        elif platform == 'openai_compatible':
-            models, err = _fetch_openai_compatible_models(
-                body.get('host') or '', (body.get('api_key') or '').strip(),
-            )
-        else:
-            return {"models": [], "error": f"Unsupported platform '{platform}'"}, 400
-
-        if err is not None:
-            return {"models": [], "error": err}, 200
-        return {"models": models, "error": None}, 200
-
-
 def _map_api_error(error_str: str, platform: str, model: str) -> str:
     el = error_str.lower()
     if any(k in el for k in ('authentication', 'auth_token', 'api_key', 'invalid_api', '401', 'unauthorized', 'invalid x-api-key')):
@@ -494,13 +340,13 @@ def _map_api_error(error_str: str, platform: str, model: str) -> str:
     return error_str[:300]
 
 
-def _test_ollama_provider(config: "dict[str, object]", model: str, start: float) -> "tuple[dict[str, object], int]":
+def _test_ollama_provider(config: "dict[str, object]", model: str, start: float) -> ProviderTestResult:
     import time
     available, err = _fetch_ollama_models(cast(str, config.get('host', '')))
     latency_ms = int((time.time() - start) * 1000)
 
     if err is not None:
-        return {"success": False, "error": err}, 200
+        return ProviderTestResult(success=False, error=err)
 
     available_names = [cast(str, m['id']) for m in (available or [])]
     model_base = model.split(':')[0]
@@ -510,36 +356,36 @@ def _test_ollama_provider(config: "dict[str, object]", model: str, start: float)
     )
 
     if not model_found and not available_names:
-        return {
-            "success": True, "model": model, "latency_ms": latency_ms,
-            "message": "Connected to Ollama (no models installed yet)"
-        }, 200
+        return ProviderTestResult(
+            success=True, model=model, latency_ms=latency_ms,
+            message="Connected to Ollama (no models installed yet)",
+        )
 
     if not model_found:
-        return {
-            "success": False,
-            "error": f"Model '{model}' not found on this Ollama instance.",
-            "hint": f"Run: ollama pull {model}  ·  Available: {', '.join(available_names[:5])}"
-        }, 200
+        return ProviderTestResult(
+            success=False,
+            error=f"Model '{model}' not found on this Ollama instance.",
+            hint=f"Run: ollama pull {model}  ·  Available: {', '.join(available_names[:5])}",
+        )
 
-    return {
-        "success": True, "model": model, "latency_ms": latency_ms,
-        "message": f"Connected · {len(available_names)} model(s) available"
-    }, 200
+    return ProviderTestResult(
+        success=True, model=model, latency_ms=latency_ms,
+        message=f"Connected · {len(available_names)} model(s) available",
+    )
 
 
-def _test_api_provider(config: "dict[str, object]", platform: str, model: str, start: float) -> "tuple[dict[str, object], int]":
+def _test_api_provider(config: "dict[str, object]", platform: str, model: str, start: float) -> ProviderTestResult:
     import time
     api_key = config.get('api_key')
     if not api_key:
-        return {
-            "success": False,
-            "error": "API key is required to test this provider",
-            "hint": "Enter your API key in the field above"
-        }, 200
+        return ProviderTestResult(
+            success=False,
+            error="API key is required to test this provider",
+            hint="Enter your API key in the field above",
+        )
 
     try:
-        test_config = {
+        test_config: dict[str, object] = {
             'platform': platform, 'model': model,
             'api_key': api_key, 'max_tokens': 1,
         }
@@ -559,36 +405,220 @@ def _test_api_provider(config: "dict[str, object]", platform: str, model: str, s
         )
         client.send(dto)
         latency_ms = int((time.time() - start) * 1000)
-        return {
-            "success": True, "model": model, "latency_ms": latency_ms,
-            "message": "Connected successfully"
-        }, 200
+        return ProviderTestResult(success=True, model=model, latency_ms=latency_ms, message="Connected successfully")
     except Exception as e:
-        error_msg = _map_api_error(str(e), platform, model)
-        return {"success": False, "error": error_msg}, 200
+        return ProviderTestResult(success=False, error=_map_api_error(str(e), platform, model))
+
+
+def get_provider_service() -> "ProviderDbService":
+    from services.database_service import get_shared_db_service
+    from services.provider_db_service import ProviderDbService
+    db = get_shared_db_service()
+    return ProviderDbService(db)
+
+
+def _provider_dto(row: "dict[str, object]") -> Provider:
+    """Build a Provider read DTO from a service dict, stripping the api_key secret."""
+    return Provider(
+        id=cast(int, row['id']),
+        name=cast(str, row['name']),
+        platform=cast(str, row['platform']),
+        model=cast(str, row['model']),
+        host=cast("str | None", row.get('host')),
+        dimensions=cast("int | None", row.get('dimensions')),
+        timeout=cast("int | None", row.get('timeout')),
+        supports_vision=bool(row.get('supports_vision')),
+        max_tokens=cast("int | None", row.get('max_tokens')),
+    )
+
+
+def _error(message: str, status: int) -> ResponseReturnValue:
+    return Error(error=message).model_dump(mode="json"), status
+
+
+def _invalidate_cache() -> None:
+    try:
+        from services.provider_cache_service import ProviderCacheService
+        ProviderCacheService.invalidate()
+    except Exception as e:
+        logger.warning(f"[REST API] Failed to invalidate provider cache: {e}")
+
+
+# ---------------------------------------------------------------------------
+# Resources
+# ---------------------------------------------------------------------------
+
+@providers_ns.route('')
+class ProviderListResource(Resource):
+    @require_session
+    @providers_ns.response(200, "List of providers", model=_M["Provider"])
+    @providers_ns.response(500, "Server error", model=_M["Error"])
+    @responds(Provider, code=200)
+    def get(self) -> "list[Provider] | ResponseReturnValue":
+        try:
+            return [_provider_dto(r) for r in get_provider_service().list_providers_summary()]
+        except Exception as e:
+            logger.error(f"[REST API] Failed to list providers: {e}")
+            return _error("Failed to list providers", 500)
+
+    @require_session
+    @providers_ns.expect(_M["ProviderCreate"])
+    @providers_ns.response(201, "Provider created", model=_M["Provider"])
+    @providers_ns.response(400, "Invalid configuration", model=_M["Error"])
+    @providers_ns.response(409, "Name conflict", model=_M["Error"])
+    @providers_ns.response(422, "Validation failed", model=_M["Error"])
+    @providers_ns.response(500, "Server error", model=_M["Error"])
+    @responds(Provider, code=201)
+    @expects(ProviderCreate)
+    def post(self, dto: ProviderCreate) -> "Provider | ResponseReturnValue":
+        try:
+            row = cast("dict[str, object]", get_provider_service().create_provider(dto.model_dump(mode="json", exclude_none=False)))
+            _invalidate_cache()
+            return _provider_dto(row)
+        except ValueError as e:
+            logger.warning(f"[REST API] Provider validation error: {e}")
+            return _error(_safe_validation_msg(e), 400)
+        except sqlite3.IntegrityError as e:
+            logger.warning(f"[REST API] Provider name conflict: {e}")
+            return _error(_DUPLICATE_NAME_MSG, 409)
+        except Exception as e:
+            logger.error(f"[REST API] Failed to create provider: {e}")
+            return _error("Failed to create provider", 500)
+
+
+@providers_ns.route('/catalog')
+class ProviderCatalogResource(Resource):
+    @require_session
+    @providers_ns.response(200, "Provider catalog")
+    @providers_ns.response(500, "Server error", model=_M["Error"])
+    def get(self) -> ResponseReturnValue:
+        """Return the curated provider presets for the setup wizard."""
+        try:
+            from services.provider_catalog_service import get_catalog
+            return {"catalog": get_catalog()}, 200
+        except Exception as e:
+            logger.exception(f"[REST API] Failed to load provider catalog: {e}")
+            return _error("Failed to load provider catalog", 500)
+
+
+@providers_ns.route('/<int:provider_id>')
+class ProviderResource(Resource):
+    @require_session
+    @providers_ns.param("provider_id", "Provider ID")
+    @providers_ns.response(200, "Provider details", model=_M["Provider"])
+    @providers_ns.response(404, "Provider not found", model=_M["Error"])
+    @providers_ns.response(500, "Server error", model=_M["Error"])
+    @responds(Provider, code=200)
+    def get(self, provider_id: int) -> "Provider | ResponseReturnValue":
+        try:
+            row = get_provider_service().get_provider_by_id(provider_id)
+            if not row:
+                return _error(_ERR_PROVIDER_NOT_FOUND, 404)
+            return _provider_dto(row)
+        except Exception as e:
+            logger.error(f"[REST API] Failed to get provider: {e}")
+            return _error("Failed to get provider", 500)
+
+    @require_session
+    @providers_ns.param("provider_id", "Provider ID")
+    @providers_ns.expect(_M["ProviderUpdate"])
+    @providers_ns.response(200, "Updated provider", model=_M["Provider"])
+    @providers_ns.response(400, "Invalid configuration", model=_M["Error"])
+    @providers_ns.response(404, "Provider not found", model=_M["Error"])
+    @providers_ns.response(409, "Name conflict", model=_M["Error"])
+    @providers_ns.response(422, "Validation failed", model=_M["Error"])
+    @providers_ns.response(500, "Server error", model=_M["Error"])
+    @responds(Provider, code=200)
+    @expects(ProviderUpdate)
+    def put(self, provider_id: int, dto: ProviderUpdate) -> "Provider | ResponseReturnValue":
+        try:
+            row = cast("dict[str, object]", get_provider_service().update_provider(provider_id, dto.model_dump(mode="json", exclude_unset=True)))
+            _invalidate_cache()
+            return _provider_dto(row)
+        except ValueError as e:
+            logger.warning(f"[REST API] Provider validation error: {e}")
+            return _error(_safe_validation_msg(e), 400)
+        except sqlite3.IntegrityError as e:
+            logger.warning(f"[REST API] Provider name conflict: {e}")
+            return _error(_DUPLICATE_NAME_MSG, 409)
+        except Exception as e:
+            logger.error(f"[REST API] Failed to update provider: {e}")
+            return _error("Failed to update provider", 500)
+
+    @require_session
+    @providers_ns.param("provider_id", "Provider ID")
+    @providers_ns.response(204, "Deleted")
+    @providers_ns.response(409, "Provider in use", model=_M["Error"])
+    @providers_ns.response(500, "Server error", model=_M["Error"])
+    def delete(self, provider_id: int) -> ResponseReturnValue:
+        try:
+            get_provider_service().delete_provider(provider_id)
+            _invalidate_cache()
+            return "", 204
+        except ValueError as e:
+            logger.warning(f"[REST API] Cannot delete provider {provider_id}: {e}")
+            return _error(_safe_validation_msg(e), 409)
+        except Exception as e:
+            logger.error(f"[REST API] Failed to delete provider: {e}")
+            return _error("Failed to delete provider", 500)
+
+
+@providers_ns.route('/list-models')
+class ProviderListModelsResource(Resource):
+    @require_session
+    @providers_ns.expect(_M["ListModelsRequest"])
+    @providers_ns.response(200, "Model list", model=_M["ListModelsResult"])
+    @providers_ns.response(400, "Unsupported platform", model=_M["Error"])
+    @providers_ns.response(422, "Validation failed", model=_M["Error"])
+    @responds(ListModelsResult, code=200)
+    @expects(ListModelsRequest)
+    def post(self, dto: ListModelsRequest) -> ListModelsResult | ResponseReturnValue:
+        """List available models for a given platform."""
+        platform = dto.platform.strip().lower()
+        if platform == 'ollama':
+            models, err = _fetch_ollama_models(dto.host or '')
+        elif platform == 'openai':
+            models, err = _fetch_openai_models((dto.api_key or '').strip())
+        elif platform == 'anthropic':
+            models, err = _fetch_anthropic_models((dto.api_key or '').strip())
+        elif platform == 'gemini':
+            models, err = _fetch_gemini_models((dto.api_key or '').strip())
+        elif platform == 'openai_compatible':
+            models, err = _fetch_openai_compatible_models(
+                dto.host or '', (dto.api_key or '').strip(),
+            )
+        else:
+            return ListModelsResult(models=[], error=f"Unsupported platform '{platform}'").model_dump(mode="json"), 400
+
+        if err is not None:
+            return ListModelsResult(models=[], error=err)
+        return ListModelsResult(
+            models=[ModelInfo(id=cast(str, m['id']), display_name=m.get('display_name')) for m in (models or [])],
+        )
 
 
 @providers_ns.route('/test')
-@providers_ns.response(200, "Test result")
 class ProviderTestResource(Resource):
     @require_session
-    def post(self) -> ResponseReturnValue:
+    @providers_ns.expect(_M["ProviderTestRequest"])
+    @providers_ns.response(200, "Test result", model=_M["ProviderTestResult"])
+    @providers_ns.response(422, "Validation failed", model=_M["Error"])
+    @providers_ns.response(500, "Server error", model=_M["ProviderTestResult"])
+    @responds(ProviderTestResult, code=200)
+    @expects(ProviderTestRequest)
+    def post(self, dto: ProviderTestRequest) -> ProviderTestResult:
         import time
-
         try:
-            data = request.get_json() or {}
-            provider_id = data.get('provider_id')
-
             config: dict[str, object] = {}
-            if provider_id:
+            if dto.provider_id is not None:
                 service = get_provider_service()
-                stored = service.get_provider_by_id(int(provider_id))
+                stored = service.get_provider_by_id(dto.provider_id)
                 if not stored:
-                    return {"success": False, "error": _ERR_PROVIDER_NOT_FOUND}, 200
+                    return ProviderTestResult(success=False, error=_ERR_PROVIDER_NOT_FOUND)
                 config = {k: v for k, v in stored.items() if v is not None}
 
             for field in ('platform', 'model', 'host', 'api_key'):
-                val = data.get(field)
+                val = getattr(dto, field)
                 if val:
                     config[field] = val
 
@@ -596,171 +626,159 @@ class ProviderTestResource(Resource):
             model = cast("str | None", config.get('model'))
 
             if not platform:
-                return {"success": False, "error": "Platform is required"}, 200
+                return ProviderTestResult(success=False, error="Platform is required")
             if not model:
-                return {"success": False, "error": "Model is required"}, 200
+                return ProviderTestResult(success=False, error="Model is required")
 
             start = time.time()
-
             if platform == 'ollama':
                 return _test_ollama_provider(config, model, start)
             return _test_api_provider(config, platform, model, start)
 
         except Exception as e:
             logger.error(f"[REST API] Provider test failed unexpectedly: {e}")
-            return {"success": False, "error": "Test failed unexpectedly"}, 500
+            return ProviderTestResult(success=False, error="Test failed unexpectedly")
 
 
 @providers_ns.route('/selected')
-@providers_ns.response(200, "Selected provider")
-@providers_ns.response(400, "Missing provider_id")
-@providers_ns.response(404, "Provider not found")
 class ProviderSelectedResource(Resource):
     @require_session
-    def get(self) -> ResponseReturnValue:
+    @providers_ns.response(200, "Selected provider", model=_M["Provider"])
+    @providers_ns.response(500, "Server error", model=_M["Error"])
+    @responds(Provider, code=200)
+    def get(self) -> "Provider | None | ResponseReturnValue":
         try:
-            service = get_provider_service()
-            provider = service.get_selected_provider()
-            if not provider:
-                return {"provider": None}, 200
-            if provider.get("api_key"):
-                provider["api_key"] = "***"
-            return {"provider": provider}, 200
+            row = get_provider_service().get_selected_provider()
+            return _provider_dto(row) if row else None
         except Exception as e:
             logger.error(f"[REST API] Failed to get selected provider: {e}")
-            return {"error": "Failed to get selected provider"}, 500
+            return _error("Failed to get selected provider", 500)
 
     @require_session
-    def put(self) -> ResponseReturnValue:
+    @providers_ns.expect(_M["ProviderRef"])
+    @providers_ns.response(200, "Updated selected provider", model=_M["Provider"])
+    @providers_ns.response(404, "Provider not found", model=_M["Error"])
+    @providers_ns.response(422, "Validation failed", model=_M["Error"])
+    @providers_ns.response(500, "Server error", model=_M["Error"])
+    @responds(Provider, code=200)
+    @expects(ProviderRef)
+    def put(self, dto: ProviderRef) -> "Provider | ResponseReturnValue":
         try:
-            data = request.get_json()
-            if not data or "provider_id" not in data:
-                return {"error": "Request body must contain 'provider_id'"}, 400
-
-            provider_id = data["provider_id"]
             service = get_provider_service()
-
-            provider = service.get_provider_by_id(int(provider_id))
-            if not provider:
-                return {"error": _ERR_PROVIDER_NOT_FOUND}, 404
-
-            service.set_selected_provider(int(provider_id))
-
-            try:
-                from services.provider_cache_service import ProviderCacheService
-                ProviderCacheService.invalidate()
-            except Exception as e:
-                logger.warning(f"[REST API] Failed to invalidate provider cache: {e}")
-
-            if provider.get("api_key"):
-                provider["api_key"] = "***"
-
-            return {"provider": provider}, 200
+            row = service.get_provider_by_id(dto.provider_id)
+            if not row:
+                return _error(_ERR_PROVIDER_NOT_FOUND, 404)
+            service.set_selected_provider(dto.provider_id)
+            _invalidate_cache()
+            return _provider_dto(row)
         except ValueError as e:
             logger.warning(f"[REST API] Provider validation error: {e}")
-            return {"error": _safe_validation_msg(e)}, 400
+            return _error(_safe_validation_msg(e), 400)
         except Exception as e:
             logger.error(f"[REST API] Failed to set selected provider: {e}")
-            return {"error": "Failed to set selected provider"}, 500
+            return _error("Failed to set selected provider", 500)
 
 
 @providers_ns.route('/vision')
-@providers_ns.response(200, "Vision provider")
-@providers_ns.response(400, "Invalid request")
-@providers_ns.response(404, "Provider not found")
 class ProviderVisionResource(Resource):
     @require_session
-    def get(self) -> ResponseReturnValue:
+    @providers_ns.response(200, "Vision provider", model=_M["ProviderRole"])
+    @providers_ns.response(500, "Server error", model=_M["Error"])
+    @responds(ProviderRole, code=200)
+    def get(self) -> ProviderRole | ResponseReturnValue:
         try:
-            service = get_provider_service()
-            status = service.get_vision_provider_status()
-            provider = cast("dict[str, object] | None", status['provider'])
-            if provider and provider.get('api_key'):
-                provider['api_key'] = '***'
-            return {'provider': provider, 'source': status['source']}, 200
+            status = get_provider_service().get_vision_provider_status()
+            row = cast("dict[str, object] | None", status['provider'])
+            return ProviderRole(
+                provider=_provider_dto(row) if row else None,
+                source=cast(str, status['source']),
+            )
         except Exception:
             logger.exception("[REST API] Failed to get vision provider")
-            return {"error": "Failed to get vision provider"}, 500
+            return _error("Failed to get vision provider", 500)
 
     @require_session
-    def put(self) -> ResponseReturnValue:
+    @providers_ns.expect(_M["NullableProviderRef"])
+    @providers_ns.response(200, "Updated vision provider", model=_M["ProviderRole"])
+    @providers_ns.response(400, "Invalid request", model=_M["Error"])
+    @providers_ns.response(404, "Provider not found", model=_M["Error"])
+    @providers_ns.response(422, "Validation failed", model=_M["Error"])
+    @providers_ns.response(500, "Server error", model=_M["Error"])
+    @responds(ProviderRole, code=200)
+    @expects(NullableProviderRef)
+    def put(self, dto: NullableProviderRef) -> ProviderRole | ResponseReturnValue:
         try:
-            data = request.get_json() or {}
-            if 'provider_id' not in data:
-                return {"error": "Request body must contain 'provider_id'"}, 400
-
             service = get_provider_service()
-            pid = data['provider_id']
-
-            if pid is None:
+            if dto.provider_id is None:
                 service.set_vision_provider(None)
-                return {'provider': None, 'source': 'none'}, 200
+                return ProviderRole(provider=None, source='none')
 
-            provider = service.get_provider_by_id(int(pid))
-            if not provider:
-                return {"error": _ERR_PROVIDER_NOT_FOUND}, 404
-            if not provider.get('supports_vision'):
-                return {"error": "Provider does not support vision"}, 400
+            row = service.get_provider_by_id(dto.provider_id)
+            if not row:
+                return _error(_ERR_PROVIDER_NOT_FOUND, 404)
+            if not row.get('supports_vision'):
+                return _error("Provider does not support vision", 400)
 
-            service.set_vision_provider(int(pid))
-            if provider.get('api_key'):
-                provider['api_key'] = '***'
-            return {'provider': provider, 'source': 'explicit'}, 200
+            service.set_vision_provider(dto.provider_id)
+            _invalidate_cache()
+            return ProviderRole(provider=_provider_dto(row), source='explicit')
         except (ValueError, TypeError):
-            return {"error": "Invalid provider_id"}, 400
+            return _error("Invalid provider_id", 400)
         except Exception:
             logger.exception("[REST API] Failed to set vision provider")
-            return {"error": "Failed to set vision provider"}, 500
+            return _error("Failed to set vision provider", 500)
 
 
 @providers_ns.route('/delegate')
-@providers_ns.response(200, "Delegate provider")
-@providers_ns.response(400, "Invalid request")
-@providers_ns.response(404, "Provider not found")
 class ProviderDelegateResource(Resource):
     @require_session
-    def get(self) -> ResponseReturnValue:
+    @providers_ns.response(200, "Delegate provider", model=_M["ProviderRole"])
+    @providers_ns.response(500, "Server error", model=_M["Error"])
+    @responds(ProviderRole, code=200)
+    def get(self) -> ProviderRole | ResponseReturnValue:
         """Return the configured delegate provider + resolution source."""
         try:
-            service = get_provider_service()
-            status = service.get_delegate_provider_status()
-            provider = cast("dict[str, object] | None", status['provider'])
-            if provider and provider.get('api_key'):
-                provider['api_key'] = '***'
-            return {'provider': provider, 'source': status['source']}, 200
+            status = get_provider_service().get_delegate_provider_status()
+            row = cast("dict[str, object] | None", status['provider'])
+            return ProviderRole(
+                provider=_provider_dto(row) if row else None,
+                source=cast(str, status['source']),
+            )
         except Exception:
             logger.exception("[REST API] Failed to get delegate provider")
-            return {"error": "Failed to get delegate provider"}, 500
+            return _error("Failed to get delegate provider", 500)
 
     @require_session
-    def put(self) -> ResponseReturnValue:
+    @providers_ns.expect(_M["NullableProviderRef"])
+    @providers_ns.response(200, "Updated delegate provider", model=_M["ProviderRole"])
+    @providers_ns.response(400, "Invalid request", model=_M["Error"])
+    @providers_ns.response(404, "Provider not found", model=_M["Error"])
+    @providers_ns.response(422, "Validation failed", model=_M["Error"])
+    @providers_ns.response(500, "Server error", model=_M["Error"])
+    @responds(ProviderRole, code=200)
+    @expects(NullableProviderRef)
+    def put(self, dto: NullableProviderRef) -> ProviderRole | ResponseReturnValue:
         """Set or clear the delegate provider ID."""
         try:
-            data = request.get_json() or {}
-            if 'provider_id' not in data:
-                return {"error": "Request body must contain 'provider_id'"}, 400
-
             service = get_provider_service()
-            pid = data['provider_id']
-
-            if pid is None:
+            if dto.provider_id is None:
                 service.set_delegate_provider(None)
                 status = service.get_delegate_provider_status()
-                provider = cast("dict[str, object] | None", status['provider'])
-                if provider and provider.get('api_key'):
-                    provider['api_key'] = '***'
-                return {'provider': provider, 'source': status['source']}, 200
+                row = cast("dict[str, object] | None", status['provider'])
+                return ProviderRole(
+                    provider=_provider_dto(row) if row else None,
+                    source=cast(str, status['source']),
+                )
 
-            provider = service.get_provider_by_id(int(pid))
-            if not provider:
-                return {"error": _ERR_PROVIDER_NOT_FOUND}, 404
+            row = service.get_provider_by_id(dto.provider_id)
+            if not row:
+                return _error(_ERR_PROVIDER_NOT_FOUND, 404)
 
-            service.set_delegate_provider(int(pid))
-            if provider.get('api_key'):
-                provider['api_key'] = '***'
-            return {'provider': provider, 'source': 'explicit'}, 200
+            service.set_delegate_provider(dto.provider_id)
+            _invalidate_cache()
+            return ProviderRole(provider=_provider_dto(row), source='explicit')
         except (ValueError, TypeError):
-            return {"error": "Invalid provider_id"}, 400
+            return _error("Invalid provider_id", 400)
         except Exception:
             logger.exception("[REST API] Failed to set delegate provider")
-            return {"error": "Failed to set delegate provider"}, 500
+            return _error("Failed to set delegate provider", 500)
