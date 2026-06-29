@@ -1,10 +1,10 @@
 <!-- Queued sends for one scope (the main spine or an open thread), rendered as
-     faded user rows at the very tail — the last user turn, pushed down as the
-     reply streams in. Each row clicks back into the composer for editing or
-     drops out via its remove button. Dispatch is the session store's job. -->
+     faded text at the very tail — the last user turn, pushed down as the reply
+     streams in. Each row clicks back into the composer for editing or drops out
+     via its remove button. Dispatch is the session store's job. -->
 <script setup lang="ts">
 import { computed, nextTick } from 'vue';
-import { User, X } from '@lucide/vue';
+import { X } from '@lucide/vue';
 import { useQueueStore } from '../../stores/queue';
 
 const props = withDefaults(defineProps<{ threadId?: number | null }>(), { threadId: null });
@@ -37,29 +37,22 @@ function edit(i: number): void {
       class="queued__row"
       :class="{ 'queued__row--lead': i === 0 }"
     >
-      <div class="queued__gutter" aria-hidden="true">
-        <span v-if="i === 0" class="queued__avatar"><User :size="15" /></span>
-      </div>
-      <div class="queued__body">
-        <button type="button" class="queued__msg" title="Click to edit" @click="edit(i)">
-          <span class="user-text">{{ text }}</span>
-        </button>
-        <button
-          type="button"
-          class="queued__remove"
-          aria-label="Remove queued message"
-          @click="remove(i)"
-        >
-          <X :size="14" />
-        </button>
-      </div>
+      <button type="button" class="queued__msg" title="Click to edit" @click="edit(i)">
+        <span class="user-text">{{ text }}</span>
+      </button>
+      <button
+        type="button"
+        class="queued__remove"
+        aria-label="Remove queued message"
+        @click="remove(i)"
+      >
+        <X :size="14" />
+      </button>
     </div>
   </div>
 </template>
 
 <style scoped lang="scss">
-// Faded (un-sent) user rows, aligned to the same avatar-gutter rhythm as
-// TurnView so they read as the conversation's trailing user turn.
 .queued {
   display: flex;
   flex-direction: column;
@@ -67,44 +60,20 @@ function edit(i: number): void {
 
 .queued__row {
   display: flex;
-  gap: 18px;
+  align-items: flex-start;
+  gap: 8px;
   width: 100%;
   max-width: var(--dock-width);
   margin-inline: auto;
+  // Clear the avatar gutter + row gap so the faded text lines up under the
+  // conversation's real user turns.
+  padding-left: calc(var(--avatar-size) + 18px);
   margin-top: 6px;
   opacity: 0.7;
 }
 
 .queued__row--lead {
   margin-top: 30px;
-}
-
-.queued__gutter {
-  width: var(--avatar-size);
-  flex-shrink: 0;
-  display: flex;
-  justify-content: center;
-  padding-top: 1px;
-}
-
-.queued__avatar {
-  width: var(--avatar-size);
-  height: var(--avatar-size);
-  display: grid;
-  place-items: center;
-  border-radius: 50%;
-  overflow: hidden;
-  background: var(--bg-surface-2);
-  border: 1px solid var(--border-strong);
-  color: var(--text-secondary);
-}
-
-.queued__body {
-  flex: 1;
-  min-width: 0;
-  display: flex;
-  align-items: flex-start;
-  gap: 8px;
 }
 
 .queued__msg {
