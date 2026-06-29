@@ -1,0 +1,41 @@
+/* Inter — woff2 only.
+ *
+ * The full @fontsource/inter/<weight>.css imports declare both .woff2 and
+ * .woff in their @font-face src, so Vite emits both formats (~475 KB of legacy
+ * .woff across 28 files that no modern browser needs). This file declares only
+ * the .woff2 src per weight. .woff2 is supported by every evergreen browser
+ * since 2014-2018 (Chrome 36+, Firefox 39+, Safari 12+).
+ *
+ * Imported by each entry point's main.ts in place of the four
+ * @fontsource/inter/{300,400,500,600}.css imports. A .css file (not .scss) is
+ * used so Vite's CSS asset pipeline resolves the bare @fontsource specifiers
+ * through this package's node_modules.
+ */
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-display: swap;
+  font-weight: 300;
+  src: url('@fontsource/inter/files/inter-latin-300-normal.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-display: swap;
+  font-weight: 400;
+  src: url('@fontsource/inter/files/inter-latin-400-normal.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-display: swap;
+  font-weight: 500;
+  src: url('@fontsource/inter/files/inter-latin-500-normal.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-display: swap;
+  font-weight: 600;
+  src: url('@fontsource/inter/files/inter-latin-600-normal.woff2') format('woff2');
+}
