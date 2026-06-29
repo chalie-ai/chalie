@@ -15,10 +15,7 @@ const { show: showToast } = useToast();
 const { confirm } = useConfirm();
 
 const { data: items, loading, reload: load } = useBrainResource(
-  async () => {
-    const data = await scheduler.list();
-    return data.schedules ?? data.items ?? [];
-  },
+  async () => await scheduler.list(),
   { initial: [] as ScheduleItem[], failMsg: 'Failed to load schedules' },
 );
 

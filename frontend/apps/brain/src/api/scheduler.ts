@@ -29,7 +29,7 @@ export interface ScheduleInput {
 }
 
 export const scheduler = {
-  list(): Promise<{ schedules?: ScheduleItem[]; items?: ScheduleItem[] }> {
+  list(): Promise<ScheduleItem[]> {
     return api.get('/api/scheduler');
   },
 

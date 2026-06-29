@@ -33,11 +33,11 @@ export interface WatchedFolder {
 }
 
 export const documents = {
-  list(includeDeleted = false): Promise<{ items: Document[] }> {
+  list(includeDeleted = false): Promise<Document[]> {
     return api.get(includeDeleted ? '/api/documents?include_deleted=true' : '/api/documents');
   },
 
-  watchedFolders(): Promise<{ items: WatchedFolder[] }> {
+  watchedFolders(): Promise<WatchedFolder[]> {
     return api.get('/api/documents/watched-folders');
   },
 

@@ -38,8 +38,8 @@ async function load(): Promise<void> {
   loading.value = true;
   try {
     const [polRes, blockRes] = await Promise.allSettled([policies.list(), policies.blocked()]);
-    if (polRes.status === 'fulfilled') rows.value = polRes.value.policies ?? [];
-    if (blockRes.status === 'fulfilled') blocked.value = blockRes.value.entries ?? [];
+    if (polRes.status === 'fulfilled') rows.value = polRes.value;
+    if (blockRes.status === 'fulfilled') blocked.value = blockRes.value;
     const networkFailure = [polRes, blockRes].some(
       (r) => r.status === 'rejected' && !(r.reason instanceof HttpError),
     );

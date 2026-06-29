@@ -107,8 +107,8 @@ async function load(): Promise<void> {
       providers.getVision(),
       providers.getDelegate(),
     ]);
-    providerList.value = provRes.providers ?? [];
-    selectedId.value = selRes.provider ? selRes.provider.id : null;
+    providerList.value = provRes;
+    selectedId.value = selRes ? selRes.id : null;
     visionId.value = visRes.provider ? visRes.provider.id : null;
     visionSource.value = visRes.source || 'none';
     delegateId.value = delRes.provider ? delRes.provider.id : null;

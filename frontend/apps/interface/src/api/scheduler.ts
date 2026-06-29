@@ -33,7 +33,7 @@ export interface ActiveSubagent {
 
 export const scheduler = {
   /** GET /api/scheduler?status=pending — list pending scheduled items. */
-  pending(): Promise<{ items: ScheduledItem[]; total: number; limit: number; offset: number }> {
+  pending(): Promise<ScheduledItem[]> {
     return api.get('/api/scheduler?status=pending');
   },
 

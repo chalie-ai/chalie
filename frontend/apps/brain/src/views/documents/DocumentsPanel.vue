@@ -31,7 +31,7 @@ const { data: docsPayload, loading, reload: load } = useBrainResource(
       documents.list(props.statusFilter === 'deleted'),
       documents.watchedFolders(),
     ]);
-    return { docs: docRes.items ?? [], folders: wfRes.items ?? [] } satisfies DocsPayload;
+    return { docs: docRes, folders: wfRes } satisfies DocsPayload;
   },
   { initial: { docs: [], folders: [] } as DocsPayload, failMsg: 'Failed to load documents' },
 );

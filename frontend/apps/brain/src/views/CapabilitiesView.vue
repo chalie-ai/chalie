@@ -11,7 +11,7 @@ import { ChevronLeft, Settings } from '@lucide/vue';
 const { show: showToast } = useToast();
 
 const { data: caps, loading, reload: load } = useBrainResource(
-  async () => (await capabilities.list()).capabilities ?? [],
+  async () => await capabilities.list(),
   { initial: [] as Capability[], failMsg: 'Failed to load capabilities' },
 );
 

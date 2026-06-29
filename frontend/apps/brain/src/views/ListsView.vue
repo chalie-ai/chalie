@@ -13,7 +13,7 @@ const { show: showToast } = useToast();
 const { confirm } = useConfirm();
 
 const { data: listsData, loading, reload: load } = useBrainResource(
-  async () => (await listsApi.list()).items ?? [],
+  async () => await listsApi.list(),
   { initial: [] as List[], failMsg: 'Failed to load lists' },
 );
 

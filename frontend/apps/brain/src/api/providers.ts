@@ -49,11 +49,11 @@ export interface TestInput extends ProviderInput {
 }
 
 export const providers = {
-  list(): Promise<{ providers: Provider[] }> {
+  list(): Promise<Provider[]> {
     return api.get('/api/providers');
   },
 
-  getSelected(): Promise<{ provider: Provider | null }> {
+  getSelected(): Promise<Provider | null> {
     return api.get('/api/providers/selected');
   },
 

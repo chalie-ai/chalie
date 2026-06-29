@@ -26,7 +26,7 @@ export interface List {
 }
 
 export const lists = {
-  list(): Promise<{ items: List[] }> {
+  list(): Promise<List[]> {
     return api.get('/api/lists');
   },
 

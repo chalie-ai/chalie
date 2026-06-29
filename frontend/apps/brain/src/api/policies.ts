@@ -29,11 +29,11 @@ export interface PolicyUpdate {
 }
 
 export const policies = {
-  list(): Promise<{ policies: PolicyRow[] }> {
+  list(): Promise<PolicyRow[]> {
     return api.get('/api/policies');
   },
 
-  blocked(): Promise<{ entries: BlockedEntry[] }> {
+  blocked(): Promise<BlockedEntry[]> {
     return api.get('/api/policies/blocked');
   },
 

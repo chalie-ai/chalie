@@ -38,7 +38,7 @@ export interface Capability {
 }
 
 export const capabilities = {
-  list(): Promise<{ capabilities: Capability[] }> {
+  list(): Promise<Capability[]> {
     return api.get('/api/capabilities');
   },
 

@@ -84,7 +84,7 @@ export const useTasksStore = defineStore('tasks', {
       ]);
 
       if (schedResult.status === 'fulfilled') {
-        this.reminders = (schedResult.value.items ?? []).filter(
+        this.reminders = schedResult.value.filter(
           (r) => r.status === 'pending' && r.due_at != null,
         );
       }
@@ -117,7 +117,7 @@ export const useTasksStore = defineStore('tasks', {
       if (type === 'task' || type === 'reminder') {
         // Fire-and-forget refresh; leave existing reminders intact on error.
         void scheduler.pending().then((res) => {
-          this.reminders = (res.items ?? []).filter(
+          this.reminders = res.filter(
             (r) => r.status === 'pending' && r.due_at != null,
           );
         }).catch(() => {
