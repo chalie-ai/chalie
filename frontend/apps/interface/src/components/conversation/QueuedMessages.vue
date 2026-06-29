@@ -1,7 +1,8 @@
-<!-- Queued sends for one scope (the main spine or an open thread), rendered as
-     faded text at the very tail — the last user turn, pushed down as the reply
-     streams in. Each row clicks back into the composer for editing or drops out
-     via its remove button. Dispatch is the session store's job. -->
+<!-- Pending (queued) sends for one scope, floating just above that scope's
+     composer as blurred rounded chips — a clear "waiting to send" affordance.
+     Each chip clicks back into the composer for editing; its x removes it.
+     The chips live inside the InputDock, so the scope is the dock's turn_id and
+     dispatch is the session store's job. -->
 <script setup lang="ts">
 import { computed, nextTick } from 'vue';
 import { X } from '@lucide/vue';
@@ -30,83 +31,91 @@ function edit(i: number): void {
 </script>
 
 <template>
-  <div v-if="items.length" class="queued">
-    <div
-      v-for="(text, i) in items"
-      :key="i"
-      class="queued__row"
-      :class="{ 'queued__row--lead': i === 0 }"
-    >
-      <button type="button" class="queued__msg" title="Click to edit" @click="edit(i)">
-        <span class="user-text">{{ text }}</span>
-      </button>
+  <div v-if="items.length" class="pending">
+    <div v-for="(text, i) in items" :key="i" class="pending__row">
       <button
         type="button"
-        class="queued__remove"
+        class="pending__remove"
         aria-label="Remove queued message"
         @click="remove(i)"
       >
-        <X :size="14" />
+        <X :size="13" />
+      </button>
+      <button type="button" class="pending__chip" title="Click to edit" @click="edit(i)">
+        <span class="pending__text">{{ text }}</span>
       </button>
     </div>
   </div>
 </template>
 
 <style scoped lang="scss">
-.queued {
+.pending {
   display: flex;
   flex-direction: column;
-}
-
-.queued__row {
-  display: flex;
-  align-items: flex-start;
-  gap: 8px;
+  gap: 6px;
   width: 100%;
   max-width: var(--dock-width);
-  margin-inline: auto;
-  // Clear the avatar gutter + row gap so the faded text lines up under the
-  // conversation's real user turns.
-  padding-left: calc(var(--avatar-size) + 18px);
-  margin-top: 6px;
-  opacity: 0.7;
+  margin: 0 auto;
+  padding: 0 4px 10px;
 }
 
-.queued__row--lead {
-  margin-top: 30px;
+.pending__row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
-.queued__msg {
-  flex: 1;
-  min-width: 0;
-  text-align: left;
-  padding: 0;
-  border: none;
-  background: none;
-  cursor: pointer;
-}
-
-.queued__msg:hover .user-text {
-  color: var(--text-primary);
-}
-
-.queued__remove {
+.pending__remove {
   flex-shrink: 0;
   display: grid;
   place-items: center;
-  width: 22px;
-  height: 22px;
+  width: 20px;
+  height: 20px;
   padding: 0;
   border: none;
-  border-radius: 6px;
+  border-radius: 50%;
   background: none;
   color: var(--text-tertiary);
   cursor: pointer;
   transition: color var(--duration-fast) ease, background var(--duration-fast) ease;
 }
 
-.queued__remove:hover {
+.pending__remove:hover {
   color: var(--error);
   background: var(--border);
+}
+
+// The floating chip: a translucent, blurred rounded box that hugs its text so a
+// queued message reads as "pending" against the conversation behind it.
+.pending__chip {
+  min-width: 0;
+  max-width: 100%;
+  padding: 7px 14px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: color-mix(in oklab, var(--bg-surface-2) 62%, transparent);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  text-align: left;
+  cursor: pointer;
+  transition: border-color var(--duration-fast) ease, background var(--duration-fast) ease;
+}
+
+.pending__chip:hover {
+  border-color: var(--border-strong);
+  background: color-mix(in oklab, var(--bg-surface-2) 78%, transparent);
+}
+
+.pending__text {
+  display: block;
+  font-size: 0.875rem;
+  line-height: 1.45;
+  color: var(--text-secondary);
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+}
+
+.pending__chip:hover .pending__text {
+  color: var(--text-primary);
 }
 </style>

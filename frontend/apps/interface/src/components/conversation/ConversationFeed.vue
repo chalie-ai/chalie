@@ -9,7 +9,6 @@ import type { ConversationForm, ThreadListItem } from '../../stores/conversation
 import { useSessionStore } from '../../stores/session';
 import { useAutoscroll } from '../../composables/useAutoscroll';
 import TurnView from './TurnView.vue';
-import QueuedMessages from './QueuedMessages.vue';
 
 const conversationStore = useConversationStore();
 const session = useSessionStore();
@@ -171,9 +170,6 @@ onBeforeUnmount(() => {
         </button>
       </div>
     </template>
-
-    <!-- Spine-scoped queued sends — the trailing user turn, faded until dispatch. -->
-    <QueuedMessages :thread-id="null" />
   </main>
 </template>
 

@@ -27,6 +27,7 @@ import { system } from '../../api/system';
 import { lsGet, lsSet } from '../../utils/storage';
 import type { AttachmentPreview as ConvoAttachmentPreview } from '../../stores/conversation';
 import ImageAttachStrip from '../upload/ImageAttachStrip.vue';
+import QueuedMessages from '../conversation/QueuedMessages.vue';
 import { FileText, Image, Plus, Mic, Send, X, AlertTriangle } from '@lucide/vue';
 
 /**
@@ -317,6 +318,9 @@ onBeforeUnmount(() => {
         </button>
       </div>
     </div>
+
+    <!-- Pending (queued) sends for this dock's scope, floating above the composer. -->
+    <QueuedMessages :thread-id="turnId" />
 
     <div class="input-dock__outer">
       <div class="input-dock__inner">
