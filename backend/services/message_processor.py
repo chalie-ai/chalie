@@ -281,10 +281,6 @@ class MessageProcessor:
 
     def _seed_turn_zero(self) -> None:
         """Framework-issued tool calls fired once before iteration 0."""
-        from abilities._dispatcher import ToolDispatcher  # noqa: PLC0415
-
-        dispatcher = ToolDispatcher(self)
-
         # a. Memory flashback — gated on the declarative flag AND the continuation
         #    gate deciding this is a session start / topic shift (a "yes, do that"
         #    re-fires nothing). Renders a curated block and records its own _auto
@@ -304,12 +300,6 @@ class MessageProcessor:
             from concurrent.futures import ThreadPoolExecutor  # noqa: PLC0415
             with ThreadPoolExecutor(max_workers=min(len(attachments), 8)) as pool:
                 list(pool.map(self._seed_upload_attachment, attachments))
-
-        # c. High-deliberation thinking pass — programmatic, never model-visible.
-        #    Fires LAST so it reasons over the uploaded documents' act-trail rows
-        #    already in the parent body (single-pass, tools disabled).
-        if getattr(self, "thinking_level", "low") == "high":
-            dispatcher.dispatch("thinking", {})
 
     def _seed_upload_attachment(self, path: str) -> None:
         """Dispatch one turn-0 attachment's blocking ``document.upload`` by PATH."""

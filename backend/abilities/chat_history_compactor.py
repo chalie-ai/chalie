@@ -3,7 +3,7 @@
 NEVER discoverable and NEVER in any always_available list: the model never sees
 `chat_history_compactor` in find_tools or its toolbox. The orchestrator dispatches
 it programmatically when a compaction limit is reached (``_dispatch_compaction``),
-exactly like the memory.recall turn-0 seed and the thinking pass. It fires its own
+exactly like the memory.recall turn-0 seed. It fires its own
 MessageProcessor.process() loop with ChatHistoryCompactionConfig, reads the parent
 channel's ``get_previous_messages()`` from the bound ``mp``, and writes the model's
 output VERBATIM to the transcript as ``role='compaction'`` — that row's own id is
