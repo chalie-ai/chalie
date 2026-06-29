@@ -3,16 +3,28 @@
 import logging
 import sqlite3
 from typing import cast
-from flask import request
-from flask.typing import ResponseReturnValue
+
 from flask_restx import Namespace, Resource
 
 from .auth import require_session
+from .dto import Error, expects, register_dto, responds
+from .dto.attachment import Attachment
+from .dto.chip import Chip
+from .dto.conversation import RecentConversationQuery, RecentConversationResponse
+from .dto.message import Message
+from .dto.segment import Segment
 from services.locale_service import CHAT_TIMESTAMP_FMT, format_date
 from services.rich_media_parser import parse as _parse_rich_media, resolve_tool_call_transcript_ids as _resolve_ids
 
 logger = logging.getLogger(__name__)
 conversation_ns = Namespace('conversation', description='Conversation history', path='/conversation')
+
+register_dto(
+    conversation_ns,
+    RecentConversationQuery, RecentConversationResponse,
+    Message, Attachment, Chip, Segment, Error,
+)
+_C = conversation_ns.models
 
 
 def _fetch_tool_calls_for_transcripts(conn: sqlite3.Connection, transcript_ids: list[int]) -> list[dict[str, object]]:
@@ -141,16 +153,23 @@ def get_recent_history(limit: int = 12, offset: int = 0) -> tuple[list[dict[str,
 @conversation_ns.route('/recent')
 class ConversationRecentResource(Resource):
     @require_session
-    @conversation_ns.response(200, "Recent conversation history")
-    def get(self) -> ResponseReturnValue:
-        try:
-            limit = max(1, min(120, int(request.args.get("limit", 12))))
-        except (ValueError, TypeError):
-            limit = 12
-        try:
-            offset = max(0, int(request.args.get("offset", 0)))
-        except (ValueError, TypeError):
-            offset = 0
-
-        messages, has_more, turns_returned = get_recent_history(limit, offset)
-        return {"messages": messages, "has_more": has_more, "turns_returned": turns_returned}
+    @conversation_ns.doc(
+        description="Turn-level pagination (a turn is many rows under the chain "
+        "model). attachments appear on user rows only; tool_calls and segments "
+        "on assistant rows only.",
+    )
+    @conversation_ns.param("limit", "Max turns to return (1-120, default 12)", _in="query")
+    @conversation_ns.param("offset", "Turns to skip (>=0, default 0)", _in="query")
+    @conversation_ns.response(200, "Recent conversation history", model=_C["RecentConversationResponse"])
+    @conversation_ns.response(422, "Validation failed", model=_C["Error"])
+    @conversation_ns.response(500, "Server error", model=_C["Error"])
+    @responds(RecentConversationResponse)
+    @expects(RecentConversationQuery, source="args")
+    def get(self, dto: RecentConversationQuery) -> RecentConversationResponse:
+        """Return the recent conversation feed, paginated by turn."""
+        messages, has_more, turns_returned = get_recent_history(dto.limit, dto.offset)
+        return RecentConversationResponse(
+            messages=[Message.model_validate(m) for m in messages],
+            has_more=has_more,
+            turns_returned=turns_returned,
+        )
