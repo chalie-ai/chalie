@@ -269,14 +269,14 @@ onMounted(async () => {
             <Copy :size="14" />
           </button>
         </div>
-        <div style="margin-top:10px">
+        <div class="mt-sm">
           <button class="btn btn-sm btn-danger" @click="regenToken">Regenerate Token</button>
         </div>
       </div>
     </div>
   </section>
 
-  <section class="mcp-section" style="margin-top:28px">
+  <section class="mcp-section mt-lg">
     <h3 class="mcp-section-title">Outbound</h3>
     <p class="panel-desc">
       Connect Chalie to remote MCP servers so their tools become available.

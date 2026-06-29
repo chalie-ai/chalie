@@ -10,13 +10,6 @@
   --bg-surface-user:   var(--bg-user);
   --bg-surface-chalie: var(--bg-chalie);
 
-  --space-xs:  4px;
-  --space-sm:  8px;
-  --space-md:  16px;
-  --space-lg:  24px;
-  --space-xl:  40px;
-  --space-2xl: 64px;
-
   --font-size-sm:  0.8125rem;
   --font-size-lg:  1.125rem;
   --font-size-xl:  1.5rem;
@@ -408,7 +401,8 @@ body.speaker-user #ambientBloom {
   font-size: 0.9375rem;
   line-height: 1.6;
   resize: none;
-  max-height: 120px;
+  max-height: var(--textarea-max-h);
+  overflow-y: auto;
   padding: var(--space-sm) 0;
 }
 

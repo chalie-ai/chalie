@@ -88,12 +88,15 @@ const canSend = computed(
   () => text.value.trim().length > 0 || attachments.getFiles().length > 0,
 );
 
-/** Auto-resize: reset height then cap at 120px. */
+/** Auto-resize: reset to auto so scrollHeight reflects full content, then grow
+ *  to it. The cap is enforced by CSS (max-height: var(--textarea-max-h)) on
+ *  .input-dock__textarea, so no px clamp lives here. */
+const taHeight = ref('auto');
 function grow(): void {
   const el = textareaRef.value;
   if (!el) return;
-  el.style.height = 'auto';
-  el.style.height = Math.min(el.scrollHeight, 120) + 'px';
+  taHeight.value = 'auto';
+  nextTick(() => { taHeight.value = `${el.scrollHeight}px`; });
 }
 
 async function handleSend(): Promise<void> {
@@ -353,6 +356,7 @@ onBeforeUnmount(() => {
           ref="textareaRef"
           v-model="text"
           class="input-dock__textarea"
+          :style="{ height: taHeight }"
           :placeholder="turnId != null ? 'Reply in this thread…' : 'Talk to Chalie…'"
           rows="1"
           @input="grow"

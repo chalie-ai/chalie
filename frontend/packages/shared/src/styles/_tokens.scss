@@ -54,6 +54,19 @@
   --avatar-size:            32px;
   --font-mono:              'JetBrains Mono', 'Fira Code', ui-monospace, SFMono-Regular, Menlo, monospace;
 
+  /* Measurement scale — the single source for spacing + sizing. Promoted from
+     interface.scss so both apps + the shared utilities consume one scale.
+     Ad-hoc px/rem nudges snap onto these steps (minor shifts accepted). */
+  --space-xs:               4px;
+  --space-sm:               8px;
+  --space-md:               16px;
+  --space-lg:               24px;
+  --space-xl:               40px;
+  --space-2xl:              64px;
+  --font-size-xs:           0.75rem;      /* 12px — meta / tertiary text */
+  --textarea-max-h:         120px;        /* compose auto-grow cap */
+  --page-max-width:         640px;        /* centered page primitive */
+
   --accent-primary:         var(--violet);
   --accent-secondary:       var(--magenta);
   --accent-tertiary:        var(--cyan);

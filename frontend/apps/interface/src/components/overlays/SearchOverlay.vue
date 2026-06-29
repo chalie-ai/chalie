@@ -20,10 +20,10 @@ watch(
     if (open) {
       query.value = '';
       results.value = [];
-      document.body.style.overflow = 'hidden';
+      document.body.classList.add('no-scroll');
       nextTick(() => inputEl.value?.focus());
     } else {
-      document.body.style.overflow = '';
+      document.body.classList.remove('no-scroll');
     }
   },
 );

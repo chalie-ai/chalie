@@ -1295,6 +1295,7 @@ input[type='checkbox'] {
 }
 
 .provider-form-page { max-width: 560px; }
+.provider-form-page--full { max-width: none; }
 
 .form-page-header {
   display: flex;
@@ -1797,7 +1798,6 @@ input[type='checkbox'] {
 .empty-state h3 { font-size: 16px; color: var(--text-primary); margin: 0 0 6px; font-weight: 600; }
 .empty-state p { font-size: 13px; margin: 0; }
 
-.hidden { display: none !important; } // stylelint-disable-line declaration-no-important
 .panel-placeholder { padding: 40px; text-align: center; color: var(--text-secondary); }
 .panel-placeholder h2 { color: var(--text-primary); margin: 0 0 8px; }
 

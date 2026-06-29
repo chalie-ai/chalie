@@ -50,7 +50,7 @@ onMounted(load);
 
 <template>
   <template v-if="viewMode === 'detail'">
-    <div class="provider-form-page" style="max-width:none">
+    <div class="provider-form-page provider-form-page--full">
       <div class="form-page-header">
         <button class="btn btn-secondary btn-sm back-btn" @click="backToList">
           <ChevronLeft :size="14" /> Back
