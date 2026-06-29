@@ -47,7 +47,7 @@ const lastChalieId = computed<number | null>(() => {
 // the latest, so tail placement is exactly where its persisted ActForm lands on
 // the next `updated`, making the live→done handoff seamless.
 const displayForms = computed<ConversationForm[]>(() => {
-  if (!(props.working || convo.isTurnWorking(turnId.value))) return props.forms;
+  if (!props.working) return props.forms;
   const trails = convo.liveTrailsFor(turnId.value);
   if (!trails.length) {
     const anchor: ActForm = {

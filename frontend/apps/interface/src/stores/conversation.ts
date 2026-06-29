@@ -392,10 +392,10 @@ export const useConversationStore = defineStore('conversation', {
       this._clearLiveTurn(turnId);
     },
 
-    /** The user opened (or is viewing) the thread — clear its Activity state so the
-     *  dock card and pill colour fall back to idle. */
+    /** The user opened (or is viewing) the thread — dismiss its standing `done`
+     *  card. A reply still streaming keeps its `working` state: "seen" clears a
+     *  finished notification, it doesn't cancel live progress. */
     seenThread(turnId: number): void {
-      this.workingTurnIds.delete(turnId);
       this.doneTurnIds.delete(turnId);
     },
 

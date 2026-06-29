@@ -45,9 +45,16 @@ const feedEntries = computed<FeedEntry[]>(() => {
     const all = conversationStore.forms.filter((f) => f.turnId === t.turn_id);
     const spine = all.filter((f) => !f.threadMessage);
     if (!spine.length) continue; // not yet hydrated — fills in on batch load
-    // A bound turn's spinner is driven by its own `working` signal (isTurnWorking
-    // inside TurnView); only the unbound live turn below needs the prop.
-    entries.push({ id: spine[0].id, forms: spine, working: false, thread: all.length > spine.length ? t : null });
+    // A forked turn's live reply streams in its panel, not here — its spine slice
+    // stays frozen at settle0 (the pink pill is its only working cue). An unforked
+    // turn owns its trail inline, so it follows its own `working` signal.
+    const forked = all.length > spine.length;
+    entries.push({
+      id: spine[0].id,
+      forms: spine,
+      working: forked ? false : conversationStore.isTurnWorking(t.turn_id),
+      thread: forked ? t : null,
+    });
   }
   // The live turn has no turn_id yet, so its spinner can't come from isTurnWorking
   // — drive it from this surface's send guard until `working` binds the thread.
@@ -149,25 +156,9 @@ onBeforeUnmount(() => {
           type="button"
           @click="onPillClick(entry.thread)"
         >
-          <span class="thread-pill__icon" aria-hidden="true">
-            <svg
-              width="13"
-              height="13"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              stroke-width="2.2"
-              stroke-linecap="round"
-              stroke-linejoin="round"
-            >
-              <circle cx="6" cy="6" r="3" />
-              <circle cx="18" cy="18" r="3" />
-              <path d="M6 9c0 6 6 3 6 9" />
-            </svg>
-          </span>
-          <span class="thread-pill__label">Thread</span>
-          <span class="thread-pill__summary">{{ entry.thread.gist || entry.thread.preview || 'Conversation' }}</span>
           <span class="thread-pill__dot" aria-hidden="true" />
+          <span class="thread-pill__summary">{{ entry.thread.gist || entry.thread.preview || 'Conversation' }}</span>
+          <span class="thread-pill__chevron" aria-hidden="true">›</span>
         </button>
       </div>
     </template>
@@ -224,7 +215,7 @@ onBeforeUnmount(() => {
   align-items: center;
   gap: 9px;
   max-width: 100%;
-  padding: 6px 12px 6px 7px;
+  padding: 6px 11px;
   border-radius: 11px;
   background: var(--bg-surface-2);
   border: 1px solid var(--border-strong);
@@ -245,31 +236,22 @@ onBeforeUnmount(() => {
 .thread-pill--done { border-color: color-mix(in oklab, var(--cyan) 45%, transparent); }
 .thread-pill--thread { border-color: color-mix(in oklab, var(--violet) 35%, transparent); }
 
-.thread-pill__icon {
-  flex-shrink: 0;
-  width: 22px;
-  height: 22px;
-  border-radius: 7px;
-  display: grid;
-  place-items: center;
-  background: color-mix(in oklab, var(--violet) 18%, transparent);
-  color: var(--violet-light);
-}
-
-.thread-pill__label {
-  flex-shrink: 0;
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--text-primary);
-}
-
 .thread-pill__summary {
+  flex: 1 1 auto;
   min-width: 0;
   font-size: 13px;
   color: var(--text-tertiary);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.thread-pill__chevron {
+  flex-shrink: 0;
+  font-size: 15px;
+  line-height: 1;
+  color: var(--text-primary);
+  opacity: 0.35;
 }
 
 .thread-pill__dot {
