@@ -97,7 +97,7 @@ function handleSettings(): void {
   background: var(--accent-primary);
   color: #fff;
   font-size: 10px;
-  font-weight: 700;
+  font-weight: 600;
   line-height: 16px;
   text-align: center;
   pointer-events: none;
