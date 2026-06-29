@@ -152,7 +152,7 @@ const hourCells = computed<HourCell[]>(() => {
       >
         <span class="weather-card__hour-label">{{ cell.hour }}</span>
         <b class="weather-card__hour-temp">{{ cell.temp_c }}°</b>
-        <div class="weather-card__hour-bar" :style="{ width: cell.barWidth + '%' }" />
+        <div class="weather-card__hour-bar" :style="{ '--fill': cell.barWidth + '%' }" />
       </div>
     </div>
   </div>
@@ -407,6 +407,7 @@ const hourCells = computed<HourCell[]>(() => {
 }
 
 .weather-card__hour-bar {
+  width: var(--fill, 0);
   height: 2px;
   margin: 6px auto 0;
   border-radius: 1px;

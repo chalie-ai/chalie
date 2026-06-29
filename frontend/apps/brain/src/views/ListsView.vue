@@ -163,7 +163,7 @@ async function deleteList(list: List): Promise<void> {
       </div>
 
       <div v-if="c.total > 0" class="progress-bar">
-        <div class="progress-fill" :style="{ width: c.pct + '%' }"></div>
+        <div class="progress-fill" :style="{ '--fill': c.pct + '%' }"></div>
       </div>
 
       <div v-if="expanded[String(list.id)]" class="list-items">

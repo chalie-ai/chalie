@@ -1032,6 +1032,7 @@ input[type='checkbox'] {
 }
 
 .progress-fill {
+  width: var(--fill, 0);
   height: 100%;
   border-radius: 2px;
   background: linear-gradient(90deg, var(--violet), var(--magenta));

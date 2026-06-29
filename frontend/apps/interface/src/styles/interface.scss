@@ -401,6 +401,7 @@ body.speaker-user #ambientBloom {
   font-size: 0.9375rem;
   line-height: 1.6;
   resize: none;
+  field-sizing: content;
   max-height: var(--textarea-max-h);
   overflow-y: auto;
   padding: var(--space-sm) 0;
