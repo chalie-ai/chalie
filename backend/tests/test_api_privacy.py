@@ -49,10 +49,10 @@ class TestPrivacyAPI:
     # DELETE /privacy/delete-all
     # ------------------------------------------------------------------
 
-    def test_delete_all_without_confirm_header_returns_400(self, client: FlaskClient) -> None:
+    def test_delete_all_without_confirm_header_returns_422(self, client: FlaskClient) -> None:
         response = client.delete('/privacy/delete-all')
 
-        assert response.status_code == 400
+        assert response.status_code == 422
         data = response.get_json()
         assert "error" in data
         assert "X-Confirm-Delete" in data["error"]
