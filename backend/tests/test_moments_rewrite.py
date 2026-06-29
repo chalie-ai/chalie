@@ -82,7 +82,7 @@ def test_pin_persists_verbatim_in_moments_table_and_dedups(authed_client: tuple[
         "/moments", json={"transcript_id": tid}, content_type="application/json"
     )
     assert first.status_code == 201, first.get_json()
-    assert first.get_json()["duplicate"] is False
+    assert first.get_json()["transcript_id"] == tid
 
     rows = _moments_rows(db)
     assert len(rows) == 1, f"expected exactly one moments row, got {rows!r}"
@@ -94,9 +94,9 @@ def test_pin_persists_verbatim_in_moments_table_and_dedups(authed_client: tuple[
     second = client.post(
         "/moments", json={"transcript_id": tid}, content_type="application/json"
     )
-    assert second.status_code == 200, second.get_json()
-    assert second.get_json()["duplicate"] is True
-    assert _count_moments(db) == 1, "a duplicate pin must not insert a second row"
+    assert second.status_code == 201, second.get_json()
+    assert second.get_json()["transcript_id"] == tid
+    assert _count_moments(db) == 1, "a re-pin must not insert a second row"
 
 
 # ── 2. Searchable via BOTH FTS (lexical) AND vec (semantic) ───────────────────
@@ -194,7 +194,7 @@ def test_pinned_moment_searchable_via_fts_and_vec(authed_client768: tuple[FlaskC
     # Lexical lane — a literal substring of the stored content.
     lexical = client.get("/moments/search?q=Hypogeum")
     assert lexical.status_code == 200, lexical.get_json()
-    lex_values = [it["value"] for it in lexical.get_json()["items"]]
+    lex_values = [it["value"] for it in lexical.get_json()]
     assert _ASSISTANT_TURN in lex_values, (
         "FTS lane did not surface the moment for a lexical substring — "
         "moments_fts is not populated"
@@ -204,7 +204,7 @@ def test_pinned_moment_searchable_via_fts_and_vec(authed_client768: tuple[FlaskC
     # vector embedding can bridge it.
     semantic = client.get(f"/moments/search?q={_SEMANTIC_PROBE.replace(' ', '+')}")
     assert semantic.status_code == 200, semantic.get_json()
-    sem_values = [it["value"] for it in semantic.get_json()["items"]]
+    sem_values = [it["value"] for it in semantic.get_json()]
     assert _ASSISTANT_TURN in sem_values, (
         "vec lane did not surface the moment for a semantic-only phrase — the "
         "moments_vec embedding is missing or KNN search is not wired"
@@ -355,7 +355,7 @@ def _seed_legacy_dg_moment(conn: sqlite3.Connection, key: str, value: str) -> No
         )
     except Exception:
         # External-content FTS may reject a manual insert depending on the build;
-        # the durable observable (AC#5) is the data_graph row count, asserted below.
+        # the durable observable is the data_graph row count, asserted below.
         pass
     conn.commit()
 
@@ -391,7 +391,7 @@ def test_frontend_json_contract_is_byte_identical(authed_client: tuple[FlaskClie
         "/moments", json={"transcript_id": tid}, content_type="application/json"
     )
     assert created.status_code == 201, created.get_json()
-    item = created.get_json()["item"]
+    item = created.get_json()
     assert set(item.keys()) == _CONTRACT_KEYS, (
         f"POST /moments item keys drifted: {sorted(item.keys())}"
     )
@@ -402,21 +402,20 @@ def test_frontend_json_contract_is_byte_identical(authed_client: tuple[FlaskClie
 
     listed = client.get("/moments")
     assert listed.status_code == 200
-    list_items = listed.get_json()["items"]
+    list_items = listed.get_json()
     assert list_items and set(list_items[0].keys()) == _CONTRACT_KEYS, (
         f"GET /moments item keys drifted: {sorted(list_items[0].keys())}"
     )
 
     searched = client.get("/moments/search?q=Hypogeum")
     assert searched.status_code == 200
-    search_items = searched.get_json()["items"]
+    search_items = searched.get_json()
     assert search_items and set(search_items[0].keys()) == _CONTRACT_KEYS, (
         f"GET /moments/search item keys drifted: {sorted(search_items[0].keys())}"
     )
 
     forget = client.post(f"/moments/{tid}/forget")
-    assert forget.status_code == 200
-    assert forget.get_json()["ok"] is True
+    assert forget.status_code == 204
 
 
 # ── 8. Privacy delete-all wipes the moments table ─────────────────────────────

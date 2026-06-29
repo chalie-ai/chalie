@@ -16,24 +16,28 @@ The remember button derives its text from the same sanitised content with the
 frontend ``extractPlaintext``, so the two plaintext projections line up.
 """
 
+from __future__ import annotations
+
 import logging
+from datetime import datetime
 from typing import TYPE_CHECKING, cast
 
-from flask import g, request
+from flask import g
 from flask.typing import ResponseReturnValue
 from flask_restx import Namespace, Resource
 
-from .auth import require_session
 from services.markup import extract_plaintext
-from services.time_utils import parse_utc
+from .auth import require_session
+from .dto import Error, expects, register_dto, responds
+from .dto.moment import Moment, MomentCreate, MomentSearch
 
 if TYPE_CHECKING:
     from services.moments_service import MomentsService
-    from services.database_service import DatabaseService
 
 logger = logging.getLogger(__name__)
 
 _ERR_INTERNAL = "Internal server error"
+_NOT_FOUND = "Not found"
 
 # Prefix for the synthesized client-facing key (``moment_<transcript_id>``) and
 # the forget round-trip — the key is derived, not stored, now that transcript_id
@@ -48,6 +52,10 @@ _RESOLVE_SCAN_LIMIT = 200
 
 moments_ns = Namespace("moments", description="Moment (pinned turn) operations", path="/moments")
 
+register_dto(moments_ns, Moment, MomentCreate, MomentSearch, Error)
+
+_M = moments_ns.models
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -60,35 +68,30 @@ def _get_moments() -> "MomentsService":
     return cast("MomentsService", g.moments_svc)
 
 
-def _get_db() -> "DatabaseService":
-    if 'moments_db' not in g:
-        from services.database_service import get_shared_db_service
-        g.moments_db = get_shared_db_service()
-    return cast("DatabaseService", g.moments_db)
+def _error(message: str, status: int) -> ResponseReturnValue:
+    """Build a uniform non-2xx ``Error`` body carrying its own status code."""
+    return Error(error=message).model_dump(mode="json"), status
 
 
-def _serialize_moment(row: "dict[str, object]") -> "dict[str, object]":
-    """``key`` is synthesized from ``transcript_id`` (the client keys the forget round-trip on it)."""
-    created_at = row.get('created_at')
-    if created_at:
-        try:
-            created_at = parse_utc(cast(str, created_at)).isoformat()
-        except Exception:
-            pass
+def _moment_dto(row: dict[str, object]) -> Moment:
+    """Build the read DTO from a moments-service row dict.
 
-    transcript_id = row.get('transcript_id')
-    value = row.get('content') or ''
-    return {
-        'id': row.get('id'),
-        'transcript_id': transcript_id,
-        'key': f"{_KEY_PREFIX}{transcript_id}",
-        'value': value,
-        'message_text': value,
-        'created_at': created_at,
-    }
+    ``key`` is synthesized from ``transcript_id`` (the client keys the forget
+    round-trip on it); ``message_text`` mirrors ``value`` — the frontend reads both.
+    """
+    transcript_id = cast(int, row['transcript_id'])
+    value = cast(str, row.get('content') or '')
+    return Moment(
+        id=cast(int, row['id']),
+        transcript_id=transcript_id,
+        key=f"{_KEY_PREFIX}{transcript_id}",
+        value=value,
+        message_text=value,
+        created_at=cast(datetime, row['created_at']),
+    )
 
 
-def _fetch_transcript_row(db: "DatabaseService", transcript_id: int) -> "dict[str, object] | None":
+def _fetch_transcript_row(transcript_id: int) -> dict[str, object] | None:
     from services.transcript_service import Transcript
     rows = Transcript.by_ids([transcript_id])
     if not rows:
@@ -100,7 +103,7 @@ def _normalise(text: str) -> str:
     return " ".join((text or "").split())
 
 
-def _resolve_assistant_turn_by_text(db: "DatabaseService", message_text: str) -> "dict[str, object] | None":
+def _resolve_assistant_turn_by_text(message_text: str) -> dict[str, object] | None:
     """Find the assistant transcript turn whose rendered text matches.
 
     Scans recent assistant turns on the user channel (newest first) and returns
@@ -127,91 +130,65 @@ def _resolve_assistant_turn_by_text(db: "DatabaseService", message_text: str) ->
 @moments_ns.route("")
 class MomentsResource(Resource):
     @require_session
-    @moments_ns.response(200, "Success")
-    @moments_ns.response(201, "Created")
-    @moments_ns.response(400, "Bad request")
-    @moments_ns.response(404, "Not found")
-    @moments_ns.response(500, "Internal server error")
-    def post(self) -> ResponseReturnValue:
-        if not request.is_json:
-            return {"error": "Content-Type must be application/json"}, 400
-
-        data = request.get_json() or {}
-        raw_transcript_id = data.get("transcript_id")
-        message_text = (data.get("message_text") or "").strip()
-        note = data.get("note")
-
-        db = _get_db()
+    @moments_ns.expect(_M["MomentCreate"])
+    @moments_ns.response(201, "Pinned moment", model=_M["Moment"])
+    @moments_ns.response(404, _NOT_FOUND, model=_M["Error"])
+    @moments_ns.response(422, "Validation failed", model=_M["Error"])
+    @responds(Moment, code=201)
+    @expects(MomentCreate)
+    def post(self, dto: MomentCreate) -> Moment | ResponseReturnValue:
+        """Pin an assistant turn by transcript_id or message_text."""
         moments = _get_moments()
-
-        if raw_transcript_id:
-            try:
-                transcript_id = int(raw_transcript_id)
-            except (TypeError, ValueError):
-                return {"error": "transcript_id must be an integer"}, 400
-
-            turn = _fetch_transcript_row(db, transcript_id)
+        if dto.transcript_id is not None:
+            turn = _fetch_transcript_row(dto.transcript_id)
             if turn is None:
-                return {"error": "Transcript row not found"}, 404
+                return _error("Transcript row not found", 404)
             if turn['role'] != 'assistant':
-                return {"error": "Only assistant turns can be pinned as moments"}, 400
-        elif message_text:
-            turn = _resolve_assistant_turn_by_text(db, message_text)
-            if turn is None:
-                return {"error": "No matching assistant message found"}, 404
-            transcript_id = cast(int, turn['id'])
+                return _error("Only assistant turns can be pinned as moments", 422)
+            transcript_id = dto.transcript_id
         else:
-            return {"error": "transcript_id or message_text is required"}, 400
+            turn = _resolve_assistant_turn_by_text(dto.message_text or "")
+            if turn is None:
+                return _error("No matching assistant message found", 404)
+            transcript_id = cast(int, turn['id'])
 
-        already_exists = moments.find_by_transcript(transcript_id) is not None
-        row = moments.store(transcript_id, cast(str, turn['content']), note=cast("str | None", note))
-
-        status = 200 if already_exists else 201
-        return {"item": _serialize_moment(cast("dict[str, object]", row)), "duplicate": already_exists}, status
+        row = moments.store(transcript_id, cast(str, turn['content']), note=dto.note)
+        return _moment_dto(cast("dict[str, object]", row))
 
     @require_session
-    @moments_ns.response(200, "Success")
-    @moments_ns.response(500, "Internal server error")
-    def get(self) -> ResponseReturnValue:
+    @moments_ns.response(200, "All moments", model=_M["Moment"])
+    @moments_ns.response(500, _ERR_INTERNAL, model=_M["Error"])
+    @responds(Moment, code=200)
+    def get(self) -> list[Moment] | ResponseReturnValue:
+        """List every pinned moment, newest first."""
         try:
-            rows = _get_moments().list_all()
-            return {"items": [_serialize_moment(cast("dict[str, object]", r)) for r in rows]}
-        except Exception as e:
-            logger.exception(f"[MOMENTS API] list_moments error: {e}")
-            return {"error": _ERR_INTERNAL}, 500
+            return [_moment_dto(cast("dict[str, object]", r)) for r in _get_moments().list_all()]
+        except Exception as exc:
+            logger.exception("[MOMENTS API] list error: %s", exc)
+            return _error(_ERR_INTERNAL, 500)
 
 
 @moments_ns.route("/<int:transcript_id>/forget")
 class MomentForgetResource(Resource):
     @require_session
-    @moments_ns.param("transcript_id", "int", "Transcript row id of the moment to forget")
-    @moments_ns.response(200, "Success")
-    @moments_ns.response(404, "Not found")
-    @moments_ns.response(500, "Internal server error")
-    def post(self, transcript_id: int) -> ResponseReturnValue:
-        try:
-            if not _get_moments().delete_by_transcript(transcript_id):
-                return {"error": "Moment not found"}, 404
-            return {"ok": True}
-        except Exception as e:
-            logger.exception(f"[MOMENTS API] forget_moment error: {e}")
-            return {"error": _ERR_INTERNAL}, 500
+    @moments_ns.param("transcript_id", "Transcript row id of the moment to forget")
+    @moments_ns.response(204, "Forgotten")
+    @moments_ns.response(404, _NOT_FOUND, model=_M["Error"])
+    @responds(code=204)
+    def post(self, transcript_id: int) -> None | ResponseReturnValue:
+        """Forget (un-pin) a moment keyed by its transcript row id."""
+        if not _get_moments().delete_by_transcript(transcript_id):
+            return _error("Moment not found", 404)
+        return None
 
 
 @moments_ns.route("/search")
 class MomentsSearchResource(Resource):
     @require_session
-    @moments_ns.response(200, "Success")
-    @moments_ns.response(400, "Bad request")
-    @moments_ns.response(500, "Internal server error")
-    def get(self) -> ResponseReturnValue:
-        query = (request.args.get("q") or "").strip()
-        if not query:
-            return {"error": "Query parameter 'q' is required"}, 400
-
-        try:
-            rows = _get_moments().search(query)
-            return {"items": [_serialize_moment(cast("dict[str, object]", r)) for r in rows]}
-        except Exception as e:
-            logger.exception(f"[MOMENTS API] search_moments error: {e}")
-            return {"error": _ERR_INTERNAL}, 500
+    @moments_ns.response(200, "Matching moments", model=_M["Moment"])
+    @moments_ns.response(422, "Validation failed", model=_M["Error"])
+    @responds(Moment, code=200)
+    @expects(MomentSearch, source="args")
+    def get(self, dto: MomentSearch) -> list[Moment] | ResponseReturnValue:
+        """Lexical + semantic search across pinned moments."""
+        return [_moment_dto(cast("dict[str, object]", r)) for r in _get_moments().search(dto.q)]

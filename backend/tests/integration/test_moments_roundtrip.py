@@ -51,7 +51,7 @@ def test_pin_by_message_text_persists_moment(authed_client: tuple[FlaskClient, s
     )
 
     assert resp.status_code == 201, resp.get_json()
-    item = resp.get_json()["item"]
+    item = resp.get_json()
     assert item["transcript_id"] == tid
     assert item["key"] == f"moment_{tid}"
     assert item["value"] == _ASSISTANT_HTML
@@ -63,8 +63,8 @@ def test_pin_missing_text_and_id_is_rejected(authed_client: tuple[FlaskClient, s
 
     resp = client.post("/moments", json={}, content_type="application/json")
 
-    assert resp.status_code == 400
-    assert "message_text" in resp.get_json()["error"]
+    assert resp.status_code == 422
+    assert resp.get_json()["error"] == "Validation failed"
 
 
 def test_pin_unmatched_text_returns_404(authed_client: tuple[FlaskClient, sqlite3.Connection, object]) -> None:
@@ -94,34 +94,33 @@ def test_full_roundtrip_pin_list_search_forget(authed_client: tuple[FlaskClient,
         content_type="application/json",
     )
     assert create.status_code == 201, create.get_json()
-    created = create.get_json()["item"]
+    created = create.get_json()
     assert created["transcript_id"] == tid
 
     # 2. List shows it.
     listed = client.get("/moments")
     assert listed.status_code == 200
-    keys = [it["key"] for it in listed.get_json()["items"]]
+    keys = [it["key"] for it in listed.get_json()]
     assert f"moment_{tid}" in keys
 
     # 3. Search returns the pinned text (FTS over the stored value).
     search = client.get("/moments/search?q=cosmology")
     assert search.status_code == 200
-    values = [it["value"] for it in search.get_json()["items"]]
+    values = [it["value"] for it in search.get_json()]
     assert _ASSISTANT_HTML in values
 
     # 4. Forget (the Undo path) removes it — keyed by transcript_id, the value
     #    the create response actually hands the client.
     forget = client.post(f"/moments/{created['transcript_id']}/forget")
-    assert forget.status_code == 200
-    assert forget.get_json()["ok"] is True
+    assert forget.status_code == 204
 
     # 5. Gone from list and search.
     listed_after = client.get("/moments")
-    keys_after = [it["key"] for it in listed_after.get_json()["items"]]
+    keys_after = [it["key"] for it in listed_after.get_json()]
     assert f"moment_{tid}" not in keys_after
 
     search_after = client.get("/moments/search?q=cosmology")
-    values_after = [it["value"] for it in search_after.get_json()["items"]]
+    values_after = [it["value"] for it in search_after.get_json()]
     assert _ASSISTANT_HTML not in values_after
 
 
@@ -137,11 +136,11 @@ def test_explicit_transcript_id_path_still_works(authed_client: tuple[FlaskClien
     )
 
     assert resp.status_code == 201, resp.get_json()
-    assert resp.get_json()["item"]["transcript_id"] == tid
+    assert resp.get_json()["transcript_id"] == tid
 
 
-def test_duplicate_pin_flags_duplicate(authed_client: tuple[FlaskClient, sqlite3.Connection, object]) -> None:
-    """Pinning the same turn twice returns 200 with duplicate=True."""
+def test_re_pin_is_idempotent(authed_client: tuple[FlaskClient, sqlite3.Connection, object]) -> None:
+    """Re-pinning the same turn returns 201 with the same resource (store dedupes)."""
     client, _db, _store = authed_client
     _seed_assistant_turn()
     payload = {"message_text": _ui_message_text()}
@@ -150,6 +149,5 @@ def test_duplicate_pin_flags_duplicate(authed_client: tuple[FlaskClient, sqlite3
     second = client.post("/moments", json=payload, content_type="application/json")
 
     assert first.status_code == 201
-    assert first.get_json()["duplicate"] is False
-    assert second.status_code == 200
-    assert second.get_json()["duplicate"] is True
+    assert second.status_code == 201
+    assert first.get_json()["id"] == second.get_json()["id"]
