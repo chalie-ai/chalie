@@ -17,13 +17,13 @@ export interface DriftTask {
   [key: string]: unknown;
 }
 
-/** A live thread surfaced in the Activity drawer: an unread reply (`new`) or a
- *  thread whose reply is streaming right now (`thinking`). */
+/** A forked thread surfaced in the Activity drawer: its reply is streaming right
+ *  now (`working`, pink) or has settled unseen (`done`, blue). */
 export interface ThreadActivityItem {
   turn_id: number;
   label: string;
   snippet: string;
-  kind: 'new' | 'thinking';
+  kind: 'working' | 'done';
 }
 
 export const useTasksStore = defineStore('tasks', {
@@ -36,11 +36,10 @@ export const useTasksStore = defineStore('tasks', {
   }),
 
   getters: {
-    /** Live/unread threads as Activity rows — most recently active first; threads
-     *  with no turn_id (not yet bound) are skipped. The `thinking` pulse is the
-     *  real per-thread streaming signal (`isTurnWorking`, driven by the turn's
-     *  `working`/`done` WS signals), not a time window — it lights only while a
-     *  reply is actually in flight. `.filter` yields a fresh array, so the
+    /** Forked threads with live Activity as dock rows — most recently active first.
+     *  A thread enters on its reply's `working` signal (pink) and stays through
+     *  `done` (blue) until the user opens it; both states are the per-thread WS
+     *  signal, not a time window. `.filter` yields a fresh array, so the
      *  `last_activity_at` sort never mutates the store. */
     threadActivity(): ThreadActivityItem[] {
       const convo = useConversationStore();
@@ -48,14 +47,15 @@ export const useTasksStore = defineStore('tasks', {
         .filter(
           (t) =>
             t.turn_id != null &&
-            ((t.unread ?? 0) > 0 || convo.isTurnWorking(t.turn_id)),
+            convo.isForkedThread(t.turn_id) &&
+            convo.threadPhase(t.turn_id) != null,
         )
         .sort((a, b) => (b.last_activity_at ?? '').localeCompare(a.last_activity_at ?? ''))
         .map((t) => ({
           turn_id: t.turn_id as number,
           label: t.gist || t.preview,
           snippet: t.preview,
-          kind: ((t.unread ?? 0) > 0 ? 'new' : 'thinking') as ThreadActivityItem['kind'],
+          kind: convo.threadPhase(t.turn_id) as ThreadActivityItem['kind'],
         }));
     },
 

@@ -14,46 +14,44 @@ from flask.testing import FlaskClient
 class TestChatEndpoints:
 
     def test_thread_empty_message_rejected_and_no_turn_started(self, authed_client: tuple[FlaskClient, sqlite3.Connection, object]) -> None:
-        """An empty POST /api/thread fails loud with 400/message required and must
+        """An empty POST /api/thread fails loud with 422/message required and must
         NOT register a turn — a follow-up interrupt finds nothing in flight."""
         client, _db_conn, _store = authed_client
 
         resp = client.post('/api/thread', data={'text': '   '})
 
-        assert resp.status_code == 400
-        data = resp.get_json()
-        assert data['status'] == 'error'
-        assert data['reason'] == 'message required'
+        assert resp.status_code == 422
+        assert resp.get_json()['error'] == 'message required'
 
         # Cross-step proof: no UMP turn was registered for the empty message.
-        interrupt = client.post('/chat/interrupt')
+        interrupt = client.post('/api/chat/interrupt')
         assert interrupt.status_code == 200
-        assert interrupt.get_json() == {'ok': True, 'reason': 'no_active_turn'}
+        assert interrupt.get_json() == {'ok': True, 'interrupted': None, 'reason': 'no_active_turn'}
 
     def test_chat_interrupt_idle_returns_no_active_turn(self, authed_client: tuple[FlaskClient, sqlite3.Connection, object]) -> None:
         """POST /chat/interrupt with no turn in flight returns 200 and says so."""
         client, _db_conn, _store = authed_client
 
-        resp = client.post('/chat/interrupt')
+        resp = client.post('/api/chat/interrupt')
 
         assert resp.status_code == 200
-        assert resp.get_json() == {'ok': True, 'reason': 'no_active_turn'}
+        assert resp.get_json() == {'ok': True, 'interrupted': None, 'reason': 'no_active_turn'}
 
     def test_action_missing_skill_rejected(self, authed_client: tuple[FlaskClient, sqlite3.Connection, object]) -> None:
-        """POST /action without a skill is rejected synchronously with 400."""
+        """POST /action without a skill is rejected synchronously with 422."""
         client, _db_conn, _store = authed_client
 
-        resp = client.post('/action', json={})
+        resp = client.post('/api/action', json={})
 
-        assert resp.status_code == 400
-        assert 'skill' in resp.get_json()['error']
+        assert resp.status_code == 422
+        assert 'skill' in str(resp.get_json()['details'])
 
     def test_action_unknown_skill_rejected_synchronously(self, authed_client: tuple[FlaskClient, sqlite3.Connection, object]) -> None:
         """An unknown skill resolves synchronously to 400 in the HTTP body — the
         result never crosses the WS bus."""
         client, _db_conn, _store = authed_client
 
-        resp = client.post('/action', json={'skill': 'no-such-tool-xyz'})
+        resp = client.post('/api/action', json={'skill': 'no-such-tool-xyz'})
 
         assert resp.status_code == 400
         assert 'Unknown skill' in resp.get_json()['error']
@@ -66,7 +64,7 @@ class TestChatEndpoints:
         client, db_conn, _store = authed_client
         transcripts_before = db_conn.execute("SELECT COUNT(*) FROM transcript").fetchone()[0]
 
-        resp = client.post('/action', json={'skill': 'list', 'action': 'create', 'name': 'QA Groceries List'})
+        resp = client.post('/api/action', json={'skill': 'list', 'action': 'create', 'name': 'QA Groceries List'})
 
         assert resp.status_code == 200
         body = resp.get_json()

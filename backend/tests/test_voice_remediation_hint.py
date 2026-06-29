@@ -22,7 +22,7 @@ def test_voice_remediation_points_to_settings_not_installer(authed_client: tuple
     client, _db, _store = authed_client
 
     # /voice/health always returns 200 JSON with status + (when not ready) a hint.
-    health = client.get("/voice/health")
+    health = client.get("/api/voice/health")
     assert health.status_code == 200
     hdata = health.get_json()
     assert hdata is not None
@@ -42,7 +42,7 @@ def test_voice_remediation_points_to_settings_not_installer(authed_client: tuple
     # state so we never trigger a real (heavy) model load just to read a hint.
     if hdata.get("status") == "unavailable":
         synth = client.post(
-            "/voice/synthesize",
+            "/api/voice/synthesize",
             json={"text": "Hello."},
             content_type="application/json",
         )

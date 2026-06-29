@@ -79,7 +79,7 @@ def _dmn_fetch_recent_episodes() -> str:
 
 
 class DmnConfig(ProcessorConfig):
-    """DMN background channel.  §3a / §8b.  No after-turn hooks (metrics moved to gateway §4e).
+    """DMN background channel.  No after-turn hooks (metrics are emitted by the gateway).
 
     DMN carries the framework discovery tools (DEFAULT_ALWAYS_AVAILABLE includes
     find_tools), so it can discover and spawn any DISCOVERABLE tool — including

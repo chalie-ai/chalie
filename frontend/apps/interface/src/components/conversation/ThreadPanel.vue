@@ -104,7 +104,12 @@ onBeforeUnmount(() => document.removeEventListener('keydown', onKeydown));
         <div v-if="showLoader" class="thread-panel__loader">
           <output class="thread-panel__spinner" aria-label="Loading thread" />
         </div>
-        <TurnView v-else :forms="panelForms" :can-reply="false" />
+        <TurnView
+          v-else
+          :forms="panelForms"
+          :working="convo.isTurnWorking(session.panelThreadId)"
+          :can-reply="false"
+        />
       </div>
 
       <InputDock v-if="session.panelThreadId != null" :turn-id="session.panelThreadId" />

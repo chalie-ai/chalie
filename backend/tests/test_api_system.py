@@ -4,10 +4,10 @@ from collections.abc import Iterator
 import pytest
 from unittest.mock import patch, MagicMock
 
-from flask import Flask
 from flask.testing import FlaskClient
-from api.system import system_bp
+from api.system import health_ns, system_ns
 from services import compaction_persistence
+from tests.restx_test_app import mount_namespace
 from services.memory_store import MemoryStore
 
 
@@ -16,8 +16,7 @@ class TestSystemAPI:
 
     @pytest.fixture
     def client(self) -> FlaskClient:
-        app = Flask(__name__)
-        app.register_blueprint(system_bp)
+        app = mount_namespace(health_ns, system_ns)
         app.config['TESTING'] = True
         return app.test_client()
 
@@ -50,7 +49,7 @@ class TestSystemAPI:
         store.zadd('dmn:deliveries', {'test-delivery': 1711500000.0})
 
         with patch('services.memory_client.MemoryClientService.create_connection', return_value=store):
-            resp = client.get('/system/status')
+            resp = client.get('/api/system/status')
 
         assert resp.status_code == 200
         data = resp.get_json()
@@ -71,7 +70,7 @@ class TestSystemAPI:
         broken_store.get.return_value = None
 
         with patch('services.memory_client.MemoryClientService.create_connection', return_value=broken_store):
-            resp = client.get('/system/status')
+            resp = client.get('/api/system/status')
 
         assert resp.status_code == 200
         data = resp.get_json()
@@ -106,7 +105,7 @@ class TestSystemAPI:
         )
         db.commit()
 
-        resp = client.get('/system/observability/records?source=episodes')
+        resp = client.get('/api/system/observability/records?source=episodes')
 
         assert resp.status_code == 200
         data = resp.get_json()
@@ -141,7 +140,7 @@ class TestSystemAPI:
         )
         db.commit()
 
-        resp = client.get('/system/observability/records?source=user&q=blue')
+        resp = client.get('/api/system/observability/records?source=user&q=blue')
 
         assert resp.status_code == 200
         data = resp.get_json()
@@ -159,13 +158,13 @@ class TestSystemAPI:
             )
         db.commit()
 
-        resp1 = client.get('/system/observability/records?source=episodes')
+        resp1 = client.get('/api/system/observability/records?source=episodes')
         assert resp1.status_code == 200
         data1 = resp1.get_json()
         assert data1['returned'] == 250
         assert data1['has_more'] is True
 
-        resp2 = client.get('/system/observability/records?source=episodes&offset=250')
+        resp2 = client.get('/api/system/observability/records?source=episodes&offset=250')
         assert resp2.status_code == 200
         data2 = resp2.get_json()
         assert data2['returned'] == 10
@@ -173,7 +172,7 @@ class TestSystemAPI:
 
     def test_records_invalid_source_400(self, client: FlaskClient, db: sqlite3.Connection) -> None:
         """Unknown source returns 400 with error payload."""
-        resp = client.get('/system/observability/records?source=bogus')
+        resp = client.get('/api/system/observability/records?source=bogus')
         assert resp.status_code == 400
         assert resp.get_json()['error'] == 'invalid source'
 
@@ -222,7 +221,7 @@ class TestSystemAPI:
         )
         db.commit()
 
-        resp = client.get('/system/observability/tools')
+        resp = client.get('/api/system/observability/tools')
 
         assert resp.status_code == 200
         data = resp.get_json()
@@ -280,7 +279,7 @@ class TestSystemAPI:
 
     def test_observability_compaction_returns_null_when_none(self, client: FlaskClient, db: sqlite3.Connection) -> None:
         """No compaction rows → 200 with {"compaction": null} (drives the empty-state card)."""
-        resp = client.get('/system/observability/compaction')
+        resp = client.get('/api/system/observability/compaction')
         assert resp.status_code == 200
         assert resp.get_json() == {'compaction': None}
 
@@ -292,7 +291,7 @@ class TestSystemAPI:
             summary='Earlier turns condensed here.',
             created_at='2026-01-01 00:00:01',
         )
-        resp = client.get('/system/observability/compaction')
+        resp = client.get('/api/system/observability/compaction')
         assert resp.status_code == 200
         comp = resp.get_json()['compaction']
         assert comp is not None
@@ -312,7 +311,7 @@ class TestSystemAPI:
             summary='Condensed.',
             created_at='2026-05-30T22:45:01.123456+00:00',
         )
-        resp = client.get('/system/observability/compaction')
+        resp = client.get('/api/system/observability/compaction')
         assert resp.status_code == 200
         compacted_at = resp.get_json()['compaction']['compacted_at']
         assert compacted_at == '2026-05-30 22:45'
@@ -326,7 +325,7 @@ class TestSystemAPI:
             summary='subagent only',
             created_at='2026-01-01 00:00:01',
         )
-        resp = client.get('/system/observability/compaction')
+        resp = client.get('/api/system/observability/compaction')
         assert resp.status_code == 200
         assert resp.get_json()['compaction'] is None
 
@@ -343,7 +342,7 @@ class TestSystemAPI:
             db, channel='user',
             summary='new summary', created_at='2026-01-02 00:00:01', compacted_up_to=20,
         )
-        resp = client.get('/system/observability/compaction')
+        resp = client.get('/api/system/observability/compaction')
         assert resp.status_code == 200
         comp = resp.get_json()['compaction']
         assert comp['summary'] == 'new summary'

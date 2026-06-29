@@ -53,8 +53,6 @@ class ToolDispatcher:
     ``dispatch()`` is the single chokepoint: match → bind → gate
     (PolicyManager.wrap) → execute → render → record. The gated work runs in
     ``_execute()`` (emit → async-decision → run → render → emit).
-
-    Spec §5 / AC-4.
     """
 
     def __init__(self, mp: object, key_healer: "KeyHealer | None" = None) -> None:
@@ -78,7 +76,7 @@ class ToolDispatcher:
         → record → return a STRING. Records EVERY outcome (allow result, block,
         unknown) so the rendered trail tells the model what happened and it does
         not retry a blocked tool forever. No cancel check — the loop guards
-        cancel_event one line before calling this. Spec §5.
+        cancel_event one line before calling this.
         """
         from services.message_processor import _sanitize_llm_args  # noqa: PLC0415
 
@@ -235,7 +233,7 @@ class ToolDispatcher:
 
         Reads the bound parent off ``ability.mp`` (set by _bind()). act_summary
         (popped from params by dispatch()) is the live summary; it is NOT a run()
-        argument. Spec §4.0 / §4.2 / D5.
+        argument.
         """
         from services.act_trail import ActTrail  # noqa: PLC0415
         from services.message_processor import MessageProcessor  # noqa: PLC0415
@@ -259,7 +257,7 @@ class ToolDispatcher:
         if run_async:
             # AsyncDelegateRunner owns the daemon-thread lifecycle + the captured
             # mp it delivers through; it returns the placeholder immediately so
-            # this ACT iteration is never blocked (spec §4.0 / §4.4). The
+            # this ACT iteration is never blocked. The
             # placeholder is prose the model reads while the real work runs.
             from services.async_delegate_runner import async_delegate_runner  # noqa: PLC0415
             placeholder = async_delegate_runner.spawn(ability, params, self._mp, act_summary)
@@ -279,7 +277,13 @@ class ToolDispatcher:
         if tr.rich is not None and getattr(config, "broadcast_to", None) == "user":
             ordinal = self._next_ordinal(tool_name)
 
-        return self._render(tool_name, tr, ordinal)
+        # The follow-up nudge fires only on a real synchronous SUCCESS: never on an
+        # error result, never on the async placeholder (the nudge would fire before
+        # the real work ran; the delivered async result is produced by
+        # AsyncDelegateRunner, outside this seam). Empty default => nothing
+        # appended, so non-overriding abilities render byte-identical to before.
+        follow_up = ability.get_follow_up(tr) if (not run_async and tr.status == "success") else ""
+        return self._render(tool_name, tr, ordinal, follow_up=follow_up)
 
     # ── Action pre-validation (ACTION_REQUIRED) ────────────────────────────────
 
@@ -337,8 +341,6 @@ class ToolDispatcher:
         rendered canonically with its code/hint/valid. A raised exception becomes
         ``code=unhandled-exception`` (with the VaultLockedError friendly message).
         A non-ToolResult return value HARD-FAILS as ``code=non-canonical-result``.
-
-        Spec §4.2 / I13.
         """
         try:
             ctx = ClientContext.current()
@@ -397,14 +399,23 @@ class ToolDispatcher:
         return counters[tool_name]
 
     @staticmethod
-    def _render(tool_name: str, tr: ToolResult, ordinal: "int | None" = None) -> str:
+    def _render(
+        tool_name: str,
+        tr: ToolResult,
+        ordinal: "int | None" = None,
+        follow_up: str = "",
+    ) -> str:
         """Render the sealed wire envelope for *tr* — the ONLY envelope formatter.
 
         success: ``[<tool>(status=success, <meta>)]\\n<body>\\n[end:<tool>]`` —
         dict/list body as compact JSON, str body verbatim. When *ordinal* is set
         (rich card on a user-broadcast turn) the rich block (``\\n\\n`` +
         instruction with the ordinal-keyed span tag) is appended to the body so
-        the rich-media parser can pair the card.
+        the rich-media parser can pair the card. When *follow_up* is non-empty
+        the follow-up instruction block is appended to the body AFTER any rich
+        block and BEFORE the closing ``[end:<tool>]`` — keeping ``[end:<tool>]``
+        the terminal token the rich-media parser's ``\\A…\\Z``-anchored unwrap
+        requires, so co-occurrence of a rich card and a follow-up degrades neither.
 
         error: ``[<tool>(status=error, code=<code>, <meta>)]\\n<message>`` plus a
         ``hint:`` line and a ``valid:`` line when those are set, then
@@ -430,6 +441,9 @@ class ToolDispatcher:
 
         if ordinal is not None and tr.rich is not None:
             body_str = ToolDispatcher._render_rich(tool_name, tr, ordinal, body_str)
+
+        if follow_up:
+            body_str = f"{body_str}\n{_FOLLOW_UP_BLOCK.format(text=follow_up)}"
 
         return f"[{tool_name}({', '.join(head_parts)})]\n{body_str}\n[end:{tool_name}]"
 
@@ -457,6 +471,12 @@ _RICH_INSTRUCTION = (
     "<span id='{tag}'>your synthesis here</span>. The span renders as a card; "
     "without it the user sees only plain text."
 )
+
+# A standing next-step nudge a tool appends to its OWN successful result. Placed
+# INSIDE the envelope (after any rich block, before ``[end:<tool>]``) so the
+# ``\A…\Z``-anchored rich-media unwrap still sees ``[end:<tool>]`` as the terminal
+# token and co-occurrence of a card and a follow-up degrades neither.
+_FOLLOW_UP_BLOCK = "[follow_up_instruction]\n{text}\n[end:follow_up_instruction]"
 
 # Appended to the SECOND (and later) identical error a tool returns in one turn,
 # to break a retry loop. Written plainly so smaller models act on it.

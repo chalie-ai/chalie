@@ -117,6 +117,10 @@ export const useConversationStore = defineStore('conversation', {
     /** turn_ids currently in flight (the `working` signal is on, no `done` yet) —
      *  drives the spinner anchor. Independent of the rows, which arrive via fetch. */
     workingTurnIds: new Set<number>(),
+    /** turn_ids whose reply has settled (`done`) but the user hasn't viewed yet —
+     *  the Activity dock's "done" (blue) state. Cleared when the thread is opened
+     *  (`seenThread`) or re-activated by a new `working`. */
+    doneTurnIds: new Set<number>(),
     /**
      * Live act-trail pills for the in-flight step, keyed by their
      * `transcript_row_id` — the assistant row driving the calls (spec §6.5). Pushed
@@ -155,6 +159,24 @@ export const useConversationStore = defineStore('conversation', {
     /** True while `turnId`'s `working` signal is on (spinner anchor visible). */
     isTurnWorking(state): (turnId: number | null) => boolean {
       return (turnId) => turnId != null && state.workingTurnIds.has(turnId);
+    },
+    /** A forked thread carries reply rows past settle0 (`thread_message` forms) —
+     *  the same test the feed uses to decide a turn earns a Thread pill. Only these
+     *  surface in the Activity dock; a plain spine turn (watched inline) does not. */
+    isForkedThread(state): (turnId: number | null) => boolean {
+      return (turnId) =>
+        turnId != null && state.forms.some((f) => f.turnId === turnId && f.threadMessage);
+    },
+    /** A forked thread's Activity phase: `working` (reply streaming, pink) →
+     *  `done` (settled but unseen, blue) → null (seen / no activity). Drives both
+     *  the dock card and the spine pill colour. */
+    threadPhase(state): (turnId: number | null) => 'working' | 'done' | null {
+      return (turnId) => {
+        if (turnId == null) return null;
+        if (state.workingTurnIds.has(turnId)) return 'working';
+        if (state.doneTurnIds.has(turnId)) return 'done';
+        return null;
+      };
     },
     /** Live act-trail trails for `turnId`'s in-flight step — one entry per
      *  transcript row carrying unsettled pills (spec §6.5). Empty when none. The
@@ -353,10 +375,28 @@ export const useConversationStore = defineStore('conversation', {
     setWorking(turnId: number, on: boolean): void {
       if (on) {
         this.workingTurnIds.add(turnId);
+        this.doneTurnIds.delete(turnId);
       } else {
         this.workingTurnIds.delete(turnId);
         this._clearLiveTurn(turnId);
       }
+    },
+
+    /** Settle a background thread reply into the Activity dock's `done` (blue)
+     *  state: stop its spinner, drop its live pills, and leave a standing card
+     *  until the user opens the thread. The notify-on-reply path `setWorking`
+     *  can't carry. */
+    markThreadDone(turnId: number): void {
+      this.workingTurnIds.delete(turnId);
+      this.doneTurnIds.add(turnId);
+      this._clearLiveTurn(turnId);
+    },
+
+    /** The user opened (or is viewing) the thread — dismiss its standing `done`
+     *  card. A reply still streaming keeps its `working` state: "seen" clears a
+     *  finished notification, it doesn't cancel live progress. */
+    seenThread(turnId: number): void {
+      this.doneTurnIds.delete(turnId);
     },
 
     /** Push a live act-trail pill the instant a tool call begins (spec §6.5 step 2),
@@ -472,6 +512,7 @@ export const useConversationStore = defineStore('conversation', {
       this.forms = this.forms.filter((f) => f.turnId !== turnId);
       this.threads = this.threads.filter((t) => t.turn_id !== turnId);
       this.workingTurnIds.delete(turnId);
+      this.doneTurnIds.delete(turnId);
       this._clearLiveTurn(turnId);
       delete this.turnVersions[turnId];
     },
@@ -533,7 +574,6 @@ export const useConversationStore = defineStore('conversation', {
       this.threads.push({
         turn_id: turnId,
         last_activity_at: nowUtc,
-        last_row_id: 0,
         row_count: 0,
         preview,
         gist: null,

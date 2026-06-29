@@ -17,7 +17,7 @@ from typing import cast
 
 import pytest
 
-from api.conversation import _rows_to_messages
+from api.threads import _rows_to_messages
 from services.transcript_service import Transcript
 
 

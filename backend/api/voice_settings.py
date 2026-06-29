@@ -1,60 +1,70 @@
-import logging
-from typing import TYPE_CHECKING
+"""Voice-settings namespace — derived state read plus a toggle that triggers a background install."""
 
-from flask import Blueprint, jsonify, request
+from __future__ import annotations
+
+import logging
+from typing import TYPE_CHECKING, cast
+
+from flask_restx import Namespace, Resource
 
 from .auth import require_session
+from .dto import Error, expects, register_dto, responds
+from .dto.voice_settings import VoiceSettings, VoiceSettingsState, VoiceSettingsUpdate
 
 if TYPE_CHECKING:
-    from flask.typing import ResponseReturnValue
     from services.settings_service import SettingsService
 
 logger = logging.getLogger(__name__)
 
-voice_settings_bp = Blueprint("voice_settings", __name__, url_prefix="/api/voice-settings")
+voice_settings_ns = Namespace("voice_settings", description="Voice settings", path="/api/voice-settings")
+
+register_dto(voice_settings_ns, VoiceSettings, VoiceSettingsUpdate, VoiceSettingsState, Error)
+
+_VS = voice_settings_ns.models
 
 
 def _get_services() -> "SettingsService":
     from services.database_service import get_shared_db_service
     from services.settings_service import SettingsService
 
-    db = get_shared_db_service()
-    return SettingsService(db)
+    return SettingsService(get_shared_db_service())
 
 
-@voice_settings_bp.route("", methods=["GET"])
-@require_session
-def get_voice_settings() -> "ResponseReturnValue":
-    from services.runtime_deps_service import RuntimeDepsService
+@voice_settings_ns.route("")
+class VoiceSettingsResource(Resource):
+    @require_session
+    @voice_settings_ns.response(200, "Voice settings", model=_VS["VoiceSettings"])
+    @voice_settings_ns.response(500, "Server error", model=_VS["Error"])
+    @responds(VoiceSettings, code=200)
+    def get(self) -> VoiceSettings:
+        from services.runtime_deps_service import RuntimeDepsService
 
-    settings = _get_services()
-    enabled = settings.get("voice_enabled") == "true"
-    status = RuntimeDepsService.get_status()["voice"]
+        status = RuntimeDepsService.get_status()["voice"]
+        return VoiceSettings(
+            enabled=_get_services().get("voice_enabled") == "true",
+            install_status=cast(str, status["status"]),
+            error=status["error"],
+        )
 
-    return jsonify({
-        "enabled": enabled,
-        "install_status": status["status"],
-        "error": status["error"],
-    })
+    @require_session
+    @voice_settings_ns.expect(_VS["VoiceSettingsUpdate"])
+    @voice_settings_ns.response(200, "Voice settings updated", model=_VS["VoiceSettingsState"])
+    @voice_settings_ns.response(422, "Validation failed", model=_VS["Error"])
+    @voice_settings_ns.response(500, "Server error", model=_VS["Error"])
+    @responds(VoiceSettingsState, code=200)
+    @expects(VoiceSettingsUpdate)
+    def put(self, dto: VoiceSettingsUpdate) -> VoiceSettingsState:
+        from services.runtime_deps_service import RuntimeDepsService
 
+        _get_services().set("voice_enabled", "true" if dto.enabled else "false")
 
-@voice_settings_bp.route("", methods=["PUT"])
-@require_session
-def update_voice_settings() -> "ResponseReturnValue":
-    from services.runtime_deps_service import RuntimeDepsService
-
-    body = request.get_json(force=True)
-    enabled = body.get("enabled")
-    if enabled is None:
-        return jsonify({"error": "enabled field required"}), 400
-
-    settings = _get_services()
-    settings.set("voice_enabled", "true" if enabled else "false")
-
-    if enabled:
-        result = RuntimeDepsService.enable_voice()
-        logger.info("[VoiceSettings] Voice enabled — installation triggered")
-        return jsonify({"enabled": True, **result})
-    else:
+        if dto.enabled:
+            result = RuntimeDepsService.enable_voice()
+            logger.info("[VoiceSettings] Voice enabled — installation triggered")
+            return VoiceSettingsState(
+                enabled=True,
+                status=result["status"],
+                message=result["message"],
+            )
         logger.info("[VoiceSettings] Voice disabled")
-        return jsonify({"enabled": False, "status": "disabled"})
+        return VoiceSettingsState(enabled=False, status="disabled")

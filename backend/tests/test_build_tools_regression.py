@@ -93,7 +93,7 @@ def test_active_tools_resolve_to_always_available_surface() -> None:
 
 
 def test_act_summary_injected_as_required_on_every_tool() -> None:
-    """Every surfaced tool gets act_summary as a required property (spec §6)."""
+    """Every surfaced tool gets act_summary as a required property."""
     tools = AbilityRegistry.build_tools(_make_mp(list(DEFAULT_ALWAYS_AVAILABLE)))
     assert tools, "build_tools returned no tools for a seeded active_tools list"
     for t in tools:

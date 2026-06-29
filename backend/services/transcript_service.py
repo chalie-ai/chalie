@@ -1122,9 +1122,9 @@ class Transcript:
         """Link an uploaded document to the transcript turn that carried it.
 
         Powers chat-attachment persistence across page refresh: the live preview is a
-        browser-only blob: URL, so on reload the rebuild (api.conversation
+        browser-only blob: URL, so on reload the rebuild (api.threads
         .serialize_turn) joins this table to re-render the image/file from
-        /documents/<id>/preview.  INSERT OR IGNORE keeps it idempotent against the
+        /api/documents/<id>/preview.  INSERT OR IGNORE keeps it idempotent against the
         composite primary key.  Called from message_processor._seed_upload_attachment.
         """
         from services.database_service import get_shared_db_service

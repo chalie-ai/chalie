@@ -1,66 +1,105 @@
-import logging
-from typing import TYPE_CHECKING, cast
+"""Memory namespace — read-only search across episodic memory + the data graph.
 
-from flask import Blueprint, request, jsonify
+A single retrieval route fans the query out to two independent stores, merges the
+heterogeneous rows into ranked :class:`MemoryHit` results, and returns partial
+results when one store fails (intended resilience, not a shim). Validation and
+serialization run through the DTO boundary decorators; no service layer is
+touched by this route.
+"""
+
+from __future__ import annotations
+
+import logging
+from typing import cast
+
+from flask.typing import ResponseReturnValue
+from flask_restx import Namespace, Resource
+
+from services.time_utils import parse_utc
 
 from .auth import require_session
-
-if TYPE_CHECKING:
-    from flask.typing import ResponseReturnValue
+from .dto import Error, expects, register_dto, responds
+from .dto.memory import MemoryHit, MemorySearchQuery, MemorySearchResponse
 
 logger = logging.getLogger(__name__)
 
-memory_bp = Blueprint('memory', __name__)
+_ERR_SEARCH_FAILED = "Failed to search memory"
+
+# Kinds recalled from the data graph alongside episodic memory (user facts + system facts).
+_RECALL_KINDS = ["user_specific", "system"]
+_RECALL_LIMIT = 5
+
+memory_ns = Namespace("memory", description="Memory search", path="/api/memory")
+
+register_dto(memory_ns, MemorySearchQuery, MemoryHit, MemorySearchResponse, Error)
+
+_M = memory_ns.models
 
 
-@memory_bp.route('/memory/search', methods=['GET'])
-@require_session
-def memory_search() -> "ResponseReturnValue":
-    query = request.args.get("q", "").strip()
-    if not query:
-        return jsonify({"error": "Missing 'q' query parameter"}), 400
+def _error(message: str, status: int) -> ResponseReturnValue:
+    """Build a uniform non-2xx ``Error`` body carrying its own status code."""
+    return Error(error=message).model_dump(mode="json"), status
 
-    try:
-        from services import episodic_retrieval_service
-        from services.data_graph_service import get_data_graph_service
 
-        results = []
+def _episode_hit(row: dict[str, object]) -> MemoryHit:
+    """Build a ``MemoryHit`` from an episodic-retrieval episode row."""
+    return MemoryHit(
+        type="episode",
+        content=cast(str, row.get("gist", "")),
+        score=cast(float, row.get("composite_score", row.get("score", 0))),
+        created_at=parse_utc(cast(str, row.get("created_at") or "")),
+    )
 
-        # Episodic search
+
+def _concept_hit(row: dict[str, object]) -> MemoryHit:
+    """Build a ``MemoryHit`` from a data-graph concept row."""
+    return MemoryHit(
+        type="concept",
+        content=f"{cast(str, row.get('key', ''))}: {cast(str, row.get('value', ''))}",
+        score=cast(float, row.get("composite_score", row.get("retrieval_weight", 0))),
+        confidence=cast(float, row.get("retrieval_weight", 0)),
+    )
+
+
+@memory_ns.route("/search")
+class MemorySearchResource(Resource):
+    @require_session
+    @memory_ns.response(200, "Search results", model=_M["MemorySearchResponse"])
+    @memory_ns.response(422, "Validation failed", model=_M["Error"])
+    @memory_ns.response(500, _ERR_SEARCH_FAILED, model=_M["Error"])
+    @responds(MemorySearchResponse, code=200)
+    @expects(MemorySearchQuery, source="args")
+    def get(self, dto: MemorySearchQuery) -> MemorySearchResponse | ResponseReturnValue:
+        """Search episodic memory + the data graph and return ranked, merged hits."""
+        results: list[MemoryHit] = []
         try:
-            episodes = cast("list[dict[str, object]]", episodic_retrieval_service.retrieve(
-                query_text=query,
-                channel=None,
-            ))
-            for ep in episodes:
-                results.append({
-                    "type": "episode",
-                    "content": cast(str, ep.get("gist", "")),
-                    "score": ep.get("composite_score", ep.get("score", 0)),
-                    "created_at": str(ep.get("created_at", "")),
-                })
-        except Exception as e:
-            logger.warning(f"[Memory] Episode search failed: {e}")
+            from services import episodic_retrieval_service
+            from services.data_graph_service import get_data_graph_service
 
-        # Data graph concept search
-        try:
-            dgs = get_data_graph_service()
-            items = dgs.recall(query, kinds=['user_specific', 'system'], limit=5)
-            for c in items:
-                results.append({
-                    "type": "concept",
-                    "content": cast(str, c.get("key", "")) + ": " + cast(str, c.get("value", "")),
-                    "score": c.get("composite_score", c.get("retrieval_weight", 0)),
-                    "confidence": c.get("retrieval_weight", 0),
-                })
-        except Exception as e:
-            logger.warning(f"[Memory] Data graph search failed: {e}")
+            try:
+                results.extend(
+                    _episode_hit(ep)
+                    for ep in cast(
+                        "list[dict[str, object]]",
+                        episodic_retrieval_service.retrieve(
+                            query_text=dto.q, channel=None
+                        ),
+                    )
+                )
+            except Exception as exc:
+                logger.warning("[Memory] Episode search failed: %s", exc)
 
-        # Sort by score descending
-        results.sort(key=lambda r: cast(float, r.get("score", 0)), reverse=True)
+            try:
+                dgs = get_data_graph_service()
+                results.extend(
+                    _concept_hit(c)
+                    for c in dgs.recall(dto.q, kinds=_RECALL_KINDS, limit=_RECALL_LIMIT)
+                )
+            except Exception as exc:
+                logger.warning("[Memory] Data graph search failed: %s", exc)
 
-        return jsonify({"results": results}), 200
-
-    except Exception as e:
-        logger.exception(f"[REST API] memory/search error: {e}")
-        return jsonify({"error": "Failed to search memory"}), 500
+            results.sort(key=lambda hit: hit.score, reverse=True)
+            return MemorySearchResponse(results=results)
+        except Exception as exc:
+            logger.exception("[REST API] memory/search error: %s", exc)
+            return _error(_ERR_SEARCH_FAILED, 500)

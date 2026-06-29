@@ -11,7 +11,7 @@ _CONTENT_FIELD_PLACEHOLDER = "{{provider_content_field_name}}"
 def substitute_provider_content_field(body: str, mp: "MessageProcessor") -> str:
     """Replace {{provider_content_field_name}} with the active provider's
     CONTENT_FIELD_LABEL, read through the mp-owned providers gateway. Best-effort:
-    placeholder absent or resolution fails → body unchanged (design §6.3)."""
+    placeholder absent or resolution fails → body unchanged."""
     if _CONTENT_FIELD_PLACEHOLDER not in body:
         return body
     try:

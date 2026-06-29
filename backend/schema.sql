@@ -173,6 +173,12 @@ VALUES ('api_key', 'string', 'REST API authentication key (auto-generated on fir
 INSERT OR IGNORE INTO settings (key, value_type, description, is_sensitive)
 VALUES ('selected_provider_id', 'int', 'ID of the active LLM provider used for all cognitive jobs', 0);
 
+INSERT OR IGNORE INTO settings (key, value, value_type, description, is_sensitive)
+VALUES ('deployment_domain', '', 'string', 'Public domain this deployment is served from; drives CORS (blank = same-origin only)', 0);
+
+INSERT OR IGNORE INTO settings (key, value, value_type, description, is_sensitive)
+VALUES ('ssl_enabled', 'false', 'boolean', 'Serve HTTPS using the uploaded certificate in the secure dir; also drives Secure session cookies', 0);
+
 -- ────────────────────────────────────────────────────────────────
 -- MASTER ACCOUNT
 -- ────────────────────────────────────────────────────────────────
@@ -407,8 +413,6 @@ CREATE TABLE IF NOT EXISTS wrapper_tokens (
     name TEXT NOT NULL,
     token_hash TEXT NOT NULL UNIQUE,
     wrapper_id TEXT NOT NULL UNIQUE,
-    capabilities TEXT NOT NULL DEFAULT '{}',
-    permissions TEXT NOT NULL DEFAULT '{}',
     metadata TEXT NOT NULL DEFAULT '{}',
     last_seen_at TEXT,
     created_at TEXT NOT NULL,

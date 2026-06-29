@@ -61,6 +61,16 @@ class FindToolsAbility(SearchableAbility):
     def get_search_tooltip(self) -> str:
         return "discover available tools"
 
+    def get_follow_up(self, tr: ToolResult) -> str:
+        """Announce the freshly-activated tools by name — live for this turn."""
+        injected = tr.body.get("injected") if isinstance(tr.body, dict) else None
+        names = [cast("dict[str, str]", n)["name"] for n in injected] if injected else []
+        if not names:
+            return ""
+        joined = ", ".join(f"`{n}`" for n in names)
+        verb = "is" if len(names) == 1 else "are"
+        return f"{joined} {verb} now available and can be called."
+
     def get_parameters(self) -> dict[str, object]:
         return self._PARAMETERS
 

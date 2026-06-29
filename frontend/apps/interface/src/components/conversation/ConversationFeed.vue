@@ -45,9 +45,16 @@ const feedEntries = computed<FeedEntry[]>(() => {
     const all = conversationStore.forms.filter((f) => f.turnId === t.turn_id);
     const spine = all.filter((f) => !f.threadMessage);
     if (!spine.length) continue; // not yet hydrated — fills in on batch load
-    // A bound turn's spinner is driven by its own `working` signal (isTurnWorking
-    // inside TurnView); only the unbound live turn below needs the prop.
-    entries.push({ id: spine[0].id, forms: spine, working: false, thread: all.length > spine.length ? t : null });
+    // A forked turn's live reply streams in its panel, not here — its spine slice
+    // stays frozen at settle0 (the pink pill is its only working cue). An unforked
+    // turn owns its trail inline, so it follows its own `working` signal.
+    const forked = all.length > spine.length;
+    entries.push({
+      id: spine[0].id,
+      forms: spine,
+      working: forked ? false : conversationStore.isTurnWorking(t.turn_id),
+      thread: forked ? t : null,
+    });
   }
   // The live turn has no turn_id yet, so its spinner can't come from isTurnWorking
   // — drive it from this surface's send guard until `working` binds the thread.
@@ -57,10 +64,12 @@ const feedEntries = computed<FeedEntry[]>(() => {
   return entries;
 });
 
-/** Pill status drives its border, dot and badge. `new` once the backend tracks
- *  unread replies; `thread` while inside the 1-hour active window; else idle. */
-function pillStatus(t: ThreadListItem): 'new' | 'thread' | 'idle' {
-  if (t.unread) return 'new';
+/** Pill status drives its border and dot colour. A forked thread with live
+ *  Activity wins: `working` (pink) while its reply streams, `done` (blue) once it
+ *  settles unseen; otherwise `thread` inside the 1-hour active window, else idle. */
+function pillStatus(t: ThreadListItem): 'working' | 'done' | 'thread' | 'idle' {
+  const phase = conversationStore.threadPhase(t.turn_id);
+  if (phase) return phase;
   if (conversationStore.isThreadActive(t.last_activity_at)) return 'thread';
   return 'idle';
 }
@@ -147,26 +156,9 @@ onBeforeUnmount(() => {
           type="button"
           @click="onPillClick(entry.thread)"
         >
-          <span class="thread-pill__icon" aria-hidden="true">
-            <svg
-              width="13"
-              height="13"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              stroke-width="2.2"
-              stroke-linecap="round"
-              stroke-linejoin="round"
-            >
-              <circle cx="6" cy="6" r="3" />
-              <circle cx="18" cy="18" r="3" />
-              <path d="M6 9c0 6 6 3 6 9" />
-            </svg>
-          </span>
-          <span class="thread-pill__label">Thread</span>
-          <span class="thread-pill__summary">{{ entry.thread.gist || entry.thread.preview || 'Conversation' }}</span>
           <span class="thread-pill__dot" aria-hidden="true" />
-          <span v-if="entry.thread.unread" class="thread-pill__badge">{{ entry.thread.unread }} new</span>
+          <span class="thread-pill__summary">{{ entry.thread.gist || entry.thread.preview || 'Conversation' }}</span>
+          <span class="thread-pill__chevron" aria-hidden="true">›</span>
         </button>
       </div>
     </template>
@@ -223,7 +215,7 @@ onBeforeUnmount(() => {
   align-items: center;
   gap: 9px;
   max-width: 100%;
-  padding: 6px 12px 6px 7px;
+  padding: 6px 11px;
   border-radius: 11px;
   background: var(--bg-surface-2);
   border: 1px solid var(--border-strong);
@@ -240,34 +232,26 @@ onBeforeUnmount(() => {
   opacity: 0.6;
 }
 
-.thread-pill--new { border-color: color-mix(in oklab, var(--status-main) 40%, transparent); }
+.thread-pill--working { border-color: color-mix(in oklab, var(--status-main) 45%, transparent); }
+.thread-pill--done { border-color: color-mix(in oklab, var(--cyan) 45%, transparent); }
 .thread-pill--thread { border-color: color-mix(in oklab, var(--violet) 35%, transparent); }
 
-.thread-pill__icon {
-  flex-shrink: 0;
-  width: 22px;
-  height: 22px;
-  border-radius: 7px;
-  display: grid;
-  place-items: center;
-  background: color-mix(in oklab, var(--violet) 18%, transparent);
-  color: var(--violet-light);
-}
-
-.thread-pill__label {
-  flex-shrink: 0;
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--text-primary);
-}
-
 .thread-pill__summary {
+  flex: 1 1 auto;
   min-width: 0;
   font-size: 13px;
   color: var(--text-tertiary);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.thread-pill__chevron {
+  flex-shrink: 0;
+  font-size: 15px;
+  line-height: 1;
+  color: var(--text-primary);
+  opacity: 0.35;
 }
 
 .thread-pill__dot {
@@ -277,10 +261,16 @@ onBeforeUnmount(() => {
   border-radius: 50%;
 }
 
-/* Inline (in-pill) the unread dot is the muted rose — NOT the bright magenta;
-   that glow is reserved for the activity rail / search dots. */
-.thread-pill--new .thread-pill__dot {
+/* Live Activity: pink (working) pulses while the reply streams, blue (done) is a
+   steady standing marker until the thread is opened. */
+.thread-pill--working .thread-pill__dot {
   background: var(--status-main);
+  box-shadow: 0 0 8px color-mix(in oklab, var(--status-main) 45%, transparent);
+}
+
+.thread-pill--done .thread-pill__dot {
+  background: var(--cyan);
+  box-shadow: 0 0 8px color-mix(in oklab, var(--cyan) 45%, transparent);
 }
 
 .thread-pill--thread .thread-pill__dot {
@@ -291,15 +281,5 @@ onBeforeUnmount(() => {
 .thread-pill--idle .thread-pill__dot {
   background: transparent;
   border: 1.5px solid color-mix(in oklab, var(--text-primary) 30%, transparent);
-}
-
-.thread-pill__badge {
-  flex-shrink: 0;
-  font-size: 10px;
-  font-weight: 600;
-  padding: 1px 7px;
-  border-radius: 9px;
-  background: color-mix(in oklab, var(--status-main) 16%, transparent);
-  color: color-mix(in oklab, var(--status-main) 70%, var(--text-primary));
 }
 </style>

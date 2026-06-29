@@ -34,22 +34,22 @@ export interface WatchedFolder {
 
 export const documents = {
   list(includeDeleted = false): Promise<{ items: Document[] }> {
-    return api.get(includeDeleted ? '/documents?include_deleted=true' : '/documents');
+    return api.get(includeDeleted ? '/api/documents?include_deleted=true' : '/api/documents');
   },
 
   watchedFolders(): Promise<{ items: WatchedFolder[] }> {
-    return api.get('/documents/watched-folders');
+    return api.get('/api/documents/watched-folders');
   },
 
   get(id: string | number): Promise<{ item: Document }> {
-    return api.get(`/documents/${id}`);
+    return api.get(`/api/documents/${id}`);
   },
 
   delete(id: string | number): Promise<unknown> {
-    return api.del(`/documents/${id}`);
+    return api.del(`/api/documents/${id}`);
   },
 
   upload(formData: FormData): Promise<unknown> {
-    return api.upload('/documents/upload', formData);
+    return api.upload('/api/documents/upload', formData);
   },
 };

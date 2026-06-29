@@ -10,7 +10,7 @@ let _redirected = false;
 async function _checkSession(): Promise<void> {
   if (_redirected) return;
   try {
-    const res = await fetch('/auth/status', { credentials: 'same-origin' });
+    const res = await fetch('/api/auth/status', { credentials: 'same-origin' });
     if (!res.ok) return;
     const data = (await res.json()) as {
       has_master_account: boolean;

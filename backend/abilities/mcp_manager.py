@@ -91,6 +91,17 @@ class McpManagerAbility(Ability):
     def get_search_tooltip(self) -> str:
         return "connect to a remote MCP server"
 
+    def get_follow_up(self, tr: ToolResult) -> str:
+        """Steer a just-connected server's remote tools into context via find_tools."""
+        body = tr.body if isinstance(tr.body, dict) else {}
+        if body.get("status") != "online":
+            return ""
+        name = body.get("name")
+        return (
+            f"`{name}` is now available. Call `find_tools` with `{name}` and the "
+            "action you want to perform to get its tools in context."
+        )
+
     _PARAMETERS: ClassVar[dict[str, object]] = {
         "type": "object",
         "properties": {

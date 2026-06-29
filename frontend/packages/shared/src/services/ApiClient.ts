@@ -159,6 +159,6 @@ export class ApiClient {
       .catch(() => ({ ready: false }));
   }
   getSetting(key: string): Promise<{ key: string; value: string | null }> {
-    return this.get(`/system/settings/${encodeURIComponent(key)}`);
+    return this.get(`/api/system/settings/${encodeURIComponent(key)}`);
   }
 }

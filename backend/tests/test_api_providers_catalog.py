@@ -46,7 +46,7 @@ class TestProviderCatalog:
     def test_catalog_is_a_curated_preset_list_not_the_full_dump(self, authed_client: tuple[FlaskClient, sqlite3.Connection, object]) -> None:
         client, _db, _store = authed_client
 
-        resp = client.get('/providers/catalog')
+        resp = client.get('/api/providers/catalog')
 
         assert resp.status_code == 200
         body = resp.get_json()
@@ -69,7 +69,7 @@ class TestProviderCatalog:
     def test_named_presets_prefill_the_right_platform_and_host(self, authed_client: tuple[FlaskClient, sqlite3.Connection, object]) -> None:
         client, _db, _store = authed_client
 
-        catalog = client.get('/providers/catalog').get_json()['catalog']
+        catalog = client.get('/api/providers/catalog').get_json()['catalog']
         by_id = {p['id']: p for p in catalog}
 
         # MiniMax is the spec's worked example: OpenAI-compatible, host pre-filled.
@@ -102,7 +102,7 @@ class TestProviderCatalog:
         to a static model list."""
         client, _db, _store = authed_client
 
-        resp = client.post('/providers/list-models', json={'platform': 'deepseek'})
+        resp = client.post('/api/providers/list-models', json={'platform': 'deepseek'})
 
         assert resp.status_code == 400
         body = resp.get_json()
@@ -114,11 +114,11 @@ class TestProviderCatalog:
         _unlock_vault()
 
         preset = next(
-            p for p in client.get('/providers/catalog').get_json()['catalog']
+            p for p in client.get('/api/providers/catalog').get_json()['catalog']
             if p['id'] == 'minimax'
         )
 
-        create = client.post('/providers', json={
+        create = client.post('/api/providers', json={
             'name': 'My MiniMax',
             'platform': preset['platform'],   # 'openai_compatible'
             'host': preset['host'],           # pre-filled base URL
@@ -128,10 +128,10 @@ class TestProviderCatalog:
         assert create.status_code == 201, create.get_json()
 
         # Cross-step proof: the host the preset pre-filled survived to the DB and
-        # is read back on the listing (api_key is redacted, never echoed raw).
-        listed = client.get('/providers').get_json()['providers']
+        # is read back on the listing (api_key is write-only, never on the read shape).
+        listed = client.get('/api/providers').get_json()
         row = next(p for p in listed if p['name'] == 'My MiniMax')
         assert row['platform'] == 'openai_compatible'
         assert row['host'] == 'https://api.minimax.io/v1'
         assert row['model'] == 'MiniMax-M2'
-        assert row['api_key'] in (None, '***')
+        assert 'api_key' not in row

@@ -313,7 +313,7 @@ export class WebSocketService {
   sendAction(payload: unknown, callbacks: ActionCallbacks = {}): void {
     this.chatCallbacks = callbacks;
     const start = Date.now();
-    fetch(this.buildHttpUrl('/action'), {
+    fetch(this.buildHttpUrl('/api/action'), {
       method: 'POST',
       credentials: 'same-origin',
       headers: { 'Content-Type': 'application/json', ...this.authHeaders() },

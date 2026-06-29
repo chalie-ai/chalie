@@ -24,13 +24,13 @@ from pathlib import Path
 from typing import cast
 
 import pytest
-from flask import Flask
 from flask.testing import FlaskClient
 from werkzeug.security import generate_password_hash
+from tests.restx_test_app import mount_namespace
 
 import services.database_service as _db_mod
 import services.vault_service as _vault_mod
-from api.user_auth import user_auth_bp
+from api.user_auth import user_auth_ns
 from services.database_service import DatabaseService
 from services.file_mapper_service import FileMapperService
 from services.vault_service import _vault_state
@@ -80,10 +80,9 @@ def redirect_backup_paths(secure_dir: Path, monkeypatch: pytest.MonkeyPatch) -> 
 
 @pytest.fixture
 def auth_client(db: sqlite3.Connection, store: object, redirect_backup_paths: None) -> Iterator[tuple[FlaskClient, sqlite3.Connection]]:
-    app = Flask(__name__)
+    app = mount_namespace(user_auth_ns)
     app.secret_key = secrets.token_hex(32)
     app.config["TESTING"] = True
-    app.register_blueprint(user_auth_bp)
     with app.test_client() as client:
         yield client, db
 
@@ -171,7 +170,7 @@ class TestVaultRestore:
 
         # Login — should restore from the retained backup
         resp = client.post(
-            "/auth/login",
+            "/api/auth/login",
             json={"username": "admin", "password": pw},
             content_type="application/json",
         )
@@ -217,7 +216,7 @@ class TestVaultRestore:
         raw_conn.commit()
 
         resp = client.post(
-            "/auth/login",
+            "/api/auth/login",
             json={"username": "admin", "password": pw},
             content_type="application/json",
         )
@@ -266,7 +265,7 @@ class TestVaultUnrecoverable:
         raw_conn.commit()
 
         resp = client.post(
-            "/auth/login",
+            "/api/auth/login",
             json={"username": "admin", "password": pw},
             content_type="application/json",
         )

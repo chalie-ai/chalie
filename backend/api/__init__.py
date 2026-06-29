@@ -1,6 +1,6 @@
 """
-REST API package — Flask app factory with Blueprint registration, WebSocket,
-and static file serving (replaces nginx).
+REST API package — Flask-RESTx app factory with Namespace auto-discovery,
+WebSocket, and static file serving (replaces nginx).
 """
 
 import importlib
@@ -11,6 +11,7 @@ from pathlib import Path
 from flask import Flask, Blueprint, Response, redirect, send_from_directory
 from flask.typing import ResponseReturnValue
 from flask_cors import CORS
+from flask_restx import Api, Namespace
 
 from services.file_mapper_service import FileMapperService
 from .auth import require_session as require_session
@@ -43,13 +44,12 @@ mimetypes.add_type('text/css', '.css')
 mimetypes.add_type('text/html', '.html')
 
 
-def _register_blueprints(app: Flask) -> None:
-    """Auto-discover and register every Blueprint defined in this package.
+def _register_namespaces(app: Flask, api: Api) -> None:
+    """Auto-discover and register every Namespace defined in this package.
 
-    Walks `backend/api/*.py`, imports each module, and registers any top-level
-    `Blueprint` instance it exposes. Modules without a Blueprint (e.g. `auth`,
-    `websocket`) are skipped silently. Drop a new `foo.py` exposing `foo_bp`
-    in this folder and it lights up on next boot — no edits here required.
+    Walks ``backend/api/*.py``, imports each module, and registers any top-level
+    ``Namespace`` instance on the given ``Api`` object. Modules without a
+    Namespace (e.g. ``auth``, ``websocket``) are skipped silently.
     """
     package = importlib.import_module(__name__)
     seen: set[int] = set()
@@ -58,21 +58,70 @@ def _register_blueprints(app: Flask) -> None:
             continue
         module = importlib.import_module(f"{__name__}.{module_info.name}")
         for attr_name, attr in vars(module).items():
-            if not isinstance(attr, Blueprint) or id(attr) in seen:
-                continue
-            app.register_blueprint(attr)
-            seen.add(id(attr))
-            logger.info("[REST API] Registered %s.%s", module_info.name, attr_name)
+            if isinstance(attr, Namespace) and id(attr) not in seen:
+                api.add_namespace(attr)
+                seen.add(id(attr))
+                logger.info("[REST API] Registered %s.%s", module_info.name, attr_name)
+        # Also register plain Blueprints (gateway etc.) that are not Namespaces
+        for attr_name, attr in vars(module).items():
+            if isinstance(attr, Blueprint) and not isinstance(attr, Namespace) and id(attr) not in seen:
+                app.register_blueprint(attr)
+                seen.add(id(attr))
+                logger.info("[REST API] Registered blueprint %s.%s", module_info.name, attr_name)
+
+    # api.init_app() is deferred to create_app(): RESTx registers its own root
+    # '/' route during init, which would shadow the SPA's '/' handler. Init must
+    # run AFTER the static routes so the SPA wins the '/' match.
+
+
+_SECURITY_HEADERS = {
+    "X-Content-Type-Options": "nosniff",
+    "X-Frame-Options": "SAMEORIGIN",
+    "Referrer-Policy": "strict-origin-when-cross-origin",
+}
+"""Baseline hardening stamped on every response — blocks MIME-sniffing, cross-origin framing, and referrer leakage."""
+
+
+def _deployment_origins() -> list[str]:
+    """Cross-origin allowlist = the configured deployment domain (both schemes).
+
+    Blank/unset → empty list, i.e. same-origin only (browsers do not enforce CORS
+    on same-origin requests). Resolved once at app construction; the System page
+    persists a domain change and restarts, so the new policy is read on next boot.
+    """
+    try:
+        from services.settings_service import SettingsService
+        from services.database_service import get_shared_db_service
+        domain = (SettingsService(get_shared_db_service()).get(SettingsService.DEPLOYMENT_DOMAIN) or "").strip()
+    except Exception as exc:
+        logger.warning("[REST API] deployment_domain unreadable; CORS limited to same-origin: %s", exc)
+        return []
+    return [f"https://{domain}", f"http://{domain}"] if domain else []
 
 
 def _configure_app(app: Flask) -> None:
-    """Apply Flask config, proxy middleware, and CORS to a new app instance."""
+    """Apply Flask config, proxy middleware, CORS, and baseline security headers to a new app instance."""
     app.config['MAX_CONTENT_LENGTH'] = 50 * 1024 * 1024
+    # Emit every registered DTO in the OpenAPI definitions; nested-envelope
+    # shapes (a list of associations inside a result DTO) otherwise dangle.
+    app.config['RESTX_INCLUDE_ALL_MODELS'] = True
 
     from werkzeug.middleware.proxy_fix import ProxyFix
     setattr(app, 'wsgi_app', ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_prefix=1))
 
-    CORS(app)
+    CORS(app, origins=_deployment_origins(), supports_credentials=True)
+
+    @app.after_request
+    def _apply_security_headers(response: Response) -> Response:
+        """Stamp the baseline security headers on every response; JSON payloads
+        also get ``no-store`` so sensitive API data is never cached downstream.
+        ``setdefault`` lets a route's own explicit header (e.g. the SPA index's
+        ``no-cache``) win."""
+        for header, value in _SECURITY_HEADERS.items():
+            response.headers.setdefault(header, value)
+        if response.mimetype == "application/json":
+            response.headers.setdefault("Cache-Control", "no-store")
+        return response
 
 
 def _register_static_routes(app: Flask) -> None:
@@ -184,11 +233,21 @@ def _register_static_routes(app: Flask) -> None:
 
 
 def create_app() -> Flask:
-    """Create and configure Flask application with all blueprints."""
+    """Create and configure Flask application with all namespaces and routes."""
     app = Flask(__name__)
 
+    # A fresh Api per app keeps create_app() a true factory: the test suite
+    # builds many apps, and a module-level Api would re-register routes onto an
+    # already-served app (Flask forbids add_url_rule after the first request).
+    api = Api(
+        title="Chalie API",
+        version="1.0",
+        description="REST API for the Chalie personal intelligence layer",
+        doc="/swagger/",
+    )
+
     _configure_app(app)
-    _register_blueprints(app)
+    _register_namespaces(app, api)
 
     # WebSocket endpoint (replaces SSE for chat + drift)
     from flask_sock import Sock
@@ -199,5 +258,9 @@ def create_app() -> Flask:
     # ── Static file serving (replaces nginx) ─────────────────────────
     _register_static_routes(app)
 
-    logger.info("[REST API] All blueprints + WebSocket + static serving registered")
+    # Flush RESTx namespaces onto the app LAST so its root '/' route is added
+    # after the SPA '/' handler — the SPA must win the '/' match (see above).
+    api.init_app(app)
+
+    logger.info("[REST API] All namespaces + WebSocket + static serving registered")
     return app

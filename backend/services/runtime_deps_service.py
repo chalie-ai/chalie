@@ -47,7 +47,7 @@ class RuntimeDepsService:
         thread imports onnxruntime, so embeddings, classifiers and voice all import
         a working runtime. The fallback is loud, never silent: the diagnosis and
         remediation hint are logged at ERROR level so they surface in the
-        Cognition → Errors panel (``GET /system/observability/errors`` only shows
+        Cognition → Errors panel (``GET /api/system/observability/errors`` only shows
         ERROR/CRITICAL). A no-op when the import already succeeds.
         """
         if cls._onnxruntime_status != "unknown":

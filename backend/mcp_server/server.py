@@ -223,8 +223,6 @@ def _ensure_mcp_token(db: DatabaseService) -> None:
     try:
         raw_token, wrapper_id = auth_svc.create_token(
             name="MCP Server (External Agents)",
-            capabilities={"signals": [], "intents": ["talk_to_chalie"]},
-            permissions={"query": ["*"], "update": ["*"], "broadcast": False},
             wrapper_id_override="__mcp_server__",
         )
     except sqlite3.IntegrityError:
