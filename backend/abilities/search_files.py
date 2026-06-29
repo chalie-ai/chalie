@@ -80,7 +80,8 @@ class SearchFilesAbility(Ability):
         return (
             "Locate files on disk by filename pattern (glob) or by content (grep). "
             "Use this BEFORE reaching for bash when you need to find a file you "
-            "don't already know the path of."
+            "don't already know the path of. Use in conjunction with the `read` "
+            "tool to then get a located file's contents into context."
         )
 
     def get_examples(self) -> list[str]:

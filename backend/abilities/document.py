@@ -87,6 +87,10 @@ class DocumentAbility(Ability):
     def get_search_tooltip(self) -> str:
         return "document and notes manager"
 
+    def get_follow_up(self, tr: ToolResult) -> str:
+        """Point the model to view a document's full text by id."""
+        return "search and list only return document ids, names and snippets, not full text. If you need the actual content of a result, call document again with action=view and that id."
+
     def get_parameters(self) -> dict[str, object]:
         return self._PARAMETERS
 

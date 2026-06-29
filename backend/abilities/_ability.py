@@ -142,6 +142,9 @@ class Ability(ABC):
             )
         if cls.__module__.startswith("abilities.") and not probe.get_search_tooltip():
             raise TypeError(f"{cls.__name__}.get_search_tooltip() must be non-empty")
+        follow_up = probe.get_follow_up(ToolResult.ok(""))
+        if not isinstance(follow_up, str):
+            raise TypeError(f"{cls.__name__}.get_follow_up() must return str")
 
     # ── Metadata getters — every concrete ability implements all five ──────────
 
@@ -164,6 +167,27 @@ class Ability(ABC):
     @abstractmethod
     def get_search_tooltip(self) -> str:
         ...
+
+    def get_follow_up(self, tr: "ToolResult") -> str:
+        """A standing next-step nudge appended to this tool's SUCCESSFUL result.
+
+        Default ``""`` — no nudge. Override on a tool whose success routinely leaves
+        the model one obvious, loop-safe step short of a complete answer
+        (search→read, find_tools→call the activated tool): return a short
+        instruction and the dispatcher wraps it in a
+        ``[follow_up_instruction]…[end:follow_up_instruction]`` block placed INSIDE
+        the envelope (after any rich-media block, before the closing
+        ``[end:tool]``), on success only.
+
+        ``tr`` is the SUCCESS :class:`ToolResult` being rendered, so an override can
+        interpolate live values straight from the result the model already sees
+        (the downloaded ``path``, the activated tool ``name``, the anchor
+        ``date_time``) — present-in-context data lifts compliance over a generic
+        nudge. An override that needs data the result lacks MUST degrade to ``""``;
+        it is probed at import on an empty ``ToolResult`` and so must never assume a
+        shape. No ``self.mp`` — the nudge is request-agnostic.
+        """
+        return ""
 
     @abstractmethod
     def get_parameters(self) -> dict[str, object]:

@@ -33,7 +33,7 @@ from typing import cast
 
 import pytest
 
-from api.conversation import serialize_turn
+from api.threads import serialize_turn
 from configs.channels import UserConfig
 from services import compaction_persistence
 from services.act_trail import ActTrail

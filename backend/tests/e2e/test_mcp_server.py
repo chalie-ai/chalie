@@ -38,8 +38,6 @@ def _patch_db(tmp_path_factory: pytest.TempPathFactory) -> Iterator[object]:
             name TEXT NOT NULL,
             token_hash TEXT NOT NULL UNIQUE,
             wrapper_id TEXT NOT NULL UNIQUE,
-            capabilities TEXT NOT NULL DEFAULT '{}',
-            permissions TEXT NOT NULL DEFAULT '{}',
             metadata TEXT NOT NULL DEFAULT '{}',
             last_seen_at TEXT,
             created_at TEXT NOT NULL,

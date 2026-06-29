@@ -9,7 +9,7 @@ if TYPE_CHECKING:
 
 
 class SkillSuggestionConfig(ProcessorConfig):
-    """§3a / AC-26 — suppress_history=True replaces the old"""
+    """Skill-suggestion channel — suppress_history=True (no prior-turn history)."""
 
     def __init__(self) -> None:
         super().__init__(

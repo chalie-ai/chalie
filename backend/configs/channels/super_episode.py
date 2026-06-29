@@ -9,7 +9,7 @@ if TYPE_CHECKING:
     from services.message_processor import MessageProcessor
 
 # ── Super-episode helper functions ───────────────────────────────────────────
-# Moved here from services/super_episode_encoder_processor.py (§1 "Killed" table).
+# Moved here from services/super_episode_encoder_processor.py.
 # subconscious_worker imports these from this module.
 
 _SUPER_EP_LOG_PREFIX = "[SUPER_EP]"
@@ -112,10 +112,10 @@ if TYPE_CHECKING:
 
 
 class SuperEpisodeConfig(ProcessorConfig):
-    """§3b / O2 — post_turn_hooks = () (caller owns the episode write).
+    """post_turn_hooks = () (caller owns the episode write).
 
     sources and spans are captured at construction so get_user_prompt is
-    self-contained per cluster (§3c: cluster loop moves to caller). The
+    self-contained per cluster (the cluster loop lives in the caller). The
     ``channel`` arg is the user channel being consolidated; the processor's
     transcript channel is always 'super_episode_encoder'.
     """

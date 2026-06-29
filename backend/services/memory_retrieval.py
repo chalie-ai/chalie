@@ -6,8 +6,7 @@ handlers here. This module owns everything non-ability — the
 store/recall/reflect/forget handlers, the episode recall engine, the
 data-graph search, the reflection layer expansion, response formatting,
 and recall telemetry — so the same engine is reachable from non-ability
-callers (e.g. the ``/api/updates/memory`` REST endpoint) without
-importing an ability.
+callers without importing an ability.
 
 Every handler returns an ``abilities._result.ToolResult`` — never a
 string. ``recall`` returns a STRUCTURED body

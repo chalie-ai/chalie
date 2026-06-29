@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING, cast
 from utils.logger import Logger
 
 if TYPE_CHECKING:
+    import ssl
     from services.embedding_service import EmbeddingService
     from services.onnx_inference_service import OnnxInferenceService
     from services.database_service import DatabaseService
@@ -338,10 +339,53 @@ def _register_workers(manager: "_WorkerManager", host: str, port: int) -> None:
     def _flask_worker() -> None:
         from api import create_app
         app = create_app()
-        logger.info(f"[Chalie] Starting on http://{host}:{port}")
-        app.run(host=host, port=port, debug=False, threaded=True)
+        ssl_context = _resolve_ssl_context()
+        scheme = "https" if ssl_context else "http"
+        logger.info(f"[Chalie] Starting on {scheme}://{host}:{port}")
+        app.run(host=host, port=port, debug=False, threaded=True, ssl_context=ssl_context)
 
     manager.register_service("rest-api-worker-1", _flask_worker)
+
+
+def _disable_ssl_setting() -> None:
+    """Clear ``ssl_enabled`` after a TLS fallback so the cookie Secure-scope tracks the real scheme.
+
+    Without this a vanished cert leaves ``ssl_enabled=true`` in the DB while the
+    server runs HTTP — issuing ``Secure`` cookies the browser drops, locking out login.
+    """
+    try:
+        from services.settings_service import SettingsService
+        from services.database_service import get_shared_db_service
+        SettingsService(get_shared_db_service()).set_bool(SettingsService.SSL_ENABLED, False)
+    except Exception as exc:
+        logger.error("[SSL] could not clear ssl_enabled after TLS fallback: %s", exc)
+
+
+def _resolve_ssl_context() -> "ssl.SSLContext | None":
+    """Build the server TLS context when SSL is enabled and a valid cert/key exist.
+
+    Returns ``None`` (plain HTTP) when SSL is off. If SSL is enabled but the cert/key
+    are missing or fail to load, clears ``ssl_enabled`` and serves HTTP — degrading
+    rather than crash-looping, and keeping the cookie Secure-scope honest.
+    """
+    try:
+        from services.settings_service import SettingsService
+        from services.database_service import get_shared_db_service
+        if not SettingsService(get_shared_db_service()).get_bool(SettingsService.SSL_ENABLED):
+            return None
+        from services.file_mapper_service import FileMapperService
+        cert = FileMapperService.get_ssl_cert_path()
+        key = FileMapperService.get_ssl_key_path()
+        if cert.is_file() and key.is_file():
+            import ssl
+            context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+            context.load_cert_chain(str(cert), str(key))
+            return context
+        logger.warning("[SSL] enabled but certificate/key missing — disabling SSL, serving HTTP")
+    except Exception as exc:
+        logger.error("[SSL] context load failed — disabling SSL, serving HTTP: %s", exc)
+    _disable_ssl_setting()
+    return None
 
 
 def _check_asset_caches() -> None:

@@ -13,7 +13,7 @@ import logging
 from collections.abc import Callable
 from typing import TYPE_CHECKING
 from functools import wraps
-from flask import request, jsonify, g, abort
+from flask import request, g, abort
 
 from services.feature_flags import internal_dev_enabled
 
@@ -70,7 +70,7 @@ def require_auth(f: Callable[..., "ResponseReturnValue"]) -> Callable[..., "Resp
         except Exception as e:
             logger.debug("[Auth] Bearer token validation failed: %s", e)
 
-        return jsonify({"error": "Authentication required"}), 401
+        return {"error": "Authentication required"}, 401
 
     return decorated
 
@@ -87,7 +87,7 @@ def _cookie_only(f: Callable[..., "ResponseReturnValue"]) -> Callable[..., "Resp
     @wraps(f)
     def decorated(*args: object, **kwargs: object) -> "ResponseReturnValue":
         if getattr(g, "wrapper_id", None) is not None:
-            return jsonify({"error": "This action requires cookie session auth"}), 403
+            return {"error": "This action requires cookie session auth"}, 403
         return f(*args, **kwargs)
 
     return decorated

@@ -19,7 +19,7 @@ if TYPE_CHECKING:
 # sees the episode and the top-N data_graph rows that are already most similar
 # to it, then emits EXACTLY ONE JSON object describing the ops to apply.
 #
-# The interface is identical across every model tier (§4.6.5): the same prompt,
+# The interface is identical across every model tier: the same prompt,
 # the same op enum, the same JSON envelope. A stronger model makes better calls;
 # the contract never branches. Unparseable output is the caller's NOOP-safe
 # default — this module never writes; it only produces text for the worker.

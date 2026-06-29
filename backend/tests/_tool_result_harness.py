@@ -47,10 +47,16 @@ def head(rendered: str, tool: str) -> str:
 
 
 def body(rendered: str, tool: str, rich: bool = False) -> str:
-    """With ``rich=True`` return only the JSON head before the blank line (the"""
+    """With ``rich=True`` return only the JSON head before the blank line (the
+    card payload); otherwise the full body between the head and ``[end:<tool>]``,
+    with any follow-up instruction block stripped — the block is a standing
+    nudge appended on success, not part of the structured payload tests assert
+    on."""
     start = rendered.index("]\n") + 2
     end = rendered.index(f"\n[end:{tool}]")
     text = rendered[start:end]
+    if "[follow_up_instruction]" in text:
+        text = text.split("\n[follow_up_instruction]", 1)[0]
     if rich:
         return text.split("\n\n", 1)[0]
     return text

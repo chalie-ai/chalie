@@ -128,10 +128,10 @@ class TestProviderCatalog:
         assert create.status_code == 201, create.get_json()
 
         # Cross-step proof: the host the preset pre-filled survived to the DB and
-        # is read back on the listing (api_key is redacted, never echoed raw).
-        listed = client.get('/providers').get_json()['providers']
+        # is read back on the listing (api_key is write-only, never on the read shape).
+        listed = client.get('/providers').get_json()
         row = next(p for p in listed if p['name'] == 'My MiniMax')
         assert row['platform'] == 'openai_compatible'
         assert row['host'] == 'https://api.minimax.io/v1'
         assert row['model'] == 'MiniMax-M2'
-        assert row['api_key'] in (None, '***')
+        assert 'api_key' not in row

@@ -8,14 +8,14 @@
 
 """WebSearchAbility — delegate a web-research task to a focused search agent.
 
-The foundational delegate-tool template (spec §5b / §10f).  A delegate
+The foundational delegate-tool template.  A delegate
 tool is a standalone Ability that pairs with a typed ``ProcessorConfig``
 subclass (``WebSearchConfig``, in ``configs/channels/web_search.py`` with the
 other channel configs).  ``run()`` instantiates the subclass and calls
 ``MessageProcessor.process()`` — there is no MessageProcessor subclass, no
 SUBAGENT_TYPES registry, and no make_subagent_config() factory.
 
-Properties (spec §5b "Properties of every delegate tool"):
+Properties of every delegate tool:
   - Clean context — skip_transcript / skip_input_row / suppress_history all True,
     no personality, no history, no world state.
   - Goal-driven system prompt — short, task-specific.

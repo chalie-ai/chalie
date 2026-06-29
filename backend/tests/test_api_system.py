@@ -4,10 +4,10 @@ from collections.abc import Iterator
 import pytest
 from unittest.mock import patch, MagicMock
 
-from flask import Flask
 from flask.testing import FlaskClient
-from api.system import system_bp
+from api.system import system_ns
 from services import compaction_persistence
+from tests.restx_test_app import mount_namespace
 from services.memory_store import MemoryStore
 
 
@@ -16,8 +16,7 @@ class TestSystemAPI:
 
     @pytest.fixture
     def client(self) -> FlaskClient:
-        app = Flask(__name__)
-        app.register_blueprint(system_bp)
+        app = mount_namespace(system_ns)
         app.config['TESTING'] = True
         return app.test_client()
 

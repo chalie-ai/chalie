@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import os
 import sqlite3
+import tempfile
 from typing import cast
 
 import pytest
@@ -73,10 +75,24 @@ def test_post_turn_hook_clears_the_ledger(db: sqlite3.Connection) -> None:
 def test_screenshot_doc_ids_survive_session_close_into_the_callers_answer(db: sqlite3.Connection) -> None:
     from abilities._delegate import delegate_result
     from abilities.web_browse import WebBrowseAbility
+    from services.database_service import get_shared_db_service
+    from services.document_service import DocumentService
 
     mp = _mp()
     cfg = cast(WebBrowseConfig, mp.config)
     uid = cast(int, mp.uid)
+
+    # Ingest already ran the capture through vision and stored the description as
+    # the document's clean_text — seed that exact state so we can assert it rides
+    # back inline (the agent sees the page without a separate vision call).
+    doc_svc = DocumentService(get_shared_db_service())
+    doc_svc.create_document(
+        "screenshot-example.png", "image/png", 10,
+        os.path.join(tempfile.gettempdir(), "x.png"), "deadbeef",
+        source_type="screenshot", doc_id="ab12cd34",
+    )
+    doc_svc.update_clean_text("ab12cd34", "The page header reads Example Domain.")
+
     record_screenshot(uid, "ab12cd34", "https://example.com")
     cfg.post_turn_hooks[0].run(mp, "final answer")
 
@@ -92,7 +108,9 @@ def test_screenshot_doc_ids_survive_session_close_into_the_callers_answer(db: sq
     assert tr.status == "success"
     assert "The page shows Example Domain." in tr.body
     assert "doc_id=ab12cd34" in tr.body
-    assert "vision" in tr.body
+    assert "https://example.com" in tr.body
+    # The stored vision description rides back inline — no separate vision call.
+    assert "The page header reads Example Domain." in tr.body
     assert tr.meta == {"screenshots": 1}
 
     # A delegate that died without an answer keeps its canonical error shape —

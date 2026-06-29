@@ -35,7 +35,7 @@ def _mk(svc: ProviderDbService, name: str, model: str, host: str) -> int:
 
 
 def _provider_ids(client: "FlaskClient") -> list[object]:
-    return [p["id"] for p in client.get("/providers").get_json()["providers"]]
+    return [p["id"] for p in client.get("/providers").get_json()]
 
 
 # ── Through the real HTTP route ───────────────────────────────────────────────
@@ -50,7 +50,7 @@ def test_cannot_delete_main_provider_returns_409(authed_client: "tuple[FlaskClie
               "host": "http://127.0.0.1:2"},
     )
     assert created.status_code == 201, created.get_data(as_text=True)
-    main_id = created.get_json()["provider"]["id"]
+    main_id = created.get_json()["id"]
 
     resp = client.delete(f"/providers/{main_id}")
     assert resp.status_code == 409, resp.get_data(as_text=True)
@@ -70,7 +70,7 @@ def test_cannot_delete_delegate_provider_returns_409(authed_client: "tuple[Flask
         "/providers",
         json={"name": "Worker", "platform": "ollama", "model": "llama3",
               "host": "http://127.0.0.1:3"},
-    ).get_json()["provider"]["id"]
+    ).get_json()["id"]
 
     pin = client.put("/providers/delegate", json={"provider_id": worker})
     assert pin.status_code == 200, pin.get_data(as_text=True)
@@ -90,7 +90,7 @@ def test_provider_deletable_after_delegate_pin_cleared(authed_client: "tuple[Fla
         "/providers",
         json={"name": "Worker", "platform": "ollama", "model": "llama3",
               "host": "http://127.0.0.1:3"},
-    ).get_json()["provider"]["id"]
+    ).get_json()["id"]
     client.put("/providers/delegate", json={"provider_id": worker})
 
     # Blocked while pinned.
@@ -101,7 +101,7 @@ def test_provider_deletable_after_delegate_pin_cleared(authed_client: "tuple[Fla
     assert cleared.status_code == 200, cleared.get_data(as_text=True)
 
     resp = client.delete(f"/providers/{worker}")
-    assert resp.status_code == 200, resp.get_data(as_text=True)
+    assert resp.status_code == 204, resp.get_data(as_text=True)
     assert worker not in _provider_ids(client)
 
 
@@ -114,10 +114,10 @@ def test_can_delete_unassigned_provider(authed_client: "tuple[FlaskClient, objec
         "/providers",
         json={"name": "Spare", "platform": "ollama", "model": "phi3",
               "host": "http://127.0.0.1:5"},
-    ).get_json()["provider"]["id"]
+    ).get_json()["id"]
 
     resp = client.delete(f"/providers/{spare}")
-    assert resp.status_code == 200, resp.get_data(as_text=True)
+    assert resp.status_code == 204, resp.get_data(as_text=True)
     assert spare not in _provider_ids(client)
 
 

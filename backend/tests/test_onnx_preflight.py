@@ -20,11 +20,11 @@ from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
-from flask import Flask
 from flask.testing import FlaskClient
 
 import api.system as system_module
-from api.system import system_bp
+from api.system import system_ns
+from tests.restx_test_app import mount_namespace
 from services import embedding_service
 from services.runtime_deps_service import RuntimeDepsService
 from utils.logger import _ChalieJsonFormatter
@@ -73,8 +73,7 @@ def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[tuple[Fl
         "services.auth_session_service.validate_session",
         lambda *_a, **_k: True,
     )
-    app = Flask(__name__)
-    app.register_blueprint(system_bp)
+    app = mount_namespace(system_ns)
     app.config["TESTING"] = True
     with app.test_client() as tc:
         yield tc, log_file
@@ -86,7 +85,7 @@ class TestOnnxRuntimeHint:
 
     def test_libcudart_failure_yields_cuda_hint(self) -> None:
         hint = RuntimeDepsService._onnxruntime_hint_for(_LIBCUDART_ERR)
-        # The parsed CUDA major (spec §D) pinpoints the wheel↔host mismatch for the operator.
+        # The parsed CUDA major pinpoints the wheel↔host mismatch for the operator.
         assert "libcudart.so.13" in hint
         assert "CUDA 13" in hint
         assert "CPU" in hint  # tells the operator the automatic fallback runs on CPU

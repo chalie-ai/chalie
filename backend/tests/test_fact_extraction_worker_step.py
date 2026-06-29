@@ -395,7 +395,7 @@ def test_unparseable_model_output_is_noop_never_corruption(db: sqlite3.Connectio
     corrupting partial write or an exception that aborts the tick).
 
     The durable, refactor-safe assertions are the data effects. The per-step
-    counter (§4.6.3) surfaces in the step's return detail; we assert softly on
+    counter surfaces in the step's return detail; we assert softly on
     it without locking its exact phrasing.
     """
     before = db.execute("SELECT COUNT(*) FROM data_graph").fetchone()[0]

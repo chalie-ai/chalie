@@ -301,7 +301,7 @@ class TurnZeroFlashback:
         return "\n".join(sections)
 
     def _render_episode(self, ep: dict[str, object]) -> str:
-        """One episode as ``On <date>: <gist>`` (spec §4.5).
+        """One episode as ``On <date>: <gist>``.
 
         The gist is rendered in full — NO truncation (); newlines are
         collapsed to keep the bundle one line per episode, but no characters are

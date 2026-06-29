@@ -1,30 +1,31 @@
 """
-Chat API — HTTP endpoints for client→server communication.
+Chat API — HTTP turn-control and rich-card action endpoints.
 
 Routes:
   POST /chat/interrupt     — cooperatively cancel the active UMP turn. The
                              cancelled turn deletes its own transcript and
                              tool_call rows. Returns 200 always with JSON body.
+  GET  /chat/subagents/active — active async delegates for the Processes panel.
+  POST /chat/subagent/<sub_id>/stop — cooperatively cancel a running async
+                             delegate by its sub_id. Returns 200 always.
   POST /action             — receive a rich-card control click; dispatches via
                              ToolDispatcher.dispatch() and returns the result
                              synchronously in the response body (no WS frame).
-  POST /chat/subagent/<sub_id>/stop — cooperatively cancel a running async
-                             delegate by its sub_id. Returns 200 always.
 
 Send path:
   User messages are sent via POST /api/thread (new thread) or
-  POST /api/thread/<turn_id> (reply) — see api/conversation.py. Both return
-  201 with an empty body; the turn surfaces via WS signals → REST pull.
+  POST /api/thread/<turn_id> (reply) — see api/threads.py. Both return 201 with
+  an empty body; the turn surfaces via WS signals → REST pull.
 
 Design:
-  WS is receive-only push (server→client). All client→server requests use
-  HTTP. Mid-ACT user messages are handled by the frontend: POST /chat/interrupt
+  WS is receive-only push (server→client). All client→server requests use HTTP.
+  Mid-ACT user messages are handled by the frontend: POST /chat/interrupt
   cancels the active turn (which self-cleans its DB rows), then the frontend
   starts a fresh turn with the combined original+new message text.
 
   User-channel messages flow through MessageProcessor.process() with the
-  UserConfig ProcessorConfig subclass — no MessageProcessor subclass.
-  Live output is signal-only, gated by the config's BROADCASTS_STATE: the surface
+  UserConfig ProcessorConfig subclass — no MessageProcessor subclass. Live
+  output is signal-only, gated by the config's BROADCASTS_STATE: the surface
   holds no event memory and refetches turn blocks over REST. Every lifecycle
   signal (created/working/updated/done + the per-tool tool_called/tool_done
   timers) is emitted by MessageProcessor itself through its `broadcast`
@@ -38,10 +39,13 @@ import time
 import uuid
 from typing import TYPE_CHECKING, Sequence, cast
 
-from flask import Blueprint, jsonify, request
 from flask.typing import ResponseReturnValue
+from flask_restx import Namespace, Resource
 
 from .auth import require_auth
+from .dto import Error, expects, register_dto, responds
+from .dto.chat import ActionRequest, ActionResult
+from .dto.subagent import ActiveSubagents, Interrupted, SubagentStopResult
 from services.log_utils import safe
 from services.markup import sanitize
 from services.websocket_broker import WebSocketBroker
@@ -51,7 +55,17 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-chat_bp = Blueprint("chat", __name__)
+chat_ns = Namespace("chat", description="Chat turn control and rich-card actions", path="/")
+
+register_dto(chat_ns, ActionRequest, ActionResult, Interrupted, SubagentStopResult, ActiveSubagents, Error)
+
+_M = chat_ns.models
+
+
+def _error(message: str, status: int) -> ResponseReturnValue:
+    """Build a uniform non-2xx ``Error`` body carrying its own status code."""
+    return Error(error=message).model_dump(mode="json"), status
+
 
 # ── Active UMP turn tracking ─────────────────────────────────────────────────
 
@@ -244,9 +258,6 @@ def _start_turn(
     return request_id
 
 
-# ── HTTP endpoints ────────────────────────────────────────────────────────────
-
-
 def _stage_chat_uploads(files: Sequence[object]) -> list[object]:
     """Returns temp paths that _seed_turn_zero feeds to document.upload — which
     ingests by PATH, never bytes, so no file blob ever reaches the act-trail.
@@ -265,120 +276,137 @@ def _stage_chat_uploads(files: Sequence[object]) -> list[object]:
     return paths
 
 
-@chat_bp.route("/chat/interrupt", methods=["POST"])
-@require_auth
-def post_chat_interrupt() -> ResponseReturnValue:
-    """The cancelled turn deletes its own transcript and tool_call rows — no data persists for an interrupted turn.
-
-    Always returns HTTP 200.
-    """
+def _interrupt_active_turn() -> Interrupted:
+    """Cancel the active UMP turn if one is running; always a 200 ack."""
     proc = _get_active_ump()
     if proc is not None:
         proc.cancel()
         logger.info("[Chat API] Interrupt signal delivered to active UMP turn")
-        return jsonify({"ok": True, "interrupted": True}), 200
-    return jsonify({"ok": True, "reason": "no_active_turn"}), 200
+        return Interrupted(interrupted=True)
+    return Interrupted(reason="no_active_turn")
 
 
-@chat_bp.route("/chat/subagents/active", methods=["GET"])
-@require_auth
-def get_active_subagents() -> ResponseReturnValue:
-    """Hydrates the Processes panel on page load/reconnect, since WS push events
-    are missed while the client is disconnected. Each row carries the tool name,
-    the model's summary of what the delegate is doing, and when it started.
-    """
-    from services.async_delegate_runner import async_delegate_runner
-
-    return jsonify({"subagents": async_delegate_runner.active()}), 200
+# ── HTTP endpoints ────────────────────────────────────────────────────────────
 
 
-@chat_bp.route("/chat/subagent/<sub_id>/stop", methods=["POST"])
-@require_auth
-def post_subagent_stop(sub_id: str) -> ResponseReturnValue:
-    """Cooperatively cancel a running async delegate.
+@chat_ns.route("/chat/interrupt")
+class ChatInterruptResource(Resource):
+    @require_auth
+    @chat_ns.response(200, "OK", model=_M["Interrupted"])
+    @responds(Interrupted)
+    def post(self) -> Interrupted:
+        """The cancelled turn deletes its own transcript and tool_call rows — no data persists for an interrupted turn.
 
-    Delegates to async_delegate_runner.cancel(). The delegate's cancel_event
-    is set; the ACT loop exits at the next iteration boundary.
-
-    Always returns HTTP 200.
-
-    Response JSON:
-        {ok: true, cancelled: true}         — stop signal delivered
-        {ok: true, reason: "not_found"}     — sub_id not in active registry
-    """
-    from services.async_delegate_runner import async_delegate_runner
-
-    if async_delegate_runner.cancel(sub_id):
-        logger.info("[Chat API] Stop signal delivered to delegate %s", safe(sub_id[:8]))
-        return jsonify({"ok": True, "cancelled": True}), 200
-    return jsonify({"ok": True, "reason": "not_found"}), 200
+        Always returns HTTP 200.
+        """
+        return _interrupt_active_turn()
 
 
-@chat_bp.route("/action", methods=["POST"])
-@require_auth
-def post_action() -> ResponseReturnValue:
-    """Rich-card control dispatch — runs the skill and returns its result inline.
+@chat_ns.route("/chat/subagents/active")
+class ActiveSubagentsResource(Resource):
+    @require_auth
+    @chat_ns.response(200, "OK", model=_M["ActiveSubagents"])
+    @responds(ActiveSubagents)
+    def get(self) -> ActiveSubagents:
+        """Hydrates the Processes panel on page load/reconnect, since WS push events
+        are missed while the client is disconnected. Each row carries the tool name,
+        the model's summary of what the delegate is doing, and when it started.
+        """
+        from services.async_delegate_runner import async_delegate_runner  # noqa: PLC0415
 
-    A card action (checkbox, button) is a silent state mutation, not a conversation
-    turn: it never persists to the transcript and crosses no WS frame. The result
-    is returned synchronously so the calling card resolves its optimistic update
-    straight from the HTTP response — the WS bus stays signal-only."""
-    body = request.get_json(silent=True) or {}
-    skill = body.get("skill") or ""
-    if not skill:
-        return jsonify({"error": "Missing 'skill' in action payload"}), 400
+        return ActiveSubagents(subagents=async_delegate_runner.active())
 
-    action_start = time.time()
-    try:
-        from abilities._dispatcher import ToolDispatcher  # noqa: PLC0415
-        from services.processor_config import ProcessorConfig  # noqa: PLC0415
 
-        params = {k: v for k, v in body.items() if k != "skill"}
+@chat_ns.route("/chat/subagent/<sub_id>/stop")
+class SubagentStopResource(Resource):
+    @require_auth
+    @chat_ns.param("sub_id", "Async delegate id")
+    @chat_ns.response(200, "OK", model=_M["SubagentStopResult"])
+    @responds(SubagentStopResult)
+    def post(self, sub_id: str) -> SubagentStopResult:
+        """Cooperatively cancel a running async delegate.
 
-        # Build a minimal flat-path context for action-button dispatches.
-        # ToolDispatcher requires an mp-like object with config, uid,
-        # cancel_event.  broadcast_to=None keeps these dispatches silent.
-        # ProcessorConfig is abstract, so action-button dispatch needs a
-        # concrete subclass; no ACT loop runs here, so the three prompt
-        # builders are never invoked — they return "" to satisfy the base.
-        class _ActionButtonConfig(ProcessorConfig):
-            def __init__(self) -> None:
-                super().__init__(
-                    channel="action_button",
-                    role="action_button",
-                    policy_channel=ProcessorConfig.PolicyChannel.CHAT,
-                    always_available=[],
-                    skip_transcript=True,
-                    skip_input_row=True,
-                    suppress_history=True,
-                    broadcast_to=None,
-                    memory_seed=False,
-                )
+        Delegates to async_delegate_runner.cancel(). The delegate's cancel_event
+        is set; the ACT loop exits at the next iteration boundary.
 
-            def get_user_definition(self, mp: object) -> str:
-                return ""
+        Always returns HTTP 200.
+        """
+        from services.async_delegate_runner import async_delegate_runner  # noqa: PLC0415
 
-            def get_user_prompt(self, mp: object) -> str:
-                return ""
+        if async_delegate_runner.cancel(sub_id):
+            logger.info("[Chat API] Stop signal delivered to delegate %s", safe(sub_id[:8]))
+            return SubagentStopResult(cancelled=True)
+        return SubagentStopResult(reason="not_found")
 
-            def get_system_prompt(self, mp: object) -> str:
-                return ""
 
-        class _ActionCtx:
-            config = _ActionButtonConfig()
-            uid = None
-            cancel_event = threading.Event()
+@chat_ns.route("/action")
+class ActionResource(Resource):
+    @require_auth
+    @chat_ns.doc(
+        description=(
+            "Dispatches a rich-card control click via ToolDispatcher and returns the "
+            "result synchronously. A card action is a silent state mutation, not a "
+            "conversation turn: it never persists to the transcript and crosses no WS "
+            "frame, so the calling card resolves its optimistic update straight from "
+            "this HTTP response."
+        )
+    )
+    @chat_ns.expect(_M["ActionRequest"])
+    @chat_ns.response(200, "Action result", model=_M["ActionResult"])
+    @chat_ns.response(400, "Unknown skill", model=_M["Error"])
+    @chat_ns.response(422, "Validation failed", model=_M["Error"])
+    @chat_ns.response(500, "Action handler error", model=_M["Error"])
+    @responds(ActionResult, code=200)
+    @expects(ActionRequest)
+    def post(self, dto: ActionRequest) -> ActionResult | ResponseReturnValue:
+        """Run the skill and return its result inline — the WS bus stays signal-only."""
+        action_start = time.time()
+        try:
+            from abilities._dispatcher import ToolDispatcher  # noqa: PLC0415
+            from services.processor_config import ProcessorConfig  # noqa: PLC0415
 
-        result_text = ToolDispatcher(_ActionCtx()).dispatch(skill, params)
-        if result_text.startswith("Unknown tool:"):
-            return jsonify({"error": f"Unknown skill: {skill}"}), 400
+            # Build a minimal flat-path context for action-button dispatches.
+            # ToolDispatcher requires an mp-like object with config, uid,
+            # cancel_event. broadcast_to=None keeps these dispatches silent.
+            # ProcessorConfig is abstract, so action-button dispatch needs a
+            # concrete subclass; no ACT loop runs here, so the three prompt
+            # builders are never invoked — they return "" to satisfy the base.
+            class _ActionButtonConfig(ProcessorConfig):
+                def __init__(self) -> None:
+                    super().__init__(
+                        channel="action_button",
+                        role="action_button",
+                        policy_channel=ProcessorConfig.PolicyChannel.CHAT,
+                        always_available=[],
+                        skip_transcript=True,
+                        skip_input_row=True,
+                        suppress_history=True,
+                        broadcast_to=None,
+                        memory_seed=False,
+                    )
 
-        return jsonify({
-            "content": sanitize(result_text or "Done."),
-            "mode": "ACT",
-            "confidence": 0.95,
-            "duration_ms": int((time.time() - action_start) * 1000),
-        }), 200
-    except Exception as exc:
-        logger.exception("[Chat API] Action handler error: %s", exc)
-        return jsonify({"error": str(exc)}), 500
+                def get_user_definition(self, mp: object) -> str:
+                    return ""
+
+                def get_user_prompt(self, mp: object) -> str:
+                    return ""
+
+                def get_system_prompt(self, mp: object) -> str:
+                    return ""
+
+            class _ActionCtx:
+                config = _ActionButtonConfig()
+                uid = None
+                cancel_event = threading.Event()
+
+            result_text = ToolDispatcher(_ActionCtx()).dispatch(dto.skill, dto.params)
+            if result_text.startswith("Unknown tool:"):
+                return _error(f"Unknown skill: {dto.skill}", 400)
+
+            return ActionResult(
+                content=sanitize(result_text or "Done."),
+                duration_ms=int((time.time() - action_start) * 1000),
+            )
+        except Exception as exc:
+            logger.exception("[Chat API] Action handler error: %s", exc)
+            return _error(str(exc), 500)

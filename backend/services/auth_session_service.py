@@ -6,7 +6,6 @@ survives container restarts. Cookie: ``chalie_session`` (HTTP-only,
 SameSite=Lax).
 """
 import hashlib
-import os
 import secrets
 import logging
 
@@ -78,6 +77,17 @@ def _validate_session_in_sqlite(token: str) -> bool:
         return False
 
 
+def _cookie_secure() -> bool:
+    """Mark the session cookie ``Secure`` only when the deployment serves HTTPS.
+
+    Sourced from the ``ssl_enabled`` DB setting (the same flag that drives TLS
+    serving) so cookie scope tracks the wire scheme without any environment var.
+    """
+    from services.settings_service import SettingsService
+    from services.database_service import get_shared_db_service
+    return SettingsService(get_shared_db_service()).get_bool(SettingsService.SSL_ENABLED)
+
+
 def create_session(response: Response) -> str:
     """Generates a cryptographically secure random token, stores it in both
     MemoryStore (fast path) and SQLite (durable), and attaches the
@@ -90,14 +100,13 @@ def create_session(response: Response) -> str:
 
     _persist_session_to_sqlite(token)
 
-    secure = os.environ.get('COOKIE_SECURE', 'false').lower() == 'true'
     response.set_cookie(
         SESSION_COOKIE_NAME,
         token,
         max_age=SESSION_TTL,
         httponly=True,
         samesite='Lax',
-        secure=secure,
+        secure=_cookie_secure(),
     )
     logger.info("[Session] Created new session")
     return token

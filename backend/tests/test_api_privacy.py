@@ -5,10 +5,10 @@ from collections.abc import Iterator
 
 import pytest
 from unittest.mock import patch
-from flask import Flask
 from flask.testing import FlaskClient
 
-from api.privacy import privacy_bp
+from api.privacy import privacy_ns
+from tests.restx_test_app import mount_namespace
 from services.memory_store import MemoryStore
 
 
@@ -16,8 +16,7 @@ from services.memory_store import MemoryStore
 class TestPrivacyAPI:
     @pytest.fixture
     def client(self, db: sqlite3.Connection) -> FlaskClient:
-        app = Flask(__name__)
-        app.register_blueprint(privacy_bp)
+        app = mount_namespace(privacy_ns)
         app.config['TESTING'] = True
         return app.test_client()
 
@@ -50,10 +49,10 @@ class TestPrivacyAPI:
     # DELETE /privacy/delete-all
     # ------------------------------------------------------------------
 
-    def test_delete_all_without_confirm_header_returns_400(self, client: FlaskClient) -> None:
+    def test_delete_all_without_confirm_header_returns_422(self, client: FlaskClient) -> None:
         response = client.delete('/privacy/delete-all')
 
-        assert response.status_code == 400
+        assert response.status_code == 422
         data = response.get_json()
         assert "error" in data
         assert "X-Confirm-Delete" in data["error"]

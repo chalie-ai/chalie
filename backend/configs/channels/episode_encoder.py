@@ -9,7 +9,7 @@ if TYPE_CHECKING:
 
 
 class EpisodeEncoderConfig(ProcessorConfig):
-    """Episode encoder — one-shot, no tools, no transcript writes.  §3a."""
+    """Episode encoder — one-shot, no tools, no transcript writes."""
 
     def __init__(self) -> None:
         super().__init__(

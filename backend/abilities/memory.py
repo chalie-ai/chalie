@@ -7,8 +7,7 @@ schema) and the action dispatch in ``run()`` — ``params → service handler �
 ToolResult``. Every retrieval/mutation handler, the episode recall engine,
 data-graph search, reflection layer expansion, response formatting and recall
 telemetry live in ``services.memory_retrieval`` so the same engine is reachable
-from non-ability callers (e.g. the ``/api/updates/memory`` REST endpoint)
-without importing an ability.
+from non-ability callers without importing an ability.
 
 The engine functions live ONLY in the service module — there are no re-exports
 from here: callers and tests import them from ``services.memory_retrieval``
