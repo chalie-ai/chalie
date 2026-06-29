@@ -1,23 +1,56 @@
-"""
-Policies blueprint — per-action permission control (allow / ask / deny).
+"""Policies namespace — per-action permission control (allow / ask / deny).
+
+Not pure CRUD: a single-cell policy upsert plus four non-CRUD action/utility
+endpoints (reset, respond, blocked-log read/clear). Each is DTO-typed through the
+foundation boundary (``@expects``/``@responds``); mutation/action endpoints
+return 204 no-body on success; read endpoints return bare lists. The
+``_tag_display_rows`` display-enrichment helper stays here (it annotates rows
+for the Brain UI, it is not serialization).
 """
 
 import logging
 import threading
 from typing import TYPE_CHECKING, cast
-
-from flask import request
 from flask.typing import ResponseReturnValue
 from flask_restx import Namespace, Resource
 
+from services.time_utils import parse_utc
 from .auth import require_session
+from .dto import Error, expects, register_dto, responds
+from .dto.policy import Policy, PolicyUpsert
+from .dto.policy_blocked import BlockedEntry, BlockedQuery
+from .dto.policy_respond import PolicyRespond
 
 if TYPE_CHECKING:
-    pass
+    from services.policy_manager import PolicyManager
 
 logger = logging.getLogger(__name__)
 
-policies_ns = Namespace('policies', description='Per-action permission control', path='/api/policies')
+_ERR_LOAD = "Failed to load policies"
+_ERR_UPDATE = "Failed to update policies"
+_ERR_RESET = "Failed to reset policies"
+_ERR_RESPOND = "Failed to resolve permission gate"
+_ERR_BLOCKED = "Failed to load blocked log"
+_ERR_CLEAR = "Failed to clear blocked log"
+
+policies_ns = Namespace("policies", description="Per-action permission control", path="/api/policies")
+
+register_dto(
+    policies_ns,
+    Policy,
+    PolicyUpsert,
+    BlockedEntry,
+    BlockedQuery,
+    PolicyRespond,
+    Error,
+)
+
+_P = policies_ns.models
+
+
+def _error(message: str, status: int) -> ResponseReturnValue:
+    """Build a uniform non-2xx ``Error`` body carrying its own status code."""
+    return Error(error=message).model_dump(mode="json"), status
 
 
 def _tag_display_rows(rows: "list[dict[str, str]]") -> None:
@@ -49,120 +82,145 @@ def _tag_display_rows(rows: "list[dict[str, str]]") -> None:
             r['label'] = humanize_segment(action or _base)
 
 
-@policies_ns.route('')
+def _get_policy_manager() -> "PolicyManager":
+    from services.database_service import get_shared_db_service
+    from services.policy_manager import PolicyManager
+    return PolicyManager(get_shared_db_service())
+
+
+def _policy_dto(row: "dict[str, str]") -> Policy:
+    """Build a :class:`Policy` DTO from a display-enriched service row."""
+    return Policy(
+        channel=row["channel"],
+        permission=row["permission"],
+        setting=row["setting"],
+        label=row.get("label", ""),
+        group=row.get("group"),
+    )
+
+
+def _blocked_dto(row: "dict[str, str]") -> BlockedEntry:
+    """Build a :class:`BlockedEntry` DTO from a service row.
+
+    ``created_at`` is persisted as an ISO-8601 string; ``parse_utc`` lifts it to a
+    timezone-aware ``datetime`` so the foundation serializer re-emits canonical UTC.
+    """
+    return BlockedEntry(
+        action_id=row["action_id"],
+        context=row["context"],
+        reason=row["reason"],
+        created_at=parse_utc(row["created_at"]),
+    )
+
+
+@policies_ns.route("")
 class PoliciesResource(Resource):
     @require_session
-    @policies_ns.response(200, "Success")
-    @policies_ns.response(500, "Internal server error")
-    def get(self) -> ResponseReturnValue:
+    @policies_ns.response(200, "All policies", model=_P["Policy"])
+    @policies_ns.response(500, _ERR_LOAD, model=_P["Error"])
+    @responds(Policy, code=200)
+    def get(self) -> list[Policy] | ResponseReturnValue:
+        """List all non-internal policies with display labels."""
         try:
-            from services.database_service import get_shared_db_service
-            from services.policy_manager import PolicyManager
-            rows = PolicyManager(get_shared_db_service()).get_all()
+            rows = _get_policy_manager().get_all()
             _tag_display_rows(rows)
-            return {"policies": rows}, 200
+            return [_policy_dto(row) for row in rows]
         except Exception as exc:
             logger.error("[POLICIES API] GET failed: %s", exc)
-            return {"error": "Failed to load policies"}, 500
+            return _error(_ERR_LOAD, 500)
 
     @require_session
-    @policies_ns.response(200, "Success")
-    @policies_ns.response(400, "Bad request")
-    @policies_ns.response(500, "Internal server error")
-    def put(self) -> ResponseReturnValue:
+    @policies_ns.expect(_P["PolicyUpsert"])
+    @policies_ns.response(204, "Policy upserted")
+    @policies_ns.response(422, "Validation failed", model=_P["Error"])
+    @policies_ns.response(500, _ERR_UPDATE, model=_P["Error"])
+    @responds(code=204)
+    @expects(PolicyUpsert)
+    def put(self, dto: PolicyUpsert) -> None | ResponseReturnValue:
+        """Upsert a single policy cell. Invalid channel/setting is a no-op 204."""
         try:
-            data = request.get_json(silent=True) or {}
-            if not all(k in data for k in ('channel', 'permission', 'setting')):
-                return {"error": "channel, permission, setting required"}, 400
-            from services.database_service import get_shared_db_service
-            from services.policy_manager import PolicyManager
-            affected = PolicyManager(get_shared_db_service()).upsert(
-                data['channel'], data['permission'], data['setting'])
-            return {"updated": affected}, 200
+            _get_policy_manager().upsert(dto.channel, dto.permission, dto.setting)
+            return None
         except Exception as exc:
             logger.error("[POLICIES API] PUT failed: %s", exc)
-            return {"error": "Failed to update policies"}, 500
+            return _error(_ERR_UPDATE, 500)
 
 
-@policies_ns.route('/reset')
+@policies_ns.route("/reset")
 class PoliciesResetResource(Resource):
     @require_session
-    @policies_ns.response(200, "Success")
-    @policies_ns.response(500, "Internal server error")
-    def post(self) -> ResponseReturnValue:
+    @policies_ns.response(204, "Policies reset to defaults")
+    @policies_ns.response(500, _ERR_RESET, model=_P["Error"])
+    @responds(code=204)
+    def post(self) -> None | ResponseReturnValue:
         """Re-apply the static seed (wipe + reseed)."""
         try:
-            from services.database_service import get_shared_db_service
-            from services.policy_manager import PolicyManager
-            affected = PolicyManager(get_shared_db_service()).reset_to_defaults()
-            return {"reset": affected}, 200
+            _get_policy_manager().reset_to_defaults()
+            return None
         except Exception as exc:
             logger.error("[POLICIES API] Reset failed: %s", exc)
-            return {"error": "Failed to reset policies"}, 500
+            return _error(_ERR_RESET, 500)
 
 
-@policies_ns.route('/respond')
+@policies_ns.route("/respond")
 class PoliciesRespondResource(Resource):
     @require_session
-    @policies_ns.response(200, "Success")
-    @policies_ns.response(400, "Bad request")
-    @policies_ns.response(500, "Internal server error")
-    def post(self) -> ResponseReturnValue:
+    @policies_ns.expect(_P["PolicyRespond"])
+    @policies_ns.response(204, "Permission gate resolved")
+    @policies_ns.response(422, "Validation failed", model=_P["Error"])
+    @policies_ns.response(500, _ERR_RESPOND, model=_P["Error"])
+    @responds(code=204)
+    @expects(PolicyRespond)
+    def post(self, dto: PolicyRespond) -> None | ResponseReturnValue:
         """Wake the blocked ACT dispatch thread with the user's allow/deny decision.
 
-        The ACT loop thread is parked on threading.Event.wait() inside
-        PolicyManager._ask_user().  This handler resolves the gate so
-        the thread wakes instantly with zero CPU overhead.
+        The ACT loop thread is parked on ``threading.Event.wait()`` inside
+        ``PolicyManager._ask_user()``. This handler resolves the gate so the
+        thread wakes instantly. An unknown or already-resolved ``request_id`` is a
+        graceful success no-op (204), NOT a not-found error — the gate-absent path
+        is by design.
         """
-        body = request.get_json(silent=True) or {}
-        request_id = body.get('request_id', '')
-        approved = bool(body.get('approved', False))
-        if not request_id:
-            return {"error": "request_id required"}, 400
         try:
             from services.policy_manager import _permission_gates
-            gate = _permission_gates.get(request_id)
-            if gate is None:
-                # Gate already resolved or request_id unknown — respond gracefully
-                logger.warning("[POLICIES API] No gate found for request_id=%s", request_id)
-                return {"ok": True}, 200
-            gate['result'] = 'approved' if approved else 'denied'
-            cast(threading.Event, gate['event']).set()
-            return {"ok": True}, 200
+            gate = _permission_gates.get(dto.request_id)
+            if gate is not None:
+                gate['result'] = 'approved' if dto.approved else 'denied'
+                cast(threading.Event, gate['event']).set()
+            else:
+                logger.warning("[POLICIES API] No gate found for request_id=%s", dto.request_id)
+            return None
         except Exception as exc:
             logger.error("[POLICIES API] Respond failed: %s", exc)
-            return {"error": "Failed to resolve permission gate"}, 500
+            return _error(_ERR_RESPOND, 500)
 
 
-@policies_ns.route('/blocked')
+@policies_ns.route("/blocked")
 class PoliciesBlockedResource(Resource):
     @require_session
-    @policies_ns.response(200, "Success")
-    @policies_ns.response(500, "Internal server error")
-    def get(self) -> ResponseReturnValue:
+    @policies_ns.param("limit", "Max entries to return (1-500, default 50)", type="integer", _in="query")
+    @policies_ns.expect(_P["BlockedQuery"])
+    @policies_ns.response(200, "Blocked-action log", model=_P["BlockedEntry"])
+    @policies_ns.response(500, _ERR_BLOCKED, model=_P["Error"])
+    @responds(BlockedEntry, code=200)
+    @expects(BlockedQuery, source="args")
+    def get(self, dto: BlockedQuery) -> list[BlockedEntry] | ResponseReturnValue:
+        """List recent blocked-action log entries."""
         try:
-            limit = request.args.get('limit', 50, type=int)
-            from services.database_service import get_shared_db_service
-            from services.policy_manager import PolicyManager
-            svc = PolicyManager(get_shared_db_service())
-            entries = svc.get_blocked_log(limit=limit)
-            return {"entries": entries, "count": len(entries)}, 200
+            entries = _get_policy_manager().get_blocked_log(limit=dto.limit)
+            return [_blocked_dto(entry) for entry in entries]
         except Exception as exc:
             logger.error("[POLICIES API] Blocked log failed: %s", exc)
-            return {"error": "Failed to load blocked log"}, 500
+            return _error(_ERR_BLOCKED, 500)
 
     @require_session
-    @policies_ns.response(200, "Success")
-    @policies_ns.response(500, "Internal server error")
-    def delete(self) -> ResponseReturnValue:
+    @policies_ns.response(204, "Blocked log cleared")
+    @policies_ns.response(500, _ERR_CLEAR, model=_P["Error"])
+    @responds(code=204)
+    def delete(self) -> None | ResponseReturnValue:
         """Clear all entries from the blocked log."""
         try:
-            from services.database_service import get_shared_db_service
-            from services.policy_manager import PolicyManager
-
-            svc = PolicyManager(get_shared_db_service())
-            cleared = svc.clear_blocked_log()
-            return {"cleared": cleared}, 200
+            _get_policy_manager().clear_blocked_log()
+            return None
         except Exception as exc:
             logger.error("[POLICIES API] Clear blocked log failed: %s", exc)
-            return {"error": "Failed to clear blocked log"}, 500
+            return _error(_ERR_CLEAR, 500)

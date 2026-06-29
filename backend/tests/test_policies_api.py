@@ -48,19 +48,22 @@ def client(monkeypatch: pytest.MonkeyPatch) -> "FlaskClient":
 def test_get_returns_flat_rows_excluding_internal(client: "FlaskClient") -> None:
     r = client.get("/api/policies")
     assert r.status_code == 200
-    rows = r.get_json()["policies"]
+    rows = r.get_json()
     row = next(x for x in rows if x["permission"] == "email.search")
     # Native rows keep the flat triple and gain an action-only display label:
     # `email.search` -> `Search` (the `tool.` prefix is dropped + humanized).
     assert row["channel"] == "chat" and row["setting"] == "allow"
     assert row["label"] == "Search"
-    assert "group" not in row  # group is MCP-only — drives the cyan pill in the UI
+    # group is MCP-only — native rows carry it as null (the DTO field is nullable).
+    assert row["group"] is None
     assert all(x["setting"] != "internal" for x in rows)
 
 
 def test_put_single_upsert(client: "FlaskClient") -> None:
     r = client.put("/api/policies", json={"channel": "chat", "permission": "email.send", "setting": "deny"})
-    assert r.status_code == 200 and r.get_json()["updated"] == 1
+    # Single-cell upsert is a non-CRUD action → 204 no-body (rowcount no longer surfaced).
+    assert r.status_code == 204
+    assert r.data == b""
 
 
 @pytest.fixture()
@@ -110,7 +113,7 @@ def test_get_groups_and_humanizes_mcp_rows(mcp_client: "FlaskClient") -> None:
 
     resp = mcp_client.get("/api/policies")
     assert resp.status_code == 200
-    rows = resp.get_json()["policies"]
+    rows = resp.get_json()
     row = next(r for r in rows if r["permission"] == "_mcp_github_add_comment_to_pending_review")
     assert row["group"] == "GitHub"
     assert row["label"] == "Add Comment to Pending Review"
