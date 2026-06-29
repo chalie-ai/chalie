@@ -82,7 +82,7 @@ class TestSchedulerAPI:
         _insert_item(db, id="item1")
         _insert_item(db, id="item2", group_id="item2")
 
-        resp = client.get("/scheduler")
+        resp = client.get("/api/scheduler")
 
         assert resp.status_code == 200
         body = resp.get_json()
@@ -93,7 +93,7 @@ class TestSchedulerAPI:
 
     def test_create_returns_201(self, client: FlaskClient, db: sqlite3.Connection) -> None:
         resp = client.post(
-            "/scheduler",
+            "/api/scheduler",
             json={"message": "Buy groceries", "due_at": _future_iso()},
         )
 
@@ -122,7 +122,7 @@ class TestSchedulerAPI:
             payload["window_start"] = "09:00"
             payload["window_end"] = "17:00"
 
-        resp = client.post("/scheduler", json=payload)
+        resp = client.post("/api/scheduler", json=payload)
 
         assert resp.status_code == 201, (
             f"Expected 201 for recurrence={recurrence}, got {resp.status_code}: "
@@ -131,7 +131,7 @@ class TestSchedulerAPI:
 
     def test_create_window_on_non_hourly_returns_422(self, client: FlaskClient, db: sqlite3.Connection) -> None:
         resp = client.post(
-            "/scheduler",
+            "/api/scheduler",
             json={
                 "message": "Bad window",
                 "due_at": _future_iso(),
@@ -149,7 +149,7 @@ class TestSchedulerAPI:
     def test_get_item_returns_item_when_found(self, client: FlaskClient, db: sqlite3.Connection) -> None:
         _insert_item(db, id="xyz99999", group_id="xyz99999")
 
-        resp = client.get("/scheduler/xyz99999")
+        resp = client.get("/api/scheduler/xyz99999")
 
         assert resp.status_code == 200
         body = resp.get_json()
@@ -162,7 +162,7 @@ class TestSchedulerAPI:
         _insert_item(db, id="upd00001", group_id="upd00001")
 
         resp = client.put(
-            "/scheduler/upd00001",
+            "/api/scheduler/upd00001",
             json={
                 "message": "Updated message",
                 "due_at": _future_iso(),
@@ -186,7 +186,7 @@ class TestSchedulerAPI:
         _insert_item(db, id="fired_item", status="fired", group_id="fired_item")
 
         resp = client.put(
-            "/scheduler/fired_item",
+            "/api/scheduler/fired_item",
             json={
                 "message": "Try updating",
                 "due_at": _future_iso(),
@@ -201,7 +201,7 @@ class TestSchedulerAPI:
     def test_cancel_pending_item(self, client: FlaskClient, db: sqlite3.Connection) -> None:
         _insert_item(db, id="cancel01", group_id="cancel01")
 
-        resp = client.delete("/scheduler/cancel01")
+        resp = client.delete("/api/scheduler/cancel01")
 
         assert resp.status_code == 204
         assert resp.data == b""
@@ -225,7 +225,7 @@ class TestSchedulerAPI:
                 group_id=f"old{i}",
             )
 
-        resp = client.delete("/scheduler/history")
+        resp = client.delete("/api/scheduler/history")
 
         assert resp.status_code == 204
 

@@ -1,4 +1,4 @@
-"""DTO for ``GET /system/status`` — comprehensive health and diagnostics.
+"""DTO for ``GET /api/system/status`` — comprehensive health and diagnostics.
 
 ``status`` is ``ok`` or ``degraded`` (stays 200 even when degraded). ``memory`` and
 ``storage`` are stable small sub-dicts (kept as raw passthrough to preserve the

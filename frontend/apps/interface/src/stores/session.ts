@@ -294,7 +294,7 @@ export const useSessionStore = defineStore('session', {
       try {
         const host = getHost();
         const base = host ? host.replace(/\/$/, '') : '';
-        await fetch(base + '/chat/interrupt', {
+        await fetch(base + '/api/chat/interrupt', {
           method: 'POST',
           credentials: 'same-origin',
           headers: { 'Content-Type': 'application/json' },

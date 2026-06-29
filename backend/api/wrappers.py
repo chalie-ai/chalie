@@ -16,6 +16,7 @@ from flask_restx import Namespace, Resource
 
 from .auth import require_auth, _cookie_only
 from .dto import Error, expects, register_dto, responds
+from .dto.boundary import error
 from .dto.wrapper import Wrapper, WrapperCreate, WrapperCreated
 from services.log_utils import safe
 
@@ -37,11 +38,6 @@ def _get_service() -> "WrapperAuthService":
     from services.database_service import get_shared_db_service
     from services.wrapper_auth_service import WrapperAuthService
     return WrapperAuthService(get_shared_db_service())
-
-
-def _error(message: str, status: int) -> ResponseReturnValue:
-    """Build a uniform non-2xx ``Error`` body carrying its own status code."""
-    return Error(error=message).model_dump(mode="json"), status
 
 
 def _wrapper_dto(row: dict[str, object]) -> Wrapper:
@@ -78,7 +74,7 @@ class WrapperRootResource(Resource):
         return WrapperCreated(wrapper_id=wrapper_id, token=raw_token)
 
     @require_auth
-    @wrappers_ns.response(200, "All wrappers", model=_M["Wrapper"])
+    @wrappers_ns.response(200, "All wrappers", model=[_M["Wrapper"]])
     @responds(Wrapper, code=200)
     def get(self) -> list[Wrapper]:
         """List every non-revoked wrapper token."""
@@ -100,7 +96,7 @@ class WrapperItemResource(Resource):
         """Get details for a single wrapper token."""
         wrapper = _get_service().get_wrapper(wrapper_id)
         if wrapper is None:
-            return _error(_NOT_FOUND, 404)
+            return error(_NOT_FOUND, 404)
         return _wrapper_dto(wrapper)
 
     @require_auth
@@ -111,6 +107,6 @@ class WrapperItemResource(Resource):
     def delete(self, wrapper_id: str) -> None | ResponseReturnValue:
         """Revoke a wrapper token."""
         if not _get_service().revoke(wrapper_id):
-            return _error(_NOT_FOUND, 404)
+            return error(_NOT_FOUND, 404)
         logger.info("[Wrappers API] Revoked wrapper: %s", safe(wrapper_id))
         return None

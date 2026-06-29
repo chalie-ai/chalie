@@ -1,7 +1,7 @@
 """DTOs for the list-items sub-resource — the items HTTP contract.
 
 ``list_id`` is never on an item DTO: it lives in the URL (the parent segment of
-``/lists/<list_id>/items/...``). One class per file, per the namespace
+``/api/lists/<list_id>/items/...``). One class per file, per the namespace
 convention.
 """
 

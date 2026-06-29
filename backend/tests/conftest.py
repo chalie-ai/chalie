@@ -175,7 +175,7 @@ def authed_client(db: sqlite3.Connection) -> Iterator[tuple[object, sqlite3.Conn
             client, db_conn, store = authed_client
             db_conn.execute("INSERT INTO ...")
             db_conn.commit()
-            response = client.get('/system/health')
+            response = client.get('/health')
     """
     from api import create_app
     from services.memory_store import MemoryStore

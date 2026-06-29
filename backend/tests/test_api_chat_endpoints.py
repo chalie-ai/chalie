@@ -24,7 +24,7 @@ class TestChatEndpoints:
         assert resp.get_json()['error'] == 'message required'
 
         # Cross-step proof: no UMP turn was registered for the empty message.
-        interrupt = client.post('/chat/interrupt')
+        interrupt = client.post('/api/chat/interrupt')
         assert interrupt.status_code == 200
         assert interrupt.get_json() == {'ok': True, 'interrupted': None, 'reason': 'no_active_turn'}
 
@@ -32,7 +32,7 @@ class TestChatEndpoints:
         """POST /chat/interrupt with no turn in flight returns 200 and says so."""
         client, _db_conn, _store = authed_client
 
-        resp = client.post('/chat/interrupt')
+        resp = client.post('/api/chat/interrupt')
 
         assert resp.status_code == 200
         assert resp.get_json() == {'ok': True, 'interrupted': None, 'reason': 'no_active_turn'}
@@ -41,7 +41,7 @@ class TestChatEndpoints:
         """POST /action without a skill is rejected synchronously with 422."""
         client, _db_conn, _store = authed_client
 
-        resp = client.post('/action', json={})
+        resp = client.post('/api/action', json={})
 
         assert resp.status_code == 422
         assert 'skill' in str(resp.get_json()['details'])
@@ -51,7 +51,7 @@ class TestChatEndpoints:
         result never crosses the WS bus."""
         client, _db_conn, _store = authed_client
 
-        resp = client.post('/action', json={'skill': 'no-such-tool-xyz'})
+        resp = client.post('/api/action', json={'skill': 'no-such-tool-xyz'})
 
         assert resp.status_code == 400
         assert 'Unknown skill' in resp.get_json()['error']
@@ -64,7 +64,7 @@ class TestChatEndpoints:
         client, db_conn, _store = authed_client
         transcripts_before = db_conn.execute("SELECT COUNT(*) FROM transcript").fetchone()[0]
 
-        resp = client.post('/action', json={'skill': 'list', 'action': 'create', 'name': 'QA Groceries List'})
+        resp = client.post('/api/action', json={'skill': 'list', 'action': 'create', 'name': 'QA Groceries List'})
 
         assert resp.status_code == 200
         body = resp.get_json()

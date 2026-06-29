@@ -23,6 +23,7 @@ from flask_restx import Namespace, Resource
 from .auth import require_session
 from .dto import Error, expects, register_dto, responds
 from .dto.attachment import Attachment
+from .dto.boundary import error
 from .dto.chip import Chip
 from .dto.message import Message
 from .dto.segment import Segment
@@ -30,7 +31,7 @@ from .dto.thread import (
     ThreadBatch, ThreadFeed, ThreadFeedQuery, ThreadSendRequest, ThreadSummary, TurnBlock,
 )
 from services.locale_service import CHAT_TIMESTAMP_FMT, format_date
-from services.rich_media_parser import parse as _parse_rich_media, resolve_tool_call_transcript_ids as _resolve_ids
+from services.rich_media_parser import parse as _parse_rich_media
 
 logger = logging.getLogger(__name__)
 
@@ -53,11 +54,6 @@ _MSG_REQUIRED = "message required"
 _FILE_PLACEHOLDER = "[File attached]"
 
 
-def _error(message: str, status: int) -> ResponseReturnValue:
-    """Build a uniform non-2xx ``Error`` body carrying its own status code."""
-    return Error(error=message).model_dump(mode="json"), status
-
-
 # ── Row → message projection ──────────────────────────────────────────────────
 
 
@@ -74,26 +70,54 @@ def _fetch_tool_calls_for_transcripts(conn: sqlite3.Connection, transcript_ids: 
         return []
     placeholders = ",".join("?" * len(transcript_ids))
     tc_rows = conn.execute(
-        f"SELECT tool_name, params, result, summary, created_at FROM tool_calls "
+        f"SELECT transcript_id, tool_name, params, result, summary, created_at FROM tool_calls "
         f"WHERE transcript_id IN ({placeholders}) ORDER BY id",
         tuple(transcript_ids),
     ).fetchall()
     return [
         {
-            "tool_name": r[0],
-            "params": r[1],
-            "result": r[2] or "",
-            "summary": r[3] or "",
-            "created_at": r[4],
+            "transcript_id": r[0],
+            "tool_name": r[1],
+            "params": r[2],
+            "result": r[3] or "",
+            "summary": r[4] or "",
+            "created_at": r[5],
         }
         for r in tc_rows
     ]
 
 
+def _resolve_turn_transcript_ids(conn: sqlite3.Connection, assistant_ids: list[int]) -> list[int]:
+    """Return every transcript row ID of the turn(s) that own the given assistant ids.
+
+    Mirrors the logic in ``resolve_tool_call_transcript_ids`` but resolves all
+    assistant rows in a single query rather than one per row, eliminating the N+1
+    when projecting a full turn block. Falls back to the supplied ids when any
+    row has no turn_id (skip_transcript channels).
+    """
+    if not assistant_ids:
+        return []
+    placeholders = ",".join("?" * len(assistant_ids))
+    channel_turn_rows = conn.execute(
+        f"SELECT DISTINCT channel, turn_id FROM transcript WHERE id IN ({placeholders}) AND turn_id IS NOT NULL",
+        tuple(assistant_ids),
+    ).fetchall()
+    if not channel_turn_rows:
+        return assistant_ids
+    all_ids: list[int] = []
+    for channel, turn_id in channel_turn_rows:
+        ids = conn.execute(
+            "SELECT id FROM transcript WHERE channel = ? AND turn_id = ? ORDER BY id",
+            (channel, turn_id),
+        ).fetchall()
+        all_ids.extend(r[0] for r in ids)
+    return all_ids or assistant_ids
+
+
 def _fetch_attachments_for_transcripts(conn: sqlite3.Connection, transcript_ids: list[int]) -> dict[int, list[dict[str, object]]]:
     """Soft-deleted docs are filtered out, so a removed file silently does not
     render. Each attachment carries the inline-serving
-    ``/documents/<id>/preview`` URL.
+    ``/api/documents/<id>/preview`` URL.
     """
     if not transcript_ids:
         return {}
@@ -113,7 +137,7 @@ def _fetch_attachments_for_transcripts(conn: sqlite3.Connection, transcript_ids:
             "filename": name,
             "mime_type": mime,
             "is_image": mime.startswith("image/"),
-            "url": f"/documents/{doc_id}/preview",
+            "url": f"/api/documents/{doc_id}/preview",
         })
     return by_id
 
@@ -130,6 +154,18 @@ def _rows_to_messages(rows: list[dict[str, object]]) -> list[dict[str, object]]:
         attachments_by_id = _fetch_attachments_for_transcripts(
             conn, [cast("int", r['id']) for r in rows if r['role'] == 'user']
         )
+
+        assistant_ids = [cast("int", r['id']) for r in rows if r['role'] != 'user']
+        # Bulk-resolve all turn transcript IDs for segment parsing (replaces per-row _resolve_ids calls).
+        turn_scope_ids = _resolve_turn_transcript_ids(conn, assistant_ids)
+        # One query for all tool calls across the whole turn scope (chips + segments).
+        all_calls = _fetch_tool_calls_for_transcripts(conn, turn_scope_ids)
+        # Group by transcript_id for per-row chip lookup.
+        calls_by_transcript: dict[int, list[dict[str, object]]] = {}
+        for c in all_calls:
+            calls_by_transcript.setdefault(cast("int", c["transcript_id"]), []).append(c)
+        # Segments use all turn-scope calls (same set for every assistant row in the turn).
+        turn_calls = all_calls
 
         for r in rows:
             transcript_id = cast("int", r['id'])
@@ -148,7 +184,7 @@ def _rows_to_messages(rows: list[dict[str, object]]) -> list[dict[str, object]]:
                 if attachments:
                     msg["attachments"] = attachments
             else:
-                own_calls = _fetch_tool_calls_for_transcripts(conn, [transcript_id])
+                own_calls = calls_by_transcript.get(transcript_id, [])
                 chips = [
                     {"tool_name": c["tool_name"], "summary": c["summary"]}
                     for c in own_calls
@@ -156,7 +192,6 @@ def _rows_to_messages(rows: list[dict[str, object]]) -> list[dict[str, object]]:
                 ]
                 if chips:
                     msg["tool_calls"] = chips
-                turn_calls = _fetch_tool_calls_for_transcripts(conn, _resolve_ids(transcript_id, conn))
                 segments = _parse_rich_media(str(content), turn_calls)
                 if not segments and content:
                     segments = [{"type": "text", "content": content}]
@@ -237,7 +272,7 @@ def _send(turn_id: "int | None", dto: ThreadSendRequest) -> ResponseReturnValue:
     attachments = _stage_chat_uploads(cast("list[object]", request.files.getlist("files")[:_MAX_FILES]))
     text = dto.text.strip()
     if not text and not attachments:
-        return _error(_MSG_REQUIRED, 422)
+        return error(_MSG_REQUIRED, 422)
     if not text:
         text = _FILE_PLACEHOLDER
 
@@ -291,7 +326,8 @@ class ThreadsBatchResource(Resource):
 @threads_ns.route("/thread")
 class ThreadResource(Resource):
     @require_session
-    @threads_ns.expect(_T["ThreadSendRequest"])
+    @threads_ns.param("text", "Message text", _in="formData", type="string")
+    @threads_ns.param("source", "Message source (default: text)", _in="formData", type="string")
     @threads_ns.param("files", "Attachments (multipart, repeatable, max 10)", _in="formData", type="file")
     @threads_ns.response(201, "Thread created (empty body)")
     @threads_ns.response(422, "Empty message and no files", model=_T["Error"])
@@ -316,7 +352,8 @@ class ThreadItemResource(Resource):
 
     @require_session
     @threads_ns.param("turn_id", "Turn id")
-    @threads_ns.expect(_T["ThreadSendRequest"])
+    @threads_ns.param("text", "Message text", _in="formData", type="string")
+    @threads_ns.param("source", "Message source (default: text)", _in="formData", type="string")
     @threads_ns.param("files", "Attachments (multipart, repeatable, max 10)", _in="formData", type="file")
     @threads_ns.response(201, "Reply accepted (empty body)")
     @threads_ns.response(422, "Empty message and no files", model=_T["Error"])

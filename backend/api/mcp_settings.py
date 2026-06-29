@@ -24,6 +24,7 @@ from flask_restx import Namespace, Resource
 
 from .auth import require_session
 from .dto import Error, expects, register_dto, responds
+from .dto.boundary import error
 from .dto.mcp_settings import McpServerSettings, McpSettingsUpdate, RegenerateTokenResult
 
 if TYPE_CHECKING:
@@ -51,18 +52,13 @@ register_dto(
 _M = mcp_settings_ns.models
 
 
-def _error(message: str, status: int) -> ResponseReturnValue:
-    """Build a uniform non-2xx ``Error`` body carrying its own status code."""
-    return Error(error=message).model_dump(mode="json"), status
-
-
-def _get_services() -> "tuple[SettingsService, WrapperAuthService, object]":
+def _get_services() -> "tuple[SettingsService, WrapperAuthService]":
     from services.database_service import get_shared_db_service
     from services.settings_service import SettingsService
     from services.wrapper_auth_service import WrapperAuthService
 
     db = get_shared_db_service()
-    return SettingsService(db), WrapperAuthService(db), db
+    return SettingsService(db), WrapperAuthService(db)
 
 
 def _get_stored_token(settings: "SettingsService") -> str | None:
@@ -101,11 +97,11 @@ class McpSettingsResource(Resource):
     def get(self) -> McpServerSettings | ResponseReturnValue:
         """Read the MCP server settings record."""
         try:
-            settings, auth_svc, _ = _get_services()
+            settings, auth_svc = _get_services()
             return _settings_dto(settings, auth_svc)
         except Exception as exc:
             logger.exception("[MCP SETTINGS] GET failed: %s", exc)
-            return _error(_ERR_READ, 500)
+            return error(_ERR_READ, 500)
 
     @require_session
     @mcp_settings_ns.expect(_M["McpSettingsUpdate"])
@@ -117,7 +113,7 @@ class McpSettingsResource(Resource):
     def put(self, dto: McpSettingsUpdate) -> None | ResponseReturnValue:
         """Partially update the MCP server settings (only provided fields are written)."""
         try:
-            settings, _, _ = _get_services()
+            settings, _ = _get_services()
             if dto.enabled is not None:
                 settings.set("mcp_server_enabled", "true" if dto.enabled else "false")
             if dto.port is not None:
@@ -125,7 +121,7 @@ class McpSettingsResource(Resource):
             return None
         except Exception as exc:
             logger.exception("[MCP SETTINGS] PUT failed: %s", exc)
-            return _error(_ERR_UPDATE, 500)
+            return error(_ERR_UPDATE, 500)
 
 
 @mcp_settings_ns.route("/regenerate-token")
@@ -137,7 +133,7 @@ class RegenerateTokenResource(Resource):
     def post(self) -> RegenerateTokenResult | ResponseReturnValue:
         """Mint a fresh MCP server bearer token, revoking the prior one if present."""
         try:
-            settings, auth_svc, _ = _get_services()
+            settings, auth_svc = _get_services()
 
             old_wrapper_id = settings.get("mcp_server_token_wrapper_id")
             if old_wrapper_id:
@@ -154,4 +150,4 @@ class RegenerateTokenResource(Resource):
             return RegenerateTokenResult(token=raw_token, wrapper_id=wrapper_id)
         except Exception as exc:
             logger.exception("[MCP SETTINGS] regenerate-token failed: %s", exc)
-            return _error(_ERR_REGEN, 500)
+            return error(_ERR_REGEN, 500)

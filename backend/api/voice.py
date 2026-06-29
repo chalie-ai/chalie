@@ -45,11 +45,12 @@ from services.markup import extract_plaintext, markdown_to_html
 
 from .auth import require_auth
 from .dto import Error, expects, register_dto, responds
+from .dto.boundary import error
 from .dto.voice import Transcription, TtsRequest, VoiceHealth, VoiceUnavailable
 
 logger = logging.getLogger(__name__)
 
-voice_ns = Namespace("voice", description="Voice (STT + TTS) operations", path="/voice")
+voice_ns = Namespace("voice", description="Voice (STT + TTS) operations", path="/api/voice")
 
 register_dto(voice_ns, TtsRequest, Transcription, VoiceHealth, VoiceUnavailable, Error)
 _V = voice_ns.models
@@ -112,9 +113,7 @@ _VOICE_MISSING_MODULES = _detect_voice_modules()
 _VOICE_AVAILABLE = not _VOICE_MISSING_MODULES
 
 _VOICE_INSTALL_HINT = (
-    "Voice dependencies are not installed. Run "
-    "`uv pip install --system -e backend[voice]` (or relaunch with "
-    "`./run.sh` — failed installs auto-retry on next launch)."
+    "Voice dependencies are not installed. Enable voice in Settings to install them."
 )
 
 
@@ -153,7 +152,7 @@ def _missing_model_files() -> list[str]:
         _MOONSHINE_DIR / "encoder_model.onnx",
         _MOONSHINE_DIR / "decoder_model_merged.onnx",
     ]
-    return [str(p) for p in expected if not p.is_file()]
+    return [p.name for p in expected if not p.is_file()]
 
 
 # ── Lazy model state ────────────────────────────────────────────────────────
@@ -603,11 +602,6 @@ def _transcribe_sync(data: bytes) -> str:
 # ── Routes ──────────────────────────────────────────────────────────────────
 
 
-def _error(message: str, status: int) -> ResponseReturnValue:
-    """Build a uniform non-2xx ``Error`` body carrying its own status code."""
-    return Error(error=message).model_dump(mode="json"), status
-
-
 def _health(
     status: str,
     reason: str | None = None,
@@ -678,7 +672,7 @@ class VoiceSynthesizeResource(Resource):
         text = _clean_for_tts(dto.text.strip())
 
         if not text:
-            return _error("Text is required", 422)
+            return error("Text is required", 422)
 
         chunks = _segment_for_tts(text)
         logger.info(
@@ -710,7 +704,7 @@ class VoiceSynthesizeResource(Resource):
                 samples = np.concatenate(cast("list[np.ndarray[tuple[int], np.dtype[np.float32]]]", all_samples))
         except Exception as e:
             logger.error("[Voice] TTS synthesis failed: %s", e)
-            return _error("TTS synthesis failed", 500)
+            return error("TTS synthesis failed", 500)
 
         wav_bytes = _audio_to_wav_bytes(samples, cast(int, sr))
         return Response(
@@ -726,6 +720,7 @@ class VoiceSynthesizeResource(Resource):
 @voice_ns.route("/transcribe")
 class VoiceTranscribeResource(Resource):
     @require_auth
+    @voice_ns.param("file", "WAV audio file to transcribe", _in="formData", type="file")
     @voice_ns.response(200, "Transcribed text", model=_V["Transcription"])
     @voice_ns.response(503, "Voice unavailable (deps or models missing/loading)", model=_V["VoiceUnavailable"])
     @voice_ns.response(422, "Invalid upload (missing/empty/malformed/too-long WAV)", model=_V["Error"])
@@ -737,19 +732,19 @@ class VoiceTranscribeResource(Resource):
             return _voice_unavailable_payload(), 503
 
         if "file" not in request.files:
-            return _error("No file uploaded", 422)
+            return error("No file uploaded", 422)
 
         file = request.files["file"]
         data = file.read()
 
         if not data:
-            return _error("Empty file", 422)
+            return error("Empty file", 422)
 
         duration = _wav_duration_seconds(data)
         if duration <= 0.0:
-            return _error("Malformed or unsupported WAV file", 422)
+            return error("Malformed or unsupported WAV file", 422)
         if duration > MAX_AUDIO_SECONDS:
-            return _error(f"Audio exceeds {MAX_AUDIO_SECONDS}s limit ({duration:.1f}s)", 422)
+            return error(f"Audio exceeds {MAX_AUDIO_SECONDS}s limit ({duration:.1f}s)", 422)
 
         if not _ensure_models():
             return _loading_or_missing_response()
@@ -759,4 +754,4 @@ class VoiceTranscribeResource(Resource):
                 return Transcription(text=_transcribe_sync(data))
             except Exception as e:
                 logger.error("[Voice] STT error: %s", e)
-                return _error("Transcription failed", 500)
+                return error("Transcription failed", 500)

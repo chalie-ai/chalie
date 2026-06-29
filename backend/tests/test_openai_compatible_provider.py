@@ -44,7 +44,7 @@ class TestOpenAICompatibleProvider:
         client, _, _store = authed_client
         _unlock_vault()
 
-        resp = client.post('/providers', json={
+        resp = client.post('/api/providers', json={
             'name': 'minimax-m2',
             'platform': 'openai_compatible',
             'model': 'MiniMax-M2',
@@ -59,7 +59,7 @@ class TestOpenAICompatibleProvider:
         assert created['host'] == 'https://api.minimax.io/v1'
         assert 'api_key' not in created  # write-only: never on the read shape
 
-        list_resp = client.get('/providers')
+        list_resp = client.get('/api/providers')
         assert list_resp.status_code == 200
         providers = list_resp.get_json()
         names = [p['name'] for p in providers]
@@ -79,7 +79,7 @@ class TestOpenAICompatibleProvider:
         _unlock_vault()
 
         test_key = secrets.token_hex(16)
-        resp = client.post('/providers', json={
+        resp = client.post('/api/providers', json={
             'name': 'minimax-vault-roundtrip',
             'platform': 'openai_compatible',
             'model': 'MiniMax-M2',
@@ -174,7 +174,7 @@ class TestOpenAICompatibleProvider:
         client, _, _store = authed_client
         _unlock_vault()
 
-        resp = client.post('/providers', json={
+        resp = client.post('/api/providers', json={
             'name': 'minimax-no-host',
             'platform': 'openai_compatible',
             'model': 'MiniMax-M2',

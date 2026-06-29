@@ -76,6 +76,15 @@ def _validation_body(exc: ValidationError) -> tuple[dict[str, object], int]:
     )
 
 
+def error(message: str, status: int) -> ResponseReturnValue:
+    """Build a uniform non-2xx ``Error`` body carrying its own HTTP status code.
+
+    The single error-response constructor shared by every namespace, so the wire
+    shape of a failure is identical across the whole API surface.
+    """
+    return Error(error=message).model_dump(mode="json"), status
+
+
 # ---------------------------------------------------------------------------
 # Decorators
 # ---------------------------------------------------------------------------

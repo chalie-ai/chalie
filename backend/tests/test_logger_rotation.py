@@ -14,7 +14,7 @@ from pathlib import Path
 import pytest
 
 import api.system as system_module
-from api.system import system_ns
+from api.system import health_ns, system_ns
 from tests.restx_test_app import mount_namespace
 from utils.logger import (
     LOG_FILE_MAX_ENTRIES,
@@ -104,11 +104,11 @@ class TestCountCappedRotation:
 
         monkeypatch.setattr(system_module, "_LOG_FILE_PATH", str(log_file))
         monkeypatch.setattr("services.auth_session_service.validate_session", lambda *_a, **_k: True)
-        app = mount_namespace(system_ns)
+        app = mount_namespace(health_ns, system_ns)
         app.config["TESTING"] = True
 
         with app.test_client() as tc:
-            resp = tc.get("/system/observability/errors")
+            resp = tc.get("/api/system/observability/errors")
 
         assert resp.status_code == 200
         messages = [e["message"] for e in resp.get_json()["errors"]]

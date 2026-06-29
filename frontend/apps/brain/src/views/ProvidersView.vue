@@ -432,7 +432,7 @@ async function saveProvider(): Promise<void> {
     // Providers-only lift check
     if (shell.providersOnly) {
       try {
-        const res = await fetch('/auth/status', { credentials: 'same-origin' });
+        const res = await fetch('/api/auth/status', { credentials: 'same-origin' });
         if (res.ok) {
           const sd = (await res.json()) as { has_providers?: boolean };
           if (sd.has_providers) shell.liftProvidersOnly();

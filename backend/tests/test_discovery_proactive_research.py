@@ -206,7 +206,7 @@ def test_research_observability_endpoints_expose_runs_and_detail(
     )
     assert run_id is not None
 
-    listing = client.get("/system/observability/research")
+    listing = client.get("/api/system/observability/research")
     assert listing.status_code == 200
     body = listing.get_json()
     assert "generated_at" in body
@@ -214,7 +214,7 @@ def test_research_observability_endpoints_expose_runs_and_detail(
     assert isinstance(runs, list) and len(runs) == 1
     assert runs[0]["researched"] == blob
 
-    detail = client.get(f"/system/observability/research/{run_id}")
+    detail = client.get(f"/api/system/observability/research/{run_id}")
     assert detail.status_code == 200
     run = detail.get_json()["run"]
     assert run["user_summary"] == "US"
@@ -222,5 +222,5 @@ def test_research_observability_endpoints_expose_runs_and_detail(
     # Assistant rows only — the input row is excluded from the joined blob.
     assert run["transcript"] == blob
 
-    missing = client.get("/system/observability/research/999999")
+    missing = client.get("/api/system/observability/research/999999")
     assert missing.status_code == 404

@@ -10,20 +10,16 @@ from flask_restx import Namespace, Resource
 
 from .auth import require_session
 from .dto import Error, expects, register_dto, responds
+from .dto.boundary import error
 from .dto.personality import Personality, PersonalityUpdate
 
 logger = logging.getLogger(__name__)
 
-personality_ns = Namespace('personality', description='Personality tuple', path='/settings')
+personality_ns = Namespace('personality', description='Personality tuple', path='/api/settings')
 
 register_dto(personality_ns, Personality, PersonalityUpdate, Error)
 
 _P = personality_ns.models
-
-
-def _error(message: str, status: int) -> ResponseReturnValue:
-    """Build a uniform non-2xx ``Error`` body carrying its own status code."""
-    return Error(error=message).model_dump(mode="json"), status
 
 
 @personality_ns.route('/personality')
@@ -43,7 +39,7 @@ class PersonalityResource(Resource):
             )
         except Exception as exc:
             logger.error("[REST API] Failed to get personality: %s", exc)
-            return _error("Failed to get personality", 500)
+            return error("Failed to get personality", 500)
 
     @require_session
     @personality_ns.expect(_P["PersonalityUpdate"])
@@ -60,7 +56,7 @@ class PersonalityResource(Resource):
             return Personality(tuple=dto.tuple_, voice=voice)
         except ValueError as exc:
             logger.warning("[REST API] Personality validation error: %s", exc)
-            return _error(str(exc), 422)
+            return error(str(exc), 422)
         except Exception as exc:
             logger.error("[REST API] Failed to set personality: %s", exc)
-            return _error("Failed to set personality", 500)
+            return error("Failed to set personality", 500)

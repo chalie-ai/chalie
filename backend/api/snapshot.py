@@ -18,7 +18,7 @@ from functools import wraps
 from pathlib import Path
 from typing import TYPE_CHECKING, ParamSpec, TypeVar
 
-from flask import request, send_file
+from flask import after_this_request, request, send_file
 from flask.typing import ResponseReturnValue
 from werkzeug.utils import secure_filename
 from flask_restx import Namespace, Resource
@@ -91,6 +91,13 @@ class SnapshotExportResource(Resource):
         try:
             from services.snapshot_service import SnapshotService
             zip_path = SnapshotService().export(password=dto.password)
+            workspace = zip_path.parent
+
+            @after_this_request
+            def _cleanup(response: object) -> object:
+                shutil.rmtree(str(workspace), ignore_errors=True)
+                return response
+
             # send_file returns a werkzeug Response — the foundation's @responds
             # passes it through untouched (binary passthrough, not a JSON DTO).
             return send_file(

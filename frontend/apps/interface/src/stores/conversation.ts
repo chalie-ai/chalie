@@ -574,7 +574,6 @@ export const useConversationStore = defineStore('conversation', {
       this.threads.push({
         turn_id: turnId,
         last_activity_at: nowUtc,
-        last_row_id: 0,
         row_count: 0,
         preview,
         gist: null,

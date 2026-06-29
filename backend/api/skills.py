@@ -28,6 +28,7 @@ from utils.skills_io import (
 
 from .auth import require_session
 from .dto import Error, expects, register_dto, responds
+from .dto.boundary import error
 from .dto.skill import Skill, SkillCreate, SkillUpdate
 from .dto.skill_association import SkillAssociation
 from .dto.skill_list import SkillListResult
@@ -106,11 +107,6 @@ def _index_new_skill(conn: sqlite3.Connection, skill_id: int, title: str, use_fo
         raise
 
 
-def _error(message: str, status: int) -> ResponseReturnValue:
-    """Build a uniform non-2xx ``Error`` body carrying its own status code."""
-    return Error(error=message).model_dump(mode="json"), status
-
-
 @skills_ns.route("")
 class SkillsListResource(Resource):
     @require_session
@@ -137,7 +133,7 @@ class SkillsListResource(Resource):
             return SkillListResult(skills=skills, associations=associations)
         except Exception as exc:
             logger.error("[SKILLS API] GET /api/skills failed: %s", exc)
-            return _error("Failed to load skills", 500)
+            return error("Failed to load skills", 500)
 
     @require_session
     @skills_ns.expect(_S["SkillCreate"])
@@ -150,7 +146,7 @@ class SkillsListResource(Resource):
     @expects(SkillCreate)
     def post(self, dto: SkillCreate) -> Skill | ResponseReturnValue:
         if not SKILLS_DB_PATH.exists():
-            return _error(_DB_UNAVAILABLE, 503)
+            return error(_DB_UNAVAILABLE, 503)
 
         try:
             conn = _open_db()
@@ -160,7 +156,7 @@ class SkillsListResource(Resource):
                     (dto.title,),
                 ).fetchone()
                 if existing is not None:
-                    return _error(f"A user skill named '{dto.title}' already exists", 409)
+                    return error(f"A user skill named '{dto.title}' already exists", 409)
 
                 conn.execute(
                     "INSERT INTO skills(title, use_for, content, tags, version, source) "
@@ -196,7 +192,7 @@ class SkillsListResource(Resource):
             return Skill.model_validate(_row_to_dict(row))
         except Exception as exc:
             logger.error("[SKILLS API] POST /api/skills failed: %s", exc)
-            return _error("Failed to create skill", 500)
+            return error("Failed to create skill", 500)
 
 
 @skills_ns.route("/<int:skill_id>")
@@ -214,7 +210,7 @@ class SkillItemResource(Resource):
     @expects(SkillUpdate)
     def put(self, skill_id: int, dto: SkillUpdate) -> Skill | ResponseReturnValue:
         if not SKILLS_DB_PATH.exists():
-            return _error(_DB_UNAVAILABLE, 503)
+            return error(_DB_UNAVAILABLE, 503)
 
         try:
             conn = _open_db()
@@ -225,9 +221,9 @@ class SkillItemResource(Resource):
                     (skill_id,),
                 ).fetchone()
                 if row is None:
-                    return _error(_NOT_FOUND, 404)
+                    return error(_NOT_FOUND, 404)
                 if row["source"] != "user":
-                    return _error(_ONLY_USER_EDIT, 403)
+                    return error(_ONLY_USER_EDIT, 403)
 
                 title = row["title"]
                 use_for = dto.use_for if dto.use_for is not None else row["use_for"]
@@ -269,7 +265,7 @@ class SkillItemResource(Resource):
             return Skill.model_validate(_row_to_dict(row))
         except Exception as exc:
             logger.error("[SKILLS API] PUT /api/skills/%d failed: %s", skill_id, exc)
-            return _error("Failed to update skill", 500)
+            return error("Failed to update skill", 500)
 
     @require_session
     @skills_ns.param("skill_id", "Skill id")
@@ -281,7 +277,7 @@ class SkillItemResource(Resource):
     @responds(code=204)
     def delete(self, skill_id: int) -> None | ResponseReturnValue:
         if not SKILLS_DB_PATH.exists():
-            return _error(_DB_UNAVAILABLE, 503)
+            return error(_DB_UNAVAILABLE, 503)
 
         try:
             conn = _open_db()
@@ -290,9 +286,9 @@ class SkillItemResource(Resource):
                     "SELECT id, title, source FROM skills WHERE id = ?", (skill_id,)
                 ).fetchone()
                 if row is None:
-                    return _error(_NOT_FOUND, 404)
+                    return error(_NOT_FOUND, 404)
                 if row["source"] != "user":
-                    return _error(_ONLY_USER_DELETE, 403)
+                    return error(_ONLY_USER_DELETE, 403)
 
                 title = row["title"]
                 path = skill_yaml_path(title)
@@ -310,7 +306,7 @@ class SkillItemResource(Resource):
             return None
         except Exception as exc:
             logger.error("[SKILLS API] DELETE /api/skills/%d failed: %s", skill_id, exc)
-            return _error("Failed to delete skill", 500)
+            return error("Failed to delete skill", 500)
 
 
 @skills_ns.route("/<int:skill_id>/toggle")
@@ -324,7 +320,7 @@ class SkillToggleResource(Resource):
     @responds(SkillToggleResult, code=200)
     def put(self, skill_id: int) -> SkillToggleResult | ResponseReturnValue:
         if not SKILLS_DB_PATH.exists():
-            return _error(_DB_UNAVAILABLE, 503)
+            return error(_DB_UNAVAILABLE, 503)
 
         try:
             conn = _open_db()
@@ -333,7 +329,7 @@ class SkillToggleResource(Resource):
                     "SELECT id, enabled FROM skills WHERE id = ?", (skill_id,)
                 ).fetchone()
                 if row is None:
-                    return _error(_NOT_FOUND, 404)
+                    return error(_NOT_FOUND, 404)
 
                 new_enabled = 0 if row["enabled"] else 1
                 conn.execute(
@@ -347,7 +343,7 @@ class SkillToggleResource(Resource):
             return SkillToggleResult(skill_id=skill_id, enabled=bool(new_enabled))
         except Exception as exc:
             logger.error("[SKILLS API] PUT /api/skills/%d/toggle failed: %s", skill_id, exc)
-            return _error("Failed to toggle skill", 500)
+            return error("Failed to toggle skill", 500)
 
 
 @skills_ns.route("/<int:skill_id>/copy")
@@ -363,7 +359,7 @@ class SkillCopyResource(Resource):
     @responds(Skill, code=201)
     def post(self, skill_id: int) -> Skill | ResponseReturnValue:
         if not SKILLS_DB_PATH.exists():
-            return _error(_DB_UNAVAILABLE, 503)
+            return error(_DB_UNAVAILABLE, 503)
 
         try:
             conn = _open_db()
@@ -374,9 +370,9 @@ class SkillCopyResource(Resource):
                     (skill_id,),
                 ).fetchone()
                 if row is None:
-                    return _error(_NOT_FOUND, 404)
+                    return error(_NOT_FOUND, 404)
                 if row["source"] != "curated":
-                    return _error(_ONLY_CURATED_COPY, 422)
+                    return error(_ONLY_CURATED_COPY, 422)
 
                 base_title = row["title"]
                 copy_title = f"{base_title} (Custom)"
@@ -387,7 +383,7 @@ class SkillCopyResource(Resource):
                     (copy_title,),
                 ).fetchone()
                 if existing_copy is not None:
-                    return _error(f"A user copy named '{copy_title}' already exists", 409)
+                    return error(f"A user copy named '{copy_title}' already exists", 409)
 
                 conn.execute(
                     "INSERT INTO skills(title, use_for, content, tags, version, source, based_on) "
@@ -427,4 +423,4 @@ class SkillCopyResource(Resource):
             return Skill.model_validate(_row_to_dict(new_row))
         except Exception as exc:
             logger.error("[SKILLS API] POST /api/skills/%d/copy failed: %s", skill_id, exc)
-            return _error("Failed to copy skill", 500)
+            return error("Failed to copy skill", 500)

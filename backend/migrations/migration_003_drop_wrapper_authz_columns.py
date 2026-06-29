@@ -1,4 +1,4 @@
-"""Migration 002 — drop the wrapper_tokens authz columns.
+"""Migration 003 — drop the wrapper_tokens authz columns.
 
 The `capabilities` and `permissions` columns existed solely to gate the
 `/api/query` and `/api/signals` REST endpoints. Both endpoints are gone, so

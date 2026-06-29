@@ -45,7 +45,6 @@ class Document(DTO):
     original_name: str
     mime_type: str
     file_size_bytes: int
-    file_path: str
     file_hash: str
     page_count: int | None
     status: str

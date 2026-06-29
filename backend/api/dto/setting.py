@@ -1,4 +1,4 @@
-"""DTOs for ``GET/PUT /system/settings/<key>`` — opaque key/value settings.
+"""DTOs for ``GET/PUT /api/system/settings/<key>`` — opaque key/value settings.
 
 The stored value is opaque (string, JSON, or null), so ``value`` stays a raw
 ``object`` passthrough. ``SettingWrite`` is the PUT body; an empty/falsey value
@@ -26,6 +26,6 @@ class SettingWrite(DTO):
 
 
 class UpdateApplyRequest(DTO):
-    """Inbound body for ``POST /system/update/apply`` — the release tag to apply."""
+    """Inbound body for ``POST /api/system/update/apply`` — the release tag to apply."""
 
     tag: str = Field(..., min_length=1)

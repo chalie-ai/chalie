@@ -1,4 +1,4 @@
-"""DTO for ``GET /system/context-usage`` — the composer context-window indicator.
+"""DTO for ``GET /api/system/context-usage`` — the composer context-window indicator.
 
 The empty/unknown state serializes to exactly
 ``{"last_request_tokens": null, "context_window": null}`` (a protected test does

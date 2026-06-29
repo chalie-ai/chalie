@@ -23,7 +23,7 @@ import pytest
 from flask.testing import FlaskClient
 
 import api.system as system_module
-from api.system import system_ns
+from api.system import health_ns, system_ns
 from tests.restx_test_app import mount_namespace
 from services import embedding_service
 from services.runtime_deps_service import RuntimeDepsService
@@ -73,7 +73,7 @@ def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[tuple[Fl
         "services.auth_session_service.validate_session",
         lambda *_a, **_k: True,
     )
-    app = mount_namespace(system_ns)
+    app = mount_namespace(health_ns, system_ns)
     app.config["TESTING"] = True
     with app.test_client() as tc:
         yield tc, log_file
@@ -216,7 +216,7 @@ class TestEnsureOnnxRuntimeHealsAndLogs:
         assert all(r["level"] == "ERROR" for r in runtime_lines)
 
         # …and the hint actually surfaces in the real Cognition → Errors endpoint.
-        panel = [e["message"] for e in tc.get("/system/observability/errors").get_json()["errors"]]
+        panel = [e["message"] for e in tc.get("/api/system/observability/errors").get_json()["errors"]]
         assert any("libcudart" in m and "CPU" in m for m in panel)
 
 

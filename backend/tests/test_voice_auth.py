@@ -38,19 +38,19 @@ def _make_client() -> FlaskClient:
 
 class TestVoiceEndpointsRejectUnauthenticated:
     def test_health_requires_auth(self, db: sqlite3.Connection) -> None:
-        resp = _make_client().get('/voice/health')
+        resp = _make_client().get('/api/voice/health')
         assert resp.status_code == 401
         assert resp.get_json() == {"error": "Authentication required"}
 
     def test_synthesize_requires_auth(self, db: sqlite3.Connection) -> None:
-        resp = _make_client().post('/voice/synthesize', json={"text": "hello"})
+        resp = _make_client().post('/api/voice/synthesize', json={"text": "hello"})
         assert resp.status_code == 401
         assert resp.get_json() == {"error": "Authentication required"}
 
     def test_transcribe_requires_auth(self, db: sqlite3.Connection) -> None:
         # A would-be attacker POSTs audio; the guard rejects before the body runs.
         resp = _make_client().post(
-            '/voice/transcribe',
+            '/api/voice/transcribe',
             data={"file": (io.BytesIO(b"RIFF....WAVE"), "clip.wav")},
             content_type="multipart/form-data",
         )
@@ -68,7 +68,7 @@ class TestVoiceEndpointsAllowAuthenticated:
             name="voice-auth-test",
         )
         resp = _make_client().get(
-            '/voice/health', headers={"Authorization": f"Bearer {raw_token}"},
+            '/api/voice/health', headers={"Authorization": f"Bearer {raw_token}"},
         )
         assert resp.status_code == 200
         # The real handler ran: it always reports a concrete status.

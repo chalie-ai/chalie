@@ -1,4 +1,4 @@
-"""DTO for ``GET /system/observability/compaction`` — the continuity-compaction view.
+"""DTO for ``GET /api/system/observability/compaction`` — the continuity-compaction view.
 
 The empty state serializes to exactly ``{"compaction": null}`` (a protected test
 does whole-body equality), so ``CompactionView`` carries only the ``compaction``

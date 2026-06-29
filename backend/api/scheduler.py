@@ -18,6 +18,7 @@ from flask_restx import Namespace, Resource
 
 from .auth import require_session
 from .dto import Error, expects, register_dto, responds
+from .dto.boundary import error
 from .dto.scheduler_item import SchedulerItem, SchedulerItemCreate, SchedulerItemUpdate
 from .dto.scheduler_query import SchedulerGroupQuery, SchedulerHistoryQuery, SchedulerListQuery
 
@@ -32,7 +33,7 @@ _ERR_INTERNAL = "Internal server error"
 _ERR_NOT_FOUND = "Not found"
 _ERR_NOT_PENDING = "Not found or item is not pending"
 
-scheduler_ns = Namespace("scheduler", description="Scheduled item management", path="/scheduler")
+scheduler_ns = Namespace("scheduler", description="Scheduled item management", path="/api/scheduler")
 
 register_dto(
     scheduler_ns,
@@ -53,11 +54,6 @@ _COLS = [
     "created_by_session", "created_at", "last_fired_at", "group_id", "is_prompt",
 ]
 _COLS_FULL = _COLS + ["source", "external_uid"]
-
-
-def _error(message: str, status: int) -> ResponseReturnValue:
-    """Build a uniform non-2xx ``Error`` body carrying its own status code."""
-    return Error(error=message).model_dump(mode="json"), status
 
 
 def _get_db() -> "DatabaseService":
@@ -115,7 +111,7 @@ class SchedulerListResource(Resource):
             return [_item_dto(r, _COLS_FULL) for r in rows]
         except Exception as exc:
             logger.error("[SCHEDULER API] list error: %s", exc)
-            return _error(_ERR_INTERNAL, 500)
+            return error(_ERR_INTERNAL, 500)
 
     @require_session
     @scheduler_ns.expect(_S["SchedulerItemCreate"])
@@ -162,7 +158,7 @@ class SchedulerListResource(Resource):
             return _item_dto(cast("Iterable[object]", row), _COLS)
         except Exception as exc:
             logger.error("[SCHEDULER API] create error: %s", exc)
-            return _error(_ERR_INTERNAL, 500)
+            return error(_ERR_INTERNAL, 500)
 
 
 @scheduler_ns.route("/history")
@@ -190,7 +186,7 @@ class SchedulerHistoryResource(Resource):
             return None
         except Exception as exc:
             logger.error("[SCHEDULER API] prune history error: %s", exc)
-            return _error(_ERR_INTERNAL, 500)
+            return error(_ERR_INTERNAL, 500)
 
 
 @scheduler_ns.route("/group/<group_id>")
@@ -214,7 +210,7 @@ class SchedulerGroupResource(Resource):
             return [_item_dto(r, _COLS) for r in rows]
         except Exception as exc:
             logger.error("[SCHEDULER API] group fires error: %s", exc)
-            return _error(_ERR_INTERNAL, 500)
+            return error(_ERR_INTERNAL, 500)
 
 
 # ---------------------------------------------------------------------------
@@ -239,11 +235,11 @@ class SchedulerItemResource(Resource):
                     (item_id,),
                 ).fetchone()
             if row is None:
-                return _error(_ERR_NOT_FOUND, 404)
+                return error(_ERR_NOT_FOUND, 404)
             return _item_dto(row, _COLS)
         except Exception as exc:
             logger.error("[SCHEDULER API] get item error: %s", exc)
-            return _error(_ERR_INTERNAL, 500)
+            return error(_ERR_INTERNAL, 500)
 
     @require_session
     @scheduler_ns.expect(_S["SchedulerItemUpdate"])
@@ -264,7 +260,7 @@ class SchedulerItemResource(Resource):
                     (item_id,),
                 )
                 if cursor.fetchone() is None:
-                    return _error(_ERR_NOT_PENDING, 404)
+                    return error(_ERR_NOT_PENDING, 404)
                 cursor.execute(
                     """
                     UPDATE scheduled_items
@@ -279,7 +275,7 @@ class SchedulerItemResource(Resource):
                 )
                 if cursor.rowcount == 0:
                     conn.commit()
-                    return _error(_ERR_NOT_PENDING, 404)
+                    return error(_ERR_NOT_PENDING, 404)
                 cursor.execute(
                     f"SELECT {', '.join(_COLS)} FROM scheduled_items WHERE id = ?",
                     (item_id,),
@@ -287,11 +283,11 @@ class SchedulerItemResource(Resource):
                 row = cursor.fetchone()
                 conn.commit()
             if row is None:
-                return _error(_ERR_NOT_PENDING, 404)
+                return error(_ERR_NOT_PENDING, 404)
             return _item_dto(row, _COLS)
         except Exception as exc:
             logger.error("[SCHEDULER API] update error: %s", exc)
-            return _error(_ERR_INTERNAL, 500)
+            return error(_ERR_INTERNAL, 500)
 
     @require_session
     @scheduler_ns.response(204, "Item cancelled")
@@ -312,8 +308,8 @@ class SchedulerItemResource(Resource):
                 affected = cursor.rowcount
                 conn.commit()
             if affected == 0:
-                return _error(_ERR_NOT_PENDING, 404)
+                return error(_ERR_NOT_PENDING, 404)
             return None
         except Exception as exc:
             logger.error("[SCHEDULER API] cancel error: %s", exc)
-            return _error(_ERR_INTERNAL, 500)
+            return error(_ERR_INTERNAL, 500)

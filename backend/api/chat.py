@@ -2,13 +2,13 @@
 Chat API — HTTP turn-control and rich-card action endpoints.
 
 Routes:
-  POST /chat/interrupt     — cooperatively cancel the active UMP turn. The
+  POST /api/chat/interrupt     — cooperatively cancel the active UMP turn. The
                              cancelled turn deletes its own transcript and
                              tool_call rows. Returns 200 always with JSON body.
-  GET  /chat/subagents/active — active async delegates for the Processes panel.
-  POST /chat/subagent/<sub_id>/stop — cooperatively cancel a running async
+  GET  /api/chat/subagents/active — active async delegates for the Processes panel.
+  POST /api/chat/subagent/<sub_id>/stop — cooperatively cancel a running async
                              delegate by its sub_id. Returns 200 always.
-  POST /action             — receive a rich-card control click; dispatches via
+  POST /api/action             — receive a rich-card control click; dispatches via
                              ToolDispatcher.dispatch() and returns the result
                              synchronously in the response body (no WS frame).
 
@@ -37,34 +37,28 @@ import logging
 import threading
 import time
 import uuid
-from typing import TYPE_CHECKING, Sequence, cast
+from typing import Sequence, cast
 
 from flask.typing import ResponseReturnValue
 from flask_restx import Namespace, Resource
 
 from .auth import require_auth
 from .dto import Error, expects, register_dto, responds
+from .dto.boundary import error
 from .dto.chat import ActionRequest, ActionResult
 from .dto.subagent import ActiveSubagents, Interrupted, SubagentStopResult
 from services.log_utils import safe
 from services.markup import sanitize
+from services.processor_config import ProcessorConfig
 from services.websocket_broker import WebSocketBroker
-
-if TYPE_CHECKING:
-    from services.processor_config import ProcessorConfig
 
 logger = logging.getLogger(__name__)
 
-chat_ns = Namespace("chat", description="Chat turn control and rich-card actions", path="/")
+chat_ns = Namespace("chat", description="Chat turn control and rich-card actions", path="/api")
 
 register_dto(chat_ns, ActionRequest, ActionResult, Interrupted, SubagentStopResult, ActiveSubagents, Error)
 
 _M = chat_ns.models
-
-
-def _error(message: str, status: int) -> ResponseReturnValue:
-    """Build a uniform non-2xx ``Error`` body carrying its own status code."""
-    return Error(error=message).model_dump(mode="json"), status
 
 
 # ── Active UMP turn tracking ─────────────────────────────────────────────────
@@ -140,7 +134,7 @@ def _run_chat_background(
             rows = Transcript.get_recent("user", limit=1)
             failed_turn = cast("int | None", rows[-1].get("turn_id")) if rows else None
             broker = WebSocketBroker()
-            broker.broadcast({"type": "error", "message": str(exc), "recoverable": False})
+            broker.broadcast({"type": "error", "message": "Turn failed unexpectedly", "recoverable": False})
             broker.broadcast({"type": "done", "turn_id": failed_turn})
     finally:
         _clear_active_ump(turn)
@@ -286,6 +280,54 @@ def _interrupt_active_turn() -> Interrupted:
     return Interrupted(reason="no_active_turn")
 
 
+# ── Action-button dispatch helpers ───────────────────────────────────────────
+
+
+class _ActionButtonConfig(ProcessorConfig):
+    """Minimal ProcessorConfig for action-button dispatches (no ACT loop runs).
+
+    No ACT loop is executed; the three prompt builders are never invoked —
+    they return "" to satisfy the abstract base.
+    """
+
+    def __init__(self) -> None:
+        super().__init__(
+            channel="action_button",
+            role="action_button",
+            policy_channel=ProcessorConfig.PolicyChannel.CHAT,
+            always_available=[],
+            skip_transcript=True,
+            skip_input_row=True,
+            suppress_history=True,
+            broadcast_to=None,
+            memory_seed=False,
+        )
+
+    def get_user_definition(self, mp: object) -> str:
+        return ""
+
+    def get_user_prompt(self, mp: object) -> str:
+        return ""
+
+    def get_system_prompt(self, mp: object) -> str:
+        return ""
+
+
+class _ActionCtx:
+    """Minimal mp-like context for ToolDispatcher in action-button dispatches.
+
+    ``broadcast_to=None`` on the config keeps dispatches silent. ``uid=None``
+    signals a non-user channel dispatch. A fresh ``cancel_event`` per instance
+    means each action-button dispatch can be independently signalled.
+    """
+
+    config = _ActionButtonConfig()
+    uid = None
+
+    def __init__(self) -> None:
+        self.cancel_event = threading.Event()
+
+
 # ── HTTP endpoints ────────────────────────────────────────────────────────────
 
 
@@ -363,45 +405,10 @@ class ActionResource(Resource):
         action_start = time.time()
         try:
             from abilities._dispatcher import ToolDispatcher  # noqa: PLC0415
-            from services.processor_config import ProcessorConfig  # noqa: PLC0415
-
-            # Build a minimal flat-path context for action-button dispatches.
-            # ToolDispatcher requires an mp-like object with config, uid,
-            # cancel_event. broadcast_to=None keeps these dispatches silent.
-            # ProcessorConfig is abstract, so action-button dispatch needs a
-            # concrete subclass; no ACT loop runs here, so the three prompt
-            # builders are never invoked — they return "" to satisfy the base.
-            class _ActionButtonConfig(ProcessorConfig):
-                def __init__(self) -> None:
-                    super().__init__(
-                        channel="action_button",
-                        role="action_button",
-                        policy_channel=ProcessorConfig.PolicyChannel.CHAT,
-                        always_available=[],
-                        skip_transcript=True,
-                        skip_input_row=True,
-                        suppress_history=True,
-                        broadcast_to=None,
-                        memory_seed=False,
-                    )
-
-                def get_user_definition(self, mp: object) -> str:
-                    return ""
-
-                def get_user_prompt(self, mp: object) -> str:
-                    return ""
-
-                def get_system_prompt(self, mp: object) -> str:
-                    return ""
-
-            class _ActionCtx:
-                config = _ActionButtonConfig()
-                uid = None
-                cancel_event = threading.Event()
 
             result_text = ToolDispatcher(_ActionCtx()).dispatch(dto.skill, dto.params)
             if result_text.startswith("Unknown tool:"):
-                return _error(f"Unknown skill: {dto.skill}", 400)
+                return error(f"Unknown skill: {dto.skill}", 400)
 
             return ActionResult(
                 content=sanitize(result_text or "Done."),
@@ -409,4 +416,4 @@ class ActionResource(Resource):
             )
         except Exception as exc:
             logger.exception("[Chat API] Action handler error: %s", exc)
-            return _error(str(exc), 500)
+            return error("Action handler error", 500)

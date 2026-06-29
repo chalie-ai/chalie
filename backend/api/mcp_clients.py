@@ -16,6 +16,7 @@ from flask_restx import Namespace, Resource
 
 from .auth import require_session
 from .dto import Error, expects, register_dto, responds
+from .dto.boundary import error
 from .dto.mcp_server import McpServer, McpServerCreate, McpServerUpdate, McpTestResult
 from .dto.mcp_tool import DiscoverableTools, McpTool
 from services.mcp_client_service import McpClientService
@@ -38,11 +39,6 @@ _NOT_FOUND = "Server not found"
 
 def _svc() -> McpClientService:
     return McpClientService()
-
-
-def _error(message: str, status: int) -> ResponseReturnValue:
-    """Build a uniform non-2xx ``Error`` body carrying its own status code."""
-    return Error(error=message).model_dump(mode="json"), status
 
 
 def _server_dto(row: dict[str, object]) -> McpServer:
@@ -139,7 +135,7 @@ class ServerResource(Resource):
         try:
             server = _svc().update_server(server_id, updates)
         except LookupError:
-            return _error(_NOT_FOUND, 404)
+            return error(_NOT_FOUND, 404)
         return _server_dto(server)
 
     @require_session
@@ -151,7 +147,7 @@ class ServerResource(Resource):
         try:
             _svc().delete_server(server_id)
         except LookupError:
-            return _error(_NOT_FOUND, 404)
+            return error(_NOT_FOUND, 404)
         return None
 
 
@@ -170,7 +166,7 @@ class ServerTestResource(Resource):
     def post(self, server_id: str) -> McpTestResult | ResponseReturnValue:
         svc = _svc()
         if svc.get_server(server_id) is None:
-            return _error(_NOT_FOUND, 404)
+            return error(_NOT_FOUND, 404)
         result = svc.ping_and_sync(server_id)
         return McpTestResult(
             status=cast(str, result["status"]),
@@ -195,5 +191,5 @@ class ServerToolsResource(Resource):
     def get(self, server_id: str) -> list[McpTool] | ResponseReturnValue:
         svc = _svc()
         if svc.get_server(server_id) is None:
-            return _error(_NOT_FOUND, 404)
+            return error(_NOT_FOUND, 404)
         return [_tool_dto(t) for t in svc.get_server_tools(server_id)]

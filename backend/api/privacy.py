@@ -1,4 +1,4 @@
-"""Privacy namespace — /privacy/data-summary, /privacy/export, /privacy/delete-all.
+"""Privacy namespace — /api/privacy/data-summary, /api/privacy/export, /api/privacy/delete-all.
 
 Not CRUD: a summary read (raw passthrough), a streaming JSON export download
 (raw Flask Response), and a single irreversible nuclear delete whose result is
@@ -13,6 +13,7 @@ user_tool_preferences, memory_recall_log, llm_call_log, concept_lut_misses.
 """
 
 import collections.abc
+import fnmatch
 import json
 import logging
 from datetime import datetime
@@ -26,6 +27,7 @@ from services.time_utils import utc_now
 
 from .auth import require_session
 from .dto import Error, register_dto, responds
+from .dto.boundary import error
 from .dto.privacy import DeleteAllResult
 
 if TYPE_CHECKING:
@@ -36,7 +38,7 @@ logger = logging.getLogger(__name__)
 _ERR_SUMMARY = "Failed to retrieve data summary"
 _ERR_DELETE = "Failed to delete data"
 
-privacy_ns = Namespace("privacy", description="Privacy data controls", path="/privacy")
+privacy_ns = Namespace("privacy", description="Privacy data controls", path="/api/privacy")
 
 register_dto(privacy_ns, DeleteAllResult, Error)
 
@@ -69,11 +71,6 @@ _DELETE_ALL_STORE_PATTERNS = (
     "working_memory:*",
     "deliberation_score:*",
 )
-
-
-def _error(message: str, status: int) -> ResponseReturnValue:
-    """Build a uniform non-2xx ``Error`` body carrying its own status code."""
-    return Error(error=message).model_dump(mode="json"), status
 
 
 def _serialize_row(row: dict[str, object]) -> dict[str, object]:
@@ -135,7 +132,8 @@ class DataSummaryResource(Resource):
                         cursor.execute(f"SELECT COUNT(*) FROM {table}")
                         row = cursor.fetchone()
                         result[table] = row[0] if row else 0
-                    except Exception:
+                    except Exception as exc:
+                        logger.warning("[REST API] privacy/data-summary count failed for %s: %s", table, exc)
                         result[table] = 0
 
                 # Oldest and newest memory timestamps
@@ -146,13 +144,13 @@ class DataSummaryResource(Resource):
                     if row and row[0]:
                         result["oldest_memory"] = str(row[0].date()) if hasattr(row[0], "date") else str(row[0])
                         result["newest_memory"] = str(row[1].date()) if hasattr(row[1], "date") else str(row[1])
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.warning("[REST API] privacy/data-summary timestamp query failed: %s", exc)
 
             return result
         except Exception as e:
             logger.exception(f"[REST API] privacy/data-summary error: {e}")
-            return _error(_ERR_SUMMARY, 500)
+            return error(_ERR_SUMMARY, 500)
 
 
 @privacy_ns.route("/export")
@@ -244,7 +242,7 @@ class ExportDataResource(Resource):
                 all_entries = store.export_matching(store_patterns)
 
                 # Group results by pattern for the same JSON shape as before
-                compiled = [(p, _re.compile(p.replace("*", ".*").replace("?", "."))) for p in store_patterns]
+                compiled = [(p, _re.compile(fnmatch.translate(p))) for p in store_patterns]
                 by_pattern: dict[str, dict[str, object]] = {p: {} for p in store_patterns}
                 for key, entry in all_entries.items():
                     for pattern, rx in compiled:
@@ -278,7 +276,7 @@ class DeleteAllResource(Resource):
         """Irreversibly delete ALL user data — gated by the ``X-Confirm-Delete: yes`` header."""
         from flask import request
         if request.headers.get("X-Confirm-Delete", "") != "yes":
-            return _error("Requires X-Confirm-Delete: yes header", 422)
+            return error("Requires X-Confirm-Delete: yes header", 422)
 
         try:
             from services.database_service import get_shared_db_service
@@ -314,4 +312,4 @@ class DeleteAllResource(Resource):
             )
         except Exception as e:
             logger.exception(f"[REST API] privacy/delete-all error: {e}")
-            return _error(_ERR_DELETE, 500)
+            return error(_ERR_DELETE, 500)

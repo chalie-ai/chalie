@@ -15,6 +15,7 @@ from flask_restx import Namespace, Resource
 
 from .auth import require_session
 from .dto import Error, expects, register_dto, responds
+from .dto.boundary import error
 from .dto.list import List, ListCreate, ListUpdate
 from .dto.list_item import ItemCreate, ItemUpdate, ListItem
 
@@ -22,7 +23,7 @@ if TYPE_CHECKING:
     from services.list_service import ListService
 
 
-lists_ns = Namespace("lists", description="List operations", path="/lists")
+lists_ns = Namespace("lists", description="List operations", path="/api/lists")
 
 register_dto(lists_ns, List, ListCreate, ListUpdate, ListItem, ItemCreate, ItemUpdate, Error)
 
@@ -36,11 +37,6 @@ def _get_list_service() -> "ListService":
     from services.database_service import get_shared_db_service
     from services.list_service import ListService
     return ListService(get_shared_db_service())
-
-
-def _error(message: str, status: int) -> ResponseReturnValue:
-    """Build a uniform non-2xx ``Error`` body carrying its own status code."""
-    return Error(error=message).model_dump(mode="json"), status
 
 
 def _list_dto(row: dict[str, object]) -> List:
@@ -90,7 +86,7 @@ class ListsResource(Resource):
         try:
             list_id = svc.create_list(dto.name, list_type=dto.list_type)
         except ValueError:
-            return _error(_NAME_TAKEN, 409)
+            return error(_NAME_TAKEN, 409)
         return _list_dto(cast("dict[str, object]", svc.get_list(list_id)))
 
 
@@ -104,7 +100,7 @@ class ListResource(Resource):
     def get(self, list_id: str) -> List | ResponseReturnValue:
         lst = _get_list_service().get_list(list_id)
         if lst is None:
-            return _error(_NOT_FOUND, 404)
+            return error(_NOT_FOUND, 404)
         return _list_dto(lst)
 
     @require_session
@@ -121,9 +117,9 @@ class ListResource(Resource):
         try:
             lst = svc.update_list(list_id, name=dto.name, list_type=dto.list_type)
         except ValueError:
-            return _error(_NAME_TAKEN, 409)
+            return error(_NAME_TAKEN, 409)
         if lst is None:
-            return _error(_NOT_FOUND, 404)
+            return error(_NOT_FOUND, 404)
         return _list_dto(lst)
 
     @require_session
@@ -133,7 +129,7 @@ class ListResource(Resource):
     @responds(code=204)
     def delete(self, list_id: str) -> None | ResponseReturnValue:
         if not _get_list_service().delete_list(list_id):
-            return _error(_NOT_FOUND, 404)
+            return error(_NOT_FOUND, 404)
         return None
 
 
@@ -151,7 +147,7 @@ class ListItemsResource(Resource):
     def get(self, list_id: str) -> list[ListItem] | ResponseReturnValue:
         items = _get_list_service().get_items(list_id)
         if items is None:
-            return _error(_NOT_FOUND, 404)
+            return error(_NOT_FOUND, 404)
         return [_item_dto(it) for it in items]
 
     @require_session
@@ -165,7 +161,7 @@ class ListItemsResource(Resource):
     def post(self, list_id: str, dto: ItemCreate) -> ListItem | ResponseReturnValue:
         item = _get_list_service().add_item(list_id, dto.content)
         if item is None:
-            return _error(_NOT_FOUND, 404)
+            return error(_NOT_FOUND, 404)
         return _item_dto(item)
 
 
@@ -186,7 +182,7 @@ class ListItemResource(Resource):
             content=dto.content, checked=dto.checked, position=dto.position,
         )
         if item is None:
-            return _error(_NOT_FOUND, 404)
+            return error(_NOT_FOUND, 404)
         return _item_dto(item)
 
     @require_session
@@ -197,5 +193,5 @@ class ListItemResource(Resource):
     @responds(code=204)
     def delete(self, list_id: str, item_id: str) -> None | ResponseReturnValue:
         if not _get_list_service().delete_item(list_id, item_id):
-            return _error(_NOT_FOUND, 404)
+            return error(_NOT_FOUND, 404)
         return None

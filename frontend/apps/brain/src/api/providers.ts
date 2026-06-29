@@ -50,58 +50,58 @@ export interface TestInput extends ProviderInput {
 
 export const providers = {
   list(): Promise<{ providers: Provider[] }> {
-    return api.get('/providers');
+    return api.get('/api/providers');
   },
 
   getSelected(): Promise<{ provider: Provider | null }> {
-    return api.get('/providers/selected');
+    return api.get('/api/providers/selected');
   },
 
   setSelected(providerId: number): Promise<unknown> {
-    return api.put('/providers/selected', { provider_id: providerId });
+    return api.put('/api/providers/selected', { provider_id: providerId });
   },
 
   getCatalog(): Promise<{ catalog: CatalogEntry[] }> {
-    return api.get('/providers/catalog');
+    return api.get('/api/providers/catalog');
   },
 
   getVision(): Promise<{ provider: Provider | null; source: string }> {
-    return api.get('/providers/vision');
+    return api.get('/api/providers/vision');
   },
 
   // provider_id null clears the explicit pin → vision falls back to the main
   // provider when it can see. Backend returns the resolved status.
   setVision(providerId: number | null): Promise<{ provider: Provider | null; source: string }> {
-    return api.put('/providers/vision', { provider_id: providerId });
+    return api.put('/api/providers/vision', { provider_id: providerId });
   },
 
   getDelegate(): Promise<{ provider: Provider | null; source: string }> {
-    return api.get('/providers/delegate');
+    return api.get('/api/providers/delegate');
   },
 
   // provider_id null clears the explicit pin → subagent work falls back to the
   // main provider (no "disabled" state). Backend returns the resolved status.
   setDelegate(providerId: number | null): Promise<{ provider: Provider | null; source: string }> {
-    return api.put('/providers/delegate', { provider_id: providerId });
+    return api.put('/api/providers/delegate', { provider_id: providerId });
   },
 
   create(input: ProviderInput): Promise<{ provider: Provider }> {
-    return api.post('/providers', input);
+    return api.post('/api/providers', input);
   },
 
   update(id: number, input: Partial<ProviderInput>): Promise<{ provider: Provider }> {
-    return api.put(`/providers/${id}`, input);
+    return api.put(`/api/providers/${id}`, input);
   },
 
   delete(id: number): Promise<unknown> {
-    return api.del(`/providers/${id}`);
+    return api.del(`/api/providers/${id}`);
   },
 
   listModels(body: { platform: string; host?: string; api_key?: string }): Promise<{ models: (string | { id: string })[] }> {
-    return api.post('/providers/list-models', body);
+    return api.post('/api/providers/list-models', body);
   },
 
   test(body: TestInput): Promise<{ success: boolean; message?: string; error?: string }> {
-    return api.post('/providers/test', body);
+    return api.post('/api/providers/test', body);
   },
 };

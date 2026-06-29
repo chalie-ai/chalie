@@ -21,6 +21,7 @@ from flask_restx import Namespace, Resource
 from services.vault_service import VaultLockedError
 from .auth import require_auth
 from .dto import Error, expects, register_dto, responds
+from .dto.boundary import error
 from .dto.capability import CapabilityDetail, CapabilityStatus, CapabilitySummary
 from .dto.capability_setup import CapabilitySetup
 
@@ -86,11 +87,6 @@ def _get_last_sync_at(cap_id: str) -> str | None:
         return None
 
 
-def _error(message: str, status: int) -> ResponseReturnValue:
-    """Build a uniform non-2xx ``Error`` body carrying its own status code."""
-    return Error(error=message).model_dump(mode="json"), status
-
-
 def _manifest(cap: "_Capability", cap_id: str) -> dict[str, object]:
     """Read the capability manifest, defaulting name/version."""
     manifest = cap.get_manifest()
@@ -121,7 +117,7 @@ def _summary_dto(cap_id: str, cap: "_Capability") -> CapabilitySummary:
 @capabilities_ns.route("")
 class CapabilityListResource(Resource):
     @require_auth
-    @capabilities_ns.response(200, "All capabilities", model=_C["CapabilitySummary"])
+    @capabilities_ns.response(200, "All capabilities", model=[_C["CapabilitySummary"]])
     @capabilities_ns.response(500, _ERR_LIST, model=_C["Error"])
     @responds(CapabilitySummary, code=200)
     def get(self) -> list[CapabilitySummary] | ResponseReturnValue:
@@ -131,7 +127,7 @@ class CapabilityListResource(Resource):
             return [_summary_dto(cap_id, cast("_Capability", cap)) for cap_id, cap in caps.items()]
         except Exception as exc:
             logger.exception("[capabilities] list_capabilities error: %s", exc)
-            return _error(_ERR_LIST, 500)
+            return error(_ERR_LIST, 500)
 
 
 @capabilities_ns.route("/<cap_id>")
@@ -147,7 +143,7 @@ class CapabilityDetailResource(Resource):
         try:
             caps = _load_caps()
             if cap_id not in caps:
-                return _error(f"Capability not found: {cap_id}", 404)
+                return error(f"Capability not found: {cap_id}", 404)
 
             cap = cast("_Capability", caps[cap_id])
             manifest = _manifest(cap, cap_id)
@@ -173,7 +169,7 @@ class CapabilityDetailResource(Resource):
             )
         except Exception as exc:
             logger.exception("[capabilities] get_capability('%s') error: %s", cap_id, exc)
-            return _error(_ERR_DETAIL, 500)
+            return error(_ERR_DETAIL, 500)
 
 
 @capabilities_ns.route("/<cap_id>/status")
@@ -189,7 +185,7 @@ class CapabilityStatusResource(Resource):
         try:
             caps = _load_caps()
             if cap_id not in caps:
-                return _error(f"Capability not found: {cap_id}", 404)
+                return error(f"Capability not found: {cap_id}", 404)
 
             cap = cast("_Capability", caps[cap_id])
 
@@ -205,7 +201,7 @@ class CapabilityStatusResource(Resource):
                 if raw_count is not None:
                     error_count = int(raw_count)
             except Exception as ec_exc:
-                logger.debug("[capabilities] could not read error_count for '%s': %s", cap_id, ec_exc)
+                logger.warning("[capabilities] could not read error_count for '%s': %s", cap_id, ec_exc)
 
             return CapabilityStatus(
                 id=cap_id,
@@ -215,7 +211,7 @@ class CapabilityStatusResource(Resource):
             )
         except Exception as exc:
             logger.exception("[capabilities] capability_status('%s') error: %s", cap_id, exc)
-            return _error(_ERR_STATUS, 500)
+            return error(_ERR_STATUS, 500)
 
 
 # ---------------------------------------------------------------------------
@@ -224,12 +220,6 @@ class CapabilityStatusResource(Resource):
 
 @capabilities_ns.route("/<cap_id>/setup")
 @capabilities_ns.param("cap_id", "Capability identifier")
-@capabilities_ns.doc(
-    body="""Per-capability credentials — keys depend on the capability's manifest
-    ``fields`` (e.g. mail: email/password/imap_host). The body is open
-    (``extra="allow"``); ``cap.configure()`` validates per-capability. Credentials
-    are write-only and never echoed on any response."""
-)
 class CapabilitySetupResource(Resource):
     @require_auth
     @capabilities_ns.expect(_C["CapabilitySetup"])
@@ -245,17 +235,17 @@ class CapabilitySetupResource(Resource):
         try:
             caps = _load_caps()
             if cap_id not in caps:
-                return _error(f"Capability not found: {cap_id}", 404)
+                return error(f"Capability not found: {cap_id}", 404)
 
             cap = cast("_Capability", caps[cap_id])
             try:
                 cap.configure(dto.model_dump(exclude_none=True))
             except ValueError as exc:
                 logger.warning("[capabilities] setup '%s' configure failed: %s", cap_id, exc)
-                return _error(str(exc), 422)
+                return error("Invalid capability configuration", 422)
 
             if not cap.is_connected():
-                return _error(_ERR_CONNECTION, 422)
+                return error(_ERR_CONNECTION, 422)
 
             import threading
 
@@ -270,10 +260,10 @@ class CapabilitySetupResource(Resource):
             return None
         except VaultLockedError:
             logger.warning("[capabilities] setup '%s' failed: vault is locked", cap_id)
-            return _error(_ERR_VAULT, 403)
+            return error(_ERR_VAULT, 403)
         except Exception as exc:
             logger.exception("[capabilities] setup_capability('%s') error: %s", cap_id, exc)
-            return _error(_ERR_SETUP, 500)
+            return error(_ERR_SETUP, 500)
 
 
 @capabilities_ns.route("/<cap_id>/disconnect")
@@ -289,9 +279,9 @@ class CapabilityDisconnectResource(Resource):
         try:
             caps = _load_caps()
             if cap_id not in caps:
-                return _error(f"Capability not found: {cap_id}", 404)
+                return error(f"Capability not found: {cap_id}", 404)
             cast("_Capability", caps[cap_id]).disconnect()
             return None
         except Exception as exc:
             logger.exception("[capabilities] disconnect_capability('%s') error: %s", cap_id, exc)
-            return _error(_ERR_DISCONNECT, 500)
+            return error(_ERR_DISCONNECT, 500)

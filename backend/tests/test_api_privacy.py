@@ -33,7 +33,7 @@ class TestPrivacyAPI:
         store = MemoryStore()
 
         with patch('services.memory_client.MemoryClientService.create_connection', return_value=store):
-            response = client.get('/privacy/data-summary')
+            response = client.get('/api/privacy/data-summary')
 
             assert response.status_code == 200
             data = response.get_json()
@@ -50,7 +50,7 @@ class TestPrivacyAPI:
     # ------------------------------------------------------------------
 
     def test_delete_all_without_confirm_header_returns_422(self, client: FlaskClient) -> None:
-        response = client.delete('/privacy/delete-all')
+        response = client.delete('/api/privacy/delete-all')
 
         assert response.status_code == 422
         data = response.get_json()
@@ -74,7 +74,7 @@ class TestPrivacyAPI:
         assert db.execute("SELECT COUNT(*) FROM transcript").fetchone()[0] == 1
 
         response = client.delete(
-            '/privacy/delete-all',
+            '/api/privacy/delete-all',
             headers={"X-Confirm-Delete": "yes"},
         )
 
@@ -126,7 +126,7 @@ class TestPrivacyAPI:
         assert db.execute("SELECT COUNT(*) FROM documents").fetchone()[0] >= 1
 
         response = client.delete(
-            '/privacy/delete-all',
+            '/api/privacy/delete-all',
             headers={"X-Confirm-Delete": "yes"},
         )
 

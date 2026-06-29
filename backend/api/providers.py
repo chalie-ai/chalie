@@ -17,6 +17,7 @@ from services.provider_db_service import PROVIDER_IN_USE_MSG
 
 from .auth import require_session
 from .dto import Error, expects, register_dto, responds
+from .dto.boundary import error
 from .dto.provider import Provider, ProviderCreate, ProviderUpdate
 from .dto.provider_models import (
     ListModelsRequest,
@@ -56,7 +57,7 @@ def _safe_validation_msg(exc: ValueError) -> str:
     return "Invalid provider configuration"
 
 
-providers_ns = Namespace('providers', description='Provider management', path='/providers')
+providers_ns = Namespace('providers', description='Provider management', path='/api/providers')
 
 register_dto(
     providers_ns,
@@ -337,7 +338,8 @@ def _map_api_error(error_str: str, platform: str, model: str) -> str:
         return f"Cannot connect to {platform} — is the service running?"
     if any(k in el for k in ('network', 'ssl')):
         return "Network error — check your internet connection"
-    return error_str[:300]
+    logger.warning("[REST API] Unmapped upstream provider error for platform=%s model=%s: %s", platform, model, error_str)
+    return "Upstream provider error"
 
 
 def _test_ollama_provider(config: "dict[str, object]", model: str, start: float) -> ProviderTestResult:
@@ -432,10 +434,6 @@ def _provider_dto(row: "dict[str, object]") -> Provider:
     )
 
 
-def _error(message: str, status: int) -> ResponseReturnValue:
-    return Error(error=message).model_dump(mode="json"), status
-
-
 def _invalidate_cache() -> None:
     try:
         from services.provider_cache_service import ProviderCacheService
@@ -451,7 +449,7 @@ def _invalidate_cache() -> None:
 @providers_ns.route('')
 class ProviderListResource(Resource):
     @require_session
-    @providers_ns.response(200, "List of providers", model=_M["Provider"])
+    @providers_ns.response(200, "List of providers", model=[_M["Provider"]])
     @providers_ns.response(500, "Server error", model=_M["Error"])
     @responds(Provider, code=200)
     def get(self) -> "list[Provider] | ResponseReturnValue":
@@ -459,7 +457,7 @@ class ProviderListResource(Resource):
             return [_provider_dto(r) for r in get_provider_service().list_providers_summary()]
         except Exception as e:
             logger.error(f"[REST API] Failed to list providers: {e}")
-            return _error("Failed to list providers", 500)
+            return error("Failed to list providers", 500)
 
     @require_session
     @providers_ns.expect(_M["ProviderCreate"])
@@ -477,13 +475,13 @@ class ProviderListResource(Resource):
             return _provider_dto(row)
         except ValueError as e:
             logger.warning(f"[REST API] Provider validation error: {e}")
-            return _error(_safe_validation_msg(e), 400)
+            return error(_safe_validation_msg(e), 400)
         except sqlite3.IntegrityError as e:
             logger.warning(f"[REST API] Provider name conflict: {e}")
-            return _error(_DUPLICATE_NAME_MSG, 409)
+            return error(_DUPLICATE_NAME_MSG, 409)
         except Exception as e:
             logger.error(f"[REST API] Failed to create provider: {e}")
-            return _error("Failed to create provider", 500)
+            return error("Failed to create provider", 500)
 
 
 @providers_ns.route('/catalog')
@@ -498,7 +496,7 @@ class ProviderCatalogResource(Resource):
             return {"catalog": get_catalog()}, 200
         except Exception as e:
             logger.exception(f"[REST API] Failed to load provider catalog: {e}")
-            return _error("Failed to load provider catalog", 500)
+            return error("Failed to load provider catalog", 500)
 
 
 @providers_ns.route('/<int:provider_id>')
@@ -513,11 +511,11 @@ class ProviderResource(Resource):
         try:
             row = get_provider_service().get_provider_by_id(provider_id)
             if not row:
-                return _error(_ERR_PROVIDER_NOT_FOUND, 404)
+                return error(_ERR_PROVIDER_NOT_FOUND, 404)
             return _provider_dto(row)
         except Exception as e:
             logger.error(f"[REST API] Failed to get provider: {e}")
-            return _error("Failed to get provider", 500)
+            return error("Failed to get provider", 500)
 
     @require_session
     @providers_ns.param("provider_id", "Provider ID")
@@ -537,13 +535,13 @@ class ProviderResource(Resource):
             return _provider_dto(row)
         except ValueError as e:
             logger.warning(f"[REST API] Provider validation error: {e}")
-            return _error(_safe_validation_msg(e), 400)
+            return error(_safe_validation_msg(e), 400)
         except sqlite3.IntegrityError as e:
             logger.warning(f"[REST API] Provider name conflict: {e}")
-            return _error(_DUPLICATE_NAME_MSG, 409)
+            return error(_DUPLICATE_NAME_MSG, 409)
         except Exception as e:
             logger.error(f"[REST API] Failed to update provider: {e}")
-            return _error("Failed to update provider", 500)
+            return error("Failed to update provider", 500)
 
     @require_session
     @providers_ns.param("provider_id", "Provider ID")
@@ -557,10 +555,10 @@ class ProviderResource(Resource):
             return "", 204
         except ValueError as e:
             logger.warning(f"[REST API] Cannot delete provider {provider_id}: {e}")
-            return _error(_safe_validation_msg(e), 409)
+            return error(_safe_validation_msg(e), 409)
         except Exception as e:
             logger.error(f"[REST API] Failed to delete provider: {e}")
-            return _error("Failed to delete provider", 500)
+            return error("Failed to delete provider", 500)
 
 
 @providers_ns.route('/list-models')
@@ -652,7 +650,7 @@ class ProviderSelectedResource(Resource):
             return _provider_dto(row) if row else None
         except Exception as e:
             logger.error(f"[REST API] Failed to get selected provider: {e}")
-            return _error("Failed to get selected provider", 500)
+            return error("Failed to get selected provider", 500)
 
     @require_session
     @providers_ns.expect(_M["ProviderRef"])
@@ -667,16 +665,16 @@ class ProviderSelectedResource(Resource):
             service = get_provider_service()
             row = service.get_provider_by_id(dto.provider_id)
             if not row:
-                return _error(_ERR_PROVIDER_NOT_FOUND, 404)
+                return error(_ERR_PROVIDER_NOT_FOUND, 404)
             service.set_selected_provider(dto.provider_id)
             _invalidate_cache()
             return _provider_dto(row)
         except ValueError as e:
             logger.warning(f"[REST API] Provider validation error: {e}")
-            return _error(_safe_validation_msg(e), 400)
+            return error(_safe_validation_msg(e), 400)
         except Exception as e:
             logger.error(f"[REST API] Failed to set selected provider: {e}")
-            return _error("Failed to set selected provider", 500)
+            return error("Failed to set selected provider", 500)
 
 
 @providers_ns.route('/vision')
@@ -695,7 +693,7 @@ class ProviderVisionResource(Resource):
             )
         except Exception:
             logger.exception("[REST API] Failed to get vision provider")
-            return _error("Failed to get vision provider", 500)
+            return error("Failed to get vision provider", 500)
 
     @require_session
     @providers_ns.expect(_M["NullableProviderRef"])
@@ -715,18 +713,18 @@ class ProviderVisionResource(Resource):
 
             row = service.get_provider_by_id(dto.provider_id)
             if not row:
-                return _error(_ERR_PROVIDER_NOT_FOUND, 404)
+                return error(_ERR_PROVIDER_NOT_FOUND, 404)
             if not row.get('supports_vision'):
-                return _error("Provider does not support vision", 400)
+                return error("Provider does not support vision", 400)
 
             service.set_vision_provider(dto.provider_id)
             _invalidate_cache()
             return ProviderRole(provider=_provider_dto(row), source='explicit')
         except (ValueError, TypeError):
-            return _error("Invalid provider_id", 400)
+            return error("Invalid provider_id", 400)
         except Exception:
             logger.exception("[REST API] Failed to set vision provider")
-            return _error("Failed to set vision provider", 500)
+            return error("Failed to set vision provider", 500)
 
 
 @providers_ns.route('/delegate')
@@ -746,7 +744,7 @@ class ProviderDelegateResource(Resource):
             )
         except Exception:
             logger.exception("[REST API] Failed to get delegate provider")
-            return _error("Failed to get delegate provider", 500)
+            return error("Failed to get delegate provider", 500)
 
     @require_session
     @providers_ns.expect(_M["NullableProviderRef"])
@@ -772,13 +770,13 @@ class ProviderDelegateResource(Resource):
 
             row = service.get_provider_by_id(dto.provider_id)
             if not row:
-                return _error(_ERR_PROVIDER_NOT_FOUND, 404)
+                return error(_ERR_PROVIDER_NOT_FOUND, 404)
 
             service.set_delegate_provider(dto.provider_id)
             _invalidate_cache()
             return ProviderRole(provider=_provider_dto(row), source='explicit')
         except (ValueError, TypeError):
-            return _error("Invalid provider_id", 400)
+            return error("Invalid provider_id", 400)
         except Exception:
             logger.exception("[REST API] Failed to set delegate provider")
-            return _error("Failed to set delegate provider", 500)
+            return error("Failed to set delegate provider", 500)

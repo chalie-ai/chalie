@@ -1,4 +1,4 @@
-"""DTO for ``GET /system/observability/write-queue`` — write-queue runtime stats."""
+"""DTO for ``GET /api/system/observability/write-queue`` — write-queue runtime stats."""
 
 from __future__ import annotations
 

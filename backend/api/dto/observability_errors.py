@@ -1,4 +1,4 @@
-"""DTO for ``GET /system/observability/errors`` — recent ERROR/CRITICAL log lines."""
+"""DTO for ``GET /api/system/observability/errors`` — recent ERROR/CRITICAL log lines."""
 
 from __future__ import annotations
 

@@ -1,4 +1,4 @@
-"""DTOs for ``GET /system/observability/tools`` — tool usage counts."""
+"""DTOs for ``GET /api/system/observability/tools`` — tool usage counts."""
 
 from __future__ import annotations
 

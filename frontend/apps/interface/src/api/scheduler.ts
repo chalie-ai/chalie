@@ -32,21 +32,21 @@ export interface ActiveSubagent {
 }
 
 export const scheduler = {
-  /** GET /scheduler?status=pending — list pending scheduled items. */
+  /** GET /api/scheduler?status=pending — list pending scheduled items. */
   pending(): Promise<{ items: ScheduledItem[]; total: number; limit: number; offset: number }> {
-    return api.get('/scheduler?status=pending');
+    return api.get('/api/scheduler?status=pending');
   },
 
-  /** GET /chat/subagents/active — running async delegates. */
+  /** GET /api/chat/subagents/active — running async delegates. */
   subagentsActive(): Promise<{ subagents: ActiveSubagent[] }> {
-    return api.get('/chat/subagents/active');
+    return api.get('/api/chat/subagents/active');
   },
 
   /**
-   * POST /chat/subagent/<subId>/stop — cancel a running delegate. Returns
+   * POST /api/chat/subagent/<subId>/stop — cancel a running delegate. Returns
    * { ok, cancelled } on success, { ok, reason: 'not_found' } for unknown sub_id.
    */
   subagentStop(subId: string): Promise<{ ok: boolean; cancelled?: boolean; reason?: string }> {
-    return api.post(`/chat/subagent/${encodeURIComponent(subId)}/stop`, {});
+    return api.post(`/api/chat/subagent/${encodeURIComponent(subId)}/stop`, {});
   },
 };

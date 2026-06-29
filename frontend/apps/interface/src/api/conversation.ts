@@ -53,7 +53,6 @@ export interface ConversationMessage {
 export interface ConversationThread {
   turn_id: number | null;
   last_activity_at: string | null;
-  last_row_id: number;
   row_count: number;
   preview: string;
   /** Per-thread one-sentence gist (from thread_gist), null when not yet generated. */

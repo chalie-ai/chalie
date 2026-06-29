@@ -31,13 +31,13 @@ class SchedulerListQuery(DTO):
 
 
 class SchedulerHistoryQuery(DTO):
-    """Params for DELETE /scheduler/history."""
+    """Params for DELETE /api/scheduler/history."""
 
     older_than_days: int = Field(default=_HISTORY_DEFAULT_DAYS, ge=1)
 
 
 class SchedulerGroupQuery(DTO):
-    """Params for GET /scheduler/group/<group_id>.
+    """Params for GET /api/scheduler/group/<group_id>.
 
     A non-int ``limit`` coerces to the default (legacy lenient behavior),
     distinct from the list endpoint which rejects it with 422.

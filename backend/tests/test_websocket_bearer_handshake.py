@@ -228,7 +228,7 @@ def test_same_minted_token_authenticates_http_bearer_request(
     app.config["TESTING"] = True
     with app.test_client() as client:
         resp = client.get(
-            "/chat/subagents/active",
+            "/api/chat/subagents/active",
             headers={"Authorization": "Bearer " + raw},
         )
 

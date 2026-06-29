@@ -29,7 +29,7 @@ _ERR_SEARCH_FAILED = "Failed to search memory"
 _RECALL_KINDS = ["user_specific", "system"]
 _RECALL_LIMIT = 5
 
-memory_ns = Namespace("memory", description="Memory search", path="/memory")
+memory_ns = Namespace("memory", description="Memory search", path="/api/memory")
 
 register_dto(memory_ns, MemorySearchQuery, MemoryHit, MemorySearchResponse, Error)
 
@@ -47,7 +47,7 @@ def _episode_hit(row: dict[str, object]) -> MemoryHit:
         type="episode",
         content=cast(str, row.get("gist", "")),
         score=cast(float, row.get("composite_score", row.get("score", 0))),
-        created_at=parse_utc(cast(str, row["created_at"])),
+        created_at=parse_utc(cast(str, row.get("created_at") or "")),
     )
 
 

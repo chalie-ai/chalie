@@ -1,4 +1,4 @@
-"""DTO for ``GET /system/observability/records`` — paginated record browser.
+"""DTO for ``GET /api/system/observability/records`` — paginated record browser.
 
 Rows are polymorphic: episodes rows carry ``location``; user/system rows carry
 ``key``. The row shape stays a raw ``dict`` (not a nested DTO) so both variants

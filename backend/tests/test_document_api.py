@@ -49,7 +49,7 @@ class TestDocumentsAPI:
         from typing import cast
         data = {"file": (io.BytesIO(b"malicious"), "virus.exe")}
         resp = client.post(
-            "/documents/upload",
+            "/api/documents/upload",
             data=data,
             content_type="multipart/form-data",
         )
@@ -72,7 +72,7 @@ class TestDocumentUploadRealStack:
         # route writes to first is independent of _DOCUMENTS_DIR.)
         with patch.object(FileMapperService, "_DOCUMENTS_DIR", tmp_path):
             resp = client.post(
-                "/documents/upload",
+                "/api/documents/upload",
                 data={"file": (io.BytesIO(body), "note.txt")},
                 content_type="multipart/form-data",
             )
@@ -121,8 +121,8 @@ class TestDocumentSearchRealStack:
         """
         client, _db_conn, _store = authed_client
 
-        good = client.get("/documents/search?q=quarterly+revenue&limit=5")
-        bad = client.get("/documents/search?q=quarterly+revenue&limit=abc")
+        good = client.get("/api/documents/search?q=quarterly+revenue&limit=5")
+        bad = client.get("/api/documents/search?q=quarterly+revenue&limit=abc")
 
         assert good.status_code == 200, good.get_data(as_text=True)
         assert bad.status_code == 422, bad.get_data(as_text=True)
@@ -131,7 +131,7 @@ class TestDocumentSearchRealStack:
         """A missing ``q`` is rejected with 422 by the DTO boundary."""
         client, _db_conn, _store = authed_client
 
-        resp = client.get("/documents/search")
+        resp = client.get("/api/documents/search")
 
         assert resp.status_code == 422, resp.get_data(as_text=True)
 

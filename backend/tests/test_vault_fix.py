@@ -170,7 +170,7 @@ class TestVaultRestore:
 
         # Login — should restore from the retained backup
         resp = client.post(
-            "/auth/login",
+            "/api/auth/login",
             json={"username": "admin", "password": pw},
             content_type="application/json",
         )
@@ -216,7 +216,7 @@ class TestVaultRestore:
         raw_conn.commit()
 
         resp = client.post(
-            "/auth/login",
+            "/api/auth/login",
             json={"username": "admin", "password": pw},
             content_type="application/json",
         )
@@ -265,7 +265,7 @@ class TestVaultUnrecoverable:
         raw_conn.commit()
 
         resp = client.post(
-            "/auth/login",
+            "/api/auth/login",
             json={"username": "admin", "password": pw},
             content_type="application/json",
         )

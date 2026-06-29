@@ -17,6 +17,7 @@ from flask_restx import Namespace, Resource
 from services.time_utils import parse_utc
 from .auth import require_session
 from .dto import Error, expects, register_dto, responds
+from .dto.boundary import error
 from .dto.policy import Policy, PolicyUpsert
 from .dto.policy_blocked import BlockedEntry, BlockedQuery
 from .dto.policy_respond import PolicyRespond
@@ -46,11 +47,6 @@ register_dto(
 )
 
 _P = policies_ns.models
-
-
-def _error(message: str, status: int) -> ResponseReturnValue:
-    """Build a uniform non-2xx ``Error`` body carrying its own status code."""
-    return Error(error=message).model_dump(mode="json"), status
 
 
 def _tag_display_rows(rows: "list[dict[str, str]]") -> None:
@@ -127,7 +123,7 @@ class PoliciesResource(Resource):
             return [_policy_dto(row) for row in rows]
         except Exception as exc:
             logger.error("[POLICIES API] GET failed: %s", exc)
-            return _error(_ERR_LOAD, 500)
+            return error(_ERR_LOAD, 500)
 
     @require_session
     @policies_ns.expect(_P["PolicyUpsert"])
@@ -143,7 +139,7 @@ class PoliciesResource(Resource):
             return None
         except Exception as exc:
             logger.error("[POLICIES API] PUT failed: %s", exc)
-            return _error(_ERR_UPDATE, 500)
+            return error(_ERR_UPDATE, 500)
 
 
 @policies_ns.route("/reset")
@@ -159,7 +155,7 @@ class PoliciesResetResource(Resource):
             return None
         except Exception as exc:
             logger.error("[POLICIES API] Reset failed: %s", exc)
-            return _error(_ERR_RESET, 500)
+            return error(_ERR_RESET, 500)
 
 
 @policies_ns.route("/respond")
@@ -191,14 +187,13 @@ class PoliciesRespondResource(Resource):
             return None
         except Exception as exc:
             logger.error("[POLICIES API] Respond failed: %s", exc)
-            return _error(_ERR_RESPOND, 500)
+            return error(_ERR_RESPOND, 500)
 
 
 @policies_ns.route("/blocked")
 class PoliciesBlockedResource(Resource):
     @require_session
     @policies_ns.param("limit", "Max entries to return (1-500, default 50)", type="integer", _in="query")
-    @policies_ns.expect(_P["BlockedQuery"])
     @policies_ns.response(200, "Blocked-action log", model=_P["BlockedEntry"])
     @policies_ns.response(500, _ERR_BLOCKED, model=_P["Error"])
     @responds(BlockedEntry, code=200)
@@ -210,7 +205,7 @@ class PoliciesBlockedResource(Resource):
             return [_blocked_dto(entry) for entry in entries]
         except Exception as exc:
             logger.error("[POLICIES API] Blocked log failed: %s", exc)
-            return _error(_ERR_BLOCKED, 500)
+            return error(_ERR_BLOCKED, 500)
 
     @require_session
     @policies_ns.response(204, "Blocked log cleared")
@@ -223,4 +218,4 @@ class PoliciesBlockedResource(Resource):
             return None
         except Exception as exc:
             logger.error("[POLICIES API] Clear blocked log failed: %s", exc)
-            return _error(_ERR_CLEAR, 500)
+            return error(_ERR_CLEAR, 500)

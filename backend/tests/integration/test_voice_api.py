@@ -7,7 +7,7 @@ from flask.testing import FlaskClient
 
 
 def _voice_available(client: FlaskClient) -> bool:
-    resp = client.get('/voice/health')
+    resp = client.get('/api/voice/health')
     if resp.status_code != 200:
         return False
     data = resp.get_json()
@@ -42,7 +42,7 @@ def test_health_endpoint_returns_known_status(authed_client: tuple[FlaskClient, 
     """GET /voice/health → 200 with status in {ok, loading, unavailable}."""
     client, _db, _store = authed_client
 
-    resp = client.get('/voice/health')
+    resp = client.get('/api/voice/health')
     assert resp.status_code == 200
 
     data = resp.get_json()
@@ -60,7 +60,7 @@ def test_synthesize_returns_single_wav_blob(authed_client: tuple[FlaskClient, sq
         pytest.skip('Voice models not available in this environment')
 
     resp = client.post(
-        '/voice/synthesize',
+        '/api/voice/synthesize',
         json={'text': 'Hello world.'},
         content_type='application/json',
     )
@@ -87,7 +87,7 @@ def test_synthesize_rejects_empty_text(authed_client: tuple[FlaskClient, sqlite3
 
     for text in ('', '   ', '\n\t  \n'):
         resp = client.post(
-            '/voice/synthesize',
+            '/api/voice/synthesize',
             json={'text': text},
             content_type='application/json',
         )
@@ -121,7 +121,7 @@ def test_synthesize_markdown_input_produces_audio(authed_client: tuple[FlaskClie
     )
 
     resp = client.post(
-        '/voice/synthesize',
+        '/api/voice/synthesize',
         json={'text': markdown_text},
         content_type='application/json',
     )
@@ -150,7 +150,7 @@ def test_synthesize_html_input_produces_audio(authed_client: tuple[FlaskClient, 
     )
 
     resp = client.post(
-        '/voice/synthesize',
+        '/api/voice/synthesize',
         json={'text': html_text},
         content_type='application/json',
     )
@@ -175,7 +175,7 @@ def test_synthesize_url_input_produces_audio(authed_client: tuple[FlaskClient, s
         pytest.skip('Voice models not available in this environment')
 
     resp = client.post(
-        '/voice/synthesize',
+        '/api/voice/synthesize',
         json={'text': 'Read more at http://google.com/search for details.'},
         content_type='application/json',
     )
@@ -195,7 +195,7 @@ def test_transcribe_empty_file_returns_400(authed_client: tuple[FlaskClient, sql
         pytest.skip('Voice models not available in this environment')
 
     resp = client.post(
-        '/voice/transcribe',
+        '/api/voice/transcribe',
         data={'file': (io.BytesIO(b''), 'empty.wav')},
         content_type='multipart/form-data',
     )
@@ -214,7 +214,7 @@ def test_transcribe_missing_file_field_returns_400(authed_client: tuple[FlaskCli
         pytest.skip('Voice models not available in this environment')
 
     resp = client.post(
-        '/voice/transcribe',
+        '/api/voice/transcribe',
         data={},
         content_type='multipart/form-data',
     )
