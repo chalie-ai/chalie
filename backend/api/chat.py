@@ -41,6 +41,9 @@ from flask.typing import ResponseReturnValue
 from flask_restx import Namespace, Resource
 
 from .auth import require_auth
+from .dto import Error, expects, register_dto, responds
+from .dto.chat import Accepted, ActionRequest, ChatRequest
+from .dto.subagent import ActiveSubagents, Interrupted, SubagentStopResult
 from services.locale_service import CHAT_TIMESTAMP_FMT, format_date
 from services.log_utils import safe
 from services.markup import sanitize
@@ -54,6 +57,10 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 chat_ns = Namespace("chat", description="Chat operations", path="/")
+
+register_dto(chat_ns, ChatRequest, Accepted, ActionRequest, Interrupted, SubagentStopResult, ActiveSubagents, Error)
+
+_M = chat_ns.models
 
 # ── Active UMP turn tracking ─────────────────────────────────────────────────
 
@@ -374,49 +381,54 @@ def _broadcast_user_echo(text: str, echo_id: str) -> None:
     })
 
 
-def _interrupt_active_turn() -> tuple[dict[str, object], int]:
+def _interrupt_active_turn() -> Interrupted:
     """Shared logic for POST /chat/interrupt and POST /chat/stop."""
     proc = _get_active_ump()
     if proc is not None:
         proc.cancel()
         logger.info("[Chat API] Interrupt signal delivered to active UMP turn")
-        return {"ok": True, "interrupted": True}, 200
-    return {"ok": True, "reason": "no_active_turn"}, 200
+        return Interrupted(interrupted=True)
+    return Interrupted(reason="no_active_turn")
 
 
 @chat_ns.route("/chat")
 class ChatResource(Resource):
     @require_auth
-    @chat_ns.response(202, "Accepted")
-    def post(self) -> ResponseReturnValue:
-        """Files are staged to temp paths and ingested via document.upload (by PATH, never bytes) at turn 0.
-
-        Response arrives asynchronously via WebSocketBroker.broadcast().
-        """
-        text = (request.form.get("text") or "").strip()
-        source = request.form.get("source") or "text"
-        echo_id = request.form.get("echo_id") or ""
+    @chat_ns.doc(
+        description=(
+            "Accepts a user message (multipart/form-data). Returns 202 immediately. "
+            "The assistant reply arrives asynchronously via WebSocketBroker.broadcast() "
+            "as a ``message`` event followed by a ``done`` event — these WS events are "
+            "NOT part of this HTTP response contract."
+        )
+    )
+    @chat_ns.expect(_M["ChatRequest"])
+    @chat_ns.response(202, "Accepted", model=_M["Accepted"])
+    @chat_ns.response(422, "Validation failed", model=_M["Error"])
+    @responds(Accepted, code=202)
+    @expects(ChatRequest, source="form")
+    def post(self, dto: ChatRequest) -> Accepted | ResponseReturnValue:
+        """Files are staged to temp paths and ingested via document.upload (by PATH, never bytes) at turn 0."""
         attachments = _stage_chat_uploads(cast(Sequence[object], request.files.getlist("files")[:10]))
+        text = (dto.text or "").strip()
 
         if not text and not attachments:
-            return {"status": "error", "reason": "message required"}, 400
+            return Error(error="message required").model_dump(mode="json"), 422
 
         if not text and attachments:
             text = "[File attached]"
 
-        # Echo the user message to every open surface so they all show it (the
-        # sender ignores its own echo via echo_id; peers render the bubble).
-        _broadcast_user_echo(text, echo_id)
-
-        dispatch_message(text, source=source, attachments=attachments)
-        return {"status": "accepted"}, 202
+        _broadcast_user_echo(text, dto.echo_id)
+        dispatch_message(text, source=dto.source, attachments=attachments)
+        return Accepted()
 
 
 @chat_ns.route("/chat/interrupt")
 class ChatInterruptResource(Resource):
     @require_auth
-    @chat_ns.response(200, "OK")
-    def post(self) -> ResponseReturnValue:
+    @chat_ns.response(200, "OK", model=_M["Interrupted"])
+    @responds(Interrupted)
+    def post(self) -> Interrupted:
         """The cancelled turn deletes its own transcript and tool_call rows — no data persists for an interrupted turn.
 
         Always returns HTTP 200.
@@ -427,8 +439,10 @@ class ChatInterruptResource(Resource):
 @chat_ns.route("/chat/stop")
 class ChatStopResource(Resource):
     @require_auth
-    @chat_ns.response(200, "OK")
-    def post(self) -> ResponseReturnValue:
+    @chat_ns.doc(deprecated=True)
+    @chat_ns.response(200, "OK", model=_M["Interrupted"])
+    @responds(Interrupted)
+    def post(self) -> Interrupted:
         """Deprecated alias for POST /chat/interrupt. New callers should use POST /chat/interrupt instead."""
         return _interrupt_active_turn()
 
@@ -436,61 +450,67 @@ class ChatStopResource(Resource):
 @chat_ns.route("/chat/subagents/active")
 class ActiveSubagentsResource(Resource):
     @require_auth
-    @chat_ns.response(200, "OK")
-    def get(self) -> ResponseReturnValue:
+    @chat_ns.response(200, "OK", model=_M["ActiveSubagents"])
+    @responds(ActiveSubagents)
+    def get(self) -> ActiveSubagents:
         """Hydrates the Processes panel on page load/reconnect, since WS push events
         are missed while the client is disconnected. Each row carries the tool name,
         the model's summary of what the delegate is doing, and when it started.
         """
         from services.async_delegate_runner import async_delegate_runner
 
-        return {"subagents": async_delegate_runner.active()}, 200
+        return ActiveSubagents(subagents=async_delegate_runner.active())
 
 
 @chat_ns.route("/chat/subagent/<sub_id>/stop")
 class SubagentStopResource(Resource):
     @require_auth
-    @chat_ns.response(200, "OK")
-    def post(self, sub_id: str) -> ResponseReturnValue:
+    @chat_ns.param("sub_id", "Async delegate id")
+    @chat_ns.response(200, "OK", model=_M["SubagentStopResult"])
+    @responds(SubagentStopResult)
+    def post(self, sub_id: str) -> SubagentStopResult:
         """Cooperatively cancel a running async delegate.
 
         Delegates to async_delegate_runner.cancel(). The delegate's cancel_event
         is set; the ACT loop exits at the next iteration boundary.
 
         Always returns HTTP 200.
-
-        Response JSON:
-            {ok: true, cancelled: true}         — stop signal delivered
-            {ok: true, reason: "not_found"}     — sub_id not in active registry
         """
         from services.async_delegate_runner import async_delegate_runner
 
         if async_delegate_runner.cancel(sub_id):
             logger.info("[Chat API] Stop signal delivered to delegate %s", safe(sub_id[:8]))
-            return {"ok": True, "cancelled": True}, 200
-        return {"ok": True, "reason": "not_found"}, 200
+            return SubagentStopResult(cancelled=True)
+        return SubagentStopResult(reason="not_found")
 
 
 @chat_ns.route("/action")
 class ActionResource(Resource):
     @require_auth
-    @chat_ns.response(202, "Accepted")
-    def post(self) -> ResponseReturnValue:
+    @chat_ns.doc(
+        description=(
+            "Dispatches an action-button click via ToolDispatcher. Returns 202 immediately. "
+            "The tool result arrives asynchronously via WebSocketBroker.broadcast() as a "
+            "``message`` event followed by a ``done`` event — these WS events are NOT part "
+            "of this HTTP response contract."
+        )
+    )
+    @chat_ns.expect(_M["ActionRequest"])
+    @chat_ns.response(202, "Accepted", model=_M["Accepted"])
+    @chat_ns.response(422, "Validation failed", model=_M["Error"])
+    @responds(Accepted, code=202)
+    @expects(ActionRequest)
+    def post(self, dto: ActionRequest) -> Accepted | ResponseReturnValue:
         """Response arrives asynchronously via WebSocketBroker.broadcast()."""
-        body = request.get_json(silent=True) or {}
-        skill = body.get("skill") or ""
-        if not skill:
-            return {"error": "Missing 'skill' in action payload"}, 400
-
         action_start = time.time()
+        skill = dto.skill
+        params = dto.params
 
         def _run_action() -> None:
             broker = WebSocketBroker()
             try:
                 from abilities._dispatcher import ToolDispatcher  # noqa: PLC0415
                 from services.processor_config import ProcessorConfig  # noqa: PLC0415
-
-                params = {k: v for k, v in body.items() if k != "skill"}
 
                 broker.broadcast({"type": "status", "stage": "processing"})
 
@@ -569,7 +589,5 @@ class ActionResource(Resource):
                 })
                 broker.broadcast({"type": "done", "duration_ms": 0})
 
-        thread = threading.Thread(target=_run_action, daemon=True, name=f"action-{skill}")
-        thread.start()
-
-        return {"status": "accepted"}, 202
+        threading.Thread(target=_run_action, daemon=True, name=f"action-{skill}").start()
+        return Accepted()
