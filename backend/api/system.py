@@ -1,10 +1,9 @@
 """System namespace — /health, /ready, /metrics (probes) and /api/system/status, /api/system/observability/* (admin).
 
-Read-only observability + diagnostics (not CRUD): 18 of 20 routes are GETs
-returning a status/diagnostic DTO or an opaque service-owned shape. The two
-mutating-ish routes (``POST /health`` heartbeat ingest, ``POST /api/system/update/apply``)
-are action endpoints kept at 200 (they return status/result, not a created
-resource). Datetimes serialize as ISO-8601 UTC via the foundation serializer — the
+Read-only observability + diagnostics (not CRUD): 17 of 18 routes are GETs
+returning a status/diagnostic DTO or an opaque service-owned shape. The one
+mutating-ish route (``POST /health`` heartbeat ingest) is an action endpoint
+kept at 200 (it returns status/result, not a created resource). Datetimes serialize as ISO-8601 UTC via the foundation serializer — the
 local ``_now_iso()`` helper is deleted. Where a protected test pins an exact shape
 (records 400, degraded-200, non-ISO ``compacted_at``, raw telemetry/metrics),
 current behavior is preserved.
@@ -36,7 +35,7 @@ from .dto.observability_records import RecordsPage
 from .dto.observability_tools import ToolUsage, ToolUsageList
 from .dto.readiness import Readiness
 from .dto.research_run import ResearchRunDetail, ResearchRunsList
-from .dto.setting import Setting, SettingWrite, UpdateApplyRequest
+from .dto.setting import Setting, SettingWrite
 from .dto.system_status import SystemStatus
 from .dto.write_queue import WriteQueueStats
 
@@ -84,7 +83,6 @@ _SYSTEM_DTOS = (
     ContextUsage,
     Setting,
     SettingWrite,
-    UpdateApplyRequest,
     NetworkState,
     NetworkUpdate,
     NetworkUpdateResult,
@@ -593,49 +591,6 @@ class ObservabilityErrorsResource(Resource):
         except Exception as e:
             logger.error(f"[REST API] observability/errors error: {e}")
             return error("Failed to retrieve error log", 500)
-
-
-# ──────────────────────────────────────────────
-# In-place update endpoints
-# ──────────────────────────────────────────────
-
-@system_ns.route("/update/check")
-class UpdateCheckResource(Resource):
-    @require_session
-    @system_ns.response(200, "Update info (opaque service-owned body)")
-    @system_ns.response(500, "Failed to check for updates", model=_S["Error"])
-    @responds(code=200)
-    def get(self) -> ResponseReturnValue:
-        """Check for an available app update (raw passthrough)."""
-        try:
-            from services.app_update_service import AppUpdateService
-            return AppUpdateService().check_for_update(), 200
-        except Exception as e:
-            logger.error(f"[REST API] update/check error: {e}")
-            return error("Failed to check for updates", 500)
-
-
-@system_ns.route("/update/apply")
-class UpdateApplyResource(Resource):
-    @require_session
-    @system_ns.expect(_S["UpdateApplyRequest"])
-    @system_ns.response(200, "Update applied (opaque {ok,...} result)")
-    @system_ns.response(422, "Validation failed", model=_S["Error"])
-    @system_ns.response(500, "Update failed (opaque {ok,message} body)")
-    @responds(code=200)
-    @expects(UpdateApplyRequest)
-    def post(self, dto: UpdateApplyRequest) -> ResponseReturnValue:
-        """Apply a release update by tag, then request a restart (raw {ok,...} result)."""
-        try:
-            from services.app_update_service import AppUpdateService
-            svc = AppUpdateService()
-            result = svc.apply_update(dto.tag)
-            if result.get("ok"):
-                svc.request_restart()
-            return result, 200
-        except Exception as e:
-            logger.error(f"[REST API] update/apply error: {e}")
-            return {"ok": False, "message": f"Update failed: {e}"}, 500
 
 
 # ──────────────────────────────────────────────

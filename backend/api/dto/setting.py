@@ -7,8 +7,6 @@ means delete the key (the handler decides), so it is NOT rejected by validation.
 
 from __future__ import annotations
 
-from pydantic import Field
-
 from .base import DTO
 
 
@@ -23,9 +21,3 @@ class SettingWrite(DTO):
     """Inbound body for a setting write — empty/falsey value means delete."""
 
     value: object = None
-
-
-class UpdateApplyRequest(DTO):
-    """Inbound body for ``POST /api/system/update/apply`` — the release tag to apply."""
-
-    tag: str = Field(..., min_length=1)
