@@ -24,12 +24,14 @@ export interface WsPingEvent {
 
 /** Push family — broadcast to every surface, routed through the drift handler
  *  with no per-request binding. Includes the turn-channel signals
- *  (`working`/`turn_updated`/`tool_invoked`): the surface reacts by refetching
- *  the turn block over REST, so these frames carry only ids, never prose. */
+ *  (`working`/`updated`/`tool_called`/`tool_done`): the surface reacts by
+ *  refetching the turn block over REST, so these frames carry only ids (plus a
+ *  tool call's id/name/summary for the live act-trail timer), never prose. */
 export type WsPushType =
   | 'working'
-  | 'turn_updated'
-  | 'tool_invoked'
+  | 'updated'
+  | 'tool_called'
+  | 'tool_done'
   | 'task'
   | 'reminder'
   | 'notification'
@@ -284,7 +286,7 @@ export class WebSocketService {
   }
 
   /** Fire a user turn. Signal-only: the turn's render flows entirely through the
-   *  broadcast `working`/`turn_updated`/`done` signals (→ drift handler → REST
+   *  broadcast `working`/`updated`/`done` signals (→ drift handler → REST
    *  refetch), so no callbacks are bound. `onSendFailure` reports ONLY a local
    *  send failure (offline / POST rejected) — the case where no signal will ever
    *  arrive — so the surface can release its send guard. */
@@ -349,7 +351,7 @@ export class WebSocketService {
     for (const file of files) form.append('files', file, file.name);
     // turn_id is PATH-only (§6.2): create → POST /api/thread, reply → POST
     // /api/thread/<turn_id>. Both return 201 empty; the turn surfaces via the
-    // created/working → turn_updated signals → REST pull (no inline content).
+    // created/working → updated signals → REST pull (no inline content).
     const path = threadId != null ? `/api/thread/${threadId}` : '/api/thread';
     fetch(this.buildHttpUrl(path), {
       method: 'POST',

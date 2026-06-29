@@ -39,20 +39,26 @@ const lastChalieId = computed<number | null>(() => {
   return null;
 });
 
-// The spinner is no rendered form — it is derived from the turn's `working`
-// signal. Append a transient ActForm anchor whose placeholder is the latest
-// `tool_invoked` summary; ActCycle renders it as the live step.
+// The live act-trail is no stored form — it is derived from the WS signals
+// (spec §6.5). While the turn works, append one transient, non-collapsed ActForm
+// per in-flight transcript row carrying its `tool_called`→`tool_done` pills;
+// ActCycle ticks their timers. Before the first pill lands (or a no-tool step) a
+// bare anchor renders the "thinking…" placeholder. The in-flight row is always
+// the latest, so tail placement is exactly where its persisted ActForm lands on
+// the next `updated`, making the live→done handoff seamless.
 const displayForms = computed<ConversationForm[]>(() => {
   if (!(props.working || convo.isTurnWorking(turnId.value))) return props.forms;
-  const anchor: ActForm = {
-    kind: 'act',
-    id: WORKING_ANCHOR_ID,
-    tools: [],
-    collapsed: false,
-    turnId: turnId.value,
-    placeholder: convo.liveSummaryFor(turnId.value),
-  };
-  return [...props.forms, anchor];
+  const trails = convo.liveTrailsFor(turnId.value);
+  if (!trails.length) {
+    const anchor: ActForm = {
+      kind: 'act', id: WORKING_ANCHOR_ID, tools: [], collapsed: false, turnId: turnId.value,
+    };
+    return [...props.forms, anchor];
+  }
+  const live: ActForm[] = trails.map((t) => ({
+    kind: 'act', id: -t.rowId, tools: t.pills, collapsed: false, turnId: turnId.value,
+  }));
+  return [...props.forms, ...live];
 });
 
 // Consecutive superseded ACT cycles fold into one group; everything else

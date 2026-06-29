@@ -8,7 +8,7 @@ GET  /api/threads/batch?id[]=— many blocks, a pure concatenation of the single
 
 Reads are GET, sends are POST; turn_id is path-only, never in the body. Both sends
 return 201 with an empty body — fire-and-acknowledge: the turn surfaces via the
-`created`/`working` → `turn_updated` signals → REST pull, never inline (§6.1/§6.8).
+`created`/`working` → `updated` signals → REST pull, never inline (§6.1/§6.8).
 """
 
 import logging

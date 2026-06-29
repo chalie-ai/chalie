@@ -24,11 +24,12 @@ Design:
 
   User-channel messages flow through MessageProcessor.process() with the
   UserConfig ProcessorConfig subclass — no MessageProcessor subclass.
-  Live output is signal-only, gated by broadcast_to='user': the surface holds
-  no event memory and refetches turn blocks over REST. _broadcast_working()
-  binds the live turn, _broadcast_turn_updated() fires at each assistant-row
-  write so the surface refetches, tool_invoked carries the transient 'using X'
-  line, and _broadcast_done() releases the working state once the chain returns.
+  Live output is signal-only, gated by the config's BROADCASTS_STATE: the surface
+  holds no event memory and refetches turn blocks over REST. Every lifecycle
+  signal (created/working/updated/done + the per-tool tool_called/tool_done
+  timers) is emitted by MessageProcessor itself through its `broadcast`
+  chokepoint. The only signal originating here is the fallback error + done a
+  FAILED turn needs (it never reaches the processor's terminal).
 """
 
 import logging
@@ -103,93 +104,32 @@ def _run_chat_background(
     metadata: dict[str, object],
     request_id: str,
 ) -> None:
-    """Clears the active UMP reference BEFORE broadcasting done so the frontend
-    can immediately send a new turn without racing a still-set active_ump."""
+    """Runs the user turn to completion. The surface's lifecycle signals
+    (created → working → updated → done, plus the per-tool timers) come from
+    MessageProcessor itself; only a turn that FAILS before reaching its terminal
+    needs the fallback error + done emitted here so the surface still drops its
+    working indicator. The active-UMP reference is cleared in ``finally`` (the
+    next statement after process() returns) — long before any surface, having
+    just received ``done`` over the socket, could round-trip a fresh send."""
     from services.message_processor import MessageProcessor  # noqa: PLC0415
 
-    broker = WebSocketBroker()
     try:
         MessageProcessor.process(raw_input, config, metadata, cancel_event=cancel_event)
-
-        # Cancelled turn — skip broadcast entirely. The replacement turn
-        # (started by dispatch_message) owns the WS event stream now.
-        if cancel_event.is_set():
-            _clear_active_ump(turn)
-            return
-
-        # Clear the active UMP BEFORE broadcasting done so the frontend can
-        # immediately send a new turn without racing a still-set active_ump.
-        _clear_active_ump(turn)
-        _broadcast_done()
-
     except Exception as exc:
         logger.exception("[Chat API] UMP error for %s: %s", request_id, exc)
-        _clear_active_ump(turn)
+        # A failed turn never reached _end_turn, so no ``done`` fired — emit the
+        # error bubble and a terminal ``done`` (keyed by the newest user row, the
+        # turn that just failed) so the surface releases its working state. A
+        # cancelled turn is owned by its replacement and stays silent.
         if not cancel_event.is_set():
-            broker.broadcast({
-                "type": "error",
-                "message": str(exc),
-                "recoverable": False,
-            })
-            _broadcast_done()
+            from services.transcript_service import Transcript  # noqa: PLC0415
+            rows = Transcript.get_recent("user", limit=1)
+            failed_turn = cast("int | None", rows[-1].get("turn_id")) if rows else None
+            broker = WebSocketBroker()
+            broker.broadcast({"type": "error", "message": str(exc), "recoverable": False})
+            broker.broadcast({"type": "done", "turn_id": failed_turn})
     finally:
         _clear_active_ump(turn)
-
-
-def _broadcast_created(turn_id: int) -> None:
-    """Announce a freshly-allocated turn_id for a NEW thread (the non-reply send,
-    ``not _forked``). Fired the instant the input row's turn_id is allocated — the
-    ONLY way the just-allocated id reaches the surface, since the send response
-    carries no id (spec §6.1/§6.2). The surface binds its optimistic main-spine
-    placeholder to this id and pulls content on ``turn_updated``."""
-    WebSocketBroker().broadcast({"type": "created", "turn_id": turn_id})
-
-
-def _broadcast_working(turn_id: int) -> None:
-    """Signal that processing (re)starts on an EXISTING turn — a reply send
-    (``_forked``) or a reactivation. The surface already knows the turn_id (the
-    reply path's URL), so this just flips that turn's pill + panel to the working
-    state. Signal-only — content arrives on ``turn_updated`` (spec §6.1)."""
-    WebSocketBroker().broadcast({"type": "working", "turn_id": turn_id})
-
-
-def _broadcast_turn_updated(turn_id: int) -> None:
-    """Signal that a turn's persisted rows changed — fired at each assistant-row
-    write boundary (every chain step and the final synthesis). Signal-only: the
-    surface refetches the turn block (coalescing concurrent fires by turn_id) and
-    atomically replaces it. The transient 'using X' line rides ``tool_invoked``."""
-    WebSocketBroker().broadcast({"type": "turn_updated", "turn_id": turn_id})
-
-
-def _broadcast_provider_retry(attempt: int, max_attempts: int) -> None:
-    """Notify the user surface that a provider call failed and is being resent.
-
-    Fired from MessageProcessor._send_with_retry before each resend on the user
-    channel. The frontend renders this as a transient toast — the turn is still
-    in flight, so no error bubble and no ``done``.
-    """
-    WebSocketBroker().broadcast({
-        "type": "provider_retry",
-        "message": "The AI provider had a problem — retrying…",
-        "attempt": attempt,
-        "max_attempts": max_attempts,
-    })
-
-
-def _broadcast_done() -> None:
-    """Release the turn's working state — the terminal signal, shared by the
-    foreground turn and the background async-result synthesis. The content is
-    already on the surface via the final ``turn_updated`` → refetch; this only
-    flips working off, keyed by the just-finished turn's id (the newest user row)."""
-    turn_id: "int | None" = None
-    try:
-        from services.transcript_service import Transcript  # noqa: PLC0415
-        rows = Transcript.get_recent("user", limit=1)
-        if rows:
-            turn_id = cast("int | None", rows[-1].get("turn_id"))
-    except Exception as exc:
-        logger.debug("[Chat API] done turn_id lookup failed: %s", exc)
-    WebSocketBroker().broadcast({"type": "done", "turn_id": turn_id})
 
 
 def deliver_async_result(mp: object, result_text: str, cancel_event: threading.Event) -> None:
@@ -226,10 +166,9 @@ def deliver_async_result(mp: object, result_text: str, cancel_event: threading.E
     thread_id = getattr(mp, "turn_id", None)
     if thread_id is not None:
         metadata["thread_id"] = thread_id
+    # The synthesis turn is a full UserConfig turn, so its created → … → done
+    # lifecycle signals come from MessageProcessor itself — nothing to emit here.
     MessageProcessor.process(result_text, synth_config, metadata, cancel_event=cancel_event)
-    if cancel_event.is_set():
-        return
-    _broadcast_done()
 
 
 def dispatch_message(

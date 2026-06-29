@@ -29,7 +29,6 @@ from typing import TYPE_CHECKING, Callable, cast
 
 # AbilityRegistry resolves native tool names; PolicyManager gates the allow path.
 # Neither imports this module, so both import normally — no alias/patch hack.
-from abilities._event_emitter import ActEventEmitter
 from abilities._mcp_ability import _MCPAbility
 from abilities._params import KeyHealer
 from abilities._registry import AbilityRegistry
@@ -64,6 +63,10 @@ class ToolDispatcher:
         # production VARIANTS registry. A test can supply a probe healer without
         # touching the registry.
         self._key_healer = key_healer or KeyHealer()
+        # The tool_calls row id _execute opened for the call in flight (None until
+        # one runs). dispatch() writes the result onto it (finish) instead of
+        # opening a second row; reset per dispatch().
+        self._pending_call_id: int | None = None
 
     # ── The single tool-call entry point ──────────────────────────────────────
 
@@ -85,6 +88,7 @@ class ToolDispatcher:
         params = _sanitize(dict(params))
         act_summary: str | None = cast("str | None", params.pop("act_summary", None))
         config = getattr(self._mp, "config", None)
+        self._pending_call_id = None
 
         ability = self._bind(tool_name)
         if ability is None:
@@ -137,21 +141,34 @@ class ToolDispatcher:
         steer = self._repeat_error_steer(tool_name, result_text)
 
         from services.act_trail import ActTrail  # noqa: PLC0415
-        ActTrail().record(
-            tool_name=tool_name,
-            params=params,
-            result=result_text,
-            # Anchors to the assistant step row that emitted this call (mp.anchor,
-            # set by _store_row before the step's tools dispatch); its turn is
-            # derived by joining transcript on (channel, turn_id) at read time.
-            # Falls back to the input row (mp.uid) for framework / turn-zero /
-            # compaction calls that fire before any step row exists.
-            transcript_id=getattr(self._mp, "anchor", None) or getattr(self._mp, "uid", None),
-            # The live blue-box summary, persisted so the chat refresh can
-            # re-render the chip's summary instead of dropping it on reload.
-            summary=act_summary,
-        )
+        if self._pending_call_id is not None:
+            # The allow path already opened the row (and started its live timer)
+            # in _execute — just write the final result onto it.
+            ActTrail().finish(call_id=self._pending_call_id, result=result_text)
+        else:
+            # A call that never entered execution (unknown tool, denied, or
+            # pre-validation failure): no live timer brackets it, so record the
+            # outcome whole — the rendered trail tells the model what happened so
+            # it does not retry a blocked tool forever. Anchors to the assistant
+            # step row that emitted the call (mp.anchor), falling back to the input
+            # row (mp.uid) for framework / turn-zero / compaction calls.
+            ActTrail().record(
+                tool_name=tool_name,
+                params=params,
+                result=result_text,
+                transcript_id=getattr(self._mp, "anchor", None) or getattr(self._mp, "uid", None),
+                summary=act_summary,
+            )
         return result_text + steer
+
+    def _signal(self, state: str, **extra: object) -> None:
+        """Relay a live tool signal (tool_called / tool_done) through the invoking
+        mp's broadcast chokepoint, keyed by its turn. A context that exposes no
+        ``broadcast`` (the /action endpoint's ctx) is a silent no-op."""
+        broadcast = getattr(self._mp, "broadcast", None)
+        if broadcast is None:
+            return
+        broadcast(state, getattr(self._mp, "turn_id", None), **extra)
 
     def _repeat_error_steer(self, tool_name: str, result_text: str) -> str:
         """Steering suffix when this exact error already fired for an identical
@@ -203,30 +220,41 @@ class ToolDispatcher:
     # ── Self-scaffolding executor — the allow-path callback dispatch() hands to wrap ──
 
     def _execute(self, ability: "Ability", params: dict[str, object], act_summary: "str | None" = None) -> str:
-        """Emit → (action pre-validation) → (async-decision) → run → render →
-        emit. Called ONLY on the allow path (dispatch() passes this as wrap's
-        callback). The per-call ``async`` flag — popped here, a framework key
-        never passed to run() — decides whether the real work blocks this ACT
-        iteration or runs on a background thread; run() is identical either way.
-        Returns the rendered envelope STRING. Recording is dispatch()'s job, not
-        ours.
+        """Open row + tool_called → (async-decision) → run → tool_done → render.
+        Called ONLY on the allow path (dispatch() passes this as wrap's callback).
+        The per-call ``async`` flag — popped here, a framework key never passed to
+        run() — decides whether the real work blocks this ACT iteration or runs on
+        a background thread; run() is identical either way. Returns the rendered
+        envelope STRING.
+
+        The tool_calls row is opened HERE (the instant the call begins) so the
+        live ``tool_called`` signal can name it and the surface can start the
+        act-trail timer; ``tool_done`` stops it. The row id is stashed on
+        ``self._pending_call_id`` so dispatch() writes the result onto it (finish)
+        rather than opening a second row.
 
         Reads the bound parent off ``ability.mp`` (set by _bind()). act_summary
-        (popped from params by dispatch()) is the WS tooltip; it is NOT a run()
+        (popped from params by dispatch()) is the live summary; it is NOT a run()
         argument. Spec §4.0 / §4.2 / D5.
         """
+        from services.act_trail import ActTrail  # noqa: PLC0415
+        from services.message_processor import MessageProcessor  # noqa: PLC0415
+
         run_async = bool(params.pop("async", False))
         config = getattr(self._mp, "config", None)
-        emitter = ActEventEmitter(config)
         tool_name = ability.get_name()
-        # Transient live 'using X' line — NOT persisted. The completed tool's
-        # act-trail lands via the next assistant-row turn_updated → refetch.
-        emitter.emit({
-            "type": "tool_invoked",
-            "turn_id": getattr(self._mp, "turn_id", None),
-            "name": tool_name,
-            "summary": act_summary,
-        })
+        transcript_id = getattr(self._mp, "anchor", None) or getattr(self._mp, "uid", None)
+
+        # Open the row NOW (with the live summary) so tool_called names it; the
+        # result lands when dispatch() finishes it after this returns.
+        call_id = ActTrail().start(
+            tool_name=tool_name, params=params, transcript_id=transcript_id, summary=act_summary,
+        )
+        self._pending_call_id = call_id
+        self._signal(
+            MessageProcessor._WS_TOOL_CALLED,
+            id=call_id, name=tool_name, summary=act_summary, transcript_row_id=transcript_id,
+        )
 
         if run_async:
             # AsyncDelegateRunner owns the daemon-thread lifecycle + the captured
@@ -238,6 +266,9 @@ class ToolDispatcher:
             tr = ToolResult.ok(str(placeholder))
         else:
             tr = self._run(ability, params)
+
+        # Execution returned — stop the act-trail timer the tool_called started.
+        self._signal(MessageProcessor._WS_TOOL_DONE, id=call_id, summary=act_summary)
 
         # Rich-media ordinal is assigned ONLY when the invoking mp broadcasts to
         # the user. Subagents / background channels never get a card: their

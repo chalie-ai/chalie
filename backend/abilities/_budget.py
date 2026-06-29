@@ -29,7 +29,10 @@ class BudgetCappedAbility(Ability, ABC):
         count = sum(
             1
             for r in ActTrail().fetch_by_turn(channel, turn_id)
-            if r.get("tool_name") == self.get_name()
+            # An empty result is this call's own in-flight row, opened by the
+            # dispatcher before run() — exclude it so the cap counts only the
+            # completed calls that came before, not the one asking.
+            if r.get("tool_name") == self.get_name() and r.get("result")
         )
         if count >= self.BUDGET_CAP:
             return ToolResult.ok(

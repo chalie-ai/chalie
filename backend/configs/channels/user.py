@@ -45,6 +45,7 @@ class UserConfig(ProcessorConfig):
     """Attachments auto-fire document.upload on turn 0 (presence of"""
 
     SUPPORTS_ASYNC = True
+    BROADCASTS_STATE = True
 
     def __init__(self, metadata: dict[str, object] | None = None) -> None:
         _metadata = metadata or {}

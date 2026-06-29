@@ -146,7 +146,7 @@ export const useSessionStore = defineStore('session', {
     /**
      * Send a user turn. Signal-only: the optimistic user bubble renders instantly;
      * everything else — the spinner, the rows, the reply — flows back through the
-     * broadcast `working`/`turn_updated`/`done` signals (→ routeDrift → refetch).
+     * broadcast `working`/`updated`/`done` signals (→ routeDrift → refetch).
      *
      * Mid-ACT path: a turn is already in flight, so the backend cancels it,
      * concatenates this text onto the original, and restarts as a FRESH turn. We
@@ -438,14 +438,18 @@ export const useSessionStore = defineStore('session', {
      * Turn-lifecycle signals — stateless and turn-addressed. Each is broadcast to
      * EVERY surface; only the surface that owns the turn (`_liveTurnId`) releases
      * its send guard on `done`. Returns true when handled.
-     *   created(id)      → carries a NEW thread's allocated id: claim it onto the
-     *                      optimistic live turn (unbound until now), bind, spinner on
-     *   working(id)      → an EXISTING turn (reply, id already known) (re)activates:
-     *                      bind (idempotent) + spinner on
-     *   tool_invoked(id) → transient loading sub-text (NO fetch)
-     *   turn_updated(id) → fetch the block + atomic monotonic replace
-     *   done(id)         → spinner off + settle
-     *   error            → one dock toast (a `done` follows to clear the spinner)
+     *   created(id)        → carries a NEW thread's allocated id: claim it onto the
+     *                        optimistic live turn (unbound until now), bind, spinner on
+     *   working(id)        → an EXISTING turn (reply, id already known) (re)activates:
+     *                        bind (idempotent) + spinner on
+     *   tool_called(id…)   → push a live act-trail pill (name + summary) onto its
+     *                        `transcript_row_id`'s trail, start its timer (NO fetch)
+     *   tool_done(id)      → stop that pill's timer, matched by id (NO fetch)
+     *   updated(id)        → fetch the block + atomic monotonic replace; that
+     *                        refetch (in upsertTurn) drops the now-persisted rows'
+     *                        live pills — the §6.5 data-driven handoff, no manual clear
+     *   done(id)           → spinner off + settle
+     *   error              → one dock toast (a `done` follows to clear the spinner)
      */
     _routeTurnSignal(data: WsPushEvent): boolean {
       const convo = useConversationStore();
@@ -464,10 +468,18 @@ export const useSessionStore = defineStore('session', {
           // forms reconcile via upsertTurn's monotonic, atomic re-splice.
           void convo.refetchTurn(turnId);
           return true;
-        case 'tool_invoked':
-          if (turnId != null) convo.setLiveSummary(turnId, (data as { summary?: string }).summary ?? '');
+        case 'tool_called':
+          if (turnId != null) {
+            const tc = data as { id?: number; name?: string; summary?: string; transcript_row_id?: number };
+            convo.startLiveTool(turnId, tc.transcript_row_id ?? null, tc.id ?? null, tc.name ?? '', tc.summary);
+          }
           return true;
-        case 'turn_updated':
+        case 'tool_done':
+          convo.finishLiveTool((data as { id?: number }).id ?? null);
+          return true;
+        case 'updated':
+          // The refetch lands the just-persisted rows; upsertTurn drops their live
+          // pills (§6.5 step-4 handoff) — no manual clear, no double-render.
           if (turnId != null) void convo.refetchTurn(turnId);
           return true;
         case 'done':

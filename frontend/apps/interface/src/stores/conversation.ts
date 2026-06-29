@@ -74,13 +74,6 @@ export interface ActForm extends TurnTagged {
    * the tool-name pill and running timer are dropped, leaving the act summaries.
    */
   collapsed: boolean;
-  /**
-   * Sub-text for a live working anchor — the transient `tool_invoked` summary
-   * ("Searching files…"), shown under the spinner while the turn runs. Set only
-   * on the synthetic anchor TurnView renders for a working turn; falls back to
-   * "thinking…" when empty.
-   */
-  placeholder?: string;
 }
 
 export type ConversationForm = UserForm | ChalieForm | ActForm;
@@ -124,9 +117,16 @@ export const useConversationStore = defineStore('conversation', {
     /** turn_ids currently in flight (the `working` signal is on, no `done` yet) —
      *  drives the spinner anchor. Independent of the rows, which arrive via fetch. */
     workingTurnIds: new Set<number>(),
-    /** Transient per-turn `tool_invoked` summary ("Searching files…"), shown under
-     *  the working anchor. Dropped when the turn settles (setWorking false). */
-    liveSummaries: {} as Record<number, string>,
+    /**
+     * Live act-trail pills for the in-flight step, keyed by their
+     * `transcript_row_id` — the assistant row driving the calls (spec §6.5). Pushed
+     * on `tool_called`, resolved on `tool_done`, shown with a running timer. The
+     * live↔persisted link IS this row id: once the row's `tool_calls` persist,
+     * `upsertTurn` drops its entry and the refetched summaries take over — a
+     * data-driven handoff, never a state machine. `turnId` rides each entry so the
+     * turn can collect its live trails for render without a row→turn lookup.
+     */
+    liveTools: {} as Record<number, { turnId: number; pills: ToolPill[] }>,
     /** Highest row id rendered per turn — the monotonic guard that drops a stale
      *  or out-of-order refetch so a slow response can't overwrite a newer one. */
     turnVersions: {} as Record<number, number>,
@@ -156,9 +156,17 @@ export const useConversationStore = defineStore('conversation', {
     isTurnWorking(state): (turnId: number | null) => boolean {
       return (turnId) => turnId != null && state.workingTurnIds.has(turnId);
     },
-    /** Transient `tool_invoked` summary for `turnId` (empty when none). */
-    liveSummaryFor(state): (turnId: number | null) => string {
-      return (turnId) => (turnId != null ? state.liveSummaries[turnId] ?? '' : '');
+    /** Live act-trail trails for `turnId`'s in-flight step — one entry per
+     *  transcript row carrying unsettled pills (spec §6.5). Empty when none. The
+     *  in-flight row is always the latest, so the view paints these at the turn's
+     *  tail, exactly where the persisted ActForm will land on the next `updated`. */
+    liveTrailsFor(state): (turnId: number | null) => { rowId: number; pills: ToolPill[] }[] {
+      return (turnId) =>
+        turnId == null
+          ? []
+          : Object.entries(state.liveTools)
+              .filter(([, v]) => v.turnId === turnId)
+              .map(([rowId, v]) => ({ rowId: Number(rowId), pills: v.pills }));
     },
     /**
      * True when a thread's last activity was within the 1-hour active window.
@@ -340,20 +348,54 @@ export const useConversationStore = defineStore('conversation', {
 
     // ---- Turn lifecycle signals ----
 
-    /** Flip a turn's spinner on/off. Settling also drops its transient summary. */
+    /** Flip a turn's spinner on/off. Settling also drops any live act-trail pills
+     *  the persisting refetch did not already clear (the §6.5 tail floor). */
     setWorking(turnId: number, on: boolean): void {
       if (on) {
         this.workingTurnIds.add(turnId);
       } else {
         this.workingTurnIds.delete(turnId);
-        delete this.liveSummaries[turnId];
+        this._clearLiveTurn(turnId);
       }
     },
 
-    /** Write the transient `tool_invoked` summary straight onto the anchor — no
-     *  fetch: a step in progress never triggers a refetch. */
-    setLiveSummary(turnId: number, summary: string): void {
-      this.liveSummaries[turnId] = summary;
+    /** Push a live act-trail pill the instant a tool call begins (spec §6.5 step 2),
+     *  starting its running timer — NO fetch. Keyed by `transcript_row_id`: the row
+     *  the pill attaches to and whose persisted summary later supersedes it. `id` is
+     *  the opened `tool_calls` row that the matching `tool_done` resolves. */
+    startLiveTool(turnId: number, rowId: number | null, id: number | null, name: string, summary?: string): void {
+      if (rowId == null || id == null) return;
+      const pill: ToolPill = {
+        id: String(id), name, summary, startedAt: Date.now(), ok: false, resolved: false,
+      };
+      const trail = this.liveTools[rowId] ?? { turnId, pills: [] };
+      this.liveTools[rowId] = { turnId, pills: [...trail.pills, pill] };
+    },
+
+    /** Resolve a live pill on `tool_done` (spec §6.5 step 3) — stop its timer and
+     *  freeze the measured duration. Matched by the unique `tool_calls` row `id`, so
+     *  no row id is needed. No-op if already cleared by the persisting refetch. */
+    finishLiveTool(id: number | null): void {
+      if (id == null) return;
+      const key = String(id);
+      for (const [rowId, trail] of Object.entries(this.liveTools)) {
+        if (!trail.pills.some((p) => p.id === key && !p.resolved)) continue;
+        this.liveTools[Number(rowId)] = {
+          turnId: trail.turnId,
+          pills: trail.pills.map((p) =>
+            p.id === key ? { ...p, resolved: true, ok: true, ms: Date.now() - p.startedAt } : p,
+          ),
+        };
+        return;
+      }
+    },
+
+    /** Drop every live trail belonging to a turn — the settle/abort floor; the
+     *  normal handoff is the per-row drop in `upsertTurn` (spec §6.5 step 4). */
+    _clearLiveTurn(turnId: number): void {
+      for (const [rowId, v] of Object.entries(this.liveTools)) {
+        if (v.turnId === turnId) delete this.liveTools[Number(rowId)];
+      }
     },
 
     /** Project one turn block into ordered forms — the user row then each
@@ -402,6 +444,14 @@ export const useConversationStore = defineStore('conversation', {
       this.forms = this.forms.filter((f) => f.turnId !== block.turn_id);
       this.forms.splice(this._turnInsertIndex(block.turn_id), 0, ...incoming);
 
+      // §6.5 step 4 — the live↔persisted handoff. Any row whose tool_calls now
+      // persist no longer needs its live pills: the just-rendered summaries are
+      // authoritative, so drop that row's trail. Driven by the data arriving, not
+      // by a signal or a manual dedup — so nothing ever double-renders.
+      for (const m of block.messages) {
+        if (m.tool_calls?.length) delete this.liveTools[parseInt(m.id, 10)];
+      }
+
       const item = this.threads.find((t) => t.turn_id === block.turn_id);
       if (item) {
         item.last_activity_at = block.last_activity_at;
@@ -411,7 +461,7 @@ export const useConversationStore = defineStore('conversation', {
     },
 
     /** Fetch one turn block and upsert it — the single read behind both the WS
-     *  `turn_updated` refetch and thread expand. */
+     *  `updated` refetch and thread expand. */
     async refetchTurn(turnId: number): Promise<void> {
       this.upsertTurn(await convoApi.thread(turnId));
     },
@@ -422,7 +472,7 @@ export const useConversationStore = defineStore('conversation', {
       this.forms = this.forms.filter((f) => f.turnId !== turnId);
       this.threads = this.threads.filter((t) => t.turn_id !== turnId);
       this.workingTurnIds.delete(turnId);
-      delete this.liveSummaries[turnId];
+      this._clearLiveTurn(turnId);
       delete this.turnVersions[turnId];
     },
 

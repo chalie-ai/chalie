@@ -91,6 +91,19 @@ Choose `async: true` when the user asks for something to happen "in the backgrou
 class MessageProcessor:
     """Single flat message processor for every channel — one instance per turn."""
 
+    # The entire lean WS vocabulary — the only signals a surface listens on.
+    # `broadcast()` is the sole emitter; every byte of turn DATA is pulled over
+    # REST. created → render the block + act-trail indicator; working → spin the
+    # state up; updated → refetch the block; done → drop the working indicator;
+    # tool_called → render the call summary + start its act-trail timer;
+    # tool_done → stop that timer.
+    _WS_CREATED_STATE = 'created'
+    _WS_WORKING_STATE = 'working'
+    _WS_UPDATED_STATE = 'updated'
+    _WS_DONE_STATE = 'done'
+    _WS_TOOL_CALLED = 'tool_called'
+    _WS_TOOL_DONE = 'tool_done'
+
     def __init__(self, raw_input: str, metadata: dict[str, object] | None = None):
         self._raw_input = raw_input
         self._metadata = metadata or {}
@@ -171,6 +184,20 @@ class MessageProcessor:
     def _cfg(self) -> "ProcessorConfig":
         """Non-None config — always set before any method except __init__ is called."""
         return cast("ProcessorConfig", self.config)
+
+    def broadcast(self, state: str, turn_id: int | None, **extra: object) -> None:
+        """The sole WS turn-signal chokepoint. No-op unless this channel opts in
+        via ``BROADCASTS_STATE`` (only the user channel does). Carries the lean
+        state + turn_id, plus a tool call's id/name/summary for tool_called and
+        tool_done — the surface pulls every byte of turn DATA back over REST. A
+        broker fault is swallowed so a dead socket never breaks the turn loop."""
+        if not self._cfg.BROADCASTS_STATE:
+            return
+        from services.websocket_broker import WebSocketBroker  # noqa: PLC0415
+        try:
+            WebSocketBroker().broadcast({"type": state, "turn_id": turn_id, **extra})
+        except Exception as exc:  # noqa: BLE001 — a dead surface must not break the loop
+            logger.debug("[MP.broadcast] %s failed: %s", state, exc)
 
     def _run_thinking_gate(self) -> None:
         """Regression-head deliberation scoring → self.thinking_level (user channel only)."""
@@ -278,18 +305,13 @@ class MessageProcessor:
             if self.turn_id is None:
                 self.turn_id = Transcript.turn_id_of_row(self.uid)
             self.anchor = self.uid
-            # Announce the turn the instant its input row is written — ONE site,
-            # branched on the user-reply discriminator (spec §6.1): a new thread
-            # (``not _forked`` — turn_id just allocated) emits ``created`` to
-            # carry the fresh id to the surface; a reply (``_forked`` — turn_id
-            # pre-set, already known to the surface) emits ``working``.
-            if self._cfg.broadcast_to == "user" and self.turn_id is not None:
-                if self._forked:
-                    from api.chat import _broadcast_working  # noqa: PLC0415
-                    _broadcast_working(self.turn_id)
-                else:
-                    from api.chat import _broadcast_created  # noqa: PLC0415
-                    _broadcast_created(self.turn_id)
+            # Announce the turn the instant its input row is written: ``created``
+            # (render the block + the act-trail indicator) then ``working`` (spin
+            # the state up). Both fire unconditionally — a fresh thread and a reply
+            # take the identical path; the surface keys on its own current state.
+            if self.turn_id is not None:
+                self.broadcast(self._WS_CREATED_STATE, self.turn_id)
+                self.broadcast(self._WS_WORKING_STATE, self.turn_id)
 
         if self._cfg.channel == "user":
             self._run_thinking_gate()
@@ -470,7 +492,13 @@ class MessageProcessor:
                     attempt, _MAX_PROVIDER_ATTEMPTS, self._cfg.channel, exc,
                 )
                 if attempt < _MAX_PROVIDER_ATTEMPTS:
-                    self._broadcast_provider_retry(attempt + 1)
+                    # A transient notice, not a turn state (no ``done`` follows; the
+                    # turn is still in flight) — toast a surface that a resend is underway.
+                    self.broadcast(
+                        "provider_retry", self.turn_id,
+                        message="The AI provider had a problem — retrying…",
+                        attempt=attempt + 1, max_attempts=_MAX_PROVIDER_ATTEMPTS,
+                    )
 
         logger.critical(
             "[MP] provider send failed after %d attempts channel=%s — terminating turn: %s",
@@ -481,12 +509,6 @@ class MessageProcessor:
             "Please try again in a moment.",
             provider=getattr(last_exc, "provider", ""),
         ) from last_exc
-
-    def _broadcast_provider_retry(self, next_attempt: int) -> None:
-        """Tell a user-facing surface a provider resend is in progress (toast)."""
-        if self._cfg.broadcast_to == "user":
-            from api.chat import _broadcast_provider_retry  # noqa: PLC0415
-            _broadcast_provider_retry(next_attempt, _MAX_PROVIDER_ATTEMPTS)
 
     def _store_row(self, text: _OptStr) -> str:
         """Persist this step's assistant row and advance the anchor its tool calls record against."""
@@ -501,9 +523,7 @@ class MessageProcessor:
         self.anchor = row_id
         # Persistence boundary: every chain step and the final synthesis land here.
         # Signal the surface to refetch the turn block (it coalesces by turn_id).
-        if self._cfg.broadcast_to == "user" and self.turn_id is not None:
-            from api.chat import _broadcast_turn_updated  # noqa: PLC0415
-            _broadcast_turn_updated(self.turn_id)
+        self.broadcast(self._WS_UPDATED_STATE, self.turn_id)
         return formatted
 
     def _dispatch_tools(self, tool_calls: list[dict[str, object]]) -> None:
@@ -559,6 +579,9 @@ class MessageProcessor:
                     type(hook).__name__,
                     exc,
                 )
+        # The turn's last assistant message carried no tool calls — it is the
+        # terminal. Drop the surface's working indicator (spec §6.4/§7.4).
+        self.broadcast(self._WS_DONE_STATE, self.turn_id)
         return formatted
 
     def _cleanup_cancelled(self) -> None:

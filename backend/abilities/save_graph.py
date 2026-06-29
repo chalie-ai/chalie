@@ -36,6 +36,12 @@ class SaveGraph(BudgetCappedAbility):
         for row in ActTrail().fetch_by_turn(channel, turn_id):
             if row.get("tool_name") != "save_graph":
                 continue
+            # The dispatcher opens this very call's trail row (result="") before
+            # run() executes, so it surfaces here too. An empty result means the
+            # row is still in flight (incl. this call) — only committed prior
+            # writes count toward dedup.
+            if not row.get("result"):
+                continue
             try:
                 p = json.loads(cast("str", row.get("params") or "{}"))
             except (ValueError, TypeError):
