@@ -201,7 +201,13 @@ export const useSessionStore = defineStore('session', {
     async _finishTurn(turnId: number | null): Promise<void> {
       const convo = useConversationStore();
       const id = turnId ?? this._liveTurnId;
-      if (id != null) convo.setWorking(id, false);
+      if (id != null) {
+        // A forked thread that settled while the user is looking elsewhere keeps a
+        // standing Activity card (blue `done`); one they're viewing, or a plain
+        // spine turn watched inline, just settles.
+        if (id !== this.panelThreadId && convo.isForkedThread(id)) convo.markThreadDone(id);
+        else convo.setWorking(id, false);
+      }
       if (id != null && id === this._liveTurnId) {
         this._liveTurnId = null;
         this._lastUserFormId = null;
@@ -400,6 +406,7 @@ export const useSessionStore = defineStore('session', {
     async openThreadPanel(turnId: number): Promise<void> {
       this.panelThreadId = turnId;
       const convo = useConversationStore();
+      convo.seenThread(turnId);
       if (convo.isHydrated(turnId)) return;
       this.threadExpanding = true;
       try {

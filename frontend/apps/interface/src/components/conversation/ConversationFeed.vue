@@ -57,10 +57,12 @@ const feedEntries = computed<FeedEntry[]>(() => {
   return entries;
 });
 
-/** Pill status drives its border, dot and badge. `new` once the backend tracks
- *  unread replies; `thread` while inside the 1-hour active window; else idle. */
-function pillStatus(t: ThreadListItem): 'new' | 'thread' | 'idle' {
-  if (t.unread) return 'new';
+/** Pill status drives its border and dot colour. A forked thread with live
+ *  Activity wins: `working` (pink) while its reply streams, `done` (blue) once it
+ *  settles unseen; otherwise `thread` inside the 1-hour active window, else idle. */
+function pillStatus(t: ThreadListItem): 'working' | 'done' | 'thread' | 'idle' {
+  const phase = conversationStore.threadPhase(t.turn_id);
+  if (phase) return phase;
   if (conversationStore.isThreadActive(t.last_activity_at)) return 'thread';
   return 'idle';
 }
@@ -166,7 +168,6 @@ onBeforeUnmount(() => {
           <span class="thread-pill__label">Thread</span>
           <span class="thread-pill__summary">{{ entry.thread.gist || entry.thread.preview || 'Conversation' }}</span>
           <span class="thread-pill__dot" aria-hidden="true" />
-          <span v-if="entry.thread.unread" class="thread-pill__badge">{{ entry.thread.unread }} new</span>
         </button>
       </div>
     </template>
@@ -240,7 +241,8 @@ onBeforeUnmount(() => {
   opacity: 0.6;
 }
 
-.thread-pill--new { border-color: color-mix(in oklab, var(--status-main) 40%, transparent); }
+.thread-pill--working { border-color: color-mix(in oklab, var(--status-main) 45%, transparent); }
+.thread-pill--done { border-color: color-mix(in oklab, var(--cyan) 45%, transparent); }
 .thread-pill--thread { border-color: color-mix(in oklab, var(--violet) 35%, transparent); }
 
 .thread-pill__icon {
@@ -277,10 +279,16 @@ onBeforeUnmount(() => {
   border-radius: 50%;
 }
 
-/* Inline (in-pill) the unread dot is the muted rose — NOT the bright magenta;
-   that glow is reserved for the activity rail / search dots. */
-.thread-pill--new .thread-pill__dot {
+/* Live Activity: pink (working) pulses while the reply streams, blue (done) is a
+   steady standing marker until the thread is opened. */
+.thread-pill--working .thread-pill__dot {
   background: var(--status-main);
+  box-shadow: 0 0 8px color-mix(in oklab, var(--status-main) 45%, transparent);
+}
+
+.thread-pill--done .thread-pill__dot {
+  background: var(--cyan);
+  box-shadow: 0 0 8px color-mix(in oklab, var(--cyan) 45%, transparent);
 }
 
 .thread-pill--thread .thread-pill__dot {
@@ -291,15 +299,5 @@ onBeforeUnmount(() => {
 .thread-pill--idle .thread-pill__dot {
   background: transparent;
   border: 1.5px solid color-mix(in oklab, var(--text-primary) 30%, transparent);
-}
-
-.thread-pill__badge {
-  flex-shrink: 0;
-  font-size: 10px;
-  font-weight: 600;
-  padding: 1px 7px;
-  border-radius: 9px;
-  background: color-mix(in oklab, var(--status-main) 16%, transparent);
-  color: color-mix(in oklab, var(--status-main) 70%, var(--text-primary));
 }
 </style>

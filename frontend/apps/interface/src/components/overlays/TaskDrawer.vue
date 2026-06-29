@@ -217,8 +217,9 @@ onBeforeUnmount(() => {
     </div>
 
     <div id="taskDrawerList" class="task-drawer__list">
-      <!-- Live threads — unread replies or threads mid-reply. Clicking opens the
-           thread's slide-over. The mockup's floating notifications live here. -->
+      <!-- Live forked threads — reply streaming (pink) or settled-unseen (blue).
+           Clicking opens the thread's slide-over. The mockup's floating
+           notifications live here. -->
       <template v-if="threadActivity.length">
         <button
           v-for="ta in threadActivity"
@@ -396,8 +397,8 @@ onBeforeUnmount(() => {
 }
 
 // ── Thread-activity row ──────────────────────────────────────────────────────────
-// Live/unread threads, folded out of the mockup's floating notifications. A left
-// accent stripe (rose for unread, violet for thinking) tells the two apart.
+// Live forked threads, folded out of the mockup's floating notifications. A left
+// accent stripe (pink while working, blue once done) tells the two apart.
 
 .task-drawer__thread {
   display: flex;
@@ -416,8 +417,8 @@ onBeforeUnmount(() => {
   }
 }
 
-.task-drawer__thread--new { border-left-color: var(--status-main); }
-.task-drawer__thread--thinking { border-left-color: var(--violet); }
+.task-drawer__thread--working { border-left-color: var(--status-main); }
+.task-drawer__thread--done { border-left-color: var(--cyan); }
 
 .task-drawer__thread-top {
   display: flex;
@@ -442,15 +443,17 @@ onBeforeUnmount(() => {
   height: 8px;
   border-radius: 50%;
 
-  &.new {
+  // Working (pink) pulses while the reply streams; done (blue) is a steady,
+  // standing marker until the user opens the thread.
+  &.working {
     background: var(--status-main);
-    box-shadow: 0 0 8px color-mix(in oklab, var(--status-main) 50%, transparent);
+    box-shadow: 0 0 10px color-mix(in oklab, var(--status-main) 60%, transparent);
+    animation: pulseV 1.4s ease-in-out infinite;
   }
 
-  &.thinking {
-    background: var(--violet);
-    box-shadow: 0 0 10px color-mix(in oklab, var(--violet) 60%, transparent);
-    animation: pulseV 1.4s ease-in-out infinite;
+  &.done {
+    background: var(--cyan);
+    box-shadow: 0 0 8px color-mix(in oklab, var(--cyan) 50%, transparent);
   }
 }
 
