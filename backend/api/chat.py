@@ -125,7 +125,7 @@ def deliver_async_result(mp: object, result_text: str, cancel_event: threading.E
     thread_id = getattr(mp, "turn_id", None)
     if thread_id is not None:
         metadata["thread_id"] = thread_id
-    # The synthesis turn is a full UserConfig turn, so its created → … → done
+    # The synthesis turn is a full UserConfig turn, so its working → … → done
     # lifecycle signals come from MessageProcessor itself — nothing to emit here.
     MessageProcessor.process(result_text, synth_config, metadata, cancel_event=cancel_event)
 

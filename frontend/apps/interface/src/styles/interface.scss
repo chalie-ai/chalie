@@ -43,7 +43,7 @@ body {
 }
 
 :focus-visible {
-  outline: 1.5px solid rgba(138, 92, 255, 0.45);
+  outline: 1.5px solid rgba(var(--bs-primary-rgb), 0.45);
   outline-offset: 2px;
 }
 
@@ -69,16 +69,16 @@ body {
     opacity 1200ms cubic-bezier(0.4, 0, 0.2, 1),
     background 1200ms cubic-bezier(0.4, 0, 0.2, 1);
   background:
-    radial-gradient(ellipse 70% 55% at 12% 35%, rgba(138, 92, 255, 0.22), transparent 55%),
-    radial-gradient(ellipse 50% 40% at 88% 75%, rgba(0, 240, 255, 0.05), transparent 60%);
+    radial-gradient(ellipse 70% 55% at 12% 35%, rgba(var(--bs-primary-rgb), 0.22), transparent 55%),
+    radial-gradient(ellipse 50% 40% at 88% 75%, rgba(var(--bs-info-rgb), 0.05), transparent 60%);
 }
 
 body.speaker-chalie #ambientBloom { opacity: 1; }
 body.speaker-user #ambientBloom {
   opacity: 1;
   background:
-    radial-gradient(ellipse 60% 45% at 18% 30%, rgba(138, 92, 255, 0.05), transparent 60%),
-    radial-gradient(ellipse 70% 55% at 88% 65%, rgba(0, 240, 255, 0.20), transparent 55%);
+    radial-gradient(ellipse 60% 45% at 18% 30%, rgba(var(--bs-primary-rgb), 0.05), transparent 60%),
+    radial-gradient(ellipse 70% 55% at 88% 65%, rgba(var(--bs-info-rgb), 0.20), transparent 55%);
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -107,8 +107,8 @@ body.speaker-user #ambientBloom {
   align-items: center;
   gap: var(--space-sm);
   padding: var(--space-sm) var(--space-md);
-  background: rgba(224, 108, 108, 0.15);
-  border: 1px solid rgba(224, 108, 108, 0.3);
+  background: rgba(var(--bs-danger-rgb), 0.15);
+  border: 1px solid rgba(var(--bs-danger-rgb), 0.3);
   border-radius: var(--radius-full);
   font-size: var(--font-size-sm);
   color: var(--error);
@@ -145,8 +145,8 @@ body.speaker-user #ambientBloom {
   align-items: center;
   gap: var(--space-sm);
   padding: var(--space-sm) var(--space-md);
-  background: rgba(220, 130, 40, 0.15);
-  border: 1px solid rgba(220, 130, 40, 0.35);
+  background: rgba(var(--bs-warning-rgb), 0.15);
+  border: 1px solid rgba(var(--bs-warning-rgb), 0.35);
   border-radius: var(--radius-full);
   font-size: var(--font-size-sm);
   color: var(--warning-banner-text);
@@ -182,8 +182,8 @@ body.speaker-user #ambientBloom {
   align-items: center;
   gap: var(--space-sm);
   padding: var(--space-sm) var(--space-md);
-  background: rgba(0, 240, 255, 0.08);
-  border: 1px solid rgba(0, 240, 255, 0.25);
+  background: rgba(var(--bs-info-rgb), 0.08);
+  border: 1px solid rgba(var(--bs-info-rgb), 0.25);
   border-radius: var(--radius-full);
   font-size: var(--font-size-sm);
   color: var(--accent-tertiary);
@@ -466,7 +466,7 @@ body.speaker-user #ambientBloom {
 .loading-overlay__skip:hover { color: var(--text-secondary); }
 
 .loading-overlay__skip:focus-visible {
-  outline: 1.5px solid rgba(138, 92, 255, 0.45);
+  outline: 1.5px solid rgba(var(--bs-primary-rgb), 0.45);
   outline-offset: 2px;
 }
 
@@ -513,8 +513,8 @@ body.speaker-user #ambientBloom {
 }
 
 @keyframes loadingGlow {
-  0%, 100% { box-shadow: 0 0 12px var(--violet, #8a5cff), 0 0 24px rgba(138, 92, 255, 0.3); }
-  50%       { box-shadow: 0 0 24px var(--violet, #8a5cff), 0 0 48px rgba(138, 92, 255, 0.45); }
+  0%, 100% { box-shadow: 0 0 12px var(--violet, #8a5cff), 0 0 24px rgba(var(--bs-primary-rgb), 0.3); }
+  50%       { box-shadow: 0 0 24px var(--violet, #8a5cff), 0 0 48px rgba(var(--bs-primary-rgb), 0.45); }
 }
 
 @keyframes loadingTextFadeIn {
@@ -546,13 +546,13 @@ body.speaker-user #ambientBloom {
 }
 
 .btn-action--send:not(:disabled) {
-  filter: drop-shadow(0 0 8px rgba(138, 92, 255, 0.40));
+  filter: drop-shadow(0 0 8px rgba(var(--bs-primary-rgb), 0.40));
 }
 
 .btn-action--send:hover:not(:disabled) {
-  color: #9B6FFF;
+  color: var(--violet-hover);
   transform: translateY(-1px);
-  filter: drop-shadow(0 0 12px rgba(138, 92, 255, 0.65));
+  filter: drop-shadow(0 0 12px rgba(var(--bs-primary-rgb), 0.65));
 }
 
 .btn-action--send:active:not(:disabled) {
@@ -767,18 +767,14 @@ body.speaker-user #ambientBloom {
 .voice-rec-btn__spinner {
   width: 14px;
   height: 14px;
-  border: 2px solid rgba(255, 255, 255, 0.15);
+  border: 2px solid var(--border-strong);
   border-top-color: var(--text-secondary);
   border-radius: 50%;
-  animation: voiceRecSpin 0.7s linear infinite;
+  animation: spin 0.7s linear infinite;
 }
 
-@keyframes voiceRecSpin {
-  to { transform: rotate(360deg); }
-}
-
-/* Canonical spin keyframe — component-scoped aliases (history-spin,
-   thread-panel-spin, voiceRecSpin, etc.) will migrate here over time. */
+/* Canonical spin keyframe — the single 360° rotation every inline loading
+   spinner uses (history, thread panel, voice, action cards, update prompt). */
 @keyframes spin {
   to { transform: rotate(360deg); }
 }

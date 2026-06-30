@@ -440,11 +440,7 @@ function _unbindKeyboard(): void {
   border: 2px solid var(--border);
   border-top-color: var(--violet);
   border-radius: 50%;
-  animation: vp-spin 0.7s linear infinite;
-}
-
-@keyframes vp-spin {
-  to { transform: rotate(360deg); }
+  animation: spin 0.7s linear infinite;
 }
 
 .voice-player__error {

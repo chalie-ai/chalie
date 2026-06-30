@@ -307,11 +307,7 @@ docker compose up -d</code>
   border-top-color: var(--accent-tertiary);
   border-radius: 50%;
   flex-shrink: 0;
-  animation: update-spin 0.8s linear infinite;
-}
-
-@keyframes update-spin {
-  to { transform: rotate(360deg); }
+  animation: spin 0.8s linear infinite;
 }
 
 .update-dialog__status {

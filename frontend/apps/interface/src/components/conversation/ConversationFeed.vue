@@ -134,11 +134,7 @@ onBeforeUnmount(() => {
   border: 2px solid color-mix(in oklab, var(--violet) 20%, transparent);
   border-top-color: var(--violet);
   border-radius: 50%;
-  animation: history-spin 0.7s linear infinite;
-}
-
-@keyframes history-spin {
-  to { transform: rotate(360deg); }
+  animation: spin 0.7s linear infinite;
 }
 
 .history-end-pill {
@@ -219,6 +215,7 @@ onBeforeUnmount(() => {
 .thread-pill--working .thread-pill__dot {
   background: var(--status-main);
   box-shadow: 0 0 8px color-mix(in oklab, var(--status-main) 45%, transparent);
+  animation: pulseV 1.4s ease-in-out infinite;
 }
 
 .thread-pill--done .thread-pill__dot {

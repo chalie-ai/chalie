@@ -146,7 +146,7 @@ onBeforeUnmount(() => {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  color: #b07cff;
+  color: var(--violet-bright);
   flex-shrink: 0;
 
   :deep(svg) {
@@ -190,7 +190,7 @@ onBeforeUnmount(() => {
 
 .tip__example-prompt {
   font-size: 0.88rem;
-  color: #b07cff;
+  color: var(--violet-bright);
   font-style: italic;
   letter-spacing: -0.005em;
 

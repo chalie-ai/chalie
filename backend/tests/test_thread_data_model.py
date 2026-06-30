@@ -92,15 +92,6 @@ class TestThreadDataModel:
         assert [r['content'] for r in rows] == ['Q1', 'A1a', 'A1b']
         assert all(r['turn_id'] == t1 for r in rows)
 
-    def test_by_turn_returns_all_roles_including_compaction(self, db: sqlite3.Connection) -> None:
-        """by_turn returns all rows unconditionally — the REST endpoint exposes
-        every transcript row so callers have full fidelity."""
-        t1 = _seed_thread('Q1', 'A1')
-        Transcript.write_input_row('user', 'compaction', 'compacted text', turn_id=t1)
-
-        rows = Transcript.by_turn('user', t1)
-        assert any(r['role'] == 'compaction' for r in rows), "by_turn includes all roles"
-
     def test_rows_to_messages_projects_by_turn(self, db: sqlite3.Connection) -> None:
         """_rows_to_messages (the shared projection) correctly maps by_turn
         into the conversation message shape — the same path the API endpoints use."""

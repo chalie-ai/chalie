@@ -33,8 +33,8 @@ class ProcessorConfig(ABC):
     It gates schema *exposure* only — never routing."""
 
     BROADCASTS_STATE: ClassVar[bool] = False
-    """True → this channel streams the lean turn-state signals (created/working/
-    updated/done + tool_called/tool_done) to its surface via ``mp.broadcast``.
+    """True → this channel streams the lean turn-state signals (working/updated/
+    done + tool_called/tool_done) to its surface via ``mp.broadcast``.
     Only UserConfig sets it; every other channel stays silent (the chokepoint
     no-ops). The single state-gate — replaces the scattered ``broadcast_to ==
     'user'`` checks. Distinct from ``broadcast_to`` (message-delivery target)."""

@@ -117,7 +117,9 @@ onBeforeUnmount(() => document.removeEventListener('keydown', onKeydown));
   z-index: 120;
   display: flex;
   flex-direction: column;
-  background: var(--bg);
+  background: var(--scrim-panel-thread);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
   border-left: 1px solid var(--border);
   border-radius: 16px 0 0 16px;
   box-shadow: -26px 0 64px rgba(0, 0, 0, 0.6);
@@ -194,13 +196,7 @@ onBeforeUnmount(() => document.removeEventListener('keydown', onKeydown));
   border: 2px solid color-mix(in oklab, var(--violet) 20%, transparent);
   border-top-color: var(--violet);
   border-radius: 50%;
-  animation: thread-panel-spin 0.7s linear infinite;
-}
-
-@keyframes thread-panel-spin {
-  to {
-    transform: rotate(360deg);
-  }
+  animation: spin 0.7s linear infinite;
 }
 
 .thread-panel-enter-active {

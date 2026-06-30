@@ -69,12 +69,8 @@ const { cards } = useActionCard();
   border: 2px solid color-mix(in oklab, var(--violet) 20%, transparent);
   border-top-color: var(--violet);
   border-radius: 50%;
-  animation: ac-spin 0.7s linear infinite;
+  animation: spin 0.7s linear infinite;
   flex-shrink: 0;
-}
-
-@keyframes ac-spin {
-  to { transform: rotate(360deg); }
 }
 
 .action-card__content {
