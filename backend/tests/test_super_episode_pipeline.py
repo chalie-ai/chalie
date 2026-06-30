@@ -185,7 +185,7 @@ def _insert_embedding(db: sqlite3.Connection, episode_id: str, emb: list[float])
 
 
 # ── LLM network-boundary seam (Pattern H — the ONLY sanctioned mock) ───────────
-# Mirrors tests/test_tkt926_per_source_profiles.py. A real ProviderClient
+# Mirrors tests/test_per_source_profiles.py. A real ProviderClient
 # subclass swapped at the class level via try/finally — no unittest.mock — so the
 # full ACT loop, prompt assembly and the whole _write_super_episode orchestration
 # run real; only the network call to the model is replaced.
