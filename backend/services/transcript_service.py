@@ -38,7 +38,7 @@ _EXTRACTION_OVERLAP = 5
 
 _COLS = (
     "id, channel, role, content, tool_call_id, tool_name, "
-    "internal, created_at, turn_id, location_lat, location_lon, location_name"
+    "internal, created_at, turn_id, location_lat, location_lon, location_name, settled"
 )
 
 # NULL-safe turn key. Legacy rows (pre-chain, or rebuilt by
@@ -65,19 +65,28 @@ def _thread_query_filter(query: str) -> tuple[str, tuple[str, ...]]:
     )
 
 
-# settle0 — the FIRST assistant row of a turn whose tool_calls carry NO
-# model-driven tool. The two internally-dispatched passes (chat_history_compactor,
-# thinking) DO record a tool_calls row but are not model tools, so they never
-# demote a settle. The orchestrator ends a turn on the first no-tool response, so
-# "first no-model-tool assistant" IS the turn's settle by construction. The
-# predicate scans the row aliased ``t``; every reader that uses it binds
-# ``*_INTERNAL_TOOLS`` in textual order after its own scope params.
-_INTERNAL_TOOLS: tuple[str, ...] = ("chat_history_compactor", "thinking")
-_SETTLE_PREDICATE = (
-    "t.role = 'assistant' AND NOT EXISTS (SELECT 1 FROM tool_calls tc "
-    "WHERE tc.transcript_id = t.id AND tc.tool_name NOT IN "
-    f"({','.join('?' * len(_INTERNAL_TOOLS))}))"
-)
+# settle0 — the FIRST assistant row of a turn with settled=1. Written as 1 by the
+# write path; ActTrail.start() demotes to 0 when a settling tool (counts_as_settle
+# True) is recorded. Internal passes (chat_history_compactor, thinking) never
+# demote. The predicate scans the row aliased ``t``; no bound params needed.
+_SETTLE_PREDICATE = "t.role = 'assistant' AND t.settled = 1"
+
+
+import functools as _functools
+
+
+@_functools.lru_cache(maxsize=1)
+def _non_settling_tools() -> "frozenset[str]":
+    """Registry-derived set of tool_names whose ability has counts_as_settle=False.
+
+    Cached after the first call. Import is deferred to avoid a circular import
+    (abilities._registry imports transcript_service indirectly via the DB service).
+    ActTrail imports this lazily for the same reason."""
+    from abilities._registry import _get_registry  # noqa: PLC0415
+    return frozenset(
+        name for name, ability in _get_registry().items()
+        if not ability.counts_as_settle
+    )
 
 class Transcript:
     """Static read/write surface for the transcript table. All access goes
@@ -137,12 +146,12 @@ class Transcript:
                     """
                     INSERT INTO transcript (
                         channel, role, content, tool_call_id, tool_name, internal,
-                        xml_migrated, location_lat, location_lon, location_name
+                        xml_migrated, location_lat, location_lon, location_name, settled
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, ?, ?)
                     """,
                     (channel, role, content, tool_call_id, tool_name, 1 if internal else 0,
-                     lat, lon, loc_name),
+                     lat, lon, loc_name, 1 if role == 'assistant' else 0),
                 )
                 rowid = cursor.lastrowid
                 cursor.close()
@@ -183,6 +192,7 @@ class Transcript:
                 'tool_call_id': r[4], 'tool_name': r[5], 'internal': bool(r[6]),
                 'created_at': r[7], 'turn_id': r[8],
                 'location_lat': r[9], 'location_lon': r[10], 'location_name': r[11],
+                'settled': bool(r[12]),
             }
             for r in rows
         ]
@@ -236,7 +246,7 @@ class Transcript:
 
     @staticmethod
     def settle0(channel: str, turn_id: int) -> int | None:
-        """``id`` of the turn's settle0 — its first no-model-tool assistant row
+        """``id`` of the turn's settle0 — its first settled assistant row
         (see ``_SETTLE_PREDICATE``), or None for a turn that has not settled yet
         (in-progress/failed). settle0 is the boundary between a turn's main
         exchange and its fork continuation: the shared pivot of the two views."""
@@ -246,7 +256,7 @@ class Transcript:
             row = conn.execute(
                 f"SELECT MIN(t.id) FROM transcript t "
                 f"WHERE t.channel = ? AND t.turn_id = ? AND {_SETTLE_PREDICATE}",
-                (channel, turn_id, *_INTERNAL_TOOLS),
+                (channel, turn_id),
             ).fetchone()
         return int(row[0]) if row and row[0] is not None else None
 
@@ -272,7 +282,7 @@ class Transcript:
                 f"SELECT t.turn_id, MIN(t.id) FROM transcript t "
                 f"WHERE t.channel = ? AND t.turn_id IN ({ph}) AND {_SETTLE_PREDICATE} "
                 f"GROUP BY t.turn_id",
-                (channel, *tids, *_INTERNAL_TOOLS),
+                (channel, *tids),
             ).fetchall()
         s0_map: dict[int, int] = {int(r[0]): int(r[1]) for r in s0_rows}
         return [r for r in rows if int(cast(int, r["id"])) <= s0_map.get(int(cast(int, r["turn_id"])), -1)]
@@ -408,7 +418,9 @@ class Transcript:
         with db.connection() as conn:
             meta_rows = conn.execute(
                 f"SELECT {_TURN_KEY} AS k, MAX(id) AS last_id, MAX(created_at) AS last_ts, "
-                f"COUNT(*) AS cnt FROM transcript "
+                f"COUNT(*) AS cnt, "
+                f"MIN(CASE WHEN role = 'assistant' AND settled = 1 THEN id END) IS NULL AS working "
+                f"FROM transcript "
                 f"WHERE channel = ?{role_filter} AND {_TURN_KEY} IN ({placeholders}) "
                 f"GROUP BY k",
                 (channel, *exclude_roles, *page_keys),
@@ -428,6 +440,7 @@ class Transcript:
                 "last_activity_at": r[2],
                 "last_row_id": int(r[1]),
                 "row_count": int(r[3]),
+                "working": bool(r[4]),
             }
         first_content: dict[int, str] = {}
         for r in first_rows:
@@ -444,6 +457,7 @@ class Transcript:
                 "last_row_id": m.get("last_row_id", 0),
                 "row_count": m.get("row_count", 0),
                 "preview": first_content.get(key, ""),
+                "working": m.get("working", False),
             })
 
         threads.sort(key=lambda t: cast("int", t.get("last_row_id") or 0), reverse=True)
@@ -572,7 +586,7 @@ class Transcript:
                 candidate_turns.update(int(r[0]) for r in conn.execute(
                     "SELECT DISTINCT transcript.turn_id FROM transcript "
                     f"WHERE channel = ? AND turn_id IS NOT NULL AND turn_id <= ? AND id < {settle}",
-                    (channel, main_wm, *_INTERNAL_TOOLS),
+                    (channel, main_wm),
                 ).fetchall())
 
         cited = Transcript._episode_cited_ids(channel)
@@ -1083,12 +1097,15 @@ class Transcript:
             cursor.execute(
                 """
                 INSERT INTO transcript (channel, role, content, xml_migrated,
-                                        location_lat, location_lon, location_name, turn_id)
+                                        location_lat, location_lon, location_name, turn_id,
+                                        settled)
                 VALUES (?, ?, ?, 1, ?, ?, ?,
                         COALESCE(?, (SELECT COALESCE(MAX(turn_id), 0) + 1
-                                     FROM transcript WHERE channel = ?)))
+                                     FROM transcript WHERE channel = ?)),
+                        ?)
                 """,
-                (channel, role, content, lat, lon, loc_name, turn_id, channel),
+                (channel, role, content, lat, lon, loc_name, turn_id, channel,
+                 1 if role == 'assistant' else 0),
             )
             row_id = cursor.lastrowid
             cursor.close()
@@ -1181,10 +1198,12 @@ class Transcript:
             cursor.execute(
                 """
                 INSERT INTO transcript (channel, role, content, xml_migrated,
-                                        location_lat, location_lon, location_name, turn_id)
+                                        location_lat, location_lon, location_name, turn_id,
+                                        settled)
                 VALUES (?, ?, ?, 1, ?, ?, ?,
                         COALESCE(?, (SELECT COALESCE(MAX(turn_id), 0) + 1
-                                     FROM transcript WHERE channel = ?)))
+                                     FROM transcript WHERE channel = ?)),
+                        1)
                 """,
                 (channel, 'assistant', content, lat, lon, loc_name, turn_id, channel),
             )

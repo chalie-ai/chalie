@@ -116,13 +116,13 @@ Choose `async: true` when the user asks for something to happen "in the backgrou
 class MessageProcessor:
     """Single flat message processor for every channel — one instance per turn."""
 
-    # The entire lean WS vocabulary — the only signals a surface listens on.
+    # The entire lean WS vocabulary — the five signals a surface listens on.
     # `broadcast()` is the sole emitter; every byte of turn DATA is pulled over
-    # REST. created → render the block + act-trail indicator; working → spin the
-    # state up; updated → refetch the block; done → drop the working indicator;
+    # REST. There is no `created` signal — the turn_id is returned in the POST
+    # body, so the surface already holds it. working → spin the state up;
+    # updated → refetch the block; done → drop the working indicator;
     # tool_called → render the call summary + start its act-trail timer;
     # tool_done → stop that timer.
-    _WS_CREATED_STATE = 'created'
     _WS_WORKING_STATE = 'working'
     _WS_UPDATED_STATE = 'updated'
     _WS_DONE_STATE = 'done'
@@ -212,15 +212,19 @@ class MessageProcessor:
 
     def broadcast(self, state: str, turn_id: int | None, **extra: object) -> None:
         """The sole WS turn-signal chokepoint. No-op unless this channel opts in
-        via ``BROADCASTS_STATE`` (only the user channel does). Carries the lean
-        state + turn_id, plus a tool call's id/name/summary for tool_called and
-        tool_done — the surface pulls every byte of turn DATA back over REST. A
-        broker fault is swallowed so a dead socket never breaks the turn loop."""
+        via ``BROADCASTS_STATE`` (the ``user`` and ``schedule`` channels do).
+        Carries the lean state + turn_id + channel (the FE routes by it — ``user``
+        → main spine, ``schedule`` → dock + that schedule's thread), plus a tool
+        call's id/name/summary for tool_called and tool_done; the surface pulls
+        every byte of turn DATA back over REST. A broker fault is swallowed so a
+        dead socket never breaks the turn loop."""
         if not self._cfg.BROADCASTS_STATE:
             return
         from services.websocket_broker import WebSocketBroker  # noqa: PLC0415
         try:
-            WebSocketBroker().broadcast({"type": state, "turn_id": turn_id, **extra})
+            WebSocketBroker().broadcast(
+                {"type": state, "turn_id": turn_id, "channel": self._cfg.channel, **extra}
+            )
         except Exception as exc:  # noqa: BLE001 — a dead surface must not break the loop
             logger.debug("[MP.broadcast] %s failed: %s", state, exc)
 
@@ -359,23 +363,30 @@ class MessageProcessor:
         # skip_input_row channel (vision, skill_association) leaves turn_id None
         # and lets its end message allocate its own turn.
         if not self._cfg.skip_input_row:
-            self.uid = Transcript.write_input_row(
-                self._cfg.channel, self._cfg.role, self._raw_input,
-                turn_id=self.turn_id,
-            )
+            # The request thread (api.chat._start_turn) pre-writes the input row so
+            # the POST can return the allocated turn_id inline; ADOPT it here rather
+            # than writing a second row. Channels without that pre-write (delegate
+            # synthesis, background passes) still open their own row.
+            pre_uid = self._metadata.get("input_uid")
+            if pre_uid is not None:
+                self.uid = cast("int", pre_uid)
+            else:
+                self.uid = Transcript.write_input_row(
+                    self._cfg.channel, self._cfg.role, self._raw_input,
+                    turn_id=self.turn_id,
+                )
             if self.turn_id is None:
                 self.turn_id = Transcript.turn_id_of_row(self.uid)
             self.anchor = self.uid
-            # Announce the turn the instant its input row is written: ``created``
-            # (render the block + the act-trail indicator) then ``working`` (spin
-            # the state up). Both fire unconditionally — a fresh thread and a reply
-            # take the identical path; the surface keys on its own current state.
+            # Announce the turn with ``working`` (spin the state up). It fires
+            # unconditionally — a fresh thread and a reply take the identical path;
+            # the surface keys on its own current state. There is no ``created``
+            # signal: the turn_id rode the POST response body.
             if self.turn_id is not None:
-                # Register the cancel handle BEFORE announcing the turn — the
-                # instant the surface learns the turn_id (via ``created``) it can
-                # DELETE /api/thread/<turn_id> against it, so the handle must exist.
+                # Register the cancel handle BEFORE announcing the turn so DELETE
+                # /api/thread/<turn_id> is live the instant ``working`` fires.
+                # Idempotent — the pre-write path already registered it.
                 _register_canceller(self.turn_id, self.cancel_event)
-                self.broadcast(self._WS_CREATED_STATE, self.turn_id)
                 self.broadcast(self._WS_WORKING_STATE, self.turn_id)
 
         if self._cfg.channel == "user":
@@ -385,8 +396,10 @@ class MessageProcessor:
 
         # Label a turn once it first grows into a thread — i.e. on the first user
         # reply past its settle0 (``_forked``). Fire the gist delegate only when no
-        # label exists yet, so a thread is summarized exactly once, at birth.
-        if self._forked and self.turn_id is not None:
+        # label exists yet, so a thread is summarized exactly once, at birth. The
+        # ``schedule`` channel is exempt: its gist lives on the schedule row, not
+        # ``thread_gist`` (§13.3), generated by the scheduler from the prompt.
+        if self._forked and self.turn_id is not None and self._cfg.channel != "schedule":
             try:
                 from services.thread_gist_service import get_thread_gist_service  # noqa: PLC0415
                 if not get_thread_gist_service().bulk_get(self._cfg.channel, [self.turn_id]):
@@ -623,8 +636,10 @@ class MessageProcessor:
         return child
 
     def _format_response(self, text: _OptStr) -> str:
-        """Normalise assistant text before it is persisted or broadcast."""
-        if self._cfg.broadcast_to == "user":
+        """Normalise assistant text before it is persisted or broadcast. Any
+        live-surfaced channel (``broadcast_to`` set — user or schedule) renders
+        markdown to HTML for its thread view; silent channels keep raw text."""
+        if self._cfg.broadcast_to is not None:
             from services.markup import markdown_to_html  # noqa: PLC0415
             return markdown_to_html(text)
         return text or ""

@@ -19,7 +19,7 @@ from flask_restx import Namespace, Resource
 from .auth import require_session
 from .dto import Error, expects, register_dto, responds
 from .dto.boundary import error
-from .dto.scheduler_item import SchedulerItem, SchedulerItemCreate, SchedulerItemUpdate
+from .dto.scheduler_item import SchedulerItem, SchedulerItemCreate, SchedulerItemUpdate, SchedulerTurn
 from .dto.scheduler_query import SchedulerGroupQuery, SchedulerHistoryQuery, SchedulerListQuery
 
 if TYPE_CHECKING:
@@ -40,6 +40,7 @@ register_dto(
     SchedulerItem,
     SchedulerItemCreate,
     SchedulerItemUpdate,
+    SchedulerTurn,
     SchedulerListQuery,
     SchedulerHistoryQuery,
     SchedulerGroupQuery,
@@ -50,7 +51,7 @@ _S = scheduler_ns.models
 
 _COLS = [
     "id", "item_type", "message", "due_at", "recurrence",
-    "window_start", "window_end", "status", "channel",
+    "status", "channel",
     "created_by_session", "created_at", "last_fired_at", "group_id", "is_prompt",
 ]
 _COLS_FULL = _COLS + ["source", "external_uid"]
@@ -134,13 +135,13 @@ class SchedulerListResource(Resource):
                     """
                     INSERT INTO scheduled_items
                       (id, item_type, message, due_at, recurrence,
-                       window_start, window_end, status, channel,
+                       status, channel,
                        created_by_session, created_at, group_id, is_prompt)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?)
                     """,
                     (
                         item_id, dto.item_type, dto.message, dto.due_at.isoformat(),
-                        dto.recurrence, dto.window_start, dto.window_end, dto.channel,
+                        dto.recurrence, dto.channel,
                         None, now.isoformat(), item_id, dto.item_type == "prompt",
                     ),
                 )
@@ -213,6 +214,42 @@ class SchedulerGroupResource(Resource):
             return error(_ERR_INTERNAL, 500)
 
 
+@scheduler_ns.route("/turns")
+class SchedulerTurnsResource(Resource):
+    _TURN_COLS = ["turn_id", "gist", "preview", "recurrence", "last_fired_at", "next_due_at"]
+
+    @require_session
+    @scheduler_ns.response(200, "Active schedule threads", model=_S["SchedulerTurn"])
+    @scheduler_ns.response(500, _ERR_INTERNAL, model=_S["Error"])
+    @responds(SchedulerTurn, code=200)
+    def get(self) -> list[SchedulerTurn] | ResponseReturnValue:
+        """List active prompt-schedule threads, one row per ``turn_id`` (§13.5).
+
+        A series' occurrences share a ``turn_id``, so they collapse to one growing
+        thread (``preview``/``gist``/``recurrence`` are uniform across a series).
+        Fully-cancelled series drop out (the HAVING); a fired one-shot stays — its
+        thread is still inspectable and replyable. The gist is sourced from
+        ``thread_gist`` (keyed by channel=schedule, turn_id)."""
+        try:
+            db = _get_db()
+            with db.connection() as conn:
+                rows = conn.execute(
+                    "SELECT si.turn_id, tg.gist, si.message, si.recurrence, "
+                    "       MAX(si.last_fired_at), "
+                    "       MIN(CASE WHEN si.status = 'pending' THEN si.due_at END) "
+                    "FROM scheduled_items si "
+                    "LEFT JOIN thread_gist tg ON tg.channel = 'schedule' AND tg.turn_id = si.turn_id "
+                    "WHERE si.is_prompt = 1 AND si.turn_id IS NOT NULL AND COALESCE(si.hidden, 0) = 0 "
+                    "GROUP BY si.turn_id "
+                    "HAVING COUNT(CASE WHEN si.status != 'cancelled' THEN 1 END) > 0 "
+                    "ORDER BY MAX(si.last_fired_at) DESC"
+                ).fetchall()
+            return [SchedulerTurn.model_validate(dict(zip(self._TURN_COLS, r))) for r in rows]
+        except Exception as exc:
+            logger.error("[SCHEDULER API] turns error: %s", exc)
+            return error(_ERR_INTERNAL, 500)
+
+
 # ---------------------------------------------------------------------------
 # Item resource (id-addressed CRUD)
 # ---------------------------------------------------------------------------
@@ -265,12 +302,12 @@ class SchedulerItemResource(Resource):
                     """
                     UPDATE scheduled_items
                     SET item_type = ?, message = ?, due_at = ?, recurrence = ?,
-                        window_start = ?, window_end = ?, is_prompt = ?
+                        is_prompt = ?
                     WHERE id = ? AND status = 'pending'
                     """,
                     (
                         dto.item_type, dto.message, dto.due_at.isoformat(), dto.recurrence,
-                        dto.window_start, dto.window_end, dto.item_type == "prompt", item_id,
+                        dto.item_type == "prompt", item_id,
                     ),
                 )
                 if cursor.rowcount == 0:

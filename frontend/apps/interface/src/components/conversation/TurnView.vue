@@ -1,127 +1,174 @@
-<!-- Renders a sequence of forms as Weave avatar rows: a 32px avatar gutter that
+<!-- Renders a turn block as Weave avatar rows: a 32px avatar gutter that
      shows on speaker change, then the message body. Shared by the main feed
      (inline turns) and the thread panel so both keep identical row rhythm. -->
 <script setup lang="ts">
 import { computed } from 'vue';
 import { User } from '@lucide/vue';
-import { useConversationStore } from '../../stores/conversation';
-import type { ConversationForm, UserForm, ChalieForm, ActForm } from '../../stores/conversation';
+import type { ConversationTurnBlock, ConversationMessage } from '../../api/conversation';
+import { useConversationFeed } from '../../composables/useConversationFeed';
+import type { LiveToolPill } from '../../composables/useConversationFeed';
 import UserBubble from './UserBubble.vue';
 import ChalieBubble from './ChalieBubble.vue';
 import ActCycle from './ActCycle.vue';
 import ActCycleGroup from './ActCycleGroup.vue';
 
 const props = withDefaults(
-  defineProps<{ forms: ConversationForm[]; canReply?: boolean; working?: boolean }>(),
-  { canReply: true, working: false },
+  defineProps<{ block: ConversationTurnBlock; canReply?: boolean; channel?: string }>(),
+  { canReply: true, channel: 'user' },
 );
 
 const emit = defineEmits<{ reply: [turnId: number] }>();
 
-const convo = useConversationStore();
+const feed = computed(() => useConversationFeed(props.channel));
 
-// Sentinel id for the synthetic working anchor — negative so it never collides
-// with a store-minted form id.
-const WORKING_ANCHOR_ID = -1;
+// The live act-trail is derived from WS signals (spec §6.5). While the turn
+// works, append one transient non-collapsed ActRow per in-flight transcript row
+// carrying its tool_called→tool_done pills. Before the first pill lands, a bare
+// anchor renders the "thinking…" placeholder.
+interface LiveActRow {
+  kind: 'live-act';
+  rowId: number;
+  pills: LiveToolPill[];
+}
 
-const turnId = computed<number | null>(() => {
-  for (const f of props.forms) if (f.turnId != null) return f.turnId;
-  return null;
-});
+interface MsgRow {
+  kind: 'msg';
+  message: ConversationMessage;
+}
 
-// Footer controls (timestamp/speak/reply) live once, on the LAST Chalie row of
-// the rendered set — local to THIS view, so the spine (rows through settle0) and
-// the panel (the whole thread) each anchor the footer to their own last row.
-const lastChalieId = computed<number | null>(() => {
-  for (let i = props.forms.length - 1; i >= 0; i--) {
-    if (props.forms[i].kind === 'chalie') return props.forms[i].id;
-  }
-  return null;
-});
+interface CollapsedGroupRow {
+  kind: 'collapsed-group';
+  id: string;
+  summaries: { tool_name: string; summary: string }[];
+}
 
-// The live act-trail is no stored form — it is derived from the WS signals
-// (spec §6.5). While the turn works, append one transient, non-collapsed ActForm
-// per in-flight transcript row carrying its `tool_called`→`tool_done` pills;
-// ActCycle ticks their timers. Before the first pill lands (or a no-tool step) a
-// bare anchor renders the "thinking…" placeholder. The in-flight row is always
-// the latest, so tail placement is exactly where its persisted ActForm lands on
-// the next `updated`, making the live→done handoff seamless.
-const displayForms = computed<ConversationForm[]>(() => {
-  if (!props.working) return props.forms;
-  const trails = convo.liveTrailsFor(turnId.value);
-  if (!trails.length) {
-    const anchor: ActForm = {
-      kind: 'act', id: WORKING_ANCHOR_ID, tools: [], collapsed: false, turnId: turnId.value,
-    };
-    return [...props.forms, anchor];
-  }
-  const live: ActForm[] = trails.map((t) => ({
-    kind: 'act', id: -t.rowId, tools: t.pills, collapsed: false, turnId: turnId.value,
-  }));
-  return [...props.forms, ...live];
-});
+type DisplayRow = MsgRow | LiveActRow | CollapsedGroupRow;
 
-// Consecutive superseded ACT cycles fold into one group; everything else
-// (including a live, non-collapsed act) renders on its own row.
-type RowBase =
-  | { type: 'single'; id: number; form: ConversationForm }
-  | { type: 'act-group'; id: number; forms: ActForm[] };
-type AvatarRow = RowBase & { role: 'user' | 'chalie'; showAvatar: boolean };
+const displayRows = computed<DisplayRow[]>(() => {
+  const rows: DisplayRow[] = [];
 
-const rows = computed<AvatarRow[]>(() => {
-  const grouped: RowBase[] = [];
-  for (const form of displayForms.value) {
-    const last = grouped[grouped.length - 1];
-    if (form.kind === 'act' && form.collapsed) {
-      if (last?.type === 'act-group') last.forms.push(form);
-      else grouped.push({ type: 'act-group', id: form.id, forms: [form] });
-    } else {
-      grouped.push({ type: 'single', id: form.id, form });
+  for (const message of props.block.messages) {
+    // Spine only renders through settle0 — drop thread reply rows.
+    if (message.thread_message) continue;
+
+    rows.push({ kind: 'msg', message });
+
+    // Collapsed tool group immediately after its assistant row.
+    if (message.role === 'assistant' && message.tool_calls?.length) {
+      rows.push({
+        kind: 'collapsed-group',
+        id: message.id,
+        summaries: message.tool_calls,
+      });
     }
   }
-  let prevRole: 'user' | 'chalie' | null = null;
-  return grouped.map((row) => {
-    const role: 'user' | 'chalie' = row.type === 'single' && row.form.kind === 'user' ? 'user' : 'chalie';
-    const annotated: AvatarRow = { ...row, role, showAvatar: role !== prevRole };
+
+  // Live trails: appended at the tail while the turn is working.
+  if (props.block.working) {
+    const trails = feed.value.liveTrailsFor(props.block.turn_id);
+    if (!trails.length) {
+      rows.push({ kind: 'live-act', rowId: -1, pills: [] });
+    } else {
+      for (const t of trails) {
+        rows.push({ kind: 'live-act', rowId: t.rowId, pills: t.pills });
+      }
+    }
+  }
+
+  return rows;
+});
+
+// Footer controls (timestamp/speak/reply) live once, on the LAST assistant
+// message of the rendered set.
+const lastAssistantMsgId = computed<string | null>(() => {
+  for (let i = props.block.messages.length - 1; i >= 0; i--) {
+    const m = props.block.messages[i];
+    if (m.role === 'assistant' && !m.thread_message) return m.id;
+  }
+  return null;
+});
+
+// Avatar-role grouping for the Weave rhythm.
+type AvatarRole = 'user' | 'chalie';
+
+interface AvatarRow {
+  key: string;
+  role: AvatarRole;
+  showAvatar: boolean;
+  row: DisplayRow;
+}
+
+const avatarRows = computed<AvatarRow[]>(() => {
+  let prevRole: AvatarRole | null = null;
+  return displayRows.value.map((row) => {
+    const role: AvatarRole =
+      row.kind === 'msg' && row.message.role === 'user' ? 'user' : 'chalie';
+    const key =
+      row.kind === 'msg'
+        ? `msg-${row.message.id}`
+        : row.kind === 'collapsed-group'
+          ? `cg-${row.id}`
+          : `live-${row.rowId}`;
+    const ar: AvatarRow = { key, role, showAvatar: role !== prevRole, row };
     prevRole = role;
-    return annotated;
+    return ar;
   });
 });
 
 function onReply(): void {
-  if (turnId.value != null) emit('reply', turnId.value);
+  emit('reply', props.block.turn_id);
 }
 </script>
 
 <template>
-  <div class="turn-view">
+  <div
+    class="turn-view"
+    :data-turn-id="block.turn_id"
+    :data-channel="channel"
+  >
     <div
-      v-for="row in rows"
-      :key="row.id"
+      v-for="ar in avatarRows"
+      :key="ar.key"
       class="msg-row"
-      :class="[`msg-row--${row.role}`, row.showAvatar ? 'msg-row--lead' : 'msg-row--cont']"
+      :class="[`msg-row--${ar.role}`, ar.showAvatar ? 'msg-row--lead' : 'msg-row--cont']"
     >
       <div class="msg-row__gutter" aria-hidden="true">
-        <span v-if="row.showAvatar && row.role === 'chalie'" class="msg-avatar msg-avatar--chalie">
+        <span v-if="ar.showAvatar && ar.role === 'chalie'" class="msg-avatar msg-avatar--chalie">
           <img src="/icons/icon.png" alt="" />
         </span>
-        <span v-else-if="row.showAvatar" class="msg-avatar msg-avatar--user">
+        <span v-else-if="ar.showAvatar" class="msg-avatar msg-avatar--user">
           <User :size="15" />
         </span>
       </div>
 
       <div class="msg-row__body">
-        <ActCycleGroup v-if="row.type === 'act-group'" :forms="row.forms" />
+        <!-- Collapsed tool-call group -->
+        <ActCycleGroup
+          v-if="ar.row.kind === 'collapsed-group'"
+          :summaries="(ar.row as CollapsedGroupRow).summaries"
+        />
+
+        <!-- Live act-trail anchor -->
+        <ActCycle
+          v-else-if="ar.row.kind === 'live-act'"
+          :pills="(ar.row as LiveActRow).pills"
+          :turn-id="block.turn_id"
+        />
+
+        <!-- Message rows -->
         <template v-else>
-          <UserBubble v-if="row.form.kind === 'user'" :form="(row.form as UserForm)" />
+          <UserBubble
+            v-if="(ar.row as MsgRow).message.role === 'user'"
+            :message="(ar.row as MsgRow).message"
+          />
           <ChalieBubble
-            v-else-if="row.form.kind === 'chalie'"
-            :form="(row.form as ChalieForm)"
-            :is-last="row.form.id === lastChalieId"
+            v-else
+            :message="(ar.row as MsgRow).message"
+            :is-last="(ar.row as MsgRow).message.id === lastAssistantMsgId"
             :can-reply="canReply"
+            :data-transcript-row-id="(ar.row as MsgRow).message.id"
             @reply="onReply"
           />
-          <ActCycle v-else-if="row.form.kind === 'act'" :form="(row.form as ActForm)" />
         </template>
       </div>
     </div>
@@ -168,8 +215,7 @@ function onReply(): void {
   flex-shrink: 0;
 }
 
-// Chalie's mark is the bare gradient logo — no badge, no glow, no clip — so the
-// transparent icon reads as the brand itself on both the dark and light scrims.
+// Chalie's mark is the bare gradient logo — no badge, no glow, no clip.
 .msg-avatar--chalie img {
   width: 100%;
   height: 100%;

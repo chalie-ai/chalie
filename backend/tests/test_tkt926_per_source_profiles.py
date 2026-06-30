@@ -484,10 +484,9 @@ def _join_threads(prefix: str, timeout: float = 15.0) -> None:
 
     Joining by name synchronises on the real production threads — no sleep, no
     poll of a guessed duration. The scheduler fires a prompt on a daemon thread
-    named ``scheduled-work-<item_id>`` (scheduler_service.py:353); that thread
-    spawns the Stage-2 user turn synchronously on a ``chat-<id>`` thread
-    (api/chat.py:314) before it returns, so joining ``scheduled-work-*`` first
-    guarantees the ``chat-*`` thread already exists when we enumerate for it."""
+    named ``scheduled-work-<item_id>`` (scheduler_service.py); that thread runs
+    the whole turn on the ``schedule`` channel inline, then spawns a
+    ``sched-gist-<group>`` daemon for the thread label."""
     for t in threading.enumerate():
         if t.name.startswith(prefix) and t is not threading.current_thread():
             t.join(timeout)
@@ -503,30 +502,29 @@ def _transcript_rows(db: sqlite3.Connection, channel: str, role: str | None = No
     return [r[0] for r in db.execute(sql, params).fetchall()]
 
 
-def test_scheduled_poll_claims_item_then_surfaces_two_stage_on_user(db: sqlite3.Connection, store: object) -> None:
+def test_scheduled_poll_fires_prompt_as_its_own_schedule_thread(db: sqlite3.Connection, store: object) -> None:
     """Driving the FULL scheduler poll path ``_poll_and_fire`` over a genuine due
     prompt row must:
 
       (claim) commit the claim transaction cleanly — the row ends ``status='fired'``
-              (the atomicity defect that earlier surfaced because Stage-1 ran SYNC
-              inside the open poll transaction; the fix moved the work onto a
-              ``scheduled-work-<id>`` daemon thread so ``_fire_item`` returns
-              immediately and the poll txn commits the claim before any LLM work).
-      (Stage 1) run the work loop on the MUTED ``scheduled`` channel with the
-              instruction persisted there, so a fired task is recoverable and its
-              own output never leaks onto the user channel as input.
-      (Stage 2) surface the worked result to the user as an assistant message on
-              the ``user`` channel — the channel whose source profile is
-              ``extract_episodes`` (so it is encoded as ordinary user output),
-              unlike the muted ``scheduled`` channel — with NO synthetic user
-              input row (hidden_input=True).
+              (the work runs on a ``scheduled-work-<id>`` daemon thread so
+              ``_fire_item`` returns immediately and the poll txn commits the claim
+              before any LLM work).
+      (thread) open the schedule's OWN thread on the ``schedule`` channel: a
+              ``turn_id`` is allocated and persisted to ``scheduled_items.turn_id``,
+              the prompt is written as the opening user row on that channel+turn,
+              and the worked result lands as the assistant row on the SAME
+              channel+turn — one growing, inspectable thread (§13.1).
+      (no relay) NOTHING is written on the ``user`` channel — the schedule
+              self-surfaces on its own channel and never relays to the spine (§13.9).
+      (encoded) the ``schedule`` channel is episode-producing, unlike the old muted
+              work channel (§13.4), so a fired task is encoded into memory.
 
     This drives the real production entry point ``_poll_and_fire()`` (not
-    ``_fire_item`` directly), so the claim/commit transaction the review flagged
-    is exercised for real. The LLM seam returns a no-tool reply for both stages,
-    so each ACT loop ends on its first turn deterministically. The two real
-    daemon threads are joined by name — ``scheduled-work-*`` (Stage 1 + dispatch)
-    first, then ``chat-*`` (Stage 2) — for synchronisation.
+    ``_fire_item`` directly), so the claim/commit transaction is exercised for
+    real. The LLM seam returns a no-tool reply, so the ACT loop ends on its first
+    turn deterministically. Real daemon threads are joined by name —
+    ``scheduled-work-*`` (the turn) then ``sched-gist-*`` (the label).
     """
     from services import scheduler_service
     from services.source_profiles import profile_for
@@ -547,55 +545,60 @@ def test_scheduled_poll_claims_item_then_surfaces_two_stage_on_user(db: sqlite3.
     db.commit()
 
     def _send(_dto: ProviderApiRequest) -> ProviderApiResponse:
-        # Both stages finish in one turn with a plain reply. Stage-1's text is the
-        # scheduled result the Stage-2 user turn relays; Stage-2 echoes it back.
+        # The turn (and the gist delegate) finish in one turn with a plain reply.
         return _text_response(result_text)
 
     with _inject_fake_client(_send):
         scheduler_service._poll_and_fire()
-        # Stage 1 (work loop + dispatch) runs on scheduled-work-<id>; it spawns
-        # the Stage-2 chat-<id> thread synchronously before returning, so join it
-        # first, then the user-turn thread.
+        # The turn runs inline on scheduled-work-<id>; it spawns the gist label on
+        # sched-gist-<group> before running. Join both so all writes have landed.
         _join_threads("scheduled-work")
-        _join_threads("chat-")
+        _join_threads("sched-gist")
 
     # (claim) The poll's claim transaction committed cleanly: the due row is
-    # marked 'fired'. A non-atomic poll (Stage-1 flushing the in-progress UPDATE
-    # on the shared connection) would leave it 'pending' or 'failed'.
-    status = db.execute(
-        "SELECT status FROM scheduled_items WHERE id=?", (item_id,)
-    ).fetchone()[0]
-    assert status == "fired", (
-        f"the poll must atomically claim and mark the due prompt 'fired'; got "
-        f"{status!r}"
+    # marked 'fired'. A non-atomic poll would leave it 'pending' or 'failed'.
+    fired = db.execute(
+        "SELECT status, turn_id FROM scheduled_items WHERE id=?", (item_id,)
+    ).fetchone()
+    assert fired[0] == "fired", (
+        f"the poll must atomically claim and mark the due prompt 'fired'; got {fired[0]!r}"
     )
 
-    # (Stage 1) the work loop ran on the muted 'scheduled' channel and persisted
-    # the instruction there (recoverable). That channel is muted, so its rows
-    # never become episodes.
-    assert not profile_for("scheduled").extract_episodes, (
-        "test premise: the scheduled work channel must be muted"
+    # (thread) a turn_id was allocated on the schedule row, and both the prompt and
+    # the worked result live on the 'schedule' channel under that one turn.
+    turn_id = fired[1]
+    assert turn_id is not None, "the first fire must allocate and persist scheduled_items.turn_id"
+
+    schedule_user = [
+        r[0] for r in db.execute(
+            "SELECT content FROM transcript WHERE channel='schedule' AND role='user' AND turn_id=? ORDER BY id",
+            (turn_id,),
+        ).fetchall()
+    ]
+    assert any(instruction in c for c in schedule_user), (
+        f"the prompt must open the schedule thread on channel='schedule' turn={turn_id}; "
+        f"found user rows: {schedule_user!r}"
     )
-    scheduled_rows = _transcript_rows(db, "scheduled")
-    assert any(instruction in c for c in scheduled_rows), (
-        "the scheduled work loop must persist the instruction on channel="
-        f"'scheduled'; found scheduled rows: {scheduled_rows!r}"
+    schedule_assistant = [
+        r[0] for r in db.execute(
+            "SELECT content FROM transcript WHERE channel='schedule' AND role='assistant' AND turn_id=? ORDER BY id",
+            (turn_id,),
+        ).fetchall()
+    ]
+    assert any(result_text in c for c in schedule_assistant), (
+        f"the worked result must land as the assistant row on channel='schedule' turn={turn_id}; "
+        f"found assistant rows: {schedule_assistant!r}"
     )
 
-    # (Stage 2) the result surfaced to the user as an assistant message on the
-    # 'user' channel — the encode-eligible channel — and the return hop wrote no
-    # synthetic user input row (hidden_input=True).
-    assert profile_for("user").extract_episodes, (
-        "test premise: the user channel must be episode-producing (encoded)"
+    # (no relay) the schedule self-surfaces on its own channel — it never relays to
+    # the user spine.
+    assert not _transcript_rows(db, "user"), (
+        f"a fired schedule must write NOTHING on the user channel (§13.9); "
+        f"found user rows: {_transcript_rows(db, 'user')!r}"
     )
-    user_assistant = _transcript_rows(db, "user", role="assistant")
-    assert any(result_text in c for c in user_assistant), (
-        "the scheduled return hop must surface the worked result as an assistant "
-        f"message on channel='user'; found user rows: "
-        f"{_transcript_rows(db, 'user')!r}"
-    )
-    assert not _transcript_rows(db, "user", role="user"), (
-        "the return hop must not write a synthetic user input row "
-        "(hidden_input=True) — the scheduled result is the model's reply, not a "
-        "faked user message"
+
+    # (encoded) the schedule channel is episode-producing (§13.4), unlike the old
+    # muted work channel.
+    assert profile_for("schedule").extract_episodes, (
+        "the schedule channel must be episode-producing (encoded into memory)"
     )

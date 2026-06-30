@@ -1,60 +1,50 @@
 <script setup lang="ts">
 import { computed } from 'vue';
-import type { ChalieForm } from '../../stores/conversation';
-import { chalieFormPlaintext, useConversationStore } from '../../stores/conversation';
+import type { ConversationMessage } from '../../api/conversation';
+import { messagePlaintext } from '../../utils/speech';
+import { useConversationFeed } from '../../composables/useConversationFeed';
 import { renderMarkup } from '../../composables/useMarkup';
 import { emit as busEmit } from '../../composables/useEventBus';
 import { Volume2, Reply } from '@lucide/vue';
 import SegmentRenderer from './SegmentRenderer.vue';
 
-const conversationStore = useConversationStore();
+const feed = useConversationFeed();
 
 const props = withDefaults(
-  defineProps<{ form: ChalieForm; isLast?: boolean; canReply?: boolean }>(),
+  defineProps<{ message: ConversationMessage; isLast?: boolean; canReply?: boolean }>(),
   { isLast: false, canReply: false },
 );
 
 const emit = defineEmits<{ reply: [] }>();
 
-const MODE_LABELS: Record<string, string> = {
-  ACT: 'acting',
-  CLARIFY: 'clarifying',
-  ACKNOWLEDGE: 'noting',
-};
+const speakText = computed(() => messagePlaintext(props.message));
 
-const modeBadgeLabel = computed(() => MODE_LABELS[props.form.meta.mode ?? ''] ?? '');
-
-const speakText = computed(() => chalieFormPlaintext(props.form));
-
-// Speak plays the WHOLE turn (every Chalie row), not just this row.
+// Speak plays the WHOLE turn (every assistant row), not just this row.
 function onSpeak(): void {
-  busEmit('chalie:speak-message', { text: conversationStore.turnSpeechText(props.form.id) });
+  if (props.message.turn_id == null) return;
+  busEmit('chalie:speak-message', { text: feed.turnSpeechText(props.message.turn_id) });
 }
 </script>
 
 <template>
   <div
     class="speech-form speech-form--chalie"
-    :class="{
-      'speech-form--escalation': form.escalation,
-      'message--faded': form.inWorkingMemory === false,
-    }"
+    :data-transcript-row-id="message.id"
+    :data-speech="speakText"
   >
     <SegmentRenderer
-      v-if="form.meta.segments && form.meta.segments.length"
-      :segments="form.meta.segments"
+      v-if="message.segments && message.segments.length"
+      :segments="message.segments"
     />
     <div
       v-else
       class="speech-form__text chalie-markup"
-      v-html="renderMarkup(form.text ?? '')"
+      v-html="renderMarkup(message.content ?? '')"
     />
 
-    <!-- Footer lives only on the turn's LAST Chalie row; interim rows carry no meta. -->
+    <!-- Footer lives only on the turn's LAST assistant row. -->
     <div v-if="isLast" class="speech-form__meta">
-      <span class="speech-form__timestamp">{{ form.meta.ts ?? '' }}</span>
-
-      <span v-if="modeBadgeLabel" class="meta-mode-badge">{{ modeBadgeLabel }}</span>
+      <span class="speech-form__timestamp">{{ message.timestamp }}</span>
 
       <span class="speech-form__meta-spacer"></span>
 

@@ -209,20 +209,6 @@ class ScheduleAbility(Ability):
                     "'hourly', or 'interval:N' (every N minutes, 1-1440). Omit for one-time."
                 ),
             },
-            Keys.window_start: {
-                "type": "string",
-                "description": (
-                    "Optional for create with recurrence='hourly': HH:MM start of active "
-                    "window (e.g. '09:00'). Requires window_end."
-                ),
-            },
-            Keys.window_end: {
-                "type": "string",
-                "description": (
-                    "Optional for create with recurrence='hourly': HH:MM end of active "
-                    "window (e.g. '17:00'). Requires window_start."
-                ),
-            },
             Keys.item_id: {
                 "type": "string",
                 "description": (
@@ -473,47 +459,6 @@ def _validate_recurrence(params: dict[str, object]) -> tuple[str | None, ToolRes
     )
 
 
-def _validate_windows(params: dict[str, object], recurrence: str | None) -> tuple[str | None, str | None, ToolResult | None]:
-    window_start = cast(str | None, params.get(Keys.window_start))
-    window_end = cast(str | None, params.get(Keys.window_end))
-
-    if not (window_start or window_end):
-        return None, None, None
-    if recurrence != "hourly":
-        return None, None, ToolResult.err(
-            "window_start/window_end are only valid with recurrence='hourly'.",
-            code="invalid-window",
-            hint="set recurrence='hourly' to use an active window, or drop the window params.",
-        )
-    if not (window_start and window_end):
-        return None, None, ToolResult.err(
-            "both window_start and window_end are required for an hourly window.",
-            code="invalid-window",
-            hint="pass both, e.g. window_start='09:00' and window_end='17:00'.",
-        )
-    window_start = _normalize_hhmm(window_start)
-    if not window_start:
-        return None, None, ToolResult.err(
-            "window_start must be HH:MM (e.g. '09:00').",
-            code="invalid-window",
-            hint="pass a 24-hour time like '09:00'.",
-        )
-    window_end = _normalize_hhmm(window_end)
-    if not window_end:
-        return None, None, ToolResult.err(
-            "window_end must be HH:MM (e.g. '17:00').",
-            code="invalid-window",
-            hint="pass a 24-hour time like '17:00'.",
-        )
-    if window_start >= window_end:
-        return None, None, ToolResult.err(
-            "window_start must be before window_end.",
-            code="invalid-window",
-            hint="set window_start earlier than window_end.",
-        )
-    return window_start, window_end, None
-
-
 def _validate_item_type(params: dict[str, object]) -> tuple[str, ToolResult | None]:
     item_type = (cast(str, params.get(Keys.item_type)) or "notification").lower()
     if item_type not in ("notification", "prompt"):
@@ -555,9 +500,6 @@ def _create(channel: str, params: dict[str, object], past_due_grace: int) -> Too
         recurrence, err = _validate_recurrence(params)
         if err:
             return err
-        window_start, window_end, err = _validate_windows(params, recurrence)
-        if err:
-            return err
 
         db = get_shared_db_service()
         item_id = uuid.uuid4().hex[:8]
@@ -572,9 +514,9 @@ def _create(channel: str, params: dict[str, object], past_due_grace: int) -> Too
             # the model invoked schedule(...) twice in the same turn.
             cursor.execute("""
                 INSERT INTO scheduled_items
-                  (id, item_type, message, due_at, recurrence, window_start, window_end,
+                  (id, item_type, message, due_at, recurrence,
                    status, channel, created_by_session, created_at, group_id, is_prompt)
-                SELECT ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, datetime('now'), ?, ?
+                SELECT ?, ?, ?, ?, ?, 'pending', ?, ?, datetime('now'), ?, ?
                 WHERE NOT EXISTS (
                     SELECT 1 FROM scheduled_items
                     WHERE status = 'pending'
@@ -582,8 +524,7 @@ def _create(channel: str, params: dict[str, object], past_due_grace: int) -> Too
                       AND created_at > datetime('now', '-60 seconds')
                 )
             """, (
-                item_id, item_type, message, due_at,
-                recurrence, window_start, window_end,
+                item_id, item_type, message, due_at, recurrence,
                 channel, None,
                 item_id,  # group_id = own id (root of new series)
                 is_prompt,
@@ -898,23 +839,6 @@ def _cancel(params: dict[str, object]) -> ToolResult:
     except Exception as e:
         logger.exception(f"{LOG_PREFIX} Cancel failed: {e}")
         return ToolResult.err(f"Cancel failed: {e}", code="cancel-failed")
-
-
-def _normalize_hhmm(time_str: str) -> str | None:
-    try:
-        parts = time_str.split(":")
-        if len(parts) != 2:
-            return None
-
-        hour = int(parts[0].strip())
-        minute = int(parts[1].strip())
-
-        if not (0 <= hour < 24 and 0 <= minute < 60):
-            return None
-
-        return f"{hour:02d}:{minute:02d}"
-    except Exception:
-        return None
 
 
 def _fetch_same_day_items(new_record: dict[str, object]) -> list[dict[str, object]]:

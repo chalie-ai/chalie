@@ -198,8 +198,6 @@ CREATE TABLE IF NOT EXISTS scheduled_items (
     message TEXT NOT NULL,
     due_at TEXT NOT NULL,
     recurrence TEXT,
-    window_start TEXT,
-    window_end TEXT,
     status TEXT NOT NULL DEFAULT 'pending',   -- 'pending' is the initial lifecycle state; intentionally repeated in documents.status
     channel TEXT,
     created_by_session TEXT,
@@ -210,7 +208,8 @@ CREATE TABLE IF NOT EXISTS scheduled_items (
     source TEXT,                              -- origin: 'caldav', 'imap', 'system', NULL = user-created
     external_uid TEXT,                        -- dedup key for external sources
     metadata TEXT DEFAULT '{}',               -- JSON blob (location, attendees, etc.)
-    hidden INTEGER DEFAULT 0                  -- hide from user-facing list/API
+    hidden INTEGER DEFAULT 0,                 -- hide from user-facing list/API
+    turn_id INTEGER                           -- the schedule's thread on the 'schedule' channel; one per series (COALESCE(group_id,id)); NULL until first fire
 );
 
 CREATE INDEX IF NOT EXISTS idx_scheduled_items_pending ON scheduled_items(due_at) WHERE status = 'pending';
@@ -519,7 +518,12 @@ CREATE TABLE IF NOT EXISTS transcript (
     -- turn_id) rather than a transcript row id. Nullable + no DEFAULT keeps it
     -- convergence-safe (ADD COLUMN) on existing databases; the value is computed
     -- at insert time by transcript_service.
-    turn_id     INTEGER
+    turn_id     INTEGER,
+    -- Positive settle flag: 1 on assistant rows that carry no model-driven tool
+    -- (the turn's settle0). Written as 1 by write_assistant_row / append;
+    -- ActTrail.start() demotes to 0 when a settling tool is recorded against the
+    -- row. Internal passes (chat_history_compactor, thinking) never demote.
+    settled     INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE INDEX IF NOT EXISTS idx_transcript_channel ON transcript(channel, created_at);

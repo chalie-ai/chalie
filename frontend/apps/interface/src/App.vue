@@ -14,10 +14,12 @@ import InputDock from './components/layout/InputDock.vue';
 import LoadingOverlay from './components/layout/LoadingOverlay.vue';
 import PermissionStack from './components/overlays/PermissionStack.vue';
 import TaskDrawer from './components/overlays/TaskDrawer.vue';
+import SchedulerDock from './components/overlays/SchedulerDock.vue';
 import QuickTipCard from './components/overlays/QuickTipCard.vue';
 import UpdatePrompt from './components/overlays/UpdatePrompt.vue';
 import VoicePlayerDialog from './components/voice/VoicePlayerDialog.vue';
 import UnlockVault from './components/layout/UnlockVault.vue';
+import ActionCardHost from './components/rich/ActionCardHost.vue';
 
 const { init: initTheme } = useTheme();
 const session = useSessionStore();
@@ -103,6 +105,9 @@ onBeforeUnmount(() => {
   <!-- Thread search overlay — Cmd/Ctrl-K or the top-bar search button. -->
   <SearchOverlay />
 
+  <!-- ACT-cycle rich-card responses, outside the feed so they never pollute the turn buffer. -->
+  <ActionCardHost />
+
   <!-- Teleport targets for dialogs / permission cards -->
   <div id="permStack" class="permission-stack"></div>
   <div id="overlayRoot"></div>
@@ -111,6 +116,7 @@ onBeforeUnmount(() => {
        self-subscribe to bus events. -->
   <PermissionStack />
   <TaskDrawer />
+  <SchedulerDock />
   <QuickTipCard />
   <UpdatePrompt />
   <VoicePlayerDialog />

@@ -142,8 +142,6 @@ class Keys:
     url = "url"
     use_for = "use_for"
     value = "value"
-    window_end = "window_end"
-    window_start = "window_start"
     wlan_id = "wlan_id"
 
 
@@ -269,8 +267,6 @@ VARIANTS: "dict[str, frozenset[str]]" = {
     Keys.unanswered: frozenset({"pending", "unread"}),
     Keys.up_kbps: frozenset({"uplink", "upload_bandwidth", "upload_limit", "upload_speed"}),
     Keys.updates: frozenset({"changes", "fields"}),
-    Keys.window_end: frozenset({"end_hour", "end_time", "stop_time"}),
-    Keys.window_start: frozenset({"begin", "from_time", "start_hour", "start_time"}),
     Keys.wlan_id: frozenset({"network", "network_id", "wifi_id"}),
 }
 

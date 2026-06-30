@@ -107,6 +107,22 @@
   /* Full-screen modal scrim — the search overlay dims the whole app behind it. */
   --scrim-overlay:          rgba(3, 4, 8, 0.66);
 
+  /* Extended accent ramps — thread-system design tokens */
+  --violet-bright:          #B07CFF;
+  --success-soft:           #56d39b;
+  --info-blue:              #5b7cf5;
+  --info-blue-2:            #4f93cc;
+  --info-blue-3:            #74acd8;
+  --info-blue-4:            #a7c9e6;
+  --rose-2:                 #d98cc0;
+  --rose-3:                 #e3a9cf;
+  --gold:                   #ffd76e;
+  --gold-soft:              #ffe9a8;
+
+  /* Panel scrims — near-opaque backdrop for sliding panels */
+  --scrim-panel-main:       rgba(15, 14, 24, 0.95);
+  --scrim-panel-thread:     rgba(22, 12, 21, 0.95);
+
   /* Legacy aliases kept for backward compat */
   --accent:                 var(--violet);
   --bg-card:                var(--bg-surface);
@@ -185,6 +201,22 @@
   --scrim-dock:             rgba(246, 244, 241, 0.92);
   --scrim-fallback:         rgba(246, 244, 241, 0.98);
   --scrim-overlay:          rgba(26, 22, 38, 0.38);
+
+  /* Extended accent ramps — same hues read well on light paper */
+  --violet-bright:          #9B6FFF;
+  --success-soft:           #2fb87a;
+  --info-blue:              #4060e0;
+  --info-blue-2:            #3a7ab5;
+  --info-blue-3:            #5590c4;
+  --info-blue-4:            #7aabcf;
+  --rose-2:                 #c47aaa;
+  --rose-3:                 #d498be;
+  --gold:                   #c89800;
+  --gold-soft:              #e8b820;
+
+  /* Panel scrims — near-opaque light panels */
+  --scrim-panel-main:       rgba(250, 249, 252, 0.95);
+  --scrim-panel-thread:     rgba(252, 245, 250, 0.95);
 
   --bg-card:                var(--bg-surface);
 }

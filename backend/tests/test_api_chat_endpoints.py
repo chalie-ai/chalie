@@ -5,6 +5,7 @@ Pins synchronous endpoint contracts only; the async full-turn path (real UMP + L
 """
 
 import sqlite3
+from collections.abc import Iterator
 
 import pytest
 from flask.testing import FlaskClient
@@ -12,6 +13,22 @@ from flask.testing import FlaskClient
 
 @pytest.mark.unit
 class TestChatEndpoints:
+
+    @pytest.fixture(autouse=True)
+    def _isolate_cancellers(self) -> Iterator[None]:
+        """The turn cancel-handle registry is process-global and a dispatched turn
+        registers its handle synchronously, so a turn one test spawns would make
+        another test's interrupt find a phantom turn. Empty it before and after
+        each test (mirrors the lifecycle suite's broker fixture)."""
+        from services.message_processor import _cancellers, _cancellers_guard
+
+        with _cancellers_guard:
+            _cancellers.clear()
+        try:
+            yield
+        finally:
+            with _cancellers_guard:
+                _cancellers.clear()
 
     def test_thread_empty_message_rejected_and_no_turn_started(self, authed_client: tuple[FlaskClient, sqlite3.Connection, object]) -> None:
         """An empty POST /api/thread fails loud with 422/message required and must
@@ -28,6 +45,33 @@ class TestChatEndpoints:
         interrupt = client.delete('/api/thread/1')
         assert interrupt.status_code == 200
         assert interrupt.get_json() == {'ok': True, 'interrupted': None, 'reason': 'no_active_turn'}
+
+    def test_thread_post_allocates_turn_id_synchronously(self, authed_client: tuple[FlaskClient, sqlite3.Connection, object]) -> None:
+        """POST /api/thread returns 200 with the synchronously-allocated
+        ``{turn_id, channel}`` — not the old empty 201. The id is REAL: its opener
+        row is already in the transcript before the response returns (the request
+        thread writes it, so the FE holds a live handle with no WS round-trip)."""
+        client, db_conn, _store = authed_client
+
+        resp = client.post('/api/thread', data={'text': 'hello there'})
+
+        assert resp.status_code == 200
+        body = resp.get_json()
+        turn_id = body['turn_id']
+        assert isinstance(turn_id, int) and turn_id >= 1
+        assert body['channel'] == 'user'
+
+        # Cross-step proof the id is real, not fabricated: the opener row was
+        # written synchronously (before the response) and is queryable now.
+        row = db_conn.execute(
+            "SELECT content, role FROM transcript WHERE channel='user' AND turn_id=? ORDER BY id LIMIT 1",
+            (turn_id,),
+        ).fetchone()
+        assert row is not None and row[0] == 'hello there' and row[1] == 'user'
+
+        # Tame the background turn the dispatch spawned (no provider in test env):
+        # the cancel handle was registered before the worker ran, so this stops it.
+        client.delete(f'/api/thread/{turn_id}')
 
     def test_thread_interrupt_idle_returns_no_active_turn(self, authed_client: tuple[FlaskClient, sqlite3.Connection, object]) -> None:
         """DELETE /api/thread/<turn_id> with no turn in flight returns 200 and says so."""

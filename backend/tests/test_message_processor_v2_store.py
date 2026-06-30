@@ -138,7 +138,7 @@ class TestGetPreviousMessagesTranscript:
 
 class TestGetPreviousMessagesChannelIsolation:
     def _seed_all_channels(self, db: sqlite3.Connection) -> None:
-        for channel in ('user', 'dmn', 'subagent', 'scheduled', _GPM_CHANNEL):
+        for channel in ('user', 'dmn', 'subagent', 'schedule', _GPM_CHANNEL):
             _settled_turn(channel, [f"Content from {channel}", f"Answer for {channel}"])
         db.commit()
 
@@ -147,7 +147,7 @@ class TestGetPreviousMessagesChannelIsolation:
         p = _GPMFakeProcessor.make()  # uses test_channel as its CHANNEL
         result = p.get_previous_messages()
         assert f'Content from {_GPM_CHANNEL}' in result
-        for other in ('user', 'dmn', 'subagent', 'scheduled'):
+        for other in ('user', 'dmn', 'subagent', 'schedule'):
             assert f'Content from {other}' not in result
 
 

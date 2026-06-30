@@ -62,6 +62,7 @@ class ActTrail:
             logger.debug("[ActTrail.start] skipping (no transcript_id): tool=%s", tool_name)
             return None
         try:
+            from services.transcript_service import _non_settling_tools  # noqa: PLC0415
             with self._db.connection() as conn:
                 cur = conn.execute(
                     "INSERT INTO tool_calls "
@@ -69,7 +70,13 @@ class ActTrail:
                     "VALUES (?, ?, ?, ?, ?, ?)",
                     (transcript_id, tool_name, json.dumps(params), "", summary or "", utc_now().isoformat()),
                 )
-                return cur.lastrowid
+                call_id = cur.lastrowid
+                if tool_name not in _non_settling_tools():
+                    conn.execute(
+                        "UPDATE transcript SET settled = 0 WHERE id = ?",
+                        (transcript_id,),
+                    )
+                return call_id
         except Exception as exc:  # noqa: BLE001
             logger.warning(
                 "[ActTrail.start] trail open failed (non-fatal): tool=%s transcript=%s: %s",

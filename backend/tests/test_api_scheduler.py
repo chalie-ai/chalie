@@ -23,8 +23,6 @@ def _insert_item(db: sqlite3.Connection, **overrides: object) -> str:
         message="Test reminder",
         due_at=(datetime.now(timezone.utc) + timedelta(hours=1)).isoformat(),
         recurrence=None,
-        window_start=None,
-        window_end=None,
         status="pending",
         channel="general",
         created_by_session=None,
@@ -39,13 +37,13 @@ def _insert_item(db: sqlite3.Connection, **overrides: object) -> str:
         """
         INSERT INTO scheduled_items
           (id, item_type, message, due_at, recurrence,
-           window_start, window_end, status, channel,
+           status, channel,
            created_by_session, created_at, last_fired_at, group_id, is_prompt)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             d["id"], d["item_type"], d["message"], d["due_at"],
-            d["recurrence"], d["window_start"], d["window_end"],
+            d["recurrence"],
             d["status"], d["channel"], d["created_by_session"],
             d["created_at"], d["last_fired_at"], d["group_id"],
             d["is_prompt"],
@@ -113,36 +111,19 @@ class TestSchedulerAPI:
         ["daily", "hourly", "interval:60"],
     )
     def test_create_accepts_valid_recurrence(self, client: FlaskClient, db: sqlite3.Connection, recurrence: str) -> None:
-        payload: dict[str, object] = {
-            "message": "Recurring item",
-            "due_at": _future_iso(),
-            "recurrence": recurrence,
-        }
-        if recurrence == "hourly":
-            payload["window_start"] = "09:00"
-            payload["window_end"] = "17:00"
-
-        resp = client.post("/api/scheduler", json=payload)
+        resp = client.post(
+            "/api/scheduler",
+            json={
+                "message": "Recurring item",
+                "due_at": _future_iso(),
+                "recurrence": recurrence,
+            },
+        )
 
         assert resp.status_code == 201, (
             f"Expected 201 for recurrence={recurrence}, got {resp.status_code}: "
             f"{resp.get_json()}"
         )
-
-    def test_create_window_on_non_hourly_returns_422(self, client: FlaskClient, db: sqlite3.Connection) -> None:
-        resp = client.post(
-            "/api/scheduler",
-            json={
-                "message": "Bad window",
-                "due_at": _future_iso(),
-                "recurrence": "daily",
-                "window_start": "09:00",
-                "window_end": "17:00",
-            },
-        )
-
-        assert resp.status_code == 422
-        assert "hourly" in str(resp.get_json())
 
     # ----- GET /scheduler/<id> -----
 

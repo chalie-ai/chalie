@@ -95,7 +95,7 @@ def make_stub_config(
 
 # ─── scheduled_items ─────────────────────────────────────────────────
 # Column order matches: SELECT id, item_type, message, due_at, recurrence,
-#   window_start, window_end, topic, created_by_session, group_id, is_prompt
+#   topic, created_by_session, group_id, is_prompt
 
 def make_scheduled_item(
     item_id: str = "sched-001",
@@ -103,8 +103,6 @@ def make_scheduled_item(
     message: str = "Test reminder",
     due_at: str | None = None,
     recurrence: str | None = None,
-    window_start: str | None = None,
-    window_end: str | None = None,
     topic: str | None = None,
     created_by_session: str | None = None,
     group_id: str | None = None,
@@ -113,7 +111,7 @@ def make_scheduled_item(
     due_at = due_at or (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat()
     return (
         item_id, item_type, message, due_at, recurrence,
-        window_start, window_end, topic, created_by_session, group_id,
+        topic, created_by_session, group_id,
         is_prompt,
     )
 

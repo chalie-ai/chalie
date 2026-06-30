@@ -62,6 +62,7 @@ class ChatHistoryCompactionConfig(CompactionConfig):
 
 class ChatHistoryCompactor(Ability):
     DISCOVERABLE: ClassVar[bool] = False  # internal-only compaction tool; pinned, never discovered
+    counts_as_settle: ClassVar[bool] = False  # never demotes a settle0
 
     def get_name(self) -> str:
         return "chat_history_compactor"

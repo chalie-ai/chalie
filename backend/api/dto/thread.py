@@ -23,18 +23,21 @@ class ThreadFeedQuery(DTO):
     q: str = ""
     limit: int = Field(default=20, ge=1, le=120)
     offset: int = Field(default=0, ge=0)
+    channel: str = "user"
 
 
 class ThreadSummary(DTO):
     """One collapsed feed row: the thread's id, last-activity timestamp, opener
-    preview, row count and one-sentence gist. The internal recency sort key (the
-    latest transcript row id) drives ordering server-side and is not exposed."""
+    preview, row count, one-sentence gist, and whether the turn is still working.
+    The internal recency sort key (the latest transcript row id) drives ordering
+    server-side and is not exposed."""
 
     turn_id: int | None = None
     last_activity_at: str | None = None
     preview: str
     row_count: int
     gist: str | None = None
+    working: bool = False
 
 
 class ThreadFeed(DTO):
@@ -77,3 +80,15 @@ class ThreadSendRequest(DTO):
 
     text: str = ""
     source: str = "text"
+    channel: str = "user"
+
+
+class ThreadCreated(DTO):
+    """POST /api/thread(/<turn_id>) response body — the synchronously-allocated
+    ``turn_id`` and its ``channel``. Replaces the old empty 201: the FE encodes
+    both as ``data-turn-id``/``data-channel`` on the thread element the instant the
+    POST returns, so the stop button and every later REST call hold the handle
+    without waiting on a WS signal (the ``created`` signal is gone)."""
+
+    turn_id: int
+    channel: str

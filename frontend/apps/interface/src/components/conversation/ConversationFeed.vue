@@ -1,82 +1,41 @@
 <!-- Renders the conversation spine: EVERY turn inline as Weave avatar rows (its
-     rows through settle0), plus the live in-flight turn. A turn with replies past
-     settle0 also gets a Thread opener beneath it; the opener and the reply action
-     open the thread in the slide-over panel. Threads never collapse the spine. -->
+     rows through settle0), plus thread opener pills for forked turns. -->
 <script setup lang="ts">
 import { ref, computed, watch, nextTick, onMounted, onBeforeUnmount } from 'vue';
-import { useConversationStore } from '../../stores/conversation';
-import type { ConversationForm, ThreadListItem } from '../../stores/conversation';
+import { useConversationFeed } from '../../composables/useConversationFeed';
+import type { ConversationTurnBlock } from '../../api/conversation';
 import { useSessionStore } from '../../stores/session';
 import { useAutoscroll } from '../../composables/useAutoscroll';
 import TurnView from './TurnView.vue';
 
-const conversationStore = useConversationStore();
+const feed = useConversationFeed();
 const session = useSessionStore();
 
 const feedRef = ref<HTMLElement | null>(null);
 const { scrollToBottom, forceScrollToBottom } = useAutoscroll(feedRef);
 
-// Live turn: forms not belonging to any known thread (in-flight).
-const liveTurnForms = computed<ConversationForm[]>(() => {
-  const known = new Set(conversationStore.threads.map((t) => t.turn_id).filter((t): t is number => t != null));
-  return conversationStore.forms.filter((f) => f.turnId == null || !known.has(f.turnId));
-});
-
-const liveTurn = computed(() => {
-  if (!liveTurnForms.value.length) return null;
-  const forms = liveTurnForms.value;
-  return { id: forms[0].id, forms };
-});
-
-// Every turn renders inline. Its spine forms are the rows through settle0 (the
-// reply continuation — thread_message forms — is dropped); a turn that HAS any
-// such reply also carries a Thread opener (`thread` non-null). The live in-flight
-// turn is inline with no opener.
 type FeedEntry = {
-  id: number;
-  forms: ConversationForm[];
-  working: boolean;
-  thread: ThreadListItem | null;
+  block: ConversationTurnBlock;
+  isForked: boolean;
 };
 
-const feedEntries = computed<FeedEntry[]>(() => {
-  const entries: FeedEntry[] = [];
-  for (const t of conversationStore.threads) {
-    const all = conversationStore.forms.filter((f) => f.turnId === t.turn_id);
-    const spine = all.filter((f) => !f.threadMessage);
-    if (!spine.length) continue; // not yet hydrated — fills in on batch load
-    // A forked turn's live reply streams in its panel, not here — its spine slice
-    // stays frozen at settle0 (the pink pill is its only working cue). An unforked
-    // turn owns its trail inline, so it follows its own `working` signal.
-    const forked = all.length > spine.length;
-    entries.push({
-      id: spine[0].id,
-      forms: spine,
-      working: forked ? false : conversationStore.isTurnWorking(t.turn_id),
-      thread: forked ? t : null,
-    });
-  }
-  // The live turn has no turn_id yet, so its spinner can't come from isTurnWorking
-  // — drive it from this surface's send guard until `working` binds the thread.
-  if (liveTurn.value) {
-    entries.push({ id: liveTurn.value.id, forms: liveTurn.value.forms, working: session.isSending, thread: null });
-  }
-  return entries;
-});
+const feedEntries = computed<FeedEntry[]>(() =>
+  feed.sortedBlocks.value.map((block) => ({
+    block,
+    isForked: feed.isForkedThread(block.turn_id),
+  })),
+);
 
-/** Pill status drives its border and dot colour. A forked thread with live
- *  Activity wins: `working` (pink) while its reply streams, `done` (blue) once it
- *  settles unseen; otherwise `thread` inside the 1-hour active window, else idle. */
-function pillStatus(t: ThreadListItem): 'working' | 'done' | 'thread' | 'idle' {
-  const phase = conversationStore.threadPhase(t.turn_id);
+/** Pill status drives its border and dot colour. */
+function pillStatus(block: ConversationTurnBlock): 'working' | 'done' | 'thread' | 'idle' {
+  const phase = feed.threadPhase(block.turn_id);
   if (phase) return phase;
-  if (conversationStore.isThreadActive(t.last_activity_at)) return 'thread';
+  if (feed.isThreadActive(block.last_activity_at)) return 'thread';
   return 'idle';
 }
 
-function onPillClick(thread: ThreadListItem): void {
-  if (thread.turn_id == null) return;
-  void session.openThreadPanel(thread.turn_id);
+function onPillClick(turnId: number): void {
+  void session.openThreadPanel(turnId);
 }
 
 function onReply(turnId: number): void {
@@ -89,7 +48,7 @@ let _paginating = false;
 
 async function _onScrollPaginate(): Promise<void> {
   if (_paginating) return;
-  if (session.historyLoading || conversationStore.threadsExhausted) return;
+  if (session.historyLoading || !feed.hasMore) return;
 
   const scrollable = document.documentElement.scrollHeight > window.innerHeight + 100;
   if (!scrollable) return;
@@ -110,17 +69,15 @@ async function _onScrollPaginate(): Promise<void> {
   }
 }
 
-// Deep watch (not count-only): narration/pill growth inside an in-flight ACT
-// form leaves forms.length unchanged, so a shallow watch would stop following
-// the trail mid-cycle. flush:'post' lets scrollToBottom measure settled height;
-// it's the GUARDED smooth variant that self-skips when the user has scrolled up.
-watch(() => conversationStore.forms, scrollToBottom, { deep: true, flush: 'post' });
+// Deep watch on sortedBlocks: narration/pill growth inside an in-flight turn
+// leaves the array length unchanged, so a shallow watch would stop following
+// the trail mid-cycle. flush:'post' lets scrollToBottom measure settled height.
+watch(() => feed.sortedBlocks.value, scrollToBottom, { deep: true, flush: 'post' });
 
 onMounted(async () => {
   document.addEventListener('session:turn-done', forceScrollToBottom);
   document.addEventListener('session:history-initial-loaded', forceScrollToBottom);
 
-  // Initial thread-list load — this is the ONLY trigger (App.vue does NOT call it).
   await session.loadRecentConversation();
 
   window.addEventListener('scroll', _onScrollPaginate, { passive: true });
@@ -139,25 +96,24 @@ onBeforeUnmount(() => {
       <output class="history-loader__spinner" aria-label="Loading history" />
     </div>
 
-    <div v-if="conversationStore.threadsExhausted" class="history-end-pill">
+    <div v-if="!feed.hasMore" class="history-end-pill">
       <span class="history-end-pill__label">End of thread history</span>
     </div>
 
-    <template v-for="entry in feedEntries" :key="`i-${entry.id}`">
+    <template v-for="entry in feedEntries" :key="`i-${entry.block.turn_id}`">
       <!-- The turn's rows through settle0 — always inline, never collapsed. -->
-      <TurnView :forms="entry.forms" :working="entry.working" @reply="onReply" />
+      <TurnView :block="entry.block" @reply="onReply" />
 
-      <!-- Thread opener: a turn with replies past settle0 gets a Weave pill that
-           opens the full thread in the slide-over panel. -->
-      <div v-if="entry.thread" class="feed-pill-row">
+      <!-- Thread opener: a forked turn gets a Weave pill. -->
+      <div v-if="entry.isForked" class="feed-pill-row">
         <button
           class="thread-pill"
-          :class="`thread-pill--${pillStatus(entry.thread)}`"
+          :class="`thread-pill--${pillStatus(entry.block)}`"
           type="button"
-          @click="onPillClick(entry.thread)"
+          @click="onPillClick(entry.block.turn_id)"
         >
           <span class="thread-pill__dot" aria-hidden="true" />
-          <span class="thread-pill__summary">{{ entry.thread.gist || entry.thread.preview || 'Conversation' }}</span>
+          <span class="thread-pill__summary">{{ entry.block.gist || entry.block.preview || 'Conversation' }}</span>
           <span class="thread-pill__chevron" aria-hidden="true">›</span>
         </button>
       </div>
@@ -201,8 +157,7 @@ onBeforeUnmount(() => {
   letter-spacing: 0.04em;
 }
 
-/* Thread pill — a collapsed fork off the conversation. Indented to sit under the
-   message column (past the avatar gutter), centred at the dock width. */
+/* Thread pill — a collapsed fork off the conversation. */
 .feed-pill-row {
   width: 100%;
   max-width: var(--dock-width);
@@ -261,8 +216,6 @@ onBeforeUnmount(() => {
   border-radius: 50%;
 }
 
-/* Live Activity: pink (working) pulses while the reply streams, blue (done) is a
-   steady standing marker until the thread is opened. */
 .thread-pill--working .thread-pill__dot {
   background: var(--status-main);
   box-shadow: 0 0 8px color-mix(in oklab, var(--status-main) 45%, transparent);

@@ -86,28 +86,44 @@ export const conversation = {
    * gist/preview/last activity). Returns the `limit` most-recently-active
    * threads; `threads_returned` advances pagination. With `query`, the same
    * getter filters to matching threads (the search overlay's source).
+   *
+   * `channel` is forwarded to the backend (defaults to "user" server-side when
+   * omitted). Existing callers that pass no channel keep working unchanged.
    */
   threads(
     limit = 20,
     offset?: number,
     query?: string,
+    channel?: string,
   ): Promise<{ threads: ConversationThread[]; has_more: boolean; threads_returned: number }> {
     const params = new URLSearchParams({ limit: String(limit) });
     if (offset != null) params.set('offset', String(offset));
     if (query) params.set('q', query);
+    if (channel) params.set('channel', channel);
     return api.get(`/api/threads?${params.toString()}`);
   },
 
-  /** GET /api/thread/<turn_id> — one turn's full block (expand + WS refetch). */
-  thread(turnId: number): Promise<ConversationTurnBlock> {
-    return api.get(`/api/thread/${turnId}`);
+  /**
+   * GET /api/thread/<turn_id> — one turn's full block (expand + WS refetch).
+   *
+   * `channel` is forwarded when supplied; existing callers that pass no channel
+   * keep working unchanged (backend defaults to "user").
+   */
+  thread(turnId: number, channel?: string): Promise<ConversationTurnBlock> {
+    const params = channel ? `?channel=${encodeURIComponent(channel)}` : '';
+    return api.get(`/api/thread/${turnId}${params}`);
   },
 
-  /** GET /api/threads/batch?id[]= — many blocks in one round-trip, a pure
-   *  concatenation of the single-turn getter over the given ids (a read → GET). */
-  batch(turnIds: number[]): Promise<{ blocks: ConversationTurnBlock[] }> {
+  /**
+   * GET /api/threads/batch?id[]= — many blocks in one round-trip, a pure
+   * concatenation of the single-turn getter over the given ids (a read → GET).
+   *
+   * `channel` is forwarded when supplied; existing callers keep working unchanged.
+   */
+  batch(turnIds: number[], channel?: string): Promise<{ blocks: ConversationTurnBlock[] }> {
     const q = new URLSearchParams();
     for (const id of turnIds) q.append('id[]', String(id));
+    if (channel) q.set('channel', channel);
     return api.get(`/api/threads/batch?${q.toString()}`);
   },
 };

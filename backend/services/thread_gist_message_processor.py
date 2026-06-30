@@ -38,21 +38,29 @@ def maybe_ingest_gist(trigger_channel: str, trigger_turn_id: int) -> None:
     t.start()
 
 
+def generate_gist(trigger_channel: str, trigger_turn_id: int) -> str | None:
+    """Build + run the gist delegate MP for one thread; return its label or None.
+
+    The single construction site for the gist delegate — every caller persists
+    the returned label into ``thread_gist`` (keyed by channel + turn_id)."""
+    from configs.channels import ThreadGistConfig
+    from services.message_processor import MessageProcessor
+
+    mp = object.__new__(MessageProcessor)
+    MessageProcessor.__init__(mp, "", None)
+    mp.config = ThreadGistConfig()
+    mp.uid = None
+    mp.cancel_event = threading.Event()
+    mp.thinking_level = "low"
+    cast("_TriggerCtx", mp)._trigger_channel = trigger_channel
+    cast("_TriggerCtx", mp)._trigger_turn_id = trigger_turn_id
+    return mp._run() or None
+
+
 def _run_gist_processor(trigger_channel: str, trigger_turn_id: int) -> None:
     try:
-        from configs.channels import ThreadGistConfig
-        from services.message_processor import MessageProcessor
         from services.thread_gist_service import get_thread_gist_service
-
-        mp = object.__new__(MessageProcessor)
-        MessageProcessor.__init__(mp, "", None)
-        mp.config = ThreadGistConfig()
-        mp.uid = None
-        mp.cancel_event = threading.Event()
-        mp.thinking_level = "low"
-        cast("_TriggerCtx", mp)._trigger_channel = trigger_channel
-        cast("_TriggerCtx", mp)._trigger_turn_id = trigger_turn_id
-        gist = mp._run()
+        gist = generate_gist(trigger_channel, trigger_turn_id)
         if gist:
             get_thread_gist_service().upsert(trigger_channel, trigger_turn_id, gist)
     except Exception as exc:

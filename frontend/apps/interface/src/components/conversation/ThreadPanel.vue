@@ -1,37 +1,23 @@
-<!-- Slide-over thread panel: a focused, full-height view of one thread. Replaces
-     the old inline accordion — a pill or the Reply action opens it via
-     session.panelThreadId. Renders the thread's rows with TurnView and carries
-     its own reply dock (turn_id pinned), so replies append to this thread. -->
+<!-- Slide-over thread panel: a focused, full-height view of one thread. -->
 <script setup lang="ts">
 import { ref, computed, watch, nextTick, onMounted, onBeforeUnmount } from 'vue';
 import { ArrowLeft } from '@lucide/vue';
 import { useSessionStore } from '../../stores/session';
-import { useConversationStore } from '../../stores/conversation';
-import type { ConversationForm } from '../../stores/conversation';
+import { useConversationFeed } from '../../composables/useConversationFeed';
 import TurnView from './TurnView.vue';
 import InputDock from '../layout/InputDock.vue';
 
 const session = useSessionStore();
-const convo = useConversationStore();
+const feed = computed(() => useConversationFeed(session.panelChannel));
 
 const open = computed(() => session.panelThreadId != null);
 
-const thread = computed(() =>
-  session.panelThreadId == null
-    ? null
-    : (convo.threads.find((t) => t.turn_id === session.panelThreadId) ?? null),
+const block = computed(() =>
+  session.panelThreadId != null ? (feed.value.blocks[session.panelThreadId] ?? null) : null,
 );
 
-// Rows of the open thread. A reply tags its live forms with the thread's turn_id
-// up-front (session._startTurn), so this stays current mid-stream.
-const panelForms = computed<ConversationForm[]>(() =>
-  session.panelThreadId == null
-    ? []
-    : convo.forms.filter((f) => f.turnId === session.panelThreadId),
-);
-
-const heading = computed(() => thread.value?.gist || thread.value?.preview || 'Thread');
-const showLoader = computed(() => session.threadExpanding && !panelForms.value.length);
+const heading = computed(() => block.value?.gist || block.value?.preview || 'Thread');
+const showLoader = computed(() => session.threadExpanding && block.value == null);
 
 const bodyRef = ref<HTMLElement | null>(null);
 
@@ -39,10 +25,10 @@ function close(): void {
   session.closeThreadPanel();
 }
 
-// Follow live reply growth: pin the body to its bottom whenever the open thread's
-// forms change. flush:'post' lets it measure settled height.
+// Follow live reply growth: pin the body to its bottom whenever the open
+// thread's block changes. flush:'post' lets it measure settled height.
 watch(
-  panelForms,
+  block,
   () => {
     if (!open.value) return;
     nextTick(() => {
@@ -105,14 +91,18 @@ onBeforeUnmount(() => document.removeEventListener('keydown', onKeydown));
           <output class="thread-panel__spinner" aria-label="Loading thread" />
         </div>
         <TurnView
-          v-else
-          :forms="panelForms"
-          :working="convo.isTurnWorking(session.panelThreadId)"
+          v-else-if="block"
+          :block="block"
           :can-reply="false"
+          :channel="session.panelChannel"
         />
       </div>
 
-      <InputDock v-if="session.panelThreadId != null" :turn-id="session.panelThreadId" />
+      <InputDock
+        v-if="session.panelThreadId != null"
+        :turn-id="session.panelThreadId"
+        :channel="session.panelChannel"
+      />
     </aside>
   </Transition>
 </template>
@@ -124,8 +114,6 @@ onBeforeUnmount(() => document.removeEventListener('keydown', onKeydown));
   right: 0;
   bottom: 0;
   width: 95%;
-  // Above the base feed + footer dock (both z-index:100, dimmed behind the
-  // panel) but below true modals (search overlay, permission cards).
   z-index: 120;
   display: flex;
   flex-direction: column;
@@ -215,8 +203,6 @@ onBeforeUnmount(() => document.removeEventListener('keydown', onKeydown));
   }
 }
 
-// Slide-in: panel slides from right using the canonical panelSlide keyframe
-// defined in interface.scss (translateX(48px) → 0). Leave transition handles unmount.
 .thread-panel-enter-active {
   animation: panelSlide 0.4s var(--ease-out);
 }

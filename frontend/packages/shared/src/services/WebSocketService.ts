@@ -289,19 +289,23 @@ export class WebSocketService {
    *  broadcast `working`/`updated`/`done` signals (→ drift handler → REST
    *  refetch), so no callbacks are bound. `onSendFailure` reports ONLY a local
    *  send failure (offline / POST rejected) — the case where no signal will ever
-   *  arrive — so the surface can release its send guard. */
+   *  arrive — so the surface can release its send guard.
+   *
+   *  Resolves with the POST body `{turn_id, channel}` so the caller can bind the
+   *  lane handle the moment the server allocates it (no WS round-trip needed). */
   send(
     text: string,
     source: 'text' | 'voice',
     onSendFailure: (message: string) => void = () => { /* no-op */ },
     files: File[] = [],
     threadId: number | null = null,
-  ): void {
+    channel = 'user',
+  ): Promise<{ turn_id: number; channel: string } | null> {
     if (!this.isConnected) {
       onSendFailure('Not connected. Please wait...');
-      return;
+      return Promise.resolve(null);
     }
-    this.postChat(text, source, files, threadId, onSendFailure);
+    return this.postChat(text, source, files, threadId, onSendFailure, channel);
   }
 
   /** Rich-card control dispatch — POST /action and resolve the card's optimistic
@@ -344,23 +348,29 @@ export class WebSocketService {
     files: File[],
     threadId: number | null,
     onSendFailure: (message: string) => void,
-  ): void {
+    channel = 'user',
+  ): Promise<{ turn_id: number; channel: string } | null> {
     const form = new FormData();
     form.append('text', text);
     form.append('source', source);
     for (const file of files) form.append('files', file, file.name);
-    // turn_id is PATH-only (§6.2): create → POST /api/thread, reply → POST
-    // /api/thread/<turn_id>. Both return 201 empty; the turn surfaces via the
-    // created/working → updated signals → REST pull (no inline content).
-    const path = threadId != null ? `/api/thread/${threadId}` : '/api/thread';
-    fetch(this.buildHttpUrl(path), {
+    // Both POST /api/thread (new) and POST /api/thread/<turn_id> (reply) return
+    // HTTP 200 with {turn_id, channel} — the caller binds the lane handle from
+    // this body the moment the server allocates it, with no WS round-trip.
+    // Non-user channels append ?channel=<channel> so the backend routes correctly.
+    const basePath = threadId != null ? `/api/thread/${threadId}` : '/api/thread';
+    const path = channel !== 'user' ? `${basePath}?channel=${channel}` : basePath;
+    return fetch(this.buildHttpUrl(path), {
       method: 'POST',
       credentials: 'same-origin',
       headers: { ...this.authHeaders() },
       body: form,
-    }).catch(() => {
-      onSendFailure('Chat request failed.');
-    });
+    })
+      .then(async (resp) => {
+        if (!resp.ok) { onSendFailure('Chat request failed.'); return null; }
+        return (await resp.json()) as { turn_id: number; channel: string };
+      })
+      .catch(() => { onSendFailure('Chat request failed.'); return null; });
   }
 
   private dispatch(data: WsInboundEvent): void {

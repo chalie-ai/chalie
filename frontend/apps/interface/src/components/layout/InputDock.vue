@@ -25,7 +25,7 @@ import { useContextUsageStore } from '../../stores/contextUsage';
 import { useAmbientSensor } from '../../composables/useAmbientSensor';
 import { system } from '../../api/system';
 import { lsGet, lsSet } from '../../utils/storage';
-import type { AttachmentPreview as ConvoAttachmentPreview } from '../../stores/conversation';
+
 import ImageAttachStrip from '../upload/ImageAttachStrip.vue';
 import QueuedMessages from '../conversation/QueuedMessages.vue';
 import { FileText, Image, Plus, Mic, Send, X, AlertTriangle } from '@lucide/vue';
@@ -36,7 +36,7 @@ import { FileText, Image, Plus, Mic, Send, X, AlertTriangle } from '@lucide/vue'
  * scaffolds a new thread. The footer dock is fixed; the thread panel's reply
  * dock sets `turnId` and renders in-flow at the foot of the panel.
  */
-const props = withDefaults(defineProps<{ turnId?: number | null }>(), { turnId: null });
+const props = withDefaults(defineProps<{ turnId?: number | null; channel?: string }>(), { turnId: null, channel: 'user' });
 
 // Stable id for this dock so focus routing can tell the footer ('main') from a
 // thread reply apart. Becomes the active dock on any interaction (focus/pointer).
@@ -90,27 +90,20 @@ const canSend = computed(
 
 async function handleSend(): Promise<void> {
   const trimmed = text.value.trim();
-
-  // Read files + previews BEFORE clear() wipes the strip.
   const files = attachments.getFiles();
-  const previews: ConvoAttachmentPreview[] = attachments.previews.map((p) => ({
-    filename: p.filename,
-    objectUrl: p.dataUrl,
-    isImage: p.isImage,
-  }));
 
   // Guard here too so we don't clear needlessly. Same gate as canSend.
   if (!trimmed && files.length === 0) return;
 
   // Clear the image strip only when this actually dispatches a turn. When the
   // lane is busy the send is queued (text-only) and the attachments stay pending.
-  const wasBusy = session.isLaneBusy(props.turnId);
+  const wasBusy = session.isLaneBusy(props.turnId, props.channel);
 
   // Clear textarea before awaiting so the UI feels instant.
   text.value = '';
   await nextTick();
 
-  await session.sendMessage(trimmed, 'text', files, previews, props.turnId);
+  await session.sendMessage(trimmed, 'text', files, props.turnId, props.channel);
 
   if (!wasBusy) attachments.clear();
 

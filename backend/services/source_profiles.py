@@ -45,7 +45,7 @@ from typing import Callable
 CHANNEL_USER = "user"
 CHANNEL_DMN = "dmn"
 CHANNEL_SKILLS_BUILDING = "skills_building"
-CHANNEL_SCHEDULED = "scheduled"
+CHANNEL_SCHEDULE = "schedule"
 CHANNEL_DISCOVERY = "discovery"
 
 # ── Channel patterns (SQL LIKE prefixes) ──────────────────────────────────────
@@ -120,9 +120,17 @@ _EXACT_PROFILES: dict[str, Profile] = {
         pattern_is_user=False,
         location_backfill=False,
     ),
-    # The scheduled work loop is muted; the user-facing return-path turn runs on
-    # CHANNEL_USER and is encoded there as an ordinary user episode.
-    CHANNEL_SCHEDULED: _MUTED,
+    # A schedule thread encodes into episodic memory like a user turn (§13.4):
+    # full episode + fact participation. Excluded from geo/pattern user-activity
+    # and location back-fill — a fired task is not the user moving through the
+    # world (the same exclusions as DMN).
+    CHANNEL_SCHEDULE: Profile(
+        extract_episodes=True,
+        extract_facts=True,
+        geo_is_user=False,
+        pattern_is_user=False,
+        location_backfill=False,
+    ),
     CHANNEL_SKILLS_BUILDING: _MUTED,
     # The proactive-research loop writes transcript rows, so it needs an explicit
     # row (allowlist default is muted, but a write-capable channel states it). Its

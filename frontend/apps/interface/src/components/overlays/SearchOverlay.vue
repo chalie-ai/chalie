@@ -2,14 +2,14 @@
 import { ref, watch, nextTick } from 'vue';
 import { Search } from '@lucide/vue';
 import { useSessionStore } from '../../stores/session';
-import { useConversationStore } from '../../stores/conversation';
-import type { ThreadListItem } from '../../stores/conversation';
+import { useConversationFeed } from '../../composables/useConversationFeed';
+import type { ConversationThread } from '../../api/conversation';
 
 const session = useSessionStore();
-const convo = useConversationStore();
+const feed = useConversationFeed();
 
 const query = ref('');
-const results = ref<ThreadListItem[]>([]);
+const results = ref<ConversationThread[]>([]);
 const inputEl = ref<HTMLInputElement | null>(null);
 
 let debounceTimer: ReturnType<typeof setTimeout> | null = null;
@@ -32,7 +32,7 @@ function onInput(e: Event): void {
   query.value = (e.target as HTMLInputElement).value;
   if (debounceTimer !== null) clearTimeout(debounceTimer);
   debounceTimer = setTimeout(async () => {
-    results.value = await convo.searchThreads(query.value);
+    results.value = await feed.searchThreads(query.value);
   }, 120);
 }
 
@@ -40,7 +40,7 @@ function onKey(e: KeyboardEvent): void {
   if (e.key === 'Escape') session.closeSearch();
 }
 
-function pick(item: ThreadListItem): void {
+function pick(item: ConversationThread): void {
   if (item.turn_id === null) return;
   session.openThreadPanel(item.turn_id);
   session.closeSearch();
@@ -95,7 +95,6 @@ function pick(item: ThreadListItem): void {
 .search-scrim {
   position: fixed;
   inset: 0;
-  /* True modal — above the base UI (z-index:100) and the thread panel (120). */
   z-index: 1200;
   background: var(--scrim-overlay);
   backdrop-filter: blur(3px);

@@ -20,6 +20,20 @@ export interface ScheduledItem {
   external_uid: string | null;
 }
 
+/**
+ * One active prompt-schedule thread, collapsed to its turn_id (§13.5).
+ * Mirrors backend SchedulerTurn DTO exactly. Datetimes arrive as ISO-8601
+ * UTC strings (the backend's DTO base serialises them that way).
+ */
+export interface SchedulerTurn {
+  turn_id: number;
+  gist: string | null;
+  preview: string;
+  recurrence: string | null;
+  last_fired_at: string | null;
+  next_due_at: string | null;
+}
+
 /** An active delegate (backgrounded tool call) from /api/subagents. */
 export interface ActiveSubagent {
   sub_id: string;
@@ -48,5 +62,10 @@ export const scheduler = {
    */
   subagentStop(subId: string): Promise<{ ok: boolean; cancelled?: boolean; reason?: string }> {
     return api.del(`/api/subagent/${encodeURIComponent(subId)}`);
+  },
+
+  /** GET /api/scheduler/turns — active prompt-schedule threads for the dock. */
+  turns(): Promise<SchedulerTurn[]> {
+    return api.get('/api/scheduler/turns');
   },
 };

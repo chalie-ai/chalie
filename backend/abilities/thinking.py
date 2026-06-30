@@ -99,6 +99,7 @@ class ThinkingConfig(ProcessorConfig):
 
 class ThinkingAbility(Ability):
     DISCOVERABLE: ClassVar[bool] = False  # internal-only; pinned on ThinkingConfig, never discovered
+    counts_as_settle: ClassVar[bool] = False  # never demotes a settle0
 
     def get_name(self) -> str:
         return "thinking"

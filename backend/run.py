@@ -250,6 +250,24 @@ def _run_startup_migrations(database_service: "DatabaseService") -> None:
     except Exception as _ephem_err:
         logger.warning(f"[Startup] tool_calls ephemeral drop skipped: {_ephem_err}")
 
+    # One-time transcript.settled backfill. SchemaConvergence adds the column as
+    # all-zeros (NOT NULL DEFAULT 0); without this every pre-existing assistant
+    # row reads settled=0, so settle0 is NULL for all historical turns and the
+    # spine/feed/GC break. migration_006 re-derives settled from tool_calls to the
+    # exact runtime predicate. Idempotent; sentinel-gated to one run per database.
+    try:
+        _settled_sentinel = _os.path.join(
+            _os.path.dirname(database_service.db_path),
+            '.transcript-settled-backfill-v1.done',
+        )
+        if not _os.path.exists(_settled_sentinel):
+            from migrations.migration_006_transcript_settled import apply as _apply_settled
+            _apply_settled(database_service.db_path)
+            with open(_settled_sentinel, 'w') as _f:
+                _f.write('done')
+    except Exception as _settled_err:
+        logger.warning(f"[Startup] transcript.settled backfill skipped: {_settled_err}")
+
     # One-time episodes FTS rebuild
     try:
         _sentinel = _os.path.join(_os.path.dirname(database_service.db_path), '.episodes-fts-rebuild-v1.done')

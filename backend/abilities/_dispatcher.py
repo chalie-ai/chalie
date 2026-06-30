@@ -268,13 +268,14 @@ class ToolDispatcher:
         # Execution returned — stop the act-trail timer the tool_called started.
         self._signal(MessageProcessor._WS_TOOL_DONE, id=call_id, summary=act_summary)
 
-        # Rich-media ordinal is assigned ONLY when the invoking mp broadcasts to
-        # the user. Subagents / background channels never get a card: their
-        # natural-language synthesis is consumed by the parent, so a span emitted
-        # at that hop has no tool_calls row paired to it. This is the single
-        # physical chokepoint that gates the entire card path.
+        # Rich-media ordinal is assigned ONLY when the invoking mp broadcasts to a
+        # live surface (``broadcast_to`` set — the user spine or a schedule thread).
+        # Subagents / background channels never get a card: their natural-language
+        # synthesis is consumed by the parent, so a span emitted at that hop has no
+        # tool_calls row paired to it. This is the single physical chokepoint that
+        # gates the entire card path.
         ordinal = None
-        if tr.rich is not None and getattr(config, "broadcast_to", None) == "user":
+        if tr.rich is not None and getattr(config, "broadcast_to", None) is not None:
             ordinal = self._next_ordinal(tool_name)
 
         # The follow-up nudge fires only on a real synchronous SUCCESS: never on an

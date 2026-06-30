@@ -207,8 +207,7 @@ def calculate_interval(
     """Calculate the next recurrence from a UTC base datetime.
 
     Pure arithmetic — adds the interval to the base datetime and returns
-    both UTC and local representations. No quiet-hours logic; that belongs
-    at execution time.
+    both UTC and local representations.
 
     Args:
         date_time: Base datetime (naive or aware) or ISO string. Parsed as UTC.

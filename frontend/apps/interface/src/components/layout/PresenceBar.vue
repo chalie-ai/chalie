@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Clock, Brain, Search, Sun, Moon } from '@lucide/vue';
+import { CalendarClock, Clock, Brain, Search, Sun, Moon } from '@lucide/vue';
 import { storeToRefs } from 'pinia';
 import { useSessionStore } from '../../stores/session';
 import { useTasksStore } from '../../stores/tasks';
@@ -42,6 +42,15 @@ function handleSettings(): void {
         @click="session.openSearch()"
       >
         <Search :size="18" aria-hidden="true" />
+      </button>
+      <button
+        id="schedulerDockBtn"
+        class="btn-icon"
+        aria-label="Schedules"
+        title="Schedules"
+        @click="session.openSchedulerDock()"
+      >
+        <CalendarClock :size="18" aria-hidden="true" />
       </button>
       <button
         v-if="totalCount > 0"

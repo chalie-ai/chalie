@@ -777,6 +777,12 @@ body.speaker-user #ambientBloom {
   to { transform: rotate(360deg); }
 }
 
+/* Canonical spin keyframe — component-scoped aliases (history-spin,
+   thread-panel-spin, voiceRecSpin, etc.) will migrate here over time. */
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
 @media (max-width: 640px) {
   .conversation-spine {
     width: 100%;

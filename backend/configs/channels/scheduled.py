@@ -6,17 +6,21 @@
 #
 #     http://www.apache.org/licenses/LICENSE-2.0
 
-"""ScheduledConfig — work-loop channel for a fired scheduled prompt.
+"""ScheduledConfig — the one shared channel for fired scheduled-prompt threads.
 
-The scheduler hands the result to a UserConfig turn on the user channel; that
-turn is what surfaces to the user and gets episodically encoded.
+Each schedule is one growing thread on the ``schedule`` channel, distinguished by
+``turn_id`` (§13.1). A fire — and every user reply — runs the standard
+``MessageProcessor`` under this config: full tool surface, channel+turn-scoped
+history, episodic encoding, and the five WS turn-state signals. The turn
+self-surfaces in its own thread and the scheduler dock; there is no user-channel
+relay (§13.9). The schedule row is the per-schedule definition — one config class,
+no per-schedule subclass.
 """
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, ClassVar
 
-from abilities._delegate import render_trail
 from services.processor_config import ProcessorConfig
 
 if TYPE_CHECKING:
@@ -25,52 +29,56 @@ if TYPE_CHECKING:
 from configs.channels._common import DEFAULT_ALWAYS_AVAILABLE
 
 _SCHEDULED_SYSTEM_PROMPT = (
-    "You are carrying out a single scheduled task on the user's behalf, given "
-    "below. It was queued earlier to run at this time; the user is not present "
-    "right now.\n\n"
+    "You are carrying out a scheduled task on the user's behalf, given below. It "
+    "was queued earlier to run at this time.\n\n"
     "Do the work the task asks for — use your tools to gather whatever you need "
     "(search, read, recall the user's memory, check the calendar, and so on). "
     "Work only from the task and what your tools return; never invent facts, "
     "URLs, or results.\n\n"
     "STOP RULE: the moment the task is done — or you know it cannot be — stop "
-    "calling tools and write a concise, self-contained result. That result is "
-    "handed straight to the user, so phrase it as the finished outcome of the "
-    "task, not as a status update about yourself."
+    "calling tools and write a concise, self-contained result. Phrase it as the "
+    "finished outcome of the task, not as a status update about yourself."
 )
 
 # The scheduled agent gets the same broad tool surface a user turn has so it can
-# actually perform arbitrary scheduled work: it carries find_tools, so every
-# DISCOVERABLE tool (including the web delegates) is reachable, exactly like
-# UserConfig.
+# perform arbitrary scheduled work: it carries find_tools, so every DISCOVERABLE
+# tool (including the web delegates) is reachable, exactly like UserConfig.
 
 
 class ScheduledConfig(ProcessorConfig):
-    """``broadcast_to=None`` — the work loop is silent; the return-path
-    UserConfig turn is what reaches the UI."""
+    """Config for every schedule thread — fires and replies alike."""
 
-    def __init__(self, policy_channel: "ProcessorConfig.PolicyChannel") -> None:
+    BROADCASTS_STATE: ClassVar[bool] = True
+
+    def __init__(self) -> None:
         super().__init__(
-            channel="scheduled",
-            role="scheduled_worker",
-            policy_channel=policy_channel,
+            channel="schedule",
+            role="user",
+            policy_channel=ProcessorConfig.PolicyChannel.SUBCONSCIOUS,
             always_available=list(DEFAULT_ALWAYS_AVAILABLE),
-            skip_transcript=False,  # persist the instruction (recoverability)
-            skip_input_row=False,   # and give the act-trail a uid to key on
-            suppress_history=True,
-            broadcast_to=None,
-            memory_seed=False,
+            skip_transcript=False,
+            skip_input_row=False,
+            suppress_history=False,
+            broadcast_to="schedule",
+            memory_seed=True,
         )
 
     def get_user_definition(self, mp: "MessageProcessor") -> str:
         return ""
 
+    def get_system_prompt(self, mp: "MessageProcessor") -> str:
+        return _SCHEDULED_SYSTEM_PROMPT
+
     def get_user_prompt(self, mp: "MessageProcessor") -> str:
-        """Goal-driven user prompt: the scheduled instruction plus the trail."""
-        parts = [f"Scheduled task:\n{mp._raw_input}"]
-        trail = render_trail(mp)
+        """Prior thread rows (context continuity across fires + replies, §13.4),
+        then the scheduled task, then the ACT trail — which carries the turn-0
+        memory seed once it has fired."""
+        parts: list[str] = []
+        prev = mp.get_previous_messages()
+        if prev:
+            parts.append(f"## Previous Messages\n{prev}")
+        parts.append(f"Scheduled task:\n{mp._raw_input}")
+        trail = mp._render_act_trail()
         if trail:
             parts.append(trail)
         return "\n\n".join(parts)
-
-    def get_system_prompt(self, mp: "MessageProcessor") -> str:
-        return _SCHEDULED_SYSTEM_PROMPT

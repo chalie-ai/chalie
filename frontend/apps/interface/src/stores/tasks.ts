@@ -8,7 +8,7 @@ import { defineStore } from 'pinia';
 import type { WsPushEvent } from '@chalie/shared';
 import { scheduler } from '../api/scheduler';
 import type { ScheduledItem, ActiveSubagent } from '../api/scheduler';
-import { useConversationStore } from './conversation';
+import { useConversationFeed } from '../composables/useConversationFeed';
 
 export type { ScheduledItem };
 
@@ -36,14 +36,10 @@ export const useTasksStore = defineStore('tasks', {
   }),
 
   getters: {
-    /** Forked threads with live Activity as dock rows — most recently active first.
-     *  A thread enters on its reply's `working` signal (pink) and stays through
-     *  `done` (blue) until the user opens it; both states are the per-thread WS
-     *  signal, not a time window. `.filter` yields a fresh array, so the
-     *  `last_activity_at` sort never mutates the store. */
+    /** Forked threads with live Activity as dock rows — most recently active first. */
     threadActivity(): ThreadActivityItem[] {
-      const convo = useConversationStore();
-      return convo.threads
+      const convo = useConversationFeed();
+      return convo.threadList()
         .filter(
           (t) =>
             t.turn_id != null &&
@@ -55,7 +51,7 @@ export const useTasksStore = defineStore('tasks', {
           turn_id: t.turn_id as number,
           label: t.gist || t.preview,
           snippet: t.preview,
-          kind: convo.threadPhase(t.turn_id) as ThreadActivityItem['kind'],
+          kind: convo.threadPhase(t.turn_id as number) as ThreadActivityItem['kind'],
         }));
     },
 
@@ -90,9 +86,6 @@ export const useTasksStore = defineStore('tasks', {
       }
 
       if (subagentResult.status === 'fulfilled') {
-        // Rebuild from the server snapshot, but keep WS-received entries the
-        // server hasn't listed yet — they may have started after the request
-        // was dispatched.
         const fresh = new Map<string, ActiveSubagent>();
         for (const sa of subagentResult.value.subagents ?? []) {
           fresh.set(sa.sub_id, sa);
@@ -107,21 +100,17 @@ export const useTasksStore = defineStore('tasks', {
     },
 
     /**
-     * Handle a task-category drift event. task/reminder refetch reminders (server
-     * is the scheduling source of truth); subagent_start/_end add/remove the
-     * delegate snapshot from the active map.
+     * Handle a task-category drift event.
      */
     applyDriftEvent(data: WsPushEvent): void {
       const type = data.type as string;
 
       if (type === 'task' || type === 'reminder') {
-        // Fire-and-forget refresh; leave existing reminders intact on error.
         void scheduler.pending().then((res) => {
           this.reminders = res.filter(
             (r) => r.status === 'pending' && r.due_at != null,
           );
-        }).catch(() => {
-        });
+        }).catch(() => {});
         return;
       }
 
