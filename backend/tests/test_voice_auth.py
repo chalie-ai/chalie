@@ -18,7 +18,6 @@ from flask.testing import FlaskClient
 
 from services.wrapper_auth_service import WrapperAuthService
 
-
 pytestmark = pytest.mark.unit
 
 

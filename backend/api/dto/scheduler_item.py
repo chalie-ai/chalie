@@ -17,7 +17,6 @@ from pydantic import Field, field_validator, model_validator
 from pydantic_core import PydanticCustomError
 
 from services.time_utils import parse_utc, utc_now
-
 from .base import DTO
 
 _VALID_TYPES = frozenset({"notification", "prompt"})

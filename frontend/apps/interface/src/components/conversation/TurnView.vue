@@ -4,22 +4,23 @@
 <script setup lang="ts">
 import { computed } from 'vue';
 import { User } from '@lucide/vue';
-import type { ConversationTurnBlock, ConversationMessage } from '../../api/conversation';
-import { useConversationFeed } from '../../composables/useConversationFeed';
+import { ConfigType } from '@chalie/shared';
+import type { ConversationMessage, ConversationTurnBlock } from '../../api/conversation';
 import type { LiveToolPill } from '../../composables/useConversationFeed';
+import { useConversationFeed } from '../../composables/useConversationFeed';
 import UserBubble from './UserBubble.vue';
 import ChalieBubble from './ChalieBubble.vue';
 import ActCycle from './ActCycle.vue';
 import ActCycleGroup from './ActCycleGroup.vue';
 
 const props = withDefaults(
-  defineProps<{ block: ConversationTurnBlock; canReply?: boolean; channel?: string }>(),
-  { canReply: true, channel: 'user' },
+  defineProps<{ block: ConversationTurnBlock; canReply?: boolean; type?: string }>(),
+  { canReply: true, type: ConfigType.USER },
 );
 
 const emit = defineEmits<{ reply: [turnId: number] }>();
 
-const feed = computed(() => useConversationFeed(props.channel));
+const feed = computed(() => useConversationFeed(props.type));
 
 // The live act-trail is derived from WS signals (spec §6.5). While the turn
 // works, append one transient non-collapsed ActRow per in-flight transcript row
@@ -101,8 +102,7 @@ interface AvatarRow {
 const avatarRows = computed<AvatarRow[]>(() => {
   let prevRole: AvatarRole | null = null;
   return displayRows.value.map((row) => {
-    const role: AvatarRole =
-      row.kind === 'msg' && row.message.role === 'user' ? 'user' : 'chalie';
+    const role: AvatarRole = row.kind === 'msg' && row.message.role === 'user' ? 'user' : 'chalie';
     const key =
       row.kind === 'msg'
         ? `msg-${row.message.id}`
@@ -121,11 +121,7 @@ function onReply(): void {
 </script>
 
 <template>
-  <div
-    class="turn-view"
-    :data-turn-id="block.turn_id"
-    :data-channel="channel"
-  >
+  <div class="turn-view" :data-turn-id="block.turn_id" :data-type="type">
     <div
       v-for="ar in avatarRows"
       :key="ar.key"
@@ -191,8 +187,12 @@ function onReply(): void {
   margin-inline: auto;
 }
 
-.msg-row--lead { margin-top: 30px; }
-.msg-row--cont { margin-top: 6px; }
+.msg-row--lead {
+  margin-top: 30px;
+}
+.msg-row--cont {
+  margin-top: 6px;
+}
 
 .msg-row__gutter {
   width: var(--avatar-size);

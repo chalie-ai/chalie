@@ -12,18 +12,18 @@
  * and vice-versa.
  */
 import { defineStore } from 'pinia';
-import { getWebSocket, useConnectionStore, AuthError } from '@chalie/shared';
 import type { WsInboundEvent, WsPushEvent } from '@chalie/shared';
+import { AuthError, ConfigType, getWebSocket, useConnectionStore } from '@chalie/shared';
 import { on } from '../composables/useEventBus';
 import { extractText } from '../composables/useMarkup';
 import { getHost } from '../api/index';
 import { showToast } from '../utils/toast';
 import { useConversationFeed } from '../composables/useConversationFeed';
 import { useActionCard } from '../composables/useActionCard';
-import { useQueueStore, laneKey } from './queue';
+import { laneKey, useQueueStore } from './queue';
 import { useTasksStore } from './tasks';
-import { useNotificationsStore } from './notifications';
 import type { TipState, UpdateState } from './notifications';
+import { useNotificationsStore } from './notifications';
 import { usePermissionsStore } from './permissions';
 import { useContextUsageStore } from './contextUsage';
 import { useAmbientSensor } from '../composables/useAmbientSensor';
@@ -41,8 +41,8 @@ interface LaneState {
   liveTurnId: number | null;
   /** Captured text from the last user turn (for requestStop restore). */
   userText: string;
-  /** Channel this lane belongs to — used to pick the correct feed on settle. */
-  channel: string;
+  /** ConfigType this lane belongs to — used to pick the correct feed on settle. */
+  type: string;
 }
 
 export const useSessionStore = defineStore('session', {
@@ -64,8 +64,8 @@ export const useSessionStore = defineStore('session', {
      *  The opener button opens the panel; the main feed dims behind it. */
     panelThreadId: null as number | null,
 
-    /** Channel of the thread currently open in the panel (default 'user'). */
-    panelChannel: 'user' as string,
+    /** ConfigType of the thread currently open in the panel (default user). */
+    panelType: ConfigType.USER as string,
 
     /** True while the thread-search overlay is open (Cmd/Ctrl-K or the top-bar
      *  search button). The overlay self-fetches; this is pure open/close state. */
@@ -106,7 +106,7 @@ export const useSessionStore = defineStore('session', {
         // never resent. Clear ALL lanes' working state so nothing hangs.
         for (const k in this.lanes) {
           const lane = this.lanes[k];
-          if (lane.liveTurnId != null) useConversationFeed(lane.channel).setWorking(lane.liveTurnId, false);
+          if (lane.liveTurnId != null) useConversationFeed(lane.type).setWorking(lane.liveTurnId, false);
         }
         this.lanes = {};
       });
@@ -169,10 +169,10 @@ export const useSessionStore = defineStore('session', {
      * Main spine shares its surface with ACT cycles (no stable turn id);
      * threads have a stable id plus the conversation working-set.
      */
-    isLaneBusy(threadId: number | null, channel = 'user'): boolean {
+    isLaneBusy(threadId: number | null, type: string = ConfigType.USER): boolean {
       return threadId == null
         ? this.isSending
-        : laneKey(threadId) in this.lanes || useConversationFeed(channel).isTurnWorking(threadId);
+        : laneKey(threadId) in this.lanes || useConversationFeed(type).isTurnWorking(threadId);
     },
 
     /**
@@ -183,17 +183,16 @@ export const useSessionStore = defineStore('session', {
      */
     async sendMessage(
       text: string,
-      source: 'text' | 'voice' = 'text',
       files: File[] = [],
       threadId: number | null = null,
-      channel = 'user',
+      type: string = ConfigType.USER,
     ): Promise<void> {
       if (!text && !files.length) return;
 
       const body = text || FILE_PLACEHOLDER;
 
-      if (this.isLaneBusy(threadId, channel)) {
-        useQueueStore().enqueue(threadId, body, channel);
+      if (this.isLaneBusy(threadId, type)) {
+        useQueueStore().enqueue(threadId, body, type);
         return;
       }
 
@@ -201,9 +200,9 @@ export const useSessionStore = defineStore('session', {
       this.lanes[key] = {
         liveTurnId: threadId,
         userText: text,
-        channel,
+        type,
       };
-      const result = await getWebSocket().send(body, source, (m) => this._onSendFailure(key, m), files, threadId, channel);
+      const result = await getWebSocket().send(body, (m) => this._onSendFailure(key, m), files, threadId, type);
       if (result != null && key in this.lanes) {
         this.lanes[key].liveTurnId = result.turn_id;
       }
@@ -214,50 +213,35 @@ export const useSessionStore = defineStore('session', {
     _onSendFailure(key: string, message: string): void {
       this.errorMessage = message;
       const lane = this.lanes[key];
-      if (lane?.liveTurnId != null) useConversationFeed(lane.channel).setWorking(lane.liveTurnId, false);
+      if (lane?.liveTurnId != null) useConversationFeed(lane.type).setWorking(lane.liveTurnId, false);
       delete this.lanes[key];
     },
 
-    /** `done(turn_id)` — settle the turn. Clear its spinner; release the owning
-     *  lane only when ITS own turn finished. Fire ambient + autoscroll, and an OS
-     *  notification for the final reply when the tab is unfocused. */
-    async _finishTurn(turnId: number | null): Promise<void> {
-      const convo = useConversationFeed();
+    /** `done(turn_id, type)` — settle the turn on its type's feed. Leave a
+     *  standing done marker unless the user is viewing it; release the owning lane
+     *  only when ITS own turn finished. Drain queues, record ambient, and fire an
+     *  OS notification for the final reply when the tab is unfocused. Identical for
+     *  every type — only the dock the settled thread lives in differs. */
+    async _finishTurn(turnId: number | null, type: string = ConfigType.USER): Promise<void> {
+      const convo = useConversationFeed(type);
       const owningKey = this._laneOwning(turnId);
       const id = turnId ?? (owningKey != null ? this.lanes[owningKey]?.liveTurnId ?? null : null);
 
       if (id != null) {
-        if (id !== this.panelThreadId && convo.isForkedThread(id)) convo.markThreadDone(id);
-        else convo.setWorking(id, false);
+        if (id === this.panelThreadId) convo.setWorking(id, false);
+        else convo.markThreadDone(id);
       }
 
       if (owningKey != null) delete this.lanes[owningKey];
 
       this._drainQueues();
       useAmbientSensor().recordResponse();
-      document.dispatchEvent(new CustomEvent('session:turn-done'));
 
       if (id != null && !document.hasFocus()) {
         await convo.fetchTurn(id);
         const t = convo.turnSpeechText(id);
         if (t) this._notifyBackground(t);
       }
-    },
-
-    /** Lean settle for a schedule-channel done: releases the owning lane (if any
-     *  user reply was in flight into this schedule thread), then flips visual state
-     *  on the schedule feed only. No ambient/autoscroll/OS-notify/main-drain. */
-    _finishScheduleTurn(turnId: number): void {
-      const owningKey = this._laneOwning(turnId);
-      if (owningKey != null) delete this.lanes[owningKey];
-
-      const feed = useConversationFeed('schedule');
-      if (this.panelThreadId === turnId) feed.setWorking(turnId, false);
-      else feed.markThreadDone(turnId);
-
-      // A reply typed into a working schedule thread waits in the queue; settle
-      // releases it — drained on its own channel by the channel-aware drain.
-      this._drainQueues();
     },
 
     /**
@@ -282,10 +266,10 @@ export const useSessionStore = defineStore('session', {
     _drainLane(key: string): void {
       const threadId = key === 'main' ? null : Number(key.slice(1));
       const queue = useQueueStore();
-      const channel = queue.channelFor(threadId);
-      if (this.isLaneBusy(threadId, channel)) return;
+      const type = queue.typeFor(threadId);
+      if (this.isLaneBusy(threadId, type)) return;
       const text = queue.take(threadId);
-      if (text) void this.sendMessage(text, 'text', [], threadId, channel);
+      if (text) void this.sendMessage(text, [], threadId, type);
     },
 
     /** Turn-level error (provider failure, quota/429) — surface it as the one dock
@@ -310,7 +294,7 @@ export const useSessionStore = defineStore('session', {
       const restoredText = lane?.userText ?? '';
 
       // Undo the whole turn: drop its block + all signal state.
-      if (lane?.liveTurnId != null) useConversationFeed(lane?.channel ?? 'user').dropLiveTurn(lane.liveTurnId);
+      if (lane?.liveTurnId != null) useConversationFeed(lane?.type ?? ConfigType.USER).dropLiveTurn(lane.liveTurnId);
       if (key != null) delete this.lanes[key];
 
       ws.abort();
@@ -365,10 +349,10 @@ export const useSessionStore = defineStore('session', {
     },
 
     /** Open a thread in the slide-over panel, loading its rows on first open. */
-    async openThreadPanel(turnId: number, channel = 'user'): Promise<void> {
+    async openThreadPanel(turnId: number, type: string = ConfigType.USER): Promise<void> {
       this.panelThreadId = turnId;
-      this.panelChannel = channel;
-      const convo = useConversationFeed(channel);
+      this.panelType = type;
+      const convo = useConversationFeed(type);
       convo.seenThread(turnId);
       if (convo.isHydrated(turnId)) return;
       this.threadExpanding = true;
@@ -417,14 +401,17 @@ export const useSessionStore = defineStore('session', {
     },
 
     /**
-     * Turn-lifecycle signals — stateless and turn-addressed. Returns true when handled.
+     * Turn-lifecycle signals — stateless and turn-addressed, discriminated on
+     * `status` (the sole turn chokepoint; pushes key on `type`). `type` names the
+     * ProcessorConfig surface to route by. Returns true when handled; a frame with
+     * no `status` is a push and falls through to `_routeSimpleEvent`.
      */
     _routeTurnSignal(data: WsPushEvent): boolean {
-      const channel = (data as { channel?: string }).channel ?? 'user';
-      const convo = useConversationFeed(channel);
+      const status = (data as { status?: string }).status;
+      if (status == null) return false;
+      const convo = useConversationFeed((data as { type?: string }).type ?? ConfigType.USER);
       const turnId = (data as { turn_id?: number | null }).turn_id ?? null;
-      const eventType = data.type as string;
-      switch (eventType) {
+      switch (status) {
         case 'working':
           if (turnId == null) return true;
           convo.setWorking(turnId, true);
@@ -445,18 +432,21 @@ export const useSessionStore = defineStore('session', {
           if (turnId != null) void convo.fetchTurn(turnId);
           return true;
         case 'done':
-          if (channel === 'schedule' && turnId != null) this._finishScheduleTurn(turnId);
-          else void this._finishTurn(turnId);
+          void this._finishTurn(turnId, (data as { type?: string }).type ?? ConfigType.USER);
           return true;
-        case 'error':
-          this._handleTurnError(data);
+        case 'provider_retry':
+          // Transient: a provider call failed mid-turn and is being resent. The
+          // turn stays in flight (no error bubble, no `done`) — just a toast.
+          showToast((data as { message?: string }).message ?? 'The AI provider had a problem — retrying…');
           return true;
         default:
           return false;
       }
     },
 
-    /** Route content-free event types; returns true when handled. */
+    /** Route content-free push event types (keyed on `type`); returns true when
+     *  handled. The turn-level `error` toast (a direct push, not a broadcast) lands
+     *  here too. */
     _routeSimpleEvent(data: WsPushEvent): boolean {
       switch (data.type as string) {
         case 'app_update':
@@ -475,8 +465,8 @@ export const useSessionStore = defineStore('session', {
         case 'quick_tip':
           useNotificationsStore().handleTip(data as unknown as TipState);
           return true;
-        case 'provider_retry':
-          showToast((data as { message?: string }).message ?? 'The AI provider had a problem — retrying…');
+        case 'error':
+          this._handleTurnError(data);
           return true;
         default:
           return false;

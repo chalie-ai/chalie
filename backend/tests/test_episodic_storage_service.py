@@ -7,7 +7,6 @@ import pytest
 
 from services.episodic_service import EpisodicService
 
-
 pytestmark = pytest.mark.unit
 
 

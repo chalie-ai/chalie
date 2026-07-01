@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { ref, onMounted } from 'vue';
-import { mcp } from '../api/mcp';
+import { onMounted, ref } from 'vue';
 import type { McpClient, McpServerConfig } from '../api/mcp';
+import { mcp } from '../api/mcp';
 import { apiErrorMessage } from '../api/http';
 import { HttpError } from '@chalie/shared';
 import { useToast } from '../composables/useToast';
@@ -115,8 +115,14 @@ async function addServer(): Promise<void> {
   const host = addHost.value.trim();
   const headers = collectHeaders(addHeaders.value);
 
-  if (!name) { showToast('Name is required', 'error'); return; }
-  if (!host) { showToast('Host is required', 'error'); return; }
+  if (!name) {
+    showToast('Name is required', 'error');
+    return;
+  }
+  if (!host) {
+    showToast('Host is required', 'error');
+    return;
+  }
 
   try {
     await mcp.createClient({ name, host, headers, enabled: addEnabled.value });
@@ -151,8 +157,14 @@ async function saveEdit(id: string | number): Promise<void> {
   const host = editHost.value.trim();
   const headers = collectHeaders(editHeaders.value);
 
-  if (!name) { showToast('Name is required', 'error'); return; }
-  if (!host) { showToast('Host is required', 'error'); return; }
+  if (!name) {
+    showToast('Name is required', 'error');
+    return;
+  }
+  if (!host) {
+    showToast('Host is required', 'error');
+    return;
+  }
 
   try {
     await mcp.updateClient(id, { name, host, headers, enabled: editEnabled.value });
@@ -174,7 +186,8 @@ async function testServer(id: string | number, silent = false): Promise<void> {
       showToast(msg, data.reachable ? 'success' : 'error');
     }
   } catch (e) {
-    if (!silent) showToast(e instanceof HttpError ? 'Test request failed' : 'Network error', 'error');
+    if (!silent)
+      showToast(e instanceof HttpError ? 'Test request failed' : 'Network error', 'error');
   } finally {
     await loadOutbound();
   }
@@ -221,8 +234,8 @@ onMounted(async () => {
   <section class="mcp-section">
     <h3 class="mcp-section-title">Inbound</h3>
     <p class="panel-desc">
-      External agents (Claude Code, Codex, CI bots) connect to Chalie via MCP.
-      Manage access and view the connection token below.
+      External agents (Claude Code, Codex, CI bots) connect to Chalie via MCP. Manage access and
+      view the connection token below.
     </p>
 
     <div v-if="loadingInbound" class="loading">Loading…</div>
@@ -231,11 +244,7 @@ onMounted(async () => {
       <div class="mcp-row">
         <label class="mcp-label">Server Enabled</label>
         <label class="switch">
-          <input
-            type="checkbox"
-            :checked="inConfig.enabled !== false"
-            @change="onEnabledChange"
-          >
+          <input type="checkbox" :checked="inConfig.enabled !== false" @change="onEnabledChange" />
           <span class="switch-track"></span>
         </label>
       </div>
@@ -251,7 +260,7 @@ onMounted(async () => {
             min="1024"
             max="65535"
             @blur="onPortBlur"
-          >
+          />
         </div>
       </div>
 
@@ -259,12 +268,7 @@ onMounted(async () => {
         <h4>Connection Token</h4>
         <p class="mcp-hint">Give this token to external agents so they can authenticate.</p>
         <div class="input-group">
-          <input
-            type="text"
-            class="monospace"
-            :value="(inConfig.token as string) || ''"
-            readonly
-          >
+          <input type="text" class="monospace" :value="(inConfig.token as string) || ''" readonly />
           <button class="input-suffix-btn" title="Copy" @click="copyToken">
             <Copy :size="14" />
           </button>
@@ -279,191 +283,185 @@ onMounted(async () => {
   <section class="mcp-section mt-lg">
     <h3 class="mcp-section-title">Outbound</h3>
     <p class="panel-desc">
-      Connect Chalie to remote MCP servers so their tools become available.
-      Chalie uses the streamable-HTTP transport.
+      Connect Chalie to remote MCP servers so their tools become available. Chalie uses the
+      streamable-HTTP transport.
     </p>
 
     <div v-if="loadingOutbound" class="loading">Loading…</div>
 
     <template v-else>
-    <template v-for="server in outServers" :key="server.id">
-      <div v-if="editingId === server.id" class="mcp-out-card mcp-out-card-editing">
-        <h4 class="mcp-out-add-title">Edit MCP Server</h4>
+      <template v-for="server in outServers" :key="server.id">
+        <div v-if="editingId === server.id" class="mcp-out-card mcp-out-card-editing">
+          <h4 class="mcp-out-add-title">Edit MCP Server</h4>
+
+          <div class="mcp-out-form-row">
+            <label class="mcp-label">Enabled</label>
+            <label class="switch">
+              <input
+                type="checkbox"
+                :checked="editEnabled"
+                @change="editEnabled = ($event.target as HTMLInputElement).checked"
+              />
+              <span class="switch-track"></span>
+            </label>
+          </div>
+
+          <div class="form-group">
+            <label for="mcpEditName">Name</label>
+            <input id="mcpEditName" v-model="editName" type="text" class="form-input" />
+          </div>
+
+          <div class="form-group">
+            <label for="mcpEditHost">Host (incl. port)</label>
+            <input id="mcpEditHost" v-model="editHost" type="text" class="form-input" />
+          </div>
+
+          <div class="form-group">
+            <label>Additional Headers</label>
+            <div class="mcp-headers-list">
+              <div v-for="(row, idx) in editHeaders" :key="idx" class="mcp-header-row">
+                <input
+                  v-model="row.key"
+                  type="text"
+                  placeholder="Header name"
+                  class="form-input mcp-header-key"
+                />
+                <span class="mcp-header-sep">:</span>
+                <input
+                  v-model="row.value"
+                  type="text"
+                  placeholder="Value"
+                  class="form-input mcp-header-val"
+                />
+                <button
+                  class="btn btn-xs btn-danger mcp-header-remove"
+                  type="button"
+                  @click="removeHeaderRow(editHeaders, idx)"
+                >
+                  ✕
+                </button>
+              </div>
+            </div>
+            <button
+              class="btn btn-xs btn-secondary"
+              type="button"
+              @click="addHeaderRow(editHeaders)"
+            >
+              + Header
+            </button>
+          </div>
+
+          <div class="mcp-out-card-actions">
+            <button class="btn btn-primary" type="button" @click="saveEdit(server.id)">Save</button>
+            <button class="btn btn-secondary" type="button" @click="cancelEdit">Cancel</button>
+          </div>
+        </div>
+
+        <div v-else class="mcp-out-card">
+          <div class="mcp-out-card-header">
+            <div>
+              <span class="mcp-out-name">{{ server.name }}</span>
+              <span class="mcp-out-host"> — {{ server.host }}</span>
+            </div>
+            <div class="mcp-out-badges">
+              <span :class="`badge badge-status badge-${server.status}`">{{ server.status }}</span>
+              <span :class="server.enabled ? 'badge badge-enabled' : 'badge badge-disabled'">
+                {{ server.enabled ? 'enabled' : 'disabled' }}
+              </span>
+            </div>
+          </div>
+          <div class="mcp-out-card-actions">
+            <button class="btn btn-xs btn-secondary" type="button" @click="startEdit(server)">
+              Edit
+            </button>
+            <button class="btn btn-xs btn-secondary" type="button" @click="testServer(server.id)">
+              Test
+            </button>
+            <button
+              class="btn btn-xs"
+              :class="server.enabled ? 'btn-secondary' : 'btn-primary'"
+              type="button"
+              @click="toggleServer(server)"
+            >
+              {{ server.enabled ? 'Disable' : 'Enable' }}
+            </button>
+            <button class="btn btn-xs btn-danger" type="button" @click="deleteServer(server)">
+              Delete
+            </button>
+          </div>
+        </div>
+      </template>
+
+      <div class="mcp-out-add-form">
+        <h4 class="mcp-out-add-title">Add Remote MCP Server</h4>
 
         <div class="mcp-out-form-row">
           <label class="mcp-label">Enabled</label>
           <label class="switch">
             <input
               type="checkbox"
-              :checked="editEnabled"
-              @change="editEnabled = ($event.target as HTMLInputElement).checked"
-            >
+              :checked="addEnabled"
+              @change="addEnabled = ($event.target as HTMLInputElement).checked"
+            />
             <span class="switch-track"></span>
           </label>
         </div>
 
         <div class="form-group">
-          <label for="mcpEditName">Name</label>
+          <label for="mcpOutName">Name</label>
           <input
-            id="mcpEditName"
-            v-model="editName"
+            id="mcpOutName"
+            v-model="addName"
             type="text"
+            placeholder="e.g. my-server"
             class="form-input"
-          >
+          />
         </div>
 
         <div class="form-group">
-          <label for="mcpEditHost">Host (incl. port)</label>
+          <label for="mcpOutHost">Host (incl. port)</label>
           <input
-            id="mcpEditHost"
-            v-model="editHost"
+            id="mcpOutHost"
+            v-model="addHost"
             type="text"
+            placeholder="https://mcp.example.com/mcp"
             class="form-input"
-          >
+          />
         </div>
 
         <div class="form-group">
           <label>Additional Headers</label>
           <div class="mcp-headers-list">
-            <div
-              v-for="(row, idx) in editHeaders"
-              :key="idx"
-              class="mcp-header-row"
-            >
+            <div v-for="(row, idx) in addHeaders" :key="idx" class="mcp-header-row">
               <input
                 v-model="row.key"
                 type="text"
                 placeholder="Header name"
                 class="form-input mcp-header-key"
-              >
+              />
               <span class="mcp-header-sep">:</span>
               <input
                 v-model="row.value"
                 type="text"
                 placeholder="Value"
                 class="form-input mcp-header-val"
-              >
+              />
               <button
                 class="btn btn-xs btn-danger mcp-header-remove"
                 type="button"
-                @click="removeHeaderRow(editHeaders, idx)"
-              >✕</button>
+                @click="removeHeaderRow(addHeaders, idx)"
+              >
+                ✕
+              </button>
             </div>
           </div>
-          <button
-            class="btn btn-xs btn-secondary"
-            type="button"
-            @click="addHeaderRow(editHeaders)"
-          >+ Header</button>
+          <button class="btn btn-xs btn-secondary" type="button" @click="addHeaderRow(addHeaders)">
+            + Header
+          </button>
         </div>
 
-        <div class="mcp-out-card-actions">
-          <button class="btn btn-primary" type="button" @click="saveEdit(server.id)">Save</button>
-          <button class="btn btn-secondary" type="button" @click="cancelEdit">Cancel</button>
-        </div>
+        <button class="btn btn-primary" type="button" @click="addServer">Add Server</button>
       </div>
-
-      <div v-else class="mcp-out-card">
-        <div class="mcp-out-card-header">
-          <div>
-            <span class="mcp-out-name">{{ server.name }}</span>
-            <span class="mcp-out-host"> — {{ server.host }}</span>
-          </div>
-          <div class="mcp-out-badges">
-            <span :class="`badge badge-status badge-${server.status}`">{{ server.status }}</span>
-            <span :class="server.enabled ? 'badge badge-enabled' : 'badge badge-disabled'">
-              {{ server.enabled ? 'enabled' : 'disabled' }}
-            </span>
-          </div>
-        </div>
-        <div class="mcp-out-card-actions">
-          <button class="btn btn-xs btn-secondary" type="button" @click="startEdit(server)">Edit</button>
-          <button class="btn btn-xs btn-secondary" type="button" @click="testServer(server.id)">Test</button>
-          <button
-            class="btn btn-xs"
-            :class="server.enabled ? 'btn-secondary' : 'btn-primary'"
-            type="button"
-            @click="toggleServer(server)"
-          >{{ server.enabled ? 'Disable' : 'Enable' }}</button>
-          <button class="btn btn-xs btn-danger" type="button" @click="deleteServer(server)">Delete</button>
-        </div>
-      </div>
-    </template>
-
-    <div class="mcp-out-add-form">
-      <h4 class="mcp-out-add-title">Add Remote MCP Server</h4>
-
-      <div class="mcp-out-form-row">
-        <label class="mcp-label">Enabled</label>
-        <label class="switch">
-          <input
-            type="checkbox"
-            :checked="addEnabled"
-            @change="addEnabled = ($event.target as HTMLInputElement).checked"
-          >
-          <span class="switch-track"></span>
-        </label>
-      </div>
-
-      <div class="form-group">
-        <label for="mcpOutName">Name</label>
-        <input
-          id="mcpOutName"
-          v-model="addName"
-          type="text"
-          placeholder="e.g. my-server"
-          class="form-input"
-        >
-      </div>
-
-      <div class="form-group">
-        <label for="mcpOutHost">Host (incl. port)</label>
-        <input
-          id="mcpOutHost"
-          v-model="addHost"
-          type="text"
-          placeholder="https://mcp.example.com/mcp"
-          class="form-input"
-        >
-      </div>
-
-      <div class="form-group">
-        <label>Additional Headers</label>
-        <div class="mcp-headers-list">
-          <div
-            v-for="(row, idx) in addHeaders"
-            :key="idx"
-            class="mcp-header-row"
-          >
-            <input
-              v-model="row.key"
-              type="text"
-              placeholder="Header name"
-              class="form-input mcp-header-key"
-            >
-            <span class="mcp-header-sep">:</span>
-            <input
-              v-model="row.value"
-              type="text"
-              placeholder="Value"
-              class="form-input mcp-header-val"
-            >
-            <button
-              class="btn btn-xs btn-danger mcp-header-remove"
-              type="button"
-              @click="removeHeaderRow(addHeaders, idx)"
-            >✕</button>
-          </div>
-        </div>
-        <button
-          class="btn btn-xs btn-secondary"
-          type="button"
-          @click="addHeaderRow(addHeaders)"
-        >+ Header</button>
-      </div>
-
-      <button class="btn btn-primary" type="button" @click="addServer">Add Server</button>
-    </div>
     </template>
   </section>
 </template>

@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { computed, ref, onMounted, onBeforeUnmount, nextTick, watch } from 'vue';
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { FileText, Image as ImageIcon } from '@lucide/vue';
-import type { ConversationMessage, ConversationAttachment } from '../../api/conversation';
+import type { ConversationAttachment, ConversationMessage } from '../../api/conversation';
 import ImagePreviewModal from '../overlays/ImagePreviewModal.vue';
 
 const props = defineProps<{ message: ConversationMessage }>();
@@ -67,14 +67,18 @@ function open(att: ConversationAttachment): void {
       ref="textEl"
       class="user-text"
       :class="{ 'user-text--clamped': overflowing && collapsed }"
-    >{{ message.content }}</div>
+    >
+      {{ message.content }}
+    </div>
 
     <button
       v-if="showText && overflowing"
       type="button"
       class="user-text__toggle"
       @click="collapsed = !collapsed"
-    >{{ collapsed ? 'show more' : 'show less' }}</button>
+    >
+      {{ collapsed ? 'show more' : 'show less' }}
+    </button>
 
     <!-- Attachments rendered from the API model directly. -->
     <ul v-if="message.attachments && message.attachments.length" class="user-attachments">

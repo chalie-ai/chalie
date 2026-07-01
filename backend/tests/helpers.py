@@ -128,14 +128,11 @@ _EPISODE_DEFAULTS: dict[str, object] = {
     "channel": "weather",
     "created_at": None,
     "last_accessed_at": None,
-    "emotional_valence": None,
-    "emotional_arousal": None,
     "transcript_ids": "[]",
     "transcript_id_start": None,
     "transcript_id_end": None,
     "consolidated_from": "[]",
     "consolidated_into": None,
-    "storage_strength": 1.0,
     "retrieval_weight": 1.0,
 }
 

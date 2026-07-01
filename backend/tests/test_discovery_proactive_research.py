@@ -1,21 +1,22 @@
 """Feature tests for proactive autonomous research (the Auto Research / discovery loop).
 
 Every test drives a real production entry point against the shared `db`
-fixture's real SQLite (the new `discovery_runs` table auto-applies via
-SchemaConvergenceService from schema.sql) — zero mocks except the single
-sanctioned network-boundary seam (`_inject_fake_client`, a real ProviderClient
-subclass swapped at the class level; precedent: test_fact_extraction_worker_step.py).
+fixture's real SQLite — zero mocks except the single sanctioned network-boundary
+seam (`_inject_fake_client`, a real ProviderClient subclass swapped at the class
+level; precedent: test_fact_extraction_worker_step.py).
 
 Wires under test, each a real cross-step trace:
 1. Channel routing + recall inclusion — a store on the discovery channel is
    filed as kind='discovery' (memory_retrieval.handle_store) and surfaces through
    the real recall path (handle_recall → _search_data_graph kinds list).
 2. The worker step — SubconsciousWorker._step_discovery fires the real
-   MessageProcessor under DiscoveryConfig, the post-turn hook persists one run
-   with its grounding, the run's full output is read live from the transcript by
-   turn, and the durable 6h clock then throttles the next tick.
-3. The Brain observability endpoints — the two locked read contracts plus the
-   assistant-only transcript join and the 404 path.
+   MessageProcessor under DiscoveryConfig (a UserConfig split: it READS the user
+   channel's history but WRITES its rows to the discovery channel), the output
+   lands on the discovery channel as one turn, the model's context is grounded in
+   the live user spine, and the durable 6h clock then throttles the next tick.
+3. The thread API surface — ConfigType.DISCOVERY routes /api/threads and
+   /api/thread onto the discovery channel (the Brain Auto Research view's
+   replacement for the removed observability endpoints).
 """
 
 import contextlib
@@ -42,7 +43,8 @@ pytestmark = pytest.mark.unit
 # ── LLM network-boundary seam (the ONLY sanctioned mock) ───────────────────────
 # A real ProviderClient subclass swapped at the class level via try/finally — no
 # unittest.mock — so the whole ACT loop, prompt assembly, transcript writes and
-# the post-turn hook run for real; only the network call to the model is replaced.
+# the read/write-channel split run for real; only the network call to the model
+# is replaced.
 
 class _FakeLLMService(ProviderClient):
 
@@ -126,101 +128,120 @@ def test_discovery_store_routes_to_kind_discovery_and_recall_surfaces_it(db: sql
     )
 
 
-# ── 2. The worker step: fire → persist → transcript join → throttle ────────────
+# ── 2. The worker step: fire → write to discovery channel → ground on user ─────
 
-def test_discovery_step_fires_persists_run_then_throttles(db: sqlite3.Connection, store: object) -> None:
-    """One tick fires the loop, persists the run with its grounding, and then throttles.
+def test_discovery_step_writes_discovery_turn_grounded_on_user_history(
+    db: sqlite3.Connection, store: object,
+) -> None:
+    """One fired tick writes the loop's output to the discovery channel as one
+    turn, while the model's context is grounded in the live user channel.
 
     The durable clock is forced past its interval so the first call fires
-    deterministically; the run that lands proves the worker → DiscoveryConfig →
-    MessageProcessor → PersistDiscoveryRunHook chain end-to-end, and the second
-    call proves the 6h self-throttle.
+    deterministically; the rows that land prove the worker → DiscoveryConfig
+    (UserConfig split: read_channel='user', writes to 'discovery') →
+    MessageProcessor chain end-to-end, the captured provider dto proves the
+    user-channel history was read (the split's whole point), and the second call
+    proves the 6h self-throttle.
     """
-    from services.data_graph_service import get_data_graph_service, KIND_SYSTEM
-    from services.time_utils import utc_now
     from services.subconscious_worker import (
         SubconsciousWorker,
-        _DISCOVERY_TIMESTAMP,
         _DISCOVERY_INTERVAL,
+        _DISCOVERY_TIMESTAMP,
     )
-    from services import discovery_runs, compaction_persistence
+    from services.time_utils import utc_now
+    from services.transcript_service import Transcript
 
-    summary = "The user is a space-exploration enthusiast building an observatory."
-    compacted = "Yesterday we discussed the James Webb telescope's latest imagery."
-    answer = "I noticed JWST released fresh deep-field images — worth a look when you're free."
+    user_msg = "We were just talking about the James Webb telescope's deep-field imagery."
+    user_reply = "Right — the new deep-field plates resolved galaxies from 13 billion years ago."
+    answer = "JWST just dropped fresh deep-field plates — worth a look when you're free."
 
-    # Grounding, seeded via the same paths the worker reads at dispatch time: the
-    # MAIN checkpoint lives in the compactions table (for_turn_id None), exactly
-    # what get_compaction("user", None) returns at dispatch.
-    get_data_graph_service().store(kind=KIND_SYSTEM, key="user_summary", value=summary, source="test:seed")
-    compaction_persistence.write_compaction("user", None, 1, compacted)
+    # Seed a live MAIN-spine user turn (input + settled reply) so the discovery
+    # loop's read_channel='user' has real history to ground on — exactly the
+    # grounding the old metadata dict used to thread in manually.
+    user_input_id = Transcript.write_input_row("user", "user", user_msg)
+    user_turn = Transcript.turn_id_of_row(user_input_id)
+    Transcript.write_assistant_row("user", user_reply, turn_id=user_turn)
 
     # Force the clock due so the step fires regardless of any prior run state.
     _DISCOVERY_TIMESTAMP.persist(utc_now() - _DISCOVERY_INTERVAL - timedelta(minutes=1))
 
-    with _inject_fake_client(lambda _dto: _text_response(answer)):
+    captured: list[object] = []
+
+    def _send(dto: object) -> ProviderApiResponse:
+        captured.append(dto)
+        return _text_response(answer)
+
+    with _inject_fake_client(_send):
         fired = SubconsciousWorker(tick_sec=10, idle_window_sec=60)._step_discovery()
     assert fired == "fired", f"expected the step to fire, got {fired!r}"
 
-    runs = discovery_runs.list_runs(10)
-    assert len(runs) == 1, f"expected exactly one persisted run, got {len(runs)}"
-    assert runs[0]["researched"] == answer
+    # The loop's output landed on the DISCOVERY channel as exactly one turn.
+    disc_rows = db.execute(
+        "SELECT turn_id, role, content FROM transcript WHERE channel = 'discovery' ORDER BY id"
+    ).fetchall()
+    assert disc_rows, "discovery step wrote no transcript rows"
+    assert len({r[0] for r in disc_rows}) == 1, "expected a single discovery turn"
+    assistant_blobs = [cast("str", r[2]) for r in disc_rows if r[1] == "assistant"]
+    assert any(answer in blob for blob in assistant_blobs), (
+        f"discovery assistant rows did not carry the answer: {assistant_blobs}"
+    )
 
-    detail = discovery_runs.get_run_detail(cast("int", runs[0]["id"]))
-    assert detail is not None
-    assert detail["user_summary"] == summary, "grounding user summary not captured at dispatch"
-    assert detail["compacted_summary"] == compacted, "grounding compaction not captured at dispatch"
-    # Transcript is read live from the turn — the loop's assistant output, joined.
-    assert detail["transcript"] == answer
+    # The model's context was grounded in the USER channel (the split's point):
+    # the seeded user message surfaces in the assembled user prompt. Discovery's
+    # own input row lives on the discovery channel and never appears here.
+    assert captured, "no provider dto was captured"
+    user_prompt = cast("list[dict[str, object]]", getattr(captured[0], "messages"))[0]["content"]
+    assert user_msg in cast("str", user_prompt), (
+        "discovery did not read the user channel — seeded user message absent from the prompt"
+    )
 
-    # The clock advanced, so the next tick self-throttles and writes no new run.
+    # The clock advanced, so the next tick self-throttles and writes no new turn.
     throttled = SubconsciousWorker(tick_sec=10, idle_window_sec=60)._step_discovery()
     assert throttled.startswith("skip"), f"expected a throttle skip, got {throttled!r}"
-    assert len(discovery_runs.list_runs(10)) == 1, "throttled tick still persisted a run"
+    after = db.execute(
+        "SELECT DISTINCT turn_id FROM transcript WHERE channel = 'discovery'"
+    ).fetchall()
+    assert len(after) == 1, "throttled tick still wrote a new discovery turn"
 
 
-# ── 3. Brain observability endpoints (locked read contract) ────────────────────
+# ── 3. Thread API surface for discovery (Brain Auto Research view) ─────────────
 
-def test_research_observability_endpoints_expose_runs_and_detail(
+def test_discovery_thread_api_lists_and_returns_discovery_turns(
     authed_client: "tuple[object, sqlite3.Connection, object]",
 ) -> None:
-    """The two read endpoints honour the locked contract incl. the assistant-only join.
+    """ConfigType.DISCOVERY routes the thread API onto the discovery channel.
 
-    Seeded through the production write helpers (Transcript writers + record_run,
-    exactly what the hook calls), then read back over real Flask routes.
+    Seeded through the production Transcript writers (exactly what the loop
+    writes), then read back over real Flask routes — the surface the Brain Auto
+    Research view now uses in place of the removed observability endpoints.
     """
     from flask.testing import FlaskClient
-    from services.transcript_service import Transcript
+
     from services.source_profiles import CHANNEL_DISCOVERY
-    from services import discovery_runs
+    from services.transcript_service import Transcript
 
     client = cast("FlaskClient", authed_client[0])
 
-    input_id = Transcript.write_input_row(CHANNEL_DISCOVERY, "discovery", "background research task")
+    input_id = Transcript.write_input_row(CHANNEL_DISCOVERY, "user", "background research task")
     turn_id = Transcript.turn_id_of_row(input_id)
     Transcript.write_assistant_row(CHANNEL_DISCOVERY, "Found one.", turn_id=turn_id)
     Transcript.write_assistant_row(CHANNEL_DISCOVERY, "Found two.", turn_id=turn_id)
-    blob = "Found one.\n\nFound two."
-    run_id = discovery_runs.record_run(
-        turn_id=turn_id, user_summary="US", compacted_summary="CS", researched=blob,
-    )
-    assert run_id is not None
 
-    listing = client.get("/api/system/observability/research")
+    listing = client.get("/api/threads?type=discovery")
     assert listing.status_code == 200
-    body = listing.get_json()
-    assert "generated_at" in body
-    runs = body["runs"]
-    assert isinstance(runs, list) and len(runs) == 1
-    assert runs[0]["researched"] == blob
+    feed = listing.get_json()
+    turn_ids = [t["turn_id"] for t in feed["threads"]]
+    assert turn_id in turn_ids, f"discovery turn {turn_id} absent from feed {turn_ids}"
+    listed = next(t for t in feed["threads"] if t["turn_id"] == turn_id)
+    assert listed["preview"], "feed row carried no preview"
 
-    detail = client.get(f"/api/system/observability/research/{run_id}")
+    detail = client.get(f"/api/thread/{turn_id}?type=discovery")
     assert detail.status_code == 200
-    run = detail.get_json()["run"]
-    assert run["user_summary"] == "US"
-    assert run["compacted_summary"] == "CS"
-    # Assistant rows only — the input row is excluded from the joined blob.
-    assert run["transcript"] == blob
-
-    missing = client.get("/api/system/observability/research/999999")
-    assert missing.status_code == 404
+    assistant_texts = {
+        cast("str", m["content"])
+        for m in detail.get_json()["messages"]
+        if m["role"] == "assistant"
+    }
+    assert {"Found one.", "Found two."} <= assistant_texts, (
+        f"discovery detail missing assistant rows: {assistant_texts}"
+    )

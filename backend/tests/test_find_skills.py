@@ -32,7 +32,6 @@ from abilities.find_skills import FindSkillsAbility
 from configs.channels import UserConfig
 from services.file_mapper_service import FileMapperService
 from services.message_processor import MessageProcessor
-
 from tests._tool_result_harness import body as _harness_body
 from tests._tool_result_harness import head as _harness_head
 from tests._tool_result_harness import seed_transcript

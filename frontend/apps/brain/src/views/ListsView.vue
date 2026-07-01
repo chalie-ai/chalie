@@ -1,21 +1,25 @@
 <script setup lang="ts">
-import { ref, reactive, computed } from 'vue';
-import { lists as listsApi } from '../api/lists';
+import { computed, reactive, ref } from 'vue';
 import type { List, ListItem } from '../api/lists';
+import { lists as listsApi } from '../api/lists';
 import { useToast } from '../composables/useToast';
 import { useConfirm } from '../composables/useConfirm';
 import { useBrainResource } from '../composables/useBrainResource';
 import BrainModal from '../ui/BrainModal.vue';
-import { Plus, List as ListIcon, ChevronDown, ChevronRight, X } from '@lucide/vue';
+import { ChevronDown, ChevronRight, List as ListIcon, Plus, X } from '@lucide/vue';
 import { HttpError } from '@chalie/shared';
 
 const { show: showToast } = useToast();
 const { confirm } = useConfirm();
 
-const { data: listsData, loading, reload: load } = useBrainResource(
-  async () => await listsApi.list(),
-  { initial: [] as List[], failMsg: 'Failed to load lists' },
-);
+const {
+  data: listsData,
+  loading,
+  reload: load,
+} = useBrainResource(async () => await listsApi.list(), {
+  initial: [] as List[],
+  failMsg: 'Failed to load lists',
+});
 
 const expanded = reactive<Record<string, boolean>>({});
 
@@ -125,13 +129,18 @@ async function deleteList(list: List): Promise<void> {
     showToast(e instanceof HttpError ? 'Delete failed' : 'Network error', 'error');
   }
 }
-
 </script>
 
 <template>
   <div class="panel-header">
     <h2>Lists</h2>
-    <button class="btn btn-primary" @click="showNew = true; newListName = ''">
+    <button
+      class="btn btn-primary"
+      @click="
+        showNew = true;
+        newListName = '';
+      "
+    >
       <Plus :size="14" /> New List
     </button>
   </div>
@@ -167,16 +176,12 @@ async function deleteList(list: List): Promise<void> {
       </div>
 
       <div v-if="expanded[String(list.id)]" class="list-items">
-        <label
-          v-for="item in list.items ?? []"
-          :key="item.id"
-          class="list-item"
-        >
+        <label v-for="item in list.items ?? []" :key="item.id" class="list-item">
           <input
             type="checkbox"
             :checked="item.checked"
             @change="toggleItem(list, item, ($event.target as HTMLInputElement).checked)"
-          >
+          />
           <span :class="{ done: item.checked }">{{ item.content }}</span>
         </label>
         <div class="list-add-row">
@@ -186,7 +191,7 @@ async function deleteList(list: List): Promise<void> {
             placeholder="Add item…"
             maxlength="300"
             @keydown.enter="onAddKey($event, list)"
-          >
+          />
         </div>
       </div>
     </div>
@@ -209,7 +214,7 @@ async function deleteList(list: List): Promise<void> {
           maxlength="200"
           placeholder="e.g. Shopping List"
           required
-        >
+        />
       </div>
       <div class="form-actions">
         <button type="button" class="btn btn-secondary" @click="showNew = false">Cancel</button>
@@ -228,13 +233,7 @@ async function deleteList(list: List): Promise<void> {
     <form @submit.prevent="renameList">
       <div class="form-group">
         <label for="renameInput">New Name</label>
-        <input
-          id="renameInput"
-          v-model="renameName"
-          type="text"
-          maxlength="200"
-          required
-        >
+        <input id="renameInput" v-model="renameName" type="text" maxlength="200" required />
       </div>
       <div class="form-actions">
         <button type="button" class="btn btn-secondary" @click="showRename = false">Cancel</button>

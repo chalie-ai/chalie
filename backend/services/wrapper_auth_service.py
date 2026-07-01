@@ -2,18 +2,16 @@ import hashlib
 import json
 import logging
 import secrets
+import sqlite3
 import uuid
 from typing import Optional, cast
 
-import sqlite3
-
 import flask
-
-from utils.data_utils import parse_json_column
 
 from services.database_service import DatabaseService, get_shared_db_service
 from services.log_utils import safe
 from services.time_utils import utc_now
+from utils.data_utils import parse_json_column
 
 logger = logging.getLogger(__name__)
 

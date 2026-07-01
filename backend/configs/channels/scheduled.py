@@ -24,6 +24,7 @@ from typing import TYPE_CHECKING, ClassVar
 from services.processor_config import ProcessorConfig
 
 if TYPE_CHECKING:
+    from services.config_type import ConfigTypeEnum
     from services.message_processor import MessageProcessor
 
 from configs.channels._common import DEFAULT_ALWAYS_AVAILABLE
@@ -62,6 +63,10 @@ class ScheduledConfig(ProcessorConfig):
             broadcast_to="schedule",
             memory_seed=True,
         )
+
+    def type(self) -> "ConfigTypeEnum":
+        from services.config_type import ConfigTypeEnum  # noqa: PLC0415
+        return ConfigTypeEnum.SCHEDULED
 
     def get_user_definition(self, mp: "MessageProcessor") -> str:
         return ""

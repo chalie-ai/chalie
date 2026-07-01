@@ -117,9 +117,7 @@ const hourCells = computed<HourCell[]>(() => {
 
       <div class="weather-card__overlay">
         <div class="weather-card__readout">
-          <div class="weather-card__temp">
-            {{ roundedTemp }}<sup>°</sup>
-          </div>
+          <div class="weather-card__temp">{{ roundedTemp }}<sup>°</sup></div>
 
           <div class="weather-card__loc">
             <div>{{ payload.location || '—' }}</div>
@@ -128,15 +126,8 @@ const hourCells = computed<HourCell[]>(() => {
         </div>
 
         <!-- Caption: synthesis (HTML) or fallback plain text -->
-        <div
-          v-if="synthesis"
-          class="weather-card__caption"
-          v-html="captionHtml"
-        />
-        <div
-          v-else
-          class="weather-card__caption"
-        >{{ fallbackCaption }}</div>
+        <div v-if="synthesis" class="weather-card__caption" v-html="captionHtml" />
+        <div v-else class="weather-card__caption">{{ fallbackCaption }}</div>
       </div>
     </div>
 
@@ -179,16 +170,16 @@ const hourCells = computed<HourCell[]>(() => {
 }
 
 /* Phase-driven gradients. Fallback (no phase) is night. */
-.weather-card[data-phase="day"] .weather-card__sky {
+.weather-card[data-phase='day'] .weather-card__sky {
   background: linear-gradient(180deg, #4a8cd6 0%, #6ea7e0 40%, #a9c8eb 80%, #f0d59f 100%);
 }
-.weather-card[data-phase="dawn"] .weather-card__sky {
+.weather-card[data-phase='dawn'] .weather-card__sky {
   background: linear-gradient(180deg, #1a2240 0%, #4a4070 35%, #c87a5a 75%, #ffc97a 100%);
 }
-.weather-card[data-phase="sunset"] .weather-card__sky {
+.weather-card[data-phase='sunset'] .weather-card__sky {
   background: linear-gradient(180deg, #1a2240 0%, #2a3560 35%, #c75a3f 75%, #ffb070 100%);
 }
-.weather-card[data-phase="night"] .weather-card__sky {
+.weather-card[data-phase='night'] .weather-card__sky {
   background: linear-gradient(180deg, #06080e 0%, #121a30 50%, #1f2a4a 100%);
 }
 
@@ -197,8 +188,8 @@ const hourCells = computed<HourCell[]>(() => {
   position: absolute;
   inset: 0;
   background:
-    radial-gradient(ellipse 60% 40% at 70% 30%, rgba(255, 200, 140, 0.30), transparent 60%),
-    radial-gradient(ellipse 80% 50% at 20% 85%, rgba(138, 92, 255, 0.20), transparent 60%);
+    radial-gradient(ellipse 60% 40% at 70% 30%, rgba(255, 200, 140, 0.3), transparent 60%),
+    radial-gradient(ellipse 80% 50% at 20% 85%, rgba(138, 92, 255, 0.2), transparent 60%);
   pointer-events: none;
 }
 
@@ -214,16 +205,16 @@ const hourCells = computed<HourCell[]>(() => {
   animation: weather-sun-bob 12s ease-in-out infinite alternate;
   pointer-events: none;
 
-  .weather-card[data-phase="day"] & {
+  .weather-card[data-phase='day'] & {
     background: radial-gradient(circle, #fff4cc 0%, #ffd972 60%, transparent 80%);
   }
 
-  .weather-card[data-phase="dawn"] &,
-  .weather-card[data-phase="sunset"] & {
+  .weather-card[data-phase='dawn'] &,
+  .weather-card[data-phase='sunset'] & {
     background: radial-gradient(circle, #ffd28c 0%, #ff9b50 60%, transparent 80%);
   }
 
-  .weather-card[data-phase="night"] & {
+  .weather-card[data-phase='night'] & {
     width: 70px;
     height: 70px;
     background: radial-gradient(circle, #f4f1ff 0%, #b8b3d6 55%, transparent 80%);
@@ -233,8 +224,12 @@ const hourCells = computed<HourCell[]>(() => {
 }
 
 @keyframes weather-sun-bob {
-  from { transform: translateY(0); }
-  to   { transform: translateY(8px); }
+  from {
+    transform: translateY(0);
+  }
+  to {
+    transform: translateY(8px);
+  }
 }
 
 .weather-card__cloud {
@@ -265,8 +260,12 @@ const hourCells = computed<HourCell[]>(() => {
 }
 
 @keyframes weather-cloud-drift {
-  from { transform: translateX(0); }
-  to   { transform: translateX(160vw); }
+  from {
+    transform: translateX(0);
+  }
+  to {
+    transform: translateX(160vw);
+  }
 }
 
 .weather-card__skyline {
@@ -285,15 +284,41 @@ const hourCells = computed<HourCell[]>(() => {
     right: 0;
     bottom: 0;
     height: 28px;
-    background-image: linear-gradient(to right,
-      transparent 5%, #0a0d18 5%, #0a0d18 8%, transparent 8%,
-      transparent 14%, #0a0d18 14%, #0a0d18 18%, transparent 18%,
-      transparent 24%, #0a0d18 24%, #0a0d18 30%, transparent 30%,
-      transparent 38%, #0a0d18 38%, #0a0d18 41%, transparent 41%,
-      transparent 50%, #0a0d18 50%, #0a0d18 56%, transparent 56%,
-      transparent 64%, #0a0d18 64%, #0a0d18 68%, transparent 68%,
-      transparent 76%, #0a0d18 76%, #0a0d18 82%, transparent 82%,
-      transparent 90%, #0a0d18 90%, #0a0d18 95%, transparent 95%);
+    background-image: linear-gradient(
+      to right,
+      transparent 5%,
+      #0a0d18 5%,
+      #0a0d18 8%,
+      transparent 8%,
+      transparent 14%,
+      #0a0d18 14%,
+      #0a0d18 18%,
+      transparent 18%,
+      transparent 24%,
+      #0a0d18 24%,
+      #0a0d18 30%,
+      transparent 30%,
+      transparent 38%,
+      #0a0d18 38%,
+      #0a0d18 41%,
+      transparent 41%,
+      transparent 50%,
+      #0a0d18 50%,
+      #0a0d18 56%,
+      transparent 56%,
+      transparent 64%,
+      #0a0d18 64%,
+      #0a0d18 68%,
+      transparent 68%,
+      transparent 76%,
+      #0a0d18 76%,
+      #0a0d18 82%,
+      transparent 82%,
+      transparent 90%,
+      #0a0d18 90%,
+      #0a0d18 95%,
+      transparent 95%
+    );
     background-size: 100% 100%;
     background-position: bottom;
     background-repeat: no-repeat;

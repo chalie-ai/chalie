@@ -71,17 +71,20 @@ def _reply(turn_id: int, question: str, *, answer: str) -> tuple[int, int]:
 
 
 def _main_mp() -> MessageProcessor:
-    """A fresh-message processor — MAIN view (``_forked`` False, ``turn_id`` None)."""
-    mp = MessageProcessor("a fresh message", None)
-    mp.config = UserConfig()
+    """A fresh-message processor — MAIN view (``_forked`` False; no turn_id
+    supplied, so the MP switches itself to MAIN). ``hidden_input`` skips the input
+    row so the read-only assertions see only the pre-seeded spine, never a row this
+    MP would otherwise allocate."""
+    mp = MessageProcessor(UserConfig({"hidden_input": True}), raw_input="a fresh message")
     return mp
 
 
 def _fork_mp(turn_id: int, live_input_id: int) -> MessageProcessor:
-    """A genuine reply into ``turn_id`` — FORK view, with the live reply's own
-    input id as the upper bound (``self.uid``) so it renders separately."""
-    mp = MessageProcessor("a reply into the thread", {"is_thread_reply": True, "thread_id": turn_id})
-    mp.config = UserConfig()
+    """A genuine reply into ``turn_id`` — FORK view (turn_id supplied, so the MP
+    switches itself to FORK), with the live reply's own input id as the upper bound
+    (``self.uid``) so it renders separately. ``hidden_input`` skips the input row
+    for the same reason as ``_main_mp``."""
+    mp = MessageProcessor(UserConfig({"hidden_input": True}), turn_id=turn_id, raw_input="a reply into the thread")
     mp.uid = live_input_id
     return mp
 

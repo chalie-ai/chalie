@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { expect, test } from '@playwright/test';
 
 test('backend readiness resolves through the typed ApiClient', async ({ page }) => {
   await page.goto('/');

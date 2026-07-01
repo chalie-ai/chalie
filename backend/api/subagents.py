@@ -18,10 +18,10 @@ import logging
 
 from flask_restx import Namespace, Resource
 
+from services.log_utils import safe
 from .auth import require_auth
 from .dto import Error, register_dto, responds
 from .dto.subagent import ActiveSubagents, SubagentStopResult
-from services.log_utils import safe
 
 logger = logging.getLogger(__name__)
 

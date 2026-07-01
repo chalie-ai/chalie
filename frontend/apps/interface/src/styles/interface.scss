@@ -498,6 +498,27 @@ body.speaker-user #ambientBloom {
   50%       { opacity: 1;    transform: scale(1.4); }
 }
 
+// Thread activity marker (blinker) — one definition shared by the user activity
+// dock (TaskDrawer) and the scheduler dock. Working (pink) pulses while the reply
+// streams; done (blue) is a steady standing marker until the user opens the thread.
+.task-drawer__thread-dot {
+  flex-shrink: 0;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+
+  &.working {
+    background: var(--status-main);
+    box-shadow: 0 0 10px color-mix(in oklab, var(--status-main) 60%, transparent);
+    animation: pulseV 1.4s ease-in-out infinite;
+  }
+
+  &.done {
+    background: var(--cyan);
+    box-shadow: 0 0 8px color-mix(in oklab, var(--cyan) 50%, transparent);
+  }
+}
+
 @keyframes glyphTwinkle {
   0%, 100% { opacity: 0.55; }
   50%       { opacity: 1; }

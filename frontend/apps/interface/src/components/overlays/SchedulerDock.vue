@@ -6,17 +6,18 @@
  *
  * Open/close is driven by session.schedulerDockOpen. Polling runs only while open.
  */
-import { ref, watch, onMounted, onBeforeUnmount } from 'vue';
+import { onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { X } from '@lucide/vue';
+import { ConfigType } from '@chalie/shared';
 import { useSessionStore } from '../../stores/session';
-import { scheduler } from '../../api/scheduler';
 import type { SchedulerTurn } from '../../api/scheduler';
+import { scheduler } from '../../api/scheduler';
 import { useConversationFeed } from '../../composables/useConversationFeed';
 
 const POLL_INTERVAL_MS = 60_000;
 
 const session = useSessionStore();
-const feed = useConversationFeed('schedule');
+const feed = useConversationFeed(ConfigType.SCHEDULED);
 
 // ── Local state ───────────────────────────────────────────────────────────────
 
@@ -38,7 +39,9 @@ async function loadTurns(): Promise<void> {
 
 function startPolling(): void {
   void loadTurns();
-  pollTimer = setInterval(() => { void loadTurns(); }, POLL_INTERVAL_MS);
+  pollTimer = setInterval(() => {
+    void loadTurns();
+  }, POLL_INTERVAL_MS);
 }
 
 function stopPolling(): void {
@@ -102,7 +105,7 @@ onBeforeUnmount(() => {
 // ── Row interaction ───────────────────────────────────────────────────────────
 
 function openTurn(turn: SchedulerTurn): void {
-  session.openThreadPanel(turn.turn_id, 'schedule');
+  session.openThreadPanel(turn.turn_id, ConfigType.SCHEDULED);
   session.closeSchedulerDock();
 }
 </script>
@@ -117,12 +120,7 @@ function openTurn(turn: SchedulerTurn): void {
   ></div>
 
   <!-- Slide-out panel -->
-  <aside
-    ref="drawerRef"
-    class="sched-dock hidden"
-    role="complementary"
-    aria-label="Schedules"
-  >
+  <aside ref="drawerRef" class="sched-dock hidden" role="complementary" aria-label="Schedules">
     <div class="sched-dock__header">
       <h2 class="sched-dock__title">Schedules</h2>
       <button
@@ -141,7 +139,9 @@ function openTurn(turn: SchedulerTurn): void {
         v-for="turn in turns"
         :key="turn.turn_id"
         class="sched-dock__row"
-        :class="feed.threadPhase(turn.turn_id) ? `sched-dock__row--${feed.threadPhase(turn.turn_id)}` : ''"
+        :class="
+          feed.threadPhase(turn.turn_id) ? `sched-dock__row--${feed.threadPhase(turn.turn_id)}` : ''
+        "
         @click="openTurn(turn)"
       >
         <span class="sched-dock__row-top">
@@ -262,8 +262,12 @@ function openTurn(turn: SchedulerTurn): void {
   }
 }
 
-.sched-dock__row--working { border-left-color: var(--status-main); }
-.sched-dock__row--done    { border-left-color: var(--cyan); }
+.sched-dock__row--working {
+  border-left-color: var(--status-main);
+}
+.sched-dock__row--done {
+  border-left-color: var(--cyan);
+}
 
 .sched-dock__row-top {
   display: flex;
@@ -288,25 +292,5 @@ function openTurn(turn: SchedulerTurn): void {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-}
-
-// Blinker dot — same tokens as TaskDrawer's .task-drawer__thread-dot.
-// pulseV is defined globally in interface.scss.
-.task-drawer__thread-dot {
-  flex-shrink: 0;
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-
-  &.working {
-    background: var(--status-main);
-    box-shadow: 0 0 10px color-mix(in oklab, var(--status-main) 60%, transparent);
-    animation: pulseV 1.4s ease-in-out infinite;
-  }
-
-  &.done {
-    background: var(--cyan);
-    box-shadow: 0 0 8px color-mix(in oklab, var(--cyan) 50%, transparent);
-  }
 }
 </style>

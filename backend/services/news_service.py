@@ -18,19 +18,17 @@ from urllib.parse import quote_plus
 # feedparser: tolerant RSS/Atom/RDF parsing + media/date normalisation,
 # replaces hand-rolled ElementTree pipeline
 import feedparser
-
-# rapidfuzz: SIMD-accelerated Levenshtein, replaces two-row DP implementation
-from rapidfuzz.distance import Levenshtein as _Levenshtein
-
 # nh3: HTML sanitiser strips tags from feed descriptions (same lib used in services/markup.py)
 import nh3
 import numpy as np
 import requests
+# rapidfuzz: SIMD-accelerated Levenshtein, replaces two-row DP implementation
+from rapidfuzz.distance import Levenshtein as _Levenshtein
 
-from services.time_utils import utc_now
 from services import news_sources
-from services.memory_store import MemoryStore
 from services.embedding_service import EmbeddingService
+from services.memory_store import MemoryStore
+from services.time_utils import utc_now
 
 logger = logging.getLogger(__name__)
 

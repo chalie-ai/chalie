@@ -1,6 +1,6 @@
 <!-- Folds consecutive superseded ACT cycles into one collapsible block. -->
 <script setup lang="ts">
-import { ref, computed } from 'vue';
+import { computed, ref } from 'vue';
 import { ChevronRight } from '@lucide/vue';
 
 const props = defineProps<{ summaries: { tool_name: string; summary: string }[] }>();
@@ -27,11 +27,9 @@ const preview = computed(() => {
     </button>
 
     <div class="act-group__content">
-      <span
-        v-if="!expanded"
-        class="act-group__preview"
-        @click="expanded = true"
-      >{{ preview }}</span>
+      <span v-if="!expanded" class="act-group__preview" @click="expanded = true">{{
+        preview
+      }}</span>
       <template v-else>
         <div v-for="(s, i) in summaries" :key="i" class="act-cycle act-cycle--collapsed">
           <div class="act-summaries">

@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 import email as _email_mod
-import email.policy
-import email.utils
 import logging
 from dataclasses import dataclass
 from datetime import timedelta

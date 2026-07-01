@@ -6,8 +6,8 @@ survives container restarts. Cookie: ``chalie_session`` (HTTP-only,
 SameSite=Lax).
 """
 import hashlib
-import secrets
 import logging
+import secrets
 
 from flask import Request, Response
 

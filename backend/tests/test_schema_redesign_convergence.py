@@ -47,32 +47,6 @@ CREATE TABLE data_graph (
 )
 """
 
-# Legacy memory_recall_log DDL: the 8 radius telemetry columns the redesign
-# removes, and NO floor_cut_count column.
-_LEGACY_MEMORY_RECALL_LOG_DDL = """
-CREATE TABLE memory_recall_log (
-    id                       INTEGER PRIMARY KEY AUTOINCREMENT,
-    created_at               TEXT NOT NULL DEFAULT (datetime('now')),
-    user_id                  TEXT,
-    channel                  TEXT,
-    thread_id                TEXT,
-    caller                   TEXT NOT NULL CHECK(caller IN ('seed', 'llm_recall')),
-    query                    TEXT NOT NULL,
-    query_embedding_hash     TEXT NOT NULL,
-    input_radius             REAL NOT NULL,
-    narrow_factor            REAL NOT NULL DEFAULT 1.0,
-    expand_factor            REAL NOT NULL DEFAULT 1.0,
-    adaptive_shrink_divisor  REAL NOT NULL DEFAULT 1.0,
-    effective_radius         REAL NOT NULL,
-    episode_count            INTEGER NOT NULL DEFAULT 0,
-    vector_candidates        INTEGER NOT NULL DEFAULT 0,
-    fts_candidates           INTEGER NOT NULL DEFAULT 0,
-    survivors_after_radius   INTEGER NOT NULL DEFAULT 0,
-    final_rrf_count          INTEGER NOT NULL DEFAULT 0,
-    top_distances            TEXT
-)
-"""
-
 _RADIUS_COLUMNS = {
     "input_radius", "narrow_factor", "expand_factor", "adaptive_shrink_divisor",
     "effective_radius", "vector_candidates", "fts_candidates", "survivors_after_radius",
@@ -175,15 +149,6 @@ def _build_legacy_db(tmp_path: Path) -> tuple[DatabaseService, dict[str, str]]:
             "INSERT INTO data_graph_edges (from_id, to_id, edge_type) VALUES (1, 2, 'superseded_by')"
         )
 
-        # ── memory_recall_log → legacy shape (8 radius cols, no floor_cut_count) ─
-        conn.execute("DROP TABLE IF EXISTS memory_recall_log")
-        conn.execute(_LEGACY_MEMORY_RECALL_LOG_DDL)
-        conn.execute(
-            "INSERT INTO memory_recall_log "
-            "(caller, query, query_embedding_hash, input_radius, effective_radius, final_rrf_count) "
-            "VALUES ('seed', 'where do I live', 'abc123', 0.5, 0.42, 3)"
-        )
-
     return db, seeded
 
 
@@ -198,8 +163,6 @@ class TestSchemaRedesignConvergence:
 
         # Pre-condition snapshot: legacy shape + row data, to prove no loss later.
         with db.connection() as conn:
-            assert _RADIUS_COLUMNS <= _columns(conn, "memory_recall_log")
-            assert "floor_cut_count" not in _columns(conn, "memory_recall_log")
             assert "level" not in _columns(conn, "episodes")
             assert "valid_from" not in _columns(conn, "data_graph")
             dg_ddl_before = conn.execute(
@@ -282,18 +245,6 @@ class TestSchemaRedesignConvergence:
             assert conn.execute(
                 "SELECT gist FROM episodes WHERE id='ep-access'"
             ).fetchone()[0] == "user mentioned moving to Valletta"
-
-            # 9. memory_recall_log radius columns gone; redesign columns present.
-            mrl_cols = _columns(conn, "memory_recall_log")
-            assert not (_RADIUS_COLUMNS & mrl_cols), (
-                f"legacy radius columns survived: {_RADIUS_COLUMNS & mrl_cols}"
-            )
-            assert "floor_cut_count" in mrl_cols
-            assert "final_rrf_count" in mrl_cols
-            # The surviving recall-log row keeps final_rrf_count through the rebuild.
-            assert conn.execute(
-                "SELECT final_rrf_count FROM memory_recall_log"
-            ).fetchone()[0] == 3
 
     def test_backfill_is_idempotent(self, tmp_path: Path) -> None:
         """Running converge() + backfill a SECOND time changes no derived value —

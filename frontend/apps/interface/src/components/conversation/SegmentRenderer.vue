@@ -2,8 +2,8 @@
 import { computed } from 'vue';
 import type { ConversationSegment } from '../../api/conversation';
 import { renderMarkup } from '../../composables/useMarkup';
-import { resolveRichCard } from '../rich/richRegistry';
 import type { RichCardEntry } from '../rich/richRegistry';
+import { resolveRichCard } from '../rich/richRegistry';
 
 const props = defineProps<{ segments: ConversationSegment[] }>();
 
@@ -13,7 +13,7 @@ const resolved = computed<{ seg: ConversationSegment; richEntry: RichCardEntry |
   props.segments.map((seg) => ({
     seg,
     richEntry: seg.type === 'rich' ? (resolveRichCard(seg.tag ?? '') ?? null) : null,
-  }))
+  })),
 );
 </script>
 

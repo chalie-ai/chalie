@@ -2,13 +2,12 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, cast
 
-from services.post_turn_hook import PostTurnHook
-from services.processor_config import ProcessorConfig
-
 from configs.channels._common import (
     DEFAULT_ALWAYS_AVAILABLE,
     substitute_provider_content_field,
 )
+from services.post_turn_hook import PostTurnHook
+from services.processor_config import ProcessorConfig
 
 if TYPE_CHECKING:
     from services.message_processor import MessageProcessor
@@ -44,8 +43,12 @@ class DiscloseToHumanHook(PostTurnHook):
             "Let the user know about this exchange in your own words."
         )
         try:
-            from api.chat import dispatch_message  # noqa: PLC0415
-            dispatch_message(disclosure_input, source="external_agent", hidden_input=True)
+            from configs.channels.user import UserConfig  # noqa: PLC0415
+            from services.message_processor import MessageProcessor  # noqa: PLC0415
+            MessageProcessor(
+                UserConfig({"hidden_input": True}), raw_input=disclosure_input,
+                metadata={"hidden_input": True},
+            ).run()
         except Exception as exc:
             _log.warning("[EAMP] disclosure dispatch failed: %s", exc)
 

@@ -12,6 +12,7 @@ from typing import cast
 from unittest.mock import patch
 
 import pytest
+
 from abilities._registry import AbilityRegistry
 from configs.channels import DEFAULT_ALWAYS_AVAILABLE, UserConfig
 from services.database_service import get_shared_db_service

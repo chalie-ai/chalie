@@ -24,9 +24,9 @@ from flask.testing import FlaskClient
 
 import api.system as system_module
 from api.system import health_ns, system_ns
-from tests.restx_test_app import mount_namespace
 from services import embedding_service
 from services.runtime_deps_service import RuntimeDepsService
+from tests.restx_test_app import mount_namespace
 from utils.logger import _ChalieJsonFormatter
 
 _LIBCUDART_ERR = ImportError("libcudart.so.13: cannot open shared object file: No such file or directory")

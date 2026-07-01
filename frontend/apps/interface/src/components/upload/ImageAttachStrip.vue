@@ -90,11 +90,7 @@ onBeforeUnmount(() => {
       :class="{ 'image-preview__thumb--doc': !preview.isImage }"
     >
       <template v-if="preview.isImage">
-        <img
-          v-if="preview.dataUrl"
-          :src="preview.dataUrl"
-          :alt="preview.filename"
-        />
+        <img v-if="preview.dataUrl" :src="preview.dataUrl" :alt="preview.filename" />
       </template>
 
       <template v-else>

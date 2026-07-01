@@ -1,9 +1,10 @@
 """Metrics Service — Redis-backed counters, timing records, and dashboard data."""
 
-import time
 import json
+import time
 import uuid
 from typing import Dict, cast
+
 from services.memory_client import MemoryClientService
 from services.memory_store import MemoryStore
 

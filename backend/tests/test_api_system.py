@@ -1,14 +1,14 @@
 import sqlite3
 from collections.abc import Iterator
-
-import pytest
 from unittest.mock import patch, MagicMock
 
+import pytest
 from flask.testing import FlaskClient
+
 from api.system import health_ns, system_ns
 from services import compaction_persistence
-from tests.restx_test_app import mount_namespace
 from services.memory_store import MemoryStore
+from tests.restx_test_app import mount_namespace
 
 
 @pytest.mark.unit

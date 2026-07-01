@@ -7,13 +7,13 @@ decay_cycle, and LUT-based upsert paths.
 import contextlib
 import math
 import pathlib
-import struct
 import sqlite3
+import struct
 from collections.abc import Generator, Iterator
 from typing import TYPE_CHECKING, Optional, cast
+from unittest.mock import MagicMock, patch
 
 import pytest
-from unittest.mock import MagicMock, patch
 
 from services.data_graph_service import (
     DataGraphService,

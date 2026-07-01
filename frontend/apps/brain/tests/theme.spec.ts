@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { expect, test } from '@playwright/test';
 
 // Rule 7: every frontend feature supports dark AND light. The theme store
 // (packages/shared/src/stores/theme.ts) flips html[data-theme] and persists the

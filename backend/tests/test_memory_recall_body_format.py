@@ -106,7 +106,6 @@ class TestEpisodeBackReferenceFromStructuredBody:
         from services.database_service import get_shared_db_service
         from services.episodic_service import EpisodicService
         from services.memory_retrieval import _recall_payload
-        from services.transcript_service import Transcript
 
         shared_db = get_shared_db_service()
         episode_id = EpisodicService(shared_db).store_episode(
@@ -145,7 +144,7 @@ class TestEpisodeBackReferenceFromStructuredBody:
         )
 
         entries: list[dict[str, object]] = [{"id": transcript_id}]
-        episodes = Transcript._fetch_referenced_episodes(entries, shared_db)
+        episodes = EpisodicService(shared_db)._fetch_referenced_episodes(entries)
 
         assert episodes, "back-reference resolved no episodes from the JSON body"
         assert any(str(ep.get("id")) == episode_id for ep in episodes), (

@@ -1,4 +1,4 @@
-import { useAsyncResource, type AsyncResource } from '@chalie/shared';
+import { type AsyncResource, useAsyncResource } from '@chalie/shared';
 import { apiErrorMessage } from '../api/http';
 import { useToast } from './useToast';
 

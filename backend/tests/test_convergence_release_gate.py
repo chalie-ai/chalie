@@ -273,30 +273,6 @@ CREATE TABLE data_graph (
 )
 """
 
-_LEGACY_MEMORY_RECALL_LOG_DDL = """
-CREATE TABLE memory_recall_log (
-    id                       INTEGER PRIMARY KEY AUTOINCREMENT,
-    created_at               TEXT NOT NULL DEFAULT (datetime('now')),
-    user_id                  TEXT,
-    channel                  TEXT,
-    thread_id                TEXT,
-    caller                   TEXT NOT NULL CHECK(caller IN ('seed', 'llm_recall')),
-    query                    TEXT NOT NULL,
-    query_embedding_hash     TEXT NOT NULL,
-    input_radius             REAL NOT NULL,
-    narrow_factor            REAL NOT NULL DEFAULT 1.0,
-    expand_factor            REAL NOT NULL DEFAULT 1.0,
-    adaptive_shrink_divisor  REAL NOT NULL DEFAULT 1.0,
-    effective_radius         REAL NOT NULL,
-    episode_count            INTEGER NOT NULL DEFAULT 0,
-    vector_candidates        INTEGER NOT NULL DEFAULT 0,
-    fts_candidates           INTEGER NOT NULL DEFAULT 0,
-    survivors_after_radius   INTEGER NOT NULL DEFAULT 0,
-    final_rrf_count          INTEGER NOT NULL DEFAULT 0,
-    top_distances            TEXT
-)
-"""
-
 
 def _build_old_shape_db(tmp_path: pathlib.Path) -> "tuple[DatabaseService, dict[str, object]]":
     """Construct a pre-redesign database and seed all old-shape payloads.
@@ -398,15 +374,6 @@ def _build_old_shape_db(tmp_path: pathlib.Path) -> "tuple[DatabaseService, dict[
             "INSERT INTO data_graph (id, kind, key, value, first_seen_at, active) "
             "VALUES (12, 'user_specific', 'hobby', 'hiking', ?, 1)",
             ("2026-02-01T00:00:00+00:00",),
-        )
-
-        # ── memory_recall_log → legacy shape (8 radius cols, no floor_cut_count) ─
-        conn.execute("DROP TABLE IF EXISTS memory_recall_log")
-        conn.execute(_LEGACY_MEMORY_RECALL_LOG_DDL)
-        conn.execute(
-            "INSERT INTO memory_recall_log "
-            "(caller, query, query_embedding_hash, input_radius, effective_radius, "
-            "final_rrf_count) VALUES ('seed','where do I live','abc',0.5,0.42,2)"
         )
 
     seed_meta: dict[str, object] = {

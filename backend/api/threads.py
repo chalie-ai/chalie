@@ -9,14 +9,15 @@ Routes (mounted under ``/api``):
   DELETE /api/thread/<turn_id> — interrupt the running turn (the FE stop button).
 
 Reads are GET, sends are POST, interrupt is DELETE; turn_id is path-only, never in
-the body. Both sends return 200 with ``{turn_id, channel}`` — the turn_id is
+the body. Both sends return 200 with ``{turn_id, type}`` — the turn_id is
 allocated synchronously (the request thread writes the input row before responding)
 so the FE holds it inline, no WS round-trip. Live output then surfaces via the
 ``working`` → ``updated`` → ``done`` signals → REST pull. The stop button calls
 DELETE with that same turn_id, registered as a cancel handle before ``working``
-fires, so the turn is interruptible for its entire working life. ``channel``
-defaults to ``user`` and rides every read/write so the surface can address other
-channels (e.g. the scheduler).
+fires, so the turn is interruptible for its entire working life. ``type`` (the
+ProcessorConfig identity — the only surface the FE speaks) defaults to ``user`` and
+rides every read/write, resolving to its transcript channel server-side so the
+surface can address other configs (e.g. the scheduler) without knowing channels.
 """
 
 import logging
@@ -27,6 +28,9 @@ from flask import request
 from flask.typing import ResponseReturnValue
 from flask_restx import Namespace, Resource
 
+from services.config_type import ConfigTypeEnum
+from services.locale_service import CHAT_TIMESTAMP_FMT, format_date
+from services.rich_media_parser import parse as _parse_rich_media
 from .auth import require_session
 from .dto import Error, expects, register_dto, responds
 from .dto.attachment import Attachment
@@ -38,8 +42,6 @@ from .dto.subagent import Interrupted
 from .dto.thread import (
     ThreadBatch, ThreadCreated, ThreadFeed, ThreadFeedQuery, ThreadSendRequest, ThreadSummary, TurnBlock,
 )
-from services.locale_service import CHAT_TIMESTAMP_FMT, format_date
-from services.rich_media_parser import parse as _parse_rich_media
 
 logger = logging.getLogger(__name__)
 
@@ -52,7 +54,7 @@ register_dto(
 )
 _T = threads_ns.models
 
-_CHANNEL = "user"
+_TYPE = "user"
 _THREAD_EXCLUDE = ("subagent_return",)
 _SEARCH_LIMIT = 5  # search collapses the feed to a single capped page (no pagination)
 _MAX_FILES = 10
@@ -274,11 +276,16 @@ def _thread_summaries(threads: list[dict[str, object]], channel: str) -> list[Th
 
 def _send(turn_id: "int | None", dto: ThreadSendRequest) -> "ThreadCreated | ResponseReturnValue":
     """Shared body of both send endpoints — the one chat-dispatch chokepoint. A
-    ``None`` turn_id starts a new thread (a fresh turn_id is allocated synchronously
-    and returned); an int appends to it (that id is echoed back). text/source/channel
-    come from the validated DTO; files are read directly (repeatable part); turn_id
-    is path-only."""
-    from api.chat import dispatch_message, _stage_chat_uploads  # noqa: PLC0415
+    ``None`` turn_id starts a new thread (the constructor allocates a fresh turn_id
+    synchronously and returns it in the meta); an int appends to it (that id is
+    echoed back). text/type come from the validated DTO; files are read directly
+    (repeatable part); turn_id is path-only.
+
+    The constructor pre-writes the input row (claiming turn_id) so get_meta_data()
+    answers before run() spawns the turn's thread — the POST returns fast and the FE
+    holds the handle with no WS round-trip."""
+    from api.chat import _stage_chat_uploads  # noqa: PLC0415
+    from services.message_processor import MessageProcessor  # noqa: PLC0415
 
     attachments = _stage_chat_uploads(cast("list[object]", request.files.getlist("files")[:_MAX_FILES]))
     text = dto.text.strip()
@@ -287,10 +294,17 @@ def _send(turn_id: "int | None", dto: ThreadSendRequest) -> "ThreadCreated | Res
     if not text:
         text = _FILE_PLACEHOLDER
 
-    landed = dispatch_message(
-        text, source=dto.source, attachments=attachments, channel=dto.channel, thread_id=turn_id,
-    )
-    return ThreadCreated(turn_id=cast("int", landed), channel=dto.channel)
+    # ``type`` selects the ProcessorConfig directly (user → UserConfig,
+    # scheduled → ScheduledConfig, its own growing thread on the schedule channel).
+    config = ConfigTypeEnum.get_by_type(dto.type)
+    # forked-ness is derived internally by the MessageProcessor from whether a
+    # turn_id was supplied — no external flag. A non-None turn_id is a genuine
+    # user reply INTO that thread → FORK view; −1 opens a fresh MAIN turn.
+    metadata: dict[str, object] = {"attachments": attachments}
+    mp = MessageProcessor(config, turn_id if turn_id is not None else -1, text, metadata)
+    meta = mp.get_meta_data()
+    mp.run()
+    return ThreadCreated(turn_id=cast("int", meta["turn_id"]), type=cast("ConfigTypeEnum", meta["type"]).value)
 
 
 # ── HTTP endpoints ────────────────────────────────────────────────────────────
@@ -310,14 +324,16 @@ class ThreadsResource(Resource):
     @expects(ThreadFeedQuery, source="args")
     def get(self, dto: ThreadFeedQuery) -> ThreadFeed:
         """List threads with collapsed metadata (gist, preview, last activity)."""
+        # @todo migrate to TranscriptService
         from services.transcript_service import Transcript  # noqa: PLC0415
 
         limit, offset = (_SEARCH_LIMIT, 0) if dto.q else (dto.limit, dto.offset)
+        channel = ConfigTypeEnum.get_by_type(dto.type).channel
         threads, has_more, threads_returned = Transcript.recent_threads(
-            dto.channel, exclude_roles=_THREAD_EXCLUDE, limit=limit, offset=offset, query=dto.q,
+            channel, exclude_roles=_THREAD_EXCLUDE, limit=limit, offset=offset, query=dto.q,
         )
         return ThreadFeed(
-            threads=_thread_summaries(threads, dto.channel),
+            threads=_thread_summaries(threads, channel),
             has_more=has_more,
             threads_returned=threads_returned,
         )
@@ -327,13 +343,13 @@ class ThreadsResource(Resource):
 class ThreadsBatchResource(Resource):
     @require_session
     @threads_ns.param("id[]", "Turn ids to fetch (repeatable)", _in="query", type="integer", action="append")
-    @threads_ns.param("channel", "Channel (default: user)", _in="query", type="string")
+    @threads_ns.param("type", "Config type (default: user)", _in="query", type="string")
     @threads_ns.response(200, "Turn blocks", model=_T["ThreadBatch"])
     @responds(ThreadBatch)
     def get(self) -> ThreadBatch:
         """Many turn blocks in one round-trip — a pure concatenation of the
         single-turn getter over the requested ids. Non-numeric ids are ignored."""
-        channel = request.args.get("channel", _CHANNEL)
+        channel = ConfigTypeEnum.get_by_type(request.args.get("type", _TYPE)).channel
         ids = [int(t) for t in request.args.getlist("id[]") if t.isdigit()]
         return ThreadBatch(blocks=[TurnBlock.model_validate(serialize_turn(channel, t)) for t in ids])
 
@@ -341,9 +357,8 @@ class ThreadsBatchResource(Resource):
 @threads_ns.route("/thread")
 class ThreadResource(Resource):
     @require_session
-    @threads_ns.param("text", "Message text", _in="formData", type="string")
-    @threads_ns.param("source", "Message source (default: text)", _in="formData", type="string")
-    @threads_ns.param("channel", "Channel (default: user)", _in="formData", type="string")
+    @threads_ns.param("text", "Message text", _in="formData", type="string", required=True)
+    @threads_ns.param("type", "Config type (default: user)", _in="formData", type="string")
     @threads_ns.param("files", "Attachments (multipart, repeatable, max 10)", _in="formData", type="file")
     @threads_ns.response(200, "Thread created", model=_T["ThreadCreated"])
     @threads_ns.response(422, "Empty message and no files", model=_T["Error"])
@@ -351,8 +366,8 @@ class ThreadResource(Resource):
     @expects(ThreadSendRequest, source="form")
     def post(self, dto: ThreadSendRequest) -> "ThreadCreated | ResponseReturnValue":
         """Create a new thread — allocates a fresh turn_id on the main spine,
-        synchronously, and returns it as ``{turn_id, channel}`` so the FE encodes the
-        handle as ``data-turn-id``/``data-channel`` immediately (no WS round-trip).
+        synchronously, and returns it as ``{turn_id, type}`` so the FE encodes the
+        handle as ``data-turn-id``/``data-type`` immediately (no WS round-trip).
         Live output then surfaces via the ``working`` signal → REST pull."""
         return _send(None, dto)
 
@@ -361,19 +376,18 @@ class ThreadResource(Resource):
 class ThreadItemResource(Resource):
     @require_session
     @threads_ns.param("turn_id", "Turn id")
-    @threads_ns.param("channel", "Channel (default: user)", _in="query", type="string")
+    @threads_ns.param("type", "Config type (default: user)", _in="query", type="string")
     @threads_ns.response(200, "Turn block", model=_T["TurnBlock"])
     @responds(TurnBlock)
     def get(self, turn_id: int) -> TurnBlock:
-        """One turn's full block — the WS-refetch + expand-on-click read. ``channel``
+        """One turn's full block — the WS-refetch + expand-on-click read. ``type``
         defaults to ``user``."""
-        return TurnBlock.model_validate(serialize_turn(request.args.get("channel", _CHANNEL), turn_id))
+        return TurnBlock.model_validate(serialize_turn(ConfigTypeEnum.get_by_type(request.args.get("type", _TYPE)).channel, turn_id))
 
     @require_session
     @threads_ns.param("turn_id", "Turn id")
-    @threads_ns.param("text", "Message text", _in="formData", type="string")
-    @threads_ns.param("source", "Message source (default: text)", _in="formData", type="string")
-    @threads_ns.param("channel", "Channel (default: user)", _in="formData", type="string")
+    @threads_ns.param("text", "Message text", _in="formData", type="string", required=True)
+    @threads_ns.param("type", "Config type (default: user)", _in="formData", type="string")
     @threads_ns.param("files", "Attachments (multipart, repeatable, max 10)", _in="formData", type="file")
     @threads_ns.response(200, "Reply accepted", model=_T["ThreadCreated"])
     @threads_ns.response(422, "Empty message and no files", model=_T["Error"])
@@ -382,7 +396,7 @@ class ThreadItemResource(Resource):
     def post(self, turn_id: int, dto: ThreadSendRequest) -> "ThreadCreated | ResponseReturnValue":
         """Reply into an existing thread — rows append carrying the path ``turn_id``
         (no new allocation), which drives the user-reply FORK view. Returns 200 with
-        ``{turn_id, channel}`` (the path id echoed back); activity surfaces via the
+        ``{turn_id, type}`` (the path id echoed back); activity surfaces via the
         ``working`` signal → REST pull."""
         return _send(turn_id, dto)
 

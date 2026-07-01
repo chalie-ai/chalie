@@ -14,11 +14,11 @@ from typing import TYPE_CHECKING, cast
 from flask.typing import ResponseReturnValue
 from flask_restx import Namespace, Resource
 
+from services.log_utils import safe
 from .auth import require_auth, _cookie_only
 from .dto import Error, expects, register_dto, responds
 from .dto.boundary import error
 from .dto.wrapper import Wrapper, WrapperCreate, WrapperCreated
-from services.log_utils import safe
 
 if TYPE_CHECKING:
     from services.wrapper_auth_service import WrapperAuthService

@@ -5,7 +5,7 @@ import { messagePlaintext } from '../../utils/speech';
 import { useConversationFeed } from '../../composables/useConversationFeed';
 import { renderMarkup } from '../../composables/useMarkup';
 import { emit as busEmit } from '../../composables/useEventBus';
-import { Volume2, Reply } from '@lucide/vue';
+import { Reply, Volume2 } from '@lucide/vue';
 import SegmentRenderer from './SegmentRenderer.vue';
 
 const feed = useConversationFeed();

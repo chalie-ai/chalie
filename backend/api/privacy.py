@@ -24,7 +24,6 @@ from flask.typing import ResponseReturnValue
 from flask_restx import Namespace, Resource
 
 from services.time_utils import utc_now
-
 from .auth import require_session
 from .dto import Error, register_dto, responds
 from .dto.boundary import error

@@ -9,8 +9,8 @@
  */
 import { defineStore } from 'pinia';
 import { ref } from 'vue';
-import { platform as adapter } from '@chalie/shared';
 import type { WakeLockHandle } from '@chalie/shared';
+import { platform as adapter } from '@chalie/shared';
 import { voice } from '../api/voice';
 import { emit } from '../composables/useEventBus';
 import { useSessionStore } from './session';

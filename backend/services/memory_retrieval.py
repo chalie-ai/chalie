@@ -790,7 +790,7 @@ def _recall_payload(results: list[dict[str, object]]) -> list[dict[str, object]]
     episode hit carries one). ``score`` is the relevance label (high/medium/low);
     the raw confidence stays internal. The structured shape replaces the old
     ``[id:X,relevance:Y] text`` prose: it is machine-parseable for the model AND
-    is what ``Transcript._fetch_referenced_episodes`` keys its episode
+    is what ``EpisodicService._fetch_referenced_episodes`` keys its episode
     back-reference on (the ``id`` field), so the format is load-bearing.
     """
     rows: list[dict[str, object]] = []

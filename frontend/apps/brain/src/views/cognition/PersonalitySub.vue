@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { reactive, ref, onMounted } from 'vue';
+import { onMounted, reactive, ref } from 'vue';
 import { cognition } from '../../api/cognition';
 import { useToast } from '../../composables/useToast';
 import { HttpError } from '@chalie/shared';
@@ -63,7 +63,9 @@ async function save() {
   <template v-if="loading"><div class="loading">Loading…</div></template>
   <template v-else-if="loadFailed"><EmptyState message="Failed to load data." /></template>
   <template v-else>
-    <p class="panel-desc">Adjust how Chalie communicates. Changes take effect on the next message.</p>
+    <p class="panel-desc">
+      Adjust how Chalie communicates. Changes take effect on the next message.
+    </p>
     <div class="personality-grid">
       <div v-for="s in sliders" :key="s.key" class="personality-field">
         <label class="personality-label">{{ s.label }}</label>

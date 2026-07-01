@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, watch, onUnmounted } from 'vue';
+import { computed, onUnmounted, ref, watch } from 'vue';
 import { Undo2 } from '@lucide/vue';
 import type { LiveToolPill } from '../../composables/useConversationFeed';
 import { useSessionStore } from '../../stores/session';
@@ -27,7 +27,9 @@ watch(
   hasRunning,
   (running) => {
     if (running && !timer) {
-      timer = setInterval(() => { now.value = Date.now(); }, 100);
+      timer = setInterval(() => {
+        now.value = Date.now();
+      }, 100);
     } else if (!running) {
       stopClock();
     }
@@ -71,8 +73,8 @@ function pillSeconds(pill: LiveToolPill): string {
         class="act-tool"
         :class="{
           'act-tool--running': !pill.resolved,
-          'act-tool--done':    pill.resolved && pill.ok,
-          'act-tool--error':   pill.resolved && !pill.ok,
+          'act-tool--done': pill.resolved && pill.ok,
+          'act-tool--error': pill.resolved && !pill.ok,
         }"
         :data-call-id="pill.id"
       >

@@ -14,7 +14,6 @@ from flask.typing import ResponseReturnValue
 from flask_restx import Namespace, Resource
 
 from services.provider_db_service import PROVIDER_IN_USE_MSG
-
 from .auth import require_session
 from .dto import Error, expects, register_dto, responds
 from .dto.boundary import error

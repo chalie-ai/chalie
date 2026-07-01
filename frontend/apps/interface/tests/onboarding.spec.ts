@@ -1,4 +1,4 @@
-import { test, expect, request } from '@playwright/test';
+import { expect, request, test } from '@playwright/test';
 
 // Feature test — drives the REAL onboarding page served at /on-boarding/ by a
 // real Chalie instance that has NO master account yet (fresh env). No mocks:

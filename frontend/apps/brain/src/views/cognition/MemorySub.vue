@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { ref, onMounted } from 'vue';
-import { cognition } from '../../api/cognition';
+import { onMounted, ref } from 'vue';
 import type { MemoryRecord } from '../../api/cognition';
+import { cognition } from '../../api/cognition';
 import { formatDate } from '../../utils/format';
 import EmptyState from '../../ui/EmptyState.vue';
 
@@ -72,7 +72,9 @@ onMounted(load);
           class="filter-tab"
           :class="{ active: source === s }"
           @click="selectSource(s)"
-        >{{ s.charAt(0).toUpperCase() + s.slice(1) }}</button>
+        >
+          {{ s.charAt(0).toUpperCase() + s.slice(1) }}
+        </button>
       </div>
       <input
         v-model="search"
@@ -80,7 +82,7 @@ onMounted(load);
         class="search-input"
         placeholder="Search…"
         @keydown.enter="submitSearch"
-      >
+      />
     </div>
     <EmptyState v-if="records.length === 0" message="No records found." />
     <template v-else>
@@ -97,7 +99,7 @@ onMounted(load);
           <tr v-for="r in records" :key="`${r.created}-${r.key ?? r.location ?? ''}`">
             <td>{{ formatDate(r.created) }}</td>
             <td>{{ formatDate(r.last_accessed) }}</td>
-            <td class="key-cell">{{ source === 'episodes' ? (r.location || '') : (r.key || '') }}</td>
+            <td class="key-cell">{{ source === 'episodes' ? r.location || '' : r.key || '' }}</td>
             <td class="val-cell">{{ r.value || '' }}</td>
           </tr>
         </tbody>

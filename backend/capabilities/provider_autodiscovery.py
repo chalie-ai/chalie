@@ -4,11 +4,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from utils.email_utils import Email
 from capabilities.mail_capability.providers import (
     PROVIDERS as _UNIFIED_PROVIDERS,
     ServerSettings,
 )
+from utils.email_utils import Email
 
 
 @dataclass(frozen=True, slots=True)

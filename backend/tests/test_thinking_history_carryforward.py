@@ -21,9 +21,9 @@ that captures the EXACT request the thinking pass sends. Zero internal mocks.
 
 import sqlite3
 from typing import TYPE_CHECKING, cast
+from unittest.mock import patch
 
 import pytest
-from unittest.mock import patch
 
 from services.provider_api import ProviderApiRequest, ProviderApiResponse, ThinkingLevel
 

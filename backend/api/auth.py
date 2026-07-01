@@ -11,8 +11,9 @@ Sessions are stored in MemoryStore via services.auth_session_service.
 
 import logging
 from collections.abc import Callable
-from typing import TYPE_CHECKING
 from functools import wraps
+from typing import TYPE_CHECKING
+
 from flask import request, g, abort
 
 from services.feature_flags import internal_dev_enabled

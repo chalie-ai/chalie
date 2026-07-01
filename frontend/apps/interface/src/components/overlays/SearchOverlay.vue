@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, watch, nextTick } from 'vue';
+import { nextTick, ref, watch } from 'vue';
 import { Search } from '@lucide/vue';
 import { useSessionStore } from '../../stores/session';
 import { useConversationFeed } from '../../composables/useConversationFeed';
@@ -128,7 +128,9 @@ function pick(item: ConversationThread): void {
 
 .search-input {
   flex: 1;
-  font: 400 14px Inter, sans-serif;
+  font:
+    400 14px Inter,
+    sans-serif;
   color: var(--text-primary);
   background: transparent;
   border: 0;
@@ -140,7 +142,9 @@ function pick(item: ConversationThread): void {
 }
 
 .esc-chip {
-  font: 600 10px Inter, sans-serif;
+  font:
+    600 10px Inter,
+    sans-serif;
   color: var(--text-muted);
   border: 1px solid var(--border-strong);
   border-radius: 5px;
@@ -157,7 +161,9 @@ function pick(item: ConversationThread): void {
 .empty-state {
   padding: 22px;
   text-align: center;
-  font: 400 13px Inter, sans-serif;
+  font:
+    400 13px Inter,
+    sans-serif;
   color: var(--text-muted);
 }
 
@@ -194,7 +200,9 @@ function pick(item: ConversationThread): void {
 
 .result-name {
   display: block;
-  font: 600 12.5px Inter, sans-serif;
+  font:
+    600 12.5px Inter,
+    sans-serif;
   color: var(--text-primary);
   white-space: nowrap;
   overflow: hidden;
@@ -203,7 +211,9 @@ function pick(item: ConversationThread): void {
 
 .result-snippet {
   display: block;
-  font: 400 11.5px Inter, sans-serif;
+  font:
+    400 11.5px Inter,
+    sans-serif;
   color: var(--text-tertiary);
   white-space: nowrap;
   overflow: hidden;
@@ -211,7 +221,9 @@ function pick(item: ConversationThread): void {
 }
 
 .result-tag {
-  font: 600 9px Inter, sans-serif;
+  font:
+    600 9px Inter,
+    sans-serif;
   letter-spacing: 0.05em;
   text-transform: uppercase;
   color: var(--text-muted);

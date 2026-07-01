@@ -12,6 +12,7 @@ Ticket B changes:
 import math
 import sqlite3
 import struct
+from datetime import timedelta
 from typing import cast
 
 import pytest
@@ -25,8 +26,6 @@ from services.decay_engine_service import (
     _JANITOR_FOSSIL_AGE_DAYS,
 )
 from services.time_utils import utc_now
-from datetime import timedelta
-
 
 pytestmark = pytest.mark.unit
 
@@ -328,7 +327,7 @@ class TestPureRead:
                         last_relevant_at=_iso_ago(hours=5))
         before = db.execute(
             "SELECT id, retrieval_weight, access_count, last_accessed_at, "
-            "storage_strength, last_relevant_at FROM episodes ORDER BY id"
+            "last_relevant_at FROM episodes ORDER BY id"
         ).fetchall()
 
         ep = EpisodicService(get_shared_db_service()).get_episode_by_id("ep-read")
@@ -336,6 +335,6 @@ class TestPureRead:
 
         after = db.execute(
             "SELECT id, retrieval_weight, access_count, last_accessed_at, "
-            "storage_strength, last_relevant_at FROM episodes ORDER BY id"
+            "last_relevant_at FROM episodes ORDER BY id"
         ).fetchall()
         assert after == before, "a read must not mutate any episode column"

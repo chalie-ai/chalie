@@ -10,8 +10,8 @@ homes in ``services/llm_clients/*`` and ``services.provider_api``;
 no backward-compat re-export shims remain.
 """
 
-import re
 import logging
+import re
 from typing import cast
 
 logger = logging.getLogger(__name__)

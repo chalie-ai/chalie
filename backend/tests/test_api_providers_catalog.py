@@ -14,9 +14,9 @@ import sqlite3
 from collections.abc import Iterator
 
 import pytest
+from flask.testing import FlaskClient
 
 import services.vault_service as _vault_mod
-from flask.testing import FlaskClient
 from services.vault_service import _vault_state, get_vault_service
 
 # The seven providers the product owner named explicitly. The curated list is

@@ -3,9 +3,9 @@ Chalie's HTML subset on user-facing channels — background channel output (DMN,
 encoders, compaction) is not mangled."""
 
 import sqlite3
+from unittest.mock import patch
 
 import pytest
-from unittest.mock import patch
 
 from configs.channels import UserConfig
 from configs.channels.dmn import DmnConfig

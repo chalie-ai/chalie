@@ -1,14 +1,15 @@
 <script setup lang="ts">
-import { ref, onMounted } from 'vue';
+import { onMounted, ref } from 'vue';
 import { ChevronLeft } from '@lucide/vue';
-import { cognition } from '../../api/cognition';
-import type { AutoResearchRun, AutoResearchDetail } from '../../api/cognition';
+import { ConfigType } from '@chalie/shared';
+import type { ThreadSummary, TurnBlock } from '../../api/threads';
+import { threads } from '../../api/threads';
 import { formatDate, mdToHtml } from '../../utils/format';
 import EmptyState from '../../ui/EmptyState.vue';
 
 const viewMode = ref<'list' | 'detail'>('list');
-const runs = ref<AutoResearchRun[]>([]);
-const detail = ref<AutoResearchDetail | null>(null);
+const rows = ref<ThreadSummary[]>([]);
+const block = ref<TurnBlock | null>(null);
 const loading = ref(false);
 const loadFailed = ref(false);
 const detailLoading = ref(false);
@@ -18,7 +19,8 @@ async function load(): Promise<void> {
   loading.value = true;
   loadFailed.value = false;
   try {
-    runs.value = (await cognition.research()).runs ?? [];
+    const feed = await threads.list(ConfigType.DISCOVERY);
+    rows.value = (feed.threads ?? []).filter((t) => t.turn_id != null);
   } catch {
     loadFailed.value = true;
   } finally {
@@ -26,13 +28,13 @@ async function load(): Promise<void> {
   }
 }
 
-async function openDetail(run: AutoResearchRun): Promise<void> {
-  detail.value = null;
+async function openDetail(turnId: number): Promise<void> {
+  block.value = null;
   detailFailed.value = false;
   detailLoading.value = true;
   viewMode.value = 'detail';
   try {
-    detail.value = (await cognition.researchDetail(run.id)).run;
+    block.value = await threads.item(turnId, ConfigType.DISCOVERY);
   } catch {
     detailFailed.value = true;
   } finally {
@@ -42,7 +44,7 @@ async function openDetail(run: AutoResearchRun): Promise<void> {
 
 function backToList(): void {
   viewMode.value = 'list';
-  detail.value = null;
+  block.value = null;
 }
 
 onMounted(load);
@@ -55,26 +57,23 @@ onMounted(load);
         <button class="btn btn-secondary btn-sm back-btn" @click="backToList">
           <ChevronLeft :size="14" /> Back
         </button>
-        <h3>{{ detail ? formatDate(detail.ran_at) : 'Research Run' }}</h3>
+        <h3>{{ block ? formatDate(block.last_activity_at) : 'Research Run' }}</h3>
       </div>
       <template v-if="detailLoading"><div class="loading">Loading…</div></template>
-      <template v-else-if="detailFailed"><EmptyState message="Failed to load research run." /></template>
-      <template v-else-if="detail">
+      <template v-else-if="detailFailed"
+        ><EmptyState message="Failed to load research run."
+      /></template>
+      <template v-else-if="block">
         <div class="research-sections">
-          <div class="research-section">
-            <div class="research-section-heading">User Summary</div>
-            <!-- eslint-disable-next-line vue/no-v-html -->
-            <div class="research-section-body md" v-html="mdToHtml(detail.user_summary)"></div>
-          </div>
-          <div class="research-section">
-            <div class="research-section-heading">Compacted Summary</div>
-            <!-- eslint-disable-next-line vue/no-v-html -->
-            <div class="research-section-body md" v-html="mdToHtml(detail.compacted_summary)"></div>
-          </div>
           <div class="research-section">
             <div class="research-section-heading">Transcript</div>
             <!-- eslint-disable-next-line vue/no-v-html -->
-            <div class="research-section-body md" v-html="mdToHtml(detail.transcript)"></div>
+            <div
+              v-for="m in block.messages.filter((msg) => msg.role === 'assistant')"
+              :key="m.id"
+              class="research-section-body md"
+              v-html="mdToHtml(m.content)"
+            ></div>
           </div>
         </div>
       </template>
@@ -85,7 +84,7 @@ onMounted(load);
     <template v-if="loading"><div class="loading">Loading…</div></template>
     <template v-else-if="loadFailed"><EmptyState message="Failed to load data." /></template>
     <template v-else>
-      <EmptyState v-if="runs.length === 0" message="No research runs found." />
+      <EmptyState v-if="rows.length === 0" message="No research runs found." />
       <table v-else class="records-table">
         <thead>
           <tr>
@@ -95,13 +94,13 @@ onMounted(load);
         </thead>
         <tbody>
           <tr
-            v-for="r in runs"
-            :key="r.id"
+            v-for="r in rows"
+            :key="r.turn_id ?? 0"
             class="clickable-row"
-            @click="openDetail(r)"
+            @click="r.turn_id != null && openDetail(r.turn_id)"
           >
-            <td>{{ formatDate(r.ran_at) }}</td>
-            <td class="val-cell">{{ r.researched }}</td>
+            <td>{{ formatDate(r.last_activity_at) }}</td>
+            <td class="val-cell">{{ r.preview }}</td>
           </tr>
         </tbody>
       </table>
@@ -134,6 +133,9 @@ onMounted(load);
   font-size: 0.875rem;
   color: var(--text-primary);
   line-height: 1.6;
+}
+.research-section-body + .research-section-body {
+  margin-top: 1rem;
 }
 .md :deep(h3) {
   font-size: 0.95rem;

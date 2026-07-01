@@ -1,4 +1,4 @@
-import { getHost, api } from '@chalie/shared';
+import { api, getHost } from '@chalie/shared';
 
 /** Response from GET /voice/health */
 export interface VoiceHealth {

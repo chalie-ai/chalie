@@ -27,8 +27,8 @@ from typing import Annotated, Literal, ParamSpec, TypeVar, cast
 from flask import Response, request
 from flask.typing import ResponseReturnValue
 from pydantic import GetCoreSchemaHandler, ValidationError
-from pydantic_core import CoreSchema, core_schema
 from pydantic.json_schema import JsonSchemaValue
+from pydantic_core import CoreSchema, core_schema
 from werkzeug.datastructures import FileStorage
 
 from .base import DTO

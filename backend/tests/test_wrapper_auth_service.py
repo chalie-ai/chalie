@@ -1,4 +1,5 @@
 import sqlite3
+
 import pytest
 from flask import Flask, request
 

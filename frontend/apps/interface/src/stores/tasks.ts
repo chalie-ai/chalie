@@ -6,8 +6,8 @@
  */
 import { defineStore } from 'pinia';
 import type { WsPushEvent } from '@chalie/shared';
+import type { ActiveSubagent, ScheduledItem } from '../api/scheduler';
 import { scheduler } from '../api/scheduler';
-import type { ScheduledItem, ActiveSubagent } from '../api/scheduler';
 import { useConversationFeed } from '../composables/useConversationFeed';
 
 export type { ScheduledItem };

@@ -22,8 +22,8 @@ from typing import Optional, cast
 
 import pytest
 
-from abilities.code_eval import CodeEvalAbility
 from abilities._result import ToolResult
+from abilities.code_eval import CodeEvalAbility
 
 pytestmark = pytest.mark.unit
 

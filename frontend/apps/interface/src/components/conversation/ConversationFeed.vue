@@ -1,7 +1,7 @@
 <!-- Renders the conversation spine: EVERY turn inline as Weave avatar rows (its
      rows through settle0), plus thread opener pills for forked turns. -->
 <script setup lang="ts">
-import { ref, computed, watch, nextTick, onMounted, onBeforeUnmount } from 'vue';
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useConversationFeed } from '../../composables/useConversationFeed';
 import type { ConversationTurnBlock } from '../../api/conversation';
 import { useSessionStore } from '../../stores/session';
@@ -75,7 +75,6 @@ async function _onScrollPaginate(): Promise<void> {
 watch(() => feed.sortedBlocks.value, scrollToBottom, { deep: true, flush: 'post' });
 
 onMounted(async () => {
-  document.addEventListener('session:turn-done', forceScrollToBottom);
   document.addEventListener('session:history-initial-loaded', forceScrollToBottom);
 
   await session.loadRecentConversation();
@@ -85,7 +84,6 @@ onMounted(async () => {
 
 onBeforeUnmount(() => {
   window.removeEventListener('scroll', _onScrollPaginate);
-  document.removeEventListener('session:turn-done', forceScrollToBottom);
   document.removeEventListener('session:history-initial-loaded', forceScrollToBottom);
 });
 </script>
@@ -113,7 +111,9 @@ onBeforeUnmount(() => {
           @click="onPillClick(entry.block.turn_id)"
         >
           <span class="thread-pill__dot" aria-hidden="true" />
-          <span class="thread-pill__summary">{{ entry.block.gist || entry.block.preview || 'Conversation' }}</span>
+          <span class="thread-pill__summary">{{
+            entry.block.gist || entry.block.preview || 'Conversation'
+          }}</span>
           <span class="thread-pill__chevron" aria-hidden="true">›</span>
         </button>
       </div>
@@ -171,7 +171,9 @@ onBeforeUnmount(() => {
   background: var(--bg-surface-2);
   border: 1px solid var(--border-strong);
   cursor: pointer;
-  transition: background var(--duration-fast) ease, border-color var(--duration-fast) ease;
+  transition:
+    background var(--duration-fast) ease,
+    border-color var(--duration-fast) ease;
 }
 
 .thread-pill:hover {
@@ -183,9 +185,15 @@ onBeforeUnmount(() => {
   opacity: 0.6;
 }
 
-.thread-pill--working { border-color: color-mix(in oklab, var(--status-main) 45%, transparent); }
-.thread-pill--done { border-color: color-mix(in oklab, var(--cyan) 45%, transparent); }
-.thread-pill--thread { border-color: color-mix(in oklab, var(--violet) 35%, transparent); }
+.thread-pill--working {
+  border-color: color-mix(in oklab, var(--status-main) 45%, transparent);
+}
+.thread-pill--done {
+  border-color: color-mix(in oklab, var(--cyan) 45%, transparent);
+}
+.thread-pill--thread {
+  border-color: color-mix(in oklab, var(--violet) 35%, transparent);
+}
 
 .thread-pill__summary {
   flex: 1 1 auto;

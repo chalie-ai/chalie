@@ -485,8 +485,7 @@ def _join_threads(prefix: str, timeout: float = 15.0) -> None:
     Joining by name synchronises on the real production threads — no sleep, no
     poll of a guessed duration. The scheduler fires a prompt on a daemon thread
     named ``scheduled-work-<item_id>`` (scheduler_service.py); that thread runs
-    the whole turn on the ``schedule`` channel inline, then spawns a
-    ``sched-gist-<group>`` daemon for the thread label."""
+    the whole turn on the ``schedule`` channel inline."""
     for t in threading.enumerate():
         if t.name.startswith(prefix) and t is not threading.current_thread():
             t.join(timeout)
@@ -523,8 +522,8 @@ def test_scheduled_poll_fires_prompt_as_its_own_schedule_thread(db: sqlite3.Conn
     This drives the real production entry point ``_poll_and_fire()`` (not
     ``_fire_item`` directly), so the claim/commit transaction is exercised for
     real. The LLM seam returns a no-tool reply, so the ACT loop ends on its first
-    turn deterministically. Real daemon threads are joined by name —
-    ``scheduled-work-*`` (the turn) then ``sched-gist-*`` (the label).
+    turn deterministically. The real ``scheduled-work-*`` daemon thread (the turn)
+    is joined by name.
     """
     from services import scheduler_service
     from services.source_profiles import profile_for
@@ -545,15 +544,15 @@ def test_scheduled_poll_fires_prompt_as_its_own_schedule_thread(db: sqlite3.Conn
     db.commit()
 
     def _send(_dto: ProviderApiRequest) -> ProviderApiResponse:
-        # The turn (and the gist delegate) finish in one turn with a plain reply.
+        # The turn finishes in one ACT cycle with a plain no-tool reply.
         return _text_response(result_text)
 
     with _inject_fake_client(_send):
         scheduler_service._poll_and_fire()
-        # The turn runs inline on scheduled-work-<id>; it spawns the gist label on
-        # sched-gist-<group> before running. Join both so all writes have landed.
+        # The turn runs inline on scheduled-work-<id>; join it so all writes land.
+        # A first fire is the thread's birth (no settle0 yet), so NO gist delegate
+        # spawns — the §5.1 label waits for the recurring fire that re-forks (§13.1).
         _join_threads("scheduled-work")
-        _join_threads("sched-gist")
 
     # (claim) The poll's claim transaction committed cleanly: the due row is
     # marked 'fired'. A non-atomic poll would leave it 'pending' or 'failed'.
@@ -588,6 +587,36 @@ def test_scheduled_poll_fires_prompt_as_its_own_schedule_thread(db: sqlite3.Conn
     assert any(result_text in c for c in schedule_assistant), (
         f"the worked result must land as the assistant row on channel='schedule' turn={turn_id}; "
         f"found assistant rows: {schedule_assistant!r}"
+    )
+    # (sole writer) exactly ONE input row for the fire — the MP writes its own
+    # opening row now (no scheduler pre-write + adopt), so there is no duplicate.
+    assert len(schedule_user) == 1, (
+        f"each fire writes exactly one opening row; got {len(schedule_user)}: {schedule_user!r}"
+    )
+
+    # (continuity) a SECOND fire of the same schedule must REUSE the persisted
+    # turn_id and APPEND — one growing thread, never a fresh one, never a duplicate
+    # opening row. Re-arm the row as due (keeping the turn_id the first fire saved)
+    # and drive the real poll path again; _fire_item reads that id off the row.
+    db.execute(
+        "UPDATE scheduled_items SET status='pending', due_at=? WHERE id=?",
+        ((utc_now() - timedelta(minutes=1)).isoformat(), item_id),
+    )
+    db.commit()
+    with _inject_fake_client(_send):
+        scheduler_service._poll_and_fire()
+        _join_threads("scheduled-work")
+
+    refired_turn = db.execute("SELECT turn_id FROM scheduled_items WHERE id=?", (item_id,)).fetchone()[0]
+    assert refired_turn == turn_id, (
+        f"a re-fire must reuse the schedule's persisted turn_id {turn_id}, not allocate a new one; got {refired_turn}"
+    )
+    user_count = db.execute(
+        "SELECT COUNT(*) FROM transcript WHERE channel='schedule' AND role='user' AND turn_id=?",
+        (turn_id,),
+    ).fetchone()[0]
+    assert user_count == 2, (
+        f"two fires must append two opening rows under the ONE turn (no duplicate); got {user_count}"
     )
 
     # (no relay) the schedule self-surfaces on its own channel — it never relays to

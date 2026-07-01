@@ -19,12 +19,11 @@ import re
 import sqlite3
 
 import uvicorn
+from mcp.server.fastmcp import FastMCP
 from starlette.applications import Starlette
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
-
-from mcp.server.fastmcp import FastMCP
 
 from services.database_service import DatabaseService
 

@@ -1,14 +1,12 @@
 
-import math
 import logging
+import math
 import sqlite3
-
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
 from ._fts_delete import fts5_external_delete
 from .time_utils import utc_now, parse_utc
-
 
 logger = logging.getLogger(__name__)
 

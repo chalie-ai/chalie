@@ -6,8 +6,8 @@
  * composable is the only owner of the cards array.
  */
 import { reactive } from 'vue';
-import { getWebSocket } from '@chalie/shared';
 import type { WsMessageEvent } from '@chalie/shared';
+import { getWebSocket } from '@chalie/shared';
 import { showToast } from '../utils/toast';
 
 export interface ActionCard {

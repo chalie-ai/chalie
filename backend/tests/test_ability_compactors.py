@@ -8,16 +8,16 @@ from typing import TYPE_CHECKING, cast
 
 import pytest
 
+from abilities._compaction_config import CompactionConfig
 from abilities.chat_history_compactor import (
     ChatHistoryCompactionConfig,
     ChatHistoryCompactor,
 )
-from abilities._compaction_config import CompactionConfig
 from configs.channels import UserConfig
 from services.act_trail import ActTrail
-from services.transcript_service import Transcript
 from services.message_processor import MessageProcessor
 from services.provider_cache_service import ProviderCacheService
+from services.transcript_service import Transcript
 
 if TYPE_CHECKING:
     # Reuse the compactor's own parent contract — no duplicate Protocol.

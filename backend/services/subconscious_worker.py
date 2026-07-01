@@ -16,7 +16,7 @@ if TYPE_CHECKING:
     from services.data_graph_service import DataGraphService
 
 from services.durable_timestamp import DurableTimestamp
-from services.time_utils import utc_now
+from services.time_utils import utc_now, parse_utc
 
 logger = logging.getLogger(__name__)
 
@@ -196,11 +196,10 @@ class SubconsciousWorker:
 
     def _check_gates(self) -> Optional[str]:
         """Return the name of the failing gate, or ``None`` when both pass."""
-        from services.world_state import world_state
+        from services.transcript_service import Transcript  # noqa: PLC0415
 
-        snapshot = world_state.snapshot()
-        last_msg_raw = snapshot.get("last_user_message_at")
-        last_msg = cast(Optional[datetime], last_msg_raw)
+        last_msg_raw = Transcript.last_user_message_at()
+        last_msg = parse_utc(last_msg_raw) if last_msg_raw else None
         now = utc_now()
 
         if last_msg is not None and now - last_msg < self.idle_window:
@@ -426,8 +425,6 @@ class SubconsciousWorker:
             embedding = emb_svc.generate_embedding(gist)
             novelty = compute_novelty(embedding, prior_embeddings) if embedding else 1.0
             super_ep["salience"] = compute_salience(
-                valence=float(cast(float, super_ep.get("emotional_valence") or 0.0)),
-                arousal=float(cast(float, super_ep.get("emotional_arousal") or 0.0)),
                 has_open_loop=bool(super_ep.get("has_open_loop", False)),
                 novelty=novelty,
             )
@@ -652,7 +649,25 @@ class SubconsciousWorker:
 
     def _step_dmn(self) -> str:
         """Step 6 — background DMN reflection via DMNMessageProcessor."""
-        synthesis = self._load_user_synthesis()
+        # DMN needs a user synthesis to reflect on; skip when none exists yet.
+        # Reads the same data_graph keys the (removed) _load_user_synthesis did.
+        synthesis: Optional[str] = None
+        try:
+            from services.database_service import get_shared_db_service
+            db = get_shared_db_service()
+            placeholders = ",".join("?" * len(_DMN_SYNTHESIS_KEYS))
+            with db.connection() as conn:
+                rows = conn.execute(
+                    "SELECT key, value FROM data_graph "
+                    "WHERE kind = 'system' "
+                    "  AND key IN (" + placeholders + ") "
+                    "  AND active = 1 AND deleted_at IS NULL",
+                    _DMN_SYNTHESIS_KEYS,
+                ).fetchall()
+            by_key = {row[0]: row[1] for row in rows if row[1]}
+            synthesis = by_key.get('user_summary_long') or by_key.get('user_summary')
+        except Exception as exc:
+            logger.warning(f"{LOG_PREFIX} DMN synthesis read failed: {exc}")
         if not synthesis:
             logger.info(f"{LOG_PREFIX} Skipping DMN — no user synthesis available")
             return "skipped: no user synthesis"
@@ -743,9 +758,9 @@ class SubconsciousWorker:
 
         Self-throttling on a dedicated durable clock: it runs inside the ordinary
         idle tick but only reaches the web once the interval has elapsed.
-        Grounding (user synthesis + the latest user-channel compaction) is
-        captured at dispatch and threaded into the run via metadata; the loop
-        records anything worth keeping as a discovery memory on its own.
+        DiscoveryConfig reads the ``user`` channel's history directly (its
+        grounding is the live user spine), so no metadata is threaded in; the
+        loop records anything worth keeping as a discovery memory on its own.
         """
         last = _DISCOVERY_TIMESTAMP.load()
         now = utc_now()
@@ -754,38 +769,11 @@ class SubconsciousWorker:
 
         from configs.channels import DiscoveryConfig  # noqa: PLC0415
         from configs.channels.discovery import DISCOVERY_PROMPT  # noqa: PLC0415
-        from services.compaction_persistence import get_compaction  # noqa: PLC0415
         from services.message_processor import MessageProcessor  # noqa: PLC0415
 
-        compaction = get_compaction("user", None)
-        MessageProcessor.process(
-            DISCOVERY_PROMPT,
-            DiscoveryConfig(),
-            metadata={
-                "user_summary": self._load_user_synthesis() or "",
-                "compacted_summary": cast(str, compaction["compacted_text"]) if compaction else "",
-            },
-        )
+        MessageProcessor.process(DISCOVERY_PROMPT, DiscoveryConfig())
         _DISCOVERY_TIMESTAMP.persist(now)
         return "fired"
-
-    def _load_user_synthesis(self) -> Optional[str]:
-        """Check whether a user_summary row exists in data_graph."""
-        try:
-            from services.database_service import get_shared_db_service
-            db = get_shared_db_service()
-            with db.connection() as conn:
-                rows = conn.execute(
-                    "SELECT key, value FROM data_graph "
-                    "WHERE kind = 'system' "
-                    "  AND key IN ('user_summary', 'user_summary_long') "
-                    "  AND active = 1 AND deleted_at IS NULL",
-                ).fetchall()
-            by_key = {row[0]: row[1] for row in rows if row[1]}
-            return by_key.get('user_summary_long') or by_key.get('user_summary')
-        except Exception as exc:
-            logger.warning(f"{LOG_PREFIX} _load_user_synthesis failed: {exc}")
-            return None
 
     # ── State persistence ───────────────────────────────────────────────────
 

@@ -129,26 +129,24 @@ class MessageProcessor:
     _WS_TOOL_CALLED = 'tool_called'
     _WS_TOOL_DONE = 'tool_done'
 
-    def __init__(self, raw_input: str, metadata: dict[str, object] | None = None):
+    def __init__(
+        self,
+        config: "ProcessorConfig",
+        turn_id: int = -1,
+        raw_input: str = "",
+        metadata: dict[str, object] | None = None,
+    ):
+        self.config = config
         self._raw_input = raw_input
         self._metadata = metadata or {}
-        # Per-turn config — set by `mp.config = X` in process() / workers.
-        self.config: "ProcessorConfig | None" = None
         self._active_tools: list[str] = []
         self._uid: int | None = None
-        # Per-channel monotonic turn boundary — redefined as the *thread* id. A
-        # thread-starter has ``thread_id=None`` and _setup allocates a fresh one;
-        # a reply has ``thread_id`` set (from metadata) and _setup appends to it.
-        # Every step in the chain shares it (propagated via _continue). The
-        # act-trail and previous-messages history render by it; tool_calls derive
-        # it via a join on the input row.
-        self.turn_id: "int | None" = cast("int | None", self._metadata.get("thread_id"))
-        # View mode. True ⇒ this is a genuine user reply INTO a
-        # thread → FORK read (the turn's settle0-floored continuation) and a fork-
-        # scoped checkpoint. Driven by a dedicated metadata key set ONLY by the
-        # user-reply path, NEVER raw ``thread_id`` presence — a delegate reply
-        # routed into a main turn reuses ``thread_id`` and must stay MAIN.
-        self._forked: bool = bool(self._metadata.get("is_thread_reply"))
+        # Per-channel monotonic turn boundary — the *thread* id. Resolved once by
+        # ``self.ts`` at construction (below): a fresh thread allocates
+        # ``MAX(turn_id)+1`` for the channel; a real ``turn_id`` appends to that
+        # thread. ``make_row_id`` mirrors it onto ``self.turn_id``; every step in the
+        # chain shares it (propagated via _continue).
+        self.turn_id: "int | None" = None
         # User thinking-level override (None = auto/gate decides). 'medium'/'high'
         # bypass the gate and are forced on every send via Providers.send.
         self.thinking_override: str | None = None
@@ -170,6 +168,68 @@ class MessageProcessor:
         self.thinking_level: str = "low"
         # Rich media ordinal counter — set by cards/media abilities; None until first use.
         self._rich_media_ordinals: object = None
+        # Pre-allocate this turn's anchoring input row SYNCHRONOUSLY (claiming its
+        # turn_id) so get_meta_data() can answer before run() touches the LLM. The
+        # row id is this MP's anchor for its tool calls and act-trail.
+        from services.transcript import TranscriptService  # noqa: PLC0415
+        self.ts = TranscriptService(self.config, turn_id)
+        # View mode — an INTERNAL switch, never supplied by callers. A reply INTO
+        # an existing thread carries that thread's turn_id (≠ the unset sentinel −1)
+        # → FORK read (the whole turn, no settle0 floor) + a fork-scoped checkpoint;
+        # a fresh message (turn_id unset) → MAIN spine. The chain threads the
+        # parent's view onto its continuations via _continue.
+        self._forked: bool = turn_id != TranscriptService._UNSET_TURN_ID
+        self.transcript_row_id: int | None = self.make_row_id()
+        self._uid = self.transcript_row_id
+        self.anchor = self.transcript_row_id
+
+    def make_row_id(self) -> "int | None":
+        """Claim this turn's anchoring input row. ``turn_id`` was resolved once by
+        ``self.ts`` at construction (verbatim when supplied, else the channel's next
+        turn); the row binds to it. A ``skip_input_row`` config writes no row (returns
+        ``None``) and lets its first assistant row open the turn."""
+        self.turn_id = self.ts.turn_id
+        if self._cfg.skip_input_row:
+            return None
+        return self.ts.insert_row(self._raw_input)
+
+    def get_meta_data(self) -> dict[str, object]:
+        """Synchronous turn metadata — available the instant the constructor
+        returns, before run() touches the LLM. Drives the thread API's fast POST
+        response: the surface holds turn_id + the pre-allocated row id with no WS
+        round-trip."""
+        return {
+            "turn_id": self.turn_id,
+            "type": self._cfg.type(),
+            "transcript_row_id": self.transcript_row_id,
+        }
+
+    def run(self) -> None:
+        """Spawn the turn on its own daemon thread and return immediately — the MP
+        owns its whole lifecycle (working → updated → done + the per-tool timers).
+        The cancel handle is registered synchronously here so DELETE
+        /api/thread/<turn_id> is live the instant the POST hands the surface its
+        turn_id (before the worker thread's _setup runs)."""
+        _register_canceller(self.turn_id, self.cancel_event)
+        threading.Thread(
+            target=self._run_guarded, daemon=True, name=f"turn-{self.turn_id}",
+        ).start()
+
+    def _run_guarded(self) -> None:
+        """Thread entry for the async send path. ``_run`` already fired the terminal
+        ``done`` from the live instance and re-raised; surface the channel-wide error
+        toast the foreground needs, unless the turn was cancelled (stop button stays
+        silent). The synchronous ``process()`` path never enters here — a failed
+        background pass propagates to its caller, toastless, as before."""
+        try:
+            self._run()
+        except Exception as exc:
+            logger.exception("[MP] turn %s failed: %s", self.turn_id, exc)
+            if not self.cancel_event.is_set():
+                from services.websocket_broker import WebSocketBroker  # noqa: PLC0415
+                WebSocketBroker().broadcast(
+                    {"type": "error", "message": "Turn failed unexpectedly", "recoverable": False}
+                )
 
     def cancel(self) -> None:
         self._cancel_event.set()
@@ -211,19 +271,19 @@ class MessageProcessor:
         return cast("ProcessorConfig", self.config)
 
     def broadcast(self, state: str, turn_id: int | None, **extra: object) -> None:
-        """The sole WS turn-signal chokepoint. No-op unless this channel opts in
-        via ``BROADCASTS_STATE`` (the ``user`` and ``schedule`` channels do).
-        Carries the lean state + turn_id + channel (the FE routes by it — ``user``
-        → main spine, ``schedule`` → dock + that schedule's thread), plus a tool
-        call's id/name/summary for tool_called and tool_done; the surface pulls
-        every byte of turn DATA back over REST. A broker fault is swallowed so a
-        dead socket never breaks the turn loop."""
+        """The sole WS turn-signal chokepoint. No-op unless this config opts in
+        via ``BROADCASTS_STATE`` (the ``user`` and ``scheduled`` types do).
+        Carries the lean ``status`` (the turn-lifecycle state) + turn_id + ``type``
+        (the FE routes by it — ``user`` → main spine, ``scheduled`` → dock + that
+        schedule's thread), plus a tool call's id/name/summary for tool_called and
+        tool_done; the surface pulls every byte of turn DATA back over REST. A
+        broker fault is swallowed so a dead socket never breaks the turn loop."""
         if not self._cfg.BROADCASTS_STATE:
             return
         from services.websocket_broker import WebSocketBroker  # noqa: PLC0415
         try:
             WebSocketBroker().broadcast(
-                {"type": state, "turn_id": turn_id, "channel": self._cfg.channel, **extra}
+                {"status": state, "turn_id": turn_id, "type": self._cfg.type(), **extra}
             )
         except Exception as exc:  # noqa: BLE001 — a dead surface must not break the loop
             logger.debug("[MP.broadcast] %s failed: %s", state, exc)
@@ -286,8 +346,14 @@ class MessageProcessor:
         cancel_event: "threading.Event | None" = None,
     ) -> str:
         """Single entry point: build an MP, run the turn under its lane lock, return text."""
-        mp = MessageProcessor(raw_input, metadata)
-        mp.config = config
+        meta = metadata or {}
+        turn_id = cast("int | None", meta.get("turn_id"))
+        mp = MessageProcessor(
+            config, turn_id if turn_id is not None else -1, raw_input, meta,
+        )
+        # Report the turn this ran on back to the caller (mutates meta): a first-fire
+        # scheduler reads the freshly-allocated id to persist its series continuity.
+        meta["turn_id"] = mp.turn_id
         if cancel_event is not None:
             mp.cancel_event = cancel_event
         # Default 'low' — the gate must explicitly raise it. A 'medium' default
@@ -315,9 +381,9 @@ class MessageProcessor:
         """Serialize turns within a surface, not across surfaces: the main spine and
         each fork thread hold independent locks so they execute concurrently; two
         turns on the same surface still serialize (shared turn cursor). Non-user
-        channels have no thread_id and collapse to one lock per channel as before."""
+        channels have no turn_id and collapse to one lock per channel as before."""
         if self._forked:
-            return f"{self._cfg.channel}:t{self._metadata.get('thread_id')}"
+            return f"{self._cfg.channel}:t{self.turn_id}"
         return f"{self._cfg.channel}:main"
 
     def _run(self) -> str:
@@ -350,56 +416,29 @@ class MessageProcessor:
         # resolves it each turn. Empty for compaction/encoder channels by design.
         self.active_tools = list(self._cfg.always_available or [])
 
-        from services.transcript_service import Transcript  # noqa: PLC0415
-
-        # Writing the input row allocates the next turn_id ATOMICALLY (a COALESCE
-        # subquery inside the INSERT, under the writer lock) — never max+1 in
-        # Python, which would race two concurrent same-channel turns onto one
-        # turn_id and merge their act-trails. The input row is gated on
-        # skip_input_row alone: a skip_transcript channel still anchors its
-        # act-trail to a uid (the background pattern/geo/summary passes set
-        # skip_input_row=False for exactly this — their per-turn budget, dedup and
-        # decay are DB-derived and key on the turn_id this row allocates). Only a
-        # skip_input_row channel (vision, skill_association) leaves turn_id None
-        # and lets its end message allocate its own turn.
-        if not self._cfg.skip_input_row:
-            # The request thread (api.chat._start_turn) pre-writes the input row so
-            # the POST can return the allocated turn_id inline; ADOPT it here rather
-            # than writing a second row. Channels without that pre-write (delegate
-            # synthesis, background passes) still open their own row.
-            pre_uid = self._metadata.get("input_uid")
-            if pre_uid is not None:
-                self.uid = cast("int", pre_uid)
-            else:
-                self.uid = Transcript.write_input_row(
-                    self._cfg.channel, self._cfg.role, self._raw_input,
-                    turn_id=self.turn_id,
-                )
-            if self.turn_id is None:
-                self.turn_id = Transcript.turn_id_of_row(self.uid)
-            self.anchor = self.uid
-            # Announce the turn with ``working`` (spin the state up). It fires
-            # unconditionally — a fresh thread and a reply take the identical path;
-            # the surface keys on its own current state. There is no ``created``
-            # signal: the turn_id rode the POST response body.
-            if self.turn_id is not None:
-                # Register the cancel handle BEFORE announcing the turn so DELETE
-                # /api/thread/<turn_id> is live the instant ``working`` fires.
-                # Idempotent — the pre-write path already registered it.
-                _register_canceller(self.turn_id, self.cancel_event)
-                self.broadcast(self._WS_WORKING_STATE, self.turn_id)
+        # The input row was pre-allocated by the constructor (make_row_id), which
+        # set uid/anchor/turn_id. Announce the turn with ``working`` now that work
+        # is starting — it fires
+        # unconditionally for any channel that owns a row; the surface keys on its
+        # own current state. A skip_input_row channel has no row/turn yet (its end
+        # message allocates one), so it announces nothing. The cancel handle is
+        # re-registered (idempotent) so the synchronous process() path is also
+        # interruptible; run() registered it up front for the API path.
+        if not self._cfg.skip_input_row and self.turn_id is not None:
+            _register_canceller(self.turn_id, self.cancel_event)
+            self.broadcast(self._WS_WORKING_STATE, self.turn_id)
 
         if self._cfg.channel == "user":
             self._run_thinking_gate()
 
         self._seed_turn_zero()
 
-        # Label a turn once it first grows into a thread — i.e. on the first user
+        # Label a turn once it first grows into a thread — i.e. on the first
         # reply past its settle0 (``_forked``). Fire the gist delegate only when no
         # label exists yet, so a thread is summarized exactly once, at birth. The
-        # ``schedule`` channel is exempt: its gist lives on the schedule row, not
-        # ``thread_gist`` (§13.3), generated by the scheduler from the prompt.
-        if self._forked and self.turn_id is not None and self._cfg.channel != "schedule":
+        # schedule channel rides this same delegate (§13.1): a recurring fire is a
+        # reply past settle0, so its gist generates identically to a user thread's.
+        if self._forked and self.turn_id is not None:
             try:
                 from services.thread_gist_service import get_thread_gist_service  # noqa: PLC0415
                 if not get_thread_gist_service().bulk_get(self._cfg.channel, [self.turn_id]):
@@ -513,7 +552,7 @@ class MessageProcessor:
     def _build_send_messages(self) -> list[dict[str, object]]:
         """Build the single-element user-message list, with checkpoint wrapper and config image."""
         user = _wrap_with_checkpoint(
-            self._cfg.channel, self._cfg.get_user_prompt(self),
+            self._cfg.read_channel or self._cfg.channel, self._cfg.get_user_prompt(self),
             self.turn_id if self._forked else None,
         )
         message: dict[str, object] = {"role": "user", "content": user}
@@ -593,12 +632,7 @@ class MessageProcessor:
         formatted = self._format_response(text or "")
         if self._cfg.skip_transcript:
             return formatted
-        from services.transcript_service import Transcript  # noqa: PLC0415
-
-        row_id = Transcript.write_assistant_row(self._cfg.channel, formatted, turn_id=self.turn_id)
-        if self.turn_id is None:
-            self.turn_id = Transcript.turn_id_of_row(row_id)
-        self.anchor = row_id
+        self.anchor = self.ts.insert_row(formatted, role='assistant', settled=1)
         # Persistence boundary: every chain step and the final synthesis land here.
         # Signal the surface to refetch the turn block (it coalesces by turn_id).
         self.broadcast(self._WS_UPDATED_STATE, self.turn_id)
@@ -616,10 +650,18 @@ class MessageProcessor:
 
     def _continue(self, *, post_compaction: bool = False) -> "MessageProcessor":
         """Spawn the next link in the chain — a hidden-input continuation MP."""
-        child = MessageProcessor(self._raw_input, self._metadata)
-        child.config = self._cfg.with_hidden_input()
+        # Hidden-input config ⇒ skip_input_row ⇒ make_row_id writes no row; the
+        # child shares THIS step's uid/turn_id (set just below), continuing the
+        # same turn rather than opening a new one.
+        child = MessageProcessor(
+            self._cfg.with_hidden_input(),
+            self.turn_id if self.turn_id is not None else -1,
+            self._raw_input,
+            self._metadata,
+        )
         child.uid = self.uid
         child.turn_id = self.turn_id
+        child._forked = self._forked
         child.anchor = self.uid
         child.active_tools = self.active_tools            # SAME list
         child._rich_media_ordinals = getattr(self, "_rich_media_ordinals", None)
@@ -659,6 +701,12 @@ class MessageProcessor:
                     type(hook).__name__,
                     exc,
                 )
+        # Turn ended without a re-run: fold the latest window into episodes when the
+        # channel's tail has grown enough. Profile-gated and off-thread inside, so
+        # firing once per turn (not per row) is the DB-churn win, never a block.
+        from services.database_service import get_shared_db_service  # noqa: PLC0415
+        from services.episodic_service import EpisodicService  # noqa: PLC0415
+        EpisodicService(get_shared_db_service()).check_and_store(self._cfg)
         # The turn's last assistant message carried no tool calls — it is the
         # terminal. Drop the surface's working indicator (spec §6.4/§7.4).
         self.broadcast(self._WS_DONE_STATE, self.turn_id)
@@ -698,60 +746,54 @@ class MessageProcessor:
             )
 
     def _previous_rows(self) -> list[dict[str, object]]:
-        """The LLM ``previous_messages`` row set for this turn's view — and the hub
-        of the read+compaction flow. Read this whole docstring before adding any
-        new read path; no single function here is correct in isolation — they only
-        make sense composed:
+        """The LLM ``previous_messages`` row set for this turn's view — the hub of the
+        read+compaction flow, read chronologically (``id ASC``) so it re-assembles the
+        transcript. Both views read through ``self.ts`` (the channel/turn-bound
+        TranscriptService); no piece below is correct alone — they compose:
 
-          one getter      ``Transcript.by_turn(channel, turn_id=None)`` —
-                          turn_id → that turn's rows (a thread); None → the whole
-                          channel spine in ONE query. No filtering; raw rows.
-          consumers       mutate the rows HERE, in Python (never in SQL): keep rows
-                          ABOVE the watermark; MAIN also drops each turn's rows past
-                          settle0 via ``Transcript.drop_post_settle0``.
           watermark       ``compaction_persistence.get_compaction(channel,
                           for_turn_id)`` — two axes that never collide: MAIN
-                          (for_turn_id=None) is a *turn_id*; FORK (for_turn_id=T) is
-                          a *transcript.id* within T.
-          summary ⊕ tail  the rows returned here are the live tail ABOVE the
-                          watermark; everything BELOW it is already carried as prose
-                          by the checkpoint summary that ``_wrap_with_checkpoint``
-                          prepends. Model context = summary(≤wm) ⊕ these rows(>wm).
-          writer          ``chat_history_compactor.run`` folds *these* rows into the
+                          (for_turn_id=None) is a *turn_id*; FORK (for_turn_id=T) is a
+                          *transcript.id* within T. Everything at/below it is already
+                          carried as prose by the checkpoint summary ``_wrap_with_
+                          checkpoint`` prepends; this returns only the live tail ABOVE
+                          it. Model context = summary(≤wm) ⊕ these rows(>wm).
+          FORK            ``self.ts.get_turn_rows("id ASC")`` — the whole forked turn
+                          (no settle0 floor; that cut is MAIN-only) — kept between its
+                          id watermark and the live reply's own rows (``id >= self.uid``,
+                          which render separately).
+          MAIN            every turn above the watermark (``get_turns_since``) read in
+                          turn order, each floored at settle0 via ``get_turn_by_id(...,
+                          include_post_settled=False)`` (the cut is a SQL WHERE, so a
+                          turn with no settled reply drops out entirely). The watermark
+                          is the ONLY spine bound — no turn cap (it would silently drop
+                          un-summarised turns).
+          writer          ``chat_history_compactor.run`` folds these rows into the
                           summary and advances the watermark to their max id/turn_id.
-                          That "always advances" guarantee is WHY this read keeps
-                          id>wm and never id≤wm: keep id≤wm and the compactor re-folds
-                          already-folded rows and livelocks.
-
-        THREAD (``self._forked`` + turn_id): that turn's rows above its transcript-id
-        watermark, minus the live reply's own rows (``id >= self.uid``, which render
-        separately). MAIN: the whole channel spine, dropping turns at/below the main
-        watermark (a turn_id) and every row past each turn's settle0. The watermark
-        is the ONLY spine bound — no turn-count cap (it would silently drop
-        un-summarised turns).
-
-        Forbidden — alternate paths tried and rejected; do NOT reintroduce them:
-        a second getter (e.g. assembling the spine from ``recent_threads`` + a
-        per-turn ``by_turn`` loop — ``recent_threads`` is for the threads feed
-        only); pushing the watermark/settle0 filter into SQL or getter params;
-        capping the turn count (the watermark is the sole spine bound; a cap
-        silently drops un-summarised turns); or inverting the comparator to keep
-        rows at/below the watermark."""
+                          That "always advances" guarantee is WHY this keeps rows
+                          strictly above the watermark — else the compactor re-folds
+                          already-folded rows and livelocks."""
         if self._cfg.suppress_history:
             return []
         from services import compaction_persistence  # noqa: PLC0415
-        from services.transcript_service import Transcript  # noqa: PLC0415
-        channel = self._cfg.channel
+        # The compaction watermark axis follows the history SCOPE: a split-channel
+        # config reads cross-turn history from ``read_channel`` and its checkpoint
+        # lives there too, so read both off the read channel (``None`` ⇒ the write
+        # channel — every non-split config). The row fetches go through ``self.ts``,
+        # already routed to the read channel by TranscriptService.
+        channel = self._cfg.read_channel or self._cfg.channel
         if self._forked and self.turn_id is not None:
             compaction = compaction_persistence.get_compaction(channel, self.turn_id)
             wm = cast("int", compaction["compacted_up_to"]) if compaction else 0
             upper = self.uid if self.uid is not None else 9223372036854775807
-            return [r for r in Transcript.by_turn(channel, self.turn_id) if wm < int(cast("int", r["id"])) < upper]
+            return [r for r in self.ts.get_turn_rows("id ASC")
+                    if wm < int(cast("int", r["id"])) < upper]
         compaction = compaction_persistence.get_compaction(channel, None)
         wm = cast("int", compaction["compacted_up_to"]) if compaction else 0
-        rows = [r for r in Transcript.by_turn(channel)
-                if r["turn_id"] is not None and int(cast("int", r["turn_id"])) > wm]
-        return Transcript.drop_post_settle0(rows, channel)
+        rows: list[dict[str, object]] = []
+        for tid in self.ts.get_turns_since(wm):
+            rows += self.ts.get_turn_by_id(tid, "id ASC", False)
+        return rows
 
     def get_previous_messages(self, drop_oldest: int = 0) -> str:
         """Render the ## Previous Messages block from _previous_rows()."""
@@ -768,15 +810,32 @@ class MessageProcessor:
         return "\n".join(lines)
 
     def _render_act_trail(self) -> str:
-        """Assemble the current turn's act-trail — its tool calls, in record order."""
+        """Assemble the current turn's act-trail — its tool calls, in record order.
+
+        A mid-turn compaction RESETS the visible trail: only tool calls emitted
+        after the turn's most recent ``chat_history_compactor`` marker are
+        rendered. The compacted checkpoint already carries prior continuity, so
+        on the resume the model re-fires any tools it still needs rather than
+        re-carrying the bloated pre-compaction results (which would re-overflow
+        the window and loop). With no compaction in the turn there is no marker,
+        so the whole turn's calls render — byte-identical to before, preserving
+        intra-turn tool-result continuity for ordinary multi-step loops."""
         if self.turn_id is None:
             return ""
         from services.act_trail import ActTrail  # noqa: PLC0415
 
         trail = ActTrail()
+        rows = trail.fetch_by_turn(self._cfg.channel, self.turn_id)
+        last_compaction = max(
+            (int(cast("int", r["id"])) for r in rows
+             if r.get("tool_name") == "chat_history_compactor"),
+            default=0,
+        )
         lines: list[str] = []
-        for row in trail.fetch_by_turn(self._cfg.channel, self.turn_id):
+        for row in rows:
             if row.get("tool_name") == "chat_history_compactor":
+                continue
+            if int(cast("int", row["id"])) <= last_compaction:
                 continue
             lines.append(trail.render(row))
         return "\n".join(lines)

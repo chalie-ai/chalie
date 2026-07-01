@@ -1,11 +1,11 @@
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue';
-import { Network, Lock } from '@lucide/vue';
+import { computed, onMounted, ref } from 'vue';
+import { Lock, Network } from '@lucide/vue';
 import ToggleSwitch from '../ui/ToggleSwitch.vue';
 import { useToast } from '../composables/useToast';
 import { useConfirm } from '../composables/useConfirm';
-import { system } from '../api/system';
 import type { NetworkConfig } from '../api/system';
+import { system } from '../api/system';
 
 const { show: showToast } = useToast();
 const { confirm } = useConfirm();
@@ -111,11 +111,9 @@ async function save(): Promise<void> {
           type="text"
           class="form-input"
           placeholder="e.g. chalie.example.com (blank = same-origin only)"
-        >
+        />
       </label>
-      <button class="btn btn-primary" @click="save">
-        <Network :size="14" /> Save Domain
-      </button>
+      <button class="btn btn-primary" @click="save"><Network :size="14" /> Save Domain</button>
     </div>
 
     <!-- SSL / TLS card -->
@@ -138,12 +136,12 @@ async function save(): Promise<void> {
 
       <label class="form-label">
         Certificate (PEM)
-        <input type="file" class="form-input" accept=".pem,.crt,.cer" @change="onCertChosen">
+        <input type="file" class="form-input" accept=".pem,.crt,.cer" @change="onCertChosen" />
       </label>
 
       <label class="form-label">
         Private key (PEM)
-        <input type="file" class="form-input" accept=".pem,.key" @change="onKeyChosen">
+        <input type="file" class="form-input" accept=".pem,.key" @change="onKeyChosen" />
       </label>
 
       <p v-if="sslSaveBlocked" class="network-ssl-warn">
@@ -151,11 +149,7 @@ async function save(): Promise<void> {
         before saving.
       </p>
 
-      <button
-        class="btn btn-primary"
-        :disabled="sslSaveBlocked"
-        @click="save"
-      >
+      <button class="btn btn-primary" :disabled="sslSaveBlocked" @click="save">
         <Lock :size="14" /> Save SSL Settings
       </button>
     </div>
@@ -177,7 +171,7 @@ async function save(): Promise<void> {
 .network-ssl-warn {
   font-size: 12px;
   color: var(--error);
-  background: rgba(var(--bs-danger-rgb), 0.10);
+  background: rgba(var(--bs-danger-rgb), 0.1);
   border: 1px solid rgba(var(--bs-danger-rgb), 0.25);
   border-radius: 6px;
   padding: 8px 12px;
@@ -191,7 +185,7 @@ async function save(): Promise<void> {
   gap: 10px;
   padding: 20px 24px;
   border-radius: 10px;
-  background: rgba(var(--bs-warning-rgb), 0.10);
+  background: rgba(var(--bs-warning-rgb), 0.1);
   border: 1px solid rgba(var(--bs-warning-rgb), 0.25);
   color: var(--warning-banner-text);
   font-size: 14px;

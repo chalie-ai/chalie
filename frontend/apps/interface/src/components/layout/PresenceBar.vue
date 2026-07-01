@@ -1,9 +1,9 @@
 <script setup lang="ts">
-import { CalendarClock, Clock, Brain, Search, Sun, Moon } from '@lucide/vue';
+import { Brain, CalendarClock, Clock, Moon, Search, Sun } from '@lucide/vue';
 import { storeToRefs } from 'pinia';
 import { useSessionStore } from '../../stores/session';
 import { useTasksStore } from '../../stores/tasks';
-import { useTheme, platform } from '@chalie/shared';
+import { platform, useTheme } from '@chalie/shared';
 import { emit } from '../../composables/useEventBus';
 
 const session = useSessionStore();
@@ -63,12 +63,7 @@ function handleSettings(): void {
         <Clock :size="18" aria-hidden="true" />
         <span class="task-trigger__badge">{{ totalCount }}</span>
       </button>
-      <button
-        id="settingsBtn"
-        class="btn-icon"
-        aria-label="Settings"
-        @click="handleSettings"
-      >
+      <button id="settingsBtn" class="btn-icon" aria-label="Settings" @click="handleSettings">
         <Brain :size="18" />
       </button>
       <button
@@ -128,8 +123,13 @@ function handleSettings(): void {
 }
 
 @keyframes presence-logo-breathe {
-  0%, 100% { opacity: 0.7; }
-  50%      { opacity: 1;   }
+  0%,
+  100% {
+    opacity: 0.7;
+  }
+  50% {
+    opacity: 1;
+  }
 }
 
 .theme-toggle {
@@ -143,9 +143,13 @@ function handleSettings(): void {
   display: inline-flex;
   align-items: center;
   padding: 3px;
-  transition: background 220ms ease, border-color 220ms ease;
+  transition:
+    background 220ms ease,
+    border-color 220ms ease;
 
-  &:hover { border-color: var(--border-strong); }
+  &:hover {
+    border-color: var(--border-strong);
+  }
 
   &:focus-visible {
     outline: 1.5px solid color-mix(in oklab, var(--violet) 45%, transparent);
@@ -177,7 +181,11 @@ function handleSettings(): void {
   width: 24px;
   height: 24px;
   border-radius: 50%;
-  background: linear-gradient(135deg, var(--violet), color-mix(in oklab, var(--magenta) 60%, var(--violet)));
+  background: linear-gradient(
+    135deg,
+    var(--violet),
+    color-mix(in oklab, var(--magenta) 60%, var(--violet))
+  );
   box-shadow:
     0 2px 8px color-mix(in oklab, var(--violet) 35%, transparent),
     0 0 0 1px color-mix(in oklab, var(--violet) 20%, transparent);
@@ -187,7 +195,7 @@ function handleSettings(): void {
   // drops the trailing `&` in scoped-CSS compilation, leaking `transform` onto
   // <html>, which then becomes the containing block for every position:fixed
   // descendant — so the fixed presence-bar scrolls away with the page.
-  [data-theme="light"] & {
+  [data-theme='light'] & {
     transform: translateX(26px);
   }
 }

@@ -8,7 +8,7 @@
  * State is owned by useNotificationsStore (dialog open/close is local). Manual
  * deployment modes ('docker' / 'dev') show instructions instead of an Apply button.
  */
-import { ref, computed, watch, onBeforeUnmount } from 'vue';
+import { computed, onBeforeUnmount, ref, watch } from 'vue';
 import { CloudDownload, X } from '@lucide/vue';
 import { useNotificationsStore } from '../../stores/notifications';
 
@@ -96,11 +96,7 @@ watch(visible, (v) => {
         @cancel.prevent="closeDialog"
       >
         <div class="update-dialog__content">
-          <button
-            class="update-dialog__close btn-icon"
-            aria-label="Close"
-            @click="closeDialog"
-          >
+          <button class="update-dialog__close btn-icon" aria-label="Close" @click="closeDialog">
             <X :size="16" aria-hidden="true" />
           </button>
 
@@ -118,16 +114,27 @@ watch(visible, (v) => {
 
           <!-- Hidden in manual modes and while applying (replaced by progress). -->
           <div
-            v-if="!isManualMode && !notifications.applyingUpdate && !notifications.updateApplyMessage"
+            v-if="
+              !isManualMode && !notifications.applyingUpdate && !notifications.updateApplyMessage
+            "
             class="update-dialog__actions"
           >
             <button class="btn btn-secondary" @click="closeDialog">Cancel</button>
-            <button class="btn btn-primary" @click="notifications.applyUpdate()">Apply update</button>
+            <button class="btn btn-primary" @click="notifications.applyUpdate()">
+              Apply update
+            </button>
           </div>
 
           <!-- Shown while applying; on failure the store restores actions after 3s. -->
-          <div v-if="notifications.applyingUpdate || notifications.updateApplyMessage" class="update-dialog__progress">
-            <div v-if="notifications.applyingUpdate" class="update-dialog__spinner" aria-hidden="true" />
+          <div
+            v-if="notifications.applyingUpdate || notifications.updateApplyMessage"
+            class="update-dialog__progress"
+          >
+            <div
+              v-if="notifications.applyingUpdate"
+              class="update-dialog__spinner"
+              aria-hidden="true"
+            />
             <p class="update-dialog__status">
               {{ notifications.updateApplyMessage ?? 'Applying update...' }}
             </p>
@@ -137,8 +144,7 @@ watch(visible, (v) => {
           <div v-if="isManualMode" class="update-dialog__instructions">
             <template v-if="update.deployment_mode === 'docker'">
               <p>You're running Chalie in Docker. To update:</p>
-              <code>docker pull chalie/chalie:{{ update.latest_tag }}
-docker compose up -d</code>
+              <code>docker pull chalie/chalie:{{ update.latest_tag }} docker compose up -d</code>
             </template>
 
             <template v-else-if="update.deployment_mode === 'dev'">

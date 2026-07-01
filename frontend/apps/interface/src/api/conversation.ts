@@ -87,30 +87,30 @@ export const conversation = {
    * threads; `threads_returned` advances pagination. With `query`, the same
    * getter filters to matching threads (the search overlay's source).
    *
-   * `channel` is forwarded to the backend (defaults to "user" server-side when
-   * omitted). Existing callers that pass no channel keep working unchanged.
+   * `type` (the ProcessorConfig identity) is forwarded to the backend, which
+   * resolves it to a transcript channel; defaults to "user" server-side when omitted.
    */
   threads(
     limit = 20,
     offset?: number,
     query?: string,
-    channel?: string,
+    type?: string,
   ): Promise<{ threads: ConversationThread[]; has_more: boolean; threads_returned: number }> {
     const params = new URLSearchParams({ limit: String(limit) });
     if (offset != null) params.set('offset', String(offset));
     if (query) params.set('q', query);
-    if (channel) params.set('channel', channel);
+    if (type) params.set('type', type);
     return api.get(`/api/threads?${params.toString()}`);
   },
 
   /**
    * GET /api/thread/<turn_id> — one turn's full block (expand + WS refetch).
    *
-   * `channel` is forwarded when supplied; existing callers that pass no channel
-   * keep working unchanged (backend defaults to "user").
+   * `type` is forwarded when supplied; the backend resolves it to a transcript
+   * channel and defaults to "user" when omitted.
    */
-  thread(turnId: number, channel?: string): Promise<ConversationTurnBlock> {
-    const params = channel ? `?channel=${encodeURIComponent(channel)}` : '';
+  thread(turnId: number, type?: string): Promise<ConversationTurnBlock> {
+    const params = type ? `?type=${encodeURIComponent(type)}` : '';
     return api.get(`/api/thread/${turnId}${params}`);
   },
 
@@ -118,12 +118,12 @@ export const conversation = {
    * GET /api/threads/batch?id[]= — many blocks in one round-trip, a pure
    * concatenation of the single-turn getter over the given ids (a read → GET).
    *
-   * `channel` is forwarded when supplied; existing callers keep working unchanged.
+   * `type` is forwarded when supplied; the backend resolves it to a transcript channel.
    */
-  batch(turnIds: number[], channel?: string): Promise<{ blocks: ConversationTurnBlock[] }> {
+  batch(turnIds: number[], type?: string): Promise<{ blocks: ConversationTurnBlock[] }> {
     const q = new URLSearchParams();
     for (const id of turnIds) q.append('id[]', String(id));
-    if (channel) q.set('channel', channel);
+    if (type) q.set('type', type);
     return api.get(`/api/threads/batch?${q.toString()}`);
   },
 };

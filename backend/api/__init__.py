@@ -4,19 +4,19 @@ WebSocket, and static file serving (replaces nginx).
 """
 
 import importlib
+import logging
 import mimetypes
 import pkgutil
-import logging
 from pathlib import Path
+
 from flask import Flask, Blueprint, Response, redirect, send_from_directory
 from flask.typing import ResponseReturnValue
 from flask_cors import CORS
 from flask_restx import Api, Namespace
 
 from services.file_mapper_service import FileMapperService
-from .auth import require_session as require_session
 from .auth import internal_only
-
+from .auth import require_session as require_session
 
 logger = logging.getLogger(__name__)
 

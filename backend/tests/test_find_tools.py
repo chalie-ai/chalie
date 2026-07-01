@@ -19,9 +19,9 @@ import pytest
 
 from abilities._dispatcher import ToolDispatcher
 from abilities.find_tools import FindToolsAbility
+from configs.channels import UserConfig
 from services.file_mapper_service import FileMapperService
 from services.message_processor import MessageProcessor
-from configs.channels import UserConfig
 
 pytestmark = pytest.mark.unit
 

@@ -6,8 +6,8 @@ from typing import TYPE_CHECKING, cast
 
 import pytest
 
-from services.document_service import DocumentService
 from services.database_service import get_shared_db_service
+from services.document_service import DocumentService
 from services.write_queue_service import WriteQueueService
 
 if TYPE_CHECKING:

@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { expect, test } from '@playwright/test';
 
 // Proves the NEW auth contract: the shared ApiClient owns the 401 redirect.
 // Previously each Brain call was wrapped in withAuth(); now a 401 on any

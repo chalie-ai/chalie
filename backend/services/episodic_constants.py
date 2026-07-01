@@ -45,3 +45,19 @@ NOVELTY_ACTIVATION_LIMIT = 100
 
 # Cycle-safe depth guard for apex traversal via consolidated_into back-pointers.
 APEX_TRAVERSAL_MAX_DEPTH = 20
+
+# ── Window extraction (count-triggered episode encoding) ───────────────────────
+# Turn-end fires episode extraction once a channel accumulates EXTRACTION_THRESHOLD
+# transcript rows past its episode watermark. The encoder then reads the latest
+# EXTRACTION_WINDOW rows (threshold + overlap with the prior window), producing
+# one episode per ~EXTRACTION_THRESHOLD new turns.
+EXTRACTION_THRESHOLD = 20
+EXTRACTION_WINDOW = 25
+
+# ── Salience scoring weights (compute_salience) ───────────────────────────────
+# raw = SALIENCE_NOVELTY_WEIGHT * novelty + SALIENCE_OPEN_LOOP_WEIGHT * open_boost,
+# then clamped to an integer 1..10. Emotional valence/arousal were dropped from
+# the formula; novelty and the open-loop flag are the only surviving signals,
+# rescaled to sum to 1.0 with the prior 2:1 novelty:open-loop ratio preserved.
+SALIENCE_NOVELTY_WEIGHT = 0.6
+SALIENCE_OPEN_LOOP_WEIGHT = 0.4

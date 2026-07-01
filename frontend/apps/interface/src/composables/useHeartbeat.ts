@@ -8,8 +8,8 @@
 import { system } from '../api';
 import { webPlatformAdapter } from '@chalie/shared';
 import { emit } from './useEventBus';
-import { useAmbientSensor } from './useAmbientSensor';
 import type { AmbientSensorApi } from './useAmbientSensor';
+import { useAmbientSensor } from './useAmbientSensor';
 
 const HEARTBEAT_INTERVAL = 5 * 60 * 1000;
 const GEO_TIMEOUT        = 10_000;           // for requestLocationPermission

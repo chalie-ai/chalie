@@ -26,15 +26,15 @@ from typing import cast
 import pytest
 from flask.testing import FlaskClient
 from werkzeug.security import generate_password_hash
-from tests.restx_test_app import mount_namespace
 
 import services.database_service as _db_mod
 import services.vault_service as _vault_mod
 from api.user_auth import user_auth_ns
 from services.database_service import DatabaseService
 from services.file_mapper_service import FileMapperService
-from services.vault_service import _vault_state
 from services.provider_db_service import ProviderDbService
+from services.vault_service import _vault_state
+from tests.restx_test_app import mount_namespace
 
 
 # ── Shared helpers ────────────────────────────────────────────────────────────

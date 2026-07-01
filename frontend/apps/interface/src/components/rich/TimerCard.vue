@@ -6,7 +6,7 @@
  *      unattended timer no longer bleeps forever (card stays "Done"; only audio
  *      + ring pulse stop). See onExpire / silenceAlarm.
  */
-import { ref, computed, onMounted, onBeforeUnmount } from 'vue';
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
 import { Pause, Play, Square } from '@lucide/vue';
 import { webPlatformAdapter } from '@chalie/shared';
 
@@ -126,11 +126,7 @@ const isStale = !isInvalid && Date.now() - initialEndsAtMs > STALE_RELOAD_GRACE_
 
 type CardState = 'running' | 'paused' | 'done' | 'stopped' | 'stale' | 'error';
 
-const state = ref<CardState>(
-  isInvalid ? 'error'
-    : isStale ? 'stale'
-    : 'running',
-);
+const state = ref<CardState>(isInvalid ? 'error' : isStale ? 'stale' : 'running');
 
 /** SVG ring dashoffset (0 = empty, RING_PATH_LENGTH = full). */
 const ringOffset = ref<number>(RING_PATH_LENGTH);
@@ -167,8 +163,7 @@ function update(): void {
   const remainingSeconds = Math.max(0, Math.ceil(remainingMs / 1_000));
   setProgress(Math.min(1, 1 - remainingSeconds / totalSeconds));
   if (remainingMs > 0) {
-    timeHtml.value =
-      `<b>${formatRemaining(remainingSeconds)}</b> remaining · ends ${formatHMS(new Date(endsAtMs))}`;
+    timeHtml.value = `<b>${formatRemaining(remainingSeconds)}</b> remaining · ends ${formatHMS(new Date(endsAtMs))}`;
   }
 }
 
@@ -287,10 +282,7 @@ onBeforeUnmount((): void => {
 </script>
 
 <template>
-  <div
-    v-if="state === 'error'"
-    class="rich-card timer-card timer-card--error"
-  >
+  <div v-if="state === 'error'" class="rich-card timer-card timer-card--error">
     Invalid timer payload
   </div>
 
@@ -305,12 +297,7 @@ onBeforeUnmount((): void => {
   >
     <div class="timer-card__ring" aria-hidden="true">
       <svg viewBox="0 0 36 36">
-        <circle
-          class="timer-card__ring-track"
-          cx="18"
-          cy="18"
-          r="16"
-        />
+        <circle class="timer-card__ring-track" cx="18" cy="18" r="16" />
         <circle
           class="timer-card__ring-fill"
           cx="18"
@@ -338,16 +325,8 @@ onBeforeUnmount((): void => {
         :disabled="isPauseDisabled"
         @click="state === 'paused' ? onResume() : onPause()"
       >
-        <Pause
-          v-if="state !== 'paused'"
-          fill="currentColor"
-          aria-hidden="true"
-        />
-        <Play
-          v-else
-          fill="currentColor"
-          aria-hidden="true"
-        />
+        <Pause v-if="state !== 'paused'" fill="currentColor" aria-hidden="true" />
+        <Play v-else fill="currentColor" aria-hidden="true" />
       </button>
 
       <button
@@ -408,8 +387,13 @@ onBeforeUnmount((): void => {
 }
 
 @keyframes timer-ring-pulse {
-  0%, 100% { opacity: 1; }
-  50%       { opacity: 0.45; }
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.45;
+  }
 }
 
 /*
@@ -464,7 +448,9 @@ onBeforeUnmount((): void => {
   align-items: center;
   justify-content: center;
   cursor: pointer;
-  transition: color 160ms ease, border-color 160ms ease;
+  transition:
+    color 160ms ease,
+    border-color 160ms ease;
   padding: 0;
 
   &:hover:not(:disabled) {

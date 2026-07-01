@@ -10,8 +10,8 @@ from datetime import timedelta
 from typing import Optional, List, Dict, cast
 
 from services.database_service import DatabaseService
-from services.file_mapper_service import FileMapperService
 from services.embedding_utils import pack_embedding as _pack_embedding
+from services.file_mapper_service import FileMapperService
 from services.log_utils import safe
 from services.write_queue_service import get_write_queue
 

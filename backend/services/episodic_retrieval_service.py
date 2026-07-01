@@ -88,9 +88,8 @@ def _get_episode_raw(episode_id: str, db: Optional[DatabaseService] = None) -> O
                 SELECT id, gist, salience, channel, created_at, updated_at,
                        last_accessed_at, access_count, transcript_ids,
                        transcript_id_start, transcript_id_end,
-                       emotional_valence, emotional_arousal,
                        consolidated_from, consolidated_into,
-                       storage_strength, retrieval_weight,
+                       retrieval_weight,
                        location_lat, location_lon, location_name,
                        last_relevant_at
                 FROM episodes
@@ -114,16 +113,13 @@ def _get_episode_raw(episode_id: str, db: Optional[DatabaseService] = None) -> O
             'transcript_ids': row[8] if row[8] is not None else '[]',
             'transcript_id_start': row[9],
             'transcript_id_end': row[10],
-            'emotional_valence': row[11],
-            'emotional_arousal': row[12],
-            'consolidated_from': row[13] if row[13] is not None else '[]',
-            'consolidated_into': row[14],
-            'storage_strength': row[15] if row[15] is not None else 1.0,
-            'retrieval_weight': row[16] if row[16] is not None else 1.0,
-            'location_lat': row[17],
-            'location_lon': row[18],
-            'location_name': row[19],
-            'last_relevant_at': row[20],
+            'consolidated_from': row[11] if row[11] is not None else '[]',
+            'consolidated_into': row[12],
+            'retrieval_weight': row[13] if row[13] is not None else 1.0,
+            'location_lat': row[14],
+            'location_lon': row[15],
+            'location_name': row[16],
+            'last_relevant_at': row[17],
         }
     except Exception as exc:
         logger.warning(f"[RETRIEVAL] _get_episode_raw failed for id={episode_id}: {exc}")
@@ -226,7 +222,6 @@ def _fts_search(query_text: str, channel: Optional[str], k: int) -> list[dict[st
                     """
                     SELECT e.id, e.gist, e.salience, e.channel, e.created_at,
                            e.last_accessed_at, e.retrieval_weight,
-                           e.emotional_valence, e.emotional_arousal,
                            e.consolidated_into,
                            episodes_fts.rank AS text_rank,
                            e.location_lat, e.location_lon, e.location_name
@@ -245,7 +240,6 @@ def _fts_search(query_text: str, channel: Optional[str], k: int) -> list[dict[st
                     """
                     SELECT e.id, e.gist, e.salience, e.channel, e.created_at,
                            e.last_accessed_at, e.retrieval_weight,
-                           e.emotional_valence, e.emotional_arousal,
                            e.consolidated_into,
                            episodes_fts.rank AS text_rank,
                            e.location_lat, e.location_lon, e.location_name
@@ -270,14 +264,12 @@ def _fts_search(query_text: str, channel: Optional[str], k: int) -> list[dict[st
                 'created_at': r[4],
                 'last_accessed_at': r[5],
                 'retrieval_weight': r[6] if r[6] is not None else 1.0,
-                'emotional_valence': r[7],
-                'emotional_arousal': r[8],
-                'consolidated_into': r[9],
-                'text_rank': r[10],
+                'consolidated_into': r[7],
+                'text_rank': r[8],
                 'vector_distance': None,
-                'location_lat': r[11],
-                'location_lon': r[12],
-                'location_name': r[13],
+                'location_lat': r[9],
+                'location_lon': r[10],
+                'location_name': r[11],
             }
             for r in rows
         ]
@@ -320,7 +312,6 @@ def _vector_search(
                     """
                     SELECT e.id, e.gist, e.salience, e.channel, e.created_at,
                            e.last_accessed_at, e.retrieval_weight,
-                           e.emotional_valence, e.emotional_arousal,
                            e.consolidated_into,
                            v.distance AS vector_distance,
                            e.location_lat, e.location_lon, e.location_name
@@ -338,7 +329,6 @@ def _vector_search(
                     """
                     SELECT e.id, e.gist, e.salience, e.channel, e.created_at,
                            e.last_accessed_at, e.retrieval_weight,
-                           e.emotional_valence, e.emotional_arousal,
                            e.consolidated_into,
                            v.distance AS vector_distance,
                            e.location_lat, e.location_lon, e.location_name
@@ -362,14 +352,12 @@ def _vector_search(
                 'created_at': r[4],
                 'last_accessed_at': r[5],
                 'retrieval_weight': r[6] if r[6] is not None else 1.0,
-                'emotional_valence': r[7],
-                'emotional_arousal': r[8],
-                'consolidated_into': r[9],
+                'consolidated_into': r[7],
                 'text_rank': None,
-                'vector_distance': r[10],
-                'location_lat': r[11],
-                'location_lon': r[12],
-                'location_name': r[13],
+                'vector_distance': r[8],
+                'location_lat': r[9],
+                'location_lon': r[10],
+                'location_name': r[11],
             }
             for r in rows
         ]

@@ -33,7 +33,6 @@ from services.database_service import get_shared_db_service
 from services.decay_engine_service import DecayEngineService
 from services.transcript_service import Transcript
 
-
 pytestmark = pytest.mark.unit
 
 

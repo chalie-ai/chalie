@@ -7,6 +7,7 @@
  * ONE newline-joined message the moment that scope next settles (session store).
  */
 import { defineStore } from 'pinia';
+import { ConfigType } from '@chalie/shared';
 
 /** Scope/lane key: the main spine, or a thread by its turn_id. */
 export function laneKey(threadId: number | null): string {
@@ -17,8 +18,8 @@ export const useQueueStore = defineStore('queue', {
   state: () => ({
     /** Queued texts per scope key, oldest first. */
     byScope: {} as Record<string, string[]>,
-    /** Channel each scope belongs to, so a drain re-sends on the right surface. */
-    channelByScope: {} as Record<string, string>,
+    /** ConfigType each scope belongs to, so a drain re-sends on the right surface. */
+    typeByScope: {} as Record<string, string>,
   }),
 
   getters: {
@@ -33,23 +34,23 @@ export const useQueueStore = defineStore('queue', {
   },
 
   actions: {
-    enqueue(threadId: number | null, text: string, channel = 'user'): void {
+    enqueue(threadId: number | null, text: string, type: string = ConfigType.USER): void {
       (this.byScope[laneKey(threadId)] ??= []).push(text);
-      this.channelByScope[laneKey(threadId)] = channel;
+      this.typeByScope[laneKey(threadId)] = type;
     },
     removeAt(threadId: number | null, index: number): void {
       this.byScope[laneKey(threadId)]?.splice(index, 1);
     },
-    /** The channel a queued scope must drain on (defaults to the user spine). */
-    channelFor(threadId: number | null): string {
-      return this.channelByScope[laneKey(threadId)] ?? 'user';
+    /** The ConfigType a queued scope must drain on (defaults to the user spine). */
+    typeFor(threadId: number | null): string {
+      return this.typeByScope[laneKey(threadId)] ?? ConfigType.USER;
     },
     /** Take the whole scope's queue as ONE newline-joined message, clearing it. */
     take(threadId: number | null): string {
       const k = laneKey(threadId);
       const joined = (this.byScope[k] ?? []).join('\n');
       delete this.byScope[k];
-      delete this.channelByScope[k];
+      delete this.typeByScope[k];
       return joined;
     },
   },

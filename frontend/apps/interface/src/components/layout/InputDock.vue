@@ -17,6 +17,7 @@ const activeDockKey = ref<string>('main');
  */
 import { computed, onMounted, onBeforeUnmount, nextTick, watch } from 'vue';
 import { storeToRefs } from 'pinia';
+import { ConfigType } from '@chalie/shared';
 import { on } from '../../composables/useEventBus';
 import { useSessionStore } from '../../stores/session';
 import { useVoiceStore } from '../../stores/voice';
@@ -36,7 +37,10 @@ import { FileText, Image, Plus, Mic, Send, X, AlertTriangle } from '@lucide/vue'
  * scaffolds a new thread. The footer dock is fixed; the thread panel's reply
  * dock sets `turnId` and renders in-flow at the foot of the panel.
  */
-const props = withDefaults(defineProps<{ turnId?: number | null; channel?: string }>(), { turnId: null, channel: 'user' });
+const props = withDefaults(defineProps<{ turnId?: number | null; type?: string }>(), {
+  turnId: null,
+  type: ConfigType.USER,
+});
 
 // Stable id for this dock so focus routing can tell the footer ('main') from a
 // thread reply apart. Becomes the active dock on any interaction (focus/pointer).
@@ -84,9 +88,7 @@ const thinkingWrapRef = ref<HTMLDivElement | null>(null);
 
 /** True when there is something to send: non-empty text OR ≥1 attachment.
  *  Mirrors the handleSend guard — both gate on getFiles(). */
-const canSend = computed(
-  () => text.value.trim().length > 0 || attachments.getFiles().length > 0,
-);
+const canSend = computed(() => text.value.trim().length > 0 || attachments.getFiles().length > 0);
 
 async function handleSend(): Promise<void> {
   const trimmed = text.value.trim();
@@ -97,13 +99,13 @@ async function handleSend(): Promise<void> {
 
   // Clear the image strip only when this actually dispatches a turn. When the
   // lane is busy the send is queued (text-only) and the attachments stay pending.
-  const wasBusy = session.isLaneBusy(props.turnId, props.channel);
+  const wasBusy = session.isLaneBusy(props.turnId, props.type);
 
   // Clear textarea before awaiting so the UI feels instant.
   text.value = '';
   await nextTick();
 
-  await session.sendMessage(trimmed, 'text', files, props.turnId, props.channel);
+  await session.sendMessage(trimmed, files, props.turnId, props.type);
 
   if (!wasBusy) attachments.clear();
 
@@ -384,7 +386,9 @@ onBeforeUnmount(() => {
       </div>
       <div id="contextDisplay" class="context-display" :class="{ hidden: !usageDisplay }">
         <span class="context-display__caption">Context</span>
-        <span class="context-indicator" title="Last request size / context window">{{ usageDisplay }}</span>
+        <span class="context-indicator" title="Last request size / context window">{{
+          usageDisplay
+        }}</span>
       </div>
     </div>
 

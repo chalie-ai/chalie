@@ -1,20 +1,36 @@
 <script setup lang="ts">
-import { ref, computed } from 'vue';
+import { computed, ref } from 'vue';
+import type { Association, Skill } from '../api/skills';
 import { skills as skillsApi } from '../api/skills';
-import type { Skill, Association } from '../api/skills';
 import { formatDate } from '../utils/format';
 import { apiErrorMessage } from '../api/http';
 import { useToast } from '../composables/useToast';
 import { useConfirm } from '../composables/useConfirm';
 import { useBrainResource } from '../composables/useBrainResource';
-import { BookOpen, Plus, ChevronLeft, ChevronRight, ChevronDown, SquarePen, Trash2, Copy } from '@lucide/vue';
+import {
+  BookOpen,
+  ChevronDown,
+  ChevronLeft,
+  ChevronRight,
+  Copy,
+  Plus,
+  SquarePen,
+  Trash2,
+} from '@lucide/vue';
 
 const { show: showToast } = useToast();
 const { confirm } = useConfirm();
 
-interface SkillsPayload { skills: Skill[]; associations: Association[] }
+interface SkillsPayload {
+  skills: Skill[];
+  associations: Association[];
+}
 
-const { data: skillsPayload, loading, reload: load } = useBrainResource(
+const {
+  data: skillsPayload,
+  loading,
+  reload: load,
+} = useBrainResource(
   async () => {
     const d = await skillsApi.list();
     return { skills: d.skills ?? [], associations: d.associations ?? [] } satisfies SkillsPayload;
@@ -139,7 +155,6 @@ async function submitCreate(): Promise<void> {
     showToast(apiErrorMessage(e, 'Failed to create skill'), 'error');
   }
 }
-
 </script>
 
 <template>
@@ -171,7 +186,7 @@ async function submitCreate(): Promise<void> {
             type="text"
             placeholder="e.g. Track Package Delivery"
             required
-          >
+          />
         </div>
         <div class="form-group">
           <label for="skillUseFor">Use for <span class="text-error">*</span></label>
@@ -181,7 +196,7 @@ async function submitCreate(): Promise<void> {
             type="text"
             placeholder="One sentence: when should this skill be used?"
             required
-          >
+          />
         </div>
         <div class="form-group">
           <label for="skillTags">Tags</label>
@@ -190,7 +205,7 @@ async function submitCreate(): Promise<void> {
             v-model="createTags"
             type="text"
             placeholder="logistics, tracking, delivery"
-          >
+          />
         </div>
         <div class="form-group">
           <label for="skillInstructions">Instructions <span class="text-error">*</span></label>
@@ -213,10 +228,7 @@ async function submitCreate(): Promise<void> {
   <template v-else>
     <h4 class="section-head">My Skills</h4>
 
-    <div
-      v-if="userSkills.length === 0"
-      class="empty-state mb-lg"
-    >
+    <div v-if="userSkills.length === 0" class="empty-state mb-lg">
       <div class="empty-icon">
         <BookOpen :size="40" />
       </div>
@@ -239,7 +251,7 @@ async function submitCreate(): Promise<void> {
                 type="text"
                 class="skill-field-use_for"
                 placeholder="When should this skill be used?"
-              >
+              />
             </div>
             <div class="form-group">
               <label>Tags</label>
@@ -248,7 +260,7 @@ async function submitCreate(): Promise<void> {
                 type="text"
                 class="skill-field-tags"
                 placeholder="tag1, tag2"
-              >
+              />
             </div>
             <div class="form-group">
               <label>Instructions</label>
@@ -260,7 +272,9 @@ async function submitCreate(): Promise<void> {
               ></textarea>
             </div>
             <div class="form-actions">
-              <button type="button" class="btn btn-secondary btn-sm" @click="editingId = null">Cancel</button>
+              <button type="button" class="btn btn-secondary btn-sm" @click="editingId = null">
+                Cancel
+              </button>
               <button type="submit" class="btn btn-primary btn-sm">Save</button>
             </div>
           </form>
@@ -292,7 +306,7 @@ async function submitCreate(): Promise<void> {
                     class="skill-toggle"
                     :checked="skill.enabled"
                     @change="toggleSkill(skill)"
-                  >
+                  />
                   <span class="switch-track"></span>
                 </label>
               </label>
@@ -307,10 +321,14 @@ async function submitCreate(): Promise<void> {
           <div class="skill-use-for">{{ skill.use_for }}</div>
           <div v-if="skill.tags" class="skill-tags">
             <span
-              v-for="tag in skill.tags.split(',').map(t => t.trim()).filter(Boolean)"
+              v-for="tag in skill.tags
+                .split(',')
+                .map((t) => t.trim())
+                .filter(Boolean)"
               :key="tag"
               class="badge badge-muted skill-tag"
-            >{{ tag }}</span>
+              >{{ tag }}</span
+            >
           </div>
           <div v-if="expandedId === skill.id" class="skill-expanded-content">
             <pre class="skill-content-preview">{{ skill.content }}</pre>
@@ -353,7 +371,7 @@ async function submitCreate(): Promise<void> {
                   class="skill-toggle"
                   :checked="skill.enabled"
                   @change="toggleSkill(skill)"
-                >
+                />
                 <span class="switch-track"></span>
               </label>
             </label>
@@ -369,10 +387,14 @@ async function submitCreate(): Promise<void> {
         <div class="skill-use-for">{{ skill.use_for }}</div>
         <div v-if="skill.tags" class="skill-tags">
           <span
-            v-for="tag in skill.tags.split(',').map(t => t.trim()).filter(Boolean)"
+            v-for="tag in skill.tags
+              .split(',')
+              .map((t) => t.trim())
+              .filter(Boolean)"
             :key="tag"
             class="badge badge-muted skill-tag"
-          >{{ tag }}</span>
+            >{{ tag }}</span
+          >
         </div>
         <div v-if="expandedId === skill.id" class="skill-expanded-content">
           <pre class="skill-content-preview">{{ skill.content }}</pre>
@@ -394,7 +416,9 @@ async function submitCreate(): Promise<void> {
         </thead>
         <tbody>
           <tr v-for="(a, idx) in associations" :key="idx">
-            <td><span class="badge badge-violet">{{ a.pattern_name }}</span></td>
+            <td>
+              <span class="badge badge-violet">{{ a.pattern_name }}</span>
+            </td>
             <td>{{ a.skill_title }}</td>
             <td class="text-xs text-secondary">{{ a.rule }}</td>
             <td class="text-xs text-tertiary">{{ formatDate(a.created_at) }}</td>

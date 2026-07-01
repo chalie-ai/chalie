@@ -20,8 +20,8 @@ from typing import TYPE_CHECKING, ParamSpec, TypeVar
 
 from flask import after_this_request, request, send_file
 from flask.typing import ResponseReturnValue
-from werkzeug.utils import secure_filename
 from flask_restx import Namespace, Resource
+from werkzeug.utils import secure_filename
 
 from .auth import require_session
 from .dto import Error, expects, register_dto, responds

@@ -11,6 +11,7 @@ for the Brain UI, it is not serialization).
 import logging
 import threading
 from typing import TYPE_CHECKING, cast
+
 from flask.typing import ResponseReturnValue
 from flask_restx import Namespace, Resource
 

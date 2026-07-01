@@ -22,7 +22,6 @@ from flask_restx import Namespace, Resource
 from services.file_mapper_service import FileMapperService
 from services.time_utils import utc_now
 from utils.logger import LOG_FILE_PATH as _LOG_FILE_PATH  # Written exclusively by utils/logger.py in the same process
-
 from .auth import require_session
 from .dto import Error, expects, register_dto, responds
 from .dto.boundary import error
@@ -34,7 +33,6 @@ from .dto.observability_errors import ErrorsList, LogError
 from .dto.observability_records import RecordsPage
 from .dto.observability_tools import ToolUsage, ToolUsageList
 from .dto.readiness import Readiness
-from .dto.research_run import ResearchRunDetail, ResearchRunsList
 from .dto.setting import Setting, SettingWrite
 from .dto.system_status import SystemStatus
 from .dto.write_queue import WriteQueueStats
@@ -55,7 +53,6 @@ _SIGNAL_SOURCE_HEALTH = "/health"
 # Records browser bounds + valid sources (invalid source is a preserved 400, not 422).
 _RECORDS_LIMIT = 250
 _VALID_SOURCES = {"episodes", "user", "system"}
-_RESEARCH_LIST_LIMIT = 100
 
 _LOG_TAIL_BYTES = 256 * 1024   # 256 KB tail read — never loads the full file
 _ERROR_LEVELS = frozenset({"ERROR", "CRITICAL"})
@@ -75,8 +72,6 @@ _SYSTEM_DTOS = (
     ToolUsageList,
     CompactionRecord,
     CompactionView,
-    ResearchRunsList,
-    ResearchRunDetail,
     WriteQueueStats,
     LogError,
     ErrorsList,
@@ -455,46 +450,6 @@ class ObservabilityCompactionResource(Resource):
         except Exception:
             logger.exception("[REST API] observability/compaction error")
             return error("Failed to retrieve compaction summary", 500)
-
-
-@system_ns.route("/observability/research")
-class ObservabilityResearchResource(Resource):
-    @require_session
-    @system_ns.response(200, "Research runs list", model=_S["ResearchRunsList"])
-    @system_ns.response(500, "Failed to retrieve research runs", model=_S["Error"])
-    @responds(ResearchRunsList, code=200)
-    def get(self) -> ResearchRunsList | ResponseReturnValue:
-        """Newest-first list of proactive-research (Auto Research) runs (read-only)."""
-        try:
-            from services import discovery_runs
-            return ResearchRunsList(
-                generated_at=utc_now(),
-                runs=discovery_runs.list_runs(_RESEARCH_LIST_LIMIT),
-            )
-        except Exception:
-            logger.exception("[REST API] observability/research error")
-            return error("Failed to retrieve research runs", 500)
-
-
-@system_ns.route("/observability/research/<int:run_id>")
-@system_ns.param("run_id", "Research run id", _in="path")
-class ObservabilityResearchDetailResource(Resource):
-    @require_session
-    @system_ns.response(200, "Research run detail", model=_S["ResearchRunDetail"])
-    @system_ns.response(404, "Not found", model=_S["Error"])
-    @system_ns.response(500, "Failed to retrieve research run", model=_S["Error"])
-    @responds(ResearchRunDetail, code=200)
-    def get(self, run_id: int) -> ResearchRunDetail | ResponseReturnValue:
-        """One Auto Research run: the grounding it ran against plus its full output."""
-        try:
-            from services import discovery_runs
-            run = discovery_runs.get_run_detail(run_id)
-            if run is None:
-                return error("not found", 404)
-            return ResearchRunDetail(generated_at=utc_now(), run=run)
-        except Exception:
-            logger.exception("[REST API] observability/research detail error")
-            return error("Failed to retrieve research run", 500)
 
 
 @system_ns.route("/observability/write-queue")

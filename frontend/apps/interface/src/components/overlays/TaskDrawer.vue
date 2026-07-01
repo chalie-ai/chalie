@@ -15,15 +15,15 @@
  * The hint appears on first open-with-content; the panel auto-closes when the
  * last item clears.
  */
-import { ref, computed, watch, onMounted, onBeforeUnmount } from 'vue';
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { Square, X } from '@lucide/vue';
 import { storeToRefs } from 'pinia';
 import { useTasksStore } from '../../stores/tasks';
 import { useSessionStore } from '../../stores/session';
-import { scheduler } from '../../api/scheduler';
 import type { ActiveSubagent } from '../../api/scheduler';
+import { scheduler } from '../../api/scheduler';
 import { webPlatformAdapter } from '@chalie/shared';
-import { relativeTime, elapsedSince } from '../../utils/time';
+import { elapsedSince, relativeTime } from '../../utils/time';
 
 const HINT_KEY = 'task_strip_hint_shown';
 const POLL_INTERVAL_MS = 60_000;
@@ -118,7 +118,9 @@ function closeDrawerDom(): void {
 function startTick(): void {
   if (tickTimer !== null) return;
   nowMs.value = Date.now();
-  tickTimer = setInterval(() => { nowMs.value = Date.now(); }, TICK_INTERVAL_MS);
+  tickTimer = setInterval(() => {
+    nowMs.value = Date.now();
+  }, TICK_INTERVAL_MS);
 }
 
 function stopTick(): void {
@@ -173,7 +175,9 @@ function handleKeydown(e: KeyboardEvent): void {
 onMounted(() => {
   document.addEventListener('keydown', handleKeydown);
   void tasks.loadActiveTasks();
-  pollTimer = setInterval(() => { void tasks.loadActiveTasks(); }, POLL_INTERVAL_MS);
+  pollTimer = setInterval(() => {
+    void tasks.loadActiveTasks();
+  }, POLL_INTERVAL_MS);
 });
 
 onBeforeUnmount(() => {
@@ -275,12 +279,7 @@ onBeforeUnmount(() => {
       </template>
 
       <!-- First-time hint — shown on first open-with-content. -->
-      <div
-        v-if="showHint"
-        class="task-drawer__hint"
-      >
-        I'll show what I'm working on here.
-      </div>
+      <div v-if="showHint" class="task-drawer__hint">I'll show what I'm working on here.</div>
     </div>
   </aside>
 </template>
@@ -417,8 +416,12 @@ onBeforeUnmount(() => {
   }
 }
 
-.task-drawer__thread--working { border-left-color: var(--status-main); }
-.task-drawer__thread--done { border-left-color: var(--cyan); }
+.task-drawer__thread--working {
+  border-left-color: var(--status-main);
+}
+.task-drawer__thread--done {
+  border-left-color: var(--cyan);
+}
 
 .task-drawer__thread-top {
   display: flex;
@@ -435,26 +438,6 @@ onBeforeUnmount(() => {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-}
-
-.task-drawer__thread-dot {
-  flex-shrink: 0;
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-
-  // Working (pink) pulses while the reply streams; done (blue) is a steady,
-  // standing marker until the user opens the thread.
-  &.working {
-    background: var(--status-main);
-    box-shadow: 0 0 10px color-mix(in oklab, var(--status-main) 60%, transparent);
-    animation: pulseV 1.4s ease-in-out infinite;
-  }
-
-  &.done {
-    background: var(--cyan);
-    box-shadow: 0 0 8px color-mix(in oklab, var(--cyan) 50%, transparent);
-  }
 }
 
 .task-drawer__thread-snippet {
@@ -528,7 +511,9 @@ onBeforeUnmount(() => {
   border-radius: 6px;
   padding: 3px 8px;
   cursor: pointer;
-  transition: color 0.15s ease, border-color 0.15s ease;
+  transition:
+    color 0.15s ease,
+    border-color 0.15s ease;
 
   &:hover {
     color: var(--error, #e55);

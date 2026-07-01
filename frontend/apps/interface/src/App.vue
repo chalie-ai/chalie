@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { computed, onMounted, onBeforeUnmount } from 'vue';
-import { platform, isTauri, useTheme } from '@chalie/shared';
+import { computed, onBeforeUnmount, onMounted } from 'vue';
+import { isTauri, platform, useTheme } from '@chalie/shared';
 import { useSessionStore } from './stores/session';
 import { useVoiceStore } from './stores/voice';
 import { useHeartbeat } from './composables/useHeartbeat';

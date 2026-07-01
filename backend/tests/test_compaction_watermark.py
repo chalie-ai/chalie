@@ -2,6 +2,7 @@ import sqlite3
 from typing import TYPE_CHECKING, cast
 
 import pytest
+
 from services.transcript_service import Transcript
 
 if TYPE_CHECKING:

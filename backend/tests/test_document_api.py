@@ -13,13 +13,13 @@ import sqlite3
 from collections.abc import Generator
 from pathlib import Path
 from typing import TYPE_CHECKING
-
-import pytest
 from unittest.mock import patch
 
+import pytest
+
 from api.documents import documents_ns
-from tests.restx_test_app import mount_namespace
 from services.file_mapper_service import FileMapperService
+from tests.restx_test_app import mount_namespace
 
 if TYPE_CHECKING:
     from flask.testing import FlaskClient

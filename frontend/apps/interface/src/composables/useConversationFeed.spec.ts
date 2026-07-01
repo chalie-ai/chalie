@@ -8,7 +8,7 @@
  * Because useConversationFeed is a module-level singleton we re-import a
  * fresh module per test via vi.resetModules() to get clean state.
  */
-import { describe, it, expect, vi } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { ConversationTurnBlock } from '../api/conversation';
 
 // ── Shared helpers ────────────────────────────────────────────────────────────

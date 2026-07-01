@@ -16,7 +16,6 @@ from flask.typing import ResponseReturnValue
 from flask_restx import Namespace, Resource
 
 from services.time_utils import parse_utc
-
 from .auth import require_session
 from .dto import Error, expects, register_dto, responds
 from .dto.memory import MemoryHit, MemorySearchQuery, MemorySearchResponse

@@ -350,9 +350,10 @@ def _fire_scheduled_prompt(
 ) -> None:
     """Run a fired scheduled prompt as its own thread on the ``schedule`` channel.
 
-    One schedule = one ``turn_id``: the first fire of a series allocates the thread
-    (writing its opening row) and persists the id across every occurrence; later
-    fires + user replies append to that same turn (§13.1). The turn runs the
+    One schedule = one ``turn_id``: the first fire of a series lets the MP allocate
+    the thread (writing its own opening row), reads the fresh id back off it, and
+    persists that id across every occurrence; later fires + user replies append to
+    that same turn (§13.1). The turn runs the
     standard ``MessageProcessor`` under ``ScheduledConfig`` — full tool surface,
     channel+turn-scoped history, episodic encoding, the five WS turn-state
     signals — and self-surfaces in its own thread + the dock. There is no
@@ -364,7 +365,6 @@ def _fire_scheduled_prompt(
     from configs.channels import ScheduledConfig  # noqa: PLC0415
     from services.database_service import get_shared_db_service  # noqa: PLC0415
     from services.message_processor import MessageProcessor  # noqa: PLC0415
-    from services.transcript_service import Transcript  # noqa: PLC0415
 
     db = get_shared_db_service()
 
@@ -379,64 +379,23 @@ def _fire_scheduled_prompt(
             ).fetchone()
         turn_id = cast("int | None", row[0]) if row else None
 
-    # Write the opening row — allocating a fresh turn_id on the very first fire,
-    # appending under the existing one otherwise. ``_setup`` ADOPTS this row via
-    # ``input_uid`` rather than writing a second one (the same reuse path a reply
-    # takes — §13.1 / §6.2).
-    uid = Transcript.write_input_row("schedule", "user", message, turn_id=turn_id)
-    if turn_id is None:
-        turn_id = Transcript.turn_id_of_row(uid)
+    # forked-ness is the MessageProcessor's internal switch, derived purely from
+    # whether a turn_id is supplied — never set here. First fire (no turn_id) → MAIN:
+    # the MP writes its own opening row and allocates the thread, reporting the fresh
+    # id back via ``meta["turn_id"]``, which we persist for series continuity. A
+    # re-fire (or user reply) supplies that id → the MP appends past settle0 → FORK,
+    # firing the §5.1 gist delegate like a user thread (§13.1 / §6.2).
+    first_fire = turn_id is None
+    meta: dict[str, object] = {"turn_id": turn_id}
+    MessageProcessor.process(message, ScheduledConfig(), meta)
+    if first_fire:
         with db.connection() as conn:
             conn.execute(
                 "UPDATE scheduled_items SET turn_id = ? "
                 "WHERE COALESCE(group_id, id) = ? AND turn_id IS NULL",
-                (turn_id, group_key),
+                (meta["turn_id"], group_key),
             )
-
-    # One-line thread label, once per schedule (§13.3) — generated from the prompt
-    # and stored on the schedule row.
-    _maybe_gist_schedule(group_key, turn_id)
-
-    MessageProcessor.process(
-        message,
-        ScheduledConfig(),
-        {
-            "channel": "schedule",
-            "thread_id": turn_id,
-            "is_thread_reply": True,
-            "input_uid": uid,
-        },
-    )
-    logger.info(f"{LOG_PREFIX} Fired scheduled prompt '{item_id}' on turn {turn_id}: {message[:80]}")
-
-
-def _maybe_gist_schedule(group_key: str, turn_id: int) -> None:
-    """Fire the gist delegate once per schedule (§13.3), no-op if one exists."""
-    from services.database_service import get_shared_db_service  # noqa: PLC0415
-
-    with get_shared_db_service().connection() as conn:
-        if conn.execute(
-            "SELECT 1 FROM thread_gist WHERE channel = 'schedule' AND turn_id = ?",
-            (turn_id,),
-        ).fetchone():
-            return
-    threading.Thread(
-        target=_run_scheduled_gist, args=(group_key, turn_id),
-        daemon=True, name=f"sched-gist-{group_key}",
-    ).start()
-
-
-def _run_scheduled_gist(group_key: str, turn_id: int) -> None:
-    """Label a schedule thread from its prompt; the gist is stored in thread_gist."""
-    try:
-        from services.thread_gist_message_processor import generate_gist  # noqa: PLC0415
-        from services.thread_gist_service import get_thread_gist_service  # noqa: PLC0415
-
-        gist = generate_gist("schedule", turn_id)
-        if gist:
-            get_thread_gist_service().upsert("schedule", turn_id, gist)
-    except Exception as exc:
-        logger.warning(f"{LOG_PREFIX} Scheduled gist failed for {group_key}: {exc}")
+    logger.info(f"{LOG_PREFIX} Fired scheduled prompt '{item_id}' on turn {meta['turn_id']}: {message[:80]}")
 
 
 _RECURRENCE_MAP = {

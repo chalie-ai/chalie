@@ -1,7 +1,6 @@
 import importlib
 import logging
 import threading
-
 from typing import cast
 
 from abilities._ability import Ability

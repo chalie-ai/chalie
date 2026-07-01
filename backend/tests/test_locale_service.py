@@ -7,8 +7,9 @@ verify the output.
 
 import json
 import sqlite3
-import pytest
 from datetime import datetime, timezone
+
+import pytest
 
 
 def _seed_telemetry(db: sqlite3.Connection, **kwargs: object) -> None:

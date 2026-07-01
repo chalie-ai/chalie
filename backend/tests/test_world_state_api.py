@@ -9,8 +9,8 @@ from datetime import timedelta
 import pytest
 from flask.testing import FlaskClient
 
-from services.world_state import world_state
 from services.time_utils import utc_now
+from services.world_state import world_state
 
 
 # ---------------------------------------------------------------------------

@@ -2,8 +2,8 @@ import sqlite3
 
 import pytest
 from flask.testing import FlaskClient
-from services.memory_store import MemoryStore
 
+from services.memory_store import MemoryStore
 
 pytestmark = pytest.mark.unit
 

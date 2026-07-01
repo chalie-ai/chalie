@@ -40,9 +40,7 @@ if TYPE_CHECKING:
 def _seed_transcript(channel: str, role: str, content: str) -> int:
     """Seed via the SAME entry point production uses to persist a turn."""
     from services.transcript_service import Transcript
-    rowid = Transcript.append(channel=channel, role=role, content=content)
-    assert rowid is not None, "production transcript append must persist a row"
-    return rowid
+    return Transcript.write_input_row(channel, role, content)
 
 
 def _recent_contents(channel: str) -> list[str]:

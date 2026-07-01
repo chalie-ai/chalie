@@ -15,6 +15,13 @@ spine writes ``for_turn_id = NULL`` and its watermark is the max turn_id. Each a
 is exactly what the matching ``_previous_rows`` read cuts on, so the next read
 returns nothing through the watermark.
 
+The checkpoint is KEYED on the channel the parent READS cross-turn history from —
+``config.read_channel`` when the config splits read/write (DiscoveryConfig reads the
+``user`` spine), else the write ``config.channel``. A split config thus folds and
+advances the READ channel's watermark, so its post-compaction continuation actually
+sees fewer rows; keying on the write channel would leave the read watermark pinned
+and re-read the same rows (livelock).
+
 No tags, no parser: whatever the model writes IS the new checkpoint. The watermark
 ALWAYS advances on a non-empty history, so compaction can never silently no-op into
 an infinite loop."""
@@ -46,6 +53,7 @@ if TYPE_CHECKING:
 
         class _Config(Protocol):
             channel: str
+            read_channel: "str | None"
 
         config: _Config
 
@@ -93,7 +101,15 @@ class ChatHistoryCompactor(Ability):
         from services import compaction_persistence  # noqa: PLC0415
 
         mp = cast("_CompactionParent", self.mp)
-        channel = mp.config.channel
+        # The checkpoint is keyed on the channel the parent READS cross-turn
+        # history from — ``read_channel`` when the config splits read/write,
+        # else the write ``channel``. A split config (DiscoveryConfig) reads the
+        # user spine, so its compaction must fold those user rows and advance the
+        # USER watermark; keying it on the write channel would leave the read
+        # channel's watermark pinned and the post-compaction continuation would
+        # re-read the same rows (no progression / livelock). The FORK/MAIN axis
+        # (for_turn_id) is independent and unchanged.
+        channel = mp.config.read_channel or mp.config.channel
         # The checkpoint axis follows the parent's view: FORK → its thread, MAIN →
         # the spine (NULL). Used for both the prior read and the new write.
         for_turn_id = mp.turn_id if mp._forked else None

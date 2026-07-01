@@ -19,9 +19,10 @@ import logging
 import mimetypes
 import os
 import secrets
+from typing import TYPE_CHECKING, Dict, Iterable, Iterator, List, Optional, cast
+
 from services.log_utils import safe
 from services.time_utils import utc_now, parse_utc
-from typing import TYPE_CHECKING, Dict, Iterable, Iterator, List, Optional, cast
 
 if TYPE_CHECKING:
     from services.database_service import DatabaseService

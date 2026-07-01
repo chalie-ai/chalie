@@ -15,14 +15,14 @@ import io
 import os
 import sqlite3
 from typing import cast
+from unittest.mock import patch
 
 import pytest
-from unittest.mock import patch
 
 from configs.channels import UserConfig
 from services.database_service import get_shared_db_service
-from services.provider_api import ProviderApiRequest, ProviderApiResponse, ThinkingLevel
 from services.message_processor import MessageProcessor
+from services.provider_api import ProviderApiRequest, ProviderApiResponse, ThinkingLevel
 from services.provider_db_service import ProviderDbService
 from services.tmp_storage import new_tmp_path
 from services.transcript_service import Transcript

@@ -1,6 +1,7 @@
 import sqlite3
 
 import pytest
+
 from abilities._registry import AbilityRegistry
 from configs.channels import UserConfig
 

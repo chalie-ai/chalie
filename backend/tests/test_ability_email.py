@@ -17,7 +17,6 @@ import pytest
 
 from abilities._dispatcher import ToolDispatcher
 from configs.channels import UserConfig
-
 from tests._tool_result_harness import MP, allow_policy, seed_transcript
 
 pytestmark = pytest.mark.unit

@@ -2,9 +2,9 @@ import sqlite3
 from typing import Optional, cast
 
 import pytest
+
 from services.list_service import ListService
 from services.time_utils import utc_now
-
 
 pytestmark = pytest.mark.unit
 

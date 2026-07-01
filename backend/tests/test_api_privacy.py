@@ -2,14 +2,14 @@
 
 import sqlite3
 from collections.abc import Iterator
+from unittest.mock import patch
 
 import pytest
-from unittest.mock import patch
 from flask.testing import FlaskClient
 
 from api.privacy import privacy_ns
-from tests.restx_test_app import mount_namespace
 from services.memory_store import MemoryStore
+from tests.restx_test_app import mount_namespace
 
 
 @pytest.mark.unit

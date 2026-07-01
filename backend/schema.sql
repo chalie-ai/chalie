@@ -25,11 +25,8 @@ CREATE TABLE IF NOT EXISTS episodes (
     transcript_ids TEXT DEFAULT '[]',         -- JSONB: list of transcript.id values this episode covers
     transcript_id_start INTEGER,              -- lowest transcript.id in this episode's range
     transcript_id_end INTEGER,                -- highest transcript.id in this episode's range
-    emotional_valence REAL,                   -- -1.0 (negative) to 1.0 (positive)
-    emotional_arousal REAL,                   -- 0.0 (calm) to 1.0 (intense) — drives consolidation strength
     consolidated_from TEXT DEFAULT '[]',      -- JSONB: episode IDs this was consolidated from
     consolidated_into TEXT,                   -- back-pointer to super-episode id (UUID, FK-ish to episodes.id)
-    storage_strength REAL DEFAULT 1.0,        -- encoding strength at storage time
     retrieval_weight REAL DEFAULT 1.0,        -- current retrieval priority weight
     location_lat  REAL,
     location_lon  REAL,
@@ -732,17 +729,7 @@ CREATE TABLE IF NOT EXISTS telemetry (
 );
 
 -- ============================================================================
--- DISCOVERY_RUNS — one row per proactive-research loop execution.
+-- (The standalone discovery_runs table was removed: the Auto Research loop now
+-- writes its output to the transcript on the `discovery` channel, read via the
+-- thread API through ConfigType.DISCOVERY. No bespoke run table remains.)
 -- ============================================================================
--- The grounding the loop ran against (user + compacted summary at execution
--- time) and a preview of what it surfaced. The loop's full output is NOT stored
--- here — it lives in the transcript under the discovery channel/turn and is
--- joined live by turn_id, keeping a single source of truth for the output.
-CREATE TABLE IF NOT EXISTS discovery_runs (
-    id                INTEGER PRIMARY KEY AUTOINCREMENT,
-    ran_at            TEXT NOT NULL DEFAULT (datetime('now')),
-    turn_id           INTEGER,
-    user_summary      TEXT,
-    compacted_summary TEXT,
-    researched        TEXT
-);

@@ -1,14 +1,14 @@
 <script setup lang="ts">
-import { ref, onMounted } from 'vue';
+import { onMounted, ref } from 'vue';
 import {
   ApiClient,
+  BaseButton,
+  BaseCard,
+  BaseField,
   getHost,
   getToken,
   useTheme,
   useWebSocket,
-  BaseButton,
-  BaseCard,
-  BaseField,
 } from '@chalie/shared';
 
 const { theme, toggle } = useTheme();
@@ -29,7 +29,8 @@ onMounted(async () => {
         Theme: <strong data-testid="theme">{{ theme }}</strong>
       </p>
       <p>
-        WebSocket: <strong data-testid="ws-status">{{ connected ? 'connected' : 'disconnected' }}</strong>
+        WebSocket:
+        <strong data-testid="ws-status">{{ connected ? 'connected' : 'disconnected' }}</strong>
       </p>
       <p>
         Backend: <strong data-testid="ready">{{ ready }}</strong>

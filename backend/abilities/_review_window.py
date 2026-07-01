@@ -37,7 +37,6 @@ import sqlite3
 from abc import ABC, abstractmethod
 from datetime import datetime, timedelta, timezone
 from typing import ClassVar
-
 from typing import cast
 
 from abilities._ability import Ability

@@ -9,13 +9,13 @@ from typing import TYPE_CHECKING, cast
 
 import yaml
 
-from services.file_mapper_service import FileMapperService
-
 from capabilities.base import AbstractCapability
 from capabilities.mail_capability.caldav_handler import CaldavHandler
 from capabilities.mail_capability.carddav_handler import CarddavHandler
 from capabilities.mail_capability.imap_handler import ImapHandler, SmtpCreds
-from capabilities.mail_capability.providers import ServerSettings, UnifiedProvider, build_custom_provider, discover_provider
+from capabilities.mail_capability.providers import ServerSettings, UnifiedProvider, build_custom_provider, \
+    discover_provider
+from services.file_mapper_service import FileMapperService
 from services.time_utils import utc_now
 from utils.data_utils import parse_json_column
 

@@ -14,12 +14,12 @@ from typing import cast
 from flask.typing import ResponseReturnValue
 from flask_restx import Namespace, Resource
 
+from services.mcp_client_service import McpClientService
 from .auth import require_session
 from .dto import Error, expects, register_dto, responds
 from .dto.boundary import error
 from .dto.mcp_server import McpServer, McpServerCreate, McpServerUpdate, McpTestResult
 from .dto.mcp_tool import DiscoverableTools, McpTool
-from services.mcp_client_service import McpClientService
 
 logger = logging.getLogger(__name__)
 

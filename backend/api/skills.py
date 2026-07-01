@@ -14,7 +14,6 @@ from flask.typing import ResponseReturnValue
 from flask_restx import Namespace, Resource
 
 from services.time_utils import parse_utc
-
 from utils.skills_io import (
     DEFAULT_VERSION,
     SKILLS_DB_PATH,
@@ -25,7 +24,6 @@ from utils.skills_io import (
     skill_yaml_path,
     write_skill_file,
 )
-
 from .auth import require_session
 from .dto import Error, expects, register_dto, responds
 from .dto.boundary import error

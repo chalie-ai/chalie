@@ -6,10 +6,11 @@ from typing import TYPE_CHECKING, cast
 from flask import request, jsonify
 from flask.typing import ResponseReturnValue
 from flask_restx import Namespace, Resource
-from services.database_service import text
-from .auth import require_auth, _cookie_only, internal_only
-from services.feature_flags import internal_dev_enabled
 from werkzeug.security import generate_password_hash, check_password_hash
+
+from services.database_service import text
+from services.feature_flags import internal_dev_enabled
+from .auth import require_auth, _cookie_only, internal_only
 from .dto import Error, expects, responds, register_dto
 from .dto.auth import AuthStatus, LoginRequest, RegisterRequest, Username, VaultResult
 

@@ -8,13 +8,14 @@
  *      finishLiveTool (tool signals), setWorking (working/done). That is ALL.
  *   3. No method in this file mutates turn data from a WS payload.
  *
- * Channel-keyed factory — call useConversationFeed('user') or with no arg for
- * the main user feed; pass a different channel key for scheduled/other surfaces.
- * Module-level singletons are eliminated; each channel owns its own FeedState.
+ * Type-keyed factory — call useConversationFeed(ConfigType.USER) or with no arg
+ * for the main user feed; pass a different type key for scheduled/other surfaces.
+ * Module-level singletons are eliminated; each type owns its own FeedState.
  */
-import { reactive, computed } from 'vue';
 import type { ComputedRef } from 'vue';
-import type { ConversationTurnBlock, ConversationThread } from '../api/conversation';
+import { computed, reactive } from 'vue';
+import { ConfigType } from '@chalie/shared';
+import type { ConversationThread, ConversationTurnBlock } from '../api/conversation';
 import { conversation as convoApi } from '../api/conversation';
 import { messagePlaintext } from '../utils/speech';
 
@@ -37,7 +38,7 @@ export interface LiveTrail {
   pills: LiveToolPill[];
 }
 
-// ── Per-channel state ─────────────────────────────────────────────────────────
+// ── Per-type state ──────────────────────────────────────────────────────────
 
 interface FeedState {
   /** Ordered turn blocks keyed by turn_id. Reactive. */
@@ -60,14 +61,14 @@ interface FeedState {
   /** Pagination cursor (count of thread items seen so far). */
   offset: number;
   hasMore: boolean;
-  /** Single interval driving all live-pill elapsed timers for this channel. */
+  /** Single interval driving all live-pill elapsed timers for this type. */
   timerInterval: ReturnType<typeof setInterval> | null;
 }
 
-const _channels = new Map<string, FeedState>();
+const _feeds = new Map<string, FeedState>();
 
-function feedState(channel: string): FeedState {
-  let s = _channels.get(channel);
+function feedState(type: string): FeedState {
+  let s = _feeds.get(type);
   if (!s) {
     s = reactive<FeedState>({
       blocks: {},
@@ -79,7 +80,7 @@ function feedState(channel: string): FeedState {
       hasMore: true,
       timerInterval: null,
     });
-    _channels.set(channel, s);
+    _feeds.set(type, s);
   }
   return s;
 }
@@ -132,37 +133,37 @@ function _upsertTurn(s: FeedState, block: ConversationTurnBlock): void {
   _maybeStopTimer(s);
 }
 
-async function _fetchTurn(s: FeedState, turnId: number, channel: string): Promise<void> {
-  _upsertTurn(s, await convoApi.thread(turnId, channel));
+async function _fetchTurn(s: FeedState, turnId: number, type: string): Promise<void> {
+  _upsertTurn(s, await convoApi.thread(turnId, type));
 }
 
 // ── Pagination ────────────────────────────────────────────────────────────────
 
-async function _loadRecent(s: FeedState, channel: string): Promise<void> {
+async function _loadRecent(s: FeedState, type: string): Promise<void> {
   s.offset = 0;
   s.hasMore = true;
   const limit = 20;
-  const { threads, has_more } = await convoApi.threads(limit, 0, undefined, channel);
+  const { threads, has_more } = await convoApi.threads(limit, 0, undefined, type);
   s.hasMore = has_more;
   s.offset = threads.length;
 
   if (!threads.length) return;
   const ids = threads.map((t) => t.turn_id).filter((id): id is number => id != null);
   if (!ids.length) return;
-  const { blocks } = await convoApi.batch(ids, channel);
+  const { blocks } = await convoApi.batch(ids, type);
   for (const b of blocks) _upsertTurn(s, b);
 }
 
-async function _loadMore(s: FeedState, channel: string): Promise<void> {
+async function _loadMore(s: FeedState, type: string): Promise<void> {
   if (!s.hasMore) return;
   const limit = 20;
-  const { threads, has_more } = await convoApi.threads(limit, s.offset, undefined, channel);
+  const { threads, has_more } = await convoApi.threads(limit, s.offset, undefined, type);
   s.hasMore = has_more;
   s.offset += threads.length;
 
   const ids = threads.map((t) => t.turn_id).filter((id): id is number => id != null);
   if (!ids.length) return;
-  const { blocks } = await convoApi.batch(ids, channel);
+  const { blocks } = await convoApi.batch(ids, type);
   for (const b of blocks) _upsertTurn(s, b);
 }
 
@@ -318,10 +319,10 @@ function _liveTrailsFor(s: FeedState, turnId: number): LiveTrail[] {
     .map(([rowId, v]) => ({ rowId: Number(rowId), pills: v.pills }));
 }
 
-async function _searchThreads(channel: string, query: string): Promise<ConversationThread[]> {
+async function _searchThreads(type: string, query: string): Promise<ConversationThread[]> {
   const trimmed = query.trim();
   if (!trimmed) return [];
-  return (await convoApi.threads(5, undefined, trimmed, channel)).threads;
+  return (await convoApi.threads(5, undefined, trimmed, type)).threads;
 }
 
 // ── Public API ────────────────────────────────────────────────────────────────
@@ -363,8 +364,8 @@ export interface ConversationFeedApi {
   turnSpeechText(turnId: number): string;
 }
 
-function makeApi(channel: string): ConversationFeedApi {
-  const s = feedState(channel);
+function makeApi(type: string): ConversationFeedApi {
+  const s = feedState(type);
 
   const sortedBlocks = computed<ConversationTurnBlock[]>(() =>
     Object.keys(s.blocks)
@@ -381,9 +382,9 @@ function makeApi(channel: string): ConversationFeedApi {
     get hasMore() { return s.hasMore; },
 
     upsertTurn: (block) => _upsertTurn(s, block),
-    fetchTurn: (turnId) => _fetchTurn(s, turnId, channel),
-    loadRecent: () => _loadRecent(s, channel),
-    loadMore: () => _loadMore(s, channel),
+    fetchTurn: (turnId) => _fetchTurn(s, turnId, type),
+    loadRecent: () => _loadRecent(s, type),
+    loadMore: () => _loadMore(s, type),
 
     setWorking: (turnId, on) => _setWorking(s, turnId, on),
     markThreadDone: (turnId) => _markThreadDone(s, turnId),
@@ -401,7 +402,7 @@ function makeApi(channel: string): ConversationFeedApi {
     isHydrated: (turnId) => _isHydrated(s, turnId),
     isThreadActive: (lastActivityAt) => _isThreadActive(lastActivityAt),
     threadList: () => _threadList(s),
-    searchThreads: (query) => _searchThreads(channel, query),
+    searchThreads: (query) => _searchThreads(type, query),
 
     turnSpeechText: (turnId) => _turnSpeechText(s, turnId),
   };
@@ -409,12 +410,12 @@ function makeApi(channel: string): ConversationFeedApi {
 
 const _apis = new Map<string, ConversationFeedApi>();
 
-/** Channel-keyed factory — safe to call outside setup(). */
-export function useConversationFeed(channel = 'user'): ConversationFeedApi {
-  let api = _apis.get(channel);
+/** Type-keyed factory — safe to call outside setup(). */
+export function useConversationFeed(type: string = ConfigType.USER): ConversationFeedApi {
+  let api = _apis.get(type);
   if (!api) {
-    api = makeApi(channel);
-    _apis.set(channel, api);
+    api = makeApi(type);
+    _apis.set(type, api);
   }
   return api;
 }

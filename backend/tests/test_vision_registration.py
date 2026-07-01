@@ -26,10 +26,10 @@ from configs.channels import DmnConfig, UserConfig
 from run import _migrate_legacy_policy_rules
 from services.database_service import DatabaseService
 from services.file_mapper_service import FileMapperService
+from services.message_processor import MessageProcessor
 from services.policy_manager import PolicyManager
 from services.processor_config import ProcessorConfig
 from services.schema_convergence_service import SchemaConvergenceService
-from services.message_processor import MessageProcessor
 
 pytestmark = pytest.mark.unit
 

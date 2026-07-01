@@ -20,18 +20,23 @@ consolidation.
 import json
 import logging
 import struct
+import threading
 import uuid
+from collections import Counter
 from typing import TYPE_CHECKING, Optional, cast
 
 import numpy as np
 
 from services.database_service import DatabaseService
 from services.embedding_utils import pack_embedding
+from services.episodic_constants import EXTRACTION_THRESHOLD, EXTRACTION_WINDOW
 from services.time_utils import utc_now
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
     from typing import Protocol
+
+    from services.processor_config import ProcessorConfig
 
     class _Cursor(Protocol):
         def execute(self, sql: str, params: Sequence[object] = ...) -> object: ...
@@ -49,6 +54,9 @@ if TYPE_CHECKING:
 # yields usable density clusters at our embedding scale; sklearn ships HDBSCAN.
 import umap
 from sklearn.cluster import HDBSCAN
+
+logger = logging.getLogger(__name__)
+LOG_PREFIX = "[EPISODIC]"
 
 
 class EpisodicService:
@@ -91,12 +99,11 @@ class EpisodicService:
                     INSERT INTO episodes (
                         id, gist, salience, channel, level,
                         transcript_ids, transcript_id_start, transcript_id_end,
-                        emotional_valence, emotional_arousal,
-                        consolidated_from, storage_strength, retrieval_weight,
+                        consolidated_from, retrieval_weight,
                         location_lat, location_lon, location_name,
                         last_relevant_at
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, (
                     episode_id,
                     episode_data['gist'],
@@ -109,10 +116,7 @@ class EpisodicService:
                     json.dumps(episode_data.get('transcript_ids', [])),
                     transcript_id_start,
                     transcript_id_end,
-                    episode_data.get('emotional_valence'),
-                    episode_data.get('emotional_arousal'),
                     json.dumps(episode_data.get('consolidated_from', [])),
-                    episode_data.get('storage_strength', 1.0),
                     episode_data.get('retrieval_weight', 1.0),
                     episode_data.get('location_lat'),
                     episode_data.get('location_lon'),
@@ -252,9 +256,8 @@ class EpisodicService:
                     SELECT id, gist, salience, channel,
                            created_at, updated_at, last_accessed_at, access_count,
                            transcript_ids, transcript_id_start, transcript_id_end,
-                           emotional_valence, emotional_arousal,
                            consolidated_from, consolidated_into,
-                           storage_strength, retrieval_weight,
+                           retrieval_weight,
                            location_lat, location_lon, location_name
                     FROM episodes
                     WHERE id = ? AND deleted_at IS NULL
@@ -278,15 +281,12 @@ class EpisodicService:
                     'transcript_ids': row[8] if row[8] is not None else '[]',
                     'transcript_id_start': row[9],
                     'transcript_id_end': row[10],
-                    'emotional_valence': row[11],
-                    'emotional_arousal': row[12],
-                    'consolidated_from': row[13] if row[13] is not None else '[]',
-                    'consolidated_into': row[14],
-                    'storage_strength': row[15] if row[15] is not None else 1.0,
-                    'retrieval_weight': row[16] if row[16] is not None else 1.0,
-                    'location_lat': row[17],
-                    'location_lon': row[18],
-                    'location_name': row[19],
+                    'consolidated_from': row[11] if row[11] is not None else '[]',
+                    'consolidated_into': row[12],
+                    'retrieval_weight': row[13] if row[13] is not None else 1.0,
+                    'location_lat': row[14],
+                    'location_lon': row[15],
+                    'location_name': row[16],
                 }
 
                 return episode
@@ -294,6 +294,329 @@ class EpisodicService:
         except Exception as e:
             logging.error(f"Failed to get episode by ID: {e}")
             return None
+
+    # ── Window extraction (turn-end episode encoding) ─────────────────
+
+    def check_and_store(self, config: "ProcessorConfig") -> None:
+        """Turn-end entry point: when ``config.channel`` has accumulated
+        ``EXTRACTION_THRESHOLD`` transcript rows past its episode watermark, spawn
+        a daemon to encode the latest window into episodes. Gated by the per-source
+        profile (only ``extract_episodes`` channels produce episodes); encoding runs
+        off-thread so the turn never blocks. Never raises."""
+        from services.source_profiles import profile_for
+        if not profile_for(config.channel).extract_episodes:
+            return
+        try:
+            from services.transcript import TranscriptService
+            # lean: turn_id=0 is a verbatim (non-allocating) bind — count-only use.
+            untriggered = TranscriptService(config, turn_id=0).count_rows(
+                since_id=self._episode_watermark(config.channel)
+            )
+            if untriggered >= EXTRACTION_THRESHOLD:
+                threading.Thread(
+                    target=self._extract_window, args=(config.channel,), daemon=True
+                ).start()
+        except Exception as exc:  # noqa: BLE001 — extraction must never break a turn
+            logger.warning("%s check_and_store failed (channel=%s): %s",
+                           LOG_PREFIX, config.channel, exc)
+
+    def _episode_watermark(self, channel: str) -> int:
+        """Highest transcript id already covered by a live episode of ``channel``
+        (0 when none) — the floor past which untriggered rows accumulate."""
+        with self.db_service.connection() as conn:
+            row = conn.execute(
+                "SELECT COALESCE(MAX(transcript_id_end), 0) FROM episodes "
+                "WHERE channel = ? AND deleted_at IS NULL AND transcript_id_end IS NOT NULL",
+                (channel,),
+            ).fetchone()
+        return int(row[0]) if row else 0
+
+    def _extract_window(self, channel: str) -> None:
+        """Encode the channel's latest ``EXTRACTION_WINDOW`` transcript rows into
+        episodes via the episode-encoder channel, then store each snapshot. Runs on
+        a daemon thread (see :meth:`check_and_store`); never raises."""
+        try:
+            from configs.channels import EpisodeEncoderConfig
+            from services.message_processor import MessageProcessor
+
+            # ── 1. Fetch the latest window ───────────────────────────────────
+            with self.db_service.connection() as conn:
+                rows = conn.execute(
+                    """
+                    SELECT id, role, content, tool_name, created_at,
+                           location_lat, location_lon, location_name
+                    FROM transcript
+                    WHERE channel = ?
+                    ORDER BY id DESC
+                    LIMIT ?
+                    """,
+                    (channel, EXTRACTION_WINDOW),
+                ).fetchall()
+            if not rows:
+                return
+
+            entries = [
+                {
+                    'id': r[0], 'role': r[1], 'content': r[2], 'tool_name': r[3],
+                    'created_at': r[4], 'location_lat': r[5], 'location_lon': r[6],
+                    'location_name': r[7], 'channel': channel,
+                }
+                for r in reversed(rows)
+            ]
+
+            # ── 2. Encode via the flat episode-encoder channel ───────────────
+            # _window / _referenced are read by EpisodeEncoderConfig.get_user_prompt;
+            # set them on the instance before _run().
+            emp = object.__new__(MessageProcessor)
+            MessageProcessor.__init__(emp, "", None)
+            emp.config = EpisodeEncoderConfig()
+            emp.uid = None
+            emp.cancel_event = threading.Event()
+            emp.thinking_level = "low"
+            setattr(emp, '_window', self._format_window_entries(entries))
+            setattr(emp, '_referenced',
+                    self._format_episodes_for_prompt(self._fetch_referenced_episodes(entries)))
+            snapshots = cast("list[dict[str, object]]", self._safe_json_load(emp._run()))
+            if not snapshots:
+                return
+
+            # ── 3. Store each snapshot ───────────────────────────────────────
+            valid_ids = {e['id'] for e in entries}
+            dominant_location = self._aggregate_dominant_location(entries)
+            prior_embeddings = _fetch_novelty_comparison_set(channel)
+            for ep in snapshots:
+                try:
+                    self._store_snapshot(ep, channel, valid_ids, dominant_location, prior_embeddings)
+                except Exception as ep_err:  # noqa: BLE001 — one bad snapshot must not abort the rest
+                    logger.warning("%s episode store failed: %s", LOG_PREFIX, ep_err)
+
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("%s _extract_window failed (channel=%s): %s", LOG_PREFIX, channel, exc)
+
+    def _store_snapshot(self, ep: dict[str, object], channel: str, valid_ids: set[object],
+                        dominant_location: dict[str, object], prior_embeddings: list[bytes]) -> None:
+        """Persist one encoder snapshot — soft-delete-only, update, or fresh store.
+        Filters ``transcript_ids`` to the window, stamps location + salience, then
+        appends the new embedding to ``prior_embeddings`` so later snapshots in the
+        same run compare against it (not just the stale pre-run set)."""
+        from services.embedding_service import get_embedding_service
+        from services.salience_service import compute_salience
+
+        if self._is_delete_only(ep):
+            delete_id = ep.get('delete_id')
+            if delete_id:
+                self.soft_delete(cast("str", delete_id))
+            return
+
+        raw_ids = cast("list[object]", ep.get('transcript_ids') or [])
+        ep['transcript_ids'] = [i for i in raw_ids if i in valid_ids]
+        if not ep['transcript_ids']:
+            return
+
+        ep['transcript_id_start'] = min(cast("list[int]", ep['transcript_ids']))
+        ep['transcript_id_end'] = max(cast("list[int]", ep['transcript_ids']))
+        ep['channel'] = channel
+
+        if dominant_location.get('lat') is not None:
+            ep['location_lat'] = dominant_location['lat']
+            ep['location_lon'] = dominant_location['lon']
+            ep['location_name'] = dominant_location.get('name')
+
+        gist = cast("str", ep.get('gist', '') or '')
+        embedding = get_embedding_service().generate_embedding(gist) if gist else None
+
+        novelty = compute_novelty(embedding, prior_embeddings) if embedding else 1.0
+        ep['salience'] = compute_salience(
+            has_open_loop=bool(ep.get('has_open_loop', False)),
+            novelty=novelty,
+        )
+
+        ep.pop('has_open_loop', None)
+        update_id = ep.pop('update_id', None)
+        ep.pop('delete_id', None)  # defensive — should be None here
+
+        if update_id:
+            self.update_episode(cast("str", update_id), ep, embedding=embedding)
+        else:
+            self.store_episode(ep, embedding=embedding)
+
+        if embedding is not None:
+            blob = pack_embedding(embedding)
+            if blob is not None:
+                prior_embeddings.append(blob)
+
+    # ── Window extraction helpers ─────────────────────────────────────
+
+    @staticmethod
+    def _aggregate_dominant_location(entries: list[dict[str, object]]) -> dict[str, object]:
+        """When all location names are unique (no majority), falls back to the most recent non-null row."""
+        located = [
+            e for e in entries
+            if e.get('location_lat') is not None or e.get('location_name') is not None
+        ]
+        if not located:
+            return {'lat': None, 'lon': None, 'name': None}
+
+        name_counts = Counter(
+            e['location_name'] for e in located if e.get('location_name') is not None
+        )
+
+        if name_counts:
+            top_name, top_count = name_counts.most_common(1)[0]
+            if top_count > 1:
+                # Clear dominant name — use any row with that name for coords
+                for e in reversed(located):
+                    if e.get('location_name') == top_name:
+                        return {
+                            'lat': e.get('location_lat'),
+                            'lon': e.get('location_lon'),
+                            'name': top_name,
+                        }
+
+        # All names are unique (or no names) — use the most recent located row
+        most_recent = located[-1]
+        return {
+            'lat': most_recent.get('location_lat'),
+            'lon': most_recent.get('location_lon'),
+            'name': most_recent.get('location_name'),
+        }
+
+    @staticmethod
+    def _format_window_entries(entries: list[dict[str, object]]) -> str:
+        lines = []
+        for entry in entries:
+            entry_id = entry.get('id', '?')
+            role = entry.get('role', 'unknown')
+            content = entry.get('content', '')
+            tool_name = entry.get('tool_name')
+            created_at = entry.get('created_at', '')
+            if tool_name:
+                lines.append(f"[{entry_id}] ({created_at}) {role} [{tool_name}]: {content}")
+            else:
+                lines.append(f"[{entry_id}] ({created_at}) {role}: {content}")
+        return "\n".join(lines)
+
+    @staticmethod
+    def _parse_episode_ids_from_results(result_texts: list[str]) -> set[str]:
+        """Extract episode IDs from rendered memory recall envelopes.
+
+        Only rows with ``kind == "episode"`` are collected — data-graph rows are
+        keyed by data-graph key (not an episode id) and are intentionally skipped.
+        Malformed / non-recall envelopes are skipped silently.
+        """
+        episode_ids: set[str] = set()
+        for text in result_texts:
+            if not text or "[end:memory]" not in text:
+                continue
+            nl = text.find("]\n")
+            end = text.find("\n[end:memory]")
+            if nl == -1 or end == -1 or end <= nl:
+                continue
+            body = text[nl + 2:end]
+            try:
+                parsed = json.loads(body)
+            except (ValueError, TypeError):
+                continue
+            rows = parsed.get("results") if isinstance(parsed, dict) else None
+            if not isinstance(rows, list):
+                continue
+            for row in rows:
+                if isinstance(row, dict) and row.get("kind") == "episode":
+                    eid = str(row.get("id", "")).strip()
+                    if eid:
+                        episode_ids.add(eid)
+        return episode_ids
+
+    def _fetch_referenced_episodes(self, entries: list[dict[str, object]]) -> list[dict[str, object]]:
+        """Episodes the window already cited via the memory tool — fed back to the
+        encoder so it can update/dedup rather than re-create. ``tool_name='memory'``
+        covers both auto-seed and LLM-invoked recall."""
+        t_ids = [e['id'] for e in entries if e.get('id')]
+        if not t_ids:
+            return []
+
+        try:
+            placeholders = ','.join('?' * len(t_ids))
+            with self.db_service.connection() as conn:
+                rows = conn.execute(
+                    f"""
+                    SELECT result FROM tool_calls
+                    WHERE transcript_id IN ({placeholders})
+                      AND tool_name = 'memory'
+                      AND result IS NOT NULL
+                    """,
+                    t_ids,
+                ).fetchall()
+        except Exception as exc:
+            logger.warning("%s _fetch_referenced_episodes query failed: %s", LOG_PREFIX, exc)
+            return []
+
+        episode_ids = self._parse_episode_ids_from_results([row[0] or '' for row in rows])
+        if not episode_ids:
+            return []
+
+        try:
+            episodes = []
+            for eid in episode_ids:
+                ep = self.get_episode_by_id(eid)
+                if ep:
+                    episodes.append(ep)
+            return episodes
+        except Exception as exc:
+            logger.warning("%s _fetch_referenced_episodes fetch failed: %s", LOG_PREFIX, exc)
+            return []
+
+    @staticmethod
+    def _format_episodes_for_prompt(episodes: list[dict[str, object]]) -> str:
+        if not episodes:
+            return ''
+        lines = []
+        for ep in episodes:
+            eid = ep.get('id', '')
+            gist = ep.get('gist', '')
+            created_at = ep.get('created_at', '')
+            lines.append(f"id: {eid} | gist: {gist} | created: {created_at}")
+        return "\n".join(lines)
+
+    @staticmethod
+    def _strip_code_fence(text: str) -> str:
+        open_end = text.find("```")
+        if open_end == -1:
+            return text
+        # Skip the opening fence line (```json or ```)
+        newline = text.find("\n", open_end)
+        if newline == -1:
+            return text
+        close_start = text.rfind("```", newline)
+        if close_start <= newline:
+            return text
+        return text[newline + 1 : close_start].strip()
+
+    @staticmethod
+    def _safe_json_load(text: str) -> list[object]:
+        if not text:
+            return []
+        text = text.strip()
+        # Strip markdown code fences if present
+        if text.startswith("```"):
+            text = EpisodicService._strip_code_fence(text)
+        try:
+            parsed = json.loads(text)
+            if isinstance(parsed, list):
+                return parsed
+            logger.warning("%s EpisodeEncoder returned non-list JSON", LOG_PREFIX)
+            return []
+        except ValueError:
+            logger.warning("%s EpisodeEncoder returned unparseable JSON", LOG_PREFIX)
+            return []
+
+    @staticmethod
+    def _is_delete_only(ep: dict[str, object]) -> bool:
+        if not ep.get('delete_id'):
+            return False
+        # All other meaningful fields must be absent or null/empty
+        meaningful = ('gist', 'transcript_ids', 'update_id')
+        return not any(ep.get(f) for f in meaningful)
 
 # ── Module-level novelty helpers ─────────────────────────────────────────────
 

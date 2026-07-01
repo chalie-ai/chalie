@@ -1,8 +1,8 @@
 """Unit tests for the unified mail provider registry."""
 
-import pytest
-
 from typing import cast
+
+import pytest
 
 from capabilities.mail_capability.providers import (
     ServerSettings,

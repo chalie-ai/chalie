@@ -7,9 +7,9 @@ run in a single process. Voice runs natively when deps are installed.
 """
 
 import argparse
+import logging
 import os
 import sys
-import logging
 from typing import TYPE_CHECKING, cast
 
 from utils.logger import Logger

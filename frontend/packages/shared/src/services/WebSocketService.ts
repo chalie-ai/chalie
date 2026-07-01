@@ -1,4 +1,5 @@
 import type { GetHost } from './types';
+import { ConfigType } from '../config/configType';
 
 // Server → client inbound events, discriminated on `type`.
 export interface WsMessageEvent {
@@ -22,16 +23,33 @@ export interface WsPingEvent {
   type: 'ping';
 }
 
-/** Push family — broadcast to every surface, routed through the drift handler
- *  with no per-request binding. Includes the turn-channel signals
- *  (`working`/`updated`/`tool_called`/`tool_done`): the surface reacts by
- *  refetching the turn block over REST, so these frames carry only ids (plus a
- *  tool call's id/name/summary for the live act-trail timer), never prose. */
-export type WsPushType =
+/** Turn-lifecycle signals — the sole WS turn chokepoint (MessageProcessor.broadcast).
+ *  Discriminated on `status` (the lifecycle state); `type` carries the ProcessorConfig
+ *  identity (`user` → main spine, `scheduled` → dock + that schedule's thread) the
+ *  surface routes by. The surface reacts by refetching the turn block over REST, so
+ *  these frames carry only ids (plus a tool call's id/name/summary for the live
+ *  act-trail timer) — never prose. `provider_retry` is the one status shown directly
+ *  (a transient toast): a provider call failed mid-turn and the backend is resending,
+ *  so the turn stays in flight (no error bubble, no `done`). */
+export type WsTurnStatus =
   | 'working'
   | 'updated'
   | 'tool_called'
   | 'tool_done'
+  | 'done'
+  | 'provider_retry';
+export interface WsTurnSignal {
+  status: WsTurnStatus;
+  /** ConfigType — the ProcessorConfig identity the FE routes by. */
+  type: string;
+  turn_id?: number | null;
+  [k: string]: unknown;
+}
+
+/** Push family — content/side-channel frames routed through the drift handler,
+ *  discriminated on `type` (distinct from the turn signals above, keyed on `status`).
+ *  The turn-level `error` toast arrives here too (WsErrorEvent). */
+export type WsPushType =
   | 'task'
   | 'reminder'
   | 'notification'
@@ -41,10 +59,7 @@ export type WsPushType =
   | 'app_update'
   | 'quick_tip'
   | 'subagent_start'
-  | 'subagent_end'
-  // A provider call failed mid-turn and the backend is resending; surfaces show
-  // a transient toast. The turn is still in flight (no error bubble, no `done`).
-  | 'provider_retry';
+  | 'subagent_end';
 export interface WsPushEvent {
   type: WsPushType;
   [k: string]: unknown;
@@ -55,6 +70,7 @@ export type WsInboundEvent =
   | WsErrorEvent
   | WsDoneEvent
   | WsPingEvent
+  | WsTurnSignal
   | WsPushEvent;
 
 /** Action channel (rich-card button → POST /action) is the only per-request
@@ -291,21 +307,22 @@ export class WebSocketService {
    *  send failure (offline / POST rejected) — the case where no signal will ever
    *  arrive — so the surface can release its send guard.
    *
-   *  Resolves with the POST body `{turn_id, channel}` so the caller can bind the
+   *  Resolves with the POST body `{turn_id, type}` so the caller can bind the
    *  lane handle the moment the server allocates it (no WS round-trip needed). */
   send(
     text: string,
-    source: 'text' | 'voice',
-    onSendFailure: (message: string) => void = () => { /* no-op */ },
+    onSendFailure: (message: string) => void = () => {
+      /* no-op */
+    },
     files: File[] = [],
     threadId: number | null = null,
-    channel = 'user',
-  ): Promise<{ turn_id: number; channel: string } | null> {
+    type: string = ConfigType.USER,
+  ): Promise<{ turn_id: number; type: string } | null> {
     if (!this.isConnected) {
       onSendFailure('Not connected. Please wait...');
       return Promise.resolve(null);
     }
-    return this.postChat(text, source, files, threadId, onSendFailure, channel);
+    return this.postChat(text, files, threadId, onSendFailure, type);
   }
 
   /** Rich-card control dispatch — POST /action and resolve the card's optimistic
@@ -329,7 +346,11 @@ export class WebSocketService {
         if (current) {
           this.chatCallbacks = null;
           if (resp.ok) callbacks.onMessage?.(data as unknown as WsMessageEvent);
-          else callbacks.onError?.({ message: String(data.error ?? 'Action failed.'), recoverable: true });
+          else
+            callbacks.onError?.({
+              message: String(data.error ?? 'Action failed.'),
+              recoverable: true,
+            });
         }
         callbacks.onDone?.({ duration_ms: Number(data.duration_ms ?? Date.now() - start) });
       })
@@ -344,22 +365,20 @@ export class WebSocketService {
 
   private postChat(
     text: string,
-    source: string,
     files: File[],
     threadId: number | null,
     onSendFailure: (message: string) => void,
-    channel = 'user',
-  ): Promise<{ turn_id: number; channel: string } | null> {
+    type: string = ConfigType.USER,
+  ): Promise<{ turn_id: number; type: string } | null> {
     const form = new FormData();
     form.append('text', text);
-    form.append('source', source);
+    form.append('type', type);
     for (const file of files) form.append('files', file, file.name);
     // Both POST /api/thread (new) and POST /api/thread/<turn_id> (reply) return
-    // HTTP 200 with {turn_id, channel} — the caller binds the lane handle from
-    // this body the moment the server allocates it, with no WS round-trip.
-    // Non-user channels append ?channel=<channel> so the backend routes correctly.
-    const basePath = threadId != null ? `/api/thread/${threadId}` : '/api/thread';
-    const path = channel !== 'user' ? `${basePath}?channel=${channel}` : basePath;
+    // HTTP 200 with {turn_id, type} — the caller binds the lane handle from this
+    // body the moment the server allocates it, with no WS round-trip. ``type`` is
+    // the ProcessorConfig identity the server resolves to a transcript channel.
+    const path = threadId != null ? `/api/thread/${threadId}` : '/api/thread';
     return fetch(this.buildHttpUrl(path), {
       method: 'POST',
       credentials: 'same-origin',
@@ -367,10 +386,16 @@ export class WebSocketService {
       body: form,
     })
       .then(async (resp) => {
-        if (!resp.ok) { onSendFailure('Chat request failed.'); return null; }
-        return (await resp.json()) as { turn_id: number; channel: string };
+        if (!resp.ok) {
+          onSendFailure('Chat request failed.');
+          return null;
+        }
+        return (await resp.json()) as { turn_id: number; type: string };
       })
-      .catch(() => { onSendFailure('Chat request failed.'); return null; });
+      .catch(() => {
+        onSendFailure('Chat request failed.');
+        return null;
+      });
   }
 
   private dispatch(data: WsInboundEvent): void {

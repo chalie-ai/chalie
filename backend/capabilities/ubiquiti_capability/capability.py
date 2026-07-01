@@ -8,8 +8,8 @@ from typing import TYPE_CHECKING, cast
 import yaml
 
 from capabilities.base import AbstractCapability
-from services.file_mapper_service import FileMapperService
 from capabilities.ubiquiti_capability import unifi_rest_handler as rest
+from services.file_mapper_service import FileMapperService
 
 if TYPE_CHECKING:
     from typing import TypedDict

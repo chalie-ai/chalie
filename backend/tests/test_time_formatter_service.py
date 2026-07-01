@@ -1,8 +1,9 @@
-import pytest
 from contextlib import AbstractContextManager
 from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 from zoneinfo import ZoneInfo
+
+import pytest
 
 from services.time_formatter_service import TimeFormatterService as T
 from services.time_utils import utc_now

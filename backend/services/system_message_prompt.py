@@ -123,15 +123,11 @@ Shape:
   "gist": "2-4 sentence summary of what happened in this slice",
   "transcript_ids": [id, id, ...],
   "has_open_loop": false,
-  "emotional_valence": 0.0,
-  "emotional_arousal": 0.0,
   "update_id": null,
   "delete_id": null
 }
 
 Field rules:
-- emotional_valence: -1.0 (negative) to 1.0 (positive). 0 = neutral.
-- emotional_arousal: 0.0 (calm) to 1.0 (intense). Independent of valence.
 - has_open_loop: true if this snapshot ends with an unresolved thread — a commitment to future action, an unanswered question, a task paused mid-flight.
 
 Reconsolidation:
@@ -152,13 +148,10 @@ You are a super-episode encoder. You are shown a cluster of coherent episodes an
 Output a single JSON object:
 {
   "gist": "2-4 sentence consolidated summary",
-  "has_open_loop": false,
-  "emotional_valence": 0.0,
-  "emotional_arousal": 0.0
+  "has_open_loop": false
 }
 
 Rules:
-- emotional_valence / emotional_arousal: reflect the combined emotional character.
 - has_open_loop: true if the combined memory still carries an unresolved thread.
 - No transcript_ids — the caller computes the union.
 

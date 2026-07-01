@@ -23,7 +23,7 @@ class ThreadFeedQuery(DTO):
     q: str = ""
     limit: int = Field(default=20, ge=1, le=120)
     offset: int = Field(default=0, ge=0)
-    channel: str = "user"
+    type: str = "user"
 
 
 class ThreadSummary(DTO):
@@ -78,17 +78,16 @@ class ThreadSendRequest(DTO):
 
     model_config = ConfigDict(extra="ignore")
 
-    text: str = ""
-    source: str = "text"
-    channel: str = "user"
+    text: str
+    type: str = "user"
 
 
 class ThreadCreated(DTO):
     """POST /api/thread(/<turn_id>) response body — the synchronously-allocated
-    ``turn_id`` and its ``channel``. Replaces the old empty 201: the FE encodes
-    both as ``data-turn-id``/``data-channel`` on the thread element the instant the
+    ``turn_id`` and its ``type``. Replaces the old empty 201: the FE encodes
+    both as ``data-turn-id``/``data-type`` on the thread element the instant the
     POST returns, so the stop button and every later REST call hold the handle
     without waiting on a WS signal (the ``created`` signal is gone)."""
 
     turn_id: int
-    channel: str
+    type: str

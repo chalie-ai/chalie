@@ -7,6 +7,7 @@
 #     http://www.apache.org/licenses/LICENSE-2.0
 
 import pytest
+
 from abilities._dispatcher import ToolDispatcher
 from abilities._registry import AbilityRegistry
 

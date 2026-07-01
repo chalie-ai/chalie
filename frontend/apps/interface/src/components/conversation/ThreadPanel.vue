@@ -1,6 +1,6 @@
 <!-- Slide-over thread panel: a focused, full-height view of one thread. -->
 <script setup lang="ts">
-import { ref, computed, watch, nextTick, onMounted, onBeforeUnmount } from 'vue';
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { ArrowLeft } from '@lucide/vue';
 import { useSessionStore } from '../../stores/session';
 import { useConversationFeed } from '../../composables/useConversationFeed';
@@ -8,7 +8,7 @@ import TurnView from './TurnView.vue';
 import InputDock from '../layout/InputDock.vue';
 
 const session = useSessionStore();
-const feed = computed(() => useConversationFeed(session.panelChannel));
+const feed = computed(() => useConversationFeed(session.panelType));
 
 const open = computed(() => session.panelThreadId != null);
 
@@ -49,13 +49,7 @@ onBeforeUnmount(() => document.removeEventListener('keydown', onKeydown));
 
 <template>
   <Transition name="thread-panel">
-    <aside
-      v-if="open"
-      class="thread-panel"
-      role="dialog"
-      aria-modal="true"
-      :aria-label="heading"
-    >
+    <aside v-if="open" class="thread-panel" role="dialog" aria-modal="true" :aria-label="heading">
       <header class="thread-panel__header">
         <button
           class="thread-panel__back"
@@ -90,18 +84,13 @@ onBeforeUnmount(() => document.removeEventListener('keydown', onKeydown));
         <div v-if="showLoader" class="thread-panel__loader">
           <output class="thread-panel__spinner" aria-label="Loading thread" />
         </div>
-        <TurnView
-          v-else-if="block"
-          :block="block"
-          :can-reply="false"
-          :channel="session.panelChannel"
-        />
+        <TurnView v-else-if="block" :block="block" :can-reply="false" :type="session.panelType" />
       </div>
 
       <InputDock
         v-if="session.panelThreadId != null"
         :turn-id="session.panelThreadId"
-        :channel="session.panelChannel"
+        :type="session.panelType"
       />
     </aside>
   </Transition>
@@ -146,9 +135,14 @@ onBeforeUnmount(() => document.removeEventListener('keydown', onKeydown));
   border-radius: 8px;
   background: none;
   color: var(--text-tertiary);
-  font: 500 13px Inter, system-ui, sans-serif;
+  font:
+    500 13px Inter,
+    system-ui,
+    sans-serif;
   cursor: pointer;
-  transition: color var(--duration-fast), background var(--duration-fast);
+  transition:
+    color var(--duration-fast),
+    background var(--duration-fast);
 }
 
 .thread-panel__back:hover {
@@ -168,7 +162,10 @@ onBeforeUnmount(() => document.removeEventListener('keydown', onKeydown));
 }
 
 .thread-panel__title {
-  font: 600 14px Inter, system-ui, sans-serif;
+  font:
+    600 14px Inter,
+    system-ui,
+    sans-serif;
   letter-spacing: -0.01em;
   color: var(--text-primary);
   min-width: 0;
@@ -204,7 +201,9 @@ onBeforeUnmount(() => document.removeEventListener('keydown', onKeydown));
 }
 
 .thread-panel-leave-active {
-  transition: opacity 200ms ease, transform 200ms ease;
+  transition:
+    opacity 200ms ease,
+    transform 200ms ease;
 }
 
 .thread-panel-leave-to {

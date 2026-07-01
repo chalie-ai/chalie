@@ -16,6 +16,7 @@ from enum import Enum
 from typing import TYPE_CHECKING, ClassVar
 
 if TYPE_CHECKING:
+    from services.config_type import ConfigTypeEnum
     from services.message_processor import MessageProcessor
     from services.post_turn_hook import PostTurnHook
 
@@ -110,6 +111,16 @@ class ProcessorConfig(ABC):
     Attachments are NOT a flag: presence of metadata['attachments'] auto-fires
     document.upload per file on turn 0."""
 
+    # ── Split-channel routing (cross-turn history read channel) ───────────────
+
+    read_channel: str | None = None
+    """Cross-turn history read channel; ``None`` ⇒ read on ``channel`` (every
+    existing config). Only split-channel configs set this — writes and
+    current-turn identity stay on ``channel`` while the model's cross-turn
+    history is read from ``read_channel``. Today only DiscoveryConfig sets it
+    (``= "user"``), and it runs MAIN-only, so the split's FORK edge cases never
+    apply. Do not set ``read_channel != channel`` on a FORK/reply config."""
+
     # ── After-turn hooks — empty tuple = no-op ───────────────────────────────
 
     post_turn_hooks: tuple[PostTurnHook, ...] = ()
@@ -150,6 +161,14 @@ class ProcessorConfig(ABC):
     def usage_class(self) -> str:
         """LLM usage class written to llm_call_log."""
         return self.policy_channel.value
+
+    # ── API routing identity ──────────────────────────────────────────────────
+
+    def type(self) -> "ConfigTypeEnum | None":
+        """The top-level API routing identifier for this config, or ``None`` for the
+        internal channels that the thread API never addresses. Only the two configs
+        reachable via ``ConfigTypeEnum.get_by_type`` override this."""
+        return None
 
     # ── Cloning ───────────────────────────────────────────────────────────────
 

@@ -139,8 +139,6 @@ def _insert_episode(
     transcript_ids: list[int] | None = None,
     transcript_id_start: int | None = None,
     transcript_id_end: int | None = None,
-    emotional_valence: float = 0.0,
-    emotional_arousal: float = 0.0,
 ) -> str:
     """Insert a minimal episode row directly via SQL. Returns the episode UUID."""
     eid = episode_id or str(uuid.uuid4())
@@ -149,18 +147,15 @@ def _insert_episode(
         INSERT INTO episodes (
             id, gist, salience, channel, level,
             transcript_ids, transcript_id_start, transcript_id_end,
-            emotional_valence, emotional_arousal,
             consolidated_from, consolidated_into, deleted_at,
-            storage_strength, retrieval_weight
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1.0, 1.0)
+            retrieval_weight
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1.0)
         """,
         (
             eid, gist, salience, channel, level,
             json.dumps(transcript_ids or []),
             transcript_id_start,
             transcript_id_end,
-            emotional_valence,
-            emotional_arousal,
             json.dumps(consolidated_from or []),
             consolidated_into,
             deleted_at,
@@ -225,13 +220,11 @@ def _inject_fake_client(
 def _super_ep_envelope(gist: str) -> ProviderApiResponse:
     """The SuperEpisodeEncoder's expected JSON object envelope. The worker
     overwrites 'channel'/'consolidated_from'/'salience' itself; the model owns
-    only the gist + affect. The response carries no tool calls, so this ends the
+    only the gist. The response carries no tool calls, so this ends the
     ACT loop."""
     return ProviderApiResponse(
         text=json.dumps({
             "gist": gist,
-            "emotional_valence": 0.0,
-            "emotional_arousal": 0.0,
             "has_open_loop": False,
         }),
         model="test-model",

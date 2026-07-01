@@ -77,7 +77,9 @@ function edit(i: number): void {
   background: none;
   color: var(--text-tertiary);
   cursor: pointer;
-  transition: color var(--duration-fast) ease, background var(--duration-fast) ease;
+  transition:
+    color var(--duration-fast) ease,
+    background var(--duration-fast) ease;
 }
 
 .pending__remove:hover {
@@ -98,7 +100,9 @@ function edit(i: number): void {
   -webkit-backdrop-filter: blur(10px);
   text-align: left;
   cursor: pointer;
-  transition: border-color var(--duration-fast) ease, background var(--duration-fast) ease;
+  transition:
+    border-color var(--duration-fast) ease,
+    background var(--duration-fast) ease;
 }
 
 .pending__chip:hover {
