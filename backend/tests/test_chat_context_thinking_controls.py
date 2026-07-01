@@ -64,9 +64,9 @@ class TestContextUsageEndpoint:
         assert data['last_request_tokens'] == 2412
         assert data['context_window'] == 64400
 
-    def test_delegate_and_thinking_calls_do_not_shadow_user_turn(self, authed_client: tuple[object, sqlite3.Connection, object]) -> None:
-        """THE regression: thinking + web_search delegate share usage_class='chat'
-        (they inherit the parent's CHAT policy_channel), so a usage_class filter
+    def test_delegate_calls_do_not_shadow_user_turn(self, authed_client: tuple[object, sqlite3.Connection, object]) -> None:
+        """THE regression: web_search delegate shares usage_class='chat'
+        (it inherits the parent's CHAT policy_channel), so a usage_class filter
         made the indicator oscillate user-turn (~17k) → delegate (~2k). Keying on
         job_name='user:user' must keep the user turn's size pinned even though
         the delegate's tiny sub-request is the NEWEST chat-class row.
@@ -83,9 +83,7 @@ class TestContextUsageEndpoint:
         log_call('user:user', 'ollama', 'llama3', tokens_input=17240,
                  tokens_output=120, latency_ms=30, usage_class='chat')
         # Newer rows fired by the SAME turn's sub-agents, all usage_class='chat':
-        #   the thinking pre-pass and several web_search delegate iterations.
-        log_call('thinking:thinking', 'ollama', 'llama3', tokens_input=16980,
-                 tokens_output=40, latency_ms=20, usage_class='chat')
+        #   several web_search delegate iterations.
         log_call('delegate:web_search:web_search', 'ollama', 'llama3',
                  tokens_input=2010, tokens_output=15, latency_ms=8, usage_class='chat')
         log_call('delegate:web_search:web_search', 'ollama', 'llama3',
@@ -103,13 +101,11 @@ class TestContextUsageEndpoint:
         from configs.channels import UserConfig
         from services.processor_config import ProcessorConfig
         from configs.channels.web_search import WebSearchConfig
-        from abilities.thinking import ThinkingConfig
 
         chat = ProcessorConfig.PolicyChannel.CHAT
         assert UserConfig().job == 'user:user'
         assert WebSearchConfig(chat).job != 'user:user'
-        assert ThinkingConfig([], chat).job != 'user:user'
-        # All three share the SAME usage_class — proving why usage_class can't
+        # Both share the SAME usage_class — proving why usage_class can't
         # be the discriminator and job_name must be.
         assert UserConfig().usage_class == WebSearchConfig(chat).usage_class == 'chat'
 
@@ -159,7 +155,7 @@ class TestThinkingModePrecedence:
 
     def test_config_pin_wins_over_override(self) -> None:
         from services.providers import resolve_thinking_mode
-        # A system ability hard-pins 'high' (compactor/thinking) — override must NOT downgrade it.
+        # A system ability hard-pins 'high' (compactor) — override must NOT downgrade it.
         assert resolve_thinking_mode('high', 'medium', 'low') == 'high'
 
     def test_override_wins_over_gate_level(self) -> None:
