@@ -27,6 +27,10 @@ from urllib.parse import urlparse
 from abilities._ability import Ability
 from abilities._params import Keys
 from abilities._result import ToolResult
+from abilities.document import ingest_file
+from services.database_service import get_shared_db_service
+from services.document_service import DocumentService
+from services.tmp_storage import new_tmp_path
 from tools.browser.session import record_screenshot, run_verb
 
 logger = logging.getLogger(__name__)
@@ -195,11 +199,6 @@ class BrowserAbility(Ability):
         grabbed = self._run_verb("grab", {})
         if grabbed.get("error"):
             return self._reply(grabbed)
-
-        from abilities.document import ingest_file  # noqa: PLC0415
-        from services.database_service import get_shared_db_service  # noqa: PLC0415
-        from services.document_service import DocumentService  # noqa: PLC0415
-        from services.tmp_storage import new_tmp_path  # noqa: PLC0415
 
         page: dict[str, object] = cast("dict[str, object]", grabbed["page"])
         host = urlparse(cast("str", page["url"])).hostname or "page"

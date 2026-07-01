@@ -27,14 +27,17 @@ from uuid import uuid4
 import requests
 
 from services.llm_clients.base import ProviderClient
+from services.llm_service import _app_user_agent, estimate_tokens
 from services.provider_api import (
     ProviderApiRequest,
     ProviderApiResponse,
+    ProviderResponseError,
+    ProviderTimeoutError,
     RateLimitError,
     ResponseOverLimitError,
-    ProviderResponseError,
     ThinkingLevel,
 )
+from services.providers import PROVIDER_CALL_TIMEOUT_S
 
 logger = logging.getLogger(__name__)
 
@@ -140,7 +143,6 @@ class OllamaClient(ProviderClient):
         self._thinking_supported: Optional[bool] = None
 
     def _user_agent(self) -> dict[str, str]:
-        from services.llm_service import _app_user_agent  # noqa: PLC0415
         return {"User-Agent": _app_user_agent()}
 
     def _model_supports_thinking(self) -> bool:
@@ -226,9 +228,6 @@ class OllamaClient(ProviderClient):
         api_messages = _ollama_convert_messages(dto.messages)
         payload = self._build_payload(dto.system, api_messages, dto.tools, dto.thinking_mode)
 
-        from services.providers import PROVIDER_CALL_TIMEOUT_S  # noqa: PLC0415
-        from services.provider_api import ProviderTimeoutError  # noqa: PLC0415
-
         start = time.time()
         try:
             resp = requests.post(
@@ -275,7 +274,6 @@ class OllamaClient(ProviderClient):
 
     def estimate_request_tokens(self, dto: ProviderApiRequest) -> int:
         """Heuristic estimate — Ollama models vary too much for a fixed tokeniser."""
-        from services.llm_service import estimate_tokens  # noqa: PLC0415
         api_messages = _ollama_convert_messages(dto.messages)
         payload = self._build_payload(dto.system, api_messages, dto.tools, ThinkingLevel.LOW)
         return estimate_tokens(json.dumps(payload))

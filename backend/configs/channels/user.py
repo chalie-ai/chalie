@@ -1,9 +1,15 @@
 from __future__ import annotations
 
+import logging
 from typing import TYPE_CHECKING, cast
 
+from services.act_trail import ActTrail
+from services.data_graph_service import get_data_graph_service
+from services.personality.personality_service import personality_service
 from services.post_turn_hook import PostTurnHook
 from services.processor_config import ProcessorConfig
+from services.skill_suggestion_message_processor import maybe_suggest_skill
+from services.system_message_prompt import UnifiedSystemMessagePrompt
 
 from configs.channels._common import (
     DEFAULT_ALWAYS_AVAILABLE,
@@ -18,13 +24,11 @@ class ProactiveSuggestionHook(PostTurnHook):
     """Fires on a turn that ran 4+ tool calls. Non-blocking (daemon thread inside"""
 
     def run(self, mp: "MessageProcessor", response_text: str) -> None:
-        import logging  # noqa: PLC0415
         _log = logging.getLogger(__name__)
         turn_id = getattr(mp, "turn_id", None)
         if turn_id is None:
             return
         try:
-            from services.act_trail import ActTrail  # noqa: PLC0415
             channel = cast("ProcessorConfig", mp.config).channel
             rows = ActTrail().fetch_by_turn(channel, turn_id)
             tool_call_count = sum(
@@ -32,7 +36,6 @@ class ProactiveSuggestionHook(PostTurnHook):
             )
             if tool_call_count < 4:
                 return
-            from services.skill_suggestion_message_processor import maybe_suggest_skill  # noqa: PLC0415
             rendered = mp._render_act_trail()
             act_trail = rendered.split("\n") if rendered else []
             raw_input = getattr(mp, "_raw_input", "")
@@ -69,7 +72,6 @@ class UserConfig(ProcessorConfig):
             return cast("str", cached)
 
         try:
-            from services.data_graph_service import get_data_graph_service  # noqa: PLC0415
             dgs = get_data_graph_service()
             rows = dgs.fetch(kinds=["system"], order_by="retrieval_weight DESC")
             by_key: dict[str, dict[str, object]] = {
@@ -91,11 +93,8 @@ class UserConfig(ProcessorConfig):
 
     def get_system_prompt(self, mp: "MessageProcessor") -> str:
         """Voice line sits at the very top for cache warmth. The"""
-        import logging  # noqa: PLC0415
         _log = logging.getLogger(__name__)
         try:
-            from services.personality.personality_service import personality_service  # noqa: PLC0415
-            from services.system_message_prompt import UnifiedSystemMessagePrompt  # noqa: PLC0415
             template = UnifiedSystemMessagePrompt().get_prompt()
             voice_line = f"When responding; {personality_service.get_voice()}"
             prompt = f"{voice_line}\n\n{template}"
@@ -108,7 +107,6 @@ class UserConfig(ProcessorConfig):
 
     def get_user_prompt(self, mp: "MessageProcessor") -> str:
         """Section order: user_def, World State, Previous Messages, blank,"""
-        import logging  # noqa: PLC0415
         _log = logging.getLogger(__name__)
         parts: list[str] = []
 

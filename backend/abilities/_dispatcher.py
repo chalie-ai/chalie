@@ -35,10 +35,14 @@ from abilities._mcp_ability import _MCPAbility
 from abilities._params import KeyHealer
 from abilities._registry import AbilityRegistry
 from abilities._result import ToolParamError, ToolResult
+from services.act_trail import ActTrail
+from services.async_delegate_runner import async_delegate_runner
 # ClientContext owns the per-request client-telemetry snapshot that _run()
 # flattens onto ability.telemetry before run().
 from services.client_context import ClientContext
+from services.message_processor import _sanitize_llm_args
 from services.policy_manager import PolicyManager
+from services.vault_service import VaultLockedError
 
 if TYPE_CHECKING:
     # Annotation-only: dispatch resolves abilities through the registry, never
@@ -78,8 +82,6 @@ class ToolDispatcher:
         not retry a blocked tool forever. No cancel check — the loop guards
         cancel_event one line before calling this. Spec §5.
         """
-        from services.message_processor import _sanitize_llm_args  # noqa: PLC0415
-
         _sanitize: "Callable[[dict[str, object]], dict[str, object]]" = cast(
             "Callable[[dict[str, object]], dict[str, object]]", _sanitize_llm_args
         )
@@ -137,7 +139,6 @@ class ToolDispatcher:
         # to the model on top of the unchanged recorded error.
         steer = self._repeat_error_steer(tool_name, result_text)
 
-        from services.act_trail import ActTrail  # noqa: PLC0415
         ActTrail().record(
             tool_name=tool_name,
             params=params,
@@ -172,7 +173,6 @@ class ToolDispatcher:
         turn_id = getattr(self._mp, "turn_id", None)
         if channel is None or turn_id is None:
             return ""
-        from services.act_trail import ActTrail  # noqa: PLC0415
         seen = any(
             row.get("tool_name") == tool_name and row.get("result") == result_text
             for row in ActTrail().fetch_by_turn(channel, turn_id)
@@ -233,7 +233,6 @@ class ToolDispatcher:
             # mp it delivers through; it returns the placeholder immediately so
             # this ACT iteration is never blocked (spec §4.0 / §4.4). The
             # placeholder is prose the model reads while the real work runs.
-            from services.async_delegate_runner import async_delegate_runner  # noqa: PLC0415
             placeholder = async_delegate_runner.spawn(ability, params, self._mp, act_summary)
             tr = ToolResult.ok(str(placeholder))
         else:
@@ -329,18 +328,14 @@ class ToolDispatcher:
             return ToolResult.err(exc.message, code=exc.code, hint=exc.hint, valid=exc.valid)
         except Exception as exc:  # noqa: BLE001
             # VaultLockedError gets a friendlier message.
-            try:
-                from services.vault_service import VaultLockedError  # noqa: PLC0415
-                if isinstance(exc, VaultLockedError):
-                    return ToolResult.err(
-                        "This function is currently unavailable. "
-                        "The vault is locked. "
-                        "Notify the user that you could not complete this action "
-                        "because they were logged out",
-                        code="vault-locked",
-                    )
-            except ImportError:
-                pass
+            if isinstance(exc, VaultLockedError):
+                return ToolResult.err(
+                    "This function is currently unavailable. "
+                    "The vault is locked. "
+                    "Notify the user that you could not complete this action "
+                    "because they were logged out",
+                    code="vault-locked",
+                )
             return ToolResult.err(f"Error: {exc}", code="unhandled-exception")
 
         if not isinstance(raw, ToolResult):

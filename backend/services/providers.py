@@ -5,6 +5,15 @@ import logging
 import threading
 from typing import TYPE_CHECKING, cast
 
+from services.database_service import get_shared_db_service
+from services.llm_call_log_service import log_call
+from services.llm_clients.factory import build_client
+from services.llm_request_logger import log_llm_request
+from services.metrics_service import MetricsService
+from services.provider_api import ProviderError, ProviderType, RequestOverCapError
+from services.provider_cache_service import ProviderCacheService
+from services.provider_db_service import ProviderDbService
+
 if TYPE_CHECKING:
     from services.llm_clients.base import ProviderClient
     from services.provider_api import ProviderApiRequest, ProviderApiResponse
@@ -40,22 +49,15 @@ class Providers:
 
     def _resolve(self, provider_type: object = None) -> "ProviderClient":
         """Return the ProviderClient for the given ProviderType."""
-        from services.provider_api import ProviderType, ProviderError  # noqa: PLC0415
-        from services.llm_clients.factory import build_client  # noqa: PLC0415
-
         pt = provider_type or ProviderType.CHAT
 
         if pt == ProviderType.VISION:
-            from services.provider_db_service import ProviderDbService  # noqa: PLC0415
-            from services.database_service import get_shared_db_service  # noqa: PLC0415
             vp = ProviderDbService(get_shared_db_service()).get_vision_provider()
             if not vp:
                 raise RuntimeError("VISION type requested but no vision provider configured")
             return build_client(dict(vp))
 
         if pt == ProviderType.DELEGATE:
-            from services.provider_db_service import ProviderDbService  # noqa: PLC0415
-            from services.database_service import get_shared_db_service  # noqa: PLC0415
             dp = ProviderDbService(get_shared_db_service()).get_delegate_provider()
             if not dp:
                 raise RuntimeError("DELEGATE type requested but no delegate or selected provider configured")
@@ -64,7 +66,6 @@ class Providers:
         if pt != ProviderType.CHAT:
             raise ProviderError(f"Unsupported provider type for send: {pt}")
 
-        from services.provider_cache_service import ProviderCacheService  # noqa: PLC0415
         config = ProviderCacheService.get_selected_provider()
         if not config:
             providers = ProviderCacheService.get_providers()
@@ -75,8 +76,6 @@ class Providers:
 
     def send(self, dto: "ProviderApiRequest") -> "ProviderApiResponse":
         """Pre-flight check, call, telemetry — the single chokepoint."""
-        from services.provider_api import RequestOverCapError  # noqa: PLC0415
-
         client = self._resolve(dto.type)
         window = min(client.get_context_limit(), MAX_CONTEXT_WINDOW)
         cap = window - max(int(0.10 * window), 8000)
@@ -103,11 +102,9 @@ class Providers:
 
     def get_context_limit(self, provider_type: object = None) -> int:
         """Declared context window for the active provider/model, hard-capped at MAX_CONTEXT_WINDOW."""
-        from services.provider_api import ProviderType  # noqa: PLC0415
         pt = provider_type or ProviderType.CHAT
 
         if pt == ProviderType.CHAT:
-            from services.provider_cache_service import ProviderCacheService  # noqa: PLC0415
             config = ProviderCacheService.get_selected_provider() or {}
             declared = config.get("max_tokens")
             if declared and int(cast("int | str", declared)) > 0:
@@ -132,7 +129,6 @@ class Providers:
 
         # File-based request log (verbatim prompt/response log).
         try:
-            from services.llm_request_logger import log_llm_request  # noqa: PLC0415
             log_llm_request(
                 caller=getattr(dto, '_caller', 'Providers'),
                 job=job_name,
@@ -147,7 +143,6 @@ class Providers:
 
     def _log_token_accounting(self, dto: "ProviderApiRequest", response: "ProviderApiResponse", job_name: str) -> None:
         try:
-            from services.llm_call_log_service import log_call  # noqa: PLC0415
             log_call(
                 job_name=job_name,
                 provider=getattr(response, 'provider', 'unknown'),
@@ -172,7 +167,6 @@ class Providers:
         """Record per-send, per-channel turn counters (spec §4e)."""
         try:
             channel = getattr(getattr(proc, 'config', None), 'channel', '') or ''
-            from services.metrics_service import MetricsService  # noqa: PLC0415
             m = MetricsService()
             m.record_counter('requests_total')
             if channel == 'dmn':

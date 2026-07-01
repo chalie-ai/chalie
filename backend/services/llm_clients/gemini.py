@@ -95,6 +95,7 @@ if TYPE_CHECKING:
         parts: "list[_Part] | None"
 
 from services.llm_clients.base import ProviderClient
+from services.llm_service import _app_user_agent, _resolve_api_key, estimate_tokens
 from services.provider_api import (
     ProviderApiRequest,
     ProviderApiResponse,
@@ -104,6 +105,7 @@ from services.provider_api import (
     ProviderTimeoutError,
     ThinkingLevel,
 )
+from services.providers import PROVIDER_CALL_TIMEOUT_S
 
 logger = logging.getLogger(__name__)
 
@@ -210,8 +212,6 @@ class GeminiClient(ProviderClient):
             )
 
     def _get_client(self, genai: "_Genai") -> "_GenaiClient":
-        from services.llm_service import _resolve_api_key, _app_user_agent  # noqa: PLC0415
-        from services.providers import PROVIDER_CALL_TIMEOUT_S  # noqa: PLC0415
         return genai.Client(
             api_key=_resolve_api_key(self._config),
             # HttpOptions.timeout is in milliseconds.
@@ -405,7 +405,6 @@ class GeminiClient(ProviderClient):
             return self._cached_context_limit
         try:
             genai = self._get_sdk()
-            from services.llm_service import _resolve_api_key  # noqa: PLC0415
             client = genai.Client(api_key=_resolve_api_key(self._config))
             model_info = client.models.get(model=self.model)
             self._cached_context_limit: int = cast(int, model_info.input_token_limit)
@@ -417,7 +416,6 @@ class GeminiClient(ProviderClient):
 
     def estimate_request_tokens(self, dto: ProviderApiRequest) -> int:
         """Estimate using build_request_body + heuristic estimate_tokens."""
-        from services.llm_service import estimate_tokens  # noqa: PLC0415
         contents = _gemini_convert_messages(dto.messages)
         config_dict: dict[str, object] = {'system_instruction': dto.system}
         if dto.tools:

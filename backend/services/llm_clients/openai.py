@@ -42,14 +42,23 @@ if TYPE_CHECKING:
         tool_calls: "list[_ToolCall] | None"
 
 from services.llm_clients.base import ProviderClient
+from services.llm_service import (
+    _app_user_agent,
+    _is_thinking_rejection,
+    _resolve_api_key,
+    _strip_think_blocks,
+    estimate_tokens,
+)
 from services.provider_api import (
     ProviderApiRequest,
     ProviderApiResponse,
+    ProviderResponseError,
+    ProviderTimeoutError,
     RateLimitError,
     ResponseOverLimitError,
-    ProviderResponseError,
     ThinkingLevel,
 )
+from services.providers import PROVIDER_CALL_TIMEOUT_S
 
 logger = logging.getLogger(__name__)
 
@@ -117,8 +126,6 @@ class OpenAIClient(ProviderClient):
 
     def _get_client(self) -> "_openai_mod.OpenAI":
         from openai import OpenAI  # noqa: PLC0415
-        from services.llm_service import _resolve_api_key, _app_user_agent  # noqa: PLC0415
-        from services.providers import PROVIDER_CALL_TIMEOUT_S  # noqa: PLC0415
         kwargs: dict[str, object] = {
             'api_key': _resolve_api_key(self._config),
             'timeout': PROVIDER_CALL_TIMEOUT_S,
@@ -172,8 +179,6 @@ class OpenAIClient(ProviderClient):
     def _invoke_create(self, client: "_openai_mod.OpenAI", create_kwargs: dict[str, object]) -> "_openai_mod.types.chat.ChatCompletion":
         """Call chat.completions.create, mapping SDK errors with a thinking-retry fallback."""
         import openai as openai_mod  # noqa: PLC0415
-        from services.llm_service import _is_thinking_rejection  # noqa: PLC0415
-        from services.provider_api import ProviderTimeoutError  # noqa: PLC0415
         try:
             return cast("Callable[..., _openai_mod.types.chat.ChatCompletion]", client.chat.completions.create)(**create_kwargs)
         except openai_mod.RateLimitError as exc:
@@ -202,8 +207,6 @@ class OpenAIClient(ProviderClient):
 
     def send(self, dto: ProviderApiRequest) -> ProviderApiResponse:
         """Transform DTO → OpenAI Chat Completions API → ProviderApiResponse."""
-        from services.llm_service import _strip_think_blocks  # noqa: PLC0415
-
         client = self._get_client()
         start = time.time()
 
@@ -260,7 +263,6 @@ class OpenAIClient(ProviderClient):
 
     def estimate_request_tokens(self, dto: ProviderApiRequest) -> int:
         """Estimate tokens using tiktoken if available, else heuristic."""
-        from services.llm_service import estimate_tokens  # noqa: PLC0415
         try:
             import tiktoken  # noqa: PLC0415
             try:

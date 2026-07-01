@@ -1,8 +1,13 @@
 from __future__ import annotations
 
+import json
+import logging
+
 from typing import TYPE_CHECKING, cast
 
 from services.processor_config import ProcessorConfig
+from services.system_message_prompt import SuperEpisodeEncoderSystemPrompt
+from services.transcript_service import Transcript
 
 if TYPE_CHECKING:
     from services.database_service import DatabaseService
@@ -29,16 +34,14 @@ def _super_ep_strip_code_fence(text: str) -> str:
 
 
 def _safe_json_load_object(text: str) -> dict[str, object]:
-    import json as _json  # noqa: PLC0415
-    import logging as _logging  # noqa: PLC0415
-    _log = _logging.getLogger(__name__)
+    _log = logging.getLogger(__name__)
     if not text:
         return {}
     text = text.strip()
     if text.startswith("```"):
         text = _super_ep_strip_code_fence(text)
     try:
-        parsed = _json.loads(text)
+        parsed = json.loads(text)
         if isinstance(parsed, dict):
             return cast("dict[str, object]", parsed)
         _log.warning("%s SuperEpisodeEncoder returned non-dict JSON", _SUPER_EP_LOG_PREFIX)
@@ -49,10 +52,9 @@ def _safe_json_load_object(text: str) -> dict[str, object]:
 
 
 def _parse_super_ep_transcript_ids_field(raw: object) -> list[object]:
-    import json as _json  # noqa: PLC0415
     if isinstance(raw, str):
         try:
-            return cast("list[object]", _json.loads(raw))
+            return cast("list[object]", json.loads(raw))
         except Exception:
             return []
     if isinstance(raw, list):
@@ -84,9 +86,7 @@ def _collect_transcript_ids(episodes: list[object]) -> set[int]:
 
 def _fetch_transcript_spans(t_ids: set[int], db: "DatabaseService") -> str:
     """Returns '' if no transcript IDs found."""
-    import logging as _logging  # noqa: PLC0415
-    from services.transcript_service import Transcript
-    _log = _logging.getLogger(__name__)
+    _log = logging.getLogger(__name__)
     if not t_ids:
         return ""
 
@@ -154,5 +154,4 @@ class SuperEpisodeConfig(ProcessorConfig):
 
     def get_system_prompt(self, mp: "MessageProcessor") -> str:
         """OLD assembly ``f"{user_def}\n\n{body}"``."""
-        from services.system_message_prompt import SuperEpisodeEncoderSystemPrompt  # noqa: PLC0415
         return f"{self.get_user_definition(mp)}\n\n{SuperEpisodeEncoderSystemPrompt().get_prompt()}"
