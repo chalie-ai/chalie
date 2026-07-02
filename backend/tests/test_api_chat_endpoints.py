@@ -31,11 +31,11 @@ class TestChatEndpoints:
                 _cancellers.clear()
 
     def test_thread_empty_message_rejected_and_no_turn_started(self, authed_client: tuple[FlaskClient, sqlite3.Connection, object]) -> None:
-        """An empty POST /api/thread fails loud with 422/message required and must
+        """An empty POST /api/thread/-1 fails loud with 422/message required and must
         NOT register a turn — a follow-up interrupt finds nothing in flight."""
         client, _db_conn, _store = authed_client
 
-        resp = client.post('/api/thread', data={'text': '   '})
+        resp = client.post('/api/thread/-1', data={'text': '   '})
 
         assert resp.status_code == 422
         assert resp.get_json()['error'] == 'message required'
@@ -47,19 +47,19 @@ class TestChatEndpoints:
         assert interrupt.get_json() == {'ok': True, 'interrupted': None, 'reason': 'no_active_turn'}
 
     def test_thread_post_allocates_turn_id_synchronously(self, authed_client: tuple[FlaskClient, sqlite3.Connection, object]) -> None:
-        """POST /api/thread returns 200 with the synchronously-allocated
-        ``{turn_id, channel}`` — not the old empty 201. The id is REAL: its opener
+        """POST /api/thread/-1 returns 200 with the synchronously-allocated
+        ``{turn_id, type}`` — not the old empty 201. The id is REAL: its opener
         row is already in the transcript before the response returns (the request
         thread writes it, so the FE holds a live handle with no WS round-trip)."""
         client, db_conn, _store = authed_client
 
-        resp = client.post('/api/thread', data={'text': 'hello there'})
+        resp = client.post('/api/thread/-1', data={'text': 'hello there'})
 
         assert resp.status_code == 200
         body = resp.get_json()
         turn_id = body['turn_id']
         assert isinstance(turn_id, int) and turn_id >= 1
-        assert body['channel'] == 'user'
+        assert body['type'] == 'user'
 
         # Cross-step proof the id is real, not fabricated: the opener row was
         # written synchronously (before the response) and is queryable now.
@@ -72,6 +72,19 @@ class TestChatEndpoints:
         # Tame the background turn the dispatch spawned (no provider in test env):
         # the cancel handle was registered before the worker ran, so this stops it.
         client.delete(f'/api/thread/{turn_id}')
+
+    def test_thread_post_nonexistent_turn_id_rejected_and_writes_nothing(self, authed_client: tuple[FlaskClient, sqlite3.Connection, object]) -> None:
+        """POST /api/thread/<id> naming a turn that does not exist must bubble the
+        constructor's ``Invalid turn_id specified`` — no phantom turn is minted, no
+        transcript row is written."""
+        client, db_conn, _store = authed_client
+        rows_before = db_conn.execute("SELECT COUNT(*) FROM transcript").fetchone()[0]
+
+        with pytest.raises(ValueError, match='Invalid turn_id specified'):
+            client.post('/api/thread/999999', data={'text': 'reply into nothing'})
+
+        rows_after = db_conn.execute("SELECT COUNT(*) FROM transcript").fetchone()[0]
+        assert rows_after == rows_before
 
     def test_thread_interrupt_idle_returns_no_active_turn(self, authed_client: tuple[FlaskClient, sqlite3.Connection, object]) -> None:
         """DELETE /api/thread/<turn_id> with no turn in flight returns 200 and says so."""

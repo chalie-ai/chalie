@@ -297,14 +297,13 @@ def _fetch_content_from_db(db_path: Path, title: str) -> str | None:
 
 
 def _mp_for_skill_test(config: "_PC", db: sqlite3.Connection) -> "_MP":
+    # Real MessageProcessor construction: config first. The constructor itself
+    # seeds this turn's anchoring input row (mp.uid/mp.turn_id) exactly as
+    # production's _setup does — no manual row seeding or private-field poking.
     from services.message_processor import MessageProcessor
-    from tests._tool_result_harness import seed_transcript
 
-    mp = MessageProcessor("manage my skills")
-    mp.config = config
+    mp = MessageProcessor(config, raw_input="manage my skills")
     mp.active_tools = list(config.always_available or [])
-    pc = getattr(config, "policy_channel", None)
-    mp.uid = seed_transcript(db, pc.value if pc else "chat", "manage my skills")
     return mp
 
 
@@ -407,11 +406,9 @@ def test_skill_suggestion_prompt_contains_real_query_and_trail(db: sqlite3.Conne
         summary="Starting 20-min timer",
     )
 
-    # 3. Build the suggestion MP exactly as _run_suggestion_processor does.
-    mp = object.__new__(MessageProcessor)
-    MessageProcessor.__init__(mp, user_query, None)
-    mp.config = SkillSuggestionConfig()
-    mp.uid = None
+    # 3. Build the suggestion MP exactly as _run_suggestion_processor does:
+    # real construction (config first) — the constructor seeds its own turn row.
+    mp = MessageProcessor(SkillSuggestionConfig(), raw_input=user_query)
     mp.cancel_event = threading.Event()
     mp.thinking_level = "low"
     setattr(mp, "_trigger_channel", "user")

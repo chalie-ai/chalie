@@ -67,11 +67,7 @@ def _config_with_hooks(hooks: tuple[PostTurnHook, ...]) -> StubProcessorConfig:
 def _make_processor(hooks: tuple[PostTurnHook, ...]) -> "_MP":
     from services.message_processor import MessageProcessor
 
-    mp = object.__new__(MessageProcessor)
-    MessageProcessor.__init__(mp, "raw input")
-    mp.config = _config_with_hooks(hooks)
-    mp.uid = None
-    return mp
+    return MessageProcessor(_config_with_hooks(hooks), raw_input="raw input")
 
 
 _SUMMARY_JSON = '{"short": "Alice, a runner", "long": "Alice is a long-distance runner in Berlin."}'

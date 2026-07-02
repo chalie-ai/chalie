@@ -47,9 +47,7 @@ def test_get_context_limit_reads_declared_max_tokens_capped(db: sqlite3.Connecti
     pid = _seed_selected_ollama(db, 8000)
     ProviderCacheService.invalidate()
 
-    mp = object.__new__(MessageProcessor)
-    MessageProcessor.__init__(mp, "hi", None)
-    mp.config = UserConfig()
+    mp = MessageProcessor(UserConfig(), raw_input="hi")
     try:
         assert mp.providers.get_context_limit() == 8000          # declared value honoured
         db.execute("UPDATE providers SET max_tokens = 999999 WHERE id = ?", (pid,))
@@ -95,9 +93,7 @@ def test_measure_true_when_full_request_reaches_threshold(db: sqlite3.Connection
     _seed_selected_ollama(db, 20000)
     ProviderCacheService.invalidate()
 
-    mp = object.__new__(MessageProcessor)
-    MessageProcessor.__init__(mp, "what should I do next?", None)
-    mp.config = UserConfig()
+    mp = MessageProcessor(UserConfig(), raw_input="what should I do next?")
     mp.thinking_level = "low"
     try:
         window = mp.providers.get_context_limit()
@@ -125,9 +121,7 @@ def test_measure_false_when_request_fits(db: sqlite3.Connection) -> None:
     _seed_selected_ollama(db, 20000)
     ProviderCacheService.invalidate()
 
-    mp = object.__new__(MessageProcessor)
-    MessageProcessor.__init__(mp, "hi", None)
-    mp.config = UserConfig()
+    mp = MessageProcessor(UserConfig(), raw_input="hi")
     mp.thinking_level = "low"
     try:
         window = mp.providers.get_context_limit()
@@ -157,9 +151,7 @@ def test_send_raises_request_over_cap_without_calling_provider(db: sqlite3.Conne
     _seed_selected_ollama(db, 20000)
     ProviderCacheService.invalidate()
 
-    mp = object.__new__(MessageProcessor)
-    MessageProcessor.__init__(mp, "what should I do next?", None)
-    mp.config = UserConfig()
+    mp = MessageProcessor(UserConfig(), raw_input="what should I do next?")
     mp.thinking_level = "low"  # set here because process() sets this; __init__ doesn't
     try:
         # No live model — if send() tried to reach Ollama this would raise
@@ -190,9 +182,7 @@ def test_fit_compaction_input_drops_oldest_until_bare_request_fits(db: sqlite3.C
     _seed_selected_ollama(db, 20000)
     ProviderCacheService.invalidate()
 
-    mp = object.__new__(MessageProcessor)
-    MessageProcessor.__init__(mp, "compact", None)
-    mp.config = UserConfig()
+    mp = MessageProcessor(UserConfig(), raw_input="compact")
     try:
         combined = ChatHistoryCompactor._fit_compaction_input(cast("_CompactionParent", mp), "")
         assert combined is not None
@@ -232,9 +222,7 @@ def test_fit_compaction_input_no_drop_when_bare_request_fits(db: sqlite3.Connect
     _seed_selected_ollama(db, 20000)
     ProviderCacheService.invalidate()
 
-    mp = object.__new__(MessageProcessor)
-    MessageProcessor.__init__(mp, "compact", None)
-    mp.config = UserConfig()
+    mp = MessageProcessor(UserConfig(), raw_input="compact")
     try:
         combined = ChatHistoryCompactor._fit_compaction_input(cast("_CompactionParent", mp), "PRIOR-CHECKPOINT")
         assert combined is not None
@@ -259,9 +247,7 @@ def test_fit_compaction_input_returns_none_when_no_history(db: sqlite3.Connectio
     _seed_selected_ollama(db, 20000)
     ProviderCacheService.invalidate()
 
-    mp = object.__new__(MessageProcessor)
-    MessageProcessor.__init__(mp, "compact", None)
-    mp.config = UserConfig()
+    mp = MessageProcessor(UserConfig(), raw_input="compact")
     try:
         assert ChatHistoryCompactor._fit_compaction_input(cast("_CompactionParent", mp), "") is None
     finally:
@@ -281,9 +267,7 @@ def test_substitute_provider_content_field_uses_mp_providers(db: sqlite3.Connect
     _seed_selected_ollama(db, 20000)
     ProviderCacheService.invalidate()
 
-    mp = object.__new__(MessageProcessor)
-    MessageProcessor.__init__(mp, "hi", None)
-    mp.config = UserConfig()
+    mp = MessageProcessor(UserConfig(), raw_input="hi")
     try:
         label = mp.providers.selected_provider().CONTENT_FIELD_LABEL
         out = substitute_provider_content_field(f"write into {_CONTENT_FIELD_PLACEHOLDER}", mp)

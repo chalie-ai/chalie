@@ -56,8 +56,7 @@ def _mp(db: sqlite3.Connection) -> MessageProcessor:
     """A real MessageProcessor bound to a real transcript anchor so the
     dispatcher's act-trail write lands on a real row. Carries ``active_tools`` —
     the genuine surface find_skills' discovery cascade runs against."""
-    mp = MessageProcessor("find me a skill")
-    mp.config = UserConfig({})
+    mp = MessageProcessor(UserConfig({}), raw_input="find me a skill")
     mp.active_tools = list(mp.config.always_available or [])
     mp.uid = seed_transcript(db, "chat", "find me a skill")
     return mp

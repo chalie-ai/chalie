@@ -180,7 +180,7 @@ class TurnZeroFlashback:
         # Fetch one extra row so dropping the current turn still leaves a full
         # window of prior context.
         rows = Transcript.get_recent(
-            cast("ProcessorConfig", self._mp.config).channel, limit=_CENTROID_WINDOW + 1
+            self._mp.config.channel, limit=_CENTROID_WINDOW + 1
         )
         current_uid = self._mp.uid
         return [

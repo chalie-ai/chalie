@@ -15,7 +15,6 @@ import pytest
 from abilities._dispatcher import ToolDispatcher
 from configs.channels import UserConfig
 from services.message_processor import MessageProcessor
-from services.transcript_service import Transcript
 
 pytestmark = pytest.mark.unit
 
@@ -23,13 +22,12 @@ _HINT_LEAD = "If you cannot find the information in memory"
 
 
 def _build_user_mp(text: str) -> MessageProcessor:
-    """Builds a real MessageProcessor with an input row (so uid anchors act-trail FK) and active_tools seeded."""
-    parent = object.__new__(MessageProcessor)
-    MessageProcessor.__init__(parent, text, {})
-    parent.config = UserConfig()
-    parent.uid = Transcript.write_input_row("user", "user", text)
-    parent.active_tools = list(parent.config.always_available or [])
-    return parent
+    """Builds a real MessageProcessor (constructor pre-allocates the input row, so
+    uid anchors act-trail FK) with active_tools seeded — mirrors _setup()'s own seed
+    without running the full turn chain."""
+    mp = MessageProcessor(UserConfig(), raw_input=text)
+    mp.active_tools = list(mp.config.always_available or [])
+    return mp
 
 
 def _tool_names_recorded(db: sqlite3.Connection, transcript_id: int) -> list[str]:

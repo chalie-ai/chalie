@@ -87,7 +87,7 @@ type Interval = ReturnType<typeof setInterval>;
 
 /**
  * WebSocket client — receive-only server→client push channel. Client→server
- * requests go over HTTP (POST /api/thread[/<turn_id>], DELETE /api/thread/<turn_id>,
+ * requests go over HTTP (POST /api/thread/<turn_id>, DELETE /api/thread/<turn_id>,
  * POST /api/action); the only client→server WS frame is `pong`.
  */
 export class WebSocketService {
@@ -374,11 +374,12 @@ export class WebSocketService {
     form.append('text', text);
     form.append('type', type);
     for (const file of files) form.append('files', file, file.name);
-    // Both POST /api/thread (new) and POST /api/thread/<turn_id> (reply) return
-    // HTTP 200 with {turn_id, type} — the caller binds the lane handle from this
-    // body the moment the server allocates it, with no WS round-trip. ``type`` is
-    // the ProcessorConfig identity the server resolves to a transcript channel.
-    const path = threadId != null ? `/api/thread/${threadId}` : '/api/thread';
+    // POST /api/thread/<turn_id> — -1 creates a new thread, a real id replies
+    // into it. Both return HTTP 200 with {turn_id, type} — the caller binds the
+    // lane handle from this body the moment the server allocates it, with no WS
+    // round-trip. ``type`` is the ProcessorConfig identity the server resolves
+    // to a transcript channel.
+    const path = `/api/thread/${threadId ?? -1}`;
     return fetch(this.buildHttpUrl(path), {
       method: 'POST',
       credentials: 'same-origin',

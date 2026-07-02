@@ -178,11 +178,7 @@ class TestThinkingGateBypass:
         from services.message_processor import MessageProcessor
         from configs.channels import UserConfig
 
-        mp = object.__new__(MessageProcessor)
-        MessageProcessor.__init__(mp, "hi", None)
-        mp.config = UserConfig()          # channel='user' → gate runs
-        mp.uid = None
-        mp._uid = None
+        mp = MessageProcessor(UserConfig(), raw_input="hi")  # channel='user' → gate runs
         mp.thinking_override = 'high'
         mp.thinking_level = '__SENTINEL__'
 
@@ -194,7 +190,7 @@ class TestThinkingGateBypass:
         """Sanity: a fresh MP defaults thinking_override to None so the gate path
         is unchanged when the user has not set an override."""
         from services.message_processor import MessageProcessor
+        from configs.channels import UserConfig
 
-        mp = object.__new__(MessageProcessor)
-        MessageProcessor.__init__(mp, "hi", None)
+        mp = MessageProcessor(UserConfig(), raw_input="hi")
         assert mp.thinking_override is None

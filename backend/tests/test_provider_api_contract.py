@@ -145,9 +145,7 @@ def test_build_send_dto_type_chat_for_user_config(db: sqlite3.Connection) -> Non
     ProviderCacheService.invalidate()
 
     try:
-        mp = object.__new__(MessageProcessor)
-        MessageProcessor.__init__(mp, "tell me a joke", None)
-        mp.config = UserConfig()
+        mp = MessageProcessor(UserConfig(), -1, "tell me a joke")
         mp.thinking_level = "low"
 
         dto = mp._build_send_dto()
@@ -173,12 +171,12 @@ def test_build_send_dto_type_vision_for_vision_config(db: sqlite3.Connection, tm
     img = tmp_path / "test.png"
     img.write_bytes(_png_1x1())
 
-    mp = object.__new__(MessageProcessor)
-    MessageProcessor.__init__(
-        mp, "what is this image?",
+    mp = MessageProcessor(
+        VisionConfig(ProcessorConfig.PolicyChannel.CHAT),
+        -1,
+        "what is this image?",
         {"image_path": str(img), "mime_type": "image/png"},
     )
-    mp.config = VisionConfig(ProcessorConfig.PolicyChannel.CHAT)
     mp.thinking_level = "low"
 
     dto = mp._build_send_dto()

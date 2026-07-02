@@ -62,12 +62,10 @@ def test_setup_seeds_active_tools_and_opens_a_turn(db: sqlite3.Connection) -> No
     the thinking gate and seed-0 fire through. Zero internal mocks."""
     ProviderDbService(get_shared_db_service()).set_vision_provider(None)
 
-    mp = object.__new__(MessageProcessor)
-    MessageProcessor.__init__(mp, "hello", None)
-    mp.config = UserConfig({"channel": "user"})
-
+    config = UserConfig({"channel": "user"})
     recorder = _RecordingProvider()
     with patch("services.providers.Providers._resolve", return_value=recorder):
+        mp = MessageProcessor(config, raw_input="hello")
         mp._setup()
 
     # active_tools seeded from the channel's always_available tier.

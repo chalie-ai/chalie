@@ -103,13 +103,14 @@ def test_settling_tool_demotes_transcript_row_to_settled_zero(db: sqlite3.Connec
 
 
 def test_non_settling_tool_leaves_transcript_row_settled_one(db: sqlite3.Connection) -> None:
-    """Case B — non-settling tools (thinking, chat_history_compactor) must NOT demote
-    the assistant row.  An internal pass leaves settled=1 so the row remains eligible
-    as settle0 on the thread spine."""
+    """Case B — non-settling tools (registry abilities with counts_as_settle=False,
+    e.g. chat_history_compactor) must NOT demote the assistant row.  An internal
+    pass leaves settled=1 so the row remains eligible as settle0 on the thread
+    spine."""
     row_id = Transcript.write_assistant_row("user", "")
     assert _settled(db, row_id) == 1
 
-    ActTrail().start(tool_name="thinking", params={}, transcript_id=row_id)
+    ActTrail().start(tool_name="chat_history_compactor", params={}, transcript_id=row_id)
 
     assert _settled(db, row_id) == 1
 
@@ -120,7 +121,7 @@ def test_settling_tool_after_non_settling_still_demotes(db: sqlite3.Connection) 
     row_id = Transcript.write_assistant_row("user", "")
     trail = ActTrail()
 
-    trail.start(tool_name="thinking", params={}, transcript_id=row_id)
+    trail.start(tool_name="chat_history_compactor", params={}, transcript_id=row_id)
     assert _settled(db, row_id) == 1  # still clean after internal pass
 
     trail.start(tool_name="web_search", params={"query": "latest news"}, transcript_id=row_id)

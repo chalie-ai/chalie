@@ -53,11 +53,13 @@ def _seed_offline_provider_cap_zero(db: sqlite3.Connection) -> int | None:
 
 
 def _make_mp(raw_input: str, channel: str) -> MessageProcessor:
-    mp = object.__new__(MessageProcessor)
-    MessageProcessor.__init__(mp, raw_input, None)
-    mp.config = UserConfig()
-    assert mp.config.channel == channel  # UserConfig drives the 'user' channel
-    return mp
+    config = UserConfig()
+    assert config.channel == channel  # UserConfig drives the 'user' channel
+    # Real public constructor (config first, per the new MP API). The fresh
+    # turn this allocates for "compact" has no settled assistant reply, so
+    # _previous_rows' settle0 floor drops it entirely — it never pollutes the
+    # settled-spine row count under test.
+    return MessageProcessor(config, raw_input=raw_input)
 
 
 def test_fit_compaction_input_surfaces_kept_row_count(db: sqlite3.Connection) -> None:

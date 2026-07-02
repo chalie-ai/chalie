@@ -368,8 +368,7 @@ class EpisodicService:
             # _window / _referenced are read by EpisodeEncoderConfig.get_user_prompt;
             # set them on the instance before _run().
             emp = object.__new__(MessageProcessor)
-            MessageProcessor.__init__(emp, "", None)
-            emp.config = EpisodeEncoderConfig()
+            MessageProcessor.__init__(emp, EpisodeEncoderConfig())
             emp.uid = None
             emp.cancel_event = threading.Event()
             emp.thinking_level = "low"

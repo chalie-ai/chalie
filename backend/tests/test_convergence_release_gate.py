@@ -196,9 +196,8 @@ def _insert_episode_raw(
             id, gist, salience, channel, level,
             retrieval_weight, last_relevant_at,
             consolidated_into, facts_extracted_at,
-            transcript_ids, consolidated_from,
-            storage_strength
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, '[]', '[]', 1.0)
+            transcript_ids, consolidated_from
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, '[]', '[]')
         """,
         (eid, gist, salience, channel, level, retrieval_weight, lr,
          consolidated_into, facts_extracted_at),

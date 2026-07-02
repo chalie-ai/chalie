@@ -47,8 +47,7 @@ def generate_gist(trigger_channel: str, trigger_turn_id: int) -> str | None:
     from services.message_processor import MessageProcessor
 
     mp = object.__new__(MessageProcessor)
-    MessageProcessor.__init__(mp, "", None)
-    mp.config = ThreadGistConfig()
+    MessageProcessor.__init__(mp, ThreadGistConfig())
     mp.uid = None
     mp.cancel_event = threading.Event()
     mp.thinking_level = "low"

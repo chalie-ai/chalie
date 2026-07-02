@@ -41,7 +41,6 @@ from configs.channels.web_search import WebSearchConfig
 from services.act_trail import ActTrail
 from services.message_processor import MessageProcessor
 from services.processor_config import ProcessorConfig
-from services.transcript_service import Transcript
 from services.websocket_broker import WebSocketBroker
 
 pytestmark = pytest.mark.unit
@@ -60,7 +59,7 @@ class _Surface:
         self.received.append(json.loads(raw))
 
     def types(self) -> list[str]:
-        return [cast(str, m.get("type")) for m in self.received]
+        return [cast(str, m.get("status")) for m in self.received]
 
 
 @pytest.fixture
@@ -79,17 +78,12 @@ def broker() -> Generator[WebSocketBroker, None, None]:
 
 def _user_mp(text: str) -> MessageProcessor:
     """A real user-channel MP placed in its post-input-row production state: the
-    real ``Transcript.write_input_row`` allocates the turn and anchor exactly as
-    ``_setup`` does, so the broadcast chokepoint and dispatch run for real. The
-    thinking gate and turn-zero seed (network / unrelated signals) are not the
-    subject here and are not driven."""
-    mp = object.__new__(MessageProcessor)
-    MessageProcessor.__init__(mp, text, {})
-    mp.config = UserConfig()
-    mp.uid = Transcript.write_input_row("user", "user", text, turn_id=None)
-    mp.turn_id = Transcript.turn_id_of_row(mp.uid)
-    mp.anchor = mp.uid
-    return mp
+    real ``MessageProcessor.__init__`` pre-allocates the turn and anchoring input
+    row exactly as production does (``make_row_id`` / ``self.ts``), so the
+    broadcast chokepoint and dispatch run for real. ``_setup`` itself (thinking
+    gate, turn-zero seed — network / unrelated signals) is deliberately not
+    driven here."""
+    return MessageProcessor(UserConfig(), raw_input=text)
 
 
 def test_live_tool_call_signals_are_keyed_to_the_persisted_row(
@@ -157,9 +151,7 @@ def test_a_non_broadcasting_channel_emits_nothing(
     surface = _Surface()
     broker.connect(surface)
 
-    mp = object.__new__(MessageProcessor)
-    MessageProcessor.__init__(mp, "current population of Malta", {})
-    mp.config = WebSearchConfig(_CHAT)
+    mp = MessageProcessor(WebSearchConfig(_CHAT), raw_input="current population of Malta")
     mp._setup()  # real delegate setup: writes its own row, gates — must stay silent
 
     ToolDispatcher(mp).dispatch("memory", {"action": "recall", "query": "population of Malta"})

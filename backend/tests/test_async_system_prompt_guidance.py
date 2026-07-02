@@ -42,15 +42,8 @@ _GUIDANCE_MARKER = "## Background tasks"
 def _assembled_system(config: ProcessorConfig) -> str:
     """Build a real MessageProcessor for *config* and return the system prompt of
     the request its turn would send — the real ``_build_send_dto`` output."""
-    from services.transcript_service import Transcript
-
-    mp = object.__new__(MessageProcessor)
-    MessageProcessor.__init__(mp, "What is the Maltese election about?", None)
-    mp.config = config
-    mp.uid = Transcript.write_input_row(config.channel, config.role, "What is the Maltese election about?")
+    mp = MessageProcessor(config, raw_input="What is the Maltese election about?")
     mp.active_tools = list(config.always_available or [])
-    mp.thinking_level = "low"
-    mp.thinking_override = None
     return mp._build_send_dto().system
 
 

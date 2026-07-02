@@ -50,10 +50,10 @@ def _seed_transcript(db: sqlite3.Connection, channel: str) -> int:
 
 
 def _mp_for(config: ProcessorConfig, db: sqlite3.Connection) -> MessageProcessor:
-    mp = MessageProcessor("call an mcp tool")
-    mp.config = config
+    mp = MessageProcessor(config, raw_input="call an mcp tool")
     mp.active_tools = list(config.always_available or [])
     mp.uid = _seed_transcript(db, "chat")
+    mp.anchor = mp.uid
     return mp
 
 

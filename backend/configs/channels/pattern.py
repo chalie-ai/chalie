@@ -56,7 +56,7 @@ def _touched_pattern_names(mp: "MessageProcessor") -> set[str]:
     if turn_id is None:
         return set()
     names: set[str] = set()
-    for row in ActTrail().fetch_by_turn(cast("ProcessorConfig", mp.config).channel, turn_id):
+    for row in ActTrail().fetch_by_turn(mp.config.channel, turn_id):
         if row.get("tool_name") != "save_pattern":
             continue
         try:
@@ -142,7 +142,7 @@ class PatternSkillSyncHook(PostTurnHook):
                     "WHERE kind='behavioral_pattern' AND active=1 "
                     "AND deleted_at IS NULL AND source=? "
                     f"AND key IN ({placeholders})",
-                    (cast("ProcessorConfig", mp.config).channel, *names),
+                    (mp.config.channel, *names),
                 ).fetchall()
             touched_ids = {r[0] for r in rows}
             if not touched_ids:

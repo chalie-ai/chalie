@@ -53,7 +53,7 @@ def _channel_lock(channel: str) -> threading.Lock:
 # of its chain (see _setup/_run) so DELETE /api/thread/<turn_id> — a separate request
 # holding no in-memory reference to the turn — can cancel it by turn_id. This is the
 # ONLY cross-request state a turn keeps; lifecycle, continuation and broadcasts all
-# ride the live MP instance (turn_id is in memory, _continue threads it + the Event).
+# ride the live MP instance (one instance runs the whole turn's step loop).
 _cancellers: "dict[int, threading.Event]" = {}
 _cancellers_guard = threading.Lock()
 
@@ -144,8 +144,8 @@ class MessageProcessor:
         # Per-channel monotonic turn boundary — the *thread* id. Resolved once by
         # ``self.ts`` at construction (below): a fresh thread allocates
         # ``MAX(turn_id)+1`` for the channel; a real ``turn_id`` appends to that
-        # thread. ``make_row_id`` mirrors it onto ``self.turn_id``; every step in the
-        # chain shares it (propagated via _continue).
+        # thread. ``make_row_id`` mirrors it onto ``self.turn_id``; every step of
+        # the turn's loop shares it.
         self.turn_id: "int | None" = None
         # User thinking-level override (None = auto/gate decides). 'medium'/'high'
         # bypass the gate and are forced on every send via Providers.send.
@@ -159,8 +159,8 @@ class MessageProcessor:
         # The transcript row this step's tool calls anchor to. Defaults to the
         # input row; a tool-bearing step advances it to its OWN step row.
         self.anchor: int | None = None
-        # Set on a continuation MP spawned AFTER a mid-turn compaction: the model
-        # lost its working context, so the user prompt prepends a recovery banner.
+        # Armed for the step AFTER a mid-turn compaction: the model lost its
+        # working context, so that step's user prompt prepends a recovery banner.
         self.post_compaction_continuation: bool = False
         self.continuation_user_query: str | None = None
         # Deliberation level: 'low'/'medium'/'high'. Overwritten by process() and
@@ -173,11 +173,14 @@ class MessageProcessor:
         # row id is this MP's anchor for its tool calls and act-trail.
         from services.transcript import TranscriptService  # noqa: PLC0415
         self.ts = TranscriptService(self.config, turn_id)
+        # A supplied turn_id must name a real turn — a reply can only fork what
+        # exists. -1 (unset) allocates fresh and skips the check.
+        if turn_id != TranscriptService._UNSET_TURN_ID and not self.ts.turn_exists():
+            raise ValueError("Invalid turn_id specified")
         # View mode — an INTERNAL switch, never supplied by callers. A reply INTO
         # an existing thread carries that thread's turn_id (≠ the unset sentinel −1)
         # → FORK read (the whole turn, no settle0 floor) + a fork-scoped checkpoint;
-        # a fresh message (turn_id unset) → MAIN spine. The chain threads the
-        # parent's view onto its continuations via _continue.
+        # a fresh message (turn_id unset) → MAIN spine.
         self._forked: bool = turn_id != TranscriptService._UNSET_TURN_ID
         self.transcript_row_id: int | None = self.make_row_id()
         self._uid = self.transcript_row_id
@@ -234,7 +237,7 @@ class MessageProcessor:
     def cancel(self) -> None:
         self._cancel_event.set()
 
-    # Public per-turn aliases — process()/_continue read & write mp.uid /
+    # Public per-turn aliases — process() and the abilities read & write mp.uid /
     # mp.cancel_event / mp.active_tools; these bridge to the private backing fields.
 
     @property
@@ -268,7 +271,7 @@ class MessageProcessor:
     @property
     def _cfg(self) -> "ProcessorConfig":
         """Non-None config — always set before any method except __init__ is called."""
-        return cast("ProcessorConfig", self.config)
+        return self.config
 
     def broadcast(self, state: str, turn_id: int | None, **extra: object) -> None:
         """The sole WS turn-signal chokepoint. No-op unless this config opts in
@@ -387,10 +390,10 @@ class MessageProcessor:
         return f"{self._cfg.channel}:main"
 
     def _run(self) -> str:
-        """Run the whole turn under the surface lock: setup, step chain, finalise.
+        """Run the whole turn under the surface lock: setup, step loop, finalise.
         ``_setup`` registers this turn's cancel handle by turn_id (the only state
         DELETE /api/thread/<turn_id> can reach it through); the ``finally`` drops it
-        once the whole chain — every ``_continue`` link runs inline here — ends."""
+        once the whole step loop — which runs inline here — ends."""
         with _channel_lock(self._lock_key()):
             try:
                 self._setup()
@@ -552,23 +555,36 @@ class MessageProcessor:
         return [message]
 
     def _step(self) -> str:
-        """One link in the recursive turn chain — exactly one LLM API call."""
+        """The turn's step loop — exactly one LLM API call per iteration. A step
+        that returns tool calls dispatches them and loops for the next step; a
+        mid-turn over-cap compacts, arms the recovery banner, and loops."""
         from services.provider_api import RequestOverCapError, ResponseOverLimitError  # noqa: PLC0415
 
-        if self.cancel_event.is_set():
-            return ""
-        try:
-            response = self._send_with_retry(self._build_send_dto())
-        except (RequestOverCapError, ResponseOverLimitError):
-            self._dispatch_compaction()
-            return self._continue(post_compaction=True)._step()
-        self.providers._record_send_counters(self)
+        while not self.cancel_event.is_set():
+            try:
+                response = self._send_with_retry(self._build_send_dto())
+            except (RequestOverCapError, ResponseOverLimitError):
+                self._dispatch_compaction()
+                # Arm the next step's recovery banner: the compaction cost the
+                # model its working context, so that step's user prompt restates
+                # the user's request and points at the checkpoint +
+                # review_transcript (which stays available for the rest of the turn).
+                from services.transcript_service import Transcript  # noqa: PLC0415
+                self.post_compaction_continuation = True
+                self.continuation_user_query = Transcript.latest_input_content(self._cfg.channel)
+                if "review_transcript" not in self.active_tools:
+                    self.active_tools.append("review_transcript")
+                continue
+            self.providers._record_send_counters(self)
+            # The recovery banner (if armed) rode the send that just landed — one-shot.
+            self.post_compaction_continuation = False
+            self.continuation_user_query = None
 
-        formatted = self._store_row(response.text)
-        if not response.tool_calls:
-            return self._end_turn(formatted)
-        self._dispatch_tools(response.tool_calls)
-        return self._continue()._step()
+            formatted = self._store_row(response.text)
+            if not response.tool_calls:
+                return self._end_turn(formatted)
+            self._dispatch_tools(response.tool_calls)
+        return ""
 
     def _send_with_retry(self, dto: "ProviderApiRequest") -> "ProviderApiResponse":
         """Send through the provider chokepoint, resending the SAME request on failure.
@@ -637,35 +653,6 @@ class MessageProcessor:
             if self.cancel_event.is_set():
                 return
             dispatcher.dispatch(cast("str", tc["name"]), cast("dict[str, object]", tc["input"]))
-
-    def _continue(self, *, post_compaction: bool = False) -> "MessageProcessor":
-        """Spawn the next link in the chain — a hidden-input continuation MP."""
-        # Hidden-input config ⇒ skip_input_row ⇒ make_row_id writes no row; the
-        # child shares THIS step's uid/turn_id (set just below), continuing the
-        # same turn rather than opening a new one.
-        child = MessageProcessor(
-            self._cfg.with_hidden_input(),
-            self.turn_id if self.turn_id is not None else -1,
-            self._raw_input,
-            self._metadata,
-        )
-        child.uid = self.uid
-        child.turn_id = self.turn_id
-        child._forked = self._forked
-        child.anchor = self.uid
-        child.active_tools = self.active_tools            # SAME list
-        child._rich_media_ordinals = getattr(self, "_rich_media_ordinals", None)
-        child.cancel_event = self.cancel_event            # SAME Event
-        child.thinking_level = getattr(self, "thinking_level", "low")
-        child.thinking_override = self.thinking_override
-        child.providers = self.providers
-        if post_compaction:
-            from services.transcript_service import Transcript  # noqa: PLC0415
-            child.post_compaction_continuation = True
-            child.continuation_user_query = Transcript.latest_input_content(self._cfg.channel)
-            if "review_transcript" not in child.active_tools:
-                child.active_tools.append("review_transcript")
-        return child
 
     def _format_response(self, text: _OptStr) -> str:
         """Normalise assistant text before it is persisted or broadcast. Any

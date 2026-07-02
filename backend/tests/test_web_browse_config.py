@@ -19,8 +19,7 @@ _CHAT = ProcessorConfig.PolicyChannel.CHAT
 
 def _mp() -> MessageProcessor:
     mp = object.__new__(MessageProcessor)
-    MessageProcessor.__init__(mp, "find the cheapest flight to Malta", {})
-    mp.config = WebBrowseConfig(_CHAT)
+    MessageProcessor.__init__(mp, WebBrowseConfig(_CHAT), raw_input="find the cheapest flight to Malta")
     mp._setup()
     return mp
 

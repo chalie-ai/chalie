@@ -58,7 +58,10 @@ def _settled_turn(channel: str, contents: list[str]) -> list[int]:
     return ids
 
 
-def _gpm_config(channel: str = _GPM_CHANNEL, role: str = 'test_role', suppress_history: bool = False) -> StubProcessorConfig:
+def _gpm_config(
+    channel: str = _GPM_CHANNEL, role: str = 'test_role', suppress_history: bool = False,
+    skip_input_row: bool = False,
+) -> StubProcessorConfig:
     from services.processor_config import ProcessorConfig
     from tests.helpers import StubProcessorConfig
 
@@ -71,7 +74,7 @@ def _gpm_config(channel: str = _GPM_CHANNEL, role: str = 'test_role', suppress_h
         build_system_prompt=lambda _mp: '',
         always_available=[],
         skip_transcript=False,
-        skip_input_row=False,
+        skip_input_row=skip_input_row,
         suppress_history=suppress_history,
         broadcast_to=None,
         memory_seed=False,
@@ -84,12 +87,17 @@ class _GPMFakeProcessor:
 
     @staticmethod
     def make(channel: str = _GPM_CHANNEL, suppress_history: bool = False, **kwargs: object) -> MessageProcessor:
+        """Build a real MessageProcessor against the new (config, turn_id, raw_input,
+        metadata) constructor. ``skip_input_row=True`` keeps construction free of a
+        stray input-row insert into the channel under test (it would otherwise show
+        up as an extra line in get_previous_messages()) and leaves ``uid`` at None,
+        which is fine here — every seeded test uses a fresh channel with turn_id
+        unset, so ``_forked`` is False and the MAIN-spine branch (the only one that
+        reads ``get_turns_since``, never ``self.uid``) is what actually runs."""
         from services.message_processor import MessageProcessor
 
-        mp = object.__new__(MessageProcessor)
-        MessageProcessor.__init__(mp, 'test raw input', {'key': 'value'})
-        mp.config = _gpm_config(channel=channel, suppress_history=suppress_history)
-        mp.uid = None
+        config = _gpm_config(channel=channel, suppress_history=suppress_history, skip_input_row=True)
+        mp = MessageProcessor(config, -1, 'test raw input', {'key': 'value'})
         for k, v in kwargs.items():
             setattr(mp, k, v)
         return mp

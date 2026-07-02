@@ -25,7 +25,7 @@ class ProactiveSuggestionHook(PostTurnHook):
             return
         try:
             from services.act_trail import ActTrail  # noqa: PLC0415
-            channel = cast("ProcessorConfig", mp.config).channel
+            channel = mp.config.channel
             rows = ActTrail().fetch_by_turn(channel, turn_id)
             tool_call_count = sum(
                 1 for r in rows if r.get("tool_name") != "chat_history_compactor"
@@ -146,8 +146,8 @@ class UserConfig(ProcessorConfig):
         # Blank separator
         parts.append("")
 
-        # 3b. Post-compaction continuity banner — only on the continuation MP
-        #     spawned right after a mid-turn compaction. The collapse cost the
+        # 3b. Post-compaction continuity banner — only on the step right after
+        #     a mid-turn compaction. The collapse cost the
         #     model its working context, so the current-state block opens by
         #     restating the user's request and pointing at the Checkpoint section
         #     (the compacted summary, prepended by the framework envelope) and the

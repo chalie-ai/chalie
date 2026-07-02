@@ -43,7 +43,6 @@ from services.document_service import DocumentService
 from services.message_processor import MessageProcessor
 from services.provider_db_service import ProviderDbService
 from services.tmp_storage import new_tmp_path
-from services.transcript_service import Transcript
 
 pytestmark = pytest.mark.unit
 
@@ -78,13 +77,13 @@ def _write_attachment(label: str) -> str:
 
 def _build_parent(attachments: list[str]) -> MessageProcessor:
     """A real UserConfig MessageProcessor in the exact state ``_seed_turn_zero``
-    fires from: input row written, ``active_tools`` seeded, attachments on
-    metadata, thinking OFF (no LLM boundary involved in this test)."""
-    parent = object.__new__(MessageProcessor)
-    MessageProcessor.__init__(parent, "What is in this image?", {"attachments": attachments})
-    parent.config = UserConfig()
-    parent.uid = Transcript.write_input_row("user", "user", "What is in this image?")
-    parent.active_tools = list(parent.config.always_available or [])
+    fires from: input row written (by the real constructor), ``active_tools``
+    seeded, attachments on metadata, thinking OFF (no LLM boundary involved in
+    this test — ``_seed_turn_zero`` is invoked directly so the attachment
+    ingest is isolated from the chat-completion step)."""
+    config = UserConfig()
+    parent = MessageProcessor(config, -1, "What is in this image?", {"attachments": attachments})
+    parent.active_tools = list(config.always_available or [])
     parent.thinking_level = "low"
     return parent
 

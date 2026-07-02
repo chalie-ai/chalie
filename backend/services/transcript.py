@@ -93,6 +93,15 @@ class TranscriptService:
             rows = conn.execute(sql, args).fetchall()
         return [dict(r) for r in rows]
 
+    def turn_exists(self) -> bool:
+        """True when this instance's ``(channel, turn_id)`` has at least one row."""
+        with self.db.connection() as conn:
+            row = conn.execute(
+                "SELECT 1 FROM transcript WHERE channel = ? AND turn_id = ? LIMIT 1",
+                (self.config.channel, self.turn_id),
+            ).fetchone()
+        return row is not None
+
     def count_rows(self, since_id: int = 0) -> int:
         """Number of this channel's transcript rows with ``id > since_id`` (every
         row when ``since_id`` is 0). Mirrors :meth:`get_turn_rows` — the channel
