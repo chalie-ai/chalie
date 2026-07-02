@@ -164,7 +164,11 @@ router.beforeEach(async (to) => {
 
   if (!has_providers) {
     shell.providersOnly = true;
-    if (router.currentRoute.value.name !== 'providers') {
+    // Compare the TARGET route, not currentRoute: during the initial navigation
+    // currentRoute is still START_LOCATION (name undefined), so checking it makes
+    // this redirect retarget itself forever — the app never mounts and the guard
+    // hammers /auth/status once per loop iteration.
+    if (to.name !== 'providers') {
       return { name: 'providers' };
     }
   }
