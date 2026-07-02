@@ -16,33 +16,10 @@ from utils.logger import Logger
 
 if TYPE_CHECKING:
     import ssl
-    from boot_screen import BootScreen as _BootScreen
     from services.embedding_service import EmbeddingService
     from services.onnx_inference_service import OnnxInferenceService
     from services.database_service import DatabaseService
     from consumer import WorkerManager as _WorkerManager
-
-
-def _parse_cli() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Chalie — personal intelligence layer")
-    parser.add_argument("--port", type=int, default=31025, help="Server port (default: 31025)")
-    parser.add_argument("--host", default="0.0.0.0", help="Bind address (default: 0.0.0.0)")
-    return parser.parse_args()
-
-
-# Own the public port from the first moment of boot. Docker publishes the port
-# at container start, so every connection before Flask binds — after the heavy
-# imports below plus schema convergence and migrations, minutes on slow
-# hardware — is reset: blank pages and failed fetches in the browser.
-# BootScreen binds instantly and serves a self-refreshing holding page until
-# the API worker takes over the port. Script-execution only: tests import
-# this module and must never bind a socket.
-_boot_screen: "_BootScreen | None" = None
-if __name__ == "__main__":
-    from boot_screen import BootScreen
-    _cli = _parse_cli()
-    _boot_screen = BootScreen(_cli.host, _cli.port)
-    _boot_screen.start()
 
 # Force numpy/transformers to fully initialize before any background thread
 # imports them. Python's import system isn't fully thread-safe for nested
@@ -382,8 +359,6 @@ def _register_workers(manager: "_WorkerManager", host: str, port: int) -> None:
         app = create_app()
         ssl_context = _resolve_ssl_context()
         scheme = "https" if ssl_context else "http"
-        if _boot_screen is not None:
-            _boot_screen.stop()  # release the port for the bind below
         logger.info(f"[Chalie] Starting on {scheme}://{host}:{port}")
         app.run(host=host, port=port, debug=False, threaded=True, ssl_context=ssl_context)
 
@@ -483,7 +458,11 @@ def _warmup_models() -> None:
 
 
 def main() -> None:
-    args = _parse_cli()
+    parser = argparse.ArgumentParser(description="Chalie — personal intelligence layer")
+    parser.add_argument("--port", type=int, default=31025, help="Server port (default: 31025)")
+    parser.add_argument("--host", default="0.0.0.0", help="Bind address (default: 0.0.0.0)")
+    args = parser.parse_args()
+
     port = args.port
     host = args.host
 
