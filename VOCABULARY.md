@@ -57,3 +57,4 @@ Domain-specific terminology used throughout the Chalie system.
 | `segment` | FE parse of assistant content into text / rich blocks. | `text`, `rich` |
 | `find_tools` | Discovery ability that surfaces tools the model can use. | `find_tools(query=['weather','valletta'])` |
 | `internal_dev` | Env-var flag gating in-development features. | `CHALIE_INTERNAL_DEV='1'` |
+| `boot screen` | Stdlib holding server that owns the public port from process start, answering 503 (holding page for browsers, `{"ready": false}` JSON for fetches) until the API worker takes over. | `backend/boot_screen.py`, started by `run.py` |
