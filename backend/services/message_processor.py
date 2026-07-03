@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING, TypeAlias, cast
 from services.time_formatter_service import TimeFormatterService
 
 if TYPE_CHECKING:
+    from services.execution_tracker import TurnExecution
     from services.processor_config import ProcessorConfig
     from services.provider_api import ProviderApiRequest, ProviderApiResponse
 
@@ -47,31 +48,6 @@ def _channel_lock(channel: str) -> threading.Lock:
                 lock = threading.Lock()
                 _channel_locks[channel] = lock
     return lock
-
-
-# turn_id → cancel_event for live turns. A turn registers its handle for the life
-# of its chain (see _setup/_run) so DELETE /api/thread/<turn_id> — a separate request
-# holding no in-memory reference to the turn — can cancel it by turn_id. This is the
-# ONLY cross-request state a turn keeps; lifecycle, continuation and broadcasts all
-# ride the live MP instance (one instance runs the whole turn's step loop).
-_cancellers: "dict[int, threading.Event]" = {}
-_cancellers_guard = threading.Lock()
-
-
-def _register_canceller(turn_id: "int | None", event: threading.Event) -> None:
-    """Expose a running turn's cancel_event by turn_id; no-op for an unallocated turn."""
-    if turn_id is None:
-        return
-    with _cancellers_guard:
-        _cancellers[turn_id] = event
-
-
-def _unregister_canceller(turn_id: "int | None") -> None:
-    """Drop a turn's cancel handle when its chain ends; a None turn_id never held one."""
-    if turn_id is None:
-        return
-    with _cancellers_guard:
-        _cancellers.pop(turn_id, None)
 
 
 #: Parses the document id out of a rendered ``document.upload`` success envelope
@@ -113,19 +89,25 @@ Some tools accept an `async` flag. Set `async: true` to run a tool in the backgr
 Choose `async: true` when the user asks for something to happen "in the background" or "while" they do something else, or when a call is likely to be slow (web research, browsing, lengthy shell or file work) and the user should not have to wait. Call tools normally (synchronously) for quick results the user is actively waiting on."""
 
 
+class _TurnCancelled(Exception):
+    """Raised by any cooperative-cancellation checkpoint inside a turn's step
+    loop; caught in exactly one place (_run) so a cancel discovered anywhere —
+    including mid-retry, inside an except block — always resolves through the
+    same cleanup + set_cancelled path, never mistaken for a crash."""
+
+
 class MessageProcessor:
     """Single flat message processor for every channel — one instance per turn."""
 
-    # The entire lean WS vocabulary — the five signals a surface listens on.
-    # `broadcast()` is the sole emitter; every byte of turn DATA is pulled over
-    # REST. There is no `created` signal — the turn_id is returned in the POST
-    # body, so the surface already holds it. working → spin the state up;
-    # updated → refetch the block; done → drop the working indicator;
-    # tool_called → render the call summary + start its act-trail timer;
-    # tool_done → stop that timer.
-    _WS_WORKING_STATE = 'working'
+    # The WS vocabulary this class itself emits — mid-turn progress signals a
+    # surface pulls the corresponding REST data for. `broadcast()` is the sole
+    # emitter; every byte of turn DATA is pulled over REST. Turn *lifecycle*
+    # (working/completed/cancelled/crashed) is a separate, richer WS message
+    # type ("turn_execution", carrying the full row) emitted by this turn's
+    # ExecutionTracker — see execution_tracker.py — not by broadcast() below.
+    # updated → refetch the block; tool_called → render the call summary +
+    # start its act-trail timer; tool_done → stop that timer.
     _WS_UPDATED_STATE = 'updated'
-    _WS_DONE_STATE = 'done'
     _WS_TOOL_CALLED = 'tool_called'
     _WS_TOOL_DONE = 'tool_done'
 
@@ -153,9 +135,6 @@ class MessageProcessor:
         # The mp owns its provider gateway — mp-free standalone orchestrator.
         from services.providers import Providers  # noqa: PLC0415
         self.providers = Providers()
-        # Cooperative cancellation flag; _step checks is_set() before each send
-        # and between tool dispatches. Never raises.
-        self._cancel_event: threading.Event = threading.Event()
         # The transcript row this step's tool calls anchor to. Defaults to the
         # input row; a tool-bearing step advances it to its OWN step row.
         self.anchor: int | None = None
@@ -169,8 +148,8 @@ class MessageProcessor:
         # Rich media ordinal counter — set by cards/media abilities; None until first use.
         self._rich_media_ordinals: object = None
         # Pre-allocate this turn's anchoring input row SYNCHRONOUSLY (claiming its
-        # turn_id) so get_meta_data() can answer before run() touches the LLM. The
-        # row id is this MP's anchor for its tool calls and act-trail.
+        # turn_id) so the ExecutionTracker below opens against a resolved turn_id.
+        # The row id is this MP's anchor for its tool calls and act-trail.
         from services.transcript import TranscriptService  # noqa: PLC0415
         self.ts = TranscriptService(self.config, turn_id)
         # A supplied turn_id must name a real turn — a reply can only fork what
@@ -185,6 +164,14 @@ class MessageProcessor:
         self.transcript_row_id: int | None = self.make_row_id()
         self._uid = self.transcript_row_id
         self.anchor = self.transcript_row_id
+        # DB-backed lifecycle handle: opens this turn's turn_executions row now
+        # (state=working), before any LLM call, so DELETE /api/thread/<turn_id> —
+        # a separate request holding no in-memory reference to this MP — can
+        # flip cancel_requested on a row that outlives this process. Every
+        # cooperative-cancellation checkpoint below reads it through
+        # self.should_stop(); it is the only cross-request state a turn keeps.
+        from services.execution_tracker import ExecutionTracker  # noqa: PLC0415
+        self._tracker = ExecutionTracker(self.config, cast("int", self.turn_id))
 
     def make_row_id(self) -> "int | None":
         """Claim this turn's anchoring input row. ``turn_id`` was resolved once by
@@ -196,49 +183,52 @@ class MessageProcessor:
             return None
         return self.ts.insert_row(self._raw_input)
 
-    def get_meta_data(self) -> dict[str, object]:
-        """Synchronous turn metadata — available the instant the constructor
-        returns, before run() touches the LLM. Drives the thread API's fast POST
-        response: the surface holds turn_id + the pre-allocated row id with no WS
-        round-trip."""
-        return {
-            "turn_id": self.turn_id,
-            "type": self._cfg.type(),
-            "transcript_row_id": self.transcript_row_id,
-        }
-
     def run(self) -> None:
         """Spawn the turn on its own daemon thread and return immediately — the MP
-        owns its whole lifecycle (working → updated → done + the per-tool timers).
-        The cancel handle is registered synchronously here so DELETE
-        /api/thread/<turn_id> is live the instant the POST hands the surface its
-        turn_id (before the worker thread's _setup runs)."""
-        _register_canceller(self.turn_id, self.cancel_event)
+        owns its whole lifecycle from here (the ExecutionTracker already opened
+        this turn's row in __init__, before this call)."""
         threading.Thread(
             target=self._run_guarded, daemon=True, name=f"turn-{self.turn_id}",
         ).start()
 
     def _run_guarded(self) -> None:
-        """Thread entry for the async send path. ``_run`` already fired the terminal
-        ``done`` from the live instance and re-raised; surface the channel-wide error
-        toast the foreground needs, unless the turn was cancelled (stop button stays
-        silent). The synchronous ``process()`` path never enters here — a failed
-        background pass propagates to its caller, toastless, as before."""
+        """Thread entry for the async send path. ``_run`` already stamped the
+        turn's terminal execution state and re-raised; surface the channel-wide
+        error toast the foreground needs. The synchronous ``process()`` path
+        never enters here — a failed background pass propagates to its caller,
+        toastless, as before."""
         try:
             self._run()
         except Exception as exc:
             logger.exception("[MP] turn %s failed: %s", self.turn_id, exc)
-            if not self.cancel_event.is_set():
-                from services.websocket_broker import WebSocketBroker  # noqa: PLC0415
-                WebSocketBroker().broadcast(
-                    {"type": "error", "message": "Turn failed unexpectedly", "recoverable": False}
-                )
+            from services.websocket_broker import WebSocketBroker  # noqa: PLC0415
+            WebSocketBroker().broadcast(
+                {"type": "error", "message": "Turn failed unexpectedly", "recoverable": False}
+            )
 
-    def cancel(self) -> None:
-        self._cancel_event.set()
+    @property
+    def execution(self) -> "TurnExecution | None":
+        """This turn's current turn_executions row — read by the thread API's
+        synchronous send response. None only when the row failed to open (a DB
+        fault at construction time; see ExecutionTracker)."""
+        return self._tracker.execution
+
+    def should_stop(self) -> bool:
+        """Cooperative-cancellation query every checkpoint below reads before
+        committing to another unit of work — a thin pass-through to this turn's
+        ExecutionTracker (the DB-backed source of truth). The same duck-typed
+        contract abilities/_dispatcher.py and policy_manager.py poll mid-tool."""
+        return self._tracker.should_stop()
+
+    def request_cancel(self) -> None:
+        """Ask this turn to stop — used by a turn's own self-cancelling ability
+        (e.g. skill_builder's post-build handoff). DELETE /api/thread/<turn_id>
+        requests cancellation directly through TurnExecutionService instead; it
+        holds no live MP reference."""
+        self._tracker.request_cancel()
 
     # Public per-turn aliases — process() and the abilities read & write mp.uid /
-    # mp.cancel_event / mp.active_tools; these bridge to the private backing fields.
+    # mp.active_tools; these bridge to the private backing fields.
 
     @property
     def raw_input(self) -> str:
@@ -251,14 +241,6 @@ class MessageProcessor:
     @uid.setter
     def uid(self, value: 'int | None') -> None:
         self._uid = value
-
-    @property
-    def cancel_event(self) -> threading.Event:
-        return self._cancel_event
-
-    @cancel_event.setter
-    def cancel_event(self, value: threading.Event) -> None:
-        self._cancel_event = value
 
     @property
     def active_tools(self) -> list[str]:
@@ -346,7 +328,6 @@ class MessageProcessor:
         raw_input: str,
         config: "ProcessorConfig",  # noqa: F821 — deferred import avoids circular dep
         metadata: "dict[str, object] | None" = None,
-        cancel_event: "threading.Event | None" = None,
     ) -> str:
         """Single entry point: build an MP, run the turn under its lane lock, return text."""
         meta = metadata or {}
@@ -354,11 +335,21 @@ class MessageProcessor:
         mp = MessageProcessor(
             config, turn_id if turn_id is not None else -1, raw_input, meta,
         )
+        if mp.execution is None:
+            # No turn_executions row (the INSERT failed) — unlike the POST
+            # /api/thread handler, which 500s the caller on this same
+            # condition, the process() path has no HTTP caller to reject: it
+            # is the background/delegate entry, toastless by design, and
+            # every should_stop()/set_*() call on a tracker with no row is a
+            # documented no-op — so the turn runs to completion untracked
+            # rather than never running at all.
+            logger.error(
+                "[MP] turn_execution row failed to open channel=%s turn_id=%s — running untracked",
+                config.channel, mp.turn_id,
+            )
         # Report the turn this ran on back to the caller (mutates meta): a first-fire
         # scheduler reads the freshly-allocated id to persist its series continuity.
         meta["turn_id"] = mp.turn_id
-        if cancel_event is not None:
-            mp.cancel_event = cancel_event
         # Default 'low' — the gate must explicitly raise it. A 'medium' default
         # would apply deliberation pressure to every turn the gate didn't run
         # (non-user channels) or that crashed, regressing simple recall/chit-chat.
@@ -366,19 +357,6 @@ class MessageProcessor:
         from services.thinking_override_service import get_thinking_override  # noqa: PLC0415
         mp.thinking_override = get_thinking_override()
         return mp._run()
-
-    @staticmethod
-    def interrupt(turn_id: "int | None") -> bool:
-        """Cancel the running turn with this id by setting its cancel_event; True if a
-        live turn was found (it then deletes its own rows and emits no error)."""
-        if turn_id is None:
-            return False
-        with _cancellers_guard:
-            event = _cancellers.get(turn_id)
-        if event is None:
-            return False
-        event.set()
-        return True
 
     def _lock_key(self) -> str:
         """Serialize turns within a surface, not across surfaces: the main spine and
@@ -391,45 +369,29 @@ class MessageProcessor:
 
     def _run(self) -> str:
         """Run the whole turn under the surface lock: setup, step loop, finalise.
-        ``_setup`` registers this turn's cancel handle by turn_id (the only state
-        DELETE /api/thread/<turn_id> can reach it through); the ``finally`` drops it
-        once the whole step loop — which runs inline here — ends."""
+        Every cooperative-cancellation checkpoint raises ``_TurnCancelled``;
+        caught HERE and nowhere else, so a cancel discovered anywhere in the
+        chain — even mid-retry, inside an except block — always resolves
+        through the same purge + set_cancelled path, never mistaken for a
+        crash. A cancel purges the rows THIS chain wrote (id-floor scoped, see
+        _cleanup_cancelled) before the execution row is stamped cancelled."""
         with _channel_lock(self._lock_key()):
             try:
                 self._setup()
-                result = self._step()
-                if self.cancel_event.is_set():
-                    self._cleanup_cancelled()
-                    return ""
-                return result
-            except Exception:
-                # The turn died before _end_turn fired its terminal ``done``. Fire it
-                # here from the live instance (it owns turn_id in memory) so the surface
-                # drops its working indicator, then re-raise for the caller to log + toast.
-                # A cancelled turn took the ``return ""`` path above, so this is genuine
-                # failure only; the broadcast is BROADCASTS_STATE-gated, so silent off-user.
-                self.broadcast(self._WS_DONE_STATE, self.turn_id)
+                return self._step()
+            except _TurnCancelled:
+                self._cleanup_cancelled()
+                self._tracker.set_cancelled()
+                return ""
+            except Exception as exc:
+                self._tracker.set_crashed(str(exc))
                 raise
-            finally:
-                _unregister_canceller(self.turn_id)
 
     def _setup(self) -> None:
-        """Pre-chain, once per turn: seed active tools, open the turn, gate, seed turn 0."""
+        """Pre-chain, once per turn: seed active tools, run the deliberation gate, seed turn 0."""
         # ACTIVE_TOOLS is live from iteration 0; find_tools appends, build_tools
         # resolves it each turn. Empty for compaction/encoder channels by design.
         self.active_tools = list(self._cfg.always_available or [])
-
-        # The input row was pre-allocated by the constructor (make_row_id), which
-        # set uid/anchor/turn_id. Announce the turn with ``working`` now that work
-        # is starting — it fires
-        # unconditionally for any channel that owns a row; the surface keys on its
-        # own current state. A skip_input_row channel has no row/turn yet (its end
-        # message allocates one), so it announces nothing. The cancel handle is
-        # re-registered (idempotent) so the synchronous process() path is also
-        # interruptible; run() registered it up front for the API path.
-        if not self._cfg.skip_input_row and self.turn_id is not None:
-            _register_canceller(self.turn_id, self.cancel_event)
-            self.broadcast(self._WS_WORKING_STATE, self.turn_id)
 
         if self._cfg.channel == "user":
             self._run_thinking_gate()
@@ -560,7 +522,9 @@ class MessageProcessor:
         mid-turn over-cap compacts, arms the recovery banner, and loops."""
         from services.provider_api import RequestOverCapError, ResponseOverLimitError  # noqa: PLC0415
 
-        while not self.cancel_event.is_set():
+        while True:
+            if self.should_stop():
+                raise _TurnCancelled()
             try:
                 response = self._send_with_retry(self._build_send_dto())
             except (RequestOverCapError, ResponseOverLimitError):
@@ -584,7 +548,6 @@ class MessageProcessor:
             if not response.tool_calls:
                 return self._end_turn(formatted)
             self._dispatch_tools(response.tool_calls)
-        return ""
 
     def _send_with_retry(self, dto: "ProviderApiRequest") -> "ProviderApiResponse":
         """Send through the provider chokepoint, resending the SAME request on failure.
@@ -608,8 +571,8 @@ class MessageProcessor:
                 raise
             except Exception as exc:  # noqa: BLE001 — every provider failure is retriable here
                 last_exc = exc
-                if self.cancel_event.is_set():
-                    raise
+                if self.should_stop():
+                    raise _TurnCancelled() from exc
                 logger.warning(
                     "[MP] provider send failed (attempt %d/%d) channel=%s: %s",
                     attempt, _MAX_PROVIDER_ATTEMPTS, self._cfg.channel, exc,
@@ -650,8 +613,8 @@ class MessageProcessor:
 
         dispatcher = ToolDispatcher(self)
         for tc in tool_calls:
-            if self.cancel_event.is_set():
-                return
+            if self.should_stop():
+                raise _TurnCancelled()
             dispatcher.dispatch(cast("str", tc["name"]), cast("dict[str, object]", tc["input"]))
 
     def _format_response(self, text: _OptStr) -> str:
@@ -665,8 +628,8 @@ class MessageProcessor:
 
     def _end_turn(self, formatted: str) -> str:
         """End the turn: fan out the failure-isolated post-turn hooks, return the text up."""
-        if self.cancel_event.is_set():
-            return ""
+        if self.should_stop():
+            raise _TurnCancelled()
         # Hooks are mutually independent; order is undefined and may become
         # concurrent, so each call is isolated (log + continue).
         for hook in self._cfg.post_turn_hooks:
@@ -685,8 +648,8 @@ class MessageProcessor:
         from services.episodic_service import EpisodicService  # noqa: PLC0415
         EpisodicService(get_shared_db_service()).check_and_store(self._cfg)
         # The turn's last assistant message carried no tool calls — it is the
-        # terminal. Drop the surface's working indicator (spec §6.4/§7.4).
-        self.broadcast(self._WS_DONE_STATE, self.turn_id)
+        # terminal. Stamp the execution row done; the tracker broadcasts it.
+        self._tracker.set_done()
         return formatted
 
     def _cleanup_cancelled(self) -> None:

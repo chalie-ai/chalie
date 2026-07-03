@@ -349,21 +349,6 @@
   overflow: hidden;
 }
 
-// Act-trail leader — a faint chevron marking every tool/step line.
-.act-tool__label::before,
-.act-tool__summary--collapsed::before,
-.act-group__preview::before {
-  content: '›';
-  flex-shrink: 0;
-  opacity: 0.7;
-  color: var(--text-tertiary);
-}
-
-.act-tool__summary--collapsed::before,
-.act-group__preview::before {
-  margin-right: 6px;
-}
-
 .act-tool__summary {
   color: var(--text-secondary);
   font-weight: 400;

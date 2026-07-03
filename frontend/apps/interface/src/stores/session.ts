@@ -12,7 +12,7 @@
  * and vice-versa.
  */
 import { defineStore } from 'pinia';
-import type { WsInboundEvent, WsPushEvent } from '@chalie/shared';
+import type { WsInboundEvent, WsPushEvent, WsTurnExecutionEvent } from '@chalie/shared';
 import { AuthError, ConfigType, getWebSocket, useConnectionStore } from '@chalie/shared';
 import { on } from '../composables/useEventBus';
 import { extractText } from '../composables/useMarkup';
@@ -35,6 +35,16 @@ let _initialized = false;
 const _busUnbinds: Array<() => void> = [];
 
 const FILE_PLACEHOLDER = '[File attached]';
+
+/** Runtime membership check backing `_routeTurnExecution`'s discriminator — a
+ *  `state` key alone does not prove a frame is a turn_execution row (e.g. the
+ *  Home capability's `home_state_changed` push also carries an unrelated
+ *  `state` string, an HA entity state that could coincidentally collide with
+ *  one of these four literals). Combined with a required `turn_id` + `started_at`
+ *  (execution-only fields no other push family emits) the match is unambiguous. */
+const TURN_EXECUTION_STATES: ReadonlySet<string> = new Set([
+  'working', 'completed', 'cancelled', 'crashed',
+]);
 
 interface LaneState {
   /** Bound turn_id; null for a new main-spine turn until the POST 200 body claims one. */
@@ -102,8 +112,9 @@ export const useSessionStore = defineStore('session', {
 
       ws.onDisconnect(() => {
         conn.setConnected(false);
-        // A mid-turn drop strands spinners: `done` lands on the dead socket and is
-        // never resent. Clear ALL lanes' working state so nothing hangs.
+        // A mid-turn drop strands spinners: the terminal `turn_execution` frame
+        // lands on the dead socket and is never resent. Clear ALL lanes' working
+        // state so nothing hangs.
         for (const k in this.lanes) {
           const lane = this.lanes[k];
           if (lane.liveTurnId != null) useConversationFeed(lane.type).setWorking(lane.liveTurnId, false);
@@ -176,10 +187,10 @@ export const useSessionStore = defineStore('session', {
     },
 
     /**
-     * Send a user turn. Signal-only: the working-signal refetch renders the user
-     * bubble from the API — no optimistic echo. Everything — the spinner, the rows,
-     * the reply — flows back through the broadcast `working`/`updated`/`done`
-     * signals (→ routeDrift → refetch).
+     * Send a user turn. Signal-only: the `turn_execution` working refetch renders
+     * the user bubble from the API — no optimistic echo. Everything — the
+     * spinner, the rows, the reply — flows back through the `updated` broadcast
+     * signal and the `turn_execution` lifecycle frame (→ routeDrift → refetch).
      */
     async sendMessage(
       text: string,
@@ -281,9 +292,12 @@ export const useSessionStore = defineStore('session', {
 
     /**
      * Stop + undo the in-flight turn identified by `turnId`. Emits
-     * 'session:turn-interrupted' so InputDock can restore the textarea.
+     * 'session:turn-interrupted' so InputDock can restore the textarea. `type`
+     * (default user) names the owning thread's ProcessorConfig — DELETE resolves
+     * the channel from it server-side, and turn_id alone is only unique per
+     * channel, so a non-user thread's stop must carry its own type through.
      */
-    async requestStop(turnId: number | null = null): Promise<void> {
+    async requestStop(turnId: number | null = null, type: string = ConfigType.USER): Promise<void> {
       const ws = getWebSocket();
 
       const key = this._laneOwning(turnId);
@@ -303,16 +317,16 @@ export const useSessionStore = defineStore('session', {
         new CustomEvent('session:turn-interrupted', { detail: { text: restoredText } }),
       );
 
-      await this._postInterrupt(stopId);
+      await this._postInterrupt(stopId, type);
     },
 
-    /** DELETE /api/thread/<turn_id> — best-effort interrupt, never throws. */
-    async _postInterrupt(turnId: number | null = null): Promise<void> {
+    /** DELETE /api/thread/<turn_id>?type=<type> — best-effort interrupt, never throws. */
+    async _postInterrupt(turnId: number | null = null, type: string = ConfigType.USER): Promise<void> {
       if (turnId == null) return;
       try {
         const host = getHost();
         const base = host ? host.replace(/\/$/, '') : '';
-        await fetch(base + '/api/thread/' + turnId, {
+        await fetch(base + '/api/thread/' + turnId + '?type=' + encodeURIComponent(type), {
           method: 'DELETE',
           credentials: 'same-origin',
         });
@@ -391,6 +405,7 @@ export const useSessionStore = defineStore('session', {
      */
     routeDrift(data: WsPushEvent): void {
       if (this._routeTurnSignal(data)) return;
+      if (this._routeTurnExecution(data)) return;
       if (this._routeSimpleEvent(data)) return;
 
       if (data.type !== 'notification') return;
@@ -401,10 +416,10 @@ export const useSessionStore = defineStore('session', {
     },
 
     /**
-     * Turn-lifecycle signals — stateless and turn-addressed, discriminated on
+     * Mid-turn progress signals — stateless and turn-addressed, discriminated on
      * `status` (the sole turn chokepoint; pushes key on `type`). `type` names the
      * ProcessorConfig surface to route by. Returns true when handled; a frame with
-     * no `status` is a push and falls through to `_routeSimpleEvent`.
+     * no `status` falls through (to `_routeTurnExecution`, then `_routeSimpleEvent`).
      */
     _routeTurnSignal(data: WsPushEvent): boolean {
       const status = (data as { status?: string }).status;
@@ -412,12 +427,6 @@ export const useSessionStore = defineStore('session', {
       const convo = useConversationFeed((data as { type?: string }).type ?? ConfigType.USER);
       const turnId = (data as { turn_id?: number | null }).turn_id ?? null;
       switch (status) {
-        case 'working':
-          if (turnId == null) return true;
-          convo.setWorking(turnId, true);
-          // Pull the block so every surface renders the user bubble from the API.
-          void convo.fetchTurn(turnId);
-          return true;
         case 'tool_called':
           if (turnId != null) {
             const tc = data as { id?: number; name?: string; summary?: string; transcript_row_id?: number };
@@ -431,17 +440,46 @@ export const useSessionStore = defineStore('session', {
         case 'updated':
           if (turnId != null) void convo.fetchTurn(turnId);
           return true;
-        case 'done':
-          void this._finishTurn(turnId, (data as { type?: string }).type ?? ConfigType.USER);
-          return true;
         case 'provider_retry':
           // Transient: a provider call failed mid-turn and is being resent. The
-          // turn stays in flight (no error bubble, no `done`) — just a toast.
+          // turn stays in flight (no error bubble) — just a toast.
           showToast((data as { message?: string }).message ?? 'The AI provider had a problem — retrying…');
           return true;
         default:
           return false;
       }
+    },
+
+    /**
+     * Turn lifecycle — the DB-backed turn_executions row, pushed whole on every
+     * state flip (see services/execution_tracker.py). This frame carries no
+     * separate kind tag, so it is recognised structurally: `state` must be one
+     * of the four lifecycle literals AND `turn_id` + `started_at` (execution-only
+     * fields) must be present — a `state` key alone is not enough (see
+     * TURN_EXECUTION_STATES; `home_state_changed` also carries a `state` string
+     * with no `turn_id`/`started_at`, and claiming it here drained its queue into
+     * a garbage _finishTurn call). `working` opens exactly like the old `working`
+     * signal; every terminal state (completed/cancelled/crashed) settles the turn
+     * exactly like the old `done` signal — a crash now reaches this path too, so
+     * a turn that dies before producing a reply never leaves a spinner hanging.
+     */
+    _routeTurnExecution(data: WsPushEvent): boolean {
+      const exec = data as unknown as WsTurnExecutionEvent;
+      if (
+        typeof exec.state !== 'string' || !TURN_EXECUTION_STATES.has(exec.state)
+        || exec.turn_id == null || exec.started_at == null
+      ) {
+        return false;
+      }
+      const type = exec.type ?? ConfigType.USER;
+      if (exec.state === 'working') {
+        useConversationFeed(type).setWorking(exec.turn_id, true);
+        // Pull the block so every surface renders the user bubble from the API.
+        void useConversationFeed(type).fetchTurn(exec.turn_id);
+        return true;
+      }
+      void this._finishTurn(exec.turn_id, type);
+      return true;
     },
 
     /** Route content-free push event types (keyed on `type`); returns true when

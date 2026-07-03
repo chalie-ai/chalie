@@ -370,7 +370,6 @@ class EpisodicService:
             emp = object.__new__(MessageProcessor)
             MessageProcessor.__init__(emp, EpisodeEncoderConfig())
             emp.uid = None
-            emp.cancel_event = threading.Event()
             emp.thinking_level = "low"
             setattr(emp, '_window', self._format_window_entries(entries))
             setattr(emp, '_referenced',

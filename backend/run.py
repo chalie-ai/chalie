@@ -488,6 +488,15 @@ def main() -> None:
     _start_model_preload()
 
     database_service = _init_database()
+
+    # Boot sweep: a turn_executions row still open (ended_at IS NULL) belonged
+    # to a process that no longer exists — closing it as crashed keeps no
+    # surface reading a stale "working" turn after a restart or a kill.
+    from services.execution_tracker import TurnExecutionService
+    _closed = TurnExecutionService(database_service).sweep_orphaned()
+    if _closed:
+        logger.info("[Startup] Closed %d orphaned turn_executions row(s)", _closed)
+
     _run_startup_migrations(database_service)
     _init_services(database_service)
 

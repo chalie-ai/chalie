@@ -387,13 +387,42 @@ def _fire_scheduled_prompt(
     # firing the §5.1 gist delegate like a user thread (§13.1 / §6.2).
     first_fire = turn_id is None
     meta: dict[str, object] = {"turn_id": turn_id}
-    MessageProcessor.process(message, ScheduledConfig(), meta)
+    config = ScheduledConfig()
+    MessageProcessor.process(message, config, meta)
     if first_fire:
-        with db.connection() as conn:
-            conn.execute(
-                "UPDATE scheduled_items SET turn_id = ? "
-                "WHERE COALESCE(group_id, id) = ? AND turn_id IS NULL",
-                (meta["turn_id"], group_key),
+        # A cancelled first fire purges its own transcript rows (see
+        # MessageProcessor._cleanup_cancelled) — persisting its turn_id here
+        # regardless would leave scheduled_items pointing at a turn_id that
+        # names no row, and every later fire's constructor would reject it
+        # ("Invalid turn_id specified"), permanently bricking the schedule.
+        # Only persist when this fire's execution is confirmed NOT cancelled;
+        # a skipped persist just leaves the item on fresh-first-fire footing
+        # (turn_id still NULL), which is the pre-existing, safe default.
+        from services.execution_tracker import TurnExecutionService, TurnExecutionState  # noqa: PLC0415
+        fresh_turn_id = cast("int", meta["turn_id"])
+        execution = TurnExecutionService().latest_for_turn(config.channel, fresh_turn_id)
+        if execution is not None and execution.state != TurnExecutionState.CANCELLED:
+            with db.connection() as conn:
+                conn.execute(
+                    "UPDATE scheduled_items SET turn_id = ? "
+                    "WHERE COALESCE(group_id, id) = ? AND turn_id IS NULL",
+                    (fresh_turn_id, group_key),
+                )
+        elif execution is None:
+            # Not the same fact as a confirmed cancel — the tracker's own row
+            # lookup failed (already logged loudly inside
+            # TurnExecutionService.latest_for_turn), so this fire's true outcome
+            # is unknown. Persistence is skipped either way (an unconfirmed
+            # turn_id is no safer to write than a cancelled one), but the two
+            # causes are distinct and must not share a log message.
+            logger.warning(
+                f"{LOG_PREFIX} first fire of '{item_id}' — execution row unavailable, "
+                "skipping first-fire turn_id persistence"
+            )
+        else:
+            logger.info(
+                f"{LOG_PREFIX} first fire of '{item_id}' ended cancelled — "
+                "leaving schedule on fresh-first-fire footing"
             )
     logger.info(f"{LOG_PREFIX} Fired scheduled prompt '{item_id}' on turn {meta['turn_id']}: {message[:80]}")
 

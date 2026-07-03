@@ -80,14 +80,3 @@ class ThreadSendRequest(DTO):
 
     text: str
     type: str = "user"
-
-
-class ThreadCreated(DTO):
-    """POST /api/thread(/<turn_id>) response body — the synchronously-allocated
-    ``turn_id`` and its ``type``. Replaces the old empty 201: the FE encodes
-    both as ``data-turn-id``/``data-type`` on the thread element the instant the
-    POST returns, so the stop button and every later REST call hold the handle
-    without waiting on a WS signal (the ``created`` signal is gone)."""
-
-    turn_id: int
-    type: str

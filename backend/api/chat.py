@@ -12,9 +12,10 @@ Routes:
 Send path:
   User messages are sent via POST /api/thread (new thread) or
   POST /api/thread/<turn_id> (reply) — see api/threads.py. Both return 200 with
-  {turn_id, channel}: the turn_id is allocated synchronously (atomic input-row
-  write) before the response, so the FE holds the handle without waiting on a WS
-  signal. Live output still surfaces via WS signals → REST pull.
+  the turn's freshly-opened turn_execution row: the turn_id is allocated
+  synchronously (atomic input-row write + turn_executions insert) before the
+  response, so the FE holds the handle without waiting on a WS signal. Live
+  output still surfaces via WS signals → REST pull.
 
 Design:
   WS is receive-only push (server→client). All client→server requests use HTTP.
@@ -23,23 +24,24 @@ Design:
   a turn_id and carries it end to end — every WS signal stamps it, so the surface
   keys its updates on it and holds no shared "active turn" state. A second message
   to a busy surface is never sent mid-turn: the frontend QUEUES it per turn_id and
-  dispatches once that turn's ``done`` arrives. Interrupt is the lone exception —
-  DELETE /api/thread/<turn_id> (see api/threads.py) cancels a running turn by
-  turn_id, which self-cleans its rows.
+  dispatches once that turn's execution reaches a terminal state. Interrupt is the
+  lone exception — DELETE /api/thread/<turn_id> (see api/threads.py) requests
+  cancellation on a running turn by turn_id, which self-cleans its rows.
 
   User-channel messages flow through MessageProcessor.process() with the
   UserConfig ProcessorConfig subclass — no MessageProcessor subclass. Live
   output is signal-only, gated by the config's BROADCASTS_STATE: the surface
-  holds no event memory and refetches turn blocks over REST. Every lifecycle
-  signal (working/updated/done + the per-tool tool_called/tool_done timers) is
-  emitted by MessageProcessor itself through its `broadcast` chokepoint,
-  including the terminal ``done`` on a FAILED turn (fired from the
-  live instance — it owns turn_id). The only signal originating here is the
-  channel-wide error toast that failed turn also needs.
+  holds no event memory and refetches turn blocks over REST. Mid-turn progress
+  (updated + the per-tool tool_called/tool_done timers) is emitted by
+  MessageProcessor itself through its `broadcast` chokepoint; the turn's
+  lifecycle (working/completed/cancelled/crashed) is a separate `turn_execution`
+  WS frame emitted by its ExecutionTracker (services/execution_tracker.py) on
+  every state flip, including a crash (so the surface always learns a failed
+  turn ended, even one that died before producing a reply). The only signal
+  originating here is the channel-wide error toast a crashed turn also needs.
 """
 
 import logging
-import threading
 import time
 import uuid
 from typing import Sequence
@@ -66,14 +68,13 @@ _M = chat_ns.models
 # ── Background helpers ────────────────────────────────────────────────────────
 
 
-def deliver_async_result(mp: object, result_text: str, cancel_event: threading.Event) -> None:
+def deliver_async_result(mp: object, result_text: str) -> None:
     """Appends another assistant turn for a finished async delegate — a plain
     MessageProcessor.process() call, independent of any foreground turn (each runs
-    on its own thread, keyed by its own turn_id).
-
-    The delegate's ``cancel_event`` is threaded into the synthesis turn so the
-    Processes-panel stop control aborts a spiralling delegate at the next chain
-    boundary (the processor returns "" and self-cleans when it is set).
+    on its own thread, keyed by its own turn_id). The synthesis turn opens its OWN
+    turn_executions row (see MessageProcessor.__init__), so the Processes-panel
+    stop control cancels it the same way as any other turn — no cancel handle
+    needs threading in from the originating delegate.
 
     Inherits the originating turn's ``turn_id`` so the synthesised reply lands
     in the same thread the delegate was spawned from.
@@ -99,9 +100,9 @@ def deliver_async_result(mp: object, result_text: str, cancel_event: threading.E
     turn_id = getattr(mp, "turn_id", None)
     if turn_id is not None:
         metadata["turn_id"] = turn_id
-    # The synthesis turn is a full UserConfig turn, so its working → … → done
-    # lifecycle signals come from MessageProcessor itself — nothing to emit here.
-    MessageProcessor.process(result_text, synth_config, metadata, cancel_event=cancel_event)
+    # The synthesis turn is a full UserConfig turn, so its lifecycle signals
+    # come from MessageProcessor itself — nothing to emit here.
+    MessageProcessor.process(result_text, synth_config, metadata)
 
 
 def _stage_chat_uploads(files: Sequence[object]) -> list[object]:
@@ -159,15 +160,16 @@ class _ActionCtx:
     """Minimal mp-like context for ToolDispatcher in action-button dispatches.
 
     ``broadcast_to=None`` on the config keeps dispatches silent. ``uid=None``
-    signals a non-user channel dispatch. A fresh ``cancel_event`` per instance
-    means each action-button dispatch can be independently signalled.
+    signals a non-user channel dispatch. An action-button dispatch runs
+    synchronously to completion in one HTTP request — there is no running
+    turn for a stop button to reach, so ``should_stop`` is always False.
     """
 
     config = _ActionButtonConfig()
     uid = None
 
-    def __init__(self) -> None:
-        self.cancel_event = threading.Event()
+    def should_stop(self) -> bool:
+        return False
 
 
 # ── HTTP endpoints ────────────────────────────────────────────────────────────

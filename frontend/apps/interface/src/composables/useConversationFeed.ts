@@ -4,8 +4,9 @@
  * DOCTRINE (authoritative — all later phases obey this file's contract):
  *   1. The buffer is filled ONLY by API responses via upsertTurn / fetchTurn /
  *      loadRecent / loadMore. Never by WS payloads.
- *   2. WS handlers MAY call: fetchTurn (updated/done), startLiveTool /
- *      finishLiveTool (tool signals), setWorking (working/done). That is ALL.
+ *   2. WS handlers MAY call: fetchTurn (updated + turn_execution working),
+ *      startLiveTool / finishLiveTool (tool signals), setWorking (turn_execution
+ *      working/terminal). That is ALL.
  *   3. No method in this file mutates turn data from a WS payload.
  *
  * Type-keyed factory — call useConversationFeed(ConfigType.USER) or with no arg

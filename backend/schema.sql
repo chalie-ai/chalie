@@ -598,6 +598,37 @@ CREATE TABLE IF NOT EXISTS transcript_docs (
 );
 
 -- ────────────────────────────────────────────────────────────────
+-- TURN EXECUTIONS — DB-backed lifecycle of one MessageProcessor turn.
+-- Opened (state='working') the instant a turn's constructor resolves its
+-- turn_id, before any LLM call, so DELETE /api/thread/<turn_id> can flip
+-- cancel_requested on a row that outlives the in-memory MessageProcessor —
+-- no process-local registry to lose on a worker restart or miss across a
+-- request boundary. cancel_requested (the ask) and state (the outcome) are
+-- separate facts: a cancel that arrives after the turn already crashed
+-- leaves state='crashed' with cancel_requested=1 — the two never collide.
+-- ────────────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS turn_executions (
+    id                INTEGER PRIMARY KEY AUTOINCREMENT,
+    channel           TEXT NOT NULL,
+    type              TEXT,
+    turn_id           INTEGER NOT NULL,
+    started_at        TEXT NOT NULL DEFAULT (datetime('now')),
+    ended_at          TEXT,
+    cancel_requested  INTEGER NOT NULL DEFAULT 0,
+    state             TEXT NOT NULL DEFAULT 'working'
+                      CHECK (state IN ('working', 'completed', 'cancelled', 'crashed')),
+    stop_reason       TEXT
+);
+
+-- Serves both DELETE /api/thread/<turn_id>'s point lookup (this channel's
+-- turn_id, open rows only — turn_id is a per-channel monotonic counter, not
+-- globally unique, so channel leads the key) and the boot sweep's full scan
+-- of rows a killed process left open — the same "still working" shape either
+-- caller needs.
+CREATE INDEX IF NOT EXISTS idx_turn_executions_open
+    ON turn_executions(channel, turn_id) WHERE ended_at IS NULL;
+
+-- ────────────────────────────────────────────────────────────────
 -- DATA GRAPH — research-informed knowledge graph (replaces knowledge)
 -- ────────────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS data_graph (

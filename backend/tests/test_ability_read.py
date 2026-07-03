@@ -9,7 +9,6 @@
 
 
 import sqlite3
-import threading
 from pathlib import Path
 
 import pytest
@@ -35,15 +34,14 @@ def _allow_read(db: sqlite3.Connection) -> None:
 
 class _MP:
     """Minimal real MP-shaped context — exactly what dispatch reads off a live
-    processor: ``config`` (policy channel + emitter gate), ``uid`` (the transcript
-    anchor), and ``cancel_event``."""
+    processor: ``config`` (policy channel + emitter gate) and ``uid`` (the
+    transcript anchor)."""
 
     def __init__(self, uid: int) -> None:
         self.config = DmnConfig()
         self.uid = uid
         self.DISCOVERABLE: list[str] = []
         self.active_tools: list[str] = []
-        self.cancel_event = threading.Event()
 
 
 def test_patch_file_passes_through_verbatim(db: sqlite3.Connection, tmp_path: Path) -> None:

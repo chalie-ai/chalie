@@ -15,7 +15,7 @@ The gate is dead simple: short-circuit INTERNAL tools, else SELECT the setting
 (lazily creating an 'ask' row on a miss), then run | block | prompt. The decision
 carries no execution timeout — an allowed tool runs to completion in the callback
 (Ability.execute). The interactive prompt parks until the user responds OR the
-turn's cancel_event fires, so it never pins the per-channel turn lock.
+turn's should_stop() returns True, so it never pins the per-channel turn lock.
 """
 
 import json
@@ -56,7 +56,7 @@ _BLOCK = "The {permission} action is not allowed. Do NOT retry."
 # POST /api/policies/respond.
 _permission_gates: dict[str, dict[str, object]] = {}
 
-# How often the interactive ask-gate re-checks the turn's cancel_event while
+# How often the interactive ask-gate re-checks the turn's should_stop() while
 # parked: small enough that a cancelled turn frees the per-channel
 # lock near-instantly, large enough to cost no measurable idle CPU.
 _GATE_POLL_SECONDS = 0.25
@@ -74,12 +74,12 @@ class PolicyManager:
         permission: str,
         callback: Callable[[], str],
         error: str = _BLOCK,
-        cancel_event: "threading.Event | None" = None,
+        should_stop: "Callable[[], bool] | None" = None,
     ) -> str:
-        """Gate `callback` for (channel, permission). `cancel_event` (the turn's)
+        """Gate `callback` for (channel, permission). `should_stop` (the turn's)
         lets a parked `ask` prompt unwind when the turn is cancelled."""
         from services.database_service import get_shared_db_service  # noqa: PLC0415
-        return PolicyManager(get_shared_db_service()).authorize(channel, permission, callback, error, cancel_event)
+        return PolicyManager(get_shared_db_service()).authorize(channel, permission, callback, error, should_stop)
 
     # ── The gate: run | block | ask (dead simple) ─────────────────────────────
 
@@ -89,20 +89,20 @@ class PolicyManager:
         permission: str,
         callback: Callable[[], str],
         error: str = _BLOCK,
-        cancel_event: "threading.Event | None" = None,
+        should_stop: "Callable[[], bool] | None" = None,
     ) -> str:
         if permission.split(".", 1)[0] in INTERNAL:
             return callback()                       # INTERNAL tools always bypass (no channel, no row)
         setting = self._setting(channel.value, permission)
         if setting in ("internal", "allow"):
             return callback()
-        if setting == "ask" and channel not in _NO_HUMAN and self._ask_user(permission, channel.value, cancel_event):
+        if setting == "ask" and channel not in _NO_HUMAN and self._ask_user(permission, channel.value, should_stop):
             return callback()
         # A turn cancelled while parked on the ask gate denies the tool
         # but is NOT a user verdict — skip the audit row so the blocked-log stays
-        # honest. The guard self-no-ops for every non-cancel path (no cancel_event,
-        # or it never fired), which keeps the normal deny/unavailable logging.
-        if cancel_event is None or not cancel_event.is_set():
+        # honest. The guard self-no-ops for every non-cancel path (no should_stop,
+        # or it never returned True), which keeps the normal deny/unavailable logging.
+        if should_stop is None or not should_stop():
             reason = setting if setting == "deny" else ("user_unavailable" if channel in _NO_HUMAN else "user_denied")
             self._log_blocked(channel.value, permission, reason)
         return error.format(permission=permission)   # block STRING (uniform with execute's return)
@@ -126,7 +126,7 @@ class PolicyManager:
 
     # ── Interactive prompt (CHAT only; fail-open per D6) ──────────────────────
 
-    def _ask_user(self, permission: str, channel: str, cancel_event: "threading.Event | None" = None) -> bool:
+    def _ask_user(self, permission: str, channel: str, should_stop: "Callable[[], bool] | None" = None) -> bool:
         try:
             from services.websocket_broker import WebSocketBroker  # noqa: PLC0415
             rid = str(uuid.uuid4())
@@ -145,7 +145,7 @@ class PolicyManager:
             # below would swallow it and WRONGLY approve the gated tool.
             event = cast(threading.Event, gate["event"])
             while not event.wait(_GATE_POLL_SECONDS):
-                if cancel_event is not None and cancel_event.is_set():
+                if should_stop is not None and should_stop():
                     break
             return _permission_gates.pop(rid, {}).get("result") == "approved"
         except Exception as exc:  # noqa: BLE001

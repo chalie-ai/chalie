@@ -15,6 +15,14 @@ holds no turn data: each signal carries a turn_id (plus, for a live tool call, t
 ``tool_calls`` row id/name/summary) and the surface pulls every byte back over
 REST. These tests drive the REAL production path with zero mocks:
 
+  * ``MessageProcessor.__init__`` also opens a ``turn_executions`` row via
+    ``ExecutionTracker``, which broadcasts its own lifecycle frame (a ``state``
+    key, never a ``status`` key — see ``execution_tracker._broadcast_lifecycle``).
+    That frame is a real, intentional side effect of construction; it is the
+    OTHER file's contract (``test_turn_executions.py``), so ``_Surface.types()``
+    here filters the wire down to ``status``-bearing frames only, exactly as a
+    real surface distinguishes the two frame kinds by key presence.
+
   * the real process-wide ``WebSocketBroker`` and real consumer surfaces at the
     ``send(raw)`` WS boundary (the exact contract a browser socket fulfils),
   * the real ``ToolDispatcher`` dispatch chokepoint running a real, offline,
@@ -59,7 +67,11 @@ class _Surface:
         self.received.append(json.loads(raw))
 
     def types(self) -> list[str]:
-        return [cast(str, m.get("status")) for m in self.received]
+        """Only the ``status``-keyed broadcast() signals — a turn_executions
+        lifecycle frame carries ``state``, never ``status``, so it is filtered
+        out here rather than polluting this file's assertions with a frame
+        kind that belongs to ExecutionTracker's own contract."""
+        return [cast(str, m["status"]) for m in self.received if "status" in m]
 
 
 @pytest.fixture
@@ -102,7 +114,7 @@ def test_live_tool_call_signals_are_keyed_to_the_persisted_row(
     assert surface.types() == ["tool_called", "tool_done"], (
         f"a live tool call must bracket itself with tool_called→tool_done; got {surface.types()}"
     )
-    called, done = surface.received
+    called, done = (f for f in surface.received if "status" in f)
     assert called["turn_id"] == mp.turn_id
     assert called["name"] == "memory"
     assert called["transcript_row_id"] == mp.anchor
@@ -122,10 +134,13 @@ def test_live_tool_call_signals_are_keyed_to_the_persisted_row(
 def test_state_signals_fire_from_the_real_persistence_steps(
     db: sqlite3.Connection, broker: WebSocketBroker,
 ) -> None:
-    """Persisting a step row emits ``updated`` (refetch the block); ending the turn
-    emits ``done`` (drop the working indicator). Both ride the same chokepoint and
-    carry the turn_id the surface coalesces on — driven through the real
-    ``_store_row`` / ``_end_turn``, not the broadcast method in isolation."""
+    """Persisting a step row emits ``updated`` (refetch the block) through the
+    broadcast() chokepoint — driven through the real ``_store_row``, not the
+    broadcast method in isolation. Ending the turn no longer emits a ``status``
+    signal of its own: ``_end_turn`` stamps the execution row done via
+    ``ExecutionTracker.set_done()``, which broadcasts the turn's lifecycle frame
+    (``state=completed``) instead — that frame's own contract is pinned in
+    ``test_turn_executions.py``, not here."""
     surface = _Surface()
     broker.connect(surface)
     mp = _user_mp("tell me a fact")
@@ -133,12 +148,18 @@ def test_state_signals_fire_from_the_real_persistence_steps(
     mp._store_row("Here is your answer.")
     mp._end_turn("Here is your answer.")
 
-    assert surface.types() == ["updated", "done"], (
-        f"persistence must emit updated then the turn end must emit done; got {surface.types()}"
+    assert surface.types() == ["updated"], (
+        f"persistence must emit exactly one updated status signal; got {surface.types()}"
     )
-    updated, done = surface.received
+    updated = next(f for f in surface.received if "status" in f)
     assert updated["turn_id"] == mp.turn_id
-    assert done["turn_id"] == mp.turn_id
+
+    # The turn's completion still reaches the wire — as the OTHER frame kind.
+    lifecycle_frames = [f for f in surface.received if "state" in f]
+    assert [f["state"] for f in lifecycle_frames] == ["working", "completed"], (
+        f"construction opens the row (working) and _end_turn's set_done() closes it (completed); "
+        f"got {surface.received}"
+    )
 
 
 def test_a_non_broadcasting_channel_emits_nothing(

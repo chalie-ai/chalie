@@ -383,7 +383,6 @@ def test_skill_suggestion_prompt_contains_real_query_and_trail(db: sqlite3.Conne
     from services.act_trail import ActTrail
     from configs.channels import SkillSuggestionConfig
     from services.message_processor import MessageProcessor
-    import threading
 
     # 1. Seed a user transcript row — this is the triggering turn.
     user_query = "Find me a good recipe for pasta carbonara and set a 20-minute timer"
@@ -409,7 +408,6 @@ def test_skill_suggestion_prompt_contains_real_query_and_trail(db: sqlite3.Conne
     # 3. Build the suggestion MP exactly as _run_suggestion_processor does:
     # real construction (config first) — the constructor seeds its own turn row.
     mp = MessageProcessor(SkillSuggestionConfig(), raw_input=user_query)
-    mp.cancel_event = threading.Event()
     mp.thinking_level = "low"
     setattr(mp, "_trigger_channel", "user")
     setattr(mp, "_trigger_turn_id", trigger_turn_id)
@@ -500,10 +498,10 @@ def test_read_returns_full_content_that_list_omits(
 def test_skills_building_create_halts_loop_other_channels_unaffected(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, db: sqlite3.Connection
 ) -> None:
-    """A successful create on the background suggestion channel sets the turn's
-    cancel_event — the signal _step checks to stop recursing — so the loop saves
-    exactly one skill. The same create on the user channel must NOT halt the
-    user's turn."""
+    """A successful create on the background suggestion channel requests the
+    turn's cancellation — the signal _step checks (should_stop()) to stop
+    recursing — so the loop saves exactly one skill. The same create on the
+    user channel must NOT halt the user's turn."""
     import abilities.skill_builder as sb
     import utils.skills_io as sio
     from abilities._dispatcher import ToolDispatcher
@@ -519,7 +517,7 @@ def test_skills_building_create_halts_loop_other_channels_unaffected(
 
     # Background suggestion loop (skill_manager on skills_building).
     mgr_mp = _mp_for_skill_test(SkillSuggestionConfig(), db)
-    assert not mgr_mp.cancel_event.is_set()
+    assert not mgr_mp.should_stop()
     rendered = ToolDispatcher(mgr_mp).dispatch(
         "skill_manager",
         {
@@ -531,11 +529,11 @@ def test_skills_building_create_halts_loop_other_channels_unaffected(
         },
     )
     assert _skill_head(rendered, "skill_manager").startswith("[skill_manager(status=success")
-    assert mgr_mp.cancel_event.is_set()  # loop stops after the first write
+    assert mgr_mp.should_stop()  # loop stops after the first write
 
     # Same create via the user-facing skill_builder on the user channel.
     user_mp = _mp_for_skill_test(UserConfig({}), db)
-    assert not user_mp.cancel_event.is_set()
+    assert not user_mp.should_stop()
     rendered_user = ToolDispatcher(user_mp).dispatch(
         "skill_builder",
         {
@@ -547,4 +545,4 @@ def test_skills_building_create_halts_loop_other_channels_unaffected(
         },
     )
     assert _skill_head(rendered_user, "skill_builder").startswith("[skill_builder(status=success")
-    assert not user_mp.cancel_event.is_set()  # user's turn keeps running
+    assert not user_mp.should_stop()  # user's turn keeps running

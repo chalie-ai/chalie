@@ -1,15 +1,19 @@
 <script setup lang="ts">
 import { computed, onUnmounted, ref, watch } from 'vue';
 import { Undo2 } from '@lucide/vue';
+import { ConfigType } from '@chalie/shared';
 import type { LiveToolPill } from '../../composables/useConversationFeed';
 import { useSessionStore } from '../../stores/session';
 
-const props = defineProps<{ pills: LiveToolPill[]; turnId: number | null }>();
+const props = withDefaults(
+  defineProps<{ pills: LiveToolPill[]; turnId: number | null; type?: string }>(),
+  { type: ConfigType.USER },
+);
 
 const session = useSessionStore();
 
 function onStop(): void {
-  void session.requestStop(props.turnId);
+  void session.requestStop(props.turnId, props.type);
 }
 
 // Live timer: ticks ONLY while a pill is unresolved.

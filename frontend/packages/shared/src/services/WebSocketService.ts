@@ -11,39 +11,48 @@ export interface WsErrorEvent {
   message: string;
   recoverable?: boolean;
 }
-export interface WsDoneEvent {
-  type: 'done';
-  /** Action channel carries a measured duration; the turn-channel signal omits it. */
-  duration_ms?: number;
-  /** turn_id (thread) the just-finished turn was persisted under; null for
-   *  untracked turns. Present on the turn-channel `done` signal only. */
-  turn_id?: number | null;
-}
 export interface WsPingEvent {
   type: 'ping';
 }
 
-/** Turn-lifecycle signals — the sole WS turn chokepoint (MessageProcessor.broadcast).
- *  Discriminated on `status` (the lifecycle state); `type` carries the ProcessorConfig
- *  identity (`user` → main spine, `scheduled` → dock + that schedule's thread) the
- *  surface routes by. The surface reacts by refetching the turn block over REST, so
- *  these frames carry only ids (plus a tool call's id/name/summary for the live
- *  act-trail timer) — never prose. `provider_retry` is the one status shown directly
- *  (a transient toast): a provider call failed mid-turn and the backend is resending,
- *  so the turn stays in flight (no error bubble, no `done`). */
-export type WsTurnStatus =
-  | 'working'
-  | 'updated'
-  | 'tool_called'
-  | 'tool_done'
-  | 'done'
-  | 'provider_retry';
+/** Mid-turn progress signals — the sole WS turn chokepoint (MessageProcessor.broadcast).
+ *  Discriminated on `status`; `type` carries the ProcessorConfig identity (`user` →
+ *  main spine, `scheduled` → dock + that schedule's thread) the surface routes by.
+ *  The surface reacts by refetching the turn block over REST, so these frames carry
+ *  only ids (plus a tool call's id/name/summary for the live act-trail timer) — never
+ *  prose. `provider_retry` is the one status shown directly (a transient toast): a
+ *  provider call failed mid-turn and the backend is resending, so the turn stays in
+ *  flight (no error bubble). Turn *lifecycle* (working/done) is a separate frame —
+ *  see `WsTurnExecutionEvent` below. */
+export type WsTurnStatus = 'updated' | 'tool_called' | 'tool_done' | 'provider_retry';
 export interface WsTurnSignal {
   status: WsTurnStatus;
   /** ConfigType — the ProcessorConfig identity the FE routes by. */
   type: string;
   turn_id?: number | null;
   [k: string]: unknown;
+}
+
+/** One `turn_executions` row, pushed whole on every state flip (see
+ *  services/execution_tracker.py). It carries no frame-kind tag of its own —
+ *  `type` here is the SAME ConfigType-identity field `WsTurnSignal.type` carries,
+ *  so a surface recognises this frame by the presence of `state` instead, exactly
+ *  as it recognises a `WsTurnSignal` by the presence of `status`. `working` is the
+ *  sole non-terminal state; `completed` / `cancelled` / `crashed` all settle the
+ *  turn the same way — a crash now reaches the surface too, so a turn that dies
+ *  before producing a reply never leaves a spinner hanging. */
+export type TurnExecutionState = 'working' | 'completed' | 'cancelled' | 'crashed';
+export interface WsTurnExecutionEvent {
+  id: number;
+  channel: string;
+  /** ConfigType — the ProcessorConfig identity the FE routes by. */
+  type: string | null;
+  turn_id: number;
+  started_at: string;
+  ended_at: string | null;
+  cancel_requested: boolean;
+  state: TurnExecutionState;
+  stop_reason: string | null;
 }
 
 /** Push family — content/side-channel frames routed through the drift handler,
@@ -68,9 +77,9 @@ export interface WsPushEvent {
 export type WsInboundEvent =
   | WsMessageEvent
   | WsErrorEvent
-  | WsDoneEvent
   | WsPingEvent
   | WsTurnSignal
+  | WsTurnExecutionEvent
   | WsPushEvent;
 
 /** Action channel (rich-card button → POST /action) is the only per-request
@@ -302,10 +311,10 @@ export class WebSocketService {
   }
 
   /** Fire a user turn. Signal-only: the turn's render flows entirely through the
-   *  broadcast `working`/`updated`/`done` signals (→ drift handler → REST
-   *  refetch), so no callbacks are bound. `onSendFailure` reports ONLY a local
-   *  send failure (offline / POST rejected) — the case where no signal will ever
-   *  arrive — so the surface can release its send guard.
+   *  `updated` broadcast signal plus the `turn_execution` lifecycle frame
+   *  (→ drift handler → REST refetch), so no callbacks are bound. `onSendFailure`
+   *  reports ONLY a local send failure (offline / POST rejected) — the case where
+   *  no signal will ever arrive — so the surface can release its send guard.
    *
    *  Resolves with the POST body `{turn_id, type}` so the caller can bind the
    *  lane handle the moment the server allocates it (no WS round-trip needed). */

@@ -5,7 +5,7 @@ Pins synchronous endpoint contracts only; the async full-turn path (real UMP + L
 """
 
 import sqlite3
-from collections.abc import Iterator
+import threading
 
 import pytest
 from flask.testing import FlaskClient
@@ -13,22 +13,6 @@ from flask.testing import FlaskClient
 
 @pytest.mark.unit
 class TestChatEndpoints:
-
-    @pytest.fixture(autouse=True)
-    def _isolate_cancellers(self) -> Iterator[None]:
-        """The turn cancel-handle registry is process-global and a dispatched turn
-        registers its handle synchronously, so a turn one test spawns would make
-        another test's interrupt find a phantom turn. Empty it before and after
-        each test (mirrors the lifecycle suite's broker fixture)."""
-        from services.message_processor import _cancellers, _cancellers_guard
-
-        with _cancellers_guard:
-            _cancellers.clear()
-        try:
-            yield
-        finally:
-            with _cancellers_guard:
-                _cancellers.clear()
 
     def test_thread_empty_message_rejected_and_no_turn_started(self, authed_client: tuple[FlaskClient, sqlite3.Connection, object]) -> None:
         """An empty POST /api/thread/-1 fails loud with 422/message required and must
@@ -69,9 +53,17 @@ class TestChatEndpoints:
         ).fetchone()
         assert row is not None and row[0] == 'hello there' and row[1] == 'user'
 
-        # Tame the background turn the dispatch spawned (no provider in test env):
-        # the cancel handle was registered before the worker ran, so this stops it.
+        # Stop the background turn the dispatch spawned (no provider in test env) and
+        # WAIT for it to actually exit — MessageProcessor.run() names its daemon
+        # thread f"turn-{turn_id}" precisely so a caller can find and join it. A
+        # fire-and-forget DELETE only requests cooperative cancellation; joining the
+        # real thread (not a sleep) keeps this test's db teardown from racing a
+        # write still in flight, which would otherwise leak into the next test.
         client.delete(f'/api/thread/{turn_id}')
+        turn_thread = next((t for t in threading.enumerate() if t.name == f"turn-{turn_id}"), None)
+        if turn_thread is not None:
+            turn_thread.join(timeout=10)
+            assert not turn_thread.is_alive(), "the background turn must exit before the test's db is torn down"
 
     def test_thread_post_nonexistent_turn_id_rejected_and_writes_nothing(self, authed_client: tuple[FlaskClient, sqlite3.Connection, object]) -> None:
         """POST /api/thread/<id> naming a turn that does not exist must bubble the

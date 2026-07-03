@@ -7,6 +7,8 @@ export type {
   WsPushEvent,
   WsPushType,
   WsMessageEvent,
+  WsTurnExecutionEvent,
+  TurnExecutionState,
   ActionCallbacks,
 } from './services/WebSocketService';
 export { ConfigType } from './config/configType';

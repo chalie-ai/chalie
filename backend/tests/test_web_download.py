@@ -13,7 +13,6 @@ import os
 import socket
 import sqlite3
 import tempfile
-import threading
 from typing import cast
 
 import pytest
@@ -118,15 +117,14 @@ def _seed_dl_transcript(db: sqlite3.Connection) -> int:
 
 class _DownloadMP:
     """Minimal real MP-shaped context — exactly what dispatch reads off a live
-    processor: ``config`` (policy channel + emitter gate), ``uid`` (the transcript
-    anchor), and ``cancel_event``. No policy row needed — web_download is INTERNAL."""
+    processor: ``config`` (policy channel + emitter gate) and ``uid`` (the
+    transcript anchor). No policy row needed — web_download is INTERNAL."""
 
     def __init__(self, uid: int) -> None:
         self.config = DmnConfig()
         self.uid = uid
         self.DISCOVERABLE: list[str] = []
         self.active_tools: list[str] = []
-        self.cancel_event = threading.Event()
 
 
 @pytest.mark.unit

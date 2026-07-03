@@ -149,6 +149,7 @@ function onReply(): void {
           v-else-if="ar.row.kind === 'live-act'"
           :pills="(ar.row as LiveActRow).pills"
           :turn-id="block.turn_id"
+          :type="type"
         />
 
         <!-- Message rows -->

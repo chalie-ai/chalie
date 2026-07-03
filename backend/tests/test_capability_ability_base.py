@@ -14,7 +14,6 @@ action-meta error paths for real.
 """
 
 import sqlite3
-import threading
 from typing import cast
 
 import pytest
@@ -45,7 +44,6 @@ class _MP:
         self.uid = uid
         self.DISCOVERABLE: list[str] = []
         self.active_tools: list[str] = []
-        self.cancel_event = threading.Event()
 
 
 def test_email_is_a_capability_ability() -> None:

@@ -12,14 +12,16 @@ Reads are GET, sends are POST, interrupt is DELETE; turn_id is path-only, never 
 the body. The path speaks the MessageProcessor constructor's own language — ``-1``
 is its unset sentinel, so the send needs no mapping layer, and a supplied id that
 names no existing turn is rejected by the constructor (``Invalid turn_id
-specified``). The send returns 200 with ``{turn_id, type}`` — the turn_id is
-allocated synchronously (the request thread writes the input row before responding)
-so the FE holds it inline, no WS round-trip. Live output then surfaces via the
-``working`` → ``updated`` → ``done`` signals → REST pull. The stop button calls
-DELETE with that same turn_id, registered as a cancel handle before ``working``
-fires, so the turn is interruptible for its entire working life. ``type`` (the
-ProcessorConfig identity — the only surface the FE speaks) defaults to ``user`` and
-rides every read/write, resolving to its transcript channel server-side so the
+specified``). Both POST and DELETE return the turn's ``turn_execution`` row (its
+DB-backed lifecycle record) — the turn_id is allocated synchronously (the request
+thread opens the row before responding) so the FE holds it inline, no WS round-trip.
+Live output then surfaces via the ``updated`` signal → REST pull, plus a
+``turn_execution`` WS frame on every lifecycle flip (working → completed / cancelled
+/ crashed). The stop button calls DELETE with that same turn_id — it flips
+``cancel_requested`` on the turn's open execution row, which the running turn polls
+cooperatively; an idle/finished turn_id is a harmless ``no_active_turn`` ack. ``type``
+(the ProcessorConfig identity — the only surface the FE speaks) defaults to ``user``
+and rides every read/write, resolving to its transcript channel server-side so the
 surface can address other configs (e.g. the scheduler) without knowing channels.
 """
 
@@ -43,8 +45,9 @@ from .dto.message import Message
 from .dto.segment import Segment
 from .dto.subagent import Interrupted
 from .dto.thread import (
-    ThreadBatch, ThreadCreated, ThreadFeed, ThreadFeedQuery, ThreadSendRequest, ThreadSummary, TurnBlock,
+    ThreadBatch, ThreadFeed, ThreadFeedQuery, ThreadSendRequest, ThreadSummary, TurnBlock,
 )
+from .dto.turn_execution import TurnExecutionDTO
 
 logger = logging.getLogger(__name__)
 
@@ -52,7 +55,7 @@ threads_ns = Namespace("threads", description="Thread feed and per-turn blocks",
 
 register_dto(
     threads_ns,
-    ThreadFeedQuery, ThreadSummary, ThreadFeed, TurnBlock, ThreadBatch, ThreadSendRequest, ThreadCreated,
+    ThreadFeedQuery, ThreadSummary, ThreadFeed, TurnBlock, ThreadBatch, ThreadSendRequest, TurnExecutionDTO,
     Message, Attachment, Chip, Segment, Interrupted, Error,
 )
 _T = threads_ns.models
@@ -344,18 +347,19 @@ class ThreadItemResource(Resource):
     @threads_ns.param("text", "Message text", _in="formData", type="string", required=True)
     @threads_ns.param("type", "Config type (default: user)", _in="formData", type="string")
     @threads_ns.param("files", "Attachments (multipart, repeatable, max 10)", _in="formData", type="file")
-    @threads_ns.response(200, "Send accepted", model=_T["ThreadCreated"])
+    @threads_ns.response(200, "Send accepted", model=_T["TurnExecutionDTO"])
     @threads_ns.response(422, "Empty message and no files", model=_T["Error"])
-    @responds(ThreadCreated, code=200)
+    @responds(TurnExecutionDTO, code=200)
     @expects(ThreadSendRequest, source="form")
-    def post(self, turn_id: int, dto: ThreadSendRequest) -> "ThreadCreated | ResponseReturnValue":
+    def post(self, turn_id: int, dto: ThreadSendRequest) -> "TurnExecutionDTO | ResponseReturnValue":
         """Send — the one chat-dispatch chokepoint. ``-1`` is the MessageProcessor's
         own unset sentinel and starts a new thread (a fresh turn_id is allocated
-        synchronously and returned); a real id replies INTO that thread (FORK view;
-        the id is echoed back). A supplied id that names no existing turn is rejected
-        by the constructor. Returns 200 with ``{turn_id, type}``; the constructor
-        pre-writes the input row so the FE holds the handle with no WS round-trip,
-        and live output then surfaces via the ``working`` signal → REST pull."""
+        synchronously); a real id replies INTO that thread (FORK view; the id is
+        echoed back). A supplied id that names no existing turn is rejected by the
+        constructor. Returns 200 with the turn's freshly-opened turn_execution row —
+        the constructor opens it synchronously so the FE holds the handle with no WS
+        round-trip, and live output then surfaces via the ``updated`` signal → REST
+        pull plus ``turn_execution`` lifecycle frames."""
         from api.chat import _stage_chat_uploads  # noqa: PLC0415
         from services.message_processor import MessageProcessor  # noqa: PLC0415
 
@@ -371,24 +375,36 @@ class ThreadItemResource(Resource):
         # forked-ness is derived internally by the MessageProcessor from the turn_id.
         config = ConfigTypeEnum.get_by_type(dto.type)
         mp = MessageProcessor(config, turn_id, text, {"attachments": attachments})
-        meta = mp.get_meta_data()
+        if mp.execution is None:
+            return error("Failed to open turn execution", 500)
+        dto_out = TurnExecutionDTO.model_validate(mp.execution.to_json())
         mp.run()
-        return ThreadCreated(turn_id=cast("int", meta["turn_id"]), type=cast("ConfigTypeEnum", meta["type"]).value)
+        return dto_out
 
     @require_session
     @threads_ns.param("turn_id", "Turn id")
-    @threads_ns.response(200, "Interrupt ack", model=_T["Interrupted"])
-    @responds(Interrupted)
-    def delete(self, turn_id: int) -> Interrupted:
+    @threads_ns.param("type", "Config type (default: user)", _in="query", type="string")
+    @threads_ns.response(200, "Interrupt ack", model=_T["TurnExecutionDTO"])
+    @threads_ns.response(400, "Invalid type", model=_T["Error"])
+    @responds(code=200)
+    def delete(self, turn_id: int) -> "TurnExecutionDTO | Interrupted | ResponseReturnValue":
         """Interrupt the running turn for this turn_id — the FE stop button's call.
-        The turn cooperatively exits and deletes its own transcript + tool_call rows;
-        an idle/finished turn_id is a harmless ``no_active_turn`` ack. The id is the
-        same one the POST response handed the surface, so no body or lookup is needed:
-        the cancel handle was registered under it before ``working`` fired (see
-        MessageProcessor.interrupt / _cancellers)."""
-        from services.message_processor import MessageProcessor  # noqa: PLC0415
+        Flips ``cancel_requested`` on the turn's open execution row; the turn polls
+        it cooperatively, stops its step loop, purges the rows THIS chain itself
+        wrote (id-floor scoped, so a fork reply only wipes its own contribution —
+        see MessageProcessor._cleanup_cancelled) and stamps itself cancelled. The
+        id is the same one the send response handed the surface, so no body beyond
+        the turn_id is needed; ``type`` resolves the channel the row was opened
+        under (turn_id is only unique per channel). An idle/finished turn_id (no
+        open row on that channel) is a harmless ``no_active_turn`` ack."""
+        from services.execution_tracker import TurnExecutionService  # noqa: PLC0415
 
-        if MessageProcessor.interrupt(turn_id):
-            logger.info("[Threads API] interrupt delivered to turn %s", turn_id)
-            return Interrupted(interrupted=True)
-        return Interrupted(reason="no_active_turn")
+        try:
+            channel = ConfigTypeEnum.get_by_type(request.args.get("type", _TYPE)).channel
+        except ValueError:
+            return error("Invalid type", 400)
+        execution = TurnExecutionService().request_cancel_by_turn(channel, turn_id)
+        if execution is None:
+            return Interrupted(reason="no_active_turn")
+        logger.info("[Threads API] cancel requested for turn %s channel=%s", turn_id, channel)
+        return TurnExecutionDTO.model_validate(execution.to_json())

@@ -20,12 +20,11 @@ is pushed to every open client as ``subagent_start`` / ``subagent_end``; a
 client that connects mid-flight rehydrates the same snapshot via ``active()``.
 
 The thread captures the originating ``mp`` object so it can deliver the result
-as a fresh assistant turn through that ``mp``'s channel, threading the
-delegate's ``cancel_event`` into that synthesis turn — so stopping a delegate
-also aborts a spiralling synthesis chain at its next boundary, reusing the
-existing cancel plumbing rather than a second kill path. A single module-level
-singleton lets ``cancel`` from ``api/chat`` reach delegates spawned by any
-processor.
+as a fresh assistant turn through that ``mp``'s channel — the synthesis turn
+opens its own ``turn_executions`` row, so it is stoppable through the same
+Processes-panel/DELETE-by-turn path as any other turn, with no cancel handle
+threaded in from the delegate. A single module-level singleton lets ``cancel``
+from ``api/chat`` reach delegates spawned by any processor.
 """
 
 from __future__ import annotations
@@ -130,13 +129,11 @@ class AsyncDelegateRunner:
         """Run the tool and deliver its outcome as a later turn through the
         captured ``mp``, then always deregister and emit ``subagent_end`` on exit.
 
-        A normal result is delivered with the delegate's ``cancel_event`` threaded
-        into the synthesis turn, so stopping the delegate also aborts a spiralling
-        synthesis at its next boundary. If the delegate was cancelled while the
-        tool was still running, the now-unwanted result is replaced by a short
-        "cancelled by the user" notice — delivered under a FRESH event so the
-        notice itself always lands — telling the model the work stopped so it can
-        ask the user what to do next (never a silent drop).
+        If the delegate was cancelled while the tool was still running, the
+        now-unwanted result is replaced by a short "cancelled by the user"
+        notice — telling the model the work stopped so it can ask the user
+        what to do next (never a silent drop). Delivery always proceeds: the
+        notice is itself a normal synthesis turn, not a special case.
 
         Lazy imports break the mutual deferral: the dispatcher imports this
         runner for its async branch, and api.chat imports this module for the
@@ -162,12 +159,11 @@ class AsyncDelegateRunner:
                     "[AsyncDelegateRunner] %s cancelled by user — delivering notice: %s",
                     delegate_id, body,
                 )
-                cancel_event = threading.Event()
 
             if body is not None:
                 try:
                     from api.chat import deliver_async_result  # noqa: PLC0415
-                    deliver_async_result(mp, body, cancel_event)
+                    deliver_async_result(mp, body)
                 except Exception as exc:  # noqa: BLE001
                     logger.warning(
                         "[AsyncDelegateRunner] delivery failed for %s: %s",

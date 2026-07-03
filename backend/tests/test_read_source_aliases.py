@@ -7,7 +7,6 @@
 #     http://www.apache.org/licenses/LICENSE-2.0
 
 import sqlite3
-import threading
 from pathlib import Path
 from typing import cast
 
@@ -43,7 +42,6 @@ class _MP:
         self.uid = uid
         self.DISCOVERABLE: list[str] = []
         self.active_tools: list[str] = []
-        self.cancel_event = threading.Event()
 
 
 def test_read_resolves_url_alias_through_real_dispatch(db: sqlite3.Connection) -> None:

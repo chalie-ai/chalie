@@ -76,7 +76,7 @@ class ToolDispatcher:
         → record → return a STRING. Records EVERY outcome (allow result, block,
         unknown) so the rendered trail tells the model what happened and it does
         not retry a blocked tool forever. No cancel check — the loop guards
-        cancel_event one line before calling this.
+        should_stop() one line before calling this.
         """
         from services.message_processor import _sanitize_llm_args  # noqa: PLC0415
 
@@ -126,11 +126,11 @@ class ToolDispatcher:
                     channel=cast("ProcessorConfig.PolicyChannel", getattr(config, "policy_channel", None)),
                     permission=permission,
                     callback=lambda: self._execute(ability, params, act_summary),
-                    # The turn's cancel_event lets a parked `ask` prompt unwind on
+                    # The turn's should_stop lets a parked `ask` prompt unwind on
                     # cancel instead of pinning the per-channel lock.
                     # Sourced off the invoking mp (the action endpoint's ctx exposes
                     # it too); absent → None → today's blocking wait (self-no-op).
-                    cancel_event=getattr(self._mp, "cancel_event", None),
+                    should_stop=getattr(self._mp, "should_stop", None),
                 )
 
         # Computed BEFORE the record below, so this call is not yet on the trail
@@ -335,7 +335,7 @@ class ToolDispatcher:
 
         There is no wall-clock bound — an ability runs to completion. The
         framework never abandons a tool call: the only things that stop a running
-        tool are cooperative cancellation (cancel_event) and the network-level
+        tool are cooperative cancellation (should_stop) and the network-level
         I/O timeouts inside individual abilities.
 
         Returns a :class:`ToolResult`. A ``ToolParamError`` raised from run() is
