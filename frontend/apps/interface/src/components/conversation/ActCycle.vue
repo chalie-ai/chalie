@@ -12,8 +12,8 @@ const props = withDefaults(
 
 const session = useSessionStore();
 
-function onStop(): void {
-  void session.requestStop(props.turnId, props.type);
+async function onStop(): Promise<void> {
+  await session.requestStop(props.turnId, props.type);
 }
 
 // Live timer: ticks ONLY while a pill is unresolved.

@@ -8,6 +8,7 @@ Domain-specific terminology used throughout the Chalie system.
 | `transcript` | The persistent, channel-scoped conversation log table (`transcript` rows: role, content, turn_id, settled). | A row with `role='assistant'`, `turn_id=42`, `settled=1` |
 | `channel` | The transcript/telemetry namespace string that scopes a conversation. | `'user'`, `'dmn'`, `'delegate:web_search'` |
 | `thread` | A turn grown past its settle0 by one or more user replies. | `turn_id=42` once a user replies into it |
+| `turn_execution` | The DB-backed lifecycle record for one turn's run: `state` (`working`/`completed`/`cancelled`/`crashed`), `cancel_requested`, `started_at`/`ended_at`. Cancel is two-phase — `cancel_requested=1` is the request, `state='cancelled'` is the honoured outcome. | `state='working'`, `cancel_requested=0` |
 | `settle0` | The id of the first settled assistant row in a turn — the boundary between the main spine and fork views. | `settle0=15` |
 | `settled` | Per-row flag marking the assistant row that closes a turn. | `settled=1` on the closing reply |
 | `model` | The specific LLM model id associated with one provider row. | `claude-opus-4-7`, `gpt-4o`, `gemma4:31b` |
@@ -38,6 +39,8 @@ Domain-specific terminology used throughout the Chalie system.
 | `policies` | The Allow / Ask / Deny gate per tool action. | `'allow'`, `'ask'`, `'deny'` |
 | `vault` | Envelope-encrypted credential store (AES-256-GCM, DEK wrapped by password-derived KEK). | `kdf_iterations=600000` |
 | `MessageProcessor` | The single flat orchestrator for every LLM turn (one per turn, per channel). | lifecycle signals: `working`, `done`, `tool_called` |
+| `ExecutionTracker` | Per-turn object the `MessageProcessor` builds after turn resolution; owns the `turn_execution` row, is the sole emitter of lifecycle WS frames, and answers `should_stop()`. | `ExecutionTracker(config, turn_id)` |
+| `should_stop` | Cooperative-stop predicate checked at each turn checkpoint; True once a cancel has been requested. Replaces the old in-memory cancel `Event`. | `if self.should_stop(): raise _TurnCancelled` |
 | `ProcessorConfig` | Frozen dataclass parameterising one channel's `MessageProcessor`. | `UserConfig`, `DmnConfig`, `DiscoveryConfig` |
 | `policy_channel` | Enum picking which policy rows apply. | `CHAT`, `SUBCONSCIOUS`, `EXTERNAL_AGENT` |
 | `post_turn_hooks` | Tuple of independent after-turn work units a config owns. | `ProactiveSuggestionHook`, `PersistUserSummaryHook` |
