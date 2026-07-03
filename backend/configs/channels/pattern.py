@@ -26,6 +26,7 @@ def _pattern_existing_patterns_block() -> str:
                 "SELECT value FROM data_graph "
                 "WHERE kind='behavioral_pattern' AND active=1 "
                 "AND deleted_at IS NULL "
+                "AND json_valid(value)=1 "
                 "AND json_extract(value, '$.confidence') IS NOT NULL "
                 "ORDER BY CAST(json_extract(value, '$.confidence') AS REAL) "
                 "DESC LIMIT ?",
