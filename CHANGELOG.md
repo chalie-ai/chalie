@@ -34,6 +34,14 @@ All notable changes to Chalie are documented here. The format follows [Keep a Ch
 
 ---
 
+## v1.0.1-beta
+
+### Fixed
+- **Cold-start holding page** — new `backend/boot_screen.py` binds the port at the very top of `run.py` and serves a self-refreshing 503 holding page (JSON for API clients) while the backend initializes, handing the port to Flask once ready. Fresh Docker installs previously reset every connection until startup finished — browsers showed `ERR_CONNECTION_RESET`, and Safari reported the same failures as blocked access-control checks.
+- **Brain auth-gate redirect loop** — the router guard compared `router.currentRoute` (still `START_LOCATION` during the initial navigation) instead of the target route when redirecting to Providers, so a fresh install with no provider configured redirected to itself forever: blank page and an `/auth/status` request per loop iteration. The guard now checks `to.name`.
+
+---
+
 ## rc-0.4.0
 
 ### v0.5.0 §5 SubconsciousWorker — idle-gated 5-minute cognition tick (Phase 2 final)
