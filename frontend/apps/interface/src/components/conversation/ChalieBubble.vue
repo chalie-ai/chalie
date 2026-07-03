@@ -24,6 +24,13 @@ const MODE_LABELS: Record<string, string> = {
 
 const modeBadgeLabel = computed(() => MODE_LABELS[props.form.meta.mode ?? ''] ?? '');
 
+// Turn latency in seconds, shown beside the timestamp so response cost is visible.
+const latencyLabel = computed(() =>
+  props.form.meta.duration_ms && props.form.meta.duration_ms >= 1000
+    ? `${(props.form.meta.duration_ms / 1000).toFixed(1)}s`
+    : '',
+);
+
 const speakText = computed(() => chalieFormPlaintext(props.form));
 
 // Remember/speak controls live only on the turn's LAST Chalie row — a turn may
@@ -67,6 +74,7 @@ function onSpeak(): void {
     <div v-if="isLastInTurn" class="speech-form__meta">
       <span class="sender-glyph" aria-hidden="true"></span>
       <span class="speech-form__timestamp">{{ form.meta.ts ?? '' }}</span>
+      <span v-if="latencyLabel" class="speech-form__timestamp">· {{ latencyLabel }}</span>
 
       <span v-if="modeBadgeLabel" class="meta-mode-badge">{{ modeBadgeLabel }}</span>
 

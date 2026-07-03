@@ -1,3 +1,19 @@
+/**
+ * Chat-bubble timestamp in the same "%d %b %H:%M" shape the backend emits
+ * (locale_service.CHAT_TIMESTAMP_FMT). History rows already carry that string;
+ * this formatter covers live-sent messages, which have no backend echo yet, so
+ * the browser's local zone stands in for the server-configured one until the
+ * next history reload. "" on parse error.
+ */
+export function chatTimestamp(iso?: string): string {
+  const d = iso ? new Date(iso) : new Date();
+  if (Number.isNaN(d.getTime())) return '';
+  const day = String(d.getDate()).padStart(2, '0');
+  const month = d.toLocaleString('en', { month: 'short' });
+  const time = d.toLocaleString('en', { hour: '2-digit', minute: '2-digit', hour12: false });
+  return `${day} ${month} ${time}`;
+}
+
 // Short relative-time label for scheduler UI ("now", "in 5m", "tomorrow",
 // "overdue", "" on parse error).
 export function relativeTime(isoStr: string): string {
