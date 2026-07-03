@@ -92,64 +92,86 @@ class ToolDispatcher:
         if ability is None:
             result_text = f"Unknown tool: {tool_name}"
         else:
-            # Heal model-mangled argument KEYS against the tool's declared schema
-            # before any gate or run() reads them: a stray-quote/case/alias key
-            # (e.g. 'source"', 'URL', or read's 'url' for 'source') is rewritten
-            # to its canonical parameter, so the ACTION_REQUIRED pre-gate and the
-            # ability see the real key instead of a corrupt one that would bounce
-            # on a spurious required-field error. Defensive: a
-            # registry/schema fault must never break dispatch — on failure the raw
-            # params flow through unchanged.
-            try:
-                params = self._key_healer.heal(params, ability.get_parameters())
-            except Exception:  # noqa: BLE001
-                logger.exception(
-                    "[ToolDispatcher] key canonicalisation failed for %s — "
-                    "proceeding with raw params", tool_name,
-                )
-            if (pre := self._prevalidate(ability, params)) is not None:
-                # ACTION_REQUIRED pre-gate fires BEFORE the permission is formed: a
-                # hallucinated action would otherwise lazily seed a bogus
-                # '<tool>.<action>' ask row and freeze the turn waiting for human
-                # approval. Malformed input never reaches the policy gate or run().
-                result_text = self._render(tool_name, pre, None)
-            else:
-                # The risk class the gate keys on is derived from the inputs via the
-                # ability's classify_action hook (default None), NOT trusted from a
-                # model-supplied 'action' — a self-declared action is prompt-injectable
-                # and must never decide the permission. Fall back to the action param
-                # only when the tool offers no classification.
-                classified = ability.classify_action(params)
-                action = classified if classified is not None else params.get("action")
-                permission = f"{tool_name}.{action}" if action else tool_name
-                result_text = PolicyManager.wrap(
-                    channel=cast("ProcessorConfig.PolicyChannel", getattr(config, "policy_channel", None)),
-                    permission=permission,
-                    callback=lambda: self._execute(ability, params, act_summary),
-                    # The turn's should_stop lets a parked `ask` prompt unwind on
-                    # cancel instead of pinning the per-channel lock.
-                    # Sourced off the invoking mp (the action endpoint's ctx exposes
-                    # it too); absent → None → today's blocking wait (self-no-op).
-                    should_stop=getattr(self._mp, "should_stop", None),
-                )
+            result_text, params = self._dispatch_bound(tool_name, ability, params, act_summary, config)
 
         # Computed BEFORE the record below, so this call is not yet on the trail
         # and cannot self-match. The steer (``""`` when not a repeat) rides back
         # to the model on top of the unchanged recorded error.
         steer = self._repeat_error_steer(tool_name, result_text)
+        self._record_outcome(tool_name, params, result_text, act_summary)
+        return result_text + steer
 
+    def _dispatch_bound(
+        self,
+        tool_name: str,
+        ability: "Ability",
+        params: dict[str, object],
+        act_summary: "str | None",
+        config: object,
+    ) -> tuple[str, dict[str, object]]:
+        """The ability-found path: heal keys → ACTION_REQUIRED pre-gate → resolve
+        permission → PolicyManager.wrap(execute). Returns the rendered result and
+        the (possibly healed) params — dispatch()'s fallback ActTrail.record() on
+        the no-execute paths must still see the healed dict."""
+        # Heal model-mangled argument KEYS against the tool's declared schema
+        # before any gate or run() reads them: a stray-quote/case/alias key
+        # (e.g. 'source"', 'URL', or read's 'url' for 'source') is rewritten
+        # to its canonical parameter, so the ACTION_REQUIRED pre-gate and the
+        # ability see the real key instead of a corrupt one that would bounce
+        # on a spurious required-field error. Defensive: a
+        # registry/schema fault must never break dispatch — on failure the raw
+        # params flow through unchanged.
+        try:
+            params = self._key_healer.heal(params, ability.get_parameters())
+        except Exception:  # noqa: BLE001
+            logger.exception(
+                "[ToolDispatcher] key canonicalisation failed for %s — "
+                "proceeding with raw params", tool_name,
+            )
+        if (pre := self._prevalidate(ability, params)) is not None:
+            # ACTION_REQUIRED pre-gate fires BEFORE the permission is formed: a
+            # hallucinated action would otherwise lazily seed a bogus
+            # '<tool>.<action>' ask row and freeze the turn waiting for human
+            # approval. Malformed input never reaches the policy gate or run().
+            return self._render(tool_name, pre, None), params
+
+        # The risk class the gate keys on is derived from the inputs via the
+        # ability's classify_action hook (default None), NOT trusted from a
+        # model-supplied 'action' — a self-declared action is prompt-injectable
+        # and must never decide the permission. Fall back to the action param
+        # only when the tool offers no classification.
+        classified = ability.classify_action(params)
+        action = classified if classified is not None else params.get("action")
+        permission = f"{tool_name}.{action}" if action else tool_name
+        result_text = PolicyManager.wrap(
+            channel=cast("ProcessorConfig.PolicyChannel", getattr(config, "policy_channel", None)),
+            permission=permission,
+            callback=lambda: self._execute(ability, params, act_summary),
+            # The turn's should_stop lets a parked `ask` prompt unwind on
+            # cancel instead of pinning the per-channel lock.
+            # Sourced off the invoking mp (the action endpoint's ctx exposes
+            # it too); absent → None → today's blocking wait (self-no-op).
+            should_stop=getattr(self._mp, "should_stop", None),
+        )
+        return result_text, params
+
+    def _record_outcome(
+        self, tool_name: str, params: dict[str, object], result_text: str, act_summary: "str | None",
+    ) -> None:
+        """Write the call's outcome onto the act-trail: finish the row _execute
+        opened on the allow path, or record the whole outcome for a call that
+        never entered execution (unknown tool, denied, or pre-validation
+        failure) — no live timer brackets that case, so the rendered trail tells
+        the model what happened and it does not retry a blocked tool forever.
+        Anchors to the assistant step row that emitted the call (mp.anchor),
+        falling back to the input row (mp.uid) for framework / turn-zero /
+        compaction calls."""
         from services.act_trail import ActTrail  # noqa: PLC0415
         if self._pending_call_id is not None:
             # The allow path already opened the row (and started its live timer)
             # in _execute — just write the final result onto it.
             ActTrail().finish(call_id=self._pending_call_id, result=result_text)
         else:
-            # A call that never entered execution (unknown tool, denied, or
-            # pre-validation failure): no live timer brackets it, so record the
-            # outcome whole — the rendered trail tells the model what happened so
-            # it does not retry a blocked tool forever. Anchors to the assistant
-            # step row that emitted the call (mp.anchor), falling back to the input
-            # row (mp.uid) for framework / turn-zero / compaction calls.
             ActTrail().record(
                 tool_name=tool_name,
                 params=params,
@@ -157,7 +179,6 @@ class ToolDispatcher:
                 transcript_id=getattr(self._mp, "anchor", None) or getattr(self._mp, "uid", None),
                 summary=act_summary,
             )
-        return result_text + steer
 
     def _signal(self, state: str, **extra: object) -> None:
         """Relay a live tool signal (tool_called / tool_done) through the invoking

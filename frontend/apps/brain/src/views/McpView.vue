@@ -268,7 +268,13 @@ onMounted(async () => {
         <h4>Connection Token</h4>
         <p class="mcp-hint">Give this token to external agents so they can authenticate.</p>
         <div class="input-group">
-          <input type="text" class="monospace" :value="(inConfig.token as string) || ''" readonly />
+          <input
+            type="text"
+            class="monospace"
+            aria-label="Connection Token"
+            :value="(inConfig.token as string) || ''"
+            readonly
+          />
           <button class="input-suffix-btn" title="Copy" @click="copyToken">
             <Copy :size="14" />
           </button>

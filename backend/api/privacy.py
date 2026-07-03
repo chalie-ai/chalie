@@ -16,6 +16,7 @@ import collections.abc
 import fnmatch
 import json
 import logging
+import sqlite3
 from datetime import datetime
 from typing import TYPE_CHECKING
 
@@ -30,7 +31,8 @@ from .dto.boundary import error
 from .dto.privacy import DeleteAllResult
 
 if TYPE_CHECKING:
-    pass
+    from services.database_service import DatabaseService
+    from services.memory_store import MemoryStore
 
 logger = logging.getLogger(__name__)
 
@@ -71,6 +73,19 @@ _DELETE_ALL_STORE_PATTERNS = (
     "deliberation_score:*",
 )
 
+# Tables + MemoryStore patterns streamed by the full export (/export).
+_EXPORT_TABLES = [
+    "episodes",
+    "transcript",
+    "scheduled_items", "lists", "list_items",
+    "user_tool_preferences",
+    "documents", "watched_folders",
+    "data_graph",
+]
+_EXPORT_STORE_PATTERNS = ["working_memory:*"]
+_EXPORT_MAX_ROWS = 10000
+_EXPORT_FETCH_BATCH = 500  # Rows fetched per iteration — keeps memory bounded
+
 
 def _serialize_row(row: dict[str, object]) -> dict[str, object]:
     """Serialize an arbitrary DB row for the raw export stream.
@@ -98,6 +113,92 @@ def _serialize_row(row: dict[str, object]) -> dict[str, object]:
         else:
             result[k] = v
     return result
+
+
+def _stream_row_batches(
+    cursor: sqlite3.Cursor, columns: list[str], fetch_batch: int
+) -> "collections.abc.Generator[str, None, int]":
+    """Yield comma-joined serialized JSON rows in batches; returns the total rows yielded."""
+    first_row = True
+    exported = 0
+    while True:
+        batch = cursor.fetchmany(fetch_batch)
+        if not batch:
+            return exported
+        for row in batch:
+            if not first_row:
+                yield ","
+            first_row = False
+            yield json.dumps(_serialize_row(dict(zip(columns, row))))
+            exported += 1
+
+
+def _stream_table_export(
+    db: "DatabaseService", table: str, max_rows: int, fetch_batch: int
+) -> "collections.abc.Generator[str, None, None]":
+    """Yield one table's export body — ``{"count", "columns", "rows": [...]}`` — or an error stub."""
+    try:
+        with db.connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(f"SELECT COUNT(*) FROM {table}")
+            total_count = cursor.fetchone()[0]
+            cursor.execute(f"SELECT * FROM {table} LIMIT {max_rows}")
+            columns = [desc[0] for desc in cursor.description]
+
+            yield f'{{"count": {total_count}, "columns": {json.dumps(columns)}, "rows": ['
+            exported = yield from _stream_row_batches(cursor, columns, fetch_batch)
+
+            suffix = "]"
+            if total_count > max_rows:
+                suffix += f', "truncated": true, "exported_rows": {exported}'
+            yield suffix + "}"
+            cursor.close()
+    except Exception:
+        yield '{"count": 0, "error": "table not found or empty"}'
+
+
+def _stream_tables_export(
+    db: "DatabaseService", tables: list[str], max_rows: int, fetch_batch: int
+) -> "collections.abc.Generator[str, None, None]":
+    """Yield the comma-joined ``"table": {...}`` entries for every table (body of the ``tables`` object)."""
+    first_table = True
+    for table in tables:
+        if not first_table:
+            yield ","
+        first_table = False
+        yield json.dumps(table) + ": "
+        yield from _stream_table_export(db, table, max_rows, fetch_batch)
+
+
+def _export_memory_store_by_pattern(
+    store: "MemoryStore", patterns: list[str]
+) -> dict[str, dict[str, object]]:
+    """Group MemoryStore entries matching ``patterns`` by pattern, single-pass via ``export_matching``.
+
+    export_matching() scans each keyspace once and applies all patterns simultaneously,
+    returning {key: {type, value}} in O(n) time — avoiding an O(n×m) keys()+type() scan
+    per pattern.
+    """
+    import re as _re
+    all_entries = store.export_matching(patterns)
+    compiled = [(p, _re.compile(fnmatch.translate(p))) for p in patterns]
+    by_pattern: dict[str, dict[str, object]] = {p: {} for p in patterns}
+    for key, entry in all_entries.items():
+        for pattern, rx in compiled:
+            if rx.fullmatch(key):
+                by_pattern[pattern][key] = entry["value"]
+                break
+    return by_pattern
+
+
+def _stream_memory_store_export(
+    store: "MemoryStore", patterns: list[str]
+) -> "collections.abc.Generator[str, None, None]":
+    """Yield the ``memory_store`` value body, or ``{}`` on any failure."""
+    try:
+        yield json.dumps(_export_memory_store_by_pattern(store, patterns))
+    except Exception:
+        yield "{}"
 
 
 @privacy_ns.route("/data-summary")
@@ -162,21 +263,6 @@ class ExportDataResource(Resource):
     @responds(code=200)
     def get(self) -> ResponseReturnValue:
         """Stream a complete JSON export of all user-data tables + memory store as an attachment."""
-        user_data_tables = [
-            "episodes",
-            "transcript",
-            "scheduled_items", "lists", "list_items",
-            "user_tool_preferences",
-            "documents", "watched_folders",
-            "data_graph",
-        ]
-
-        store_patterns = [
-            "working_memory:*",
-        ]
-
-        MAX_EXPORT_ROWS = 10000
-        FETCH_BATCH = 500  # Rows fetched per iteration — keeps memory bounded
 
         def generate() -> "collections.abc.Generator[str, None, None]":
             from services.database_service import get_shared_db_service
@@ -187,72 +273,9 @@ class ExportDataResource(Resource):
 
             exported_at = utc_now().isoformat()
             yield f'{{"exported_at": {json.dumps(exported_at)}, "tables": {{'
-
-            first_table = True
-            for table in user_data_tables:
-                if not first_table:
-                    yield ","
-                first_table = False
-
-                yield json.dumps(table) + ": "
-                try:
-                    with db.connection() as conn:
-                        cursor = conn.cursor()
-                        cursor.execute(f"SELECT COUNT(*) FROM {table}")
-                        total_count = cursor.fetchone()[0]
-                        cursor.execute(f"SELECT * FROM {table} LIMIT {MAX_EXPORT_ROWS}")
-                        columns = [desc[0] for desc in cursor.description]
-
-                        yield (
-                            f'{{"count": {total_count}, '
-                            f'"columns": {json.dumps(columns)}, '
-                            f'"rows": ['
-                        )
-
-                        first_row = True
-                        exported = 0
-                        while True:
-                            batch = cursor.fetchmany(FETCH_BATCH)
-                            if not batch:
-                                break
-                            for row in batch:
-                                if not first_row:
-                                    yield ","
-                                first_row = False
-                                yield json.dumps(_serialize_row(dict(zip(columns, row))))
-                                exported += 1
-
-                        suffix = "]"
-                        if total_count > MAX_EXPORT_ROWS:
-                            suffix += f', "truncated": true, "exported_rows": {exported}'
-                        yield suffix + "}"
-                        cursor.close()
-
-                except Exception:
-                    yield '{"count": 0, "error": "table not found or empty"}'
-
-            # ── MemoryStore keys — single-pass export via export_matching ──
-            # export_matching() scans each keyspace once and applies all patterns
-            # simultaneously, returning {key: {type, value}} in O(n) time.
-            # This replaces the previous O(n×m×5) pattern of keys() + type() per key.
+            yield from _stream_tables_export(db, _EXPORT_TABLES, _EXPORT_MAX_ROWS, _EXPORT_FETCH_BATCH)
             yield '}, "memory_store": '
-            try:
-                import re as _re
-                all_entries = store.export_matching(store_patterns)
-
-                # Group results by pattern for the same JSON shape as before
-                compiled = [(p, _re.compile(fnmatch.translate(p))) for p in store_patterns]
-                by_pattern: dict[str, dict[str, object]] = {p: {} for p in store_patterns}
-                for key, entry in all_entries.items():
-                    for pattern, rx in compiled:
-                        if rx.fullmatch(key):
-                            by_pattern[pattern][key] = entry["value"]
-                            break
-
-                yield json.dumps(by_pattern)
-            except Exception:
-                yield "{}"
-
+            yield from _stream_memory_store_export(store, _EXPORT_STORE_PATTERNS)
             yield "}"
 
         response = Response(

@@ -110,8 +110,8 @@ class SchedulerListResource(Resource):
                 )
                 rows = cursor.fetchall()
             return [_item_dto(r, _COLS_FULL) for r in rows]
-        except Exception as exc:
-            logger.error("[SCHEDULER API] list error: %s", exc)
+        except Exception:
+            logger.exception("[SCHEDULER API] list error")
             return error(_ERR_INTERNAL, 500)
 
     @require_session
@@ -157,8 +157,8 @@ class SchedulerListResource(Resource):
                 daemon=True, name="scheduler-embed",
             ).start()
             return _item_dto(cast("Iterable[object]", row), _COLS)
-        except Exception as exc:
-            logger.error("[SCHEDULER API] create error: %s", exc)
+        except Exception:
+            logger.exception("[SCHEDULER API] create error")
             return error(_ERR_INTERNAL, 500)
 
 
@@ -185,8 +185,8 @@ class SchedulerHistoryResource(Resource):
                 )
                 conn.commit()
             return None
-        except Exception as exc:
-            logger.error("[SCHEDULER API] prune history error: %s", exc)
+        except Exception:
+            logger.exception("[SCHEDULER API] prune history error")
             return error(_ERR_INTERNAL, 500)
 
 
@@ -209,8 +209,8 @@ class SchedulerGroupResource(Resource):
                     (group_id, dto.limit),
                 ).fetchall()
             return [_item_dto(r, _COLS) for r in rows]
-        except Exception as exc:
-            logger.error("[SCHEDULER API] group fires error: %s", exc)
+        except Exception:
+            logger.exception("[SCHEDULER API] group fires error")
             return error(_ERR_INTERNAL, 500)
 
 
@@ -245,8 +245,8 @@ class SchedulerTurnsResource(Resource):
                     "ORDER BY MAX(si.last_fired_at) DESC"
                 ).fetchall()
             return [SchedulerTurn.model_validate(dict(zip(self._TURN_COLS, r))) for r in rows]
-        except Exception as exc:
-            logger.error("[SCHEDULER API] turns error: %s", exc)
+        except Exception:
+            logger.exception("[SCHEDULER API] turns error")
             return error(_ERR_INTERNAL, 500)
 
 
@@ -274,8 +274,8 @@ class SchedulerItemResource(Resource):
             if row is None:
                 return error(_ERR_NOT_FOUND, 404)
             return _item_dto(row, _COLS)
-        except Exception as exc:
-            logger.error("[SCHEDULER API] get item error: %s", exc)
+        except Exception:
+            logger.exception("[SCHEDULER API] get item error")
             return error(_ERR_INTERNAL, 500)
 
     @require_session
@@ -347,6 +347,6 @@ class SchedulerItemResource(Resource):
             if affected == 0:
                 return error(_ERR_NOT_PENDING, 404)
             return None
-        except Exception as exc:
-            logger.error("[SCHEDULER API] cancel error: %s", exc)
+        except Exception:
+            logger.exception("[SCHEDULER API] cancel error")
             return error(_ERR_INTERNAL, 500)

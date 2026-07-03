@@ -11,7 +11,7 @@ standalone idempotent script for operators who want to apply the drop manually.
 No backfill is needed — the dropped data gated removed endpoints and has no
 remaining consumer.
 
-Usage: `python backend/migrations/migration_002_drop_wrapper_authz_columns.py [DB_PATH]`
+Usage: `python backend/migrations/migration_003_drop_wrapper_authz_columns.py`
 """
 
 import os
@@ -43,5 +43,4 @@ def apply(db_path: str) -> None:
 
 
 if __name__ == "__main__":
-    _path = sys.argv[1] if len(sys.argv) > 1 else str(FileMapperService.get_db_path())
-    apply(_path)
+    apply(str(FileMapperService.get_db_path()))

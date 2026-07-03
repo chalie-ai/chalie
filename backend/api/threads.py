@@ -158,6 +158,52 @@ def _fetch_attachments_for_transcripts(conn: sqlite3.Connection, transcript_ids:
     return by_id
 
 
+def _group_calls_by_transcript(calls: list[dict[str, object]]) -> dict[int, list[dict[str, object]]]:
+    """Bucket flat tool-call rows by the transcript row that owns each call."""
+    by_transcript: dict[int, list[dict[str, object]]] = {}
+    for c in calls:
+        by_transcript.setdefault(cast("int", c["transcript_id"]), []).append(c)
+    return by_transcript
+
+
+def _base_message(r: dict[str, object]) -> dict[str, object]:
+    """The role/content/timestamp shape common to every projected message."""
+    return {
+        "id": str(cast("int", r['id'])),
+        "role": r['role'],
+        "content": r['content'] or "",
+        "timestamp": format_date(cast("str", r['created_at']), CHAT_TIMESTAMP_FMT, for_ui=True) or "",
+        "turn_id": r['turn_id'],
+    }
+
+
+def _apply_user_fields(msg: dict[str, object], r: dict[str, object], attachments_by_id: dict[int, list[dict[str, object]]]) -> None:
+    attachments = attachments_by_id.get(cast("int", r['id']))
+    if attachments:
+        msg["attachments"] = attachments
+
+
+def _apply_assistant_fields(
+    msg: dict[str, object],
+    r: dict[str, object],
+    calls_by_transcript: dict[int, list[dict[str, object]]],
+    turn_calls: list[dict[str, object]],
+) -> None:
+    own_calls = calls_by_transcript.get(cast("int", r['id']), [])
+    chips = [
+        {"tool_name": c["tool_name"], "summary": c["summary"]}
+        for c in own_calls
+        if c["tool_name"] != _COMPACTOR_TOOL
+    ]
+    if chips:
+        msg["tool_calls"] = chips
+    content = msg["content"]
+    segments = _parse_rich_media(str(content), turn_calls)
+    if not segments and content:
+        segments = [{"type": "text", "content": content}]
+    msg["segments"] = segments
+
+
 def _rows_to_messages(rows: list[dict[str, object]]) -> list[dict[str, object]]:
     """Project raw transcript rows (oldest-first) into the conversation message
     shape — attachments for user rows, tool-call chips + rich-media segments for
@@ -175,43 +221,16 @@ def _rows_to_messages(rows: list[dict[str, object]]) -> list[dict[str, object]]:
         # Bulk-resolve all turn transcript IDs for segment parsing (replaces per-row _resolve_ids calls).
         turn_scope_ids = _resolve_turn_transcript_ids(conn, assistant_ids)
         # One query for all tool calls across the whole turn scope (chips + segments).
-        all_calls = _fetch_tool_calls_for_transcripts(conn, turn_scope_ids)
+        turn_calls = _fetch_tool_calls_for_transcripts(conn, turn_scope_ids)
         # Group by transcript_id for per-row chip lookup.
-        calls_by_transcript: dict[int, list[dict[str, object]]] = {}
-        for c in all_calls:
-            calls_by_transcript.setdefault(cast("int", c["transcript_id"]), []).append(c)
-        # Segments use all turn-scope calls (same set for every assistant row in the turn).
-        turn_calls = all_calls
+        calls_by_transcript = _group_calls_by_transcript(turn_calls)
 
         for r in rows:
-            transcript_id = cast("int", r['id'])
-            role, content = r['role'], r['content'] or ""
-            ts = format_date(cast("str", r['created_at']), CHAT_TIMESTAMP_FMT, for_ui=True) or ""
-            msg: dict[str, object] = {
-                "id": str(transcript_id),
-                "role": role,
-                "content": content,
-                "timestamp": ts,
-                "turn_id": r['turn_id'],
-            }
-
-            if role == 'user':
-                attachments = attachments_by_id.get(transcript_id)
-                if attachments:
-                    msg["attachments"] = attachments
+            msg = _base_message(r)
+            if r['role'] == 'user':
+                _apply_user_fields(msg, r, attachments_by_id)
             else:
-                own_calls = calls_by_transcript.get(transcript_id, [])
-                chips = [
-                    {"tool_name": c["tool_name"], "summary": c["summary"]}
-                    for c in own_calls
-                    if c["tool_name"] != _COMPACTOR_TOOL
-                ]
-                if chips:
-                    msg["tool_calls"] = chips
-                segments = _parse_rich_media(str(content), turn_calls)
-                if not segments and content:
-                    segments = [{"type": "text", "content": content}]
-                msg["segments"] = segments
+                _apply_assistant_fields(msg, r, calls_by_transcript, turn_calls)
             messages.append(msg)
 
     return messages

@@ -6,7 +6,7 @@ import ipaddress
 import logging
 import socket
 import sqlite3
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, TypeAlias, cast
 from urllib.parse import urlparse
 
 import requests as req
@@ -34,6 +34,10 @@ logger = logging.getLogger(__name__)
 
 _ERR_PROVIDER_NOT_FOUND = "Provider not found"
 _DUPLICATE_NAME_MSG = "A provider with that name already exists"
+
+_OptStr: TypeAlias = "str | None"
+_OptInt: TypeAlias = "int | None"
+_OptDictStrObj: TypeAlias = "dict[str, object] | None"
 
 _SAFE_VALIDATION_MESSAGES = {
     "'model' is required",
@@ -425,11 +429,11 @@ def _provider_dto(row: "dict[str, object]") -> Provider:
         name=cast(str, row['name']),
         platform=cast(str, row['platform']),
         model=cast(str, row['model']),
-        host=cast("str | None", row.get('host')),
-        dimensions=cast("int | None", row.get('dimensions')),
-        timeout=cast("int | None", row.get('timeout')),
+        host=cast(_OptStr, row.get('host')),
+        dimensions=cast(_OptInt, row.get('dimensions')),
+        timeout=cast(_OptInt, row.get('timeout')),
         supports_vision=bool(row.get('supports_vision')),
-        max_tokens=cast("int | None", row.get('max_tokens')),
+        max_tokens=cast(_OptInt, row.get('max_tokens')),
     )
 
 
@@ -619,8 +623,8 @@ class ProviderTestResource(Resource):
                 if val:
                     config[field] = val
 
-            platform = cast("str | None", config.get('platform'))
-            model = cast("str | None", config.get('model'))
+            platform = cast(_OptStr, config.get('platform'))
+            model = cast(_OptStr, config.get('model'))
 
             if not platform:
                 return ProviderTestResult(success=False, error="Platform is required")
@@ -685,7 +689,7 @@ class ProviderVisionResource(Resource):
     def get(self) -> ProviderRole | ResponseReturnValue:
         try:
             status = get_provider_service().get_vision_provider_status()
-            row = cast("dict[str, object] | None", status['provider'])
+            row = cast(_OptDictStrObj, status['provider'])
             return ProviderRole(
                 provider=_provider_dto(row) if row else None,
                 source=cast(str, status['source']),
@@ -736,7 +740,7 @@ class ProviderDelegateResource(Resource):
         """Return the configured delegate provider + resolution source."""
         try:
             status = get_provider_service().get_delegate_provider_status()
-            row = cast("dict[str, object] | None", status['provider'])
+            row = cast(_OptDictStrObj, status['provider'])
             return ProviderRole(
                 provider=_provider_dto(row) if row else None,
                 source=cast(str, status['source']),
@@ -761,7 +765,7 @@ class ProviderDelegateResource(Resource):
             if dto.provider_id is None:
                 service.set_delegate_provider(None)
                 status = service.get_delegate_provider_status()
-                row = cast("dict[str, object] | None", status['provider'])
+                row = cast(_OptDictStrObj, status['provider'])
                 return ProviderRole(
                     provider=_provider_dto(row) if row else None,
                     source=cast(str, status['source']),

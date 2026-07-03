@@ -13,7 +13,7 @@ const feed = computed(() => useConversationFeed(session.panelType));
 const open = computed(() => session.panelThreadId != null);
 
 const block = computed(() =>
-  session.panelThreadId != null ? (feed.value.blocks[session.panelThreadId] ?? null) : null,
+  session.panelThreadId == null ? null : (feed.value.blocks[session.panelThreadId] ?? null),
 );
 
 const heading = computed(() => block.value?.gist || block.value?.preview || 'Thread');

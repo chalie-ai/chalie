@@ -67,12 +67,12 @@ const displayRows = computed<DisplayRow[]>(() => {
   // Live trails: appended at the tail while the turn is working.
   if (props.block.working) {
     const trails = feed.value.liveTrailsFor(props.block.turn_id);
-    if (!trails.length) {
-      rows.push({ kind: 'live-act', rowId: -1, pills: [] });
-    } else {
+    if (trails.length) {
       for (const t of trails) {
         rows.push({ kind: 'live-act', rowId: t.rowId, pills: t.pills });
       }
+    } else {
+      rows.push({ kind: 'live-act', rowId: -1, pills: [] });
     }
   }
 
@@ -99,16 +99,16 @@ interface AvatarRow {
   row: DisplayRow;
 }
 
+/** Key for a non-message row — collapsed tool group or live act-trail anchor. */
+function nonMsgKey(row: LiveActRow | CollapsedGroupRow): string {
+  return row.kind === 'collapsed-group' ? `cg-${row.id}` : `live-${row.rowId}`;
+}
+
 const avatarRows = computed<AvatarRow[]>(() => {
   let prevRole: AvatarRole | null = null;
   return displayRows.value.map((row) => {
     const role: AvatarRole = row.kind === 'msg' && row.message.role === 'user' ? 'user' : 'chalie';
-    const key =
-      row.kind === 'msg'
-        ? `msg-${row.message.id}`
-        : row.kind === 'collapsed-group'
-          ? `cg-${row.id}`
-          : `live-${row.rowId}`;
+    const key = row.kind === 'msg' ? `msg-${row.message.id}` : nonMsgKey(row);
     const ar: AvatarRow = { key, role, showAvatar: role !== prevRole, row };
     prevRole = role;
     return ar;

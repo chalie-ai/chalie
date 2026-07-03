@@ -29,7 +29,7 @@ def _as_object(value: object) -> object:
     if isinstance(value, str):
         try:
             return json.loads(value)
-        except (json.JSONDecodeError, ValueError):
+        except ValueError:
             return value
     return value
 

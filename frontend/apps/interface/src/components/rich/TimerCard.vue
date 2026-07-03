@@ -126,7 +126,8 @@ const isStale = !isInvalid && Date.now() - initialEndsAtMs > STALE_RELOAD_GRACE_
 
 type CardState = 'running' | 'paused' | 'done' | 'stopped' | 'stale' | 'error';
 
-const state = ref<CardState>(isInvalid ? 'error' : isStale ? 'stale' : 'running');
+const initialState: CardState = isInvalid ? 'error' : isStale ? 'stale' : 'running';
+const state = ref<CardState>(initialState);
 
 /** SVG ring dashoffset (0 = empty, RING_PATH_LENGTH = full). */
 const ringOffset = ref<number>(RING_PATH_LENGTH);

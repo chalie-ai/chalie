@@ -35,8 +35,10 @@ export const useQueueStore = defineStore('queue', {
 
   actions: {
     enqueue(threadId: number | null, text: string, type: string = ConfigType.USER): void {
-      (this.byScope[laneKey(threadId)] ??= []).push(text);
-      this.typeByScope[laneKey(threadId)] = type;
+      const key = laneKey(threadId);
+      this.byScope[key] ??= [];
+      this.byScope[key].push(text);
+      this.typeByScope[key] = type;
     },
     removeAt(threadId: number | null, index: number): void {
       this.byScope[laneKey(threadId)]?.splice(index, 1);

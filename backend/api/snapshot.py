@@ -16,7 +16,7 @@ import tempfile
 from collections.abc import Callable
 from functools import wraps
 from pathlib import Path
-from typing import TYPE_CHECKING, ParamSpec, TypeVar
+from typing import ParamSpec, TypeVar
 
 from flask import after_this_request, request, send_file
 from flask.typing import ResponseReturnValue
@@ -26,9 +26,6 @@ from werkzeug.utils import secure_filename
 from .auth import require_session
 from .dto import Error, expects, register_dto, responds
 from .dto.snapshot import SnapshotExportRequest, SnapshotImportRequest, SnapshotImportResult
-
-if TYPE_CHECKING:
-    pass
 
 logger = logging.getLogger(__name__)
 

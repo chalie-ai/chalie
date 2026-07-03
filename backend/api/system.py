@@ -420,8 +420,8 @@ class ObservabilityWorldStateResource(Resource):
                     "schedule": _fetch_schedule_rows(),
                 },
             }
-        except Exception as e:
-            logger.error(f"[REST API] observability/world-state error: {e}")
+        except Exception:
+            logger.exception("[REST API] observability/world-state error")
             return error("Failed to retrieve world state", 500)
 
 
@@ -569,8 +569,8 @@ class ContextUsageResource(Resource):
                 last_request_tokens=last,
                 context_window=cast("int | None", selected.get("max_tokens")),
             )
-        except Exception as e:
-            logger.error(f"[REST API] context-usage error: {e}")
+        except Exception:
+            logger.exception("[REST API] context-usage error")
             return error("Failed to retrieve context usage", 500)
 
 
@@ -644,7 +644,7 @@ def _store_tls_material(cert: "FileStorage", key: "FileStorage") -> bool:
     _save_secure(key, tmp_key)
     try:
         ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER).load_cert_chain(str(tmp_cert), str(tmp_key))
-    except (ssl.SSLError, OSError) as exc:
+    except OSError as exc:
         logger.warning("[SSL] uploaded certificate/key rejected: %s", exc)
         tmp_cert.unlink(missing_ok=True)
         tmp_key.unlink(missing_ok=True)
@@ -671,8 +671,8 @@ class NetworkResource(Resource):
                 ssl_enabled=svc.get_bool(SettingsService.SSL_ENABLED),
                 ssl_cert_present=FileMapperService.get_ssl_cert_path().is_file(),
             )
-        except Exception as e:
-            logger.error(f"[REST API] network state error: {e}")
+        except Exception:
+            logger.exception("[REST API] network state error")
             return error("Failed to read network settings", 500)
 
     @require_session
@@ -710,6 +710,6 @@ class NetworkResource(Resource):
 
             request_restart()
             return NetworkUpdateResult(ssl_enabled=dto.ssl_enabled, restarting=True)
-        except Exception as e:
-            logger.error(f"[REST API] network update error: {e}")
+        except Exception:
+            logger.exception("[REST API] network update error")
             return error("Failed to save network settings", 500)

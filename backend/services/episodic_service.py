@@ -495,34 +495,40 @@ class EpisodicService:
         return "\n".join(lines)
 
     @staticmethod
-    def _parse_episode_ids_from_results(result_texts: list[str]) -> set[str]:
-        """Extract episode IDs from rendered memory recall envelopes.
+    def _episode_ids_from_envelope(text: str) -> set[str]:
+        """Extract episode IDs from one rendered memory recall envelope.
 
         Only rows with ``kind == "episode"`` are collected — data-graph rows are
         keyed by data-graph key (not an episode id) and are intentionally skipped.
-        Malformed / non-recall envelopes are skipped silently.
+        A malformed / non-recall envelope yields an empty set silently.
         """
+        if not text or "[end:memory]" not in text:
+            return set()
+        nl = text.find("]\n")
+        end = text.find("\n[end:memory]")
+        if nl == -1 or end == -1 or end <= nl:
+            return set()
+        body = text[nl + 2:end]
+        try:
+            parsed = json.loads(body)
+        except (ValueError, TypeError):
+            return set()
+        rows = parsed.get("results") if isinstance(parsed, dict) else None
+        if not isinstance(rows, list):
+            return set()
+        return {
+            eid
+            for row in rows
+            if isinstance(row, dict) and row.get("kind") == "episode"
+            if (eid := str(row.get("id", "")).strip())
+        }
+
+    @staticmethod
+    def _parse_episode_ids_from_results(result_texts: list[str]) -> set[str]:
+        """Extract episode IDs from rendered memory recall envelopes."""
         episode_ids: set[str] = set()
         for text in result_texts:
-            if not text or "[end:memory]" not in text:
-                continue
-            nl = text.find("]\n")
-            end = text.find("\n[end:memory]")
-            if nl == -1 or end == -1 or end <= nl:
-                continue
-            body = text[nl + 2:end]
-            try:
-                parsed = json.loads(body)
-            except (ValueError, TypeError):
-                continue
-            rows = parsed.get("results") if isinstance(parsed, dict) else None
-            if not isinstance(rows, list):
-                continue
-            for row in rows:
-                if isinstance(row, dict) and row.get("kind") == "episode":
-                    eid = str(row.get("id", "")).strip()
-                    if eid:
-                        episode_ids.add(eid)
+            episode_ids |= EpisodicService._episode_ids_from_envelope(text)
         return episode_ids
 
     def _fetch_referenced_episodes(self, entries: list[dict[str, object]]) -> list[dict[str, object]]:

@@ -98,7 +98,7 @@ const summaryCards = computed(() => {
       label: windowLabels[usageWindow.value] ?? 'Total Tokens',
     },
     {
-      value: rawSummary.cache_hit_pct != null ? `${rawSummary.cache_hit_pct}%` : 'N/A',
+      value: rawSummary.cache_hit_pct == null ? 'N/A' : `${rawSummary.cache_hit_pct}%`,
       label: 'Cache Hit Rate',
     },
     { value: fmtTokens(rawSummary.tokens_today ?? 0), label: 'Today (UTC)' },

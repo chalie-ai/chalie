@@ -70,7 +70,10 @@ def _validation_body(exc: ValidationError) -> tuple[dict[str, object], int]:
     return (
         Error(
             error=_VALIDATION_FAILED,
-            details=cast("list[dict[str, object]]", exc.errors(include_url=False)),
+            details=cast(
+                "list[dict[str, object]]",
+                [{k: v for k, v in e.items() if k != "url"} for e in exc.errors()],
+            ),
         ).model_dump(mode="json"),
         422,
     )

@@ -12,7 +12,7 @@ allocated lazily on the first fire (a schedule that has never fired has no
 thread). The gist is stored in `thread_gist` (keyed by channel+turn_id), NOT
 on the scheduled_items row.
 
-Usage: `python backend/migrations/migration_005_scheduled_thread_columns.py [DB_PATH]`
+Usage: `python backend/migrations/migration_005_scheduled_thread_columns.py`
 """
 
 import os
@@ -41,5 +41,4 @@ def apply(db_path: str) -> None:
 
 
 if __name__ == "__main__":
-    _path = sys.argv[1] if len(sys.argv) > 1 else str(FileMapperService.get_db_path())
-    apply(_path)
+    apply(str(FileMapperService.get_db_path()))

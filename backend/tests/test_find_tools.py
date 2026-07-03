@@ -148,7 +148,7 @@ def test_no_global_cap_large_array_returns_all_deduped(db: sqlite3.Connection) -
     pass: a large array of distinct exact names must inject ALL of them (more than
     the old global cap of 6), deduped, never truncated."""
     names = ["weather", "calendar", "email", "chalie_docs", "web_browse", "web_search", "vision"]
-    injected, body, _r = _run(db, names + ["weather"])  # trailing dup must collapse
+    injected, _body, _r = _run(db, names + ["weather"])  # trailing dup must collapse
     for n in ("weather", "calendar", "email", "chalie_docs", "web_browse", "web_search", "vision"):
         assert n in injected, f"{n!r} must be injected (no global cap). injected={injected!r}"
     assert len(injected) > 6, f"a large array must exceed the old cap of 6. injected={injected!r}"
@@ -180,7 +180,7 @@ def test_semantic_query_degrades_gracefully_when_db_missing(db: sqlite3.Connecti
     raise); a purely-semantic intent then falls through to an honest not_found
     rather than crashing the turn."""
     monkeypatch.setattr(FindToolsAbility, "_DB_PATH", FileMapperService.get_abilities_db_path().parent / "gone.sqlite")
-    injected, body, rendered = _run(db, ["documentation"])
+    _injected, body, rendered = _run(db, ["documentation"])
     assert "status=success" in rendered, f"a missing index must degrade, not error. rendered={rendered!r}"
     assert "documentation" in cast("list[str]", body["not_found"]), f"body={body!r}"
 

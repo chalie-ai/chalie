@@ -35,11 +35,11 @@ function pillStatus(block: ConversationTurnBlock): 'working' | 'done' | 'thread'
 }
 
 function onPillClick(turnId: number): void {
-  void session.openThreadPanel(turnId);
+  session.openThreadPanel(turnId);
 }
 
 function onReply(turnId: number): void {
-  void session.openThreadPanel(turnId);
+  session.openThreadPanel(turnId);
 }
 
 // History pagination: on scroll within 150px of the top (and not already

@@ -62,6 +62,7 @@ function pick(item: ConversationThread): void {
             ref="inputEl"
             class="search-input"
             placeholder="Search threads…"
+            aria-label="Search threads"
             autocomplete="off"
             @input="onInput"
             @keydown="onKey"

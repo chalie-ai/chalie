@@ -357,7 +357,7 @@ export class WebSocketService {
           if (resp.ok) callbacks.onMessage?.(data as unknown as WsMessageEvent);
           else
             callbacks.onError?.({
-              message: String(data.error ?? 'Action failed.'),
+              message: typeof data.error === 'string' ? data.error : 'Action failed.',
               recoverable: true,
             });
         }

@@ -155,6 +155,35 @@ async function _open(text: string): Promise<void> {
   }
 }
 
+type _RetryErrorBody = { error?: string; reason?: string; hint?: string };
+
+/** Parse a failed /voice/synthesize response body (defaults to {} on non-JSON). */
+async function _parseRetryError(resp: Response): Promise<_RetryErrorBody> {
+  return (await resp
+    .clone()
+    .json()
+    .catch(() => ({}))) as _RetryErrorBody;
+}
+
+/** ms to wait before the next cold-start retry, honoring Retry-After when valid. */
+function _retryDelayMs(resp: Response): number {
+  const retryAfter = Number.parseFloat(resp.headers.get('Retry-After') ?? '');
+  return Number.isFinite(retryAfter) && retryAfter > 0
+    ? retryAfter * 1000
+    : _LOADING_DEFAULT_DELAY_MS;
+}
+
+/** Build the terminal error for a non-retryable (or exhausted) synthesize failure. */
+function _retryFailureError(err: _RetryErrorBody, resp: Response): Error {
+  if (err.reason === 'deps_missing') {
+    return new Error(err.hint ?? err.error ?? 'Voice dependencies not installed');
+  }
+  if (err.reason === 'models_missing') {
+    return new Error(err.hint ?? err.error ?? 'Voice models not installed');
+  }
+  return new Error(err.error ?? `HTTP ${resp.status}`);
+}
+
 /**
  * POST text to /voice/synthesize with cold-start retry. Returns the successful
  * Response, null if the session was aborted/superseded mid-wait, or throws on
@@ -166,32 +195,13 @@ async function _fetchWithLoadingRetry(text: string, gen: number): Promise<Respon
     if (gen !== _openGeneration) return null;
     if (resp.ok) return resp;
 
-    const err = (await resp
-      .clone()
-      .json()
-      .catch(() => ({}))) as {
-      error?: string;
-      reason?: string;
-      hint?: string;
-    };
-
-    if (err.reason === 'deps_missing') {
-      throw new Error(err.hint ?? err.error ?? 'Voice dependencies not installed');
-    }
-    if (err.reason === 'models_missing') {
-      throw new Error(err.hint ?? err.error ?? 'Voice models not installed');
-    }
+    const err = await _parseRetryError(resp);
     if (err.reason === 'loading' && attempt < _LOADING_MAX_RETRIES) {
-      const retryAfter = Number.parseFloat(resp.headers.get('Retry-After') ?? '');
-      const delayMs =
-        Number.isFinite(retryAfter) && retryAfter > 0
-          ? retryAfter * 1000
-          : _LOADING_DEFAULT_DELAY_MS;
-      await _sleepAbortable(delayMs);
+      await _sleepAbortable(_retryDelayMs(resp));
       if (gen !== _openGeneration) return null;
       continue;
     }
-    throw new Error(err.error ?? `HTTP ${resp.status}`);
+    throw _retryFailureError(err, resp);
   }
   throw new Error('Voice models still loading — please retry shortly');
 }

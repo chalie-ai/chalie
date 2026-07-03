@@ -469,6 +469,40 @@ class Transcript:
 
 
     @staticmethod
+    def _resolve_watermarks(scope_rows: list[tuple[object, object]]) -> tuple[int | None, dict[int, int]]:
+        """Split compaction scope rows into the main watermark (for_turn_id NULL
+        → turn_id axis) and per-fork watermarks (for_turn_id = T → transcript.id
+        axis)."""
+        main_wm: int | None = None
+        fork_wm: dict[int, int] = {}
+        for for_tid, up_to in scope_rows:
+            if for_tid is None:
+                main_wm = int(cast("int", up_to))
+            else:
+                fork_wm[int(cast("int", for_tid))] = int(cast("int", up_to))
+        return main_wm, fork_wm
+
+    @staticmethod
+    def _dead_row_ids(
+        ids: list[int], settle_id: int, cited: set[int], main_absorbed: bool, fork_watermark: int | None,
+    ) -> list[int]:
+        """Rows one turn's compaction(s) have folded, under the two-axis rule: a
+        forked turn (any row past settle0) reads as the WHOLE turn, so the thread
+        owns every row above its watermark — including the pre-settle0 head main
+        also reads. A row dies only when BOTH scopes are done: main needs
+        id <= settle0 until it absorbs the turn; the thread needs id > its fork
+        watermark (fork_floor; 0 ⇒ never compacted ⇒ keeps everything). settle0 is
+        re-derived every read, so it is never collected."""
+        is_forked = any(rid > settle_id for rid in ids)
+        fork_floor = fork_watermark if fork_watermark is not None else 0
+        return [
+            rid for rid in ids
+            if rid not in cited and rid != settle_id
+            and (rid > settle_id or main_absorbed)
+            and (not is_forked or rid <= fork_floor)
+        ]
+
+    @staticmethod
     def _gc_channel(channel: str) -> int:
         """Delete one channel's folded rows under the two-axis watermark."""
         from services.database_service import get_shared_db_service
@@ -483,13 +517,7 @@ class Transcript:
                 "WHERE c2.channel = c.channel AND c2.for_turn_id IS c.for_turn_id)",
                 (channel,),
             ).fetchall()
-        main_wm: int | None = None
-        fork_wm: dict[int, int] = {}
-        for for_tid, up_to in scope_rows:
-            if for_tid is None:
-                main_wm = int(up_to)
-            else:
-                fork_wm[int(for_tid)] = int(up_to)
+        main_wm, fork_wm = Transcript._resolve_watermarks(scope_rows)
 
         # Candidate turns: every fork-compacted turn, plus every main-absorbed turn
         # that still carries a main-owned row below its settle0 (the correlated
@@ -513,27 +541,16 @@ class Transcript:
             settle_id = Transcript.settle0(channel, tid)
             if settle_id is None:
                 continue  # unsettled turn — its boundary is undefined, leave it whole
-            main_absorbed = main_wm is not None and tid <= main_wm
-            fwm = fork_wm.get(tid)
             with db.connection() as conn:
                 ids = [int(r[0]) for r in conn.execute(
                     "SELECT id FROM transcript WHERE channel = ? AND turn_id = ?",
                     (channel, tid),
                 ).fetchall()]
-            # A forked turn (any row past settle0) reads as the WHOLE turn, so the
-            # thread owns every row above its watermark — including the pre-settle0
-            # head main also reads. A row dies only when BOTH scopes are done: main
-            # needs id <= settle0 until it absorbs the turn; the thread needs
-            # id > its fork watermark (fork_floor; 0 ⇒ never compacted ⇒ keeps
-            # everything). settle0 is re-derived every read, so it is never collected.
-            is_forked = any(rid > settle_id for rid in ids)
-            fork_floor = fwm if fwm is not None else 0
-            dead = [
-                rid for rid in ids
-                if rid not in cited and rid != settle_id
-                and (rid > settle_id or main_absorbed)
-                and (not is_forked or rid <= fork_floor)
-            ]
+            dead = Transcript._dead_row_ids(
+                ids, settle_id, cited,
+                main_absorbed=main_wm is not None and tid <= main_wm,
+                fork_watermark=fork_wm.get(tid),
+            )
             if not dead:
                 continue
             ph = ','.join('?' * len(dead))

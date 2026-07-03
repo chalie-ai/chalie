@@ -11,7 +11,7 @@ Backfill: mark settled=1 on every assistant row that the old NOT-EXISTS predicat
 would have considered settled — i.e. rows with no tool_calls entry carrying a
 non-internal tool name.
 
-Usage: `python backend/migrations/migration_006_transcript_settled.py [DB_PATH]`
+Usage: `python backend/migrations/migration_006_transcript_settled.py`
 """
 
 import os
@@ -62,5 +62,4 @@ def apply(db_path: str) -> None:
 
 
 if __name__ == "__main__":
-    _path = sys.argv[1] if len(sys.argv) > 1 else str(FileMapperService.get_db_path())
-    apply(_path)
+    apply(str(FileMapperService.get_db_path()))

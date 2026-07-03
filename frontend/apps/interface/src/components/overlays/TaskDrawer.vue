@@ -175,8 +175,8 @@ function handleKeydown(e: KeyboardEvent): void {
 onMounted(() => {
   document.addEventListener('keydown', handleKeydown);
   void tasks.loadActiveTasks();
-  pollTimer = setInterval(() => {
-    void tasks.loadActiveTasks();
+  pollTimer = setInterval(async () => {
+    await tasks.loadActiveTasks();
   }, POLL_INTERVAL_MS);
 });
 

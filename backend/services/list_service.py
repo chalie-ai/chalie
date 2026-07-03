@@ -223,8 +223,8 @@ class ListService:
                 embed_list(list_id, name, db=self.db)
             logger.info("[LISTS] Updated list '%s' (id=%s)", safe(name or list_row['name']), list_id)
             return self.get_list(list_id)
-        except Exception as e:
-            logger.error(f"[LISTS] update_list failed: {e}")
+        except Exception:
+            logger.exception("[LISTS] update_list failed")
             return None
 
     def get_list(self, list_id: str) -> Optional[Dict[str, object]]:
@@ -459,8 +459,8 @@ class ListService:
             return None
         try:
             return [{**it, 'checked': bool(it['checked'])} for it in self._active_items(list_id)]
-        except Exception as e:
-            logger.error(f"[LISTS] get_items failed: {e}")
+        except Exception:
+            logger.exception("[LISTS] get_items failed")
             return None
 
     def add_item(self, list_id: str, content: str) -> Optional[Dict[str, object]]:
@@ -491,8 +491,8 @@ class ListService:
             self._touch_list(list_id)
             logger.info("[LISTS] Added item to list '%s' (id=%s)", safe(list_row['name']), item_id)
             return self._get_item_row(list_id, item_id)
-        except Exception as e:
-            logger.error(f"[LISTS] add_item failed: {e}")
+        except Exception:
+            logger.exception("[LISTS] add_item failed")
             return None
 
     def update_item(
@@ -539,8 +539,8 @@ class ListService:
             self._write_queue.submit_sync(_update)
             self._touch_list(list_id)
             return self._get_item_row(list_id, item_id)
-        except Exception as e:
-            logger.error(f"[LISTS] update_item failed: {e}")
+        except Exception:
+            logger.exception("[LISTS] update_item failed")
             return None
 
     def delete_item(self, list_id: str, item_id: str) -> bool:
@@ -563,8 +563,8 @@ class ListService:
             self._touch_list(list_id)
             logger.info("[LISTS] Removed item %s from list %s", item_id, list_id)
             return True
-        except Exception as e:
-            logger.error(f"[LISTS] delete_item failed: {e}")
+        except Exception:
+            logger.exception("[LISTS] delete_item failed")
             return False
 
     # Internal helpers

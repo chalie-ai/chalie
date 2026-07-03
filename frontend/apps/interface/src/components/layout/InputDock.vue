@@ -1,5 +1,5 @@
 <script lang="ts">
-import { ref } from 'vue';
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 
 // Shared across every mounted dock. The footer dock and an open thread's reply
 // dock both render at once, so the focus-routed handlers (voice transcript,
@@ -15,7 +15,6 @@ const activeDockKey = ref<string>('main');
  * WS single-owner rule: send/stop go through the session store; this component
  * never touches the WebSocket directly.
  */
-import { computed, onMounted, onBeforeUnmount, nextTick, watch } from 'vue';
 import { storeToRefs } from 'pinia';
 import { ConfigType } from '@chalie/shared';
 import { on } from '../../composables/useEventBus';
@@ -44,7 +43,7 @@ const props = withDefaults(defineProps<{ turnId?: number | null; type?: string }
 
 // Stable id for this dock so focus routing can tell the footer ('main') from a
 // thread reply apart. Becomes the active dock on any interaction (focus/pointer).
-const dockKey = props.turnId != null ? `t${props.turnId}` : 'main';
+const dockKey = props.turnId == null ? 'main' : `t${props.turnId}`;
 const isActiveDock = computed(() => activeDockKey.value === dockKey);
 function markActive(): void {
   activeDockKey.value = dockKey;
@@ -70,7 +69,7 @@ const text = ref('');
 
 // Restore draft: persisted on every change so a reload/close/navigate recovers it.
 // Keyed per thread so a reply draft never bleeds into the main composer.
-const DRAFT_KEY = props.turnId != null ? `chalie:draft:t${props.turnId}` : 'chalie:draft';
+const DRAFT_KEY = props.turnId == null ? 'chalie:draft' : `chalie:draft:t${props.turnId}`;
 const stored = lsGet(DRAFT_KEY);
 if (stored) text.value = stored;
 watch(text, (v) => lsSet(DRAFT_KEY, v));

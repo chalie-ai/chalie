@@ -236,7 +236,7 @@ export const useSessionStore = defineStore('session', {
     async _finishTurn(turnId: number | null, type: string = ConfigType.USER): Promise<void> {
       const convo = useConversationFeed(type);
       const owningKey = this._laneOwning(turnId);
-      const id = turnId ?? (owningKey != null ? this.lanes[owningKey]?.liveTurnId ?? null : null);
+      const id = turnId ?? (owningKey == null ? null : this.lanes[owningKey]?.liveTurnId ?? null);
 
       if (id != null) {
         if (id === this.panelThreadId) convo.setWorking(id, false);
@@ -301,7 +301,7 @@ export const useSessionStore = defineStore('session', {
       const ws = getWebSocket();
 
       const key = this._laneOwning(turnId);
-      const lane = key != null ? this.lanes[key] : undefined;
+      const lane = key == null ? undefined : this.lanes[key];
       const stopId = lane?.liveTurnId ?? turnId;
 
       // Restore text from lane record (no optimistic form to read from any more).

@@ -20,6 +20,8 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+_ORDER_ID_DESC = "id DESC"
+
 
 class TranscriptService:
     """Transcript access bound to one ``ProcessorConfig`` and one turn.
@@ -42,7 +44,7 @@ class TranscriptService:
         self.db = get_shared_db_service()
         self.turn_id = self._find_or_make_turn_id(turn_id)
 
-    def get_turn_by_id(self, id: int, sort: str = "id DESC",
+    def get_turn_by_id(self, id: int, sort: str = _ORDER_ID_DESC,
                        include_post_settled: bool = True) -> list[dict[str, object]]:
         """Every transcript row of ``(read_channel, id)`` — ``id`` a turn_id — ordered by
         ``sort`` (default ``id DESC``). ``include_post_settled=False`` floors the turn
@@ -62,7 +64,7 @@ class TranscriptService:
             ).fetchall()
         return [dict(r) for r in rows]
 
-    def get_turn_rows(self, sort: str = "id DESC") -> list[dict[str, object]]:
+    def get_turn_rows(self, sort: str = _ORDER_ID_DESC) -> list[dict[str, object]]:
         """This instance's own turn — :meth:`get_turn_by_id` bound to ``self.turn_id``,
         the whole turn (post-settle0 included)."""
         return self.get_turn_by_id(self.turn_id, sort)
@@ -78,7 +80,7 @@ class TranscriptService:
             ).fetchall()
         return [int(r[0]) for r in rows]
 
-    def get_channel_rows(self, sort: str = "id DESC", limit: int = 0, offset: int = 0) -> list[dict[str, object]]:
+    def get_channel_rows(self, sort: str = _ORDER_ID_DESC, limit: int = 0, offset: int = 0) -> list[dict[str, object]]:
         """The ``limit``/``offset`` page of this instance's channel rows, ordered by
         ``sort`` (default ``id DESC`` — newest first); ``limit`` 0 means no cap.
         Channel-scoped, unlike turn-scoped :meth:`get_turn_rows`; the page is the

@@ -120,7 +120,7 @@ function openTurn(turn: SchedulerTurn): void {
   ></div>
 
   <!-- Slide-out panel -->
-  <aside ref="drawerRef" class="sched-dock hidden" role="complementary" aria-label="Schedules">
+  <aside ref="drawerRef" class="sched-dock hidden" aria-label="Schedules">
     <div class="sched-dock__header">
       <h2 class="sched-dock__title">Schedules</h2>
       <button

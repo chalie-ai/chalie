@@ -113,7 +113,7 @@ function _maybeStopTimer(s: FeedState): void {
 function _blockVersion(block: ConversationTurnBlock): number {
   let v = 0;
   for (const m of block.messages) {
-    const n = parseInt(m.id, 10);
+    const n = Number.parseInt(m.id, 10);
     if (n > v) v = n;
   }
   return v;
@@ -129,7 +129,7 @@ function _upsertTurn(s: FeedState, block: ConversationTurnBlock): void {
 
   // §6.5 step 4 — persisted tool_calls supersede live pills for that row.
   for (const m of block.messages) {
-    if (m.tool_calls?.length) delete s.liveTools[parseInt(m.id, 10)];
+    if (m.tool_calls?.length) delete s.liveTools[Number.parseInt(m.id, 10)];
   }
   _maybeStopTimer(s);
 }

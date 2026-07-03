@@ -20,7 +20,7 @@ const collapsed = ref(true);
 function measure(): void {
   const el = textEl.value;
   if (!el) return;
-  const lineHeight = parseFloat(getComputedStyle(el).lineHeight) || 24;
+  const lineHeight = Number.parseFloat(getComputedStyle(el).lineHeight) || 24;
   overflowing.value = el.scrollHeight > lineHeight * 5 + 1;
 }
 

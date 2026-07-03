@@ -38,7 +38,7 @@ import logging
 import os
 import uuid
 from datetime import datetime
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, TypeAlias, cast
 
 from flask import request, send_file
 from flask.typing import ResponseReturnValue
@@ -85,6 +85,10 @@ _ERR_INTERNAL = "Internal server error"
 _ERR_NOT_FOUND = "Not found"
 _ERR_FILE_NOT_FOUND = "File not found on disk"
 _ERR_ALREADY_WATCHED = "This folder is already being watched"
+
+_OptDatetime: TypeAlias = "datetime | None"
+_OptStr: TypeAlias = "str | None"
+_StrList: TypeAlias = "list[str]"
 
 documents_ns = Namespace("documents", description="Document operations", path="/api/documents")
 
@@ -292,7 +296,7 @@ class UploadDocumentResource(Resource):
                         id=cast(str, d["id"]),
                         original_name=cast(str, d["original_name"]),
                         match_type=cast(str, d["match_type"]),
-                        created_at=cast("datetime | None", d.get("created_at")),
+                        created_at=cast(_OptDatetime, d.get("created_at")),
                     )
                     for d in duplicates
                 ] or None,
@@ -560,6 +564,16 @@ class DocumentPurgeResource(Resource):
             return error(_ERR_INTERNAL, 500)
 
 
+def _search_result_dto(row: "dict[str, object]") -> SearchResult:
+    source = cast(str, row.get("source", "") or "")
+    return SearchResult(
+        document_id=source.split(":", 1)[1] if source.startswith("document:") else "",
+        key=cast(str, row.get("key", "")),
+        content=cast(str, row.get("value", "")),
+        source=source,
+    )
+
+
 @documents_ns.route("/search")
 class DocumentSearchResource(Resource):
     @require_session
@@ -579,15 +593,7 @@ class DocumentSearchResource(Resource):
             results = dgs.recall(dto.q, kinds=[KIND_DOCUMENT], limit=dto.limit)
 
             return SearchResponse(
-                results=[
-                    SearchResult(
-                        document_id=source.split(":", 1)[1] if (source := cast(str, row.get("source", "") or "")).startswith("document:") else "",
-                        key=cast(str, row.get("key", "")),
-                        content=cast(str, row.get("value", "")),
-                        source=source,
-                    )
-                    for row in results
-                ],
+                results=[_search_result_dto(row) for row in results],
                 query=dto.q,
             )
         except Exception as e:
@@ -821,8 +827,8 @@ class WatchedFolderBrowseResource(Resource):
             result = _get_watcher_service().browse_directory(dto.path)
             return BrowseResponse(
                 current=cast(str, result["current"]),
-                parent=cast("str | None", result.get("parent")),
-                directories=cast("list[str]", result["directories"]),
+                parent=cast(_OptStr, result.get("parent")),
+                directories=cast(_StrList, result["directories"]),
             )
         except ValueError as e:
             return error(str(e), 422)
@@ -847,24 +853,24 @@ def _document_dto(row: "dict[str, object]") -> Document:
         file_hash=cast(str, row["file_hash"]),
         page_count=cast("int | None", row.get("page_count")),
         status=cast(str, row["status"]),
-        error_message=cast("str | None", row.get("error_message")),
+        error_message=cast(_OptStr, row.get("error_message")),
         chunk_count=cast("int | None", row.get("chunk_count")),
         source_type=cast(str, row["source_type"]),
-        tags=cast("list[str]", row.get("tags") or []),
-        summary=cast("str | None", row.get("summary")),
+        tags=cast(_StrList, row.get("tags") or []),
+        summary=cast(_OptStr, row.get("summary")),
         extracted_metadata=cast("dict[str, object]", row.get("extracted_metadata") or {}),
-        supersedes_id=cast("str | None", row.get("supersedes_id")),
-        language=cast("str | None", row.get("language")),
-        fingerprint=cast("str | None", row.get("fingerprint")),
-        doc_category=cast("str | None", row.get("doc_category")),
-        doc_project=cast("str | None", row.get("doc_project")),
-        doc_date=cast("str | None", row.get("doc_date")),
+        supersedes_id=cast(_OptStr, row.get("supersedes_id")),
+        language=cast(_OptStr, row.get("language")),
+        fingerprint=cast(_OptStr, row.get("fingerprint")),
+        doc_category=cast(_OptStr, row.get("doc_category")),
+        doc_project=cast(_OptStr, row.get("doc_project")),
+        doc_date=cast(_OptStr, row.get("doc_date")),
         meta_locked=bool(row.get("meta_locked")),
-        watched_folder_id=cast("str | None", row.get("watched_folder_id")),
+        watched_folder_id=cast(_OptStr, row.get("watched_folder_id")),
         created_at=cast("datetime", row["created_at"]),
         updated_at=cast("datetime", row["updated_at"]),
-        deleted_at=cast("datetime | None", row.get("deleted_at")),
-        purge_after=cast("datetime | None", row.get("purge_after")),
+        deleted_at=cast(_OptDatetime, row.get("deleted_at")),
+        purge_after=cast(_OptDatetime, row.get("purge_after")),
     )
 
 
@@ -873,11 +879,11 @@ def _watched_folder_dto(row: "dict[str, object]") -> WatchedFolder:
     return WatchedFolder(
         id=cast(str, row["id"]),
         folder_path=cast(str, row["folder_path"]),
-        label=cast("str | None", row.get("label")),
+        label=cast(_OptStr, row.get("label")),
         source_type=cast(str, row["source_type"]),
         enabled=bool(cast(int, row.get("enabled"))),
-        file_patterns=cast("list[str]", row.get("file_patterns") or []),
-        ignore_patterns=cast("list[str]", row.get("ignore_patterns") or []),
+        file_patterns=cast(_StrList, row.get("file_patterns") or []),
+        ignore_patterns=cast(_StrList, row.get("ignore_patterns") or []),
         recursive=bool(cast(int, row.get("recursive"))),
         scan_interval=cast(int, row["scan_interval"]),
         source_config=cast("dict[str, object]", row.get("source_config") or {}),
@@ -886,7 +892,7 @@ def _watched_folder_dto(row: "dict[str, object]") -> WatchedFolder:
     )
 
 
-def _resolve_document_file(doc: "dict[str, object]") -> "str | None":
+def _resolve_document_file(doc: "dict[str, object]") -> str | None:
     """Resolve the on-disk path for a document, validating uploads stay in-root."""
     if doc.get("watched_folder_id"):
         full_path = cast(str, doc["file_path"])
