@@ -57,6 +57,29 @@ def get_shared_db_service() -> 'DatabaseService':
     return _shared_db_service
 
 
+def close_thread_connection() -> None:
+    """Close the *calling* thread's SQLite connection and clear its thread-local state.
+
+    Counterpart to :meth:`DatabaseService._get_connection` for worker teardown:
+    a thread that opened a connection (via ``get_shared_db_service()``) must
+    close it before exiting, otherwise the connection is abandoned for the GC
+    to reclaim — emitting a ``ResourceWarning`` and holding a transient WAL
+    handle (issue #1903). SQLite objects may only be touched by their owning
+    thread, so this must run *while the thread is still live*, e.g. in a
+    worker wrapper's ``finally`` block.
+
+    Safe to call from a thread that never opened a connection: it is a no-op.
+    """
+    conn = getattr(_local, 'conn', None)
+    if conn is not None:
+        try:
+            conn.close()
+        except Exception:
+            pass
+        _local.conn = None
+        _local.db_path = None
+
+
 class SessionProxy:
     """Lightweight shim that mimics SQLAlchemy session.execute(text("SQL"), params).
 
@@ -343,18 +366,9 @@ class DatabaseService:
     def close_pool(self) -> None:
         """Close the calling thread's SQLite connection and clear thread-local state.
 
-        Silently ignores errors from ``sqlite3.Connection.close()`` so that
-        worker teardown paths remain exception-safe.  After this call
-        ``_local.conn`` and ``_local.db_path`` are both reset to ``None``,
-        ensuring the next call to :meth:`_get_connection` opens a new
-        connection.
+        Thin wrapper around :func:`close_thread_connection` kept for the
+        instance-style API; see that function for behaviour and the rationale
+        for calling it from worker teardown paths.
         """
-        conn = getattr(_local, 'conn', None)
-        if conn:
-            try:
-                conn.close()
-            except Exception:
-                pass
-            _local.conn = None
-            _local.db_path = None
+        close_thread_connection()
 
