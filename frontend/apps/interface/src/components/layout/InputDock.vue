@@ -17,7 +17,7 @@ import { system } from '../../api/system';
 import { lsGet, lsSet } from '../../utils/storage';
 import type { AttachmentPreview as ConvoAttachmentPreview } from '../../stores/conversation';
 import ImageAttachStrip from '../upload/ImageAttachStrip.vue';
-import { FileText, Image, Plus, Mic, Send, X, AlertTriangle } from '@lucide/vue';
+import { FileText, Image, Plus, Mic, Send, X, AlertTriangle, LoaderCircle } from '@lucide/vue';
 
 const session = useSessionStore();
 const voiceStore = useVoiceStore();
@@ -295,11 +295,12 @@ onBeforeUnmount(() => {
 
         <button
           class="btn-action btn-action--send"
-          aria-label="Send message"
-          :disabled="!canSend"
+          :aria-label="session.isSending ? 'Sending...' : 'Send message'"
+          :disabled="!canSend || session.isSending"
           @click="handleSend()"
         >
-          <Send :size="20" />
+          <LoaderCircle v-if="session.isSending" class="btn-action--send__spinner" :size="20" />
+          <Send v-else :size="20" />
         </button>
       </div>
     </div>

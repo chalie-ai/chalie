@@ -57,17 +57,16 @@ export const useAttachmentsStore = defineStore('attachments', {
         return;
       }
       const isImage = file.type.startsWith('image/');
-      let dataUrl: string | null = null;
+      const preview: AttachmentPreview = { filename: file.name, dataUrl: null, isImage };
+      this._entries.push({ file, preview });
+      this.previews.push(preview);
       if (isImage) {
         try {
-          dataUrl = await webPlatformAdapter.readFileAsDataURL(file);
+          preview.dataUrl = await webPlatformAdapter.readFileAsDataURL(file);
         } catch {
           // Preview fails gracefully — chip still shown without thumbnail.
         }
       }
-      const preview: AttachmentPreview = { filename: file.name, dataUrl, isImage };
-      this._entries.push({ file, preview });
-      this.previews.push(preview);
     },
   },
 });

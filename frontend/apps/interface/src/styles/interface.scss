@@ -523,6 +523,14 @@ body.speaker-user #ambientBloom {
   cursor: not-allowed;
 }
 
+.btn-action--send__spinner {
+  animation: spin 800ms linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
 .btn-action--attach {
   background: transparent;
   color: var(--text-secondary);
