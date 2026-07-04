@@ -54,6 +54,10 @@ const hasVisionProvider = ref(true);
 const thinkingMenuOpen = ref(false);
 const thinkingWrapRef = ref<HTMLDivElement | null>(null);
 
+const ENTER_SENDS_KEY = 'chalie:enterSends';
+const enterSends = ref(lsGet(ENTER_SENDS_KEY) === 'true');
+watch(enterSends, (v) => lsSet(ENTER_SENDS_KEY, String(v)));
+
 /** True when there is something to send: non-empty text OR ≥1 attachment.
  *  Mirrors the handleSend guard — both gate on getFiles(). */
 const canSend = computed(
@@ -98,9 +102,15 @@ async function handleSend(): Promise<void> {
   textareaRef.value?.focus();
 }
 
-// Multi-line textarea: Enter inserts a newline and ONLY the send button submits,
-// so there is no keydown handler. Cancelling an in-flight turn is the act-trail's
-// stop/undo button, not the dock.
+/** When enterSends is enabled, Enter submits the message; Shift+Enter always
+ *  inserts a newline. Cancelling an in-flight turn is the act-trail's stop/undo
+ *  button, not the dock. */
+function onTextareaKeydown(e: KeyboardEvent): void {
+  if (e.key === 'Enter' && !e.shiftKey && enterSends.value) {
+    e.preventDefault();
+    void handleSend();
+  }
+}
 
 function chooseDocument(): void {
   attachMenuOpen.value = false;
@@ -291,6 +301,7 @@ onBeforeUnmount(() => {
           placeholder="Talk to Chalie..."
           rows="1"
           @input="grow"
+          @keydown="onTextareaKeydown"
         ></textarea>
 
         <button
@@ -341,6 +352,10 @@ onBeforeUnmount(() => {
         <span class="context-display__caption">Context</span>
         <span class="context-indicator" title="Last request size / context window">{{ usageDisplay }}</span>
       </div>
+      <label class="enter-sends-toggle" :class="{ active: enterSends }" title="Enter sends message">
+        <input v-model="enterSends" type="checkbox" class="enter-sends-toggle__input" />
+        <span class="enter-sends-toggle__label">Enter ↵ sends</span>
+      </label>
     </div>
 
     <!-- No capture attr: lets mobile show the standard OS picker (library +
