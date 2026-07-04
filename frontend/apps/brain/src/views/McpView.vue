@@ -13,6 +13,7 @@ const { confirm } = useConfirm();
 
 const inConfig = ref<McpServerConfig>({});
 const inPort = ref<number>(8462);
+const inHost = ref<string>('0.0.0.0');
 const loadingInbound = ref(true);
 
 const outServers = ref<McpClient[]>([]);
@@ -34,6 +35,7 @@ async function loadInbound(): Promise<void> {
     const data = await mcp.getServerConfig();
     inConfig.value = data;
     inPort.value = (data.port as number) || 8462;
+    inHost.value = (data.host as string) || '0.0.0.0';
   } catch {
     showToast('Failed to load MCP inbound settings', 'error');
   } finally {
@@ -59,6 +61,13 @@ function onPortBlur(): void {
   const val = inPort.value;
   if (val >= 1024 && val <= 65535 && val !== inConfig.value.port) {
     saveInbound({ port: val });
+  }
+}
+
+function onHostBlur(): void {
+  const val = inHost.value.trim();
+  if (val && val !== inConfig.value.host) {
+    saveInbound({ host: val });
   }
 }
 
@@ -253,6 +262,24 @@ onMounted(async () => {
             @blur="onPortBlur"
           >
         </div>
+      </div>
+
+      <div class="form-group">
+        <label for="mcpHost">Bind Host</label>
+        <div class="input-group">
+          <span class="input-prefix">IP</span>
+          <input
+            id="mcpHost"
+            v-model="inHost"
+            type="text"
+            placeholder="0.0.0.0"
+            @blur="onHostBlur"
+          >
+        </div>
+        <p class="mcp-hint">
+          When empty, inherits the main app's <code>--host</code>. Set
+          <code>127.0.0.1</code> to keep the MCP port off the LAN.
+        </p>
       </div>
 
       <div class="mcp-token-section">

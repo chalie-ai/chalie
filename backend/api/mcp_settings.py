@@ -39,6 +39,7 @@ def get_mcp_settings() -> "ResponseReturnValue":
 
     enabled = settings.get("mcp_server_enabled")
     port = settings.get("mcp_server_port") or "8462"
+    host = settings.get("mcp_server_host")
     wrapper_id = settings.get("mcp_server_token_wrapper_id")
 
     token_display = None
@@ -50,6 +51,7 @@ def get_mcp_settings() -> "ResponseReturnValue":
     return jsonify({
         "enabled": enabled is None or str(enabled).lower() not in ("false", "0", "no"),
         "port": int(port) if port and port.isdigit() else 8462,
+        "host": host or "0.0.0.0",
         "token": token_display,
         "wrapper_id": wrapper_id,
     })
@@ -74,6 +76,13 @@ def update_mcp_settings() -> "ResponseReturnValue":
                 return jsonify({"error": "Port must be between 1024 and 65535"}), 400
         except (ValueError, TypeError):
             return jsonify({"error": "Invalid port number"}), 400
+
+    if "host" in data:
+        host_val = str(data["host"]).strip()
+        if host_val:
+            settings.set("mcp_server_host", host_val)
+        else:
+            return jsonify({"error": "Host cannot be empty"}), 400
 
     return jsonify({"success": True})
 
