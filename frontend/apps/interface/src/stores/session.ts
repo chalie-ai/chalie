@@ -96,8 +96,10 @@ export const useSessionStore = defineStore('session', {
         }
       });
 
-      // Tab-refocus liveness check.
-      globalThis.addEventListener('focus', () => ws.ensureAlive());
+      // Tab-refocus liveness check. Tracked for teardown (HMR / StrictMode).
+      const onFocus = () => ws.ensureAlive();
+      globalThis.addEventListener('focus', onFocus);
+      _busUnbinds.push(() => globalThis.removeEventListener('focus', onFocus));
 
       // chalie:action — deterministic skill invocations. Registered inside init()
       // so the WS single-owner rule holds (only one listener ever bound).
@@ -156,6 +158,12 @@ export const useSessionStore = defineStore('session', {
       );
 
       ws.connect();
+    },
+
+    /** Tear down everything init() bound (HMR / StrictMode). Idempotent. */
+    teardown(): void {
+      _busUnbinds.splice(0).forEach((unbind) => unbind());
+      _initialized = false;
     },
 
     /** Register an auth-failure callback (called by App bootstrap). */

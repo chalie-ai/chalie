@@ -67,6 +67,7 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
   _unbindRecall?.();
+  session.teardown();
   useHeartbeat().stop();
   useAmbientSensor().destroy();
 });

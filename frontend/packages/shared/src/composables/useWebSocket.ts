@@ -5,7 +5,6 @@ import { getHost, getToken } from '../config/host';
 import { useConnectionStore } from '../stores/connection';
 
 let service: WebSocketService | null = null;
-let focusBound = false;
 
 /** Process-wide singleton so every view shares one socket. */
 export function getWebSocket(): WebSocketService {
@@ -24,10 +23,6 @@ export function useWebSocket() {
     ws.onConnect(() => conn.setConnected(ws.isConnected));
     ws.connect();
     conn.setConnected(ws.isConnected);
-    if (!focusBound) {
-      focusBound = true;
-      globalThis.addEventListener('focus', () => ws.ensureAlive());
-    }
   });
 
   return { ws, connected };
