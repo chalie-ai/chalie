@@ -116,7 +116,7 @@ Full documentation lives at [chalie.ai](https://chalie.ai).
 
 ## Contributing
 
-PRs welcome. See [Contributing](https://chalie.ai/contribute) or [open an issue](https://github.com/chalie-ai/chalie/issues). Found a security issue? Read [SECURITY.md](SECURITY.md).
+PRs welcome. Start with the [contributor handbook](docs/index.md) — vision, principles, and mechanics in one index — or [open an issue](https://github.com/chalie-ai/chalie/issues). Found a security issue? Read [SECURITY.md](docs/SECURITY.md).
 
 ## License
 

@@ -24,7 +24,7 @@ Domain-specific terminology used throughout the Chalie system.
 | `delegate` | A tool call opted into async background execution. | `delegate_id="web_search_a3b2c1d4"` |
 | `subagent` | User-facing label for a backgrounded delegate. | `GET /api/subagents` |
 | `capability` | An external system adapter an ability wraps. | `mail_capability` (IMAP), `home_capability` (Home Assistant) |
-| `MCP` | Model Context Protocol connection to a remote MCP server. | `_mcp_taskie_create_document` |
+| `MCP` | Model Context Protocol connection to a remote MCP server. | `_mcp_notes_create_document` |
 | `always_available` | Tools pinned in every LLM call on a channel. | `["find_skills", "find_tools", "memory"]` |
 | `DISCOVERABLE` | Ability trait; when False the tool only reaches the model by being pinned. | `thinking`, `browser` are non-discoverable |
 | `counts_as_settle` | Ability trait; when True a tool_calls row demotes its row's `settled=1` to 0. | `bash` (True), `thinking` (False) |

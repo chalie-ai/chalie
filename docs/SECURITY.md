@@ -22,16 +22,9 @@ All LLM provider API keys are:
 
 ## Tool Execution Security
 
-Tools extend Chalie's capabilities but run in isolation:
+Built-in abilities are first-party code in this repository — they run in-process and are reviewed like any other code. External tools execute in a separate subprocess with a structured stdin/stdout protocol and hard output limits.
 
-| Trust Level | Execution | Access |
-|-------------|-----------|--------|
-| **Sandboxed** (default) | Docker container | No access to host filesystem, network, or Chalie internals |
-| **Trusted** (first-party) | Subprocess | Access to its own working directory only; no access to SQLite, MemoryStore, or backend APIs |
-
-Tools have **zero access** to Chalie's internal state. A tool cannot read your conversation history, memory, or traits. It receives only the structured input the dispatcher provides and returns structured output. This is enforced architecturally, not by policy — there is no Chalie API exposed to tool containers.
-
-Webhook endpoints (`/api/tools/webhook/<name>`) use HMAC-SHA256 signatures with replay protection (timestamp window + nonce).
+Tool subprocesses have **zero access** to Chalie's internal state. A tool cannot read your conversation history, memory, or traits. It receives only the structured input the dispatcher provides and returns structured output. This is enforced architecturally, not by policy — there is no Chalie API exposed to tool subprocesses. The `bash` ability additionally blocks remote-access and container commands (`ssh`, `scp`, `rsync`, `kubectl`, `docker`, and similar).
 
 ---
 
