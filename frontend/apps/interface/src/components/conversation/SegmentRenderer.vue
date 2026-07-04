@@ -21,7 +21,7 @@ const resolved = computed<{ seg: ConversationSegment; richEntry: RichCardEntry |
   <template v-for="(item, idx) in resolved" :key="idx">
     <div
       v-if="item.seg.type === 'text'"
-      class="speech-form__text"
+      class="speech-form__text chalie-markup"
       v-html="renderMarkup(item.seg.content ?? '')"
     />
 
@@ -38,7 +38,7 @@ const resolved = computed<{ seg: ConversationSegment; richEntry: RichCardEntry |
       <!-- Unknown-tag fallback: render synthesis or content as markup. -->
       <div
         v-else
-        class="speech-form__text"
+        class="speech-form__text chalie-markup"
         v-html="renderMarkup(item.seg.synthesis ?? item.seg.content ?? '')"
       />
     </template>
