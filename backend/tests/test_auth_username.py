@@ -57,7 +57,7 @@ class TestAuthUsername:
         )
         db_conn.commit()
 
-        resp = client.get('/auth/username')
+        resp = client.get('/api/auth/username')
         assert resp.status_code == 200
         assert resp.get_json() == {"username": "alice"}
 
@@ -67,14 +67,14 @@ class TestAuthUsername:
         # readable by a wrapper token. (No master_account row needed: the guard
         # rejects before the handler's SELECT.)
         raw_token, _wrapper_id = WrapperAuthService().create_token(
-            name="auth-username-test", permissions={},
+            name="auth-username-test",
         )
         resp = _make_client().get(
-            '/auth/username', headers={"Authorization": f"Bearer {raw_token}"},
+            '/api/auth/username', headers={"Authorization": f"Bearer {raw_token}"},
         )
         assert resp.status_code == 403
 
     def test_unauthenticated_is_rejected(self, db: sqlite3.Connection) -> None:
-        resp = _make_client().get('/auth/username')
+        resp = _make_client().get('/api/auth/username')
         assert resp.status_code == 401
         assert resp.get_json() == {"error": "Authentication required"}

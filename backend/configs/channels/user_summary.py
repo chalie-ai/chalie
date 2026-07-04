@@ -29,10 +29,10 @@ def _format_pattern_line(content: dict[str, object]) -> str:
 
 
 class PersistUserSummaryHook(PostTurnHook):
-    """AC-29: receives response_text directly — no on_store hook, no
-    _last_response cache. §3b / §4.8: this hook is the only after-turn
-    callback for this channel. Writes user_summary_long FIRST so crash
-    recovery works correctly."""
+    """Receives response_text directly — no on_store hook, no
+    _last_response cache. This hook is the only after-turn callback for
+    this channel. Writes user_summary_long FIRST so crash recovery works
+    correctly."""
 
     def run(self, mp: "MessageProcessor", response_text: str) -> None:
         import json as _json  # noqa: PLC0415
@@ -157,7 +157,7 @@ def _should_synthesise() -> bool:
 
 class UserSummaryConfig(ProcessorConfig):
     """Caller gates on _should_synthesise() BEFORE calling
-    MessageProcessor.process() — §3c / O1."""
+    MessageProcessor.process()."""
 
     def __init__(self) -> None:
         super().__init__(

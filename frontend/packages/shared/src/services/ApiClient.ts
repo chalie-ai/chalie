@@ -10,8 +10,8 @@ export class AuthError extends Error {
 export class HttpError extends Error {
   constructor(
     public readonly status: number,
-    public readonly error?: string,   // server-provided message parsed from a JSON {error} body, if any
-    public readonly body?: unknown,    // the full parsed JSON error body, if any
+    public readonly error?: string, // server-provided message parsed from a JSON {error} body, if any
+    public readonly body?: unknown, // the full parsed JSON error body, if any
   ) {
     super(`HTTP ${status}`);
     this.name = 'HttpError';
@@ -81,7 +81,10 @@ export class ApiClient {
   private async throwHttp(res: Response): Promise<never> {
     const body = await res.json().catch(() => null);
     const msg =
-      body && typeof body === 'object' && 'error' in body && typeof (body as { error?: unknown }).error === 'string'
+      body &&
+      typeof body === 'object' &&
+      'error' in body &&
+      typeof (body as { error?: unknown }).error === 'string'
         ? (body as { error?: string }).error
         : undefined;
     throw new HttpError(res.status, msg, body ?? undefined);
@@ -148,17 +151,23 @@ export class ApiClient {
   }
 
   health(): Promise<{ status: string } | null> {
-    return fetch(this.buildUrl('/health'), { credentials: 'same-origin', headers: { ...this.authHeaders() } })
+    return fetch(this.buildUrl('/health'), {
+      credentials: 'same-origin',
+      headers: { ...this.authHeaders() },
+    })
       .then((r) => r.json())
       .catch(() => null);
   }
   /** Never rejects. */
   ready(): Promise<{ ready: boolean }> {
-    return fetch(this.buildUrl('/ready'), { credentials: 'same-origin', headers: { ...this.authHeaders() } })
+    return fetch(this.buildUrl('/ready'), {
+      credentials: 'same-origin',
+      headers: { ...this.authHeaders() },
+    })
       .then((r) => (r.ok ? r.json() : { ready: false }))
       .catch(() => ({ ready: false }));
   }
   getSetting(key: string): Promise<{ key: string; value: string | null }> {
-    return this.get(`/system/settings/${encodeURIComponent(key)}`);
+    return this.get(`/api/system/settings/${encodeURIComponent(key)}`);
   }
 }

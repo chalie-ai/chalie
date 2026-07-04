@@ -41,8 +41,7 @@ pytestmark = pytest.mark.unit
 
 
 def _mp_for(config: ProcessorConfig) -> MessageProcessor:
-    mp = MessageProcessor("find a tool for me")
-    mp.config = config
+    mp = MessageProcessor(config, raw_input="find a tool for me")
     mp.active_tools = list(config.always_available or [])
     return mp
 
@@ -66,7 +65,7 @@ def _find_tools_on(mp: MessageProcessor, params: dict[str, object]) -> str | Map
 class TestUserChannelCannotReachRawWebTools:
 
     @pytest.mark.parametrize("raw", ["browser", "search", "news"])
-    def test_raw_web_tool_is_never_injected_on_user_channel(self, raw: str) -> None:
+    def test_raw_web_tool_is_never_injected_on_user_channel(self, raw: str, db: object) -> None:
         """A query naming a raw web tool (``browser`` / ``search`` / ``news``) must
         NEVER inject that raw tool — it is ``DISCOVERABLE=False``, absent from the
         global roster and from the index the cascade searches (raw web is exclusive
@@ -81,7 +80,7 @@ class TestUserChannelCannotReachRawWebTools:
             f"DISCOVERABLE=False. active_tools={mp.active_tools}"
         )
 
-    def test_query_cannot_surface_browser_on_user_channel(self) -> None:
+    def test_query_cannot_surface_browser_on_user_channel(self, db: object) -> None:
         """Even a query that is a perfect semantic match for browser must not
         inject it — browser is DISCOVERABLE=False, so it never enters the global
         roster the query path searches over."""
@@ -93,7 +92,7 @@ class TestUserChannelCannotReachRawWebTools:
             f"regardless of relevance. active_tools={mp.active_tools}"
         )
 
-    def test_delegate_tools_remain_available_on_user_channel(self) -> None:
+    def test_delegate_tools_remain_available_on_user_channel(self, db: object) -> None:
         """The model must not over-block: the delegate tools (web_browse /
         web_search) are how the user channel reaches the web, and stay
         selectable (they are DISCOVERABLE=True)."""
@@ -118,7 +117,7 @@ class TestUserChannelCannotReachRawWebTools:
 
 class TestBackgroundChannelDiscovery:
 
-    def test_dmn_cannot_reach_raw_web_or_pattern_tools(self) -> None:
+    def test_dmn_cannot_reach_raw_web_or_pattern_tools(self, db: object) -> None:
         """The raw, non-discoverable tools (browser/search/news/save_pattern/
         save_graph) are absent from the global roster, so a DMN query naming them
         can never inject them either."""
@@ -132,7 +131,7 @@ class TestBackgroundChannelDiscovery:
             f"DMN must not reach non-discoverable tools {non_discoverable}; leaked: {leaked}"
         )
 
-    def test_dmn_can_discover_the_delegate_wrappers(self) -> None:
+    def test_dmn_can_discover_the_delegate_wrappers(self, db: object) -> None:
         """Discovery is global now: the DMN carries find_tools and the delegate
         wrappers are DISCOVERABLE=True, so the background loop can discover and
         spawn web_browse / web_search / vision. Keeping that work out of the
@@ -157,13 +156,13 @@ class TestBackgroundChannelDiscovery:
 
 class TestWebBrowseDelegateHasBrowser:
 
-    def test_browser_resolves_into_the_tool_schemas_on_web_browse_channel(self) -> None:
+    def test_browser_resolves_into_the_tool_schemas_on_web_browse_channel(self, db: object) -> None:
         """WebBrowseConfig pins browser as always-available, so build_tools
         resolves a real 'browser' tool schema for the delegate — the channel
         raw browser is exclusive to. (always_available bypasses discovery
         entirely: a non-discoverable tool is reached ONLY this way.)"""
         mp = _mp_for(WebBrowseConfig(ProcessorConfig.PolicyChannel.CHAT))
-        assert "browser" in cast(ProcessorConfig, mp.config).always_available
+        assert "browser" in mp.config.always_available
 
         schemas = AbilityRegistry.build_tools(mp)
         names = {cast(str, s["name"]) for s in schemas}

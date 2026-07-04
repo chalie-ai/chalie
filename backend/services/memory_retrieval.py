@@ -6,8 +6,7 @@ handlers here. This module owns everything non-ability — the
 store/recall/reflect/forget handlers, the episode recall engine, the
 data-graph search, the reflection layer expansion, response formatting,
 and recall telemetry — so the same engine is reachable from non-ability
-callers (e.g. the ``/api/updates/memory`` REST endpoint) without
-importing an ability.
+callers without importing an ability.
 
 Every handler returns an ``abilities._result.ToolResult`` — never a
 string. ``recall`` returns a STRUCTURED body
@@ -30,10 +29,8 @@ scope.
 
 Two recall callers stay distinct only in their side-effects:
 ``caller='seed'`` is the silent turn-0 auto-seed (no fallback hint, no
-fan-out, no user-curated moments lane). ``caller='llm_recall'`` is the
-explicit recall — appends the fallback hint naming ``document`` and
-``schedule`` tools, and adds the labeled moments lane (``kind='moment'``)
-so pinned bookmarks surface alongside facts/episodes.
+fan-out). ``caller='llm_recall'`` is the explicit recall — appends the
+fallback hint naming ``document`` and ``schedule`` tools.
 """
 
 import hashlib
@@ -249,16 +246,6 @@ _BACKEND_ERROR_HINT = (
     "you have no record; say you could not reach memory and try again later."
 )
 
-# Label stamped on the user-curated moments lane in an explicit recall, so the
-# model (and the transcript back-reference) can tell a pinned bookmark apart from
-# a generic data_graph fact. Moments are surfaced ONLY on explicit recall, never
-# in the silent turn-0 auto-seed.
-_MOMENT_KIND = "moment"
-# A pinned moment is a deliberate, high-signal user bookmark, so its lane rows
-# carry a "high" relevance label regardless of lexical/semantic distance.
-_MOMENT_RELEVANCE = "high"
-_MOMENT_CONFIDENCE = 0.9
-
 
 def _is_backend_error(status: str) -> bool:
     """A search helper signals an infra failure with a status prefixed ``error:``.
@@ -315,14 +302,6 @@ def handle_recall(mp: "MessageProcessor | None", channel: str, params: dict[str,
         results.extend(dg_hits)
         statuses.extend([loc_status, sem_status, dg_status])
 
-        # The user-curated moments lane is explicit-recall only — never the
-        # silent turn-0 seed (caller='seed'), so pinned bookmarks stay out of the
-        # auto-flashback.
-        if caller == "llm_recall":
-            mom_hits, mom_status = _search_moments(query, limit)
-            results.extend(mom_hits)
-            statuses.append(mom_status)
-
     elif location:
         hits, loc_status = _search_episodes_by_location(location, limit)
         results.extend(hits)
@@ -335,13 +314,6 @@ def handle_recall(mp: "MessageProcessor | None", channel: str, params: dict[str,
         ep_hits, sem_status = _search_episodes(mp, query, limit, caller=caller)
         results.extend(ep_hits)
         statuses.extend([dg_status, sem_status])
-
-        # Explicit-recall-only moments lane (see the AND-gate branch above): the
-        # turn-0 auto-seed never surfaces pinned bookmarks.
-        if caller == "llm_recall":
-            mom_hits, mom_status = _search_moments(query, limit)
-            results.extend(mom_hits)
-            statuses.append(mom_status)
 
     errored = [s for s in statuses if _is_backend_error(s)]
     # All lanes failed → the store is down. Surface a loud, stable error so the
@@ -577,10 +549,6 @@ def _search_data_graph(query: str, limit: int) -> tuple[list[dict[str, object]],
             KIND_DISCOVERY,
         )
 
-        # Moments are deliberately absent here: they live in the dedicated
-        # ``moments`` table (services/moments_service.py), surfaced as their own
-        # labeled explicit-recall lane via ``_search_moments`` — not as part of
-        # generic data_graph recall.
         dgs = get_data_graph_service()
         rows = dgs.recall(
             query=query,
@@ -612,36 +580,6 @@ def _search_data_graph(query: str, limit: int) -> tuple[list[dict[str, object]],
 
     except Exception as e:
         logger.warning(f"{LOG_PREFIX} Data graph search failed: {e}")
-        return [], f"error: {e}"
-
-
-def _search_moments(query: str, limit: int) -> tuple[list[dict[str, object]], str]:
-    """Search the user-curated moments lane (FTS + vec) for an explicit recall.
-
-    Moments live in the dedicated ``moments`` table, outside data_graph, so they
-    are a distinct labeled lane: every hit carries ``kind="moment"`` so the model
-    can tell a pinned bookmark apart from a generic fact. The status string is the
-    same ``N matches`` / ``error: …`` discriminator the other lanes use, so a dead
-    moments backend degrades the recall rather than masquerading as "0 results".
-    """
-    try:
-        from services.moments_service import get_moments_service
-
-        rows = cast("list[dict[str, object]]", get_moments_service().search(query, limit=limit))
-        hits = [
-            {
-                "id": f"moment_{row.get('transcript_id')}",
-                "kind": _MOMENT_KIND,
-                "text": row.get("content", ""),
-                "relevance": _MOMENT_RELEVANCE,
-                "confidence": _MOMENT_CONFIDENCE,
-                "created_at": row.get("created_at"),
-            }
-            for row in rows
-        ]
-        return hits, f"{len(hits)} matches"
-    except Exception as e:
-        logger.warning(f"{LOG_PREFIX} Moments search failed: {e}")
         return [], f"error: {e}"
 
 
@@ -852,7 +790,7 @@ def _recall_payload(results: list[dict[str, object]]) -> list[dict[str, object]]
     episode hit carries one). ``score`` is the relevance label (high/medium/low);
     the raw confidence stays internal. The structured shape replaces the old
     ``[id:X,relevance:Y] text`` prose: it is machine-parseable for the model AND
-    is what ``Transcript._fetch_referenced_episodes`` keys its episode
+    is what ``EpisodicService._fetch_referenced_episodes`` keys its episode
     back-reference on (the ``id`` field), so the format is load-bearing.
     """
     rows: list[dict[str, object]] = []

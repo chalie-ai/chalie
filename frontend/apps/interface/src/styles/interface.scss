@@ -10,13 +10,6 @@
   --bg-surface-user:   var(--bg-user);
   --bg-surface-chalie: var(--bg-chalie);
 
-  --space-xs:  4px;
-  --space-sm:  8px;
-  --space-md:  16px;
-  --space-lg:  24px;
-  --space-xl:  40px;
-  --space-2xl: 64px;
-
   --font-size-sm:  0.8125rem;
   --font-size-lg:  1.125rem;
   --font-size-xl:  1.5rem;
@@ -50,7 +43,7 @@ body {
 }
 
 :focus-visible {
-  outline: 1.5px solid rgba(138, 92, 255, 0.45);
+  outline: 1.5px solid rgba(var(--bs-primary-rgb), 0.45);
   outline-offset: 2px;
 }
 
@@ -76,16 +69,16 @@ body {
     opacity 1200ms cubic-bezier(0.4, 0, 0.2, 1),
     background 1200ms cubic-bezier(0.4, 0, 0.2, 1);
   background:
-    radial-gradient(ellipse 70% 55% at 12% 35%, rgba(138, 92, 255, 0.22), transparent 55%),
-    radial-gradient(ellipse 50% 40% at 88% 75%, rgba(0, 240, 255, 0.05), transparent 60%);
+    radial-gradient(ellipse 70% 55% at 12% 35%, rgba(var(--bs-primary-rgb), 0.22), transparent 55%),
+    radial-gradient(ellipse 50% 40% at 88% 75%, rgba(var(--bs-info-rgb), 0.05), transparent 60%);
 }
 
 body.speaker-chalie #ambientBloom { opacity: 1; }
 body.speaker-user #ambientBloom {
   opacity: 1;
   background:
-    radial-gradient(ellipse 60% 45% at 18% 30%, rgba(138, 92, 255, 0.05), transparent 60%),
-    radial-gradient(ellipse 70% 55% at 88% 65%, rgba(0, 240, 255, 0.20), transparent 55%);
+    radial-gradient(ellipse 60% 45% at 18% 30%, rgba(var(--bs-primary-rgb), 0.05), transparent 60%),
+    radial-gradient(ellipse 70% 55% at 88% 65%, rgba(var(--bs-info-rgb), 0.20), transparent 55%);
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -114,8 +107,8 @@ body.speaker-user #ambientBloom {
   align-items: center;
   gap: var(--space-sm);
   padding: var(--space-sm) var(--space-md);
-  background: rgba(224, 108, 108, 0.15);
-  border: 1px solid rgba(224, 108, 108, 0.3);
+  background: rgba(var(--bs-danger-rgb), 0.15);
+  border: 1px solid rgba(var(--bs-danger-rgb), 0.3);
   border-radius: var(--radius-full);
   font-size: var(--font-size-sm);
   color: var(--error);
@@ -152,8 +145,8 @@ body.speaker-user #ambientBloom {
   align-items: center;
   gap: var(--space-sm);
   padding: var(--space-sm) var(--space-md);
-  background: rgba(220, 130, 40, 0.15);
-  border: 1px solid rgba(220, 130, 40, 0.35);
+  background: rgba(var(--bs-warning-rgb), 0.15);
+  border: 1px solid rgba(var(--bs-warning-rgb), 0.35);
   border-radius: var(--radius-full);
   font-size: var(--font-size-sm);
   color: var(--warning-banner-text);
@@ -189,8 +182,8 @@ body.speaker-user #ambientBloom {
   align-items: center;
   gap: var(--space-sm);
   padding: var(--space-sm) var(--space-md);
-  background: rgba(0, 240, 255, 0.08);
-  border: 1px solid rgba(0, 240, 255, 0.25);
+  background: rgba(var(--bs-info-rgb), 0.08);
+  border: 1px solid rgba(var(--bs-info-rgb), 0.25);
   border-radius: var(--radius-full);
   font-size: var(--font-size-sm);
   color: var(--accent-tertiary);
@@ -283,10 +276,12 @@ body.speaker-user #ambientBloom {
 .conversation-spine {
   position: relative;
   z-index: 10;
-  width: 95vw;
-  max-width: 95vw;
-  margin: 0 auto;
-  padding: calc(56px + var(--space-xl)) var(--space-lg) calc(80px + var(--space-xl));
+  // Exposed so full-bleed children (thread rows/cards) can cancel it with a
+  // negative margin that tracks the responsive padding below.
+  --spine-pad-x: var(--space-lg);
+  width: 100%;
+  max-width: 100%;
+  padding: calc(56px + var(--space-xl)) var(--spine-pad-x) calc(80px + var(--space-xl));
   display: flex;
   flex-direction: column;
   min-height: 100vh;
@@ -310,6 +305,14 @@ body.speaker-user #ambientBloom {
   padding: var(--space-md) var(--space-lg);
   background: linear-gradient(to top, var(--scrim-dock) 50%, transparent);
   transition: background 420ms ease;
+}
+
+// Inline variant — the same composer rendered in-flow at the foot of the thread
+// panel instead of pinned to the viewport footer. Identical look to the main
+// dock; only un-pinned so it sits at the bottom of the panel's flex column.
+.input-dock--inline {
+  position: static;
+  z-index: auto;
 }
 
 .input-dock__outer {
@@ -375,7 +378,7 @@ body.speaker-user #ambientBloom {
   background: var(--bg-surface-2);
   border: 1px solid var(--border-strong);
   border-radius: var(--radius-full);
-  padding: var(--space-sm) var(--space-md);
+  padding: var(--space-xs) var(--space-md);
   backdrop-filter: blur(20px) saturate(120%);
   -webkit-backdrop-filter: blur(20px) saturate(120%);
   box-shadow: var(--shadow-card);
@@ -398,7 +401,9 @@ body.speaker-user #ambientBloom {
   font-size: 0.9375rem;
   line-height: 1.6;
   resize: none;
-  max-height: 120px;
+  field-sizing: content;
+  max-height: var(--textarea-max-h);
+  overflow-y: auto;
   padding: var(--space-sm) 0;
 }
 
@@ -461,7 +466,7 @@ body.speaker-user #ambientBloom {
 .loading-overlay__skip:hover { color: var(--text-secondary); }
 
 .loading-overlay__skip:focus-visible {
-  outline: 1.5px solid rgba(138, 92, 255, 0.45);
+  outline: 1.5px solid rgba(var(--bs-primary-rgb), 0.45);
   outline-offset: 2px;
 }
 
@@ -470,9 +475,67 @@ body.speaker-user #ambientBloom {
   to   { opacity: 1; transform: translateY(0); }
 }
 
+// ── Weave motion (canonical bodies from the threading design system) ──
+// Single signature easing for all of these is var(--ease-out) = cubic-bezier(0.16,1,0.3,1).
+@keyframes panelSlide {
+  from { transform: translateX(48px); }
+  to   { transform: translateX(0); }
+}
+
+@keyframes overlayIn {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+@keyframes cardEnter {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+// Status-dot heartbeat (thinking threads) and gist-glyph twinkle.
+@keyframes pulseV {
+  0%, 100% { opacity: 0.55; transform: scale(1); }
+  50%       { opacity: 1;    transform: scale(1.4); }
+}
+
+// Thread activity marker (blinker) — one definition shared by the user activity
+// dock (TaskDrawer) and the scheduler dock. Working (pink) pulses while the reply
+// streams; done (blue) is a steady standing marker until the user opens the thread.
+.task-drawer__thread-dot {
+  flex-shrink: 0;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+
+  &.working {
+    background: var(--status-main);
+    box-shadow: 0 0 10px color-mix(in oklab, var(--status-main) 60%, transparent);
+    animation: pulseV 1.4s ease-in-out infinite;
+  }
+
+  &.done {
+    background: var(--cyan);
+    box-shadow: 0 0 8px color-mix(in oklab, var(--cyan) 50%, transparent);
+  }
+}
+
+@keyframes glyphTwinkle {
+  0%, 100% { opacity: 0.55; }
+  50%       { opacity: 1; }
+}
+
+// Base layer (feed + footer dock) recedes behind an open thread panel — the
+// mockup's baseStyle when inThread. The top bar and the panel itself stay crisp.
+.weave-dimmed {
+  opacity: 0.5;
+  filter: blur(1px);
+  pointer-events: none;
+  transition: opacity var(--duration-normal) var(--ease-out), filter var(--duration-normal) var(--ease-out);
+}
+
 @keyframes loadingGlow {
-  0%, 100% { box-shadow: 0 0 12px var(--violet, #8a5cff), 0 0 24px rgba(138, 92, 255, 0.3); }
-  50%       { box-shadow: 0 0 24px var(--violet, #8a5cff), 0 0 48px rgba(138, 92, 255, 0.45); }
+  0%, 100% { box-shadow: 0 0 12px var(--violet, #8a5cff), 0 0 24px rgba(var(--bs-primary-rgb), 0.3); }
+  50%       { box-shadow: 0 0 24px var(--violet, #8a5cff), 0 0 48px rgba(var(--bs-primary-rgb), 0.45); }
 }
 
 @keyframes loadingTextFadeIn {
@@ -504,13 +567,13 @@ body.speaker-user #ambientBloom {
 }
 
 .btn-action--send:not(:disabled) {
-  filter: drop-shadow(0 0 8px rgba(138, 92, 255, 0.40));
+  filter: drop-shadow(0 0 8px rgba(var(--bs-primary-rgb), 0.40));
 }
 
 .btn-action--send:hover:not(:disabled) {
-  color: #9B6FFF;
+  color: var(--violet-hover);
   transform: translateY(-1px);
-  filter: drop-shadow(0 0 12px rgba(138, 92, 255, 0.65));
+  filter: drop-shadow(0 0 12px rgba(var(--bs-primary-rgb), 0.65));
 }
 
 .btn-action--send:active:not(:disabled) {
@@ -733,13 +796,15 @@ body.speaker-user #ambientBloom {
 .voice-rec-btn__spinner {
   width: 14px;
   height: 14px;
-  border: 2px solid rgba(255, 255, 255, 0.15);
+  border: 2px solid var(--border-strong);
   border-top-color: var(--text-secondary);
   border-radius: 50%;
-  animation: voiceRecSpin 0.7s linear infinite;
+  animation: spin 0.7s linear infinite;
 }
 
-@keyframes voiceRecSpin {
+/* Canonical spin keyframe — the single 360° rotation every inline loading
+   spinner uses (history, thread panel, voice, action cards, update prompt). */
+@keyframes spin {
   to { transform: rotate(360deg); }
 }
 
@@ -747,8 +812,9 @@ body.speaker-user #ambientBloom {
   .conversation-spine {
     width: 100%;
     max-width: 100%;
-    padding-left: var(--space-md);
-    padding-right: var(--space-md);
+    --spine-pad-x: var(--space-md);
+    padding-left: var(--spine-pad-x);
+    padding-right: var(--spine-pad-x);
   }
 
   // Input box (and its trays, via --dock-width) span 90% of the viewport,

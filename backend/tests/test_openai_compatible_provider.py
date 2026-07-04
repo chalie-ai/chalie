@@ -44,7 +44,7 @@ class TestOpenAICompatibleProvider:
         client, _, _store = authed_client
         _unlock_vault()
 
-        resp = client.post('/providers', json={
+        resp = client.post('/api/providers', json={
             'name': 'minimax-m2',
             'platform': 'openai_compatible',
             'model': 'MiniMax-M2',
@@ -53,15 +53,15 @@ class TestOpenAICompatibleProvider:
         })
 
         assert resp.status_code == 201, resp.get_data(as_text=True)
-        created = resp.get_json()['provider']
+        created = resp.get_json()
         assert created['platform'] == 'openai_compatible'
         assert created['model'] == 'MiniMax-M2'
         assert created['host'] == 'https://api.minimax.io/v1'
-        assert created['api_key'] == '***'  # masked on create response
+        assert 'api_key' not in created  # write-only: never on the read shape
 
-        list_resp = client.get('/providers')
+        list_resp = client.get('/api/providers')
         assert list_resp.status_code == 200
-        providers = list_resp.get_json()['providers']
+        providers = list_resp.get_json()
         names = [p['name'] for p in providers]
         assert 'minimax-m2' in names
 
@@ -79,7 +79,7 @@ class TestOpenAICompatibleProvider:
         _unlock_vault()
 
         test_key = secrets.token_hex(16)
-        resp = client.post('/providers', json={
+        resp = client.post('/api/providers', json={
             'name': 'minimax-vault-roundtrip',
             'platform': 'openai_compatible',
             'model': 'MiniMax-M2',
@@ -87,7 +87,7 @@ class TestOpenAICompatibleProvider:
             'api_key': test_key,
         })
         assert resp.status_code == 201
-        provider_id = resp.get_json()['provider']['id']
+        provider_id = resp.get_json()['id']
 
         # Read back via the DB service (decrypts the key)
         from services.provider_db_service import ProviderDbService
@@ -174,7 +174,7 @@ class TestOpenAICompatibleProvider:
         client, _, _store = authed_client
         _unlock_vault()
 
-        resp = client.post('/providers', json={
+        resp = client.post('/api/providers', json={
             'name': 'minimax-no-host',
             'platform': 'openai_compatible',
             'model': 'MiniMax-M2',

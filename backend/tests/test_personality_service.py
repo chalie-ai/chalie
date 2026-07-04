@@ -1,6 +1,7 @@
 import itertools
-import pytest
 from typing import cast
+
+import pytest
 
 pytestmark = pytest.mark.unit
 

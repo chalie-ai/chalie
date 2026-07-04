@@ -7,7 +7,7 @@
  *
  * State is owned by useNotificationsStore; this component is purely presentational.
  */
-import { computed, onMounted, onBeforeUnmount } from 'vue';
+import { computed, onBeforeUnmount, onMounted } from 'vue';
 import { Lightbulb, X } from '@lucide/vue';
 import { useNotificationsStore } from '../../stores/notifications';
 
@@ -33,17 +33,8 @@ onBeforeUnmount(() => {
 
 <template>
   <Transition name="tip">
-    <div
-      v-if="visible"
-      class="tip tip--visible"
-      role="status"
-      aria-live="polite"
-    >
-      <button
-        class="tip__dismiss"
-        aria-label="Dismiss tip"
-        @click="notifications.dismissTip()"
-      >
+    <div v-if="visible" class="tip tip--visible" role="status" aria-live="polite">
+      <button class="tip__dismiss" aria-label="Dismiss tip" @click="notifications.dismissTip()">
         <X :size="12" :stroke-width="2.4" aria-hidden="true" />
       </button>
 
@@ -64,9 +55,7 @@ onBeforeUnmount(() => {
       </div>
 
       <div class="tip__foot">
-        <button class="tip__mute" @click="notifications.muteTip()">
-          Don't show more tips
-        </button>
+        <button class="tip__mute" @click="notifications.muteTip()">Don't show more tips</button>
       </div>
     </div>
   </Transition>
@@ -146,7 +135,7 @@ onBeforeUnmount(() => {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  color: #b07cff;
+  color: var(--violet-bright);
   flex-shrink: 0;
 
   :deep(svg) {
@@ -190,12 +179,16 @@ onBeforeUnmount(() => {
 
 .tip__example-prompt {
   font-size: 0.88rem;
-  color: #b07cff;
+  color: var(--violet-bright);
   font-style: italic;
   letter-spacing: -0.005em;
 
-  &::before { content: '\201C'; }
-  &::after  { content: '\201D'; }
+  &::before {
+    content: '\201C';
+  }
+  &::after {
+    content: '\201D';
+  }
 }
 
 .tip__foot {

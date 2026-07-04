@@ -183,9 +183,9 @@ class SkillBuilderAbility(Ability):
         # ACT loop so the model cannot keep emitting near-duplicate writes. Other
         # channels (a user explicitly building a skill) are unaffected.
         if channel == "skills_building" and action in ("create", "edit") and result.status == "success":
-            cancel = getattr(self.mp, "cancel_event", None)
-            if cancel is not None:
-                cancel.set()
+            request_cancel = getattr(self.mp, "request_cancel", None)
+            if request_cancel is not None:
+                request_cancel()
         return result
 
 

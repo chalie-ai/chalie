@@ -5,8 +5,8 @@ import logging
 import subprocess
 import sys
 import threading
-from pathlib import Path
 from collections.abc import Callable
+from pathlib import Path
 from typing import IO, cast
 
 logger = logging.getLogger(__name__)

@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { expect, test } from '@playwright/test';
 
 // End-to-end feature test: one entry point (clicking send in the real compose
 // dock) drives the whole hot path — optimistic user bubble, presence machine,

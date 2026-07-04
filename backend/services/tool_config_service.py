@@ -10,7 +10,6 @@ import logging
 
 from services.database_service import DatabaseService
 
-
 logger = logging.getLogger(__name__)
 
 

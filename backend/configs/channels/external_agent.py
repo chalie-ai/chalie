@@ -2,13 +2,12 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, cast
 
-from services.post_turn_hook import PostTurnHook
-from services.processor_config import ProcessorConfig
-
 from configs.channels._common import (
     DEFAULT_ALWAYS_AVAILABLE,
     substitute_provider_content_field,
 )
+from services.post_turn_hook import PostTurnHook
+from services.processor_config import ProcessorConfig
 
 if TYPE_CHECKING:
     from services.message_processor import MessageProcessor
@@ -20,11 +19,11 @@ if TYPE_CHECKING:
 
 class DiscloseToHumanHook(PostTurnHook):
     """EAMP after-turn: dispatch a disclosure turn to the user channel so the
-    human learns about the external-agent exchange.  §3b / §4d / §4.8.
+    human learns about the external-agent exchange.
 
     The closure-over-constructor-args of the old factory becomes honest object
     fields.  Composed onto EAMPConfig only when ``loop_in_human`` is set.  The
-    hidden-input UserConfig turn it spawns is the §4.0 cross-channel surface —
+    hidden-input UserConfig turn it spawns is the cross-channel surface —
     a background, emit-only processor invisible to the foreground turn machinery.
     """
 
@@ -44,8 +43,12 @@ class DiscloseToHumanHook(PostTurnHook):
             "Let the user know about this exchange in your own words."
         )
         try:
-            from api.chat import dispatch_message  # noqa: PLC0415
-            dispatch_message(disclosure_input, source="external_agent", hidden_input=True)
+            from configs.channels.user import UserConfig  # noqa: PLC0415
+            from services.message_processor import MessageProcessor  # noqa: PLC0415
+            MessageProcessor(
+                UserConfig({"hidden_input": True}), raw_input=disclosure_input,
+                metadata={"hidden_input": True},
+            ).run()
         except Exception as exc:
             _log.warning("[EAMP] disclosure dispatch failed: %s", exc)
 
@@ -55,7 +58,7 @@ class EAMPConfig(ProcessorConfig):
 
     channel='external-agent:{agent_name}', role='external_agent'.
     suppress_history=False (conversational), memory_seed=True.
-    post_turn dispatches disclosure when loop_in_human (§3b).
+    post_turn dispatches disclosure when loop_in_human.
 
     agent_name / project are captured on the instance (the prompt-builder
     methods read them via self).  wrapper_id is accepted for call-site
@@ -87,7 +90,7 @@ class EAMPConfig(ProcessorConfig):
         object.__setattr__(self, "_project", project)
 
     def get_user_definition(self, mp: "MessageProcessor") -> str:
-        """Static agent identity string.  §3b."""
+        """Static agent identity string."""
         _self = cast("_WithAgentAttrs", self)
         return (
             f"The user is {_self._agent_name}, an external agent. "

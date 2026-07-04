@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING, TypeAlias, cast
 from services.time_formatter_service import TimeFormatterService
 
 if TYPE_CHECKING:
+    from services.execution_tracker import TurnExecution
     from services.processor_config import ProcessorConfig
     from services.provider_api import ProviderApiRequest, ProviderApiResponse
 
@@ -88,38 +89,57 @@ Some tools accept an `async` flag. Set `async: true` to run a tool in the backgr
 Choose `async: true` when the user asks for something to happen "in the background" or "while" they do something else, or when a call is likely to be slow (web research, browsing, lengthy shell or file work) and the user should not have to wait. Call tools normally (synchronously) for quick results the user is actively waiting on."""
 
 
+class _TurnCancelled(Exception):
+    """Raised by any cooperative-cancellation checkpoint inside a turn's step
+    loop; caught in exactly one place (_run) so a cancel discovered anywhere —
+    including mid-retry, inside an except block — always resolves through the
+    same cleanup + set_cancelled path, never mistaken for a crash."""
+
+
 class MessageProcessor:
     """Single flat message processor for every channel — one instance per turn."""
 
-    def __init__(self, raw_input: str, metadata: dict[str, object] | None = None):
+    # The WS vocabulary this class itself emits — mid-turn progress signals a
+    # surface pulls the corresponding REST data for. `broadcast()` is the sole
+    # emitter; every byte of turn DATA is pulled over REST. Turn *lifecycle*
+    # (working/completed/cancelled/crashed) is a separate, richer WS message
+    # type ("turn_execution", carrying the full row) emitted by this turn's
+    # ExecutionTracker — see execution_tracker.py — not by broadcast() below.
+    # updated → refetch the block; tool_called → render the call summary +
+    # start its act-trail timer; tool_done → stop that timer.
+    _WS_UPDATED_STATE = 'updated'
+    _WS_TOOL_CALLED = 'tool_called'
+    _WS_TOOL_DONE = 'tool_done'
+
+    def __init__(
+        self,
+        config: "ProcessorConfig",
+        turn_id: int = -1,
+        raw_input: str = "",
+        metadata: dict[str, object] | None = None,
+    ):
+        self.config = config
         self._raw_input = raw_input
         self._metadata = metadata or {}
-        # Per-turn config — set by `mp.config = X` in process() / workers.
-        self.config: "ProcessorConfig | None" = None
         self._active_tools: list[str] = []
         self._uid: int | None = None
-        # Per-channel monotonic turn boundary, allocated atomically when _setup
-        # writes the input row. Every call opens its OWN turn (an async tool result
-        # or delegate return is a NEW turn). The act-trail and previous-messages
-        # history render by it; tool_calls derive it via a join on the input row.
-        self.turn_id: int | None = None
+        # Per-channel monotonic turn boundary — the *thread* id. Resolved once by
+        # ``self.ts`` at construction (below): a fresh thread allocates
+        # ``MAX(turn_id)+1`` for the channel; a real ``turn_id`` appends to that
+        # thread. ``make_row_id`` mirrors it onto ``self.turn_id``; every step of
+        # the turn's loop shares it.
+        self.turn_id: "int | None" = None
         # User thinking-level override (None = auto/gate decides). 'medium'/'high'
         # bypass the gate and are forced on every send via Providers.send.
         self.thinking_override: str | None = None
         # The mp owns its provider gateway — mp-free standalone orchestrator.
         from services.providers import Providers  # noqa: PLC0415
         self.providers = Providers()
-        # Cooperative cancellation flag; _step checks is_set() before each send
-        # and between tool dispatches. Never raises.
-        self._cancel_event: threading.Event = threading.Event()
         # The transcript row this step's tool calls anchor to. Defaults to the
         # input row; a tool-bearing step advances it to its OWN step row.
         self.anchor: int | None = None
-        # Every turn_id this chain opened — a mid-turn compaction splits the turn,
-        # so cancellation cleanup must sweep them all. Shared by reference via _continue.
-        self._chain_turn_ids: set[int] = set()
-        # Set on a continuation MP spawned AFTER a mid-turn compaction: the model
-        # lost its working context, so the user prompt prepends a recovery banner.
+        # Armed for the step AFTER a mid-turn compaction: the model lost its
+        # working context, so that step's user prompt prepends a recovery banner.
         self.post_compaction_continuation: bool = False
         self.continuation_user_query: str | None = None
         # Deliberation level: 'low'/'medium'/'high'. Overwritten by process() and
@@ -127,12 +147,88 @@ class MessageProcessor:
         self.thinking_level: str = "low"
         # Rich media ordinal counter — set by cards/media abilities; None until first use.
         self._rich_media_ordinals: object = None
+        # Pre-allocate this turn's anchoring input row SYNCHRONOUSLY (claiming its
+        # turn_id) so the ExecutionTracker below opens against a resolved turn_id.
+        # The row id is this MP's anchor for its tool calls and act-trail.
+        from services.transcript import TranscriptService  # noqa: PLC0415
+        self.ts = TranscriptService(self.config, turn_id)
+        # A supplied turn_id must name a real turn — a reply can only fork what
+        # exists. -1 (unset) allocates fresh and skips the check.
+        if turn_id != TranscriptService._UNSET_TURN_ID and not self.ts.turn_exists():
+            raise ValueError("Invalid turn_id specified")
+        # View mode — an INTERNAL switch, never supplied by callers. A reply INTO
+        # an existing thread carries that thread's turn_id (≠ the unset sentinel −1)
+        # → FORK read (the whole turn, no settle0 floor) + a fork-scoped checkpoint;
+        # a fresh message (turn_id unset) → MAIN spine.
+        self._forked: bool = turn_id != TranscriptService._UNSET_TURN_ID
+        self.transcript_row_id: int | None = self.make_row_id()
+        self._uid = self.transcript_row_id
+        self.anchor = self.transcript_row_id
+        # DB-backed lifecycle handle: opens this turn's turn_executions row now
+        # (state=working), before any LLM call, so DELETE /api/thread/<turn_id> —
+        # a separate request holding no in-memory reference to this MP — can
+        # flip cancel_requested on a row that outlives this process. Every
+        # cooperative-cancellation checkpoint below reads it through
+        # self.should_stop(); it is the only cross-request state a turn keeps.
+        from services.execution_tracker import ExecutionTracker  # noqa: PLC0415
+        self._tracker = ExecutionTracker(self.config, cast("int", self.turn_id))
 
-    def cancel(self) -> None:
-        self._cancel_event.set()
+    def make_row_id(self) -> "int | None":
+        """Claim this turn's anchoring input row. ``turn_id`` was resolved once by
+        ``self.ts`` at construction (verbatim when supplied, else the channel's next
+        turn); the row binds to it. A ``skip_input_row`` config writes no row (returns
+        ``None``) and lets its first assistant row open the turn."""
+        self.turn_id = self.ts.turn_id
+        if self._cfg.skip_input_row:
+            return None
+        return self.ts.insert_row(self._raw_input)
 
-    # Public per-turn aliases — process()/_continue read & write mp.uid /
-    # mp.cancel_event / mp.active_tools; these bridge to the private backing fields.
+    def run(self) -> None:
+        """Spawn the turn on its own daemon thread and return immediately — the MP
+        owns its whole lifecycle from here (the ExecutionTracker already opened
+        this turn's row in __init__, before this call)."""
+        threading.Thread(
+            target=self._run_guarded, daemon=True, name=f"turn-{self.turn_id}",
+        ).start()
+
+    def _run_guarded(self) -> None:
+        """Thread entry for the async send path. ``_run`` already stamped the
+        turn's terminal execution state and re-raised; surface the channel-wide
+        error toast the foreground needs. The synchronous ``process()`` path
+        never enters here — a failed background pass propagates to its caller,
+        toastless, as before."""
+        try:
+            self._run()
+        except Exception as exc:
+            logger.exception("[MP] turn %s failed: %s", self.turn_id, exc)
+            from services.websocket_broker import WebSocketBroker  # noqa: PLC0415
+            WebSocketBroker().broadcast(
+                {"type": "error", "message": "Turn failed unexpectedly", "recoverable": False}
+            )
+
+    @property
+    def execution(self) -> "TurnExecution | None":
+        """This turn's current turn_executions row — read by the thread API's
+        synchronous send response. None only when the row failed to open (a DB
+        fault at construction time; see ExecutionTracker)."""
+        return self._tracker.execution
+
+    def should_stop(self) -> bool:
+        """Cooperative-cancellation query every checkpoint below reads before
+        committing to another unit of work — a thin pass-through to this turn's
+        ExecutionTracker (the DB-backed source of truth). The same duck-typed
+        contract abilities/_dispatcher.py and policy_manager.py poll mid-tool."""
+        return self._tracker.should_stop()
+
+    def request_cancel(self) -> None:
+        """Ask this turn to stop — used by a turn's own self-cancelling ability
+        (e.g. skill_builder's post-build handoff). DELETE /api/thread/<turn_id>
+        requests cancellation directly through TurnExecutionService instead; it
+        holds no live MP reference."""
+        self._tracker.request_cancel()
+
+    # Public per-turn aliases — process() and the abilities read & write mp.uid /
+    # mp.active_tools; these bridge to the private backing fields.
 
     @property
     def raw_input(self) -> str:
@@ -147,14 +243,6 @@ class MessageProcessor:
         self._uid = value
 
     @property
-    def cancel_event(self) -> threading.Event:
-        return self._cancel_event
-
-    @cancel_event.setter
-    def cancel_event(self, value: threading.Event) -> None:
-        self._cancel_event = value
-
-    @property
     def active_tools(self) -> list[str]:
         return self._active_tools
 
@@ -165,7 +253,25 @@ class MessageProcessor:
     @property
     def _cfg(self) -> "ProcessorConfig":
         """Non-None config — always set before any method except __init__ is called."""
-        return cast("ProcessorConfig", self.config)
+        return self.config
+
+    def broadcast(self, state: str, turn_id: int | None, **extra: object) -> None:
+        """The sole WS turn-signal chokepoint. No-op unless this config opts in
+        via ``BROADCASTS_STATE`` (the ``user`` and ``scheduled`` types do).
+        Carries the lean ``status`` (the turn-lifecycle state) + turn_id + ``type``
+        (the FE routes by it — ``user`` → main spine, ``scheduled`` → dock + that
+        schedule's thread), plus a tool call's id/name/summary for tool_called and
+        tool_done; the surface pulls every byte of turn DATA back over REST. A
+        broker fault is swallowed so a dead socket never breaks the turn loop."""
+        if not self._cfg.BROADCASTS_STATE:
+            return
+        from services.websocket_broker import WebSocketBroker  # noqa: PLC0415
+        try:
+            WebSocketBroker().broadcast(
+                {"status": state, "turn_id": turn_id, "type": self._cfg.type(), **extra}
+            )
+        except Exception as exc:  # noqa: BLE001 — a dead surface must not break the loop
+            logger.debug("[MP.broadcast] %s failed: %s", state, exc)
 
     def _run_thinking_gate(self) -> None:
         """Regression-head deliberation scoring → self.thinking_level (user channel only)."""
@@ -222,62 +328,89 @@ class MessageProcessor:
         raw_input: str,
         config: "ProcessorConfig",  # noqa: F821 — deferred import avoids circular dep
         metadata: "dict[str, object] | None" = None,
-        cancel_event: "threading.Event | None" = None,
     ) -> str:
-        """Single entry point: build an MP, run the turn under the channel lock, return text."""
-        mp = MessageProcessor(raw_input, metadata)
-        mp.config = config
-        if cancel_event is not None:
-            mp.cancel_event = cancel_event
+        """Single entry point: build an MP, run the turn under its lane lock, return text."""
+        meta = metadata or {}
+        turn_id = cast("int | None", meta.get("turn_id"))
+        mp = MessageProcessor(
+            config, turn_id if turn_id is not None else -1, raw_input, meta,
+        )
+        if mp.execution is None:
+            # No turn_executions row (the INSERT failed) — unlike the POST
+            # /api/thread handler, which 500s the caller on this same
+            # condition, the process() path has no HTTP caller to reject: it
+            # is the background/delegate entry, toastless by design, and
+            # every should_stop()/set_*() call on a tracker with no row is a
+            # documented no-op — so the turn runs to completion untracked
+            # rather than never running at all.
+            logger.error(
+                "[MP] turn_execution row failed to open channel=%s turn_id=%s — running untracked",
+                config.channel, mp.turn_id,
+            )
+        # Report the turn this ran on back to the caller (mutates meta): a first-fire
+        # scheduler reads the freshly-allocated id to persist its series continuity.
+        meta["turn_id"] = mp.turn_id
         # Default 'low' — the gate must explicitly raise it. A 'medium' default
         # would apply deliberation pressure to every turn the gate didn't run
         # (non-user channels) or that crashed, regressing simple recall/chit-chat.
         mp.thinking_level = "low"
-        from services.thinking_override_service import get_thinking_override
+        from services.thinking_override_service import get_thinking_override  # noqa: PLC0415
         mp.thinking_override = get_thinking_override()
         return mp._run()
 
+    def _lock_key(self) -> str:
+        """Serialize turns within a surface, not across surfaces: the main spine and
+        each fork thread hold independent locks so they execute concurrently; two
+        turns on the same surface still serialize (shared turn cursor). Non-user
+        channels have no turn_id and collapse to one lock per channel as before."""
+        if self._forked:
+            return f"{self._cfg.channel}:t{self.turn_id}"
+        return f"{self._cfg.channel}:main"
+
     def _run(self) -> str:
-        """Run the whole turn under the channel lock: setup, step chain, finalise."""
-        with _channel_lock(self._cfg.channel):
-            self._setup()
-            result = self._step()
-            if self.cancel_event.is_set():
+        """Run the whole turn under the surface lock: setup, step loop, finalise.
+        Every cooperative-cancellation checkpoint raises ``_TurnCancelled``;
+        caught HERE and nowhere else, so a cancel discovered anywhere in the
+        chain — even mid-retry, inside an except block — always resolves
+        through the same purge + set_cancelled path, never mistaken for a
+        crash. A cancel purges the rows THIS chain wrote (id-floor scoped, see
+        _cleanup_cancelled) before the execution row is stamped cancelled."""
+        with _channel_lock(self._lock_key()):
+            try:
+                self._setup()
+                return self._step()
+            except _TurnCancelled:
                 self._cleanup_cancelled()
+                self._tracker.set_cancelled()
                 return ""
-            return result
+            except Exception as exc:
+                self._tracker.set_crashed(str(exc))
+                raise
 
     def _setup(self) -> None:
-        """Pre-chain, once per turn: seed active tools, open the turn, gate, seed turn 0."""
+        """Pre-chain, once per turn: seed active tools, run the deliberation gate, seed turn 0."""
         # ACTIVE_TOOLS is live from iteration 0; find_tools appends, build_tools
         # resolves it each turn. Empty for compaction/encoder channels by design.
         self.active_tools = list(self._cfg.always_available or [])
-
-        from services.transcript_service import Transcript  # noqa: PLC0415
-
-        # Writing the input row allocates the next turn_id ATOMICALLY (a COALESCE
-        # subquery inside the INSERT, under the writer lock) — never max+1 in
-        # Python, which would race two concurrent same-channel turns onto one
-        # turn_id and merge their act-trails. The input row is gated on
-        # skip_input_row alone: a skip_transcript channel still anchors its
-        # act-trail to a uid (the background pattern/geo/summary passes set
-        # skip_input_row=False for exactly this — their per-turn budget, dedup and
-        # decay are DB-derived and key on the turn_id this row allocates). Only a
-        # skip_input_row channel (vision, skill_association) leaves turn_id None
-        # and lets its end message allocate its own turn.
-        if not self._cfg.skip_input_row:
-            self.uid = Transcript.write_input_row(
-                self._cfg.channel, self._cfg.role, self._raw_input,
-            )
-            self.turn_id = Transcript.turn_id_of_row(self.uid)
-            self.anchor = self.uid
-            if self.turn_id is not None:
-                self._chain_turn_ids.add(self.turn_id)
 
         if self._cfg.channel == "user":
             self._run_thinking_gate()
 
         self._seed_turn_zero()
+
+        # Label a turn once it first grows into a thread — i.e. on the first
+        # reply past its settle0 (``_forked``). Fire the gist delegate only when no
+        # label exists yet, so a thread is summarized exactly once, at birth. The
+        # schedule channel rides this same delegate (§13.1): a recurring fire is a
+        # reply past settle0, so its gist generates identically to a user thread's.
+        if self._forked and self.turn_id is not None:
+            try:
+                from services.thread_gist_service import get_thread_gist_service  # noqa: PLC0415
+                if not get_thread_gist_service().bulk_get(self._cfg.channel, [self.turn_id]):
+                    from services.thread_gist_message_processor import maybe_ingest_gist  # noqa: PLC0415
+                    maybe_ingest_gist(self._cfg.channel, self.turn_id)
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("[MP] thread gist fire failed (non-fatal): %s", exc)
 
     def _seed_turn_zero(self) -> None:
         """Framework-issued tool calls fired once before iteration 0."""
@@ -373,7 +506,10 @@ class MessageProcessor:
 
     def _build_send_messages(self) -> list[dict[str, object]]:
         """Build the single-element user-message list, with checkpoint wrapper and config image."""
-        user = _wrap_with_checkpoint(self._cfg.channel, self._cfg.get_user_prompt(self))
+        user = _wrap_with_checkpoint(
+            self._cfg.read_channel or self._cfg.channel, self._cfg.get_user_prompt(self),
+            self.turn_id if self._forked else None,
+        )
         message: dict[str, object] = {"role": "user", "content": user}
         img = self._cfg.get_image(self)
         if img is not None:
@@ -381,24 +517,37 @@ class MessageProcessor:
         return [message]
 
     def _step(self) -> str:
-        """One link in the recursive turn chain — exactly one LLM API call."""
+        """The turn's step loop — exactly one LLM API call per iteration. A step
+        that returns tool calls dispatches them and loops for the next step; a
+        mid-turn over-cap compacts, arms the recovery banner, and loops."""
         from services.provider_api import RequestOverCapError, ResponseOverLimitError  # noqa: PLC0415
 
-        if self.cancel_event.is_set():
-            return ""
-        try:
-            response = self._send_with_retry(self._build_send_dto())
-        except (RequestOverCapError, ResponseOverLimitError):
-            self._dispatch_compaction()
-            return self._continue(post_compaction=True)._step()
-        self.providers._record_send_counters(self)
+        while True:
+            if self.should_stop():
+                raise _TurnCancelled()
+            try:
+                response = self._send_with_retry(self._build_send_dto())
+            except (RequestOverCapError, ResponseOverLimitError):
+                self._dispatch_compaction()
+                # Arm the next step's recovery banner: the compaction cost the
+                # model its working context, so that step's user prompt restates
+                # the user's request and points at the checkpoint +
+                # review_transcript (which stays available for the rest of the turn).
+                from services.transcript_service import Transcript  # noqa: PLC0415
+                self.post_compaction_continuation = True
+                self.continuation_user_query = Transcript.latest_input_content(self._cfg.channel)
+                if "review_transcript" not in self.active_tools:
+                    self.active_tools.append("review_transcript")
+                continue
+            self.providers._record_send_counters(self)
+            # The recovery banner (if armed) rode the send that just landed — one-shot.
+            self.post_compaction_continuation = False
+            self.continuation_user_query = None
 
-        formatted = self._store_row(response.text)
-        if not response.tool_calls:
-            return self._end_turn(formatted)
-        self._emit_interim(formatted)
-        self._dispatch_tools(response.tool_calls)
-        return self._continue()._step()
+            formatted = self._store_row(response.text)
+            if not response.tool_calls:
+                return self._end_turn(formatted)
+            self._dispatch_tools(response.tool_calls)
 
     def _send_with_retry(self, dto: "ProviderApiRequest") -> "ProviderApiResponse":
         """Send through the provider chokepoint, resending the SAME request on failure.
@@ -422,14 +571,20 @@ class MessageProcessor:
                 raise
             except Exception as exc:  # noqa: BLE001 — every provider failure is retriable here
                 last_exc = exc
-                if self.cancel_event.is_set():
-                    raise
+                if self.should_stop():
+                    raise _TurnCancelled() from exc
                 logger.warning(
                     "[MP] provider send failed (attempt %d/%d) channel=%s: %s",
                     attempt, _MAX_PROVIDER_ATTEMPTS, self._cfg.channel, exc,
                 )
                 if attempt < _MAX_PROVIDER_ATTEMPTS:
-                    self._broadcast_provider_retry(attempt + 1)
+                    # A transient notice, not a turn state (no ``done`` follows; the
+                    # turn is still in flight) — toast a surface that a resend is underway.
+                    self.broadcast(
+                        "provider_retry", self.turn_id,
+                        message="The AI provider had a problem — retrying…",
+                        attempt=attempt + 1, max_attempts=_MAX_PROVIDER_ATTEMPTS,
+                    )
 
         logger.critical(
             "[MP] provider send failed after %d attempts channel=%s — terminating turn: %s",
@@ -441,41 +596,16 @@ class MessageProcessor:
             provider=getattr(last_exc, "provider", ""),
         ) from last_exc
 
-    def _broadcast_provider_retry(self, next_attempt: int) -> None:
-        """Tell a user-facing surface a provider resend is in progress (toast)."""
-        if self._cfg.broadcast_to == "user":
-            from api.chat import _broadcast_provider_retry  # noqa: PLC0415
-            _broadcast_provider_retry(next_attempt, _MAX_PROVIDER_ATTEMPTS)
-
     def _store_row(self, text: _OptStr) -> str:
         """Persist this step's assistant row and advance the anchor its tool calls record against."""
         formatted = self._format_response(text or "")
         if self._cfg.skip_transcript:
             return formatted
-        from services.transcript_service import Transcript  # noqa: PLC0415
-
-        row_id = Transcript.write_assistant_row(self._cfg.channel, formatted, turn_id=self.turn_id)
-        if self.turn_id is None:
-            self.turn_id = Transcript.turn_id_of_row(row_id)
-            if self.turn_id is not None:
-                self._chain_turn_ids.add(self.turn_id)
-        self.anchor = row_id
+        self.anchor = self.ts.insert_row(formatted, role='assistant', settled=1)
+        # Persistence boundary: every chain step and the final synthesis land here.
+        # Signal the surface to refetch the turn block (it coalesces by turn_id).
+        self.broadcast(self._WS_UPDATED_STATE, self.turn_id)
         return formatted
-
-    def _emit_interim(self, formatted: str) -> None:
-        """Broadcast a tool-bearing step's boundary frame live on the user channel.
-
-        Fires once per tool-bearing step (the no-tool step ends the turn before
-        reaching here). The frame IS the per-step boundary the surface renders
-        on: it collapses the prior step's tool group and opens the next. Emit it
-        even when the step has no prose — an empty interim still delimits the
-        step (the surface self-no-ops the empty bubble), and without it the
-        next step's tools pile into the prior group and the whole turn reads as
-        one ever-growing ACT loop. Do NOT re-add a ``formatted.strip()`` guard.
-        """
-        if self._cfg.broadcast_to == "user":
-            from api.chat import _broadcast_interim  # noqa: PLC0415
-            _broadcast_interim(self._metadata, formatted)
 
     def _dispatch_tools(self, tool_calls: list[dict[str, object]]) -> None:
         """Dispatch one step's tool calls in order through the chokepoint."""
@@ -483,43 +613,23 @@ class MessageProcessor:
 
         dispatcher = ToolDispatcher(self)
         for tc in tool_calls:
-            if self.cancel_event.is_set():
-                return
+            if self.should_stop():
+                raise _TurnCancelled()
             dispatcher.dispatch(cast("str", tc["name"]), cast("dict[str, object]", tc["input"]))
 
-    def _continue(self, *, post_compaction: bool = False) -> "MessageProcessor":
-        """Spawn the next link in the chain — a hidden-input continuation MP."""
-        child = MessageProcessor(self._raw_input, self._metadata)
-        child.config = self._cfg.with_hidden_input()
-        child.uid = self.uid
-        child.turn_id = self.turn_id
-        child.anchor = self.uid
-        child.active_tools = self.active_tools            # SAME list
-        child._chain_turn_ids = self._chain_turn_ids      # SAME set
-        child._rich_media_ordinals = getattr(self, "_rich_media_ordinals", None)
-        child.cancel_event = self.cancel_event            # SAME Event
-        child.thinking_level = getattr(self, "thinking_level", "low")
-        child.thinking_override = self.thinking_override
-        child.providers = self.providers
-        if post_compaction:
-            from services.transcript_service import Transcript  # noqa: PLC0415
-            child.post_compaction_continuation = True
-            child.continuation_user_query = Transcript.latest_input_content(self._cfg.channel)
-            if "review_transcript" not in child.active_tools:
-                child.active_tools.append("review_transcript")
-        return child
-
     def _format_response(self, text: _OptStr) -> str:
-        """Normalise assistant text before it is persisted or broadcast."""
-        if self._cfg.broadcast_to == "user":
+        """Normalise assistant text before it is persisted or broadcast. Any
+        live-surfaced channel (``broadcast_to`` set — user or schedule) renders
+        markdown to HTML for its thread view; silent channels keep raw text."""
+        if self._cfg.broadcast_to is not None:
             from services.markup import markdown_to_html  # noqa: PLC0415
             return markdown_to_html(text)
         return text or ""
 
     def _end_turn(self, formatted: str) -> str:
         """End the turn: fan out the failure-isolated post-turn hooks, return the text up."""
-        if self.cancel_event.is_set():
-            return ""
+        if self.should_stop():
+            raise _TurnCancelled()
         # Hooks are mutually independent; order is undefined and may become
         # concurrent, so each call is isolated (log + continue).
         for hook in self._cfg.post_turn_hooks:
@@ -531,53 +641,99 @@ class MessageProcessor:
                     type(hook).__name__,
                     exc,
                 )
+        # Turn ended without a re-run: fold the latest window into episodes when the
+        # channel's tail has grown enough. Profile-gated and off-thread inside, so
+        # firing once per turn (not per row) is the DB-churn win, never a block.
+        from services.database_service import get_shared_db_service  # noqa: PLC0415
+        from services.episodic_service import EpisodicService  # noqa: PLC0415
+        EpisodicService(get_shared_db_service()).check_and_store(self._cfg)
+        # The turn's last assistant message carried no tool calls — it is the
+        # terminal. Stamp the execution row done; the tracker broadcasts it.
+        self._tracker.set_done()
         return formatted
 
     def _cleanup_cancelled(self) -> None:
-        """Delete every transcript + tool_calls row of the cancelled chain, across every turn."""
-        turn_ids = {t for t in (self._chain_turn_ids or ({self.turn_id} if self.turn_id is not None else set())) if t is not None}
-        if not turn_ids:
+        """Delete the cancelled chain's OWN rows from this turn — those at or above
+        the chain's first row (``self.uid``). A fork reply shares its turn_id with
+        the thread it replies into, so deleting the whole turn would wipe history
+        that predates the reply; the id floor confines the purge to what THIS chain
+        wrote. ``uid`` None (no input row written yet) ⇒ floor 0 ⇒ the turn is this
+        chain's alone (a starter / skip-input continuation) and clears whole."""
+        if self.turn_id is None:
             return
-        channel = self._cfg.channel
+        channel, floor = self._cfg.channel, self.uid or 0
         try:
             from services.database_service import get_shared_db_service  # noqa: PLC0415
             db = get_shared_db_service()
             with db.connection() as conn:
-                for tid in sorted(turn_ids):
-                    conn.execute(
-                        "DELETE FROM tool_calls WHERE transcript_id IN "
-                        "(SELECT id FROM transcript WHERE channel = ? AND turn_id = ?)",
-                        (channel, tid),
-                    )
-                    conn.execute(
-                        "DELETE FROM transcript WHERE channel = ? AND turn_id = ?",
-                        (channel, tid),
-                    )
+                conn.execute(
+                    "DELETE FROM tool_calls WHERE transcript_id IN "
+                    "(SELECT id FROM transcript WHERE channel = ? AND turn_id = ? AND id >= ?)",
+                    (channel, self.turn_id, floor),
+                )
+                conn.execute(
+                    "DELETE FROM transcript WHERE channel = ? AND turn_id = ? AND id >= ?",
+                    (channel, self.turn_id, floor),
+                )
             logger.info(
-                "[MessageProcessor] %s: cleaned up cancelled chain (turn_ids=%s)",
-                channel,
-                sorted(turn_ids),
+                "[MessageProcessor] %s: cleaned up cancelled chain (turn_id=%s, id>=%s)",
+                channel, self.turn_id, floor,
             )
         except Exception as exc:
             logger.warning(
-                "[MessageProcessor] %s: failed to clean up cancelled chain (turn_ids=%s): %s",
-                channel,
-                sorted(turn_ids),
-                exc,
+                "[MessageProcessor] %s: failed to clean up cancelled chain (turn_id=%s): %s",
+                channel, self.turn_id, exc,
             )
 
     def _previous_rows(self) -> list[dict[str, object]]:
-        """Watermark-bounded transcript rows for this channel, EXCLUDING the current turn."""
+        """The LLM ``previous_messages`` row set for this turn's view — the hub of the
+        read+compaction flow, read chronologically (``id ASC``) so it re-assembles the
+        transcript. Both views read through ``self.ts`` (the channel/turn-bound
+        TranscriptService); no piece below is correct alone — they compose:
+
+          watermark       ``compaction_persistence.get_compaction(channel,
+                          for_turn_id)`` — two axes that never collide: MAIN
+                          (for_turn_id=None) is a *turn_id*; FORK (for_turn_id=T) is a
+                          *transcript.id* within T. Everything at/below it is already
+                          carried as prose by the checkpoint summary ``_wrap_with_
+                          checkpoint`` prepends; this returns only the live tail ABOVE
+                          it. Model context = summary(≤wm) ⊕ these rows(>wm).
+          FORK            ``self.ts.get_turn_rows("id ASC")`` — the whole forked turn
+                          (no settle0 floor; that cut is MAIN-only) — kept between its
+                          id watermark and the live reply's own rows (``id >= self.uid``,
+                          which render separately).
+          MAIN            every turn above the watermark (``get_turns_since``) read in
+                          turn order, each floored at settle0 via ``get_turn_by_id(...,
+                          include_post_settled=False)`` (the cut is a SQL WHERE, so a
+                          turn with no settled reply drops out entirely). The watermark
+                          is the ONLY spine bound — no turn cap (it would silently drop
+                          un-summarised turns).
+          writer          ``chat_history_compactor.run`` folds these rows into the
+                          summary and advances the watermark to their max id/turn_id.
+                          That "always advances" guarantee is WHY this keeps rows
+                          strictly above the watermark — else the compactor re-folds
+                          already-folded rows and livelocks."""
         if self._cfg.suppress_history:
             return []
         from services import compaction_persistence  # noqa: PLC0415
-        from services.transcript_service import Transcript  # noqa: PLC0415
-        compaction = compaction_persistence.get_compaction(self._cfg.channel)
-        watermark = cast("int", compaction["compacted_up_to_id"]) if compaction else 0
-        rows = Transcript.get_recent(self._cfg.channel, since_id=watermark)
-        if self.turn_id is None:
-            return rows
-        return [r for r in rows if cast("int", r.get("turn_id") or 0) < self.turn_id]
+        # The compaction watermark axis follows the history SCOPE: a split-channel
+        # config reads cross-turn history from ``read_channel`` and its checkpoint
+        # lives there too, so read both off the read channel (``None`` ⇒ the write
+        # channel — every non-split config). The row fetches go through ``self.ts``,
+        # already routed to the read channel by TranscriptService.
+        channel = self._cfg.read_channel or self._cfg.channel
+        if self._forked and self.turn_id is not None:
+            compaction = compaction_persistence.get_compaction(channel, self.turn_id)
+            wm = cast("int", compaction["compacted_up_to"]) if compaction else 0
+            upper = self.uid if self.uid is not None else 9223372036854775807
+            return [r for r in self.ts.get_turn_rows("id ASC")
+                    if wm < int(cast("int", r["id"])) < upper]
+        compaction = compaction_persistence.get_compaction(channel, None)
+        wm = cast("int", compaction["compacted_up_to"]) if compaction else 0
+        rows: list[dict[str, object]] = []
+        for tid in self.ts.get_turns_since(wm):
+            rows += self.ts.get_turn_by_id(tid, "id ASC", False)
+        return rows
 
     def get_previous_messages(self, drop_oldest: int = 0) -> str:
         """Render the ## Previous Messages block from _previous_rows()."""
@@ -594,40 +750,48 @@ class MessageProcessor:
         return "\n".join(lines)
 
     def _render_act_trail(self) -> str:
-        """Assemble the current turn's act-trail — its tool calls, in record order."""
+        """Assemble the current turn's act-trail — its tool calls, in record order.
+
+        A mid-turn compaction RESETS the visible trail: only tool calls emitted
+        after the turn's most recent ``chat_history_compactor`` marker are
+        rendered. The compacted checkpoint already carries prior continuity, so
+        on the resume the model re-fires any tools it still needs rather than
+        re-carrying the bloated pre-compaction results (which would re-overflow
+        the window and loop). With no compaction in the turn there is no marker,
+        so the whole turn's calls render — byte-identical to before, preserving
+        intra-turn tool-result continuity for ordinary multi-step loops."""
         if self.turn_id is None:
             return ""
         from services.act_trail import ActTrail  # noqa: PLC0415
 
         trail = ActTrail()
+        rows = trail.fetch_by_turn(self._cfg.channel, self.turn_id)
+        last_compaction = max(
+            (int(cast("int", r["id"])) for r in rows
+             if r.get("tool_name") == "chat_history_compactor"),
+            default=0,
+        )
         lines: list[str] = []
-        for row in trail.fetch_by_turn(self._cfg.channel, self.turn_id):
+        for row in rows:
             if row.get("tool_name") == "chat_history_compactor":
+                continue
+            if int(cast("int", row["id"])) <= last_compaction:
                 continue
             lines.append(trail.render(row))
         return "\n".join(lines)
 
     def _dispatch_compaction(self) -> None:
-        """Fire chat-history compaction through the normal tool-dispatch chokepoint."""
+        """Fire chat-history compaction through the normal tool-dispatch chokepoint.
+
+        The compactor scopes its own checkpoint by view (``mp._forked``) and writes
+        it into the ``compactions`` table — off the transcript spine, so firing
+        never moves ``turn_id`` and the turn boundary survives a mid-turn collapse.
+        The post-compaction continuation re-reads ``_previous_rows`` against the
+        fresh watermark; nothing here needs to inspect the result."""
         from abilities._dispatcher import ToolDispatcher  # noqa: PLC0415
-        from services import compaction_persistence  # noqa: PLC0415
-        from services.transcript_service import Transcript  # noqa: PLC0415
-
-        before = compaction_persistence.get_compaction(self._cfg.channel)
-        before_id = cast("int", before["compacted_up_to_id"]) if before else 0
-
         ToolDispatcher(self).dispatch(
             "chat_history_compactor", {"act_summary": "Compacting conversation"}
         )
-
-        after = compaction_persistence.get_compaction(self._cfg.channel)
-        after_id = cast("int", after["compacted_up_to_id"]) if after else 0
-        if after_id <= before_id:
-            return
-        new_turn = Transcript.turn_id_of_row(after_id)
-        if new_turn is not None:
-            self.turn_id = new_turn
-            self._chain_turn_ids.add(new_turn)
 
 
 # ── Module-private helpers ────────────────────────────────────────────────────
@@ -638,11 +802,19 @@ class MessageProcessor:
 _MISSING_TS_PLACEHOLDER = '????-??-?? ??:??'
 
 
-def _wrap_with_checkpoint(channel: str, user_body: str) -> str:
-    """Wrap the user-message body with a ### Checkpoint envelope when a compaction exists."""
+def _wrap_with_checkpoint(channel: str, user_body: str, for_turn_id: "int | None") -> str:
+    """Wrap the user-message body with a ### Checkpoint envelope when a compaction
+    exists for this view's scope: ``for_turn_id`` is the thread id
+    for a FORK reply, ``None`` for the MAIN spine — the same axis the matching
+    ``_previous_rows`` read uses, so the envelope and the history never disagree.
+
+    This summary IS the reconstruction of everything at/below the watermark; it
+    pairs with the live tail above the watermark that ``_previous_rows`` returns
+    (model context = summary(≤wm) ⊕ tail(>wm)). See the flow narrative on
+    ``MessageProcessor._previous_rows``."""
     from services import compaction_persistence
 
-    row = compaction_persistence.get_compaction(channel)
+    row = compaction_persistence.get_compaction(channel, for_turn_id)
     if not row or not (compacted := cast('str', row.get('compacted_text') or '').strip()):
         return user_body
     return (

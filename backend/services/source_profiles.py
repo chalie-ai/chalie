@@ -37,7 +37,6 @@ import cycle.
 from __future__ import annotations
 
 from dataclasses import dataclass
-
 from typing import Callable
 
 # ── Channel keys (exact) ──────────────────────────────────────────────────────
@@ -45,7 +44,7 @@ from typing import Callable
 CHANNEL_USER = "user"
 CHANNEL_DMN = "dmn"
 CHANNEL_SKILLS_BUILDING = "skills_building"
-CHANNEL_SCHEDULED = "scheduled"
+CHANNEL_SCHEDULE = "schedule"
 CHANNEL_DISCOVERY = "discovery"
 
 # ── Channel patterns (SQL LIKE prefixes) ──────────────────────────────────────
@@ -59,10 +58,6 @@ LIKE_DELEGATE = "delegate:%"
 # channel (see abilities/_pattern_provenance.py) and from the episode channel in
 # fact extraction; this constant is the shared default for the pattern pass.
 PROVENANCE_PATTERN_MATCH = "pattern_match"
-
-# Roles excluded from every user-activity reader: compaction rows are written on
-# a parent's channel but are housekeeping artefacts, never user behaviour.
-ROLE_COMPACTION = "compaction"
 
 
 @dataclass(frozen=True)
@@ -124,9 +119,17 @@ _EXACT_PROFILES: dict[str, Profile] = {
         pattern_is_user=False,
         location_backfill=False,
     ),
-    # The scheduled work loop is muted; the user-facing return-path turn runs on
-    # CHANNEL_USER and is encoded there as an ordinary user episode.
-    CHANNEL_SCHEDULED: _MUTED,
+    # A schedule thread encodes into episodic memory like a user turn (§13.4):
+    # full episode + fact participation. Excluded from geo/pattern user-activity
+    # and location back-fill — a fired task is not the user moving through the
+    # world (the same exclusions as DMN).
+    CHANNEL_SCHEDULE: Profile(
+        extract_episodes=True,
+        extract_facts=True,
+        geo_is_user=False,
+        pattern_is_user=False,
+        location_backfill=False,
+    ),
     CHANNEL_SKILLS_BUILDING: _MUTED,
     # The proactive-research loop writes transcript rows, so it needs an explicit
     # row (allowlist default is muted, but a write-capable channel states it). Its
@@ -213,10 +216,6 @@ def janitor_protected_sql(column: str = "channel") -> str:
     cutoff; protecting every episode-producing channel keeps that memory.
     """
     return _allowlist_sql(column, lambda p: p.extract_episodes)
-
-
-def non_compaction_sql(column: str = "role") -> str:
-    return f"{column} != '{ROLE_COMPACTION}'"
 
 
 def consolidating_exact_channels() -> list[str]:

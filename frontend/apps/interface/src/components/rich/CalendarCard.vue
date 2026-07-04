@@ -21,7 +21,20 @@ export interface CalendarPayload {
 const props = defineProps<{ payload: CalendarPayload; synthesis?: string }>();
 
 const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'] as const;
-const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'] as const;
+const MONTHS = [
+  'Jan',
+  'Feb',
+  'Mar',
+  'Apr',
+  'May',
+  'Jun',
+  'Jul',
+  'Aug',
+  'Sep',
+  'Oct',
+  'Nov',
+  'Dec',
+] as const;
 
 function parseISO(s: string | undefined | null): Date | null {
   if (!s) return null;
@@ -123,10 +136,7 @@ const dayGroups = computed<DayGroup[]>(() => {
 </script>
 
 <template>
-  <div
-    v-if="singleEvent"
-    class="rich-card calendar-card"
-  >
+  <div v-if="singleEvent" class="rich-card calendar-card">
     <div class="calendar-card__when">
       <div class="calendar-card__when-day">{{ whenBlock.day }}</div>
       <div class="calendar-card__when-date">{{ whenBlock.date }}</div>
@@ -147,33 +157,19 @@ const dayGroups = computed<DayGroup[]>(() => {
         {{ singleEvent.location }}
       </div>
 
-      <div
-        v-if="singleEvent.attendees?.length"
-        class="calendar-card__attendees"
-      >
+      <div v-if="singleEvent.attendees?.length" class="calendar-card__attendees">
         {{ singleEvent.attendees.join(', ') }}
       </div>
     </div>
   </div>
 
-  <div
-    v-else-if="dayGroups.length > 0"
-    class="rich-card calendar-card calendar-card--list"
-  >
-    <div
-      v-for="group in dayGroups"
-      :key="group.key"
-      class="calendar-card__day-group"
-    >
+  <div v-else-if="dayGroups.length > 0" class="rich-card calendar-card calendar-card--list">
+    <div v-for="group in dayGroups" :key="group.key" class="calendar-card__day-group">
       <div v-if="group.label" class="calendar-card__day-label">
         {{ group.label }}
       </div>
 
-      <div
-        v-for="(row, rowIdx) in group.rows"
-        :key="rowIdx"
-        class="calendar-card__row"
-      >
+      <div v-for="(row, rowIdx) in group.rows" :key="rowIdx" class="calendar-card__row">
         <span class="calendar-card__row-time">{{ row.timeText }}</span>
         <span class="calendar-card__row-title">{{ row.title }}</span>
         <span v-if="row.location" class="calendar-card__row-loc">{{ row.location }}</span>

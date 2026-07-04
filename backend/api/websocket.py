@@ -4,9 +4,10 @@ import uuid
 from typing import TYPE_CHECKING, cast
 
 from simple_websocket import Server as _WS
-from utils.logger import set_correlation_id
+
 from services.memory_store import MemoryStore
 from services.websocket_broker import WebSocketBroker, _WebSocket
+from utils.logger import set_correlation_id
 
 if TYPE_CHECKING:
     from flask_sock import Sock

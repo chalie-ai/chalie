@@ -56,10 +56,8 @@ def _run_suggestion_processor(
         from services.message_processor import MessageProcessor
 
         mp = object.__new__(MessageProcessor)
-        MessageProcessor.__init__(mp, raw_input, None)
-        mp.config = SkillSuggestionConfig()
+        MessageProcessor.__init__(mp, SkillSuggestionConfig(), raw_input=raw_input)
         mp.uid = None
-        mp.cancel_event = threading.Event()
         mp.thinking_level = "low"
         # Trigger context — the user turn that fired this suggestion pass.
         # get_user_prompt reads these to derive the real act-trail and query

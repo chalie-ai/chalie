@@ -19,7 +19,6 @@ the raw error visible in the message.
 
 import base64
 import sqlite3
-import threading
 from pathlib import Path
 from typing import cast
 
@@ -42,14 +41,7 @@ def _png_bytes() -> bytes:
 def _make_user_mp() -> MessageProcessor:
     from configs.channels.user import UserConfig
 
-    mp = object.__new__(MessageProcessor)
-    MessageProcessor.__init__(mp, "x", {})
-    mp.config = UserConfig()
-    mp.uid = None
-    mp.cancel_event = threading.Event()
-    mp.thinking_level = "low"
-    mp.thinking_override = None
-    return mp
+    return MessageProcessor(UserConfig(), raw_input="x")
 
 
 def _force_vision_provider(db: sqlite3.Connection) -> int:

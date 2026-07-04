@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed } from 'vue';
+import { computed, ref } from 'vue';
 import { Check } from '@lucide/vue';
 import { emit } from '../../composables/useEventBus';
 
@@ -78,7 +78,7 @@ function onToggle(item: ListItem): void {
     </div>
 
     <div class="list-card__bar">
-      <div class="list-card__bar-fill" :style="{ width: progressPercent + '%' }" />
+      <div class="list-card__bar-fill" :style="{ '--fill': progressPercent + '%' }" />
     </div>
 
     <div class="list-card__items">
@@ -135,8 +135,9 @@ function onToggle(item: ListItem): void {
 }
 
 .list-card__bar-fill {
+  width: var(--fill, 0);
   height: 100%;
-  background: linear-gradient(90deg, var(--violet), var(--violet-hover, #B07CFF));
+  background: linear-gradient(90deg, var(--violet), var(--violet-hover, #b07cff));
   box-shadow: 0 0 6px color-mix(in oklab, var(--violet) 50%, transparent);
   border-radius: 1px;
   transition: width 300ms ease;

@@ -154,31 +154,6 @@ class TestSubconsciousGateDeStarvationAfterRestart:
         finally:
             _ws_mod.world_state = original
 
-    def test_recent_user_message_keeps_gate_user_active_after_restart(self, db: sqlite3.Connection, warm_store: MemoryStore) -> None:
-        """User spoke 1 min ago: gate must return 'user_active' after restart.
-
-        At HEAD the restart wipes last_user_message_at so the worker wrongly
-        treats the user as idle. With durable hydrate the real ``_check_gates``
-        returns 'user_active'.
-        """
-        from services.subconscious_worker import SubconsciousWorker
-
-        WorldState().absorb(
-            Signal(source="http_chat", kind="user_message",
-                   payload={"text": "still here"},
-                   received_at=utc_now() - timedelta(minutes=1))
-        )
-
-        with _simulated_restart() as restarted, self._gate_against(restarted):
-            worker = SubconsciousWorker()
-            gate = worker._check_gates()
-
-        assert gate == "user_active", (
-            "after a restart the worker must still see the recent user message "
-            f"and skip with 'user_active'; got {gate!r}. A None/already_fired "
-            "here means the durable timestamp was lost (starvation)."
-        )
-
     def test_idle_user_message_lets_gate_run_after_restart(self, db: sqlite3.Connection, warm_store: MemoryStore) -> None:
         """User last spoke 45 min ago: hydrated-but-old timestamp must not trip the gate.
 

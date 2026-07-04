@@ -19,12 +19,11 @@ import re
 import sqlite3
 
 import uvicorn
+from mcp.server.fastmcp import FastMCP
 from starlette.applications import Starlette
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
-
-from mcp.server.fastmcp import FastMCP
 
 from services.database_service import DatabaseService
 
@@ -223,8 +222,6 @@ def _ensure_mcp_token(db: DatabaseService) -> None:
     try:
         raw_token, wrapper_id = auth_svc.create_token(
             name="MCP Server (External Agents)",
-            capabilities={"signals": [], "intents": ["talk_to_chalie"]},
-            permissions={"query": ["*"], "update": ["*"], "broadcast": False},
             wrapper_id_override="__mcp_server__",
         )
     except sqlite3.IntegrityError:

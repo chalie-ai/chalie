@@ -1,12 +1,12 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, watch, onUnmounted } from 'vue';
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
+import type { CatalogEntry, Provider } from '../api/providers';
 import { providers } from '../api/providers';
-import type { Provider, CatalogEntry } from '../api/providers';
 import { apiErrorMessage } from '../api/http';
 import { useToast } from '../composables/useToast';
 import { useConfirm } from '../composables/useConfirm';
 import { useShellStore } from '../stores/shell';
-import { Plus, LayoutGrid, ChevronLeft } from '@lucide/vue';
+import { ChevronLeft, LayoutGrid, Plus } from '@lucide/vue';
 
 const { show: showToast } = useToast();
 const { confirm } = useConfirm();
@@ -59,8 +59,8 @@ let suppressNextCredsWatch = false;
 
 const testing = ref(false);
 
-const needsHost = computed(() =>
-  preset.value?.platform === 'ollama' || preset.value?.platform === 'openai_compatible',
+const needsHost = computed(
+  () => preset.value?.platform === 'ollama' || preset.value?.platform === 'openai_compatible',
 );
 
 const needsKey = computed(() => !!preset.value?.needs_key);
@@ -107,8 +107,8 @@ async function load(): Promise<void> {
       providers.getVision(),
       providers.getDelegate(),
     ]);
-    providerList.value = provRes.providers ?? [];
-    selectedId.value = selRes.provider ? selRes.provider.id : null;
+    providerList.value = provRes;
+    selectedId.value = selRes ? selRes.id : null;
     visionId.value = visRes.provider ? visRes.provider.id : null;
     visionSource.value = visRes.source || 'none';
     delegateId.value = delRes.provider ? delRes.provider.id : null;
@@ -261,7 +261,7 @@ async function ensureCatalog(): Promise<void> {
   try {
     const res = await providers.getCatalog();
     catalog.value = Array.isArray(res.catalog) ? res.catalog : [];
-    catalogLoaded.value = true;  // only on success, so a failed load retries next open
+    catalogLoaded.value = true; // only on success, so a failed load retries next open
   } catch {
     catalog.value = [];
     showToast('Could not load provider catalog', 'error');
@@ -432,7 +432,7 @@ async function saveProvider(): Promise<void> {
     // Providers-only lift check
     if (shell.providersOnly) {
       try {
-        const res = await fetch('/auth/status', { credentials: 'same-origin' });
+        const res = await fetch('/api/auth/status', { credentials: 'same-origin' });
         if (res.ok) {
           const sd = (await res.json()) as { has_providers?: boolean };
           if (sd.has_providers) shell.liftProvidersOnly();
@@ -495,7 +495,8 @@ async function saveProvider(): Promise<void> {
                 v-if="p.decrypt_failed"
                 class="provider-warn"
                 title="Misconfigured — re-enter credentials"
-              >⚠</span>
+                >⚠</span
+              >
             </div>
             <div class="provider-meta">
               <span :class="`badge badge-${p.platform}`">{{ p.platform }}</span>
@@ -503,7 +504,8 @@ async function saveProvider(): Promise<void> {
                 v-if="p.supports_vision"
                 class="badge badge-success"
                 title="Verified image understanding"
-              >Vision</span>
+                >Vision</span
+              >
               <span>{{ p.model || 'no model' }}</span>
               <span v-if="p.host">· {{ p.host }}</span>
             </div>
@@ -513,10 +515,16 @@ async function saveProvider(): Promise<void> {
             <button
               class="btn btn-sm btn-danger"
               :disabled="providerRoles(p.id).length > 0"
-              :title="providerRoles(p.id).length > 0 ? `In use as the ${providerRoles(p.id).join(', ')} provider — clear or reassign this role before deleting` : ''"
+              :title="
+                providerRoles(p.id).length > 0
+                  ? `In use as the ${providerRoles(p.id).join(', ')} provider — clear or reassign this role before deleting`
+                  : ''
+              "
               :aria-disabled="providerRoles(p.id).length > 0"
               @click="confirmDelete(p.id)"
-            >Delete</button>
+            >
+              Delete
+            </button>
           </div>
         </div>
       </template>
@@ -602,33 +610,15 @@ async function saveProvider(): Promise<void> {
       <form class="wizard-form" autocomplete="off" @submit.prevent="saveProvider">
         <div class="form-group">
           <label for="pName">Name</label>
-          <input
-            id="pName"
-            v-model="formName"
-            type="text"
-            required
-          />
+          <input id="pName" v-model="formName" type="text" required />
         </div>
 
-        <div
-          id="hostGroup"
-          class="form-group wizard-step"
-          :hidden="!needsHost"
-        >
+        <div id="hostGroup" class="form-group wizard-step" :hidden="!needsHost">
           <label for="pHost">Host / Base URL</label>
-          <input
-            id="pHost"
-            v-model="formHost"
-            type="text"
-            placeholder="https://…"
-          />
+          <input id="pHost" v-model="formHost" type="text" placeholder="https://…" />
         </div>
 
-        <div
-          id="keyGroup"
-          class="form-group wizard-step"
-          :hidden="!showKeyGroup"
-        >
+        <div id="keyGroup" class="form-group wizard-step" :hidden="!showKeyGroup">
           <label for="pKey">API Key</label>
           <input
             id="pKey"
@@ -639,11 +629,7 @@ async function saveProvider(): Promise<void> {
           />
         </div>
 
-        <div
-          id="modelGroup"
-          class="form-group wizard-step"
-          :hidden="!showModelGroup"
-        >
+        <div id="modelGroup" class="form-group wizard-step" :hidden="!showModelGroup">
           <label for="pModel">Model</label>
           <select id="pModel" v-model="formModel">
             <option value="">Select model…</option>

@@ -13,7 +13,6 @@ Acceptance items:
        seeded superseded fact gets valid_to set (bi-temporal invariant).
   (H)  >=50 apex leaves trigger roll-up: a level-1 super-episode exists, children
        tombstoned + consolidated_into pointing at the parent.
-  (I)  Zero data_graph rows with kind='moment' remain after tick 1.
   (RS) Restart-safety: one tick drains a partial backlog; the progress cursor
        (facts_extracted_at) is durable across a fresh service instance; the
        remainder drains on a second tick; at most one item is re-processed.
@@ -197,9 +196,8 @@ def _insert_episode_raw(
             id, gist, salience, channel, level,
             retrieval_weight, last_relevant_at,
             consolidated_into, facts_extracted_at,
-            transcript_ids, consolidated_from,
-            storage_strength
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, '[]', '[]', 1.0)
+            transcript_ids, consolidated_from
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, '[]', '[]')
         """,
         (eid, gist, salience, channel, level, retrieval_weight, lr,
          consolidated_into, facts_extracted_at),
@@ -257,7 +255,7 @@ def _seed_apex_cluster_raw(
 _LEGACY_DATA_GRAPH_DDL = """
 CREATE TABLE data_graph (
     id                INTEGER PRIMARY KEY AUTOINCREMENT,
-    kind              TEXT NOT NULL CHECK(kind IN ('user_specific','system','misc','moment')),
+    kind              TEXT NOT NULL CHECK(kind IN ('user_specific','system','misc')),
     key               TEXT NOT NULL,
     value             TEXT,
     storage_strength  REAL NOT NULL DEFAULT 0.5,
@@ -271,30 +269,6 @@ CREATE TABLE data_graph (
     deleted_at        TEXT,
     active            INTEGER NOT NULL DEFAULT 1,
     search_queries    TEXT DEFAULT NULL
-)
-"""
-
-_LEGACY_MEMORY_RECALL_LOG_DDL = """
-CREATE TABLE memory_recall_log (
-    id                       INTEGER PRIMARY KEY AUTOINCREMENT,
-    created_at               TEXT NOT NULL DEFAULT (datetime('now')),
-    user_id                  TEXT,
-    channel                  TEXT,
-    thread_id                TEXT,
-    caller                   TEXT NOT NULL CHECK(caller IN ('seed', 'llm_recall')),
-    query                    TEXT NOT NULL,
-    query_embedding_hash     TEXT NOT NULL,
-    input_radius             REAL NOT NULL,
-    narrow_factor            REAL NOT NULL DEFAULT 1.0,
-    expand_factor            REAL NOT NULL DEFAULT 1.0,
-    adaptive_shrink_divisor  REAL NOT NULL DEFAULT 1.0,
-    effective_radius         REAL NOT NULL,
-    episode_count            INTEGER NOT NULL DEFAULT 0,
-    vector_candidates        INTEGER NOT NULL DEFAULT 0,
-    fts_candidates           INTEGER NOT NULL DEFAULT 0,
-    survivors_after_radius   INTEGER NOT NULL DEFAULT 0,
-    final_rrf_count          INTEGER NOT NULL DEFAULT 0,
-    top_distances            TEXT
 )
 """
 
@@ -399,26 +373,6 @@ def _build_old_shape_db(tmp_path: pathlib.Path) -> "tuple[DatabaseService, dict[
             "INSERT INTO data_graph (id, kind, key, value, first_seen_at, active) "
             "VALUES (12, 'user_specific', 'hobby', 'hiking', ?, 1)",
             ("2026-02-01T00:00:00+00:00",),
-        )
-        # (I) Legacy kind='moment' rows that should be wiped by the decay step.
-        conn.execute(
-            "INSERT INTO data_graph (id, kind, key, value, first_seen_at, active) "
-            "VALUES (20, 'moment', 'moment_text', 'User mentioned cats', "
-            "datetime('now'), 1)"
-        )
-        conn.execute(
-            "INSERT INTO data_graph (id, kind, key, value, first_seen_at, active) "
-            "VALUES (21, 'moment', 'moment_text', 'User asked about weather', "
-            "datetime('now'), 1)"
-        )
-
-        # ── memory_recall_log → legacy shape (8 radius cols, no floor_cut_count) ─
-        conn.execute("DROP TABLE IF EXISTS memory_recall_log")
-        conn.execute(_LEGACY_MEMORY_RECALL_LOG_DDL)
-        conn.execute(
-            "INSERT INTO memory_recall_log "
-            "(caller, query, query_embedding_hash, input_radius, effective_radius, "
-            "final_rrf_count) VALUES ('seed','where do I live','abc',0.5,0.42,2)"
         )
 
     seed_meta: dict[str, object] = {
@@ -666,15 +620,6 @@ class TestFullJumpConvergence:
                         assert cast("tuple[object, ...]", child_row)[1] is not None, (
                             f"child {child_id} must be tombstoned after roll-up"
                         )
-
-            # ── (I) Assert: legacy kind='moment' rows wiped ───────────────────
-            moment_count = cast("tuple[object, ...]", _qry1(
-                "SELECT COUNT(*) FROM data_graph WHERE kind='moment'"
-            ))[0]
-            assert moment_count == 0, (
-                f"decay step must wipe all legacy kind='moment' data_graph rows; "
-                f"{moment_count} remain"
-            )
 
         finally:
             old_db.close_pool()

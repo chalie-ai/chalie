@@ -1,7 +1,7 @@
 """Heartbeat service — cached client telemetry singleton.
 
 Writer: POST /health (heartbeat.js, every ~5 min).
-Readers: WorldState, locale_service, act_dispatcher, api/context.
+Readers: WorldState, locale_service, act_dispatcher.
 """
 
 import json

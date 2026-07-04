@@ -49,11 +49,14 @@ _DELEGATES = [
 
 
 def _delegate_mp(config: ProcessorConfig) -> MessageProcessor:
-    mp = object.__new__(MessageProcessor)
-    MessageProcessor.__init__(mp, "current population of Malta", {})
-    mp.config = config
-    mp._setup()
-    return mp
+    """Build a real MessageProcessor bound to a delegate config.
+
+    ``config`` is the constructor's first argument now (it builds ``self.ts =
+    TranscriptService(config, turn_id)`` immediately, and allocates the turn's
+    input row — hence ``mp.uid`` — right there in ``__init__``), so no manual
+    ``_setup()`` call or private-field poking is needed (precedent:
+    test_tkt960_delegate_provider._delegate_mp, test_ability_save_pattern.py)."""
+    return MessageProcessor(config, raw_input="current population of Malta")
 
 
 @pytest.mark.parametrize("config_cls,channel,role,prefix", _DELEGATES)
@@ -81,7 +84,7 @@ def test_delegate_sees_its_own_act_trail(
     )
 
     # Before any tool executes, the prompt is the bare, results-blind query.
-    config = cast(ProcessorConfig, mp.config)
+    config = mp.config
     blind = config.get_user_prompt(mp)
     assert blind.startswith(prefix)
     assert mp._render_act_trail() == "", "trail should be empty before any tool runs"

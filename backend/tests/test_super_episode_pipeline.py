@@ -139,8 +139,6 @@ def _insert_episode(
     transcript_ids: list[int] | None = None,
     transcript_id_start: int | None = None,
     transcript_id_end: int | None = None,
-    emotional_valence: float = 0.0,
-    emotional_arousal: float = 0.0,
 ) -> str:
     """Insert a minimal episode row directly via SQL. Returns the episode UUID."""
     eid = episode_id or str(uuid.uuid4())
@@ -149,18 +147,15 @@ def _insert_episode(
         INSERT INTO episodes (
             id, gist, salience, channel, level,
             transcript_ids, transcript_id_start, transcript_id_end,
-            emotional_valence, emotional_arousal,
             consolidated_from, consolidated_into, deleted_at,
-            storage_strength, retrieval_weight
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1.0, 1.0)
+            retrieval_weight
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1.0)
         """,
         (
             eid, gist, salience, channel, level,
             json.dumps(transcript_ids or []),
             transcript_id_start,
             transcript_id_end,
-            emotional_valence,
-            emotional_arousal,
             json.dumps(consolidated_from or []),
             consolidated_into,
             deleted_at,
@@ -185,7 +180,7 @@ def _insert_embedding(db: sqlite3.Connection, episode_id: str, emb: list[float])
 
 
 # ── LLM network-boundary seam (Pattern H — the ONLY sanctioned mock) ───────────
-# Mirrors tests/test_tkt926_per_source_profiles.py. A real ProviderClient
+# Mirrors tests/test_per_source_profiles.py. A real ProviderClient
 # subclass swapped at the class level via try/finally — no unittest.mock — so the
 # full ACT loop, prompt assembly and the whole _write_super_episode orchestration
 # run real; only the network call to the model is replaced.
@@ -225,13 +220,11 @@ def _inject_fake_client(
 def _super_ep_envelope(gist: str) -> ProviderApiResponse:
     """The SuperEpisodeEncoder's expected JSON object envelope. The worker
     overwrites 'channel'/'consolidated_from'/'salience' itself; the model owns
-    only the gist + affect. The response carries no tool calls, so this ends the
+    only the gist. The response carries no tool calls, so this ends the
     ACT loop."""
     return ProviderApiResponse(
         text=json.dumps({
             "gist": gist,
-            "emotional_valence": 0.0,
-            "emotional_arousal": 0.0,
             "has_open_loop": False,
         }),
         model="test-model",
@@ -393,7 +386,7 @@ class TestCountTriggeredRollup:
         """Below the 50-apex count trigger NO consolidation happens — even with
         49 near-identical (cosine ~1.0) apex leaves on an allowlisted channel.
 
-        Acceptance criterion (build §2 AC-1): the count trigger fires at >=50
+        Acceptance criterion — the count trigger fires at >=50
         apexes, NOT on a small tight cluster. Asserted against the literal 50,
         not a production constant, so a constant typo cannot make the test agree
         with the bug. The replaced 0.90/min-3 algorithm fires here, so this is
@@ -412,7 +405,7 @@ class TestCountTriggeredRollup:
             db, "user", count=49, axis=0, jitter_axis=200, gist_prefix="below",
         )
         assert len(seeded) == 49
-        # AC-1: literal 50-apex trigger — 49 < 50 must NOT fire.
+        # Literal 50-apex trigger — 49 < 50 must NOT fire.
         assert _apex_leaf_count(db, "user") == 49
 
         assert find_super_candidates("user") == [], (
@@ -453,7 +446,7 @@ class TestCountTriggeredRollup:
                                      gist_prefix="alpha")
         topic_b = _seed_apex_cluster(db, "user", count=25, axis=1, jitter_axis=201,
                                      gist_prefix="beta")
-        assert _apex_leaf_count(db, "user") == 50  # AC-1: at the literal trigger
+        assert _apex_leaf_count(db, "user") == 50  # at the literal trigger
 
         # The clustering entry point yields >=1 candidate group at the trigger.
         groups = find_super_candidates("user")
@@ -499,8 +492,8 @@ class TestCountTriggeredRollup:
         as leaf apexes — never force-assigned into a cluster.
 
         Seeds two coherent topics (25 each, orthogonal axes) plus a handful of
-        off-topic outliers each on its own far-apart axis. Acceptance criterion
-        (build §2 AC-2): topically-pure clusters with noise left as leaves.
+        off-topic outliers each on its own far-apart axis. Acceptance criterion:
+        topically-pure clusters with noise left as leaves.
 
         Purity is asserted implementation-robustly: each super-episode's source
         set is a SUBSET of exactly one seeded topic (no parent mixes topics), and
@@ -568,7 +561,7 @@ class TestCountTriggeredRollup:
         """When >=25 level-1 nodes accumulate they roll up recursively into a
         level-2 "era" digest whose level-1 children are tombstoned + back-pointed.
 
-        Acceptance criterion (build §2 AC-3): summaries land at level=1, eras at
+        Acceptance criterion: summaries land at level=1, eras at
         level=2. Seeds 25 pre-existing level-1 apex nodes (representing supers
         rolled up on earlier ticks) on one tight topic, then drives the real
         consolidation tick. RED until the level-2 era recursion exists.
@@ -619,7 +612,7 @@ class TestCountTriggeredRollup:
         timezone-aware UTC ``tombstoned_at`` alongside its ``consolidated_into``
         back-pointer.
 
-        Acceptance criterion (build §2 AC-4): children tombstoned on roll-up. The
+        Acceptance criterion: children tombstoned on roll-up. The
         actual >30d hard-delete is the decay engine's job (a separate ticket) —
         this test asserts only the marker and the back-pointer. RED until
         _write_super_episode writes tombstoned_at (today it writes only the
@@ -663,7 +656,7 @@ class TestCountTriggeredRollup:
 def test_clustering_dependencies_import() -> None:
     """The new production clustering stack resolves in the runtime environment.
 
-    Acceptance criterion (build §2 AC-5): scikit-learn / scipy / umap-learn /
+    Acceptance criterion: scikit-learn / scipy / umap-learn /
     numba / llvmlite install AND import cleanly, and HDBSCAN is the sklearn
     built-in the rewrite targets. GREEN on arrival (wheels installed) — a
     regression lock that a dropped or broken dep is caught at the unit gate

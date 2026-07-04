@@ -2,15 +2,15 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, cast
 
-from services.post_turn_hook import PostTurnHook
-from services.processor_config import ProcessorConfig
-
 from configs.channels._common import (
     DEFAULT_ALWAYS_AVAILABLE,
     substitute_provider_content_field,
 )
+from services.post_turn_hook import PostTurnHook
+from services.processor_config import ProcessorConfig
 
 if TYPE_CHECKING:
+    from services.config_type import ConfigTypeEnum
     from services.message_processor import MessageProcessor
 
 
@@ -25,7 +25,7 @@ class ProactiveSuggestionHook(PostTurnHook):
             return
         try:
             from services.act_trail import ActTrail  # noqa: PLC0415
-            channel = cast("ProcessorConfig", mp.config).channel
+            channel = mp.config.channel
             rows = ActTrail().fetch_by_turn(channel, turn_id)
             tool_call_count = sum(
                 1 for r in rows if r.get("tool_name") != "chat_history_compactor"
@@ -45,6 +45,7 @@ class UserConfig(ProcessorConfig):
     """Attachments auto-fire document.upload on turn 0 (presence of"""
 
     SUPPORTS_ASYNC = True
+    BROADCASTS_STATE = True
 
     def __init__(self, metadata: dict[str, object] | None = None) -> None:
         _metadata = metadata or {}
@@ -60,6 +61,10 @@ class UserConfig(ProcessorConfig):
             memory_seed=True,
             post_turn_hooks=(ProactiveSuggestionHook(),),
         )
+
+    def type(self) -> "ConfigTypeEnum":
+        from services.config_type import ConfigTypeEnum  # noqa: PLC0415
+        return ConfigTypeEnum.USER
 
     def get_user_definition(self, mp: "MessageProcessor") -> str:
         """Per-turn cached on mp._user_definition_cached so each ACT iteration"""
@@ -141,8 +146,8 @@ class UserConfig(ProcessorConfig):
         # Blank separator
         parts.append("")
 
-        # 3b. Post-compaction continuity banner — only on the continuation MP
-        #     spawned right after a mid-turn compaction. The collapse cost the
+        # 3b. Post-compaction continuity banner — only on the step right after
+        #     a mid-turn compaction. The collapse cost the
         #     model its working context, so the current-state block opens by
         #     restating the user's request and pointing at the Checkpoint section
         #     (the compacted summary, prepended by the framework envelope) and the
@@ -158,12 +163,8 @@ class UserConfig(ProcessorConfig):
                 "previous turns of this conversation."
             )
 
-        # 4. Input line with optional nudge — BEFORE the trail (OLD ordering).
-        nudge_tag = (getattr(mp, "_metadata", None) or {}).get("nudge_tag") or ""
-        turn_line = f"user: {mp._raw_input}"
-        if nudge_tag:
-            turn_line += " " + nudge_tag
-        parts.append(turn_line)
+        # 4. Input line — BEFORE the trail (OLD ordering).
+        parts.append(f"user: {mp._raw_input}")
 
         # 5. ACT loop trail (empty before any tools have run; carries the turn-0
         #    memory seed once it has fired).

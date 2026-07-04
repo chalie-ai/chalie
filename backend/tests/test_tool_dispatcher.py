@@ -16,7 +16,6 @@ retries a non-existent tool forever.
 """
 
 import sqlite3
-import threading
 from typing import cast
 
 import pytest
@@ -47,7 +46,6 @@ class _MP:
         self.uid = uid
         self.DISCOVERABLE: list[str] = []
         self.active_tools: list[str] = []
-        self.cancel_event = threading.Event()
 
 
 def test_dispatch_runs_real_registered_tool_through_gate_and_records(db: sqlite3.Connection) -> None:

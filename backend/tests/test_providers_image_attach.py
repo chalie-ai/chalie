@@ -2,6 +2,7 @@
 assembles its ProviderApiRequest DTO with image attachment from config.get_image."""
 
 import base64
+import sqlite3
 from pathlib import Path
 from typing import cast
 
@@ -18,16 +19,20 @@ def _png_bytes() -> bytes:
     )
 
 
-def test_build_send_messages_attaches_image_from_get_image(tmp_path: Path) -> None:
+def test_build_send_messages_attaches_image_from_get_image(
+    tmp_path: Path, db: sqlite3.Connection
+) -> None:
     from configs.channels.vision import VisionConfig
     from services.processor_config import ProcessorConfig
 
     img = tmp_path / "a.png"
     img.write_bytes(_png_bytes())
 
-    mp = object.__new__(MessageProcessor)
-    MessageProcessor.__init__(mp, "what is this", {"image_path": str(img), "mime_type": "image/png"})
-    mp.config = VisionConfig(ProcessorConfig.PolicyChannel.CHAT)
+    config = VisionConfig(ProcessorConfig.PolicyChannel.CHAT)
+    mp = MessageProcessor(
+        config, raw_input="what is this",
+        metadata={"image_path": str(img), "mime_type": "image/png"},
+    )
 
     messages = mp._build_send_messages()
 
@@ -36,13 +41,12 @@ def test_build_send_messages_attaches_image_from_get_image(tmp_path: Path) -> No
     assert cast(dict[str, object], messages[0]["image"])["data"] == base64.b64encode(_png_bytes()).decode()
 
 
-def test_build_send_messages_no_image_when_get_image_returns_none(tmp_path: Path) -> None:
+def test_build_send_messages_no_image_when_get_image_returns_none(db: sqlite3.Connection) -> None:
     from configs.channels.vision import VisionConfig
     from services.processor_config import ProcessorConfig
 
-    mp = object.__new__(MessageProcessor)
-    MessageProcessor.__init__(mp, "what is this", {})
-    mp.config = VisionConfig(ProcessorConfig.PolicyChannel.CHAT)
+    config = VisionConfig(ProcessorConfig.PolicyChannel.CHAT)
+    mp = MessageProcessor(config, raw_input="what is this")
 
     messages = mp._build_send_messages()
 

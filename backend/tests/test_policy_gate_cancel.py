@@ -5,12 +5,13 @@ Drives the REAL tool-call chokepoint (``ToolDispatcher.dispatch`` — the same
 entry the action endpoint calls) against the REAL policy gate and a REAL test
 database. A non-internal probe tool with no seed row resolves to a lazily-created
 'ask', so dispatch parks in the real ``PolicyManager._ask_user`` exactly as a
-gated chat tool does. No mocks: dispatch sources the cancel_event off the
-invoking mp-like ctx and threads it through ``wrap → authorize → _ask_user``; the
-gate dict is the inspectable surface ``POST /api/policies/respond`` normally
-wakes. Before the fix the park is unbounded → the worker never joins (RED); after
-it, cancel wakes the gate, the tool is denied without ever running, and the gate
-cleans up (GREEN)."""
+gated chat tool does. No mocks: dispatch sources ``should_stop`` off the
+invoking mp-like ctx (the same duck-typed contract ``api/chat.py``'s
+``_ActionCtx`` and the real ``MessageProcessor`` both expose) and threads it
+through ``wrap → authorize → _ask_user``; the gate dict is the inspectable
+surface ``POST /api/policies/respond`` normally wakes. Before the fix the park
+is unbounded → the worker never joins (RED); after it, cancel wakes the gate,
+the tool is denied without ever running, and the gate cleans up (GREEN)."""
 
 import sqlite3
 import threading
@@ -53,13 +54,16 @@ class _GatePark(Ability):
 
 class _TurnCtx:
     """Mirrors api/chat.py's _ActionCtx — the mp-like object dispatch consumes:
-    config (for policy_channel), uid/anchor (ActTrail anchor), cancel_event."""
+    config (for policy_channel), uid/anchor (ActTrail anchor), should_stop()."""
 
     def __init__(self, cancel_event: threading.Event) -> None:
         self.config = SimpleNamespace(policy_channel=CH.CHAT, broadcast_to=None)
         self.uid = None
         self.anchor = None
-        self.cancel_event = cancel_event
+        self._cancel_event = cancel_event
+
+    def should_stop(self) -> bool:
+        return self._cancel_event.is_set()
 
 
 def test_cancel_unwinds_parked_ask_gate(db: sqlite3.Connection) -> None:

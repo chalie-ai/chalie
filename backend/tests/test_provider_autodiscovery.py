@@ -1,5 +1,7 @@
-import pytest
 from typing import cast
+
+import pytest
+
 from capabilities.mail_capability.providers import ServerSettings
 from capabilities.provider_autodiscovery import (
     EmailProviderSettings,

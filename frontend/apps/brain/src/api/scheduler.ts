@@ -29,19 +29,19 @@ export interface ScheduleInput {
 }
 
 export const scheduler = {
-  list(): Promise<{ schedules?: ScheduleItem[]; items?: ScheduleItem[] }> {
-    return api.get('/scheduler');
+  list(): Promise<ScheduleItem[]> {
+    return api.get('/api/scheduler');
   },
 
   create(body: ScheduleInput): Promise<{ schedule?: ScheduleItem }> {
-    return api.post('/scheduler', body);
+    return api.post('/api/scheduler', body);
   },
 
   update(id: string | number, body: Partial<ScheduleInput>): Promise<{ schedule?: ScheduleItem }> {
-    return api.put(`/scheduler/${id}`, body);
+    return api.put(`/api/scheduler/${id}`, body);
   },
 
   delete(id: string | number): Promise<unknown> {
-    return api.del(`/scheduler/${id}`);
+    return api.del(`/api/scheduler/${id}`);
   },
 };

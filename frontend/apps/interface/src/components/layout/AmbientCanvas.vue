@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted, onBeforeUnmount } from 'vue';
+import { onBeforeUnmount, onMounted, ref } from 'vue';
 import { useAmbientCanvas } from '../../composables/useAmbientCanvas';
 
 const canvasRef = ref<HTMLCanvasElement | null>(null);

@@ -1,142 +1,195 @@
-"""
-MCP Clients blueprint — outbound MCP server management API.
+"""MCP Clients namespace — outbound MCP server management.
 
-Provides CRUD + test/sync endpoints for the mcp_client_servers table.
-Auto-registered by api/__init__._register_blueprints() — no edits to
-__init__.py required.
-
-All endpoints return 200 (not 201 for create) per the design contract
-locked by an end-to-end scenario.
+CRUD plus discover/test/tools endpoints, all DTO-typed through the foundation
+boundary decorators. ``headers`` is a write-only credential carrier: it lives on
+the create/update request DTOs only and is never present on a response.
 """
+
+from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, cast
+from datetime import datetime
+from typing import cast
 
-from flask import Blueprint, jsonify, request
+from flask.typing import ResponseReturnValue
+from flask_restx import Namespace, Resource
 
-from .auth import require_session
 from services.mcp_client_service import McpClientService
-
-if TYPE_CHECKING:
-    from flask.typing import ResponseReturnValue
+from .auth import require_session
+from .dto import Error, expects, register_dto, responds
+from .dto.boundary import error
+from .dto.mcp_server import McpServer, McpServerCreate, McpServerUpdate, McpTestResult
+from .dto.mcp_tool import DiscoverableTools, McpTool
 
 logger = logging.getLogger(__name__)
 
-mcp_clients_bp = Blueprint("mcp_clients", __name__, url_prefix="/api/mcp-clients")
+mcp_clients_ns = Namespace(
+    "mcp_clients", description="Outbound MCP server management", path="/api/mcp-clients"
+)
+
+register_dto(
+    mcp_clients_ns, McpServer, McpServerCreate, McpServerUpdate,
+    McpTool, DiscoverableTools, McpTestResult, Error,
+)
+
+_M = mcp_clients_ns.models
+
+_NOT_FOUND = "Server not found"
 
 
 def _svc() -> McpClientService:
     return McpClientService()
 
 
-# ── GET /api/mcp-clients ─────────────────────────────────────────────────────
+def _server_dto(row: dict[str, object]) -> McpServer:
+    return McpServer(
+        id=cast(str, row["id"]),
+        name=cast(str, row["name"]),
+        host=cast(str, row["host"]),
+        enabled=cast(bool, row["enabled"]),
+        status=cast(str, row["status"]),
+        last_pinged_at=cast("datetime | None", row["last_pinged_at"]),
+        created_at=cast(datetime, row["created_at"]),
+        updated_at=cast(datetime, row["updated_at"]),
+    )
 
 
-@mcp_clients_bp.route("/", methods=["GET"])
-@require_session
-def list_servers() -> "ResponseReturnValue":
-    servers = _svc().list_servers()
-    return jsonify(servers), 200
+def _tool_dto(row: dict[str, object]) -> McpTool:
+    return McpTool(
+        tool_name=cast(str, row["tool_name"]),
+        summary=cast(str, row["summary"]),
+        schema=cast("dict[str, object]", row["schema"]),
+    )
 
 
-# ── POST /api/mcp-clients — add a server ─────────────────────────────────────
+# ---------------------------------------------------------------------------
+# /api/mcp-clients/  — server collection
+# ---------------------------------------------------------------------------
 
 
-@mcp_clients_bp.route("/", methods=["POST"])
-@require_session
-def add_server() -> "ResponseReturnValue":
-    body = request.get_json(silent=True) or {}
-    name = (body.get("name") or "").strip()
-    host = (body.get("host") or "").strip()
-    if not name or not host:
-        return jsonify({"error": "name and host are required"}), 400
-    headers = body.get("headers") or {}
-    if not isinstance(headers, dict):
-        return jsonify({"error": "headers must be a JSON object"}), 400
-    enabled = body.get("enabled", True)
+@mcp_clients_ns.route("/")
+class ServerListResource(Resource):
+    @require_session
+    @mcp_clients_ns.response(200, "All servers", model=_M["McpServer"])
+    @mcp_clients_ns.response(500, "Internal error", model=_M["Error"])
+    @responds(McpServer, code=200)
+    def get(self) -> list[McpServer]:
+        return [_server_dto(s) for s in _svc().list_servers()]
 
-    svc = _svc()
-    server = svc.add_server(name=name, host=host, headers=headers, enabled=bool(enabled))
-    # Trigger an immediate ping+sync so tools are indexed promptly.
-    # Errors are swallowed — the row is persisted regardless.
-    try:
-        sync_result = svc.ping_and_sync(cast(str, server["id"]))
-        if sync_result.get("reachable"):
-            # Build vector embeddings for the newly-synced tools so semantic
-            # queries can reach them immediately.  Add-only — not called on the
-            # /test endpoint or heartbeat so the sync path stays zero-cost.
-            svc.embed_server_tools(cast(str, server["id"]))
-        # Reload to get the updated status.
-        refreshed = svc.get_server(cast(str, server["id"]))
-        if refreshed:
-            server = refreshed
-    except Exception as exc:
-        logger.warning("[MCP CLIENTS] Initial ping failed for %r: %s", name, exc)
-
-    return jsonify(server), 200
+    @require_session
+    @mcp_clients_ns.expect(_M["McpServerCreate"])
+    @mcp_clients_ns.response(201, "Created", model=_M["McpServer"])
+    @mcp_clients_ns.response(422, "Validation failed", model=_M["Error"])
+    @responds(McpServer, code=201)
+    @expects(McpServerCreate)
+    def post(self, dto: McpServerCreate) -> McpServer | ResponseReturnValue:
+        svc = _svc()
+        server = svc.add_server(
+            name=dto.name, host=dto.host, headers=dto.headers, enabled=dto.enabled,
+        )
+        try:
+            sync_result = svc.ping_and_sync(cast(str, server["id"]))
+            if sync_result.get("reachable"):
+                svc.embed_server_tools(cast(str, server["id"]))
+            refreshed = svc.get_server(cast(str, server["id"]))
+            if refreshed:
+                server = refreshed
+        except Exception as exc:
+            logger.warning("[MCP CLIENTS] Initial ping failed for %r: %s", dto.name, exc)
+        return _server_dto(server)
 
 
-# ── GET /api/mcp-clients/discoverable ────────────────────────────────────────
+# ---------------------------------------------------------------------------
+# /api/mcp-clients/discoverable
+# ---------------------------------------------------------------------------
 
 
-@mcp_clients_bp.route("/discoverable", methods=["GET"])
-@require_session
-def get_discoverable() -> "ResponseReturnValue":
-    names = _svc().get_online_mcp_tool_names()
-    return jsonify({"tools": names, "count": len(names)}), 200
+@mcp_clients_ns.route("/discoverable")
+class DiscoverableResource(Resource):
+    @require_session
+    @mcp_clients_ns.response(200, "Discoverable tool names", model=_M["DiscoverableTools"])
+    @mcp_clients_ns.response(500, "Internal error", model=_M["Error"])
+    @responds(DiscoverableTools, code=200)
+    def get(self) -> DiscoverableTools:
+        names = _svc().get_online_mcp_tool_names()
+        return DiscoverableTools(tools=names, count=len(names))
 
 
-# ── PUT /api/mcp-clients/<id> ─────────────────────────────────────────────────
+# ---------------------------------------------------------------------------
+# /api/mcp-clients/<server_id>
+# ---------------------------------------------------------------------------
 
 
-@mcp_clients_bp.route("/<server_id>", methods=["PUT"])
-@require_session
-def update_server(server_id: str) -> "ResponseReturnValue":
-    body = request.get_json(silent=True) or {}
-    updates = {k: v for k, v in body.items() if k in ("name", "host", "headers", "enabled")}
-    if not updates:
-        return jsonify({"error": "No valid fields to update"}), 400
-    try:
-        server = _svc().update_server(server_id, updates)
-    except LookupError:
-        return jsonify({"error": f"Server not found: {server_id}"}), 404
-    return jsonify(server), 200
+@mcp_clients_ns.route("/<server_id>")
+class ServerResource(Resource):
+    @require_session
+    @mcp_clients_ns.param("server_id", "Server id")
+    @mcp_clients_ns.expect(_M["McpServerUpdate"])
+    @mcp_clients_ns.response(200, "Updated", model=_M["McpServer"])
+    @mcp_clients_ns.response(404, _NOT_FOUND, model=_M["Error"])
+    @mcp_clients_ns.response(422, "Validation failed", model=_M["Error"])
+    @responds(McpServer, code=200)
+    @expects(McpServerUpdate)
+    def put(self, server_id: str, dto: McpServerUpdate) -> McpServer | ResponseReturnValue:
+        updates: dict[str, object] = {k: v for k, v in dto.model_dump().items() if v is not None}
+        try:
+            server = _svc().update_server(server_id, updates)
+        except LookupError:
+            return error(_NOT_FOUND, 404)
+        return _server_dto(server)
+
+    @require_session
+    @mcp_clients_ns.param("server_id", "Server id")
+    @mcp_clients_ns.response(204, "Deleted")
+    @mcp_clients_ns.response(404, _NOT_FOUND, model=_M["Error"])
+    @responds(code=204)
+    def delete(self, server_id: str) -> None | ResponseReturnValue:
+        try:
+            _svc().delete_server(server_id)
+        except LookupError:
+            return error(_NOT_FOUND, 404)
+        return None
 
 
-# ── DELETE /api/mcp-clients/<id> ─────────────────────────────────────────────
+# ---------------------------------------------------------------------------
+# /api/mcp-clients/<server_id>/test
+# ---------------------------------------------------------------------------
 
 
-@mcp_clients_bp.route("/<server_id>", methods=["DELETE"])
-@require_session
-def delete_server(server_id: str) -> "ResponseReturnValue":
-    try:
-        _svc().delete_server(server_id)
-    except LookupError:
-        return jsonify({"error": f"Server not found: {server_id}"}), 404
-    return jsonify({"deleted": server_id}), 200
+@mcp_clients_ns.route("/<server_id>/test")
+class ServerTestResource(Resource):
+    @require_session
+    @mcp_clients_ns.param("server_id", "Server id")
+    @mcp_clients_ns.response(200, "Test result", model=_M["McpTestResult"])
+    @mcp_clients_ns.response(404, _NOT_FOUND, model=_M["Error"])
+    @responds(McpTestResult, code=200)
+    def post(self, server_id: str) -> McpTestResult | ResponseReturnValue:
+        svc = _svc()
+        if svc.get_server(server_id) is None:
+            return error(_NOT_FOUND, 404)
+        result = svc.ping_and_sync(server_id)
+        return McpTestResult(
+            status=cast(str, result["status"]),
+            tool_count=cast(int, result["tool_count"]),
+            reachable=cast(bool, result["reachable"]),
+            error=cast("str | None", result["error"]),
+        )
 
 
-# ── POST /api/mcp-clients/<id>/test ──────────────────────────────────────────
+# ---------------------------------------------------------------------------
+# /api/mcp-clients/<server_id>/tools
+# ---------------------------------------------------------------------------
 
 
-@mcp_clients_bp.route("/<server_id>/test", methods=["POST"])
-@require_session
-def test_server(server_id: str) -> "ResponseReturnValue":
-    svc = _svc()
-    if svc.get_server(server_id) is None:
-        return jsonify({"error": f"Server not found: {server_id}"}), 404
-    result = svc.ping_and_sync(server_id)
-    return jsonify(result), 200
-
-
-# ── GET /api/mcp-clients/<id>/tools ──────────────────────────────────────────
-
-
-@mcp_clients_bp.route("/<server_id>/tools", methods=["GET"])
-@require_session
-def get_server_tools(server_id: str) -> "ResponseReturnValue":
-    svc = _svc()
-    if svc.get_server(server_id) is None:
-        return jsonify({"error": f"Server not found: {server_id}"}), 404
-    tools = svc.get_server_tools(server_id)
-    return jsonify({"tools": tools, "tool_count": len(tools)}), 200
+@mcp_clients_ns.route("/<server_id>/tools")
+class ServerToolsResource(Resource):
+    @require_session
+    @mcp_clients_ns.param("server_id", "Server id")
+    @mcp_clients_ns.response(200, "Server tools", model=_M["McpTool"])
+    @mcp_clients_ns.response(404, _NOT_FOUND, model=_M["Error"])
+    @responds(McpTool, code=200)
+    def get(self, server_id: str) -> list[McpTool] | ResponseReturnValue:
+        svc = _svc()
+        if svc.get_server(server_id) is None:
+            return error(_NOT_FOUND, 404)
+        return [_tool_dto(t) for t in svc.get_server_tools(server_id)]

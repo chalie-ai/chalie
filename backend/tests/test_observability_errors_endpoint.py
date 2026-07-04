@@ -4,11 +4,11 @@ from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
-from flask import Flask
 from flask.testing import FlaskClient
 
 import api.system as system_module
-from api.system import system_bp
+from api.system import health_ns, system_ns
+from tests.restx_test_app import mount_namespace
 
 
 # ---------------------------------------------------------------------------
@@ -30,8 +30,7 @@ def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[tuple[Fl
         lambda *_args, **_kwargs: True,
     )
 
-    app = Flask(__name__)
-    app.register_blueprint(system_bp)
+    app = mount_namespace(health_ns, system_ns)
     app.config["TESTING"] = True  # Disables exception propagation only; project has no Flask-WTF/CSRF middleware
 
     with app.test_client() as tc:
@@ -75,7 +74,7 @@ class TestObservabilityErrorsEndpoint:
         ]
         log_file.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
-        resp = tc.get("/system/observability/errors")
+        resp = tc.get("/api/system/observability/errors")
 
         assert resp.status_code == 200
         data = resp.get_json()
@@ -106,7 +105,7 @@ class TestObservabilityErrorsEndpoint:
         # Deliberately do not create log_file — it must not exist
         assert not log_file.exists()
 
-        resp = tc.get("/system/observability/errors")
+        resp = tc.get("/api/system/observability/errors")
 
         assert resp.status_code == 200
         data = resp.get_json()
@@ -117,7 +116,7 @@ class TestObservabilityErrorsEndpoint:
         tc, log_file = client
         log_file.write_text("", encoding="utf-8")
 
-        resp = tc.get("/system/observability/errors")
+        resp = tc.get("/api/system/observability/errors")
 
         assert resp.status_code == 200
         data = resp.get_json()
@@ -133,7 +132,7 @@ class TestObservabilityErrorsEndpoint:
 
         log_file.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
-        resp = tc.get("/system/observability/errors")
+        resp = tc.get("/api/system/observability/errors")
 
         assert resp.status_code == 200
         data = resp.get_json()
@@ -168,7 +167,7 @@ class TestObservabilityErrorsEndpoint:
         log_file.write_text("\n".join(lines) + "\n", encoding="utf-8")
         assert log_file.stat().st_size > _LOG_TAIL_BYTES   # confirm we cross the threshold
 
-        resp = tc.get("/system/observability/errors")
+        resp = tc.get("/api/system/observability/errors")
 
         assert resp.status_code == 200
         data = resp.get_json()

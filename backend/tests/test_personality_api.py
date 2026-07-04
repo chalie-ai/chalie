@@ -11,8 +11,8 @@ import json
 import sqlite3
 
 import pytest
-
 from flask.testing import FlaskClient
+
 from services.file_mapper_service import FileMapperService
 from services.memory_store import MemoryStore
 
@@ -48,7 +48,7 @@ class TestPersonalityAPIGet:
         expected_voice = corpus[(0, 0, 0, 0, 0)]
 
         client, _db, _store = authed_client
-        resp = client.get('/settings/personality')
+        resp = client.get('/api/settings/personality')
 
         assert resp.status_code == 200
         data = resp.get_json()
@@ -73,7 +73,7 @@ class TestPersonalityAPIPut:
         client, _db, _store = authed_client
 
         put_resp = client.put(
-            '/settings/personality',
+            '/api/settings/personality',
             json={'tuple': target},
             content_type='application/json',
         )
@@ -84,7 +84,7 @@ class TestPersonalityAPIPut:
         )
         assert put_data['tuple'] == target
 
-        get_resp = client.get('/settings/personality')
+        get_resp = client.get('/api/settings/personality')
         assert get_resp.status_code == 200
         get_data = get_resp.get_json()
         assert get_data['tuple'] == target, (
@@ -103,54 +103,54 @@ class TestPersonalityAPIPutValidation:
     def test_put_rejects_out_of_range_step(self, authed_client: tuple[FlaskClient, sqlite3.Connection, MemoryStore]) -> None:
         client, _db, _store = authed_client
         resp = client.put(
-            '/settings/personality',
+            '/api/settings/personality',
             json={'tuple': [3, 0, 0, 0, 0]},
             content_type='application/json',
         )
-        assert resp.status_code == 400, (
-            f"Expected 400 for out-of-range step, got {resp.status_code}"
+        assert resp.status_code == 422, (
+            f"Expected 422 for out-of-range step, got {resp.status_code}"
         )
 
     def test_put_rejects_tuple_wrong_length(self, authed_client: tuple[FlaskClient, sqlite3.Connection, MemoryStore]) -> None:
         client, _db, _store = authed_client
         resp = client.put(
-            '/settings/personality',
+            '/api/settings/personality',
             json={'tuple': [0, 0, 0, 0]},
             content_type='application/json',
         )
-        assert resp.status_code == 400, (
-            f"Expected 400 for 4-element tuple, got {resp.status_code}"
+        assert resp.status_code == 422, (
+            f"Expected 422 for 4-element tuple, got {resp.status_code}"
         )
 
     def test_put_rejects_non_list_tuple(self, authed_client: tuple[FlaskClient, sqlite3.Connection, MemoryStore]) -> None:
         client, _db, _store = authed_client
         resp = client.put(
-            '/settings/personality',
+            '/api/settings/personality',
             json={'tuple': 'not-a-list'},
             content_type='application/json',
         )
-        assert resp.status_code == 400, (
-            f"Expected 400 for string 'tuple', got {resp.status_code}"
+        assert resp.status_code == 422, (
+            f"Expected 422 for string 'tuple', got {resp.status_code}"
         )
 
     def test_put_rejects_missing_tuple_field(self, authed_client: tuple[FlaskClient, sqlite3.Connection, MemoryStore]) -> None:
         client, _db, _store = authed_client
         resp = client.put(
-            '/settings/personality',
+            '/api/settings/personality',
             json={},
             content_type='application/json',
         )
-        assert resp.status_code == 400, (
-            f"Expected 400 for missing 'tuple' field, got {resp.status_code}"
+        assert resp.status_code == 422, (
+            f"Expected 422 for missing 'tuple' field, got {resp.status_code}"
         )
 
     def test_put_rejects_bools_as_integers(self, authed_client: tuple[FlaskClient, sqlite3.Connection, MemoryStore]) -> None:
         client, _db, _store = authed_client
         resp = client.put(
-            '/settings/personality',
+            '/api/settings/personality',
             json={'tuple': [True, False, 0, 0, 0]},
             content_type='application/json',
         )
-        assert resp.status_code == 400, (
-            f"Expected 400 for bool elements, got {resp.status_code}"
+        assert resp.status_code == 422, (
+            f"Expected 422 for bool elements, got {resp.status_code}"
         )

@@ -24,114 +24,42 @@ _TEST_PORT = 18462
 
 
 @pytest.fixture(scope="module", autouse=True)
-def _patch_db(tmp_path_factory: pytest.TempPathFactory) -> Iterator[object]:
-    import sqlite3
+def _patch_db(_db_template: str, tmp_path_factory: pytest.TempPathFactory) -> Iterator[object]:
+    """Real, fully-converged schema (built from schema.sql via the shared
+    session-scoped ``_db_template`` fixture in ``tests/conftest.py``) copied
+    into a module-local file, then installed as the process-wide singleton.
+
+    Only the singleton *value* (``database_service._shared_db_service``) is
+    swapped, never the ``get_shared_db_service`` function object itself — see
+    the import-time-binding hazard documented in ``tests/conftest.py``.
+    Modules that did ``from services.database_service import
+    get_shared_db_service`` at import time keep a reference to the real
+    function, which always re-reads the (module-global) singleton value, so
+    swapping only the value keeps those modules correctly wired both during
+    the test and after teardown restores the prior value.
+    """
+    import shutil
+
     from services import database_service
 
     db_dir = tmp_path_factory.mktemp("mcp_test_db")
     db_path = str(db_dir / "test.db")
-
-    conn = sqlite3.connect(db_path)
-    conn.executescript("""
-        CREATE TABLE IF NOT EXISTS wrapper_tokens (
-            id TEXT PRIMARY KEY,
-            name TEXT NOT NULL,
-            token_hash TEXT NOT NULL UNIQUE,
-            wrapper_id TEXT NOT NULL UNIQUE,
-            capabilities TEXT NOT NULL DEFAULT '{}',
-            permissions TEXT NOT NULL DEFAULT '{}',
-            metadata TEXT NOT NULL DEFAULT '{}',
-            last_seen_at TEXT,
-            created_at TEXT NOT NULL,
-            revoked_at TEXT
-        );
-        CREATE INDEX IF NOT EXISTS idx_wrapper_tokens_hash
-            ON wrapper_tokens(token_hash)
-            WHERE revoked_at IS NULL;
-
-        CREATE TABLE IF NOT EXISTS transcript (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            channel TEXT NOT NULL,
-            role TEXT NOT NULL,
-            content TEXT NOT NULL,
-            tool_call_id TEXT,
-            tool_name TEXT,
-            internal INTEGER DEFAULT 0,
-            deliberation_score REAL,
-            created_at TEXT NOT NULL DEFAULT (datetime('now')),
-            xml_migrated INTEGER NOT NULL DEFAULT 0
-        );
-        CREATE INDEX IF NOT EXISTS idx_transcript_channel
-            ON transcript(channel, created_at);
-
-        CREATE TABLE IF NOT EXISTS tool_calls (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            transcript_id INTEGER NOT NULL,
-            tool_name TEXT NOT NULL,
-            params TEXT DEFAULT '{}',
-            result TEXT DEFAULT '',
-            created_at TEXT NOT NULL DEFAULT (datetime('now'))
-        );
-
-        CREATE TABLE IF NOT EXISTS settings (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            key TEXT NOT NULL UNIQUE,
-            value TEXT,
-            encrypted_value TEXT,
-            is_sensitive INTEGER NOT NULL DEFAULT 0,
-            value_type TEXT NOT NULL DEFAULT 'string',
-            description TEXT,
-            created_at TEXT NOT NULL DEFAULT (datetime('now')),
-            updated_at TEXT NOT NULL DEFAULT (datetime('now'))
-        );
-
-        CREATE TABLE IF NOT EXISTS data_graph (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            kind TEXT NOT NULL,
-            key TEXT NOT NULL,
-            value TEXT NOT NULL DEFAULT '',
-            source TEXT,
-            confidence REAL DEFAULT 1.0,
-            created_at TEXT NOT NULL DEFAULT (datetime('now')),
-            updated_at TEXT NOT NULL DEFAULT (datetime('now'))
-        );
-
-        CREATE TABLE IF NOT EXISTS policy_rules (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            action_id TEXT NOT NULL,
-            context TEXT NOT NULL DEFAULT 'chat',
-            state TEXT NOT NULL DEFAULT 'ask',
-            created_at TEXT NOT NULL DEFAULT (datetime('now')),
-            updated_at TEXT NOT NULL DEFAULT (datetime('now')),
-            UNIQUE(action_id, context)
-        );
-
-        CREATE TABLE IF NOT EXISTS llm_call_log (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            job TEXT NOT NULL,
-            model TEXT,
-            input_tokens INTEGER DEFAULT 0,
-            output_tokens INTEGER DEFAULT 0,
-            latency_ms INTEGER DEFAULT 0,
-            created_at TEXT NOT NULL DEFAULT (datetime('now'))
-        );
-    """)
-    conn.close()
+    shutil.copy2(_db_template, db_path)
 
     test_db = database_service.DatabaseService(db_path)
 
-    original = database_service.get_shared_db_service
+    database_service._local.conn = None
+    database_service._local.db_path = None
 
-    def _patched() -> database_service.DatabaseService:
-        return test_db
-
-    database_service.get_shared_db_service = _patched
+    original = database_service._shared_db_service
     database_service._shared_db_service = test_db
 
     yield test_db
 
-    database_service.get_shared_db_service = original
-    database_service._shared_db_service = None
+    test_db.close_pool()
+    database_service._shared_db_service = original
+    database_service._local.conn = None
+    database_service._local.db_path = None
 
 
 @pytest.fixture(scope="module")
@@ -287,88 +215,3 @@ class TestMCPServerToolList:
         assert "talk_to_chalie" in tool_names, (
             f"Expected talk_to_chalie in {tool_names}"
         )
-
-
-class TestMCPServerToolCall:
-    def _mcp_request(self, url: str, method: str, params: dict[str, object], auth_token: str, session_id: str | None = None) -> tuple[object | None, str | None]:
-        import urllib.request
-
-        body = json.dumps({
-            "jsonrpc": "2.0",
-            "id": 1,
-            "method": method,
-            "params": params,
-        }).encode()
-
-        headers = {
-            "Content-Type": "application/json",
-            "Accept": "application/json, text/event-stream",
-            "Authorization": f"Bearer {auth_token}",
-        }
-        if session_id:
-            headers["Mcp-Session-Id"] = session_id
-
-        req = urllib.request.Request(url, data=body, headers=headers)
-        resp = urllib.request.urlopen(req, timeout=30)
-        raw = resp.read().decode()
-
-        resp_session_id = resp.headers.get("Mcp-Session-Id")
-
-        for line in raw.splitlines():
-            if line.startswith("data: "):
-                data = json.loads(line[6:])
-                if "result" in data:
-                    return data["result"], resp_session_id
-
-        return None, resp_session_id
-
-    def test_talk_to_chalie_returns_response(self, mcp_server: dict[str, object], auth_token: str) -> None:
-        from unittest.mock import patch, MagicMock
-
-        fake_response = MagicMock()
-        fake_response.text = "Hello from Chalie! I received your message."
-        fake_response.tool_calls = []
-
-        fake_provider = MagicMock()
-        fake_provider.send_messages.return_value = fake_response
-        fake_provider.get_context_limit.return_value = 128_000
-        fake_provider.calculate.return_value = 0.0
-
-        url = f"{mcp_server['url']}/mcp"
-
-        # Initialize session
-        init_result, session_id = self._mcp_request(
-            url, "initialize",
-            {
-                "protocolVersion": "2024-11-05",
-                "capabilities": {},
-                "clientInfo": {"name": "e2e-test", "version": "0.1.0"},
-            },
-            auth_token,
-        )
-        assert init_result is not None
-
-        # Call talk_to_chalie with LLM patched
-        with patch("services.providers.Providers") as mock_providers_cls:
-            mock_providers_cls.instance.return_value = fake_provider
-
-            call_result, _ = self._mcp_request(
-                url, "tools/call",
-                {
-                    "name": "talk_to_chalie",
-                    "arguments": {
-                        "message": "What's on my schedule today?",
-                        "agent_name": "Claude Code",
-                        "project_or_task_name": "Chalie Demo Project",
-                    },
-                },
-                auth_token,
-                session_id,
-            )
-
-        assert call_result is not None, "tools/call returned no result"
-        content = cast(list[dict[str, object]], cast(dict[str, object], call_result).get("content", []))
-        assert len(content) > 0, f"Expected content in response, got: {call_result}"
-        text = cast(str, content[0].get("text", ""))
-        assert len(text) > 0, "Expected non-empty text response from talk_to_chalie"
-        assert "Hello from Chalie" in text

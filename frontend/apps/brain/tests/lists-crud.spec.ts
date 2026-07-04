@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { expect, test } from '@playwright/test';
 
 // A real CRUD round-trip against the live backend: create a list via the modal
 // (POST /api/lists), assert the new card renders, then delete it via the card's

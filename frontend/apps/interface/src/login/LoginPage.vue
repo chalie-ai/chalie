@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted } from 'vue';
+import { onMounted, ref } from 'vue';
 import { auth, AuthError, HttpError } from '../api/auth';
 
 // Only honour ?next= paths starting with '/' to prevent open-redirect.

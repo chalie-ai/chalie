@@ -4,22 +4,26 @@
  * Single WS owner rule: ONLY this store may touch WebSocketService handlers
  * (send/sendAction/abort/onDrift/onAny/onConnect/onDisconnect/connect/ensureAlive).
  * Everything else goes through this store or the event bus.
+ *
+ * Lane model: every independent conversation surface (the main spine + each
+ * open thread reply) is a "lane" keyed by laneKey(threadId). The four former
+ * global single-flight fields (isSending, _liveTurnId, _lastUserFormId,
+ * _lastUserText) are now per-lane so a working thread never blocks the spine
+ * and vice-versa.
  */
 import { defineStore } from 'pinia';
-import { getWebSocket, useConnectionStore, AuthError } from '@chalie/shared';
-import type { WsInboundEvent, WsPushEvent, WsMessageEvent } from '@chalie/shared';
+import type { WsInboundEvent, WsPushEvent, WsTurnExecutionEvent } from '@chalie/shared';
+import { AuthError, ConfigType, getWebSocket, useConnectionStore } from '@chalie/shared';
 import { on } from '../composables/useEventBus';
 import { extractText } from '../composables/useMarkup';
-import { conversation } from '../api/conversation';
-import { moments } from '../api/moments';
 import { getHost } from '../api/index';
 import { showToast } from '../utils/toast';
-import { useConversationStore } from './conversation';
-import type { AttachmentPreview } from './conversation';
-import type { ConversationSegment } from '../api/conversation';
+import { useConversationFeed } from '../composables/useConversationFeed';
+import { useActionCard } from '../composables/useActionCard';
+import { laneKey, useQueueStore } from './queue';
 import { useTasksStore } from './tasks';
-import { useNotificationsStore } from './notifications';
 import type { TipState, UpdateState } from './notifications';
+import { useNotificationsStore } from './notifications';
 import { usePermissionsStore } from './permissions';
 import { useContextUsageStore } from './contextUsage';
 import { useAmbientSensor } from '../composables/useAmbientSensor';
@@ -27,33 +31,70 @@ import { useAmbientSensor } from '../composables/useAmbientSensor';
 /** Guard: init() must be idempotent (HMR / Vue StrictMode). */
 let _initialized = false;
 
-/** Last pin-moment timestamp (ms) — 250ms debounce. */
-let _pinDebounce = 0;
-
 /** Unbind fns for event-bus listeners registered in init() (for future cleanup). */
 const _busUnbinds: Array<() => void> = [];
 
+const FILE_PLACEHOLDER = '[File attached]';
+
+/** Runtime membership check backing `_routeTurnExecution`'s discriminator — a
+ *  `state` key alone does not prove a frame is a turn_execution row (e.g. the
+ *  Home capability's `home_state_changed` push also carries an unrelated
+ *  `state` string, an HA entity state that could coincidentally collide with
+ *  one of these four literals). Combined with a required `turn_id` + `started_at`
+ *  (execution-only fields no other push family emits) the match is unambiguous. */
+const TURN_EXECUTION_STATES: ReadonlySet<string> = new Set([
+  'working', 'completed', 'cancelled', 'crashed',
+]);
+
+interface LaneState {
+  /** Bound turn_id; null for a new main-spine turn until the POST 200 body claims one. */
+  liveTurnId: number | null;
+  /** Captured text from the last user turn (for requestStop restore). */
+  userText: string;
+  /** ConfigType this lane belongs to — used to pick the correct feed on settle. */
+  type: string;
+}
+
 export const useSessionStore = defineStore('session', {
   state: () => ({
-    isSending: false,
-    /** Id of the active ACT form while a turn is in-flight. */
-    _activeActId: null as number | null,
-    /** Id of the last user form (for mid-ACT restore on requestStop). */
-    _lastUserFormId: null as number | null,
-    /** Captured text from the last user turn (for requestStop restore). */
-    _lastUserText: '',
+    /** Per-lane single-flight state. Key = laneKey(threadId). A key's presence
+     *  means that lane is actively sending. */
+    lanes: {} as Record<string, LaneState>,
 
     /** Turn-level provider/quota error, surfaced as a closable toast above the
      *  input dock. Null when there is nothing to show. */
     errorMessage: null as string | null,
 
-    historyOffset: 0,
     historyLoading: false,
-    historyExhausted: false,
+    /** True while a deep-link thread fetch is in-flight (drives the panel
+     *  spinner on first open of a thread outside the loaded pages). */
+    threadExpanding: false,
+
+    /** turn_id of the thread shown in the slide-over panel, or null when closed.
+     *  The opener button opens the panel; the main feed dims behind it. */
+    panelThreadId: null as number | null,
+
+    /** ConfigType of the thread currently open in the panel (default user). */
+    panelType: ConfigType.USER as string,
+
+    /** True while the thread-search overlay is open (Cmd/Ctrl-K or the top-bar
+     *  search button). The overlay self-fetches; this is pure open/close state. */
+    searchOpen: false,
+
+    /** True while the scheduler dock is open. */
+    schedulerDockOpen: false,
 
     /** Registered auth-failure callback (set by App bootstrap). */
     _onAuthFailure: null as (() => void) | null,
   }),
+
+  getters: {
+    /**
+     * True when the MAIN spine is busy (lane present).
+     * Consumed by PresenceBar (logo pulse) and ConversationFeed (live-turn spinner).
+     */
+    isSending: (state): boolean => 'main' in state.lanes,
+  },
 
   actions: {
     /** Wire the WebSocket singleton and connect. Idempotent (HMR / StrictMode). */
@@ -71,22 +112,21 @@ export const useSessionStore = defineStore('session', {
 
       ws.onDisconnect(() => {
         conn.setConnected(false);
-        this.isSending = false;
-        // A mid-turn drop strands the live act group: the turn's done now lands
-        // on the dead socket and is never resent, so collapse it here or the
-        // "thinking…" spinner hangs forever.
-        if (this._activeActId != null) {
-          useConversationStore().resolveAct(this._activeActId);
-          this._activeActId = null;
+        // A mid-turn drop strands spinners: the terminal `turn_execution` frame
+        // lands on the dead socket and is never resent. Clear ALL lanes' working
+        // state so nothing hangs.
+        for (const k in this.lanes) {
+          const lane = this.lanes[k];
+          if (lane.liveTurnId != null) useConversationFeed(lane.type).setWorking(lane.liveTurnId, false);
         }
+        this.lanes = {};
       });
 
       ws.onDrift((data: WsPushEvent) => {
         this.routeDrift(data);
       });
 
-      // onAny feeds the context-usage indicator — must never throw. refresh()
-      // is coalesced inside the store, so a per-frame call is safe.
+      // onAny feeds the context-usage indicator — must never throw.
       ws.onAny((data: WsInboundEvent) => {
         try {
           void data;
@@ -99,52 +139,24 @@ export const useSessionStore = defineStore('session', {
       // Tab-refocus liveness check.
       globalThis.addEventListener('focus', () => ws.ensureAlive());
 
-      // chalie:action — deterministic skill invocations. Registered inside init()
-      // so the WS single-owner rule holds (only one listener ever bound).
+      // chalie:action — deterministic skill invocations routed through useActionCard.
       _busUnbinds.push(
         on('chalie:action', (payload) => {
-          // Bus emits the full detail; legacy read e.detail.payload — support both.
           const p =
             (payload as { payload?: Record<string, unknown> }).payload ??
             (payload as Record<string, unknown>);
-          void this.sendAction(p);
+          useActionCard().run(p, (msg) => { this.errorMessage = msg; });
         }),
       );
 
-      // chalie:pin-moment — Remember button: 250ms debounce, single POST
-      // /moments, then a "Remembered" toast with an Undo action (POST
-      // /moments/<id>/forget). No confirmation dialog — recall is a separate UI.
-      _busUnbinds.push(
-        on('chalie:pin-moment', (detail) => {
-          const text = (detail as { content?: string }).content ?? '';
-          if (!text) return;
-          const now = Date.now();
-          if (now - _pinDebounce < 250) return;
-          _pinDebounce = now;
-          void moments
-            .pin(text)
-            .then((res) => {
-              const transcriptId = res.item?.transcript_id ?? null;
-              showToast(
-                res.duplicate ? 'Already remembered' : 'Remembered',
-                transcriptId != null ? () => void moments.forget(transcriptId) : null,
-              );
-            })
-            .catch((err: unknown) => {
-              console.warn('[Session] pin moment failed:', err);
-            });
-        }),
-      );
-
-      // chalie:silent-action — rich-card interactions, no chat bubble. Caller
-      // supplies optional onMessage/onError/onDone for optimistic card UI.
+      // chalie:silent-action — rich-card interactions, no chat bubble.
       _busUnbinds.push(
         on('chalie:silent-action', (detail) => {
           const d = detail as {
             payload?: Record<string, unknown>;
-            onMessage?: (data: WsMessageEvent) => void;
+            onMessage?: (data: WsInboundEvent) => void;
             onError?: (data: { message: string; recoverable?: boolean }) => void;
-            onDone?: (data: { duration_ms: number }) => void;
+            onDone?: (data: { duration_ms?: number }) => void;
           };
           if (!d.payload) return;
           getWebSocket().sendAction(d.payload, {
@@ -164,234 +176,159 @@ export const useSessionStore = defineStore('session', {
     },
 
     /**
-     * Main send orchestrator. Mid-ACT path: when a turn is in-flight, append the
-     * new text to the existing user form, drop the partial turn, and restart —
-     * the backend cancels the active turn, concatenates, and starts fresh.
+     * True when a given surface is currently busy — gates sends and drains.
+     * Main spine shares its surface with ACT cycles (no stable turn id);
+     * threads have a stable id plus the conversation working-set.
+     */
+    isLaneBusy(threadId: number | null, type: string = ConfigType.USER): boolean {
+      return threadId == null
+        ? this.isSending
+        : laneKey(threadId) in this.lanes || useConversationFeed(type).isTurnWorking(threadId);
+    },
+
+    /**
+     * Send a user turn. Signal-only: the `turn_execution` working refetch renders
+     * the user bubble from the API — no optimistic echo. Everything — the
+     * spinner, the rows, the reply — flows back through the `updated` broadcast
+     * signal and the `turn_execution` lifecycle frame (→ routeDrift → refetch).
      */
     async sendMessage(
       text: string,
-      source: 'text' | 'voice' = 'text',
       files: File[] = [],
-      previews: AttachmentPreview[] = [],
+      threadId: number | null = null,
+      type: string = ConfigType.USER,
     ): Promise<void> {
       if (!text && !files.length) return;
 
-      const convo = useConversationStore();
+      const body = text || FILE_PLACEHOLDER;
 
-      if (this.isSending) {
-        if (this._lastUserFormId != null) {
-          const uidx = convo.forms.findIndex((f) => f.id === this._lastUserFormId);
-          if (uidx !== -1) {
-            const uform = convo.forms[uidx];
-            if (uform.kind === 'user') uform.text += '\n\n' + text;
-            // Drop the partial turn rendering (interim bubbles + tool groups).
-            convo.forms.splice(uidx + 1);
-          }
-        }
-        this._activeActId = null;
-        this._startTurn(text, source, false);
+      if (this.isLaneBusy(threadId, type)) {
+        useQueueStore().enqueue(threadId, body, type);
         return;
       }
 
-      this.isSending = true;
+      const key = laneKey(threadId);
+      this.lanes[key] = {
+        liveTurnId: threadId,
+        userText: text,
+        type,
+      };
+      const result = await getWebSocket().send(body, (m) => this._onSendFailure(key, m), files, threadId, type);
+      if (result != null && key in this.lanes) {
+        this.lanes[key].liveTurnId = result.turn_id;
+      }
+    },
 
-      const userFormId = convo.appendUser(text || '[File attached]', previews, {
-        inWorkingMemory: true,
-      });
-      this._lastUserFormId = userFormId;
-      this._lastUserText = text;
+    /** A local send failure (offline / POST rejected) — no signal will ever
+     *  arrive, so release this lane's guard and surface the message. */
+    _onSendFailure(key: string, message: string): void {
+      this.errorMessage = message;
+      const lane = this.lanes[key];
+      if (lane?.liveTurnId != null) useConversationFeed(lane.type).setWorking(lane.liveTurnId, false);
+      delete this.lanes[key];
+    },
 
-      this._startTurn(text || '[File attached]', source, false, files, previews);
+    /** `done(turn_id, type)` — settle the turn on its type's feed. Leave a
+     *  standing done marker unless the user is viewing it; release the owning lane
+     *  only when ITS own turn finished. Drain queues, record ambient, and fire an
+     *  OS notification for the final reply when the tab is unfocused. Identical for
+     *  every type — only the dock the settled thread lives in differs. */
+    async _finishTurn(turnId: number | null, type: string = ConfigType.USER): Promise<void> {
+      const convo = useConversationFeed(type);
+      const owningKey = this._laneOwning(turnId);
+      const id = turnId ?? (owningKey == null ? null : this.lanes[owningKey]?.liveTurnId ?? null);
+
+      if (id != null) {
+        if (id === this.panelThreadId) convo.setWorking(id, false);
+        else convo.markThreadDone(id);
+      }
+
+      if (owningKey != null) delete this.lanes[owningKey];
+
+      this._drainQueues();
+      useAmbientSensor().recordResponse();
+
+      if (id != null && !document.hasFocus()) {
+        await convo.fetchTurn(id);
+        const t = convo.turnSpeechText(id);
+        if (t) this._notifyBackground(t);
+      }
     },
 
     /**
-     * Wire and launch a turn. `showUserBubble` is true only for re-entries where
-     * sendMessage hasn't already appended the user form.
+     * Find the lane key that owns the given turnId — used to release ONLY the
+     * correct lane on `done` without disturbing peer lanes.
      */
-    _startTurn(
-      text: string,
-      source: 'text' | 'voice',
-      showUserBubble: boolean,
-      files: File[] = [],
-      previews: AttachmentPreview[] = [],
-    ): void {
-      const convo = useConversationStore();
-      const ws = getWebSocket();
-
-      if (showUserBubble) {
-        const uid = convo.appendUser(text || '[File attached]', previews, {
-          inWorkingMemory: true,
-        });
-        this._lastUserFormId = uid;
-        this._lastUserText = text;
+    _laneOwning(turnId: number | null): string | null {
+      if ('main' in this.lanes && (turnId == null || this.lanes['main'].liveTurnId === turnId)) {
+        return 'main';
       }
+      for (const k in this.lanes) {
+        if (k !== 'main' && this.lanes[k].liveTurnId === turnId) return k;
+      }
+      return null;
+    },
 
-      // Open the ACT group up-front: an empty live group is the "thinking…"
-      // placeholder (logo + stop affordance). The step's first tool_start lands
-      // its pill in place; a tool-free turn evicts the empty group on resolve.
-      this._activeActId = convo.appendAct();
+    /** Drain ALL pending scopes independently. */
+    _drainQueues(): void {
+      for (const key of useQueueStore().pendingScopes) this._drainLane(key);
+    },
 
-      // Capture the FINAL turn result across onMessage(final) / onDone — interim
-      // steps render immediately and are never cached.
-      let responseContent = '';
-      let responseMeta: {
-        topic?: string;
-        exchange_id?: string;
-        mode?: string;
-        confidence?: number;
-        segments?: ConversationSegment[];
-        timestamp?: string;
-        duration_ms?: number;
-      } = {};
+    _drainLane(key: string): void {
+      const threadId = key === 'main' ? null : Number(key.slice(1));
+      const queue = useQueueStore();
+      const type = queue.typeFor(threadId);
+      if (this.isLaneBusy(threadId, type)) return;
+      const text = queue.take(threadId);
+      if (text) void this.sendMessage(text, [], threadId, type);
+    },
 
-      ws.send(
-        text,
-        source,
-        {
-          // Use d.id (NOT d.call_id) — frame is act_tool_start { type,name,id,summary }.
-          // Lazily open the step's tool group; its prose already landed via the
-          // preceding interim message.
-          onToolStart: (data) => {
-            const d = data as { id?: string; name?: string; summary?: string };
-            if (this._activeActId == null) this._activeActId = convo.appendAct();
-            convo.appendToolPill(this._activeActId, d.id ?? '', d.name ?? '', d.summary);
-          },
-
-          // act_tool_end has no duration field — pass ms=0, resolveToolPill
-          // computes client elapsed.
-          onToolEnd: (data) => {
-            const d = data as { id?: string; ok?: boolean };
-            convo.resolveToolPill(d.id ?? '', 0, !!d.ok);
-          },
-
-          onMessage: (data) => {
-            const d = data as WsMessageEvent & {
-              content?: string;
-              topic?: string;
-              exchange_id?: string;
-              mode?: string;
-              confidence?: number;
-              segments?: ConversationSegment[];
-              timestamp?: string;
-            };
-
-            if (d.interim) {
-              // Interim prose: supersede the previous step (collapse its tool
-              // group), then render this step's bubble; the next onToolStart
-              // opens a fresh group beneath it.
-              if (this._activeActId != null) {
-                convo.resolveAct(this._activeActId);
-                this._activeActId = null;
-              }
-              if (d.content) convo.appendChalie(d.content, { ts: d.timestamp ?? '' });
-              return;
-            }
-
-            // Final result — cached, rendered on done so duration_ms lands on the
-            // bubble (also carries turn-wide rich-media segments).
-            responseContent = d.content ?? '';
-            responseMeta = {
-              topic: d.topic,
-              exchange_id: d.exchange_id,
-              mode: d.mode ?? '',
-              confidence: d.confidence ?? 0,
-              segments: d.segments,
-              timestamp: d.timestamp ?? '',
-            };
-          },
-
-          onError: (data) => {
-            // Turn-level errors (provider failure, quota/429) are NOT auth events:
-            // collapse the in-flight step and surface the error as its own form.
-            // Only data.auth_failed redirects to login.
-            if (this._activeActId != null) {
-              convo.resolveAct(this._activeActId);
-              this._activeActId = null;
-            }
-            this.errorMessage = data.message;
-            const d = data as { auth_failed?: boolean };
-            if (d.auth_failed) this._onAuthFailure?.();
-          },
-
-          onDone: (data) => {
-            responseMeta.duration_ms = data.duration_ms;
-            // Settle the final step before the reply lands beneath it: collapse
-            // its tools, or evict the bare "thinking…" placeholder if none ran.
-            if (this._activeActId != null) {
-              convo.resolveAct(this._activeActId);
-              this._activeActId = null;
-            }
-            if (responseContent || responseMeta.segments?.length) {
-              convo.appendChalie(responseContent, {
-                topic: responseMeta.topic,
-                exchange_id: responseMeta.exchange_id,
-                mode: responseMeta.mode,
-                confidence: responseMeta.confidence,
-                segments: responseMeta.segments,
-                ts: responseMeta.timestamp,
-                duration_ms: responseMeta.duration_ms,
-              });
-            }
-            useAmbientSensor().recordResponse();
-            this.isSending = false;
-            document.dispatchEvent(new CustomEvent('session:turn-done'));
-
-            if (responseContent && !document.hasFocus()) {
-              this._notifyBackground(responseContent);
-            }
-          },
-        },
-        files,
-      );
+    /** Turn-level error (provider failure, quota/429) — surface it as the one dock
+     *  toast. Not an act row: the following `done` clears the spinner. */
+    _handleTurnError(data: WsPushEvent): void {
+      this.errorMessage = (data as { message?: string }).message ?? 'Something went wrong.';
+      if ((data as { auth_failed?: boolean }).auth_failed) this._onAuthFailure?.();
     },
 
     /**
-     * Stop + undo the whole in-flight turn (user message + everything the chain
-     * rendered after it). Emits 'session:turn-interrupted' so InputDock can
-     * restore the textarea value.
+     * Stop + undo the in-flight turn identified by `turnId`. Emits
+     * 'session:turn-interrupted' so InputDock can restore the textarea. `type`
+     * (default user) names the owning thread's ProcessorConfig — DELETE resolves
+     * the channel from it server-side, and turn_id alone is only unique per
+     * channel, so a non-user thread's stop must carry its own type through.
      */
-    async requestStop(): Promise<void> {
-      const convo = useConversationStore();
+    async requestStop(turnId: number | null = null, type: string = ConfigType.USER): Promise<void> {
       const ws = getWebSocket();
 
-      // Capture the user bubble's LIVE text: a mid-ACT append holds the
-      // concatenated "A\n\nB", not the original "A". _lastUserText is only a
-      // fallback when the form is gone.
-      let restoredText = this._lastUserText;
-      if (this._lastUserFormId != null) {
-        const uidx = convo.forms.findIndex((f) => f.id === this._lastUserFormId);
-        if (uidx !== -1) {
-          const uform = convo.forms[uidx];
-          if (uform.kind === 'user') restoredText = uform.text;
-          convo.forms.splice(uidx);
-        }
-        this._lastUserFormId = null;
-      }
-      this._activeActId = null;
-      this._lastUserText = '';
+      const key = this._laneOwning(turnId);
+      const lane = key == null ? undefined : this.lanes[key];
+      const stopId = lane?.liveTurnId ?? turnId;
 
-      // Abort WS callbacks so stale events are ignored.
+      // Restore text from lane record (no optimistic form to read from any more).
+      const restoredText = lane?.userText ?? '';
+
+      // Undo the whole turn: drop its block + all signal state.
+      if (lane?.liveTurnId != null) useConversationFeed(lane?.type ?? ConfigType.USER).dropLiveTurn(lane.liveTurnId);
+      if (key != null) delete this.lanes[key];
+
       ws.abort();
-
-      this.isSending = false;
 
       document.dispatchEvent(
         new CustomEvent('session:turn-interrupted', { detail: { text: restoredText } }),
       );
 
-      await this._postInterrupt();
+      await this._postInterrupt(stopId, type);
     },
 
-    /** POST /chat/interrupt — best-effort, never throws. */
-    async _postInterrupt(): Promise<void> {
+    /** DELETE /api/thread/<turn_id>?type=<type> — best-effort interrupt, never throws. */
+    async _postInterrupt(turnId: number | null = null, type: string = ConfigType.USER): Promise<void> {
+      if (turnId == null) return;
       try {
         const host = getHost();
         const base = host ? host.replace(/\/$/, '') : '';
-        await fetch(base + '/chat/interrupt', {
-          method: 'POST',
+        await fetch(base + '/api/thread/' + turnId + '?type=' + encodeURIComponent(type), {
+          method: 'DELETE',
           credentials: 'same-origin',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({}),
         });
       } catch {
         // Best-effort — swallow.
@@ -399,193 +336,113 @@ export const useSessionStore = defineStore('session', {
     },
 
     /**
-     * Create an ACT cycle, block concurrent sends, and call ws.sendAction with
-     * callbacks that resolve the ACT into a Chalie form or error.
-     */
-    async sendAction(payload: Record<string, unknown>): Promise<void> {
-      if (this.isSending) return;
-
-      const convo = useConversationStore();
-      const ws = getWebSocket();
-
-      this.isSending = true;
-      const actId = convo.appendAct();
-      this._activeActId = actId;
-
-      ws.sendAction(payload, {
-        onMessage: (data) => {
-          const d = data as WsMessageEvent & {
-            content?: string;
-            mode?: string;
-            confidence?: number;
-          };
-          convo.replaceActWithResponse(actId, {
-            content: d.content ?? '',
-            mode: d.mode ?? 'ACT',
-            confidence: d.confidence ?? 0.95,
-          });
-        },
-        onError: (data) => {
-          convo.resolveAct(actId);
-          this.errorMessage = data.message;
-        },
-        onDone: () => {
-          this._activeActId = null;
-          this.isSending = false;
-        },
-      });
-    },
-
-    /**
-     * Load (or paginate) conversation history. Guards against concurrent loads
-     * and exhaustion. Initial load (offset=0) appends turns + emits force-scroll;
-     * paginated loads (offset>0) prepend.
+     * Load (or paginate) the thread list via the composable. Initial load fetches
+     * the 20 most-recent collapsed threads; scroll-up pagination prepends 20 more.
      */
     async loadRecentConversation(): Promise<void> {
-      if (this.historyLoading || this.historyExhausted) return;
+      const convo = useConversationFeed();
+      if (!convo.hasMore || this.historyLoading) return;
       this.historyLoading = true;
 
-      const LIMIT = 12;
-      const MAX_TURNS = 120;
-      const convo = useConversationStore();
-
       try {
-        const data = await conversation.recent(
-          LIMIT,
-          this.historyOffset > 0 ? this.historyOffset : undefined,
-        );
-        const messages = data.messages ?? [];
+        const isInitialLoad = convo.sortedBlocks.value.length === 0;
+        await (isInitialLoad ? convo.loadRecent() : convo.loadMore());
 
-        if (messages.length === 0 && this.historyOffset === 0) {
-          this.historyExhausted = true;
-          return;
-        }
-
-        const isInitialLoad = this.historyOffset === 0;
-        if (isInitialLoad) {
-          convo.appendTurns(messages);
-        } else {
-          convo.prependTurns(messages);
-        }
-
-        this.historyOffset += data.turns_returned;
-
-        if (!data.has_more || this.historyOffset >= MAX_TURNS) {
-          this.historyExhausted = true;
-        }
-
-        if (isInitialLoad && messages.length > 0) {
+        if (isInitialLoad && convo.sortedBlocks.value.length > 0) {
           document.dispatchEvent(new CustomEvent('session:history-initial-loaded'));
         }
       } catch (err) {
         if (err instanceof AuthError) {
           this._onAuthFailure?.();
         } else {
-          console.error('[Session] Failed to load conversation history:', err);
+          console.error('[Session] Failed to load thread list:', err);
         }
       } finally {
         this.historyLoading = false;
       }
     },
 
-    /**
-     * Route a drift push event. Routing order is load-bearing:
-     *   1. Simple content-free types  2. 'thought' (bypasses send-guard)
-     *   3. 'response' while sending → IGNORED  4. Background notify
-     *   5. 'notification'  6. 'response' / 'escalation' / 'drift' → appendChalie
-     */
-    routeDrift(data: WsPushEvent): void {
-      if (this._routeSimpleEvent(data)) return;
-
-      const content = (data as { content?: string }).content ?? '';
-      if (!content) return;
-
-      // Multi-surface sync — user echo. Own-surface echoes were dropped in
-      // WebSocketService (by echo_id), so this came from a DIFFERENT surface and
-      // has no bubble yet; render it so all surfaces match.
-      if ((data.type as string) === 'user_message') {
-        useConversationStore().appendUser(content, [], { inWorkingMemory: true });
-        return;
+    /** Open a thread in the slide-over panel, loading its rows on first open. */
+    async openThreadPanel(turnId: number, type: string = ConfigType.USER): Promise<void> {
+      this.panelThreadId = turnId;
+      this.panelType = type;
+      const convo = useConversationFeed(type);
+      convo.seenThread(turnId);
+      if (convo.isHydrated(turnId)) return;
+      this.threadExpanding = true;
+      try {
+        await convo.fetchTurn(turnId);
+      } finally {
+        this.threadExpanding = false;
       }
-
-      // Multi-surface sync — assistant reply (rule 2 of the echo+render model).
-      // The sending surface gets this via chat callbacks (never here); every
-      // OTHER surface lands here and renders a plain Chalie bubble.
-      if ((data.type as string) === 'message') {
-        const d = data as {
-          topic?: string;
-          exchange_id?: string;
-          mode?: string;
-          confidence?: number;
-          segments?: ConversationSegment[];
-          timestamp?: string;
-        };
-        this._notifyBackground(content);
-        useConversationStore().appendChalie(content, {
-          topic: d.topic,
-          exchange_id: d.exchange_id,
-          mode: d.mode ?? '',
-          confidence: d.confidence ?? 0,
-          segments: d.segments,
-          ts: d.timestamp || new Date().toISOString(),
-          type: 'message',
-        });
-        return;
-      }
-
-      // Step 2: thought bypasses the send-guard.
-      if ((data.type as string) === 'thought') {
-        useConversationStore().appendChalie(content, {
-          topic: (data as { topic?: string }).topic,
-          type: data.type,
-          ts: new Date().toISOString(),
-          mode: (data as { mode?: string }).mode ?? '',
-          confidence: (data as { confidence?: number }).confidence ?? 0,
-        });
-        return;
-      }
-
-      // Step 3: 'response' while /chat is in-flight → ignore.
-      if ((data.type as string) === 'response' && this.isSending) return;
-
-      // Step 4: background notify.
-      this._notifyBackground(content);
-
-      // Step 5: notification — scheduler fired (reminder/task done): chime
-      // UNCONDITIONALLY (no focus/permission gate, unlike step 4) and refresh
-      // the task strip.
-      if (data.type === 'notification') {
-        useNotificationsStore().chime();
-        void useTasksStore().loadActiveTasks();
-        return;
-      }
-
-      // Step 6: response / escalation / drift.
-      this._renderContentEvent(data, content);
     },
 
-    /** Route content-free event types; returns true when handled. */
-    _routeSimpleEvent(data: WsPushEvent): boolean {
-      switch (data.type as string) {
-        case 'app_update':
-          useNotificationsStore().handleUpdate(data as unknown as UpdateState);
+    /** Close the slide-over panel. */
+    closeThreadPanel(): void {
+      this.panelThreadId = null;
+    },
+
+    /** Open / close the thread-search overlay. */
+    openSearch(): void {
+      this.searchOpen = true;
+    },
+    closeSearch(): void {
+      this.searchOpen = false;
+    },
+
+    /** Open / close the scheduler dock. */
+    openSchedulerDock(): void {
+      this.schedulerDockOpen = true;
+    },
+    closeSchedulerDock(): void {
+      this.schedulerDockOpen = false;
+    },
+
+    /**
+     * Route a drift push event. Turn signals route first; the only push that
+     * still carries content is the scheduler `notification`. Every other frame
+     * is a signal handled above.
+     */
+    routeDrift(data: WsPushEvent): void {
+      if (this._routeTurnSignal(data)) return;
+      if (this._routeTurnExecution(data)) return;
+      if (this._routeSimpleEvent(data)) return;
+
+      if (data.type !== 'notification') return;
+      const content = (data as { content?: string }).content ?? '';
+      if (content) this._notifyBackground(content);
+      useNotificationsStore().chime();
+      void useTasksStore().loadActiveTasks();
+    },
+
+    /**
+     * Mid-turn progress signals — stateless and turn-addressed, discriminated on
+     * `status` (the sole turn chokepoint; pushes key on `type`). `type` names the
+     * ProcessorConfig surface to route by. Returns true when handled; a frame with
+     * no `status` falls through (to `_routeTurnExecution`, then `_routeSimpleEvent`).
+     */
+    _routeTurnSignal(data: WsPushEvent): boolean {
+      const status = (data as { status?: string }).status;
+      if (status == null) return false;
+      const convo = useConversationFeed((data as { type?: string }).type ?? ConfigType.USER);
+      const turnId = (data as { turn_id?: number | null }).turn_id ?? null;
+      switch (status) {
+        case 'tool_called':
+          if (turnId != null) {
+            const tc = data as { id?: number; name?: string; summary?: string; transcript_row_id?: number };
+            convo.startLiveTool(turnId, tc.transcript_row_id ?? null, tc.id ?? null, tc.name ?? '', tc.summary);
+          }
           return true;
-        // task + subagent lifecycle both feed the task drawer.
-        case 'task':
-        case 'subagent_start':
-        case 'subagent_end':
-          useTasksStore().applyDriftEvent(data);
+        case 'tool_done':
+          // The wire tool_done frame carries NO success/error flag — ok:true is correct parity.
+          convo.finishLiveTool((data as { id?: number }).id ?? null);
           return true;
-        case 'capability_alert':
-          // No-op: dormant channel (no UI consumer).
-          return true;
-        case 'permission_request':
-          usePermissionsStore().enqueue(data);
-          return true;
-        case 'quick_tip':
-          useNotificationsStore().handleTip(data as unknown as TipState);
+        case 'updated':
+          if (turnId != null) void convo.fetchTurn(turnId);
           return true;
         case 'provider_retry':
+          // Transient: a provider call failed mid-turn and is being resent. The
+          // turn stays in flight (no error bubble) — just a toast.
           showToast((data as { message?: string }).message ?? 'The AI provider had a problem — retrying…');
           return true;
         default:
@@ -593,25 +450,70 @@ export const useSessionStore = defineStore('session', {
       }
     },
 
-    /** Escalation gets an `escalation: true` flag (CSS `--escalation` modifier). */
-    _renderContentEvent(data: WsPushEvent, content: string): void {
-      useConversationStore().appendChalie(
-        content,
-        {
-          topic: (data as { topic?: string }).topic,
-          type: data.type,
-          ts: new Date().toISOString(),
-          mode: (data as { mode?: string }).mode ?? '',
-          confidence: (data as { confidence?: number }).confidence ?? 0,
-        },
-        { escalation: (data.type as string) === 'escalation' },
-      );
+    /**
+     * Turn lifecycle — the DB-backed turn_executions row, pushed whole on every
+     * state flip (see services/execution_tracker.py). This frame carries no
+     * separate kind tag, so it is recognised structurally: `state` must be one
+     * of the four lifecycle literals AND `turn_id` + `started_at` (execution-only
+     * fields) must be present — a `state` key alone is not enough (see
+     * TURN_EXECUTION_STATES; `home_state_changed` also carries a `state` string
+     * with no `turn_id`/`started_at`, and claiming it here drained its queue into
+     * a garbage _finishTurn call). `working` opens exactly like the old `working`
+     * signal; every terminal state (completed/cancelled/crashed) settles the turn
+     * exactly like the old `done` signal — a crash now reaches this path too, so
+     * a turn that dies before producing a reply never leaves a spinner hanging.
+     */
+    _routeTurnExecution(data: WsPushEvent): boolean {
+      const exec = data as unknown as WsTurnExecutionEvent;
+      if (
+        typeof exec.state !== 'string' || !TURN_EXECUTION_STATES.has(exec.state)
+        || exec.turn_id == null || exec.started_at == null
+      ) {
+        return false;
+      }
+      const type = exec.type ?? ConfigType.USER;
+      if (exec.state === 'working') {
+        useConversationFeed(type).setWorking(exec.turn_id, true);
+        // Pull the block so every surface renders the user bubble from the API.
+        void useConversationFeed(type).fetchTurn(exec.turn_id);
+        return true;
+      }
+      void this._finishTurn(exec.turn_id, type);
+      return true;
+    },
+
+    /** Route content-free push event types (keyed on `type`); returns true when
+     *  handled. The turn-level `error` toast (a direct push, not a broadcast) lands
+     *  here too. */
+    _routeSimpleEvent(data: WsPushEvent): boolean {
+      switch (data.type as string) {
+        case 'app_update':
+          useNotificationsStore().handleUpdate(data as unknown as UpdateState);
+          return true;
+        case 'task':
+        case 'subagent_start':
+        case 'subagent_end':
+          useTasksStore().applyDriftEvent(data);
+          return true;
+        case 'capability_alert':
+          return true;
+        case 'permission_request':
+          usePermissionsStore().enqueue(data);
+          return true;
+        case 'quick_tip':
+          useNotificationsStore().handleTip(data as unknown as TipState);
+          return true;
+        case 'error':
+          this._handleTurnError(data);
+          return true;
+        default:
+          return false;
+      }
     },
 
     /** Fire a background notification when the tab is not focused. */
     _notifyBackground(content: string): void {
       if (document.hasFocus()) return;
-      // Plain text for the OS preview — drops <actions> labels, substitutes <img alt>.
       const plain = extractText(content);
       if (plain) useNotificationsStore().pushBackground(plain);
     },

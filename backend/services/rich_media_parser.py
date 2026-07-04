@@ -8,10 +8,10 @@ Segment shapes:
     {"type": "text", "content": "<safe HTML>"}
     {"type": "rich", "tag": "weather_1", "synthesis": "<safe HTML>", "payload": {…}}
 
-The parser is called at the WS-send boundary and again on the
-``/conversation/recent`` refresh path — both against persisted surfaces
-(``transcript.content`` + ``tool_calls.result``) so they produce
-byte-identical output.
+The parser is called at the WS-send boundary and again on the thread-block
+refresh path (``serialize_turn`` — the REST reads + WS refetch) — both against
+persisted surfaces (``transcript.content`` + ``tool_calls.result``) so they
+produce byte-identical output.
 """
 from __future__ import annotations
 

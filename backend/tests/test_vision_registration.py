@@ -26,10 +26,10 @@ from configs.channels import DmnConfig, UserConfig
 from run import _migrate_legacy_policy_rules
 from services.database_service import DatabaseService
 from services.file_mapper_service import FileMapperService
+from services.message_processor import MessageProcessor
 from services.policy_manager import PolicyManager
 from services.processor_config import ProcessorConfig
 from services.schema_convergence_service import SchemaConvergenceService
-from services.message_processor import MessageProcessor
 
 pytestmark = pytest.mark.unit
 
@@ -41,8 +41,7 @@ _CHANNEL = ProcessorConfig.PolicyChannel
 # ---------------------------------------------------------------------------
 
 def _mp_for(config: ProcessorConfig) -> MessageProcessor:
-    mp = MessageProcessor("find a vision tool for me")
-    mp.config = config
+    mp = MessageProcessor(config, raw_input="find a vision tool for me")
     mp.active_tools = list(config.always_available or [])
     return mp
 
@@ -94,7 +93,7 @@ class TestVisionVisibility:
         roster and trips this guard."""
         assert "vision" in AbilityRegistry.discoverable_names()
 
-    def test_vision_selectable_on_user_channel(self) -> None:
+    def test_vision_selectable_on_user_channel(self, db: object) -> None:
         mp = _mp_for(UserConfig())
 
         result = _find_tools_on(mp, {"query": ["vision"]})
@@ -109,7 +108,7 @@ class TestVisionVisibility:
             f"vision must not be reported unavailable on the user channel. result={result!r}"
         )
 
-    def test_vision_selectable_on_dmn_channel(self) -> None:
+    def test_vision_selectable_on_dmn_channel(self, db: object) -> None:
         """Discovery is global now: the DMN background channel carries find_tools,
         and vision is DISCOVERABLE=True, so the DMN can discover and spawn the
         vision delegate. Containing vision away from the subconscious is the policy

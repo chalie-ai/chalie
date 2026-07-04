@@ -6,10 +6,11 @@
 import json
 import sqlite3
 import uuid
-import pytest
 from collections.abc import Generator
 from contextlib import contextmanager
 from typing import TYPE_CHECKING, cast
+
+import pytest
 
 from services.database_service import DatabaseService
 from services.file_mapper_service import FileMapperService
@@ -87,7 +88,7 @@ def _ep(**overrides: object) -> dict[str, object]:
     return base
 
 
-# ── store_episode: all 10 new Phase-0 columns ────────────────────────────────
+# ── store_episode: column persistence ────────────────────────────────────────
 
 class TestStoreEpisodeNewColumns:
 
@@ -112,15 +113,6 @@ class TestStoreEpisodeNewColumns:
         assert row['transcript_id_start'] == 5
         assert row['transcript_id_end'] == 29
 
-    def test_emotional_valence_stored(self, mem_db: sqlite3.Connection, episodic_svc: "EpisodicService") -> None:
-        data = _ep(emotional_valence=0.75)
-
-        episode_id = episodic_svc.store_episode(data)
-
-        row = mem_db.execute("SELECT emotional_valence FROM episodes WHERE id = ?",
-                             (episode_id,)).fetchone()
-        assert row['emotional_valence'] == pytest.approx(0.75)
-
     def test_consolidated_from_stored_as_json(self, mem_db: sqlite3.Connection, episodic_svc: "EpisodicService") -> None:
         source_ids = [str(uuid.uuid4()), str(uuid.uuid4())]
         data = _ep(consolidated_from=source_ids)
@@ -131,32 +123,19 @@ class TestStoreEpisodeNewColumns:
                              (episode_id,)).fetchone()
         assert json.loads(row['consolidated_from']) == source_ids
 
-    def test_storage_strength_stored(self, mem_db: sqlite3.Connection, episodic_svc: "EpisodicService") -> None:
-        data = _ep(storage_strength=1.5)
-
-        episode_id = episodic_svc.store_episode(data)
-
-        row = mem_db.execute("SELECT storage_strength FROM episodes WHERE id = ?",
-                             (episode_id,)).fetchone()
-        assert row['storage_strength'] == pytest.approx(1.5)
-
     def test_new_columns_default_when_absent(self, mem_db: sqlite3.Connection, episodic_svc: "EpisodicService") -> None:
         data = _ep()
 
         episode_id = episodic_svc.store_episode(data)
 
         row = mem_db.execute("""
-            SELECT transcript_ids, emotional_valence,
-                   emotional_arousal, consolidated_from, storage_strength, retrieval_weight,
+            SELECT transcript_ids, consolidated_from, retrieval_weight,
                    transcript_id_start, transcript_id_end
             FROM episodes WHERE id = ?
         """, (episode_id,)).fetchone()
 
         assert json.loads(row['transcript_ids']) == []
-        assert row['emotional_valence'] is None
-        assert row['emotional_arousal'] is None
         assert json.loads(row['consolidated_from']) == []
-        assert row['storage_strength'] == pytest.approx(1.0)
         assert row['retrieval_weight'] == pytest.approx(1.0)
         assert row['transcript_id_start'] is None
         assert row['transcript_id_end'] is None
@@ -167,10 +146,7 @@ class TestStoreEpisodeNewColumns:
             transcript_ids=[1, 2, 3],
             transcript_id_start=1,
             transcript_id_end=3,
-            emotional_valence=-0.3,
-            emotional_arousal=0.6,
             consolidated_from=src_ids,
-            storage_strength=1.2,
             retrieval_weight=0.9,
         )
 
@@ -178,18 +154,14 @@ class TestStoreEpisodeNewColumns:
 
         row = mem_db.execute("""
             SELECT transcript_ids, transcript_id_start, transcript_id_end,
-                   emotional_valence, emotional_arousal,
-                   consolidated_from, storage_strength, retrieval_weight
+                   consolidated_from, retrieval_weight
             FROM episodes WHERE id = ?
         """, (episode_id,)).fetchone()
 
         assert json.loads(row['transcript_ids']) == [1, 2, 3]
         assert row['transcript_id_start'] == 1
         assert row['transcript_id_end'] == 3
-        assert row['emotional_valence'] == pytest.approx(-0.3)
-        assert row['emotional_arousal'] == pytest.approx(0.6)
         assert json.loads(row['consolidated_from']) == src_ids
-        assert row['storage_strength'] == pytest.approx(1.2)
         assert row['retrieval_weight'] == pytest.approx(0.9)
 
 

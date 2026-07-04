@@ -35,7 +35,6 @@ from services.onnx_inference_service import (
     _get_encoder_sha256,
 )
 
-
 # Default repo paths for real assets — resolved via canonical paths module.
 _DEFAULT_MODELS_DIR = str(FileMapperService.get_models_path())
 _DEFAULT_PRETRAINED_DIR = str(FileMapperService.get_pretrained_path())

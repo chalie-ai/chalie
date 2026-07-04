@@ -79,8 +79,9 @@ def test_screenshot_ingest_lands_in_screenshots_subdir_and_vision_reads_it(db: s
 
     # The delegate reads its own screenshot via the REAL dispatch chokepoint.
     mp = object.__new__(MessageProcessor)
-    MessageProcessor.__init__(mp, "look at the screenshot", {})
-    mp.config = WebBrowseConfig(ProcessorConfig.PolicyChannel.CHAT)
+    MessageProcessor.__init__(
+        mp, WebBrowseConfig(ProcessorConfig.PolicyChannel.CHAT), raw_input="look at the screenshot",
+    )
     mp._setup()
     out = ToolDispatcher(mp).dispatch(
         "vision", {"image": ingested["id"], "query": "what text is in this image"}

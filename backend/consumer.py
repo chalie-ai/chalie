@@ -13,12 +13,13 @@ PostgreSQL, MemoryStore replaces Redis.
 """
 
 import logging
-import time
 import signal
 import threading
+import time
 from typing import Callable, Dict, List, Tuple, cast
 
 from utils.logger import Logger
+
 
 def _read_version() -> str:
     try:

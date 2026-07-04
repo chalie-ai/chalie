@@ -1,30 +1,9 @@
 import type { GetHost } from './types';
+import { ConfigType } from '../config/configType';
 
 // Server → client inbound events, discriminated on `type`.
-export interface WsStatusEvent {
-  type: 'status';
-  stage: string;
-}
-export interface WsActNarrationEvent {
-  type: 'act_narration';
-  [k: string]: unknown;
-}
-export interface WsActToolStartEvent {
-  type: 'act_tool_start';
-  [k: string]: unknown;
-}
-export interface WsActToolEndEvent {
-  type: 'act_tool_end';
-  [k: string]: unknown;
-}
 export interface WsMessageEvent {
   type: 'message';
-  /**
-   * True for a chain step's interim assistant prose: text streams ahead of the
-   * step's tool batch with NO trailing `done`. Absent/false on the final turn
-   * result, which carries the rich segments and is followed by `done`.
-   */
-  interim?: boolean;
   [k: string]: unknown;
 }
 export interface WsErrorEvent {
@@ -32,20 +11,56 @@ export interface WsErrorEvent {
   message: string;
   recoverable?: boolean;
 }
-export interface WsDoneEvent {
-  type: 'done';
-  duration_ms: number;
-}
 export interface WsPingEvent {
   type: 'ping';
 }
 
-/** Push/drift family. */
+/** Mid-turn progress signals — the sole WS turn chokepoint (MessageProcessor.broadcast).
+ *  Discriminated on `status`; `type` carries the ProcessorConfig identity (`user` →
+ *  main spine, `scheduled` → dock + that schedule's thread) the surface routes by.
+ *  The surface reacts by refetching the turn block over REST, so these frames carry
+ *  only ids (plus a tool call's id/name/summary for the live act-trail timer) — never
+ *  prose. `provider_retry` is the one status shown directly (a transient toast): a
+ *  provider call failed mid-turn and the backend is resending, so the turn stays in
+ *  flight (no error bubble). Turn *lifecycle* (working/done) is a separate frame —
+ *  see `WsTurnExecutionEvent` below. */
+export type WsTurnStatus = 'updated' | 'tool_called' | 'tool_done' | 'provider_retry';
+export interface WsTurnSignal {
+  status: WsTurnStatus;
+  /** ConfigType — the ProcessorConfig identity the FE routes by. */
+  type: string;
+  turn_id?: number | null;
+  [k: string]: unknown;
+}
+
+/** One `turn_executions` row, pushed whole on every state flip (see
+ *  services/execution_tracker.py). It carries no frame-kind tag of its own —
+ *  `type` here is the SAME ConfigType-identity field `WsTurnSignal.type` carries,
+ *  so a surface recognises this frame by the presence of `state` instead, exactly
+ *  as it recognises a `WsTurnSignal` by the presence of `status`. `working` is the
+ *  sole non-terminal state; `completed` / `cancelled` / `crashed` all settle the
+ *  turn the same way — a crash now reaches the surface too, so a turn that dies
+ *  before producing a reply never leaves a spinner hanging. */
+export type TurnExecutionState = 'working' | 'completed' | 'cancelled' | 'crashed';
+export interface WsTurnExecutionEvent {
+  id: number;
+  channel: string;
+  /** ConfigType — the ProcessorConfig identity the FE routes by. */
+  type: string | null;
+  turn_id: number;
+  started_at: string;
+  ended_at: string | null;
+  cancel_requested: boolean;
+  state: TurnExecutionState;
+  stop_reason: string | null;
+}
+
+/** Push family — content/side-channel frames routed through the drift handler,
+ *  discriminated on `type` (distinct from the turn signals above, keyed on `status`).
+ *  The turn-level `error` toast arrives here too (WsErrorEvent). */
 export type WsPushType =
-  | 'drift'
   | 'task'
   | 'reminder'
-  | 'escalation'
   | 'notification'
   | 'permission_request'
   | 'intent'
@@ -53,45 +68,27 @@ export type WsPushType =
   | 'app_update'
   | 'quick_tip'
   | 'subagent_start'
-  | 'subagent_end'
-  | 'thought'
-  | 'response'
-  // A provider call failed mid-turn and the backend is resending; surfaces show
-  // a transient toast. The turn is still in flight (no error bubble, no `done`).
-  | 'provider_retry'
-  // Echo: server re-broadcasts every user message so surfaces stay in sync; the
-  // sender drops its own via echo_id, peers render the bubble.
-  | 'user_message';
+  | 'subagent_end';
 export interface WsPushEvent {
   type: WsPushType;
   [k: string]: unknown;
 }
 
 export type WsInboundEvent =
-  | WsStatusEvent
-  | WsActNarrationEvent
-  | WsActToolStartEvent
-  | WsActToolEndEvent
   | WsMessageEvent
   | WsErrorEvent
-  | WsDoneEvent
   | WsPingEvent
+  | WsTurnSignal
+  | WsTurnExecutionEvent
   | WsPushEvent;
 
-export interface ChatCallbacks {
-  onStatus?: (stage: string) => void;
-  onMessage?: (data: WsMessageEvent) => void;
-  onNarration?: (data: WsActNarrationEvent) => void;
-  onError?: (data: { message: string; recoverable?: boolean }) => void;
-  onDone?: (data: { duration_ms: number }) => void;
-  onToolStart?: (data: WsActToolStartEvent) => void;
-  onToolEnd?: (data: WsActToolEndEvent) => void;
-}
-
+/** Action channel (rich-card button → POST /action) is the only per-request
+ *  binding left: it sets these callbacks for the optimistic card render. The
+ *  user-turn channel is signal-only (see WsPushType) and never binds. */
 export interface ActionCallbacks {
   onMessage?: (data: WsMessageEvent) => void;
   onError?: (data: { message: string; recoverable?: boolean }) => void;
-  onDone?: (data: { duration_ms: number }) => void;
+  onDone?: (data: { duration_ms?: number }) => void;
 }
 
 type Timer = ReturnType<typeof setTimeout>;
@@ -99,27 +96,21 @@ type Interval = ReturnType<typeof setInterval>;
 
 /**
  * WebSocket client — receive-only server→client push channel. Client→server
- * requests go over HTTP (POST /chat, /chat/interrupt, /action); the only
- * client→server WS frame is `pong`.
+ * requests go over HTTP (POST /api/thread/<turn_id>, DELETE /api/thread/<turn_id>,
+ * POST /api/action); the only client→server WS frame is `pong`.
  */
 export class WebSocketService {
   private ws: WebSocket | null = null;
   private reconnectDelay = 1000;
   private readonly maxReconnectDelay = 30000;
   private reconnectTimer: Timer | null = null;
-  private chatCallbacks: (ChatCallbacks & ActionCallbacks) | null = null;
+  private chatCallbacks: ActionCallbacks | null = null;
   private driftHandler: ((data: WsPushEvent) => void) | null = null;
   private anyHandler: ((data: WsInboundEvent) => void) | null = null;
   private disconnectHandler: (() => void) | null = null;
   private connectHandler: (() => void) | null = null;
   private connected = false;
   private intentionallyClosed = false;
-
-  // Echo ids this surface minted. It rendered its own message optimistically, so
-  // it drops any broadcast echo whose id it owns. Bounded so a missed echo can't
-  // grow the set forever.
-  private readonly ownEchoIds = new Set<string>();
-  private readonly maxOwnEchoIds = 64;
 
   // Half-open detection: backend pings every 60s of client silence; fire only on
   // full silence past 90s.
@@ -253,9 +244,10 @@ export class WebSocketService {
     return this.connected && this.ws?.readyState === WebSocket.OPEN;
   }
 
-  /** Connection lost: drop the in-flight turn's callbacks before notifying
-   *  listeners. The turn's done went to the dead socket and is never resent, so
-   *  a lingering closure would otherwise swallow an unrelated turn's done. */
+  /** Connection lost: drop any in-flight action's callbacks before notifying
+   *  listeners. Its done went to the dead socket and is never resent, so a
+   *  lingering closure would otherwise swallow a later action's done. The turn
+   *  channel is signal-only — surfaces resync by refetching on reconnect. */
   private notifyDisconnect(): void {
     this.chatCallbacks = null;
     this.disconnectHandler?.();
@@ -318,72 +310,102 @@ export class WebSocketService {
     this.chatCallbacks = null;
   }
 
-  send(text: string, source: 'text' | 'voice', callbacks: ChatCallbacks = {}, files: File[] = []): void {
-    this.chatCallbacks = callbacks;
+  /** Fire a user turn. Signal-only: the turn's render flows entirely through the
+   *  `updated` broadcast signal plus the `turn_execution` lifecycle frame
+   *  (→ drift handler → REST refetch), so no callbacks are bound. `onSendFailure`
+   *  reports ONLY a local send failure (offline / POST rejected) — the case where
+   *  no signal will ever arrive — so the surface can release its send guard.
+   *
+   *  Resolves with the POST body `{turn_id, type}` so the caller can bind the
+   *  lane handle the moment the server allocates it (no WS round-trip needed). */
+  send(
+    text: string,
+    onSendFailure: (message: string) => void = () => {
+      /* no-op */
+    },
+    files: File[] = [],
+    threadId: number | null = null,
+    type: string = ConfigType.USER,
+  ): Promise<{ turn_id: number; type: string } | null> {
     if (!this.isConnected) {
-      callbacks.onError?.({ message: 'Not connected. Please wait...', recoverable: true });
-      callbacks.onDone?.({ duration_ms: 0 });
-      this.chatCallbacks = null;
-      return;
+      onSendFailure('Not connected. Please wait...');
+      return Promise.resolve(null);
     }
-    this.postChat(text, source, files, this.mintEchoId());
+    return this.postChat(text, files, threadId, onSendFailure, type);
   }
 
-  /**
-   * Mint a globally-unique echo id and remember it so this surface ignores its
-   * own broadcast echo. Uniqueness must be global (every surface checks echoes
-   * against its own set), hence crypto.randomUUID with a random-token fallback
-   * for non-secure contexts.
-   */
-  private mintEchoId(): string {
-    const id =
-      globalThis.crypto?.randomUUID?.() ??
-      `echo-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
-    this.ownEchoIds.add(id);
-    if (this.ownEchoIds.size > this.maxOwnEchoIds) {
-      const oldest = this.ownEchoIds.values().next().value;
-      if (oldest !== undefined) this.ownEchoIds.delete(oldest);
-    }
-    return id;
-  }
-
+  /** Rich-card control dispatch — POST /action and resolve the card's optimistic
+   *  UI from the SYNCHRONOUS HTTP response. No data crosses the WS bus. The
+   *  callbacks bag doubles as an abort token: abort()/notifyDisconnect() null it
+   *  and a newer sendAction supersedes it. When the request settles superseded we
+   *  suppress the stale data callbacks (onMessage/onError) but ALWAYS fire onDone
+   *  so the card releases its loading state instead of hanging. */
   sendAction(payload: unknown, callbacks: ActionCallbacks = {}): void {
-    this.abort();
     this.chatCallbacks = callbacks;
-    if (!this.isConnected) {
-      callbacks.onError?.({ message: 'Not connected.', recoverable: true });
-      callbacks.onDone?.({ duration_ms: 0 });
-      this.chatCallbacks = null;
-      return;
-    }
-    fetch(this.buildHttpUrl('/action'), {
+    const start = Date.now();
+    fetch(this.buildHttpUrl('/api/action'), {
       method: 'POST',
       credentials: 'same-origin',
       headers: { 'Content-Type': 'application/json', ...this.authHeaders() },
       body: JSON.stringify(payload),
-    }).catch(() => {
-      callbacks.onError?.({ message: 'Action request failed.', recoverable: true });
-      callbacks.onDone?.({ duration_ms: 0 });
-      this.chatCallbacks = null;
-    });
+    })
+      .then(async (resp) => {
+        const data = (await resp.json().catch(() => ({}))) as Record<string, unknown>;
+        const current = this.chatCallbacks === callbacks;
+        if (current) {
+          this.chatCallbacks = null;
+          if (resp.ok) callbacks.onMessage?.(data as unknown as WsMessageEvent);
+          else
+            callbacks.onError?.({
+              message: typeof data.error === 'string' ? data.error : 'Action failed.',
+              recoverable: true,
+            });
+        }
+        callbacks.onDone?.({ duration_ms: Number(data.duration_ms ?? Date.now() - start) });
+      })
+      .catch(() => {
+        if (this.chatCallbacks === callbacks) {
+          this.chatCallbacks = null;
+          callbacks.onError?.({ message: 'Action request failed.', recoverable: true });
+        }
+        callbacks.onDone?.({ duration_ms: 0 });
+      });
   }
 
-  private postChat(text: string, source: string, files: File[], echoId: string): void {
+  private postChat(
+    text: string,
+    files: File[],
+    threadId: number | null,
+    onSendFailure: (message: string) => void,
+    type: string = ConfigType.USER,
+  ): Promise<{ turn_id: number; type: string } | null> {
     const form = new FormData();
     form.append('text', text);
-    form.append('source', source);
-    form.append('echo_id', echoId);
+    form.append('type', type);
     for (const file of files) form.append('files', file, file.name);
-    fetch(this.buildHttpUrl('/chat'), {
+    // POST /api/thread/<turn_id> — -1 creates a new thread, a real id replies
+    // into it. Both return HTTP 200 with {turn_id, type} — the caller binds the
+    // lane handle from this body the moment the server allocates it, with no WS
+    // round-trip. ``type`` is the ProcessorConfig identity the server resolves
+    // to a transcript channel.
+    const path = `/api/thread/${threadId ?? -1}`;
+    return fetch(this.buildHttpUrl(path), {
       method: 'POST',
       credentials: 'same-origin',
       headers: { ...this.authHeaders() },
       body: form,
-    }).catch(() => {
-      this.chatCallbacks?.onError?.({ message: 'Chat request failed.', recoverable: true });
-      this.chatCallbacks?.onDone?.({ duration_ms: 0 });
-      this.chatCallbacks = null;
-    });
+    })
+      .then(async (resp) => {
+        if (!resp.ok) {
+          onSendFailure('Chat request failed.');
+          return null;
+        }
+        return (await resp.json()) as { turn_id: number; type: string };
+      })
+      .catch(() => {
+        onSendFailure('Chat request failed.');
+        return null;
+      });
   }
 
   private dispatch(data: WsInboundEvent): void {
@@ -398,45 +420,8 @@ export class WebSocketService {
       if (this.ws?.readyState === WebSocket.OPEN) this.ws.send(JSON.stringify({ type: 'pong' }));
       return;
     }
-    // Echo: if we minted the id we already rendered it — drop. Otherwise a peer
-    // sent it, so route to the drift handler to render here too.
-    if (data.type === 'user_message') {
-      const echoId = (data as { echo_id?: string }).echo_id;
-      if (echoId && this.ownEchoIds.has(echoId)) {
-        this.ownEchoIds.delete(echoId);
-        return;
-      }
-      this.driftHandler?.(data as WsPushEvent);
-      return;
-    }
-    if (this.chatCallbacks) {
-      switch (data.type) {
-        case 'status':
-          this.chatCallbacks.onStatus?.(data.stage);
-          return;
-        case 'act_narration':
-          this.chatCallbacks.onNarration?.(data);
-          return;
-        case 'act_tool_start':
-          this.chatCallbacks.onToolStart?.(data);
-          return;
-        case 'act_tool_end':
-          this.chatCallbacks.onToolEnd?.(data);
-          return;
-        case 'message':
-          this.chatCallbacks.onMessage?.(data);
-          return;
-        case 'error':
-          this.chatCallbacks.onError?.(data);
-          return;
-        case 'done': {
-          const cb = this.chatCallbacks;
-          this.chatCallbacks = null;
-          cb?.onDone?.(data);
-          return;
-        }
-      }
-    }
+    // Receive-only signal bus: every server frame is a turn signal. It carries no
+    // content — the drift handler reacts by refetching the turn over REST.
     this.driftHandler?.(data as WsPushEvent);
   }
 }

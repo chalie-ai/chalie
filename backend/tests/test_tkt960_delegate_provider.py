@@ -188,18 +188,18 @@ def _delegate_mp(config_cls: type, raw_input: str) -> "MessageProcessor":
     """Build a real MessageProcessor bound to a delegate config, ready for
     _build_send_dto().
 
-    Mirrors the DTO-type derivation pattern in test_provider_api_contract.py:
-    object.__new__ + __init__ + config + thinking_level, then _build_send_dto().
-    The delegate configs' get_user_prompt calls render_trail(mp), which is fully
-    defensive (returns "" when no act-trail/uid exists), so no _setup() is needed
-    to derive the DTO's provider type.
+    ``config`` is the constructor's first argument now (it builds ``self.ts =
+    TranscriptService(config, turn_id)`` immediately), so the config must exist
+    before the MP does. The delegate configs' get_user_prompt calls
+    render_trail(mp), which is fully defensive (returns "" when no
+    act-trail/uid exists), so no _setup() is needed to derive the DTO's
+    provider type.
     """
     from services.message_processor import MessageProcessor
     from services.processor_config import ProcessorConfig
 
-    mp = object.__new__(MessageProcessor)
-    MessageProcessor.__init__(mp, raw_input, {})
-    mp.config = config_cls(ProcessorConfig.PolicyChannel.CHAT)
+    config = config_cls(ProcessorConfig.PolicyChannel.CHAT)
+    mp = MessageProcessor(config, raw_input=raw_input)
     mp.thinking_level = "low"
     return mp
 
@@ -238,9 +238,8 @@ def test_build_send_dto_vision_precedence_over_delegate(db: sqlite3.Connection) 
     from services.message_processor import MessageProcessor
     from services.processor_config import ProcessorConfig
 
-    mp = object.__new__(MessageProcessor)
-    MessageProcessor.__init__(mp, "describe this", {})
-    mp.config = VisionConfig(ProcessorConfig.PolicyChannel.CHAT)
+    config = VisionConfig(ProcessorConfig.PolicyChannel.CHAT)
+    mp = MessageProcessor(config, raw_input="describe this")
     mp.thinking_level = "low"
 
     dto = mp._build_send_dto()

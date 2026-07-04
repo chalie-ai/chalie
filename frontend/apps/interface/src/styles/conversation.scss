@@ -27,51 +27,65 @@
 }
 
 // --------------------------------------------------------------------------
-// 2. User bubble
+// 2. User message — plain text in the avatar row body (no panel)
 // --------------------------------------------------------------------------
-// The wrapper owns the outer spacing (clearing the neighbouring rows) and stacks
-// the attachment list above its bubble. The bubble itself is a full-width flat
-// panel — no border, no accent stripe, no spark glyph; a slightly-elevated
-// surface sets it apart from the page.
+// The user message sits in its avatar row like Chalie's, set apart only by the
+// person avatar and a heavier text weight. The wrapper stacks the text above any
+// attachments; the row (TurnView) owns the outer spacing.
 .user-message {
   display: flex;
   flex-direction: column;
   gap: var(--space-sm);
-  margin: var(--space-xl) 0;
-  width: 90%;
-  align-self: flex-end; // user message hugs the right; width keeps the panel at 90%
 }
 
-.speech-form--user {
-  background: var(--bg-surface-2);
-  border: none;
-  align-self: stretch;
-  width: 100%;
-  max-width: 100%;
-  // Text renders directly in this bubble (no .speech-form__text wrapper), so the
-  // whitespace/weight/break rules live here — pre-wrap preserves the newlines the
-  // composer inserts (Enter adds a newline; only the send button submits).
+.user-text {
+  // pre-wrap preserves the newlines the composer inserts (Enter adds a newline;
+  // only the send button submits).
   white-space: pre-wrap;
-  font-weight: 600;
   overflow-wrap: break-word;
+  font-weight: 500;
+  font-size: 0.9375rem;
+  line-height: 1.6;
+  color: var(--text-primary);
 }
 
-// Hover lift (pointer devices only)
-@media (hover: hover) {
-  .speech-form:hover {
-    transform: translateY(-2px);
-    border-color: color-mix(in oklab, var(--text-primary) 16%, transparent);
-    box-shadow: 0 12px 32px color-mix(in oklab, #000 55%, transparent), 0 0 0 1px color-mix(in oklab, var(--violet) 4%, transparent) inset;
-  }
+// Collapsed long message: clamp to 5 lines with a soft fade hinting at more text
+// below. The fade resolves to the feed background (--bg) so it matches both the
+// dark and light themes — the text sits on the page, not on a panel.
+.user-text--clamped {
+  display: -webkit-box;
+  -webkit-line-clamp: 5;
+  line-clamp: 5;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  position: relative;
+}
 
-  .speech-form--user:hover {
-    box-shadow: 0 12px 32px color-mix(in oklab, #000 55%, transparent), 0 0 0 1px color-mix(in oklab, var(--cyan) 5%, transparent) inset;
-  }
+.user-text--clamped::after {
+  content: '';
+  position: absolute;
+  inset-inline: 0;
+  bottom: 0;
+  height: 2.4em;
+  background: linear-gradient(to bottom, transparent, var(--bg));
+  pointer-events: none;
+}
 
-  [data-theme="light"] .speech-form:hover,
-  [data-theme="light"] .speech-form--user:hover {
-    box-shadow: none;
-  }
+.user-text__toggle {
+  align-self: flex-start;
+  padding: 0;
+  border: none;
+  background: none;
+  cursor: pointer;
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  letter-spacing: 0.01em;
+  color: var(--text-tertiary);
+  transition: color 150ms ease;
+}
+
+.user-text__toggle:hover {
+  color: var(--accent-primary);
 }
 
 // Hard no-shadow guard inside bubbles
@@ -103,45 +117,6 @@
   display: none;
 }
 
-// Chalie glyph now lives inline in the footer (meta) row.
-.speech-form--chalie .speech-form__meta .sender-glyph,
-.speech-form--chalie .speech-form__header .sender-glyph {
-  position: static;
-  width: 16px;
-  height: 16px;
-}
-
-// Sender glyph — SVG asset painted via mask so currentColor themes it
-.sender-glyph {
-  position: absolute;
-  top: -9px;
-  width: 18px;
-  height: 18px;
-  z-index: 3;
-  pointer-events: none;
-  display: inline-block;
-  background-color: currentColor;
-  -webkit-mask: center / contain no-repeat;
-  mask: center / contain no-repeat;
-}
-
-.speech-form--chalie .sender-glyph {
-  left: -9px;
-  color: var(--violet);
-  -webkit-mask-image: url(/icons/sender-glyph-chalie.svg);
-  mask-image: url(/icons/sender-glyph-chalie.svg);
-  animation: glyphTwinkle 3.2s ease-in-out infinite;
-}
-
-@keyframes glyphTwinkle {
-  0%, 100% { opacity: 0.55; }
-  50%      { opacity: 1; }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .speech-form--chalie .sender-glyph { animation: none; opacity: 0.85; }
-}
-
 // Faded messages — outside working memory
 .message--faded {
   opacity: 0.75;
@@ -154,15 +129,15 @@
 }
 
 // --------------------------------------------------------------------------
-// 7. Attachments — condensed right-aligned list, act-trail idiom
+// 7. Attachments — condensed list under the message, act-trail idiom
 // --------------------------------------------------------------------------
 .user-attachments {
   display: flex;
   flex-direction: column;
-  align-items: flex-end; // hug the right edge
+  align-items: flex-start;
   gap: 0; // condensed — line-height carries the row rhythm
   margin: 0;
-  padding: 0 var(--space-lg) 0 0; // line names up under the bubble's right padding
+  padding: 0;
   list-style: none;
 }
 
@@ -175,7 +150,7 @@
   border: none;
   background: none;
   cursor: pointer;
-  font-family: 'JetBrains Mono', 'Fira Code', ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-family: var(--font-mono);
   font-size: 0.82rem;
   line-height: 1.4;
   letter-spacing: -0.005em;
@@ -202,26 +177,18 @@
   display: flex;
   align-items: center;
   gap: var(--space-sm);
-  margin-top: var(--space-sm);
-  font-size: var(--font-size-sm);
+  margin-top: 10px;
+  font-size: 0.8125rem;
   color: var(--text-tertiary);
-  justify-content: flex-start;
   position: relative;
   z-index: 2;
-  font-family: 'JetBrains Mono', 'Fira Code', ui-monospace, 'SF Mono', Menlo, monospace;
+  font-family: var(--font-mono);
   letter-spacing: 0.04em;
 }
 
-// Action buttons (remember/speak) pushed to the right of the footer row
-.speech-form__actions {
-  display: flex;
-  align-items: center;
-  gap: var(--space-sm);
-  margin-left: auto;
-}
-
-.speech-form--user .speech-form__meta {
-  justify-content: flex-end;
+// Pushes the action buttons to the right edge of the footer row.
+.speech-form__meta-spacer {
+  flex: 1;
 }
 
 .speech-form__timestamp {
@@ -231,14 +198,16 @@
   letter-spacing: 0.04em;
 }
 
-.speech-form__remember-btn {
+// Footer action buttons (read-aloud, reply). 24×24 ghost buttons that take a
+// per-action accent on hover.
+.speech-form__act-btn {
   background: none;
   border: none;
   color: var(--text-tertiary);
   cursor: pointer;
-  padding: var(--space-xs);
-  border-radius: var(--radius-sm);
-  transition: color var(--duration-fast), box-shadow var(--duration-fast);
+  padding: 0;
+  border-radius: 8px;
+  transition: color var(--duration-fast), background var(--duration-fast);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -246,48 +215,22 @@
   height: 24px;
 }
 
-.speech-form__remember-btn svg { width: 24px; height: 24px; }
-
-.speech-form__remember-btn:hover {
-  color: var(--accent-primary);
+.speech-form__act-btn:hover {
+  background: color-mix(in oklab, var(--text-primary) 7%, transparent);
 }
 
-.speech-form__remember-btn--active {
-  color: var(--accent-primary);
-  box-shadow: 0 0 8px color-mix(in oklab, var(--violet) 35%, transparent) !important;
-  cursor: default;
+.speech-form__act-btn--speak:hover {
+  color: var(--cyan);
 }
 
-.speech-form__remember-btn:disabled:not(.speech-form__remember-btn--active) {
-  opacity: 0.5;
-  cursor: default;
-}
-
-.speech-form__speak-btn {
-  background: none;
-  border: none;
-  color: var(--text-tertiary);
-  cursor: pointer;
-  padding: var(--space-xs);
-  border-radius: var(--radius-sm);
-  transition: color var(--duration-fast);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 24px;
-  height: 24px;
-}
-
-.speech-form__speak-btn svg { width: 24px; height: 24px; }
-
-.speech-form__speak-btn:hover {
-  color: var(--dusk-blue);
+.speech-form__act-btn--reply:hover {
+  color: var(--violet);
 }
 
 // Escalation form (critic)
 .speech-form--escalation {
-  border-color: color-mix(in oklab, #ffb432 25%, transparent);
-  box-shadow: 0 0 16px color-mix(in oklab, #ffb432 6%, transparent);
+  border-color: color-mix(in oklab, var(--warning) 25%, transparent);
+  box-shadow: 0 0 16px color-mix(in oklab, var(--warning) 6%, transparent);
   margin-top: var(--space-lg);
 }
 
@@ -295,11 +238,11 @@
   background: linear-gradient(
     180deg,
     transparent 0%,
-    color-mix(in oklab, #ffb432 85%, transparent) 20%,
-    color-mix(in oklab, #ffb432 85%, transparent) 80%,
+    color-mix(in oklab, var(--warning) 85%, transparent) 20%,
+    color-mix(in oklab, var(--warning) 85%, transparent) 80%,
     transparent 100%
   );
-  box-shadow: 0 0 8px color-mix(in oklab, #ffb432 60%, transparent), 0 0 18px color-mix(in oklab, #ffb432 33%, transparent);
+  box-shadow: 0 0 8px color-mix(in oklab, var(--warning) 60%, transparent), 0 0 18px color-mix(in oklab, var(--warning) 33%, transparent);
 }
 
 .speech-form--escalation::after {
@@ -309,7 +252,7 @@
   left: 0;
   right: 0;
   height: 1px;
-  background: linear-gradient(90deg, transparent, color-mix(in oklab, #ffb432 30%, transparent), transparent);
+  background: linear-gradient(90deg, transparent, color-mix(in oklab, var(--warning) 30%, transparent), transparent);
   pointer-events: none;
 }
 
@@ -384,7 +327,7 @@
   gap: 16px;
   min-width: 220px;
   max-width: 760px;
-  font-family: 'JetBrains Mono', 'Fira Code', ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-family: var(--font-mono);
   font-size: 0.82rem;
   line-height: 1.2;
   font-variant-numeric: tabular-nums;
@@ -461,7 +404,7 @@
   overflow: visible;
   line-height: 1.4;
   font-size: 0.82rem;
-  font-family: 'JetBrains Mono', 'Fira Code', ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-family: var(--font-mono);
 }
 
 // A run of superseded steps folds behind one chevron: a caret-gutter + content
@@ -513,7 +456,7 @@ $act-group-line: calc(0.82rem * 1.4); // first-line box for both preview & summa
   text-overflow: ellipsis;
   cursor: pointer;
   color: var(--text-secondary);
-  font-family: 'JetBrains Mono', 'Fira Code', ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-family: var(--font-mono);
   font-size: 0.82rem;
   line-height: 1.4;
 }

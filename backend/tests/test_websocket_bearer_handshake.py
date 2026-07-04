@@ -24,7 +24,7 @@ These exercise the REAL production path with zero mocks:
   * a real consumer object at the WS boundary fulfils the same
     ``send(raw)`` / ``close()`` / ``receive()`` contract the browser socket
     fulfils — the same pattern as test_websocket_broadcast_fanout.py;
-  * the real Flask route ``GET /chat/subagents/active`` (``@require_auth``)
+  * the real Flask route ``GET /api/subagents`` (``@require_auth``)
     proves the token authenticates an HTTP request too.
 
 Against the pre-fix handler (cookie-only ``validate_session`` at
@@ -219,7 +219,7 @@ def test_same_minted_token_authenticates_http_bearer_request(
     """The SAME token the WS handshake accepts must authenticate an ordinary
     HTTP request via ``Authorization: Bearer`` — proving one token works across
     both surfaces the mobile app uses. Drives the real ``@require_auth`` route
-    GET /chat/subagents/active end-to-end (no auth bypass)."""
+    GET /api/subagents end-to-end (no auth bypass)."""
     from api import create_app
 
     raw = _mint_token("Mobile — http bearer")
@@ -228,12 +228,12 @@ def test_same_minted_token_authenticates_http_bearer_request(
     app.config["TESTING"] = True
     with app.test_client() as client:
         resp = client.get(
-            "/chat/subagents/active",
+            "/api/subagents",
             headers={"Authorization": "Bearer " + raw},
         )
 
     assert resp.status_code == 200, (
-        "a valid bearer token must authenticate GET /chat/subagents/active; got "
+        "a valid bearer token must authenticate GET /api/subagents; got "
         f"{resp.status_code} {resp.get_data(as_text=True)!r}"
     )
     assert "subagents" in resp.get_json(), (

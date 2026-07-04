@@ -1,4 +1,5 @@
 import pytest
+
 from services.news_sources import (
     SOURCES,
     get_source_by_id,

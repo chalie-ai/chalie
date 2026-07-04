@@ -41,6 +41,65 @@ class ActTrail:
             db = get_shared_db_service()
         self._db = db
 
+    def start(
+        self,
+        *,
+        tool_name: str,
+        params: dict[str, object],
+        transcript_id: "int | None",
+        summary: "str | None" = None,
+    ) -> "int | None":
+        """Open a ``tool_calls`` row the instant a call begins executing and return
+        its id, so the live ``tool_called`` signal can name the row whose timer it
+        starts; :meth:`finish` writes the result when the call returns. The call
+        anchors to its input row alone (``transcript_id``) — its turn is derived
+        later by joining transcript on (channel, turn_id). ``summary`` is the
+        ability's act_summary (the live blue box), persisted so a chat refresh can
+        re-render it. Skips (returns None) when transcript_id is None — a delegate
+        with skip_transcript has no anchor row and the FK is NOT NULL. A write
+        failure logs and yields None; the turn continues unrecorded."""
+        if transcript_id is None:
+            logger.debug("[ActTrail.start] skipping (no transcript_id): tool=%s", tool_name)
+            return None
+        try:
+            from services.transcript_service import _non_settling_tools  # noqa: PLC0415
+            with self._db.connection() as conn:
+                cur = conn.execute(
+                    "INSERT INTO tool_calls "
+                    "(transcript_id, tool_name, params, result, summary, created_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?)",
+                    (transcript_id, tool_name, json.dumps(params), "", summary or "", utc_now().isoformat()),
+                )
+                call_id = cur.lastrowid
+                if tool_name not in _non_settling_tools():
+                    conn.execute(
+                        "UPDATE transcript SET settled = 0 WHERE id = ?",
+                        (transcript_id,),
+                    )
+                return call_id
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "[ActTrail.start] trail open failed (non-fatal): tool=%s transcript=%s: %s",
+                tool_name, transcript_id, exc,
+            )
+            return None
+
+    def finish(self, *, call_id: "int | None", result: str) -> None:
+        """Write the result onto a row opened by :meth:`start`. No-op when call_id
+        is None (the call was never recorded — no anchor). A write failure logs and
+        is non-fatal. Retention janitor in DecayEngineService removes rows older
+        than 7 days."""
+        if call_id is None:
+            return
+        try:
+            with self._db.connection() as conn:
+                conn.execute("UPDATE tool_calls SET result = ? WHERE id = ?", (result, call_id))
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "[ActTrail.finish] trail result write failed (non-fatal): call=%s: %s",
+                call_id, exc,
+            )
+
     def record(
         self,
         *,
@@ -50,35 +109,16 @@ class ActTrail:
         transcript_id: "int | None",
         summary: "str | None" = None,
     ) -> None:
-        """Skips silently when transcript_id is None (delegates with
-        skip_transcript have no anchor row; the FK is NOT NULL). The tool call
-        anchors to that input row alone — its turn is derived later by joining
-        transcript on (channel, turn_id). ``summary`` is the ability's
-        act_summary (the live blue box) persisted so the chat refresh can
-        re-render it. A write failure logs and is non-fatal — the turn
-        continues. Retention janitor in DecayEngineService removes rows older
-        than 7 days."""
-        if transcript_id is None:
-            logger.debug(
-                "[ActTrail.record] skipping record (no transcript_id): tool=%s",
-                tool_name,
-            )
-            return
-        try:
-            params_json = json.dumps(params)
-            now = utc_now().isoformat()
-            with self._db.connection() as conn:
-                conn.execute(
-                    "INSERT INTO tool_calls "
-                    "(transcript_id, tool_name, params, result, summary, created_at) "
-                    "VALUES (?, ?, ?, ?, ?, ?)",
-                    (transcript_id, tool_name, params_json, result, summary or "", now),
-                )
-        except Exception as exc:  # noqa: BLE001
-            logger.warning(
-                "[ActTrail.record] trail write failed (non-fatal): tool=%s transcript=%s: %s",
-                tool_name, transcript_id, exc,
-            )
+        """One-shot open+result for outcomes that never enter execution (an unknown
+        tool, a denied or pre-validation-failed call): no live timer brackets them,
+        so the row is written whole after the fact. Skips silently when
+        transcript_id is None."""
+        self.finish(
+            call_id=self.start(
+                tool_name=tool_name, params=params, transcript_id=transcript_id, summary=summary,
+            ),
+            result=result,
+        )
 
     def fetch_by_turn(self, channel: str, turn_id: int) -> "list[dict[str, object]]":
         """Every tool call of one logical turn, ordered by autoincrement id.

@@ -9,8 +9,8 @@ from datetime import timedelta
 import pytest
 from flask.testing import FlaskClient
 
-from services.world_state import world_state
 from services.time_utils import utc_now
+from services.world_state import world_state
 
 
 # ---------------------------------------------------------------------------
@@ -58,14 +58,14 @@ class TestWorldStateObservabilityEmpty:
         client, db_conn, _ = authed_client
         _reset_world_state(db_conn)
 
-        resp = client.get("/system/observability/world-state")
+        resp = client.get("/api/system/observability/world-state")
         assert resp.status_code == 200
 
     def test_empty_state_rendered_is_empty_string(self, authed_client: tuple[FlaskClient, sqlite3.Connection, object]) -> None:
         client, db_conn, _ = authed_client
         _reset_world_state(db_conn)
 
-        data = client.get("/system/observability/world-state").get_json()
+        data = client.get("/api/system/observability/world-state").get_json()
         assert data["rendered"] == ""
 
 
@@ -80,7 +80,7 @@ class TestWorldStateTelemetryRendering:
         _seed_telemetry(db_conn, {"location_name": "Sliema, MT"})
         world_state.set("signals", {})
 
-        data = client.get("/system/observability/world-state").get_json()
+        data = client.get("/api/system/observability/world-state").get_json()
         assert "location_name:Sliema, MT" in data["rendered"]
 
     def test_telemetry_reflected_in_inputs(self, authed_client: tuple[FlaskClient, sqlite3.Connection, object]) -> None:
@@ -88,7 +88,7 @@ class TestWorldStateTelemetryRendering:
         _seed_telemetry(db_conn, {"location_name": "Valletta", "mobility": "stationary"})
         world_state.set("signals", {})
 
-        inputs = client.get("/system/observability/world-state").get_json()["inputs"]
+        inputs = client.get("/api/system/observability/world-state").get_json()["inputs"]
         assert inputs["telemetry"]["location_name"] == "Valletta"
         assert inputs["telemetry"]["mobility"] == "stationary"
 
@@ -111,7 +111,7 @@ class TestWorldStateScheduleRendering:
         )
         db_conn.commit()
 
-        data = client.get("/system/observability/world-state").get_json()
+        data = client.get("/api/system/observability/world-state").get_json()
         assert "[schedule]" in data["rendered"]
         assert "Call Mum" in data["rendered"]
         assert "due-in:" in data["rendered"]
@@ -130,7 +130,7 @@ class TestWorldStateSignalRendering:
         _reset_world_state(db_conn)
         world_state.push_signal("weather", "Thunderstorm at 18:00")
 
-        data = client.get("/system/observability/world-state").get_json()
+        data = client.get("/api/system/observability/world-state").get_json()
         assert "[signal:weather]" in data["rendered"]
         assert "Thunderstorm at 18:00" in data["rendered"]
 
@@ -164,7 +164,7 @@ class TestWorldStateFullLifecycle:
         )
         db_conn.commit()
 
-        resp = client.get("/system/observability/world-state")
+        resp = client.get("/api/system/observability/world-state")
         assert resp.status_code == 200
         data = resp.get_json()
 

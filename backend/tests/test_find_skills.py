@@ -32,7 +32,6 @@ from abilities.find_skills import FindSkillsAbility
 from configs.channels import UserConfig
 from services.file_mapper_service import FileMapperService
 from services.message_processor import MessageProcessor
-
 from tests._tool_result_harness import body as _harness_body
 from tests._tool_result_harness import head as _harness_head
 from tests._tool_result_harness import seed_transcript
@@ -57,8 +56,7 @@ def _mp(db: sqlite3.Connection) -> MessageProcessor:
     """A real MessageProcessor bound to a real transcript anchor so the
     dispatcher's act-trail write lands on a real row. Carries ``active_tools`` —
     the genuine surface find_skills' discovery cascade runs against."""
-    mp = MessageProcessor("find me a skill")
-    mp.config = UserConfig({})
+    mp = MessageProcessor(UserConfig({}), raw_input="find me a skill")
     mp.active_tools = list(mp.config.always_available or [])
     mp.uid = seed_transcript(db, "chat", "find me a skill")
     return mp

@@ -887,7 +887,7 @@ input[type='checkbox'] {
 
 .stat-value {
   font-size: 22px;
-  font-weight: 700;
+  font-weight: 600;
   letter-spacing: -0.02em;
   background: linear-gradient(135deg, var(--violet), var(--magenta));
   -webkit-background-clip: text;
@@ -1032,6 +1032,7 @@ input[type='checkbox'] {
 }
 
 .progress-fill {
+  width: var(--fill, 0);
   height: 100%;
   border-radius: 2px;
   background: linear-gradient(90deg, var(--violet), var(--magenta));
@@ -1295,6 +1296,7 @@ input[type='checkbox'] {
 }
 
 .provider-form-page { max-width: 560px; }
+.provider-form-page--full { max-width: none; }
 
 .form-page-header {
   display: flex;
@@ -1347,7 +1349,7 @@ input[type='checkbox'] {
   background: rgba(138, 92, 255, 0.14);
   color: var(--violet);
   font-size: 16px;
-  font-weight: 700;
+  font-weight: 600;
 }
 
 .provider-tile-name { font-size: 13px; font-weight: 600; line-height: 1.2; }
@@ -1537,7 +1539,7 @@ input[type='checkbox'] {
 
 .mcp-section-title {
   font-size: 13px;
-  font-weight: 700;
+  font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.08em;
   color: var(--text-secondary);
@@ -1797,7 +1799,6 @@ input[type='checkbox'] {
 .empty-state h3 { font-size: 16px; color: var(--text-primary); margin: 0 0 6px; font-weight: 600; }
 .empty-state p { font-size: 13px; margin: 0; }
 
-.hidden { display: none !important; } // stylelint-disable-line declaration-no-important
 .panel-placeholder { padding: 40px; text-align: center; color: var(--text-secondary); }
 .panel-placeholder h2 { color: var(--text-primary); margin: 0 0 8px; }
 

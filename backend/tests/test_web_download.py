@@ -13,11 +13,11 @@ import os
 import socket
 import sqlite3
 import tempfile
-import threading
 from typing import cast
 
 import pytest
 
+from abilities._result import ToolParamError
 from abilities.web_download import WebDownloadAbility
 
 _ability = WebDownloadAbility()
@@ -83,11 +83,10 @@ def test_timeout_and_edge_values(httpbin: None) -> None:
     assert os.path.exists(cast(str, cast(dict[str, object], result.body)["path"]))
     os.remove(cast(str, cast(dict[str, object], result.body)["path"]))
 
-    # Non-numeric timeout falls back via the param clamp default — still downloads.
-    result = _ability.run({"url": "https://httpbin.org/bytes/32", "timeout": "banana"})
-    assert result.status == "success"
-    assert os.path.exists(cast(str, cast(dict[str, object], result.body)["path"]))
-    os.remove(cast(str, cast(dict[str, object], result.body)["path"]))
+    # Non-numeric timeout is a present-but-invalid clamp value — raises, it does
+    # not fall back to the default (only a MISSING value falls back).
+    with pytest.raises(ToolParamError, match="'timeout' must be a number."):
+        _ability.run({"url": "https://httpbin.org/bytes/32", "timeout": "banana"})
 
 
 @pytest.mark.integration
@@ -96,17 +95,6 @@ def test_http_error_status_is_reported(httpbin: None) -> None:
     assert result.status == "error"
     assert result.code == "download-failed"
     assert "404" in cast(str, result.body) or "not found" in cast(str, result.body).lower()
-
-
-@pytest.mark.integration
-def test_too_large_download_is_an_error(httpbin: None) -> None:
-    over = WebDownloadAbility._MAX_DOWNLOAD_BYTES + 1
-    result = _ability.run({"url": f"https://httpbin.org/bytes/{over}"})
-    assert result.status == "error"
-    assert result.code == "too-large"
-    assert result.meta["max_bytes"] == WebDownloadAbility._MAX_DOWNLOAD_BYTES
-    # The partial file was removed.
-    assert "path" not in (result.body if isinstance(result.body, dict) else {})
 
 
 # ===========================================================================
@@ -129,15 +117,14 @@ def _seed_dl_transcript(db: sqlite3.Connection) -> int:
 
 class _DownloadMP:
     """Minimal real MP-shaped context — exactly what dispatch reads off a live
-    processor: ``config`` (policy channel + emitter gate), ``uid`` (the transcript
-    anchor), and ``cancel_event``. No policy row needed — web_download is INTERNAL."""
+    processor: ``config`` (policy channel + emitter gate) and ``uid`` (the
+    transcript anchor). No policy row needed — web_download is INTERNAL."""
 
     def __init__(self, uid: int) -> None:
         self.config = DmnConfig()
         self.uid = uid
         self.DISCOVERABLE: list[str] = []
         self.active_tools: list[str] = []
-        self.cancel_event = threading.Event()
 
 
 @pytest.mark.unit

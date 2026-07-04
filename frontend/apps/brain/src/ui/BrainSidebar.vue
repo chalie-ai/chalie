@@ -1,23 +1,24 @@
 <!-- Two NAV groups with collapsible sub-lists, active-route highlight, providersOnly lock banner, theme toggle. -->
 <script setup lang="ts">
-import { computed } from 'vue';
 import type { FunctionalComponent } from 'vue';
-import { useRouter, useRoute } from 'vue-router';
+import { computed } from 'vue';
+import { useRoute, useRouter } from 'vue-router';
 import {
-  LayoutGrid,
+  BookOpen,
   Brain,
   Calendar,
-  List,
+  ChevronRight,
+  DatabaseBackup,
   FileText,
+  LayoutGrid,
+  List,
+  Moon,
+  Network,
+  Server,
   Settings,
   ShieldCheck,
-  BookOpen,
-  Server,
-  DatabaseBackup,
   Smartphone,
-  ChevronRight,
   Sun,
-  Moon,
 } from '@lucide/vue';
 import { useTheme } from '@chalie/shared';
 import { useShellStore } from '../stores/shell';
@@ -46,7 +47,10 @@ interface NavItem {
 const NAV: NavItem[] = [
   { id: 'providers', label: 'Providers', icon: LayoutGrid, group: 'cognition' },
   {
-    id: 'cognition', label: 'Cognition', icon: Brain, group: 'cognition',
+    id: 'cognition',
+    label: 'Cognition',
+    icon: Brain,
+    group: 'cognition',
     sub: [
       { id: 'memory', label: 'Memory' },
       { id: 'auto-research', label: 'Auto Research' },
@@ -59,7 +63,10 @@ const NAV: NavItem[] = [
     ],
   },
   {
-    id: 'scheduler', label: 'Scheduler', icon: Calendar, group: 'cognition',
+    id: 'scheduler',
+    label: 'Scheduler',
+    icon: Calendar,
+    group: 'cognition',
     sub: [
       { id: 'all', label: 'All' },
       { id: 'pending', label: 'Pending' },
@@ -70,7 +77,10 @@ const NAV: NavItem[] = [
   },
   { id: 'lists', label: 'Lists', icon: List, group: 'cognition' },
   {
-    id: 'documents', label: 'Documents', icon: FileText, group: 'cognition',
+    id: 'documents',
+    label: 'Documents',
+    icon: FileText,
+    group: 'cognition',
     sub: [
       { id: 'active', label: 'Active' },
       { id: 'processing', label: 'Processing' },
@@ -80,7 +90,10 @@ const NAV: NavItem[] = [
   },
   { id: 'capabilities', label: 'Capabilities', icon: Settings, group: 'system' },
   {
-    id: 'policies', label: 'Policies', icon: ShieldCheck, group: 'system',
+    id: 'policies',
+    label: 'Policies',
+    icon: ShieldCheck,
+    group: 'system',
     sub: [
       { id: 'chat', label: 'Chat' },
       { id: 'background', label: 'Background' },
@@ -90,6 +103,7 @@ const NAV: NavItem[] = [
   { id: 'skills', label: 'Skills', icon: BookOpen, group: 'system' },
   { id: 'mcp', label: 'MCP', icon: Server, group: 'system' },
   { id: 'import-export', label: 'Import / Export', icon: DatabaseBackup, group: 'system' },
+  { id: 'system', label: 'System', icon: Network, group: 'system' },
   { id: 'link-device', label: 'Link device', icon: Smartphone, group: 'system' },
 ];
 

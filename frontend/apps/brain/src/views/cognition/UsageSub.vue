@@ -1,12 +1,31 @@
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue';
-import { cognition } from '../../api/cognition';
+import { computed, onMounted, ref } from 'vue';
 import type { UsageResponse } from '../../api/cognition';
+import { cognition } from '../../api/cognition';
 import EmptyState from '../../ui/EmptyState.vue';
 
-const _MONTH_NAMES = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+const _MONTH_NAMES = [
+  'Jan',
+  'Feb',
+  'Mar',
+  'Apr',
+  'May',
+  'Jun',
+  'Jul',
+  'Aug',
+  'Sep',
+  'Oct',
+  'Nov',
+  'Dec',
+];
 const _DAY_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-const _TABLE_HEADERS: Record<string, string> = { hour: 'Hour', day: 'Hour', week: 'Day', month: 'Day', lifetime: 'Month' };
+const _TABLE_HEADERS: Record<string, string> = {
+  hour: 'Hour',
+  day: 'Hour',
+  week: 'Day',
+  month: 'Day',
+  lifetime: 'Month',
+};
 
 type UsageWindow = 'hour' | 'day' | 'week' | 'month' | 'lifetime';
 
@@ -46,7 +65,10 @@ function selectWindow(w: UsageWindow): void {
 
 onMounted(load);
 
-interface BucketValue { input: number; output: number }
+interface BucketValue {
+  input: number;
+  output: number;
+}
 
 const bucketMap = computed((): Record<string, BucketValue> => {
   const entries = data.value?.entries ?? [];
@@ -71,26 +93,43 @@ const windowLabels: Record<UsageWindow, string> = {
 const summaryCards = computed(() => {
   const rawSummary = data.value?.summary ?? {};
   return [
-    { value: fmtTokens(rawSummary.total_tokens ?? 0), label: windowLabels[usageWindow.value] ?? 'Total Tokens' },
-    { value: rawSummary.cache_hit_pct != null ? `${rawSummary.cache_hit_pct}%` : 'N/A', label: 'Cache Hit Rate' },
+    {
+      value: fmtTokens(rawSummary.total_tokens ?? 0),
+      label: windowLabels[usageWindow.value] ?? 'Total Tokens',
+    },
+    {
+      value: rawSummary.cache_hit_pct == null ? 'N/A' : `${rawSummary.cache_hit_pct}%`,
+      label: 'Cache Hit Rate',
+    },
     { value: fmtTokens(rawSummary.tokens_today ?? 0), label: 'Today (UTC)' },
     { value: rawSummary.most_active_model || '—', label: 'Top Model' },
   ];
 });
 
-interface ChartBar { label: string; input: number; output: number }
+interface ChartBar {
+  label: string;
+  input: number;
+  output: number;
+}
 
 const chartData = computed((): ChartBar[] => {
   return Object.entries(bucketMap.value)
     .sort(([a], [b]) => a.localeCompare(b))
     .map(([bucket, v]) => ({
-      label: usageWindow.value === 'hour' || usageWindow.value === 'day' ? bucket.slice(11, 16) : bucket.slice(5, 10),
+      label:
+        usageWindow.value === 'hour' || usageWindow.value === 'day'
+          ? bucket.slice(11, 16)
+          : bucket.slice(5, 10),
       input: v.input,
       output: v.output,
     }));
 });
 
-interface SlotRow { label: string; input: number; output: number }
+interface SlotRow {
+  label: string;
+  input: number;
+  output: number;
+}
 
 function buildHourSlots(bm: Record<string, BucketValue>): SlotRow[] {
   return Object.entries(bm)
@@ -158,7 +197,10 @@ function buildLifetimeSlots(bm: Record<string, BucketValue>, now: Date): SlotRow
     const label = `${_MONTH_NAMES[m - 1]} ${String(y).slice(2)}`;
     const d = monthAgg[mk] ?? { input: 0, output: 0 };
     slots.push({ label, input: d.input, output: d.output });
-    if (++m > 12) { m = 1; y++; }
+    if (++m > 12) {
+      m = 1;
+      y++;
+    }
   }
   return slots;
 }
@@ -193,7 +235,7 @@ interface BarGeom {
 const chartGeom = computed(() => {
   const chart = chartData.value;
   if (chart.length === 0) return null;
-  const maxVal = Math.max(...chart.map(d => (d.input || 0) + (d.output || 0)), 1);
+  const maxVal = Math.max(...chart.map((d) => (d.input || 0) + (d.output || 0)), 1);
   const barW = Math.max(16, Math.floor(600 / chart.length) - 4);
   const h = 160;
   const labelH = 40;
@@ -229,12 +271,14 @@ const chartGeom = computed(() => {
   <template v-else>
     <div id="usageWindowTabs" class="filter-tabs">
       <button
-        v-for="w in (['hour', 'day', 'week', 'month', 'lifetime'] as const)"
+        v-for="w in ['hour', 'day', 'week', 'month', 'lifetime'] as const"
         :key="w"
         class="filter-tab"
         :class="{ active: w === usageWindow }"
         @click="selectWindow(w)"
-      >{{ w.charAt(0).toUpperCase() + w.slice(1) }}</button>
+      >
+        {{ w.charAt(0).toUpperCase() + w.slice(1) }}
+      </button>
     </div>
 
     <div class="stat-grid">
@@ -273,7 +317,9 @@ const chartGeom = computed(() => {
               :y="bar.labelY"
               class="bar-label"
               :transform="`rotate(45 ${bar.labelX} ${bar.labelY})`"
-            >{{ bar.label }}</text>
+            >
+              {{ bar.label }}
+            </text>
           </g>
         </svg>
       </div>

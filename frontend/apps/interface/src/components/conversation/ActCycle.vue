@@ -1,25 +1,26 @@
 <script setup lang="ts">
-import { ref, computed, watch, onUnmounted } from 'vue';
+import { computed, onUnmounted, ref, watch } from 'vue';
 import { Undo2 } from '@lucide/vue';
-import type { ActForm, ToolPill } from '../../stores/conversation';
+import { ConfigType } from '@chalie/shared';
+import type { LiveToolPill } from '../../composables/useConversationFeed';
 import { useSessionStore } from '../../stores/session';
 
-const props = defineProps<{ form: ActForm }>();
+const props = withDefaults(
+  defineProps<{ pills: LiveToolPill[]; turnId: number | null; type?: string }>(),
+  { type: ConfigType.USER },
+);
 
 const session = useSessionStore();
 
-function onStop(): void {
-  void session.requestStop();
+async function onStop(): Promise<void> {
+  await session.requestStop(props.turnId, props.type);
 }
 
-// Live timer: ticks ONLY while the step is live and a pill is unresolved; torn
-// down the instant everything resolves, so settled turns cost nothing.
+// Live timer: ticks ONLY while a pill is unresolved.
 const now = ref(Date.now());
 let timer: ReturnType<typeof setInterval> | null = null;
 
-const hasRunning = computed(
-  () => !props.form.collapsed && props.form.tools.some((t) => !t.resolved),
-);
+const hasRunning = computed(() => props.pills.some((p) => !p.resolved));
 
 function stopClock(): void {
   if (timer) clearInterval(timer);
@@ -42,8 +43,7 @@ watch(
 
 onUnmounted(stopClock);
 
-// Seconds on a pill: measured duration once resolved, else live elapsed.
-function pillSeconds(pill: ToolPill): string {
+function pillSeconds(pill: LiveToolPill): string {
   const ms = pill.resolved
     ? Math.max(0, pill.ms ?? 0)
     : Math.max(0, pill.startedAt ? now.value - pill.startedAt : 0);
@@ -52,9 +52,9 @@ function pillSeconds(pill: ToolPill): string {
 </script>
 
 <template>
-  <div class="act-cycle" :class="{ 'act-cycle--collapsed': form.collapsed }">
-    <!-- Live working anchor (logo + stop); dropped once superseded. -->
-    <div v-if="!form.collapsed" class="act-row">
+  <div class="act-cycle">
+    <!-- Live working anchor (logo + stop). -->
+    <div class="act-row">
       <span class="act-logo" />
       <button
         class="act-stop-btn"
@@ -67,29 +67,18 @@ function pillSeconds(pill: ToolPill): string {
       </button>
     </div>
 
-    <!-- Collapsed: summary-only lines; tool-name pill and timer dropped. -->
-    <div v-if="form.collapsed" class="act-summaries">
-      <span
-        v-for="pill in form.tools"
-        :key="pill.id"
-        class="act-tool__summary act-tool__summary--collapsed"
-      >
-        {{ pill.summary || pill.name }}
-      </span>
-    </div>
-
-    <!-- Live: running / done pills with name + ticking timer (green on done).
-         Before the first pill lands, the bare group is the "thinking…" anchor. -->
-    <div v-else class="act-tools">
-      <span v-if="!form.tools.length" class="act-placeholder">thinking…</span>
+    <!-- Running / done pills with name + ticking timer. Before the first pill
+         lands, the bare group is the "thinking…" anchor. -->
+    <div class="act-tools">
+      <span v-if="!pills.length" class="act-placeholder">thinking…</span>
       <div
-        v-for="pill in form.tools"
+        v-for="pill in pills"
         :key="pill.id"
         class="act-tool"
         :class="{
           'act-tool--running': !pill.resolved,
-          'act-tool--done':    pill.resolved && pill.ok,
-          'act-tool--error':   pill.resolved && !pill.ok,
+          'act-tool--done': pill.resolved && pill.ok,
+          'act-tool--error': pill.resolved && !pill.ok,
         }"
         :data-call-id="pill.id"
       >

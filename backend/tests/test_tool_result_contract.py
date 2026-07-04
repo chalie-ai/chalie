@@ -24,7 +24,6 @@
 """
 
 import sqlite3
-import threading
 from collections.abc import Iterator
 from typing import cast
 
@@ -50,7 +49,6 @@ class _MP:
         self.uid = uid
         self.DISCOVERABLE: list[str] = []
         self.active_tools: list[str] = []
-        self.cancel_event = threading.Event()
 
 
 # ── Throwaway abilities — they self-register via Ability.__init_subclass__ +

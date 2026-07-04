@@ -19,8 +19,7 @@ from configs.channels.geo_pattern import GeoConfig
 from configs.channels.pattern import PatternConfig
 from services.act_trail import ActTrail
 from services.message_processor import MessageProcessor
-from services.transcript_service import Transcript
-from tests._tool_result_harness import body, head, seed_transcript
+from tests._tool_result_harness import body, head
 
 pytestmark = pytest.mark.unit
 
@@ -28,19 +27,13 @@ pytestmark = pytest.mark.unit
 # ── Fixtures / helpers ──────────────────────────────────────────────────────────
 
 
-def _seed_transcript(db: sqlite3.Connection) -> int:
-    return seed_transcript(db, channel="pattern_match", content="remember a fact")
-
-
 def _mp(db: sqlite3.Connection) -> MessageProcessor:
-    mp = MessageProcessor("remember a fact")
-    mp.config = PatternConfig(0, 1)
+    # Real MessageProcessor construction: config first, then turn_id/raw_input.
+    # PatternConfig.skip_input_row is False, so the constructor itself seeds this
+    # turn's anchoring input row (mp.uid/mp.turn_id) exactly as production's
+    # _setup does — no manual row seeding or private-field poking needed.
+    mp = MessageProcessor(PatternConfig(0, 1), raw_input="remember a fact")
     mp.active_tools = list(mp.config.always_available or [])
-    mp.uid = _seed_transcript(db)
-    # The per-turn budget and dedup set are derived from this turn's tool_calls
-    # rows, keyed by (config.channel, turn_id) — set turn_id from the seeded
-    # input row exactly as production's _setup does. No instance state.
-    mp.turn_id = Transcript.turn_id_of_row(mp.uid)
     return mp
 
 
@@ -66,11 +59,8 @@ def _rows(db: sqlite3.Connection, *, kind: str | None = None, key: str | None = 
 
 def _geo_mp(db: sqlite3.Connection) -> MessageProcessor:
     """A real MessageProcessor on the GEO config — the other background pass that"""
-    mp = MessageProcessor("detect a geo fact")
-    mp.config = GeoConfig(0, 1)
+    mp = MessageProcessor(GeoConfig(0, 1), raw_input="detect a geo fact")
     mp.active_tools = list(mp.config.always_available or [])
-    mp.uid = seed_transcript(db, channel="geo_pattern", content="detect a geo fact")
-    mp.turn_id = Transcript.turn_id_of_row(mp.uid)
     return mp
 
 

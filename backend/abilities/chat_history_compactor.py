@@ -6,8 +6,21 @@ it programmatically when a compaction limit is reached (``_dispatch_compaction``
 exactly like the memory.recall turn-0 seed. It fires its own
 MessageProcessor.process() loop with ChatHistoryCompactionConfig, reads the parent
 channel's ``get_previous_messages()`` from the bound ``mp``, and writes the model's
-output VERBATIM to the transcript as ``role='compaction'`` — that row's own id is
-the new watermark, so the next ``_previous_rows()`` read returns nothing through it.
+output VERBATIM into the ``compactions`` table — never a transcript
+row, so firing never moves a ``turn_id`` and the turn boundary survives.
+
+The checkpoint is scoped to the parent's VIEW: a FORK reply writes ``for_turn_id =
+turn_id`` and its watermark is the max transcript.id of the folded rows; the MAIN
+spine writes ``for_turn_id = NULL`` and its watermark is the max turn_id. Each axis
+is exactly what the matching ``_previous_rows`` read cuts on, so the next read
+returns nothing through the watermark.
+
+The checkpoint is KEYED on the channel the parent READS cross-turn history from —
+``config.read_channel`` when the config splits read/write (DiscoveryConfig reads the
+``user`` spine), else the write ``config.channel``. A split config thus folds and
+advances the READ channel's watermark, so its post-compaction continuation actually
+sees fewer rows; keying on the write channel would leave the read watermark pinned
+and re-read the same rows (livelock).
 
 No tags, no parser: whatever the model writes IS the new checkpoint. The watermark
 ALWAYS advances on a non-empty history, so compaction can never silently no-op into
@@ -26,8 +39,10 @@ if TYPE_CHECKING:
 
     class _CompactionParent(Protocol):
         _compaction_kept_rows: int
+        turn_id: "int | None"
+        _forked: bool
 
-        def _previous_rows(self) -> list[object]: ...
+        def _previous_rows(self) -> list[dict[str, object]]: ...
         def get_previous_messages(self, *, drop_oldest: int = ...) -> str: ...
 
         class _Providers(Protocol):
@@ -38,6 +53,7 @@ if TYPE_CHECKING:
 
         class _Config(Protocol):
             channel: str
+            read_channel: "str | None"
 
         config: _Config
 
@@ -54,6 +70,7 @@ class ChatHistoryCompactionConfig(CompactionConfig):
 
 class ChatHistoryCompactor(Ability):
     DISCOVERABLE: ClassVar[bool] = False  # internal-only compaction tool; pinned, never discovered
+    counts_as_settle: ClassVar[bool] = False  # never demotes a settle0
 
     def get_name(self) -> str:
         return "chat_history_compactor"
@@ -82,14 +99,24 @@ class ChatHistoryCompactor(Ability):
     def run(self, params: dict[str, object]) -> ToolResult:
         from services.message_processor import MessageProcessor  # noqa: PLC0415
         from services import compaction_persistence  # noqa: PLC0415
-        from services.transcript_service import Transcript  # noqa: PLC0415
 
         mp = cast("_CompactionParent", self.mp)
-        channel = mp.config.channel
+        # The checkpoint is keyed on the channel the parent READS cross-turn
+        # history from — ``read_channel`` when the config splits read/write,
+        # else the write ``channel``. A split config (DiscoveryConfig) reads the
+        # user spine, so its compaction must fold those user rows and advance the
+        # USER watermark; keying it on the write channel would leave the read
+        # channel's watermark pinned and the post-compaction continuation would
+        # re-read the same rows (no progression / livelock). The FORK/MAIN axis
+        # (for_turn_id) is independent and unchanged.
+        channel = mp.config.read_channel or mp.config.channel
+        # The checkpoint axis follows the parent's view: FORK → its thread, MAIN →
+        # the spine (NULL). Used for both the prior read and the new write.
+        for_turn_id = mp.turn_id if mp._forked else None
 
         # Carry forward the prior checkpoint so continuity chains across
         # compactions instead of restarting from the recent tail each time.
-        prior_row = compaction_persistence.get_compaction(channel)
+        prior_row = compaction_persistence.get_compaction(channel, for_turn_id)
         prior = (cast(str, prior_row.get("compacted_text")) or "").strip() if prior_row else ""
 
         combined = self._fit_compaction_input(mp, prior)
@@ -106,14 +133,23 @@ class ChatHistoryCompactor(Ability):
         summary = (MessageProcessor.process(combined, ChatHistoryCompactionConfig()) or "").strip()
         if not summary:
             logger.warning(
-                "[chat_history_compactor] empty summary on channel=%s; advancing watermark anyway",
-                channel,
+                "[chat_history_compactor] empty summary on channel=%s scope=%s; advancing watermark anyway",
+                channel, for_turn_id,
             )
 
-        # The model's output IS the checkpoint — write it verbatim. The new
-        # transcript row's own id becomes the watermark (advances unconditionally
-        # on a non-empty backlog → no silent no-write, no infinite loop).
-        Transcript.write_input_row(channel, "compaction", summary)
+        # The model's output IS the checkpoint — write it verbatim into the
+        # compactions table. The watermark covers everything just read (the full
+        # _previous_rows, not the kept subset) so a rare drop-oldest stays covered
+        # and the next read returns nothing through it. Axis follows the view: a
+        # FORK stores the max transcript.id, the MAIN spine the max turn_id.
+        # This advance only holds because _previous_rows returns rows ABOVE the
+        # prior watermark — keep that contract (its flow narrative spells out why).
+        rows = mp._previous_rows()
+        compacted_up_to = (
+            max(cast(int, r["id"]) for r in rows) if mp._forked
+            else max(cast(int, r["turn_id"]) for r in rows if r["turn_id"] is not None)
+        )
+        compaction_persistence.write_compaction(channel, for_turn_id, compacted_up_to, summary)
         return ToolResult.ok("Chat history compacted.", rows_compacted=rows_compacted)
 
     @staticmethod

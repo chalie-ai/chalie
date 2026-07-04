@@ -15,5 +15,6 @@ export { policies } from './policies';
 export { skills } from './skills';
 export { mcp } from './mcp';
 export { snapshot } from './snapshot';
+export { threads } from './threads';
 
 export { getHost } from '@chalie/shared';

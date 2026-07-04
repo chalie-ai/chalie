@@ -16,6 +16,7 @@ from enum import Enum
 from typing import TYPE_CHECKING, ClassVar
 
 if TYPE_CHECKING:
+    from services.config_type import ConfigTypeEnum
     from services.message_processor import MessageProcessor
     from services.post_turn_hook import PostTurnHook
 
@@ -29,8 +30,15 @@ class ProcessorConfig(ABC):
     """True → the framework ``async`` boolean is exposed on every tool's schema
     for this channel, letting the model run a call in the background and receive
     the result as a later turn.  Only a push channel with a durable session can
-    honour a deferred result, so this is False everywhere except UserConfig
-    (§4.0 / §4.8d).  It gates schema *exposure* only — never routing."""
+    honour a deferred result, so this is False everywhere except UserConfig.
+    It gates schema *exposure* only — never routing."""
+
+    BROADCASTS_STATE: ClassVar[bool] = False
+    """True → this channel streams the lean turn-state signals (working/updated/
+    done + tool_called/tool_done) to its surface via ``mp.broadcast``.
+    Only UserConfig sets it; every other channel stays silent (the chokepoint
+    no-ops). The single state-gate — replaces the scattered ``broadcast_to ==
+    'user'`` checks. Distinct from ``broadcast_to`` (message-delivery target)."""
 
     uses_vision_provider: ClassVar[bool] = False
     """True -> Providers._resolve reads the brain's Vision Provider from the DB
@@ -87,21 +95,31 @@ class ProcessorConfig(ABC):
 
     suppress_history: bool
     """True → get_previous_messages() returns '' (housekeeping loops).
-    Set on all channels except UMP and ExternalAgent (§2 / AC-26)."""
+    Set on all channels except UMP and ExternalAgent."""
 
     # ── Live output (declarative, not a hook) ─────────────────────────────────
 
     broadcast_to: str | None
     """None = silent.  Non-None = stream live tool events to this channel and
     deliver the turn's end message there.  Only UserConfig sets this ('user');
-    all others leave it None (AC-28)."""
+    all others leave it None."""
 
     # ── Turn-0 auto-seed (declarative, not a hook) ────────────────────────────
 
     memory_seed: bool
     """True → fire the memory recall tool (action='recall') once on turn 0.
     Attachments are NOT a flag: presence of metadata['attachments'] auto-fires
-    document.upload per file on turn 0 (AC-30 / AC-31)."""
+    document.upload per file on turn 0."""
+
+    # ── Split-channel routing (cross-turn history read channel) ───────────────
+
+    read_channel: str | None = None
+    """Cross-turn history read channel; ``None`` ⇒ read on ``channel`` (every
+    existing config). Only split-channel configs set this — writes and
+    current-turn identity stay on ``channel`` while the model's cross-turn
+    history is read from ``read_channel``. Today only DiscoveryConfig sets it
+    (``= "user"``), and it runs MAIN-only, so the split's FORK edge cases never
+    apply. Do not set ``read_channel != channel`` on a FORK/reply config."""
 
     # ── After-turn hooks — empty tuple = no-op ───────────────────────────────
 
@@ -110,7 +128,7 @@ class ProcessorConfig(ABC):
     run once after the assistant row is persisted.  Empty tuple = no-op.  Hooks
     are mutually independent and failure-isolated — see services/post_turn_hook.py
     and MessageProcessor._end_turn.  This is the ONLY hook surface on
-    ProcessorConfig (AC-32 / §4.8)."""
+    ProcessorConfig."""
 
     # ── Prompt builders (abstract — one implementation per channel) ───────────
 
@@ -143,6 +161,14 @@ class ProcessorConfig(ABC):
     def usage_class(self) -> str:
         """LLM usage class written to llm_call_log."""
         return self.policy_channel.value
+
+    # ── API routing identity ──────────────────────────────────────────────────
+
+    def type(self) -> "ConfigTypeEnum | None":
+        """The top-level API routing identifier for this config, or ``None`` for the
+        internal channels that the thread API never addresses. Only the two configs
+        reachable via ``ConfigTypeEnum.get_by_type`` override this."""
+        return None
 
     # ── Cloning ───────────────────────────────────────────────────────────────
 

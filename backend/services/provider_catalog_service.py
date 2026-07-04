@@ -3,7 +3,7 @@
 Each preset maps a popular AI provider onto one of Chalie's five existing
 platforms (``ollama`` / ``openai`` / ``anthropic`` / ``gemini`` /
 ``openai_compatible``) plus its base URL, so the wizard can pre-fill the host and
-reuse the live model-fetch path (``POST /providers/list-models``) unchanged.
+reuse the live model-fetch path (``POST /api/providers/list-models``) unchanged.
 
 A preset is NEVER a runtime platform of its own — ``platform`` is always a real
 Chalie platform, and the provider is created through the ordinary create path

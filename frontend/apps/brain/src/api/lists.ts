@@ -26,31 +26,31 @@ export interface List {
 }
 
 export const lists = {
-  list(): Promise<{ items: List[] }> {
-    return api.get('/lists');
+  list(): Promise<List[]> {
+    return api.get('/api/lists');
   },
 
   get(listId: string | number): Promise<{ item: List }> {
-    return api.get(`/lists/${listId}`);
+    return api.get(`/api/lists/${listId}`);
   },
 
   create(name: string): Promise<{ item: List }> {
-    return api.post('/lists', { name });
+    return api.post('/api/lists', { name });
   },
 
   delete(listId: string | number): Promise<unknown> {
-    return api.del(`/lists/${listId}`);
+    return api.del(`/api/lists/${listId}`);
   },
 
   rename(listId: string | number, name: string): Promise<unknown> {
-    return api.put(`/lists/${listId}/rename`, { name });
+    return api.put(`/api/lists/${listId}/rename`, { name });
   },
 
   addItems(listId: string | number, items: string[]): Promise<unknown> {
-    return api.post(`/lists/${listId}/items`, { items });
+    return api.post(`/api/lists/${listId}/items`, { items });
   },
 
   toggleItem(listId: string | number, endpoint: string, item: { content: string }): Promise<unknown> {
-    return api.put(`/lists/${listId}/items/${endpoint}`, { items: [item.content] });
+    return api.put(`/api/lists/${listId}/items/${endpoint}`, { items: [item.content] });
   },
 };

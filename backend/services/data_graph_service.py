@@ -41,10 +41,6 @@ KIND_CONTACT = 'contact'
 # joins generic data_graph recall + the turn-0 flashback) but ephemeral — it
 # decays over ~2 weeks so stale news fades on its own.
 KIND_DISCOVERY = 'discovery'
-# 'moment' is deliberately absent: moments are a dedicated user-curated store
-# (services/moments_service.py), not a data_graph kind. With it gone from
-# VALID_KINDS the store() guard below rejects any kind='moment' write — closing
-# the hole where any channel could write any kind.
 VALID_KINDS = frozenset({
     KIND_USER_SPECIFIC, KIND_SYSTEM, KIND_MISC,
     KIND_DOCUMENT, KIND_BEHAVIORAL_PATTERN, KIND_PLACE, KIND_CONTACT, KIND_DISCOVERY,

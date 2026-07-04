@@ -3,7 +3,7 @@
 // token, pairs it with this instance's own origin, and encodes the locked
 // PairingPayload as a scannable QR shown in a modal. The raw token is shown
 // ONCE (server never stores it) — re-minting issues a new one.
-import { ref, nextTick } from 'vue';
+import { nextTick, ref } from 'vue';
 import QRCode from 'qrcode';
 import type { PairingPayload } from '@chalie/shared';
 import { validatePairingPayload } from '@chalie/shared';
@@ -13,7 +13,7 @@ import { readBrainOrigin } from '../api/origin';
 import { useToast } from '../composables/useToast';
 import { apiErrorMessage } from '../api/http';
 import BrainModal from '../ui/BrainModal.vue';
-import { Smartphone, QrCode, X } from '@lucide/vue';
+import { QrCode, Smartphone, X } from '@lucide/vue';
 
 const { show: showToast } = useToast();
 
@@ -69,10 +69,9 @@ async function generate(): Promise<void> {
       <div class="export-card-icon"><QrCode :size="24" /></div>
       <div class="export-card-label">Pair the Chalie mobile app</div>
       <p class="form-hint">
-        Generates a one-time QR code that links your phone to this instance. It
-        encodes this instance's address and a fresh access token. The token is
-        shown <strong>once</strong> — re-generate to issue a new one (and revoke
-        the old device).
+        Generates a one-time QR code that links your phone to this instance. It encodes this
+        instance's address and a fresh access token. The token is shown <strong>once</strong> —
+        re-generate to issue a new one (and revoke the old device).
       </p>
       <button
         class="btn btn-primary"
@@ -94,8 +93,8 @@ async function generate(): Promise<void> {
     </div>
     <div class="pairing-modal-body">
       <p class="form-hint">
-        Open the Chalie app on your phone and scan this code. It expires once
-        used — re-generate to link another device.
+        Open the Chalie app on your phone and scan this code. It expires once used — re-generate to
+        link another device.
       </p>
       <canvas
         ref="qrCanvas"

@@ -25,7 +25,6 @@ from services.data_graph_service import get_data_graph_service
 from services.database_service import get_shared_db_service
 from services.episodic_service import EpisodicService
 from services.message_processor import MessageProcessor
-from services.transcript_service import Transcript
 
 pytestmark = pytest.mark.unit
 
@@ -34,10 +33,11 @@ pytestmark = pytest.mark.unit
 
 
 def _new_turn(text: str) -> MessageProcessor:
-    mp = object.__new__(MessageProcessor)
-    MessageProcessor.__init__(mp, text, {})
-    mp.config = UserConfig()
-    mp.uid = Transcript.write_input_row("user", "user", text)
+    """A fresh session-start turn on the real 'user' channel — the real
+    MessageProcessor constructor pre-allocates the turn/uid/anchor (see
+    MessageProcessor.__init__ / make_row_id), so this drives the real
+    production wiring rather than hand-rolling private fields."""
+    mp = MessageProcessor(UserConfig(), raw_input=text)
     mp.active_tools = list(mp.config.always_available or [])
     return mp
 

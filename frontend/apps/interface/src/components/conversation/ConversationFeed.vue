@@ -1,41 +1,46 @@
-<!-- Renders conversation forms, drives history pagination, manages autoscroll. -->
+<!-- Renders the conversation spine: EVERY turn inline as Weave avatar rows (its
+     rows through settle0), plus thread opener pills for forked turns. -->
 <script setup lang="ts">
-import { ref, watch, nextTick, onMounted, onBeforeUnmount } from 'vue';
-import { useConversationStore } from '../../stores/conversation';
-import type { ConversationForm, UserForm, ChalieForm, ActForm } from '../../stores/conversation';
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import { useConversationFeed } from '../../composables/useConversationFeed';
+import type { ConversationTurnBlock } from '../../api/conversation';
 import { useSessionStore } from '../../stores/session';
 import { useAutoscroll } from '../../composables/useAutoscroll';
-import UserBubble from './UserBubble.vue';
-import ChalieBubble from './ChalieBubble.vue';
-import ActCycle from './ActCycle.vue';
-import ActCycleGroup from './ActCycleGroup.vue';
+import TurnView from './TurnView.vue';
 
-const conversationStore = useConversationStore();
+const feed = useConversationFeed();
 const session = useSessionStore();
 
-// Consecutive superseded ACT cycles fold into one group; everything else
-// (including a live, non-collapsed act) renders on its own.
-type RenderRow =
-  | { type: 'single'; id: number; form: ConversationForm }
-  | { type: 'act-group'; id: number; forms: ActForm[] };
+const feedRef = ref<HTMLElement | null>(null);
+const { scrollToBottom, forceScrollToBottom } = useAutoscroll(feedRef);
 
-function groupRows(forms: ConversationForm[]): RenderRow[] {
-  const rows: RenderRow[] = [];
-  for (const form of forms) {
-    const last = rows[rows.length - 1];
-    if (form.kind === 'act' && form.collapsed) {
-      if (last?.type === 'act-group') last.forms.push(form);
-      else rows.push({ type: 'act-group', id: form.id, forms: [form] });
-    } else {
-      rows.push({ type: 'single', id: form.id, form });
-    }
-  }
-  return rows;
+type FeedEntry = {
+  block: ConversationTurnBlock;
+  isForked: boolean;
+};
+
+const feedEntries = computed<FeedEntry[]>(() =>
+  feed.sortedBlocks.value.map((block) => ({
+    block,
+    isForked: feed.isForkedThread(block.turn_id),
+  })),
+);
+
+/** Pill status drives its border and dot colour. */
+function pillStatus(block: ConversationTurnBlock): 'working' | 'done' | 'thread' | 'idle' {
+  const phase = feed.threadPhase(block.turn_id);
+  if (phase) return phase;
+  if (feed.isThreadActive(block.last_activity_at)) return 'thread';
+  return 'idle';
 }
 
-const feedRef = ref<HTMLElement | null>(null);
+function onPillClick(turnId: number): void {
+  session.openThreadPanel(turnId);
+}
 
-const { scrollToBottom, forceScrollToBottom } = useAutoscroll(feedRef);
+function onReply(turnId: number): void {
+  session.openThreadPanel(turnId);
+}
 
 // History pagination: on scroll within 150px of the top (and not already
 // loading/exhausted), anchor-preserve then paginate.
@@ -43,7 +48,7 @@ let _paginating = false;
 
 async function _onScrollPaginate(): Promise<void> {
   if (_paginating) return;
-  if (session.historyLoading || session.historyExhausted) return;
+  if (session.historyLoading || !feed.hasMore) return;
 
   const scrollable = document.documentElement.scrollHeight > window.innerHeight + 100;
   if (!scrollable) return;
@@ -51,11 +56,6 @@ async function _onScrollPaginate(): Promise<void> {
 
   _paginating = true;
   try {
-    // Anchor-preserve: capture height AND scrollY BEFORE the prepend.
-    // `prevScrollY` MUST be read before the await — Chromium scroll-anchoring
-    // (overflow-anchor, on by default) shifts scrollY once nodes land above the
-    // viewport, so reading it post-prepend would double-count the offset.
-    // Restoring to `prevScrollY + added` keeps the visible content fixed.
     const prevHeight = document.body.scrollHeight;
     const prevScrollY = window.scrollY;
     await session.loadRecentConversation();
@@ -69,28 +69,21 @@ async function _onScrollPaginate(): Promise<void> {
   }
 }
 
-// Deep watch (not count-only): narration/pill growth inside an in-flight ACT
-// form leaves forms.length unchanged, so a shallow watch would stop following
-// the trail mid-cycle. flush:'post' lets scrollToBottom measure settled height;
-// it's the GUARDED smooth variant that self-skips when the user has scrolled up.
-watch(() => conversationStore.forms, scrollToBottom, { deep: true, flush: 'post' });
+// Deep watch on sortedBlocks: narration/pill growth inside an in-flight turn
+// leaves the array length unchanged, so a shallow watch would stop following
+// the trail mid-cycle. flush:'post' lets scrollToBottom measure settled height.
+watch(() => feed.sortedBlocks.value, scrollToBottom, { deep: true, flush: 'post' });
 
 onMounted(async () => {
-  document.addEventListener('session:turn-done', forceScrollToBottom);
   document.addEventListener('session:history-initial-loaded', forceScrollToBottom);
 
-  // Initial history load — this is the ONLY trigger (App.vue does NOT call it).
   await session.loadRecentConversation();
 
-  // Wire the pagination listener ONLY AFTER the initial load: registering it
-  // earlier lets a short conversation (scrollY 0 < 150 during load) fire a
-  // pagination cascade on startup.
   window.addEventListener('scroll', _onScrollPaginate, { passive: true });
 });
 
 onBeforeUnmount(() => {
   window.removeEventListener('scroll', _onScrollPaginate);
-  document.removeEventListener('session:turn-done', forceScrollToBottom);
   document.removeEventListener('session:history-initial-loaded', forceScrollToBottom);
 });
 </script>
@@ -101,38 +94,34 @@ onBeforeUnmount(() => {
       <output class="history-loader__spinner" aria-label="Loading history" />
     </div>
 
-    <div v-if="session.historyExhausted" class="history-end-pill">
-      <span class="history-end-pill__label">End of working history</span>
+    <div v-if="!feed.hasMore" class="history-end-pill">
+      <span class="history-end-pill__label">End of thread history</span>
     </div>
 
-    <!-- Each turn shares one `.turn` wrapper so intra-turn spacing < inter-turn. -->
-    <div v-for="turn in conversationStore.turns" :key="turn.id" class="turn">
-      <template v-for="row in groupRows(turn.forms)" :key="row.id">
-        <ActCycleGroup
-          v-if="row.type === 'act-group'"
-          :forms="row.forms"
-        />
-        <template v-else>
-          <UserBubble
-            v-if="row.form.kind === 'user'"
-            :form="(row.form as UserForm)"
-          />
-          <ChalieBubble
-            v-else-if="row.form.kind === 'chalie'"
-            :form="(row.form as ChalieForm)"
-          />
-          <ActCycle
-            v-else-if="row.form.kind === 'act'"
-            :form="(row.form as ActForm)"
-          />
-        </template>
-      </template>
-    </div>
+    <template v-for="entry in feedEntries" :key="`i-${entry.block.turn_id}`">
+      <!-- The turn's rows through settle0 — always inline, never collapsed. -->
+      <TurnView :block="entry.block" @reply="onReply" />
+
+      <!-- Thread opener: a forked turn gets a Weave pill. -->
+      <div v-if="entry.isForked" class="feed-pill-row">
+        <button
+          class="thread-pill"
+          :class="`thread-pill--${pillStatus(entry.block)}`"
+          type="button"
+          @click="onPillClick(entry.block.turn_id)"
+        >
+          <span class="thread-pill__dot" aria-hidden="true" />
+          <span class="thread-pill__summary">{{
+            entry.block.gist || entry.block.preview || 'Conversation'
+          }}</span>
+          <span class="thread-pill__chevron" aria-hidden="true">›</span>
+        </button>
+      </div>
+    </template>
   </main>
 </template>
 
 <style scoped lang="scss">
-/* Loader + end-pill only; `.conversation-spine` layout is owned by interface.scss. */
 .history-loader {
   display: flex;
   justify-content: center;
@@ -145,13 +134,7 @@ onBeforeUnmount(() => {
   border: 2px solid color-mix(in oklab, var(--violet) 20%, transparent);
   border-top-color: var(--violet);
   border-radius: 50%;
-  animation: history-spin 0.7s linear infinite;
-}
-
-@keyframes history-spin {
-  to {
-    transform: rotate(360deg);
-  }
+  animation: spin 0.7s linear infinite;
 }
 
 .history-end-pill {
@@ -168,5 +151,93 @@ onBeforeUnmount(() => {
   border-radius: 20px;
   padding: 4px 14px;
   letter-spacing: 0.04em;
+}
+
+/* Thread pill — a collapsed fork off the conversation. */
+.feed-pill-row {
+  width: 100%;
+  max-width: var(--dock-width);
+  margin: 14px auto 0;
+  padding-left: calc(var(--avatar-size) + 18px);
+}
+
+.thread-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  max-width: 100%;
+  padding: 6px 11px;
+  border-radius: 11px;
+  background: var(--bg-surface-2);
+  border: 1px solid var(--border-strong);
+  cursor: pointer;
+  transition:
+    background var(--duration-fast) ease,
+    border-color var(--duration-fast) ease;
+}
+
+.thread-pill:hover {
+  background: color-mix(in oklab, var(--violet) 7%, var(--bg-surface-2));
+}
+
+.thread-pill:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+
+.thread-pill--working {
+  border-color: color-mix(in oklab, var(--status-main) 45%, transparent);
+}
+.thread-pill--done {
+  border-color: color-mix(in oklab, var(--cyan) 45%, transparent);
+}
+.thread-pill--thread {
+  border-color: color-mix(in oklab, var(--violet) 35%, transparent);
+}
+
+.thread-pill__summary {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 13px;
+  color: var(--text-tertiary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.thread-pill__chevron {
+  flex-shrink: 0;
+  font-size: 15px;
+  line-height: 1;
+  color: var(--text-primary);
+  opacity: 0.35;
+}
+
+.thread-pill__dot {
+  flex-shrink: 0;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+
+.thread-pill--working .thread-pill__dot {
+  background: var(--status-main);
+  box-shadow: 0 0 8px color-mix(in oklab, var(--status-main) 45%, transparent);
+  animation: pulseV 1.4s ease-in-out infinite;
+}
+
+.thread-pill--done .thread-pill__dot {
+  background: var(--cyan);
+  box-shadow: 0 0 8px color-mix(in oklab, var(--cyan) 45%, transparent);
+}
+
+.thread-pill--thread .thread-pill__dot {
+  background: var(--violet);
+  box-shadow: 0 0 8px color-mix(in oklab, var(--violet) 40%, transparent);
+}
+
+.thread-pill--idle .thread-pill__dot {
+  background: transparent;
+  border: 1.5px solid color-mix(in oklab, var(--text-primary) 30%, transparent);
 }
 </style>

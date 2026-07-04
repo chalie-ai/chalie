@@ -71,8 +71,14 @@ export const webPlatformAdapter: PlatformAdapter = {
     const requestLock = async () => {
       if (!('wakeLock' in navigator)) return;
       try {
-        sentinel = await (navigator as Navigator & { wakeLock: { request(type: string): Promise<WakeLockSentinel> } }).wakeLock.request('screen');
-        sentinel.addEventListener('release', () => { sentinel = null; });
+        sentinel = await (
+          navigator as Navigator & {
+            wakeLock: { request(type: string): Promise<WakeLockSentinel> };
+          }
+        ).wakeLock.request('screen');
+        sentinel.addEventListener('release', () => {
+          sentinel = null;
+        });
       } catch (err) {
         console.debug('[wakelock] request failed:', err);
       }
@@ -96,7 +102,11 @@ export const webPlatformAdapter: PlatformAdapter = {
         active = false;
         document.removeEventListener('visibilitychange', onVisibility);
         if (sentinel) {
-          try { await sentinel.release(); } catch { /* ignore */ }
+          try {
+            await sentinel.release();
+          } catch {
+            /* ignore */
+          }
           sentinel = null;
         }
       },

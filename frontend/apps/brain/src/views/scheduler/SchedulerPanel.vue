@@ -1,26 +1,27 @@
 <script setup lang="ts">
-import { ref, computed } from 'vue';
+import { computed, ref } from 'vue';
+import type { ScheduleInput, ScheduleItem } from '../../api/scheduler';
 import { scheduler } from '../../api/scheduler';
-import type { ScheduleItem, ScheduleInput } from '../../api/scheduler';
 import { formatDate } from '../../utils/format';
 import { apiErrorMessage } from '../../api/http';
 import { useToast } from '../../composables/useToast';
 import { useConfirm } from '../../composables/useConfirm';
 import { useBrainResource } from '../../composables/useBrainResource';
-import { Plus, ChevronLeft, Calendar } from '@lucide/vue';
+import { Calendar, ChevronLeft, Plus } from '@lucide/vue';
 
 const props = defineProps<{ statusFilter: 'all' | 'pending' | 'fired' | 'failed' | 'cancelled' }>();
 
 const { show: showToast } = useToast();
 const { confirm } = useConfirm();
 
-const { data: items, loading, reload: load } = useBrainResource(
-  async () => {
-    const data = await scheduler.list();
-    return data.schedules ?? data.items ?? [];
-  },
-  { initial: [] as ScheduleItem[], failMsg: 'Failed to load schedules' },
-);
+const {
+  data: items,
+  loading,
+  reload: load,
+} = useBrainResource(async () => await scheduler.list(), {
+  initial: [] as ScheduleItem[],
+  failMsg: 'Failed to load schedules',
+});
 
 const formMode = ref<'list' | 'form'>('list');
 const editingId = ref<string | number | null>(null);
@@ -30,17 +31,29 @@ const formType = ref<'notification' | 'prompt'>('notification');
 const formRecur = ref('');
 
 const filtered = computed<ScheduleItem[]>(() =>
-  props.statusFilter === 'all' ? items.value : items.value.filter((s) => s.status === props.statusFilter),
+  props.statusFilter === 'all'
+    ? items.value
+    : items.value.filter((s) => s.status === props.statusFilter),
 );
 
 function statusClass(status: string | null | undefined): string {
-  return ({ pending: 'badge-warning', fired: 'badge-success', failed: 'badge-danger', cancelled: 'badge-muted' } as Record<string, string>)[status ?? ''] ?? 'badge-muted';
+  return (
+    (
+      {
+        pending: 'badge-warning',
+        fired: 'badge-success',
+        failed: 'badge-danger',
+        cancelled: 'badge-muted',
+      } as Record<string, string>
+    )[status ?? ''] ?? 'badge-muted'
+  );
 }
 
 function openForm(item: ScheduleItem | null): void {
   formMsg.value = item?.message ?? item?.prompt ?? '';
   formDue.value = item?.due_at ? item.due_at.slice(0, 16) : '';
-  formType.value = item?.type === 'prompt' || item?.item_type === 'prompt' ? 'prompt' : 'notification';
+  formType.value =
+    item?.type === 'prompt' || item?.item_type === 'prompt' ? 'prompt' : 'notification';
   formRecur.value = item?.recurrence ?? '';
   editingId.value = item?.id ?? null;
   formMode.value = 'form';
@@ -116,7 +129,7 @@ async function cancelSchedule(s: ScheduleItem): Promise<void> {
       </div>
       <div class="form-group">
         <label for="schedDue">Due Date &amp; Time</label>
-        <input id="schedDue" v-model="formDue" type="datetime-local" required>
+        <input id="schedDue" v-model="formDue" type="datetime-local" required />
       </div>
       <div class="form-group">
         <label for="schedType">Type</label>
@@ -166,13 +179,23 @@ async function cancelSchedule(s: ScheduleItem): Promise<void> {
     <tbody>
       <tr v-for="s in filtered" :key="s.id">
         <td class="key-cell">{{ s.message || s.prompt || '' }}</td>
-        <td><span class="badge" :class="statusClass(s.status)">{{ s.status || '' }}</span></td>
+        <td>
+          <span class="badge" :class="statusClass(s.status)">{{ s.status || '' }}</span>
+        </td>
         <td>{{ formatDate(s.due_at || s.due) }}</td>
         <td>{{ s.recurrence || '—' }}</td>
-        <td><span class="badge badge-muted">{{ s.type || 'notification' }}</span></td>
+        <td>
+          <span class="badge badge-muted">{{ s.type || 'notification' }}</span>
+        </td>
         <td class="row-actions">
           <button class="btn btn-sm btn-secondary" @click="openForm(s)">Edit</button>
-          <button v-if="s.status === 'pending'" class="btn btn-sm btn-danger" @click="cancelSchedule(s)">Cancel</button>
+          <button
+            v-if="s.status === 'pending'"
+            class="btn btn-sm btn-danger"
+            @click="cancelSchedule(s)"
+          >
+            Cancel
+          </button>
         </td>
       </tr>
     </tbody>

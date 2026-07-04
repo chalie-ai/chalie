@@ -6,9 +6,9 @@ from typing import cast
 import yaml
 
 from capabilities.base import AbstractCapability
-from services.file_mapper_service import FileMapperService
 from capabilities.home_capability import ha_rest_handler as rest
 from capabilities.home_capability.ha_ws_handler import HaWebSocketHandler
+from services.file_mapper_service import FileMapperService
 
 logger = logging.getLogger(__name__)
 

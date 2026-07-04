@@ -53,8 +53,7 @@ function initials(contact: Contact): string {
   const parts: string[] = fn.trim().split(/\s+/);
   if (parts.length >= 2) {
     return (
-      (parts[0] as string).charAt(0) +
-      (parts[parts.length - 1] as string).charAt(0)
+      (parts[0] as string).charAt(0) + (parts[parts.length - 1] as string).charAt(0)
     ).toUpperCase();
   }
   return fn.charAt(0).toUpperCase() || '?';
@@ -132,20 +131,12 @@ const listContacts = computed<Contact[]>(() => {
   </div>
 
   <div v-else-if="listContacts.length > 0" class="rich-card ct ct--list">
-    <div
-      v-for="(c, idx) in listContacts"
-      :key="c.uid ?? c.fn ?? c.name ?? idx"
-      class="ct__row"
-    >
+    <div v-for="(c, idx) in listContacts" :key="c.uid ?? c.fn ?? c.name ?? idx" class="ct__row">
       <div class="ct__avatar ct__avatar--sm">{{ initials(c) }}</div>
 
       <span class="ct__row-name">{{ c.fn ?? c.name ?? '' }}</span>
 
-      <a
-        v-if="primaryValue(c.phones)"
-        class="ct__field"
-        :href="`tel:${primaryValue(c.phones)}`"
-      >
+      <a v-if="primaryValue(c.phones)" class="ct__field" :href="`tel:${primaryValue(c.phones)}`">
         <Phone :size="11" />
         <span>{{ primaryValue(c.phones) }}</span>
       </a>

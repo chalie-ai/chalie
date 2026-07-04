@@ -21,7 +21,6 @@ from abilities.mcp_manager import _classify_sync_error
 from configs.channels import UserConfig
 from services.file_mapper_service import FileMapperService
 from services.mcp_client_service import McpClientService
-
 from tests._tool_result_harness import head as _harness_head
 from tests._tool_result_harness import parse_body, seed_transcript
 

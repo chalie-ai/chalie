@@ -7,9 +7,11 @@ export type {
   WsPushEvent,
   WsPushType,
   WsMessageEvent,
-  ChatCallbacks,
+  WsTurnExecutionEvent,
+  TurnExecutionState,
   ActionCallbacks,
 } from './services/WebSocketService';
+export { ConfigType } from './config/configType';
 export { getHost, setHost, getToken, setToken, getUsername, setUsername } from './config/host';
 export type { PairingPayload } from './config/pairing';
 export { validatePairingPayload } from './config/pairing';

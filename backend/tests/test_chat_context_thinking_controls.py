@@ -58,7 +58,7 @@ class TestContextUsageEndpoint:
                  tokens_input=2412, tokens_output=88, latency_ms=10,
                  usage_class='chat')
 
-        resp = cast("FlaskClient", client).get('/system/context-usage')
+        resp = cast("FlaskClient", client).get('/api/system/context-usage')
         assert resp.status_code == 200
         data = cast(dict[str, object], resp.get_json())
         assert data['last_request_tokens'] == 2412
@@ -89,7 +89,7 @@ class TestContextUsageEndpoint:
         log_call('delegate:web_search:web_search', 'ollama', 'llama3',
                  tokens_input=2240, tokens_output=15, latency_ms=8, usage_class='chat')
 
-        data = cast(dict[str, object], cast("FlaskClient", client).get('/system/context-usage').get_json())
+        data = cast(dict[str, object], cast("FlaskClient", client).get('/api/system/context-usage').get_json())
         # Pinned to the user turn — NOT the newest (delegate) chat-class row.
         assert data['last_request_tokens'] == 17240
 
@@ -112,7 +112,7 @@ class TestContextUsageEndpoint:
     def test_nulls_when_no_calls_or_provider(self, authed_client: tuple[object, sqlite3.Connection, object]) -> None:
         """Empty DB → both fields null; endpoint never raises."""
         client, _db, _ = authed_client
-        data = cast(dict[str, object], cast("FlaskClient", client).get('/system/context-usage').get_json())
+        data = cast(dict[str, object], cast("FlaskClient", client).get('/api/system/context-usage').get_json())
         assert data == {'last_request_tokens': None, 'context_window': None}
 
 
@@ -178,11 +178,7 @@ class TestThinkingGateBypass:
         from services.message_processor import MessageProcessor
         from configs.channels import UserConfig
 
-        mp = object.__new__(MessageProcessor)
-        MessageProcessor.__init__(mp, "hi", None)
-        mp.config = UserConfig()          # channel='user' → gate runs
-        mp.uid = None
-        mp._uid = None
+        mp = MessageProcessor(UserConfig(), raw_input="hi")  # channel='user' → gate runs
         mp.thinking_override = 'high'
         mp.thinking_level = '__SENTINEL__'
 
@@ -194,7 +190,7 @@ class TestThinkingGateBypass:
         """Sanity: a fresh MP defaults thinking_override to None so the gate path
         is unchanged when the user has not set an override."""
         from services.message_processor import MessageProcessor
+        from configs.channels import UserConfig
 
-        mp = object.__new__(MessageProcessor)
-        MessageProcessor.__init__(mp, "hi", None)
+        mp = MessageProcessor(UserConfig(), raw_input="hi")
         assert mp.thinking_override is None

@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { expect, test } from '@playwright/test';
 
 // Real production pairing path: the Brain mints a wrapper token against the
 // LIVE POST /api/wrappers (cookie-authed, no mocks), reads its OWN served

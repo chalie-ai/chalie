@@ -20,7 +20,6 @@ import pytest
 from abilities._dispatcher import ToolDispatcher
 from configs.channels import UserConfig
 from services.act_trail import ActTrail
-
 from tests._tool_result_harness import allow_policy, parse_body, seed_transcript
 
 pytestmark = pytest.mark.unit

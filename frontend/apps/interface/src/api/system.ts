@@ -35,7 +35,7 @@ const NO_REDIRECT = { redirectOnAuthError: false } as const;
 export const system = {
   /** GET /auth/status — readiness probe used by the auth gate in main.ts. */
   authStatus(): Promise<AuthStatus> {
-    return api.get('/auth/status', NO_REDIRECT);
+    return api.get('/api/auth/status', NO_REDIRECT);
   },
 
   /**
@@ -57,12 +57,12 @@ export const system = {
 
   /** GET /system/context-usage — last request token count + context window. */
   contextUsage(): Promise<ContextUsage> {
-    return api.get('/system/context-usage');
+    return api.get('/api/system/context-usage');
   },
 
   /** GET /system/settings/thinking_level_override */
   thinkingLevel(): Promise<{ key: string; value: string | null }> {
-    return api.get('/system/settings/thinking_level_override');
+    return api.get('/api/system/settings/thinking_level_override');
   },
 
   /**
@@ -70,11 +70,11 @@ export const system = {
    * the row (reverts to auto).
    */
   setThinkingLevel(value: string): Promise<Record<string, unknown>> {
-    return api.put('/system/settings/thinking_level_override', { value });
+    return api.put('/api/system/settings/thinking_level_override', { value });
   },
 
   /** POST /system/update/apply — apply an in-place installer update. */
   updateApply(tag: string): Promise<UpdateApplyResult> {
-    return api.post('/system/update/apply', { tag });
+    return api.post('/api/system/update/apply', { tag });
   },
 };

@@ -7,6 +7,7 @@
 #     http://www.apache.org/licenses/LICENSE-2.0
 
 import pytest
+
 from abilities._dispatcher import ToolDispatcher
 from abilities._registry import AbilityRegistry
 
@@ -22,7 +23,6 @@ class _Cfg:
 class _MP:
     config = _Cfg()
     uid = None
-    cancel_event = None
 
 
 def test_dispatch_unknown_tool_is_graceful_not_keyerror() -> None:

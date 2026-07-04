@@ -7,7 +7,6 @@ import sqlite3
 import threading
 from typing import Optional, cast
 
-
 from services.database_service import DatabaseService, get_shared_db_service
 from services.embedding_utils import pack_embedding
 

@@ -11,8 +11,23 @@ logger = logging.getLogger(__name__)
 
 class SettingsService:
 
+    # Well-known non-sensitive setting keys — single source for the cross-layer
+    # consumers (REST CORS, the TLS serving path, and the session-cookie Secure flag).
+    SSL_ENABLED = "ssl_enabled"
+    DEPLOYMENT_DOMAIN = "deployment_domain"
+    _BOOL_TRUE = "true"
+    _BOOL_FALSE = "false"
+
     def __init__(self, database_service: DatabaseService) -> None:
         self.db = database_service
+
+    def get_bool(self, key: str) -> bool:
+        """Read a boolean setting — True only for the stored literal ``'true'``."""
+        return self.get(key) == self._BOOL_TRUE
+
+    def set_bool(self, key: str, value: bool) -> None:
+        """Persist a boolean setting as ``'true'``/``'false'`` (non-sensitive plain text)."""
+        self.set(key, self._BOOL_TRUE if value else self._BOOL_FALSE, "boolean")
 
     def get(self, key: str) -> Optional[str]:
         """Sensitive settings are decrypted via the VaultService (AES-256-GCM).

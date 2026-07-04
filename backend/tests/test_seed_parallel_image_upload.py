@@ -16,7 +16,6 @@ from services.document_service import DocumentService
 from services.message_processor import MessageProcessor
 from services.provider_db_service import ProviderDbService
 from services.tmp_storage import new_tmp_path
-from services.transcript_service import Transcript
 
 pytestmark = pytest.mark.unit
 
@@ -50,12 +49,12 @@ def _write_attachment(label: str) -> str:
 
 
 def _build_parent(attachments: "list[str]") -> MessageProcessor:
-    parent = object.__new__(MessageProcessor)
-    MessageProcessor.__init__(parent, "Here are some files.", {"attachments": attachments})
-    parent.config = UserConfig()
-    parent.uid = Transcript.write_input_row("user", "user", "Here are some files.")
-    parent.active_tools = list(parent.config.always_available or [])
-    return parent
+    """Build the REAL MessageProcessor via its actual constructor (config first,
+    per the current signature) so ``self.ts``/``self.uid``/``self.turn_id`` are
+    populated exactly as production does — no private-field poking."""
+    return MessageProcessor(
+        UserConfig(), -1, "Here are some files.", {"attachments": attachments},
+    )
 
 
 def test_seed_uploads_all_attachments_in_parallel(db: object) -> None:

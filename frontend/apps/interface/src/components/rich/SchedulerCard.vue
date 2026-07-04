@@ -35,7 +35,20 @@ const props = defineProps<{
 }>();
 
 const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'] as const;
-const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'] as const;
+const MONTHS = [
+  'Jan',
+  'Feb',
+  'Mar',
+  'Apr',
+  'May',
+  'Jun',
+  'Jul',
+  'Aug',
+  'Sep',
+  'Oct',
+  'Nov',
+  'Dec',
+] as const;
 
 function parseDueAt(dueAtStr: string | null | undefined): Date | null {
   if (!dueAtStr) return null;
@@ -91,16 +104,11 @@ const sameDay = computed(() =>
 
     <div v-if="sameDay.length > 0" class="scheduler-card__same-day">
       <div class="scheduler-card__same-day-label">Also on this day · {{ sameDay.length }}</div>
-      <div
-        v-for="item in sameDay"
-        :key="item.id"
-        class="scheduler-card__same-day-item"
-      >
+      <div v-for="item in sameDay" :key="item.id" class="scheduler-card__same-day-item">
         <span class="scheduler-card__same-day-text">{{ item.message || '' }}</span>
-        <span
-          v-if="parseDueAt(item.due_at)"
-          class="scheduler-card__same-day-time"
-        >{{ formatTime(parseDueAt(item.due_at)!) }}</span>
+        <span v-if="parseDueAt(item.due_at)" class="scheduler-card__same-day-time">{{
+          formatTime(parseDueAt(item.due_at)!)
+        }}</span>
       </div>
     </div>
   </div>

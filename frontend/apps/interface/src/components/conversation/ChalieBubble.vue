@@ -1,97 +1,72 @@
 <script setup lang="ts">
-import { ref, computed } from 'vue';
-import type { ChalieForm } from '../../stores/conversation';
-import { chalieFormPlaintext, useConversationStore } from '../../stores/conversation';
+import { computed } from 'vue';
+import type { ConversationMessage } from '../../api/conversation';
+import { messagePlaintext } from '../../utils/speech';
+import { useConversationFeed } from '../../composables/useConversationFeed';
 import { renderMarkup } from '../../composables/useMarkup';
-import { emit } from '../../composables/useEventBus';
-import { Star, Volume2 } from '@lucide/vue';
+import { emit as busEmit } from '../../composables/useEventBus';
+import { Reply, Volume2 } from '@lucide/vue';
 import SegmentRenderer from './SegmentRenderer.vue';
 
-const conversationStore = useConversationStore();
+const feed = useConversationFeed();
 
-const props = defineProps<{ form: ChalieForm }>();
+const props = withDefaults(
+  defineProps<{ message: ConversationMessage; isLast?: boolean; canReply?: boolean }>(),
+  { isLast: false, canReply: false },
+);
 
-// Prevents double-fire of the remember click.
-const pinned = ref(false);
-// Glow lands AFTER the 150ms delay (button disables immediately, --active later).
-const pinActive = ref(false);
+const emit = defineEmits<{ reply: [] }>();
 
-const MODE_LABELS: Record<string, string> = {
-  ACT: 'acting',
-  CLARIFY: 'clarifying',
-  ACKNOWLEDGE: 'noting',
-};
+const speakText = computed(() => messagePlaintext(props.message));
 
-const modeBadgeLabel = computed(() => MODE_LABELS[props.form.meta.mode ?? ''] ?? '');
-
-const speakText = computed(() => chalieFormPlaintext(props.form));
-
-// Remember/speak controls live only on the turn's LAST Chalie row — a turn may
-// span several assistant rows, and the controls act on the whole turn.
-const isLastInTurn = computed(() => conversationStore.isLastChalieInTurn(props.form.id));
-
-function onRemember(): void {
-  if (pinned.value) return;
-  pinned.value = true;
-  setTimeout(() => {
-    emit('chalie:pin-moment', { content: conversationStore.turnSpeechText(props.form.id) });
-    pinActive.value = true;
-  }, 150);
-}
-
-// Speak plays the WHOLE turn (every Chalie row), not just this row.
+// Speak plays the WHOLE turn (every assistant row), not just this row.
 function onSpeak(): void {
-  emit('chalie:speak-message', { text: conversationStore.turnSpeechText(props.form.id) });
+  if (props.message.turn_id == null) return;
+  busEmit('chalie:speak-message', { text: feed.turnSpeechText(props.message.turn_id) });
 }
 </script>
 
 <template>
   <div
     class="speech-form speech-form--chalie"
-    :class="{
-      'speech-form--escalation': form.escalation,
-      'message--faded': form.inWorkingMemory === false,
-    }"
+    :data-transcript-row-id="message.id"
+    :data-speech="speakText"
   >
     <SegmentRenderer
-      v-if="form.meta.segments && form.meta.segments.length"
-      :segments="form.meta.segments"
+      v-if="message.segments && message.segments.length"
+      :segments="message.segments"
     />
     <div
       v-else
       class="speech-form__text chalie-markup"
-      v-html="renderMarkup(form.text ?? '')"
+      v-html="renderMarkup(message.content ?? '')"
     />
 
-    <!-- Footer lives only on the turn's LAST Chalie row; interim rows carry no meta. -->
-    <div v-if="isLastInTurn" class="speech-form__meta">
-      <span class="sender-glyph" aria-hidden="true"></span>
-      <span class="speech-form__timestamp">{{ form.meta.ts ?? '' }}</span>
+    <!-- Footer lives only on the turn's LAST assistant row. -->
+    <div v-if="isLast" class="speech-form__meta">
+      <span class="speech-form__timestamp">{{ message.timestamp }}</span>
 
-      <span v-if="modeBadgeLabel" class="meta-mode-badge">{{ modeBadgeLabel }}</span>
+      <span class="speech-form__meta-spacer"></span>
 
-      <div class="speech-form__actions">
-        <button
-          class="speech-form__remember-btn"
-          :class="{ 'speech-form__remember-btn--active': pinActive }"
-          aria-label="Remember this"
-          type="button"
-          :disabled="pinned"
-          @click="onRemember"
-        >
-          <Star :size="14" />
-        </button>
+      <button
+        v-if="speakText"
+        class="speech-form__act-btn speech-form__act-btn--speak"
+        aria-label="Read this message aloud"
+        type="button"
+        @click="onSpeak"
+      >
+        <Volume2 :size="16" />
+      </button>
 
-        <button
-          v-if="speakText"
-          class="speech-form__speak-btn"
-          aria-label="Listen to this message"
-          type="button"
-          @click="onSpeak"
-        >
-          <Volume2 :size="14" />
-        </button>
-      </div>
+      <button
+        v-if="canReply"
+        class="speech-form__act-btn speech-form__act-btn--reply"
+        aria-label="Reply in a thread"
+        type="button"
+        @click="emit('reply')"
+      >
+        <Reply :size="16" />
+      </button>
     </div>
   </div>
 </template>
@@ -129,7 +104,7 @@ function onSpeak(): void {
 
 .chalie-code,
 .chalie-markup code {
-  font-family: 'JetBrains Mono', 'Fira Code', ui-monospace, 'SF Mono', Menlo, monospace;
+  font-family: var(--font-mono);
   font-size: 0.875em;
   background: color-mix(in oklab, var(--text-primary) 8%, transparent);
   padding: 0.1em 0.35em;

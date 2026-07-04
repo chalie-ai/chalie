@@ -6,7 +6,7 @@
 #
 #     http://www.apache.org/licenses/LICENSE-2.0
 
-"""Feature test for the PostTurnHook failure-isolation contract (§4.8).
+"""Feature test for the PostTurnHook failure-isolation contract.
 
 Drives the real production after-turn path — ``MessageProcessor._end_turn`` —
 against the real test database with the real production hook
@@ -67,11 +67,7 @@ def _config_with_hooks(hooks: tuple[PostTurnHook, ...]) -> StubProcessorConfig:
 def _make_processor(hooks: tuple[PostTurnHook, ...]) -> "_MP":
     from services.message_processor import MessageProcessor
 
-    mp = object.__new__(MessageProcessor)
-    MessageProcessor.__init__(mp, "raw input")
-    mp.config = _config_with_hooks(hooks)
-    mp.uid = None
-    return mp
+    return MessageProcessor(_config_with_hooks(hooks), raw_input="raw input")
 
 
 _SUMMARY_JSON = '{"short": "Alice, a runner", "long": "Alice is a long-distance runner in Berlin."}'
@@ -88,7 +84,7 @@ def _read_summary(db: sqlite3.Connection) -> dict[str, object]:
 
 def test_exploding_sibling_does_not_block_real_hook(db: sqlite3.Connection) -> None:
     """A saboteur hook raising first must not stop PersistUserSummaryHook from
-    writing both user_summary rows to data_graph (§4.8 failure isolation)."""
+    writing both user_summary rows to data_graph (failure isolation)."""
     saboteur = _ExplodingHook()
     mp = _make_processor((saboteur, PersistUserSummaryHook()))
 

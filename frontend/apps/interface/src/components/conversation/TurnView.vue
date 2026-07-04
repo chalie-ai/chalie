@@ -1,0 +1,234 @@
+<!-- Renders a turn block as Weave avatar rows: a 32px avatar gutter that
+     shows on speaker change, then the message body. Shared by the main feed
+     (inline turns) and the thread panel so both keep identical row rhythm. -->
+<script setup lang="ts">
+import { computed } from 'vue';
+import { User } from '@lucide/vue';
+import { ConfigType } from '@chalie/shared';
+import type { ConversationMessage, ConversationTurnBlock } from '../../api/conversation';
+import type { LiveToolPill } from '../../composables/useConversationFeed';
+import { useConversationFeed } from '../../composables/useConversationFeed';
+import UserBubble from './UserBubble.vue';
+import ChalieBubble from './ChalieBubble.vue';
+import ActCycle from './ActCycle.vue';
+import ActCycleGroup from './ActCycleGroup.vue';
+
+const props = withDefaults(
+  defineProps<{ block: ConversationTurnBlock; canReply?: boolean; type?: string }>(),
+  { canReply: true, type: ConfigType.USER },
+);
+
+const emit = defineEmits<{ reply: [turnId: number] }>();
+
+const feed = computed(() => useConversationFeed(props.type));
+
+// The live act-trail is derived from WS signals (spec §6.5). While the turn
+// works, append one transient non-collapsed ActRow per in-flight transcript row
+// carrying its tool_called→tool_done pills. Before the first pill lands, a bare
+// anchor renders the "thinking…" placeholder.
+interface LiveActRow {
+  kind: 'live-act';
+  rowId: number;
+  pills: LiveToolPill[];
+}
+
+interface MsgRow {
+  kind: 'msg';
+  message: ConversationMessage;
+}
+
+interface CollapsedGroupRow {
+  kind: 'collapsed-group';
+  id: string;
+  summaries: { tool_name: string; summary: string }[];
+}
+
+type DisplayRow = MsgRow | LiveActRow | CollapsedGroupRow;
+
+const displayRows = computed<DisplayRow[]>(() => {
+  const rows: DisplayRow[] = [];
+
+  for (const message of props.block.messages) {
+    // Spine only renders through settle0 — drop thread reply rows.
+    if (message.thread_message) continue;
+
+    rows.push({ kind: 'msg', message });
+
+    // Collapsed tool group immediately after its assistant row.
+    if (message.role === 'assistant' && message.tool_calls?.length) {
+      rows.push({
+        kind: 'collapsed-group',
+        id: message.id,
+        summaries: message.tool_calls,
+      });
+    }
+  }
+
+  // Live trails: appended at the tail while the turn is working.
+  if (props.block.working) {
+    const trails = feed.value.liveTrailsFor(props.block.turn_id);
+    if (trails.length) {
+      for (const t of trails) {
+        rows.push({ kind: 'live-act', rowId: t.rowId, pills: t.pills });
+      }
+    } else {
+      rows.push({ kind: 'live-act', rowId: -1, pills: [] });
+    }
+  }
+
+  return rows;
+});
+
+// Footer controls (timestamp/speak/reply) live once, on the LAST assistant
+// message of the rendered set.
+const lastAssistantMsgId = computed<string | null>(() => {
+  for (let i = props.block.messages.length - 1; i >= 0; i--) {
+    const m = props.block.messages[i];
+    if (m.role === 'assistant' && !m.thread_message) return m.id;
+  }
+  return null;
+});
+
+// Avatar-role grouping for the Weave rhythm.
+type AvatarRole = 'user' | 'chalie';
+
+interface AvatarRow {
+  key: string;
+  role: AvatarRole;
+  showAvatar: boolean;
+  row: DisplayRow;
+}
+
+/** Key for a non-message row — collapsed tool group or live act-trail anchor. */
+function nonMsgKey(row: LiveActRow | CollapsedGroupRow): string {
+  return row.kind === 'collapsed-group' ? `cg-${row.id}` : `live-${row.rowId}`;
+}
+
+const avatarRows = computed<AvatarRow[]>(() => {
+  let prevRole: AvatarRole | null = null;
+  return displayRows.value.map((row) => {
+    const role: AvatarRole = row.kind === 'msg' && row.message.role === 'user' ? 'user' : 'chalie';
+    const key = row.kind === 'msg' ? `msg-${row.message.id}` : nonMsgKey(row);
+    const ar: AvatarRow = { key, role, showAvatar: role !== prevRole, row };
+    prevRole = role;
+    return ar;
+  });
+});
+
+function onReply(): void {
+  emit('reply', props.block.turn_id);
+}
+</script>
+
+<template>
+  <div class="turn-view" :data-turn-id="block.turn_id" :data-type="type">
+    <div
+      v-for="ar in avatarRows"
+      :key="ar.key"
+      class="msg-row"
+      :class="[`msg-row--${ar.role}`, ar.showAvatar ? 'msg-row--lead' : 'msg-row--cont']"
+    >
+      <div class="msg-row__gutter" aria-hidden="true">
+        <span v-if="ar.showAvatar && ar.role === 'chalie'" class="msg-avatar msg-avatar--chalie">
+          <img src="/icons/icon.png" alt="" />
+        </span>
+        <span v-else-if="ar.showAvatar" class="msg-avatar msg-avatar--user">
+          <User :size="15" />
+        </span>
+      </div>
+
+      <div class="msg-row__body">
+        <!-- Collapsed tool-call group -->
+        <ActCycleGroup
+          v-if="ar.row.kind === 'collapsed-group'"
+          :summaries="(ar.row as CollapsedGroupRow).summaries"
+        />
+
+        <!-- Live act-trail anchor -->
+        <ActCycle
+          v-else-if="ar.row.kind === 'live-act'"
+          :pills="(ar.row as LiveActRow).pills"
+          :turn-id="block.turn_id"
+          :type="type"
+        />
+
+        <!-- Message rows -->
+        <template v-else>
+          <UserBubble
+            v-if="(ar.row as MsgRow).message.role === 'user'"
+            :message="(ar.row as MsgRow).message"
+          />
+          <ChalieBubble
+            v-else
+            :message="(ar.row as MsgRow).message"
+            :is-last="(ar.row as MsgRow).message.id === lastAssistantMsgId"
+            :can-reply="canReply"
+            :data-transcript-row-id="(ar.row as MsgRow).message.id"
+            @reply="onReply"
+          />
+        </template>
+      </div>
+    </div>
+  </div>
+</template>
+
+<style scoped lang="scss">
+.turn-view {
+  display: flex;
+  flex-direction: column;
+}
+
+/* Weave message row: centred at the dock width, 32px avatar gutter + 18px gap.
+   Speaker-change rhythm — new speaker 30px, same-speaker continuation 6px. */
+.msg-row {
+  display: flex;
+  gap: 18px;
+  width: 100%;
+  max-width: var(--dock-width);
+  margin-inline: auto;
+}
+
+.msg-row--lead {
+  margin-top: 30px;
+}
+.msg-row--cont {
+  margin-top: 6px;
+}
+
+.msg-row__gutter {
+  width: var(--avatar-size);
+  flex-shrink: 0;
+  display: flex;
+  justify-content: center;
+  padding-top: 1px;
+}
+
+.msg-row__body {
+  flex: 1;
+  min-width: 0;
+}
+
+.msg-avatar {
+  width: var(--avatar-size);
+  height: var(--avatar-size);
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+}
+
+// Chalie's mark is the bare gradient logo — no badge, no glow, no clip.
+.msg-avatar--chalie img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+// Only the generic person avatar is a clipped circular badge.
+.msg-avatar--user {
+  border-radius: 50%;
+  overflow: hidden;
+  background: var(--bg-surface-2);
+  border: 1px solid var(--border-strong);
+  color: var(--text-secondary);
+}
+</style>

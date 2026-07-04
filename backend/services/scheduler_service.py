@@ -28,21 +28,10 @@ logger = logging.getLogger(__name__)
 LOG_PREFIX = "[SCHEDULER]"
 _POLL_INTERVAL = 60  # seconds
 
-# Stage-2 origin label for the return hop onto the user channel.
-_SCHEDULED_SOURCE = "scheduled"
-
-# Daemon-thread name prefix for the asynchronous two-stage fire. The poll loop
-# must never block on the LLM work, so a fired prompt runs on its own thread
-# named ``scheduled-work-<item_id>``.
+# Daemon-thread name prefix for the asynchronous fire. The poll loop must never
+# block on the LLM work, so a fired prompt runs on its own thread named
+# ``scheduled-work-<item_id>``.
 _SCHEDULED_WORK_THREAD_PREFIX = "scheduled-work"
-
-# How a fired scheduled prompt's worked result is framed when it is handed to
-# the user-facing turn that actually surfaces (Stage 2). The placeholder is
-# filled with the work loop's synthesis.
-_SCHEDULED_DELIVERY_TEMPLATE = (
-    "A scheduled task just ran in the background. Relay its result to me now, "
-    "in your own voice:\n\n{result}"
-)
 
 # System handler registry — capabilities register callbacks for item_type='system'
 _SYSTEM_HANDLERS: dict[str, Callable[..., object]] = {}
@@ -138,7 +127,7 @@ def _poll_and_fire() -> None:
             cursor = conn.cursor()
             cursor.execute("""
                 SELECT id, item_type, message, due_at, recurrence,
-                       window_start, window_end, channel, created_by_session, group_id,
+                       turn_id, channel, created_by_session, group_id,
                        is_prompt, metadata
                 FROM scheduled_items
                 WHERE status = 'pending' AND due_at <= ? AND item_type NOT IN ('event') AND COALESCE(hidden, 0) = 0
@@ -149,7 +138,7 @@ def _poll_and_fire() -> None:
 
             cols = [
                 "id", "item_type", "message", "due_at", "recurrence",
-                "window_start", "window_end", "channel", "created_by_session", "group_id",
+                "turn_id", "channel", "created_by_session", "group_id",
                 "is_prompt", "metadata"
             ]
 
@@ -166,15 +155,11 @@ def _poll_and_fire() -> None:
                     if not current or current[0] != "pending":
                         continue
 
-                    # Skip execution during quiet hours or weekends (for weekday schedules)
-                    skip = _in_quiet_hours(item)
-                    if item["recurrence"] == "weekdays":
-                        from services.locale_service import local_now
-                        if local_now().weekday() >= 5:
-                            skip = True
-
+                    # Weekday schedules don't fire on weekends.
+                    from services.locale_service import local_now
+                    skip = item["recurrence"] == "weekdays" and local_now().weekday() >= 5
                     if skip:
-                        logger.debug(f"{LOG_PREFIX} Skipping {item['id']} — quiet hours / weekend")
+                        logger.debug(f"{LOG_PREFIX} Skipping {item['id']} — weekend")
                     else:
                         _fire_item(item)
                     cursor.execute(
@@ -189,13 +174,13 @@ def _poll_and_fire() -> None:
                         cursor.execute("""
                             INSERT INTO scheduled_items
                               (id, item_type, message, due_at, recurrence,
-                               window_start, window_end, status, channel,
+                               turn_id, status, channel,
                                created_by_session, created_at, group_id, is_prompt)
-                            VALUES (?,?,?,?,?,?,?,'pending',?,?,?,?,?)
+                            VALUES (?,?,?,?,?,?,'pending',?,?,?,?,?)
                         """, (
                             next_id, item["item_type"], item["message"],
                             next_due.isoformat(),
-                            item["recurrence"], item.get("window_start"), item.get("window_end"),
+                            item["recurrence"], item.get("turn_id"),
                             item.get("channel"), item.get("created_by_session"),
                             now_iso, item.get("group_id") or item["id"],
                             1 if item.get("is_prompt") else 0,
@@ -333,15 +318,18 @@ def _fire_item(item: dict[str, object]) -> None:
         if not message or not message.strip():
             logger.warning(f"{LOG_PREFIX} Skipping prompt item '{item.get('id', '?')}' — empty message")
             return
-        # Fire asynchronously: the two-stage work runs the full LLM ACT loop and
-        # must NOT execute on the scheduler poll thread, which is mid-transaction
-        # claiming/marking items. A nested write commit on the shared thread-local
-        # connection would flush the in-progress 'fired' UPDATE and break the
-        # claim atomicity, and the poll lock would be held for the whole loop.
+        # Fire asynchronously: the full LLM ACT loop must NOT execute on the
+        # scheduler poll thread, which is mid-transaction claiming/marking items.
+        # A nested write commit on the shared thread-local connection would flush
+        # the in-progress 'fired' UPDATE and break the claim atomicity, and the
+        # poll lock would be held for the whole loop. The work opens (or reuses,
+        # for a recurring series) the schedule's own thread on the ``schedule``
+        # channel, keyed by ``group_key``.
         item_id = cast(str, item.get('id', 'unknown'))
+        group_key = cast(str, item.get("group_id") or item["id"])
         threading.Thread(
             target=_fire_scheduled_prompt,
-            args=(item_id, message),
+            args=(item_id, message, group_key, item.get("turn_id")),
             daemon=True,
             name=f"{_SCHEDULED_WORK_THREAD_PREFIX}-{item_id}",
         ).start()
@@ -357,65 +345,86 @@ def _fire_item(item: dict[str, object]) -> None:
         logger.info(f"{LOG_PREFIX} Fired {source} (direct) '{item.get('id')}': {message[:80]}")
 
 
-def _run_scheduled_work_loop(message: str) -> str:
-    """Stage 1 — run the scheduled instruction on its own muted channel.
+def _fire_scheduled_prompt(
+    item_id: str, message: str, group_key: str, turn_id: "int | None",
+) -> None:
+    """Run a fired scheduled prompt as its own thread on the ``schedule`` channel.
 
-    An independent ``MessageProcessor.process`` carries out the task with the
-    full tool surface on channel ``scheduled``. That channel resolves to the
-    MUTED source profile, so the work loop produces no episodes, facts, geo or
-    pattern signal — only the return hop (Stage 2) is encoded. Returns the work
-    loop's synthesis, or '' if it exhausted its budget without an answer.
+    One schedule = one ``turn_id``: the first fire of a series lets the MP allocate
+    the thread (writing its own opening row), reads the fresh id back off it, and
+    persists that id across every occurrence; later fires + user replies append to
+    that same turn (§13.1). The turn runs the
+    standard ``MessageProcessor`` under ``ScheduledConfig`` — full tool surface,
+    channel+turn-scoped history, episodic encoding, the five WS turn-state
+    signals — and self-surfaces in its own thread + the dock. There is no
+    user-channel relay (§13.9).
+
+    Runs on its own daemon thread so the scheduler poll transaction is never held
+    during the LLM loop.
     """
     from configs.channels import ScheduledConfig  # noqa: PLC0415
+    from services.database_service import get_shared_db_service  # noqa: PLC0415
     from services.message_processor import MessageProcessor  # noqa: PLC0415
-    from services.processor_config import ProcessorConfig  # noqa: PLC0415
 
-    config = ScheduledConfig(ProcessorConfig.PolicyChannel.SUBCONSCIOUS)
-    return MessageProcessor.process(message, config)
+    db = get_shared_db_service()
 
+    # Series continuity: reuse an earlier occurrence's turn_id if one was already
+    # allocated, so a recurring schedule is ONE growing thread (not one per fire).
+    if turn_id is None:
+        with db.connection() as conn:
+            row = conn.execute(
+                "SELECT turn_id FROM scheduled_items "
+                "WHERE COALESCE(group_id, id) = ? AND turn_id IS NOT NULL LIMIT 1",
+                (group_key,),
+            ).fetchone()
+        turn_id = cast("int | None", row[0]) if row else None
 
-def _fire_scheduled_prompt(item_id: str, message: str) -> None:
-    """Fire a scheduled prompt in two stages (modelled on the web delegates).
-
-    Stage 1 runs the task on the muted ``scheduled`` channel and returns its
-    worked result. Stage 2 hands that result to an ordinary user-channel turn via
-    ``dispatch_message`` — that turn is what reaches the UI and is episodically
-    encoded as a normal user episode. If the work loop produced nothing usable,
-    the original instruction is delivered so the user is never left silent.
-
-    Runs on its own daemon thread (``scheduled-work-<item_id>``) so the scheduler
-    poll transaction is never held during the LLM loop. A Stage-1 failure is
-    logged with context and re-raised — Stage 2 is never fired with a fabricated
-    success — so the failure surfaces rather than masquerading as a delivered task.
-    """
-    from api.chat import dispatch_message  # noqa: PLC0415
-
-    try:
-        result = _run_scheduled_work_loop(message)
-    except Exception:
-        logger.exception(
-            f"{LOG_PREFIX} Scheduled work loop raised for '{item_id}' — "
-            f"not firing return hop"
-        )
-        raise
-
-    if result.strip():
-        delivery = _SCHEDULED_DELIVERY_TEMPLATE.format(result=result)
-        logger.info(
-            f"{LOG_PREFIX} Scheduled work loop produced result for '{item_id}': "
-            f"{result[:80]}"
-        )
-    else:
-        # Work loop exhausted its budget or was cancelled — fall back to the raw
-        # instruction so the scheduled prompt still surfaces to the user.
-        delivery = message
-        logger.warning(
-            f"{LOG_PREFIX} Scheduled work loop empty for '{item_id}' — "
-            f"delivering raw instruction"
-        )
-
-    dispatch_message(delivery, source=_SCHEDULED_SOURCE, hidden_input=True)
-    logger.info(f"{LOG_PREFIX} Dispatched scheduled prompt '{item_id}': {message[:80]}")
+    # forked-ness is the MessageProcessor's internal switch, derived purely from
+    # whether a turn_id is supplied — never set here. First fire (no turn_id) → MAIN:
+    # the MP writes its own opening row and allocates the thread, reporting the fresh
+    # id back via ``meta["turn_id"]``, which we persist for series continuity. A
+    # re-fire (or user reply) supplies that id → the MP appends past settle0 → FORK,
+    # firing the §5.1 gist delegate like a user thread (§13.1 / §6.2).
+    first_fire = turn_id is None
+    meta: dict[str, object] = {"turn_id": turn_id}
+    config = ScheduledConfig()
+    MessageProcessor.process(message, config, meta)
+    if first_fire:
+        # A cancelled first fire purges its own transcript rows (see
+        # MessageProcessor._cleanup_cancelled) — persisting its turn_id here
+        # regardless would leave scheduled_items pointing at a turn_id that
+        # names no row, and every later fire's constructor would reject it
+        # ("Invalid turn_id specified"), permanently bricking the schedule.
+        # Only persist when this fire's execution is confirmed NOT cancelled;
+        # a skipped persist just leaves the item on fresh-first-fire footing
+        # (turn_id still NULL), which is the pre-existing, safe default.
+        from services.execution_tracker import TurnExecutionService, TurnExecutionState  # noqa: PLC0415
+        fresh_turn_id = cast("int", meta["turn_id"])
+        execution = TurnExecutionService().latest_for_turn(config.channel, fresh_turn_id)
+        if execution is not None and execution.state != TurnExecutionState.CANCELLED:
+            with db.connection() as conn:
+                conn.execute(
+                    "UPDATE scheduled_items SET turn_id = ? "
+                    "WHERE COALESCE(group_id, id) = ? AND turn_id IS NULL",
+                    (fresh_turn_id, group_key),
+                )
+        elif execution is None:
+            # Not the same fact as a confirmed cancel — the tracker's own row
+            # lookup failed (already logged loudly inside
+            # TurnExecutionService.latest_for_turn), so this fire's true outcome
+            # is unknown. Persistence is skipped either way (an unconfirmed
+            # turn_id is no safer to write than a cancelled one), but the two
+            # causes are distinct and must not share a log message.
+            logger.warning(
+                f"{LOG_PREFIX} first fire of '{item_id}' — execution row unavailable, "
+                "skipping first-fire turn_id persistence"
+            )
+        else:
+            logger.info(
+                f"{LOG_PREFIX} first fire of '{item_id}' ended cancelled — "
+                "leaving schedule on fresh-first-fire footing"
+            )
+    logger.info(f"{LOG_PREFIX} Fired scheduled prompt '{item_id}' on turn {meta['turn_id']}: {message[:80]}")
 
 
 _RECURRENCE_MAP = {
@@ -424,17 +433,6 @@ _RECURRENCE_MAP = {
     "weekdays": ("day", 1),
     "hourly": ("hour", 1),
 }
-
-
-def _in_quiet_hours(item: dict[str, object]) -> bool:
-    """Check if now is outside the item's active window (quiet hours)."""
-    ws, we = item.get("window_start"), item.get("window_end")
-    if not ws or not we:
-        return False
-    from services.locale_service import local_now
-    now_local = local_now()
-    current = (now_local.hour, now_local.minute)
-    return not (tuple(map(int, cast(str, ws).split(":"))) <= current < tuple(map(int, cast(str, we).split(":"))))
 
 
 def _next_due(item: dict[str, object]) -> datetime | None:

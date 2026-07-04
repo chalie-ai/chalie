@@ -63,6 +63,16 @@ class FileMapperService:
         return sorted(cls._SECURE_DIR.glob("vault_backup_*.json"), reverse=True)
 
     @classmethod
+    def get_ssl_cert_path(cls) -> Path:
+        """TLS certificate (PEM) uploaded via the System page; stored 0600 in the secure dir."""
+        return cls._SECURE_DIR / "ssl_cert.pem"
+
+    @classmethod
+    def get_ssl_key_path(cls) -> Path:
+        """TLS private key (PEM) uploaded via the System page; stored 0600 in the secure dir."""
+        return cls._SECURE_DIR / "ssl_key.pem"
+
+    @classmethod
     def get_schema_path(cls) -> Path:
         """Return path to the declarative schema SQL file."""
         return cls._BACKEND_DIR / "schema.sql"

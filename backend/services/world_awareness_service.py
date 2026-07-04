@@ -13,7 +13,6 @@ from typing import TYPE_CHECKING, cast
 
 import numpy as np
 
-
 if TYPE_CHECKING:
     from services.database_service import DatabaseService
     from services.embedding_service import EmbeddingService

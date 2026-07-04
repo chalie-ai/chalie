@@ -1,6 +1,6 @@
 /**
  * Snapshot API — whole-instance Import/Export Time-Machine.
- * Derived from frontend/brain/import_export.js; paired with backend/api/snapshot.py.
+ * Paired with backend/api/snapshot.py.
  *
  *   POST /api/snapshot/export → streams a single .zip clone of the instance
  *                               (databases, documents, skills, secrets).

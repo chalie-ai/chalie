@@ -15,13 +15,13 @@ from typing import cast
 
 import pytest
 
+from abilities._dispatcher import ToolDispatcher
 from abilities._result import ToolResult
 from abilities.file_permissions import (
     FilePermissionsAbility,
     _format_octal,
     _parse_octal,
 )
-from abilities._dispatcher import ToolDispatcher
 from configs.channels import UserConfig
 from tests._tool_result_harness import allow_policy, parse_body, seed_transcript
 

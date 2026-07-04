@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { expect, test } from '@playwright/test';
 
 // The real interface opens a WebSocket to the backend on load (session store is
 // the single WS owner). These assert the real handshake + a healthy connection.

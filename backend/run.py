@@ -7,18 +7,43 @@ run in a single process. Voice runs natively when deps are installed.
 """
 
 import argparse
+import logging
 import os
 import sys
-import logging
 from typing import TYPE_CHECKING, cast
 
 from utils.logger import Logger
 
 if TYPE_CHECKING:
+    import ssl
+
+    from boot_screen import BootScreen as _BootScreen
     from services.embedding_service import EmbeddingService
     from services.onnx_inference_service import OnnxInferenceService
     from services.database_service import DatabaseService
     from consumer import WorkerManager as _WorkerManager
+
+
+def _parse_cli() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Chalie — personal intelligence layer")
+    parser.add_argument("--port", type=int, default=31025, help="Server port (default: 31025)")
+    parser.add_argument("--host", default="0.0.0.0", help="Bind address (default: 0.0.0.0)")
+    return parser.parse_args()
+
+
+# Own the public port from the first moment of boot. Docker publishes the port
+# at container start, so every connection before Flask binds — after the heavy
+# imports below plus schema convergence and migrations, minutes on slow
+# hardware — is reset: blank pages and failed fetches in the browser.
+# BootScreen binds instantly and serves a self-refreshing holding page until
+# the API worker takes over the port. Script-execution only: tests import
+# this module and must never bind a socket.
+_boot_screen: "_BootScreen | None" = None
+if __name__ == "__main__":
+    from boot_screen import BootScreen
+    _cli = _parse_cli()
+    _boot_screen = BootScreen(_cli.host, _cli.port)
+    _boot_screen.start()
 
 # Force numpy/transformers to fully initialize before any background thread
 # imports them. Python's import system isn't fully thread-safe for nested
@@ -173,9 +198,18 @@ def _init_database() -> "DatabaseService":
 
 def _run_startup_migrations(database_service: "DatabaseService") -> None:
     """Run all one-time startup migrations and data backfills."""
-    import os as _os
+    _backfill_provider_token_limits(database_service)
+    _run_transcript_rebuild(database_service)
+    _migrate_compactions_table(database_service)
+    _drop_invoked_by_column(database_service)
+    _drop_ephemeral_column(database_service)
+    _backfill_transcript_settled(database_service)
+    _rebuild_episodes_fts(database_service)
+    _purge_stale_adaptive_layer_rows(database_service)
 
-    # Token-limit backfill
+
+def _backfill_provider_token_limits(database_service: "DatabaseService") -> None:
+    """One-time provider token-limit (max_tokens/compact_at) backfill."""
     try:
         from services.provider_token_limits import backfill_all
         with database_service.connection() as _conn:
@@ -188,20 +222,44 @@ def _run_startup_migrations(database_service: "DatabaseService") -> None:
     except Exception as _bf_err:
         logger.warning(f"[Startup] providers max_tokens/compact_at backfill skipped: {_bf_err}")
 
-    # One-time transcript rebuild
+
+def _run_transcript_rebuild(database_service: "DatabaseService") -> None:
+    """One-time transcript rebuild."""
     try:
         from migrate_transcript_rebuild import run_once_on_boot
         run_once_on_boot(db_path=database_service.db_path)
     except Exception as _mig_err:
         logger.warning(f"[Startup] Transcript migration skipped: {_mig_err}")
 
-    # Drop zombie invoked_by column
+
+def _migrate_compactions_table(database_service: "DatabaseService") -> None:
+    """One-time compactions-table migration — purge legacy role='compaction'
+    transcript rows now that compaction state lives in its own table. Runs after
+    the rebuild above (which leaves those rows in place). Idempotent; sentinel
+    gates it to one run per database.
+    """
     try:
-        _drop_sentinel = _os.path.join(
-            _os.path.dirname(database_service.db_path),
+        _compaction_sentinel = os.path.join(
+            os.path.dirname(database_service.db_path),
+            '.compactions-table-migration-v1.done',
+        )
+        if not os.path.exists(_compaction_sentinel):
+            from migrations.migration_002_compactions_table import apply as _apply_compactions
+            _apply_compactions(database_service.db_path)
+            with open(_compaction_sentinel, 'w') as _f:
+                _f.write('done')
+    except Exception as _comp_err:
+        logger.warning(f"[Startup] compactions-table migration skipped: {_comp_err}")
+
+
+def _drop_invoked_by_column(database_service: "DatabaseService") -> None:
+    """Drop zombie invoked_by column."""
+    try:
+        _drop_sentinel = os.path.join(
+            os.path.dirname(database_service.db_path),
             '.tool-calls-drop-invoked-by-v1.done',
         )
-        if not _os.path.exists(_drop_sentinel):
+        if not os.path.exists(_drop_sentinel):
             with database_service.connection() as _conn:
                 _cols = [r[1] for r in _conn.execute("PRAGMA table_info(tool_calls)").fetchall()]
                 if 'invoked_by' in _cols:
@@ -213,14 +271,17 @@ def _run_startup_migrations(database_service: "DatabaseService") -> None:
     except Exception as _drop_err:
         logger.warning(f"[Startup] tool_calls invoked_by drop skipped: {_drop_err}")
 
-    # Drop legacy ephemeral column — every tool call is now durable; rows older
-    # than 7 days are removed by DecayEngineService._purge_tool_calls() instead.
+
+def _drop_ephemeral_column(database_service: "DatabaseService") -> None:
+    """Drop legacy ephemeral column — every tool call is now durable; rows older
+    than 7 days are removed by DecayEngineService._purge_tool_calls() instead.
+    """
     try:
-        _ephem_sentinel = _os.path.join(
-            _os.path.dirname(database_service.db_path),
+        _ephem_sentinel = os.path.join(
+            os.path.dirname(database_service.db_path),
             '.tool-calls-drop-ephemeral-v1.done',
         )
-        if not _os.path.exists(_ephem_sentinel):
+        if not os.path.exists(_ephem_sentinel):
             with database_service.connection() as _conn:
                 _cols = [r[1] for r in _conn.execute("PRAGMA table_info(tool_calls)").fetchall()]
                 if 'ephemeral' in _cols:
@@ -232,10 +293,33 @@ def _run_startup_migrations(database_service: "DatabaseService") -> None:
     except Exception as _ephem_err:
         logger.warning(f"[Startup] tool_calls ephemeral drop skipped: {_ephem_err}")
 
-    # One-time episodes FTS rebuild
+
+def _backfill_transcript_settled(database_service: "DatabaseService") -> None:
+    """One-time transcript.settled backfill. SchemaConvergence adds the column as
+    all-zeros (NOT NULL DEFAULT 0); without this every pre-existing assistant
+    row reads settled=0, so settle0 is NULL for all historical turns and the
+    spine/feed/GC break. migration_006 re-derives settled from tool_calls to the
+    exact runtime predicate. Idempotent; sentinel-gated to one run per database.
+    """
     try:
-        _sentinel = _os.path.join(_os.path.dirname(database_service.db_path), '.episodes-fts-rebuild-v1.done')
-        if not _os.path.exists(_sentinel):
+        _settled_sentinel = os.path.join(
+            os.path.dirname(database_service.db_path),
+            '.transcript-settled-backfill-v1.done',
+        )
+        if not os.path.exists(_settled_sentinel):
+            from migrations.migration_006_transcript_settled import apply as _apply_settled
+            _apply_settled(database_service.db_path)
+            with open(_settled_sentinel, 'w') as _f:
+                _f.write('done')
+    except Exception as _settled_err:
+        logger.warning(f"[Startup] transcript.settled backfill skipped: {_settled_err}")
+
+
+def _rebuild_episodes_fts(database_service: "DatabaseService") -> None:
+    """One-time episodes FTS rebuild."""
+    try:
+        _sentinel = os.path.join(os.path.dirname(database_service.db_path), '.episodes-fts-rebuild-v1.done')
+        if not os.path.exists(_sentinel):
             with database_service.connection() as _conn:
                 _conn.execute("INSERT INTO episodes_fts(episodes_fts) VALUES('rebuild')")
                 _conn.commit()
@@ -245,7 +329,9 @@ def _run_startup_migrations(database_service: "DatabaseService") -> None:
     except Exception as _fts_err:
         logger.warning(f"[Startup] episodes FTS rebuild skipped: {_fts_err}")
 
-    # Purge stale AdaptiveLayer data_graph rows
+
+def _purge_stale_adaptive_layer_rows(database_service: "DatabaseService") -> None:
+    """Purge stale AdaptiveLayer data_graph rows."""
     try:
         _adaptive_keys = (
             'prefers_concise', 'prefers_depth', 'enjoys_challenge',
@@ -321,10 +407,55 @@ def _register_workers(manager: "_WorkerManager", host: str, port: int) -> None:
     def _flask_worker() -> None:
         from api import create_app
         app = create_app()
-        logger.info(f"[Chalie] Starting on http://{host}:{port}")
-        app.run(host=host, port=port, debug=False, threaded=True)
+        if _boot_screen is not None:
+            _boot_screen.stop()  # release the port for the bind below
+        ssl_context = _resolve_ssl_context()
+        scheme = "https" if ssl_context else "http"
+        logger.info(f"[Chalie] Starting on {scheme}://{host}:{port}")
+        app.run(host=host, port=port, debug=False, threaded=True, ssl_context=ssl_context)
 
     manager.register_service("rest-api-worker-1", _flask_worker)
+
+
+def _disable_ssl_setting() -> None:
+    """Clear ``ssl_enabled`` after a TLS fallback so the cookie Secure-scope tracks the real scheme.
+
+    Without this a vanished cert leaves ``ssl_enabled=true`` in the DB while the
+    server runs HTTP — issuing ``Secure`` cookies the browser drops, locking out login.
+    """
+    try:
+        from services.settings_service import SettingsService
+        from services.database_service import get_shared_db_service
+        SettingsService(get_shared_db_service()).set_bool(SettingsService.SSL_ENABLED, False)
+    except Exception:
+        logger.exception("[SSL] could not clear ssl_enabled after TLS fallback")
+
+
+def _resolve_ssl_context() -> "ssl.SSLContext | None":
+    """Build the server TLS context when SSL is enabled and a valid cert/key exist.
+
+    Returns ``None`` (plain HTTP) when SSL is off. If SSL is enabled but the cert/key
+    are missing or fail to load, clears ``ssl_enabled`` and serves HTTP — degrading
+    rather than crash-looping, and keeping the cookie Secure-scope honest.
+    """
+    try:
+        from services.settings_service import SettingsService
+        from services.database_service import get_shared_db_service
+        if not SettingsService(get_shared_db_service()).get_bool(SettingsService.SSL_ENABLED):
+            return None
+        from services.file_mapper_service import FileMapperService
+        cert = FileMapperService.get_ssl_cert_path()
+        key = FileMapperService.get_ssl_key_path()
+        if cert.is_file() and key.is_file():
+            import ssl
+            context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+            context.load_cert_chain(str(cert), str(key))
+            return context
+        logger.warning("[SSL] enabled but certificate/key missing — disabling SSL, serving HTTP")
+    except Exception:
+        logger.exception("[SSL] context load failed — disabling SSL, serving HTTP")
+    _disable_ssl_setting()
+    return None
 
 
 def _check_asset_caches() -> None:
@@ -379,11 +510,7 @@ def _warmup_models() -> None:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Chalie — personal intelligence layer")
-    parser.add_argument("--port", type=int, default=31025, help="Server port (default: 31025)")
-    parser.add_argument("--host", default="0.0.0.0", help="Bind address (default: 0.0.0.0)")
-    args = parser.parse_args()
-
+    args = _parse_cli()
     port = args.port
     host = args.host
 
@@ -409,6 +536,15 @@ def main() -> None:
     _start_model_preload()
 
     database_service = _init_database()
+
+    # Boot sweep: a turn_executions row still open (ended_at IS NULL) belonged
+    # to a process that no longer exists — closing it as crashed keeps no
+    # surface reading a stale "working" turn after a restart or a kill.
+    from services.execution_tracker import TurnExecutionService
+    _closed = TurnExecutionService(database_service).sweep_orphaned()
+    if _closed:
+        logger.info("[Startup] Closed %d orphaned turn_executions row(s)", _closed)
+
     _run_startup_migrations(database_service)
     _init_services(database_service)
 

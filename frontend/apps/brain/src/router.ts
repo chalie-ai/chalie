@@ -13,6 +13,7 @@ import SkillsView from './views/SkillsView.vue';
 import McpView from './views/McpView.vue';
 import ImportExportView from './views/ImportExportView.vue';
 import LinkDeviceView from './views/LinkDeviceView.vue';
+import SystemView from './views/SystemView.vue';
 
 import MemorySub from './views/cognition/MemorySub.vue';
 import AutoResearchSub from './views/cognition/AutoResearchSub.vue';
@@ -111,6 +112,7 @@ export const router = createRouter({
     { path: '/mcp', name: 'mcp', component: McpView },
     { path: '/import-export', name: 'import-export', component: ImportExportView },
     { path: '/link-device', name: 'link-device', component: LinkDeviceView },
+    { path: '/system', name: 'system', component: SystemView },
 
     // Catch-all → providers.
     { path: '/:pathMatch(.*)*', redirect: '/providers' },
@@ -164,7 +166,11 @@ router.beforeEach(async (to) => {
 
   if (!has_providers) {
     shell.providersOnly = true;
-    if (router.currentRoute.value.name !== 'providers') {
+    // Compare the TARGET route, not currentRoute: during the initial navigation
+    // currentRoute is still START_LOCATION (name undefined), so checking it makes
+    // this redirect retarget itself forever — the app never mounts and the guard
+    // hammers /auth/status once per loop iteration.
+    if (to.name !== 'providers') {
       return { name: 'providers' };
     }
   }

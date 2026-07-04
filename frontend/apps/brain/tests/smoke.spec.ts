@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { expect, test } from '@playwright/test';
 
 // Boots the real Brain SPA served by Chalie at /brain/ and proves the
 // shell chrome + every top-level nav entry actually renders. Drives the real

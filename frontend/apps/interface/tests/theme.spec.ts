@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { expect, test } from '@playwright/test';
 
 // Theme parity (Rule 7) — the real PresenceBar theme toggle drives html
 // [data-theme], persists to localStorage (key 'chalie-theme'), and the shell

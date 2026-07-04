@@ -1,3 +1,13 @@
+<script lang="ts">
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
+
+// Shared across every mounted dock. The footer dock and an open thread's reply
+// dock both render at once, so the focus-routed handlers (voice transcript,
+// interrupt-restore) and the pending-attachment strip act on the dock the user
+// is composing in — otherwise one voice transcript would paste into both.
+const activeDockKey = ref<string>('main');
+</script>
+
 <script setup lang="ts">
 /**
  * InputDock — compose / send / stop, plus the full peripheral controls.
@@ -5,8 +15,8 @@
  * WS single-owner rule: send/stop go through the session store; this component
  * never touches the WebSocket directly.
  */
-import { ref, computed, onMounted, onBeforeUnmount, nextTick, watch } from 'vue';
 import { storeToRefs } from 'pinia';
+import { ConfigType } from '@chalie/shared';
 import { on } from '../../composables/useEventBus';
 import { useSessionStore } from '../../stores/session';
 import { useVoiceStore } from '../../stores/voice';
@@ -15,9 +25,29 @@ import { useContextUsageStore } from '../../stores/contextUsage';
 import { useAmbientSensor } from '../../composables/useAmbientSensor';
 import { system } from '../../api/system';
 import { lsGet, lsSet } from '../../utils/storage';
-import type { AttachmentPreview as ConvoAttachmentPreview } from '../../stores/conversation';
+
 import ImageAttachStrip from '../upload/ImageAttachStrip.vue';
+import QueuedMessages from '../conversation/QueuedMessages.vue';
 import { FileText, Image, Plus, Mic, Send, X, AlertTriangle, LoaderCircle } from '@lucide/vue';
+
+/**
+ * `turnId` is the only thing that distinguishes a thread reply from a main-dock
+ * send: set, it appends to that thread; null (the dock default), the chat API
+ * scaffolds a new thread. The footer dock is fixed; the thread panel's reply
+ * dock sets `turnId` and renders in-flow at the foot of the panel.
+ */
+const props = withDefaults(defineProps<{ turnId?: number | null; type?: string }>(), {
+  turnId: null,
+  type: ConfigType.USER,
+});
+
+// Stable id for this dock so focus routing can tell the footer ('main') from a
+// thread reply apart. Becomes the active dock on any interaction (focus/pointer).
+const dockKey = props.turnId == null ? 'main' : `t${props.turnId}`;
+const isActiveDock = computed(() => activeDockKey.value === dockKey);
+function markActive(): void {
+  activeDockKey.value = dockKey;
+}
 
 const session = useSessionStore();
 const voiceStore = useVoiceStore();
@@ -38,7 +68,8 @@ const textareaRef = ref<HTMLTextAreaElement | null>(null);
 const text = ref('');
 
 // Restore draft: persisted on every change so a reload/close/navigate recovers it.
-const DRAFT_KEY = 'chalie:draft';
+// Keyed per thread so a reply draft never bleeds into the main composer.
+const DRAFT_KEY = props.turnId == null ? 'chalie:draft' : `chalie:draft:t${props.turnId}`;
 const stored = lsGet(DRAFT_KEY);
 if (stored) text.value = stored;
 watch(text, (v) => lsSet(DRAFT_KEY, v));
@@ -56,44 +87,26 @@ const thinkingWrapRef = ref<HTMLDivElement | null>(null);
 
 /** True when there is something to send: non-empty text OR ≥1 attachment.
  *  Mirrors the handleSend guard — both gate on getFiles(). */
-const canSend = computed(
-  () => text.value.trim().length > 0 || attachments.getFiles().length > 0,
-);
-
-/** Auto-resize: reset height then cap at 120px. */
-function grow(): void {
-  const el = textareaRef.value;
-  if (!el) return;
-  el.style.height = 'auto';
-  el.style.height = Math.min(el.scrollHeight, 120) + 'px';
-}
+const canSend = computed(() => text.value.trim().length > 0 || attachments.getFiles().length > 0);
 
 async function handleSend(): Promise<void> {
   const trimmed = text.value.trim();
-
-  // Read files + previews BEFORE clear() wipes the strip.
   const files = attachments.getFiles();
-  const previews: ConvoAttachmentPreview[] = attachments.previews.map((p) => ({
-    filename: p.filename,
-    objectUrl: p.dataUrl,
-    isImage: p.isImage,
-  }));
 
-  // Guard here too so we don't clear/re-grow needlessly. Same gate as canSend.
+  // Guard here too so we don't clear needlessly. Same gate as canSend.
   if (!trimmed && files.length === 0) return;
 
-  // Clear the image strip only on a fresh turn, not the mid-ACT append path —
-  // so capture send-mode before the store flips isSending.
-  const wasSending = session.isSending;
+  // Clear the image strip only when this actually dispatches a turn. When the
+  // lane is busy the send is queued (text-only) and the attachments stay pending.
+  const wasBusy = session.isLaneBusy(props.turnId, props.type);
 
   // Clear textarea before awaiting so the UI feels instant.
   text.value = '';
   await nextTick();
-  grow();
 
-  await session.sendMessage(trimmed, 'text', files, previews);
+  await session.sendMessage(trimmed, files, props.turnId, props.type);
 
-  if (!wasSending) attachments.clear();
+  if (!wasBusy) attachments.clear();
 
   textareaRef.value?.focus();
 }
@@ -153,10 +166,10 @@ function onBeforeUnload(e: BeforeUnloadEvent): void {
 }
 
 function onTurnInterrupted(e: Event): void {
+  if (!isActiveDock.value) return;
   const detail = (e as CustomEvent<{ text: string }>).detail;
   text.value = detail.text ?? '';
   nextTick(() => {
-    grow();
     textareaRef.value?.focus();
     // Move cursor to end.
     const el = textareaRef.value;
@@ -166,13 +179,29 @@ function onTurnInterrupted(e: Event): void {
   });
 }
 
+/** A queued message was clicked for editing — route it to the dock that owns its
+ *  scope (footer for the spine, the panel dock for a thread), append it to any
+ *  draft, and focus. Matched by turn_id, not active state, so a spine click lands
+ *  in the footer even while a thread dock is focused. */
+function onEditQueued(e: Event): void {
+  const detail = (e as CustomEvent<{ turnId: number | null; text: string }>).detail;
+  if (detail.turnId !== props.turnId) return;
+  markActive();
+  text.value = text.value ? `${text.value}\n${detail.text}` : detail.text;
+  nextTick(() => {
+    textareaRef.value?.focus();
+    const el = textareaRef.value;
+    if (el) el.selectionStart = el.selectionEnd = el.value.length;
+  });
+}
+
 let _unsubVoiceTranscript: (() => void) | null = null;
 
 /** Paste the voice transcript into the compose textarea for review — does NOT auto-send. */
 function onVoiceTranscript({ text: transcript }: { text: string }): void {
+  if (!isActiveDock.value) return;
   text.value = transcript;
   nextTick(() => {
-    grow();
     textareaRef.value?.focus();
     // Move cursor to end.
     const el = textareaRef.value;
@@ -184,6 +213,7 @@ function onVoiceTranscript({ text: transcript }: { text: string }): void {
 
 onMounted(() => {
   document.addEventListener('session:turn-interrupted', onTurnInterrupted);
+  document.addEventListener('chalie:edit-queued', onEditQueued);
   _unsubVoiceTranscript = on('chalie:voice-transcript', onVoiceTranscript);
   document.addEventListener('click', onDocumentClick);
   globalThis.addEventListener('scroll', onWindowScroll, { passive: true });
@@ -208,16 +238,27 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
   document.removeEventListener('session:turn-interrupted', onTurnInterrupted);
+  document.removeEventListener('chalie:edit-queued', onEditQueued);
   _unsubVoiceTranscript?.();
   document.removeEventListener('click', onDocumentClick);
   globalThis.removeEventListener('scroll', onWindowScroll);
   globalThis.removeEventListener('beforeunload', onBeforeUnload);
-  voiceStore.destroyRecorder();
+  // Hand focus routing back to the footer when an inline dock collapses.
+  if (activeDockKey.value === dockKey) activeDockKey.value = 'main';
+  // The recorder is a shared singleton — only the permanent footer dock tears it
+  // down, so collapsing a thread mid-recording can't kill it under the footer.
+  if (props.turnId == null) voiceStore.destroyRecorder();
 });
 </script>
 
 <template>
-  <footer class="input-dock">
+  <footer
+    class="input-dock"
+    :class="{ 'input-dock--inline': turnId != null }"
+    :data-turn-id="turnId"
+    @focusin="markActive"
+    @pointerdown="markActive"
+  >
     <div v-if="session.errorMessage" class="dock-error" role="alert">
       <AlertTriangle class="dock-error__icon" :size="18" aria-hidden="true" />
       <span class="dock-error__text">{{ session.errorMessage }}</span>
@@ -231,7 +272,9 @@ onBeforeUnmount(() => {
       </button>
     </div>
 
-    <ImageAttachStrip />
+    <!-- Attachments are a shared store; render the pending strip only in the
+         active dock so the footer and an open thread don't show duplicates. -->
+    <ImageAttachStrip v-if="isActiveDock" />
 
     <div
       id="attachMenu"
@@ -256,6 +299,9 @@ onBeforeUnmount(() => {
         </button>
       </div>
     </div>
+
+    <!-- Pending (queued) sends for this dock's scope, floating above the composer. -->
+    <QueuedMessages :thread-id="turnId" />
 
     <div class="input-dock__outer">
       <div class="input-dock__inner">
@@ -288,9 +334,9 @@ onBeforeUnmount(() => {
           ref="textareaRef"
           v-model="text"
           class="input-dock__textarea"
-          placeholder="Talk to Chalie..."
+          :aria-label="turnId != null ? 'Reply in thread' : 'Message Chalie'"
+          :placeholder="turnId != null ? 'Reply in this thread…' : 'Talk to Chalie…'"
           rows="1"
-          @input="grow"
         ></textarea>
 
         <button
@@ -340,7 +386,9 @@ onBeforeUnmount(() => {
       </div>
       <div id="contextDisplay" class="context-display" :class="{ hidden: !usageDisplay }">
         <span class="context-display__caption">Context</span>
-        <span class="context-indicator" title="Last request size / context window">{{ usageDisplay }}</span>
+        <span class="context-indicator" title="Last request size / context window">{{
+          usageDisplay
+        }}</span>
       </div>
     </div>
 

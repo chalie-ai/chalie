@@ -53,10 +53,10 @@
  * components — it only talks to itself and the event bus.
  */
 
-import { ref, onMounted, onBeforeUnmount } from 'vue';
+import { onBeforeUnmount, onMounted, ref } from 'vue';
 import { Pause, Play, X } from '@lucide/vue';
-import { webPlatformAdapter } from '@chalie/shared';
 import type { WakeLockHandle } from '@chalie/shared';
+import { webPlatformAdapter } from '@chalie/shared';
 import { on } from '../../composables/useEventBus';
 import { voice } from '../../api/voice';
 
@@ -150,10 +150,38 @@ async function _open(text: string): Promise<void> {
     if ((err as { name?: string }).name === 'AbortError') return;
     if (gen !== _openGeneration) return;
     uiState.value = 'idle';
-    errorMsg.value =
-      err instanceof Error ? err.message : 'Failed to synthesize';
+    errorMsg.value = err instanceof Error ? err.message : 'Failed to synthesize';
     console.error('[VoicePlayer] synthesize error:', err);
   }
+}
+
+type _RetryErrorBody = { error?: string; reason?: string; hint?: string };
+
+/** Parse a failed /voice/synthesize response body (defaults to {} on non-JSON). */
+async function _parseRetryError(resp: Response): Promise<_RetryErrorBody> {
+  return (await resp
+    .clone()
+    .json()
+    .catch(() => ({}))) as _RetryErrorBody;
+}
+
+/** ms to wait before the next cold-start retry, honoring Retry-After when valid. */
+function _retryDelayMs(resp: Response): number {
+  const retryAfter = Number.parseFloat(resp.headers.get('Retry-After') ?? '');
+  return Number.isFinite(retryAfter) && retryAfter > 0
+    ? retryAfter * 1000
+    : _LOADING_DEFAULT_DELAY_MS;
+}
+
+/** Build the terminal error for a non-retryable (or exhausted) synthesize failure. */
+function _retryFailureError(err: _RetryErrorBody, resp: Response): Error {
+  if (err.reason === 'deps_missing') {
+    return new Error(err.hint ?? err.error ?? 'Voice dependencies not installed');
+  }
+  if (err.reason === 'models_missing') {
+    return new Error(err.hint ?? err.error ?? 'Voice models not installed');
+  }
+  return new Error(err.error ?? `HTTP ${resp.status}`);
 }
 
 /**
@@ -161,38 +189,19 @@ async function _open(text: string): Promise<void> {
  * Response, null if the session was aborted/superseded mid-wait, or throws on
  * any non-loading error.
  */
-async function _fetchWithLoadingRetry(
-  text: string,
-  gen: number,
-): Promise<Response | null> {
+async function _fetchWithLoadingRetry(text: string, gen: number): Promise<Response | null> {
   for (let attempt = 0; attempt <= _LOADING_MAX_RETRIES; attempt += 1) {
     const resp = await voice.speak(text);
     if (gen !== _openGeneration) return null;
     if (resp.ok) return resp;
 
-    const err = await resp.clone().json().catch(() => ({})) as {
-      error?: string;
-      reason?: string;
-      hint?: string;
-    };
-
-    if (err.reason === 'deps_missing') {
-      throw new Error(err.hint ?? err.error ?? 'Voice dependencies not installed');
-    }
-    if (err.reason === 'models_missing') {
-      throw new Error(err.hint ?? err.error ?? 'Voice models not installed');
-    }
+    const err = await _parseRetryError(resp);
     if (err.reason === 'loading' && attempt < _LOADING_MAX_RETRIES) {
-      const retryAfter = Number.parseFloat(resp.headers.get('Retry-After') ?? '');
-      const delayMs =
-        Number.isFinite(retryAfter) && retryAfter > 0
-          ? retryAfter * 1000
-          : _LOADING_DEFAULT_DELAY_MS;
-      await _sleepAbortable(delayMs);
+      await _sleepAbortable(_retryDelayMs(resp));
       if (gen !== _openGeneration) return null;
       continue;
     }
-    throw new Error(err.error ?? `HTTP ${resp.status}`);
+    throw _retryFailureError(err, resp);
   }
   throw new Error('Voice models still loading — please retry shortly');
 }
@@ -210,7 +219,10 @@ function _sleepAbortable(ms: number): Promise<void> {
       const e = new DOMException('aborted', 'AbortError');
       reject(e);
     };
-    if (signal?.aborted) { onAbort(); return; }
+    if (signal?.aborted) {
+      onAbort();
+      return;
+    }
     signal?.addEventListener('abort', onAbort, { once: true });
   });
 }
@@ -218,7 +230,10 @@ function _sleepAbortable(ms: number): Promise<void> {
 /** Promise wrapper around AudioContext.decodeAudioData (callback form for iOS compat). */
 function _decodeAudio(arrayBuffer: ArrayBuffer): Promise<AudioBuffer> {
   return new Promise<AudioBuffer>((resolve, reject) => {
-    if (!_audioCtx) { reject(new Error('AudioContext gone')); return; }
+    if (!_audioCtx) {
+      reject(new Error('AudioContext gone'));
+      return;
+    }
     _audioCtx.decodeAudioData(arrayBuffer, resolve, reject);
   });
 }
@@ -294,8 +309,16 @@ function _playBufferFrom(buffer: AudioBuffer, offset: number): void {
 function _stopCurrentSource(): void {
   if (!_currentSource) return;
   _currentSource.onended = null;
-  try { _currentSource.stop(); } catch { /* ignore */ }
-  try { _currentSource.disconnect(); } catch { /* ignore */ }
+  try {
+    _currentSource.stop();
+  } catch {
+    /* ignore */
+  }
+  try {
+    _currentSource.disconnect();
+  } catch {
+    /* ignore */
+  }
   _currentSource = null;
 }
 
@@ -371,13 +394,18 @@ function _bindKeyboard(): void {
   _boundKeydown = (e: KeyboardEvent) => {
     const d = dialogEl.value;
     if (!d?.open) return;
-    if (e.key === 'Escape') { _close(); return; }
+    if (e.key === 'Escape') {
+      _close();
+      return;
+    }
     const t = e.target as HTMLElement | null;
     const editable =
-      t !== null &&
-      (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable);
+      t !== null && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable);
     if (editable) return;
-    if (e.key === ' ' || e.key === 'Space') { e.preventDefault(); _togglePlayPause(); }
+    if (e.key === ' ' || e.key === 'Space') {
+      e.preventDefault();
+      _togglePlayPause();
+    }
   };
   document.addEventListener('keydown', _boundKeydown);
 }
@@ -440,11 +468,7 @@ function _unbindKeyboard(): void {
   border: 2px solid var(--border);
   border-top-color: var(--violet);
   border-radius: 50%;
-  animation: vp-spin 0.7s linear infinite;
-}
-
-@keyframes vp-spin {
-  to { transform: rotate(360deg); }
+  animation: spin 0.7s linear infinite;
 }
 
 .voice-player__error {

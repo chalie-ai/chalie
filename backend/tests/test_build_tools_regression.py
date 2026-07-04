@@ -12,6 +12,7 @@ from typing import cast
 from unittest.mock import patch
 
 import pytest
+
 from abilities._registry import AbilityRegistry
 from configs.channels import DEFAULT_ALWAYS_AVAILABLE, UserConfig
 from services.database_service import get_shared_db_service
@@ -61,12 +62,10 @@ def test_setup_seeds_active_tools_and_opens_a_turn(db: sqlite3.Connection) -> No
     the thinking gate and seed-0 fire through. Zero internal mocks."""
     ProviderDbService(get_shared_db_service()).set_vision_provider(None)
 
-    mp = object.__new__(MessageProcessor)
-    MessageProcessor.__init__(mp, "hello", None)
-    mp.config = UserConfig({"channel": "user"})
-
+    config = UserConfig({"channel": "user"})
     recorder = _RecordingProvider()
     with patch("services.providers.Providers._resolve", return_value=recorder):
+        mp = MessageProcessor(config, raw_input="hello")
         mp._setup()
 
     # active_tools seeded from the channel's always_available tier.
@@ -93,7 +92,7 @@ def test_active_tools_resolve_to_always_available_surface() -> None:
 
 
 def test_act_summary_injected_as_required_on_every_tool() -> None:
-    """Every surfaced tool gets act_summary as a required property (spec §6)."""
+    """Every surfaced tool gets act_summary as a required property."""
     tools = AbilityRegistry.build_tools(_make_mp(list(DEFAULT_ALWAYS_AVAILABLE)))
     assert tools, "build_tools returned no tools for a seeded active_tools list"
     for t in tools:

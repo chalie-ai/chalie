@@ -1,32 +1,16 @@
 """
 Transcript Service — persistent conversation record.
+
+DEPRECATED: this is legacy. New functionality belongs in ``services/transcript.py``
+(``TranscriptService``). Hard rule: consult user before adding new functions to
+``services/transcript.py``.
 """
 
 import logging
-import threading
-from collections import Counter
-from typing import TYPE_CHECKING, cast
-
-if TYPE_CHECKING:
-    from services.database_service import DatabaseService
+from typing import cast
 
 logger = logging.getLogger(__name__)
 LOG_PREFIX = "[TRANSCRIPT]"
-
-# Rolling episode extraction — DB-state-driven.
-#
-# On every transcript append, count the transcripts in the channel whose id
-# is greater than the channel's latest episode.transcript_id_end. When the
-# tail reaches _EXTRACTION_THRESHOLD (20), fire extraction. The extractor
-# pulls the last _EXTRACTION_WINDOW (25) rows — 20 new + 5 overlap with
-# the prior window — producing one episode per ~20 new transcript turns.
-#
-# No process-local counter, no boot catch-up: trigger state lives entirely
-# in the DB (transcript.id vs episodes.transcript_id_end) so restarts never
-# desync from accumulated history.
-_EXTRACTION_THRESHOLD = 20
-_EXTRACTION_WINDOW = 25
-_EXTRACTION_OVERLAP = 5
 
 
 # ── Read API ─────────────────────────────────────────────────────────
@@ -38,7 +22,7 @@ _EXTRACTION_OVERLAP = 5
 
 _COLS = (
     "id, channel, role, content, tool_call_id, tool_name, "
-    "internal, created_at, turn_id, location_lat, location_lon, location_name"
+    "internal, created_at, turn_id, location_lat, location_lon, location_name, settled"
 )
 
 # NULL-safe turn key. Legacy rows (pre-chain, or rebuilt by
@@ -49,6 +33,44 @@ _COLS = (
 # becomes its own singleton turn in correct chronological order.
 _TURN_KEY = "COALESCE(turn_id, -id)"
 
+
+def _thread_query_filter(query: str) -> tuple[str, tuple[str, ...]]:
+    """The §5.2 search filter as a HAVING clause over a per-turn GROUP: keep only
+    threads carrying a user-role row whose content matches ``query`` (case-
+    insensitive substring). Empty query → no clause (the unfiltered feed). Shared by
+    ``recent_threads`` (the page) and ``count_turns`` (its ``has_more``) so search and
+    feed run one identical path."""
+    query = (query or "").strip()
+    if not query:
+        return "", ()
+    return (
+        " HAVING MAX(CASE WHEN role = 'user' AND content LIKE ? THEN 1 ELSE 0 END) = 1",
+        (f"%{query}%",),
+    )
+
+
+# settle0 — the FIRST assistant row of a turn with settled=1. Written as 1 by the
+# write path; ActTrail.start() demotes to 0 when a settling tool (counts_as_settle
+# True) is recorded. Internal passes (chat_history_compactor, thinking) never
+# demote. The predicate scans the row aliased ``t``; no bound params needed.
+_SETTLE_PREDICATE = "t.role = 'assistant' AND t.settled = 1"
+
+
+import functools as _functools
+
+
+@_functools.lru_cache(maxsize=1)
+def _non_settling_tools() -> "frozenset[str]":
+    """Registry-derived set of tool_names whose ability has counts_as_settle=False.
+
+    Cached after the first call. Import is deferred to avoid a circular import
+    (abilities._registry imports transcript_service indirectly via the DB service).
+    ActTrail imports this lazily for the same reason."""
+    from abilities._registry import _get_registry  # noqa: PLC0415
+    return frozenset(
+        name for name, ability in _get_registry().items()
+        if not ability.counts_as_settle
+    )
 
 class Transcript:
     """Static read/write surface for the transcript table. All access goes
@@ -78,59 +100,6 @@ class Transcript:
 
 
     @staticmethod
-    def append(
-        channel: str,
-        role: str,
-        content: str,
-        tool_call_id: str | None = None,
-        tool_name: str | None = None,
-        internal: bool = False,
-        location_lat: float | None = None,
-        location_lon: float | None = None,
-        location_name: str | None = None,
-    ) -> int | None:
-        if not channel:
-            return None
-        if not content and role != 'assistant':
-            return None
-
-        try:
-            from services.database_service import get_shared_db_service
-            db = get_shared_db_service()
-
-            lat, lon, loc_name = Transcript._resolve_location(
-                location_lat, location_lon, location_name, channel
-            )
-
-            with db.connection() as conn:
-                cursor = conn.cursor()
-                cursor.execute(
-                    """
-                    INSERT INTO transcript (
-                        channel, role, content, tool_call_id, tool_name, internal,
-                        xml_migrated, location_lat, location_lon, location_name
-                    )
-                    VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, ?)
-                    """,
-                    (channel, role, content, tool_call_id, tool_name, 1 if internal else 0,
-                     lat, lon, loc_name),
-                )
-                rowid = cursor.lastrowid
-                cursor.close()
-
-            Transcript._maybe_trigger_extraction(channel, rowid)
-
-            return rowid
-
-        except Exception as e:
-            logger.warning(f"{LOG_PREFIX} Failed to append: {e}")
-            return None
-
-
-
-
-
-    @staticmethod
     def _in(n: int) -> str:
         return ",".join("?" * n)
 
@@ -154,6 +123,7 @@ class Transcript:
                 'tool_call_id': r[4], 'tool_name': r[5], 'internal': bool(r[6]),
                 'created_at': r[7], 'turn_id': r[8],
                 'location_lat': r[9], 'location_lon': r[10], 'location_name': r[11],
+                'settled': bool(r[12]),
             }
             for r in rows
         ]
@@ -188,10 +158,52 @@ class Transcript:
 
 
     @staticmethod
-    def by_turn(channel: str, turn_id: int) -> list[dict[str, object]]:
-        """Every row of one ``(channel, turn_id)`` — a turn is many rows under the
-        chain model. id-only callers read the ``id`` field off the uniform shape."""
+    def by_turn(channel: str, turn_id: int | None = None) -> list[dict[str, object]]:
+        """The one getter. ``turn_id`` given → every row of that ``(channel,
+        turn_id)`` (a turn is many rows under the chain model); ``turn_id`` None →
+        the whole channel spine, every turn oldest-first. No watermark, no settle0,
+        no role filter — consumers mutate the returned rows in Python. id-only
+        callers read the ``id`` field off the uniform shape.
+
+        This is the chokepoint of the read+compaction flow — never add a second
+        getter, a per-turn loop, or push filtering in here. The whole flow (getter
+        → consumer mutations → two-axis watermark → checkpoint summary → writer) is
+        narrated on ``MessageProcessor._previous_rows``; read it before changing
+        any read path."""
+        if turn_id is None:
+            return Transcript._select("channel = ?", (channel,))
         return Transcript._select("channel = ? AND turn_id = ?", (channel, turn_id))
+
+
+    @staticmethod
+    def last_user_message_at() -> "str | None":
+        """The ``created_at`` of the most recent user-role row, or ``None`` when no
+        user row exists. Drives the subconscious worker's user-active gate."""
+        from services.database_service import get_shared_db_service
+
+        db = get_shared_db_service()
+        with db.connection() as conn:
+            row = conn.execute(
+                "SELECT MAX(created_at) FROM transcript WHERE role = 'user'",
+            ).fetchone()
+        return row[0] if row else None
+
+
+    @staticmethod
+    def settle0(channel: str, turn_id: int) -> int | None:
+        """``id`` of the turn's settle0 — its first settled assistant row
+        (see ``_SETTLE_PREDICATE``), or None for a turn that has not settled yet
+        (in-progress/failed). settle0 is the boundary between a turn's main
+        exchange and its fork continuation: the shared pivot of the two views."""
+        from services.database_service import get_shared_db_service
+        db = get_shared_db_service()
+        with db.connection() as conn:
+            row = conn.execute(
+                f"SELECT MIN(t.id) FROM transcript t "
+                f"WHERE t.channel = ? AND t.turn_id = ? AND {_SETTLE_PREDICATE}",
+                (channel, turn_id),
+            ).fetchone()
+        return int(row[0]) if row and row[0] is not None else None
 
 
     @staticmethod
@@ -263,18 +275,20 @@ class Transcript:
 
 
     @staticmethod
-    def count_turns(channel: str, *, exclude_roles: tuple[str, ...] = ()) -> int:
+    def count_turns(channel: str, *, exclude_roles: tuple[str, ...] = (), query: str = "") -> int:
         """Distinct turn count for a channel (NULL-safe ``_TURN_KEY``) — the single
-        source for the feed's ``has_more`` and the dashboard turn metric. 0 on error."""
+        source for the feed's ``has_more`` and the dashboard turn metric. A non-empty
+        ``query`` counts only threads matching the §5.2 search filter. 0 on error."""
         role_filter = "".join(" AND role != ?" for _ in exclude_roles)
+        having, having_params = _thread_query_filter(query)
         try:
             from services.database_service import get_shared_db_service
             db = get_shared_db_service()
             with db.connection() as conn:
                 row = conn.execute(
-                    f"SELECT COUNT(DISTINCT {_TURN_KEY}) FROM transcript "
-                    f"WHERE channel = ?{role_filter}",
-                    (channel, *exclude_roles),
+                    f"SELECT COUNT(*) FROM (SELECT 1 FROM transcript "
+                    f"WHERE channel = ?{role_filter} GROUP BY {_TURN_KEY}{having})",
+                    (channel, *exclude_roles, *having_params),
                 ).fetchone()
             return int(row[0]) if row and row[0] is not None else 0
         except Exception as e:
@@ -283,41 +297,93 @@ class Transcript:
 
 
     @staticmethod
-    def recent_turns(channel: str, *, exclude_roles: tuple[str, ...] = (),
-                     limit: int = 12, offset: int = 0,
-                     ) -> tuple[list[dict[str, object]], bool, int]:
-        """The conversation feed's turn-paginated history. A turn is many rows under
-        the chain model (), so paginate by turn, never by row. Picks the
-        newest ``limit`` turn keys, then returns ALL their rows oldest-first.
-        Returns ``(rows, has_more, turns_returned)``."""
+    def recent_threads(
+        channel: str, *, exclude_roles: tuple[str, ...] = (),
+        limit: int = 20, offset: int = 0, query: str = "",
+    ) -> tuple[list[dict[str, object]], bool, int]:
+        """Thread-level metadata for the collapsed feed: one summary row per
+        thread (turn_id), ordered by last activity (MAX(created_at) / MAX(id)).
+
+        Returns ``(threads, has_more, threads_returned)`` where each thread dict
+        carries ``turn_id``, ``last_activity_at`` (MAX(created_at)), ``last_row_id``
+        (MAX(id) — the recency key), ``row_count`` and ``first_content`` (the
+        earliest row's content, truncated — the collapsed preview).
+        Legacy NULL-turn_id rows each form their own singleton thread via
+        ``_TURN_KEY``.
+
+        A non-empty ``query`` turns the feed into search (§5.2): the page is
+        restricted to threads with a user-role row matching the keyword — same
+        rows, same ordering, same shape, just filtered (the caller caps the limit).
+        """
         from services.database_service import get_shared_db_service
 
         role_filter = "".join(" AND role != ?" for _ in exclude_roles)
+        having, having_params = _thread_query_filter(query)
         db = get_shared_db_service()
         with db.connection() as conn:
-            # Newest turns by their LAST row's id — the only recency measure that
-            # holds for both chain turns (positive turn_id) and legacy rows (where
-            # _TURN_KEY=-id would invert the order if sorted directly).
             page_keys = [
                 r[0] for r in conn.execute(
                     f"SELECT {_TURN_KEY} AS k FROM transcript "
                     f"WHERE channel = ?{role_filter} "
-                    f"GROUP BY k ORDER BY MAX(id) DESC LIMIT ? OFFSET ?",
-                    (channel, *exclude_roles, limit, offset),
+                    f"GROUP BY k{having} ORDER BY MAX(id) DESC LIMIT ? OFFSET ?",
+                    (channel, *exclude_roles, *having_params, limit, offset),
                 ).fetchall()
             ]
         if not page_keys:
             return [], False, 0
-        # Display oldest-first: legacy rows (turn_id NULL→0) tie below every chain
-        # turn and fall back to id order; chain rows stay grouped by turn_id.
-        messages = Transcript._select(
-            f"channel = ?{role_filter} AND {_TURN_KEY} IN ({Transcript._in(len(page_keys))})",
-            (channel, *exclude_roles, *page_keys),
-            order_by="COALESCE(turn_id, 0) ASC, id ASC",
-        )
-        turns_returned = len(page_keys)
-        has_more = Transcript.count_turns(channel, exclude_roles=exclude_roles) > offset + turns_returned
-        return messages, has_more, turns_returned
+
+        placeholders = ",".join("?" * len(page_keys))
+        with db.connection() as conn:
+            meta_rows = conn.execute(
+                f"SELECT {_TURN_KEY} AS k, MAX(id) AS last_id, MAX(created_at) AS last_ts, "
+                f"COUNT(*) AS cnt, "
+                f"MIN(CASE WHEN role = 'assistant' AND settled = 1 THEN id END) IS NULL AS working "
+                f"FROM transcript "
+                f"WHERE channel = ?{role_filter} AND {_TURN_KEY} IN ({placeholders}) "
+                f"GROUP BY k",
+                (channel, *exclude_roles, *page_keys),
+            ).fetchall()
+            first_rows = conn.execute(
+                f"SELECT {_TURN_KEY} AS k, content FROM transcript "
+                f"WHERE channel = ?{role_filter} AND {_TURN_KEY} IN ({placeholders}) "
+                f"GROUP BY k ORDER BY MIN(id) ASC",
+                (channel, *exclude_roles, *page_keys),
+            ).fetchall()
+
+        meta: dict[int, dict[str, object]] = {}
+        for r in meta_rows:
+            key = int(r[0])
+            meta[key] = {
+                "turn_id": key if key > 0 else None,
+                "last_activity_at": r[2],
+                "last_row_id": int(r[1]),
+                "row_count": int(r[3]),
+                "working": bool(r[4]),
+            }
+        first_content: dict[int, str] = {}
+        for r in first_rows:
+            key = int(r[0])
+            first_content[key] = cast("str", r[1] or "")[:200]
+
+        threads = []
+        for k in page_keys:
+            key = int(k)
+            m = meta.get(key, {})
+            threads.append({
+                "turn_id": key if key > 0 else None,
+                "last_activity_at": m.get("last_activity_at"),
+                "last_row_id": m.get("last_row_id", 0),
+                "row_count": m.get("row_count", 0),
+                "preview": first_content.get(key, ""),
+                "working": m.get("working", False),
+            })
+
+        threads.sort(key=lambda t: cast("int", t.get("last_row_id") or 0), reverse=True)
+        threads_returned = len(threads)
+        has_more = Transcript.count_turns(
+            channel, exclude_roles=exclude_roles, query=query,
+        ) > offset + threads_returned
+        return threads, has_more, threads_returned
 
 
     @staticmethod
@@ -362,536 +428,182 @@ class Transcript:
 
     @staticmethod
     def cleanup_unlinked_entries(channel: str | None = None) -> int:
+        """Scope-aware transcript GC. Discovers compacted scopes from the
+        ``compactions`` table and, per turn, deletes only rows a checkpoint has
+        folded — the **intersection** of the two scopes that can read a row:
+
+        * **MAIN** reads each turn's opening exchange (``id <= settle0``) until it
+          absorbs the turn (``turn_id <= main_watermark``, the turn_id axis);
+        * **THREAD** (a forked turn — one with any row past settle0) reads the
+          WHOLE turn (``id > fork_watermark``, the transcript-id axis), so it owns
+          even the pre-settle0 head the main spine also reads.
+
+        A row dies only when BOTH are done with it: a thread compacting past its
+        early rows must not delete the head the main spine still needs, and main
+        absorbing a turn must not delete rows its live thread still reads. settle0
+        itself is never collected — the spine re-derives it on every read. Episode-
+        cited rows are always preserved. Best-effort: 0 on error."""
         try:
-            from services import compaction_persistence
             from services.database_service import get_shared_db_service
             db = get_shared_db_service()
 
-            # Resolve each channel's compaction watermark through the single
-            # canonical source — compaction_persistence.get_compaction reads the
-            # latest role='compaction' transcript row, whose own id IS the
-            # watermark. The all-channels discovery uses that SAME source so the
-            # two can never silently drift apart again ().
             if channel:
                 channels = [channel]
             else:
                 with db.connection() as conn:
                     channels = [r[0] for r in conn.execute(
-                        "SELECT DISTINCT channel FROM transcript WHERE role = 'compaction'"
+                        "SELECT DISTINCT channel FROM compactions"
                     ).fetchall()]
 
-            watermarks = []
-            for ch in channels:
-                row = compaction_persistence.get_compaction(ch)
-                if row:
-                    watermarks.append((ch, row['compacted_up_to_id']))
-
-            with db.connection() as conn:
-                cursor = conn.cursor()
-                total_deleted = 0
-
-                for t, watermark in watermarks:
-                    if not watermark:
-                        continue
-
-                    # Collect transcript IDs referenced by any episode for this topic
-                    cursor.execute(
-                        """
-                        SELECT transcript_ids FROM episodes
-                        WHERE channel = ? AND deleted_at IS NULL
-                          AND transcript_ids IS NOT NULL AND transcript_ids != '[]'
-                        """,
-                        (t,),
-                    )
-                    referenced_ids: set[int] = set()
-                    import json as _json
-                    for ep_row in cursor.fetchall():
-                        try:
-                            ids = _json.loads(ep_row[0])
-                            if isinstance(ids, list):
-                                referenced_ids.update(int(i) for i in ids if i is not None)
-                        except Exception:
-                            pass
-
-                    # Find transcript IDs below watermark that are not referenced
-                    cursor.execute(
-                        """
-                        SELECT id FROM transcript
-                        WHERE channel = ? AND id < ?
-                        """,
-                        (t, watermark),
-                    )
-                    candidate_rows = cursor.fetchall()
-
-                    to_delete_ids = []
-                    for (entry_id,) in candidate_rows:
-                        if entry_id not in referenced_ids:
-                            to_delete_ids.append(entry_id)
-
-                    if not to_delete_ids:
-                        continue
-
-                    id_placeholders = ','.join('?' * len(to_delete_ids))
-                    # Children before parent: tool_calls FK-references transcript
-                    # with no ON DELETE CASCADE, so an obsolete turn's audit rows
-                    # must go first. A tool call is dead the moment its turn is —
-                    # there is no separate tool-call retention clock any more.
-                    cursor.execute(
-                        f"DELETE FROM tool_calls WHERE transcript_id IN ({id_placeholders})",
-                        to_delete_ids,
-                    )
-                    cursor.execute(
-                        f"DELETE FROM transcript WHERE id IN ({id_placeholders})",
-                        to_delete_ids,
-                    )
-                    total_deleted += len(to_delete_ids)
-
-                cursor.close()
-
+            total_deleted = sum(Transcript._gc_channel(ch) for ch in channels)
             # Always log the count — a steady 0 across channels is the signature
-            # of a watermark/discovery regression (the  no-op) and must
-            # not stay invisible. info, never debug.
+            # of a watermark/discovery regression and must not stay invisible.
             logger.info(
-                f"{LOG_PREFIX} Transcript GC: deleted {total_deleted} unlinked "
-                f"entries across {len(watermarks)} watermarked channel(s)"
+                f"{LOG_PREFIX} Transcript GC: deleted {total_deleted} folded "
+                f"entries across {len(channels)} channel(s)"
             )
             return total_deleted
-
         except Exception as e:
             logger.warning(f"{LOG_PREFIX} cleanup_unlinked_entries failed: {e}")
             return 0
 
 
-    # ── Internal helpers ─────────────────────────────────────────────────
-
-
     @staticmethod
-    def _maybe_trigger_extraction(channel: str, rowid: int | None) -> None:
-        """Fire episode extraction when the channel has accumulated
-        _EXTRACTION_THRESHOLD untriggered transcripts.
-
-        Gate: only channels whose source profile has ``extract_episodes`` produce
-        episodes (user, dmn, external-agent:*). Every other channel (delegate:*,
-        skills_building, scheduled, …) resolves to the muted default and returns
-        here before any DB work, keeping the episodes table free of housekeeping
-        noise and bounding which channels SubconsciousWorker._step_consolidate()
-        iterates.
-
-        DB-state-driven: counts transcripts with id > MAX(episodes.transcript_id_end)
-        for the channel. When count >= threshold, fire. No process-local state,
-        so restarts and container rebuilds cannot desync the trigger from the
-        actual tail of accumulated history.
-
-        Never raises — failures logged and silently ignored.
-        """
-        if rowid is None:
-            return
-        # Bidirectional dependency: the per-source allowlist lives in
-        # services/source_profiles.py; this is the episode-gate consumer.
-        from services.source_profiles import profile_for
-
-        if not profile_for(channel).extract_episodes:
-            return
-
-        try:
-            from services.database_service import get_shared_db_service
-
-            db = get_shared_db_service()
-            with db.connection() as conn:
-                row = conn.execute(
-                    """
-                    SELECT COUNT(*)
-                    FROM transcript
-                    WHERE channel = ?
-                      AND role != 'compaction'
-                      AND id > COALESCE(
-                          (SELECT MAX(transcript_id_end)
-                           FROM episodes
-                           WHERE channel = ? AND deleted_at IS NULL
-                             AND transcript_id_end IS NOT NULL),
-                          0
-                      )
-                    """,
-                    (channel, channel),
-                ).fetchone()
-            untriggered = row[0] if row else 0
-            if untriggered >= _EXTRACTION_THRESHOLD:
-                Transcript._trigger_episode_extraction(channel, rowid)
-        except Exception as e:
-            logger.warning(
-                f"{LOG_PREFIX} _maybe_trigger_extraction failed "
-                f"(channel={channel}, rowid={rowid}): {e}"
-            )
-
-
-    @staticmethod
-    def _trigger_episode_extraction(channel: str, rowid: int) -> None:
-        """Fire-and-forget episode extraction for the window ending at rowid.
-
-        Never raises — any failure is logged only.
-        """
-        def _run() -> None:
-            try:
-                import threading
-
-                from configs.channels import EpisodeEncoderConfig
-                from services.database_service import get_shared_db_service
-                from services.message_processor import MessageProcessor
-                from services.episodic_service import (
-                    EpisodicService, _fetch_novelty_comparison_set, compute_novelty,
-                )
-                from services.salience_service import compute_salience
-                from services.embedding_service import get_embedding_service
-
-                db = get_shared_db_service()
-
-                # ── 1. Fetch the window ──────────────────────────────────────────
-                with db.connection() as conn:
-                    cursor = conn.cursor()
-                    cursor.execute(
-                        """
-                        SELECT id, role, content, tool_name, created_at,
-                               location_lat, location_lon, location_name
-                        FROM transcript
-                        WHERE channel = ? AND id <= ? AND role != 'compaction'
-                        ORDER BY id DESC
-                        LIMIT ?
-                        """,
-                        (channel, rowid, _EXTRACTION_WINDOW),
-                    )
-                    rows = cursor.fetchall()
-                    cursor.close()
-
-                if not rows:
-                    return
-
-                entries = [
-                    {
-                        'id': r[0],
-                        'role': r[1],
-                        'content': r[2],
-                        'tool_name': r[3],
-                        'created_at': r[4],
-                        'location_lat': r[5],
-                        'location_lon': r[6],
-                        'location_name': r[7],
-                        'channel': channel,
-                    }
-                    for r in reversed(rows)
-                ]
-
-                # ── 2. Format window string ──────────────────────────────────────
-                window_str = Transcript._format_window_entries(entries)
-
-                # ── 3. Fetch referenced episodes via tool_calls ──────────────────
-                referenced_episodes = Transcript._fetch_referenced_episodes(entries, db)
-                referenced_str = Transcript._format_episodes_for_prompt(referenced_episodes)
-
-                # ── 4. Encode the window via the flat episode-encoder channel ────
-                # _window / _referenced are read by EpisodeEncoderConfig's
-                # get_user_prompt; set them on the instance before _run().
-                emp = object.__new__(MessageProcessor)
-                MessageProcessor.__init__(emp, "", None)
-                emp.config = EpisodeEncoderConfig()
-                emp.uid = None
-                emp.cancel_event = threading.Event()
-                emp.thinking_level = "low"
-                setattr(emp, '_window', window_str)
-                setattr(emp, '_referenced', referenced_str)
-                response = emp._run()
-                snapshots = cast("list[dict[str, object]]", Transcript._safe_json_load(response))
-                if not snapshots:
-                    return
-
-                # ── 5. Resolve service handles ───────────────────────────────────
-                episodic_svc = EpisodicService(db)
-                emb_svc = get_embedding_service()
-
-                valid_ids = {e['id'] for e in entries}
-
-                # Hoist novelty comparison set ONCE — shared across all snapshots
-                prior_embeddings = _fetch_novelty_comparison_set(channel)
-
-                # ── 6. Store snapshots ───────────────────────────────────────────
-                for ep in snapshots:
-                    try:
-                        if Transcript._is_delete_only(ep):
-                            delete_id = ep.get('delete_id')
-                            if delete_id:
-                                episodic_svc.soft_delete(cast("str", delete_id))
-                            continue
-
-                        # Filter transcript_ids to valid window IDs
-                        raw_ids = cast("list[object]", ep.get('transcript_ids') or [])
-                        ep['transcript_ids'] = [i for i in raw_ids if i in valid_ids]
-                        if not ep['transcript_ids']:
-                            continue
-
-                        ep['transcript_id_start'] = min(cast("list[int]", ep['transcript_ids']))
-                        ep['transcript_id_end'] = max(cast("list[int]", ep['transcript_ids']))
-                        ep['channel'] = channel
-
-                        dominant_location = Transcript._aggregate_dominant_location(entries)
-                        if dominant_location.get('lat') is not None:
-                            ep['location_lat'] = dominant_location['lat']
-                            ep['location_lon'] = dominant_location['lon']
-                            ep['location_name'] = dominant_location.get('name')
-
-                        gist = cast("str", ep.get('gist', '') or '')
-                        embedding = emb_svc.generate_embedding(gist) if gist else None
-
-                        novelty = compute_novelty(embedding, prior_embeddings) if embedding else 1.0
-                        ep['salience'] = compute_salience(
-                            valence=float(cast("float", ep.get('emotional_valence') or 0.0)),
-                            arousal=float(cast("float", ep.get('emotional_arousal') or 0.0)),
-                            has_open_loop=bool(ep.get('has_open_loop', False)),
-                            novelty=novelty,
-                        )
-
-                        # Pop transient fields — not persisted
-                        ep.pop('has_open_loop', None)
-                        update_id = ep.pop('update_id', None)
-                        ep.pop('delete_id', None)  # defensive — should be None here
-
-                        if update_id:
-                            episodic_svc.update_episode(cast("str", update_id), ep, embedding=embedding)
-                        else:
-                            episodic_svc.store_episode(ep, embedding=embedding)
-
-                        # Update the novelty comparison set so subsequent snapshots
-                        # in this same extraction run are compared against already-stored
-                        # episodes, not just the stale pre-run set.
-                        if embedding is not None:
-                            from services.embedding_utils import pack_embedding as _pack
-                            blob = _pack(embedding)
-                            if blob is not None:
-                                prior_embeddings.append(blob)
-
-                    except Exception as ep_err:
-                        logger.warning(f"{LOG_PREFIX} Episode store failed in trigger: {ep_err}")
-
-            except Exception as e:
-                logger.warning(
-                    f"{LOG_PREFIX} Episode extraction trigger failed "
-                    f"(channel={channel}, rowid={rowid}): {e}"
-                )
-
-        threading.Thread(target=_run, daemon=True).start()
-
-
-    # ── Episode extraction helpers ───────────────────────────────────────────────
-
-
-    @staticmethod
-    def _aggregate_dominant_location(entries: list[dict[str, object]]) -> dict[str, object]:
-        """When all location names are unique (no majority), falls back to the most recent non-null row."""
-        located = [
-            e for e in entries
-            if e.get('location_lat') is not None or e.get('location_name') is not None
-        ]
-        if not located:
-            return {'lat': None, 'lon': None, 'name': None}
-
-        name_counts = Counter(
-            e['location_name'] for e in located if e.get('location_name') is not None
-        )
-
-        if name_counts:
-            top_name, top_count = name_counts.most_common(1)[0]
-            if top_count > 1:
-                # Clear dominant name — use any row with that name for coords
-                for e in reversed(located):
-                    if e.get('location_name') == top_name:
-                        return {
-                            'lat': e.get('location_lat'),
-                            'lon': e.get('location_lon'),
-                            'name': top_name,
-                        }
-
-        # All names are unique (or no names) — use the most recent located row
-        most_recent = located[-1]
-        return {
-            'lat': most_recent.get('location_lat'),
-            'lon': most_recent.get('location_lon'),
-            'name': most_recent.get('location_name'),
-        }
-
-
-    @staticmethod
-    def _format_window_entries(entries: list[dict[str, object]]) -> str:
-        lines = []
-        for entry in entries:
-            entry_id = entry.get('id', '?')
-            role = entry.get('role', 'unknown')
-            content = entry.get('content', '')
-            tool_name = entry.get('tool_name')
-            created_at = entry.get('created_at', '')
-            if tool_name:
-                lines.append(f"[{entry_id}] ({created_at}) {role} [{tool_name}]: {content}")
+    def _resolve_watermarks(scope_rows: list[tuple[object, object]]) -> tuple[int | None, dict[int, int]]:
+        """Split compaction scope rows into the main watermark (for_turn_id NULL
+        → turn_id axis) and per-fork watermarks (for_turn_id = T → transcript.id
+        axis)."""
+        main_wm: int | None = None
+        fork_wm: dict[int, int] = {}
+        for for_tid, up_to in scope_rows:
+            if for_tid is None:
+                main_wm = int(cast("int", up_to))
             else:
-                lines.append(f"[{entry_id}] ({created_at}) {role}: {content}")
-        return "\n".join(lines)
-
-
-    @staticmethod
-    def _parse_episode_ids_from_results(result_texts: list[str]) -> set[str]:
-        """Extract episode IDs from rendered memory recall envelopes.
-
-        Only rows with ``kind == "episode"`` are collected — data-graph rows are
-        keyed by data-graph key (not an episode id) and are intentionally skipped.
-        Malformed / non-recall envelopes are skipped silently.
-        """
-        import json as _json
-
-        episode_ids: set[str] = set()
-        for text in result_texts:
-            if not text or "[end:memory]" not in text:
-                continue
-            nl = text.find("]\n")
-            end = text.find("\n[end:memory]")
-            if nl == -1 or end == -1 or end <= nl:
-                continue
-            body = text[nl + 2:end]
-            try:
-                parsed = _json.loads(body)
-            except (ValueError, TypeError):
-                continue
-            rows = parsed.get("results") if isinstance(parsed, dict) else None
-            if not isinstance(rows, list):
-                continue
-            for row in rows:
-                if isinstance(row, dict) and row.get("kind") == "episode":
-                    eid = str(row.get("id", "")).strip()
-                    if eid:
-                        episode_ids.add(eid)
-        return episode_ids
-
+                fork_wm[int(cast("int", for_tid))] = int(cast("int", up_to))
+        return main_wm, fork_wm
 
     @staticmethod
-    def _fetch_referenced_episodes(entries: list[dict[str, object]], db: "DatabaseService") -> list[dict[str, object]]:
-        """Query tool_calls for memory skill invocations within the window.
+    def _dead_row_ids(
+        ids: list[int], settle_id: int, cited: set[int], main_absorbed: bool, fork_watermark: int | None,
+    ) -> list[int]:
+        """Rows one turn's compaction(s) have folded, under the two-axis rule: a
+        forked turn (any row past settle0) reads as the WHOLE turn, so the thread
+        owns every row above its watermark — including the pre-settle0 head main
+        also reads. A row dies only when BOTH scopes are done: main needs
+        id <= settle0 until it absorbs the turn; the thread needs id > its fork
+        watermark (fork_floor; 0 ⇒ never compacted ⇒ keeps everything). settle0 is
+        re-derived every read, so it is never collected."""
+        is_forked = any(rid > settle_id for rid in ids)
+        fork_floor = fork_watermark if fork_watermark is not None else 0
+        return [
+            rid for rid in ids
+            if rid not in cited and rid != settle_id
+            and (rid > settle_id or main_absorbed)
+            and (not is_forked or rid <= fork_floor)
+        ]
 
-        ``tool_name='memory'`` covers both auto-seed and LLM-invoked recall —
-        both are dispatched under the same tool name.
-        """
+    @staticmethod
+    def _gc_channel(channel: str) -> int:
+        """Delete one channel's folded rows under the two-axis watermark."""
+        from services.database_service import get_shared_db_service
+        db = get_shared_db_service()
 
-        t_ids = [e['id'] for e in entries if e.get('id')]
-        if not t_ids:
-            return []
+        # Latest watermark per scope: main (for_turn_id NULL → turn_id axis) plus
+        # one per fork (for_turn_id = T → transcript.id axis).
+        with db.connection() as conn:
+            scope_rows = conn.execute(
+                "SELECT c.for_turn_id, c.compacted_up_to FROM compactions c "
+                "WHERE c.channel = ? AND c.id = (SELECT MAX(c2.id) FROM compactions c2 "
+                "WHERE c2.channel = c.channel AND c2.for_turn_id IS c.for_turn_id)",
+                (channel,),
+            ).fetchall()
+        main_wm, fork_wm = Transcript._resolve_watermarks(scope_rows)
 
-        try:
-            placeholders = ','.join('?' * len(t_ids))
+        # Candidate turns: every fork-compacted turn, plus every main-absorbed turn
+        # that still carries a main-owned row below its settle0 (the correlated
+        # settle subquery bounds the main sweep to turns with something to delete).
+        candidate_turns: set[int] = set(fork_wm)
+        if main_wm is not None:
+            settle = (
+                "(SELECT MIN(t.id) FROM transcript t WHERE t.channel = transcript.channel "
+                f"AND t.turn_id = transcript.turn_id AND {_SETTLE_PREDICATE})"
+            )
             with db.connection() as conn:
-                cursor = conn.cursor()
-                cursor.execute(
-                    f"""
-                    SELECT result FROM tool_calls
-                    WHERE transcript_id IN ({placeholders})
-                      AND tool_name = 'memory'
-                      AND result IS NOT NULL
-                    """,
-                    t_ids,
-                )
-                rows = cursor.fetchall()
-                cursor.close()
-        except Exception as exc:
-            logger.warning(f"{LOG_PREFIX} _fetch_referenced_episodes query failed: {exc}")
-            return []
+                candidate_turns.update(int(r[0]) for r in conn.execute(
+                    "SELECT DISTINCT transcript.turn_id FROM transcript "
+                    f"WHERE channel = ? AND turn_id IS NOT NULL AND turn_id <= ? AND id < {settle}",
+                    (channel, main_wm),
+                ).fetchall())
 
-        # Parse episode IDs out of each memory recall envelope. recall renders a
-        # structured JSON body — ``[memory(status=success, …)]\n{"results": [{"id":…,
-        # "kind":"episode", …}, …]}\n[end:memory]`` — so we pull the JSON between the
-        # open tag and ``[end:memory]`` and collect the ``id`` of every row whose
-        # ``kind`` is ``episode`` (data-graph rows carry their own kind and are keyed
-        # by data-graph key, not an episode id, so they are skipped).
-        episode_ids = Transcript._parse_episode_ids_from_results([row[0] or '' for row in rows])
-
-        if not episode_ids:
-            return []
-
-        try:
-            from services.episodic_service import EpisodicService
-            episodic_svc = EpisodicService(db)
-            episodes = []
-            for eid in episode_ids:
-                ep = episodic_svc.get_episode_by_id(eid)
-                if ep:
-                    episodes.append(ep)
-            return episodes
-        except Exception as exc:
-            logger.warning(f"{LOG_PREFIX} _fetch_referenced_episodes fetch failed: {exc}")
-            return []
+        cited = Transcript._episode_cited_ids(channel)
+        deleted = 0
+        for tid in candidate_turns:
+            settle_id = Transcript.settle0(channel, tid)
+            if settle_id is None:
+                continue  # unsettled turn — its boundary is undefined, leave it whole
+            with db.connection() as conn:
+                ids = [int(r[0]) for r in conn.execute(
+                    "SELECT id FROM transcript WHERE channel = ? AND turn_id = ?",
+                    (channel, tid),
+                ).fetchall()]
+            dead = Transcript._dead_row_ids(
+                ids, settle_id, cited,
+                main_absorbed=main_wm is not None and tid <= main_wm,
+                fork_watermark=fork_wm.get(tid),
+            )
+            if not dead:
+                continue
+            ph = ','.join('?' * len(dead))
+            # Children before parent: tool_calls FK-references transcript with no
+            # ON DELETE CASCADE, so a folded row's audit rows go first.
+            with db.connection() as conn:
+                conn.execute(f"DELETE FROM tool_calls WHERE transcript_id IN ({ph})", dead)
+                conn.execute(f"DELETE FROM transcript WHERE id IN ({ph})", dead)
+            deleted += len(dead)
+        return deleted
 
 
     @staticmethod
-    def _format_episodes_for_prompt(episodes: list[dict[str, object]]) -> str:
-        if not episodes:
-            return ''
-        lines = []
-        for ep in episodes:
-            eid = ep.get('id', '')
-            gist = ep.get('gist', '')
-            created_at = ep.get('created_at', '')
-            lines.append(f"id: {eid} | gist: {gist} | created: {created_at}")
-        return "\n".join(lines)
+    def _episode_cited_ids(channel: str) -> set[int]:
+        """Transcript ids cited by any live episode of the channel — GC never
+        deletes a row an episode still points at."""
+        import json
+        from services.database_service import get_shared_db_service
+        db = get_shared_db_service()
+        with db.connection() as conn:
+            rows = conn.execute(
+                "SELECT transcript_ids FROM episodes WHERE channel = ? "
+                "AND deleted_at IS NULL AND transcript_ids IS NOT NULL "
+                "AND transcript_ids != '[]'",
+                (channel,),
+            ).fetchall()
+        cited: set[int] = set()
+        for (blob,) in rows:
+            try:
+                ids = json.loads(blob)
+            except Exception:
+                continue
+            if isinstance(ids, list):
+                cited.update(int(i) for i in ids if i is not None)
+        return cited
 
 
     @staticmethod
-    def _strip_code_fence(text: str) -> str:
-        open_end = text.find("```")
-        if open_end == -1:
-            return text
-        # Skip the opening fence line (```json or ```)
-        newline = text.find("\n", open_end)
-        if newline == -1:
-            return text
-        close_start = text.rfind("```", newline)
-        if close_start <= newline:
-            return text
-        return text[newline + 1 : close_start].strip()
+    def write_input_row(
+        channel: str, role: str, content: str, *, turn_id: "int | None" = None,
+    ) -> int:
+        """Write a turn's anchoring input row, opening the next turn (or appending
+        to an existing thread).
 
-
-    @staticmethod
-    def _safe_json_load(text: str) -> list[object]:
-        import json as _json
-
-        if not text:
-            return []
-        text = text.strip()
-        # Strip markdown code fences if present
-        if text.startswith("```"):
-            text = Transcript._strip_code_fence(text)
-        try:
-            parsed = _json.loads(text)
-            if isinstance(parsed, list):
-                return parsed
-            logger.warning(f"{LOG_PREFIX} EpisodeEncoder returned non-list JSON")
-            return []
-        except ValueError:
-            logger.warning(f"{LOG_PREFIX} EpisodeEncoder returned unparseable JSON")
-            return []
-
-
-    @staticmethod
-    def _is_delete_only(ep: dict[str, object]) -> bool:
-        if not ep.get('delete_id'):
-            return False
-        # All other meaningful fields must be absent or null/empty
-        meaningful = ('gist', 'transcript_ids', 'update_id')
-        return not any(ep.get(f) for f in meaningful)
-
-
-    @staticmethod
-    def write_input_row(channel: str, role: str, content: str) -> int:
-        """Write a turn's anchoring input row, opening the next turn.
-
-        turn_id is the per-channel monotonic turn boundary. Every input row opens a
-        fresh turn — there is no caller-supplied turn_id: fresh user / external
-        input, an async re-entry and a compaction checkpoint each open their OWN
-        turn. The next value, ``MAX(turn_id)+1`` for the channel, is computed inside
-        the INSERT so the allocation is atomic with the write — no read-then-insert
-        race when two same-channel turns open concurrently. Read it back with
-        :func:`turn_id_of_row`.
+        turn_id is the per-channel monotonic turn boundary — redefined as the
+        *thread* id: a thread-starter allocates a new turn_id; a reply appends rows
+        carrying the **existing** turn_id. When ``turn_id`` is None (thread-starter),
+        the next value, ``MAX(turn_id)+1`` for the channel, is computed inside the
+        INSERT so the allocation is atomic with the write — no read-then-insert
+        race when two same-channel turns open concurrently. When ``turn_id`` is
+        supplied (reply), that value is written verbatim — no allocation. Read the
+        allocated value back with :func:`turn_id_of_row` (only needed on the
+        thread-starter path; the reply path already knows its turn_id).
         """
         from services.database_service import get_shared_db_service
 
@@ -902,17 +614,18 @@ class Transcript:
             cursor.execute(
                 """
                 INSERT INTO transcript (channel, role, content, xml_migrated,
-                                        location_lat, location_lon, location_name, turn_id)
+                                        location_lat, location_lon, location_name, turn_id,
+                                        settled)
                 VALUES (?, ?, ?, 1, ?, ?, ?,
-                        (SELECT COALESCE(MAX(turn_id), 0) + 1
-                         FROM transcript WHERE channel = ?))
+                        COALESCE(?, (SELECT COALESCE(MAX(turn_id), 0) + 1
+                                     FROM transcript WHERE channel = ?)),
+                        ?)
                 """,
-                (channel, role, content, lat, lon, loc_name, channel),
+                (channel, role, content, lat, lon, loc_name, turn_id, channel,
+                 1 if role == 'assistant' else 0),
             )
             row_id = cursor.lastrowid
             cursor.close()
-
-        Transcript._maybe_trigger_extraction(channel, row_id)
 
         return cast("int", row_id)
 
@@ -941,9 +654,9 @@ class Transcript:
         """Link an uploaded document to the transcript turn that carried it.
 
         Powers chat-attachment persistence across page refresh: the live preview is a
-        browser-only blob: URL, so on reload the rebuild (api.conversation
-        .get_recent_history) joins this table to re-render the image/file from
-        /documents/<id>/preview.  INSERT OR IGNORE keeps it idempotent against the
+        browser-only blob: URL, so on reload the rebuild (api.threads
+        .serialize_turn) joins this table to re-render the image/file from
+        /api/documents/<id>/preview.  INSERT OR IGNORE keeps it idempotent against the
         composite primary key.  Called from message_processor._seed_upload_attachment.
         """
         from services.database_service import get_shared_db_service
@@ -961,12 +674,10 @@ class Transcript:
         """The most recent input-row content on a channel — the post-compaction
         continuation's "the user query was: …".
 
-        An input row is any NON-assistant, NON-compaction row: there are many input
-        roles (user / proactive_thought / external_agent / vision / …), so we exclude
-        the two output-shaped roles rather than hardcode role='user'. Compaction
-        checkpoints are written via write_input_row(channel, 'compaction', …) so they
-        ARE non-assistant rows and must be excluded explicitly. Ordered by monotonic
-        id (not created_at — one-second granularity ties). Returns None on an empty
+        An input row is any NON-assistant row: there are many input roles (user /
+        proactive_thought / external_agent / vision / …), so we exclude the one
+        output-shaped role rather than hardcode role='user'. Ordered by monotonic id
+        (not created_at — one-second granularity ties). Returns None on an empty
         channel."""
         from services.database_service import get_shared_db_service
 
@@ -974,7 +685,7 @@ class Transcript:
         with db.connection() as conn:
             row = conn.execute(
                 "SELECT content FROM transcript "
-                "WHERE channel = ? AND role != 'assistant' AND role != 'compaction' "
+                "WHERE channel = ? AND role != 'assistant' "
                 "ORDER BY id DESC LIMIT 1",
                 (channel,),
             ).fetchone()
@@ -1002,16 +713,16 @@ class Transcript:
             cursor.execute(
                 """
                 INSERT INTO transcript (channel, role, content, xml_migrated,
-                                        location_lat, location_lon, location_name, turn_id)
+                                        location_lat, location_lon, location_name, turn_id,
+                                        settled)
                 VALUES (?, ?, ?, 1, ?, ?, ?,
                         COALESCE(?, (SELECT COALESCE(MAX(turn_id), 0) + 1
-                                     FROM transcript WHERE channel = ?)))
+                                     FROM transcript WHERE channel = ?)),
+                        1)
                 """,
                 (channel, 'assistant', content, lat, lon, loc_name, turn_id, channel),
             )
             row_id = cursor.lastrowid
             cursor.close()
-
-        Transcript._maybe_trigger_extraction(channel, row_id)
 
         return cast("int", row_id)

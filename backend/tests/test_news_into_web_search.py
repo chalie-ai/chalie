@@ -34,8 +34,7 @@ pytestmark = pytest.mark.unit
 
 
 def _mp_for(config: ProcessorConfig) -> MessageProcessor:
-    mp = MessageProcessor("what's in the news today")
-    mp.config = config
+    mp = MessageProcessor(config, raw_input="what's in the news today")
     mp.active_tools = list(config.always_available or [])
     return mp
 
@@ -50,7 +49,7 @@ def _find_tools_on(mp: MessageProcessor, params: dict[str, object]) -> str:
 
 class TestNewsBlockedOnUserChannel:
 
-    def test_news_is_never_injected_on_user_channel(self) -> None:
+    def test_news_is_never_injected_on_user_channel(self, db: object) -> None:
         """A query naming ``news`` on the user channel must NEVER inject the raw
         news tool — it is ``DISCOVERABLE=False``, exactly like browser/search, so it
         is absent from the global discovery roster and the index the cascade
@@ -69,7 +68,7 @@ class TestNewsBlockedOnUserChannel:
 
 class TestNewsAvailableInWebSearchDelegate:
 
-    def test_web_search_delegate_tool_surface_includes_news(self) -> None:
+    def test_web_search_delegate_tool_surface_includes_news(self, db: object) -> None:
         """The web_search delegate's resolved per-turn tool schemas must include
         `news` — proving the delegate can actually dispatch it, alongside
         search/read/web_download."""
