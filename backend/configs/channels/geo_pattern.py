@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import logging
+
 from typing import TYPE_CHECKING
 
 from services.processor_config import ProcessorConfig
+from services.transcript_service import Transcript
 
 if TYPE_CHECKING:
     from services.message_processor import MessageProcessor
@@ -14,10 +17,8 @@ from configs.channels.pattern import _pattern_existing_patterns_block
 
 def _geo_pattern_load_transcript_block(window_start: int, window_end: int) -> str:
     """Fetch location-tagged transcripts from the window and format them."""
-    import logging as _logging  # noqa: PLC0415
-    _log = _logging.getLogger(__name__)
+    _log = logging.getLogger(__name__)
     try:
-        from services.transcript_service import Transcript  # noqa: PLC0415
         rows = Transcript.window(
             ["user"],
             after_id=window_start,

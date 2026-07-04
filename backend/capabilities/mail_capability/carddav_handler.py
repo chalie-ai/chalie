@@ -45,11 +45,13 @@ if TYPE_CHECKING:
         data: object
         def load(self) -> None: ...
 
+from capabilities.contact_resolver import _parse_contact_row, index_contact_profile, resolve
+from services.data_graph_service import get_data_graph_service
+
 logger = logging.getLogger(__name__)
 
 
 def _dgs() -> "_DgsProtocol":
-    from services.data_graph_service import get_data_graph_service
     return cast("_DgsProtocol", get_data_graph_service())
 
 
@@ -171,7 +173,6 @@ class CarddavHandler:
     # -----------------------------------------------------------------------
 
     def index_contacts(self, contacts: list[dict[str, object]]) -> None:
-        from capabilities.contact_resolver import index_contact_profile  # noqa: PLC0415
         for contact in contacts:
             fn = (cast(str, contact.get("fn")) or "").strip()
             if not fn:
@@ -195,11 +196,6 @@ class CarddavHandler:
     # -----------------------------------------------------------------------
 
     def list_contacts(self, params: dict[str, object]) -> dict[str, object]:
-        from capabilities.contact_resolver import (  # noqa: PLC0415
-            _parse_contact_row,
-            resolve,
-        )
-
         limit = min(int(cast(int, params.get("limit", 20))), 50)
         query = (cast(str, params.get("query")) or "").strip()
 
@@ -221,8 +217,6 @@ class CarddavHandler:
         return {"contacts": contacts, "count": len(contacts)}
 
     def get_contact(self, params: dict[str, object]) -> dict[str, object]:
-        from capabilities.contact_resolver import resolve  # noqa: PLC0415
-
         identifier = (cast(str, params.get("identifier")) or "").strip()
         if not identifier:
             return {"error": "identifier is required"}

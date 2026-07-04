@@ -1,14 +1,20 @@
 from __future__ import annotations
 
+import logging
+
 from typing import TYPE_CHECKING, cast
 
-from services.post_turn_hook import PostTurnHook
-from services.processor_config import ProcessorConfig
+from api.chat import dispatch_message
 
 from configs.channels._common import (
     DEFAULT_ALWAYS_AVAILABLE,
     substitute_provider_content_field,
 )
+
+from services.data_graph_service import get_data_graph_service
+from services.post_turn_hook import PostTurnHook
+from services.processor_config import ProcessorConfig
+from services.system_message_prompt import ExternalAgentSystemMessagePrompt
 
 if TYPE_CHECKING:
     from services.message_processor import MessageProcessor
@@ -33,7 +39,6 @@ class DiscloseToHumanHook(PostTurnHook):
         self._project = project
 
     def run(self, mp: "MessageProcessor", response_text: str) -> None:
-        import logging  # noqa: PLC0415
         _log = logging.getLogger(__name__)
         raw_input = getattr(mp, "_raw_input", "")
         disclosure_input = (
@@ -44,7 +49,6 @@ class DiscloseToHumanHook(PostTurnHook):
             "Let the user know about this exchange in your own words."
         )
         try:
-            from api.chat import dispatch_message  # noqa: PLC0415
             dispatch_message(disclosure_input, source="external_agent", hidden_input=True)
         except Exception as exc:
             _log.warning("[EAMP] disclosure dispatch failed: %s", exc)
@@ -95,20 +99,17 @@ class EAMPConfig(ProcessorConfig):
         )
 
     def get_system_prompt(self, mp: "MessageProcessor") -> str:
-        import logging  # noqa: PLC0415
         _log = logging.getLogger(__name__)
         _self = cast("_WithAgentAttrs", self)
         _agent_name = _self._agent_name
         _project = _self._project
         try:
-            from services.system_message_prompt import ExternalAgentSystemMessagePrompt  # noqa: PLC0415
             body = ExternalAgentSystemMessagePrompt().get_prompt()
             body = substitute_provider_content_field(body, mp)
 
             # Resolve the user's first name from data_graph.
             user_name = "the user"
             try:
-                from services.data_graph_service import get_data_graph_service  # noqa: PLC0415
                 dgs = get_data_graph_service()
                 rows = dgs.fetch(kinds=["system"])
                 for row in rows:
@@ -135,7 +136,6 @@ class EAMPConfig(ProcessorConfig):
             return ""
 
     def get_user_prompt(self, mp: "MessageProcessor") -> str:
-        import logging  # noqa: PLC0415
         _log = logging.getLogger(__name__)
         parts: list[str] = []
 

@@ -40,6 +40,7 @@ if TYPE_CHECKING:
         text: str
 
 from services.llm_clients.base import ProviderClient
+from services.llm_service import _app_user_agent, _resolve_api_key, estimate_tokens
 from services.provider_api import (
     ProviderApiRequest,
     ProviderApiResponse,
@@ -49,6 +50,7 @@ from services.provider_api import (
     ProviderTimeoutError,
     ThinkingLevel,
 )
+from services.providers import PROVIDER_CALL_TIMEOUT_S
 
 logger = logging.getLogger(__name__)
 
@@ -149,9 +151,7 @@ class AnthropicClient(ProviderClient):
         self.model: str = cast(str, config.get('model', 'claude-haiku-4-5-20251001'))
 
     def _get_client(self) -> "_anthropic_mod.Anthropic":
-        import anthropic
-        from services.llm_service import _resolve_api_key, _app_user_agent  # noqa: PLC0415
-        from services.providers import PROVIDER_CALL_TIMEOUT_S  # noqa: PLC0415
+        import anthropic  # noqa: PLC0415 — heavy third-party SDK cold-start deferral
         return anthropic.Anthropic(
             api_key=_resolve_api_key(self._config),
             timeout=PROVIDER_CALL_TIMEOUT_S,
@@ -280,7 +280,6 @@ class AnthropicClient(ProviderClient):
         before the main send).  Pre-flight over-cap checks only need a safe
         heuristic, not an exact count.
         """
-        from services.llm_service import estimate_tokens  # noqa: PLC0415
         body = json.dumps({
             'model': self.model,
             'system': dto.system,
@@ -288,3 +287,5 @@ class AnthropicClient(ProviderClient):
             **({'tools': dto.tools} if dto.tools else {}),
         }, default=str)
         return estimate_tokens(body)
+
+

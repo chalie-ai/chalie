@@ -34,21 +34,27 @@ import logging
 import threading
 import time
 import uuid
-from typing import TYPE_CHECKING, Sequence, cast
+from typing import Sequence, cast
 
 from flask import Blueprint, jsonify, request
 from flask.typing import ResponseReturnValue
 
 from .auth import require_auth
+from abilities._dispatcher import ToolDispatcher
+from configs.channels import UserConfig
+from services.async_delegate_runner import async_delegate_runner
+from services.filename_utils import safe_filename
 from services.locale_service import CHAT_TIMESTAMP_FMT, format_date
 from services.log_utils import safe
 from services.markup import sanitize
+from services.message_processor import MessageProcessor
+from services.processor_config import ProcessorConfig
+from services.rich_media_parser import resolve_tool_call_transcript_ids
 from services.time_utils import utc_now
+from services.tmp_storage import new_tmp_path
+from services.transcript_service import Transcript
 from services.websocket_broker import WebSocketBroker
 from services.segment_service import SegmentService
-
-if TYPE_CHECKING:
-    from services.processor_config import ProcessorConfig
 
 logger = logging.getLogger(__name__)
 
@@ -101,15 +107,13 @@ def _run_chat_background(
     turn: _ActiveTurn,
     cancel_event: threading.Event,
     raw_input: str,
-    config: "ProcessorConfig",
+    config: ProcessorConfig,
     metadata: dict[str, object],
     request_id: str,
     turn_start: float,
 ) -> None:
     """Clears the active UMP reference BEFORE broadcasting done so the frontend
     can immediately POST /chat without racing a still-set active_ump."""
-    from services.message_processor import MessageProcessor  # noqa: PLC0415
-
     broker = WebSocketBroker()
     try:
         response = MessageProcessor.process(
@@ -201,11 +205,9 @@ def _broadcast_turn_result(response: str, request_id: str, turn_start: float) ->
     # span tags with tool_calls identically.
     transcript_ids: list[int] = []
     try:
-        from services.transcript_service import Transcript  # noqa: PLC0415
         rows = Transcript.get_recent("user", limit=1)
         if rows:
-            from services.database_service import get_shared_db_service  # noqa: PLC0415
-            from services.rich_media_parser import resolve_tool_call_transcript_ids  # noqa: PLC0415
+            from services.database_service import get_shared_db_service  # noqa: PLC0415 — singleton: lazy database accessor
             with get_shared_db_service().connection() as conn:
                 transcript_ids = resolve_tool_call_transcript_ids(cast(int, rows[-1]["id"]), conn)
     except Exception as exc:
@@ -238,8 +240,6 @@ def deliver_async_result(mp: object, result_text: str, cancel_event: threading.E
     Processes-panel stop control aborts a spiralling delegate at the next chain
     boundary (the processor returns "" and self-cleans when it is set).
     """
-    from services.message_processor import MessageProcessor  # noqa: PLC0415
-
     config = getattr(mp, "config", None)
     if config is None:
         logger.warning("[Chat API] async delivery skipped: captured mp has no config")
@@ -290,13 +290,11 @@ def dispatch_message(
 
 
 def _start_turn(text: str, source: str, attachments: list[object], hidden_input: bool = False) -> str:
-    from configs.channels import UserConfig  # noqa: PLC0415
-
     request_id = str(uuid.uuid4())
     turn_start = time.time()
 
     try:
-        from services.world_state import world_state, Signal  # noqa: PLC0415
+        from services.world_state import world_state, Signal  # noqa: PLC0415 — eager singleton with DB hydration at module init
         world_state.absorb(Signal(source="http_chat", kind="user_message", payload={"text": text[:200]}))
     except Exception as exc:
         logger.debug("[Chat API] world_state.absorb failed: %s", exc)
@@ -335,8 +333,6 @@ def _stage_chat_uploads(files: Sequence[object]) -> list[object]:
     """Returns temp paths that _seed_turn_zero feeds to document.upload — which
     ingests by PATH, never bytes, so no file blob ever reaches the act-trail.
     """
-    from services.filename_utils import safe_filename  # noqa: PLC0415
-    from services.tmp_storage import new_tmp_path  # noqa: PLC0415
 
     paths: list[object] = []
     for f in files:
@@ -428,8 +424,6 @@ def get_active_subagents() -> ResponseReturnValue:
     are missed while the client is disconnected. Each row carries the tool name,
     the model's summary of what the delegate is doing, and when it started.
     """
-    from services.async_delegate_runner import async_delegate_runner
-
     return jsonify({"subagents": async_delegate_runner.active()}), 200
 
 
@@ -447,8 +441,6 @@ def post_subagent_stop(sub_id: str) -> ResponseReturnValue:
         {ok: true, cancelled: true}         — stop signal delivered
         {ok: true, reason: "not_found"}     — sub_id not in active registry
     """
-    from services.async_delegate_runner import async_delegate_runner
-
     if async_delegate_runner.cancel(sub_id):
         logger.info("[Chat API] Stop signal delivered to delegate %s", safe(sub_id[:8]))
         return jsonify({"ok": True, "cancelled": True}), 200
@@ -469,9 +461,6 @@ def post_action() -> ResponseReturnValue:
     def _run_action() -> None:
         broker = WebSocketBroker()
         try:
-            from abilities._dispatcher import ToolDispatcher  # noqa: PLC0415
-            from services.processor_config import ProcessorConfig  # noqa: PLC0415
-
             params = {k: v for k, v in body.items() if k != "skill"}
 
             broker.broadcast({"type": "status", "stage": "processing"})

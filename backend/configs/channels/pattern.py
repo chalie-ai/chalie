@@ -1,9 +1,16 @@
 from __future__ import annotations
 
+import json
+import logging
 from typing import TYPE_CHECKING, cast
 
+from services.act_trail import ActTrail
+from services.database_service import get_shared_db_service
 from services.post_turn_hook import PostTurnHook
 from services.processor_config import ProcessorConfig
+from services.skill_association_service import SkillAssociationService
+from services.time_utils import utc_now
+from services.transcript_service import Transcript
 
 if TYPE_CHECKING:
     from services.message_processor import MessageProcessor
@@ -15,11 +22,8 @@ _TOP_PATTERN_CAP = 50
 
 def _pattern_existing_patterns_block() -> str:
     """Return the top-confidence active behavioral_pattern rows as JSON."""
-    import json as _json  # noqa: PLC0415
-    import logging as _logging  # noqa: PLC0415
-    _log = _logging.getLogger(__name__)
+    _log = logging.getLogger(__name__)
     try:
-        from services.database_service import get_shared_db_service  # noqa: PLC0415
         db = get_shared_db_service()
         with db.connection() as conn:
             rows = conn.execute(
@@ -36,13 +40,13 @@ def _pattern_existing_patterns_block() -> str:
         patterns = {}
         for (val,) in rows:
             try:
-                d = _json.loads(val) or {}
+                d = json.loads(val) or {}
                 name = d.get("name")
                 if name:
                     patterns[name] = d.get("summary", "")
             except Exception:
                 continue
-        return _json.dumps(patterns, indent=2) if patterns else "(none yet)"
+        return json.dumps(patterns, indent=2) if patterns else "(none yet)"
     except Exception as exc:
         _log.warning("[PATTERN_CONFIG] existing_patterns_block failed: %s", exc)
         return "(none yet)"
@@ -50,8 +54,6 @@ def _pattern_existing_patterns_block() -> str:
 
 def _touched_pattern_names(mp: "MessageProcessor") -> set[str]:
     """Pattern names (= data_graph keys) save_pattern wrote this turn, from the DB."""
-    import json as _json  # noqa: PLC0415
-    from services.act_trail import ActTrail  # noqa: PLC0415
     turn_id = getattr(mp, "turn_id", None)
     if turn_id is None:
         return set()
@@ -60,7 +62,7 @@ def _touched_pattern_names(mp: "MessageProcessor") -> set[str]:
         if row.get("tool_name") != "save_pattern":
             continue
         try:
-            name = (_json.loads(cast("str", row.get("params") or "{}")) or {}).get("name")
+            name = (json.loads(cast("str", row.get("params") or "{}")) or {}).get("name")
         except Exception:
             continue
         if name:
@@ -72,11 +74,8 @@ class PatternDecayHook(PostTurnHook):
     """Confidence decay sweep: -0.005 on untouched active rows; soft-delete at <=0."""
 
     def run(self, mp: "MessageProcessor", response_text: str) -> None:
-        import logging as _logging  # noqa: PLC0415
-        _log = _logging.getLogger(__name__)
+        _log = logging.getLogger(__name__)
         try:
-            from services.database_service import get_shared_db_service  # noqa: PLC0415
-            from services.time_utils import utc_now  # noqa: PLC0415
             touched_names = _touched_pattern_names(mp)
             db = get_shared_db_service()
             with db.connection() as conn:
@@ -127,13 +126,11 @@ class PatternSkillSyncHook(PostTurnHook):
     """Map the behavioural patterns touched this turn to curated skill playbooks."""
 
     def run(self, mp: "MessageProcessor", response_text: str) -> None:
-        import logging as _logging  # noqa: PLC0415
-        _log = _logging.getLogger(__name__)
+        _log = logging.getLogger(__name__)
         try:
             names = _touched_pattern_names(mp)
             if not names:
                 return
-            from services.database_service import get_shared_db_service  # noqa: PLC0415
             db = get_shared_db_service()
             placeholders = ",".join("?" * len(names))
             with db.connection() as conn:
@@ -147,7 +144,6 @@ class PatternSkillSyncHook(PostTurnHook):
             touched_ids = {r[0] for r in rows}
             if not touched_ids:
                 return
-            from services.skill_association_service import SkillAssociationService  # noqa: PLC0415
             SkillAssociationService().run_pass(touched_ids)
         except Exception as exc:
             _log.warning("[PATTERN_CONFIG] skill association pass failed: %s", exc)
@@ -181,10 +177,8 @@ class PatternConfig(ProcessorConfig):
 
     def get_user_prompt(self, mp: "MessageProcessor") -> str:
         """Pattern-match user-prompt: transcripts from window + existing patterns + trail."""
-        import logging as _logging  # noqa: PLC0415
-        _log = _logging.getLogger(__name__)
+        _log = logging.getLogger(__name__)
         try:
-            from services.transcript_service import Transcript  # noqa: PLC0415
             rows = Transcript.window(
                 ["user"],
                 after_id=self._window_start,

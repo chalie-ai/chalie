@@ -9,15 +9,34 @@
 """MessageProcessor — single flat processor for all LLM message turns."""
 
 import logging
+import os
 import re
 import threading
+from concurrent.futures import ThreadPoolExecutor
 from typing import TYPE_CHECKING, TypeAlias, cast
 
+from services import compaction_persistence
+from services.act_trail import ActTrail
+from services.deliberation_ema_service import DeliberationEmaService
+from services.deliberation_score_service import DeliberationScoreService
+from services.provider_api import (
+    ProviderApiRequest,
+    ProviderRetriesExhaustedError,
+    ProviderType,
+    RequestOverCapError,
+    ResponseOverLimitError,
+    ThinkingLevel,
+)
+from services.providers import Providers, resolve_thinking_mode
+from services.thinking_override_service import get_thinking_override
 from services.time_formatter_service import TimeFormatterService
+from services.tmp_storage import TMP_PATH_PREFIX
+from services.transcript_service import Transcript
+from services.turn_zero_flashback import TurnZeroFlashback
 
 if TYPE_CHECKING:
     from services.processor_config import ProcessorConfig
-    from services.provider_api import ProviderApiRequest, ProviderApiResponse
+    from services.provider_api import ProviderApiResponse
 
 logger = logging.getLogger(__name__)
 
@@ -107,7 +126,6 @@ class MessageProcessor:
         # bypass the gate and are forced on every send via Providers.send.
         self.thinking_override: str | None = None
         # The mp owns its provider gateway — mp-free standalone orchestrator.
-        from services.providers import Providers  # noqa: PLC0415
         self.providers = Providers()
         # Cooperative cancellation flag; _step checks is_set() before each send
         # and between tool dispatches. Never raises.
@@ -177,9 +195,6 @@ class MessageProcessor:
             return
 
         try:
-            from services.deliberation_score_service import DeliberationScoreService
-            from services.deliberation_ema_service import DeliberationEmaService
-
             scalar = DeliberationScoreService().classify(self._raw_input)
             ema_svc = DeliberationEmaService()
 
@@ -199,7 +214,7 @@ class MessageProcessor:
             )
 
             if self._uid is not None:
-                from services.database_service import get_shared_db_service
+                from services.database_service import get_shared_db_service  # noqa: PLC0415
                 try:
                     db = get_shared_db_service()
                     with db.connection() as conn:
@@ -220,7 +235,7 @@ class MessageProcessor:
     @staticmethod
     def process(
         raw_input: str,
-        config: "ProcessorConfig",  # noqa: F821 — deferred import avoids circular dep
+        config: "ProcessorConfig",
         metadata: "dict[str, object] | None" = None,
         cancel_event: "threading.Event | None" = None,
     ) -> str:
@@ -233,7 +248,6 @@ class MessageProcessor:
         # would apply deliberation pressure to every turn the gate didn't run
         # (non-user channels) or that crashed, regressing simple recall/chit-chat.
         mp.thinking_level = "low"
-        from services.thinking_override_service import get_thinking_override
         mp.thinking_override = get_thinking_override()
         return mp._run()
 
@@ -252,8 +266,6 @@ class MessageProcessor:
         # ACTIVE_TOOLS is live from iteration 0; find_tools appends, build_tools
         # resolves it each turn. Empty for compaction/encoder channels by design.
         self.active_tools = list(self._cfg.always_available or [])
-
-        from services.transcript_service import Transcript  # noqa: PLC0415
 
         # Writing the input row allocates the next turn_id ATOMICALLY (a COALESCE
         # subquery inside the INSERT, under the writer lock) — never max+1 in
@@ -286,7 +298,6 @@ class MessageProcessor:
         #    re-fires nothing). Renders a curated block and records its own _auto
         #    memory(recall) row; the model-invoked memory.recall keeps its JSON contract.
         if self._cfg.memory_seed:
-            from services.turn_zero_flashback import TurnZeroFlashback  # noqa: PLC0415
             TurnZeroFlashback(self).seed()
 
         # b. Attachment uploads — presence-gated; each file's upload IS the ingest.
@@ -297,15 +308,12 @@ class MessageProcessor:
         #    layer, and doc_id is a pre-generated random hex, never a cross-connection rowid.
         attachments = list(cast("list[str]", self._metadata.get("attachments") or []))
         if attachments:
-            from concurrent.futures import ThreadPoolExecutor  # noqa: PLC0415
             with ThreadPoolExecutor(max_workers=min(len(attachments), 8)) as pool:
                 list(pool.map(self._seed_upload_attachment, attachments))
 
     def _seed_upload_attachment(self, path: str) -> None:
         """Dispatch one turn-0 attachment's blocking ``document.upload`` by PATH."""
-        import os  # noqa: PLC0415
         from abilities._dispatcher import ToolDispatcher  # noqa: PLC0415
-        from services.tmp_storage import TMP_PATH_PREFIX  # noqa: PLC0415
 
         real = os.path.realpath(path)
         if not real.startswith(TMP_PATH_PREFIX) or not os.path.isfile(real):
@@ -321,16 +329,13 @@ class MessageProcessor:
         # Scoped to the user-attachment seed: a model-issued upload mid-turn must
         # NOT render as a user attachment.
         if self.uid is not None:
-            from services.transcript_service import Transcript  # noqa: PLC0415
             match = _SEED_UPLOAD_ID_RE.search(result)
             if match:
                 Transcript.link_transcript_doc(self.uid, match.group(1))
 
     def _build_send_dto(self) -> "ProviderApiRequest":
         """Build a ProviderApiRequest from this mp's current state."""
-        from services.provider_api import ProviderApiRequest, ThinkingLevel, ProviderType  # noqa: PLC0415
         from abilities._registry import AbilityRegistry  # noqa: PLC0415
-        from services.providers import resolve_thinking_mode  # noqa: PLC0415
 
         system = self._cfg.get_system_prompt(self)
         if self._cfg.SUPPORTS_ASYNC:
@@ -382,8 +387,6 @@ class MessageProcessor:
 
     def _step(self) -> str:
         """One link in the recursive turn chain — exactly one LLM API call."""
-        from services.provider_api import RequestOverCapError, ResponseOverLimitError  # noqa: PLC0415
-
         if self.cancel_event.is_set():
             return ""
         try:
@@ -410,10 +413,6 @@ class MessageProcessor:
         the caller's compaction path. After the final failure the turn is
         terminated with a user-facing ProviderRetriesExhaustedError.
         """
-        from services.provider_api import (  # noqa: PLC0415
-            ProviderRetriesExhaustedError, RequestOverCapError, ResponseOverLimitError,
-        )
-
         last_exc: Exception | None = None
         for attempt in range(1, _MAX_PROVIDER_ATTEMPTS + 1):
             try:
@@ -452,7 +451,6 @@ class MessageProcessor:
         formatted = self._format_response(text or "")
         if self._cfg.skip_transcript:
             return formatted
-        from services.transcript_service import Transcript  # noqa: PLC0415
 
         row_id = Transcript.write_assistant_row(self._cfg.channel, formatted, turn_id=self.turn_id)
         if self.turn_id is None:
@@ -502,7 +500,6 @@ class MessageProcessor:
         child.thinking_override = self.thinking_override
         child.providers = self.providers
         if post_compaction:
-            from services.transcript_service import Transcript  # noqa: PLC0415
             child.post_compaction_continuation = True
             child.continuation_user_query = Transcript.latest_input_content(self._cfg.channel)
             if "review_transcript" not in child.active_tools:
@@ -570,8 +567,6 @@ class MessageProcessor:
         """Watermark-bounded transcript rows for this channel, EXCLUDING the current turn."""
         if self._cfg.suppress_history:
             return []
-        from services import compaction_persistence  # noqa: PLC0415
-        from services.transcript_service import Transcript  # noqa: PLC0415
         compaction = compaction_persistence.get_compaction(self._cfg.channel)
         watermark = cast("int", compaction["compacted_up_to_id"]) if compaction else 0
         rows = Transcript.get_recent(self._cfg.channel, since_id=watermark)
@@ -597,7 +592,6 @@ class MessageProcessor:
         """Assemble the current turn's act-trail — its tool calls, in record order."""
         if self.turn_id is None:
             return ""
-        from services.act_trail import ActTrail  # noqa: PLC0415
 
         trail = ActTrail()
         lines: list[str] = []
@@ -610,8 +604,6 @@ class MessageProcessor:
     def _dispatch_compaction(self) -> None:
         """Fire chat-history compaction through the normal tool-dispatch chokepoint."""
         from abilities._dispatcher import ToolDispatcher  # noqa: PLC0415
-        from services import compaction_persistence  # noqa: PLC0415
-        from services.transcript_service import Transcript  # noqa: PLC0415
 
         before = compaction_persistence.get_compaction(self._cfg.channel)
         before_id = cast("int", before["compacted_up_to_id"]) if before else 0
@@ -640,8 +632,6 @@ _MISSING_TS_PLACEHOLDER = '????-??-?? ??:??'
 
 def _wrap_with_checkpoint(channel: str, user_body: str) -> str:
     """Wrap the user-message body with a ### Checkpoint envelope when a compaction exists."""
-    from services import compaction_persistence
-
     row = compaction_persistence.get_compaction(channel)
     if not row or not (compacted := cast('str', row.get('compacted_text') or '').strip()):
         return user_body

@@ -1,9 +1,14 @@
 from __future__ import annotations
 
+import json
+import logging
 from typing import TYPE_CHECKING, cast
 
+from services.data_graph_service import get_data_graph_service
 from services.post_turn_hook import PostTurnHook
 from services.processor_config import ProcessorConfig
+from services.system_message_prompt import UserSummarySystemPrompt
+from services.time_utils import parse_utc
 
 if TYPE_CHECKING:
     from services.message_processor import MessageProcessor
@@ -35,9 +40,7 @@ class PersistUserSummaryHook(PostTurnHook):
     recovery works correctly."""
 
     def run(self, mp: "MessageProcessor", response_text: str) -> None:
-        import json as _json  # noqa: PLC0415
-        import logging as _logging  # noqa: PLC0415
-        _log = _logging.getLogger(__name__)
+        _log = logging.getLogger(__name__)
 
         text = (response_text or "").strip()
         if not text:
@@ -49,8 +52,8 @@ class PersistUserSummaryHook(PostTurnHook):
         stripped = stripped.removesuffix("```").rstrip()
 
         try:
-            parsed = _json.loads(stripped)
-        except _json.JSONDecodeError as exc:
+            parsed = json.loads(stripped)
+        except json.JSONDecodeError as exc:
             _log.warning(
                 "[USER_SUMMARY_CONFIG] post_turn: JSON parse failed (%s) — skipping write. raw=%r",
                 exc,
@@ -74,7 +77,6 @@ class PersistUserSummaryHook(PostTurnHook):
             return
 
         try:
-            from services.data_graph_service import get_data_graph_service  # noqa: PLC0415
             dgs = get_data_graph_service()
             # Write user_summary_long FIRST so crash recovery works correctly.
             dgs.store(
@@ -105,11 +107,9 @@ def _should_synthesise() -> bool:
     traits/patterns exist but no summary → True;
     otherwise → True iff the latest trait/pattern is newer than the summary row.
     """
-    import logging as _logging  # noqa: PLC0415
-    _log = _logging.getLogger(__name__)
+    _log = logging.getLogger(__name__)
     try:
         from services.database_service import get_shared_db_service  # noqa: PLC0415
-        from services.time_utils import parse_utc  # noqa: PLC0415
         db = get_shared_db_service()
         with db.connection() as conn:
             row = conn.execute(
@@ -178,13 +178,10 @@ class UserSummaryConfig(ProcessorConfig):
 
     def get_user_prompt(self, mp: "MessageProcessor") -> str:
         """User-summary user-prompt: user_specific traits + behavioral_patterns."""
-        import json as _json  # noqa: PLC0415
-        import logging as _logging  # noqa: PLC0415
-        _log = _logging.getLogger(__name__)
+        _log = logging.getLogger(__name__)
 
         # Section 1: user_specific traits
         try:
-            from services.data_graph_service import get_data_graph_service  # noqa: PLC0415
             rows = get_data_graph_service().fetch(
                 kinds=["user_specific"],
                 limit=_MAX_TRAIT_ROWS,
@@ -224,7 +221,7 @@ class UserSummaryConfig(ProcessorConfig):
                 ).fetchall()
             for (value_json,) in pattern_rows:
                 try:
-                    content = _json.loads(cast("str", value_json))
+                    content = json.loads(cast("str", value_json))
                     if content:
                         active_patterns.append(cast("dict[str, object]", content))
                 except Exception:
@@ -244,5 +241,4 @@ class UserSummaryConfig(ProcessorConfig):
 
     def get_system_prompt(self, mp: "MessageProcessor") -> str:
         """OLD assembly ``f"{user_def}\n\n{body}"``."""
-        from services.system_message_prompt import UserSummarySystemPrompt  # noqa: PLC0415
         return f"{self.get_user_definition(mp)}\n\n{UserSummarySystemPrompt().get_prompt()}"

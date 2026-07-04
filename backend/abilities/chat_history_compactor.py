@@ -19,7 +19,10 @@ from typing import TYPE_CHECKING, ClassVar, cast
 from abilities._ability import Ability
 from abilities._compaction_config import CompactionConfig
 from abilities._result import ToolResult
+from services import compaction_persistence
+from services.provider_api import ProviderApiRequest, ThinkingLevel
 from services.system_message_prompt import ChatHistoryCompactionSystemPrompt
+from services.transcript_service import Transcript
 
 if TYPE_CHECKING:
     from typing import Protocol
@@ -81,8 +84,6 @@ class ChatHistoryCompactor(Ability):
 
     def run(self, params: dict[str, object]) -> ToolResult:
         from services.message_processor import MessageProcessor  # noqa: PLC0415
-        from services import compaction_persistence  # noqa: PLC0415
-        from services.transcript_service import Transcript  # noqa: PLC0415
 
         mp = cast("_CompactionParent", self.mp)
         channel = mp.config.channel
@@ -137,8 +138,6 @@ class ChatHistoryCompactor(Ability):
         ``rows_compacted`` to the success result without recomputing or paying a
         second provider call. It is 0 when there is nothing to compact.
         """
-        from services.provider_api import ProviderApiRequest, ThinkingLevel  # noqa: PLC0415
-
         system = ChatHistoryCompactionSystemPrompt().get_prompt()
         window = parent.providers.get_context_limit()
         cap = window - max(int(0.10 * window), 8000) if window else 0

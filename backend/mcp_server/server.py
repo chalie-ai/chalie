@@ -27,6 +27,8 @@ from starlette.responses import JSONResponse, Response
 from mcp.server.fastmcp import FastMCP
 
 from services.database_service import DatabaseService
+from services.provider_api import ProviderRetriesExhaustedError
+from services.time_utils import utc_now
 
 logger = logging.getLogger(__name__)
 
@@ -73,9 +75,8 @@ class BearerTokenMiddleware(BaseHTTPMiddleware):
 
     @staticmethod
     def _validate_token(raw_token: str) -> str | None:
-        from services.wrapper_auth_service import _hash_token
-        from services.database_service import get_shared_db_service
-        from services.time_utils import utc_now
+        from services.wrapper_auth_service import _hash_token  # noqa: PLC0415 — heavy: wrapper_auth_service imports sqlite3 + flask
+        from services.database_service import get_shared_db_service  # noqa: PLC0415 — singleton: lazy database accessor
 
         token_hash = _hash_token(raw_token)
         db = get_shared_db_service()
@@ -151,8 +152,6 @@ def create_mcp_server(host: str = "0.0.0.0", port: int = _DEFAULT_PORT) -> FastM
             agent_name, project_or_task_name, loop_in_human, wrapper_id,
         )
 
-        from services.provider_api import ProviderRetriesExhaustedError  # noqa: PLC0415
-
         def _run() -> str:
             config = EAMPConfig(
                 agent_name=agent_name,
@@ -180,8 +179,8 @@ def _build_app(mcp: FastMCP) -> Starlette:
 
 def run_mcp_server() -> None:
     """Run the MCP server (blocking). Intended as a WorkerManager service."""
-    from services.settings_service import SettingsService
-    from services.database_service import get_shared_db_service
+    from services.settings_service import SettingsService  # noqa: PLC0415 — singleton: SettingsService imports database_service at module level
+    from services.database_service import get_shared_db_service  # noqa: PLC0415 — singleton: lazy database accessor
 
     db = get_shared_db_service()
     settings = SettingsService(db)
@@ -208,8 +207,8 @@ def run_mcp_server() -> None:
 
 def _ensure_mcp_token(db: DatabaseService) -> None:
     """Generate an MCP auth token on first boot if none exists."""
-    from services.wrapper_auth_service import WrapperAuthService
-    from services.settings_service import SettingsService
+    from services.wrapper_auth_service import WrapperAuthService  # noqa: PLC0415 — heavy: wrapper_auth_service imports sqlite3 + flask
+    from services.settings_service import SettingsService  # noqa: PLC0415 — singleton: SettingsService imports database_service at module level
 
     settings = SettingsService(db)
     existing = settings.get("mcp_server_token_wrapper_id")

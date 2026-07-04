@@ -10,13 +10,20 @@ from typing import TYPE_CHECKING, Optional, cast
 
 if TYPE_CHECKING:
     from services.database_service import DatabaseService
-    from services.decay_engine_service import DecayEngineService
     from services.embedding_service import EmbeddingService
     from services.episodic_service import EpisodicService
     from services.data_graph_service import DataGraphService
 
+from capabilities import load_capabilities
+from services.compaction_persistence import get_compaction
+from services.data_graph_service import get_data_graph_service
+from services.decay_engine_service import DecayEngineService
 from services.durable_timestamp import DurableTimestamp
+from services.episodic_constants import ERA_DIGEST_TRIGGER, HDBSCAN_MIN_CLUSTER_SIZE
+from services.salience_service import compute_salience
+from services.source_profiles import LIKE_EXTERNAL_AGENT, consolidating_exact_channels
 from services.time_utils import utc_now
+from services.transcript_service import Transcript
 
 logger = logging.getLogger(__name__)
 
@@ -196,7 +203,7 @@ class SubconsciousWorker:
 
     def _check_gates(self) -> Optional[str]:
         """Return the name of the failing gate, or ``None`` when both pass."""
-        from services.world_state import world_state
+        from services.world_state import world_state  # noqa: PLC0415 — eager singleton with DB hydration at module init
 
         snapshot = world_state.snapshot()
         last_msg_raw = snapshot.get("last_user_message_at")
@@ -219,8 +226,8 @@ class SubconsciousWorker:
 
     def _step_consolidate(self) -> str:
         """Step 1 — consolidate apex episodes into super-episodes, per channel."""
-        from services.database_service import get_shared_db_service  # noqa: PLC0415
-        from services.embedding_service import get_embedding_service  # noqa: PLC0415
+        from services.database_service import get_shared_db_service  # noqa: PLC0415 — singleton: lazy database accessor
+        from services.embedding_service import get_embedding_service  # noqa: PLC0415 — singleton: lazy embedding accessor (pulls numpy)
 
         db = get_shared_db_service()
         emb_svc = get_embedding_service()
@@ -253,10 +260,6 @@ class SubconsciousWorker:
     @staticmethod
     def _consolidating_channels(db: "DatabaseService") -> list[str]:
         """Return the channels to consolidate: the HEAVY exact channels (user,"""
-        from services.source_profiles import (  # noqa: PLC0415
-            LIKE_EXTERNAL_AGENT,
-            consolidating_exact_channels,
-        )
 
         channels = list(consolidating_exact_channels())
         try:
@@ -277,8 +280,7 @@ class SubconsciousWorker:
 
     def _consolidate_channel(self, channel: str, db: "DatabaseService", emb_svc: "EmbeddingService") -> tuple[int, int]:
         """Consolidate one channel across both hierarchy rounds. Returns"""
-        from services.episodic_constants import ERA_DIGEST_TRIGGER  # noqa: PLC0415
-        from services.episodic_service import (  # noqa: PLC0415
+        from services.episodic_service import (  # noqa: PLC0415 — episodic_service pulls numpy/umap/sklearn at module scope
             EpisodicService,
             cluster_apex_embeddings,
             find_super_candidates,
@@ -336,7 +338,7 @@ class SubconsciousWorker:
         episodic_svc: "EpisodicService",
     ) -> int:
         """Write one roll-up round's clusters at ``level``. Returns supers written."""
-        from services.episodic_service import _fetch_novelty_comparison_set  # noqa: PLC0415
+        from services.episodic_service import _fetch_novelty_comparison_set  # noqa: PLC0415 — episodic_service pulls numpy/umap/sklearn at module scope
 
         if not clusters or self._summarization_budget_remaining <= 0:
             return 0
@@ -372,16 +374,14 @@ class SubconsciousWorker:
         prior_embeddings: list[bytes],
     ) -> bool:
         """Encode + store one parent episode for a cluster. Returns True on write."""
-        from configs.channels import (  # noqa: PLC0415
+        from configs.channels import (  # noqa: PLC0415 — circular: configs.channels → external_agent → api.chat → configs.channels
             SuperEpisodeConfig,
             _collect_transcript_ids,
             _fetch_transcript_spans,
             _safe_json_load_object,
         )
-        from services.episodic_constants import HDBSCAN_MIN_CLUSTER_SIZE  # noqa: PLC0415
-        from services.episodic_service import compute_novelty  # noqa: PLC0415
-        from services.message_processor import MessageProcessor  # noqa: PLC0415
-        from services.salience_service import compute_salience  # noqa: PLC0415
+        from services.episodic_service import compute_novelty  # noqa: PLC0415 — episodic_service pulls numpy/umap/sklearn at module scope
+        from services.message_processor import MessageProcessor  # noqa: PLC0415 — heavy orchestrator: message_processor pulls large first-party graph at module scope
 
         try:
             sources = [
@@ -452,11 +452,10 @@ class SubconsciousWorker:
 
     def _step_fact_extraction(self) -> str:
         """Step 2 — route hard facts from new episodes into data_graph."""
-        from configs.channels import FactExtractionConfig, parse_fact_ops  # noqa: PLC0415
-        from services.data_graph_service import get_data_graph_service  # noqa: PLC0415
-        from services.database_service import get_shared_db_service  # noqa: PLC0415
-        from services.episodic_service import EpisodicService  # noqa: PLC0415
-        from services.message_processor import MessageProcessor  # noqa: PLC0415
+        from configs.channels import FactExtractionConfig, parse_fact_ops  # noqa: PLC0415 — circular: configs.channels → external_agent → api.chat → configs.channels
+        from services.database_service import get_shared_db_service  # noqa: PLC0415 — singleton: lazy database accessor
+        from services.episodic_service import EpisodicService  # noqa: PLC0415 — episodic_service pulls numpy/umap/sklearn at module scope
+        from services.message_processor import MessageProcessor  # noqa: PLC0415 — heavy orchestrator: message_processor pulls large first-party graph at module scope
 
         episodic_svc = EpisodicService(get_shared_db_service())
         backlog = episodic_svc.fetch_fact_extraction_backlog(_FACT_EXTRACTION_CALL_BUDGET)
@@ -502,12 +501,11 @@ class SubconsciousWorker:
         gist = cast(str, episode.get("gist") or "")
         neighbours = dg.recall(gist, limit=_FACT_NEIGHBOUR_LIMIT) if gist else []
 
-        from collections.abc import Callable as _Callable  # noqa: PLC0415
-        config = cast(_Callable[..., object], config_cls)(gist, neighbours)
-        response = cast(_Callable[[str, object], str], getattr(processor_cls, "process"))("", config)
+        config = cast(Callable[..., object], config_cls)(gist, neighbours)
+        response = cast(Callable[[str, object], str], getattr(processor_cls, "process"))("", config)
 
         try:
-            ops = cast(list[dict[str, object]], cast(_Callable[..., object], parse_ops)(response))
+            ops = cast(list[dict[str, object]], cast(Callable[..., object], parse_ops)(response))
         except ValueError as exc:
             counters["unparseable"] += 1
             logger.warning(
@@ -529,7 +527,7 @@ class SubconsciousWorker:
 
     def _apply_fact_op(self, op: dict[str, object], dg: "DataGraphService", counters: dict[str, int], source: str) -> None:
         """Apply one validated constrained op to data_graph and count it."""
-        from configs.channels.fact_extraction import OP_DELETE  # noqa: PLC0415
+        from configs.channels.fact_extraction import OP_DELETE  # noqa: PLC0415 — circular: configs.channels → external_agent → api.chat → configs.channels
 
         verb = op["op"]
         try:
@@ -552,15 +550,13 @@ class SubconsciousWorker:
     def _step_decay(self) -> str:
         """Step 3 — run the unified decay cycle."""
         if self._decay_engine is None:
-            from services.decay_engine_service import DecayEngineService
             self._decay_engine = DecayEngineService()
         self._decay_engine.run_once()
         return "ok"
 
     def _step_pattern_match(self) -> str:
         """Step 4 — single-pass LLM pattern matcher over a transcript-id window."""
-        from services.data_graph_service import get_data_graph_service
-        from services.database_service import get_shared_db_service
+        from services.database_service import get_shared_db_service  # noqa: PLC0415 — singleton: lazy database accessor
 
         _DG_KEY_CURSOR = "pattern_match_cursor"
         _MIN_DELTA = 50
@@ -592,7 +588,6 @@ class SubconsciousWorker:
         # actually reads — user-behaviour channels, no compaction rows. Counting
         # background-loop rows (dmn writes many) would advance the delta past the
         # _MIN_DELTA trigger and fire spurious pattern passes the load discards.
-        from services.transcript_service import Transcript  # noqa: PLC0415
         latest = Transcript.latest_id(["user"], exclude_roles=("compaction",)) or 0
 
         delta = latest - cursor
@@ -608,8 +603,8 @@ class SubconsciousWorker:
         # post_turn_hooks, keyed off the patterns it touched — both that set and
         # the confidence-decay sweep are derived from the turn's durable rows, so
         # nothing needs to be inspected on the processor after it returns.
-        from configs.channels import PatternConfig  # noqa: PLC0415
-        from services.message_processor import MessageProcessor  # noqa: PLC0415
+        from configs.channels import PatternConfig  # noqa: PLC0415 — circular: configs.channels → external_agent → api.chat → configs.channels
+        from services.message_processor import MessageProcessor  # noqa: PLC0415 — heavy orchestrator: message_processor pulls large first-party graph at module scope
 
         MessageProcessor.process("", PatternConfig(cursor, latest))
 
@@ -639,8 +634,8 @@ class SubconsciousWorker:
 
     def _step_synthesis(self) -> str:
         """Step 5 — refresh the user synopsis (short + long)."""
-        from configs.channels import UserSummaryConfig, _should_synthesise  # noqa: PLC0415
-        from services.message_processor import MessageProcessor  # noqa: PLC0415
+        from configs.channels import UserSummaryConfig, _should_synthesise  # noqa: PLC0415 — circular: configs.channels → external_agent → api.chat → configs.channels
+        from services.message_processor import MessageProcessor  # noqa: PLC0415 — heavy orchestrator: message_processor pulls large first-party graph at module scope
 
         if not _should_synthesise():
             logger.info(f"{LOG_PREFIX} No new traits since last synthesis; skipping")
@@ -657,14 +652,13 @@ class SubconsciousWorker:
             logger.info(f"{LOG_PREFIX} Skipping DMN — no user synthesis available")
             return "skipped: no user synthesis"
 
-        from configs.channels import DmnConfig  # noqa: PLC0415
-        from services.message_processor import MessageProcessor  # noqa: PLC0415
+        from configs.channels import DmnConfig  # noqa: PLC0415 — circular: configs.channels → external_agent → api.chat → configs.channels
+        from services.message_processor import MessageProcessor  # noqa: PLC0415 — heavy orchestrator: message_processor pulls large first-party graph at module scope
         MessageProcessor.process("", DmnConfig())
         return "ok"
 
     def _step_capability_sync(self) -> str:
         """Step 7 — IMAP / CalDAV / CardDAV server sync."""
-        from capabilities import load_capabilities
 
         synced = []
         for cap in load_capabilities().values():
@@ -675,8 +669,7 @@ class SubconsciousWorker:
 
     def _step_geo_patterns(self) -> str:
         """Step 8 — single-pass LLM geo-spatial pattern extractor."""
-        from services.data_graph_service import get_data_graph_service
-        from services.database_service import get_shared_db_service
+        from services.database_service import get_shared_db_service  # noqa: PLC0415 — singleton: lazy database accessor
 
         _DG_KEY_CURSOR = "geo_pattern_cursor"
         _MIN_DELTA = 30
@@ -702,7 +695,6 @@ class SubconsciousWorker:
             # Same allowlist as the geo-pattern window (geo_pattern.py): only
             # user geo-activity channels advance the cursor, so a located row on
             # a muted channel can never fire the geo pass.
-            from services.transcript_service import Transcript  # noqa: PLC0415
             latest = Transcript.latest_id(["user"], require_location=True, exclude_roles=("compaction",)) or 0
         except Exception as exc:
             logger.debug(f"{LOG_PREFIX} geo_patterns no db: {exc}")
@@ -717,8 +709,8 @@ class SubconsciousWorker:
             return f"skip cursor={cursor} latest={latest} delta={delta}"
 
         # Fire the geo pass via the canonical entry point.
-        from configs.channels import GeoConfig  # noqa: PLC0415
-        from services.message_processor import MessageProcessor  # noqa: PLC0415
+        from configs.channels import GeoConfig  # noqa: PLC0415 — circular: configs.channels → external_agent → api.chat → configs.channels
+        from services.message_processor import MessageProcessor  # noqa: PLC0415 — heavy orchestrator: message_processor pulls large first-party graph at module scope
 
         MessageProcessor.process("", GeoConfig(cursor, latest))
 
@@ -752,10 +744,9 @@ class SubconsciousWorker:
         if last is not None and now - last < _DISCOVERY_INTERVAL:
             return f"skip: fired {int((now - last).total_seconds() // 3600)}h ago"
 
-        from configs.channels import DiscoveryConfig  # noqa: PLC0415
-        from configs.channels.discovery import DISCOVERY_PROMPT  # noqa: PLC0415
-        from services.compaction_persistence import get_compaction  # noqa: PLC0415
-        from services.message_processor import MessageProcessor  # noqa: PLC0415
+        from configs.channels import DiscoveryConfig  # noqa: PLC0415 — circular: configs.channels → external_agent → api.chat → configs.channels
+        from configs.channels.discovery import DISCOVERY_PROMPT  # noqa: PLC0415 — circular: configs.channels → external_agent → api.chat → configs.channels
+        from services.message_processor import MessageProcessor  # noqa: PLC0415 — heavy orchestrator: message_processor pulls large first-party graph at module scope
 
         compaction = get_compaction("user")
         MessageProcessor.process(
@@ -772,7 +763,7 @@ class SubconsciousWorker:
     def _load_user_synthesis(self) -> Optional[str]:
         """Check whether a user_summary row exists in data_graph."""
         try:
-            from services.database_service import get_shared_db_service
+            from services.database_service import get_shared_db_service  # noqa: PLC0415 — singleton: lazy database accessor
             db = get_shared_db_service()
             with db.connection() as conn:
                 rows = conn.execute(
