@@ -675,6 +675,32 @@ body.speaker-user #ambientBloom {
   font-variant-numeric: tabular-nums;
 }
 
+.enter-sends-toggle {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 4px;
+  font-size: var(--font-size-sm);
+  cursor: pointer;
+  color: var(--text-tertiary);
+  user-select: none;
+}
+
+.enter-sends-toggle.active {
+  color: var(--accent-primary);
+}
+
+.enter-sends-toggle__input {
+  width: 12px;
+  height: 12px;
+  accent-color: var(--accent-primary);
+  cursor: pointer;
+}
+
+.enter-sends-toggle__label {
+  line-height: 1;
+}
+
 .voice-rec-btn {
   flex-shrink: 0;
   position: relative;
