@@ -231,6 +231,11 @@
   letter-spacing: 0.04em;
 }
 
+.user-message__ts {
+  @extend .speech-form__timestamp;
+  align-self: flex-end;
+}
+
 .speech-form__remember-btn {
   background: none;
   border: none;

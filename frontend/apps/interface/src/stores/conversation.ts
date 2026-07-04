@@ -7,6 +7,7 @@
 import { defineStore } from 'pinia';
 import type { ConversationAttachment, ConversationMessage, ConversationSegment } from '../api/conversation';
 import { extractText } from '../composables/useMarkup';
+import { chatTimestamp } from '../utils/time';
 
 export interface AttachmentPreview {
   filename: string;
@@ -51,6 +52,8 @@ export interface UserForm extends TurnTagged {
   attachments?: AttachmentPreview[];
   /** Whether the turn is within working memory (faded if false). */
   inWorkingMemory?: boolean;
+  /** Display-formatted send time ("%d %b %H:%M"); history rows carry the server string. */
+  ts?: string;
 }
 
 export interface ChalieForm extends TurnTagged {
@@ -160,7 +163,7 @@ export const useConversationStore = defineStore('conversation', {
     appendUser(
       text: string,
       attachments?: AttachmentPreview[],
-      opts?: { inWorkingMemory?: boolean; turnId?: number | null },
+      opts?: { inWorkingMemory?: boolean; turnId?: number | null; ts?: string },
     ): number {
       const id = nextId();
       const form: UserForm = {
@@ -170,6 +173,7 @@ export const useConversationStore = defineStore('conversation', {
         attachments: attachments ?? [],
         inWorkingMemory: opts?.inWorkingMemory ?? true,
         turnId: opts?.turnId,
+        ts: opts?.ts ?? chatTimestamp(),
       };
       this.forms.push(form);
       return id;
@@ -398,7 +402,7 @@ export const useConversationStore = defineStore('conversation', {
     _appendMessage(msg: ConversationMessage, inWorkingMemory: boolean): void {
       if (msg.role === 'user') {
         const attachments = this._attachmentsFor(msg);
-        this.appendUser(msg.content, attachments, { inWorkingMemory, turnId: msg.turn_id });
+        this.appendUser(msg.content, attachments, { inWorkingMemory, turnId: msg.turn_id, ts: msg.timestamp });
         return;
       }
       for (const form of this._assistantForms(msg, inWorkingMemory)) {
@@ -417,6 +421,7 @@ export const useConversationStore = defineStore('conversation', {
           attachments,
           inWorkingMemory,
           turnId: msg.turn_id,
+          ts: msg.timestamp,
         });
         return;
       }
