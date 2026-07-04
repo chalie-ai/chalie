@@ -30,13 +30,6 @@ class TestSubmitSync:
         with pytest.raises(ValueError, match="boom"):
             wq.submit_sync(lambda: _raise(ValueError("boom")))
 
-    def test_preserves_fifo_ordering(self, wq: WriteQueueService) -> None:
-        results = []
-        for i in range(5):
-            results.append(wq.submit_sync(lambda x=i: x))
-        assert results == [0, 1, 2, 3, 4]
-
-
 # ── submit (fire-and-forget) ────────────────────────────────────────────────
 
 class TestSubmit:

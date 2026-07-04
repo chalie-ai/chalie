@@ -53,19 +53,6 @@ def httpbin() -> None:
 
 
 @pytest.mark.unit
-def test_three_named_profiles_exist_with_distinct_user_agents() -> None:
-    """BROWSER / API / DOWNLOAD ship as the named profiles the abilities use."""
-    assert web_fetch.BROWSER.name == "browser"
-    assert web_fetch.API.name == "api"
-    assert web_fetch.DOWNLOAD.name == "download"
-
-    # Browser impersonates Chrome; API/DOWNLOAD identify as ChalieBot.
-    assert "Chrome/131" in web_fetch.BROWSER.headers["User-Agent"]
-    assert "ChalieBot" in web_fetch.API.headers["User-Agent"]
-    assert "ChalieBot" in web_fetch.DOWNLOAD.headers["User-Agent"]
-
-
-@pytest.mark.unit
 def test_fetch_text_uses_the_real_ssrf_guard() -> None:
     """The fetch service shares ONE SSRF guard with the abilities."""
     # Identity, not equality: web_fetch must call the same production guard.

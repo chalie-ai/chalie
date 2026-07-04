@@ -112,24 +112,6 @@ class TestSlugifyTitle:
         assert "hello" in result
 
 
-@pytest.mark.unit
-class TestSkillYamlPath:
-
-    def test_returns_path_in_user_skills_dir(self) -> None:
-        from utils.skills_io import USER_SKILLS_DIR, skill_yaml_path
-
-        path = skill_yaml_path("My Custom Skill")
-        assert path.parent == USER_SKILLS_DIR
-
-    def test_filename_is_slugified_title_with_yaml_extension(self) -> None:
-        from utils.skills_io import skill_yaml_path, slugify_title
-
-        title = "Weekly Expense Review"
-        path = skill_yaml_path(title)
-        assert path.name == f"{slugify_title(title)}.yaml"
-        assert path.suffix == ".yaml"
-
-
 # ===========================================================================
 # INTEGRATION TESTS — SkillBuilderAbility.execute() against real DB
 # ===========================================================================

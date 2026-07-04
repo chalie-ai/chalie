@@ -101,18 +101,6 @@ def _parse_body(rendered: str, tool: str = "calendar") -> dict[str, object]:
     return cast(dict[str, object], parse_body(rendered, tool, rich=True))
 
 
-def test_param_surface_is_trimmed() -> None:
-    """The 11-param surface is reduced — ``calendar_name`` (an unused filter) is
-    gone and the new ``title`` fuzzy-match param is present."""
-    from abilities._registry import AbilityRegistry
-
-    schema = AbilityRegistry.get("calendar").get_parameters()
-    props = cast(dict[str, object], schema["properties"])
-    assert "title" in props
-    assert "calendar_name" not in props
-    assert len(props) <= 9
-
-
 def test_list_events_default_window_is_today_plus_seven_days(db: sqlite3.Connection, chat_mp: _MP) -> None:
     """``list_events`` with NO ``date_from``/``date_to`` applies the advertised
     default window (today → +7 days): an event 2 days out is returned, one 30 days

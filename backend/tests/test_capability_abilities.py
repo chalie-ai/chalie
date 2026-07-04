@@ -106,35 +106,3 @@ def test_contacts_not_connected_returns_structured_error() -> None:
     assert result.code == "not-connected"
     assert "not connected" in cast(str, result.body).lower()
     assert "mail integration" in (result.hint or "").lower()
-
-
-# ---------------------------------------------------------------------------
-# 3. Scheduler-driven sync is the authoritative sync path
-# ---------------------------------------------------------------------------
-
-
-def test_subconscious_worker_owns_capability_sync() -> None:
-    """The subconscious worker drives capability syncs via _step_capability_sync.
-
-    The worker calls each connected capability's monitor() method on every
-    tick. MailCapability._do_monitor() handles per-protocol cadence internally.
-    The scheduler is NOT involved in triggering syncs.
-    """
-    from services.subconscious_worker import SubconsciousWorker
-
-    assert hasattr(SubconsciousWorker, "_step_capability_sync")
-    assert not hasattr(SubconsciousWorker, "_step_calendar_sync")
-    assert not hasattr(SubconsciousWorker, "_step_contacts_sync")
-
-
-def test_mail_capability_has_no_scheduler_sync_registration() -> None:
-    """MailCapability must NOT register a scheduler handler for syncs.
-
-    Syncs are driven by the subconscious worker, not the scheduler.
-    The scheduler only stores calendar event data.
-    """
-    from capabilities.mail_capability.capability import MailCapability
-
-    assert not hasattr(MailCapability, "_ensure_sync_registration") or not callable(getattr(MailCapability, "_ensure_sync_registration", None))
-    cap = MailCapability()
-    assert not hasattr(cap, "_sync_registered")

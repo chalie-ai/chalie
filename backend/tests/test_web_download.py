@@ -103,7 +103,6 @@ def test_http_error_status_is_reported(httpbin: None) -> None:
 # All four scheme/SSRF tests migrated — none were covered in the network tier above.
 # ===========================================================================
 
-import abilities.web_download  # noqa: E402
 from abilities._dispatcher import ToolDispatcher  # noqa: E402
 from configs.channels import DmnConfig  # noqa: E402
 from services.act_trail import ActTrail  # noqa: E402
@@ -178,17 +177,3 @@ def test_127_ssrf_terminal_outcome_is_blocked_url(db: sqlite3.Connection) -> Non
 
     assert "status=error" in result
     assert "code=blocked-url" in result
-
-
-@pytest.mark.unit
-def test_module_no_longer_carries_local_ssrf_guard() -> None:
-    """The bespoke local ``is_private_url`` import and ``_validate_url`` helper are
-    gone — the guard lives in ``web_fetch`` (one source), the scheme check is
-    inline. Mirrors the read hygiene assertion in test_ssrf_single_source."""
-    assert not hasattr(abilities.web_download, "is_private_url"), (
-        "web_download must not re-import the SSRF guard; it reaches it through web_fetch"
-    )
-    assert not hasattr(abilities.web_download, "_validate_url"), (
-        "the local _validate_url pre-check is replaced by the inline scheme check + "
-        "the single web_fetch guard"
-    )

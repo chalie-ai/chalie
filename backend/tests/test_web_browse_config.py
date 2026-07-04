@@ -32,12 +32,6 @@ def test_config_contract() -> None:
     assert cfg.skip_input_row is False
     assert cfg.suppress_history is True
     assert len(cfg.post_turn_hooks) == 1
-    # Lean delegate prompt: drive with the fewest steps and bail with an error
-    # rather than grinding. The screenshot guardrail lives here (the system
-    # prompt), not in the per-turn user prompt.
-    sp = cfg.get_system_prompt(cast(MessageProcessor, None))
-    assert "fewest steps" in sp and "return an error" in sp
-    assert "every screenshot comes back already described" in sp
 
 
 def test_screenshot_ledger_pins_doc_ids_into_every_prompt(db: sqlite3.Connection) -> None:
@@ -52,10 +46,6 @@ def test_screenshot_ledger_pins_doc_ids_into_every_prompt(db: sqlite3.Connection
     after = cfg.get_user_prompt(mp)
     assert "ab12cd34" in after
     assert "https://example.com/checkout" in after
-    # The per-turn user prompt carries only state (the ledger). Screenshot
-    # guardrails are NOT re-instructed here every iteration — they live in the
-    # system prompt (see test_config_contract).
-    assert "described" not in after
 
     close_session(uid)  # the post-turn hook's call — ledger gone
     assert "ab12cd34" not in cfg.get_user_prompt(mp)

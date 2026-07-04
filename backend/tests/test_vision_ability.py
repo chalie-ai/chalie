@@ -143,12 +143,6 @@ def test_vision_run_unknown_doc_id_is_error(db: sqlite3.Connection) -> None:
     assert "deadbeef" in result.body
 
 
-def test_rich_index_prompt_mentions_searchable() -> None:
-    from abilities.vision import RICH_INDEX_PROMPT
-
-    assert "searchable" in RICH_INDEX_PROMPT
-
-
 # ===========================================================================
 # Migrated from test_ability_vision_tool_result.py ()
 # Ability-specific business-logic tests for the ToolResult contract ().

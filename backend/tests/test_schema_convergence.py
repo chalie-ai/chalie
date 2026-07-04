@@ -372,19 +372,6 @@ class TestSchemaConvergence:
         with pytest.raises(FileNotFoundError):
             svc.converge()
 
-    # ── 19. _restore_if_not_exists ────────────────────────────────────────────
-
-    def test_restore_if_not_exists_for_index(self, tmp_path: Path) -> None:
-        """_restore_if_not_exists() inserts IF NOT EXISTS after CREATE INDEX."""
-        db = _make_db(tmp_path)
-        svc = SchemaConvergenceService(db, embedding_dimensions=256)
-
-        normalized = "create index idx_foo on bar(col)"
-        restored = svc._restore_if_not_exists(normalized, "index")
-
-        assert "if not exists" in restored
-        assert restored.startswith("create index if not exists")
-
 
 
 

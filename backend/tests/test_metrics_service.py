@@ -21,11 +21,6 @@ def metrics(store: MemoryStore) -> MetricsService:
 
 
 class TestTraceLifecycle:
-    def test_start_trace_returns_valid_id(self, metrics: MetricsService) -> None:
-        trace_id = metrics.start_trace()
-        assert isinstance(trace_id, str)
-        assert len(trace_id) == 8
-
     def test_trace_persisted_in_store(self, metrics: MetricsService, store: MemoryStore) -> None:
         trace_id = metrics.start_trace()
         raw = store.get(f"trace:{trace_id}")

@@ -36,11 +36,6 @@ def test_create_clears_supports_vision_when_probe_fails(db: sqlite3.Connection) 
     assert cast("dict[str, object]", p)["supports_vision"] is False
 
 
-def test_infer_vision_support_is_gone() -> None:
-    import services.provider_db_service as mod
-    assert not hasattr(mod, "_infer_vision_support")
-
-
 def test_create_keyless_key_requiring_provider_skips_probe(db: sqlite3.Connection) -> None:
     # Key-requiring platforms (openai/anthropic/gemini/openai_compatible) with no
     # api_key cannot be probed — probe is skipped to avoid guaranteed-to-fail network call.

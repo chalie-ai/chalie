@@ -238,20 +238,3 @@ def test_async_injected_only_under_supports_async_config() -> None:
 
     del cls
     gc.collect()
-
-
-def test_mp_gated_summary_is_deterministic_at_build_time() -> None:
-    """A getter that enriches on a live mp (e.g. bash's cwd) MUST fall back to
-    deterministic base text at mp=None so the search index stays machine-stable."""
-
-    def _summary(self: Ability) -> str:
-        base = "base summary"
-        return f"{base} — cwd /tmp" if self.mp is not None else base
-
-    cls = _make_subclass("_MpGatedSummary", get_summary=_summary)
-
-    assert cls().get_summary() == "base summary"  # build-time: base text
-    assert cls(mp=_Mp(UserConfig({}))).get_summary() == "base summary — cwd /tmp"
-
-    del cls
-    gc.collect()

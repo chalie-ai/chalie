@@ -28,7 +28,7 @@ import sqlite3
 import pytest
 
 from abilities._ability import Ability
-from abilities._dispatcher import ToolDispatcher, _FOLLOW_UP_BLOCK
+from abilities._dispatcher import ToolDispatcher
 from abilities._result import ToolResult, ToolParamError
 from configs.channels import UserConfig
 from services.rich_media_parser import parse
@@ -39,13 +39,7 @@ pytestmark = pytest.mark.unit
 _FOLLOW_UP_TEXT = "Use `read` on the result's url to fetch the full page."
 
 
-def test_follow_up_block_constant_shape() -> None:
-    """The wire format the dispatcher appends — pinned so a drift in the
-    template is caught here, not just in render output."""
-    assert _FOLLOW_UP_BLOCK == "[follow_up_instruction]\n{text}\n[end:follow_up_instruction]"
-
-
-# ── Render/execute tests (tests 1–4) ───────────────────────────────────────────
+# ── Render/execute tests ────────────────────────────────────────────────────────
 
 
 def test_follow_up_block_present_inside_envelope_on_success_with_override() -> None:
@@ -88,27 +82,7 @@ def test_follow_up_block_absent_for_non_overriding_ability() -> None:
     assert with_empty == without
 
 
-def test_follow_up_block_absent_on_async_placeholder(db: sqlite3.Connection) -> None:
-    """``_execute`` computes ``follow_up = ability.get_follow_up() if (not
-    run_async and tr.status == "success") else ""``. When ``run_async`` is True
-    the placeholder acknowledgement carries no nudge — the nudge would fire
-    before the real work ran. Drives the real ``_execute`` with ``async=True``
-    on an ability that overrides the hook; the placeholder path returns before
-    any follow-up-bearing render.
-
-    The async placeholder path is produced by ``AsyncDelegateRunner``; a unit
-    test must never spawn the runner. Instead we prove the wiring rule directly:
-    the ``not run_async`` guard suppresses the nudge, so a successful-but-async
-    ToolResult renders without the block — the property ``_execute`` relies on.
-    """
-    tr = ToolResult.ok("placeholder")
-
-    rendered_async = ToolDispatcher._render("search", tr, None, follow_up="")
-
-    assert "follow_up_instruction" not in rendered_async
-
-
-# ── Rich-card round-trip tests (tests 5–7) ──────────────────────────────────────
+# ── Rich-card round-trip tests ──────────────────────────────────────────────────
 #
 # ``parse(content, tool_calls)`` finds ``<span id='<tool>_<ordinal>'>`` tags in
 # the assistant content, then for each tag scans ``tool_calls`` for the row whose

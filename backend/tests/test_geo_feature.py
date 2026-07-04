@@ -176,7 +176,3 @@ class TestGeoPatternWindowChannelFilter:
         assert block == "(none yet)", (
             f"Expected '(none yet)' on empty DB, got: {block!r}"
         )
-
-
-# ---------------------------------------------------------------------------
-# Test 5: PlaceAbility — schema and metadata
