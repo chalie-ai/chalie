@@ -41,6 +41,8 @@ _ATTRIBUTES = {
     "img": {"src", "alt"},
     "action": {"label", "value", "execute", "collect", "target", "open-url", "payload", "style"},
     "span": {"id"},
+    "td": {"colspan", "rowspan", "headers"},
+    "th": {"colspan", "rowspan", "scope", "headers"},
 }
 
 # Image src URLs are restricted to http(s). ``data:`` and ``javascript:`` are
