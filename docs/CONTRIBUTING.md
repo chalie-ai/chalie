@@ -42,8 +42,9 @@ Write feature tests, not mock theater: drive the real entry point on the real st
 
 - All datetimes are timezone-aware UTC via `services.time_utils` (`utc_now()` / `parse_utc()`) — never `datetime.now()`, `utcnow()`, or `fromisoformat()`.
 - Both themes, always: frontend styling uses the shared theme's CSS variables, never hardcoded single-theme colors.
-- Repo paths resolve through `FileMapperService` — no `Path(__file__)` outside it.
+- Repo paths resolve through `FileMapperService` — no `Path(__file__)` outside it; runtime `os.path.join(root, …)` is fine, and `sys.path.insert` bootstraps are exempt.
 - Schema changes ship with a migration in `backend/migrations/` in the same commit.
+- No single-use variables — inline `call_func(y)`, not `x = y; call_func(x)`.
 - Match the surrounding code's style and comment density; comments explain *why*, never *what*.
 - A feature that introduces a new concept adds its term to [VOCABULARY.md](VOCABULARY.md).
 
