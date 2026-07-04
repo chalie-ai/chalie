@@ -6,13 +6,12 @@
  * Everything else goes through this store or the event bus.
  */
 import { defineStore } from 'pinia';
-import { getWebSocket, useConnectionStore, AuthError } from '@chalie/shared';
+import { getWebSocket, useConnectionStore, AuthError, api, HttpError } from '@chalie/shared';
 import type { WsInboundEvent, WsPushEvent, WsMessageEvent } from '@chalie/shared';
 import { on } from '../composables/useEventBus';
 import { extractText } from '../composables/useMarkup';
 import { conversation } from '../api/conversation';
 import { moments } from '../api/moments';
-import { getHost } from '../api/index';
 import { showToast } from '../utils/toast';
 import { useConversationStore } from './conversation';
 import type { AttachmentPreview } from './conversation';
@@ -382,19 +381,18 @@ export const useSessionStore = defineStore('session', {
       await this._postInterrupt();
     },
 
-    /** POST /chat/interrupt — best-effort, never throws. */
+    /** POST /chat/interrupt via the central ApiClient (carries the bearer). */
     async _postInterrupt(): Promise<void> {
       try {
-        const host = getHost();
-        const base = host ? host.replace(/\/$/, '') : '';
-        await fetch(base + '/chat/interrupt', {
-          method: 'POST',
-          credentials: 'same-origin',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({}),
-        });
-      } catch {
-        // Best-effort — swallow.
+        await api.post('/chat/interrupt', {});
+      } catch (err) {
+        if (err instanceof AuthError) {
+          this._onAuthFailure?.();
+          return;
+        }
+        const msg = err instanceof HttpError ? err.error ?? `HTTP ${err.status}` : 'Stop signal failed';
+        console.error('[Session] /chat/interrupt failed:', err);
+        showToast(msg);
       }
     },
 
