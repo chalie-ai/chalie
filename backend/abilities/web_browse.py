@@ -101,14 +101,21 @@ class WebBrowseAbility(Ability):
         return self._PARAMETERS
 
     def run(self, params: dict[str, object]) -> ToolResult:
-        from services.message_processor import MessageProcessor  # noqa: PLC0415
+        from controllers.message_processor import MessageProcessor  # noqa: PLC0415
+        from tools.browser.session import screenshot_ledger  # noqa: PLC0415
 
         cfg = WebBrowseConfig(cast("ProcessorConfig", getattr(self.mp, "config", None)).policy_channel)
-        result = MessageProcessor.process(cast(str, self.param(params, Keys.goal, required=True)), cfg)
+        mp = MessageProcessor.process(
+            cfg, raw_input=cast(str, self.param(params, Keys.goal, required=True)),
+        )
+        result = mp.result()
         tr = delegate_result(
             result, hint="Restate the goal more concretely or break it into steps, then retry."
         )
-        return self._with_screenshots(tr, cfg.final_screenshots())
+        # Screenshots ride back off the sub-turn's uid-keyed ledger (the frozen
+        # config no longer carries per-run state, §2.5) — the same key
+        # browser._session_key() records under and PromptService reads.
+        return self._with_screenshots(tr, screenshot_ledger(mp.uid or 0))
 
     @staticmethod
     def _with_screenshots(tr: ToolResult, shots: list[tuple[str, str]]) -> ToolResult:
@@ -120,10 +127,9 @@ class WebBrowseAbility(Ability):
         separate vision call, even when the delegate forgot to mention a shot."""
         if tr.status != "success" or not shots:
             return tr
-        from services.database_service import get_shared_db_service  # noqa: PLC0415
         from services.document_service import DocumentService  # noqa: PLC0415
 
-        doc_svc = DocumentService(get_shared_db_service())
+        doc_svc = DocumentService()
         blocks = []
         for doc_id, url in shots:
             doc = doc_svc.get_document(doc_id)

@@ -9,6 +9,7 @@ import logging
 from typing import cast
 
 from services.file_mapper_service import FileMapperService
+from services.settings_service import SettingsService
 
 logger = logging.getLogger(__name__)
 
@@ -42,9 +43,7 @@ class PersonalityService:
     def set_tuple(self, tup: tuple[int, int, int, int, int]) -> str:
         if len(tup) != 5 or any(v not in range(-2, 3) for v in tup):
             raise ValueError(f"Invalid personality tuple: {tup}")
-        from services.database_service import get_shared_db_service
-        from services.settings_service import SettingsService
-        SettingsService(get_shared_db_service()).set('personality', json.dumps(list(tup)))
+        SettingsService().set('personality', json.dumps(list(tup)))
         self._tuple = tup
         self._voice = self._index.get(tup) or self._index.get(
             NEUTRAL, "Engage naturally as a peer.",
@@ -62,9 +61,7 @@ class PersonalityService:
 
     def _read_tuple(self) -> tuple[int, int, int, int, int]:
         try:
-            from services.database_service import get_shared_db_service
-            from services.settings_service import SettingsService
-            raw = SettingsService(get_shared_db_service()).get('personality')
+            raw = SettingsService().get('personality')
             if raw:
                 parsed = json.loads(raw)
                 if isinstance(parsed, list) and len(parsed) == 5:

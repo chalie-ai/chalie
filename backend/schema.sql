@@ -191,18 +191,20 @@ CREATE TABLE IF NOT EXISTS master_account (
 -- ────────────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS scheduled_items (
     id TEXT PRIMARY KEY,
-    item_type TEXT NOT NULL DEFAULT 'notification',
+    item_type TEXT NOT NULL DEFAULT 'prompt',  -- 'prompt' = user schedule (fires as a turn); 'event' = CalDAV calendar row (display-only, never fired)
     message TEXT NOT NULL,
-    due_at TEXT NOT NULL,
-    recurrence TEXT,
+    start_at TEXT NOT NULL,                   -- UTC; activation floor ("Start Time"). due_at never fires before this. Defaults to creation time.
+    due_at TEXT NOT NULL,                     -- UTC; materialized next fire = first cron match >= start_at, advanced after each fire
+    cron_dom INTEGER,                         -- day-of-month 1-31 in USER-LOCAL tz; NULL = every
+    cron_hour INTEGER,                        -- hour 0-23 in USER-LOCAL tz; NULL = every
+    cron_minute INTEGER,                      -- minute 0-59 in USER-LOCAL tz; NULL = every
     status TEXT NOT NULL DEFAULT 'pending',   -- 'pending' is the initial lifecycle state; intentionally repeated in documents.status
     channel TEXT,
     created_by_session TEXT,
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
-    last_fired_at TEXT,
+    enabled INTEGER NOT NULL DEFAULT 1,       -- 0 = disabled: the poller skips it (series paused); re-enable resumes firing
     group_id TEXT,
-    is_prompt INTEGER DEFAULT 0,             -- BOOLEAN
-    source TEXT,                              -- origin: 'caldav', 'imap', 'system', NULL = user-created
+    source TEXT,                              -- origin: 'caldav', 'imap', NULL = user-created
     external_uid TEXT,                        -- dedup key for external sources
     metadata TEXT DEFAULT '{}',               -- JSON blob (location, attendees, etc.)
     hidden INTEGER DEFAULT 0,                 -- hide from user-facing list/API
@@ -536,11 +538,19 @@ CREATE TABLE IF NOT EXISTS tool_calls (
     tool_name     TEXT NOT NULL,
     params        TEXT DEFAULT '{}',
     result        TEXT DEFAULT '',
-    -- The ability's act_summary — the one-line "what I'm doing" the dispatcher
-    -- emits as `tool_invoked`. Persisting it lets the turn refetch re-render each
-    -- tool chip's blue summary box instead of dropping it on reload.
+    -- The ability's act_summary — the one-line "what I'm doing" the single WS
+    -- tool frame carries on its live pill. Persisting it lets the turn refetch
+    -- re-render each tool chip's blue summary box instead of dropping it on reload.
     summary       TEXT DEFAULT '',
     created_at    TEXT NOT NULL DEFAULT (datetime('now')),
+    -- When the call left execution (result written). NULL while state='started'.
+    ended_at      TEXT,
+    -- The call's lifecycle, STORED (never re-derived by parsing the result
+    -- envelope): 'started' the instant the row opens (before invocation),
+    -- 'done' on a successful/placeholder return, 'error' on a failure, denial,
+    -- or pre-validation bounce. The single WS tool frame carries this verbatim.
+    state         TEXT NOT NULL DEFAULT 'started'
+                  CHECK (state IN ('started', 'done', 'error')),
     -- A tool call anchors ONLY to the transcript input row that drove it
     -- (transcript_id); its turn is derived by joining transcript on
     -- (channel, turn_id). An async / delegate re-entry writes its

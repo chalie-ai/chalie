@@ -5,7 +5,6 @@ from unittest.mock import MagicMock
 import numpy as np
 import pytest
 
-from services.database_service import get_shared_db_service
 from services.news_service import NewsArticle
 from services.world_awareness_service import WorldAwarenessService
 
@@ -53,8 +52,7 @@ def _seed_topic_transcript(db: sqlite3.Connection, topic: str, count: int, last_
 
 
 def _make_service(db: sqlite3.Connection) -> WorldAwarenessService:
-    db_service = get_shared_db_service()
-    return WorldAwarenessService(db_service)
+    return WorldAwarenessService()
 
 
 # ── Trait extraction tests ────────────────────────────────────

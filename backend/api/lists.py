@@ -34,9 +34,8 @@ _NAME_TAKEN = "A list with this name already exists."
 
 
 def _get_list_service() -> "ListService":
-    from services.database_service import get_shared_db_service
     from services.list_service import ListService
-    return ListService(get_shared_db_service())
+    return ListService()
 
 
 def _list_dto(row: dict[str, object]) -> List:

@@ -25,7 +25,7 @@ from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoin
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 
-from services.database_service import DatabaseService
+from services.database import Database
 
 logger = logging.getLogger(__name__)
 
@@ -73,21 +73,16 @@ class BearerTokenMiddleware(BaseHTTPMiddleware):
     @staticmethod
     def _validate_token(raw_token: str) -> str | None:
         from services.wrapper_auth_service import _hash_token
-        from services.database_service import get_shared_db_service
         from services.time_utils import utc_now
 
         token_hash = _hash_token(raw_token)
-        db = get_shared_db_service()
 
-        with db.connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute(
+        with Database.transaction() as conn:
+            row = conn.execute(
                 "SELECT wrapper_id FROM wrapper_tokens "
                 "WHERE token_hash = ? AND revoked_at IS NULL",
                 (token_hash,),
-            )
-            row = cursor.fetchone()
-            cursor.close()
+            ).fetchone()
 
         if row is None:
             return None
@@ -95,13 +90,11 @@ class BearerTokenMiddleware(BaseHTTPMiddleware):
         wrapper_id: str = row[0] if isinstance(row, (tuple, list)) else row["wrapper_id"]
 
         now = utc_now().isoformat()
-        with db.connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute(
+        with Database.transaction() as conn:
+            conn.execute(
                 "UPDATE wrapper_tokens SET last_seen_at = ? WHERE wrapper_id = ?",
                 (now, wrapper_id),
             )
-            cursor.close()
 
         return wrapper_id
 
@@ -142,7 +135,7 @@ def create_mcp_server(host: str = "0.0.0.0", port: int = _DEFAULT_PORT) -> FastM
             return "Invalid parameters:\n" + "\n".join(f"- {e}" for e in errors)
 
         from configs.channels import EAMPConfig  # noqa: PLC0415
-        from services.message_processor import MessageProcessor  # noqa: PLC0415
+        from controllers.message_processor import MessageProcessor  # noqa: PLC0415
 
         wrapper_id = _current_wrapper_id.get()
         logger.info(
@@ -157,9 +150,8 @@ def create_mcp_server(host: str = "0.0.0.0", port: int = _DEFAULT_PORT) -> FastM
                 agent_name=agent_name,
                 project=project_or_task_name,
                 loop_in_human=loop_in_human,
-                wrapper_id=wrapper_id or "",
             )
-            return MessageProcessor.process(message, config)
+            return MessageProcessor.process(config, raw_input=message).result()
 
         try:
             response = await asyncio.to_thread(_run)
@@ -180,10 +172,8 @@ def _build_app(mcp: FastMCP) -> Starlette:
 def run_mcp_server() -> None:
     """Run the MCP server (blocking). Intended as a WorkerManager service."""
     from services.settings_service import SettingsService
-    from services.database_service import get_shared_db_service
 
-    db = get_shared_db_service()
-    settings = SettingsService(db)
+    settings = SettingsService()
 
     enabled = settings.get("mcp_server_enabled")
     if enabled is not None and str(enabled).lower() in ("false", "0", "no"):
@@ -196,7 +186,7 @@ def run_mcp_server() -> None:
     except (ValueError, TypeError):
         port = _DEFAULT_PORT
 
-    _ensure_mcp_token(db)
+    _ensure_mcp_token()
 
     logger.info("[MCP] Starting MCP server on port %d", port)
     mcp = create_mcp_server(host="0.0.0.0", port=port)
@@ -205,20 +195,20 @@ def run_mcp_server() -> None:
     uvicorn.run(app, host="0.0.0.0", port=port, log_level="info")
 
 
-def _ensure_mcp_token(db: DatabaseService) -> None:
+def _ensure_mcp_token() -> None:
     """Generate an MCP auth token on first boot if none exists."""
     from services.wrapper_auth_service import WrapperAuthService
     from services.settings_service import SettingsService
 
-    settings = SettingsService(db)
+    settings = SettingsService()
     existing = settings.get("mcp_server_token_wrapper_id")
     if existing:
-        auth_svc = WrapperAuthService(db)
+        auth_svc = WrapperAuthService()
         wrapper = auth_svc.get_wrapper(existing)
         if wrapper:
             return
 
-    auth_svc = WrapperAuthService(db)
+    auth_svc = WrapperAuthService()
     try:
         raw_token, wrapper_id = auth_svc.create_token(
             name="MCP Server (External Agents)",

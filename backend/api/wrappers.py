@@ -35,9 +35,8 @@ _NOT_FOUND = "Wrapper not found"
 
 
 def _get_service() -> "WrapperAuthService":
-    from services.database_service import get_shared_db_service
     from services.wrapper_auth_service import WrapperAuthService
-    return WrapperAuthService(get_shared_db_service())
+    return WrapperAuthService()
 
 
 def _wrapper_dto(row: dict[str, object]) -> Wrapper:

@@ -55,10 +55,12 @@ interface FeedState {
    */
   done: Set<number>;
   /**
-   * Live act-trail pills keyed by transcript_row_id. Visual-only; no turn data.
-   * Cleared per-row when the row's tool_calls persist (upsertTurn §6.5 step 4).
+   * Live act-trail pills keyed by turn_id — the single tool frame carries no
+   * transcript_row_id, so the turn is the anchor (consecutive tool-only steps
+   * collapse onto one binder anyway). Visual-only; no turn data. Resolved pills are
+   * dropped when the turn's persisted tool_calls arrive (upsertTurn §6.5 step 4).
    */
-  liveTools: Record<number, { turnId: number; pills: LiveToolPill[] }>;
+  liveTools: Record<number, LiveToolPill[]>;
   /** Pagination cursor (count of thread items seen so far). */
   offset: number;
   hasMore: boolean;
@@ -91,17 +93,15 @@ function feedState(type: string): FeedState {
 function _ensureTimerRunning(s: FeedState): void {
   if (s.timerInterval !== null) return;
   s.timerInterval = setInterval(() => {
-    for (const rowId of Object.keys(s.liveTools)) {
-      const trail = s.liveTools[Number(rowId)];
-      if (trail?.pills.some((p) => !p.resolved)) {
-        s.liveTools[Number(rowId)] = { ...trail, pills: [...trail.pills] };
-      }
+    for (const turnId of Object.keys(s.liveTools)) {
+      const pills = s.liveTools[Number(turnId)];
+      if (pills?.some((p) => !p.resolved)) s.liveTools[Number(turnId)] = [...pills];
     }
   }, 500);
 }
 
 function _maybeStopTimer(s: FeedState): void {
-  const hasLive = Object.values(s.liveTools).some((t) => t.pills.some((p) => !p.resolved));
+  const hasLive = Object.values(s.liveTools).some((pills) => pills.some((p) => !p.resolved));
   if (!hasLive && s.timerInterval !== null) {
     clearInterval(s.timerInterval);
     s.timerInterval = null;
@@ -127,9 +127,12 @@ function _upsertTurn(s: FeedState, block: ConversationTurnBlock): void {
   s.versions[block.turn_id] = incoming;
   s.blocks[block.turn_id] = block;
 
-  // §6.5 step 4 — persisted tool_calls supersede live pills for that row.
-  for (const m of block.messages) {
-    if (m.tool_calls?.length) delete s.liveTools[Number.parseInt(m.id, 10)];
+  // §6.5 step 4 — the turn's persisted tool_calls supersede its resolved live
+  // pills; an unresolved pill (a step still running) is left to finish live.
+  if (block.messages.some((m) => m.tool_calls?.length)) {
+    const live = s.liveTools[block.turn_id]?.filter((p) => !p.resolved);
+    if (live?.length) s.liveTools[block.turn_id] = live;
+    else delete s.liveTools[block.turn_id];
   }
   _maybeStopTimer(s);
 }
@@ -196,12 +199,11 @@ function _seenThread(s: FeedState, turnId: number): void {
 function _startLiveTool(
   s: FeedState,
   turnId: number,
-  rowId: number | null,
   callId: number | null,
   name: string,
   summary?: string,
 ): void {
-  if (rowId == null || callId == null) return;
+  if (callId == null) return;
   const pill: LiveToolPill = {
     id: String(callId),
     name,
@@ -210,32 +212,23 @@ function _startLiveTool(
     ok: false,
     resolved: false,
   };
-  const trail = s.liveTools[rowId] ?? { turnId, pills: [] };
-  s.liveTools[rowId] = { turnId, pills: [...trail.pills, pill] };
+  s.liveTools[turnId] = [...(s.liveTools[turnId] ?? []), pill];
   _ensureTimerRunning(s);
 }
 
-function _finishLiveTool(s: FeedState, callId: number | null): void {
+function _finishLiveTool(s: FeedState, turnId: number, callId: number | null, ok: boolean): void {
   if (callId == null) return;
   const key = String(callId);
-  for (const rowId of Object.keys(s.liveTools)) {
-    const trail = s.liveTools[Number(rowId)];
-    if (!trail?.pills.some((p) => p.id === key && !p.resolved)) continue;
-    s.liveTools[Number(rowId)] = {
-      turnId: trail.turnId,
-      pills: trail.pills.map((p) =>
-        p.id === key ? { ...p, resolved: true, ok: true, ms: Date.now() - p.startedAt } : p,
-      ),
-    };
-    _maybeStopTimer(s);
-    return;
-  }
+  const pills = s.liveTools[turnId];
+  if (!pills?.some((p) => p.id === key && !p.resolved)) return;
+  s.liveTools[turnId] = pills.map((p) =>
+    p.id === key ? { ...p, resolved: true, ok, ms: Date.now() - p.startedAt } : p,
+  );
+  _maybeStopTimer(s);
 }
 
 function _clearLiveTurn(s: FeedState, turnId: number): void {
-  for (const rowId of Object.keys(s.liveTools)) {
-    if (s.liveTools[Number(rowId)]?.turnId === turnId) delete s.liveTools[Number(rowId)];
-  }
+  delete s.liveTools[turnId];
   _maybeStopTimer(s);
 }
 
@@ -313,11 +306,10 @@ function _turnSpeechText(s: FeedState, turnId: number): string {
     .join(' ');
 }
 
-/** Live trails for a given turnId, for the template to render. */
+/** The live trail for a given turnId, for the template to render. */
 function _liveTrailsFor(s: FeedState, turnId: number): LiveTrail[] {
-  return Object.entries(s.liveTools)
-    .filter(([, v]) => v.turnId === turnId)
-    .map(([rowId, v]) => ({ rowId: Number(rowId), pills: v.pills }));
+  const pills = s.liveTools[turnId];
+  return pills ? [{ rowId: turnId, pills }] : [];
 }
 
 async function _searchThreads(type: string, query: string): Promise<ConversationThread[]> {
@@ -335,8 +327,8 @@ export interface ConversationFeedApi {
   readonly blocks: Record<number, ConversationTurnBlock>;
   /** Working-spinner flags (transient visual), reactive. */
   readonly working: Record<number, boolean>;
-  /** Live tool-trail map (transient visual), reactive. */
-  readonly liveTools: Record<number, { turnId: number; pills: LiveToolPill[] }>;
+  /** Live tool-trail map (transient visual), keyed by turn_id, reactive. */
+  readonly liveTools: Record<number, LiveToolPill[]>;
   readonly hasMore: boolean;
 
   upsertTurn(block: ConversationTurnBlock): void;
@@ -349,8 +341,8 @@ export interface ConversationFeedApi {
   seenThread(turnId: number): void;
   dropLiveTurn(turnId: number): void;
 
-  startLiveTool(turnId: number, rowId: number | null, callId: number | null, name: string, summary?: string): void;
-  finishLiveTool(callId: number | null): void;
+  startLiveTool(turnId: number, callId: number | null, name: string, summary?: string): void;
+  finishLiveTool(turnId: number, callId: number | null, ok: boolean): void;
   liveTrailsFor(turnId: number): LiveTrail[];
 
   isTurnWorking(turnId: number): boolean;
@@ -392,9 +384,9 @@ function makeApi(type: string): ConversationFeedApi {
     seenThread: (turnId) => _seenThread(s, turnId),
     dropLiveTurn: (turnId) => _dropLiveTurn(s, turnId),
 
-    startLiveTool: (turnId, rowId, callId, name, summary) =>
-      _startLiveTool(s, turnId, rowId, callId, name, summary),
-    finishLiveTool: (callId) => _finishLiveTool(s, callId),
+    startLiveTool: (turnId, callId, name, summary) =>
+      _startLiveTool(s, turnId, callId, name, summary),
+    finishLiveTool: (turnId, callId, ok) => _finishLiveTool(s, turnId, callId, ok),
     liveTrailsFor: (turnId) => _liveTrailsFor(s, turnId),
 
     isTurnWorking: (turnId) => _isTurnWorking(s, turnId),

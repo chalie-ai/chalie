@@ -4,7 +4,7 @@ import logging
 import sqlite3
 from typing import Dict, Optional, List, cast
 
-from services.database_service import DatabaseService
+from services.database import Database
 from services.log_utils import safe
 
 logger = logging.getLogger(__name__)
@@ -25,9 +25,6 @@ class ProviderDbService:
         "id, name, platform, model, host, api_key, "
         "dimensions, timeout, supports_vision, max_tokens"
     )
-
-    def __init__(self, database_service: DatabaseService) -> None:
-        self.db = database_service
 
     @staticmethod
     def _seal_api_key(value: str) -> str:
@@ -93,55 +90,55 @@ class ProviderDbService:
         return result
 
     def get_all_providers(self) -> List[Dict[str, object]]:
-        with self.db.connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute(
-                f"SELECT {self._PROVIDER_COLS} "
-                "FROM providers ORDER BY name"
-            )
-            rows = cursor.fetchall()
-            cursor.close()
-            return [self._row_to_provider(row) for row in rows]
+        conn = Database.conn()
+        cursor = conn.cursor()
+        cursor.execute(
+            f"SELECT {self._PROVIDER_COLS} "
+            "FROM providers ORDER BY name"
+        )
+        rows = cursor.fetchall()
+        cursor.close()
+        return [self._row_to_provider(row) for row in rows]
 
     def list_providers_summary(self) -> List[Dict[str, object]]:
-        with self.db.connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute(
-                "SELECT id, name, platform, model, host, "
-                "(api_key IS NOT NULL) AS has_api_key, "
-                "dimensions, timeout, supports_vision "
-                "FROM providers ORDER BY name"
-            )
-            rows = cursor.fetchall()
-            cursor.close()
-            return [
-                {
-                    "id": row[0],
-                    "name": row[1],
-                    "platform": row[2],
-                    "model": row[3],
-                    "host": row[4],
-                    "api_key": "***" if row[5] else None,
-                    "dimensions": row[6],
-                    "timeout": row[7],
-                    "supports_vision": bool(row[8]),
-                }
-                for row in rows
-            ]
+        conn = Database.conn()
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT id, name, platform, model, host, "
+            "(api_key IS NOT NULL) AS has_api_key, "
+            "dimensions, timeout, supports_vision "
+            "FROM providers ORDER BY name"
+        )
+        rows = cursor.fetchall()
+        cursor.close()
+        return [
+            {
+                "id": row[0],
+                "name": row[1],
+                "platform": row[2],
+                "model": row[3],
+                "host": row[4],
+                "api_key": "***" if row[5] else None,
+                "dimensions": row[6],
+                "timeout": row[7],
+                "supports_vision": bool(row[8]),
+            }
+            for row in rows
+        ]
 
     def get_provider_by_id(self, provider_id: int) -> Optional[Dict[str, object]]:
-        with self.db.connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute(
-                f"SELECT {self._PROVIDER_COLS} "
-                "FROM providers WHERE id = ?",
-                (provider_id,)
-            )
-            row = cursor.fetchone()
-            cursor.close()
-            if not row:
-                return None
-            return self._row_to_provider(row)
+        conn = Database.conn()
+        cursor = conn.cursor()
+        cursor.execute(
+            f"SELECT {self._PROVIDER_COLS} "
+            "FROM providers WHERE id = ?",
+            (provider_id,)
+        )
+        row = cursor.fetchone()
+        cursor.close()
+        if not row:
+            return None
+        return self._row_to_provider(row)
 
     def create_provider(self, data: Dict[str, object]) -> Optional[Dict[str, object]]:
         default_model = data.get("model")
@@ -186,7 +183,7 @@ class ProviderDbService:
             }
             vision = 1 if probe_provider(probe_config) else 0
 
-        with self.db.connection() as conn:
+        with Database.transaction() as conn:
             cursor = conn.cursor()
             cursor.execute(
                 "INSERT INTO providers (name, platform, model, host, api_key, "
@@ -212,9 +209,8 @@ class ProviderDbService:
         # populated by the next boot or a manual retry.
         try:
             from services.provider_token_limits import backfill_one
-            with self.db.connection() as conn:
+            with Database.transaction() as conn:
                 backfill_one(conn, cast(int, new_id))
-                conn.commit()
         except Exception as exc:
             logger.warning(
                 "[ProviderDBService] post-create token-limit backfill failed for id=%s: %s",
@@ -284,7 +280,7 @@ class ProviderDbService:
 
         query = f"UPDATE providers SET {', '.join(updates)} WHERE id = ?"
 
-        with self.db.connection() as conn:
+        with Database.transaction() as conn:
             cursor = conn.cursor()
             cursor.execute(query, tuple(params))
             cursor.close()
@@ -299,14 +295,14 @@ class ProviderDbService:
             'vision_provider_id': 'vision',
             'delegate_provider_id': 'delegate',
         }
-        with self.db.connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute(
-                "SELECT key, value FROM settings WHERE key IN "
-                "('selected_provider_id', 'vision_provider_id', 'delegate_provider_id')"
-            )
-            rows = cursor.fetchall()
-            cursor.close()
+        conn = Database.conn()
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT key, value FROM settings WHERE key IN "
+            "('selected_provider_id', 'vision_provider_id', 'delegate_provider_id')"
+        )
+        rows = cursor.fetchall()
+        cursor.close()
         assigned = set()
         for key, value in rows:
             if not value:
@@ -328,7 +324,7 @@ class ProviderDbService:
     def delete_provider(self, provider_id: int) -> bool:
         if self._provider_roles(provider_id):
             raise ValueError(PROVIDER_IN_USE_MSG)
-        with self.db.connection() as conn:
+        with Database.transaction() as conn:
             cursor = conn.cursor()
             cursor.execute(
                 "DELETE FROM providers WHERE id = ?",
@@ -340,23 +336,23 @@ class ProviderDbService:
     # ── Selected Provider ──────────────────────────────────────────
 
     def get_selected_provider(self) -> Optional[Dict[str, object]]:
-        with self.db.connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute(
-                "SELECT value FROM settings WHERE key = 'selected_provider_id'"
-            )
-            row = cursor.fetchone()
-            cursor.close()
-            if not row or not row[0]:
-                return None
-            try:
-                provider_id = int(row[0])
-                return self.get_provider_by_id(provider_id)
-            except (ValueError, TypeError):
-                return None
+        conn = Database.conn()
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT value FROM settings WHERE key = 'selected_provider_id'"
+        )
+        row = cursor.fetchone()
+        cursor.close()
+        if not row or not row[0]:
+            return None
+        try:
+            provider_id = int(row[0])
+            return self.get_provider_by_id(provider_id)
+        except (ValueError, TypeError):
+            return None
 
     def set_selected_provider(self, provider_id: int) -> None:
-        with self.db.connection() as conn:
+        with Database.transaction() as conn:
             cursor = conn.cursor()
             cursor.execute(
                 "INSERT INTO settings (key, value, value_type, description, is_sensitive) "
@@ -371,13 +367,13 @@ class ProviderDbService:
     _KEY_REQUIRING = ('anthropic', 'openai', 'gemini', 'openai_compatible')
 
     def _resolve_vision_provider(self) -> tuple[Optional[Dict[str, object]], str]:
-        with self.db.connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute(
-                "SELECT value FROM settings WHERE key = 'vision_provider_id'"
-            )
-            row = cursor.fetchone()
-            cursor.close()
+        conn = Database.conn()
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT value FROM settings WHERE key = 'vision_provider_id'"
+        )
+        row = cursor.fetchone()
+        cursor.close()
         if row and row[0]:
             try:
                 pid = int(row[0])
@@ -402,7 +398,7 @@ class ProviderDbService:
 
     def set_vision_provider(self, provider_id: Optional[int]) -> None:
         """Persist the explicit vision provider id, or clear it when None."""
-        with self.db.connection() as conn:
+        with Database.transaction() as conn:
             cursor = conn.cursor()
             if provider_id is None:
                 cursor.execute(
@@ -426,13 +422,13 @@ class ProviderDbService:
     # also no supports_vision requirement — any active provider can be pinned.
 
     def _resolve_delegate_provider(self) -> tuple[Optional[Dict[str, object]], str]:
-        with self.db.connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute(
-                "SELECT value FROM settings WHERE key = 'delegate_provider_id'"
-            )
-            row = cursor.fetchone()
-            cursor.close()
+        conn = Database.conn()
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT value FROM settings WHERE key = 'delegate_provider_id'"
+        )
+        row = cursor.fetchone()
+        cursor.close()
         if row and row[0]:
             try:
                 pid = int(row[0])
@@ -461,7 +457,7 @@ class ProviderDbService:
 
         Clearing does NOT disable delegate turns — resolution then falls back
         to the selected (main) provider (see _resolve_delegate_provider)."""
-        with self.db.connection() as conn:
+        with Database.transaction() as conn:
             cursor = conn.cursor()
             if provider_id is None:
                 cursor.execute(

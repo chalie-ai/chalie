@@ -141,15 +141,13 @@ ALLOWED_EXTENSIONS = {
 # ---------------------------------------------------------------------------
 
 def _get_document_service() -> "DocumentService":
-    from services.database_service import get_shared_db_service
     from services.document_service import DocumentService
-    return DocumentService(get_shared_db_service())
+    return DocumentService()
 
 
 def _get_watcher_service() -> "FolderWatcherService":
-    from services.database_service import get_shared_db_service
     from services.folder_watcher_service import FolderWatcherService
-    return FolderWatcherService(get_shared_db_service())
+    return FolderWatcherService()
 
 
 
@@ -191,8 +189,7 @@ def _mark_upload_failed(doc_id: str, error: str) -> None:
     """Best-effort status update to 'failed' — swallow errors since we're already in a failure path."""
     try:
         from services.document_service import DocumentService
-        from services.database_service import get_shared_db_service
-        DocumentService(get_shared_db_service()).update_status(doc_id, "failed", error[:500])
+        DocumentService().update_status(doc_id, "failed", error[:500])
     except Exception:
         logger.exception(f"[DOCS API] Could not mark {doc_id} as failed")
 
@@ -200,11 +197,10 @@ def _mark_upload_failed(doc_id: str, error: str) -> None:
 def _run_upload_extraction(doc_id: str) -> None:
     """Extract text + write artifacts + mark ready. Raises on unrecoverable errors."""
     from services.document_service import DocumentService
-    from services.database_service import get_shared_db_service
     from services.text_extractor import extract_text
     from services.document_chunking import create_document_artifacts
 
-    svc = DocumentService(get_shared_db_service())
+    svc = DocumentService()
     doc = svc.get_document(doc_id)
     if not doc:
         return

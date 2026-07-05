@@ -11,8 +11,10 @@ from .segment import Segment
 class Message(DTO):
     """One transcript row.
 
-    Role-conditional: ``attachments`` appears on user rows only;
-    ``tool_calls``/``segments`` on non-user rows only. ``timestamp`` is a
+    Role-conditional: ``attachments`` appears on user rows only; ``segments`` on
+    non-user rows only. ``tool_calls`` appears on WHATEVER row anchors them —
+    including the user input row (a step-1 tool-only call anchors there before
+    any assistant text is written). ``timestamp`` is a
     pre-formatted locale string, not a datetime. ``thread_message`` is set on
     rows past the turn's settle0 — the fork-reply continuation (a turn that has
     any is a thread; the main spine renders only through settle0).

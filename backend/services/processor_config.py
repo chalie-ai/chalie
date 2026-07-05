@@ -10,15 +10,13 @@
 
 from __future__ import annotations
 
-from abc import ABC, abstractmethod
+from abc import ABC
 from dataclasses import dataclass
 from enum import Enum
 from typing import TYPE_CHECKING, ClassVar
 
 if TYPE_CHECKING:
     from services.config_type import ConfigTypeEnum
-    from services.message_processor import MessageProcessor
-    from services.post_turn_hook import PostTurnHook
 
 
 @dataclass(frozen=True)
@@ -34,18 +32,27 @@ class ProcessorConfig(ABC):
     It gates schema *exposure* only — never routing."""
 
     BROADCASTS_STATE: ClassVar[bool] = False
-    """True → this channel streams the lean turn-state signals (working/updated/
-    done + tool_called/tool_done) to its surface via ``mp.broadcast``.
-    Only UserConfig sets it; every other channel stays silent (the chokepoint
-    no-ops). The single state-gate — replaces the scattered ``broadcast_to ==
-    'user'`` checks. Distinct from ``broadcast_to`` (message-delivery target)."""
+    """True → this channel streams its live progress to its surface: the lean
+    ``updated`` turn-state signal via ``mp.broadcast``, the turn-execution
+    lifecycle frame via ExecutionTracker, and the single tool-call frame via
+    ActTrail. Only UserConfig sets it; every other channel stays silent (each
+    chokepoint no-ops). The single state-gate — replaces the scattered
+    ``broadcast_to == 'user'`` checks. Distinct from ``broadcast_to`` (message-
+    delivery target)."""
+
+    thinking_mode: ClassVar[str | None] = None
+    """Fixed reasoning level for a background channel whose deliberation must not
+    be data-driven (thread_gist / web_search pin ``"low"``). ``None`` on every
+    interactive channel — those resolve the level per-turn (the user channel's
+    regression-head gate, or a caller override). ``ProviderService`` reads it
+    first in ``resolve_thinking_mode`` (config pin > override > gate result)."""
 
     uses_vision_provider: ClassVar[bool] = False
-    """True -> Providers._resolve reads the brain's Vision Provider from the DB
+    """True -> ProviderService._resolve reads the brain's Vision Provider from the DB
     instead of the global selected provider. Only VisionConfig sets it."""
 
     uses_delegate_provider: ClassVar[bool] = False
-    """True -> Providers._resolve reads the brain's Delegate Provider from the DB
+    """True -> ProviderService._resolve reads the brain's Delegate Provider from the DB
     (falling back to the selected provider when none is pinned) instead of the
     global selected provider. Set by the subagent channels (web_search,
     web_browse). Vision takes precedence: VisionConfig keeps uses_vision_provider
@@ -121,46 +128,38 @@ class ProcessorConfig(ABC):
     (``= "user"``), and it runs MAIN-only, so the split's FORK edge cases never
     apply. Do not set ``read_channel != channel`` on a FORK/reply config."""
 
-    # ── After-turn hooks — empty tuple = no-op ───────────────────────────────
+    # ── PromptService dispatch override ───────────────────────────────────────
 
-    post_turn_hooks: tuple[PostTurnHook, ...] = ()
-    """Independent units of after-turn work, each ``hook.run(mp, response_text)``,
-    run once after the assistant row is persisted.  Empty tuple = no-op.  Hooks
-    are mutually independent and failure-isolated — see services/post_turn_hook.py
-    and MessageProcessor._end_turn.  This is the ONLY hook surface on
-    ProcessorConfig."""
-
-    # ── Prompt builders (abstract — one implementation per channel) ───────────
-
-    @abstractmethod
-    def get_system_prompt(self, mp: "MessageProcessor") -> str:
-        """System instruction block for this channel's turn."""
-
-    @abstractmethod
-    def get_user_prompt(self, mp: "MessageProcessor") -> str:
-        """User-turn body (world state, history, input, ACT trail)."""
-
-    @abstractmethod
-    def get_user_definition(self, mp: "MessageProcessor") -> str:
-        """User/persona preamble. Return ``""`` when the channel has none."""
-
-    # ── Per-turn image attachment (concrete hook — default: no image) ──────────
-
-    def get_image(self, mp: "MessageProcessor") -> "dict[str, object] | None":
-        """VisionConfig overrides this to return"""
-        return None
+    prompt_channel: str | None = None
+    """Overrides the PromptService dispatch key; ``None`` ⇒ dispatch on
+    ``channel``. Only configs whose ``channel`` is dynamic or channel-specific
+    yet share another channel's prompt assembly set this — DiscoveryConfig
+    (``= "user"``) reuses the user prompts; EAMPConfig (``= "external_agent"``)
+    has a per-agent dynamic ``channel``."""
 
     # ── Derived properties ────────────────────────────────────────────────────
 
     @property
     def job(self) -> str:
-        """Telemetry label passed through ``Providers.send()`` to the resolved"""
+        """Telemetry label passed through ``ProviderService.send()`` to the resolved"""
         return f"{self.channel}:{self.role}"
 
     @property
     def usage_class(self) -> str:
         """LLM usage class written to llm_call_log."""
         return self.policy_channel.value
+
+    @property
+    def system_prompt(self) -> str:
+        """The channel's static system-prompt body — the literal prompt text.
+
+        Default ``""`` (channels with no ACT loop, e.g. action_button). Every
+        channel whose prompt is a frozen literal overrides this to return it;
+        the two dynamic channels (``UserConfig`` / ``EAMPConfig``) return their
+        base literal and ``PromptService`` wraps it with runtime data (voice
+        line, provider content-field, resolved names). Pure declarative data —
+        no service reads, no DB access (§2.4)."""
+        return ""
 
     # ── API routing identity ──────────────────────────────────────────────────
 
@@ -169,6 +168,14 @@ class ProcessorConfig(ABC):
         internal channels that the thread API never addresses. Only the two configs
         reachable via ``ConfigTypeEnum.get_by_type`` override this."""
         return None
+
+    def type_value(self) -> "str | None":
+        """This config's routing type as the wire/DB string (``None`` for the
+        internal channels). The single projection of :meth:`type` every spine
+        service emits — the WS ``type`` field and ``turn_executions.type`` — so
+        the enum→string conversion lives in exactly one place."""
+        config_type = self.type()
+        return config_type.value if config_type is not None else None
 
     # ── Cloning ───────────────────────────────────────────────────────────────
 

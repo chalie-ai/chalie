@@ -13,8 +13,7 @@ pytestmark = pytest.mark.unit
 @pytest.fixture
 def episodic_svc(db: sqlite3.Connection) -> EpisodicService:
     """EpisodicService backed by the real test DB."""
-    from services.database_service import get_shared_db_service
-    return EpisodicService(get_shared_db_service())
+    return EpisodicService()
 
 
 def _make_episode_data(**overrides: object) -> dict[str, object]:

@@ -2,12 +2,29 @@
 
 import logging
 import sqlite3
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
 
+from services.database import Database
 from services.database_service import DatabaseService
+from services.file_mapper_service import FileMapperService
 from services.schema_convergence_service import SchemaConvergenceService
+
+
+# ── Gateway isolation ─────────────────────────────────────────────────────────
+
+@pytest.fixture(autouse=True)
+def _gateway_to_tmp_db(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    # SchemaConvergenceService resolves its write path through the Database gateway
+    # (FileMapperService.get_db_path), not the DatabaseService the helpers build.
+    # Redirect the gateway to the same per-test file so converge() and the
+    # DatabaseService reads below share one database instead of hitting chalie.db.
+    monkeypatch.setattr(FileMapperService, "get_db_path", lambda *_: tmp_path / "test.db")
+    Database.close()
+    yield
+    Database.close()
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -17,7 +34,7 @@ def _make_db(tmp_path: Path, name: str = "test.db") -> DatabaseService:
 
 
 def _converge(db: DatabaseService, embedding_dimensions: int = 256) -> SchemaConvergenceService:
-    svc = SchemaConvergenceService(db, embedding_dimensions=embedding_dimensions)
+    svc = SchemaConvergenceService(embedding_dimensions=embedding_dimensions)
     svc.converge()
     return svc
 
@@ -288,7 +305,7 @@ class TestSchemaConvergence:
         stub.write_text("CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY);\n"
                         "CREATE TABLE IF NOT EXISTS schema_version (version INTEGER);\n")
 
-        svc = SchemaConvergenceService(db, embedding_dimensions=256)
+        svc = SchemaConvergenceService(embedding_dimensions=256)
         monkeypatch.setattr(svc, "_schema_path", stub)
 
         with caplog.at_level(logging.ERROR, logger="services.schema_convergence_service"):
@@ -310,7 +327,7 @@ class TestSchemaConvergence:
     def test_vec0_tables_use_custom_embedding_dimensions(self, tmp_path: Path) -> None:
         """vec0 virtual tables are created with the configured embedding_dimensions."""
         db = _make_db(tmp_path)
-        svc = SchemaConvergenceService(db, embedding_dimensions=256)
+        svc = SchemaConvergenceService(embedding_dimensions=256)
         svc.converge()
 
         with db.connection() as conn:
@@ -364,7 +381,7 @@ class TestSchemaConvergence:
     def test_missing_schema_file_raises_file_not_found(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """converge() raises FileNotFoundError when schema.sql does not exist."""
         db = _make_db(tmp_path)
-        svc = SchemaConvergenceService(db, embedding_dimensions=256)
+        svc = SchemaConvergenceService(embedding_dimensions=256)
 
         # Point schema path to a nonexistent file
         monkeypatch.setattr(svc, "_schema_path", tmp_path / "nonexistent_schema.sql")
@@ -457,7 +474,7 @@ class TestStripDataGraphCheckConstraint:
         return row is not None and row[0] is not None and 'CHECK' in row[0].upper()
 
     def _build_svc(self, db: DatabaseService) -> SchemaConvergenceService:
-        return SchemaConvergenceService(db, embedding_dimensions=256)
+        return SchemaConvergenceService(embedding_dimensions=256)
 
     def test_removes_check_constraint_from_existing_table(self, tmp_path: Path) -> None:
         """CHECK constraint is stripped — the resulting table DDL contains no CHECK."""

@@ -11,24 +11,21 @@ import logging
 import secrets
 from typing import Optional, List, Dict, cast
 
-from services.database_service import DatabaseService
+from services.database import Database
 from services.log_utils import safe
 from services.write_queue_service import get_write_queue
 
 logger = logging.getLogger(__name__)
 
 
-def embed_list(list_id: str, name: str, db: Optional[DatabaseService] = None) -> None:
+def embed_list(list_id: str, name: str) -> None:
     """Generate an embedding for the list name and store it in lists_vec. Non-fatal."""
     try:
         from services.embedding_service import EmbeddingService
         from services.embedding_utils import pack_embedding
-        if db is None:
-            from services.database_service import get_shared_db_service
-            db = get_shared_db_service()
         embedding = EmbeddingService().generate_embedding(name)
         packed = pack_embedding(embedding)
-        with db.connection() as conn:
+        with Database.transaction() as conn:
             cursor = conn.cursor()
             cursor.execute("SELECT rowid FROM lists WHERE id = ?", (list_id,))
             row = cursor.fetchone()
@@ -38,7 +35,6 @@ def embed_list(list_id: str, name: str, db: Optional[DatabaseService] = None) ->
                     "INSERT OR REPLACE INTO lists_vec(rowid, embedding) VALUES (?, ?)",
                     (rowid, packed)
                 )
-                conn.commit()
     except Exception as e:
         logging.warning(f"[LISTS] Embedding failed (non-fatal): {e}")
 
@@ -46,8 +42,7 @@ def embed_list(list_id: str, name: str, db: Optional[DatabaseService] = None) ->
 class ListService:
     """Deterministic, id-addressed list management."""
 
-    def __init__(self, db_service: DatabaseService) -> None:
-        self.db = db_service
+    def __init__(self) -> None:
         self._write_queue = get_write_queue()
 
     # List operations
@@ -65,8 +60,8 @@ class ListService:
         list_id = secrets.token_hex(4)
 
         try:
-            def _insert_list(_id: str = list_id, _name: str = name, _type: str = list_type, _db: DatabaseService = self.db) -> None:
-                with _db.connection() as conn:
+            def _insert_list(_id: str = list_id, _name: str = name, _type: str = list_type) -> None:
+                with Database.transaction() as conn:
                     cursor = conn.cursor()
                     cursor.execute("""
                         INSERT INTO lists (id, name, list_type, created_at, updated_at)
@@ -76,7 +71,7 @@ class ListService:
 
             self._write_queue.submit_sync(_insert_list)
 
-            embed_list(list_id, name, db=self.db)
+            embed_list(list_id, name)
             logger.info("[LISTS] Created list '%s' (id=%s)", safe(name), list_id)
             return list_id
 
@@ -93,8 +88,8 @@ class ListService:
             return False
 
         try:
-            def _soft_delete(_id: str = list_id, _db: DatabaseService = self.db) -> int:
-                with _db.connection() as conn:
+            def _soft_delete(_id: str = list_id) -> int:
+                with Database.transaction() as conn:
                     cursor = conn.cursor()
                     cursor.execute("""
                         UPDATE lists SET deleted_at = datetime('now'), updated_at = datetime('now')
@@ -120,8 +115,8 @@ class ListService:
             return -1
 
         try:
-            def _clear_items(_id: str = list_id, _db: DatabaseService = self.db) -> int:
-                with _db.connection() as conn:
+            def _clear_items(_id: str = list_id) -> int:
+                with Database.transaction() as conn:
                     cursor = conn.cursor()
                     cursor.execute("""
                         UPDATE list_items SET removed_at = datetime('now'), updated_at = datetime('now')
@@ -154,8 +149,8 @@ class ListService:
 
         old_name = list_row['name']
         try:
-            def _rename(_id: str = list_id, _new_name: str = new_name, _db: DatabaseService = self.db) -> int:
-                with _db.connection() as conn:
+            def _rename(_id: str = list_id, _new_name: str = new_name) -> int:
+                with Database.transaction() as conn:
                     cursor = conn.cursor()
                     cursor.execute("""
                         UPDATE lists SET name = ?, updated_at = datetime('now')
@@ -167,7 +162,7 @@ class ListService:
 
             updated = cast(int, self._write_queue.submit_sync(_rename)) > 0
             if updated:
-                embed_list(list_id, new_name, db=self.db)
+                embed_list(list_id, new_name)
                 logger.info(f"[LISTS] Renamed list '{old_name}' -> '{new_name}'")
             return updated
 
@@ -207,9 +202,8 @@ class ListService:
         sets.append("updated_at = datetime('now')")
         params.append(list_id)
         try:
-            def _update(_sets: List[str] = sets, _params: List[object] = params,
-                        _db: DatabaseService = self.db) -> None:
-                with _db.connection() as conn:
+            def _update(_sets: List[str] = sets, _params: List[object] = params) -> None:
+                with Database.transaction() as conn:
                     cursor = conn.cursor()
                     cursor.execute(
                         f"UPDATE lists SET {', '.join(_sets)} "
@@ -220,7 +214,7 @@ class ListService:
 
             self._write_queue.submit_sync(_update)
             if name is not None and name != list_row['name']:
-                embed_list(list_id, name, db=self.db)
+                embed_list(list_id, name)
             logger.info("[LISTS] Updated list '%s' (id=%s)", safe(name or list_row['name']), list_id)
             return self.get_list(list_id)
         except Exception:
@@ -248,25 +242,25 @@ class ListService:
     def get_all_lists(self) -> List[Dict[str, object]]:
         """Get all active lists with summary counts (item_count, checked_count)."""
         try:
-            with self.db.connection() as conn:
-                cursor = conn.cursor()
-                cursor.execute("""
-                    SELECT
-                        l.id,
-                        l.name,
-                        l.list_type,
-                        l.created_at,
-                        l.updated_at,
-                        SUM(CASE WHEN li.removed_at IS NULL AND li.id IS NOT NULL THEN 1 ELSE 0 END) AS item_count,
-                        SUM(CASE WHEN li.removed_at IS NULL AND li.checked THEN 1 ELSE 0 END)        AS checked_count
-                    FROM lists l
-                    LEFT JOIN list_items li ON li.list_id = l.id
-                    WHERE l.deleted_at IS NULL
-                    GROUP BY l.id, l.name, l.list_type, l.created_at, l.updated_at
-                    ORDER BY l.updated_at DESC
-                """)
-                rows = cursor.fetchall()
-                cursor.close()
+            conn = Database.conn()
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT
+                    l.id,
+                    l.name,
+                    l.list_type,
+                    l.created_at,
+                    l.updated_at,
+                    SUM(CASE WHEN li.removed_at IS NULL AND li.id IS NOT NULL THEN 1 ELSE 0 END) AS item_count,
+                    SUM(CASE WHEN li.removed_at IS NULL AND li.checked THEN 1 ELSE 0 END)        AS checked_count
+                FROM lists l
+                LEFT JOIN list_items li ON li.list_id = l.id
+                WHERE l.deleted_at IS NULL
+                GROUP BY l.id, l.name, l.list_type, l.created_at, l.updated_at
+                ORDER BY l.updated_at DESC
+            """)
+            rows = cursor.fetchall()
+            cursor.close()
 
             return [
                 {
@@ -303,8 +297,8 @@ class ListService:
             return 0
 
         try:
-            def _add_items_block(_id: str = list_id, _items: List[str] = items, _dedupe: bool = dedupe, _db: DatabaseService = self.db) -> int:
-                with _db.connection() as conn:
+            def _add_items_block(_id: str = list_id, _items: List[str] = items, _dedupe: bool = dedupe) -> int:
+                with Database.transaction() as conn:
                     cursor = conn.cursor()
 
                     cursor.execute("""
@@ -384,8 +378,8 @@ class ListService:
             return 0
 
         try:
-            def _remove_items_block(_id: str = list_id, _items: List[str] = items, _db: DatabaseService = self.db) -> int:
-                with _db.connection() as conn:
+            def _remove_items_block(_id: str = list_id, _items: List[str] = items) -> int:
+                with Database.transaction() as conn:
                     cursor = conn.cursor()
                     removed = 0
                     for item_content in _items:
@@ -425,8 +419,8 @@ class ListService:
             return 0
 
         try:
-            def _set_checked_block(_id: str = list_id, _items: List[str] = items, _checked: bool = checked, _db: DatabaseService = self.db) -> int:
-                with _db.connection() as conn:
+            def _set_checked_block(_id: str = list_id, _items: List[str] = items, _checked: bool = checked) -> int:
+                with Database.transaction() as conn:
                     cursor = conn.cursor()
                     count = 0
                     for item_content in _items:
@@ -469,8 +463,8 @@ class ListService:
         if not list_row:
             return None
         try:
-            def _insert(_id: str = list_id, _content: str = content, _db: DatabaseService = self.db) -> str:
-                with _db.connection() as conn:
+            def _insert(_id: str = list_id, _content: str = content) -> str:
+                with Database.transaction() as conn:
                     cursor = conn.cursor()
                     cursor.execute(
                         "SELECT COALESCE(MAX(position), -1) FROM list_items "
@@ -525,9 +519,8 @@ class ListService:
         sets.append("updated_at = datetime('now')")
         params.extend([item_id, list_id])
         try:
-            def _update(_sets: List[str] = sets, _params: List[object] = params,
-                        _db: DatabaseService = self.db) -> None:
-                with _db.connection() as conn:
+            def _update(_sets: List[str] = sets, _params: List[object] = params) -> None:
+                with Database.transaction() as conn:
                     cursor = conn.cursor()
                     cursor.execute(
                         f"UPDATE list_items SET {', '.join(_sets)} "
@@ -548,9 +541,8 @@ class ListService:
         if self._get_item_row(list_id, item_id) is None:
             return False
         try:
-            def _soft_remove(_item_id: str = item_id, _list_id: str = list_id,
-                             _db: DatabaseService = self.db) -> None:
-                with _db.connection() as conn:
+            def _soft_remove(_item_id: str = item_id, _list_id: str = list_id) -> None:
+                with Database.transaction() as conn:
                     cursor = conn.cursor()
                     cursor.execute(
                         "UPDATE list_items SET removed_at = datetime('now'), updated_at = datetime('now') "
@@ -571,16 +563,16 @@ class ListService:
 
     def _active_items(self, list_id: str) -> List[Dict[str, object]]:
         """Active items for a list ordered by position (raw DB column values)."""
-        with self.db.connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute(
-                "SELECT id, content, checked, position, added_at, updated_at "
-                "FROM list_items WHERE list_id = ? AND removed_at IS NULL "
-                "ORDER BY position ASC, added_at ASC",
-                (list_id,),
-            )
-            rows = cursor.fetchall()
-            cursor.close()
+        conn = Database.conn()
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT id, content, checked, position, added_at, updated_at "
+            "FROM list_items WHERE list_id = ? AND removed_at IS NULL "
+            "ORDER BY position ASC, added_at ASC",
+            (list_id,),
+        )
+        rows = cursor.fetchall()
+        cursor.close()
         return [
             {'id': row[0], 'content': row[1], 'checked': row[2], 'position': row[3],
              'added_at': row[4], 'updated_at': row[5]}
@@ -589,15 +581,15 @@ class ListService:
 
     def _get_item_row(self, list_id: str, item_id: str) -> Optional[Dict[str, object]]:
         """Fetch one active item by id; None if missing."""
-        with self.db.connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute(
-                "SELECT id, content, checked, position, added_at, updated_at "
-                "FROM list_items WHERE id = ? AND list_id = ? AND removed_at IS NULL",
-                (item_id, list_id),
-            )
-            row = cursor.fetchone()
-            cursor.close()
+        conn = Database.conn()
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT id, content, checked, position, added_at, updated_at "
+            "FROM list_items WHERE id = ? AND list_id = ? AND removed_at IS NULL",
+            (item_id, list_id),
+        )
+        row = cursor.fetchone()
+        cursor.close()
         if not row:
             return None
         return {'id': row[0], 'content': row[1], 'checked': bool(row[2]),
@@ -608,15 +600,15 @@ class ListService:
         if not list_id:
             return None
         try:
-            with self.db.connection() as conn:
-                cursor = conn.cursor()
-                cursor.execute("""
-                    SELECT id, name, list_type, created_at, updated_at
-                    FROM lists
-                    WHERE id = ? AND deleted_at IS NULL
-                """, (list_id,))
-                row = cursor.fetchone()
-                cursor.close()
+            conn = Database.conn()
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT id, name, list_type, created_at, updated_at
+                FROM lists
+                WHERE id = ? AND deleted_at IS NULL
+            """, (list_id,))
+            row = cursor.fetchone()
+            cursor.close()
 
             if row:
                 return {'id': row[0], 'name': row[1], 'list_type': row[2],
@@ -632,16 +624,16 @@ class ListService:
         if not name:
             return None
         try:
-            with self.db.connection() as conn:
-                cursor = conn.cursor()
-                cursor.execute("""
-                    SELECT id, name, list_type, updated_at
-                    FROM lists
-                    WHERE LOWER(name) = LOWER(?) AND deleted_at IS NULL
-                    LIMIT 1
-                """, (name,))
-                row = cursor.fetchone()
-                cursor.close()
+            conn = Database.conn()
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT id, name, list_type, updated_at
+                FROM lists
+                WHERE LOWER(name) = LOWER(?) AND deleted_at IS NULL
+                LIMIT 1
+            """, (name,))
+            row = cursor.fetchone()
+            cursor.close()
 
             if row:
                 return {'id': row[0], 'name': row[1], 'list_type': row[2], 'updated_at': row[3]}
@@ -652,8 +644,8 @@ class ListService:
             return None
 
     def _touch_list(self, list_id: str) -> None:
-        def _touch(_id: str = list_id, _db: DatabaseService = self.db) -> None:
-            with _db.connection() as conn:
+        def _touch(_id: str = list_id) -> None:
+            with Database.transaction() as conn:
                 cursor = conn.cursor()
                 cursor.execute("""
                     UPDATE lists SET updated_at = datetime('now') WHERE id = ?

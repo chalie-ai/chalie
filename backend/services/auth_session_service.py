@@ -32,13 +32,13 @@ def _persist_session_to_sqlite(token: str) -> None:
     mirroring the wrapper-auth path so a DB leak cannot yield live tokens.
     """
     try:
-        from services.database_service import get_shared_db_service
-        db = get_shared_db_service()
-        db.execute(
-            """INSERT OR REPLACE INTO auth_sessions (token, created_at, expires_at)
-               VALUES (?, ?, datetime('now', '+30 days'))""",
-            (_hash_session_token(token), utc_now().isoformat())
-        )
+        from services.database import Database
+        with Database.transaction() as conn:
+            conn.execute(
+                """INSERT OR REPLACE INTO auth_sessions (token, created_at, expires_at)
+                   VALUES (?, ?, datetime('now', '+30 days'))""",
+                (_hash_session_token(token), utc_now().isoformat())
+            )
     except Exception as e:
         logger.error(f"[Session] SQLite persist failed: {e}")
 
@@ -46,9 +46,9 @@ def _persist_session_to_sqlite(token: str) -> None:
 def _delete_session_from_sqlite(token: str) -> None:
     """Remove session from SQLite."""
     try:
-        from services.database_service import get_shared_db_service
-        db = get_shared_db_service()
-        db.execute("DELETE FROM auth_sessions WHERE token = ?", (_hash_session_token(token),))
+        from services.database import Database
+        with Database.transaction() as conn:
+            conn.execute("DELETE FROM auth_sessions WHERE token = ?", (_hash_session_token(token),))
     except Exception as e:
         logger.debug(f"[Session] SQLite delete failed: {e}")
 
@@ -56,14 +56,13 @@ def _delete_session_from_sqlite(token: str) -> None:
 def _validate_session_in_sqlite(token: str) -> bool:
     """Check SQLite for a valid (non-expired) session and rehydrate MemoryStore."""
     try:
-        from services.database_service import get_shared_db_service
-        db = get_shared_db_service()
-        rows = db.fetch_all(
+        from services.database import Database
+        rows = Database.conn().execute(
             """SELECT token FROM auth_sessions
                WHERE token = ? AND expires_at > datetime('now')
                LIMIT 1""",
             (_hash_session_token(token),)
-        )
+        ).fetchall()
         if rows:
             # Rehydrate MemoryStore so subsequent requests are fast
             from services.memory_client import MemoryClientService
@@ -84,8 +83,7 @@ def _cookie_secure() -> bool:
     serving) so cookie scope tracks the wire scheme without any environment var.
     """
     from services.settings_service import SettingsService
-    from services.database_service import get_shared_db_service
-    return SettingsService(get_shared_db_service()).get_bool(SettingsService.SSL_ENABLED)
+    return SettingsService().get_bool(SettingsService.SSL_ENABLED)
 
 
 def create_session(response: Response) -> str:
@@ -148,8 +146,8 @@ def destroy_session(request: Request, response: Response) -> None:
 def cleanup_expired_sessions() -> None:
     """Delete expired sessions from SQLite. Called periodically or on startup."""
     try:
-        from services.database_service import get_shared_db_service
-        db = get_shared_db_service()
-        db.execute("DELETE FROM auth_sessions WHERE expires_at <= datetime('now')")
+        from services.database import Database
+        with Database.transaction() as conn:
+            conn.execute("DELETE FROM auth_sessions WHERE expires_at <= datetime('now')")
     except Exception as e:
         logger.debug(f"[Session] Expired session cleanup failed: {e}")

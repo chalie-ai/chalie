@@ -28,7 +28,7 @@ def send_image_with_config(config: Dict[str, object], image_bytes: bytes,
 
     Builds a ProviderApiRequest and calls the thin client directly: this probes a
     CANDIDATE provider (not the live-configured one), so it cannot route through
-    Providers.send, which resolves the configured provider. The call is still
+    ProviderService.send, which resolves the configured provider. The call is still
     bounded — every client enforces PROVIDER_CALL_TIMEOUT_S at its HTTP boundary.
     Returns None on any failure.
     """

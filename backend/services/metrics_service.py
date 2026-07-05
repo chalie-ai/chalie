@@ -5,6 +5,7 @@ import time
 import uuid
 from typing import Dict, cast
 
+from services.database import Database
 from services.memory_client import MemoryClientService
 from services.memory_store import MemoryStore
 
@@ -102,13 +103,11 @@ class MetricsService:
         store-only test contexts) so the dashboard never fails on a missing DB.
         """
         try:
-            from services.database_service import get_shared_db_service
-            db = get_shared_db_service()
-            with db.connection() as conn:
-                row = conn.execute(
-                    "SELECT COUNT(*) FROM transcript "
-                    "WHERE role = 'user' AND channel = 'user'"
-                ).fetchone()
+            conn = Database.conn()
+            row = conn.execute(
+                "SELECT COUNT(*) FROM transcript "
+                "WHERE role = 'user' AND channel = 'user'"
+            ).fetchone()
             return int(row[0]) if row else 0
         except Exception:
             return 0

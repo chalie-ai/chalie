@@ -18,11 +18,11 @@ from typing import cast
 
 import pytest
 
-from abilities._dispatcher import ToolDispatcher
 from abilities.find_tools import FindToolsAbility
 from configs.channels import UserConfig
+from controllers.message_processor import MessageProcessor
+from services.dispatch_service import DispatchService
 from services.file_mapper_service import FileMapperService
-from services.message_processor import MessageProcessor
 
 pytestmark = pytest.mark.unit
 
@@ -40,7 +40,7 @@ def _run(db: sqlite3.Connection, query: object) -> tuple[list[str], dict[str, ob
     ability.mp = mp
     result = ability.run({"query": query})
     injected = [t for t in mp.active_tools if t not in base]
-    rendered = ToolDispatcher._render("find_tools", result)
+    rendered = DispatchService(mp=cast("MessageProcessor", None))._render("find_tools", result)
     body = result.body if isinstance(result.body, dict) else {}
     return injected, cast("dict[str, object]", body), rendered
 

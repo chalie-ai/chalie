@@ -11,17 +11,19 @@ a ``SUPPORTS_ASYNC`` channel, at the real request-assembly chokepoint.
 
 The guidance that teaches the model WHEN/HOW to use the per-call ``async`` flag
 lives in ONE place: appended to the system prompt in
-``MessageProcessor._build_send_dto`` whenever ``config.SUPPORTS_ASYNC`` is True —
-the SAME gate that exposes the ``async`` tool parameter. Enabling async on a new
+``PromptService.system_prompt`` whenever ``config.SUPPORTS_ASYNC`` is True — the
+SAME gate that exposes the ``async`` tool parameter. Enabling async on a new
 ProcessorConfig therefore surfaces this guidance automatically, at no per-tool
 description cost.
 
 Driven on the real assembly path with real SQLite (``db``), the real prompt
 builders, and the real ability registry — zero mocks. We build a real
-MessageProcessor for each channel and call the production method that assembles
-the exact ``ProviderApiRequest`` the turn sends, then assert on ``dto.system`` —
-i.e. precisely what the model is told. UserConfig (SUPPORTS_ASYNC=True) carries
-the guidance verbatim; the non-async DmnConfig channel never does.
+MessageProcessor for each channel and call the production ``PromptService``
+(``mp.prompt_service``, eagerly constructed by the MP constructor) — the same
+service the turn's request assembly reads its system prompt from — then assert
+on the returned string, i.e. precisely what the model is told. UserConfig
+(SUPPORTS_ASYNC=True) carries the guidance verbatim; the non-async DmnConfig
+channel never does.
 """
 
 import sqlite3
@@ -29,8 +31,9 @@ import sqlite3
 import pytest
 
 from configs.channels import DmnConfig, UserConfig
-from services.message_processor import _ASYNC_GUIDANCE, MessageProcessor
+from controllers.message_processor import MessageProcessor
 from services.processor_config import ProcessorConfig
+from services.prompt_service import _ASYNC_GUIDANCE
 
 pytestmark = pytest.mark.unit
 
@@ -40,11 +43,11 @@ _GUIDANCE_MARKER = "## Background tasks"
 
 
 def _assembled_system(config: ProcessorConfig) -> str:
-    """Build a real MessageProcessor for *config* and return the system prompt of
-    the request its turn would send — the real ``_build_send_dto`` output."""
+    """Build a real MessageProcessor for *config* and return the system prompt
+    its turn would send — the real ``PromptService.system_prompt`` output."""
     mp = MessageProcessor(config, raw_input="What is the Maltese election about?")
     mp.active_tools = list(config.always_available or [])
-    return mp._build_send_dto().system
+    return mp.prompt_service.system_prompt()
 
 
 def test_async_guidance_present_on_supports_async_channel(db: sqlite3.Connection) -> None:

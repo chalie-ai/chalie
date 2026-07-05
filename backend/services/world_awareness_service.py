@@ -14,7 +14,6 @@ from typing import TYPE_CHECKING, cast
 import numpy as np
 
 if TYPE_CHECKING:
-    from services.database_service import DatabaseService
     from services.embedding_service import EmbeddingService
     from services.news_service import NewsService
 
@@ -34,8 +33,7 @@ SIGNAL_SOURCE = "world_awareness"
 
 
 class WorldAwarenessService:
-    def __init__(self, database_service: "DatabaseService") -> None:
-        self._db = database_service
+    def __init__(self) -> None:
         self._embedding_svc: "EmbeddingService | None" = None
         self._news_service: "NewsService | None" = None
 
@@ -70,11 +68,8 @@ class WorldAwarenessService:
 
     def _extract_trait_interests(self) -> list[dict[str, str | float]]:
         try:
-            from services.data_graph_service import get_data_graph_service
-            rows = cast("list[dict[str, object]]", get_data_graph_service().fetch(
-                kinds=['user_specific'],
-                order_by='retrieval_weight DESC',
-            ))
+            from models.data_graph import DataGraph
+            rows = [r.to_dict() for r in DataGraph.traits().get()]
             traits = [
                 r for r in rows
                 if cast(float, r.get('retrieval_weight') or 0) >= TRAIT_MIN_CONFIDENCE
@@ -180,10 +175,7 @@ class WorldAwarenessService:
 
 def world_awareness_worker() -> None:
     """Module-level entry point for run.py registration."""
-    from services.database_service import DatabaseService
-
-    db = DatabaseService()
-    service = WorldAwarenessService(db)
+    service = WorldAwarenessService()
 
     logger.info(f"{LOG_PREFIX} Service started (poll interval: {POLL_INTERVAL}s)")
 

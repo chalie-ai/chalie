@@ -9,7 +9,7 @@ import sqlite3
 from datetime import timedelta
 from typing import Optional, List, Dict, cast
 
-from services.database_service import DatabaseService
+from services.database import Database
 from services.embedding_utils import pack_embedding as _pack_embedding
 from services.file_mapper_service import FileMapperService
 from services.log_utils import safe
@@ -29,8 +29,7 @@ PURGE_WINDOW_DAYS = 30
 
 class DocumentService:
 
-    def __init__(self, db_service: DatabaseService) -> None:
-        self.db = db_service
+    def __init__(self) -> None:
         self._write_queue = get_write_queue()
 
     # ─────────────────────────────────────────────
@@ -56,8 +55,8 @@ class DocumentService:
                 file_hash, source_type, watched_folder_id,
             )
 
-            def _insert(params: tuple[object, ...] = _params, db: DatabaseService = self.db) -> None:
-                with db.connection() as conn:
+            def _insert(params: tuple[object, ...] = _params) -> None:
+                with Database.transaction() as conn:
                     cursor = conn.cursor()
                     cursor.execute(
                         """INSERT INTO documents
@@ -81,20 +80,20 @@ class DocumentService:
 
     def get_document(self, doc_id: str) -> Optional[Dict[str, object]]:
         try:
-            with self.db.connection() as conn:
-                cursor = conn.cursor()
-                cursor.execute("""
-                    SELECT id, original_name, mime_type, file_size_bytes, file_path,
-                           file_hash, page_count, status, error_message, chunk_count,
-                           source_type, tags, summary, extracted_metadata, supersedes_id,
-                           clean_text, language, fingerprint,
-                           doc_category, doc_project, doc_date, meta_locked,
-                           watched_folder_id,
-                           created_at, updated_at, deleted_at, purge_after
-                    FROM documents WHERE id = ?
-                """, (doc_id,))
-                row = cursor.fetchone()
-                cursor.close()
+            conn = Database.conn()
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT id, original_name, mime_type, file_size_bytes, file_path,
+                       file_hash, page_count, status, error_message, chunk_count,
+                       source_type, tags, summary, extracted_metadata, supersedes_id,
+                       clean_text, language, fingerprint,
+                       doc_category, doc_project, doc_date, meta_locked,
+                       watched_folder_id,
+                       created_at, updated_at, deleted_at, purge_after
+                FROM documents WHERE id = ?
+            """, (doc_id,))
+            row = cursor.fetchone()
+            cursor.close()
 
             if not row:
                 return None
@@ -106,47 +105,21 @@ class DocumentService:
 
     def get_all_documents(self, include_deleted: bool = False) -> List[Dict[str, object]]:
         try:
-            with self.db.connection() as conn:
-                cursor = conn.cursor()
-                if include_deleted:
-                    cursor.execute("""
-                        SELECT id, original_name, mime_type, file_size_bytes, file_path,
-                               file_hash, page_count, status, error_message, chunk_count,
-                               source_type, tags, summary, extracted_metadata, supersedes_id,
-                               clean_text, language, fingerprint,
-                               doc_category, doc_project, doc_date, meta_locked,
-                               watched_folder_id,
-                               created_at, updated_at, deleted_at, purge_after
-                        FROM documents
-                        ORDER BY created_at DESC
-                    """)
-                else:
-                    cursor.execute("""
-                        SELECT id, original_name, mime_type, file_size_bytes, file_path,
-                               file_hash, page_count, status, error_message, chunk_count,
-                               source_type, tags, summary, extracted_metadata, supersedes_id,
-                               clean_text, language, fingerprint,
-                               doc_category, doc_project, doc_date, meta_locked,
-                               watched_folder_id,
-                               created_at, updated_at, deleted_at, purge_after
-                        FROM documents
-                        WHERE deleted_at IS NULL
-                        ORDER BY created_at DESC
-                    """)
-                rows = cursor.fetchall()
-                cursor.close()
-
-            return [self._row_to_dict(row) for row in rows]
-
-        except Exception as e:
-            logger.error(f"[DOCS] get_all_documents failed: {e}")
-            return []
-
-    def search_documents_metadata(self, query: str) -> List[Dict[str, object]]:
-        try:
-            with self.db.connection() as conn:
-                cursor = conn.cursor()
-                like_query = f"%{query}%"
+            conn = Database.conn()
+            cursor = conn.cursor()
+            if include_deleted:
+                cursor.execute("""
+                    SELECT id, original_name, mime_type, file_size_bytes, file_path,
+                           file_hash, page_count, status, error_message, chunk_count,
+                           source_type, tags, summary, extracted_metadata, supersedes_id,
+                           clean_text, language, fingerprint,
+                           doc_category, doc_project, doc_date, meta_locked,
+                           watched_folder_id,
+                           created_at, updated_at, deleted_at, purge_after
+                    FROM documents
+                    ORDER BY created_at DESC
+                """)
+            else:
                 cursor.execute("""
                     SELECT id, original_name, mime_type, file_size_bytes, file_path,
                            file_hash, page_count, status, error_message, chunk_count,
@@ -157,14 +130,40 @@ class DocumentService:
                            created_at, updated_at, deleted_at, purge_after
                     FROM documents
                     WHERE deleted_at IS NULL
-                      AND (LOWER(original_name) LIKE LOWER(?)
-                           OR EXISTS (SELECT 1 FROM json_each(tags) WHERE value = ?)
-                           OR LOWER(doc_category) LIKE LOWER(?)
-                           OR LOWER(doc_project) LIKE LOWER(?))
                     ORDER BY created_at DESC
-                """, (like_query, query, like_query, like_query))
-                rows = cursor.fetchall()
-                cursor.close()
+                """)
+            rows = cursor.fetchall()
+            cursor.close()
+
+            return [self._row_to_dict(row) for row in rows]
+
+        except Exception as e:
+            logger.error(f"[DOCS] get_all_documents failed: {e}")
+            return []
+
+    def search_documents_metadata(self, query: str) -> List[Dict[str, object]]:
+        try:
+            conn = Database.conn()
+            cursor = conn.cursor()
+            like_query = f"%{query}%"
+            cursor.execute("""
+                SELECT id, original_name, mime_type, file_size_bytes, file_path,
+                       file_hash, page_count, status, error_message, chunk_count,
+                       source_type, tags, summary, extracted_metadata, supersedes_id,
+                       clean_text, language, fingerprint,
+                       doc_category, doc_project, doc_date, meta_locked,
+                       watched_folder_id,
+                       created_at, updated_at, deleted_at, purge_after
+                FROM documents
+                WHERE deleted_at IS NULL
+                  AND (LOWER(original_name) LIKE LOWER(?)
+                       OR EXISTS (SELECT 1 FROM json_each(tags) WHERE value = ?)
+                       OR LOWER(doc_category) LIKE LOWER(?)
+                       OR LOWER(doc_project) LIKE LOWER(?))
+                ORDER BY created_at DESC
+            """, (like_query, query, like_query, like_query))
+            rows = cursor.fetchall()
+            cursor.close()
 
             return [self._row_to_dict(row) for row in rows]
 
@@ -202,8 +201,8 @@ class DocumentService:
             doc_id=doc_id,
         )
 
-        def _set_clean(did: str = doc_id, txt: str = text_content, db: DatabaseService = self.db) -> None:
-            with db.connection() as conn:
+        def _set_clean(did: str = doc_id, txt: str = text_content) -> None:
+            with Database.transaction() as conn:
                 conn.execute(
                     "UPDATE documents SET clean_text = ? WHERE id = ?",
                     (txt, did),
@@ -227,8 +226,8 @@ class DocumentService:
         try:
             _params = (status, error_message, chunk_count, doc_id)
 
-            def _update(params: tuple[object, ...] = _params, db: DatabaseService = self.db) -> None:
-                with db.connection() as conn:
+            def _update(params: tuple[object, ...] = _params) -> None:
+                with Database.transaction() as conn:
                     cursor = conn.cursor()
                     cursor.execute(
                         """UPDATE documents
@@ -247,8 +246,8 @@ class DocumentService:
 
     def update_clean_text(self, doc_id: str, clean_text: str) -> None:
         try:
-            def _update(did: str = doc_id, txt: str = clean_text, db: DatabaseService = self.db) -> None:
-                with db.connection() as conn:
+            def _update(did: str = doc_id, txt: str = clean_text) -> None:
+                with Database.transaction() as conn:
                     conn.execute(
                         "UPDATE documents SET clean_text = ?, updated_at = datetime('now') WHERE id = ?",
                         (txt, did),
@@ -259,8 +258,8 @@ class DocumentService:
 
     def update_summary(self, doc_id: str, summary: str) -> None:
         try:
-            def _update(did: str = doc_id, s: str = summary, db: DatabaseService = self.db) -> None:
-                with db.connection() as conn:
+            def _update(did: str = doc_id, s: str = summary) -> None:
+                with Database.transaction() as conn:
                     conn.execute(
                         "UPDATE documents SET summary = ?, updated_at = datetime('now') WHERE id = ?",
                         (s, did),
@@ -306,9 +305,8 @@ class DocumentService:
             p: list[object] = params,
             did: str = doc_id,
             emb: Optional[bytes] = packed_emb,
-            db: DatabaseService = self.db,
         ) -> None:
-            with db.connection() as conn:
+            with Database.transaction() as conn:
                 cursor = conn.cursor()
                 cursor.execute(stmt, p)
 
@@ -329,8 +327,8 @@ class DocumentService:
 
     def set_supersedes(self, doc_id: str, supersedes_id: str) -> None:
         try:
-            def _supersede(did: str = doc_id, sid: str = supersedes_id, db: DatabaseService = self.db) -> None:
-                with db.connection() as conn:
+            def _supersede(did: str = doc_id, sid: str = supersedes_id) -> None:
+                with Database.transaction() as conn:
                     cursor = conn.cursor()
                     cursor.execute(
                         """UPDATE documents SET supersedes_id = ?,
@@ -358,63 +356,63 @@ class DocumentService:
         results = []
 
         try:
-            with self.db.connection() as conn:
-                cursor = conn.cursor()
+            conn = Database.conn()
+            cursor = conn.cursor()
 
-                # Layer 1: exact hash match
-                if file_hash:
-                    cursor.execute("""
-                        SELECT id, original_name, created_at
-                        FROM documents
-                        WHERE file_hash = ? AND deleted_at IS NULL
-                          AND (? IS NULL OR id != ?)
-                    """, (file_hash, exclude_id, exclude_id))
-                    for row in cursor.fetchall():
+            # Layer 1: exact hash match
+            if file_hash:
+                cursor.execute("""
+                    SELECT id, original_name, created_at
+                    FROM documents
+                    WHERE file_hash = ? AND deleted_at IS NULL
+                      AND (? IS NULL OR id != ?)
+                """, (file_hash, exclude_id, exclude_id))
+                for row in cursor.fetchall():
+                    results.append({
+                        'id': row[0],
+                        'original_name': row[1],
+                        'created_at': row[2],
+                        'match_type': 'exact',
+                        'distance': 0.0,
+                    })
+
+            # Layer 2: semantic similarity (skip for short docs)
+            if (summary_embedding
+                    and text_length >= DEDUP_MIN_TEXT_LENGTH
+                    and not results):
+                packed = _pack_embedding(summary_embedding)
+                cursor.execute("""
+                    SELECT d.id, d.original_name, d.created_at,
+                           v.distance
+                    FROM documents_vec v
+                    JOIN documents d ON d.rowid = v.rowid
+                    WHERE v.embedding MATCH ? AND k = 5
+                      AND d.deleted_at IS NULL
+                    ORDER BY v.distance
+                """, (packed,))
+                for row in cursor.fetchall():
+                    dist = float(row[3])
+                    doc_id = row[0]
+                    if exclude_id and doc_id == exclude_id:
+                        continue
+                    if dist < DEDUP_EXACT_THRESHOLD:
                         results.append({
-                            'id': row[0],
+                            'id': doc_id,
                             'original_name': row[1],
                             'created_at': row[2],
-                            'match_type': 'exact',
-                            'distance': 0.0,
+                            'match_type': 'semantic_exact',
+                            'distance': dist,
+                        })
+                    elif dist < DEDUP_REVISION_THRESHOLD:
+                        results.append({
+                            'id': doc_id,
+                            'original_name': row[1],
+                            'created_at': row[2],
+                            'match_type': 'semantic_revision',
+                            'distance': dist,
                         })
 
-                # Layer 2: semantic similarity (skip for short docs)
-                if (summary_embedding
-                        and text_length >= DEDUP_MIN_TEXT_LENGTH
-                        and not results):
-                    packed = _pack_embedding(summary_embedding)
-                    cursor.execute("""
-                        SELECT d.id, d.original_name, d.created_at,
-                               v.distance
-                        FROM documents_vec v
-                        JOIN documents d ON d.rowid = v.rowid
-                        WHERE v.embedding MATCH ? AND k = 5
-                          AND d.deleted_at IS NULL
-                        ORDER BY v.distance
-                    """, (packed,))
-                    for row in cursor.fetchall():
-                        dist = float(row[3])
-                        doc_id = row[0]
-                        if exclude_id and doc_id == exclude_id:
-                            continue
-                        if dist < DEDUP_EXACT_THRESHOLD:
-                            results.append({
-                                'id': doc_id,
-                                'original_name': row[1],
-                                'created_at': row[2],
-                                'match_type': 'semantic_exact',
-                                'distance': dist,
-                            })
-                        elif dist < DEDUP_REVISION_THRESHOLD:
-                            results.append({
-                                'id': doc_id,
-                                'original_name': row[1],
-                                'created_at': row[2],
-                                'match_type': 'semantic_revision',
-                                'distance': dist,
-                            })
-
-                cursor.close()
+            cursor.close()
 
         except Exception as e:
             logger.error(f"[DOCS] find_duplicates failed: {e}")
@@ -430,8 +428,8 @@ class DocumentService:
             from services.time_utils import utc_now
             purge_after = utc_now() + timedelta(days=PURGE_WINDOW_DAYS)
 
-            def _soft_delete(did: str = doc_id, pa: object = purge_after, db: DatabaseService = self.db) -> int:
-                with db.connection() as conn:
+            def _soft_delete(did: str = doc_id, pa: object = purge_after) -> int:
+                with Database.transaction() as conn:
                     cursor = conn.cursor()
                     cursor.execute(
                         """UPDATE documents
@@ -467,8 +465,8 @@ class DocumentService:
 
     def restore(self, doc_id: str) -> bool:
         try:
-            def _restore(did: str = doc_id, db: DatabaseService = self.db) -> int:
-                with db.connection() as conn:
+            def _restore(did: str = doc_id) -> int:
+                with Database.transaction() as conn:
                     cursor = conn.cursor()
                     cursor.execute(
                         """UPDATE documents
@@ -508,8 +506,8 @@ class DocumentService:
             if not doc:
                 return False
 
-            def _hard_delete(did: str = doc_id, db: DatabaseService = self.db) -> int:
-                with db.connection() as conn:
+            def _hard_delete(did: str = doc_id) -> int:
+                with Database.transaction() as conn:
                     cursor = conn.cursor()
                     # Clean up virtual tables BEFORE the document delete —
                     # sqlite-vec virtual tables don't support FK cascades.
@@ -554,14 +552,14 @@ class DocumentService:
     def purge_expired(self) -> int:
         try:
             # Find expired docs first (need file paths for disk cleanup)
-            with self.db.connection() as conn:
-                cursor = conn.cursor()
-                cursor.execute("""
-                    SELECT id FROM documents
-                    WHERE purge_after IS NOT NULL AND purge_after < datetime('now')
-                """)
-                expired_ids = [row[0] for row in cursor.fetchall()]
-                cursor.close()
+            conn = Database.conn()
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT id FROM documents
+                WHERE purge_after IS NOT NULL AND purge_after < datetime('now')
+            """)
+            expired_ids = [row[0] for row in cursor.fetchall()]
+            cursor.close()
 
             count = 0
             for doc_id in expired_ids:
@@ -582,22 +580,22 @@ class DocumentService:
 
     def get_documents_by_watched_folder(self, folder_id: str) -> List[Dict[str, object]]:
         try:
-            with self.db.connection() as conn:
-                cursor = conn.cursor()
-                cursor.execute("""
-                    SELECT id, original_name, mime_type, file_size_bytes, file_path,
-                           file_hash, page_count, status, error_message, chunk_count,
-                           source_type, tags, summary, extracted_metadata, supersedes_id,
-                           clean_text, language, fingerprint,
-                           doc_category, doc_project, doc_date, meta_locked,
-                           watched_folder_id,
-                           created_at, updated_at, deleted_at, purge_after
-                    FROM documents
-                    WHERE watched_folder_id = ?
-                    ORDER BY created_at DESC
-                """, (folder_id,))
-                rows = cursor.fetchall()
-                cursor.close()
+            conn = Database.conn()
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT id, original_name, mime_type, file_size_bytes, file_path,
+                       file_hash, page_count, status, error_message, chunk_count,
+                       source_type, tags, summary, extracted_metadata, supersedes_id,
+                       clean_text, language, fingerprint,
+                       doc_category, doc_project, doc_date, meta_locked,
+                       watched_folder_id,
+                       created_at, updated_at, deleted_at, purge_after
+                FROM documents
+                WHERE watched_folder_id = ?
+                ORDER BY created_at DESC
+            """, (folder_id,))
+            rows = cursor.fetchall()
+            cursor.close()
             return [self._row_to_dict(row) for row in rows]
         except Exception as e:
             logger.error(f"[DOCS] get_documents_by_watched_folder failed: {e}")
@@ -605,8 +603,8 @@ class DocumentService:
 
     def update_tags(self, doc_id: str, tags: list[str]) -> None:
         try:
-            def _update_tags(did: str = doc_id, t: str = json.dumps(tags), db: DatabaseService = self.db) -> None:
-                with db.connection() as conn:
+            def _update_tags(did: str = doc_id, t: str = json.dumps(tags)) -> None:
+                with Database.transaction() as conn:
                     cursor = conn.cursor()
                     cursor.execute(
                         "UPDATE documents SET tags = ?, updated_at = datetime('now') WHERE id = ?",
@@ -642,9 +640,8 @@ class DocumentService:
             def _update_class(
                 stmt: str = f"UPDATE documents SET {', '.join(set_parts)} WHERE id = ?",
                 p: list[object] = params,
-                db: DatabaseService = self.db,
             ) -> None:
-                with db.connection() as conn:
+                with Database.transaction() as conn:
                     cursor = conn.cursor()
                     cursor.execute(stmt, p)
                     cursor.close()
@@ -657,27 +654,27 @@ class DocumentService:
         if field not in ('doc_category', 'doc_project', 'doc_date'):
             return []
         try:
-            with self.db.connection() as conn:
-                cursor = conn.cursor()
-                if field == 'doc_date':
-                    # Group by year
-                    cursor.execute("""
-                        SELECT COALESCE(SUBSTR(doc_date, 1, 4), 'Unknown') as grp,
-                               COUNT(*) as cnt
-                        FROM documents
-                        WHERE deleted_at IS NULL AND status = 'ready'
-                        GROUP BY grp ORDER BY grp DESC
-                    """)
-                else:
-                    cursor.execute(f"""
-                        SELECT COALESCE({field}, 'Uncategorized') as grp,
-                               COUNT(*) as cnt
-                        FROM documents
-                        WHERE deleted_at IS NULL AND status = 'ready'
-                        GROUP BY grp ORDER BY cnt DESC
-                    """)
-                rows = cursor.fetchall()
-                cursor.close()
+            conn = Database.conn()
+            cursor = conn.cursor()
+            if field == 'doc_date':
+                # Group by year
+                cursor.execute("""
+                    SELECT COALESCE(SUBSTR(doc_date, 1, 4), 'Unknown') as grp,
+                           COUNT(*) as cnt
+                    FROM documents
+                    WHERE deleted_at IS NULL AND status = 'ready'
+                    GROUP BY grp ORDER BY grp DESC
+                """)
+            else:
+                cursor.execute(f"""
+                    SELECT COALESCE({field}, 'Uncategorized') as grp,
+                           COUNT(*) as cnt
+                    FROM documents
+                    WHERE deleted_at IS NULL AND status = 'ready'
+                    GROUP BY grp ORDER BY cnt DESC
+                """)
+            rows = cursor.fetchall()
+            cursor.close()
             return [{'value': r[0], 'count': r[1]} for r in rows]
         except Exception as e:
             logger.error(f"[DOCS] get_classification_groups failed: {e}")
@@ -685,8 +682,8 @@ class DocumentService:
 
     def update_file_path(self, doc_id: str, new_path: str) -> None:
         try:
-            def _update_path(did: str = doc_id, path: str = new_path, db: DatabaseService = self.db) -> None:
-                with db.connection() as conn:
+            def _update_path(did: str = doc_id, path: str = new_path) -> None:
+                with Database.transaction() as conn:
                     cursor = conn.cursor()
                     cursor.execute(
                         "UPDATE documents SET file_path = ?, updated_at = datetime('now') WHERE id = ?",

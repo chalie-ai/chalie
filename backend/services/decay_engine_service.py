@@ -7,6 +7,7 @@ from datetime import datetime, timedelta, timezone
 
 from ._fts_delete import fts5_external_delete
 from .time_utils import utc_now, parse_utc
+from services.database import Database
 
 logger = logging.getLogger(__name__)
 
@@ -104,43 +105,37 @@ class DecayEngineService:
 
     def _decay_episodic(self) -> int:
         try:
-            from .database_service import get_shared_db_service
+            with Database.transaction() as conn:
+                cursor = conn.cursor()
+                cursor.execute("""
+                    SELECT id, retrieval_weight, salience,
+                           COALESCE(level, 0) AS level,
+                           COALESCE(last_relevant_at, created_at) AS anchor,
+                           tombstoned_at
+                    FROM episodes
+                    WHERE deleted_at IS NULL
+                """)
+                rows = cursor.fetchall()
 
-            db_service = get_shared_db_service()
-            try:
-                with db_service.connection() as conn:
-                    cursor = conn.cursor()
-                    cursor.execute("""
-                        SELECT id, retrieval_weight, salience,
-                               COALESCE(level, 0) AS level,
-                               COALESCE(last_relevant_at, created_at) AS anchor,
-                               tombstoned_at
-                        FROM episodes
-                        WHERE deleted_at IS NULL
-                    """)
-                    rows = cursor.fetchall()
+                now = utc_now()
+                updated = 0
+                for raw in rows:
+                    row = _EpisodeDecayRow(*raw)
+                    new_rw = self._absolute_weight(row, now)
+                    if new_rw is None:
+                        continue
+                    current = row.retrieval_weight if row.retrieval_weight is not None else 0.0
+                    if abs(new_rw - current) > _RW_EPSILON:
+                        cursor.execute(
+                            "UPDATE episodes SET retrieval_weight = ? WHERE id = ?",
+                            (new_rw, row.episode_id),
+                        )
+                        updated += 1
 
-                    now = utc_now()
-                    updated = 0
-                    for raw in rows:
-                        row = _EpisodeDecayRow(*raw)
-                        new_rw = self._absolute_weight(row, now)
-                        if new_rw is None:
-                            continue
-                        current = row.retrieval_weight if row.retrieval_weight is not None else 0.0
-                        if abs(new_rw - current) > _RW_EPSILON:
-                            cursor.execute(
-                                "UPDATE episodes SET retrieval_weight = ? WHERE id = ?",
-                                (new_rw, row.episode_id),
-                            )
-                            updated += 1
-
-                    cursor.close()
-                    if updated > 0:
-                        logger.info(f"[DECAY ENGINE] Recomputed {updated} episodic retrieval weights")
-                    return updated
-            finally:
-                db_service.close_pool()
+                cursor.close()
+                if updated > 0:
+                    logger.info(f"[DECAY ENGINE] Recomputed {updated} episodic retrieval weights")
+                return updated
         except Exception as e:
             logger.exception(f"[DECAY ENGINE] Episodic decay failed: {e}")
             return 0
@@ -163,52 +158,46 @@ class DecayEngineService:
 
     def _delete_expired_episodes(self) -> int:
         try:
-            from .database_service import get_shared_db_service
+            with Database.transaction() as conn:
+                now = utc_now()
+                tombstone_cutoff = (now - timedelta(days=_TOMBSTONE_DELETE_AFTER_DAYS)).isoformat()
+                leaf_age_cutoff = (now - timedelta(days=_LEAF_DELETE_AGE_DAYS)).isoformat()
 
-            db_service = get_shared_db_service()
-            try:
-                with db_service.connection() as conn:
-                    now = utc_now()
-                    tombstone_cutoff = (now - timedelta(days=_TOMBSTONE_DELETE_AFTER_DAYS)).isoformat()
-                    leaf_age_cutoff = (now - timedelta(days=_LEAF_DELETE_AGE_DAYS)).isoformat()
+                cursor = conn.cursor()
+                cursor.execute(
+                    """
+                    SELECT id FROM episodes
+                    WHERE deleted_at IS NULL
+                      AND tombstoned_at IS NOT NULL
+                      AND julianday(tombstoned_at) < julianday(?)
+                    """,
+                    (tombstone_cutoff,),
+                )
+                to_delete = {r[0] for r in cursor.fetchall()}
 
-                    cursor = conn.cursor()
-                    cursor.execute(
-                        """
-                        SELECT id FROM episodes
-                        WHERE deleted_at IS NULL
-                          AND tombstoned_at IS NOT NULL
-                          AND julianday(tombstoned_at) < julianday(?)
-                        """,
-                        (tombstone_cutoff,),
-                    )
-                    to_delete = {r[0] for r in cursor.fetchall()}
+                cursor.execute(
+                    """
+                    SELECT id FROM episodes
+                    WHERE deleted_at IS NULL
+                      AND consolidated_into IS NULL
+                      AND COALESCE(level, 0) = ?
+                      AND retrieval_weight < ?
+                      AND salience <= ?
+                      AND julianday(COALESCE(last_relevant_at, created_at)) < julianday(?)
+                    """,
+                    (_LEVEL_LEAF, _LEAF_DELETE_RW_FLOOR, _LEAF_DELETE_SALIENCE_MAX, leaf_age_cutoff),
+                )
+                to_delete.update(r[0] for r in cursor.fetchall())
 
-                    cursor.execute(
-                        """
-                        SELECT id FROM episodes
-                        WHERE deleted_at IS NULL
-                          AND consolidated_into IS NULL
-                          AND COALESCE(level, 0) = ?
-                          AND retrieval_weight < ?
-                          AND salience <= ?
-                          AND julianday(COALESCE(last_relevant_at, created_at)) < julianday(?)
-                        """,
-                        (_LEVEL_LEAF, _LEAF_DELETE_RW_FLOOR, _LEAF_DELETE_SALIENCE_MAX, leaf_age_cutoff),
-                    )
-                    to_delete.update(r[0] for r in cursor.fetchall())
+                deleted = 0
+                for episode_id in to_delete:
+                    self._hard_delete_episode(conn, episode_id)
+                    deleted += 1
+                cursor.close()
 
-                    deleted = 0
-                    for episode_id in to_delete:
-                        self._hard_delete_episode(conn, episode_id)
-                        deleted += 1
-                    cursor.close()
-
-                    if deleted > 0:
-                        logger.info(f"[DECAY ENGINE] Hard-deleted {deleted} expired episodes")
-                    return deleted
-            finally:
-                db_service.close_pool()
+                if deleted > 0:
+                    logger.info(f"[DECAY ENGINE] Hard-deleted {deleted} expired episodes")
+                return deleted
         except Exception as e:
             logger.exception(f"[DECAY ENGINE] Episode deletion failed: {e}")
             return 0
@@ -230,46 +219,35 @@ class DecayEngineService:
         from .source_profiles import janitor_protected_sql
 
         try:
-            from .database_service import get_shared_db_service
-
-            db_service = get_shared_db_service()
-            try:
-                with db_service.connection() as conn:
-                    now = utc_now()
-                    fossil_cutoff = (now - timedelta(days=_JANITOR_FOSSIL_AGE_DAYS)).isoformat()
-                    cursor = conn.execute(
-                        f"""
-                        UPDATE episodes
-                        SET tombstoned_at = ?
-                        WHERE deleted_at IS NULL
-                          AND tombstoned_at IS NULL
-                          AND consolidated_into IS NULL
-                          AND COALESCE(level, 0) = ?
-                          AND NOT {janitor_protected_sql()}
-                          AND julianday(COALESCE(last_relevant_at, created_at)) < julianday(?)
-                        """,
-                        (now.isoformat(), _LEVEL_LEAF, fossil_cutoff),
-                    )
-                    tombstoned = cursor.rowcount or 0
-                    if tombstoned > 0:
-                        logger.info(f"[DECAY ENGINE] Janitor tombstoned {tombstoned} fossil episodes")
-                    return tombstoned
-            finally:
-                db_service.close_pool()
+            with Database.transaction() as conn:
+                now = utc_now()
+                fossil_cutoff = (now - timedelta(days=_JANITOR_FOSSIL_AGE_DAYS)).isoformat()
+                cursor = conn.execute(
+                    f"""
+                    UPDATE episodes
+                    SET tombstoned_at = ?
+                    WHERE deleted_at IS NULL
+                      AND tombstoned_at IS NULL
+                      AND consolidated_into IS NULL
+                      AND COALESCE(level, 0) = ?
+                      AND NOT {janitor_protected_sql()}
+                      AND julianday(COALESCE(last_relevant_at, created_at)) < julianday(?)
+                    """,
+                    (now.isoformat(), _LEVEL_LEAF, fossil_cutoff),
+                )
+                tombstoned = cursor.rowcount or 0
+                if tombstoned > 0:
+                    logger.info(f"[DECAY ENGINE] Janitor tombstoned {tombstoned} fossil episodes")
+                return tombstoned
         except Exception as e:
             logger.exception(f"[DECAY ENGINE] Fossil janitor failed: {e}")
             return 0
 
     def _decay_data_graph(self) -> int:
         try:
-            from .database_service import get_shared_db_service
             from .data_graph_service import DataGraphService
-            db = get_shared_db_service()
-            try:
-                svc = DataGraphService(db)
-                return svc.decay_cycle()
-            finally:
-                db.close_pool()
+            svc = DataGraphService()
+            return svc.decay_cycle()
         except Exception as e:
             logger.error(f"[DECAY ENGINE] Data graph decay failed: {e}")
             return 0

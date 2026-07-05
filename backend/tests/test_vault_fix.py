@@ -21,16 +21,13 @@ import secrets
 import sqlite3
 from collections.abc import Iterator
 from pathlib import Path
-from typing import cast
 
 import pytest
 from flask.testing import FlaskClient
 from werkzeug.security import generate_password_hash
 
-import services.database_service as _db_mod
 import services.vault_service as _vault_mod
 from api.user_auth import user_auth_ns
-from services.database_service import DatabaseService
 from services.file_mapper_service import FileMapperService
 from services.provider_db_service import ProviderDbService
 from services.vault_service import _vault_state
@@ -357,7 +354,7 @@ class TestProviderDecryptTolerance:
         )
         db.commit()
 
-        service = ProviderDbService(cast(DatabaseService, _db_mod._shared_db_service))
+        service = ProviderDbService()
         providers = service.get_all_providers()
 
         names = {p["name"] for p in providers}
@@ -390,7 +387,7 @@ class TestProviderDecryptTolerance:
 
         # Vault intentionally left sealed (_reset_vault_singletons autouse
         # fixture ensures _vault_state.dek is None)
-        service = ProviderDbService(cast(DatabaseService, _db_mod._shared_db_service))
+        service = ProviderDbService()
         providers = service.get_all_providers()
 
         assert len(providers) == 2

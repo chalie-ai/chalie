@@ -24,6 +24,7 @@ from flask import Response, stream_with_context
 from flask.typing import ResponseReturnValue
 from flask_restx import Namespace, Resource
 
+from services.database import Database
 from services.time_utils import utc_now
 from .auth import require_session
 from .dto import Error, register_dto, responds
@@ -31,7 +32,6 @@ from .dto.boundary import error
 from .dto.privacy import DeleteAllResult
 
 if TYPE_CHECKING:
-    from services.database_service import DatabaseService
     from services.memory_store import MemoryStore
 
 logger = logging.getLogger(__name__)
@@ -134,31 +134,31 @@ def _stream_row_batches(
 
 
 def _stream_table_export(
-    db: "DatabaseService", table: str, max_rows: int, fetch_batch: int
+    table: str, max_rows: int, fetch_batch: int
 ) -> "collections.abc.Generator[str, None, None]":
     """Yield one table's export body — ``{"count", "columns", "rows": [...]}`` — or an error stub."""
     try:
-        with db.connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute(f"SELECT COUNT(*) FROM {table}")
-            total_count = cursor.fetchone()[0]
-            cursor.execute(f"SELECT * FROM {table} LIMIT {max_rows}")
-            columns = [desc[0] for desc in cursor.description]
+        conn = Database.conn()
+        cursor = conn.cursor()
+        cursor.execute(f"SELECT COUNT(*) FROM {table}")
+        total_count = cursor.fetchone()[0]
+        cursor.execute(f"SELECT * FROM {table} LIMIT {max_rows}")
+        columns = [desc[0] for desc in cursor.description]
 
-            yield f'{{"count": {total_count}, "columns": {json.dumps(columns)}, "rows": ['
-            exported = yield from _stream_row_batches(cursor, columns, fetch_batch)
+        yield f'{{"count": {total_count}, "columns": {json.dumps(columns)}, "rows": ['
+        exported = yield from _stream_row_batches(cursor, columns, fetch_batch)
 
-            suffix = "]"
-            if total_count > max_rows:
-                suffix += f', "truncated": true, "exported_rows": {exported}'
-            yield suffix + "}"
-            cursor.close()
+        suffix = "]"
+        if total_count > max_rows:
+            suffix += f', "truncated": true, "exported_rows": {exported}'
+        yield suffix + "}"
+        cursor.close()
     except Exception:
         yield '{"count": 0, "error": "table not found or empty"}'
 
 
 def _stream_tables_export(
-    db: "DatabaseService", tables: list[str], max_rows: int, fetch_batch: int
+    tables: list[str], max_rows: int, fetch_batch: int
 ) -> "collections.abc.Generator[str, None, None]":
     """Yield the comma-joined ``"table": {...}`` entries for every table (body of the ``tables`` object)."""
     first_table = True
@@ -167,7 +167,7 @@ def _stream_tables_export(
             yield ","
         first_table = False
         yield json.dumps(table) + ": "
-        yield from _stream_table_export(db, table, max_rows, fetch_batch)
+        yield from _stream_table_export(table, max_rows, fetch_batch)
 
 
 def _export_memory_store_by_pattern(
@@ -210,42 +210,40 @@ class DataSummaryResource(Resource):
     def get(self) -> ResponseReturnValue:
         """Row counts per user-data table plus oldest/newest memory dates (raw passthrough)."""
         try:
-            from services.database_service import get_shared_db_service
             from services.memory_client import MemoryClientService
 
-            db = get_shared_db_service()
             MemoryClientService.create_connection()
 
             result: dict[str, object] = {}
 
             # SQLite table counts — all user-data tables
-            with db.connection() as conn:
-                for table in [
-                    "episodes", "transcript",
-                    "scheduled_items",
-                    "lists", "list_items",
-                    "documents",
-                    "data_graph",
-                ]:
-                    try:
-                        cursor = conn.cursor()
-                        cursor.execute(f"SELECT COUNT(*) FROM {table}")
-                        row = cursor.fetchone()
-                        result[table] = row[0] if row else 0
-                    except Exception as exc:
-                        logger.warning("[REST API] privacy/data-summary count failed for %s: %s", table, exc)
-                        result[table] = 0
-
-                # Oldest and newest memory timestamps
+            conn = Database.conn()
+            for table in [
+                "episodes", "transcript",
+                "scheduled_items",
+                "lists", "list_items",
+                "documents",
+                "data_graph",
+            ]:
                 try:
                     cursor = conn.cursor()
-                    cursor.execute("SELECT MIN(created_at), MAX(created_at) FROM episodes")
+                    cursor.execute(f"SELECT COUNT(*) FROM {table}")
                     row = cursor.fetchone()
-                    if row and row[0]:
-                        result["oldest_memory"] = str(row[0].date()) if hasattr(row[0], "date") else str(row[0])
-                        result["newest_memory"] = str(row[1].date()) if hasattr(row[1], "date") else str(row[1])
+                    result[table] = row[0] if row else 0
                 except Exception as exc:
-                    logger.warning("[REST API] privacy/data-summary timestamp query failed: %s", exc)
+                    logger.warning("[REST API] privacy/data-summary count failed for %s: %s", table, exc)
+                    result[table] = 0
+
+            # Oldest and newest memory timestamps
+            try:
+                cursor = conn.cursor()
+                cursor.execute("SELECT MIN(created_at), MAX(created_at) FROM episodes")
+                row = cursor.fetchone()
+                if row and row[0]:
+                    result["oldest_memory"] = str(row[0].date()) if hasattr(row[0], "date") else str(row[0])
+                    result["newest_memory"] = str(row[1].date()) if hasattr(row[1], "date") else str(row[1])
+            except Exception as exc:
+                logger.warning("[REST API] privacy/data-summary timestamp query failed: %s", exc)
 
             return result
         except Exception as e:
@@ -265,15 +263,13 @@ class ExportDataResource(Resource):
         """Stream a complete JSON export of all user-data tables + memory store as an attachment."""
 
         def generate() -> "collections.abc.Generator[str, None, None]":
-            from services.database_service import get_shared_db_service
             from services.memory_client import MemoryClientService
 
-            db = get_shared_db_service()
             store = MemoryClientService.create_connection()
 
             exported_at = utc_now().isoformat()
             yield f'{{"exported_at": {json.dumps(exported_at)}, "tables": {{'
-            yield from _stream_tables_export(db, _EXPORT_TABLES, _EXPORT_MAX_ROWS, _EXPORT_FETCH_BATCH)
+            yield from _stream_tables_export(_EXPORT_TABLES, _EXPORT_MAX_ROWS, _EXPORT_FETCH_BATCH)
             yield '}, "memory_store": '
             yield from _stream_memory_store_export(store, _EXPORT_STORE_PATTERNS)
             yield "}"
@@ -301,13 +297,11 @@ class DeleteAllResource(Resource):
             return error("Requires X-Confirm-Delete: yes header", 422)
 
         try:
-            from services.database_service import get_shared_db_service
             from services.memory_client import MemoryClientService
 
-            db = get_shared_db_service()
             truncate_failures: list[str] = []
 
-            with db.connection() as conn:
+            with Database.transaction() as conn:
                 cursor = conn.cursor()
                 for table in _DELETE_ALL_TABLES:
                     try:

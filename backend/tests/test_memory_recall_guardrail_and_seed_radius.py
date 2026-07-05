@@ -1,6 +1,6 @@
 """Test memory.recall guardrail behavior, silent turn-0 seed, and per-lane
 relative-floor telemetry. All exercised through the real production
-path via ToolDispatcher.dispatch("memory") with zero mocks.
+path via DispatchService.dispatch("memory") with zero mocks.
 
 Pinned behaviors:
 1. Explicit recall carries a fallback guardrail naming document/schedule tools but fires no fan-out.
@@ -12,9 +12,8 @@ import sqlite3
 
 import pytest
 
-from abilities._dispatcher import ToolDispatcher
 from configs.channels import UserConfig
-from services.message_processor import MessageProcessor
+from controllers.message_processor import MessageProcessor
 
 pytestmark = pytest.mark.unit
 
@@ -22,11 +21,20 @@ _HINT_LEAD = "If you cannot find the information in memory"
 
 
 def _build_user_mp(text: str) -> MessageProcessor:
-    """Builds a real MessageProcessor (constructor pre-allocates the input row, so
-    uid anchors act-trail FK) with active_tools seeded — mirrors _setup()'s own seed
-    without running the full turn chain."""
+    """Builds a real MessageProcessor with active_tools seeded — mirrors
+    _setup()'s own seed without running the full turn chain. The constructor is
+    "constructed inert" — it never allocates a turn or writes the anchoring input
+    row itself (that's begin()'s job, run on a background drive thread we don't
+    want here). Replay the exact synchronous half of begin() (turn allocation +
+    the anchoring input row) through the mp's own transcript_service, so mp.uid
+    anchors the act-trail FK exactly as it would mid-turn — no private-field
+    poking, no invented API."""
     mp = MessageProcessor(UserConfig(), raw_input=text)
     mp.active_tools = list(mp.config.always_available or [])
+    with mp.db.transaction():
+        mp.turn_id = mp.transcript_service.allocate_turn()
+        mp.uid = mp.transcript_service.append_input(mp.raw_input)
+        mp.current_transcript_id = mp.uid
     return mp
 
 
@@ -64,7 +72,7 @@ def _last_recall_log(db: sqlite3.Connection, caller: str | None = None) -> dict[
 def test_explicit_recall_carries_guardrail_and_fires_no_fanout(db: sqlite3.Connection) -> None:
     mp = _build_user_mp("what is my home wifi password")
 
-    out = ToolDispatcher(mp).dispatch(
+    out = mp.dispatch_service.dispatch(
         "memory", {"action": "recall", "query": "what is my home wifi password"}
     )
 
@@ -94,7 +102,7 @@ def test_explicit_recall_carries_guardrail_and_fires_no_fanout(db: sqlite3.Conne
 def test_turn0_seed_recall_is_silent_and_logs_seed_telemetry(db: sqlite3.Connection) -> None:
     mp = _build_user_mp("what did we talk about at home last week")
 
-    out = ToolDispatcher(mp).dispatch(
+    out = mp.dispatch_service.dispatch(
         "memory",
         {"action": "recall", "query": "what did we talk about at home last week", "_auto": True},
     )
@@ -121,14 +129,14 @@ def test_invalidated_fact_never_surfaces_in_recall(db: sqlite3.Connection) -> No
     import json
     from typing import cast
 
-    from services.data_graph_service import get_data_graph_service
+    from models.data_graph import DataGraph
 
-    get_data_graph_service().store(
+    DataGraph.store(
         kind="user_specific", key="residence", value="Valletta", source="test:seed",
     )
 
     def _recall_residence_rows() -> list[object]:
-        out = ToolDispatcher(_build_user_mp("where do I live")).dispatch(
+        out = _build_user_mp("where do I live").dispatch_service.dispatch(
             "memory", {"action": "recall", "query": "residence city Valletta"}
         )
         head = out.index("]\n") + 2

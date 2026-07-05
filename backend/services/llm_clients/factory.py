@@ -3,14 +3,14 @@ Provider client factory — dispatches a config dict to the correct thin client.
 
 Replaces the create_llm_service / _build_service pair from llm_service.py.
 No FallbackLLMService, no LoggingLLMService — those concerns live in
-Providers (telemetry) and have been deleted (fallback is dead code).
+ProviderService (telemetry) and have been deleted (fallback is dead code).
 
-Consumed by: services.providers (_resolve), services.provider_token_limits.
+Consumed by: services.provider_service (_resolve), services.provider_token_limits.
 """
 
 from __future__ import annotations
 
-from services.llm_clients.base import ProviderClient
+from contracts.provider_client import ProviderClient
 
 
 def build_client(config: dict[str, object]) -> ProviderClient:

@@ -6,11 +6,6 @@ export interface WsMessageEvent {
   type: 'message';
   [k: string]: unknown;
 }
-export interface WsErrorEvent {
-  type: 'error';
-  message: string;
-  recoverable?: boolean;
-}
 export interface WsPingEvent {
   type: 'ping';
 }
@@ -19,18 +14,40 @@ export interface WsPingEvent {
  *  Discriminated on `status`; `type` carries the ProcessorConfig identity (`user` →
  *  main spine, `scheduled` → dock + that schedule's thread) the surface routes by.
  *  The surface reacts by refetching the turn block over REST, so these frames carry
- *  only ids (plus a tool call's id/name/summary for the live act-trail timer) — never
- *  prose. `provider_retry` is the one status shown directly (a transient toast): a
- *  provider call failed mid-turn and the backend is resending, so the turn stays in
- *  flight (no error bubble). Turn *lifecycle* (working/done) is a separate frame —
- *  see `WsTurnExecutionEvent` below. */
-export type WsTurnStatus = 'updated' | 'tool_called' | 'tool_done' | 'provider_retry';
+ *  only ids — never prose. `provider_retry` is the one status shown directly (a
+ *  transient toast): a provider call failed mid-turn and the backend is resending, so
+ *  the turn stays in flight (no error bubble). Turn *lifecycle* (working/done) is a
+ *  separate frame (`WsTurnExecutionEvent`); a live tool call is another
+ *  (`WsToolCallEvent`) — both below. */
+export type WsTurnStatus = 'updated' | 'provider_retry';
 export interface WsTurnSignal {
   status: WsTurnStatus;
   /** ConfigType — the ProcessorConfig identity the FE routes by. */
   type: string;
   turn_id?: number | null;
   [k: string]: unknown;
+}
+
+/** One `tool_calls` row's live projection, pushed on every state flip (see
+ *  services/act_trail.py). It carries no frame-kind tag of its own — `type` is the
+ *  SAME ConfigType-identity field the turn frames carry, so a surface recognises this
+ *  frame by the presence of `tool_name` (checked BEFORE `state` and `status`). One
+ *  emit function fires all three phases: `started` the instant the call begins,
+ *  `done` on success/placeholder return, `error` on a failure/denial/pre-validation
+ *  bounce. `params`/`result` never cross the wire — the surface refetches the turn
+ *  block over REST for the persisted trail; this frame drives the live pill timer
+ *  only. */
+export type WsToolCallState = 'started' | 'done' | 'error';
+export interface WsToolCallEvent {
+  id: number;
+  tool_name: string;
+  summary: string;
+  created_at: string;
+  ended_at: string | null;
+  state: WsToolCallState;
+  /** ConfigType — the ProcessorConfig identity the FE routes by. */
+  type: string | null;
+  turn_id: number | null;
 }
 
 /** One `turn_executions` row, pushed whole on every state flip (see
@@ -57,11 +74,11 @@ export interface WsTurnExecutionEvent {
 
 /** Push family — content/side-channel frames routed through the drift handler,
  *  discriminated on `type` (distinct from the turn signals above, keyed on `status`).
- *  The turn-level `error` toast arrives here too (WsErrorEvent). */
+ *  The scheduler runs prompts only now, so a fire is an ordinary turn lifecycle
+ *  frame on the `scheduled` type — there is no separate `notification`/`reminder`
+ *  push. */
 export type WsPushType =
   | 'task'
-  | 'reminder'
-  | 'notification'
   | 'permission_request'
   | 'intent'
   | 'capability_alert'
@@ -76,10 +93,10 @@ export interface WsPushEvent {
 
 export type WsInboundEvent =
   | WsMessageEvent
-  | WsErrorEvent
   | WsPingEvent
   | WsTurnSignal
   | WsTurnExecutionEvent
+  | WsToolCallEvent
   | WsPushEvent;
 
 /** Action channel (rich-card button → POST /action) is the only per-request

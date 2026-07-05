@@ -35,6 +35,7 @@ from typing import ClassVar, cast
 from abilities._params import Keys
 from abilities._result import ToolResult
 from abilities._search import KNN_DEPTH, SearchableAbility
+from services.database import Database
 from services.file_mapper_service import FileMapperService
 
 logger = logging.getLogger(__name__)
@@ -120,15 +121,12 @@ class FindSkillsAbility(SearchableAbility):
 
     def _probe_index(self) -> "ToolResult | None":
         try:
-            conn = sqlite3.connect(str(self._DB_PATH))
-            try:
-                conn.execute("SELECT 1 FROM skills LIMIT 1").fetchone()
-                conn.execute(
-                    "SELECT 1 FROM skill_search_fts "
-                    "WHERE skill_search_fts MATCH 'probe' LIMIT 1"
-                ).fetchone()
-            finally:
-                conn.close()
+            conn = Database.conn(str(self._DB_PATH))
+            conn.execute("SELECT 1 FROM skills LIMIT 1").fetchone()
+            conn.execute(
+                "SELECT 1 FROM skill_search_fts "
+                "WHERE skill_search_fts MATCH 'probe' LIMIT 1"
+            ).fetchone()
         except sqlite3.Error as exc:
             logger.warning(f"{self._LOG_PREFIX} index probe failed: {exc}")
             return ToolResult.err(
@@ -140,14 +138,11 @@ class FindSkillsAbility(SearchableAbility):
 
     def _title_index(self) -> dict[str, int]:
         """``{normalised title: skill_id}`` for the exact-name rung."""
-        conn = sqlite3.connect(str(self._DB_PATH))
-        try:
-            return {
-                self._norm(cast("str", title)): cast("int", skill_id)
-                for skill_id, title in conn.execute("SELECT id, title FROM skills WHERE enabled = 1")
-            }
-        finally:
-            conn.close()
+        conn = Database.conn(str(self._DB_PATH))
+        return {
+            self._norm(cast("str", title)): cast("int", skill_id)
+            for skill_id, title in conn.execute("SELECT id, title FROM skills WHERE enabled = 1")
+        }
 
     def _bm25_name(self, terms: list[str]) -> list[object]:
         """Rung 2: bm25 over the skill TITLE only, gated by title-segment alignment."""
@@ -205,18 +200,15 @@ class FindSkillsAbility(SearchableAbility):
         return {"name": title, "content": content, "rules": rules}
 
     def _fetch_detail(self, skill_id: int) -> tuple[str, str, list[dict[str, object]]]:
-        conn = sqlite3.connect(str(self._DB_PATH))
-        try:
-            row = conn.execute(
-                "SELECT title, content FROM skills WHERE id = ?", (skill_id,)
-            ).fetchone()
-            title, content = (row[0], row[1]) if row else ("", "")
+        conn = Database.conn(str(self._DB_PATH))
+        row = conn.execute(
+            "SELECT title, content FROM skills WHERE id = ?", (skill_id,)
+        ).fetchone()
+        title, content = (row[0], row[1]) if row else ("", "")
 
-            rules = conn.execute(
-                "SELECT pattern_name, rule FROM skill_associations WHERE skill_id = ?",
-                (skill_id,),
-            ).fetchall()
-        finally:
-            conn.close()
+        rules = conn.execute(
+            "SELECT pattern_name, rule FROM skill_associations WHERE skill_id = ?",
+            (skill_id,),
+        ).fetchall()
 
         return title, content, [{"pattern_name": r[0], "rule": r[1]} for r in rules]

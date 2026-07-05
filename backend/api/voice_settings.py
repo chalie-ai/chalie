@@ -24,10 +24,9 @@ _VS = voice_settings_ns.models
 
 
 def _get_services() -> "SettingsService":
-    from services.database_service import get_shared_db_service
     from services.settings_service import SettingsService
 
-    return SettingsService(get_shared_db_service())
+    return SettingsService()
 
 
 @voice_settings_ns.route("")

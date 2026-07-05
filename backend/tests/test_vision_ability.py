@@ -24,8 +24,7 @@ from typing import cast
 
 import pytest
 
-from services.database_service import get_shared_db_service
-from services.message_processor import MessageProcessor
+from controllers.message_processor import MessageProcessor
 from services.processor_config import ProcessorConfig
 from services.provider_db_service import ProviderDbService
 
@@ -45,7 +44,7 @@ def _make_user_mp() -> MessageProcessor:
 
 
 def _force_vision_provider(db: sqlite3.Connection) -> int:
-    svc = ProviderDbService(get_shared_db_service())
+    svc = ProviderDbService()
     provider = svc.create_provider(
         {
             "name": "probe-vision",
@@ -65,8 +64,8 @@ def _force_vision_provider(db: sqlite3.Connection) -> int:
 def test_describe_image_no_vision_provider_falls_back_to_ocr(db: sqlite3.Connection, tmp_path: Path) -> None:
     from abilities.vision import describe_image
 
-    ProviderDbService(get_shared_db_service()).set_vision_provider(None)
-    assert ProviderDbService(get_shared_db_service()).get_vision_provider() is None
+    ProviderDbService().set_vision_provider(None)
+    assert ProviderDbService().get_vision_provider() is None
 
     img = tmp_path / "blank.png"
     img.write_bytes(_png_bytes())
@@ -113,7 +112,7 @@ def test_vision_run_provider_error_returns_visible_error(db: sqlite3.Connection)
     # A real document row + a real on-disk image file the ability resolves.
     import hashlib
 
-    doc_svc = DocumentService(get_shared_db_service())
+    doc_svc = DocumentService()
     doc_id = doc_svc.create_document(
         original_name="pic.png",
         mime_type="image/png",
@@ -150,19 +149,22 @@ def test_vision_run_unknown_doc_id_is_error(db: sqlite3.Connection) -> None:
 
 import hashlib  # noqa: E402 — appended to existing file
 
-from abilities._dispatcher import ToolDispatcher  # noqa: E402
 from configs.channels import UserConfig  # noqa: E402
 from services.document_service import DocumentService  # noqa: E402
 from services.file_mapper_service import FileMapperService  # noqa: E402
-from tests._tool_result_harness import MP, body, head, seed_transcript  # noqa: E402
+from tests._tool_result_harness import body, head, seed_transcript  # noqa: E402
 
 
 @pytest.fixture
-def _vision_chat_mp(db: sqlite3.Connection) -> MP:
+def _vision_chat_mp(db: sqlite3.Connection) -> MessageProcessor:
     """A real chat-channel mp bound to the test database, with a seeded transcript
-    anchor. Vision seeds ``allow`` on chat in the db template, so the real gate
-    passes through to the production run()."""
-    return MP(seed_transcript(db, content="what is in this image"), UserConfig({}))
+    anchor (mp.uid — dispatch's ``ToolCallService._transcript_id()`` falls back to
+    it when ``current_transcript_id`` is unset). Vision seeds ``allow`` on chat in
+    the db template, so the real gate passes through to the production run()."""
+    mp = MessageProcessor(UserConfig({}), raw_input="what is in this image")
+    mp.active_tools = list(mp.config.always_available or [])
+    mp.uid = seed_transcript(db, content="what is in this image")
+    return mp
 
 
 def _vision_head(rendered: str) -> str:
@@ -177,7 +179,7 @@ def _real_image_doc_for_vision(db: sqlite3.Connection, rel_dir: str = "vis_tr001
     """Create a real document row AND materialise a real PNG at the resolved
     documents path so the ability resolves a genuine file on disk."""
     png = _png_bytes()
-    doc_svc = DocumentService(get_shared_db_service())
+    doc_svc = DocumentService()
     doc_id = doc_svc.create_document(
         original_name="pic.png",
         mime_type="image/png",
@@ -192,10 +194,10 @@ def _real_image_doc_for_vision(db: sqlite3.Connection, rel_dir: str = "vis_tr001
 
 
 @pytest.mark.unit
-def test_whitespace_only_image_is_missing_params(db: sqlite3.Connection, _vision_chat_mp: MP) -> None:
+def test_whitespace_only_image_is_missing_params(db: sqlite3.Connection, _vision_chat_mp: MessageProcessor) -> None:
     """A whitespace-only ``image`` slips the truthiness pre-gate and reaches run(),
     which rejects the stripped-empty doc id as ``code=missing-params``."""
-    out = ToolDispatcher(_vision_chat_mp).dispatch(
+    out = _vision_chat_mp.dispatch_service.dispatch(
         "vision", {"image": "   ", "query": "x", "act_summary": "x"}
     )
 
@@ -207,7 +209,7 @@ def test_whitespace_only_image_is_missing_params(db: sqlite3.Connection, _vision
 
 
 @pytest.mark.unit
-def test_doc_with_no_file_path_is_no_file_on_disk(db: sqlite3.Connection, _vision_chat_mp: MP) -> None:
+def test_doc_with_no_file_path_is_no_file_on_disk(db: sqlite3.Connection, _vision_chat_mp: MessageProcessor) -> None:
     """A real document row whose ``file_path`` is empty (no stored file) →
     ``code=no-file-on-disk`` with a recovery hint."""
     doc_id = "facefeed2"
@@ -218,7 +220,7 @@ def test_doc_with_no_file_path_is_no_file_on_disk(db: sqlite3.Connection, _visio
     )
     db.commit()
 
-    out = ToolDispatcher(_vision_chat_mp).dispatch(
+    out = _vision_chat_mp.dispatch_service.dispatch(
         "vision", {"image": doc_id, "query": "x", "act_summary": "x"}
     )
 
@@ -231,16 +233,16 @@ def test_doc_with_no_file_path_is_no_file_on_disk(db: sqlite3.Connection, _visio
 
 
 @pytest.mark.unit
-def test_ocr_fallback_success_is_degraded(db: sqlite3.Connection, _vision_chat_mp: MP) -> None:
+def test_ocr_fallback_success_is_degraded(db: sqlite3.Connection, _vision_chat_mp: MessageProcessor) -> None:
     """No vision provider configured → the OCR fallback returns ``ok`` BUT with
     ``degraded=true`` in the head, and the no-vision-provider note still rides the
     body verbatim."""
-    ProviderDbService(get_shared_db_service()).set_vision_provider(None)
-    assert ProviderDbService(get_shared_db_service()).get_vision_provider() is None
+    ProviderDbService().set_vision_provider(None)
+    assert ProviderDbService().get_vision_provider() is None
 
     doc_id = _real_image_doc_for_vision(db, rel_dir="vis_tr002")
 
-    out = ToolDispatcher(_vision_chat_mp).dispatch(
+    out = _vision_chat_mp.dispatch_service.dispatch(
         "vision", {"image": doc_id, "query": "what is this", "act_summary": "x"}
     )
 

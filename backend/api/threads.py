@@ -34,6 +34,7 @@ from flask.typing import ResponseReturnValue
 from flask_restx import Namespace, Resource
 
 from services.config_type import ConfigTypeEnum
+from services.database import Database
 from services.locale_service import CHAT_TIMESTAMP_FMT, format_date
 from services.rich_media_parser import parse as _parse_rich_media
 from .auth import require_session
@@ -86,7 +87,7 @@ def _fetch_tool_calls_for_transcripts(conn: sqlite3.Connection, transcript_ids: 
         return []
     placeholders = ",".join("?" * len(transcript_ids))
     tc_rows = conn.execute(
-        f"SELECT transcript_id, tool_name, params, result, summary, created_at FROM tool_calls "
+        f"SELECT transcript_id, tool_name, params, result, summary, created_at, ended_at, state FROM tool_calls "
         f"WHERE transcript_id IN ({placeholders}) ORDER BY id",
         tuple(transcript_ids),
     ).fetchall()
@@ -98,6 +99,8 @@ def _fetch_tool_calls_for_transcripts(conn: sqlite3.Connection, transcript_ids: 
             "result": r[3] or "",
             "summary": r[4] or "",
             "created_at": r[5],
+            "ended_at": r[6],
+            "state": r[7],
         }
         for r in tc_rows
     ]
@@ -183,20 +186,30 @@ def _apply_user_fields(msg: dict[str, object], r: dict[str, object], attachments
         msg["attachments"] = attachments
 
 
-def _apply_assistant_fields(
-    msg: dict[str, object],
-    r: dict[str, object],
-    calls_by_transcript: dict[int, list[dict[str, object]]],
-    turn_calls: list[dict[str, object]],
-) -> None:
-    own_calls = calls_by_transcript.get(cast("int", r['id']), [])
-    chips = [
-        {"tool_name": c["tool_name"], "summary": c["summary"]}
+def _tool_call_chips(own_calls: list[dict[str, object]]) -> list[dict[str, object]]:
+    """Chips for whatever transcript row anchors these calls — the user input row
+    or an assistant text row alike. A step-1 tool-only call (the commonest shape)
+    anchors to the user row, so chips are role-agnostic (the ratified feed vision:
+    tool calls render under WHATEVER row anchors them). Each chip carries the
+    persisted ``state`` + ``ended_at`` so a refetched error stays an error pill,
+    not a downgraded neutral chip."""
+    return [
+        {
+            "tool_name": c["tool_name"],
+            "summary": c["summary"],
+            "state": c["state"],
+            "ended_at": c["ended_at"],
+        }
         for c in own_calls
         if c["tool_name"] != _COMPACTOR_TOOL
     ]
-    if chips:
-        msg["tool_calls"] = chips
+
+
+def _apply_assistant_fields(
+    msg: dict[str, object],
+    r: dict[str, object],
+    turn_calls: list[dict[str, object]],
+) -> None:
     content = msg["content"]
     segments = _parse_rich_media(str(content), turn_calls)
     if not segments and content:
@@ -206,34 +219,50 @@ def _apply_assistant_fields(
 
 def _rows_to_messages(rows: list[dict[str, object]]) -> list[dict[str, object]]:
     """Project raw transcript rows (oldest-first) into the conversation message
-    shape — attachments for user rows, tool-call chips + rich-media segments for
-    assistant rows. Shared by thread-list and thread-expand."""
-    from services.database_service import get_shared_db_service
-
+    shape — attachments for user rows, rich-media segments for assistant rows,
+    and tool-call chips on WHATEVER row anchors them (user input row included).
+    Shared by thread-list and thread-expand."""
     messages: list[dict[str, object]] = []
-    db = get_shared_db_service()
-    with db.connection() as conn:
-        attachments_by_id = _fetch_attachments_for_transcripts(
-            conn, [cast("int", r['id']) for r in rows if r['role'] == 'user']
-        )
+    conn = Database.conn()
+    attachments_by_id = _fetch_attachments_for_transcripts(
+        conn, [cast("int", r['id']) for r in rows if r['role'] == 'user']
+    )
 
-        assistant_ids = [cast("int", r['id']) for r in rows if r['role'] != 'user']
-        # Bulk-resolve all turn transcript IDs for segment parsing (replaces per-row _resolve_ids calls).
-        turn_scope_ids = _resolve_turn_transcript_ids(conn, assistant_ids)
-        # One query for all tool calls across the whole turn scope (chips + segments).
-        turn_calls = _fetch_tool_calls_for_transcripts(conn, turn_scope_ids)
-        # Group by transcript_id for per-row chip lookup.
-        calls_by_transcript = _group_calls_by_transcript(turn_calls)
+    # Resolve turn scope from EVERY row, not just assistant rows: a step-1
+    # tool-only call anchors to the user input row, and a turn whose only row
+    # so far is that input row has zero assistant rows — keying off assistant
+    # ids alone would resolve to an empty scope and silently drop its chips.
+    turn_scope_ids = _resolve_turn_transcript_ids(
+        conn, [cast("int", r['id']) for r in rows]
+    )
+    # One query for all tool calls across the whole turn scope (chips + segments).
+    turn_calls = _fetch_tool_calls_for_transcripts(conn, turn_scope_ids)
+    # Group by transcript_id for per-row chip lookup.
+    calls_by_transcript = _group_calls_by_transcript(turn_calls)
 
-        for r in rows:
-            msg = _base_message(r)
-            if r['role'] == 'user':
-                _apply_user_fields(msg, r, attachments_by_id)
-            else:
-                _apply_assistant_fields(msg, r, calls_by_transcript, turn_calls)
-            messages.append(msg)
+    for r in rows:
+        msg = _base_message(r)
+        chips = _tool_call_chips(calls_by_transcript.get(cast("int", r['id']), []))
+        if chips:
+            msg["tool_calls"] = chips
+        if r['role'] == 'user':
+            _apply_user_fields(msg, r, attachments_by_id)
+        else:
+            _apply_assistant_fields(msg, r, turn_calls)
+        messages.append(msg)
 
     return messages
+
+
+def _bulk_gists(channel: str, turn_ids: list[int]) -> dict[int, str]:
+    """Thread labels for a batch of turn_ids, reached through an inert MP's
+    ``gist_service`` (cut-over §2.7-style: :meth:`GistService.bulk_get` takes
+    ``channel``/``turn_ids`` explicitly and never touches ``mp.config``, so any
+    config satisfies construction — zero side-effects, I2)."""
+    from controllers.message_processor import MessageProcessor  # noqa: PLC0415
+
+    mp = MessageProcessor(ConfigTypeEnum.get_by_type(_TYPE))
+    return mp.gist_service.bulk_get(channel, turn_ids)
 
 
 def serialize_turn(channel: str, turn_id: int) -> dict[str, object]:
@@ -248,8 +277,7 @@ def serialize_turn(channel: str, turn_id: int) -> dict[str, object]:
     metadata (gist, preview, last activity) and the turn-level render state
     (``working`` — unsettled/in-flight — and ``duration_ms``, derived from the row
     span) are folded in."""
-    from services.transcript_service import Transcript
-    from services.thread_gist_service import get_thread_gist_service
+    from models.transcript import Transcript
     from services.time_utils import parse_utc
 
     rows = Transcript.by_turn(channel, turn_id)
@@ -267,7 +295,7 @@ def serialize_turn(channel: str, turn_id: int) -> dict[str, object]:
 
     return {
         "turn_id": turn_id,
-        "gist": get_thread_gist_service().bulk_get(channel, [turn_id]).get(turn_id),
+        "gist": _bulk_gists(channel, [turn_id]).get(turn_id),
         "preview": cast("str", rows[0]["content"] or "")[:_PREVIEW_CHARS] if rows else "",
         "last_activity_at": rows[-1]["created_at"] if rows else None,
         "working": settle is None,
@@ -282,10 +310,9 @@ def _thread_summaries(threads: list[dict[str, object]], channel: str) -> list[Th
     key is dropped here."""
     if not threads:
         return []
-    from services.thread_gist_service import get_thread_gist_service  # noqa: PLC0415
 
     turn_ids = [cast("int", t["turn_id"]) for t in threads if t.get("turn_id") is not None]
-    gists = get_thread_gist_service().bulk_get(channel, turn_ids)
+    gists = _bulk_gists(channel, turn_ids)
     return [
         ThreadSummary(
             turn_id=cast("int | None", t.get("turn_id")),
@@ -316,8 +343,7 @@ class ThreadsResource(Resource):
     @expects(ThreadFeedQuery, source="args")
     def get(self, dto: ThreadFeedQuery) -> ThreadFeed:
         """List threads with collapsed metadata (gist, preview, last activity)."""
-        # @todo migrate to TranscriptService
-        from services.transcript_service import Transcript  # noqa: PLC0415
+        from models.transcript import Transcript  # noqa: PLC0415
 
         limit, offset = (_SEARCH_LIMIT, 0) if dto.q else (dto.limit, dto.offset)
         channel = ConfigTypeEnum.get_by_type(dto.type).channel
@@ -380,7 +406,7 @@ class ThreadItemResource(Resource):
         round-trip, and live output then surfaces via the ``updated`` signal → REST
         pull plus ``turn_execution`` lifecycle frames."""
         from api.chat import _stage_chat_uploads  # noqa: PLC0415
-        from services.message_processor import MessageProcessor  # noqa: PLC0415
+        from controllers.message_processor import MessageProcessor  # noqa: PLC0415
 
         attachments = _stage_chat_uploads(cast("list[object]", request.files.getlist("files")[:_MAX_FILES]))
         text = dto.text.strip()
@@ -393,12 +419,10 @@ class ThreadItemResource(Resource):
         # scheduled → ScheduledConfig, its own growing thread on the schedule channel).
         # forked-ness is derived internally by the MessageProcessor from the turn_id.
         config = ConfigTypeEnum.get_by_type(dto.type)
-        mp = MessageProcessor(config, turn_id, text, {"attachments": attachments})
+        mp = MessageProcessor.process(config, text, {"attachments": attachments}, turn_id)
         if mp.execution is None:
             return error("Failed to open turn execution", 500)
-        dto_out = TurnExecutionDTO.model_validate(mp.execution.to_json())
-        mp.run()
-        return dto_out
+        return TurnExecutionDTO.model_validate(mp.execution.to_dict())
 
     @require_session
     @threads_ns.param("turn_id", "Turn id")
@@ -409,21 +433,21 @@ class ThreadItemResource(Resource):
     def delete(self, turn_id: int) -> "TurnExecutionDTO | Interrupted | ResponseReturnValue":
         """Interrupt the running turn for this turn_id — the FE stop button's call.
         Flips ``cancel_requested`` on the turn's open execution row; the turn polls
-        it cooperatively, stops its step loop, purges the rows THIS chain itself
-        wrote (id-floor scoped, so a fork reply only wipes its own contribution —
-        see MessageProcessor._cleanup_cancelled) and stamps itself cancelled. The
+        it cooperatively, stops its step loop and stamps itself cancelled — every
+        row it already wrote stays, nothing is deleted. The
         id is the same one the send response handed the surface, so no body beyond
         the turn_id is needed; ``type`` resolves the channel the row was opened
         under (turn_id is only unique per channel). An idle/finished turn_id (no
         open row on that channel) is a harmless ``no_active_turn`` ack."""
-        from services.execution_tracker import TurnExecutionService  # noqa: PLC0415
+        from controllers.message_processor import MessageProcessor  # noqa: PLC0415
 
         try:
-            channel = ConfigTypeEnum.get_by_type(request.args.get("type", _TYPE)).channel
+            config = ConfigTypeEnum.get_by_type(request.args.get("type", _TYPE))
         except ValueError:
             return error("Invalid type", 400)
-        execution = TurnExecutionService().request_cancel_by_turn(channel, turn_id)
+        mp = MessageProcessor(config, turn_id)  # inert (I2): 0 db, 0 ws at construction
+        execution = mp.turn_execution_service.cancel()
         if execution is None:
             return Interrupted(reason="no_active_turn")
-        logger.info("[Threads API] cancel requested for turn %s channel=%s", turn_id, channel)
-        return TurnExecutionDTO.model_validate(execution.to_json())
+        logger.info("[Threads API] cancel requested for turn %s channel=%s", turn_id, config.channel)
+        return TurnExecutionDTO.model_validate(execution.to_dict())

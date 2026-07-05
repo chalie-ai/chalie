@@ -26,7 +26,7 @@ from services.data_graph_service import (
     _CONCEPT_LUT_THRESHOLD,
     _l2_dist_to_cosine,
 )
-from services.database_service import DatabaseService, get_shared_db_service
+from services.database import Database
 from services.embedding_service import EmbeddingService
 from services.embedding_utils import pack_embedding
 
@@ -373,7 +373,6 @@ _OUTCOME_COUNTERS = {
 
 
 def _run_row(
-    db: DatabaseService,
     lut_conn: sqlite3.Connection,
     emb_service: EmbeddingService,
     row: tuple[int, str, str, str],
@@ -386,7 +385,7 @@ def _run_row(
     if blob is None:
         return 'skipped'
     try:
-        with db.connection() as conn:
+        with Database.transaction() as conn:
             return _process_row(
                 conn, lut_conn, emb_service,
                 row_id, key, value or '', search_queries or '',
@@ -413,13 +412,12 @@ def main() -> None:
     if dry_run:
         print("DRY RUN — no changes will be written.\n")
 
-    db = get_shared_db_service()
     emb_service = EmbeddingService()
     lut_conn = _open_lut()
 
     print(f"Opened LUT: {_CONCEPT_LUT_PATH}")
 
-    with db.connection() as conn:
+    with Database.transaction() as conn:
         rows = conn.execute(
             "SELECT id, key, value, search_queries FROM data_graph "
             "WHERE kind=? AND active=1 AND deleted_at IS NULL",
@@ -435,7 +433,7 @@ def main() -> None:
         embeddings = emb_service.generate_embeddings_batch([r[1] for r in batch])
 
         for row, emb in zip(batch, embeddings):
-            outcome = _run_row(db, lut_conn, emb_service, row, emb, dry_run)
+            outcome = _run_row(lut_conn, emb_service, row, emb, dry_run)
             counts[_OUTCOME_COUNTERS.get(outcome, 'skipped')] += 1
 
         print(f"  Processed {min(i + _BATCH_SIZE, len(rows))}/{len(rows)}...")

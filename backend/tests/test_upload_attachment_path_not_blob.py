@@ -2,7 +2,7 @@
 
 Root cause of the deepseek ``400 The prompt is too long``: the turn-0
 upload path base64-encoded the whole attachment and dispatched
-``document.upload(content=<base64>)``.  ``ToolDispatcher.dispatch`` records every
+``document.upload(content=<base64>)``.  ``DispatchService.dispatch`` records every
 call's params verbatim into ``tool_calls.params`` (``ActTrail.record``), and
 ``ActTrail.render`` inlines ``[document] {params} -> {result}`` straight into the
 next prompt.  A ~3 MB image became a ~4 MB base64 string sitting in the act-trail,
@@ -38,9 +38,9 @@ from typing import cast
 import pytest
 
 from configs.channels import UserConfig
+from controllers.message_processor import MessageProcessor
 from services.database_service import get_shared_db_service
 from services.document_service import DocumentService
-from services.message_processor import MessageProcessor
 from services.provider_db_service import ProviderDbService
 from services.tmp_storage import new_tmp_path
 
@@ -77,14 +77,25 @@ def _write_attachment(label: str) -> str:
 
 def _build_parent(attachments: list[str]) -> MessageProcessor:
     """A real UserConfig MessageProcessor in the exact state ``_seed_turn_zero``
-    fires from: input row written (by the real constructor), ``active_tools``
-    seeded, attachments on metadata, thinking OFF (no LLM boundary involved in
-    this test — ``_seed_turn_zero`` is invoked directly so the attachment
-    ingest is isolated from the chat-completion step)."""
+    fires from: input row written, ``active_tools`` seeded, attachments on
+    metadata, thinking OFF (no LLM boundary involved in this test —
+    ``_seed_turn_zero`` is invoked directly so the attachment ingest is
+    isolated from the chat-completion step).
+
+    The constructor is "constructed inert" (I2: zero DB side effects) —
+    ``begin()`` is what synchronously allocates the turn and writes the
+    anchoring input row. Replay exactly that synchronous half directly
+    through the mp's own coordinating services (no private-field poking, no
+    invented API) so ``uid``/``current_transcript_id`` are real rather than
+    the bare constructor's ``None``."""
     config = UserConfig()
     parent = MessageProcessor(config, -1, "What is in this image?", {"attachments": attachments})
     parent.active_tools = list(config.always_available or [])
     parent.thinking_level = "low"
+    with parent.db.transaction():
+        parent.turn_id = parent.transcript_service.allocate_turn()
+        parent.uid = parent.transcript_service.append_input(parent.raw_input)
+        parent.current_transcript_id = parent.uid
     return parent
 
 
@@ -95,7 +106,7 @@ def test_turn0_upload_records_path_not_base64_blob(db: sqlite3.Connection) -> No
     a multi-KB+ blob -> the assertions below FAIL.  Post-fix it sends ``path=`` so
     the row is tiny and base64-free -> they PASS.
     """
-    ProviderDbService(get_shared_db_service()).set_vision_provider(None)  # OCR fork
+    ProviderDbService().set_vision_provider(None)  # OCR fork
 
     attachment = _write_attachment("invoice")
     parent = _build_parent([attachment])
@@ -134,10 +145,10 @@ def test_turn0_upload_records_path_not_base64_blob(db: sqlite3.Connection) -> No
     assert '"id":"' in result and '"hash":"' in result, (
         f"upload result lost its id/hash keys: {result!r}"
     )
-    from services.message_processor import _SEED_UPLOAD_ID_RE
+    from controllers.message_processor import _SEED_UPLOAD_ID_RE
     doc_id = cast(re.Match[str], _SEED_UPLOAD_ID_RE.search(result)).group(1)
 
-    doc = DocumentService(get_shared_db_service()).get_document(doc_id)
+    doc = DocumentService().get_document(doc_id)
     assert doc is not None, f"document {doc_id} was not persisted"
     assert doc.get("status") == "ready", f"document {doc_id} not ready: {doc.get('status')!r}"
     assert doc.get("file_hash"), f"document {doc_id} has no content hash"

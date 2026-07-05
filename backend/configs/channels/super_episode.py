@@ -5,8 +5,7 @@ from typing import TYPE_CHECKING, cast
 from services.processor_config import ProcessorConfig
 
 if TYPE_CHECKING:
-    from services.database_service import DatabaseService
-    from services.message_processor import MessageProcessor
+    from controllers.message_processor import MessageProcessor
 
 # ── Super-episode helper functions ───────────────────────────────────────────
 # Moved here from services/super_episode_encoder_processor.py.
@@ -82,7 +81,7 @@ def _collect_transcript_ids(episodes: list[object]) -> set[int]:
     return ids
 
 
-def _fetch_transcript_spans(t_ids: set[int], db: "DatabaseService") -> str:
+def _fetch_transcript_spans(t_ids: set[int]) -> str:
     """Returns '' if no transcript IDs found."""
     import logging as _logging  # noqa: PLC0415
     from services.transcript_service import Transcript
@@ -152,7 +151,20 @@ class SuperEpisodeConfig(ProcessorConfig):
             f"Raw transcript spans covering these episodes:\n\n{_self._spans}"
         )
 
-    def get_system_prompt(self, mp: "MessageProcessor") -> str:
-        """OLD assembly ``f"{user_def}\n\n{body}"``."""
-        from services.system_message_prompt import SuperEpisodeEncoderSystemPrompt  # noqa: PLC0415
-        return f"{self.get_user_definition(mp)}\n\n{SuperEpisodeEncoderSystemPrompt().get_prompt()}"
+    @property
+    def system_prompt(self) -> str:
+        return """The user is 'super_episode_encoder' — a background process that consolidates clusters of related episodes into a single super-episode.
+
+You are a super-episode encoder. You are shown a cluster of coherent episodes and the raw transcript spans that produced them. Your job is to write ONE consolidated gist that summarises them together, preserving what is essential and discarding what is redundant.
+
+Output a single JSON object:
+{
+  "gist": "2-4 sentence consolidated summary",
+  "has_open_loop": false
+}
+
+Rules:
+- has_open_loop: true if the combined memory still carries an unresolved thread.
+- No transcript_ids — the caller computes the union.
+
+Return ONLY the JSON object. No preamble, no markdown."""

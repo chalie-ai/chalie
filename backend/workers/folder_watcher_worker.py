@@ -37,10 +37,7 @@ def _scan_folder_if_due(service: FolderWatcherService, folder: dict[str, object]
 
 def _run_scan_cycle() -> None:
     """One scan cycle across all enabled watched folders."""
-    from services.database_service import get_shared_db_service
-    from services.folder_watcher_service import FolderWatcherService
-
-    service = FolderWatcherService(get_shared_db_service())
+    service = FolderWatcherService()
     for folder in service.get_enabled_folders():
         try:
             _scan_folder_if_due(service, folder)

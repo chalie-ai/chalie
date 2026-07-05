@@ -42,9 +42,8 @@ class CapabilityDetail(DTO):
 
 
 class CapabilityStatus(DTO):
-    """Connectivity + error status for a capability."""
+    """Connectivity status for a capability."""
 
     id: str
     connected: bool
     last_sync_at: str | None
-    error_count: int

@@ -8,7 +8,6 @@ from flask.typing import ResponseReturnValue
 from flask_restx import Namespace, Resource
 from werkzeug.security import generate_password_hash, check_password_hash
 
-from services.database_service import text
 from services.feature_flags import internal_dev_enabled
 from .auth import require_auth, _cookie_only, internal_only
 from .dto import Error, expects, responds, register_dto
@@ -96,20 +95,16 @@ class AuthStatusResource(Resource):
         * ``internal_dev``       — ``True`` when in-development features are enabled.
         """
         try:
-            from services.database_service import get_shared_db_service
+            from services.database import Database
             from services.auth_session_service import validate_session
 
-            db = get_shared_db_service()
-
-            with db.get_session() as session:
-                account_count = cast("tuple[int, ...]", session.execute(
-                    text("SELECT COUNT(*) FROM master_account")
-                ).fetchone())[0]
-
-            with db.get_session() as session:
-                provider_count = cast("tuple[int, ...]", session.execute(
-                    text("SELECT COUNT(*) FROM providers")
-                ).fetchone())[0]
+            conn = Database.conn()
+            account_count = cast("tuple[int, ...]", conn.execute(
+                "SELECT COUNT(*) FROM master_account"
+            ).fetchone())[0]
+            provider_count = cast("tuple[int, ...]", conn.execute(
+                "SELECT COUNT(*) FROM providers"
+            ).fetchone())[0]
 
             has_session = validate_session(request)
             vault_state = _get_vault_state()
@@ -119,7 +114,7 @@ class AuthStatusResource(Resource):
             try:
                 from services.provider_db_service import ProviderDbService
                 has_vision = (
-                    ProviderDbService(get_shared_db_service()).get_vision_provider()
+                    ProviderDbService().get_vision_provider()
                     is not None
                 )
             except Exception:
@@ -156,13 +151,11 @@ class UsernameResource(Resource):
         POST /api/auth/login. Cookie-session only; a wrapper bearer must not read it.
         """
         try:
-            from services.database_service import get_shared_db_service
+            from services.database import Database
 
-            db = get_shared_db_service()
-            with db.get_session() as session:
-                row = session.execute(
-                    text("SELECT username FROM master_account LIMIT 1")
-                ).fetchone()
+            row = Database.conn().execute(
+                "SELECT username FROM master_account LIMIT 1"
+            ).fetchone()
             if not row:
                 return {"error": "No master account"}, 404
             return Username(username=row[0])
@@ -189,7 +182,7 @@ class RegisterResource(Resource):
         re-initialised (this scenario is logged clearly for operator investigation).
         """
         try:
-            from services.database_service import get_shared_db_service
+            from services.database import Database
             from services.auth_session_service import create_session
             from services.vault_service import get_vault_service
             from flask import make_response
@@ -197,26 +190,21 @@ class RegisterResource(Resource):
             username = dto.username.strip()
             password = dto.password
 
-            db = get_shared_db_service()
-
-            with db.get_session() as session:
-                existing = cast("tuple[int, ...]", session.execute(
-                    text("SELECT COUNT(*) FROM master_account")
+            with Database.transaction() as conn:
+                existing = cast("tuple[int, ...]", conn.execute(
+                    "SELECT COUNT(*) FROM master_account"
                 ).fetchone())[0]
 
                 if existing > 0:
                     return {"error": "Master account already exists"}, 409
 
                 password_hash = generate_password_hash(password)
-                session.execute(
-                    text(
-                        "INSERT INTO master_account "
-                        "(username, password_hash) "
-                        "VALUES (:username, :password_hash)"
-                    ),
+                conn.execute(
+                    "INSERT INTO master_account "
+                    "(username, password_hash) "
+                    "VALUES (:username, :password_hash)",
                     {"username": username, "password_hash": password_hash}
                 )
-                session.commit()
 
             vault = get_vault_service()
             try:
@@ -272,7 +260,7 @@ class LoginResource(Resource):
         encrypted credentials are re-connected immediately.
         """
         try:
-            from services.database_service import get_shared_db_service
+            from services.database import Database
             from services.auth_session_service import create_session
             from services.vault_service import (
                 get_vault_service, OUTCOME_UNRECOVERABLE,
@@ -285,19 +273,14 @@ class LoginResource(Resource):
             if not _get_login_rate_limiter().is_allowed(request.remote_addr or "unknown"):
                 return {"error": "Too many login attempts. Try again later."}, 429
 
-            db = get_shared_db_service()
+            row = Database.conn().execute(
+                "SELECT password_hash FROM master_account "
+                "WHERE username = :username",
+                {"username": username}
+            ).fetchone()
 
-            with db.get_session() as session:
-                row = session.execute(
-                    text(
-                        "SELECT password_hash FROM master_account "
-                        "WHERE username = :username"
-                    ),
-                    {"username": username}
-                ).fetchone()
-
-                if not row or not check_password_hash(row[0], password):
-                    return {"error": "Invalid credentials"}, 401
+            if not row or not check_password_hash(row[0], password):
+                return {"error": "Invalid credentials"}, 401
 
             vault = get_vault_service()
             vault_state = "locked"
@@ -317,9 +300,8 @@ class LoginResource(Resource):
                     "[Auth] Vault key corrupted with no valid backup — wiping the "
                     "master account to force re-onboarding."
                 )
-                with db.get_session() as session:
-                    session.execute(text("DELETE FROM master_account"))
-                    session.commit()
+                with Database.transaction() as conn:
+                    conn.execute("DELETE FROM master_account")
                 vault.reset()
                 return {
                     "error": "Your encryption key could not be recovered. "

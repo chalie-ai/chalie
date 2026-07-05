@@ -1,19 +1,20 @@
 <script setup lang="ts">
 import { computed } from 'vue';
+import { formatCadence } from '../../utils/time';
 
 export interface SchedulerRecord {
   id: string | number;
   message: string;
-  /**
-   * The create record emits `due_at_local` (+`due_at_utc`), NOT a bare `due_at`;
-   * legacy read `record.due_at` so the date block always rendered "—". Reading
-   * this field instead is an intentional bug-fix divergence.
-   */
-  due_at_local: string | null;
-  due_at_utc?: string | null;
-  item_type?: string | null;
-  recurrence?: string | null;
-  /** Present only on the already-existed dedup path (omits item_type/recurrence). */
+  /** Localized (user-timezone) ISO string — the schedule's activation floor. */
+  start_at: string;
+  /** Localized next fire, when the backend has one to report. */
+  due_at?: string | null;
+  /** Cron fields (`null` = "every" on that field); absent entirely on the
+   *  already-existed dedup path, where no cadence is known to show. */
+  day?: number | null;
+  hour?: number | null;
+  minute?: number | null;
+  /** Present only on the already-existed dedup path. */
   note?: string;
 }
 
@@ -21,7 +22,6 @@ export interface SchedulerSameDayItem {
   id: string | number;
   message: string;
   due_at: string | null;
-  recurrence: string | null;
 }
 
 export interface SchedulerPayload {
@@ -50,9 +50,11 @@ const MONTHS = [
   'Dec',
 ] as const;
 
-function parseDueAt(dueAtStr: string | null | undefined): Date | null {
-  if (!dueAtStr) return null;
-  const d = new Date(dueAtStr);
+// The backend already localizes start_at/due_at to the user's timezone — parse
+// and read the components directly, no client-side offset math.
+function parseLocal(isoStr: string | null | undefined): Date | null {
+  if (!isoStr) return null;
+  const d = new Date(isoStr);
   return Number.isNaN(d.getTime()) ? null : d;
 }
 
@@ -60,25 +62,37 @@ function formatTime(d: Date): string {
   return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
 }
 
+function formatDayTime(d: Date): string {
+  return `${DAYS[d.getDay()]} ${formatTime(d)}`;
+}
+
 const record = computed(() => props.payload.record);
 
-// due_at_local is the field the create card actually carries (see its doc-comment).
-const dueAt = computed(() => parseDueAt(record.value.due_at_local));
+const startAt = computed(() => parseLocal(record.value.start_at));
+const nextDueAt = computed(() => parseLocal(record.value.due_at));
 
-const whenDay = computed(() => (dueAt.value ? DAYS[dueAt.value.getDay()] : '—'));
-const whenDate = computed(() => (dueAt.value ? String(dueAt.value.getDate()) : '—'));
-const whenMon = computed(() => (dueAt.value ? MONTHS[dueAt.value.getMonth()] : ''));
+const whenDay = computed(() => (startAt.value ? DAYS[startAt.value.getDay()] : '—'));
+const whenDate = computed(() => (startAt.value ? String(startAt.value.getDate()) : '—'));
+const whenMon = computed(() => (startAt.value ? MONTHS[startAt.value.getMonth()] : ''));
 
 const title = computed(() => record.value.message || props.synthesis || '');
 
-const metaTime = computed(() => (dueAt.value ? formatTime(dueAt.value) : null));
+const metaTime = computed(() => (startAt.value ? formatTime(startAt.value) : null));
+
+/** Cadence label, only when the record actually carries cron fields (absent on
+ *  the already-existed dedup path — nothing to derive a cadence from there). */
+const cadenceText = computed((): string | null => {
+  const r = record.value;
+  if (r.day === undefined && r.hour === undefined && r.minute === undefined) return null;
+  return formatCadence(r.day ?? null, r.hour ?? null, r.minute ?? null);
+});
 
 const metaText = computed((): string => {
-  const textParts: string[] = [];
-  if (record.value.recurrence) textParts.push(record.value.recurrence);
-  if (record.value.item_type === 'prompt') textParts.push('prompt');
-  if (textParts.length === 0) return '';
-  return (dueAt.value ? ' · ' : '') + textParts.join(' · ');
+  const parts: string[] = [];
+  if (cadenceText.value) parts.push(cadenceText.value);
+  if (nextDueAt.value) parts.push(`Next ${formatDayTime(nextDueAt.value)}`);
+  if (parts.length === 0) return '';
+  return (metaTime.value ? ' · ' : '') + parts.join(' · ');
 });
 
 const sameDay = computed(() =>
@@ -106,8 +120,8 @@ const sameDay = computed(() =>
       <div class="scheduler-card__same-day-label">Also on this day · {{ sameDay.length }}</div>
       <div v-for="item in sameDay" :key="item.id" class="scheduler-card__same-day-item">
         <span class="scheduler-card__same-day-text">{{ item.message || '' }}</span>
-        <span v-if="parseDueAt(item.due_at)" class="scheduler-card__same-day-time">{{
-          formatTime(parseDueAt(item.due_at)!)
+        <span v-if="parseLocal(item.due_at)" class="scheduler-card__same-day-time">{{
+          formatTime(parseLocal(item.due_at)!)
         }}</span>
       </div>
     </div>

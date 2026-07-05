@@ -9,9 +9,9 @@ Called by SubconsciousWorker after every PatternMatchProcessor pass.
 
 import json
 import logging
-import sqlite3
 from typing import cast
 
+from services.database import Database
 from services.file_mapper_service import FileMapperService
 from services.time_utils import utc_now
 
@@ -57,25 +57,20 @@ class SkillAssociationService:
         return written
 
     def _load_patterns(self, row_ids: set[int]) -> list[tuple[str, str]]:
-        from services.database_service import get_shared_db_service
-        db = get_shared_db_service()
         placeholders = ",".join("?" * len(row_ids))
-        with db.connection() as conn:
-            return cast(list[tuple[str, str]], conn.execute(
-                f"SELECT key, value FROM data_graph "
-                f"WHERE id IN ({placeholders}) "
-                f"AND kind='behavioral_pattern' AND active=1 AND deleted_at IS NULL",
-                tuple(row_ids),
-            ).fetchall())
+        conn = Database.conn()
+        return cast(list[tuple[str, str]], conn.execute(
+            f"SELECT key, value FROM data_graph "
+            f"WHERE id IN ({placeholders}) "
+            f"AND kind='behavioral_pattern' AND active=1 AND deleted_at IS NULL",
+            tuple(row_ids),
+        ).fetchall())
 
     def _load_skill_index(self) -> list[tuple[str, str, str]]:
-        conn = sqlite3.connect(str(_SKILLS_DB))
-        try:
-            return cast(list[tuple[str, str, str]], conn.execute(
-                "SELECT id, title, use_for FROM skills"
-            ).fetchall())
-        finally:
-            conn.close()
+        conn = Database.conn(str(_SKILLS_DB))
+        return cast(list[tuple[str, str, str]], conn.execute(
+            "SELECT id, title, use_for FROM skills"
+        ).fetchall())
 
     def _request_associations(
         self,
@@ -95,10 +90,10 @@ class SkillAssociationService:
             f"## Available Skills\n{json.dumps(skill_list)}"
         )
 
-        from services.message_processor import MessageProcessor
+        from controllers.message_processor import MessageProcessor
         from configs.channels import SkillAssociationConfig
         try:
-            text = MessageProcessor.process(user_prompt, SkillAssociationConfig())
+            text = MessageProcessor.process(SkillAssociationConfig(), raw_input=user_prompt).result()
         except Exception as exc:
             exc_str = str(exc).lower()
             if "context" in exc_str or "token" in exc_str or "length" in exc_str:
@@ -121,8 +116,7 @@ class SkillAssociationService:
         now = utc_now().isoformat()
         written = 0
 
-        conn = sqlite3.connect(str(_SKILLS_DB))
-        try:
+        with Database.transaction(str(_SKILLS_DB)) as conn:
             conn.execute("PRAGMA foreign_keys = ON")
             for assoc in associations:
                 sid = assoc.get("skill_id")
@@ -140,10 +134,6 @@ class SkillAssociationService:
                     (sid, pname, rule, now),
                 )
                 written += 1
-
-            conn.commit()
-        finally:
-            conn.close()
 
         return written
 

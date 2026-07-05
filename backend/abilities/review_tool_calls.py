@@ -15,6 +15,7 @@ from typing import ClassVar
 from abilities._params import Keys
 from abilities._result import ToolResult
 from abilities._review_window import ReviewWindowAbility
+from services.database import Database
 
 # Tool-call params summaries can be large; clip so one row stays a single readable
 # line of structured JSON.
@@ -84,24 +85,21 @@ class ReviewToolCallsAbility(ReviewWindowAbility):
         new narration rows are written. The literal filter stays only to hide any
         such rows left in an existing DB from before that change; it is not a
         live tool name."""
-        from services.database_service import get_shared_db_service
-
-        db = get_shared_db_service()
-        with db.connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute(
-                """
-                SELECT tool_name, params, result, created_at
-                FROM tool_calls
-                WHERE created_at BETWEEN ? AND ?
-                  AND tool_name != 'narration'
-                ORDER BY created_at ASC, id ASC
-                """,
-                (lo, hi),
-            )
-            columns = ("tool_name", "params", "result", "created_at")
-            rows = [dict(zip(columns, r)) for r in cursor.fetchall()]
-            cursor.close()
+        conn = Database.conn()
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            SELECT tool_name, params, result, created_at
+            FROM tool_calls
+            WHERE created_at BETWEEN ? AND ?
+              AND tool_name != 'narration'
+            ORDER BY created_at ASC, id ASC
+            """,
+            (lo, hi),
+        )
+        columns = ("tool_name", "params", "result", "created_at")
+        rows = [dict(zip(columns, r)) for r in cursor.fetchall()]
+        cursor.close()
         return rows
 
     def _row(self, rec: dict[str, object], ordinal: int) -> dict[str, object]:

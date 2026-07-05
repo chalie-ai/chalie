@@ -1,102 +1,7 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, cast
-
-from services.post_turn_hook import PostTurnHook
+from services.database import Database
 from services.processor_config import ProcessorConfig
-
-if TYPE_CHECKING:
-    from services.message_processor import MessageProcessor
-
-# ── User-summary prompt builders and post_turn ────────────────────────────────
-
-_MAX_TRAIT_ROWS = 200
-_MAX_PATTERN_ROWS = 25
-
-
-def _format_pattern_line(content: dict[str, object]) -> str:
-    name = cast("str", content.get("name", "unknown"))
-    freq = content.get("frequency", "?")
-    anchor = cast("str", content.get("time_anchor") or "")
-    summary = content.get("summary", "")
-    confidence = content.get("confidence", 0)
-    last_seen = cast("str", content.get("last_seen_at") or "")[:10] or "?"
-    anchor_part = f" @ {anchor}" if anchor else ""
-    return (
-        f"{name} ({freq}{anchor_part}): {summary} "
-        f"[confidence={confidence}, last {last_seen}]"
-    )
-
-
-class PersistUserSummaryHook(PostTurnHook):
-    """Receives response_text directly — no on_store hook, no
-    _last_response cache. This hook is the only after-turn callback for
-    this channel. Writes user_summary_long FIRST so crash recovery works
-    correctly."""
-
-    def run(self, mp: "MessageProcessor", response_text: str) -> None:
-        import json as _json  # noqa: PLC0415
-        import logging as _logging  # noqa: PLC0415
-        _log = _logging.getLogger(__name__)
-
-        text = (response_text or "").strip()
-        if not text:
-            _log.warning("[USER_SUMMARY_CONFIG] post_turn: empty LLM response — skipping write")
-            return
-
-        # Strip markdown code fences if the model wrapped the JSON.
-        stripped = text.removeprefix("```json").removeprefix("```").lstrip()
-        stripped = stripped.removesuffix("```").rstrip()
-
-        try:
-            parsed = _json.loads(stripped)
-        except _json.JSONDecodeError as exc:
-            _log.warning(
-                "[USER_SUMMARY_CONFIG] post_turn: JSON parse failed (%s) — skipping write. raw=%r",
-                exc,
-                text[:200],
-            )
-            return
-
-        if not isinstance(parsed, dict):
-            _log.warning(
-                "[USER_SUMMARY_CONFIG] post_turn: parsed value is not a dict — skipping write"
-            )
-            return
-
-        short = (parsed.get("short") or "").strip()
-        long_ = (parsed.get("long") or "").strip()
-
-        if not short or not long_:
-            _log.warning(
-                "[USER_SUMMARY_CONFIG] post_turn: 'short' or 'long' missing/empty — skipping write"
-            )
-            return
-
-        try:
-            from services.data_graph_service import get_data_graph_service  # noqa: PLC0415
-            dgs = get_data_graph_service()
-            # Write user_summary_long FIRST so crash recovery works correctly.
-            dgs.store(
-                kind="system",
-                key="user_summary_long",
-                value=long_,
-                source="user_summary_config",
-            )
-            dgs.store(
-                kind="system",
-                key="user_summary",
-                value=short,
-                source="user_summary_config",
-            )
-            _log.info(
-                "[USER_SUMMARY_CONFIG] post_turn: wrote user_summary (%d chars) and "
-                "user_summary_long (%d chars)",
-                len(short),
-                len(long_),
-            )
-        except Exception as exc:
-            _log.warning("[USER_SUMMARY_CONFIG] post_turn: data_graph write failed: %s", exc)
 
 
 def _should_synthesise() -> bool:
@@ -108,10 +13,8 @@ def _should_synthesise() -> bool:
     import logging as _logging  # noqa: PLC0415
     _log = _logging.getLogger(__name__)
     try:
-        from services.database_service import get_shared_db_service  # noqa: PLC0415
         from services.time_utils import parse_utc  # noqa: PLC0415
-        db = get_shared_db_service()
-        with db.connection() as conn:
+        with Database.transaction() as conn:
             row = conn.execute(
                 """
                 SELECT MAX(last_confirmed_at)
@@ -170,79 +73,28 @@ class UserSummaryConfig(ProcessorConfig):
             suppress_history=True,
             broadcast_to=None,
             memory_seed=False,
-            post_turn_hooks=(PersistUserSummaryHook(),),
         )
 
-    def get_user_definition(self, mp: "MessageProcessor") -> str:
-        return "You are a synthesiser. The user is a real human whose traits you are distilling."
+    @property
+    def system_prompt(self) -> str:
+        return """You are a synthesiser. The user is a real human whose traits you are distilling.
 
-    def get_user_prompt(self, mp: "MessageProcessor") -> str:
-        """User-summary user-prompt: user_specific traits + behavioral_patterns."""
-        import json as _json  # noqa: PLC0415
-        import logging as _logging  # noqa: PLC0415
-        _log = _logging.getLogger(__name__)
+You are a user-profile synthesiser. You receive a list of stored facts about a
+real human and distil them into two synopses — one short, one longer.
 
-        # Section 1: user_specific traits
-        try:
-            from services.data_graph_service import get_data_graph_service  # noqa: PLC0415
-            rows = get_data_graph_service().fetch(
-                kinds=["user_specific"],
-                limit=_MAX_TRAIT_ROWS,
-                order_by="retrieval_weight DESC",
-            )
-        except Exception as exc:
-            _log.warning("[USER_SUMMARY_CONFIG] trait fetch failed: %s", exc)
-            rows = []
+Rules:
+- Write in the third person ("They", or the user's first name if given).
+- Identity first: name, location, role, then preferences and behaviours.
+- Use only facts present in the input. Never invent or infer beyond them.
+- Never mention that you are summarising, that you have a list of facts, or
+  reference the synthesis process itself.
+- No preamble, no trailing notes, no markdown.
 
-        if not rows:
-            facts_section = "Facts:\n(no facts available)"
-        else:
-            lines = [
-                f"{r['key']}: {r['value']}"
-                for r in rows
-                if r is not None and r.get("key") and r.get("value")
-            ]
-            facts_section = "Facts:\n" + "\n".join(lines) if lines else "Facts:\n(no facts available)"
+Output a single JSON object with exactly two keys:
 
-        # Section 2: active behavioral_patterns
-        active_patterns: list[dict[str, object]] = []
-        try:
-            from services.database_service import get_shared_db_service  # noqa: PLC0415
-            db = get_shared_db_service()
-            with db.connection() as conn:
-                pattern_rows = conn.execute(
-                    """
-                    SELECT value
-                    FROM data_graph
-                    WHERE kind = 'behavioral_pattern'
-                      AND active = 1
-                      AND deleted_at IS NULL
-                    ORDER BY last_confirmed_at DESC
-                    LIMIT ?
-                    """,
-                    (_MAX_PATTERN_ROWS,),
-                ).fetchall()
-            for (value_json,) in pattern_rows:
-                try:
-                    content = _json.loads(cast("str", value_json))
-                    if content:
-                        active_patterns.append(cast("dict[str, object]", content))
-                except Exception:
-                    continue
-        except Exception as exc:
-            _log.warning("[USER_SUMMARY_CONFIG] active pattern fetch failed: %s", exc)
+{
+  "short": "<one or two sentences, max 50 words, the tightest identity snapshot>",
+  "long":  "<up to 200 words, richer profile covering traits, preferences, context, ongoing interests>"
+}
 
-        if not active_patterns:
-            return facts_section
-
-        pattern_lines = [_format_pattern_line(p) for p in active_patterns]
-        patterns_section = (
-            "## Behavioural patterns (frequency, last seen)\n"
-            + "\n".join(f"- {line}" for line in pattern_lines)
-        )
-        return facts_section + "\n\n" + patterns_section
-
-    def get_system_prompt(self, mp: "MessageProcessor") -> str:
-        """OLD assembly ``f"{user_def}\n\n{body}"``."""
-        from services.system_message_prompt import UserSummarySystemPrompt  # noqa: PLC0415
-        return f"{self.get_user_definition(mp)}\n\n{UserSummarySystemPrompt().get_prompt()}"
+Return ONLY the JSON object. No code fences."""

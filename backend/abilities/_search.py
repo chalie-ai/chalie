@@ -30,6 +30,7 @@ from pathlib import Path
 from typing import ClassVar, cast
 
 from abilities._ability import Ability
+from services.database import Database
 
 logger = logging.getLogger(__name__)
 
@@ -198,12 +199,9 @@ class SearchableAbility(Ability, ABC):
         if blob is None or not target.exists():
             return []
         try:
-            conn = sqlite3.connect(str(target))
-            try:
-                self._load_vec(conn)
-                return cast("list[tuple[object, object, float]]", conn.execute(vec_sql, vec_params).fetchall())
-            finally:
-                conn.close()
+            conn = Database.conn(str(target))
+            self._load_vec(conn)
+            return cast("list[tuple[object, object, float]]", conn.execute(vec_sql, vec_params).fetchall())
         except Exception as exc:
             logger.warning(f"{self._LOG_PREFIX} vec search failed (skipping): {exc}")
             return []
@@ -221,11 +219,8 @@ class SearchableAbility(Ability, ABC):
         if not fts_match or not target.exists():
             return []
         try:
-            conn = sqlite3.connect(str(target))
-            try:
-                return cast("list[tuple[object, object, float]]", conn.execute(fts_sql, fts_params).fetchall())
-            finally:
-                conn.close()
+            conn = Database.conn(str(target))
+            return cast("list[tuple[object, object, float]]", conn.execute(fts_sql, fts_params).fetchall())
         except Exception as exc:
             logger.warning(f"{self._LOG_PREFIX} FTS search failed (skipping): {exc}")
             return []

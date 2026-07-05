@@ -4,7 +4,7 @@ import logging
 import secrets
 from typing import Optional, cast
 
-from services.database_service import DatabaseService, text
+from services.database import Database
 
 logger = logging.getLogger(__name__)
 
@@ -17,9 +17,6 @@ class SettingsService:
     DEPLOYMENT_DOMAIN = "deployment_domain"
     _BOOL_TRUE = "true"
     _BOOL_FALSE = "false"
-
-    def __init__(self, database_service: DatabaseService) -> None:
-        self.db = database_service
 
     def get_bool(self, key: str) -> bool:
         """Read a boolean setting — True only for the stored literal ``'true'``."""
@@ -37,22 +34,20 @@ class SettingsService:
             :exc:`~services.vault_service.VaultLockedError`: If the setting is
                 sensitive and the vault has not been unlocked yet.
         """
-        with self.db.get_session() as session:
-            result = session.execute(
-                text("SELECT value, encrypted_value, is_sensitive "
-                     "FROM settings WHERE key = :key"),
-                {"key": key}
-            )
-            row = result.fetchone()
-            if not row:
-                return None
+        row = Database.conn().execute(
+            "SELECT value, encrypted_value, is_sensitive "
+            "FROM settings WHERE key = :key",
+            {"key": key}
+        ).fetchone()
+        if not row:
+            return None
 
-            is_sensitive = row[2]
-            if is_sensitive and row[1] is not None:
-                import base64
-                from services.vault_service import get_vault_service
-                return get_vault_service().decrypt_str(base64.b64decode(row[1]))
-            return cast(str | None, row[0])
+        is_sensitive = row[2]
+        if is_sensitive and row[1] is not None:
+            import base64
+            from services.vault_service import get_vault_service
+            return get_vault_service().decrypt_str(base64.b64decode(row[1]))
+        return cast(str | None, row[0])
 
     def set(self, key: str, value: str, value_type: str = 'string', description: str | None = None) -> str:
         """Sensitive settings are encrypted via the VaultService (AES-256-GCM)
@@ -65,13 +60,12 @@ class SettingsService:
             :exc:`~services.vault_service.VaultLockedError`: If the setting is
                 sensitive and the vault has not been unlocked yet.
         """
-        with self.db.get_session() as session:
+        with Database.transaction() as conn:
             # Check if exists and get its sensitivity flag
-            result = session.execute(
-                text("SELECT id, is_sensitive FROM settings WHERE key = :key"),
+            existing = conn.execute(
+                "SELECT id, is_sensitive FROM settings WHERE key = :key",
                 {"key": key}
-            )
-            existing = result.fetchone()
+            ).fetchone()
             row_is_sensitive = existing[1] if existing else False
 
             if existing:
@@ -83,35 +77,32 @@ class SettingsService:
                     encrypted = base64.b64encode(
                         get_vault_service().encrypt_str(value)
                     ).decode()
-                    session.execute(
-                        text("UPDATE settings SET encrypted_value = :enc_value, "
-                             "value = NULL, updated_at = datetime('now') WHERE key = :key"),
+                    conn.execute(
+                        "UPDATE settings SET encrypted_value = :enc_value, "
+                        "value = NULL, updated_at = datetime('now') WHERE key = :key",
                         {"key": key, "enc_value": encrypted}
                     )
                 else:
                     # Plain text value
-                    session.execute(
-                        text("UPDATE settings SET value = :value, encrypted_value = NULL, "
-                             "updated_at = datetime('now') WHERE key = :key"),
+                    conn.execute(
+                        "UPDATE settings SET value = :value, encrypted_value = NULL, "
+                        "updated_at = datetime('now') WHERE key = :key",
                         {"key": key, "value": value}
                     )
             else:
                 # Insert (non-sensitive only; sensitive rows must be seeded by migration)
-                session.execute(
-                    text("INSERT INTO settings (key, value, value_type, description) VALUES (:key, :value, :value_type, :description)"),
+                conn.execute(
+                    "INSERT INTO settings (key, value, value_type, description) VALUES (:key, :value, :value_type, :description)",
                     {"key": key, "value": value, "value_type": value_type, "description": description}
                 )
-
-            session.commit()
         return value
 
     def delete(self, key: str) -> bool:
-        with self.db.get_session() as session:
-            session.execute(
-                text("DELETE FROM settings WHERE key = :key"),
+        with Database.transaction() as conn:
+            conn.execute(
+                "DELETE FROM settings WHERE key = :key",
                 {"key": key}
             )
-            session.commit()
         return True
 
     def get_api_key_or_generate(self) -> str:

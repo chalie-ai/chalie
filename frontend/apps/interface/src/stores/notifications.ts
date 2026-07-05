@@ -126,14 +126,6 @@ export const useNotificationsStore = defineStore('notifications', {
       this.notifications.push({ id: String(Date.now()), text });
     },
 
-    /**
-     * Chime for a scheduler 'notification' WS event (reminder/task done) —
-     * UNCONDITIONAL, no focus or permission gate, unlike pushBackground.
-     */
-    chime(): void {
-      playChime();
-    },
-
     /** No-stacking: replaces any existing tip. DORMANT — backend doesn't emit yet. */
     handleTip(payload: TipState): void {
       if (!payload || !payload.tip_id) return;

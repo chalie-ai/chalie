@@ -21,11 +21,11 @@ import os
 import secrets
 from typing import TYPE_CHECKING, Dict, Iterable, Iterator, List, Optional, cast
 
+from services.database import Database
 from services.log_utils import safe
 from services.time_utils import utc_now, parse_utc
 
 if TYPE_CHECKING:
-    from services.database_service import DatabaseService
     from services.document_service import DocumentService
     from services.memory_store import MemoryStore
 
@@ -48,9 +48,8 @@ ALLOWED_EXTENSIONS = {
 class FolderWatcherService:
     """Manages watched folder CRUD, directory browsing, and file scanning."""
 
-    def __init__(self, db_service: "DatabaseService") -> None:
-        """Initialize the service with a DatabaseService instance."""
-        self.db = db_service
+    def __init__(self) -> None:
+        """Initialize the service."""
 
     # CRUD
     # ─────────────────────────────────────────────
@@ -75,7 +74,7 @@ class FolderWatcherService:
 
         default_ignores = [".git", "node_modules", "__pycache__", "build", "dist", ".DS_Store", "Thumbs.db"]
 
-        with self.db.connection() as conn:
+        with Database.transaction() as conn:
             cursor = conn.cursor()
             cursor.execute("""
                 INSERT INTO watched_folders
@@ -99,34 +98,34 @@ class FolderWatcherService:
 
     def get_folder(self, folder_id: str) -> Optional[Dict[str, object]]:
         """Retrieve a single watched folder record by its ID."""
-        with self.db.connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute("SELECT * FROM watched_folders WHERE id = ?", (folder_id,))
-            row = cursor.fetchone()
-            cols = [d[0] for d in cursor.description] if cursor.description else []
-            cursor.close()
+        conn = Database.conn()
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM watched_folders WHERE id = ?", (folder_id,))
+        row = cursor.fetchone()
+        cols = [d[0] for d in cursor.description] if cursor.description else []
+        cursor.close()
         if not row:
             return None
         return self._row_to_dict(row, cols)
 
     def get_all_folders(self) -> List[Dict[str, object]]:
         """Retrieve all watched folder records, newest first."""
-        with self.db.connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute("SELECT * FROM watched_folders ORDER BY created_at DESC")
-            rows = cursor.fetchall()
-            cols = [d[0] for d in cursor.description] if cursor.description else []
-            cursor.close()
+        conn = Database.conn()
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM watched_folders ORDER BY created_at DESC")
+        rows = cursor.fetchall()
+        cols = [d[0] for d in cursor.description] if cursor.description else []
+        cursor.close()
         return [self._row_to_dict(row, cols) for row in rows]
 
     def get_enabled_folders(self) -> List[Dict[str, object]]:
         """Retrieve only enabled watched folder records."""
-        with self.db.connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute("SELECT * FROM watched_folders WHERE enabled = 1 ORDER BY created_at DESC")
-            rows = cursor.fetchall()
-            cols = [d[0] for d in cursor.description] if cursor.description else []
-            cursor.close()
+        conn = Database.conn()
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM watched_folders WHERE enabled = 1 ORDER BY created_at DESC")
+        rows = cursor.fetchall()
+        cols = [d[0] for d in cursor.description] if cursor.description else []
+        cursor.close()
         return [self._row_to_dict(row, cols) for row in rows]
 
     def update_folder(self, folder_id: str, **kwargs: object) -> Optional[Dict[str, object]]:
@@ -159,7 +158,7 @@ class FolderWatcherService:
         set_parts.append("updated_at = datetime('now')")
         params = list(updates.values()) + [folder_id]
 
-        with self.db.connection() as conn:
+        with Database.transaction() as conn:
             cursor = conn.cursor()
             cursor.execute(
                 f"UPDATE watched_folders SET {', '.join(set_parts)} WHERE id = ?",
@@ -173,13 +172,13 @@ class FolderWatcherService:
         """Delete a watched folder record."""
         if delete_documents:
             from services.document_service import DocumentService
-            doc_svc = DocumentService(self.db)
+            doc_svc = DocumentService()
             docs = doc_svc.get_documents_by_watched_folder(folder_id)
             for doc in docs:
                 if not doc.get('deleted_at'):
                     doc_svc.soft_delete(cast(str, doc['id']))
 
-        with self.db.connection() as conn:
+        with Database.transaction() as conn:
             cursor = conn.cursor()
             cursor.execute("DELETE FROM watched_folders WHERE id = ?", (folder_id,))
             deleted: bool = cursor.rowcount > 0
@@ -377,7 +376,7 @@ class FolderWatcherService:
         for abs_path, mtime in self._walk_folder(folder_path, recursive, file_patterns, ignore_patterns):
             discovered[abs_path] = mtime
 
-        doc_svc = DocumentService(self.db)
+        doc_svc = DocumentService()
         existing_docs = doc_svc.get_documents_by_watched_folder(folder_id)
 
         existing_by_path: Dict[str, Dict[str, object]] = {}
@@ -520,17 +519,16 @@ class FolderWatcherService:
                 from services.text_extractor import extract_text
                 from services.document_chunking import create_document_artifacts
                 from services.document_service import DocumentService
-                from services.database_service import get_shared_db_service
 
                 text = extract_text(abs_path)
                 if not text:
-                    DocumentService(get_shared_db_service()).update_status(
+                    DocumentService().update_status(
                         doc_id, 'failed', 'Text extraction empty'
                     )
                     return
 
                 artifact_count = create_document_artifacts(doc_id, text)
-                svc = DocumentService(get_shared_db_service())
+                svc = DocumentService()
 
                 summary = text[:500]
                 dot_pos = summary.rfind('. ')
@@ -542,8 +540,7 @@ class FolderWatcherService:
                 logger.error(f"[FOLDER WATCHER] Failed to process {doc_id}: {e}")
                 try:
                     from services.document_service import DocumentService
-                    from services.database_service import get_shared_db_service
-                    DocumentService(get_shared_db_service()).update_status(
+                    DocumentService().update_status(
                         doc_id, 'failed', str(e)[:500]
                     )
                 except Exception:
@@ -583,7 +580,7 @@ class FolderWatcherService:
 
         # Cold start: rebuild from DB
         from services.document_service import DocumentService
-        doc_svc = DocumentService(self.db)
+        doc_svc = DocumentService()
         docs = doc_svc.get_documents_by_watched_folder(folder_id)
         cache: Dict[str, Dict[str, object]] = {}
         for doc in docs:
@@ -609,7 +606,7 @@ class FolderWatcherService:
 
     def _update_scan_stats(self, folder_id: str, file_count: int) -> None:
         """Persist scan completion statistics to the database."""
-        with self.db.connection() as conn:
+        with Database.transaction() as conn:
             cursor = conn.cursor()
             cursor.execute("""
                 UPDATE watched_folders
@@ -621,7 +618,7 @@ class FolderWatcherService:
 
     def _update_scan_error(self, folder_id: str, error: str) -> None:
         """Record a scan error message in the database."""
-        with self.db.connection() as conn:
+        with Database.transaction() as conn:
             cursor = conn.cursor()
             cursor.execute("""
                 UPDATE watched_folders

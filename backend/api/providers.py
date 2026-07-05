@@ -416,10 +416,8 @@ def _test_api_provider(config: "dict[str, object]", platform: str, model: str, s
 
 
 def get_provider_service() -> "ProviderDbService":
-    from services.database_service import get_shared_db_service
     from services.provider_db_service import ProviderDbService
-    db = get_shared_db_service()
-    return ProviderDbService(db)
+    return ProviderDbService()
 
 
 def _provider_dto(row: "dict[str, object]") -> Provider:

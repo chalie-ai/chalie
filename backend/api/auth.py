@@ -62,8 +62,7 @@ def require_auth(f: Callable[..., "ResponseReturnValue"]) -> Callable[..., "Resp
         # Try bearer token
         try:
             from services.wrapper_auth_service import WrapperAuthService
-            from services.database_service import get_shared_db_service
-            svc = WrapperAuthService(get_shared_db_service())
+            svc = WrapperAuthService()
             wrapper_id = svc.validate_bearer(request)
             if wrapper_id:
                 g.wrapper_id = wrapper_id

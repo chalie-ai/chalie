@@ -13,7 +13,7 @@ roster are orthogonal.
 """
 
 import sqlite3
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
 from pathlib import Path
 from typing import cast
 
@@ -24,9 +24,9 @@ from abilities.find_tools import FindToolsAbility
 from abilities.vision import VisionAbility
 from configs.channels import DmnConfig, UserConfig
 from run import _migrate_legacy_policy_rules
-from services.database_service import DatabaseService
+from services.database import Database
 from services.file_mapper_service import FileMapperService
-from services.message_processor import MessageProcessor
+from controllers.message_processor import MessageProcessor
 from services.policy_manager import PolicyManager
 from services.processor_config import ProcessorConfig
 from services.schema_convergence_service import SchemaConvergenceService
@@ -53,11 +53,10 @@ def _find_tools_on(mp: MessageProcessor, params: dict[str, object]) -> Mapping[s
 
 
 def _seeded_policy_db(tmp_path: Path) -> PolicyManager:
-    db = DatabaseService(str(tmp_path / "vision_policy.db"))
-    _migrate_legacy_policy_rules(db)                                  # no-op on fresh
-    SchemaConvergenceService(db, embedding_dimensions=256).converge()  # creates policy
-    PolicyManager(db).apply_seed()                                    # reads the JSON
-    return PolicyManager(db)
+    _migrate_legacy_policy_rules()                                    # no-op on fresh
+    SchemaConvergenceService(embedding_dimensions=256).converge()  # creates policy
+    PolicyManager().apply_seed()                                  # reads the JSON
+    return PolicyManager()
 
 
 # ---------------------------------------------------------------------------
@@ -65,6 +64,17 @@ def _seeded_policy_db(tmp_path: Path) -> PolicyManager:
 # ---------------------------------------------------------------------------
 
 class TestVisionPolicyDefaults:
+
+    @pytest.fixture(autouse=True)
+    def _gateway_to_tmp_db(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+        # _migrate_legacy_policy_rules()/converge()/apply_seed()/_setting() all resolve
+        # their path through the Database gateway (FileMapperService.get_db_path).
+        # Redirect the gateway to the same tmp file so the seed writes and the
+        # _setting reads share one database, not the real chalie.db.
+        monkeypatch.setattr(FileMapperService, "get_db_path", lambda *_: tmp_path / "vision_policy.db")
+        Database.close()
+        yield
+        Database.close()
 
     def test_chat_vision_is_allow(self, tmp_path: Path) -> None:
         pm = _seeded_policy_db(tmp_path)

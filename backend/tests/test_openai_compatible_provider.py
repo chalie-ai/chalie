@@ -91,10 +91,7 @@ class TestOpenAICompatibleProvider:
 
         # Read back via the DB service (decrypts the key)
         from services.provider_db_service import ProviderDbService
-        from services.database_service import DatabaseService
-        from typing import cast
-        import services.database_service as _db_mod
-        svc = ProviderDbService(cast(DatabaseService, _db_mod._shared_db_service))
+        svc = ProviderDbService()
         provider = svc.get_provider_by_id(provider_id)
 
         assert provider is not None

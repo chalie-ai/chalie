@@ -9,14 +9,17 @@ import pytest
 
 from configs.channels import UserConfig
 from configs.channels.dmn import DmnConfig
-from services.message_processor import MessageProcessor
+from controllers.message_processor import MessageProcessor
+from models.provider_response import ProviderResponse
 from services.processor_config import ProcessorConfig
-from services.provider_api import ProviderApiResponse
 from services.transcript_service import Transcript
 
 pytestmark = pytest.mark.unit
 
-_PROVIDERS_RESOLVE = "services.providers.Providers._resolve"
+# ``ProviderService.send`` (the new spine's provider chokepoint) builds its thin
+# transport client via ``services.llm_clients.factory.build_client`` directly —
+# it does not go through the old ``services.providers.Providers`` facade at all.
+_BUILD_CLIENT = "services.provider_service.build_client"
 
 
 class _RecordingProvider:
@@ -34,17 +37,29 @@ class _RecordingProvider:
     def estimate_request_tokens(self, dto: object) -> int:
         return 1
 
-    def send(self, dto: object) -> ProviderApiResponse:
+    def send(self, dto: object) -> ProviderResponse:
         self.sends.append(dto)
-        return ProviderApiResponse(text=self._response_text, model="recorder", tool_calls=None)
+        return ProviderResponse(text=self._response_text, model="recorder", tool_calls=None)
+
+
+def _recent(channel: str, limit: int = 10) -> list[dict[str, object]]:
+    """The channel's last ``limit`` transcript rows, oldest first — composed from
+    the model's Query primitives (the same ``filter``/``order_by``/``get``/
+    ``to_dict()`` shape ``Transcript.by_turn`` uses)."""
+    rows = Transcript.filter("channel = ?", channel).order_by("id DESC").limit(limit).get()
+    rows.reverse()
+    return [row.to_dict() for row in rows]
 
 
 def _run_turn(config: ProcessorConfig, raw_input: str, response_text: str) -> str:
-    """Drive the real production entry point — MessageProcessor.process — with
-    the LLM boundary (Providers._resolve) swapped for a fixed-response recorder."""
+    """Drive the real production entry point — ``MessageProcessor.process`` —
+    with the LLM boundary (``ProviderService``'s client factory) swapped for a
+    fixed-response recorder, then join the turn's background drive thread via
+    the real ``.result()`` for its final text."""
     recorder = _RecordingProvider(response_text)
-    with patch(_PROVIDERS_RESOLVE, return_value=recorder):
-        return MessageProcessor.process(raw_input, config)
+    with patch(_BUILD_CLIENT, return_value=recorder):
+        mp = MessageProcessor.process(config, raw_input)
+        return mp.result()
 
 
 def test_user_channel_markdown_is_converted_to_html(db: sqlite3.Connection) -> None:
@@ -57,7 +72,7 @@ def test_user_channel_markdown_is_converted_to_html(db: sqlite3.Connection) -> N
     assert result == expected
 
     # The same converted HTML is what got persisted — no marker survives.
-    history = Transcript.get_recent("user", limit=10)
+    history = _recent("user", limit=10)
     assistant = [r for r in history if r["role"] == "assistant"]
     assert assistant, "no assistant row persisted"
     content = assistant[-1]["content"]
@@ -74,7 +89,7 @@ def test_dmn_channel_markdown_is_left_verbatim(db: sqlite3.Connection) -> None:
     # Gated off: returned text is the raw markdown, untouched.
     assert result == leaked
 
-    history = Transcript.get_recent("dmn", limit=10)
+    history = _recent("dmn", limit=10)
     assistant = [r for r in history if r["role"] == "assistant"]
     assert assistant, "no assistant row persisted"
     content = assistant[-1]["content"]
@@ -93,7 +108,7 @@ def test_inline_code_protects_emphasis_markers(db: sqlite3.Connection) -> None:
     result = _run_turn(UserConfig(), "show code", leaked)
 
     assert result == expected
-    content = [r for r in Transcript.get_recent("user", limit=10) if r["role"] == "assistant"][-1]["content"]
+    content = [r for r in _recent("user", limit=10) if r["role"] == "assistant"][-1]["content"]
     assert content == expected
 
 
@@ -106,5 +121,5 @@ def test_snake_case_identifiers_are_not_underlined(db: sqlite3.Connection) -> No
 
     assert result == leaked
     assert "<u>" not in result
-    content = [r for r in Transcript.get_recent("user", limit=10) if r["role"] == "assistant"][-1]["content"]
+    content = [r for r in _recent("user", limit=10) if r["role"] == "assistant"][-1]["content"]
     assert content == leaked

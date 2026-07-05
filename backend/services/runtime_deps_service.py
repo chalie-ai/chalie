@@ -11,15 +11,10 @@ import sys
 import threading
 import time
 from pathlib import Path
-from typing import TYPE_CHECKING
 
 import requests
 
 from services.file_mapper_service import FileMapperService
-
-if TYPE_CHECKING:
-    from services.database_service import DatabaseService
-
 
 logger = logging.getLogger(__name__)
 
@@ -119,7 +114,7 @@ class RuntimeDepsService:
         return {"status": "installing", "message": "Voice dependencies installing in background"}
 
     @classmethod
-    def init_voice_from_settings(cls, database_service: "DatabaseService") -> None:
+    def init_voice_from_settings(cls) -> None:
         """Check DB settings on boot — if voice is enabled, trigger install.
 
         Migration: if voice_enabled is not yet in the DB but the legacy
@@ -129,7 +124,7 @@ class RuntimeDepsService:
         """
         try:
             from services.settings_service import SettingsService
-            settings = SettingsService(database_service)
+            settings = SettingsService()
             voice_enabled = settings.get("voice_enabled")
 
             if voice_enabled is None:

@@ -15,7 +15,6 @@ from typing import TYPE_CHECKING, cast
 
 import pytest
 
-from services.database_service import get_shared_db_service
 from services.provider_db_service import PROVIDER_IN_USE_MSG, ProviderDbService
 
 if TYPE_CHECKING:
@@ -25,7 +24,7 @@ pytestmark = pytest.mark.unit
 
 
 def _svc() -> ProviderDbService:
-    return ProviderDbService(get_shared_db_service())
+    return ProviderDbService()
 
 
 def _mk(svc: ProviderDbService, name: str, model: str, host: str) -> int:

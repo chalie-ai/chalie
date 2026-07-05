@@ -197,13 +197,12 @@ class BrowserAbility(Ability):
             return self._reply(grabbed)
 
         from abilities.document import ingest_file  # noqa: PLC0415
-        from services.database_service import get_shared_db_service  # noqa: PLC0415
         from services.document_service import DocumentService  # noqa: PLC0415
         from services.tmp_storage import new_tmp_path  # noqa: PLC0415
 
         page: dict[str, object] = cast("dict[str, object]", grabbed["page"])
         host = urlparse(cast("str", page["url"])).hostname or "page"
-        doc_svc = DocumentService(get_shared_db_service())
+        doc_svc = DocumentService()
         tmp = new_tmp_path(f"{token_hex(4)}.png")
         try:
             with open(tmp, "wb") as fh:

@@ -32,7 +32,7 @@ import re
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Optional, cast
 
-from services.database_service import DatabaseService
+from services.database import Database
 from services.episodic_constants import APEX_TRAVERSAL_MAX_DEPTH
 from services.time_utils import utc_now, parse_utc
 
@@ -74,31 +74,29 @@ _RELATIVE_SCORE_FLOOR = 0.5
 # ── Apex traversal ────────────────────────────────────────────────────────────
 
 
-def _get_episode_raw(episode_id: str, db: Optional[DatabaseService] = None) -> Optional[dict[str, object]]:
+def _get_episode_raw(episode_id: str, conn: Optional["sqlite3.Connection"] = None) -> Optional[dict[str, object]]:
     """Fetch a single episode row for apex traversal or final-apex surfacing."""
-    if db is None:
-        from services.database_service import get_shared_db_service
-        db = get_shared_db_service()
+    if conn is None:
+        conn = Database.conn()
 
     try:
-        with db.connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute(
-                """
-                SELECT id, gist, salience, channel, created_at, updated_at,
-                       last_accessed_at, access_count, transcript_ids,
-                       transcript_id_start, transcript_id_end,
-                       consolidated_from, consolidated_into,
-                       retrieval_weight,
-                       location_lat, location_lon, location_name,
-                       last_relevant_at
-                FROM episodes
-                WHERE id = ? AND deleted_at IS NULL
-                """,
-                (episode_id,),
-            )
-            row = cursor.fetchone()
-            cursor.close()
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            SELECT id, gist, salience, channel, created_at, updated_at,
+                   last_accessed_at, access_count, transcript_ids,
+                   transcript_id_start, transcript_id_end,
+                   consolidated_from, consolidated_into,
+                   retrieval_weight,
+                   location_lat, location_lon, location_name,
+                   last_relevant_at
+            FROM episodes
+            WHERE id = ? AND deleted_at IS NULL
+            """,
+            (episode_id,),
+        )
+        row = cursor.fetchone()
+        cursor.close()
         if not row:
             return None
         return {
@@ -126,7 +124,7 @@ def _get_episode_raw(episode_id: str, db: Optional[DatabaseService] = None) -> O
         return None
 
 
-def walk_up_to_apex(episode_id: str, db: Optional[DatabaseService] = None) -> Optional[dict[str, object]]:
+def walk_up_to_apex(episode_id: str, conn: Optional["sqlite3.Connection"] = None) -> Optional[dict[str, object]]:
     """Walk the consolidated_into chain from *episode_id* to its apex."""
     seen: set[str] = set()
     current_id = episode_id
@@ -134,10 +132,10 @@ def walk_up_to_apex(episode_id: str, db: Optional[DatabaseService] = None) -> Op
     for _ in range(_MAX_TRAVERSAL_DEPTH):
         if current_id in seen:
             logger.exception(f"[retrieval] consolidation cycle at id={current_id}")
-            return _get_episode_raw(current_id, db=db)
+            return _get_episode_raw(current_id, conn=conn)
         seen.add(current_id)
 
-        row = _get_episode_raw(current_id, db=db)
+        row = _get_episode_raw(current_id, conn=conn)
         if not row:
             return None
         if not row.get('consolidated_into'):
@@ -145,7 +143,7 @@ def walk_up_to_apex(episode_id: str, db: Optional[DatabaseService] = None) -> Op
         current_id = str(row['consolidated_into'])
 
     logger.warning(f"[retrieval] apex traversal hit max depth {_MAX_TRAVERSAL_DEPTH}")
-    return _get_episode_raw(current_id, db=db)
+    return _get_episode_raw(current_id, conn=conn)
 
 
 # ── Retrieval helpers ─────────────────────────────────────────────────────────
@@ -176,19 +174,17 @@ def _generate_embedding(text: str) -> Optional[list[float]]:
 def _count_episodes(channel: Optional[str] = None) -> int:
     """Return the live episode count, optionally scoped to a channel."""
     try:
-        from services.database_service import get_shared_db_service
-        db = get_shared_db_service()
-        with db.connection() as conn:
-            if channel is not None:
-                cursor = conn.execute(
-                    "SELECT COUNT(*) FROM episodes WHERE deleted_at IS NULL AND channel = ?",
-                    (channel,),
-                )
-            else:
-                cursor = conn.execute(
-                    "SELECT COUNT(*) FROM episodes WHERE deleted_at IS NULL"
-                )
-            return cast(int, cast("sqlite3.Row", cursor.fetchone())[0])
+        conn = Database.conn()
+        if channel is not None:
+            cursor = conn.execute(
+                "SELECT COUNT(*) FROM episodes WHERE deleted_at IS NULL AND channel = ?",
+                (channel,),
+            )
+        else:
+            cursor = conn.execute(
+                "SELECT COUNT(*) FROM episodes WHERE deleted_at IS NULL"
+            )
+        return cast(int, cast("sqlite3.Row", cursor.fetchone())[0])
     except Exception:
         return 0
 
@@ -204,8 +200,6 @@ def _fts_search(query_text: str, channel: Optional[str], k: int) -> list[dict[st
     Returns:
         List of episode dicts with ``text_rank`` key (negative float).
     """
-    from services.database_service import get_shared_db_service
-
     # Sanitise for FTS5 — only alphanumeric + spaces, then quote each term.
     safe = re.sub(r'[^a-zA-Z0-9\s]', ' ', query_text or '')
     safe = re.sub(r'\s+', ' ', safe).strip()
@@ -214,46 +208,45 @@ def _fts_search(query_text: str, channel: Optional[str], k: int) -> list[dict[st
         return []
 
     try:
-        db = get_shared_db_service()
-        with db.connection() as conn:
-            cursor = conn.cursor()
-            if channel is not None:
-                cursor.execute(
-                    """
-                    SELECT e.id, e.gist, e.salience, e.channel, e.created_at,
-                           e.last_accessed_at, e.retrieval_weight,
-                           e.consolidated_into,
-                           episodes_fts.rank AS text_rank,
-                           e.location_lat, e.location_lon, e.location_name
-                    FROM episodes_fts
-                    JOIN episodes e ON e.rowid = episodes_fts.rowid
-                    WHERE episodes_fts MATCH ?
-                      AND e.channel = ?
-                      AND e.deleted_at IS NULL
-                    ORDER BY episodes_fts.rank
-                    LIMIT ?
-                    """,
-                    (terms, channel, k),
-                )
-            else:
-                cursor.execute(
-                    """
-                    SELECT e.id, e.gist, e.salience, e.channel, e.created_at,
-                           e.last_accessed_at, e.retrieval_weight,
-                           e.consolidated_into,
-                           episodes_fts.rank AS text_rank,
-                           e.location_lat, e.location_lon, e.location_name
-                    FROM episodes_fts
-                    JOIN episodes e ON e.rowid = episodes_fts.rowid
-                    WHERE episodes_fts MATCH ?
-                      AND e.deleted_at IS NULL
-                    ORDER BY episodes_fts.rank
-                    LIMIT ?
-                    """,
-                    (terms, k),
-                )
-            rows = cursor.fetchall()
-            cursor.close()
+        conn = Database.conn()
+        cursor = conn.cursor()
+        if channel is not None:
+            cursor.execute(
+                """
+                SELECT e.id, e.gist, e.salience, e.channel, e.created_at,
+                       e.last_accessed_at, e.retrieval_weight,
+                       e.consolidated_into,
+                       episodes_fts.rank AS text_rank,
+                       e.location_lat, e.location_lon, e.location_name
+                FROM episodes_fts
+                JOIN episodes e ON e.rowid = episodes_fts.rowid
+                WHERE episodes_fts MATCH ?
+                  AND e.channel = ?
+                  AND e.deleted_at IS NULL
+                ORDER BY episodes_fts.rank
+                LIMIT ?
+                """,
+                (terms, channel, k),
+            )
+        else:
+            cursor.execute(
+                """
+                SELECT e.id, e.gist, e.salience, e.channel, e.created_at,
+                       e.last_accessed_at, e.retrieval_weight,
+                       e.consolidated_into,
+                       episodes_fts.rank AS text_rank,
+                       e.location_lat, e.location_lon, e.location_name
+                FROM episodes_fts
+                JOIN episodes e ON e.rowid = episodes_fts.rowid
+                WHERE episodes_fts MATCH ?
+                  AND e.deleted_at IS NULL
+                ORDER BY episodes_fts.rank
+                LIMIT ?
+                """,
+                (terms, k),
+            )
+        rows = cursor.fetchall()
+        cursor.close()
 
         return [
             {
@@ -297,51 +290,48 @@ def _vector_search(
     Returns:
         List of episode dicts with a ``vector_distance`` key.
     """
-    from services.database_service import get_shared_db_service
-
     blob = _pack_embedding(query_embedding)
     if blob is None:
         return []
 
     try:
-        db = get_shared_db_service()
-        with db.connection() as conn:
-            cursor = conn.cursor()
-            if channel is not None:
-                cursor.execute(
-                    """
-                    SELECT e.id, e.gist, e.salience, e.channel, e.created_at,
-                           e.last_accessed_at, e.retrieval_weight,
-                           e.consolidated_into,
-                           v.distance AS vector_distance,
-                           e.location_lat, e.location_lon, e.location_name
-                    FROM episodes e
-                    JOIN episodes_vec v ON v.rowid = e.rowid
-                    WHERE v.embedding MATCH ? AND k = ?
-                      AND e.channel = ?
-                      AND e.deleted_at IS NULL
-                    ORDER BY v.distance
-                    """,
-                    (blob, k, channel),
-                )
-            else:
-                cursor.execute(
-                    """
-                    SELECT e.id, e.gist, e.salience, e.channel, e.created_at,
-                           e.last_accessed_at, e.retrieval_weight,
-                           e.consolidated_into,
-                           v.distance AS vector_distance,
-                           e.location_lat, e.location_lon, e.location_name
-                    FROM episodes e
-                    JOIN episodes_vec v ON v.rowid = e.rowid
-                    WHERE v.embedding MATCH ? AND k = ?
-                      AND e.deleted_at IS NULL
-                    ORDER BY v.distance
-                    """,
-                    (blob, k),
-                )
-            rows = cursor.fetchall()
-            cursor.close()
+        conn = Database.conn()
+        cursor = conn.cursor()
+        if channel is not None:
+            cursor.execute(
+                """
+                SELECT e.id, e.gist, e.salience, e.channel, e.created_at,
+                       e.last_accessed_at, e.retrieval_weight,
+                       e.consolidated_into,
+                       v.distance AS vector_distance,
+                       e.location_lat, e.location_lon, e.location_name
+                FROM episodes e
+                JOIN episodes_vec v ON v.rowid = e.rowid
+                WHERE v.embedding MATCH ? AND k = ?
+                  AND e.channel = ?
+                  AND e.deleted_at IS NULL
+                ORDER BY v.distance
+                """,
+                (blob, k, channel),
+            )
+        else:
+            cursor.execute(
+                """
+                SELECT e.id, e.gist, e.salience, e.channel, e.created_at,
+                       e.last_accessed_at, e.retrieval_weight,
+                       e.consolidated_into,
+                       v.distance AS vector_distance,
+                       e.location_lat, e.location_lon, e.location_name
+                FROM episodes e
+                JOIN episodes_vec v ON v.rowid = e.rowid
+                WHERE v.embedding MATCH ? AND k = ?
+                  AND e.deleted_at IS NULL
+                ORDER BY v.distance
+                """,
+                (blob, k),
+            )
+        rows = cursor.fetchall()
+        cursor.close()
 
         return [
             {

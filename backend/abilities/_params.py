@@ -73,6 +73,7 @@ class Keys:
     date_from = "date_from"
     date_time = "date_time"
     date_to = "date_to"
+    day = "day"
     destination_location = "destination_location"
     direction = "direction"
     directory = "directory"
@@ -80,7 +81,6 @@ class Keys:
     down_kbps = "down_kbps"
     dtend = "dtend"
     dtstart = "dtstart"
-    due_at = "due_at"
     duration_seconds = "duration_seconds"
     entity_id = "entity_id"
     evidence_transcript_ids = "evidence_transcript_ids"
@@ -88,12 +88,12 @@ class Keys:
     goal = "goal"
     headers = "headers"
     host = "host"
+    hour = "hour"
     id = "id"  # noqa: A003 — attr name mirrors the wire key (shadows builtin)
     identifier = "identifier"
     image = "image"
     include_subagent_transcripts = "include_subagent_transcripts"
     item_id = "item_id"
-    item_type = "item_type"
     items = "items"
     key = "key"
     keyword = "keyword"
@@ -104,6 +104,7 @@ class Keys:
     location = "location"
     max_chars = "max_chars"
     message = "message"
+    minute = "minute"
     minutes = "minutes"
     name = "name"
     operation = "operation"
@@ -114,7 +115,6 @@ class Keys:
     provider = "provider"
     query = "query"
     quota_mb = "quota_mb"
-    recurrence = "recurrence"
     rule = "rule"
     rule_id = "rule_id"
     section = "section"
@@ -124,6 +124,7 @@ class Keys:
     service = "service"
     service_data = "service_data"
     source = "source"
+    start_at = "start_at"
     subject = "subject"
     summary = "summary"
     tags = "tags"
@@ -241,7 +242,6 @@ VARIANTS: "dict[str, frozenset[str]]" = {
     Keys.down_kbps: frozenset({"bandwidth_down", "download_speed"}),
     Keys.dtend: frozenset({"end_date", "end_datetime", "end_time"}),
     Keys.dtstart: frozenset({"start_date", "start_datetime", "start_time"}),
-    Keys.due_at: frozenset({"deadline", "when"}),
     Keys.duration_seconds: frozenset({"duration", "length", "seconds"}),
     Keys.entity_id: frozenset({"device", "device_id", "entity", "ha_id"}),
     Keys.evidence_transcript_ids: frozenset({"evidence_ids", "transcript_ids"}),
@@ -252,7 +252,6 @@ VARIANTS: "dict[str, frozenset[str]]" = {
     Keys.image: frozenset({"doc_id", "document_id", "file_id", "img", "photo"}),
     Keys.include_subagent_transcripts: frozenset({"include_agents", "show_subagents", "with_subagents"}),
     Keys.item_id: frozenset({Keys.id, "reminder_id", "schedule_id"}),
-    Keys.item_type: frozenset({"kind", "reminder_type", "schedule_type"}),
     Keys.items: frozenset({"entries", "values"}),
     Keys.keyword: frozenset({"q", Keys.query, "search_query", "search_term", "term"}),
     Keys.max_chars: frozenset({"max_length"}),

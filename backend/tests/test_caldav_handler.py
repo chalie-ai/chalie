@@ -19,18 +19,9 @@ Coverage:
     14. ``upsert_events`` — 15-min alert created for upcoming event.
     15. ``upsert_events`` — alert NOT created for all-day events.
     16. ``upsert_events`` — conflict notification created for overlapping events.
-    17. ``upsert_events`` — daily digest inserted exactly once.
-    18. ``upsert_events`` — greeting inserted exactly once.
-    19. ``list_events`` — returns events filtered by date range.
-    20. ``list_events`` — filters by calendar_name (case-insensitive).
-    21. ``get_event`` — returns error when uid missing.
-    22. ``get_event`` — returns event dict when found.
-    23. ``get_event`` — returns error when not found.
-    24. ``find_free_slots`` — gap found between two events.
-    25. ``find_free_slots`` — no slots when fully booked.
-    26. ``create_event`` — returns error when summary missing.
-    27. ``create_event`` — returns error when dtstart missing.
-    28. ``open_client`` — raises RuntimeError when caldav unavailable.
+    17. ``find_free_slots`` — gap found between two events.
+    18. ``create_event`` — returns error when summary missing.
+    19. ``open_client`` — raises RuntimeError when caldav unavailable.
 
 All tests are marked ``@pytest.mark.unit``.
 """
@@ -250,8 +241,8 @@ class TestUpsertEvents:
         # Insert an event that will not appear in the next sync
         db.execute(
             """INSERT INTO scheduled_items
-               (id, item_type, message, due_at, status, source, external_uid, created_at)
-               VALUES ('old1', 'event', 'Old event', '2026-04-01T09:00:00+00:00',
+               (id, item_type, message, start_at, due_at, status, source, external_uid, created_at)
+               VALUES ('old1', 'event', 'Old event', '2026-04-01T09:00:00+00:00', '2026-04-01T09:00:00+00:00',
                        'pending', 'mail', 'caldav:stale-uid', '2026-04-01T08:00:00+00:00')"""
         )
         db.commit()
@@ -314,18 +305,6 @@ class TestUpsertEvents:
         ).fetchone()
         assert row is not None
         assert row[0] == "notification"
-
-    def test_daily_digest_inserted_once(self, db: sqlite3.Connection) -> None:
-        handler = _make_handler()
-        now = _dt(2026, 4, 1, 8)
-
-        handler.upsert_events([], now)
-        handler.upsert_events([], now)  # second call must not duplicate
-
-        count = db.execute(
-            "SELECT COUNT(*) FROM scheduled_items WHERE external_uid='caldav:daily-digest'"
-        ).fetchone()[0]
-        assert count == 1
 
 
 

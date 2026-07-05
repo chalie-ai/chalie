@@ -23,13 +23,12 @@ import logging
 import threading
 import uuid
 from collections.abc import Callable
-from typing import TYPE_CHECKING, cast
+from typing import cast
 
+from services.database import Database
 from services.processor_config import ProcessorConfig
 from services.time_utils import utc_now
-
-if TYPE_CHECKING:
-    from services.database_service import DatabaseService
+from services.websocket import Websocket
 
 logger = logging.getLogger(__name__)
 
@@ -63,9 +62,6 @@ _GATE_POLL_SECONDS = 0.25
 
 
 class PolicyManager:
-    def __init__(self, db: "DatabaseService") -> None:
-        self.db = db
-
     # ── The single entry point dispatch calls ─────────────────────────────────
 
     @staticmethod
@@ -78,8 +74,7 @@ class PolicyManager:
     ) -> str:
         """Gate `callback` for (channel, permission). `should_stop` (the turn's)
         lets a parked `ask` prompt unwind when the turn is cancelled."""
-        from services.database_service import get_shared_db_service  # noqa: PLC0415
-        return PolicyManager(get_shared_db_service()).authorize(channel, permission, callback, error, should_stop)
+        return PolicyManager().authorize(channel, permission, callback, error, should_stop)
 
     # ── The gate: run | block | ask (dead simple) ─────────────────────────────
 
@@ -110,7 +105,7 @@ class PolicyManager:
     # ── Lookup-or-create: the entire provisioning story ───────────────────────
 
     def _setting(self, channel: str, permission: str) -> str:
-        with self.db.connection() as conn:
+        with Database.transaction() as conn:
             row = conn.execute(
                 "SELECT setting FROM policy WHERE channel = ? AND permission = ?",
                 (channel, permission),
@@ -121,22 +116,21 @@ class PolicyManager:
                 "INSERT OR IGNORE INTO policy (channel, permission, setting) VALUES (?, ?, 'ask')",
                 (channel, permission),
             )
-            conn.commit()
             return "ask"
 
     # ── Interactive prompt (CHAT only; fail-open per D6) ──────────────────────
 
     def _ask_user(self, permission: str, channel: str, should_stop: "Callable[[], bool] | None" = None) -> bool:
         try:
-            from services.websocket_broker import WebSocketBroker  # noqa: PLC0415
+            from models.ws_message import WsMessage  # noqa: PLC0415
             rid = str(uuid.uuid4())
             gate = _permission_gates[rid] = {"event": threading.Event(), "result": None}
-            WebSocketBroker().broadcast({
-                "type": "permission_request",
-                "request_id": rid,
-                "action_id": permission,
-                "context": channel,
-            })
+            Websocket.broadcast(WsMessage(
+                type="permission_request",
+                request_id=rid,
+                action_id=permission,
+                context=channel,
+            ))
             # Park until the user responds (POST /api/policies/respond sets the gate
             # event) OR the turn is cancelled. Polling makes the wait a cooperative
             # cancel checkpoint instead of an unbounded park that would pin the
@@ -153,51 +147,48 @@ class PolicyManager:
             return True  # fail-open (D6)
 
     def _log_blocked(self, channel: str, permission: str, reason: str) -> None:
-        with self.db.connection() as conn:
+        with Database.transaction() as conn:
             conn.execute(
                 "INSERT INTO policy_blocked_log (action_id, context, reason, created_at) "
                 "VALUES (?, ?, ?, ?)",
                 (permission, channel, reason, utc_now().isoformat()),
             )
-            conn.commit()
 
     # ── Brain REST surface (api/policies.py) ──────────────────────────────────
 
     def get_all(self) -> list[dict[str, str]]:
         """All rows EXCLUDING internal (hidden in Brain), as flat triples."""
-        with self.db.connection() as conn:
-            rows = conn.execute(
-                "SELECT channel, permission, setting FROM policy "
-                "WHERE setting != 'internal' ORDER BY channel, permission"
-            ).fetchall()
+        conn = Database.conn()
+        rows = conn.execute(
+            "SELECT channel, permission, setting FROM policy "
+            "WHERE setting != 'internal' ORDER BY channel, permission"
+        ).fetchall()
         return [{"channel": r[0], "permission": r[1], "setting": r[2]} for r in rows]
 
     def upsert(self, channel: str, permission: str, setting: str) -> int:
         """Single-cell upsert. Returns rows affected (0 on invalid input)."""
         if channel not in VALID_CHANNELS or setting not in VALID_SETTINGS:
             return 0
-        with self.db.connection() as conn:
+        with Database.transaction() as conn:
             cur = conn.execute(
                 "INSERT INTO policy (channel, permission, setting) VALUES (?, ?, ?) "
                 "ON CONFLICT(channel, permission) DO UPDATE SET setting = ?",
                 (channel, permission, setting, setting),
             )
-            conn.commit()
             return cur.rowcount
 
     def get_blocked_log(self, limit: int = 50) -> list[dict[str, str]]:
-        with self.db.connection() as conn:
-            rows = conn.execute(
-                "SELECT action_id, context, reason, created_at FROM policy_blocked_log "
-                "ORDER BY created_at DESC LIMIT ?",
-                (limit,),
-            ).fetchall()
+        conn = Database.conn()
+        rows = conn.execute(
+            "SELECT action_id, context, reason, created_at FROM policy_blocked_log "
+            "ORDER BY created_at DESC LIMIT ?",
+            (limit,),
+        ).fetchall()
         return [{"action_id": r[0], "context": r[1], "reason": r[2], "created_at": r[3]} for r in rows]
 
     def clear_blocked_log(self) -> int:
-        with self.db.connection() as conn:
+        with Database.transaction() as conn:
             cur = conn.execute("DELETE FROM policy_blocked_log")
-            conn.commit()
             return cur.rowcount
 
     # ── Seed / reset (static policy_defaults.json) ────────────────────────────
@@ -208,18 +199,16 @@ class PolicyManager:
         with open(FileMapperService.get_policy_defaults_path()) as f:
             seed = cast(list[dict[str, str]], json.load(f))
         inserted = 0
-        with self.db.connection() as conn:
+        with Database.transaction() as conn:
             for r in seed:
                 inserted += conn.execute(
                     "INSERT OR IGNORE INTO policy (channel, permission, setting) VALUES (?, ?, ?)",
                     (r["channel"], r["permission"], r["setting"]),
                 ).rowcount
-            conn.commit()
         return inserted
 
     def reset_to_defaults(self) -> int:
         """Wipe and re-apply the static seed."""
-        with self.db.connection() as conn:
+        with Database.transaction() as conn:
             conn.execute("DELETE FROM policy")
-            conn.commit()
         return self.apply_seed()

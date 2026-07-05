@@ -13,6 +13,7 @@ import sys
 import threading
 import time
 from collections.abc import Iterator
+from pathlib import Path
 from typing import cast
 
 import pytest
@@ -27,7 +28,8 @@ _TEST_PORT = 18462
 def _patch_db(_db_template: str, tmp_path_factory: pytest.TempPathFactory) -> Iterator[object]:
     """Real, fully-converged schema (built from schema.sql via the shared
     session-scoped ``_db_template`` fixture in ``tests/conftest.py``) copied
-    into a module-local file, then installed as the process-wide singleton.
+    into a module-local file, then installed as the process-wide singleton
+    AND pointed to by the ``Database`` gateway.
 
     Only the singleton *value* (``database_service._shared_db_service``) is
     swapped, never the ``get_shared_db_service`` function object itself — see
@@ -37,10 +39,22 @@ def _patch_db(_db_template: str, tmp_path_factory: pytest.TempPathFactory) -> It
     function, which always re-reads the (module-global) singleton value, so
     swapping only the value keeps those modules correctly wired both during
     the test and after teardown restores the prior value.
+
+    The server's own DB access (``BearerTokenMiddleware``) goes through the
+    ``Database`` gateway, which resolves its path via
+    ``FileMapperService.get_db_path()`` at call time rather than consulting
+    the singleton above — so that path is redirected here too, mirroring
+    ``tests/conftest.py``'s ``db`` fixture and
+    ``tests/test_schema_convergence.py``'s ``_gateway_to_tmp_db`` fixture.
+    The built-in ``monkeypatch`` fixture is function-scoped and cannot be
+    used from this module-scoped fixture, so ``pytest.MonkeyPatch()`` is
+    used directly and undone by hand in teardown.
     """
     import shutil
 
+    from services import database as _newdb
     from services import database_service
+    from services.file_mapper_service import FileMapperService
 
     db_dir = tmp_path_factory.mktemp("mcp_test_db")
     db_path = str(db_dir / "test.db")
@@ -54,12 +68,18 @@ def _patch_db(_db_template: str, tmp_path_factory: pytest.TempPathFactory) -> It
     original = database_service._shared_db_service
     database_service._shared_db_service = test_db
 
+    mp = pytest.MonkeyPatch()
+    mp.setattr(FileMapperService, "get_db_path", lambda *_: Path(db_path))
+    _newdb.Database.close()
+
     yield test_db
 
     test_db.close_pool()
     database_service._shared_db_service = original
     database_service._local.conn = None
     database_service._local.db_path = None
+    _newdb.Database.close()
+    mp.undo()
 
 
 @pytest.fixture(scope="module")

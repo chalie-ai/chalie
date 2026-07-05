@@ -11,10 +11,8 @@ pytestmark = pytest.mark.unit
 
 
 def _svc(db: sqlite3.Connection) -> "ProviderDbService":
-    import services.database_service as _db_mod
-    from services.database_service import DatabaseService
     from services.provider_db_service import ProviderDbService
-    return ProviderDbService(cast(DatabaseService, _db_mod._shared_db_service))
+    return ProviderDbService()
 
 
 def test_create_sets_supports_vision_when_probe_passes(db: sqlite3.Connection) -> None:

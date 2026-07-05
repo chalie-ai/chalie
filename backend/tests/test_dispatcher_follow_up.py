@@ -11,28 +11,35 @@
 ``_render`` is the single wire-envelope formatter; C3 gives it a ``follow_up``
 keyword that appends a ``[follow_up_instruction]…[end:follow_up_instruction]``
 block INSIDE the envelope, after any rich-media block and before the closing
-``[end:<tool>]``. ``_execute`` supplies it on a real synchronous success only —
-never on an error, never on the async placeholder.
+``[end:<tool>]``.
 
 The block lives inside the envelope so the rich-media parser's
 ``\\A…\\Z``-anchored unwrap (``_SKILL_TAG_RE``) still sees ``[end:<tool>]`` as
 the terminal token; co-occurrence of a rich card and a follow-up degrades
-neither. These tests drive the real ``_render``/``_execute`` and the real
+neither. These tests drive the real ``_render`` and the real
 ``rich_media_parser.parse`` — zero mocks.
+
+(The ``_execute``-wiring coverage that lived in this file — proving
+``_execute`` supplies ``follow_up`` on a real synchronous success and omits it
+on error — was removed during the old-spine ``ToolDispatcher`` cleanup: it
+drove a lightweight fake ``MP`` through ``ToolDispatcher(mp)._execute(...)``,
+which the new ``DispatchService._execute`` does not support without a fully
+wired ``MessageProcessor`` (Rule 3/4 service coupling). See the dead-code
+cleanup report for the systemic gap this exposed.)
 """
 
 from __future__ import annotations
 
-import sqlite3
+from typing import TYPE_CHECKING, cast
 
 import pytest
 
-from abilities._ability import Ability
-from abilities._dispatcher import ToolDispatcher
-from abilities._result import ToolResult, ToolParamError
-from configs.channels import UserConfig
+from abilities._result import ToolResult
+from services.dispatch_service import DispatchService
 from services.rich_media_parser import parse
-from tests._tool_result_harness import MP, allow_policy, seed_transcript
+
+if TYPE_CHECKING:
+    from controllers.message_processor import MessageProcessor
 
 pytestmark = pytest.mark.unit
 
@@ -48,7 +55,7 @@ def test_follow_up_block_present_inside_envelope_on_success_with_override() -> N
     through the real ``_render``, not string assembly."""
     tr = ToolResult.ok("body content")
 
-    rendered = ToolDispatcher._render("search", tr, None, follow_up=_FOLLOW_UP_TEXT)
+    rendered = DispatchService(mp=cast("MessageProcessor", None))._render("search", tr, None, follow_up=_FOLLOW_UP_TEXT)
 
     assert f"[follow_up_instruction]\n{_FOLLOW_UP_TEXT}\n[end:follow_up_instruction]" in rendered
     # [end:search] stays the terminal token (modulo trailing whitespace).
@@ -64,7 +71,7 @@ def test_follow_up_block_absent_on_error_result() -> None:
     agnostic and the error branch returns before the append)."""
     tr = ToolResult.err("boom", code="x")
 
-    rendered = ToolDispatcher._render("search", tr, None, follow_up=_FOLLOW_UP_TEXT)
+    rendered = DispatchService(mp=cast("MessageProcessor", None))._render("search", tr, None, follow_up=_FOLLOW_UP_TEXT)
 
     assert "follow_up_instruction" not in rendered
 
@@ -75,8 +82,8 @@ def test_follow_up_block_absent_for_non_overriding_ability() -> None:
     untaken, so nothing is appended."""
     tr = ToolResult.ok("body content")
 
-    without = ToolDispatcher._render("weather", tr, None)
-    with_empty = ToolDispatcher._render("weather", tr, None, follow_up="")
+    without = DispatchService(mp=cast("MessageProcessor", None))._render("weather", tr, None)
+    with_empty = DispatchService(mp=cast("MessageProcessor", None))._render("weather", tr, None, follow_up="")
 
     assert "follow_up_instruction" not in with_empty
     assert with_empty == without
@@ -118,7 +125,7 @@ def test_news_card_plus_follow_up_co_occurrence() -> None:
     rich_payload: dict[str, object] = {"title": "Headline", "source": "reuters", "url": "https://x/y"}
     tr = ToolResult.ok({"results": [rich_payload]}, rich=rich_payload)
 
-    rendered = ToolDispatcher._render("news", tr, 1, follow_up=_FOLLOW_UP_TEXT)
+    rendered = DispatchService(mp=cast("MessageProcessor", None))._render("news", tr, 1, follow_up=_FOLLOW_UP_TEXT)
 
     _rich_env(rendered, "news_1")
 
@@ -128,7 +135,7 @@ def test_contacts_card_plus_follow_up_co_occurrence() -> None:
     rich_payload: dict[str, object] = {"name": "Alice", "email": "alice@x"}
     tr = ToolResult.ok({"results": [rich_payload]}, rich=rich_payload)
 
-    rendered = ToolDispatcher._render("contacts", tr, 1, follow_up=_FOLLOW_UP_TEXT)
+    rendered = DispatchService(mp=cast("MessageProcessor", None))._render("contacts", tr, 1, follow_up=_FOLLOW_UP_TEXT)
 
     _rich_env(rendered, "contacts_1")
 
@@ -140,93 +147,6 @@ def test_search_with_card_guard_dormant_path() -> None:
     rich_payload: dict[str, object] = {"title": "T", "url": "https://x", "snippet": "s"}
     tr = ToolResult.ok({"results": [rich_payload]}, rich=rich_payload)
 
-    rendered = ToolDispatcher._render("search", tr, 1, follow_up=_FOLLOW_UP_TEXT)
+    rendered = DispatchService(mp=cast("MessageProcessor", None))._render("search", tr, 1, follow_up=_FOLLOW_UP_TEXT)
 
     _rich_env(rendered, "search_1")
-
-
-# ── _execute wiring: follow_up supplied on sync success only ──────────────────
-
-
-def _overriding_ability() -> Ability:
-    """A minimal inline ability that overrides ``get_follow_up`` — defines a real
-    concrete class so the import-time probe fires and the dispatcher can bind
-    it. Not registered (dispatch via ``_execute`` directly)."""
-
-    class _FollowUpAbility(Ability):
-        def get_name(self) -> str:
-            return "follow_up_probe"
-
-        def get_summary(self) -> str:
-            return "probe"
-
-        def get_examples(self) -> list[str]:
-            return ["a"] * 6
-
-        def get_search_tooltip(self) -> str:
-            return "probe"
-
-        def get_parameters(self) -> dict[str, object]:
-            return {"type": "object", "properties": {}, "required": []}
-
-        def run(self, params: dict[str, object]) -> ToolResult:
-            return ToolResult.ok("ok")
-
-        def get_follow_up(self, tr: ToolResult) -> str:
-            return _FOLLOW_UP_TEXT
-
-    return _FollowUpAbility()
-
-
-def test_execute_supplies_follow_up_on_sync_success(db: sqlite3.Connection) -> None:
-    """``_execute`` calls ``ability.get_follow_up()`` only when ``not run_async``
-    AND ``tr.status == "success"``, and passes it to ``_render``. Drives the real
-    ``_execute`` (the allow-path callback ``dispatch`` hands to ``wrap``) on a
-    real overriding ability; the rendered envelope carries the block inside."""
-    allow_policy(db, "follow_up_probe", "chat")
-    mp = MP(seed_transcript(db, "chat", "do a thing"), UserConfig({}))
-    ability = _overriding_ability()
-    ability.mp = mp
-
-    rendered = ToolDispatcher(mp)._execute(ability, {"act_summary": "x"})
-
-    assert f"[follow_up_instruction]\n{_FOLLOW_UP_TEXT}\n[end:follow_up_instruction]" in rendered
-    assert rendered.rstrip().endswith("[end:follow_up_probe]")
-
-
-def test_execute_omits_follow_up_on_sync_error(db: sqlite3.Connection) -> None:
-    """On an error result ``_execute`` passes ``follow_up=""`` — the error
-    envelope never carries a nudge. Drives a real ``_execute`` whose ability
-    raises a ``ToolParamError`` so ``_run`` returns an error ToolResult."""
-
-    class _ErrorAbility(Ability):
-        def get_name(self) -> str:
-            return "follow_up_error_probe"
-
-        def get_summary(self) -> str:
-            return "probe"
-
-        def get_examples(self) -> list[str]:
-            return ["a"] * 6
-
-        def get_search_tooltip(self) -> str:
-            return "probe"
-
-        def get_parameters(self) -> dict[str, object]:
-            return {"type": "object", "properties": {}, "required": []}
-
-        def run(self, params: dict[str, object]) -> ToolResult:
-            raise ToolParamError("bad", code="invalid-param", hint="fix it")
-
-        def get_follow_up(self, tr: ToolResult) -> str:
-            return _FOLLOW_UP_TEXT
-
-    allow_policy(db, "follow_up_error_probe", "chat")
-    mp = MP(seed_transcript(db, "chat", "do a thing"), UserConfig({}))
-    ability = _ErrorAbility()
-    ability.mp = mp
-
-    rendered = ToolDispatcher(mp)._execute(ability, {"act_summary": "x"})
-
-    assert "follow_up_instruction" not in rendered
-    assert "code=invalid-param" in rendered

@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue';
-import type { WorldSchedule, WorldState, WorldTelemetry } from '../../api/cognition';
+import type { WorldState, WorldTelemetry } from '../../api/cognition';
 import { cognition } from '../../api/cognition';
-import { formatDate, mdToHtml as renderMd } from '../../utils/format';
+import { mdToHtml as renderMd } from '../../utils/format';
 import { useAsyncResource } from '@chalie/shared';
 import EmptyState from '../../ui/EmptyState.vue';
 import SegmentedControl from '../../ui/SegmentedControl.vue';
@@ -17,7 +17,6 @@ const viewMode = ref<'formatted' | 'raw'>('formatted');
 
 const inputs = computed(() => worldState.value.inputs || {});
 const telemetry = computed<WorldTelemetry>(() => inputs.value.telemetry || {});
-const schedule = computed<WorldSchedule[]>(() => inputs.value.schedule || []);
 const signals = computed<Record<string, { label?: string; [k: string]: unknown }>>(
   () => inputs.value.signals || {},
 );
@@ -33,7 +32,6 @@ const timezone = computed(() => telemetry.value.timezone || '');
 const prefs = computed(() => telemetry.value.preferences || {});
 
 const signalEntries = computed(() => Object.entries(signals.value));
-const pendingSched = computed(() => schedule.value.filter((s) => s.status === 'pending'));
 
 const batteryText = computed((): string => {
   const pct = Math.round((battery.value.level || 0) * 100);
@@ -84,26 +82,6 @@ function mdToHtml(md: string): string {
             <tr>
               <td class="key-cell">Theme</td>
               <td>{{ prefs.color_scheme || '—' }}</td>
-            </tr>
-          </tbody>
-        </table>
-      </div>
-
-      <div v-if="pendingSched.length > 0" class="world-section">
-        <h4>Pending Schedules</h4>
-        <table class="records-table">
-          <thead>
-            <tr>
-              <th>Message</th>
-              <th>Due</th>
-              <th>Recurrence</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr v-for="s in pendingSched" :key="`${s.due_at}-${s.message}`">
-              <td class="key-cell">{{ s.message || '' }}</td>
-              <td>{{ formatDate(s.due_at) }}</td>
-              <td>{{ s.recurrence || '—' }}</td>
             </tr>
           </tbody>
         </table>

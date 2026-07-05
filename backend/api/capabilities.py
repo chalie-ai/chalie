@@ -75,11 +75,9 @@ def _load_caps() -> "Mapping[str, object]":
 def _get_last_sync_at(cap_id: str) -> str | None:
     """Read the stored last-sync timestamp; returns ``None`` on any read error."""
     try:
-        from services.database_service import get_shared_db_service
         from services.tool_config_service import ToolConfigService
 
-        db = get_shared_db_service()
-        svc = ToolConfigService(db)
+        svc = ToolConfigService()
         config = svc.get_tool_config(cap_id)
         return config.get(f"{cap_id}:last_sync_at")
     except Exception as exc:  # noqa: BLE001
@@ -181,7 +179,7 @@ class CapabilityStatusResource(Resource):
     @capabilities_ns.response(500, _ERR_STATUS, model=_C["Error"])
     @responds(CapabilityStatus, code=200)
     def get(self, cap_id: str) -> CapabilityStatus | ResponseReturnValue:
-        """Get connectivity and error status for a capability."""
+        """Get connectivity status for a capability."""
         try:
             caps = _load_caps()
             if cap_id not in caps:
@@ -189,25 +187,10 @@ class CapabilityStatusResource(Resource):
 
             cap = cast("_Capability", caps[cap_id])
 
-            error_count = 0
-            try:
-                from services.database_service import get_shared_db_service
-                from services.tool_config_service import ToolConfigService
-
-                db = get_shared_db_service()
-                svc = ToolConfigService(db)
-                config = svc.get_tool_config(cap_id)
-                raw_count = config.get(f"{cap_id}:error_count")
-                if raw_count is not None:
-                    error_count = int(raw_count)
-            except Exception as ec_exc:
-                logger.warning("[capabilities] could not read error_count for '%s': %s", cap_id, ec_exc)
-
             return CapabilityStatus(
                 id=cap_id,
                 connected=cap.is_connected(),
                 last_sync_at=_get_last_sync_at(cap_id),
-                error_count=error_count,
             )
         except Exception as exc:
             logger.exception("[capabilities] capability_status('%s') error: %s", cap_id, exc)

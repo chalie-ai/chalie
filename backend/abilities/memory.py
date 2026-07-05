@@ -18,7 +18,7 @@ import logging
 from typing import TYPE_CHECKING, ClassVar, cast
 
 if TYPE_CHECKING:
-    from services.message_processor import MessageProcessor
+    from controllers.message_processor import MessageProcessor
 
 from abilities._ability import Ability
 from abilities._params import Keys

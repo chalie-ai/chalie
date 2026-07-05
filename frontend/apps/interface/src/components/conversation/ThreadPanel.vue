@@ -84,7 +84,13 @@ onBeforeUnmount(() => document.removeEventListener('keydown', onKeydown));
         <div v-if="showLoader" class="thread-panel__loader">
           <output class="thread-panel__spinner" aria-label="Loading thread" />
         </div>
-        <TurnView v-else-if="block" :block="block" :can-reply="false" :type="session.panelType" />
+        <TurnView
+          v-else-if="block"
+          :block="block"
+          :can-reply="false"
+          :full-thread="true"
+          :type="session.panelType"
+        />
       </div>
 
       <InputDock

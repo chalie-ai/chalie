@@ -36,11 +36,10 @@ from typing import TYPE_CHECKING, ClassVar, cast
 if TYPE_CHECKING:
     from typing import SupportsInt
 
-    from services.data_graph_service import DataGraphService
-
 from abilities._capability import CapabilityAbility
 from abilities._params import Keys
 from abilities._result import ToolResult
+from models.data_graph import DataGraph
 
 # Read actions answered inline against the local index. An unknown action is
 # reported with this ladder in valid=.
@@ -144,9 +143,10 @@ class ContactsAbility(CapabilityAbility):
         if query:
             contacts = resolve(query, limit=limit)
         else:
-            rows = self._dgs().fetch(
-                kinds=["contact"], order_by="key ASC", limit=limit
-            )
+            rows = [
+                r.to_dict()
+                for r in DataGraph.live("contact").order_by("key ASC").limit(limit).get()
+            ]
             contacts = [
                 c
                 for c in (
@@ -234,12 +234,6 @@ class ContactsAbility(CapabilityAbility):
                 action=action,
             )
         return None
-
-    @staticmethod
-    def _dgs() -> "DataGraphService":
-        from services.data_graph_service import get_data_graph_service
-
-        return get_data_graph_service()
 
 
 # ---------------------------------------------------------------------------

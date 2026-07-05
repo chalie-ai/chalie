@@ -1,16 +1,14 @@
 /**
- * Tasks store — reminders (GET /scheduler?status=pending, filtered to items with
- * a due_at) + active delegates (GET /api/subagents, each a full snapshot
- * an Activity row renders). Live updates arrive via applyDriftEvent() from the
- * session store.
+ * Tasks store — active delegates (GET /api/subagents, each a full snapshot an
+ * Activity row renders) plus forked-thread activity. Live updates arrive via
+ * applyDriftEvent() from the session store. Recurring prompt-schedules live
+ * exclusively in the scheduler dock, not here.
  */
 import { defineStore } from 'pinia';
 import type { WsPushEvent } from '@chalie/shared';
-import type { ActiveSubagent, ScheduledItem } from '../api/scheduler';
+import type { ActiveSubagent } from '../api/scheduler';
 import { scheduler } from '../api/scheduler';
 import { useConversationFeed } from '../composables/useConversationFeed';
-
-export type { ScheduledItem };
 
 export interface DriftTask {
   id?: string;
@@ -28,8 +26,6 @@ export interface ThreadActivityItem {
 
 export const useTasksStore = defineStore('tasks', {
   state: () => ({
-    /** Pending reminders with a due_at, cached from the last poll. */
-    reminders: [] as ScheduledItem[],
     /** Active delegates keyed by sub_id, each a full ActiveSubagent snapshot. */
     subagents: new Map<string, ActiveSubagent>() as Map<string, ActiveSubagent>,
     isOpen: false,
@@ -56,7 +52,7 @@ export const useTasksStore = defineStore('tasks', {
     },
 
     totalCount(state): number {
-      return state.reminders.length + state.subagents.size + this.threadActivity.length;
+      return state.subagents.size + this.threadActivity.length;
     },
   },
 
@@ -69,34 +65,25 @@ export const useTasksStore = defineStore('tasks', {
       this.isOpen = false;
     },
 
-    /**
-     * Fetch reminders and subagents in parallel. On partial failure the
-     * successful half still updates its slice of state.
-     */
+    /** Refresh the active-delegate snapshot; leaves prior state intact on failure. */
     async loadActiveTasks(): Promise<void> {
-      const [schedResult, subagentResult] = await Promise.allSettled([
-        scheduler.pending(),
-        scheduler.subagentsActive(),
-      ]);
-
-      if (schedResult.status === 'fulfilled') {
-        this.reminders = schedResult.value.filter(
-          (r) => r.status === 'pending' && r.due_at != null,
-        );
+      let result;
+      try {
+        result = await scheduler.subagentsActive();
+      } catch {
+        return;
       }
 
-      if (subagentResult.status === 'fulfilled') {
-        const fresh = new Map<string, ActiveSubagent>();
-        for (const sa of subagentResult.value.subagents ?? []) {
-          fresh.set(sa.sub_id, sa);
-        }
-        for (const [id, sa] of this.subagents) {
-          if (!fresh.has(id)) {
-            fresh.set(id, sa);
-          }
-        }
-        this.subagents = fresh;
+      const fresh = new Map<string, ActiveSubagent>();
+      for (const sa of result.subagents ?? []) {
+        fresh.set(sa.sub_id, sa);
       }
+      for (const [id, sa] of this.subagents) {
+        if (!fresh.has(id)) {
+          fresh.set(id, sa);
+        }
+      }
+      this.subagents = fresh;
     },
 
     /**
@@ -104,15 +91,6 @@ export const useTasksStore = defineStore('tasks', {
      */
     applyDriftEvent(data: WsPushEvent): void {
       const type = data.type as string;
-
-      if (type === 'task' || type === 'reminder') {
-        void scheduler.pending().then((res) => {
-          this.reminders = res.filter(
-            (r) => r.status === 'pending' && r.due_at != null,
-          );
-        }).catch(() => {});
-        return;
-      }
 
       if (type === 'subagent_start') {
         const sa = data as unknown as ActiveSubagent;

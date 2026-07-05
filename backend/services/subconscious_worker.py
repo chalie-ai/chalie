@@ -9,12 +9,13 @@ from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Optional, cast
 
 if TYPE_CHECKING:
-    from services.database_service import DatabaseService
+    from controllers.message_processor import MessageProcessor
     from services.decay_engine_service import DecayEngineService
     from services.embedding_service import EmbeddingService
     from services.episodic_service import EpisodicService
     from services.data_graph_service import DataGraphService
 
+from services.database import Database
 from services.durable_timestamp import DurableTimestamp
 from services.time_utils import utc_now, parse_utc
 
@@ -218,10 +219,8 @@ class SubconsciousWorker:
 
     def _step_consolidate(self) -> str:
         """Step 1 — consolidate apex episodes into super-episodes, per channel."""
-        from services.database_service import get_shared_db_service  # noqa: PLC0415
         from services.embedding_service import get_embedding_service  # noqa: PLC0415
 
-        db = get_shared_db_service()
         emb_svc = get_embedding_service()
 
         # Per-tick summarization budget shared across every channel and round.
@@ -229,11 +228,11 @@ class SubconsciousWorker:
         # blowing one tick's LLM budget.
         self._summarization_budget_remaining = _SUMMARIZATION_CLUSTER_BUDGET
 
-        channels = self._consolidating_channels(db)
+        channels = self._consolidating_channels()
         total_clusters = 0
         supers_written = 0
         for channel in channels:
-            found, written = self._consolidate_channel(channel, db, emb_svc)
+            found, written = self._consolidate_channel(channel, emb_svc)
             total_clusters += found
             supers_written += written
 
@@ -250,7 +249,7 @@ class SubconsciousWorker:
         )
 
     @staticmethod
-    def _consolidating_channels(db: "DatabaseService") -> list[str]:
+    def _consolidating_channels() -> list[str]:
         """Return the channels to consolidate: the HEAVY exact channels (user,"""
         from services.source_profiles import (  # noqa: PLC0415
             LIKE_EXTERNAL_AGENT,
@@ -259,7 +258,7 @@ class SubconsciousWorker:
 
         channels = list(consolidating_exact_channels())
         try:
-            with db.connection() as conn:
+            with Database.transaction() as conn:
                 rows = conn.execute(
                     "SELECT DISTINCT channel FROM episodes "
                     "WHERE deleted_at IS NULL "
@@ -274,7 +273,7 @@ class SubconsciousWorker:
             )
         return channels
 
-    def _consolidate_channel(self, channel: str, db: "DatabaseService", emb_svc: "EmbeddingService") -> tuple[int, int]:
+    def _consolidate_channel(self, channel: str, emb_svc: "EmbeddingService") -> tuple[int, int]:
         """Consolidate one channel across both hierarchy rounds. Returns"""
         from services.episodic_constants import ERA_DIGEST_TRIGGER  # noqa: PLC0415
         from services.episodic_service import (  # noqa: PLC0415
@@ -284,7 +283,7 @@ class SubconsciousWorker:
             _fetch_apex_embeddings,
         )
 
-        episodic_svc = EpisodicService(db)
+        episodic_svc = EpisodicService()
 
         # Leaf round — count trigger lives inside find_super_candidates.
         try:
@@ -321,7 +320,7 @@ class SubconsciousWorker:
         written = 0
         for clusters, level in rounds:
             written += self._write_round(
-                channel, clusters, level, db, emb_svc, episodic_svc
+                channel, clusters, level, emb_svc, episodic_svc
             )
         return found, written
 
@@ -330,7 +329,6 @@ class SubconsciousWorker:
         channel: str,
         clusters: list[list[str]],
         level: int,
-        db: "DatabaseService",
         emb_svc: "EmbeddingService",
         episodic_svc: "EpisodicService",
     ) -> int:
@@ -354,7 +352,7 @@ class SubconsciousWorker:
             if self._summarization_budget_remaining <= 0:
                 break
             if self._write_super_episode(
-                channel, cluster_ids, level, db, emb_svc, episodic_svc, prior_embeddings
+                channel, cluster_ids, level, emb_svc, episodic_svc, prior_embeddings
             ):
                 written += 1
                 self._summarization_budget_remaining -= 1
@@ -365,7 +363,6 @@ class SubconsciousWorker:
         channel: str,
         cluster_ids: list[str],
         level: int,
-        db: "DatabaseService",
         emb_svc: "EmbeddingService",
         episodic_svc: "EpisodicService",
         prior_embeddings: list[bytes],
@@ -379,7 +376,7 @@ class SubconsciousWorker:
         )
         from services.episodic_constants import HDBSCAN_MIN_CLUSTER_SIZE  # noqa: PLC0415
         from services.episodic_service import compute_novelty  # noqa: PLC0415
-        from services.message_processor import MessageProcessor  # noqa: PLC0415
+        from controllers.message_processor import MessageProcessor  # noqa: PLC0415
         from services.salience_service import compute_salience  # noqa: PLC0415
 
         try:
@@ -393,10 +390,10 @@ class SubconsciousWorker:
                 return False
 
             all_t_ids = _collect_transcript_ids(cast(list[object], sources))
-            transcript_spans = _fetch_transcript_spans(all_t_ids, db)
+            transcript_spans = _fetch_transcript_spans(all_t_ids)
 
             config = SuperEpisodeConfig(channel, cast(list[object], sources), transcript_spans)
-            response = MessageProcessor.process("", config)
+            response = MessageProcessor.process(config).result()
 
             if not response:
                 logger.warning(
@@ -451,11 +448,10 @@ class SubconsciousWorker:
         """Step 2 — route hard facts from new episodes into data_graph."""
         from configs.channels import FactExtractionConfig, parse_fact_ops  # noqa: PLC0415
         from services.data_graph_service import get_data_graph_service  # noqa: PLC0415
-        from services.database_service import get_shared_db_service  # noqa: PLC0415
         from services.episodic_service import EpisodicService  # noqa: PLC0415
-        from services.message_processor import MessageProcessor  # noqa: PLC0415
+        from controllers.message_processor import MessageProcessor  # noqa: PLC0415
 
-        episodic_svc = EpisodicService(get_shared_db_service())
+        episodic_svc = EpisodicService()
         backlog = episodic_svc.fetch_fact_extraction_backlog(_FACT_EXTRACTION_CALL_BUDGET)
         if not backlog:
             return "no backlog"
@@ -501,7 +497,10 @@ class SubconsciousWorker:
 
         from collections.abc import Callable as _Callable  # noqa: PLC0415
         config = cast(_Callable[..., object], config_cls)(gist, neighbours)
-        response = cast(_Callable[[str, object], str], getattr(processor_cls, "process"))("", config)
+        mp = cast(
+            _Callable[[object], "MessageProcessor"], getattr(processor_cls, "process")
+        )(config)
+        response = mp.result()
 
         try:
             ops = cast(list[dict[str, object]], cast(_Callable[..., object], parse_ops)(response))
@@ -556,13 +555,8 @@ class SubconsciousWorker:
 
     def _step_pattern_match(self) -> str:
         """Step 4 — single-pass LLM pattern matcher over a transcript-id window."""
-        from services.data_graph_service import get_data_graph_service
-        from services.database_service import get_shared_db_service
-
         _DG_KEY_CURSOR = "pattern_match_cursor"
         _MIN_DELTA = 50
-
-        db = get_shared_db_service()
 
         # 1. Read cursor — newest active row wins. The deterministic
         # ORDER BY id DESC defends against historical / concurrent writes
@@ -570,7 +564,7 @@ class SubconsciousWorker:
         # data_graph_service.store path); SQLite's default ordering is
         # implementation-defined and would silently pick the wrong row.
         cursor = 0
-        with db.connection() as conn:
+        with Database.transaction() as conn:
             row = conn.execute(
                 "SELECT value FROM data_graph "
                 "WHERE kind='system' AND key=? "
@@ -606,9 +600,9 @@ class SubconsciousWorker:
         # the confidence-decay sweep are derived from the turn's durable rows, so
         # nothing needs to be inspected on the processor after it returns.
         from configs.channels import PatternConfig  # noqa: PLC0415
-        from services.message_processor import MessageProcessor  # noqa: PLC0415
+        from controllers.message_processor import MessageProcessor  # noqa: PLC0415
 
-        MessageProcessor.process("", PatternConfig(cursor, latest))
+        MessageProcessor.process(PatternConfig(cursor, latest))
 
         # 4. Advance cursor on success.
         # Cursor write race / known risk: a crash here leaves the cursor
@@ -619,7 +613,8 @@ class SubconsciousWorker:
         # minor double-fire risk; logging at WARNING so an unexpected
         # cursor-stuck pattern is observable in operator logs.
         try:
-            get_data_graph_service().store(
+            from models.data_graph import DataGraph
+            DataGraph.store(
                 kind="system",
                 key=_DG_KEY_CURSOR,
                 value=str(latest),
@@ -637,14 +632,14 @@ class SubconsciousWorker:
     def _step_synthesis(self) -> str:
         """Step 5 — refresh the user synopsis (short + long)."""
         from configs.channels import UserSummaryConfig, _should_synthesise  # noqa: PLC0415
-        from services.message_processor import MessageProcessor  # noqa: PLC0415
+        from controllers.message_processor import MessageProcessor  # noqa: PLC0415
 
         if not _should_synthesise():
             logger.info(f"{LOG_PREFIX} No new traits since last synthesis; skipping")
             return "no new traits/patterns; skipped"
 
         config = UserSummaryConfig()
-        MessageProcessor.process("", config)
+        MessageProcessor.process(config)
         return "ok"
 
     def _step_dmn(self) -> str:
@@ -653,10 +648,8 @@ class SubconsciousWorker:
         # Reads the same data_graph keys the (removed) _load_user_synthesis did.
         synthesis: Optional[str] = None
         try:
-            from services.database_service import get_shared_db_service
-            db = get_shared_db_service()
             placeholders = ",".join("?" * len(_DMN_SYNTHESIS_KEYS))
-            with db.connection() as conn:
+            with Database.transaction() as conn:
                 rows = conn.execute(
                     "SELECT key, value FROM data_graph "
                     "WHERE kind = 'system' "
@@ -673,8 +666,8 @@ class SubconsciousWorker:
             return "skipped: no user synthesis"
 
         from configs.channels import DmnConfig  # noqa: PLC0415
-        from services.message_processor import MessageProcessor  # noqa: PLC0415
-        MessageProcessor.process("", DmnConfig())
+        from controllers.message_processor import MessageProcessor  # noqa: PLC0415
+        MessageProcessor.process(DmnConfig())
         return "ok"
 
     def _step_capability_sync(self) -> str:
@@ -690,17 +683,12 @@ class SubconsciousWorker:
 
     def _step_geo_patterns(self) -> str:
         """Step 8 — single-pass LLM geo-spatial pattern extractor."""
-        from services.data_graph_service import get_data_graph_service
-        from services.database_service import get_shared_db_service
-
         _DG_KEY_CURSOR = "geo_pattern_cursor"
         _MIN_DELTA = 30
 
-        db = get_shared_db_service()
-
         cursor = 0
         try:
-            with db.connection() as conn:
+            with Database.transaction() as conn:
                 row = conn.execute(
                     "SELECT value FROM data_graph "
                     "WHERE kind='system' AND key=? "
@@ -733,12 +721,13 @@ class SubconsciousWorker:
 
         # Fire the geo pass via the canonical entry point.
         from configs.channels import GeoConfig  # noqa: PLC0415
-        from services.message_processor import MessageProcessor  # noqa: PLC0415
+        from controllers.message_processor import MessageProcessor  # noqa: PLC0415
 
-        MessageProcessor.process("", GeoConfig(cursor, latest))
+        MessageProcessor.process(GeoConfig(cursor, latest))
 
         try:
-            get_data_graph_service().store(
+            from models.data_graph import DataGraph
+            DataGraph.store(
                 kind="system",
                 key=_DG_KEY_CURSOR,
                 value=str(latest),
@@ -769,9 +758,9 @@ class SubconsciousWorker:
 
         from configs.channels import DiscoveryConfig  # noqa: PLC0415
         from configs.channels.discovery import DISCOVERY_PROMPT  # noqa: PLC0415
-        from services.message_processor import MessageProcessor  # noqa: PLC0415
+        from controllers.message_processor import MessageProcessor  # noqa: PLC0415
 
-        MessageProcessor.process(DISCOVERY_PROMPT, DiscoveryConfig())
+        MessageProcessor.process(DiscoveryConfig(), DISCOVERY_PROMPT)
         _DISCOVERY_TIMESTAMP.persist(now)
         return "fired"
 

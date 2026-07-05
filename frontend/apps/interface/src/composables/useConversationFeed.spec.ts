@@ -32,7 +32,7 @@ function block(
       timestamp: '2026-01-01 00:00:00',
       turn_id: turnId,
       tool_calls: opts.toolCalls?.includes(id)
-        ? [{ tool_name: 'search', summary: 'searched' }]
+        ? [{ tool_name: 'search', summary: 'searched', state: 'done', ended_at: null }]
         : undefined,
     })),
   };
@@ -92,49 +92,49 @@ describe('upsertTurn — turn_id ordering in sortedBlocks', () => {
 });
 
 describe('live-pill clear-on-upsert handoff (§6.5 step 4)', () => {
-  it('removes a live trail for a row once that row has persisted tool_calls', async () => {
+  it('removes a live trail for a turn once that turn has persisted tool_calls', async () => {
     const feed = await freshFeed();
-    // Row id 11 has an in-flight live pill.
-    feed.startLiveTool(1, 11, 999, 'search', 'searching…');
-    expect(feed.liveTools[11]).toBeDefined();
+    // Turn 1 has an in-flight live pill.
+    feed.startLiveTool(1, 999, 'search', 'searching…');
+    expect(feed.liveTools[1]).toBeDefined();
 
     // Upsert a block where message id 11 now carries tool_calls.
     feed.upsertTurn(block(1, [10, 11], { toolCalls: [11] }));
 
-    // The live trail for row 11 must be gone — summaries take over.
-    expect(feed.liveTools[11]).toBeUndefined();
+    // The live trail for turn 1 must be gone — summaries take over.
+    expect(feed.liveTools[1]).toBeUndefined();
   });
 
-  it('does not clear trails for rows that have no persisted tool_calls yet', async () => {
+  it('does not clear trails for a turn that has no persisted tool_calls yet', async () => {
     const feed = await freshFeed();
-    feed.startLiveTool(1, 11, 999, 'search');
-    feed.upsertTurn(block(1, [10, 11])); // row 11 has no tool_calls
-    expect(feed.liveTools[11]).toBeDefined();
+    feed.startLiveTool(1, 999, 'search');
+    feed.upsertTurn(block(1, [10, 11])); // no message carries tool_calls
+    expect(feed.liveTools[1]).toBeDefined();
   });
 });
 
 describe('startLiveTool / finishLiveTool', () => {
   it('adds an unresolved pill on startLiveTool', async () => {
     const feed = await freshFeed();
-    feed.startLiveTool(1, 5, 42, 'calendar', 'checking calendar');
-    const trail = feed.liveTools[5];
-    expect(trail?.pills).toHaveLength(1);
-    expect(trail?.pills[0]).toMatchObject({ id: '42', name: 'calendar', resolved: false });
+    feed.startLiveTool(1, 42, 'calendar', 'checking calendar');
+    const pills = feed.liveTools[1];
+    expect(pills).toHaveLength(1);
+    expect(pills?.[0]).toMatchObject({ id: '42', name: 'calendar', resolved: false });
   });
 
   it('resolves the correct pill on finishLiveTool, preserving others', async () => {
     const feed = await freshFeed();
-    feed.startLiveTool(1, 5, 42, 'calendar');
-    feed.startLiveTool(1, 5, 43, 'weather');
-    feed.finishLiveTool(42);
-    const pills = feed.liveTools[5]?.pills ?? [];
+    feed.startLiveTool(1, 42, 'calendar');
+    feed.startLiveTool(1, 43, 'weather');
+    feed.finishLiveTool(1, 42, true);
+    const pills = feed.liveTools[1] ?? [];
     expect(pills.find((p) => p.id === '42')?.resolved).toBe(true);
     expect(pills.find((p) => p.id === '43')?.resolved).toBe(false);
   });
 
   it('is a no-op for null callId', async () => {
     const feed = await freshFeed();
-    expect(() => feed.finishLiveTool(null)).not.toThrow();
+    expect(() => feed.finishLiveTool(1, null, true)).not.toThrow();
   });
 });
 
@@ -149,8 +149,8 @@ describe('setWorking', () => {
 
   it('clearing working also purges that turn live trails', async () => {
     const feed = await freshFeed();
-    feed.startLiveTool(7, 20, 1, 'search');
+    feed.startLiveTool(7, 1, 'search');
     feed.setWorking(7, false);
-    expect(feed.liveTools[20]).toBeUndefined();
+    expect(feed.liveTools[7]).toBeUndefined();
   });
 });

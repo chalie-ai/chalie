@@ -5,16 +5,17 @@ Both delegate configs used to set ``skip_transcript=True`` AND
 async-only HiddenInput flag (``skip_input_row`` belongs to ``deliver_async_result``
 / ``with_hidden_input``, not to a delegate). Together those two flags trip the
 ``_setup`` uid guard (``not skip_transcript and not skip_input_row``), so
-``mp.uid`` stayed ``None``, ``_render_act_trail`` short-circuited to ``""``, and the
+``mp.uid`` stayed ``None``, the act-trail render short-circuited to ``""``, and the
 delegate's ``get_user_prompt`` was a constant, results-blind prompt on EVERY ACT
 iteration. The loop never saw what it had already gathered, so it re-issued the
 same searches turn after turn — minutes per delegate.
 
 This drives the REAL production path with zero mocks: the real
-``MessageProcessor._setup()`` (whose uid assignment from the config flags is the
-fix), the real ``ToolDispatcher`` dispatch chokepoint (which records each tool
-call under that uid), the real ``WebSearchConfig`` / ``WebBrowseConfig``
-``get_user_prompt`` + ``_render_act_trail``, against the real SQLite test db.
+``MessageProcessor.begin()`` synchronous turn/uid allocation (whose uid
+assignment from the config flags is the fix), the real ``DispatchService``
+dispatch chokepoint (which records each tool call under that uid), the real
+``WebSearchConfig`` / ``WebBrowseConfig`` ``get_user_prompt`` +
+``PromptService.act_trail()``, against the real SQLite test db.
 
 The regression it locks, end to end: after the delegate executes a tool, its
 NEXT-iteration user prompt must GROW to include that tool's result. With the old
@@ -27,10 +28,9 @@ from typing import TYPE_CHECKING, Protocol, cast
 
 import pytest
 
-from abilities._dispatcher import ToolDispatcher
 from configs.channels.web_browse import WebBrowseConfig
 from configs.channels.web_search import WebSearchConfig
-from services.message_processor import MessageProcessor
+from controllers.message_processor import MessageProcessor
 from services.processor_config import ProcessorConfig
 
 if TYPE_CHECKING:
@@ -51,12 +51,22 @@ _DELEGATES = [
 def _delegate_mp(config: ProcessorConfig) -> MessageProcessor:
     """Build a real MessageProcessor bound to a delegate config.
 
-    ``config`` is the constructor's first argument now (it builds ``self.ts =
-    TranscriptService(config, turn_id)`` immediately, and allocates the turn's
-    input row — hence ``mp.uid`` — right there in ``__init__``), so no manual
-    ``_setup()`` call or private-field poking is needed (precedent:
-    test_tkt960_delegate_provider._delegate_mp, test_ability_save_pattern.py)."""
-    return MessageProcessor(config, raw_input="current population of Malta")
+    The constructor is "constructed inert" (I2: zero DB/WS side-effects) — it
+    never allocates the turn or writes the anchoring input row itself (that's
+    ``begin()``'s job, run on a background drive thread we don't want here).
+    Replay the exact synchronous half of ``begin()`` (turn allocation + the
+    anchoring input row) through the mp's own transcript_service, so ``mp.uid``
+    is a real row, ``mp.turn_id`` a real allocated turn (the id
+    ``ToolCall.by_turn`` joins ``transcript`` on), and the config's
+    channel/role land on that row exactly as production writes them — no
+    private-field poking, no invented API."""
+    mp = MessageProcessor(config, raw_input="current population of Malta")
+    mp.active_tools = list(mp.config.always_available or [])
+    with mp.db.transaction():
+        mp.turn_id = mp.transcript_service.allocate_turn()
+        mp.uid = mp.transcript_service.append_input(mp.raw_input)
+        mp.current_transcript_id = mp.uid
+    return mp
 
 
 @pytest.mark.parametrize("config_cls,channel,role,prefix", _DELEGATES)
@@ -87,12 +97,12 @@ def test_delegate_sees_its_own_act_trail(
     config = mp.config
     blind = config.get_user_prompt(mp)
     assert blind.startswith(prefix)
-    assert mp._render_act_trail() == "", "trail should be empty before any tool runs"
+    assert mp.prompt_service.act_trail() == "", "trail should be empty before any tool runs"
 
     # ── Execute one real tool through the production dispatch chokepoint. ──────
     #    `memory` is in the delegate's always_available tier; recall is
     #    deterministic (local embeddings + SQLite, no network).
-    ToolDispatcher(mp).dispatch(
+    mp.dispatch_service.dispatch(
         "memory", {"action": "recall", "query": "current population of Malta"}
     )
 
@@ -108,7 +118,7 @@ def test_delegate_sees_its_own_act_trail(
         f"the delegate's tool call was not recorded under its uid: {names!r}"
     )
 
-    trail = mp._render_act_trail()
+    trail = mp.prompt_service.act_trail()
     assert trail, "act-trail rendered empty even after a recorded tool call"
 
     # The NEXT-iteration prompt the delegate would send GREW to include the trail

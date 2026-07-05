@@ -27,7 +27,7 @@ from typing import TYPE_CHECKING, Optional, cast
 
 import numpy as np
 
-from services.database_service import DatabaseService
+from services.database import Database
 from services.embedding_utils import pack_embedding
 from services.episodic_constants import EXTRACTION_THRESHOLD, EXTRACTION_WINDOW
 from services.time_utils import utc_now
@@ -63,8 +63,7 @@ class EpisodicService:
     """Manages episode storage and CRUD (no retrieval — see
     ``episodic_retrieval_service.retrieve``)."""
 
-    def __init__(self, database_service: DatabaseService, config: Optional[dict[str, object]] = None):
-        self.db_service = database_service
+    def __init__(self, config: Optional[dict[str, object]] = None):
         self.config = config or {}
 
     # ── Storage / CRUD ───────────────────────────────────────────────
@@ -89,7 +88,7 @@ class EpisodicService:
             transcript_id_start = episode_data.get('transcript_id_start')
             transcript_id_end = episode_data.get('transcript_id_end')
 
-            with self.db_service.connection() as conn:
+            with Database.transaction() as conn:
                 cursor = conn.cursor()
 
                 # Creation is a write-relevant event: seed the relevance clock
@@ -173,7 +172,7 @@ class EpisodicService:
         if not fields and embedding is None:
             return
 
-        with self.db_service.connection() as conn:
+        with Database.transaction() as conn:
             if fields:
                 set_clauses = [f"{key} = ?" for key in fields]
                 set_clauses.append("updated_at = datetime('now')")
@@ -185,7 +184,7 @@ class EpisodicService:
                 self._store_embedding(conn, episode_id, embedding)
 
     def soft_delete(self, episode_id: str) -> None:
-        with self.db_service.connection() as conn:
+        with Database.transaction() as conn:
             conn.execute("""
                 UPDATE episodes
                 SET deleted_at = datetime('now')
@@ -201,7 +200,7 @@ class EpisodicService:
         markers are written in one statement so a child can never carry a
         back-pointer without a tombstone."""
         now_iso = utc_now().isoformat()
-        with self.db_service.connection() as conn:
+        with Database.transaction() as conn:
             conn.execute(
                 "UPDATE episodes "
                 "SET consolidated_into = ?, last_relevant_at = ?, tombstoned_at = ? "
@@ -220,14 +219,14 @@ class EpisodicService:
 
         Returns a list of ``{id, gist, created_at, channel}`` dicts.
         """
-        with self.db_service.connection() as conn:
-            rows = conn.execute(
-                "SELECT id, gist, created_at, channel FROM episodes "
-                "WHERE facts_extracted_at IS NULL AND deleted_at IS NULL "
-                "ORDER BY created_at ASC, id ASC "
-                "LIMIT ?",
-                (limit,),
-            ).fetchall()
+        conn = Database.conn()
+        rows = conn.execute(
+            "SELECT id, gist, created_at, channel FROM episodes "
+            "WHERE facts_extracted_at IS NULL AND deleted_at IS NULL "
+            "ORDER BY created_at ASC, id ASC "
+            "LIMIT ?",
+            (limit,),
+        ).fetchall()
         return [
             {'id': str(r[0]), 'gist': r[1], 'created_at': r[2], 'channel': r[3]}
             for r in rows
@@ -239,7 +238,7 @@ class EpisodicService:
         marker — a tick interrupted mid-budget re-processes at most the
         un-stamped remainder."""
         now_iso = utc_now().isoformat()
-        with self.db_service.connection() as conn:
+        with Database.transaction() as conn:
             conn.execute(
                 "UPDATE episodes SET facts_extracted_at = ? WHERE id = ?",
                 (now_iso, episode_id),
@@ -249,47 +248,47 @@ class EpisodicService:
         """Pure read — fetching never mutates. Relevance advances only on
         write-relevant events (creation, consolidation), not on access."""
         try:
-            with self.db_service.connection() as conn:
-                cursor = conn.cursor()
+            conn = Database.conn()
+            cursor = conn.cursor()
 
-                cursor.execute("""
-                    SELECT id, gist, salience, channel,
-                           created_at, updated_at, last_accessed_at, access_count,
-                           transcript_ids, transcript_id_start, transcript_id_end,
-                           consolidated_from, consolidated_into,
-                           retrieval_weight,
-                           location_lat, location_lon, location_name
-                    FROM episodes
-                    WHERE id = ? AND deleted_at IS NULL
-                """, (episode_id,))
+            cursor.execute("""
+                SELECT id, gist, salience, channel,
+                       created_at, updated_at, last_accessed_at, access_count,
+                       transcript_ids, transcript_id_start, transcript_id_end,
+                       consolidated_from, consolidated_into,
+                       retrieval_weight,
+                       location_lat, location_lon, location_name
+                FROM episodes
+                WHERE id = ? AND deleted_at IS NULL
+            """, (episode_id,))
 
-                row = cursor.fetchone()
-                cursor.close()
+            row = cursor.fetchone()
+            cursor.close()
 
-                if not row:
-                    return None
+            if not row:
+                return None
 
-                episode = {
-                    'id': str(row[0]),
-                    'gist': row[1],
-                    'salience': row[2],
-                    'channel': row[3],
-                    'created_at': row[4],
-                    'updated_at': row[5],
-                    'last_accessed_at': row[6],
-                    'access_count': row[7],
-                    'transcript_ids': row[8] if row[8] is not None else '[]',
-                    'transcript_id_start': row[9],
-                    'transcript_id_end': row[10],
-                    'consolidated_from': row[11] if row[11] is not None else '[]',
-                    'consolidated_into': row[12],
-                    'retrieval_weight': row[13] if row[13] is not None else 1.0,
-                    'location_lat': row[14],
-                    'location_lon': row[15],
-                    'location_name': row[16],
-                }
+            episode = {
+                'id': str(row[0]),
+                'gist': row[1],
+                'salience': row[2],
+                'channel': row[3],
+                'created_at': row[4],
+                'updated_at': row[5],
+                'last_accessed_at': row[6],
+                'access_count': row[7],
+                'transcript_ids': row[8] if row[8] is not None else '[]',
+                'transcript_id_start': row[9],
+                'transcript_id_end': row[10],
+                'consolidated_from': row[11] if row[11] is not None else '[]',
+                'consolidated_into': row[12],
+                'retrieval_weight': row[13] if row[13] is not None else 1.0,
+                'location_lat': row[14],
+                'location_lon': row[15],
+                'location_name': row[16],
+            }
 
-                return episode
+            return episode
 
         except Exception as e:
             logging.error(f"Failed to get episode by ID: {e}")
@@ -307,10 +306,11 @@ class EpisodicService:
         if not profile_for(config.channel).extract_episodes:
             return
         try:
-            from services.transcript import TranscriptService
-            # lean: turn_id=0 is a verbatim (non-allocating) bind — count-only use.
-            untriggered = TranscriptService(config, turn_id=0).count_rows(
-                since_id=self._episode_watermark(config.channel)
+            from models.transcript import Transcript
+            untriggered = (
+                Transcript.filter("channel = ?", config.channel)
+                .filter("id > ?", self._episode_watermark(config.channel))
+                .count()
             )
             if untriggered >= EXTRACTION_THRESHOLD:
                 threading.Thread(
@@ -323,12 +323,12 @@ class EpisodicService:
     def _episode_watermark(self, channel: str) -> int:
         """Highest transcript id already covered by a live episode of ``channel``
         (0 when none) — the floor past which untriggered rows accumulate."""
-        with self.db_service.connection() as conn:
-            row = conn.execute(
-                "SELECT COALESCE(MAX(transcript_id_end), 0) FROM episodes "
-                "WHERE channel = ? AND deleted_at IS NULL AND transcript_id_end IS NOT NULL",
-                (channel,),
-            ).fetchone()
+        conn = Database.conn()
+        row = conn.execute(
+            "SELECT COALESCE(MAX(transcript_id_end), 0) FROM episodes "
+            "WHERE channel = ? AND deleted_at IS NULL AND transcript_id_end IS NOT NULL",
+            (channel,),
+        ).fetchone()
         return int(row[0]) if row else 0
 
     def _extract_window(self, channel: str) -> None:
@@ -337,21 +337,21 @@ class EpisodicService:
         a daemon thread (see :meth:`check_and_store`); never raises."""
         try:
             from configs.channels import EpisodeEncoderConfig
-            from services.message_processor import MessageProcessor
+            from controllers.message_processor import MessageProcessor
 
             # ── 1. Fetch the latest window ───────────────────────────────────
-            with self.db_service.connection() as conn:
-                rows = conn.execute(
-                    """
-                    SELECT id, role, content, tool_name, created_at,
-                           location_lat, location_lon, location_name
-                    FROM transcript
-                    WHERE channel = ?
-                    ORDER BY id DESC
-                    LIMIT ?
-                    """,
-                    (channel, EXTRACTION_WINDOW),
-                ).fetchall()
+            conn = Database.conn()
+            rows = conn.execute(
+                """
+                SELECT id, role, content, tool_name, created_at,
+                       location_lat, location_lon, location_name
+                FROM transcript
+                WHERE channel = ?
+                ORDER BY id DESC
+                LIMIT ?
+                """,
+                (channel, EXTRACTION_WINDOW),
+            ).fetchall()
             if not rows:
                 return
 
@@ -365,16 +365,18 @@ class EpisodicService:
             ]
 
             # ── 2. Encode via the flat episode-encoder channel ───────────────
-            # _window / _referenced are read by EpisodeEncoderConfig.get_user_prompt;
-            # set them on the instance before _run().
-            emp = object.__new__(MessageProcessor)
-            MessageProcessor.__init__(emp, EpisodeEncoderConfig())
-            emp.uid = None
-            emp.thinking_level = "low"
-            setattr(emp, '_window', self._format_window_entries(entries))
-            setattr(emp, '_referenced',
-                    self._format_episodes_for_prompt(self._fetch_referenced_episodes(entries)))
-            snapshots = cast("list[dict[str, object]]", self._safe_json_load(emp._run()))
+            # The window + referenced-episode text ride the turn on `metadata`
+            # (PromptService._episode_encoder_prompt reads them, §2.4); a
+            # synchronous text turn, so `.process(...).result()`.
+            emp = MessageProcessor.process(
+                EpisodeEncoderConfig(),
+                metadata={
+                    "window": self._format_window_entries(entries),
+                    "referenced": self._format_episodes_for_prompt(
+                        self._fetch_referenced_episodes(entries)),
+                },
+            )
+            snapshots = cast("list[dict[str, object]]", self._safe_json_load(emp.result()))
             if not snapshots:
                 return
 
@@ -541,16 +543,16 @@ class EpisodicService:
 
         try:
             placeholders = ','.join('?' * len(t_ids))
-            with self.db_service.connection() as conn:
-                rows = conn.execute(
-                    f"""
-                    SELECT result FROM tool_calls
-                    WHERE transcript_id IN ({placeholders})
-                      AND tool_name = 'memory'
-                      AND result IS NOT NULL
-                    """,
-                    t_ids,
-                ).fetchall()
+            conn = Database.conn()
+            rows = conn.execute(
+                f"""
+                SELECT result FROM tool_calls
+                WHERE transcript_id IN ({placeholders})
+                  AND tool_name = 'memory'
+                  AND result IS NOT NULL
+                """,
+                t_ids,
+            ).fetchall()
         except Exception as exc:
             logger.warning("%s _fetch_referenced_episodes query failed: %s", LOG_PREFIX, exc)
             return []
@@ -630,52 +632,50 @@ def _fetch_novelty_comparison_set(channel: str) -> list[bytes]:
     access_count), apex-only (consolidated_into IS NULL), same channel,
     not deleted. Returns [] on any failure — novelty will be 1.0
     (fully novel)."""
-    from services.database_service import get_shared_db_service
     from services.episodic_constants import NOVELTY_RECENT_LIMIT, NOVELTY_ACTIVATION_LIMIT
 
     try:
-        db = get_shared_db_service()
-        with db.connection() as conn:
-            cursor = conn.cursor()
+        conn = Database.conn()
+        cursor = conn.cursor()
 
-            cursor.execute(
-                """
-                SELECT id FROM episodes
-                WHERE channel = ? AND deleted_at IS NULL AND consolidated_into IS NULL
-                ORDER BY created_at DESC LIMIT ?
-                """,
-                (channel, NOVELTY_RECENT_LIMIT),
-            )
-            recent_ids = {row[0] for row in cursor.fetchall()}
+        cursor.execute(
+            """
+            SELECT id FROM episodes
+            WHERE channel = ? AND deleted_at IS NULL AND consolidated_into IS NULL
+            ORDER BY created_at DESC LIMIT ?
+            """,
+            (channel, NOVELTY_RECENT_LIMIT),
+        )
+        recent_ids = {row[0] for row in cursor.fetchall()}
 
-            cursor.execute(
-                """
-                SELECT id FROM episodes
-                WHERE channel = ? AND deleted_at IS NULL AND consolidated_into IS NULL
-                ORDER BY access_count DESC LIMIT ?
-                """,
-                (channel, NOVELTY_ACTIVATION_LIMIT),
-            )
-            top_ids = {row[0] for row in cursor.fetchall()}
+        cursor.execute(
+            """
+            SELECT id FROM episodes
+            WHERE channel = ? AND deleted_at IS NULL AND consolidated_into IS NULL
+            ORDER BY access_count DESC LIMIT ?
+            """,
+            (channel, NOVELTY_ACTIVATION_LIMIT),
+        )
+        top_ids = {row[0] for row in cursor.fetchall()}
 
-            all_ids = list(recent_ids | top_ids)
-            if not all_ids:
-                cursor.close()
-                return []
-
-            placeholders = ','.join('?' * len(all_ids))
-            cursor.execute(
-                f"""
-                SELECT ev.embedding
-                FROM episodes_vec ev
-                JOIN episodes e ON e.rowid = ev.rowid
-                WHERE e.id IN ({placeholders})
-                  AND ev.embedding IS NOT NULL
-                """,
-                all_ids,
-            )
-            blobs = [row[0] for row in cursor.fetchall() if row[0]]
+        all_ids = list(recent_ids | top_ids)
+        if not all_ids:
             cursor.close()
+            return []
+
+        placeholders = ','.join('?' * len(all_ids))
+        cursor.execute(
+            f"""
+            SELECT ev.embedding
+            FROM episodes_vec ev
+            JOIN episodes e ON e.rowid = ev.rowid
+            WHERE e.id IN ({placeholders})
+              AND ev.embedding IS NOT NULL
+            """,
+            all_ids,
+        )
+        blobs = [row[0] for row in cursor.fetchall() if row[0]]
+        cursor.close()
 
         return blobs
 
@@ -770,28 +770,25 @@ def _fetch_apex_embeddings(channel: str, level: int) -> tuple[list[str], list[by
     present, scoped to one channel and one ``level`` (0 = leaves, 1 = supers).
     Returns two index-aligned lists, or two empty lists on any query failure.
     """
-    from services.database_service import get_shared_db_service
-
     try:
-        db = get_shared_db_service()
-        with db.connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute(
-                """
-                SELECT e.id, ev.embedding
-                FROM episodes e
-                JOIN episodes_vec ev ON ev.rowid = e.rowid
-                WHERE e.channel = ?
-                  AND e.level = ?
-                  AND e.consolidated_into IS NULL
-                  AND e.deleted_at IS NULL
-                  AND ev.embedding IS NOT NULL
-                ORDER BY e.created_at ASC
-                """,
-                (channel, level),
-            )
-            rows = cursor.fetchall()
-            cursor.close()
+        conn = Database.conn()
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            SELECT e.id, ev.embedding
+            FROM episodes e
+            JOIN episodes_vec ev ON ev.rowid = e.rowid
+            WHERE e.channel = ?
+              AND e.level = ?
+              AND e.consolidated_into IS NULL
+              AND e.deleted_at IS NULL
+              AND ev.embedding IS NOT NULL
+            ORDER BY e.created_at ASC
+            """,
+            (channel, level),
+        )
+        rows = cursor.fetchall()
+        cursor.close()
     except Exception as exc:
         logging.warning(f"[SUPER_CLUSTER] apex fetch failed (channel={channel}, level={level}): {exc}")
         return [], []

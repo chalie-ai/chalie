@@ -14,8 +14,13 @@ import ActCycle from './ActCycle.vue';
 import ActCycleGroup from './ActCycleGroup.vue';
 
 const props = withDefaults(
-  defineProps<{ block: ConversationTurnBlock; canReply?: boolean; type?: string }>(),
-  { canReply: true, type: ConfigType.USER },
+  defineProps<{
+    block: ConversationTurnBlock;
+    canReply?: boolean;
+    type?: string;
+    fullThread?: boolean;
+  }>(),
+  { canReply: true, type: ConfigType.USER, fullThread: false },
 );
 
 const emit = defineEmits<{ reply: [turnId: number] }>();
@@ -23,9 +28,9 @@ const emit = defineEmits<{ reply: [turnId: number] }>();
 const feed = computed(() => useConversationFeed(props.type));
 
 // The live act-trail is derived from WS signals (spec §6.5). While the turn
-// works, append one transient non-collapsed ActRow per in-flight transcript row
-// carrying its tool_called→tool_done pills. Before the first pill lands, a bare
-// anchor renders the "thinking…" placeholder.
+// works, append one transient non-collapsed ActRow carrying the turn's live tool
+// pills (each driven started→done/error by the single tool-call frame). Before the
+// first pill lands, a bare anchor renders the "thinking…" placeholder.
 interface LiveActRow {
   kind: 'live-act';
   rowId: number;
@@ -40,7 +45,7 @@ interface MsgRow {
 interface CollapsedGroupRow {
   kind: 'collapsed-group';
   id: string;
-  summaries: { tool_name: string; summary: string }[];
+  summaries: { tool_name: string; summary: string; state: string; ended_at: string | null }[];
 }
 
 type DisplayRow = MsgRow | LiveActRow | CollapsedGroupRow;
@@ -49,13 +54,15 @@ const displayRows = computed<DisplayRow[]>(() => {
   const rows: DisplayRow[] = [];
 
   for (const message of props.block.messages) {
-    // Spine only renders through settle0 — drop thread reply rows.
-    if (message.thread_message) continue;
+    // Spine renders only through settle0 — drop thread reply rows. The thread
+    // panel (fullThread) renders the WHOLE thread, continuations included.
+    if (!props.fullThread && message.thread_message) continue;
 
     rows.push({ kind: 'msg', message });
 
-    // Collapsed tool group immediately after its assistant row.
-    if (message.role === 'assistant' && message.tool_calls?.length) {
+    // Collapsed tool group immediately after WHATEVER row anchors the chips —
+    // user input row or assistant text row alike (the ratified feed vision).
+    if (message.tool_calls?.length) {
       rows.push({
         kind: 'collapsed-group',
         id: message.id,
@@ -84,7 +91,7 @@ const displayRows = computed<DisplayRow[]>(() => {
 const lastAssistantMsgId = computed<string | null>(() => {
   for (let i = props.block.messages.length - 1; i >= 0; i--) {
     const m = props.block.messages[i];
-    if (m.role === 'assistant' && !m.thread_message) return m.id;
+    if (m.role === 'assistant' && (props.fullThread || !m.thread_message)) return m.id;
   }
   return null;
 });

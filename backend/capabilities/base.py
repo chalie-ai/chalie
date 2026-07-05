@@ -24,7 +24,6 @@ level to prevent circular-import issues during early application boot.
 
 import logging
 from abc import ABC, abstractmethod
-from datetime import datetime
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -39,24 +38,16 @@ logger = logging.getLogger(__name__)
 
 def _get_tool_config_service() -> "_ToolConfigService":
     """Return a :class:`~services.tool_config_service.ToolConfigService` instance via deferred import."""
-    from services.database_service import get_shared_db_service
     from services.tool_config_service import ToolConfigService
 
-    return ToolConfigService(get_shared_db_service())
+    return ToolConfigService()
 
 
 class AbstractCapability(ABC):
     """Abstract base class that every capability plugin must subclass."""
 
-    MAX_CONSECUTIVE_FAILURES = 5
-
     def __init__(self) -> None:
         self._connected: bool = False
-        self._error_count: int = 0
-        self._last_error: str | None = None
-        self._failure_alerted: bool = False
-        self._backoff_secs: int = 0
-        self._next_retry_at: datetime | None = None
 
     # ------------------------------------------------------------------
     # Abstract interface — must be implemented by every subclass
@@ -106,145 +97,6 @@ class AbstractCapability(ABC):
 
     def monitor(self) -> None:
         self._do_monitor()
-
-    def health(self) -> bool:
-        """Quick connectivity check.
-
-        Default implementation returns the current ``_connected`` state.
-        Subclasses may override to perform an active probe (e.g. a lightweight
-        server request).
-
-        Returns:
-            bool: ``True`` if the capability's data source is reachable.
-        """
-        return self._connected
-
-    def health_details(self) -> dict[str, object]:
-        """Return detailed health information including error tracking.
-
-        Returns:
-            dict: ``{"connected": bool, "error_count": int,
-            "last_error": str | None}``.
-        """
-        return {
-            "connected": self._connected,
-            "error_count": self._error_count,
-            "last_error": self._last_error,
-        }
-
-    def run_monitor(self) -> None:
-        """Execute :meth:`monitor` with health tracking and circuit breaker.
-
-        Resets error count on success, increments on failure, auto-disconnects
-        after :attr:`MAX_CONSECUTIVE_FAILURES`.  When disconnected, applies
-        exponential backoff so dead servers are not hammered every cycle.
-        Sends a recovery alert when a degraded capability comes back online.
-        """
-        if self._next_retry_at:
-            from services.time_utils import utc_now
-            if utc_now() < self._next_retry_at:
-                return
-
-        try:
-            self.monitor()
-            was_degraded = self._backoff_secs and self._failure_alerted
-            if was_degraded:
-                self._send_recovery_alert()
-            self._error_count = 0
-            self._last_error = None
-            self._failure_alerted = False
-            self._backoff_secs = 0
-            self._next_retry_at = None
-        except Exception as exc:
-            self._error_count += 1
-            self._last_error = str(exc)
-            logger.warning("[%s] monitor() failed (%d/%d): %s",
-                           self.get_id(), self._error_count,
-                           self.MAX_CONSECUTIVE_FAILURES, exc)
-            if self._error_count >= self.MAX_CONSECUTIVE_FAILURES:
-                self._connected = False
-                self._maybe_send_failure_alert()
-                self._activate_backoff()
-        self._persist_health()
-
-    def _persist_health(self) -> None:
-        """Persist current error state to ``tool_configs``."""
-        try:
-            svc = _get_tool_config_service()
-            cap_id = self.get_id()
-            svc.set_tool_config(cap_id, {
-                f"{cap_id}:error_count": str(self._error_count),
-                f"{cap_id}:last_error": self._last_error or "",
-            })
-        except Exception:
-            pass
-
-    def _maybe_send_failure_alert(self) -> None:
-        """Send a WebSocket status-bar alert when a capability disconnects.
-
-        Fires once per disconnection event.  Reset when monitor()
-        succeeds again (``_failure_alerted`` cleared on success path).
-        """
-        if self._failure_alerted:
-            return
-        self._failure_alerted = True
-        cap_id = self.get_id()
-        cap_name = self.get_manifest().get("name", cap_id)
-        err = self._last_error or "unknown error"
-        try:
-            import json
-            from services.memory_client import MemoryClientService
-            from services.websocket_broker import WebSocketBroker
-            store = MemoryClientService.create_connection()
-            payload = {
-                "type": "capability_alert",
-                "cap_id": cap_id,
-                "cap_name": cap_name,
-                "error": err,
-                "recovered": False,
-            }
-            WebSocketBroker().broadcast(payload)
-            store.setex(
-                f"capability:alert:{cap_id}",
-                1800,
-                json.dumps(payload),
-            )
-        except Exception as exc:
-            logger.debug("failure alert push: %s", exc)
-
-    def _send_recovery_alert(self) -> None:
-        """Send a WebSocket status-bar recovery notification."""
-        cap_id = self.get_id()
-        cap_name = self.get_manifest().get("name", cap_id)
-        try:
-            from services.memory_client import MemoryClientService
-            from services.websocket_broker import WebSocketBroker
-            store = MemoryClientService.create_connection()
-            payload = {
-                "type": "capability_alert",
-                "cap_id": cap_id,
-                "cap_name": cap_name,
-                "recovered": True,
-            }
-            WebSocketBroker().broadcast(payload)
-            store.delete(f"capability:alert:{cap_id}")
-        except Exception as exc:
-            logger.debug("recovery alert push: %s", exc)
-
-    INITIAL_BACKOFF_SECS = 60
-    MAX_BACKOFF_SECS = 1800
-
-    def _activate_backoff(self) -> None:
-        """Set or double the exponential backoff timer."""
-        from datetime import timedelta
-        from services.time_utils import utc_now
-
-        self._backoff_secs = min(
-            self._backoff_secs * 2 if self._backoff_secs else self.INITIAL_BACKOFF_SECS,
-            self.MAX_BACKOFF_SECS,
-        )
-        self._next_retry_at = utc_now() + timedelta(seconds=self._backoff_secs)
-        logger.info("[%s] backoff %ds", self.get_id(), self._backoff_secs)
 
     @abstractmethod
     def get_tools(self) -> list[dict[str, object]]:

@@ -1,15 +1,14 @@
-import contextlib
 import sqlite3
-from collections.abc import Generator, Iterator
-from typing import TYPE_CHECKING, cast
+from collections.abc import Iterator
+from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
+import services.database as _db_gateway
+from services.file_mapper_service import FileMapperService
 from services.policy_manager import PolicyManager
 from services.processor_config import ProcessorConfig
-
-if TYPE_CHECKING:
-    from services.database_service import DatabaseService
 
 pytestmark = pytest.mark.unit
 
@@ -19,6 +18,7 @@ CH = ProcessorConfig.PolicyChannel
 @pytest.fixture()
 def db() -> Iterator[sqlite3.Connection]:
     conn = sqlite3.connect(":memory:")
+    conn.isolation_level = None  # autocommit — matches the Database gateway's connections
     conn.row_factory = sqlite3.Row
     conn.executescript("""
         CREATE TABLE policy (
@@ -33,21 +33,25 @@ def db() -> Iterator[sqlite3.Connection]:
             created_at TEXT NOT NULL
         );
     """)
-    yield conn
+    # PolicyManager reaches the DB through the Database gateway
+    # (Database.conn()/transaction() → FileMapperService.get_db_path()). An in-memory
+    # db is per-connection, so point the gateway at THIS exact handle — the only way
+    # the manager's writes and the test's seed/asserts share one database.
+    sentinel = Path(":memory:policy-manager-test")
+    with patch.object(FileMapperService, "get_db_path", return_value=sentinel):
+        _db_gateway._local.conns = {str(sentinel): conn}
+        _db_gateway._local.depths = {}
+        try:
+            yield conn
+        finally:
+            _db_gateway._local.conns = {}
+            _db_gateway._local.depths = {}
     conn.close()
-
-
-class _FakeDB:
-    def __init__(self, conn: sqlite3.Connection) -> None: self._conn = conn
-    def connection(self) -> contextlib.AbstractContextManager[sqlite3.Connection]:
-        @contextlib.contextmanager
-        def _ctx() -> Generator[sqlite3.Connection, None, None]: yield self._conn
-        return _ctx()
 
 
 @pytest.fixture()
 def mgr(db: sqlite3.Connection) -> PolicyManager:
-    return PolicyManager(cast("DatabaseService", _FakeDB(db)))
+    return PolicyManager()
 
 
 def _ran() -> str:

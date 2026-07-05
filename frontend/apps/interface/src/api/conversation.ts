@@ -35,12 +35,15 @@ export interface ConversationMessage {
   /** Present on assistant turns — one or more content segments. */
   segments?: ConversationSegment[];
   /**
-   * Present on assistant turns that drove tools — the chips THIS row emitted,
-   * each with the ability's persisted `act_summary`. Each assistant row owns its
-   * own tools; the refresh path renders them as a collapsed (summary-only) group
-   * beneath the row, mirroring how the live path collapses a superseded step.
+   * The chips THIS row anchors — present on WHATEVER row drove the tools,
+   * including the user input row (a step-1 tool-only call anchors there before
+   * any assistant text). Each chip carries the ability's persisted `act_summary`
+   * plus its persisted lifecycle `state` (started/done/error) + `ended_at`, so a
+   * refetched error stays a red pill instead of downgrading to a neutral chip.
+   * The refresh path renders them as a collapsed group beneath the row,
+   * mirroring how the live path collapses a superseded step.
    */
-  tool_calls?: { tool_name: string; summary: string }[];
+  tool_calls?: { tool_name: string; summary: string; state: string; ended_at: string | null }[];
   /**
    * Set (true) on every row PAST this turn's settle0 — the reply continuation.
    * The main spine drops these (it renders only through settle0); a turn that

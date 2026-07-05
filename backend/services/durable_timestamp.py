@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 from typing import Optional, cast
 
 from services.data_graph_service import KIND_SYSTEM
+from services.database import Database
 from services.time_utils import parse_utc
 
 logger = logging.getLogger(__name__)
@@ -71,8 +72,8 @@ class DurableTimestamp:
 
     def _persist_data_graph(self, iso: str) -> None:
         try:
-            from services.data_graph_service import get_data_graph_service
-            get_data_graph_service().store(
+            from models.data_graph import DataGraph
+            DataGraph.store(
                 kind=self._DG_KIND,
                 key=self._data_graph_key,
                 value=iso,
@@ -86,15 +87,13 @@ class DurableTimestamp:
 
     def _read_data_graph(self) -> Optional[str]:
         try:
-            from services.database_service import get_shared_db_service
-            db = get_shared_db_service()
-            with db.connection() as conn:
-                row = conn.execute(
-                    "SELECT value FROM data_graph "
-                    "WHERE kind=? AND key=? AND active=1 AND deleted_at IS NULL "
-                    "LIMIT 1",
-                    (self._DG_KIND, self._data_graph_key),
-                ).fetchone()
+            conn = Database.conn()
+            row = conn.execute(
+                "SELECT value FROM data_graph "
+                "WHERE kind=? AND key=? AND active=1 AND deleted_at IS NULL "
+                "LIMIT 1",
+                (self._DG_KIND, self._data_graph_key),
+            ).fetchone()
             if row and row[0]:
                 return cast(str, row[0])
             return None

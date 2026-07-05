@@ -2,6 +2,8 @@
 
 import logging
 
+from services.database import Database
+
 logger = logging.getLogger(__name__)
 
 
@@ -27,17 +29,14 @@ class SegmentService:
         if not transcript_ids:
             return []
         try:
-            from services.database_service import get_shared_db_service
-            db = get_shared_db_service()
             placeholders = ','.join('?' * len(transcript_ids))
-            with db.connection() as conn:
-                tc_rows = conn.execute(
-                    f"SELECT tool_name, params, result, created_at "
-                    f"FROM tool_calls "
-                    f"WHERE transcript_id IN ({placeholders}) "
-                    f"ORDER BY created_at, id",
-                    transcript_ids,
-                ).fetchall()
+            tc_rows = Database.conn().execute(
+                f"SELECT tool_name, params, result, created_at "
+                f"FROM tool_calls "
+                f"WHERE transcript_id IN ({placeholders}) "
+                f"ORDER BY created_at, id",
+                transcript_ids,
+            ).fetchall()
             return [
                 {
                     "tool_name": r[0],

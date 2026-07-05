@@ -20,27 +20,9 @@ Paired with ``WebSearchAbility`` (abilities/web_search.py).
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, ClassVar
+from typing import ClassVar
 
-from abilities._delegate import render_trail
 from services.processor_config import ProcessorConfig
-
-if TYPE_CHECKING:
-    from services.message_processor import MessageProcessor
-
-_WEB_SEARCH_SYSTEM_PROMPT = (
-    "You are a focused web-research agent. You receive one research query and "
-    "answer it from the web.\n\n"
-    "Be efficient. Run ONE search, then work from the result snippets — they "
-    "usually already answer the query. Read a full page only when the snippets "
-    "are genuinely insufficient for a specific missing detail, and read at most "
-    "the one or two most relevant pages. Do not re-search to fill gaps; "
-    "synthesise from what the first search and any targeted reads gave you.\n\n"
-    "Cite the sources you actually used. Never fabricate URLs, quotes, or facts. "
-    "If the web yields nothing useful, say so plainly.\n\n"
-    "Return a concise synthesis that directly answers the query. You have no "
-    "conversation history and no user personality — work only from the query."
-)
 
 _WEB_SEARCH_TOOLS: tuple[str, ...] = ("search", "news", "read", "web_download")
 
@@ -71,15 +53,12 @@ class WebSearchConfig(ProcessorConfig):
             memory_seed=False,
         )
 
-    def get_user_definition(self, mp: "MessageProcessor") -> str:
-        return ""
+    @property
+    def system_prompt(self) -> str:
+        return """You are a focused web-research agent. You receive one research query and answer it from the web.
 
-    def get_user_prompt(self, mp: "MessageProcessor") -> str:
-        parts = [f"Research query:\n{mp._raw_input}"]
-        trail = render_trail(mp)
-        if trail:
-            parts.append(trail)
-        return "\n\n".join(parts)
+Be efficient. Run ONE search, then work from the result snippets — they usually already answer the query. Read a full page only when the snippets are genuinely insufficient for a specific missing detail, and read at most the one or two most relevant pages. Do not re-search to fill gaps; synthesise from what the first search and any targeted reads gave you.
 
-    def get_system_prompt(self, mp: "MessageProcessor") -> str:
-        return _WEB_SEARCH_SYSTEM_PROMPT
+Cite the sources you actually used. Never fabricate URLs, quotes, or facts. If the web yields nothing useful, say so plainly.
+
+Return a concise synthesis that directly answers the query. You have no conversation history and no user personality — work only from the query."""

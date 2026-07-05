@@ -10,6 +10,7 @@ from datetime import timedelta
 from itertools import combinations
 from typing import TYPE_CHECKING, cast
 
+from services.database import Database
 from services.time_utils import utc_now, parse_utc
 from utils.data_utils import parse_json_column
 
@@ -106,9 +107,9 @@ _DEFAULT_FUTURE_DAYS = 30
 
 _ERR_CALDAV_NOT_INSTALLED = "'caldav' package is not installed."
 _SQL_INSERT_NOTIFICATION = """INSERT OR IGNORE INTO scheduled_items
-                           (id, item_type, message, due_at, status, channel,
+                           (id, item_type, message, start_at, due_at, status, channel,
                             source, external_uid, hidden, created_at)
-                         VALUES (?, 'notification', ?, ?, 'pending', 'calendar',
+                         VALUES (?, 'notification', ?, ?, ?, 'pending', 'calendar',
                                  'mail', ?, 1, ?)"""
 
 # ---------------------------------------------------------------------------
@@ -171,15 +172,6 @@ def _get_user_tz() -> object:
     if tz.key == "UTC":
         return None
     return tz
-
-
-def _next_morning_8am() -> _dt_module.datetime:
-    from services.locale_service import local_now, to_utc
-    now = local_now()
-    local_8am = now.replace(hour=8, minute=0, second=0, microsecond=0)
-    if local_8am <= now:
-        local_8am += timedelta(days=1)
-    return to_utc(local_8am)
 
 
 # ---------------------------------------------------------------------------
@@ -348,10 +340,7 @@ class CaldavHandler:
 
     def upsert_events(self, events: list[dict[str, object]], now: _dt_module.datetime) -> None:
         try:
-            from services.database_service import get_shared_db_service
-            db = get_shared_db_service()
-
-            with db.connection() as conn:
+            with Database.transaction() as conn:
                 c = conn.cursor()
 
                 # Mark existing mail events for stale check
@@ -393,17 +382,18 @@ class CaldavHandler:
 
                     c.execute(
                         """INSERT INTO scheduled_items
-                           (id, item_type, message, due_at, status, channel,
+                           (id, item_type, message, start_at, due_at, status, channel,
                             source, external_uid, metadata, hidden, created_at)
-                         VALUES (?, 'event', ?, ?, 'pending', 'calendar',
+                         VALUES (?, 'event', ?, ?, ?, 'pending', 'calendar',
                                  'mail', ?, ?, 1, ?)
                          ON CONFLICT(external_uid) DO UPDATE SET
                             message=excluded.message,
+                            start_at=excluded.start_at,
                             due_at=excluded.due_at,
                             metadata=excluded.metadata,
                             hidden=1,
                             status='pending'""",
-                        (uuid.uuid4().hex[:8], message, due_at,
+                        (uuid.uuid4().hex[:8], message, due_at, due_at,
                          external_uid, metadata, now.isoformat()),
                     )
 
@@ -424,10 +414,10 @@ class CaldavHandler:
                     alert_msg = f"In 15 min: {ev.get('summary', 'Event')}"
                     if ev.get("location"):
                         alert_msg += f" @ {ev['location']}"
+                    alert_due_at = (dtstart - timedelta(minutes=15)).isoformat()
                     c.execute(
                         _SQL_INSERT_NOTIFICATION,
-                        (uuid.uuid4().hex[:8], alert_msg,
-                         (dtstart - timedelta(minutes=15)).isoformat(),
+                        (uuid.uuid4().hex[:8], alert_msg, alert_due_at, alert_due_at,
                          f"caldav:{uid}:alert", now.isoformat()),
                     )
 
@@ -439,7 +429,7 @@ class CaldavHandler:
                     )
                     c.execute(
                         _SQL_INSERT_NOTIFICATION,
-                        (uuid.uuid4().hex[:8], conflict_msg, now.isoformat(),
+                        (uuid.uuid4().hex[:8], conflict_msg, now.isoformat(), now.isoformat(),
                          f"caldav:conflict:{canon_key}", now.isoformat()),
                     )
                 # Back-to-back warnings (< 5 min gap)
@@ -449,45 +439,11 @@ class CaldavHandler:
                         f"\"{ev_a.get('summary', 'Event')}\" \u2192 "
                         f"\"{ev_b.get('summary', 'Event')}\""
                     )
+                    b2b_due_at = cast(_dt_module.datetime, ev_a.get("dtend", now)).isoformat()
                     c.execute(
                         _SQL_INSERT_NOTIFICATION,
-                        (uuid.uuid4().hex[:8], b2b_msg,
-                         cast(_dt_module.datetime, ev_a.get("dtend", now)).isoformat(),
+                        (uuid.uuid4().hex[:8], b2b_msg, b2b_due_at, b2b_due_at,
                          f"caldav:b2b:{canon_key}", now.isoformat()),
-                    )
-
-                # Daily digest (one-time insert, recurring)
-                if not c.execute(
-                    "SELECT id FROM scheduled_items WHERE external_uid='caldav:daily-digest'"
-                ).fetchone():
-                    c.execute(
-                        """INSERT INTO scheduled_items
-                           (id, item_type, message, due_at, recurrence, status, channel,
-                            source, external_uid, hidden, created_at, is_prompt)
-                         VALUES (?, 'prompt',
-                                 'Summarize today''s calendar: highlight key meetings, conflicts, and free blocks. Keep it brief — 3-4 sentences.',
-                                 ?, 'daily', 'pending', 'calendar',
-                                 'mail', 'caldav:daily-digest', 1, ?, 1)""",
-                        (uuid.uuid4().hex[:8], _next_morning_8am().isoformat(), now.isoformat()),
-                    )
-
-                # First-connect greeting (one-time)
-                if not c.execute(
-                    "SELECT id FROM scheduled_items WHERE external_uid='caldav:greeting'"
-                ).fetchone():
-                    n = len(events)
-                    greeting_msg = (
-                        f"Calendar connected! Found {n} event{'s' if n != 1 else ''} "
-                        f"across your calendars."
-                    )
-                    c.execute(
-                        """INSERT INTO scheduled_items
-                           (id, item_type, message, due_at, status, channel,
-                            source, external_uid, hidden, created_at)
-                         VALUES (?, 'notification', ?, ?, 'pending', 'calendar',
-                                 'mail', 'caldav:greeting', 1, ?)""",
-                        (uuid.uuid4().hex[:8], greeting_msg,
-                         now.isoformat(), now.isoformat()),
                     )
 
                 conn.commit()
@@ -674,8 +630,6 @@ class CaldavHandler:
     def find_free_slots(self, params: dict[str, object]) -> dict[str, object]:
         try:
             from datetime import timezone as _tz
-            from services.database_service import get_shared_db_service
-            db = get_shared_db_service()
 
             date_from = cast(str, params.get("date_from", utc_now().isoformat()))
             date_to = cast(str, params.get("date_to", (utc_now() + timedelta(days=7)).isoformat()))
@@ -683,13 +637,12 @@ class CaldavHandler:
             wh_start = int(cast(int, params.get("working_hours_start", 8)))
             wh_end = int(cast(int, params.get("working_hours_end", 18)))
 
-            with db.connection() as conn:
-                rows = conn.execute(
-                    "SELECT due_at, metadata FROM scheduled_items "
-                    "WHERE source='mail' AND item_type='event' AND status='pending' "
-                    "AND due_at >= ? AND due_at <= ? ORDER BY due_at ASC",
-                    (date_from, date_to),
-                ).fetchall()
+            rows = Database.conn().execute(
+                "SELECT due_at, metadata FROM scheduled_items "
+                "WHERE source='mail' AND item_type='event' AND status='pending' "
+                "AND due_at >= ? AND due_at <= ? ORDER BY due_at ASC",
+                (date_from, date_to),
+            ).fetchall()
 
             busy: list[tuple[_dt_module.datetime, _dt_module.datetime]] = []
             for due_at_str, meta_raw in rows:
@@ -750,16 +703,13 @@ class CaldavHandler:
         if not uid:
             return {"error": "uid is required"}
         try:
-            from services.database_service import get_shared_db_service
             from capabilities.contact_resolver import resolve
-            db = get_shared_db_service()
 
-            with db.connection() as conn:
-                row = conn.execute(
-                    "SELECT message, metadata FROM scheduled_items "
-                    "WHERE external_uid = ? AND item_type='event'",
-                    (f"caldav:{uid}",),
-                ).fetchone()
+            row = Database.conn().execute(
+                "SELECT message, metadata FROM scheduled_items "
+                "WHERE external_uid = ? AND item_type='event'",
+                (f"caldav:{uid}",),
+            ).fetchone()
 
             if not row:
                 return {"error": f"Event '{uid}' not found"}

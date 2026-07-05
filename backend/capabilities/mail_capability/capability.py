@@ -15,6 +15,7 @@ from capabilities.mail_capability.carddav_handler import CarddavHandler
 from capabilities.mail_capability.imap_handler import ImapHandler, SmtpCreds
 from capabilities.mail_capability.providers import ServerSettings, UnifiedProvider, build_custom_provider, \
     discover_provider
+from services.database import Database
 from services.file_mapper_service import FileMapperService
 from services.time_utils import utc_now
 from utils.data_utils import parse_json_column
@@ -338,14 +339,11 @@ class MailCapability(AbstractCapability):
         self._cycle_count = 0
 
         try:
-            from services.database_service import get_shared_db_service
-            db = get_shared_db_service()
-            with db.connection() as conn:
+            with Database.transaction() as conn:
                 conn.execute(
                     "UPDATE scheduled_items SET status='cancelled' "
                     "WHERE source='mail' AND status='pending'"
                 )
-                conn.commit()
             logger.info("[mail] Scheduled items cancelled.")
         except Exception as exc:
             logger.warning("[mail] disconnect cleanup: %s", exc)
@@ -1079,18 +1077,3 @@ class MailCapability(AbstractCapability):
             tools += self._build_carddav_tools()
 
         return tools
-
-
-    # ------------------------------------------------------------------
-    # Health
-    # ------------------------------------------------------------------
-
-    def health_details(self) -> dict[str, object]:
-        return {
-            "connected": self.is_connected(),
-            "protocols": {
-                "imap": self._imap_ok,
-                "caldav": self._caldav_ok,
-                "carddav": self._carddav_ok,
-            },
-        }

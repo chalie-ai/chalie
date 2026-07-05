@@ -283,13 +283,6 @@ export const useSessionStore = defineStore('session', {
       if (text) void this.sendMessage(text, [], threadId, type);
     },
 
-    /** Turn-level error (provider failure, quota/429) — surface it as the one dock
-     *  toast. Not an act row: the following `done` clears the spinner. */
-    _handleTurnError(data: WsPushEvent): void {
-      this.errorMessage = (data as { message?: string }).message ?? 'Something went wrong.';
-      if ((data as { auth_failed?: boolean }).auth_failed) this._onAuthFailure?.();
-    },
-
     /**
      * Stop + undo the in-flight turn identified by `turnId`. Emits
      * 'session:turn-interrupted' so InputDock can restore the textarea. `type`
@@ -399,20 +392,17 @@ export const useSessionStore = defineStore('session', {
     },
 
     /**
-     * Route a drift push event. Turn signals route first; the only push that
-     * still carries content is the scheduler `notification`. Every other frame
-     * is a signal handled above.
+     * Route a drift push event. The live tool-call frame is claimed first (it is
+     * recognised by `tool_name`, checked before the `state`/`status` discriminants
+     * the other turn frames key on). Every push is a content-free signal — the
+     * scheduler runs prompts only now, so its fires arrive as ordinary turn
+     * lifecycle frames on the `scheduled` type, not a distinct `notification` push.
      */
     routeDrift(data: WsPushEvent): void {
+      if (this._routeToolCall(data)) return;
       if (this._routeTurnSignal(data)) return;
       if (this._routeTurnExecution(data)) return;
-      if (this._routeSimpleEvent(data)) return;
-
-      if (data.type !== 'notification') return;
-      const content = (data as { content?: string }).content ?? '';
-      if (content) this._notifyBackground(content);
-      useNotificationsStore().chime();
-      void useTasksStore().loadActiveTasks();
+      this._routeSimpleEvent(data);
     },
 
     /**
@@ -427,16 +417,6 @@ export const useSessionStore = defineStore('session', {
       const convo = useConversationFeed((data as { type?: string }).type ?? ConfigType.USER);
       const turnId = (data as { turn_id?: number | null }).turn_id ?? null;
       switch (status) {
-        case 'tool_called':
-          if (turnId != null) {
-            const tc = data as { id?: number; name?: string; summary?: string; transcript_row_id?: number };
-            convo.startLiveTool(turnId, tc.transcript_row_id ?? null, tc.id ?? null, tc.name ?? '', tc.summary);
-          }
-          return true;
-        case 'tool_done':
-          // The wire tool_done frame carries NO success/error flag — ok:true is correct parity.
-          convo.finishLiveTool((data as { id?: number }).id ?? null);
-          return true;
         case 'updated':
           if (turnId != null) void convo.fetchTurn(turnId);
           return true;
@@ -451,6 +431,30 @@ export const useSessionStore = defineStore('session', {
     },
 
     /**
+     * Live tool-call frame — the `tool_calls` row's WS projection, pushed on every
+     * state flip by ActTrail (see services/act_trail.py). It carries no kind tag, so
+     * it is recognised by the presence of `tool_name` (claimed before the
+     * `state`/`status` frames). `started` opens the live pill + elapsed timer;
+     * `done`/`error` resolve it (ok = state === 'done'), the ONLY place the pill's
+     * error state is set. A frame with no anchor turn (`turn_id` null) is dropped —
+     * no pill to hang it on. Returns true when the frame is a tool call.
+     */
+    _routeToolCall(data: WsPushEvent): boolean {
+      const toolName = (data as { tool_name?: string }).tool_name;
+      if (toolName == null) return false;
+      const turnId = (data as { turn_id?: number | null }).turn_id ?? null;
+      if (turnId == null) return true;
+      const convo = useConversationFeed((data as { type?: string }).type ?? ConfigType.USER);
+      const frame = data as { id?: number; summary?: string; state?: string };
+      if (frame.state === 'started') {
+        convo.startLiveTool(turnId, frame.id ?? null, toolName, frame.summary);
+      } else {
+        convo.finishLiveTool(turnId, frame.id ?? null, frame.state === 'done');
+      }
+      return true;
+    },
+
+    /**
      * Turn lifecycle — the DB-backed turn_executions row, pushed whole on every
      * state flip (see services/execution_tracker.py). This frame carries no
      * separate kind tag, so it is recognised structurally: `state` must be one
@@ -462,6 +466,8 @@ export const useSessionStore = defineStore('session', {
      * signal; every terminal state (completed/cancelled/crashed) settles the turn
      * exactly like the old `done` signal — a crash now reaches this path too, so
      * a turn that dies before producing a reply never leaves a spinner hanging.
+     * `crashed` additionally raises the 'turn failed' dock toast — derived from
+     * the lifecycle state itself, so no separate error frame is needed.
      */
     _routeTurnExecution(data: WsPushEvent): boolean {
       const exec = data as unknown as WsTurnExecutionEvent;
@@ -478,19 +484,18 @@ export const useSessionStore = defineStore('session', {
         void useConversationFeed(type).fetchTurn(exec.turn_id);
         return true;
       }
+      if (exec.state === 'crashed') this.errorMessage = 'Turn failed unexpectedly';
       void this._finishTurn(exec.turn_id, type);
       return true;
     },
 
     /** Route content-free push event types (keyed on `type`); returns true when
-     *  handled. The turn-level `error` toast (a direct push, not a broadcast) lands
-     *  here too. */
+     *  handled. */
     _routeSimpleEvent(data: WsPushEvent): boolean {
       switch (data.type as string) {
         case 'app_update':
           useNotificationsStore().handleUpdate(data as unknown as UpdateState);
           return true;
-        case 'task':
         case 'subagent_start':
         case 'subagent_end':
           useTasksStore().applyDriftEvent(data);
@@ -502,9 +507,6 @@ export const useSessionStore = defineStore('session', {
           return true;
         case 'quick_tip':
           useNotificationsStore().handleTip(data as unknown as TipState);
-          return true;
-        case 'error':
-          this._handleTurnError(data);
           return true;
         default:
           return false;

@@ -24,6 +24,8 @@ observability (Brain read-only view).
 import logging
 from typing import Optional, Dict
 
+from services.database import Database
+
 
 logger = logging.getLogger(__name__)
 LOG_PREFIX = "[COMPACTION]"
@@ -39,14 +41,12 @@ def get_compaction(channel: str, for_turn_id: "int | None") -> Optional[Dict[str
     the scope wins (``id DESC``).
     """
     try:
-        from services.database_service import get_shared_db_service
-        db = get_shared_db_service()
-        with db.connection() as conn:
-            row = conn.execute(
-                "SELECT compacted_up_to, content, created_at FROM compactions "
-                "WHERE channel = ? AND for_turn_id IS ? ORDER BY id DESC LIMIT 1",
-                (channel, for_turn_id),
-            ).fetchone()
+        conn = Database.conn()
+        row = conn.execute(
+            "SELECT compacted_up_to, content, created_at FROM compactions "
+            "WHERE channel = ? AND for_turn_id IS ? ORDER BY id DESC LIMIT 1",
+            (channel, for_turn_id),
+        ).fetchone()
         if not row:
             return None
         return {
@@ -66,11 +66,9 @@ def write_compaction(channel: str, for_turn_id: "int | None", compacted_up_to: i
     or a transcript.id for a FORK compaction. ``created_at`` is filled by the
     table default (UTC ``datetime('now')``), matching the transcript writers.
     """
-    from services.database_service import get_shared_db_service
-    db = get_shared_db_service()
-    with db.connection() as conn:
-        conn.execute(
-            "INSERT INTO compactions (channel, for_turn_id, compacted_up_to, content) "
-            "VALUES (?, ?, ?, ?)",
-            (channel, for_turn_id, compacted_up_to, content),
-        )
+    conn = Database.conn()
+    conn.execute(
+        "INSERT INTO compactions (channel, for_turn_id, compacted_up_to, content) "
+        "VALUES (?, ?, ?, ?)",
+        (channel, for_turn_id, compacted_up_to, content),
+    )

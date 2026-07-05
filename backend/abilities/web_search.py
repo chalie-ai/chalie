@@ -98,12 +98,12 @@ class WebSearchAbility(Ability):
         return self._PARAMETERS
 
     def run(self, params: dict[str, object]) -> ToolResult:
-        from services.message_processor import MessageProcessor  # noqa: PLC0415
+        from controllers.message_processor import MessageProcessor  # noqa: PLC0415
 
         result = MessageProcessor.process(
-            cast(str, self.param(params, Keys.query, required=True)),
             WebSearchConfig(cast("ProcessorConfig", getattr(self.mp, "config", None)).policy_channel),
-        )
+            raw_input=cast(str, self.param(params, Keys.query, required=True)),
+        ).result()
         return delegate_result(
             result, hint="Narrow the query or split it into smaller searches, then retry."
         )

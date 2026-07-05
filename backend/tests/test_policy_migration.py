@@ -8,34 +8,26 @@ Two paths:
     non-fresh and skip schema.sql's INSERT OR IGNORE seed pass, leaving the
     ``api_key`` setting unmarked-sensitive — and thus stored in cleartext.
 """
-import contextlib
 import sqlite3
-from collections.abc import Generator
 from pathlib import Path
-from typing import cast
+from unittest.mock import patch
 
 import pytest
 
 from run import _migrate_legacy_policy_rules
-from services.database_service import DatabaseService
+from services.database import Database
+from services.file_mapper_service import FileMapperService
 from services.policy_manager import PolicyManager
 from services.schema_convergence_service import SchemaConvergenceService
 
 pytestmark = pytest.mark.unit
 
 
-class _FakeDB:
-    def __init__(self, conn: sqlite3.Connection) -> None: self._conn = conn
-    def connection(self) -> contextlib.AbstractContextManager[sqlite3.Connection]:
-        @contextlib.contextmanager
-        def _ctx() -> Generator[sqlite3.Connection, None, None]: yield self._conn
-        return _ctx()
-
-
 @pytest.fixture()
-def legacy_db() -> Generator[sqlite3.Connection, None, None]:
-    """A pre-redesign DB: has policy_rules with one custom row, no policy table."""
-    conn = sqlite3.connect(":memory:")
+def legacy_db_path(tmp_path: Path) -> Path:
+    """A pre-redesign DB file: has policy_rules with one custom row, no policy table."""
+    db_path = tmp_path / "legacy.db"
+    conn = sqlite3.connect(str(db_path))
     conn.executescript("""
         CREATE TABLE policy_rules (
             id INTEGER PRIMARY KEY AUTOINCREMENT, action_id TEXT NOT NULL,
@@ -45,33 +37,42 @@ def legacy_db() -> Generator[sqlite3.Connection, None, None]:
         INSERT INTO policy_rules (action_id, context, state, updated_at)
         VALUES ('email.manage', 'chat', 'allow', '2026-01-01T00:00:00+00:00');
     """)
-    yield conn
+    conn.commit()
     conn.close()
+    return db_path
 
 
-def test_upgrade_copies_legacy_rules_one_to_one(legacy_db: sqlite3.Connection) -> None:
-    _migrate_legacy_policy_rules(cast(DatabaseService, _FakeDB(legacy_db)))
-    # policy table created to hold the copy
-    assert legacy_db.execute(
-        "SELECT count(*) FROM sqlite_master WHERE name='policy'").fetchone()[0] == 1
-    # custom row copied 1:1 (context→channel, action_id→permission, state→setting)
-    assert legacy_db.execute(
-        "SELECT setting FROM policy WHERE channel='chat' AND permission='email.manage'"
-    ).fetchone()[0] == "allow"
+def test_upgrade_copies_legacy_rules_one_to_one(legacy_db_path: Path) -> None:
+    # _migrate_legacy_policy_rules resolves its write path through the Database
+    # gateway (FileMapperService.get_db_path) — redirect it to the legacy db file
+    # so the copy runs against that file, not the real chalie.db.
+    with patch.object(FileMapperService, "get_db_path", return_value=legacy_db_path):
+        Database.close()
+        _migrate_legacy_policy_rules()
+        conn = Database.conn()
+        # policy table created to hold the copy
+        assert conn.execute(
+            "SELECT count(*) FROM sqlite_master WHERE name='policy'").fetchone()[0] == 1
+        # custom row copied 1:1 (context→channel, action_id→permission, state→setting)
+        assert conn.execute(
+            "SELECT setting FROM policy WHERE channel='chat' AND permission='email.manage'"
+        ).fetchone()[0] == "allow"
+        Database.close()
 
 
-def test_fresh_install_is_noop_and_leaves_db_empty() -> None:
+def test_fresh_install_is_noop_and_leaves_db_empty(tmp_path: Path) -> None:
     """Fresh path: no policy_rules → no-op → the policy table is NOT created early,
     so convergence still sees a genuinely empty (fresh) database."""
-    conn = sqlite3.connect(":memory:")
-    try:
-        _migrate_legacy_policy_rules(cast(DatabaseService, _FakeDB(conn)))
+    fresh_noop_path = tmp_path / "fresh_noop.db"
+    with patch.object(FileMapperService, "get_db_path", return_value=fresh_noop_path):
+        Database.close()
+        _migrate_legacy_policy_rules()
+        conn = Database.conn()
         assert conn.execute(
             "SELECT count(*) FROM sqlite_master "
             "WHERE type='table' AND name NOT LIKE 'sqlite_%'"
         ).fetchone()[0] == 0
-    finally:
-        conn.close()
+        Database.close()
 
 
 def test_fresh_install_seeds_api_key_as_sensitive(tmp_path: Path) -> None:
@@ -79,17 +80,20 @@ def test_fresh_install_seeds_api_key_as_sensitive(tmp_path: Path) -> None:
     seed pass so ``api_key`` is marked sensitive — otherwise the REST API key is
     persisted in cleartext.  Mirrors _init_database's boot order against a real
     temp DB with real convergence — zero mocks."""
-    db = DatabaseService(str(tmp_path / "fresh.db"))
-
-    _migrate_legacy_policy_rules(db)                                   # no-op on fresh
-    SchemaConvergenceService(db, embedding_dimensions=256).converge()  # creates + seeds
-    PolicyManager(db).apply_seed()                                     # policy defaults
-
-    with db.connection() as conn:
-        api_key = conn.execute(
+    fresh_path = tmp_path / "fresh.db"
+    # converge()/apply_seed()/_migrate_legacy_policy_rules all resolve their write
+    # path through the Database gateway (FileMapperService.get_db_path); point it
+    # at fresh.db for the whole boot sequence so every step lands in the same file.
+    with patch.object(FileMapperService, "get_db_path", return_value=fresh_path):
+        Database.close()  # drop any thread connection bound to another path
+        _migrate_legacy_policy_rules()                                 # no-op on fresh
+        SchemaConvergenceService(embedding_dimensions=256).converge()  # creates + seeds
+        PolicyManager().apply_seed()                                   # policy defaults
+        api_key = Database.conn().execute(
             "SELECT is_sensitive FROM settings WHERE key='api_key'"
         ).fetchone()
-        policy_rows = conn.execute("SELECT count(*) FROM policy").fetchone()[0]
+        policy_rows = Database.conn().execute("SELECT count(*) FROM policy").fetchone()[0]
+        Database.close()
 
     assert api_key is not None, "api_key seed row missing — schema.sql seed pass was skipped"
     assert api_key[0] == 1, "api_key not marked sensitive — REST key would be stored cleartext"

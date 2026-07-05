@@ -41,7 +41,7 @@ if TYPE_CHECKING:
         content: "str | None"
         tool_calls: "list[_ToolCall] | None"
 
-from services.llm_clients.base import ProviderClient
+from contracts.provider_client import ProviderClient
 from services.provider_api import (
     ProviderApiRequest,
     ProviderApiResponse,
@@ -118,7 +118,7 @@ class OpenAIClient(ProviderClient):
     def _get_client(self) -> "_openai_mod.OpenAI":
         from openai import OpenAI  # noqa: PLC0415
         from services.llm_service import _resolve_api_key, _app_user_agent  # noqa: PLC0415
-        from services.providers import PROVIDER_CALL_TIMEOUT_S  # noqa: PLC0415
+        from services.provider_api import PROVIDER_CALL_TIMEOUT_S  # noqa: PLC0415
         kwargs: dict[str, object] = {
             'api_key': _resolve_api_key(self._config),
             'timeout': PROVIDER_CALL_TIMEOUT_S,

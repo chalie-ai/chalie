@@ -7,12 +7,12 @@ import json
 import sqlite3
 import uuid
 from collections.abc import Generator
-from contextlib import contextmanager
-from typing import TYPE_CHECKING, cast
+from pathlib import Path
+from typing import TYPE_CHECKING
+from unittest.mock import patch
 
 import pytest
 
-from services.database_service import DatabaseService
 from services.file_mapper_service import FileMapperService
 
 if TYPE_CHECKING:
@@ -49,32 +49,35 @@ def _build_schema(conn: sqlite3.Connection) -> None:
 
 # ── Fixture helpers ───────────────────────────────────────────────────────────
 
-class _FakeDB:
-    # Satisfies EpisodicService's db_service.connection() API.
-
-    def __init__(self, conn: sqlite3.Connection) -> None:
-        self._conn = conn
-
-    @contextmanager
-    def connection(self) -> Generator[sqlite3.Connection, None, None]:
-        yield self._conn
-        self._conn.commit()
-
-
 @pytest.fixture
 def mem_db() -> Generator[sqlite3.Connection, None, None]:
+    import services.database as _db_gateway
+
     conn = sqlite3.connect(":memory:")
+    conn.isolation_level = None  # autocommit — matches the Database gateway's connections
     conn.row_factory = sqlite3.Row
     _build_schema(conn)
-    yield conn
+
+    # EpisodicService() reaches the DB through the Database gateway
+    # (Database.conn()/transaction() → FileMapperService.get_db_path()). An in-memory
+    # db is per-connection, so point the gateway at THIS exact handle — the only way
+    # the service's writes and the test's reads share one database.
+    sentinel = Path(":memory:episodic-test")
+    with patch.object(FileMapperService, "get_db_path", return_value=sentinel):
+        _db_gateway._local.conns = {str(sentinel): conn}
+        _db_gateway._local.depths = {}
+        try:
+            yield conn
+        finally:
+            _db_gateway._local.conns = {}
+            _db_gateway._local.depths = {}
     conn.close()
 
 
 @pytest.fixture
 def episodic_svc(mem_db: sqlite3.Connection) -> "EpisodicService":
     from services.episodic_service import EpisodicService
-    fake_db = _FakeDB(mem_db)
-    return EpisodicService(cast(DatabaseService, fake_db))
+    return EpisodicService()
 
 
 # Minimal valid episode_data dict — 3 required fields.

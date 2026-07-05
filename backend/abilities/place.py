@@ -24,6 +24,7 @@ from typing import ClassVar, cast
 from abilities._ability import Ability
 from abilities._params import Keys
 from abilities._result import ToolResult
+from models.data_graph import DataGraph
 from services.data_graph_service import KIND_PLACE, get_data_graph_service
 
 logger = logging.getLogger(__name__)
@@ -167,19 +168,19 @@ class PlaceAbility(Ability):
         )
 
     def _handle_list(self) -> ToolResult:
-        rows = get_data_graph_service().fetch(kinds=[KIND_PLACE])
+        rows = [r.to_dict() for r in DataGraph.live(KIND_PLACE).get()]
         places = [_row_to_place(r) for r in rows if r]
         return ToolResult.ok(places, count=len(places))
 
     def _handle_get(self, name: str) -> ToolResult:
-        rows = get_data_graph_service().fetch(kinds=[KIND_PLACE])
+        rows = [r.to_dict() for r in DataGraph.live(KIND_PLACE).get()]
         matched = next((r for r in rows if r and cast(str, r.get("key", "")).lower() == name), None)
         if matched is None:
             return ToolResult.err(_ERR_NOT_FOUND, code="not-found", hint=_HINT_NOT_FOUND, name=name)
         return ToolResult.ok(_row_to_place(matched))
 
     def _handle_delete(self, name: str) -> ToolResult:
-        rows = get_data_graph_service().fetch(kinds=[KIND_PLACE])
+        rows = [r.to_dict() for r in DataGraph.live(KIND_PLACE).get()]
         matched = next((r for r in rows if r and cast(str, r.get("key", "")).lower() == name), None)
         if matched is None:
             return ToolResult.err(_ERR_NOT_FOUND, code="not-found", hint=_HINT_NOT_FOUND, name=name)

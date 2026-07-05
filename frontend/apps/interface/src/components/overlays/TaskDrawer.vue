@@ -23,7 +23,7 @@ import { useSessionStore } from '../../stores/session';
 import type { ActiveSubagent } from '../../api/scheduler';
 import { scheduler } from '../../api/scheduler';
 import { webPlatformAdapter } from '@chalie/shared';
-import { elapsedSince, relativeTime } from '../../utils/time';
+import { elapsedSince } from '../../utils/time';
 
 const HINT_KEY = 'task_strip_hint_shown';
 const POLL_INTERVAL_MS = 60_000;
@@ -33,7 +33,7 @@ const TICK_INTERVAL_MS = 1_000;
 
 const tasks = useTasksStore();
 const session = useSessionStore();
-const { reminders, subagents, threadActivity, totalCount, isOpen } = storeToRefs(tasks);
+const { subagents, threadActivity, totalCount, isOpen } = storeToRefs(tasks);
 
 /** Open a thread's slide-over from its Activity row, then close the drawer. */
 function openThread(turnId: number): void {
@@ -58,7 +58,6 @@ const stopping = ref(new Set<string>());
 
 // ── Computed ──────────────────────────────────────────────────────────────────
 
-const hasReminders = computed(() => reminders.value.length > 0);
 const hasSubagents = computed(() => subagents.value.size > 0);
 
 /** Delegates as an array so v-for can iterate. */
@@ -240,18 +239,6 @@ onBeforeUnmount(() => {
         </button>
       </template>
 
-      <!-- Scheduled items — what Chalie is set to do later -->
-      <template v-if="hasReminders">
-        <div
-          v-for="r in reminders"
-          :key="r.id"
-          class="task-drawer__item task-drawer__item--reminder"
-        >
-          <span class="task-drawer__msg">{{ r.message }}</span>
-          <span v-if="r.due_at" class="task-drawer__due">{{ relativeTime(r.due_at) }}</span>
-        </div>
-      </template>
-
       <!-- Active delegates — what Chalie is doing right now -->
       <template v-if="hasSubagents">
         <div
@@ -360,41 +347,6 @@ onBeforeUnmount(() => {
   padding: 8px 0;
 }
 
-.task-drawer__item {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 8px;
-  padding: 10px 16px;
-
-  &:hover {
-    background: var(--surface-hover, rgba(128, 128, 128, 0.06));
-  }
-}
-
-.task-drawer__item--reminder {
-  flex-direction: column;
-  gap: 2px;
-}
-
-// Reminder message: wrap, capped at two lines (no horizontal overflow).
-.task-drawer__msg {
-  font-size: 13px;
-  color: var(--text-primary);
-  line-height: 1.4;
-  width: 100%;
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
-}
-
-.task-drawer__due {
-  font-size: 11px;
-  color: var(--text-secondary);
-  font-variant-numeric: tabular-nums;
-}
-
 // ── Thread-activity row ──────────────────────────────────────────────────────────
 // Live forked threads, folded out of the mockup's floating notifications. A left
 // accent stripe (pink while working, blue once done) tells the two apart.
@@ -467,7 +419,7 @@ onBeforeUnmount(() => {
   }
 }
 
-// Bold title: the model's summary, capped at two lines like the reminders.
+// Bold title: the model's summary, capped at two lines.
 .task-drawer__delegate-title {
   font-size: 13px;
   font-weight: 600;

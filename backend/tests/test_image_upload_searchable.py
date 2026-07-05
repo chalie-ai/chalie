@@ -27,7 +27,6 @@ from typing import TYPE_CHECKING, cast
 import pytest
 
 from abilities.document import DocumentAbility
-from services.database_service import get_shared_db_service
 from services.document_service import DocumentService
 from services.provider_db_service import ProviderDbService
 from services.tmp_storage import new_tmp_path
@@ -75,7 +74,7 @@ def _blank_png_path() -> str:
 def test_uploaded_image_is_findable_via_document_search(db: sqlite3.Connection) -> None:
     """No vision provider -> OCR description -> the existing embed+FTS5 pipeline ->
     document.search finds the image by content (real recall, FTS5 + vector)."""
-    ProviderDbService(get_shared_db_service()).set_vision_provider(None)
+    ProviderDbService().set_vision_provider(None)
 
     ability = DocumentAbility(mp=None)
     up = ability.run({
@@ -97,7 +96,7 @@ def test_uploaded_image_is_findable_via_document_search(db: sqlite3.Connection) 
 def test_textless_image_is_ready_not_failed(db: sqlite3.Connection) -> None:
     """A textless image with no vision provider (empty OCR) must persist 'ready',
     never 'failed' — directly proves the _run_upload_extraction image-aware branch."""
-    ProviderDbService(get_shared_db_service()).set_vision_provider(None)
+    ProviderDbService().set_vision_provider(None)
 
     ability = DocumentAbility(mp=None)
     up = ability.run({
@@ -108,6 +107,6 @@ def test_textless_image_is_ready_not_failed(db: sqlite3.Connection) -> None:
     assert up.status == "success", up
     doc_id = cast(str, cast(dict[str, object], up.body)["id"])
 
-    doc = DocumentService(get_shared_db_service()).get_document(doc_id)
+    doc = DocumentService().get_document(doc_id)
     assert doc is not None, up
     assert doc["status"] == "ready", doc.get("status")

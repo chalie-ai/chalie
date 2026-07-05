@@ -6,7 +6,6 @@ from typing import TYPE_CHECKING, cast
 
 import pytest
 
-from services.database_service import get_shared_db_service
 from services.document_service import DocumentService
 from services.write_queue_service import WriteQueueService
 
@@ -58,7 +57,7 @@ def _insert_document(db: sqlite3.Connection, doc_id: str = 'abc123', original_na
 @pytest.fixture
 def doc_service(db: sqlite3.Connection) -> DocumentService:
     """DocumentService wired to the test database with inline write queue."""
-    svc = DocumentService(get_shared_db_service())
+    svc = DocumentService()
     svc._write_queue = cast(WriteQueueService, _InlineWriteQueue())
     return svc
 

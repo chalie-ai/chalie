@@ -94,7 +94,7 @@ if TYPE_CHECKING:
     class _Content(Protocol):
         parts: "list[_Part] | None"
 
-from services.llm_clients.base import ProviderClient
+from contracts.provider_client import ProviderClient
 from services.provider_api import (
     ProviderApiRequest,
     ProviderApiResponse,
@@ -211,7 +211,7 @@ class GeminiClient(ProviderClient):
 
     def _get_client(self, genai: "_Genai") -> "_GenaiClient":
         from services.llm_service import _resolve_api_key, _app_user_agent  # noqa: PLC0415
-        from services.providers import PROVIDER_CALL_TIMEOUT_S  # noqa: PLC0415
+        from services.provider_api import PROVIDER_CALL_TIMEOUT_S  # noqa: PLC0415
         return genai.Client(
             api_key=_resolve_api_key(self._config),
             # HttpOptions.timeout is in milliseconds.

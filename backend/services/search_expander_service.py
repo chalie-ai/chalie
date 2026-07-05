@@ -7,7 +7,7 @@ import sqlite3
 import threading
 from typing import Optional, cast
 
-from services.database_service import DatabaseService, get_shared_db_service
+from services.database import Database
 from services.embedding_utils import pack_embedding
 
 logger = logging.getLogger(__name__)
@@ -46,8 +46,7 @@ def enqueue(table: str, rowid: int) -> None:
 
 class SearchExpanderService:
 
-    def __init__(self, db_service: DatabaseService | None = None) -> None:
-        self._db = db_service or get_shared_db_service()
+    def __init__(self) -> None:
         self._event = threading.Event()
 
         # MemoryStore queue — lazy import so tests can stub the store before init
@@ -91,13 +90,13 @@ class SearchExpanderService:
 
     def _self_heal(self) -> None:
         try:
-            with self._db.connection() as conn:
-                data_graph_ids = [
-                    r[0] for r in conn.execute(
-                        "SELECT id FROM data_graph "
-                        "WHERE search_queries IS NULL AND deleted_at IS NULL AND active=1"
-                    ).fetchall()
-                ]
+            conn = Database.conn()
+            data_graph_ids = [
+                r[0] for r in conn.execute(
+                    "SELECT id FROM data_graph "
+                    "WHERE search_queries IS NULL AND deleted_at IS NULL AND active=1"
+                ).fetchall()
+            ]
 
             for rowid in data_graph_ids:
                 self._store.rpush(_QUEUE_KEY, json.dumps({"table": _TABLE_DATA_GRAPH, "rowid": rowid}))
@@ -128,11 +127,11 @@ class SearchExpanderService:
             logger.warning("[SES] Processing failed for %s rowid=%s: %s", table, rowid, e)
 
     def _process_data_graph(self, rowid: int) -> None:
-        with self._db.connection() as conn:
-            row = conn.execute(
-                "SELECT key, value, kind FROM data_graph WHERE id = ?",
-                (rowid,)
-            ).fetchone()
+        conn = Database.conn()
+        row = conn.execute(
+            "SELECT key, value, kind FROM data_graph WHERE id = ?",
+            (rowid,)
+        ).fetchone()
 
         if row is None:
             logger.debug("[SES] data_graph rowid=%s gone — skipping", rowid)
@@ -141,7 +140,7 @@ class SearchExpanderService:
         key, value, _ = row[0], row[1], row[2]
         variants = self._generate_variants(key, value)
 
-        with self._db.connection() as conn:
+        with Database.transaction() as conn:
             # Absorbs _schedule_embeddings: populate key_vec/value_vec if missing.
             self._backfill_key_value_vec(conn, rowid, key, value)
             self._write_variants(conn, _TABLE_DATA_GRAPH, rowid, variants)

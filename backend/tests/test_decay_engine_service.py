@@ -330,7 +330,7 @@ class TestPureRead:
             "last_relevant_at FROM episodes ORDER BY id"
         ).fetchall()
 
-        ep = EpisodicService(get_shared_db_service()).get_episode_by_id("ep-read")
+        ep = EpisodicService().get_episode_by_id("ep-read")
         assert ep is not None and ep["id"] == "ep-read"
 
         after = db.execute(

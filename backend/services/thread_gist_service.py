@@ -11,7 +11,7 @@ from __future__ import annotations
 import logging
 from typing import Optional, cast
 
-from services.database_service import get_shared_db_service
+from services.database import Database
 from services.time_utils import utc_now
 
 logger = logging.getLogger(__name__)
@@ -27,13 +27,12 @@ class ThreadGistService:
         if not gist:
             return
         try:
-            with get_shared_db_service().connection() as conn:
-                conn.execute(
-                    "INSERT INTO thread_gist (channel, turn_id, gist, created_at) "
-                    "VALUES (?, ?, ?, ?) "
-                    "ON CONFLICT(channel, turn_id) DO UPDATE SET gist = excluded.gist",
-                    (channel, turn_id, gist, utc_now().isoformat()),
-                )
+            Database.conn().execute(
+                "INSERT INTO thread_gist (channel, turn_id, gist, created_at) "
+                "VALUES (?, ?, ?, ?) "
+                "ON CONFLICT(channel, turn_id) DO UPDATE SET gist = excluded.gist",
+                (channel, turn_id, gist, utc_now().isoformat()),
+            )
         except Exception as exc:
             logger.warning("%s upsert failed for %s turn=%s: %s", LOG_PREFIX, channel, turn_id, exc)
 
@@ -46,12 +45,11 @@ class ThreadGistService:
             return {}
         try:
             placeholders = ",".join("?" * len(turn_ids))
-            with get_shared_db_service().connection() as conn:
-                rows = conn.execute(
-                    f"SELECT turn_id, gist FROM thread_gist "
-                    f"WHERE channel = ? AND turn_id IN ({placeholders})",
-                    (channel, *turn_ids),
-                ).fetchall()
+            rows = Database.conn().execute(
+                f"SELECT turn_id, gist FROM thread_gist "
+                f"WHERE channel = ? AND turn_id IN ({placeholders})",
+                (channel, *turn_ids),
+            ).fetchall()
             return {int(r[0]): cast(str, r[1]) for r in rows}
         except Exception as exc:
             logger.debug("%s bulk_get failed for %s: %s", LOG_PREFIX, channel, exc)

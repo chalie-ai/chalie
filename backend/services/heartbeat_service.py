@@ -9,6 +9,8 @@ import logging
 import time
 from typing import cast
 
+from services.database import Database
+
 logger = logging.getLogger(__name__)
 
 
@@ -21,10 +23,7 @@ class HeartbeatService:
         if self._ctx is not None:
             return self._ctx
         try:
-            from services.database_service import get_shared_db_service
-            db = get_shared_db_service()
-            with db.connection() as conn:
-                rows = conn.execute("SELECT key, value FROM telemetry").fetchall()
+            rows = Database.conn().execute("SELECT key, value FROM telemetry").fetchall()
             self._ctx = self._unflatten(rows) if rows else {}
         except Exception:
             self._ctx = {}
@@ -33,15 +32,12 @@ class HeartbeatService:
     def write(self, ctx: dict[str, object]) -> None:
         ctx["saved_at"] = time.time()
         flat = self._flatten(ctx)
-        from services.database_service import get_shared_db_service
-        db = get_shared_db_service()
-        with db.connection() as conn:
+        with Database.transaction() as conn:
             conn.execute("DELETE FROM telemetry")
             conn.executemany(
                 "INSERT INTO telemetry (key, value) VALUES (?, ?)",
                 list(flat.items()),
             )
-            conn.commit()
         self._ctx = ctx
 
     @staticmethod

@@ -1,10 +1,10 @@
 /**
- * Scheduler API — endpoints derived from frontend/brain/scheduler.js fetch calls.
+ * Scheduler API — endpoints for managing scheduled prompts.
  *
- * GET    /scheduler              → list schedules { schedules: [...] }
- * POST   /scheduler              → create schedule
- * PUT    /scheduler/:id          → update schedule
- * DELETE /scheduler/:id          → delete/cancel schedule
+ * GET    /api/scheduler          → list schedules (one row per series)
+ * POST   /api/scheduler          → create schedule (enabled is a field on the body)
+ * PUT    /api/scheduler/:id      → update schedule, incl. enable/disable
+ * DELETE /api/scheduler/:id      → delete/cancel schedule
  */
 import { api } from '@chalie/shared';
 
@@ -13,19 +13,23 @@ export interface ScheduleItem {
   message?: string | null;
   prompt?: string | null;
   status: string;
+  enabled: number;
+  start_at?: string | null;
   due_at?: string | null;
   due?: string | null;
-  recurrence?: string | null;
-  type?: string | null;
-  item_type?: string | null;
+  day: number | null;
+  hour: number | null;
+  minute: number | null;
   [key: string]: unknown;
 }
 
 export interface ScheduleInput {
   message: string;
-  due_at: string;
-  type?: string;
-  recurrence?: string | null;
+  start_at?: string;
+  day: number | null;
+  hour: number | null;
+  minute: number | null;
+  enabled?: boolean;
 }
 
 export const scheduler = {

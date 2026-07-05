@@ -24,6 +24,7 @@ from typing import ClassVar, cast
 from abilities._ability import Ability
 from abilities._params import Keys
 from abilities._result import ToolResult
+from services.database import Database
 from services.file_mapper_service import FileMapperService
 from utils.skills_io import (
     DEFAULT_VERSION,
@@ -387,14 +388,10 @@ def _handle_list(params: dict[str, object]) -> ToolResult:  # noqa: ARG001
             action="list",
         )
 
-    conn = sqlite3.connect(str(SKILLS_DB_PATH))
-    try:
-        rows = conn.execute(
-            "SELECT id, title, use_for, tags, version, source, enabled "
-            "FROM skills ORDER BY source, title"
-        ).fetchall()
-    finally:
-        conn.close()
+    rows = Database.conn(str(SKILLS_DB_PATH)).execute(
+        "SELECT id, title, use_for, tags, version, source, enabled "
+        "FROM skills ORDER BY source, title"
+    ).fetchall()
 
     # Structured rows (JSON), not prose: a weak model can read each skill's
     # fields directly. count meta mirrors len(body) so the model sees the total
@@ -425,18 +422,14 @@ def _handle_read(params: dict[str, object]) -> ToolResult:
             action="read",
         )
 
-    conn = sqlite3.connect(str(SKILLS_DB_PATH))
-    try:
-        # Match any source; prefer the editable user copy when a title collides
-        # with a curated skill. Unlike list, this returns the full `content` so
-        # the model can read a skill's steps before action=edit merges into them.
-        row = conn.execute(
-            "SELECT id, title, use_for, content, tags, version, source, enabled "
-            "FROM skills WHERE lower(title) = lower(?) ORDER BY (source = 'user') DESC",
-            (title,),
-        ).fetchone()
-    finally:
-        conn.close()
+    # Match any source; prefer the editable user copy when a title collides
+    # with a curated skill. Unlike list, this returns the full `content` so
+    # the model can read a skill's steps before action=edit merges into them.
+    row = Database.conn(str(SKILLS_DB_PATH)).execute(
+        "SELECT id, title, use_for, content, tags, version, source, enabled "
+        "FROM skills WHERE lower(title) = lower(?) ORDER BY (source = 'user') DESC",
+        (title,),
+    ).fetchone()
 
     if row is None:
         return ToolResult.err(

@@ -39,10 +39,10 @@ import logging
 from typing import TYPE_CHECKING, cast
 
 from abilities._result import ToolResult
+from services.database import Database
 
 if TYPE_CHECKING:
-    from services.database_service import DatabaseService
-    from services.message_processor import MessageProcessor
+    from controllers.message_processor import MessageProcessor
 
 logger = logging.getLogger(__name__)
 LOG_PREFIX = "[MEMORY]"
@@ -393,12 +393,9 @@ def handle_reflect(mp: "MessageProcessor | None", params: dict[str, object]) -> 
 
 
 def _expand_episode_layers(episode: dict[str, object]) -> list[dict[str, object]]:
-    from services.database_service import get_shared_db_service
-
     try:
-        db = get_shared_db_service()
         results: list[dict[str, object]] = []
-        _expand_recursive(db, episode, results, depth=0, max_depth=3)
+        _expand_recursive(episode, results, depth=0, max_depth=3)
         return results
     except Exception as exc:
         logger.warning(f"{LOG_PREFIX} Reflect layer expansion failed: {exc}")
@@ -406,7 +403,7 @@ def _expand_episode_layers(episode: dict[str, object]) -> list[dict[str, object]
 
 
 def _expand_recursive(
-    db: "DatabaseService", episode: dict[str, object], results: list[dict[str, object]], depth: int, max_depth: int
+    episode: dict[str, object], results: list[dict[str, object]], depth: int, max_depth: int
 ) -> None:
     if depth >= max_depth:
         return
@@ -419,14 +416,14 @@ def _expand_recursive(
         return
 
     if consolidated_from:
-        children = _fetch_episodes_by_ids(db, consolidated_from)
+        children = _fetch_episodes_by_ids(consolidated_from)
         for child in children:
             results.append({
                 "type": "episode",
                 "content": child.get("gist", ""),
                 "salience": child.get("salience", 0),
             })
-            _expand_recursive(db, child, results, depth + 1, max_depth)
+            _expand_recursive(child, results, depth + 1, max_depth)
 
 
 def _parse_json_list(raw: object) -> list[object]:
@@ -441,19 +438,19 @@ def _parse_json_list(raw: object) -> list[object]:
         return []
 
 
-def _fetch_episodes_by_ids(db_service: "DatabaseService", episode_ids: list[object]) -> list[dict[str, object]]:
+def _fetch_episodes_by_ids(episode_ids: list[object]) -> list[dict[str, object]]:
     if not episode_ids:
         return []
     try:
-        with db_service.connection() as conn:
-            placeholders = ",".join("?" for _ in episode_ids)
-            cursor = conn.execute(
-                f"SELECT id, gist, salience, transcript_ids, consolidated_from "
-                f"FROM episodes WHERE id IN ({placeholders}) AND deleted_at IS NULL "
-                f"ORDER BY salience DESC",
-                list(episode_ids),
-            )
-            return [dict(r) for r in cursor.fetchall()]
+        conn = Database.conn()
+        placeholders = ",".join("?" for _ in episode_ids)
+        cursor = conn.execute(
+            f"SELECT id, gist, salience, transcript_ids, consolidated_from "
+            f"FROM episodes WHERE id IN ({placeholders}) AND deleted_at IS NULL "
+            f"ORDER BY salience DESC",
+            list(episode_ids),
+        )
+        return [dict(r) for r in cursor.fetchall()]
     except Exception as exc:
         logger.warning(f"{LOG_PREFIX} Episode fetch by IDs failed: {exc}")
         return []
@@ -596,7 +593,6 @@ def _embedding_hash(embedding: list[float]) -> str:
 
 
 def _write_recall_telemetry(
-    db_service: "DatabaseService",
     *,
     turn_uid: str,
     transcript_id: int | None,
@@ -614,29 +610,27 @@ def _write_recall_telemetry(
     count, and the top vector distances.
     """
     try:
-        with db_service.connection() as conn:
-            conn.execute(
-                """
-                INSERT INTO memory_recall_log (
-                    turn_uid, transcript_id, channel, caller, query,
-                    query_embedding_hash, episode_count, floor_cut_count,
-                    final_rrf_count, top_distances
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    turn_uid,
-                    transcript_id,
-                    channel,
-                    caller,
-                    query,
-                    embedding_hash,
-                    telemetry.get("episode_count", 0),
-                    telemetry.get("floor_cut_count", 0),
-                    telemetry.get("final_rrf_count", 0),
-                    json.dumps(telemetry.get("top_distances", [])),
-                ),
-            )
-            conn.commit()
+        Database.conn().execute(
+            """
+            INSERT INTO memory_recall_log (
+                turn_uid, transcript_id, channel, caller, query,
+                query_embedding_hash, episode_count, floor_cut_count,
+                final_rrf_count, top_distances
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                turn_uid,
+                transcript_id,
+                channel,
+                caller,
+                query,
+                embedding_hash,
+                telemetry.get("episode_count", 0),
+                telemetry.get("floor_cut_count", 0),
+                telemetry.get("final_rrf_count", 0),
+                json.dumps(telemetry.get("top_distances", [])),
+            ),
+        )
     except Exception as e:
         logger.warning(f"{LOG_PREFIX} Failed to write memory_recall_log row: {e}")
 
@@ -683,14 +677,12 @@ def recall_episodes(
     """
     try:
         from services import episodic_retrieval_service
-        from services.database_service import get_shared_db_service
         from services.embedding_service import get_embedding_service
     except Exception as exc:
         logger.warning(f"{LOG_PREFIX} Episode recall imports failed: {exc}")
         return [], f"error: {exc}"
 
     try:
-        db = get_shared_db_service()
         emb_svc = get_embedding_service()
 
         q_embedding = emb_svc.generate_embedding(query, mp=mp)
@@ -708,7 +700,6 @@ def recall_episodes(
         )
 
         _write_recall_telemetry(
-            db,
             turn_uid=turn_uid,
             transcript_id=cast("int | None", transcript_id),
             channel=provenance_channel,
@@ -719,7 +710,7 @@ def recall_episodes(
         )
 
         if not episodes:
-            candidates = _count_episode_candidates(db)
+            candidates = _count_episode_candidates()
             status = f"0 matches ({candidates} candidates evaluated)"
             return [], status
 
@@ -761,7 +752,7 @@ def _search_episodes(
     )
 
 
-def _count_episode_candidates(db_service: "DatabaseService") -> int:
+def _count_episode_candidates() -> int:
     """Count recall-eligible episodes across every channel.
 
     Episode recall is cross-channel (), so the "0 matches (N candidates
@@ -769,14 +760,13 @@ def _count_episode_candidates(db_service: "DatabaseService") -> int:
     slice — to honestly report how many candidates the empty recall searched.
     """
     try:
-        with db_service.connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute(
-                "SELECT COUNT(*) FROM episodes WHERE deleted_at IS NULL",
-            )
-            row = cursor.fetchone()
-            count = cast("int", row[0]) if row else 0
-            cursor.close()
+        cursor = Database.conn().cursor()
+        cursor.execute(
+            "SELECT COUNT(*) FROM episodes WHERE deleted_at IS NULL",
+        )
+        row = cursor.fetchone()
+        count = cast("int", row[0]) if row else 0
+        cursor.close()
         return count
     except Exception:
         return 0
@@ -824,15 +814,14 @@ def _search_episodes_by_location(
     kind='place' to pick up alternate location_name strings stored at save time.
     """
     try:
-        from services.data_graph_service import KIND_PLACE, get_data_graph_service
-        from services.database_service import get_shared_db_service
+        from models.data_graph import DataGraph
+        from services.data_graph_service import KIND_PLACE
 
         # Build the list of strings to LIKE-match against location_name.
         # Start with the raw input and add any resolved name from saved places.
         location_names = [location]
         try:
-            dgs = get_data_graph_service()
-            places = cast("list[dict[str, object]]", [p for p in dgs.fetch(kinds=[KIND_PLACE]) if p is not None])
+            places = [r.to_dict() for r in DataGraph.live(KIND_PLACE).get()]
             for place in places:
                 raw_value = cast("str | None", place.get("value") or "{}")
                 val = json.loads(raw_value) if isinstance(raw_value, str) else raw_value
@@ -843,20 +832,19 @@ def _search_episodes_by_location(
         except Exception as _resolve_exc:
             logger.debug("%s Place label resolution failed: %s", LOG_PREFIX, _resolve_exc)
 
-        db = get_shared_db_service()
         like_clauses = " OR ".join(["e.location_name LIKE ?"] * len(location_names))
         like_params = [f"%{name}%" for name in location_names]
 
-        with db.connection() as conn:
-            sql = (
-                "SELECT e.id, e.gist, e.location_name, e.created_at "
-                "FROM episodes e "
-                f"WHERE e.deleted_at IS NULL AND ({like_clauses}) "
-                "AND e.location_name IS NOT NULL "
-                "ORDER BY e.created_at DESC LIMIT ?"
-            )
-            db_params = like_params + [limit]
-            rows = conn.execute(sql, db_params).fetchall()
+        conn = Database.conn()
+        sql = (
+            "SELECT e.id, e.gist, e.location_name, e.created_at "
+            "FROM episodes e "
+            f"WHERE e.deleted_at IS NULL AND ({like_clauses}) "
+            "AND e.location_name IS NOT NULL "
+            "ORDER BY e.created_at DESC LIMIT ?"
+        )
+        db_params = like_params + [limit]
+        rows = conn.execute(sql, db_params).fetchall()
 
         if not rows:
             return [], "0 matches"

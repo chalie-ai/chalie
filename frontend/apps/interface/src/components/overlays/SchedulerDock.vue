@@ -13,6 +13,7 @@ import { useSessionStore } from '../../stores/session';
 import type { SchedulerTurn } from '../../api/scheduler';
 import { scheduler } from '../../api/scheduler';
 import { useConversationFeed } from '../../composables/useConversationFeed';
+import { formatCadence } from '../../utils/time';
 
 const POLL_INTERVAL_MS = 60_000;
 
@@ -108,6 +109,11 @@ function openTurn(turn: SchedulerTurn): void {
   session.openThreadPanel(turn.turn_id, ConfigType.SCHEDULED);
   session.closeSchedulerDock();
 }
+
+/** Cadence sub-label for a dock row, derived from the series' cron fields. */
+function cadence(turn: SchedulerTurn): string {
+  return formatCadence(turn.day, turn.hour, turn.minute);
+}
 </script>
 
 <template>
@@ -153,7 +159,7 @@ function openTurn(turn: SchedulerTurn): void {
             aria-hidden="true"
           />
         </span>
-        <span v-if="turn.recurrence" class="sched-dock__row-sub">{{ turn.recurrence }}</span>
+        <span class="sched-dock__row-sub">{{ cadence(turn) }}</span>
       </button>
     </div>
   </aside>

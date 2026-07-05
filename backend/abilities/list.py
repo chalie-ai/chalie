@@ -135,10 +135,9 @@ class ListAbility(Ability):
     def run(self, params: dict[str, object]) -> ToolResult:
         action = cast(str, self.param(params, Keys.action, default="list_all"))
 
-        from services.database_service import get_shared_db_service
         from services.list_service import ListService
 
-        service = ListService(get_shared_db_service())
+        service = ListService()
         return _dispatch(self, service, action, params)
 
     @classmethod
@@ -156,10 +155,9 @@ class ListAbility(Ability):
         list_id = payload.get("id") if isinstance(payload, dict) else None
         if not list_id:
             return payload
-        from services.database_service import get_shared_db_service
         from services.list_service import ListService
 
-        service = ListService(get_shared_db_service())
+        service = ListService()
         fresh = _fe_payload(service, cast(str, list_id))
         return fresh if fresh else payload
 

@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import logging
 
-from services.database_service import DatabaseService
+from services.database import Database
 
 logger = logging.getLogger(__name__)
 
@@ -28,20 +28,17 @@ class ToolConfigService:
         "_source_type", "_source_url", "_installed_tag",
     }
 
-    def __init__(self, database_service: DatabaseService) -> None:
-        self.db: DatabaseService = database_service
-
     def get_tool_config(self, tool_name: str) -> dict[str, str]:
         try:
-            with self.db.connection() as conn:
-                cursor = conn.cursor()
-                cursor.execute(
-                    "SELECT config_key, config_value FROM tool_configs WHERE tool_name = ?",
-                    (tool_name,)
-                )
-                rows = cursor.fetchall()
-                cursor.close()
-                return {row[0]: row[1] for row in rows}
+            conn = Database.conn()
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT config_key, config_value FROM tool_configs WHERE tool_name = ?",
+                (tool_name,)
+            )
+            rows = cursor.fetchall()
+            cursor.close()
+            return {row[0]: row[1] for row in rows}
         except Exception as e:
             logger.debug(f"[TOOL CONFIG] get_tool_config('{tool_name}'): {e}")
             return {}
@@ -49,7 +46,7 @@ class ToolConfigService:
     def _set_enabled_flag(self, tool_name: str, enabled: bool) -> bool:
         """Write _enabled flag directly, bypassing the reserved-key guard."""
         try:
-            with self.db.connection() as conn:
+            with Database.transaction() as conn:
                 cursor = conn.cursor()
                 value = "true" if enabled else "false"
                 cursor.execute(
@@ -71,7 +68,7 @@ class ToolConfigService:
     def _set_source_metadata(self, tool_name: str, source_type: str, source_url: str, installed_tag: str) -> bool:
         """Write source tracking keys (_source_type, _source_url, _installed_tag), bypassing the reserved-key guard."""
         try:
-            with self.db.connection() as conn:
+            with Database.transaction() as conn:
                 cursor = conn.cursor()
                 for key, value in [
                     ("_source_type", source_type),
@@ -103,7 +100,7 @@ class ToolConfigService:
         if reserved:
             raise ValueError(f"Reserved config keys cannot be set directly: {sorted(reserved)}")
         try:
-            with self.db.connection() as conn:
+            with Database.transaction() as conn:
                 cursor = conn.cursor()
                 for key, value in config.items():
                     cursor.execute(
@@ -124,7 +121,7 @@ class ToolConfigService:
 
     def delete_tool_config_key(self, tool_name: str, key: str) -> bool:
         try:
-            with self.db.connection() as conn:
+            with Database.transaction() as conn:
                 cursor = conn.cursor()
                 cursor.execute(
                     "DELETE FROM tool_configs WHERE tool_name = ? AND config_key = ?",
@@ -140,7 +137,7 @@ class ToolConfigService:
     def delete_tool_config(self, tool_name: str) -> bool:
         """Delete ALL config rows for a tool, including reserved system keys (used during uninstall)."""
         try:
-            with self.db.connection() as conn:
+            with Database.transaction() as conn:
                 cursor = conn.cursor()
                 cursor.execute(
                     "DELETE FROM tool_configs WHERE tool_name = ?",

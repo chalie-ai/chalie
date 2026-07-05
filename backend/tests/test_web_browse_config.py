@@ -8,7 +8,7 @@ from typing import cast
 import pytest
 
 from configs.channels.web_browse import WebBrowseConfig
-from services.message_processor import MessageProcessor
+from controllers.message_processor import MessageProcessor
 from services.processor_config import ProcessorConfig
 from tools.browser.session import close_session, record_screenshot
 
@@ -18,8 +18,19 @@ _CHAT = ProcessorConfig.PolicyChannel.CHAT
 
 
 def _mp() -> MessageProcessor:
+    """The constructor is "constructed inert" — it never allocates a turn or
+    writes the anchoring input row itself (that's begin()'s job, run on a
+    background drive thread we don't want here). Replay the exact synchronous
+    half of begin() (turn allocation + the anchoring input row) through the
+    mp's own transcript_service so mp.uid is a real row id — the delegate's
+    transcript uid IS the browser session key (tools/browser/session.py), so a
+    None uid would key the ledger on a value production never produces."""
     mp = object.__new__(MessageProcessor)
     MessageProcessor.__init__(mp, WebBrowseConfig(_CHAT), raw_input="find the cheapest flight to Malta")
+    with mp.db.transaction():
+        mp.turn_id = mp.transcript_service.allocate_turn()
+        mp.uid = mp.transcript_service.append_input(mp.raw_input)
+        mp.current_transcript_id = mp.uid
     mp._setup()
     return mp
 
@@ -64,7 +75,6 @@ def test_post_turn_hook_clears_the_ledger(db: sqlite3.Connection) -> None:
 def test_screenshot_doc_ids_survive_session_close_into_the_callers_answer(db: sqlite3.Connection) -> None:
     from abilities._delegate import delegate_result
     from abilities.web_browse import WebBrowseAbility
-    from services.database_service import get_shared_db_service
     from services.document_service import DocumentService
 
     mp = _mp()
@@ -74,7 +84,7 @@ def test_screenshot_doc_ids_survive_session_close_into_the_callers_answer(db: sq
     # Ingest already ran the capture through vision and stored the description as
     # the document's clean_text — seed that exact state so we can assert it rides
     # back inline (the agent sees the page without a separate vision call).
-    doc_svc = DocumentService(get_shared_db_service())
+    doc_svc = DocumentService()
     doc_svc.create_document(
         "screenshot-example.png", "image/png", 10,
         os.path.join(tempfile.gettempdir(), "x.png"), "deadbeef",

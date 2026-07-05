@@ -26,7 +26,7 @@ from uuid import uuid4
 
 import requests
 
-from services.llm_clients.base import ProviderClient
+from contracts.provider_client import ProviderClient
 from services.provider_api import (
     ProviderApiRequest,
     ProviderApiResponse,
@@ -226,8 +226,7 @@ class OllamaClient(ProviderClient):
         api_messages = _ollama_convert_messages(dto.messages)
         payload = self._build_payload(dto.system, api_messages, dto.tools, dto.thinking_mode)
 
-        from services.providers import PROVIDER_CALL_TIMEOUT_S  # noqa: PLC0415
-        from services.provider_api import ProviderTimeoutError  # noqa: PLC0415
+        from services.provider_api import PROVIDER_CALL_TIMEOUT_S, ProviderTimeoutError  # noqa: PLC0415
 
         start = time.time()
         try:

@@ -20,13 +20,14 @@ import json
 import logging
 from typing import TYPE_CHECKING, cast
 
+from models.data_graph import DataGraph
+
 if TYPE_CHECKING:
     from typing import Optional, Protocol
 
     class _DgsProtocol(Protocol):
         def store(self, kind: str, key: str, value: str, *, source: Optional[str] = None) -> object: ...
         def recall(self, query: str, *, kinds: Optional[list[str]] = None, limit: int = 10) -> list[dict[str, object]]: ...
-        def fetch(self, *, kinds: Optional[list[str]] = None, limit: Optional[int] = None, order_by: str = "") -> list[dict[str, object]]: ...
 
 logger = logging.getLogger(__name__)
 
@@ -48,7 +49,7 @@ def index_person(email: str, name: str | None = None, source: str = "unknown") -
     if not email or "@" not in str(email) or not display:
         return
     try:
-        _dgs().store(
+        DataGraph.store(
             kind="contact",
             key=f"{_CONTACT_KEY_PREFIX}{email.strip().lower()}",
             value=display,
@@ -68,7 +69,7 @@ def index_contact_profile(profile: dict[str, object], source: str = "carddav") -
     if not fn:
         return
     try:
-        _dgs().store(
+        DataGraph.store(
             kind="contact",
             key=f"{_CONTACT_KEY_PREFIX}{fn}",
             value=json.dumps(profile, ensure_ascii=False),

@@ -15,6 +15,7 @@ from flask_cors import CORS
 from flask_restx import Api, Namespace
 
 from services.file_mapper_service import FileMapperService
+from services.settings_service import SettingsService
 from .auth import internal_only
 from .auth import require_session as require_session
 
@@ -90,9 +91,7 @@ def _deployment_origins() -> list[str]:
     persists a domain change and restarts, so the new policy is read on next boot.
     """
     try:
-        from services.settings_service import SettingsService
-        from services.database_service import get_shared_db_service
-        domain = (SettingsService(get_shared_db_service()).get(SettingsService.DEPLOYMENT_DOMAIN) or "").strip()
+        domain = (SettingsService().get(SettingsService.DEPLOYMENT_DOMAIN) or "").strip()
     except Exception as exc:
         logger.warning("[REST API] deployment_domain unreadable; CORS limited to same-origin: %s", exc)
         return []

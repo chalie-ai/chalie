@@ -11,9 +11,8 @@ from typing import cast
 import pytest
 
 from configs.channels import UserConfig
-from services.database_service import get_shared_db_service
+from controllers.message_processor import MessageProcessor
 from services.document_service import DocumentService
-from services.message_processor import MessageProcessor
 from services.provider_db_service import ProviderDbService
 from services.tmp_storage import new_tmp_path
 
@@ -49,9 +48,13 @@ def _write_attachment(label: str) -> str:
 
 
 def _build_parent(attachments: "list[str]") -> MessageProcessor:
-    """Build the REAL MessageProcessor via its actual constructor (config first,
-    per the current signature) so ``self.ts``/``self.uid``/``self.turn_id`` are
-    populated exactly as production does — no private-field poking."""
+    """Build the REAL MessageProcessor via its actual public constructor — no
+    private-field poking. The constructor is "constructed inert": it wires every
+    coordinating service (``dispatch_service`` included) eagerly but performs no
+    DB writes and never assigns ``self.uid`` outside ``begin()``'s transaction.
+    ``_seed_turn_zero`` -> ``_seed_upload_attachment`` tolerates that: it uploads
+    through the real, fully-wired ``dispatch_service`` regardless, and only skips
+    the (here-irrelevant) input-row doc-link when ``self.uid`` is ``None``."""
     return MessageProcessor(
         UserConfig(), -1, "Here are some files.", {"attachments": attachments},
     )
@@ -59,7 +62,7 @@ def _build_parent(attachments: "list[str]") -> MessageProcessor:
 
 def test_seed_uploads_all_attachments_in_parallel(db: object) -> None:
     """Proves the barrier joins all uploads before _seed_turn_zero returns."""
-    ProviderDbService(get_shared_db_service()).set_vision_provider(None)
+    ProviderDbService().set_vision_provider(None)
 
     import os
 
@@ -69,7 +72,7 @@ def test_seed_uploads_all_attachments_in_parallel(db: object) -> None:
     # actual basename (which includes the Chalie temp prefix).
     names = [os.path.basename(p) for p in attachments]
 
-    svc = DocumentService(get_shared_db_service())
+    svc = DocumentService()
     before = {d["id"] for d in svc.get_all_documents()}
 
     parent = _build_parent(attachments)
@@ -97,12 +100,12 @@ def test_seed_uploads_all_attachments_in_parallel(db: object) -> None:
 
 def test_seed_skips_unreadable_attachment_without_aborting_others(db: object) -> None:
     """Proves the per-task OSError guard doesn't take down the whole barrier."""
-    ProviderDbService(get_shared_db_service()).set_vision_provider(None)
+    ProviderDbService().set_vision_provider(None)
 
     good = _write_attachment("delta")
     bad = "/nonexistent/not_under_tmp_prefix.png"  # fails the realpath guard
 
-    svc = DocumentService(get_shared_db_service())
+    svc = DocumentService()
     before = {d["id"] for d in svc.get_all_documents()}
 
     parent = _build_parent([good, bad])

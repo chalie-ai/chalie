@@ -6,7 +6,7 @@ logger = logging.getLogger(__name__)
 
 def backfill_one(conn: sqlite3.Connection, provider_id: int) -> bool:
     """Failure leaves the row's previous values intact."""
-    from services.providers import MAX_CONTEXT_WINDOW
+    from services.provider_api import MAX_CONTEXT_WINDOW
     from services.config_service import ConfigService
     from services.llm_clients.factory import build_client
 

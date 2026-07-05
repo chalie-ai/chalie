@@ -199,6 +199,28 @@ def local_now() -> datetime:
     return utc_now().astimezone(get_timezone())
 
 
+def parse_local(dt: datetime | str) -> datetime:
+    """Interpret a naive LOCAL wall-clock datetime and return it as UTC.
+
+    Use for user/LLM-supplied wall-clock values (e.g. the scheduler "Start
+    Time", which the World State surfaces in local time and which is never
+    timezone-converted upstream). This is the inverse intent of ``to_utc``,
+    which assumes a naive input is already UTC — here a naive input is assumed
+    to be in the user's timezone. Aware inputs are converted as-is.
+
+    Args:
+        dt: A naive local datetime, an aware datetime, or an ISO string.
+
+    Returns:
+        Timezone-aware UTC datetime.
+    """
+    if isinstance(dt, str):
+        dt = datetime.fromisoformat(dt.strip())
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=get_timezone())
+    return dt.astimezone(timezone.utc)
+
+
 def calculate_interval(
     date_time: datetime | str,
     interval_type: str,

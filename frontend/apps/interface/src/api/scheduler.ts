@@ -1,37 +1,17 @@
 import { api } from '@chalie/shared';
 
-/** A single scheduled item from the scheduler API. */
-export interface ScheduledItem {
-  id: string;
-  item_type: string;
-  message: string;
-  due_at: string | null;
-  recurrence: string | null;
-  window_start: string | null;
-  window_end: string | null;
-  status: string;
-  channel: string | null;
-  created_by_session: string | null;
-  created_at: string | null;
-  last_fired_at: string | null;
-  group_id: string | null;
-  is_prompt: boolean;
-  source: string | null;
-  external_uid: string | null;
-}
-
 /**
  * One active prompt-schedule thread, collapsed to its turn_id (§13.5).
- * Mirrors backend SchedulerTurn DTO exactly. Datetimes arrive as ISO-8601
- * UTC strings (the backend's DTO base serialises them that way).
+ * Mirrors backend SchedulerTurn DTO exactly. `day`/`hour`/`minute` are the
+ * series' cron fields (`null` = "every").
  */
 export interface SchedulerTurn {
   turn_id: number;
   gist: string | null;
   preview: string;
-  recurrence: string | null;
-  last_fired_at: string | null;
-  next_due_at: string | null;
+  day: number | null;
+  hour: number | null;
+  minute: number | null;
 }
 
 /** An active delegate (backgrounded tool call) from /api/subagents. */
@@ -46,11 +26,6 @@ export interface ActiveSubagent {
 }
 
 export const scheduler = {
-  /** GET /api/scheduler?status=pending — list pending scheduled items. */
-  pending(): Promise<ScheduledItem[]> {
-    return api.get('/api/scheduler?status=pending');
-  },
-
   /** GET /api/subagents — running async delegates. */
   subagentsActive(): Promise<{ subagents: ActiveSubagent[] }> {
     return api.get('/api/subagents');

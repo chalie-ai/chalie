@@ -12,7 +12,6 @@ from typing import cast
 
 import pytest
 
-from services.database_service import get_shared_db_service
 from services.provider_db_service import ProviderDbService
 from services.text_extractor import extract_text
 
@@ -27,7 +26,7 @@ def _png_bytes() -> bytes:
 
 
 def test_image_extraction_routes_through_describe_image_ocr_fork(db: sqlite3.Connection, tmp_path: Path) -> None:
-    ProviderDbService(get_shared_db_service()).set_vision_provider(None)
+    ProviderDbService().set_vision_provider(None)
     p = tmp_path / "x.png"
     p.write_bytes(_png_bytes())
 
@@ -40,7 +39,7 @@ def test_image_extraction_routes_through_describe_image_ocr_fork(db: sqlite3.Con
 
 
 def test_image_extraction_provider_error_propagates_never_swallowed(db: sqlite3.Connection, tmp_path: Path) -> None:
-    svc = ProviderDbService(get_shared_db_service())
+    svc = ProviderDbService()
     provider = cast(dict[str, object], svc.create_provider({
         "name": "broken-vision", "platform": "ollama", "model": "llava",
         "host": "http://127.0.0.1:1", "api_key": "",

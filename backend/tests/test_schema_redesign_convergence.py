@@ -1,11 +1,28 @@
 import sqlite3
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
 
+from services.database import Database
 from services.database_service import DatabaseService
+from services.file_mapper_service import FileMapperService
 from services.schema_convergence_service import SchemaConvergenceService
 from services.time_utils import utc_now
+
+
+# ── Gateway isolation ─────────────────────────────────────────────────────────
+
+@pytest.fixture(autouse=True)
+def _gateway_to_tmp_db(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    # converge()/backfill_redesign_columns() write through the Database gateway
+    # (FileMapperService.get_db_path), not the DatabaseService the helpers build.
+    # Redirect the gateway to the same per-test file so the boot path and the
+    # DatabaseService reads below share one database instead of hitting chalie.db.
+    monkeypatch.setattr(FileMapperService, "get_db_path", lambda *_: tmp_path / "redesign.db")
+    Database.close()
+    yield
+    Database.close()
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -15,7 +32,7 @@ def _make_db(tmp_path: Path, name: str = "redesign.db") -> DatabaseService:
 
 
 def _converge_and_backfill(db: DatabaseService) -> None:
-    svc = SchemaConvergenceService(db, embedding_dimensions=256)
+    svc = SchemaConvergenceService(embedding_dimensions=256)
     svc.converge()
     svc.backfill_redesign_columns()
 
@@ -57,7 +74,7 @@ def _build_legacy_db(tmp_path: Path) -> tuple[DatabaseService, dict[str, str]]:
     db = _make_db(tmp_path)
     # First converge to get the full, correct schema for every OTHER table; then
     # we mutate only the three tables the redesign touches back to legacy shape.
-    SchemaConvergenceService(db, embedding_dimensions=256).converge()
+    SchemaConvergenceService(embedding_dimensions=256).converge()
 
     # Distinct, fixed timestamps so derived-value assertions are exact.
     now = utc_now()
@@ -276,7 +293,7 @@ class TestSchemaRedesignConvergence:
     def test_fresh_db_gets_redesign_shape_and_backfill_no_ops(self, tmp_path: Path) -> None:
         """A fresh DB converges directly to the new shape; backfill runs cleanly
         and seeds level=0 with no rows present (no error, no churn)."""
-        db = _make_db(tmp_path, name="fresh.db")
+        db = _make_db(tmp_path)
         _converge_and_backfill(db)
 
         with db.connection() as conn:

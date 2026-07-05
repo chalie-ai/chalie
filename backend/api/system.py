@@ -19,6 +19,7 @@ from flask import request
 from flask.typing import ResponseReturnValue
 from flask_restx import Namespace, Resource
 
+from services.database import Database
 from services.file_mapper_service import FileMapperService
 from services.time_utils import utc_now
 from utils.logger import LOG_FILE_PATH as _LOG_FILE_PATH  # Written exclusively by utils/logger.py in the same process
@@ -200,7 +201,6 @@ class SystemStatusResource(Resource):
         """Comprehensive system health and diagnostics."""
         try:
             from services.memory_client import MemoryClientService
-            from services.database_service import get_shared_db_service
 
             store = MemoryClientService.create_connection()
             status = "ok"
@@ -221,8 +221,7 @@ class SystemStatusResource(Resource):
 
             # SQLite counts
             try:
-                db = get_shared_db_service()
-                with db.connection() as conn:
+                with Database.transaction() as conn:
                     cursor = conn.cursor()
                     for table_label, query in [
                         ("episodes", "SELECT COUNT(*) FROM episodes"),
@@ -286,11 +285,8 @@ class ObservabilityRecordsResource(Resource):
 
             q = (request.args.get("q", "") or "")[:200]
 
-            from services.database_service import get_shared_db_service
-            db = get_shared_db_service()
-
             if source == "episodes":
-                rows = db.fetch_all(
+                rows = [dict(r) for r in Database.conn().execute(
                     "SELECT created_at AS created, "
                     "COALESCE(last_relevant_at, created_at) AS last_accessed, "
                     "gist AS value, location_name "
@@ -300,10 +296,10 @@ class ObservabilityRecordsResource(Resource):
                     "ORDER BY COALESCE(last_relevant_at, created_at) DESC, created_at DESC "
                     "LIMIT ? OFFSET ?",
                     (q, f"%{q}%", _RECORDS_LIMIT, offset),
-                )
+                ).fetchall()]
             else:
                 kind = "user_specific" if source == "user" else "system"
-                rows = db.fetch_all(
+                rows = [dict(r) for r in Database.conn().execute(
                     "SELECT first_seen_at AS created, last_accessed_at AS last_accessed, "
                     "key, value "
                     "FROM data_graph "
@@ -312,7 +308,7 @@ class ObservabilityRecordsResource(Resource):
                     "ORDER BY last_accessed_at IS NULL, last_accessed_at DESC, first_seen_at DESC "
                     "LIMIT ? OFFSET ?",
                     (kind, q, f"%{q}%", f"%{q}%", _RECORDS_LIMIT, offset),
-                )
+                ).fetchall()]
 
             rows = rows or []
             serialised: list[dict[str, object]] = []
@@ -351,16 +347,14 @@ class ObservabilityToolsResource(Resource):
     def get(self) -> ToolUsageList | ResponseReturnValue:
         """Tool usage counts from tool_calls — count + last_used per tool."""
         try:
-            from services.database_service import get_shared_db_service
-            db = get_shared_db_service()
-            rows = db.fetch_all(
+            rows = [dict(r) for r in Database.conn().execute(
                 "SELECT tool_name, COUNT(*) AS count, MAX(created_at) AS last_used_at "
                 "FROM tool_calls "
                 "WHERE tool_name NOT IN ('compaction', 'tool_compaction', 'trail_compaction', "
                 "'chat_history_compactor', 'thinking') "
                 "GROUP BY tool_name "
                 "ORDER BY last_used_at DESC"
-            )
+            ).fetchall()]
             return ToolUsageList(
                 generated_at=utc_now(),
                 tools=[
@@ -409,7 +403,7 @@ class ObservabilityWorldStateResource(Resource):
     def get(self) -> ResponseReturnValue:
         """World state as seen by the ACT loop — rendered block + raw inputs (raw passthrough)."""
         try:
-            from services.world_state import world_state, _fetch_schedule_rows
+            from services.world_state import world_state
             from services.heartbeat_service import heartbeat_service
 
             return {
@@ -417,7 +411,6 @@ class ObservabilityWorldStateResource(Resource):
                 "inputs": {
                     "telemetry": heartbeat_service.read(),
                     "signals": world_state.get("signals"),
-                    "schedule": _fetch_schedule_rows(),
                 },
             }
         except Exception:
@@ -584,9 +577,8 @@ class SettingsResource(Resource):
     def get(self, key: str) -> Setting | ResponseReturnValue:
         """Read an opaque setting by key."""
         from services.settings_service import SettingsService
-        from services.database_service import get_shared_db_service
         try:
-            svc = SettingsService(get_shared_db_service())
+            svc = SettingsService()
             return Setting(key=key, value=svc.get(key))
         except Exception as e:
             logger.error(f"[REST API] get setting error: {e}")
@@ -601,9 +593,8 @@ class SettingsResource(Resource):
     def put(self, key: str, dto: SettingWrite) -> Setting | ResponseReturnValue:
         """Write (or, on empty/falsey value, delete) an opaque setting."""
         from services.settings_service import SettingsService
-        from services.database_service import get_shared_db_service
         try:
-            svc = SettingsService(get_shared_db_service())
+            svc = SettingsService()
             value = dto.value
             if not value:
                 svc.delete(key)
@@ -663,9 +654,8 @@ class NetworkResource(Resource):
     def get(self) -> NetworkState | ResponseReturnValue:
         """Current deployment domain + TLS state for the System page."""
         from services.settings_service import SettingsService
-        from services.database_service import get_shared_db_service
         try:
-            svc = SettingsService(get_shared_db_service())
+            svc = SettingsService()
             return NetworkState(
                 deployment_domain=svc.get(SettingsService.DEPLOYMENT_DOMAIN) or "",
                 ssl_enabled=svc.get_bool(SettingsService.SSL_ENABLED),
@@ -690,7 +680,6 @@ class NetworkResource(Resource):
         file, so a bad upload can never crash-loop the server.
         """
         from services.settings_service import SettingsService
-        from services.database_service import get_shared_db_service
         from services.restart_service import request_restart
         try:
             if (dto.ssl_cert is None) != (dto.ssl_key is None):
@@ -704,7 +693,7 @@ class NetworkResource(Resource):
             if dto.ssl_enabled and not cert_ready:
                 return error("Cannot enable SSL without a certificate and key", 422)
 
-            svc = SettingsService(get_shared_db_service())
+            svc = SettingsService()
             svc.set(SettingsService.DEPLOYMENT_DOMAIN, dto.deployment_domain)
             svc.set_bool(SettingsService.SSL_ENABLED, dto.ssl_enabled)
 

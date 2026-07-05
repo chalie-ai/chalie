@@ -53,12 +53,10 @@ _M = mcp_settings_ns.models
 
 
 def _get_services() -> "tuple[SettingsService, WrapperAuthService]":
-    from services.database_service import get_shared_db_service
     from services.settings_service import SettingsService
     from services.wrapper_auth_service import WrapperAuthService
 
-    db = get_shared_db_service()
-    return SettingsService(db), WrapperAuthService(db)
+    return SettingsService(), WrapperAuthService()
 
 
 def _get_stored_token(settings: "SettingsService") -> str | None:

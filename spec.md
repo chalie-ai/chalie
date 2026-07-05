@@ -11,6 +11,7 @@ Read the vocabulary to understand the systems' terminology
 - `MessageProcessor(config, turn_id=-1, raw_input, metadata)` — constructor pre-allocates the input transcript row via `make_row_id()`, exposes `get_meta_data()` synchronously, and `run()` spawns the turn on a daemon thread.
 - `turn_id == -1` → new thread; `MAX(turn_id)+1` allocated per channel. A supplied `turn_id` → append to that thread; if it names no existing turn the constructor throws `Invalid turn_id specified`.
 - `_forked` is derived from `turn_id` presence — no external flag.
+- `MP.current_transcript_id` is the in-memory binder every `tool_calls` row anchors to. It starts at the turn's input row and moves ONLY when an assistant row is actually written — assistant rows are written only when the LLM emits text (or on the turn's terminal step), never for tool-call-only steps.
 
 ## BE: API Flow (New Turn)
 This flow describes a message arriving from the main spine
@@ -26,13 +27,13 @@ API endpoint handler resolves the config via `ConfigTypeEnum.get_by_type({type})
 	3. MP must fire the pre-LLM API call tool calls as needed (based on the `ProcessorConfig` loaded)
    
 4. `MessageProcessor` sends LLM API call
-	1. MP must create a transcript row where `role=assistant` (could contain an assistant text message or not, doesn't matter)
+	1. If the LLM returned text, MP creates a transcript row `role=assistant` and moves `MP.current_transcript_id` onto it. A tool-call-only response writes NO row — the binder stays where it is, so consecutive tool-only steps collapse onto the row that opened them (no empty assistant rows)
 	2. If the LLM returns tool calls; 
 		1. we invoke the tools
-		2. We attach the `tool_calls` to the `transcript` row id from step 4.1
-		3. Each tool call emits the WS message `tool_called` when it starts and `tool_done` on completion
+		2. Each `tool_calls` row binds to `MP.current_transcript_id`
+		3. Each tool call emits its WS frame (state `started` / `done` / `error` — see TKT-1233)
 		4. Loop back to step 4 on the same `MessageProcessor` instance (same config, same `turn_id`) for the next LLM API call
-5. Now that LLM stopped emitting tool calls, we close the `MessageProcessor` instance and emit the WS message with state `done`
+5. The LLM stopped emitting tool calls — the terminal step. Its transcript row is ALWAYS written, even with empty text (it is the turn's settle row — the spine's settle0/working state keys on it). We close the `MessageProcessor` instance and emit the WS message with state `done`
 
 ## BE: API Flow (Message in thread)
 This floww describes a message arriving from a thread
@@ -47,33 +48,40 @@ API endpoint handler resolves the config via `ConfigTypeEnum.get_by_type({type})
 	2. MP must emit the Websocket event with state `working` and properties: `turn_id` & `config.type`
 	3. MP must fire the pre-LLM API call tool calls as needed (based on the `ProcessorConfig` loaded)
    
-4. `MessageProcessor` sends LLM API call
-	1. MP must create a transcript row where `role=assistant` (could contain an assistant text message or not, doesn't matter)
-	2. If the LLM returns tool calls; 
-		1. we invoke the tools
-		2. We attach the `tool_calls` to the `transcript` row id from step 4.1
-		3. Each tool call emits the WS message `tool_called` when it starts and `tool_done` on completion
-		4. Loop back to step 4 on the same `MessageProcessor` instance (same config, same `turn_id`) for the next LLM API call
-5. Now that LLM stopped emitting tool calls, we close the `MessageProcessor` instance and emit the WS message with state `done`
+4. `MessageProcessor` sends LLM API call — identical to the new-turn flow: text moves `MP.current_transcript_id` onto a fresh assistant row, tool-call-only steps write nothing and bind their `tool_calls` to the current binder, each call emits its WS frame, loop.
+5. Terminal step (no tool calls): its transcript row is always written; we close the `MessageProcessor` instance and emit the WS message with state `done`
 
 ## FE: Visual Feedback (New Turn in Main Spine)
-This flow describes what the interface does when the user sends a message from the main input dock. Doctrine: the feed buffer is filled ONLY by API responses — no optimistic echo, no payload-driven rendering.
+This flow describes what the interface does when the user sends a message from the main input dock. The feed is filled only by API responses — no optimistic echo.
 
-1. `InputDock` submits via `session.sendMessage(text, files, threadId=null, type)`; empty text with no files is a no-op; files without text fall back to the `[File attached]` placeholder.
-2. If the main lane is already busy (`isLaneBusy`), the message is enqueued per-lane (`useQueueStore`) and auto-sent when the lane frees — flow ends here.
-3. `sendMessage` claims the lane: `lanes['main'] = { liveTurnId: null, userText, type }`. Lane presence IS the busy state — `isSending` drives the PresenceBar pulse and the feed's live-turn spinner. The composed text is kept on the lane for restore-on-stop.
-4. The message is POSTed as a multipart form (`text`, `type`, repeated `files`) to `POST /api/thread/-1`.
-5. On HTTP 200 the body `{turn_id, type}` binds `lane.liveTurnId = turn_id` — the handle every later step keys on (block rendering, stop button), held synchronously from the POST response.
-6. On failure (offline / non-200) `_onSendFailure` surfaces the error as the dock toast, clears the turn's working flag and releases the lane — no signal will ever arrive for this turn.
-7. While the lane is live, the stop button calls `session.requestStop(turn_id)`: drops the turn's block and all its visual state (`dropLiveTurn`), fires a best-effort `DELETE /api/thread/<turn_id>`, and restores the lane's captured text into the dock.
-8. Rendering (`useConversationFeed(type)`): turn blocks enter the reactive buffer only via `GET /api/thread/<turn_id>` / `GET /api/threads/batch` (`fetchTurn` → `upsertTurn`, guarded by a monotonic max-row-id version check so a stale response never overwrites a newer block). Transient visuals — `working` spinner flags, live tool pills with elapsed timers, unseen-`done` markers — live beside the buffer and never mutate turn data; persisted `tool_calls` on a fetched row supersede that row's live pills.
+1. `InputDock` submits the message via `session.sendMessage(text, files, threadId=null, type)`.
+
+2. If the main lane is already busy, the message is queued per-lane (`useQueueStore`) and auto-sent when the lane frees — flow ends here.
+
+3. `sendMessage` claims the `main` lane in the session store;
+	1. Lane presence is the busy state — it drives the PresenceBar pulse and the feed's live-turn spinner
+	2. The composed text is kept on the lane so a stop can restore it into the dock
+
+4. The message is POSTed as a multipart form (`text`, `type`, `files`) to `POST /api/thread/-1`
+	1. On HTTP 200 the body `{turn_id, type}` binds `lane.liveTurnId = turn_id` — the handle every later step keys on
+	2. On failure the error surfaces as the dock toast and the lane is released — no signal will ever arrive for this turn
+
+5. While the lane is live, the stop button calls `session.requestStop(turn_id)`: drops the turn's block (`dropLiveTurn`), fires a best-effort `DELETE /api/thread/<turn_id>`, and restores the lane's text into the dock.
+
+6. Turn blocks enter the feed (`useConversationFeed`) only via `GET /api/thread/<turn_id>` / `GET /api/threads/batch`; transient visuals — `working` spinner, live tool pills, unseen-`done` markers — live beside the buffer, and a fetched row's persisted `tool_calls` supersede its live pills.
 
 ## FE: Visual Feedback (New Turn in Thread View)
 This flow describes a reply sent from the slide-over thread panel. It is the main-spine flow with these differences:
 
-1. The panel's `InputDock` carries the open thread's id, so the submit is `session.sendMessage(text, files, threadId={turn_id}, type)`.
-2. The lane key is `t{turn_id}` instead of `main` and it is claimed with `liveTurnId` preset to that id — each thread is an independent lane, so a working thread never blocks the spine (or other threads) and its queue drains independently.
-3. The busy gate additionally checks the feed's working flag for that turn (`isTurnWorking`), since a thread has a stable id whose in-flight state outlives the lane record.
+1. The panel's `InputDock` carries the open thread's id: `session.sendMessage(text, files, threadId={turn_id}, type)`.
+
+2. The lane key is `t{turn_id}` instead of `main` — each thread is an independent lane, so a working thread never blocks the spine or other threads.
+
+3. The busy gate additionally checks the feed's working flag for that turn (`isTurnWorking`), since a thread's in-flight state outlives the lane record.
+
 4. The POST goes to `POST /api/thread/<turn_id>`; the 200 body echoes the same `turn_id` back.
-5. Working/stop/failure behavior is identical, keyed on the thread's `turn_id`; the working spinner and live tool pills render inside the thread panel's turn view.
-6. On settle, a thread the user is NOT currently viewing keeps a standing `done` marker (the Activity dock's blue state) until the panel is opened (`seenThread` clears it); the open thread just drops its spinner.
+
+5. Working/stop/failure behavior is identical, keyed on the thread's `turn_id`; the spinner and live tool pills render inside the thread panel.
+
+6. On settle, a thread the user is not viewing keeps a standing `done` marker (the Activity dock's blue state) until the panel is opened; the open thread just drops its spinner.
+

@@ -46,9 +46,7 @@ def test_vector_lane_returns_the_semantically_nearest_episode(db: sqlite3.Connec
     """A representative query whose embedding matches one stored episode surfaces
     that episode through the vector lane — the lane is NON-EMPTY (the radius-0
     regression that silently emptied it is gone)."""
-    from services.database_service import get_shared_db_service
-
-    es = EpisodicService(get_shared_db_service())
+    es = EpisodicService()
     target = _seed(es, "home wifi password is hunter2", embedding=_unit(3))
     _seed(es, "grocery list has bananas and milk", embedding=_unit(120))
 
@@ -72,9 +70,7 @@ def test_relative_floor_drops_the_weak_tail_count_below_k(db: sqlite3.Connection
     """A strong match and a much weaker (orthogonal) one go into the pool; the
     relative floor drops the weak candidate rather than padding the result up to
     k. Count < number of candidates, and the floor cut is reported."""
-    from services.database_service import get_shared_db_service
-
-    es = EpisodicService(get_shared_db_service())
+    es = EpisodicService()
     strong = _seed(es, "annual leave booked for the trip to Gozo", salience=9,
                    embedding=_unit(10))
     weak = _seed(es, "random note about a stapler", salience=1,
@@ -97,9 +93,7 @@ def test_collapsed_tree_surfaces_super_and_leaf_in_one_pool(db: sqlite3.Connecti
     """A leaf consolidated into a super-episode and the super itself BOTH compete
     in one pool. When a query matches both, both surface — the leaf is not walked
     away into its apex (collapsed-tree retrieval, )."""
-    from services.database_service import get_shared_db_service
-
-    es = EpisodicService(get_shared_db_service())
+    es = EpisodicService()
     leaf = _seed(es, "monday standup notes about the wifi outage",
                  embedding=_unit(7))
     super_ep = _seed(es, "weekly summary of network and wifi issues",
@@ -130,9 +124,7 @@ def test_higher_level_super_can_outrank_a_leaf(db: sqlite3.Connection) -> None:
     """A higher-salience super-episode competes on equal footing and can outrank
     a weaker leaf — levels are not muted; importance (salience × weight) lifts the
     super in the normalised composite."""
-    from services.database_service import get_shared_db_service
-
-    es = EpisodicService(get_shared_db_service())
+    es = EpisodicService()
     # Both match the query in the vector lane (same basis vector → both distance 0)
     # so lane relevance is equal; salience is close enough that BOTH clear the
     # relative floor and the only discriminator left is importance ordering.

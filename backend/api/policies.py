@@ -80,9 +80,8 @@ def _tag_display_rows(rows: "list[dict[str, str]]") -> None:
 
 
 def _get_policy_manager() -> "PolicyManager":
-    from services.database_service import get_shared_db_service
     from services.policy_manager import PolicyManager
-    return PolicyManager(get_shared_db_service())
+    return PolicyManager()
 
 
 def _policy_dto(row: "dict[str, str]") -> Policy:

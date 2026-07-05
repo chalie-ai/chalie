@@ -1,20 +1,20 @@
-// Short relative-time label for scheduler UI ("now", "in 5m", "tomorrow",
-// "overdue", "" on parse error).
-export function relativeTime(isoStr: string): string {
-  try {
-    const diffMs = new Date(isoStr).getTime() - Date.now();
-    if (diffMs < 0) return 'overdue';
-    const mins = Math.round(diffMs / 60_000);
-    if (mins < 1) return 'now';
-    if (mins < 60) return `in ${mins}m`;
-    const hrs = Math.round(mins / 60);
-    if (hrs < 24) return `in ${hrs}h`;
-    const days = Math.round(hrs / 24);
-    if (days === 1) return 'tomorrow';
-    return `in ${days}d`;
-  } catch {
-    return '';
-  }
+/**
+ * Human cadence label for a scheduler cron triple — `day`/`hour`/`minute` mirror
+ * the backend's `cron_dom`/`cron_hour`/`cron_minute` (`null` = "every" on that
+ * field). Only four shapes are legal — the coarse-to-fine "every-prefix" rule
+ * enforced by `validate_cron` (see services/cron_schedule.py) — so these four
+ * branches are exhaustive.
+ */
+export function formatCadence(
+  day: number | null,
+  hour: number | null,
+  minute: number | null,
+): string {
+  const pad = (n: number): string => String(n).padStart(2, '0');
+  if (day == null && hour == null && minute == null) return 'Every minute';
+  if (day == null && hour == null) return `Every hour at :${pad(minute as number)}`;
+  if (day == null) return `Every day at ${pad(hour as number)}:${pad(minute as number)}`;
+  return `Monthly on day ${day} at ${pad(hour as number)}:${pad(minute as number)}`;
 }
 
 /**

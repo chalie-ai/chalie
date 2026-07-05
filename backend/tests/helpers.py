@@ -11,8 +11,8 @@ from typing import TYPE_CHECKING, Callable
 from services.processor_config import ProcessorConfig
 
 if TYPE_CHECKING:
-    from services.message_processor import MessageProcessor
-    from services.post_turn_hook import PostTurnHook
+    from controllers.message_processor import MessageProcessor
+    from contracts.post_turn_hook import PostTurnHook
 
     class _WithBuilders(ProcessorConfig):
         _b_up: Callable[["MessageProcessor"], str]
@@ -94,25 +94,43 @@ def make_stub_config(
 
 
 # ─── scheduled_items ─────────────────────────────────────────────────
-# Column order matches: SELECT id, item_type, message, due_at, recurrence,
-#   topic, created_by_session, group_id, is_prompt
+# Column order matches schema.sql: id, item_type, message, start_at, due_at,
+#   cron_dom, cron_hour, cron_minute, status, channel, created_by_session,
+#   created_at, enabled, group_id, source, external_uid, metadata,
+#   hidden, turn_id
+# cron_dom/cron_hour/cron_minute are NULL = "every" in the every-prefix cron
+# model (services/cron_schedule.validate_cron); start_at/due_at are UTC.
 
 def make_scheduled_item(
     item_id: str = "sched-001",
-    item_type: str = "reminder",
+    item_type: str = "prompt",
     message: str = "Test reminder",
+    start_at: str | None = None,
     due_at: str | None = None,
-    recurrence: str | None = None,
-    topic: str | None = None,
+    cron_dom: int | None = None,
+    cron_hour: int | None = None,
+    cron_minute: int | None = None,
+    status: str = "pending",
+    channel: str | None = None,
     created_by_session: str | None = None,
+    created_at: str | None = None,
+    enabled: int = 1,
     group_id: str | None = None,
-    is_prompt: bool = False,
+    source: str | None = None,
+    external_uid: str | None = None,
+    metadata: str = "{}",
+    hidden: int = 0,
+    turn_id: int | None = None,
 ) -> tuple[object, ...]:
     due_at = due_at or (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat()
+    start_at = start_at or due_at
+    created_at = created_at or datetime.now(timezone.utc).isoformat()
     return (
-        item_id, item_type, message, due_at, recurrence,
-        topic, created_by_session, group_id,
-        is_prompt,
+        item_id, item_type, message, start_at, due_at,
+        cron_dom, cron_hour, cron_minute,
+        status, channel, created_by_session,
+        created_at, enabled, group_id,
+        source, external_uid, metadata, hidden, turn_id,
     )
 
 

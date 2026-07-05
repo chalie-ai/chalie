@@ -18,10 +18,9 @@ from typing import cast
 
 import pytest
 
-from abilities._dispatcher import ToolDispatcher
 from abilities.browser import BrowserAbility
 from configs.channels.web_browse import WebBrowseConfig
-from services.message_processor import MessageProcessor
+from controllers.message_processor import MessageProcessor
 from services.processor_config import ProcessorConfig
 
 pytestmark = pytest.mark.unit
@@ -36,7 +35,7 @@ def _browse_mp() -> MessageProcessor:
 
 
 def _dispatch(params: dict[str, object]) -> str:
-    return ToolDispatcher(_browse_mp()).dispatch("browser", params)
+    return _browse_mp().dispatch_service.dispatch("browser", params)
 
 
 def test_schema_is_ten_flat_verbs() -> None:

@@ -9,6 +9,8 @@ export type {
   WsMessageEvent,
   WsTurnExecutionEvent,
   TurnExecutionState,
+  WsToolCallEvent,
+  WsToolCallState,
   ActionCallbacks,
 } from './services/WebSocketService';
 export { ConfigType } from './config/configType';

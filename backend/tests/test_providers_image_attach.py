@@ -1,5 +1,6 @@
-"""Test that the message processor's _build_send_messages() correctly
-assembles its ProviderApiRequest DTO with image attachment from config.get_image."""
+"""Test that the message processor's _build_messages() correctly assembles its
+ProviderRequest DTO with image attachment from ``PromptService.image()``
+(``VisionConfig.get_image`` under the old spine)."""
 
 import base64
 import sqlite3
@@ -8,7 +9,7 @@ from typing import cast
 
 import pytest
 
-from services.message_processor import MessageProcessor
+from controllers.message_processor import MessageProcessor
 
 pytestmark = pytest.mark.unit
 
@@ -34,7 +35,7 @@ def test_build_send_messages_attaches_image_from_get_image(
         metadata={"image_path": str(img), "mime_type": "image/png"},
     )
 
-    messages = mp._build_send_messages()
+    messages = mp._build_messages()
 
     assert messages[0]["role"] == "user"
     assert cast(dict[str, object], messages[0]["image"])["mime_type"] == "image/png"
@@ -48,7 +49,7 @@ def test_build_send_messages_no_image_when_get_image_returns_none(db: sqlite3.Co
     config = VisionConfig(ProcessorConfig.PolicyChannel.CHAT)
     mp = MessageProcessor(config, raw_input="what is this")
 
-    messages = mp._build_send_messages()
+    messages = mp._build_messages()
 
     assert messages[0]["role"] == "user"
     assert "image" not in messages[0]

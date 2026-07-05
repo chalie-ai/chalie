@@ -32,7 +32,6 @@ from typing import TYPE_CHECKING, ClassVar, cast
 from abilities._ability import Ability
 from abilities._compaction_config import CompactionConfig
 from abilities._result import ToolResult
-from services.system_message_prompt import ChatHistoryCompactionSystemPrompt
 
 if TYPE_CHECKING:
     from typing import Protocol
@@ -54,6 +53,7 @@ if TYPE_CHECKING:
         class _Config(Protocol):
             channel: str
             read_channel: "str | None"
+            system_prompt: str
 
         config: _Config
 
@@ -65,7 +65,30 @@ class ChatHistoryCompactionConfig(CompactionConfig):
     own (the ability writes the durable watermark row explicitly). Thinking is
     forced high so the model reasons hard about what continuity to preserve."""
 
-    SYSTEM_PROMPT_CLASS: ClassVar[type] = ChatHistoryCompactionSystemPrompt
+    @property
+    def system_prompt(self) -> str:
+        return """You are updating your memory of one ongoing conversation. Your output replaces all prior history — from the next turn until the next compaction it is the ONLY history you will see; anything not written here is forgotten. Write it to your future self.
+
+Input:
+- ## Previous Summary — your last memory. Carry it forward; change only what the new turns change.
+- ## New Turns — exchanges since then. Reference only; never reply to them. Do not address the user.
+(No Previous Summary means you are compacting raw turns for the first time.)
+
+Write one living document with exactly these sections:
+- Person — stable identity: name, household, location, role, values, strong stances. 2-4 lines.
+- Now — what they're in the middle of. 2-5 lines.
+- Holding — promises you made, things you owe, things they asked you to remember. Bullets.
+- Open — unresolved questions and threads either side said they'd return to. Bullets.
+- Voice — tone, recurring names, in-jokes that have stuck. 1-3 lines.
+- Last — the final user message (one line) and your reply (one line).
+
+Drop: one-off mentions, resolved loops, social filler, and all plumbing (timestamps, System Awareness blocks, Checkpoint headers, telemetry).
+
+Rules:
+- 200-400 tokens. Older facts compress harder than newer ones.
+- State facts; never "we discussed" / "the user asked".
+- Losing a recurring fact is failure. Spending more words on the same facts is also failure.
+- Output ONLY the document."""
 
 
 class ChatHistoryCompactor(Ability):
@@ -97,7 +120,7 @@ class ChatHistoryCompactor(Ability):
         return self._PARAMETERS
 
     def run(self, params: dict[str, object]) -> ToolResult:
-        from services.message_processor import MessageProcessor  # noqa: PLC0415
+        from controllers.message_processor import MessageProcessor  # noqa: PLC0415
         from services import compaction_persistence  # noqa: PLC0415
 
         mp = cast("_CompactionParent", self.mp)
@@ -130,7 +153,9 @@ class ChatHistoryCompactor(Ability):
         # an honest scalar already computed there, no extra provider call.
         rows_compacted = mp._compaction_kept_rows
 
-        summary = (MessageProcessor.process(combined, ChatHistoryCompactionConfig()) or "").strip()
+        summary = (MessageProcessor.process(
+            ChatHistoryCompactionConfig(), raw_input=combined,
+        ).result() or "").strip()
         if not summary:
             logger.warning(
                 "[chat_history_compactor] empty summary on channel=%s scope=%s; advancing watermark anyway",
@@ -175,7 +200,7 @@ class ChatHistoryCompactor(Ability):
         """
         from services.provider_api import ProviderApiRequest, ThinkingLevel  # noqa: PLC0415
 
-        system = ChatHistoryCompactionSystemPrompt().get_prompt()
+        system = parent.config.system_prompt
         window = parent.providers.get_context_limit()
         cap = window - max(int(0.10 * window), 8000) if window else 0
         total = len(parent._previous_rows())

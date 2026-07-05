@@ -9,7 +9,7 @@ from abilities._budget import BudgetCappedAbility
 from abilities._params import Keys
 from abilities._pattern_provenance import pattern_provenance
 from abilities._result import ToolResult
-from services.database_service import get_shared_db_service
+from services.database import Database
 from services.time_utils import utc_now
 from utils.data_utils import parse_json_column
 
@@ -168,9 +168,8 @@ class SavePattern(BudgetCappedAbility):
 def _upsert_pattern(validated: dict[str, object], source: str) -> tuple[int, float, bool]:
     """``source`` is the provenance of the pass that produced this pattern"""
     now_iso = utc_now().isoformat()
-    db = get_shared_db_service()
 
-    with db.connection() as conn:
+    with Database.transaction() as conn:
         existing = conn.execute(
             "SELECT id, value, storage_strength, evidence_count FROM data_graph "
             "WHERE kind=? AND key=? AND active=1 AND deleted_at IS NULL "

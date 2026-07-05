@@ -7,7 +7,7 @@ from abilities._result import ToolResult
 from abilities.find_tools import FindToolsAbility
 from services.file_mapper_service import FileMapperService
 from services.mcp_client_service import McpClientService, _open_tools_db
-from services.message_processor import MessageProcessor
+from controllers.message_processor import MessageProcessor
 from tests.helpers import make_stub_config
 
 pytestmark = pytest.mark.unit
@@ -23,7 +23,7 @@ def _stub_proc() -> MessageProcessor:
     # via run()'s _get_online_mcp_names() — independent of any per-config list.
     proc = object.__new__(MessageProcessor)
     proc.config = make_stub_config()
-    proc._active_tools = []
+    proc.active_tools = []
     return proc
 
 

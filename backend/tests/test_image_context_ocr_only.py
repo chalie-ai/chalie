@@ -14,7 +14,6 @@ from typing import cast
 import pytest
 
 from services import image_context_service
-from services.database_service import get_shared_db_service
 from services.provider_db_service import ProviderDbService
 
 pytestmark = pytest.mark.unit
@@ -28,7 +27,7 @@ def _png_bytes() -> bytes:
 
 
 def test_analyze_is_ocr_only_even_with_vision_provider_configured(db: sqlite3.Connection) -> None:
-    svc = ProviderDbService(get_shared_db_service())
+    svc = ProviderDbService()
 
     # Real factory creates the row. Platform 'ollama' is not key-requiring, so
     # create_provider runs a live vision probe against the unreachable host and

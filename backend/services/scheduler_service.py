@@ -1,9 +1,10 @@
 """
 Scheduler Service — Background poller for scheduled items in SQLite.
 
-Polls scheduled_items table every 60 seconds. Fires due items either as
-direct WebSocket broadcasts (WebSocketBroker) or through the chat chokepoint
-for prompt-type items that need LLM execution with full tool access.
+Polls scheduled_items table every 60 seconds. Every row the poller selects is
+``item_type='prompt'`` (user schedule) — 'event' rows are CalDAV calendar
+entries and are excluded from the poll and never fired. Due prompts are fired
+through the chat chokepoint for LLM execution with full tool access.
 
 SQLite's WAL mode provides implicit locking — no explicit row locks needed.
 Entry point: scheduler_worker() registered in run.py.
@@ -13,12 +14,10 @@ import logging
 import threading
 import time
 import uuid
-from collections.abc import Callable
-from typing import TYPE_CHECKING, cast
+from typing import cast
 
-if TYPE_CHECKING:
-    from services.database_service import DatabaseService
-
+from services.cron_schedule import next_due_from
+from services.database import Database
 from services.embedding_utils import pack_embedding
 from utils.logger import Logger
 from datetime import datetime, timedelta
@@ -33,23 +32,11 @@ _POLL_INTERVAL = 60  # seconds
 # ``scheduled-work-<item_id>``.
 _SCHEDULED_WORK_THREAD_PREFIX = "scheduled-work"
 
-# System handler registry — capabilities register callbacks for item_type='system'
-_SYSTEM_HANDLERS: dict[str, Callable[..., object]] = {}
 
-
-def register_system_handler(source: str, callback: Callable[..., object]) -> None:
-    """Register a callback for system scheduled items with the given topic."""
-    _SYSTEM_HANDLERS[source] = callback
-    logger.info(f"{LOG_PREFIX} Registered system handler: {source}")
-
-
-def embed_scheduled_item(item_id: str, message: str, db: "DatabaseService | None" = None) -> None:
+def embed_scheduled_item(item_id: str, message: str) -> None:
     """Non-fatal: logs a warning and returns silently on any failure."""
     try:
         from services.embedding_service import get_embedding_service
-        if db is None:
-            from services.database_service import get_shared_db_service
-            db = get_shared_db_service()
 
         emb_service = get_embedding_service()
         embedding = emb_service.generate_embedding(message)
@@ -58,7 +45,7 @@ def embed_scheduled_item(item_id: str, message: str, db: "DatabaseService | None
 
         packed = pack_embedding(embedding)
 
-        with db.connection() as conn:
+        with Database.transaction() as conn:
             cursor = conn.cursor()
             cursor.execute(
                 "SELECT rowid FROM scheduled_items WHERE id = ?", (item_id,)
@@ -100,19 +87,16 @@ def scheduler_worker() -> None:
 
 def _poll_and_fire() -> None:
     try:
-        from services.database_service import get_shared_db_service
-
-        db = get_shared_db_service()
         from services.time_utils import utc_now
         now = utc_now()
         now_iso = now.isoformat()
 
         # Check for overdue items (potential stall warning)
-        with db.connection() as conn:
+        with Database.transaction() as conn:
             cursor = conn.cursor()
             overdue_threshold = (now - timedelta(minutes=5)).isoformat()
             cursor.execute(
-                "SELECT COUNT(*) FROM scheduled_items WHERE status='pending' AND due_at < ? AND item_type NOT IN ('event') AND hidden=0",
+                "SELECT COUNT(*) FROM scheduled_items WHERE status='pending' AND enabled=1 AND due_at < ? AND item_type NOT IN ('event') AND hidden=0",
                 (overdue_threshold,)
             )
             overdue_count = cursor.fetchone()[0]
@@ -123,23 +107,25 @@ def _poll_and_fire() -> None:
 
         # Atomic claim: SQLite WAL mode provides implicit locking.
         # LIMIT 100 prevents long transaction locks / prompt queue floods.
-        with db.connection() as conn:
+        with Database.transaction() as conn:
             cursor = conn.cursor()
             cursor.execute("""
-                SELECT id, item_type, message, due_at, recurrence,
+                SELECT id, item_type, message, due_at, start_at,
+                       cron_dom, cron_hour, cron_minute,
                        turn_id, channel, created_by_session, group_id,
-                       is_prompt, metadata
+                       metadata
                 FROM scheduled_items
-                WHERE status = 'pending' AND due_at <= ? AND item_type NOT IN ('event') AND COALESCE(hidden, 0) = 0
+                WHERE status = 'pending' AND enabled = 1 AND due_at <= ? AND item_type NOT IN ('event') AND COALESCE(hidden, 0) = 0
                 ORDER BY due_at
                 LIMIT 100
             """, (now_iso,))
             rows = cursor.fetchall()
 
             cols = [
-                "id", "item_type", "message", "due_at", "recurrence",
+                "id", "item_type", "message", "due_at", "start_at",
+                "cron_dom", "cron_hour", "cron_minute",
                 "turn_id", "channel", "created_by_session", "group_id",
-                "is_prompt", "metadata"
+                "metadata"
             ]
 
             for row in rows:
@@ -155,37 +141,40 @@ def _poll_and_fire() -> None:
                     if not current or current[0] != "pending":
                         continue
 
-                    # Weekday schedules don't fire on weekends.
-                    from services.locale_service import local_now
-                    skip = item["recurrence"] == "weekdays" and local_now().weekday() >= 5
-                    if skip:
-                        logger.debug(f"{LOG_PREFIX} Skipping {item['id']} — weekend")
-                    else:
-                        _fire_item(item)
+                    _fire_item(item)
                     cursor.execute(
-                        "UPDATE scheduled_items SET status='fired', last_fired_at=? WHERE id=?",
-                        (now_iso, item["id"])
+                        "UPDATE scheduled_items SET status='fired' WHERE id=?",
+                        (item["id"],)
                     )
 
-                    # Generate next occurrence
-                    next_due = _next_due(item)
-                    if next_due is not None:
-                        next_id = uuid.uuid4().hex[:8]
-                        cursor.execute("""
-                            INSERT INTO scheduled_items
-                              (id, item_type, message, due_at, recurrence,
-                               turn_id, status, channel,
-                               created_by_session, created_at, group_id, is_prompt)
-                            VALUES (?,?,?,?,?,?,'pending',?,?,?,?,?)
-                        """, (
-                            next_id, item["item_type"], item["message"],
-                            next_due.isoformat(),
-                            item["recurrence"], item.get("turn_id"),
-                            item.get("channel"), item.get("created_by_session"),
-                            now_iso, item.get("group_id") or item["id"],
-                            1 if item.get("is_prompt") else 0,
-                        ))
-                        embed_scheduled_item(next_id, item["message"])
+                    # Cron always has a next match — every prompt schedule
+                    # recurs indefinitely ("cron is the schedule"; there is no
+                    # one-time schedule). Advance from the just-fired due_at + 1
+                    # minute so the same minute isn't re-matched.
+                    from services.time_utils import parse_utc
+                    fired_due_at = parse_utc(cast(str, item["due_at"]))
+                    next_utc, _ = next_due_from(
+                        fired_due_at + timedelta(minutes=1),
+                        item["cron_dom"], item["cron_hour"], item["cron_minute"],
+                    )
+                    next_id = uuid.uuid4().hex[:8]
+                    cursor.execute("""
+                        INSERT INTO scheduled_items
+                          (id, item_type, message, start_at, due_at,
+                           cron_dom, cron_hour, cron_minute,
+                           turn_id, status, channel,
+                           created_by_session, created_at, group_id, metadata)
+                        VALUES (?,?,?,?,?,?,?,?,?,'pending',?,?,?,?,?)
+                    """, (
+                        next_id, item["item_type"], item["message"],
+                        item["start_at"], next_utc.isoformat(),
+                        item["cron_dom"], item["cron_hour"], item["cron_minute"],
+                        item.get("turn_id"),
+                        item.get("channel"), item.get("created_by_session"),
+                        now_iso, item.get("group_id") or item["id"],
+                        item.get("metadata"),
+                    ))
+                    embed_scheduled_item(next_id, item["message"])
 
                 except Exception as e:
                     logger.error(f"{LOG_PREFIX} Failed to fire {item['id']}: {e}")
@@ -291,58 +280,36 @@ def _build_departure_advisory(item: dict[str, object]) -> str | None:
 
 
 def _fire_item(item: dict[str, object]) -> None:
-    """Fire a due item — directly or via LLM pipeline depending on item_type."""
+    """Fire a due prompt item via the LLM pipeline.
+
+    Every row the poller selects is ``item_type='prompt'`` ('event' rows are
+    CalDAV calendar entries, excluded by the poll query and never fired), so
+    this collapses to the prompt-firing path.
+    """
     advisory = _build_departure_advisory(item)
     message = cast(str, item.get("message", ""))
     if advisory:
         message = f"{advisory}\n\n{message}"
-    source = cast(str, item.get("item_type", "notification"))
-    is_prompt = (source == "prompt")
 
-    if source == "system":
-        # System handler dispatch — capabilities register callbacks
-        handler_key = cast(str, item.get("channel", item.get("topic", "")))
-        handler = _SYSTEM_HANDLERS.get(handler_key)
-        if handler:
-            try:
-                handler()
-                logger.info(f"{LOG_PREFIX} Fired system handler '{handler_key}' for '{item.get('id')}'")
-            except Exception as exc:
-                logger.error(f"{LOG_PREFIX} System handler '{handler_key}' failed: {exc}")
-        else:
-            logger.warning(f"{LOG_PREFIX} No system handler for topic '{handler_key}'")
+    # Guard: empty/whitespace prompts are not actionable
+    if not message or not message.strip():
+        logger.warning(f"{LOG_PREFIX} Skipping prompt item '{item.get('id', '?')}' — empty message")
         return
-
-    if is_prompt:
-        # Guard: empty/whitespace prompts are not actionable
-        if not message or not message.strip():
-            logger.warning(f"{LOG_PREFIX} Skipping prompt item '{item.get('id', '?')}' — empty message")
-            return
-        # Fire asynchronously: the full LLM ACT loop must NOT execute on the
-        # scheduler poll thread, which is mid-transaction claiming/marking items.
-        # A nested write commit on the shared thread-local connection would flush
-        # the in-progress 'fired' UPDATE and break the claim atomicity, and the
-        # poll lock would be held for the whole loop. The work opens (or reuses,
-        # for a recurring series) the schedule's own thread on the ``schedule``
-        # channel, keyed by ``group_key``.
-        item_id = cast(str, item.get('id', 'unknown'))
-        group_key = cast(str, item.get("group_id") or item["id"])
-        threading.Thread(
-            target=_fire_scheduled_prompt,
-            args=(item_id, message, group_key, item.get("turn_id")),
-            daemon=True,
-            name=f"{_SCHEDULED_WORK_THREAD_PREFIX}-{item_id}",
-        ).start()
-    else:
-        # Direct delivery — bypass LLM, broadcast straight to WebSocket
-        from services.markup import sanitize
-        from services.websocket_broker import WebSocketBroker
-
-        WebSocketBroker().broadcast({
-            'type': source,
-            'content': sanitize(message),
-        })
-        logger.info(f"{LOG_PREFIX} Fired {source} (direct) '{item.get('id')}': {message[:80]}")
+    # Fire asynchronously: the full LLM ACT loop must NOT execute on the
+    # scheduler poll thread, which is mid-transaction claiming/marking items.
+    # A nested write commit on the shared thread-local connection would flush
+    # the in-progress 'fired' UPDATE and break the claim atomicity, and the
+    # poll lock would be held for the whole loop. The work opens (or reuses,
+    # for a recurring series) the schedule's own thread on the ``schedule``
+    # channel, keyed by ``group_key``.
+    item_id = cast(str, item.get('id', 'unknown'))
+    group_key = cast(str, item.get("group_id") or item["id"])
+    threading.Thread(
+        target=_fire_scheduled_prompt,
+        args=(item_id, message, group_key, item.get("turn_id")),
+        daemon=True,
+        name=f"{_SCHEDULED_WORK_THREAD_PREFIX}-{item_id}",
+    ).start()
 
 
 def _fire_scheduled_prompt(
@@ -363,15 +330,12 @@ def _fire_scheduled_prompt(
     during the LLM loop.
     """
     from configs.channels import ScheduledConfig  # noqa: PLC0415
-    from services.database_service import get_shared_db_service  # noqa: PLC0415
-    from services.message_processor import MessageProcessor  # noqa: PLC0415
-
-    db = get_shared_db_service()
+    from controllers.message_processor import MessageProcessor  # noqa: PLC0415
 
     # Series continuity: reuse an earlier occurrence's turn_id if one was already
     # allocated, so a recurring schedule is ONE growing thread (not one per fire).
     if turn_id is None:
-        with db.connection() as conn:
+        with Database.transaction() as conn:
             row = conn.execute(
                 "SELECT turn_id FROM scheduled_items "
                 "WHERE COALESCE(group_id, id) = ? AND turn_id IS NOT NULL LIMIT 1",
@@ -388,21 +352,27 @@ def _fire_scheduled_prompt(
     first_fire = turn_id is None
     meta: dict[str, object] = {"turn_id": turn_id}
     config = ScheduledConfig()
-    MessageProcessor.process(message, config, meta)
+    mp = MessageProcessor.process(
+        config, raw_input=message, metadata=meta,
+        turn_id=turn_id if turn_id is not None else -1,
+    )
     if first_fire:
-        # A cancelled first fire purges its own transcript rows (see
-        # MessageProcessor._cleanup_cancelled) — persisting its turn_id here
-        # regardless would leave scheduled_items pointing at a turn_id that
-        # names no row, and every later fire's constructor would reject it
-        # ("Invalid turn_id specified"), permanently bricking the schedule.
-        # Only persist when this fire's execution is confirmed NOT cancelled;
-        # a skipped persist just leaves the item on fresh-first-fire footing
-        # (turn_id still NULL), which is the pre-existing, safe default.
-        from services.execution_tracker import TurnExecutionService, TurnExecutionState  # noqa: PLC0415
+        # process() is fire-and-forget: it returns as soon as the turn is opened,
+        # before the LLM loop runs. Join the drive thread so the cancellation
+        # check below reads the turn's real terminal state — this function
+        # already runs on its own dedicated per-item thread (see module
+        # docstring), so blocking here holds nothing else up.
+        mp.result()
+        # A cancel deletes nothing — a cancelled first fire's rows persist, so
+        # persisting its turn_id would be safe. But a turn the user killed
+        # mid-flight is a poor anchor for the whole series: skip the persist so
+        # the next fire starts the thread fresh (turn_id still NULL — the
+        # pre-existing first-fire footing), leaving the cancelled turn behind.
+        from models.turn_execution import TurnExecution  # noqa: PLC0415
         fresh_turn_id = cast("int", meta["turn_id"])
-        execution = TurnExecutionService().latest_for_turn(config.channel, fresh_turn_id)
-        if execution is not None and execution.state != TurnExecutionState.CANCELLED:
-            with db.connection() as conn:
+        execution = MessageProcessor(config, fresh_turn_id).turn_execution_service.latest_for_turn()
+        if execution is not None and execution.state != TurnExecution.CANCELLED:
+            with Database.transaction() as conn:
                 conn.execute(
                     "UPDATE scheduled_items SET turn_id = ? "
                     "WHERE COALESCE(group_id, id) = ? AND turn_id IS NULL",
@@ -425,48 +395,3 @@ def _fire_scheduled_prompt(
                 "leaving schedule on fresh-first-fire footing"
             )
     logger.info(f"{LOG_PREFIX} Fired scheduled prompt '{item_id}' on turn {meta['turn_id']}: {message[:80]}")
-
-
-_RECURRENCE_MAP = {
-    "daily": ("day", 1),
-    "weekly": ("day", 7),
-    "weekdays": ("day", 1),
-    "hourly": ("hour", 1),
-}
-
-
-def _next_due(item: dict[str, object]) -> datetime | None:
-    """Return the next UTC due datetime for a recurring item, or None."""
-    import calendar
-    from services.locale_service import calculate_interval
-    from services.time_utils import parse_utc
-
-    recurrence = item.get("recurrence")
-    if not recurrence:
-        return None
-
-    try:
-        due_at = parse_utc(cast(str, item["due_at"]))
-    except Exception:
-        return None
-
-    if recurrence in _RECURRENCE_MAP:
-        next_utc, _ = calculate_interval(due_at, *_RECURRENCE_MAP[recurrence])
-        return next_utc
-
-    if recurrence == "monthly":
-        year, month = due_at.year, due_at.month + 1
-        if month > 12:
-            month, year = 1, year + 1
-        day = min(due_at.day, calendar.monthrange(year, month)[1])
-        return due_at.replace(year=year, month=month, day=day)
-
-    if cast(str, recurrence).startswith("interval:"):
-        try:
-            mins = int(cast(str, recurrence).split(":", 1)[1])
-            next_utc, _ = calculate_interval(due_at, "minute", mins)
-            return next_utc
-        except (ValueError, IndexError):
-            return None
-
-    return None

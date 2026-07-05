@@ -135,11 +135,9 @@ class DocumentAbility(Ability):
     def run(self, params: dict[str, object]) -> ToolResult:
         action = cast(str, params.get(Keys.action, "search"))
 
-        from services.database_service import get_shared_db_service
         from services.document_service import DocumentService
 
-        db = get_shared_db_service()
-        service = DocumentService(db)
+        service = DocumentService()
         return _dispatch(service, action, params)
 
 

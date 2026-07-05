@@ -30,7 +30,7 @@ from abilities._result import ToolResult
 from configs.channels.vision import VisionConfig
 
 if TYPE_CHECKING:
-    from services.message_processor import MessageProcessor
+    from controllers.message_processor import MessageProcessor
     from services.processor_config import ProcessorConfig
 
 logger = logging.getLogger(__name__)
@@ -56,17 +56,16 @@ def describe_image(image_path: str, mime_type: str, query: str, *, policy_channe
     """Forks ONCE on vision-provider-configured. Provider path RAISES on provider
     failure (never swallowed); the OCR fallback is ONLY for the not-configured path.
     """
-    from services.database_service import get_shared_db_service  # noqa: PLC0415
     from services.provider_db_service import ProviderDbService  # noqa: PLC0415
 
-    if ProviderDbService(get_shared_db_service()).get_vision_provider():
-        from services.message_processor import MessageProcessor  # noqa: PLC0415
+    if ProviderDbService().get_vision_provider():
+        from controllers.message_processor import MessageProcessor  # noqa: PLC0415
 
         description = MessageProcessor.process(
-            query,
             VisionConfig(policy_channel),
+            raw_input=query,
             metadata={"image_path": image_path, "mime_type": mime_type},
-        )
+        ).result()
         return {"description": description, "vision_used": True, "note": None}
 
     from services import image_context_service  # noqa: PLC0415
@@ -150,11 +149,10 @@ class VisionAbility(Ability):
                 valid=("image", "query"),
             )
 
-        from services.database_service import get_shared_db_service  # noqa: PLC0415
         from services.document_service import DocumentService  # noqa: PLC0415
         from services.file_mapper_service import FileMapperService  # noqa: PLC0415
 
-        doc = DocumentService(get_shared_db_service()).get_document(doc_id)
+        doc = DocumentService().get_document(doc_id)
         if not doc:
             return ToolResult.err(
                 f"No document found for id={doc_id}.",

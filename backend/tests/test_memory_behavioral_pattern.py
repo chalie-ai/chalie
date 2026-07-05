@@ -156,9 +156,9 @@ class TestSearchDataGraphIncludesBehavioralPattern:
         KIND_BEHAVIORAL_PATTERN was absent from the kinds filter passed to
         dgs.recall(), so behavioral_pattern rows were silently dropped.
         """
-        from services.data_graph_service import get_data_graph_service, KIND_BEHAVIORAL_PATTERN
+        from models.data_graph import DataGraph
+        from services.data_graph_service import KIND_BEHAVIORAL_PATTERN
 
-        dgs = get_data_graph_service()
         pattern_value = json.dumps({
             "name": "dawn_meditation_practice",
             "frequency": "daily",
@@ -166,7 +166,7 @@ class TestSearchDataGraphIncludesBehavioralPattern:
             "summary": "Practises 20 minutes of silent meditation before breakfast",
             "confidence": 8.0,
         })
-        dgs.store(
+        DataGraph.store(
             kind=KIND_BEHAVIORAL_PATTERN,
             key="dawn_meditation_practice",
             value=pattern_value,
@@ -189,9 +189,9 @@ class TestSearchDataGraphIncludesBehavioralPattern:
 
     def test_behavioral_pattern_hit_text_is_rendered_not_raw_json(self, db: sqlite3.Connection) -> None:
         """The text field for a behavioral_pattern hit is the rendered line, not raw JSON."""
-        from services.data_graph_service import get_data_graph_service, KIND_BEHAVIORAL_PATTERN
+        from models.data_graph import DataGraph
+        from services.data_graph_service import KIND_BEHAVIORAL_PATTERN
 
-        dgs = get_data_graph_service()
         pattern_value = json.dumps({
             "name": "evening_run",
             "frequency": "weekdays",
@@ -199,7 +199,7 @@ class TestSearchDataGraphIncludesBehavioralPattern:
             "summary": "Runs 5 km along the seafront",
             "confidence": 7.2,
         })
-        dgs.store(
+        DataGraph.store(
             kind=KIND_BEHAVIORAL_PATTERN,
             key="evening_run",
             value=pattern_value,

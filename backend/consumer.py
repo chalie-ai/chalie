@@ -150,11 +150,9 @@ if __name__ == "__main__":
         logging.warning(f"[System] Embedding model preload failed: {e}")
 
     # Initialize SQLite database — declarative convergence
-    from services.database_service import get_shared_db_service
     from services.schema_convergence_service import SchemaConvergenceService
 
-    database_service = get_shared_db_service()
-    convergence = SchemaConvergenceService(database_service)
+    convergence = SchemaConvergenceService()
     convergence.converge()
     # Separate deterministic value backfill — convergence applies only static
     # column DEFAULTs, never derived values (last_relevant_at, valid_from, etc.).
@@ -163,7 +161,7 @@ if __name__ == "__main__":
     # Initialize API key
     try:
         from services.settings_service import SettingsService
-        settings_service = SettingsService(database_service)
+        settings_service = SettingsService()
         api_key = settings_service.get_api_key_or_generate()
         logging.info(f"[Settings] API key initialized (key: ...{api_key[-8:]})")
     except Exception as e:

@@ -4,6 +4,16 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Optional
 
+# Hard ceiling on any provider's reported context window.
+MAX_CONTEXT_WINDOW = 200_000
+
+# Deadline (seconds) for a single provider API call, enforced by every thin
+# client at its own HTTP boundary (the only place a call can actually be
+# interrupted — a Python thread cannot be killed). On expiry the client raises
+# ProviderTimeoutError, which the retry helper surfaces immediately. This is the
+# ONE provider-call timeout; clients import this constant rather than hard-coding.
+PROVIDER_CALL_TIMEOUT_S = 300
+
 
 class ProviderType(Enum):
     CHAT = "chat"
@@ -31,7 +41,7 @@ class ThinkingLevel(Enum):
 class ProviderApiRequest:
     """Caller-built, provider-neutral send request.
 
-    The caller assembles every field from its own state; Providers.send()
+    The caller assembles every field from its own state; ProviderService.send()
     does NOT reach into mp or any external context — it only receives this DTO.
 
     Fields mirror the informal send_messages() signature that existed across
@@ -55,7 +65,7 @@ class ProviderApiRequest:
     max_tokens: Optional[int] = field(default=None)
 
     # Telemetry metadata — set by the caller at construction time so the
-    # Providers chokepoint can log without reaching into mp or external state.
+    # ProviderService chokepoint can log without reaching into mp or external state.
     # Not part of the provider-neutral contract: excluded from __eq__/repr so
     # they never affect compaction or test assertions.
     # job_name: empty string means "skip log_call" (probe DTOs leave this empty).

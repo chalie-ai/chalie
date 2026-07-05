@@ -3,8 +3,9 @@ Chat API — HTTP turn-control and rich-card action endpoints.
 
 Routes:
   POST /api/action             — receive a rich-card control click; dispatches via
-                             ToolDispatcher.dispatch() and returns the result
-                             synchronously in the response body (no WS frame).
+                             an inert MessageProcessor's dispatch_service.dispatch()
+                             and returns the result synchronously in the response
+                             body (no WS frame).
 
   Async-delegate (subagent) lifecycle lives in its own resource group —
   GET /api/subagents and DELETE /api/subagent/<sub_id> (see api/subagents.py).
@@ -32,9 +33,11 @@ Design:
   UserConfig ProcessorConfig subclass — no MessageProcessor subclass. Live
   output is signal-only, gated by the config's BROADCASTS_STATE: the surface
   holds no event memory and refetches turn blocks over REST. Mid-turn progress
-  (updated + the per-tool tool_called/tool_done timers) is emitted by
-  MessageProcessor itself through its `broadcast` chokepoint; the turn's
-  lifecycle (working/completed/cancelled/crashed) is a separate `turn_execution`
+  (the `updated` block-refetch poke) is emitted by MessageProcessor itself
+  through its `broadcast` chokepoint; each live tool call is a single
+  `tool_name`-bearing frame (state=started/done/error) emitted by ActTrail
+  (services/act_trail.py); the turn's lifecycle
+  (working/completed/cancelled/crashed) is a separate `turn_execution`
   WS frame emitted by its ExecutionTracker (services/execution_tracker.py) on
   every state flip, including a crash (so the surface always learns a failed
   turn ended, even one that died before producing a reply). The only signal
@@ -79,7 +82,7 @@ def deliver_async_result(mp: object, result_text: str) -> None:
     Inherits the originating turn's ``turn_id`` so the synthesised reply lands
     in the same thread the delegate was spawned from.
     """
-    from services.message_processor import MessageProcessor  # noqa: PLC0415
+    from controllers.message_processor import MessageProcessor  # noqa: PLC0415
 
     config = getattr(mp, "config", None)
     if config is None:
@@ -94,15 +97,14 @@ def deliver_async_result(mp: object, result_text: str) -> None:
     # assistant row AFTER the turn's settle0, so the synthesis IS a forked reply:
     # it inherits turn_id → the MessageProcessor switches itself to FORK view
     # internally (no external flag).
-    metadata = dict(getattr(mp, "_metadata", None) or {})
+    metadata = dict(getattr(mp, "metadata", None) or {})
     metadata["hidden_input"] = True
     metadata["attachments"] = []
     turn_id = getattr(mp, "turn_id", None)
-    if turn_id is not None:
-        metadata["turn_id"] = turn_id
     # The synthesis turn is a full UserConfig turn, so its lifecycle signals
-    # come from MessageProcessor itself — nothing to emit here.
-    MessageProcessor.process(result_text, synth_config, metadata)
+    # come from MessageProcessor itself — nothing to emit here. Fire-and-forget:
+    # nothing here consumes the final text, so the drive thread is never joined.
+    MessageProcessor.process(synth_config, result_text, metadata, turn_id if turn_id is not None else -1)
 
 
 def _stage_chat_uploads(files: Sequence[object]) -> list[object]:
@@ -129,8 +131,8 @@ def _stage_chat_uploads(files: Sequence[object]) -> list[object]:
 class _ActionButtonConfig(ProcessorConfig):
     """Minimal ProcessorConfig for action-button dispatches (no ACT loop runs).
 
-    No ACT loop is executed; the three prompt builders are never invoked —
-    they return "" to satisfy the abstract base.
+    No ACT loop is executed; prompt_service returns "" for the action_button
+    channel, so no prompt builders are needed here.
     """
 
     def __init__(self) -> None:
@@ -146,31 +148,6 @@ class _ActionButtonConfig(ProcessorConfig):
             memory_seed=False,
         )
 
-    def get_user_definition(self, mp: object) -> str:
-        return ""
-
-    def get_user_prompt(self, mp: object) -> str:
-        return ""
-
-    def get_system_prompt(self, mp: object) -> str:
-        return ""
-
-
-class _ActionCtx:
-    """Minimal mp-like context for ToolDispatcher in action-button dispatches.
-
-    ``broadcast_to=None`` on the config keeps dispatches silent. ``uid=None``
-    signals a non-user channel dispatch. An action-button dispatch runs
-    synchronously to completion in one HTTP request — there is no running
-    turn for a stop button to reach, so ``should_stop`` is always False.
-    """
-
-    config = _ActionButtonConfig()
-    uid = None
-
-    def should_stop(self) -> bool:
-        return False
-
 
 # ── HTTP endpoints ────────────────────────────────────────────────────────────
 
@@ -180,11 +157,11 @@ class ActionResource(Resource):
     @require_auth
     @chat_ns.doc(
         description=(
-            "Dispatches a rich-card control click via ToolDispatcher and returns the "
-            "result synchronously. A card action is a silent state mutation, not a "
-            "conversation turn: it never persists to the transcript and crosses no WS "
-            "frame, so the calling card resolves its optimistic update straight from "
-            "this HTTP response."
+            "Dispatches a rich-card control click via an inert MessageProcessor's "
+            "dispatch_service and returns the result synchronously. A card action is "
+            "a silent state mutation, not a conversation turn: it never persists to "
+            "the transcript and crosses no WS frame, so the calling card resolves its "
+            "optimistic update straight from this HTTP response."
         )
     )
     @chat_ns.expect(_M["ActionRequest"])
@@ -198,9 +175,15 @@ class ActionResource(Resource):
         """Run the skill and return its result inline — the WS bus stays signal-only."""
         action_start = time.time()
         try:
-            from abilities._dispatcher import ToolDispatcher  # noqa: PLC0415
+            from controllers.message_processor import MessageProcessor  # noqa: PLC0415
 
-            result_text = ToolDispatcher(_ActionCtx()).dispatch(dto.skill, dto.params)
+            # Inert (I2): no process()/begin(), so zero DB/WS side-effects at
+            # construction — the config's skip_transcript/skip_input_row/
+            # broadcast_to=None flags keep the dispatch itself silent, and with
+            # no turn_executions row, should_stop() fails open (always False) —
+            # there is no running turn for a stop button to reach.
+            mp = MessageProcessor(_ActionButtonConfig())
+            result_text = mp.dispatch_service.dispatch(dto.skill, dto.params)
             if result_text.startswith("Unknown tool:"):
                 return error(f"Unknown skill: {dto.skill}", 400)
 

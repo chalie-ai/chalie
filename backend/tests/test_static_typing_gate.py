@@ -87,6 +87,7 @@ _PACKAGES = [
     "tests",
 ]
 _TOP_LEVEL_MODULES = [
+    "boot_screen.py",
     "consumer.py",
     "run.py",
     "runtime_config.py",

@@ -48,7 +48,7 @@ class DiscoveryConfig(UserConfig):
         object.__setattr__(self, "channel", "discovery")
         object.__setattr__(self, "read_channel", "user")
         object.__setattr__(self, "broadcast_to", None)
-        object.__setattr__(self, "post_turn_hooks", ())
+        object.__setattr__(self, "prompt_channel", "user")
 
     def type(self) -> "ConfigTypeEnum":
         from services.config_type import ConfigTypeEnum  # noqa: PLC0415

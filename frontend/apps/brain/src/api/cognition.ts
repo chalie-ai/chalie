@@ -47,18 +47,9 @@ export interface WorldTelemetry {
   [k: string]: unknown;
 }
 
-export interface WorldSchedule {
-  status?: string;
-  message?: string;
-  due_at?: string | null;
-  recurrence?: string | null;
-  [k: string]: unknown;
-}
-
 export interface WorldState {
   inputs?: {
     telemetry?: WorldTelemetry | null;
-    schedule?: WorldSchedule[] | null;
     signals?: Record<string, { label?: string; [k: string]: unknown }> | null;
     bg_processes?: (string | Record<string, unknown>)[] | null;
     [k: string]: unknown;

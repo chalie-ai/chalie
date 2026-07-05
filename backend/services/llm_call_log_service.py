@@ -3,15 +3,11 @@
 import logging
 from typing import TYPE_CHECKING, cast
 
-from services.database_service import get_shared_db_service
+from services.database import Database
 from services.time_utils import utc_now
 
 if TYPE_CHECKING:
-    from typing import Callable, Protocol, Sequence
-
-    class _DbService(Protocol):
-        def execute(self, sql: str, params: "Sequence[object]" = ...) -> object: ...
-        def fetch_all(self, sql: str, params: "Sequence[object]" = ...) -> list[dict[str, object]]: ...
+    from typing import Callable
 
 logger = logging.getLogger(__name__)
 
@@ -40,8 +36,7 @@ def log_call(
 ) -> None:
     """Record a single LLM call with full token counts and latency."""
     try:
-        db = cast("_DbService", get_shared_db_service())
-        db.execute(
+        Database.conn().execute(
             """INSERT INTO llm_call_log
                (job_name, provider, model,
                 tokens_input, tokens_output,
@@ -69,12 +64,11 @@ def get_last_chat_request_tokens(job_name: str = 'user:user') -> 'int | None':
     makes the indicator oscillate between the real user turn (~17-20k) and
     a delegate's tiny clean-context sub-request (~2k).
     """
-    db = get_shared_db_service()
-    rows = db.fetch_all(
+    rows = [dict(r) for r in Database.conn().execute(
         "SELECT tokens_input FROM llm_call_log WHERE job_name = ? "
         "ORDER BY id DESC LIMIT 1",
         (job_name,),
-    )
+    ).fetchall()]
     return cast(int, rows[0]['tokens_input']) if rows else None
 
 
@@ -85,7 +79,6 @@ def get_token_usage(window: str, usage_class: str | None = None) -> dict[str, ob
     entries: list of bucket/token breakdowns by (bucket, usage_class, model, provider).
     summary: total_tokens, cache_hit_pct, tokens_today, most_active_model.
     """
-    db = cast("_DbService", get_shared_db_service())
     offset = _WINDOW_OFFSETS[window]
 
     # Bucket width: hour/day → by-hour buckets; week/month/lifetime → by-day.
@@ -104,7 +97,7 @@ def get_token_usage(window: str, usage_class: str | None = None) -> dict[str, ob
 
     where_sql = ("WHERE " + " AND ".join(where_clauses)) if where_clauses else ""
 
-    rows = db.fetch_all(
+    rows = [dict(r) for r in Database.conn().execute(
         f"""SELECT
                strftime('{bucket_fmt}', created_at) AS bucket,
                usage_class,
@@ -120,7 +113,7 @@ def get_token_usage(window: str, usage_class: str | None = None) -> dict[str, ob
            GROUP BY bucket, usage_class, model, provider
            ORDER BY bucket DESC""",
         params,
-    )
+    ).fetchall()]
 
     entries = [
         {
@@ -163,14 +156,13 @@ def _compute_summary(entries: list[dict[str, object]]) -> dict[str, object]:
 
     # Tokens today — re-query the DB for the current UTC day.
     try:
-        db = cast("_DbService", get_shared_db_service())
-        today_rows = db.fetch_all(
+        today_rows = [dict(r) for r in Database.conn().execute(
             """SELECT COALESCE(SUM(tokens_input + tokens_output +
                                   tokens_cache_read + tokens_cache_create +
                                   tokens_thinking), 0) AS total
                FROM llm_call_log
                WHERE created_at >= date('now')""",
-        )
+        ).fetchall()]
         tokens_today = today_rows[0]['total'] if today_rows else 0
     except Exception:
         tokens_today = 0

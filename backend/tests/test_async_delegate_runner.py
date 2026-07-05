@@ -12,7 +12,7 @@ Drives the runner's real daemon-thread path with no mocks: spawn returns the
 placeholder immediately (non-blocking), registers a rich snapshot (tool name,
 the model's act-summary, start time, cancel event), runs the real ability
 through the shared sync-run primitive, and deregisters on completion. Both
-lifecycle events are observed through the REAL WebSocketBroker fan-out via an
+lifecycle events are observed through the REAL socket-registry fan-out via an
 in-process client implementing the broker's send Protocol — the same seam the
 WS route uses — so a dropped event or a missing payload key fails the test loud.
 
@@ -36,13 +36,13 @@ from abilities._ability import Ability
 from abilities._result import ToolResult
 from services.async_delegate_runner import AsyncDelegateRunner
 from services.time_utils import parse_utc
-from services.websocket_broker import WebSocketBroker
+from services.websocket import Websocket
 
 pytestmark = pytest.mark.unit
 
 
 class _RecordingClient:
-    """A real WebSocketBroker subscriber: implements the broker's send(str)
+    """A real socket-registry subscriber: implements the registry's send(str)
     Protocol and captures every broadcast frame as the inspectable surface the
     Processes panel renders from."""
 
@@ -92,7 +92,7 @@ def test_spawn_pushes_rich_snapshot_then_emits_end_on_deregister() -> None:
     ability.mp = object()  # delivery is skipped (cancelled below) — never reaches a real LLM.
 
     client = _RecordingClient()
-    WebSocketBroker().connect(client)
+    Websocket._connect(client)
     runner = AsyncDelegateRunner()
     try:
         placeholder = runner.spawn(ability, {}, ability.mp, "Drafting the weekly digest")
@@ -134,7 +134,7 @@ def test_spawn_pushes_rich_snapshot_then_emits_end_on_deregister() -> None:
         ends = client.frames_for("subagent_end", delegate_id)
         assert len(ends) == 1
     finally:
-        WebSocketBroker().disconnect(client)
+        Websocket._disconnect(client)
 
 
 def test_cancel_delivers_notice_to_model_instead_of_dropping(caplog: pytest.LogCaptureFixture) -> None:

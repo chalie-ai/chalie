@@ -6,7 +6,7 @@ from abilities._budget import BudgetCappedAbility
 from abilities._params import Keys
 from abilities._pattern_provenance import pattern_provenance
 from abilities._result import ToolResult
-from services.act_trail import ActTrail
+from models.tool_call import ToolCall
 from services.data_graph_service import VALID_KINDS, get_data_graph_service
 
 # Subset: exclude behavioral_pattern (own tool) and system (internal use).
@@ -33,17 +33,17 @@ class SaveGraph(BudgetCappedAbility):
         if channel is None or turn_id is None:
             return set()
         seen: set[tuple[str, str, str]] = set()
-        for row in ActTrail().fetch_by_turn(channel, turn_id):
-            if row.get("tool_name") != "save_graph":
+        for row in ToolCall.by_turn(channel, turn_id):
+            if row.tool_name != "save_graph":
                 continue
             # The dispatcher opens this very call's trail row (result="") before
             # run() executes, so it surfaces here too. An empty result means the
             # row is still in flight (incl. this call) — only committed prior
             # writes count toward dedup.
-            if not row.get("result"):
+            if not row.result:
                 continue
             try:
-                p = json.loads(cast("str", row.get("params") or "{}"))
+                p = json.loads(row.params or "{}")
             except (ValueError, TypeError):
                 continue
             k = p.get(Keys.kind, "")
