@@ -802,9 +802,11 @@ def _cancel(params: dict[str, object]) -> ToolResult:
 
 def _set_enabled(params: dict[str, object], *, enabled: bool) -> ToolResult:
     """Enable or disable a pending series. Disabling makes the poller skip it;
-    enabling recomputes ``due_at`` forward from now (via ``next_due_from``, which
-    floors its anchor) so the series resumes at the NEXT occurrence rather than
-    firing the one missed while disabled — the approved skip-the-catch-up rule."""
+    enabling recomputes ``due_at`` forward, anchored on the row's stored
+    ``start_at`` (via ``next_due_from``, which floors its anchor to now). A past
+    ``start_at`` resumes at the NEXT occurrence rather than firing the one missed
+    while disabled — the approved skip-the-catch-up rule — while a future-dated
+    ``start_at`` still holds the series until its start, never re-floored to now."""
     verb = "enable" if enabled else "disable"
     try:
         item_id, err = _resolve_pending_target(params, verb=verb)
@@ -815,14 +817,14 @@ def _set_enabled(params: dict[str, object], *, enabled: bool) -> ToolResult:
             cursor = conn.cursor()
             if enabled:
                 cron = cursor.execute(
-                    "SELECT cron_dom, cron_hour, cron_minute FROM scheduled_items "
+                    "SELECT start_at, cron_dom, cron_hour, cron_minute FROM scheduled_items "
                     "WHERE id=? AND status='pending'",
                     (item_id,),
                 ).fetchone()
                 if cron is None:
                     affected = 0
                 else:
-                    due_at = next_due_from(utc_now(), cron[0], cron[1], cron[2])[0]
+                    due_at = next_due_from(cron[0], cron[1], cron[2], cron[3])[0]
                     affected = cursor.execute(
                         "UPDATE scheduled_items SET enabled=1, due_at=? WHERE id=? AND status='pending'",
                         (due_at.isoformat(), item_id),

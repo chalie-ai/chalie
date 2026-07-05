@@ -1,11 +1,8 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, cast
+from typing import cast
 
 from services.processor_config import ProcessorConfig
-
-if TYPE_CHECKING:
-    from controllers.message_processor import MessageProcessor
 
 # ── Super-episode helper functions ───────────────────────────────────────────
 # Moved here from services/super_episode_encoder_processor.py.
@@ -104,19 +101,14 @@ def _fetch_transcript_spans(t_ids: set[int]) -> str:
 
 # ── Super-episode config ─────────────────────────────────────────────────────
 
-if TYPE_CHECKING:
-    class _WithSourcesSpans:
-        _sources: list[object]
-        _spans: object
-
 
 class SuperEpisodeConfig(ProcessorConfig):
     """post_turn_hooks = () (caller owns the episode write).
 
-    sources and spans are captured at construction so get_user_prompt is
-    self-contained per cluster (the cluster loop lives in the caller). The
-    ``channel`` arg is the user channel being consolidated; the processor's
-    transcript channel is always 'super_episode_encoder'.
+    sources and spans are captured at construction so ``PromptService`` can
+    build the user prompt self-contained per cluster (the cluster loop lives
+    in the caller). The ``channel`` arg is the user channel being consolidated;
+    the processor's transcript channel is always 'super_episode_encoder'.
     """
 
     def __init__(self, channel: str, sources: list[object], spans: object) -> None:
@@ -133,23 +125,6 @@ class SuperEpisodeConfig(ProcessorConfig):
         )
         object.__setattr__(self, "_sources", sources)
         object.__setattr__(self, "_spans", spans)
-
-    def get_user_definition(self, mp: "MessageProcessor") -> str:
-        return (
-            "The user is 'super_episode_encoder' — a background process that "
-            "consolidates clusters of related episodes into a single super-episode."
-        )
-
-    def get_user_prompt(self, mp: "MessageProcessor") -> str:
-        _self = cast("_WithSourcesSpans", self)
-        src = "\n\n".join(
-            f"[{cast('dict[str, object]', e)['id']}] {cast('dict[str, object]', e)['gist']}"
-            for e in _self._sources
-        )
-        return (
-            f"Source episodes:\n\n{src}\n\n"
-            f"Raw transcript spans covering these episodes:\n\n{_self._spans}"
-        )
 
     @property
     def system_prompt(self) -> str:

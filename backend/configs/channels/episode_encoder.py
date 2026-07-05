@@ -1,11 +1,8 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, ClassVar
+from typing import ClassVar
 
 from services.processor_config import ProcessorConfig
-
-if TYPE_CHECKING:
-    from controllers.message_processor import MessageProcessor
 
 
 class EpisodeEncoderConfig(ProcessorConfig):
@@ -28,29 +25,6 @@ class EpisodeEncoderConfig(ProcessorConfig):
             broadcast_to=None,
             memory_seed=False,
         )
-
-    def get_user_definition(self, mp: "MessageProcessor") -> str:
-        return (
-            "The user is 'episode_encoder' — a background process that "
-            "summarises transcript windows into memory snapshots."
-        )
-
-    def get_user_prompt(self, mp: "MessageProcessor") -> str:
-        window = getattr(mp, "_window", "") or ""
-        referenced = getattr(mp, "_referenced", "") or ""
-        parts = [
-            "Transcript window — each line is `[id] (timestamp) role: content`:",
-            "",
-            window,
-        ]
-        if referenced:
-            parts.extend([
-                "",
-                "Episodes referenced during these turns (candidates for update / delete):",
-                "",
-                referenced,
-            ])
-        return "\n".join(parts)
 
     @property
     def system_prompt(self) -> str:

@@ -316,16 +316,22 @@ class SchedulerItemResource(Resource):
         catch-up semantics.
         """
         try:
-            start_at_utc = parse_local(dto.start_at) if dto.start_at else utc_now()
-            due_utc, _ = next_due_from(start_at_utc, dto.day, dto.hour, dto.minute)
             with Database.transaction() as conn:
                 cursor = conn.cursor()
-                cursor.execute(
-                    "SELECT id FROM scheduled_items WHERE id = ? AND status = 'pending'",
+                existing = cursor.execute(
+                    "SELECT start_at FROM scheduled_items WHERE id = ? AND status = 'pending'",
                     (item_id,),
-                )
-                if cursor.fetchone() is None:
+                ).fetchone()
+                if existing is None:
                     return error(_ERR_NOT_PENDING, 404)
+                # Anchor for due_at: the caller's new start_at when supplied, else
+                # the row's existing one (a plain enabled-toggle omits it). Keeping
+                # the stored start_at means disabling then re-enabling a future-dated
+                # series never re-floors its activation to now; next_due_from floors
+                # the anchor to now regardless, so a past start_at still resumes at
+                # the next occurrence — the approved skip-the-catch-up semantics.
+                start_at_stored = parse_local(dto.start_at).isoformat() if dto.start_at else existing[0]
+                due_utc, _ = next_due_from(start_at_stored, dto.day, dto.hour, dto.minute)
                 cursor.execute(
                     """
                     UPDATE scheduled_items
@@ -334,17 +340,14 @@ class SchedulerItemResource(Resource):
                     WHERE id = ? AND status = 'pending'
                     """,
                     (
-                        dto.message, start_at_utc.isoformat(), due_utc.isoformat(),
+                        dto.message, start_at_stored, due_utc.isoformat(),
                         dto.day, dto.hour, dto.minute, 1 if dto.enabled else 0, item_id,
                     ),
                 )
-                if cursor.rowcount == 0:
-                    return error(_ERR_NOT_PENDING, 404)
-                cursor.execute(
+                row = cursor.execute(
                     f"SELECT {', '.join(_COLS)} FROM scheduled_items WHERE id = ?",
                     (item_id,),
-                )
-                row = cursor.fetchone()
+                ).fetchone()
             if row is None:
                 return error(_ERR_NOT_PENDING, 404)
             return _item_dto(row, _COLS)
