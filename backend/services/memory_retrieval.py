@@ -39,7 +39,6 @@ import logging
 from typing import TYPE_CHECKING, Literal, cast, overload
 
 from abilities._result import ToolResult
-from models.behavioral_pattern import BehavioralPattern
 from models.episode import Episode
 from services.database import Database
 
@@ -80,12 +79,9 @@ def handle_store(channel: str, params: dict[str, object]) -> ToolResult:
             hint="pass the atomic 'value' to store under the key.",
         )
 
-    from services.data_graph_service import get_data_graph_service
-
-    dgs = get_data_graph_service()
-    result = dgs.store(kind=kind, key=key, value=str(value), source=f"skill:memory:store:{channel}")
-
-    if result is None:
+    # Validate the kind ourselves now (the deleted thin service used to).
+    from services.data_graph_service import VALID_KINDS
+    if kind not in VALID_KINDS:
         return ToolResult.err(
             f"Could not store '{key}': '{kind}' is not a valid memory kind.",
             code="invalid-kind",
@@ -93,6 +89,19 @@ def handle_store(channel: str, params: dict[str, object]) -> ToolResult:
             key=key,
             valid=("user_specific", "system", "misc"),
         )
+
+    source = f"skill:memory:store:{channel}"
+    result: dict[str, object]
+    if kind == "user_specific":
+        from services.fact_service import FactService
+        result = FactService().store(key, str(value), source=source)  # full envelope
+    else:
+        # Transitional: other kinds land on their own verticals in E2–E6. The
+        # bare-row store gives no status, so non-FACTS fall through to
+        # _format_store_response's plain-stored fallback — intended here.
+        from models.data_graph import DataGraph
+        DataGraph.store(kind, key, str(value), source=source)
+        result = {"status": "", "provided_key": key, "canonical_key": key, "value": str(value)}
 
     body = _format_store_response(result)
     return ToolResult.ok(body, action="store", key=key)
@@ -111,9 +120,6 @@ def _format_store_response(result: dict[str, object]) -> str:
         key_display = f"'{canonical}'"
 
     if status == "created":
-        rule = result.get("rule")
-        if rule == "coexist":
-            return f"{key_display} saved as ['{value}']."
         return f"{key_display} saved as '{value}'."
 
     if status == "reinforced":
@@ -123,29 +129,8 @@ def _format_store_response(result: dict[str, object]) -> str:
         old = result.get("old_value", "")
         return f"{key_display} updated to '{value}'. Supersedes '{old}' (previously set on {date})."
 
-    if status == "conflict":
-        old = result.get("old_value", "")
-        return (
-            f"{key_display} is immutable. Existing value '{old}' (set {date}) kept. "
-            f"New value '{value}' rejected. Use 'forget' first if you're sure."
-        )
-
-    if status == "appended":
-        all_vals = cast("list[object]", result.get("all_values") or [])
-        vals_str = ", ".join(f"'{v}'" for v in all_vals)
-        return f"{key_display} updated. Values now: [{vals_str}] (previously updated on {date})."
-
-    if status == "lut_miss_created":
-        return f"'{provided}' saved as '{value}'."
-
-    if status == "lut_miss_reinforced":
-        return f"'{provided}' already set to '{value}'. Memory reinforced."
-
-    if status == "lut_miss_appended":
-        all_vals = cast("list[object]", result.get("all_values") or [])
-        vals_str = ", ".join(f"'{v}'" for v in all_vals)
-        return f"'{provided}' updated. Values now: [{vals_str}]."
-
+    # coexist/immutable (conflict, appended) and the LUT-miss statuses land in E1b
+    # with the concept-LUT layer; this slice cannot emit them.
     return f"'{provided}' stored."
 
 
@@ -165,19 +150,19 @@ def handle_forget(params: dict[str, object]) -> ToolResult:
             hint="pass the canonical 'key' of the fact to forget.",
         )
 
-    from services.data_graph_service import get_data_graph_service
-
-    dgs = get_data_graph_service()
-    result = dgs.forget(kind=kind, key=key, value=value)
-
-    if result is None:
+    if kind != "user_specific":
+        # Non-FACTS forget has no model method after the spine rewrite; each
+        # vertical restores it (E2–E6). A loud, stable error beats a crash.
         return ToolResult.err(
-            f"Could not forget '{key}': '{kind}' is not a valid memory kind.",
-            code="invalid-kind",
+            f"Forget for '{kind}' memories isn't available yet.",
+            code="kind-not-migrated",
             action="forget",
             key=key,
-            valid=("user_specific", "system", "misc"),
+            valid=("user_specific",),
         )
+
+    from services.fact_service import FactService
+    result = FactService().forget(key, value)
 
     body = _format_forget_response(result)
     return ToolResult.ok(body, action="forget", key=key)
@@ -188,7 +173,6 @@ def _format_forget_response(result: dict[str, object]) -> str:
     canonical = result.get("canonical_key", "")
     provided = result.get("provided_key", "")
     value = result.get("value")
-    date = result.get("date")
 
     if canonical and provided and canonical != provided:
         key_display = f"'{canonical}' (canonical of '{provided}')"
@@ -196,20 +180,11 @@ def _format_forget_response(result: dict[str, object]) -> str:
         key_display = f"'{canonical or provided}'"
 
     if status == "forgotten":
-        rule = result.get("rule")
-        if rule == "coexist":
-            remaining = cast("list[object]", result.get("remaining_values") or [])
-            vals_str = ", ".join(f"'{v}'" for v in remaining)
-            return f"'{value}' removed from {key_display}. Remaining: [{vals_str}]."
+        # Forget-by-exact-key closes N rows with no single set-date, so render
+        # only what we have: the removed value when one was named, else a bare
+        # confirmation. The dated "was X, set …" form returns with E1b's LUT.
         old = result.get("old_value") or value
-        return f"{key_display} forgotten (was '{old}', set {date})."
-
-    if status == "forgotten_all":
-        n = result.get("versions_removed", 0)
-        return f"{key_display} forgotten. All {n} versions removed."
-
-    if status == "forgotten_empty":
-        return f"'{value}' removed from {key_display}. No values remain — key fully forgotten."
+        return f"{key_display} forgotten (was '{old}')." if old else f"{key_display} forgotten."
 
     if status == "value_not_found":
         remaining = cast("list[object]", result.get("remaining_values") or [])
@@ -219,9 +194,8 @@ def _format_forget_response(result: dict[str, object]) -> str:
     if status == "not_found":
         return f"No memory stored under {key_display}. Nothing to forget."
 
-    if status == "error":
-        return f"{LOG_PREFIX} {result.get('message', 'Unknown error')}"
-
+    # coexist (multi-value remaining), forgotten_all/empty and the error status
+    # land in E1b with the LUT/immutable layer; this slice cannot emit them.
     return f"{key_display} forget operation completed."
 
 
@@ -514,46 +488,24 @@ def _relevance_label(score: float) -> str:
 
 
 def _search_data_graph(query: str, limit: int) -> tuple[list[dict[str, object]], str]:
+    # Transitional FACTS-only recall: E7's modelless recall service fuses every
+    # vertical's search() + Episodic with real cosine/RRF; here only the
+    # user_specific lane is ported, searched via FTS. The error:-prefix status
+    # contract (the backend-down discriminator) is preserved.
     try:
-        from services.data_graph_service import (
-            get_data_graph_service,
-            KIND_BEHAVIORAL_PATTERN,
-            KIND_PLACE,
-            KIND_USER_SPECIFIC,
-            KIND_SYSTEM,
-            KIND_MISC,
-            KIND_DISCOVERY,
-        )
-
-        dgs = get_data_graph_service()
-        rows = dgs.recall(
-            query=query,
-            kinds=[KIND_USER_SPECIFIC, KIND_SYSTEM, KIND_MISC,
-                   KIND_BEHAVIORAL_PATTERN, KIND_PLACE, KIND_DISCOVERY],
-            limit=limit,
-        )
-
+        from models.fact import FactRow
+        rows = FactRow.search(query, limit)
         if not rows:
             return [], "0 matches"
-
-        hits = []
-        for row in rows:
-            cos = cast("float", row.get("cos_score", 0.0))
-            kind = cast("str", row.get("kind", ""))
-            text = cast("str", row.get("value", ""))
-            if kind == KIND_BEHAVIORAL_PATTERN:
-                text = BehavioralPattern.render(text)
-            hits.append({
-                "id": row.get("key", ""),
-                "kind": kind,
-                "text": text,
-                "relevance": _relevance_label(cos),
-                "confidence": cos,
-                "created_at": None,
-            })
-
+        hits: list[dict[str, object]] = [{
+            "id": r.key,
+            "kind": r.kind,
+            "text": r.value or "",
+            "relevance": "medium",     # FTS-only has no cosine; E7 restores true scoring
+            "confidence": 0.6,          # keep >= 0.5 so the partial-confidence gate is unaffected
+            "created_at": None,
+        } for r in rows]
         return hits, f"{len(hits)} matches"
-
     except Exception as e:
         logger.warning(f"{LOG_PREFIX} Data graph search failed: {e}")
         return [], f"error: {e}"

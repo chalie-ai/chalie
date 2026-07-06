@@ -7,7 +7,7 @@ from abilities._params import Keys
 from abilities._pattern_provenance import pattern_provenance
 from abilities._result import ToolResult
 from models.tool_call import ToolCall
-from services.data_graph_service import VALID_KINDS, get_data_graph_service
+from services.data_graph_service import VALID_KINDS
 
 # Subset: exclude behavioral_pattern (own tool) and system (internal use).
 ALLOWED_KINDS = sorted(VALID_KINDS - {"behavioral_pattern", "system"})
@@ -133,24 +133,21 @@ class SaveGraph(BudgetCappedAbility):
         if dedup_key in seen:
             return ToolResult.ok({"saved": 0, "deduped": 1, "key": key})
 
-        # DataGraphService.store() never raises — it swallows every failure
-        # internally and returns None (data_graph_service.store: try/except →
-        # logger.error → return None). A None result is therefore the only
-        # store-failure signal; surface it loudly instead of as a phantom save.
-        result = get_data_graph_service().store(
-            kind=kind,
-            key=key,
-            value=value,
-            source=pattern_provenance(proc),
-        )
-        if result is None:
-            return ToolResult.err(
-                f"Could not store {kind} fact {key!r}.",
-                code="store-failed",
-                hint="check the data graph service logs; nothing was persisted",
-            )
+        # FACTS route through their vertical (rich status → reinforced-dedup);
+        # every other kind lands transitionally on the alive DataGraph model
+        # classmethod (E2–E6 give each its own vertical + status). Neither raises
+        # for a valid kind, so the pre-gate + ALLOWED_KINDS check above are the
+        # only rejection points — no None store-failure branch remains.
+        source = pattern_provenance(proc)
+        if kind == "user_specific":
+            from services.fact_service import FactService
+            status = FactService().store(key, value, source=source)["status"]
+        else:
+            from models.data_graph import DataGraph
+            DataGraph.store(kind, key, value, source=source)
+            status = "created"
 
-        if result.get("status") == "reinforced":
+        if status == "reinforced":
             return ToolResult.ok({"saved": 0, "deduped": 1, "key": key})
 
         return ToolResult.ok({"saved": 1, "kind": kind, "key": key})

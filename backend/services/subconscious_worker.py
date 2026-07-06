@@ -13,7 +13,6 @@ if TYPE_CHECKING:
     from services.decay_engine_service import DecayEngineService
     from services.embedding_service import EmbeddingService
     from services.episodic_service import EpisodicService
-    from services.data_graph_service import DataGraphService
 
 from models.episode import Episode
 from services.database import Database
@@ -434,14 +433,12 @@ class SubconsciousWorker:
     def _step_fact_extraction(self) -> str:
         """Step 2 — route hard facts from new episodes into data_graph."""
         from configs.channels import FactExtractionConfig, parse_fact_ops  # noqa: PLC0415
-        from services.data_graph_service import get_data_graph_service  # noqa: PLC0415
         from controllers.message_processor import MessageProcessor  # noqa: PLC0415
 
         backlog = Episode.fact_extraction_backlog(_FACT_EXTRACTION_CALL_BUDGET)
         if not backlog:
             return "no backlog"
 
-        dg = get_data_graph_service()
         counters = {
             "episodes": 0, "add": 0, "update": 0, "delete": 0,
             "noop": 0, "unparseable": 0, "failed": 0,
@@ -450,7 +447,7 @@ class SubconsciousWorker:
         for episode in backlog:
             try:
                 self._extract_facts_for_episode(
-                    episode, dg, counters,
+                    episode, counters,
                     FactExtractionConfig, parse_fact_ops, MessageProcessor,
                 )
             except Exception as exc:
@@ -469,15 +466,20 @@ class SubconsciousWorker:
     def _extract_facts_for_episode(
         self,
         episode: Episode,
-        dg: "DataGraphService",
         counters: dict[str, int],
         config_cls: object,
         parse_ops: object,
         processor_cls: object,
     ) -> None:
         """Run the constrained-op pipeline for a single episode and stamp it."""
+        from models.fact import FactRow  # noqa: PLC0415
+
         gist = episode.gist or ""
-        neighbours = dg.recall(gist, limit=_FACT_NEIGHBOUR_LIMIT) if gist else []
+        neighbours: list[object] = (
+            [{"kind": r.kind, "key": r.key, "value": r.value}
+             for r in FactRow.search(gist, _FACT_NEIGHBOUR_LIMIT)]
+            if gist else []
+        )
 
         from collections.abc import Callable as _Callable  # noqa: PLC0415
         config = cast(_Callable[..., object], config_cls)(gist, neighbours)
@@ -502,26 +504,29 @@ class SubconsciousWorker:
         # backlog feeds every episode-producing channel.
         source = _fact_source_for(episode.channel)
         for op in ops:
-            self._apply_fact_op(op, dg, counters, source)
+            self._apply_fact_op(op, counters, source)
 
         Episode.set_facts_extracted_at(cast(str, episode.id))
         counters["episodes"] += 1
 
-    def _apply_fact_op(self, op: dict[str, object], dg: "DataGraphService", counters: dict[str, int], source: str) -> None:
-        """Apply one validated constrained op to data_graph and count it."""
+    def _apply_fact_op(self, op: dict[str, object], counters: dict[str, int], source: str) -> None:
+        """Apply one validated constrained op to data_graph and count it.
+
+        The pipeline writes user_specific only (fact_extraction stamps that kind
+        on every op, DELETE included), so both branches route through the FACTS
+        vertical: DELETE invalidates the key, ADD/UPDATE upsert it."""
         from configs.channels.fact_extraction import OP_DELETE  # noqa: PLC0415
+        from models.fact import FactRow  # noqa: PLC0415
+        from services.fact_service import FactService  # noqa: PLC0415
 
         verb = op["op"]
         try:
             if verb == OP_DELETE:
-                dg.invalidate(cast(str, op["kind"]), cast(str, op["key"]))
+                FactRow.forget(cast(str, op["key"]))
                 counters["delete"] += 1
                 return
-            result = dg.upsert_fact(cast(str, op["key"]), cast(str, op["value"]), source=source)
-            if result is None:
-                counters["noop"] += 1
-                return
-            counters[_FACT_STATUS_COUNTER.get(cast(str, result.get("status")), "add")] += 1
+            env = FactService().store(cast(str, op["key"]), cast(str, op["value"]), source=source)
+            counters[_FACT_STATUS_COUNTER.get(cast(str, env["status"]), "add")] += 1
         except Exception as exc:
             counters["failed"] += 1
             logger.warning(
