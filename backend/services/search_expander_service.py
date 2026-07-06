@@ -255,8 +255,15 @@ class SearchExpanderService:
         if old is None:
             return
 
-        # Delete stale FTS entry before overwriting content
-        self._delete_data_graph_fts(conn, rowid, old[0], old[1], old[2], old[3] or '')
+        # The external-content FTS index is populated ONLY here, in lock-step
+        # with search_queries: this method sets search_queries non-NULL exactly
+        # when it inserts the posting, and no trigger writes the index. So
+        # search_queries IS NULL <=> the row was never indexed, and issuing the
+        # FTS5 'delete' command for a posting that was never inserted corrupts
+        # the index (TKT-1456: delete-before-first-insert). Only remove a prior
+        # posting when one exists; a first index goes straight to INSERT.
+        if old[3] is not None:
+            self._delete_data_graph_fts(conn, rowid, old[0], old[1], old[2], old[3])
 
         conn.execute(
             "UPDATE data_graph SET search_queries = ? WHERE id = ?",
