@@ -9,13 +9,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout chalie-web
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           repository: dylangrech92/chalie-web
           token: ${{ secrets.CHALIE_WEB_TOKEN }}
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: 20
 
