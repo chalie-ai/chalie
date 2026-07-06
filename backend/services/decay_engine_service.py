@@ -1,77 +1,42 @@
+"""The decay/GC entry point invoked off-turn by the subconscious worker.
+
+A thin, mp-less wrapper that wires a :class:`~orchestrators.decay_engine.DecayEngine`
+once — registering the domain-service Decayables — and runs it each cycle. The
+engine owns the sequencing, per-unit isolation, and the cross-kind ``data_graph``
+maintenance; this service owns only the registration list and the cycle-complete
+log. New per-vertical decayables plug in on the ``register()`` chain as they land.
+"""
+
+from __future__ import annotations
 
 import logging
 
-from models.episode import Episode
-from services.database import Database
+from orchestrators import DecayEngine
+from services.episodic_service import EpisodicService
 
 logger = logging.getLogger(__name__)
 
 
 class DecayEngineService:
+    """Off-turn decay cycle — constructs and runs the DecayEngine."""
 
     def __init__(self) -> None:
-        logger.info("[DECAY ENGINE] Initialized (absolute exponential decay)")
+        self._engine = (
+            DecayEngine()
+            .register(EpisodicService())
+            # Transcript retention sweep deferred: its model GC was cut in the
+            # spine rewrite and no unlinked-GC method exists on models.transcript
+            # yet, so there is nothing to run — re-register once that lands.
+            # Per-kind data_graph verticals register here as they land too (E1+).
+        )
+        logger.info("[DECAY ENGINE] Initialized")
 
     def run_once(self) -> None:
+        """Subconscious-worker entry point (one decay cycle)."""
         self.run_decay_cycle()
 
     def run_decay_cycle(self) -> None:
-        fossils_tombstoned = self._janitor_fossil_episodes()
-        episodic_count = self._decay_episodic()
-        episodes_deleted = self._delete_expired_episodes()
-        data_graph_count = self._decay_data_graph()
-        transcript_cleaned = self._cleanup_transcript()
-
-        logger.info(
-            f"[DECAY ENGINE] Cycle complete: "
-            f"fossils_tombstoned={fossils_tombstoned}, "
-            f"episodic={episodic_count} updated, "
-            f"episodes_deleted={episodes_deleted}, "
-            f"data_graph={data_graph_count} updated, "
-            f"transcript_cleaned={transcript_cleaned}"
-        )
-
-    def _decay_episodic(self) -> int:
-        try:
-            with Database.transaction():
-                return Episode.decay_weights()
-        except Exception as e:
-            logger.exception(f"[DECAY ENGINE] Episodic decay failed: {e}")
-            return 0
-
-    def _delete_expired_episodes(self) -> int:
-        try:
-            with Database.transaction():
-                return Episode.delete_expired()
-        except Exception as e:
-            logger.exception(f"[DECAY ENGINE] Episode deletion failed: {e}")
-            return 0
-
-    def _janitor_fossil_episodes(self) -> int:
-        # Bidirectional dependency: the per-source allowlist lives in
-        # services/source_profiles.py; this is the janitor-protection consumer.
-        from .source_profiles import janitor_protected_sql
-
-        try:
-            with Database.transaction():
-                return Episode.tombstone_fossils(janitor_protected_sql())
-        except Exception as e:
-            logger.exception(f"[DECAY ENGINE] Fossil janitor failed: {e}")
-            return 0
-
-    def _decay_data_graph(self) -> int:
-        try:
-            from .data_graph_service import DataGraphService
-            svc = DataGraphService()
-            return svc.decay_cycle()
-        except Exception as e:
-            logger.error(f"[DECAY ENGINE] Data graph decay failed: {e}")
-            return 0
-
-    def _cleanup_transcript(self) -> int:
-        try:
-            from services.transcript_service import Transcript
-            return Transcript.cleanup_unlinked_entries()
-        except Exception as e:
-            logger.warning(f"[DECAY ENGINE] Transcript cleanup failed: {e}")
-            return 0
+        """Run one full decay cycle across every registered Decayable and the
+        engine-owned cross-kind ``data_graph`` maintenance."""
+        total = self._engine.run()
+        logger.info("[DECAY ENGINE] Cycle complete: %d rows maintained", total)

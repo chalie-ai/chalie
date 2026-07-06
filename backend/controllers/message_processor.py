@@ -437,7 +437,7 @@ class MessageProcessor:
         patterns written this turn (legacy ``PatternDecayHook`` +
         ``PatternSkillSyncHook``, both self-guarding on an empty touched set)."""
         touched = self._touched_pattern_names()
-        self.behavioral_pattern_service.decay(touched)
+        self.behavioral_pattern_service.decay_untouched(touched)
         from services.skill_association_service import SkillAssociationService  # noqa: PLC0415
         SkillAssociationService().run_pass(self.behavioral_pattern_service.ids_for_touched(touched))
 

@@ -157,6 +157,25 @@ class EpisodicService:
             if embedding is not None:
                 self._store_embedding(episode_id, embedding)
 
+    # ── Off-turn decay (Decayable) ────────────────────────────────────
+
+    def decay(self) -> int:
+        """Off-turn episodic maintenance (the Decayable contract): tombstone
+        stale fossils, recompute retrieval weights by absolute exponential
+        decay, then hard-delete expired episodes — in that order, so a fossil
+        tombstoned this pass collapses onto the fast τ before its deletion
+        eligibility is checked. Each step delegates to the :class:`Episode`
+        model (the sole home of the SQL); the model's decay methods run single
+        autocommit statements, so the service groups them in one transaction
+        (its contract). Returns the total rows maintained (tombstoned +
+        reweighted + deleted)."""
+        from services.source_profiles import janitor_protected_sql
+        with Database.transaction():
+            tombstoned = Episode.tombstone_fossils(janitor_protected_sql())
+            reweighted = Episode.decay_weights()
+            deleted = Episode.delete_expired()
+        return tombstoned + reweighted + deleted
+
     # ── Hybrid retrieval ──────────────────────────────────────────────────────
 
     def retrieve(

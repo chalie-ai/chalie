@@ -37,6 +37,8 @@ class TranscriptService:
     row identity off ``self.mp`` rather than taking it as an argument."""
 
     def __init__(self, mp: MessageProcessor) -> None:
+        # Turn-scoped: every read/write below derives channel/turn identity off
+        # ``self.mp`` (§2.4) — this service is never constructed off-turn.
         self.mp = mp
 
     # ── reads ────────────────────────────────────────────────────────────────

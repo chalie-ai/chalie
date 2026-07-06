@@ -65,9 +65,12 @@ class BehavioralPatternService:
         with self.mp.db.transaction():
             return BehavioralPattern.upsert(validated, self.mp.config.channel)
 
-    def decay(self, touched_keys: set[str]) -> None:
-        """Run the confidence sweep, exempting the pattern names written this
-        turn."""
+    def decay_untouched(self, touched_keys: set[str]) -> None:
+        """Run the on-turn confidence sweep, exempting the pattern names written
+        this turn. Named ``decay_untouched`` (not ``decay``) because this is the
+        on-turn, ``mp``-bound sweep — incompatible with the off-turn
+        :class:`~orchestrators.decayable.Decayable` shape (``decay() -> int``),
+        which this service does not implement (T1)."""
         BehavioralPattern.decay(touched_keys)
 
     def ids_for_touched(self, touched_keys: set[str]) -> set[int]:
