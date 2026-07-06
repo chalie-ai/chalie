@@ -18,9 +18,12 @@ Vision Provider from the DB instead of the global selected provider;
 
 from __future__ import annotations
 
-from typing import ClassVar
+from typing import TYPE_CHECKING, ClassVar
 
 from services.processor_config import ProcessorConfig
+
+if TYPE_CHECKING:
+    from configs.enums.policy_channel import PolicyChannel
 
 
 class VisionConfig(ProcessorConfig):
@@ -28,7 +31,7 @@ class VisionConfig(ProcessorConfig):
 
     uses_vision_provider: ClassVar[bool] = True
 
-    def __init__(self, policy_channel: "ProcessorConfig.PolicyChannel") -> None:
+    def __init__(self, policy_channel: "PolicyChannel") -> None:
         super().__init__(
             channel="delegate:vision",
             role="vision",

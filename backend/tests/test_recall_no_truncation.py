@@ -15,8 +15,8 @@ now dispatches through) — seeds an episode whose gist is LONGER than the old c
 via the production ``EpisodicService.store_episode`` write path, and asserts the
 model-visible text is the WHOLE, unclipped gist.
 
-Zero mocks: real ``EpisodicService`` / ``DatabaseService`` against the ``db``
-fixture and the real ``DispatchService`` envelope renderer. RED against HEAD
+Zero mocks: real ``EpisodicService`` over the ``Database`` gateway against the
+``db`` fixture and the real ``DispatchService`` envelope renderer. RED against HEAD
 before the truncation is removed: each gist exceeds its path's old cap, so the
 truncated content cannot equal the full gist.
 """

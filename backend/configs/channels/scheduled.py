@@ -21,10 +21,11 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, ClassVar
 
+from configs.enums.policy_channel import PolicyChannel
 from services.processor_config import ProcessorConfig
 
 if TYPE_CHECKING:
-    from services.config_type import ConfigTypeEnum
+    from configs.enums.config_type import ConfigTypeEnum
 
 from configs.channels._common import DEFAULT_ALWAYS_AVAILABLE
 
@@ -42,17 +43,18 @@ class ScheduledConfig(ProcessorConfig):
         super().__init__(
             channel="schedule",
             role="user",
-            policy_channel=ProcessorConfig.PolicyChannel.SUBCONSCIOUS,
+            policy_channel=PolicyChannel.SUBCONSCIOUS,
             always_available=list(DEFAULT_ALWAYS_AVAILABLE),
             skip_transcript=False,
             skip_input_row=False,
             suppress_history=False,
             broadcast_to="schedule",
             memory_seed=True,
+            external_turn_id=True,
         )
 
     def type(self) -> "ConfigTypeEnum":
-        from services.config_type import ConfigTypeEnum  # noqa: PLC0415
+        from configs.enums.config_type import ConfigTypeEnum  # noqa: PLC0415
         return ConfigTypeEnum.SCHEDULED
 
     @property

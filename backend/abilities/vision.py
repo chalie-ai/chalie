@@ -30,8 +30,8 @@ from abilities._result import ToolResult
 from configs.channels.vision import VisionConfig
 
 if TYPE_CHECKING:
+    from configs.enums.policy_channel import PolicyChannel
     from controllers.message_processor import MessageProcessor
-    from services.processor_config import ProcessorConfig
 
 logger = logging.getLogger(__name__)
 
@@ -52,7 +52,7 @@ _NO_VISION_NOTE = (
 )
 
 
-def describe_image(image_path: str, mime_type: str, query: str, *, policy_channel: "ProcessorConfig.PolicyChannel") -> dict[str, object]:
+def describe_image(image_path: str, mime_type: str, query: str, *, policy_channel: "PolicyChannel") -> dict[str, object]:
     """Forks ONCE on vision-provider-configured. Provider path RAISES on provider
     failure (never swallowed); the OCR fallback is ONLY for the not-configured path.
     """

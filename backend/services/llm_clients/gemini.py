@@ -94,6 +94,7 @@ if TYPE_CHECKING:
     class _Content(Protocol):
         parts: "list[_Part] | None"
 
+from configs.enums.thinking_level import ThinkingLevel
 from contracts.provider_client import ProviderClient
 from services.provider_api import (
     ProviderApiRequest,
@@ -102,7 +103,6 @@ from services.provider_api import (
     ResponseOverLimitError,
     ProviderResponseError,
     ProviderTimeoutError,
-    ThinkingLevel,
 )
 
 logger = logging.getLogger(__name__)

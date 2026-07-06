@@ -23,8 +23,8 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING
 
+from configs.enums.config_type import ConfigTypeEnum
 from models.turn_execution import TurnExecution
-from services.config_type import ConfigTypeEnum
 from services.time_utils import utc_now
 from services.websocket import Websocket
 

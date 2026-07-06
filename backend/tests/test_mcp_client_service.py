@@ -92,8 +92,9 @@ def test_get_online_mcp_tool_names_excludes_disabled_and_offline(db: sqlite3.Con
     LLM visibility.
 
     _DATA_DIR is redirected to tmp_path so mcp_tools.sqlite lands in a fresh
-    temp directory.  The conftest db fixture patches get_shared_db_service
-    (not _DATA_DIR), so the two redirects are independent.
+    temp directory.  The conftest db fixture points the Database gateway at
+    chalie.db (via FileMapperService.get_db_path, not _DATA_DIR), so the two
+    redirects are independent.
     """
     # Redirect mcp_tools.sqlite to a fresh temp directory via the class attribute
     # that get_mcp_tools_db_path() reads.  monkeypatch auto-undoes this at teardown.
@@ -109,37 +110,38 @@ def test_get_online_mcp_tool_names_excludes_disabled_and_offline(db: sqlite3.Con
     server_c = svc.add_server(name="offline_svc", host="http://c:1", headers={}, enabled=True)
 
     # Manually write status values to the DB (bypassing ping_and_sync which needs network).
-    with svc._db.connection() as conn:
-        conn.execute(
-            "UPDATE mcp_client_servers SET status='online' WHERE id=?", (server_a["id"],)
-        )
-        conn.execute(
-            "UPDATE mcp_client_servers SET status='online' WHERE id=?", (server_b["id"],)
-        )
-        conn.execute(
-            "UPDATE mcp_client_servers SET status='offline' WHERE id=?", (server_c["id"],)
-        )
-        conn.commit()
+    # mcp_client_servers lives in chalie.db — the connection the db fixture yields is the
+    # same handle the service reaches via Database.conn().
+    db.execute(
+        "UPDATE mcp_client_servers SET status='online' WHERE id=?", (server_a["id"],)
+    )
+    db.execute(
+        "UPDATE mcp_client_servers SET status='online' WHERE id=?", (server_b["id"],)
+    )
+    db.execute(
+        "UPDATE mcp_client_servers SET status='offline' WHERE id=?", (server_c["id"],)
+    )
+    db.commit()
 
     # Seed fake tool rows directly into mcp_tools.sqlite via the real production writer.
     from services.mcp_client_service import _open_tools_db
 
+    # _open_tools_db() hands back the Database gateway's cached mcp_tools.sqlite
+    # connection; the db fixture's Database.close() teardown owns its lifecycle,
+    # so callers never close it (closing would poison the per-thread registry).
     conn_tools = _open_tools_db()
-    try:
-        for srv_id, srv_name in [
-            (server_a["id"], "online_svc"),
-            (server_b["id"], "disabled_svc"),
-            (server_c["id"], "offline_svc"),
-        ]:
-            tool_name = f"_mcp_{_sanitize_name(srv_name)}_fetch"
-            conn_tools.execute(
-                "INSERT OR REPLACE INTO mcp_tools "
-                "(server_id, tool_name, summary, raw_schema) VALUES (?, ?, ?, ?)",
-                (srv_id, tool_name, "test tool", "{}"),
-            )
-        conn_tools.commit()
-    finally:
-        conn_tools.close()
+    for srv_id, srv_name in [
+        (server_a["id"], "online_svc"),
+        (server_b["id"], "disabled_svc"),
+        (server_c["id"], "offline_svc"),
+    ]:
+        tool_name = f"_mcp_{_sanitize_name(srv_name)}_fetch"
+        conn_tools.execute(
+            "INSERT OR REPLACE INTO mcp_tools "
+            "(server_id, tool_name, summary, raw_schema) VALUES (?, ?, ?, ?)",
+            (srv_id, tool_name, "test tool", "{}"),
+        )
+    conn_tools.commit()
 
     online_names = svc.get_online_mcp_tool_names()
 
@@ -183,11 +185,10 @@ def test_add_server_persists_row_with_correct_defaults(db: sqlite3.Connection) -
     assert cast(dict[str, object], server["headers"])["Authorization"] == "Bearer token123"
 
     # Row is actually in the DB — not just in the returned dict.
-    with svc._db.connection() as conn:
-        row = conn.execute(
-            "SELECT id, name, status, enabled FROM mcp_client_servers WHERE id = ?",
-            (server["id"],),
-        ).fetchone()
+    row = db.execute(
+        "SELECT id, name, status, enabled FROM mcp_client_servers WHERE id = ?",
+        (server["id"],),
+    ).fetchone()
 
     assert row is not None
     assert row[1] == "my-server"
@@ -322,38 +323,29 @@ def test_add_server_upsert_name_change_purges_old_prefix_rows(db: sqlite3.Connec
     old_tool = _tool_name("taskie", "create_document")
 
     conn = _open_tools_db()
-    try:
-        conn.execute(
-            "INSERT INTO mcp_tools (server_id, tool_name, summary, raw_schema) "
-            "VALUES (?, ?, ?, ?)",
-            (s["id"], old_tool, "", "{}"),
-        )
-        conn.commit()
-    finally:
-        conn.close()
-    with svc._db.connection() as c:
-        c.execute(
-            "INSERT OR IGNORE INTO policy (channel, permission, setting) "
-            "VALUES (?, ?, ?)",
-            ("chat", old_tool, "ask"),
-        )
-        c.commit()
+    conn.execute(
+        "INSERT INTO mcp_tools (server_id, tool_name, summary, raw_schema) "
+        "VALUES (?, ?, ?, ?)",
+        (s["id"], old_tool, "", "{}"),
+    )
+    conn.commit()
+    db.execute(
+        "INSERT OR IGNORE INTO policy (channel, permission, setting) "
+        "VALUES (?, ?, ?)",
+        ("chat", old_tool, "ask"),
+    )
+    db.commit()
 
     # Re-add the SAME endpoint under a NEW name → old-prefix rows must be purged.
     svc.add_server(name="taskie2", host="https://mcp.example.com/mcp",
                    headers={}, enabled=True)
 
-    conn = _open_tools_db()
-    try:
-        tool_count = conn.execute(
-            "SELECT COUNT(*) FROM mcp_tools WHERE tool_name = ?", (old_tool,)
-        ).fetchone()[0]
-    finally:
-        conn.close()
-    with svc._db.connection() as c:
-        policy_count = c.execute(
-            "SELECT COUNT(*) FROM policy WHERE permission = ?", (old_tool,)
-        ).fetchone()[0]
+    tool_count = _open_tools_db().execute(
+        "SELECT COUNT(*) FROM mcp_tools WHERE tool_name = ?", (old_tool,)
+    ).fetchone()[0]
+    policy_count = db.execute(
+        "SELECT COUNT(*) FROM policy WHERE permission = ?", (old_tool,)
+    ).fetchone()[0]
 
     assert tool_count == 0
     assert policy_count == 0

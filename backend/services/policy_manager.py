@@ -5,7 +5,7 @@ Every native AND MCP tool call flows through it (ToolDispatcher.dispatch passes
 ToolDispatcher._execute as the callback).
 
 Settings: internal (always allowed, hidden in Brain) · allow · ask · deny.
-Channels: ProcessorConfig.PolicyChannel values.
+Channels: PolicyChannel values.
 
 A small set of read-only / scratch / infrastructure tools (``INTERNAL``) ALWAYS
 bypass the gate regardless of channel or any seeded row — they are never
@@ -25,14 +25,14 @@ import uuid
 from collections.abc import Callable
 from typing import cast
 
+from configs.enums.policy_channel import PolicyChannel
 from services.database import Database
-from services.processor_config import ProcessorConfig
 from services.time_utils import utc_now
 from services.websocket import Websocket
 
 logger = logging.getLogger(__name__)
 
-CHANNEL = ProcessorConfig.PolicyChannel
+CHANNEL = PolicyChannel
 VALID_CHANNELS = {c.value for c in CHANNEL}
 VALID_SETTINGS = {"internal", "allow", "ask", "deny"}
 
@@ -66,7 +66,7 @@ class PolicyManager:
 
     @staticmethod
     def wrap(
-        channel: ProcessorConfig.PolicyChannel,
+        channel: PolicyChannel,
         permission: str,
         callback: Callable[[], str],
         error: str = _BLOCK,
@@ -80,7 +80,7 @@ class PolicyManager:
 
     def authorize(
         self,
-        channel: ProcessorConfig.PolicyChannel,
+        channel: PolicyChannel,
         permission: str,
         callback: Callable[[], str],
         error: str = _BLOCK,

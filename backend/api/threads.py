@@ -33,7 +33,7 @@ from flask import request
 from flask.typing import ResponseReturnValue
 from flask_restx import Namespace, Resource
 
-from services.config_type import ConfigTypeEnum
+from configs.enums.config_type import ConfigTypeEnum
 from services.database import Database
 from services.locale_service import CHAT_TIMESTAMP_FMT, format_date
 from services.rich_media_parser import parse as _parse_rich_media

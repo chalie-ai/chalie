@@ -32,6 +32,7 @@ from typing import TYPE_CHECKING, ClassVar, cast
 from abilities._ability import Ability
 from abilities._compaction_config import CompactionConfig
 from abilities._result import ToolResult
+from configs.enums.thinking_level import ThinkingLevel
 
 if TYPE_CHECKING:
     from typing import Protocol
@@ -198,7 +199,7 @@ class ChatHistoryCompactor(Ability):
         ``rows_compacted`` to the success result without recomputing or paying a
         second provider call. It is 0 when there is nothing to compact.
         """
-        from services.provider_api import ProviderApiRequest, ThinkingLevel  # noqa: PLC0415
+        from services.provider_api import ProviderApiRequest  # noqa: PLC0415
 
         system = parent.config.system_prompt
         window = parent.providers.get_context_limit()

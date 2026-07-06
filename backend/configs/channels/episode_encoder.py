@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import ClassVar
 
+from configs.enums.policy_channel import PolicyChannel
 from services.processor_config import ProcessorConfig
 
 
@@ -17,7 +18,7 @@ class EpisodeEncoderConfig(ProcessorConfig):
         super().__init__(
             channel="episode_encoder",
             role="episode_encoder",
-            policy_channel=ProcessorConfig.PolicyChannel.SUBCONSCIOUS,
+            policy_channel=PolicyChannel.SUBCONSCIOUS,
             always_available=[],
             skip_transcript=True,
             skip_input_row=False,

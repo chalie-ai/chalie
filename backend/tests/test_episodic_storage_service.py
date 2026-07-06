@@ -1,10 +1,12 @@
 """Tests for EpisodicService storage using the real production stack (no mocks)."""
 
+import json
 import sqlite3
 import uuid
 
 import pytest
 
+from models.episode import Episode
 from services.episodic_service import EpisodicService
 
 pytestmark = pytest.mark.unit
@@ -95,6 +97,20 @@ class TestUpdateEpisode:
         row = db.execute("SELECT gist FROM episodes WHERE id = ?", (episode_id,)).fetchone()
         assert row[0] == 'updated gist'
 
+    def test_list_fields_update_persisted(self, db: sqlite3.Connection, episodic_svc: EpisodicService) -> None:
+        """List columns persist as JSON text — the encoder's update-snapshot
+        path (merge new turns into an existing episode) round-trips."""
+        svc = episodic_svc
+        episode_id = svc.store_episode(_make_episode_data())
+
+        svc.update_episode(episode_id, {'gist': 'merged gist', 'transcript_ids': [4, 5, 6]})
+
+        row = db.execute(
+            "SELECT gist, transcript_ids FROM episodes WHERE id = ?", (episode_id,)
+        ).fetchone()
+        assert row[0] == 'merged gist'
+        assert json.loads(row[1]) == [4, 5, 6]
+
     def test_update_nonexistent_row_is_silent(self, episodic_svc: EpisodicService) -> None:
         """Updating a row that doesn't exist completes without raising
         (SQLite silently updates 0 rows)."""
@@ -112,27 +128,27 @@ class TestSoftDeleteEpisode:
         svc = episodic_svc
         episode_id = svc.store_episode(_make_episode_data())
 
-        svc.soft_delete(episode_id)
+        Episode.soft_delete(episode_id)
 
         row = db.execute("SELECT deleted_at FROM episodes WHERE id = ?", (episode_id,)).fetchone()
         assert row[0] is not None
 
     def test_nonexistent_id_is_noop(self, episodic_svc: EpisodicService) -> None:
         """soft_delete() on a nonexistent ID completes without raising."""
-        episodic_svc.soft_delete('nonexistent-id')
+        Episode.soft_delete('nonexistent-id')
 
     def test_already_deleted_episode_timestamp_unchanged(self, db: sqlite3.Connection, episodic_svc: EpisodicService) -> None:
         """soft_delete() on an already-deleted episode is a no-op (WHERE deleted_at IS NULL)."""
         svc = episodic_svc
         episode_id = svc.store_episode(_make_episode_data())
-        svc.soft_delete(episode_id)
+        Episode.soft_delete(episode_id)
 
         first_deleted_at = db.execute(
             "SELECT deleted_at FROM episodes WHERE id = ?", (episode_id,)
         ).fetchone()[0]
 
         # Second call should not change deleted_at (WHERE deleted_at IS NULL filters it out)
-        svc.soft_delete(episode_id)
+        Episode.soft_delete(episode_id)
 
         second_deleted_at = db.execute(
             "SELECT deleted_at FROM episodes WHERE id = ?", (episode_id,)

@@ -35,8 +35,8 @@ Design:
   holds no event memory and refetches turn blocks over REST. Mid-turn progress
   (the `updated` block-refetch poke) is emitted by MessageProcessor itself
   through its `broadcast` chokepoint; each live tool call is a single
-  `tool_name`-bearing frame (state=started/done/error) emitted by ActTrail
-  (services/act_trail.py); the turn's lifecycle
+  `tool_name`-bearing frame (state=started/done/error) emitted by
+  ToolCallService (services/tool_call_service.py); the turn's lifecycle
   (working/completed/cancelled/crashed) is a separate `turn_execution`
   WS frame emitted by its ExecutionTracker (services/execution_tracker.py) on
   every state flip, including a crash (so the surface always learns a failed
@@ -52,6 +52,7 @@ from typing import Sequence
 from flask.typing import ResponseReturnValue
 from flask_restx import Namespace, Resource
 
+from configs.enums.policy_channel import PolicyChannel
 from services.markup import sanitize
 from services.processor_config import ProcessorConfig
 from .auth import require_auth
@@ -139,7 +140,7 @@ class _ActionButtonConfig(ProcessorConfig):
         super().__init__(
             channel="action_button",
             role="action_button",
-            policy_channel=ProcessorConfig.PolicyChannel.CHAT,
+            policy_channel=PolicyChannel.CHAT,
             always_available=[],
             skip_transcript=True,
             skip_input_row=True,

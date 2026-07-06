@@ -6,13 +6,13 @@ from unittest.mock import patch
 import pytest
 
 import services.database as _db_gateway
+from configs.enums.policy_channel import PolicyChannel
 from services.file_mapper_service import FileMapperService
 from services.policy_manager import PolicyManager
-from services.processor_config import ProcessorConfig
 
 pytestmark = pytest.mark.unit
 
-CH = ProcessorConfig.PolicyChannel
+CH = PolicyChannel
 
 
 @pytest.fixture()
@@ -76,7 +76,7 @@ def test_allow_and_internal_run_callback(mgr: PolicyManager, db: sqlite3.Connect
 # 1b. INTERNAL tools ALWAYS bypass — every channel, no row, even over a deny row
 @pytest.mark.parametrize("channel", [CH.CHAT, CH.SUBCONSCIOUS, CH.EXTERNAL_AGENT])
 @pytest.mark.parametrize("permission", ["read", "search", "browser.open", "memory.store", "save_graph"])
-def test_internal_tools_always_bypass(mgr: PolicyManager, db: sqlite3.Connection, channel: ProcessorConfig.PolicyChannel, permission: str) -> None:
+def test_internal_tools_always_bypass(mgr: PolicyManager, db: sqlite3.Connection, channel: PolicyChannel, permission: str) -> None:
     # a deny row for the same key must be ignored — INTERNAL wins, no DB lookup
     _seed(db, channel.value, permission, "deny")
     assert mgr.authorize(channel, permission, _ran) == _ran()

@@ -10,7 +10,7 @@ pytestmark = pytest.mark.unit
 
 @pytest.fixture
 def svc(db: sqlite3.Connection) -> WrapperAuthService:
-    """WrapperAuthService using the real DB fixture (no arg = uses get_shared_db_service)."""
+    """WrapperAuthService against the real DB fixture (which points the Database gateway at this test's SQLite file)."""
     return WrapperAuthService()
 
 

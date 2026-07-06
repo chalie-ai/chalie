@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from configs.enums.policy_channel import PolicyChannel
 from services.processor_config import ProcessorConfig
 
 
@@ -10,7 +11,7 @@ class SkillSuggestionConfig(ProcessorConfig):
         super().__init__(
             channel="skills_building",
             role="skills_building",
-            policy_channel=ProcessorConfig.PolicyChannel.SUBCONSCIOUS,
+            policy_channel=PolicyChannel.SUBCONSCIOUS,
             always_available=["skill_manager"],
             skip_transcript=False,
             skip_input_row=False,

@@ -1,6 +1,6 @@
 import sqlite3
 from collections.abc import Iterator
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone
 from typing import cast
 from unittest.mock import patch
 
@@ -11,60 +11,46 @@ from api.scheduler import scheduler_ns
 from tests.restx_test_app import mount_namespace
 
 
-def _future_local_iso(hours: int = 1) -> str:
-    """A naive local wall-clock ISO string — the wire shape ``start_at`` takes
-    (see ``api/dto/scheduler_item.py``: parsed via ``parse_local``, never a UTC
-    offset the caller computes itself)."""
-    return (datetime.now(timezone.utc) + timedelta(hours=hours)).replace(tzinfo=None).isoformat()
-
-
-def _insert_item(db: sqlite3.Connection, **overrides: object) -> str:
+def _insert_item(db: sqlite3.Connection, **overrides: object) -> int:
+    """Insert a row against the prompt-only ``scheduled_items`` schema
+    (TKT-1434) and return its auto-assigned integer ``id``."""
     now = datetime.now(timezone.utc).isoformat()
     defaults: dict[str, object] = dict(
-        id="abc12345",
-        item_type="prompt",
         message="Test reminder",
         start_at=now,
-        due_at=(datetime.now(timezone.utc) + timedelta(hours=1)).isoformat(),
         cron_dom=None,
         cron_hour=None,
         cron_minute=None,
-        status="pending",
+        enabled=1,
         channel="general",
         created_by_session=None,
         created_at=now,
-        enabled=1,
-        group_id="abc12345",
     )
     defaults.update(overrides)
     d = defaults
-    db.execute(
+    cur = db.execute(
         """
         INSERT INTO scheduled_items
-          (id, item_type, message, start_at, due_at, cron_dom, cron_hour, cron_minute,
-           status, channel,
-           created_by_session, created_at, enabled, group_id)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          (message, start_at, cron_dom, cron_hour, cron_minute,
+           enabled, channel, created_by_session, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
-            d["id"], d["item_type"], d["message"], d["start_at"], d["due_at"],
-            d["cron_dom"], d["cron_hour"], d["cron_minute"],
-            d["status"], d["channel"], d["created_by_session"],
-            d["created_at"], d["enabled"], d["group_id"],
+            d["message"], d["start_at"], d["cron_dom"], d["cron_hour"], d["cron_minute"],
+            d["enabled"], d["channel"], d["created_by_session"], d["created_at"],
         ),
     )
     db.commit()
-    return cast(str, d["id"])
+    return cast(int, cur.lastrowid)
 
 
 @pytest.mark.unit
 class TestSchedulerAPI:
-    """Tests for every scheduler namespace route, against the cron recurrence
-    model (TKT-1434): the wire body carries ``day``/``hour``/``minute``
-    (nullable ints, NULL = "every") + optional local ``start_at``; the server
-    computes ``due_at`` via ``services.cron_schedule.next_due_from``. There is
-    no ``recurrence`` keyword or ``is_prompt``/``due_at`` write field anymore —
-    both are gone from the DTO and the schema."""
+    """Tests for the scheduler namespace against the prompt-only dumb-cron
+    model (TKT-1434): ``scheduled_items`` is one row per schedule, forever —
+    no ``item_type``/``due_at``/``status``/``group_id``/``turn_id``. ``id`` is
+    the SQLite auto-increment PK, also the schedule's ``turn_id`` on the
+    ``schedule`` channel. Delete is a hard ``DELETE`` (no soft-cancel state)."""
 
     @pytest.fixture
     def client(self, db: sqlite3.Connection) -> FlaskClient:
@@ -86,8 +72,8 @@ class TestSchedulerAPI:
     # ----- GET /scheduler -----
 
     def test_list_returns_items_as_bare_list(self, client: FlaskClient, db: sqlite3.Connection) -> None:
-        _insert_item(db, id="item1")
-        _insert_item(db, id="item2", group_id="item2")
+        _insert_item(db, message="item1")
+        _insert_item(db, message="item2")
 
         resp = client.get("/api/scheduler")
 
@@ -118,16 +104,16 @@ class TestSchedulerAPI:
 
         assert resp.status_code == 201, resp.get_json()
         body = resp.get_json()
+        assert isinstance(body["id"], int)
         assert body["message"] == "Buy groceries"
-        assert body["status"] == "pending"
         assert body["day"] == day
         assert body["hour"] == hour
         assert body["minute"] == minute
-        assert body["due_at"]  # a real materialized fire instant
+        assert body["enabled"] == 1
 
         row = db.execute(
-            "SELECT cron_dom, cron_hour, cron_minute FROM scheduled_items WHERE message = ?",
-            ("Buy groceries",),
+            "SELECT cron_dom, cron_hour, cron_minute FROM scheduled_items WHERE id = ?",
+            (body["id"],),
         ).fetchone()
         assert row is not None
         assert (row["cron_dom"], row["cron_hour"], row["cron_minute"]) == (day, hour, minute)
@@ -162,22 +148,27 @@ class TestSchedulerAPI:
     # ----- GET /scheduler/<id> -----
 
     def test_get_item_returns_item_when_found(self, client: FlaskClient, db: sqlite3.Connection) -> None:
-        _insert_item(db, id="xyz99999", group_id="xyz99999")
+        item_id = _insert_item(db, message="Check on this")
 
-        resp = client.get("/api/scheduler/xyz99999")
+        resp = client.get(f"/api/scheduler/{item_id}")
 
         assert resp.status_code == 200
         body = resp.get_json()
-        assert body["id"] == "xyz99999"
-        assert body["status"] == "pending"
+        assert body["id"] == item_id
+        assert body["message"] == "Check on this"
+
+    def test_get_item_returns_404_when_missing(self, client: FlaskClient) -> None:
+        resp = client.get("/api/scheduler/999999")
+
+        assert resp.status_code == 404
 
     # ----- PUT /scheduler/<id> -----
 
-    def test_update_pending_item(self, client: FlaskClient, db: sqlite3.Connection) -> None:
-        _insert_item(db, id="upd00001", group_id="upd00001")
+    def test_update_replaces_message_and_cron_fields(self, client: FlaskClient, db: sqlite3.Connection) -> None:
+        item_id = _insert_item(db, message="Original")
 
         resp = client.put(
-            "/api/scheduler/upd00001",
+            f"/api/scheduler/{item_id}",
             json={"message": "Updated message", "day": None, "hour": 18, "minute": 0},
         )
 
@@ -189,55 +180,41 @@ class TestSchedulerAPI:
 
         row = db.execute(
             "SELECT message, cron_hour, cron_minute FROM scheduled_items WHERE id = ?",
-            ("upd00001",),
+            (item_id,),
         ).fetchone()
         assert row["message"] == "Updated message"
         assert row["cron_hour"] == 18
         assert row["cron_minute"] == 0
 
-    def test_update_returns_404_for_non_pending(self, client: FlaskClient, db: sqlite3.Connection) -> None:
-        _insert_item(db, id="fired_item", status="fired", group_id="fired_item")
-
+    def test_update_returns_404_for_unknown_id(self, client: FlaskClient) -> None:
         resp = client.put(
-            "/api/scheduler/fired_item",
-            json={"message": "Try updating"},
+            "/api/scheduler/999999",
+            json={"message": "Try updating", "day": None, "hour": 9, "minute": 0},
         )
 
         assert resp.status_code == 404
-        assert "not pending" in resp.get_json()["error"]
 
-    # ----- DELETE /scheduler/<id> -----
+    # ----- DELETE /scheduler/<id> — hard delete, id never reissued -----
 
-    def test_cancel_pending_item(self, client: FlaskClient, db: sqlite3.Connection) -> None:
-        _insert_item(db, id="cancel01", group_id="cancel01")
+    def test_delete_hard_deletes_row_and_id_is_never_reissued(
+        self, client: FlaskClient, db: sqlite3.Connection
+    ) -> None:
+        item_id = _insert_item(db, message="Cancel me")
 
-        resp = client.delete("/api/scheduler/cancel01")
+        resp = client.delete(f"/api/scheduler/{item_id}")
 
         assert resp.status_code == 204
         assert resp.data == b""
+        assert db.execute(
+            "SELECT 1 FROM scheduled_items WHERE id = ?", (item_id,)
+        ).fetchone() is None
 
-        row = db.execute(
-            "SELECT status FROM scheduled_items WHERE id = ?",
-            ("cancel01",),
-        ).fetchone()
-        assert row["status"] == "cancelled"
+        # AUTOINCREMENT: a freshly created row never reuses the deleted id.
+        new_id = _insert_item(db, message="Fresh schedule")
+        assert new_id != item_id
+        assert new_id > item_id
 
-    # ----- DELETE /scheduler/history -----
+    def test_delete_returns_404_for_unknown_id(self, client: FlaskClient) -> None:
+        resp = client.delete("/api/scheduler/999999")
 
-    def test_prune_history(self, client: FlaskClient, db: sqlite3.Connection) -> None:
-        old_date = (datetime.now(timezone.utc) - timedelta(days=60)).isoformat()
-        for i in range(7):
-            _insert_item(
-                db,
-                id=f"old{i}",
-                status="fired",
-                created_at=old_date,
-                group_id=f"old{i}",
-            )
-
-        resp = client.delete("/api/scheduler/history")
-
-        assert resp.status_code == 204
-
-        count = db.execute("SELECT COUNT(*) FROM scheduled_items").fetchone()[0]
-        assert count == 0
+        assert resp.status_code == 404

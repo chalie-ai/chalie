@@ -20,9 +20,12 @@ Paired with ``WebSearchAbility`` (abilities/web_search.py).
 
 from __future__ import annotations
 
-from typing import ClassVar
+from typing import TYPE_CHECKING, ClassVar
 
 from services.processor_config import ProcessorConfig
+
+if TYPE_CHECKING:
+    from configs.enums.policy_channel import PolicyChannel
 
 _WEB_SEARCH_TOOLS: tuple[str, ...] = ("search", "news", "read", "web_download")
 
@@ -39,7 +42,7 @@ class WebSearchConfig(ProcessorConfig):
     # over the override and the gate-computed level.
     thinking_mode: ClassVar[str] = "low"
 
-    def __init__(self, policy_channel: "ProcessorConfig.PolicyChannel") -> None:
+    def __init__(self, policy_channel: "PolicyChannel") -> None:
         tools = list(_WEB_SEARCH_TOOLS)
         super().__init__(
             channel="delegate:web_search",

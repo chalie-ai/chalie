@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from enum import Enum
 from typing import Optional
+
+from configs.enums.provider_type import ProviderType
+from configs.enums.thinking_level import ThinkingLevel
 
 # Hard ceiling on any provider's reported context window.
 MAX_CONTEXT_WINDOW = 200_000
@@ -13,28 +15,6 @@ MAX_CONTEXT_WINDOW = 200_000
 # ProviderTimeoutError, which the retry helper surfaces immediately. This is the
 # ONE provider-call timeout; clients import this constant rather than hard-coding.
 PROVIDER_CALL_TIMEOUT_S = 300
-
-
-class ProviderType(Enum):
-    CHAT = "chat"
-    VISION = "vision"
-    DELEGATE = "delegate"
-    VISUAL_OUTPUT = "visual_output"  # reserved, not wired
-
-
-class ThinkingLevel(Enum):
-    """Formalises the existing low/medium/high strings; adds MAX (additive).
-
-    Each thin client maps the level to its native flag internally.
-    LOW is the floor — maps to "no flag" on Anthropic/OpenAI/Gemini.
-    The Ollama quirk (think gated on model capability, level ignored) is
-    preserved in OllamaClient and not represented here.
-    """
-
-    LOW = "low"
-    MEDIUM = "medium"
-    HIGH = "high"
-    MAX = "max"
 
 
 @dataclass

@@ -257,6 +257,23 @@ class Transcript(Model):
             .get()
         ]
 
+    @classmethod
+    def by_ids(cls, ids: list[int]) -> list[dict[str, object]]:
+        """Rows for an explicit ``id`` list, ordered by ``id`` ascending, as
+        plain column dicts — the memory-retrieval span fetch and the
+        super-episode transcript projection. Empty list → no query, empty
+        result; absent ids are simply omitted. Dict-shaped (like ``by_turn``)
+        because callers read ``r['id']``/``r['role']``/``r['content']``/
+        ``r['created_at']``/``r['tool_name']``."""
+        if not ids:
+            return []
+        return [
+            row.to_dict()
+            for row in cls.filter(f"id IN ({cls._placeholders(len(ids))})", *ids)
+            .order_by("id ASC")
+            .get()
+        ]
+
     # ── SQL fragment builders (shared, no duplication) ───────────────────────
 
     @classmethod

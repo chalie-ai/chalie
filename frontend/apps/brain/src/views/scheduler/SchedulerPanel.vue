@@ -10,8 +10,6 @@ import { useBrainResource } from '../../composables/useBrainResource';
 import ToggleSwitch from '../../ui/ToggleSwitch.vue';
 import { Calendar, ChevronLeft, Plus } from '@lucide/vue';
 
-const props = defineProps<{ statusFilter: 'all' | 'pending' | 'fired' | 'failed' | 'cancelled' }>();
-
 const { show: showToast } = useToast();
 const { confirm } = useConfirm();
 
@@ -25,7 +23,7 @@ const {
 });
 
 const formMode = ref<'list' | 'form'>('list');
-const editingId = ref<string | number | null>(null);
+const editingId = ref<number | null>(null);
 const formMsg = ref('');
 const formStart = ref('');
 const formDay = ref<number | null>(null);
@@ -55,25 +53,6 @@ function enforceEveryPrefix(): void {
 
 watch(formDay, enforceEveryPrefix);
 watch(formHour, enforceEveryPrefix);
-
-const filtered = computed<ScheduleItem[]>(() =>
-  props.statusFilter === 'all'
-    ? items.value
-    : items.value.filter((s) => s.status === props.statusFilter),
-);
-
-function statusClass(status: string | null | undefined): string {
-  return (
-    (
-      {
-        pending: 'badge-warning',
-        fired: 'badge-success',
-        failed: 'badge-danger',
-        cancelled: 'badge-muted',
-      } as Record<string, string>
-    )[status ?? ''] ?? 'badge-muted'
-  );
-}
 
 function cadenceLabel(s: ScheduleItem): string {
   const { day, hour, minute } = s;
@@ -119,8 +98,9 @@ async function save(): Promise<void> {
 }
 
 // Quick-toggle from the list: reuse the update path with just the enabled flag
-// flipped (start_at omitted, so the backend re-floors due_at to now → the series
-// resumes at its next occurrence, never firing the one missed while disabled).
+// flipped. start_at/cron fields are left untouched — the poller re-evaluates
+// them against the wall clock on every cycle, so re-enabling simply lets the
+// next matching minute fire again (no recompute needed).
 async function toggleEnabled(s: ScheduleItem, next: boolean): Promise<void> {
   try {
     await scheduler.update(s.id, {
@@ -137,20 +117,23 @@ async function toggleEnabled(s: ScheduleItem, next: boolean): Promise<void> {
   }
 }
 
+// Delete = hard delete — the row (and its id) is gone for good, so its
+// schedule thread can never be re-entered. Distinct from Disable, which pauses
+// firing but keeps the row (and the id reusable for re-enabling).
 async function cancelSchedule(s: ScheduleItem): Promise<void> {
   const ok = await confirm({
-    title: 'Cancel Schedule',
-    desc: 'Cancel this scheduled item?',
-    confirmLabel: 'Cancel Item',
+    title: 'Delete Schedule',
+    desc: 'Delete this schedule? To pause it without deleting, use the toggle instead.',
+    confirmLabel: 'Delete',
     confirmClass: 'btn-danger',
   });
   if (!ok) return;
   try {
     await scheduler.delete(s.id);
-    showToast('Schedule cancelled', 'success');
+    showToast('Schedule deleted', 'success');
     await load();
   } catch (e) {
-    showToast(apiErrorMessage(e, 'Cancel failed'), 'error');
+    showToast(apiErrorMessage(e, 'Delete failed'), 'error');
   }
 }
 </script>
@@ -221,7 +204,7 @@ async function cancelSchedule(s: ScheduleItem): Promise<void> {
     </form>
   </div>
 
-  <div v-else-if="filtered.length === 0" class="empty-state">
+  <div v-else-if="items.length === 0" class="empty-state">
     <div class="empty-icon">
       <Calendar :size="40" />
     </div>
@@ -233,40 +216,45 @@ async function cancelSchedule(s: ScheduleItem): Promise<void> {
     <thead>
       <tr>
         <th>Message</th>
-        <th>Status</th>
+        <th>State</th>
         <th>Start</th>
         <th>Cadence</th>
-        <th>Enabled</th>
         <th></th>
       </tr>
     </thead>
     <tbody>
-      <tr v-for="s in filtered" :key="s.id">
+      <tr v-for="s in items" :key="s.id">
         <td class="key-cell">{{ s.message || s.prompt || '' }}</td>
-        <td>
-          <span class="badge" :class="statusClass(s.status)">{{ s.status || '' }}</span>
-        </td>
-        <td>{{ formatDate(s.start_at) }}</td>
-        <td>{{ cadenceLabel(s) }}</td>
-        <td>
+        <td class="state-cell">
           <ToggleSwitch
-            v-if="s.status === 'pending'"
             :model-value="s.enabled === 1"
             @update:model-value="toggleEnabled(s, $event)"
           />
-          <span v-else style="color: var(--text-muted)">—</span>
+          <span :class="s.enabled === 1 ? 'state-active' : 'state-disabled'">
+            {{ s.enabled === 1 ? 'Active' : 'Disabled' }}
+          </span>
         </td>
+        <td>{{ formatDate(s.start_at) }}</td>
+        <td>{{ cadenceLabel(s) }}</td>
         <td class="row-actions">
           <button class="btn btn-sm btn-secondary" @click="openForm(s)">Edit</button>
-          <button
-            v-if="s.status === 'pending'"
-            class="btn btn-sm btn-danger"
-            @click="cancelSchedule(s)"
-          >
-            Cancel
-          </button>
+          <button class="btn btn-sm btn-danger" @click="cancelSchedule(s)">Delete</button>
         </td>
       </tr>
     </tbody>
   </table>
 </template>
+
+<style scoped>
+.state-cell {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+.state-active {
+  color: var(--success);
+}
+.state-disabled {
+  color: var(--text-muted);
+}
+</style>

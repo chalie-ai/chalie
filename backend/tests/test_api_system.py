@@ -355,7 +355,7 @@ class TestSystemAPI:
         """Build patch context for /ready — database and store can be individually broken.
 
         Args:
-            db_ok (bool): When False, patches get_shared_db_service() to raise.
+            db_ok (bool): When False, patches Database.conn() to raise so the /ready DB check fails.
             store_ok (bool): When True, uses a real MemoryStore (Category A). When False,
                 uses a broken_store MagicMock whose ping() raises (Category C).
 
@@ -387,14 +387,15 @@ class TestSystemAPI:
         }
 
         if db_ok:
-            # When db_ok, the real db fixture is active and get_shared_db_service()
-            # returns the test DatabaseService — no patching needed.
+            # When db_ok, the real db fixture is active — it points the Database
+            # gateway at this test's SQLite file — so the preflight DB check
+            # (Database.conn().execute('SELECT 1')) passes with no patching.
             pass
         else:
-            # Force the database check to fail by patching get_shared_db_service
-            mock_db = MagicMock()
-            mock_db.connection.side_effect = Exception('db down')
-            patches['services.database_service.get_shared_db_service'] = MagicMock(return_value=mock_db)
+            # Force the database check to fail: run_preflight opens the DB via
+            # Database.conn(), so make that raise. Patched on the class attribute
+            # the preflight module references.
+            patches['services.preflight_service.Database.conn'] = MagicMock(side_effect=Exception('db down'))
 
         return patches
 

@@ -202,6 +202,7 @@ def _run_startup_migrations() -> None:
     _rebuild_episodes_fts()
     _purge_stale_adaptive_layer_rows()
     _wipe_scheduled_items_for_cron()
+    _rebuild_scheduled_items_prompt_only()
 
 
 def _backfill_provider_token_limits() -> None:
@@ -339,6 +340,33 @@ def _wipe_scheduled_items_for_cron() -> None:
                 _f.write('done')
     except Exception as _wipe_err:
         logger.warning(f"[Startup] scheduled_items cron wipe skipped: {_wipe_err}")
+
+
+def _rebuild_scheduled_items_prompt_only() -> None:
+    """One-time rebuild of scheduled_items for the prompt-only model.
+
+    The scheduler drops every lifecycle/CalDAV column (item_type, due_at,
+    status, group_id, turn_id, source, external_uid, metadata, hidden) and its
+    id column changes from TEXT PRIMARY KEY to INTEGER PRIMARY KEY
+    AUTOINCREMENT so id can double as the schedule's turn_id on the
+    'schedule' channel. That primary-key type change is outside what
+    SchemaConvergenceService performs (it only logs type mismatches), so
+    migration_008 does the rebuild explicitly. Idempotent; sentinel-gated to
+    one run per database.
+    """
+    try:
+        from services.file_mapper_service import FileMapperService
+        _sentinel = os.path.join(
+            os.path.dirname(str(FileMapperService.get_db_path())),
+            '.scheduled-items-prompt-only-v1.done',
+        )
+        if not os.path.exists(_sentinel):
+            from migrations.migration_008_scheduler_prompt_only import apply as _apply_rebuild
+            _apply_rebuild(str(FileMapperService.get_db_path()))
+            with open(_sentinel, 'w') as _f:
+                _f.write('done')
+    except Exception as _rebuild_err:
+        logger.warning(f"[Startup] scheduled_items prompt-only rebuild skipped: {_rebuild_err}")
 
 
 def _rebuild_episodes_fts() -> None:
@@ -577,8 +605,8 @@ def main() -> None:
     # through an inert MP (§7 G3: crash recovery has no live turn to construct
     # a real one for) so the sweep runs through the same
     # TurnExecutionService.sweep_orphaned() every in-process turn would.
+    from configs.enums.config_type import ConfigTypeEnum
     from controllers.message_processor import MessageProcessor
-    from services.config_type import ConfigTypeEnum
     _boot_mp = MessageProcessor(ConfigTypeEnum.get_by_type(ConfigTypeEnum.USER))
     _closed = _boot_mp.turn_execution_service.sweep_orphaned()
     if _closed:

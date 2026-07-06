@@ -62,19 +62,7 @@ const NAV: NavItem[] = [
       { id: 'compaction', label: 'Compacted Summary' },
     ],
   },
-  {
-    id: 'scheduler',
-    label: 'Scheduler',
-    icon: Calendar,
-    group: 'cognition',
-    sub: [
-      { id: 'all', label: 'All' },
-      { id: 'pending', label: 'Pending' },
-      { id: 'fired', label: 'Fired' },
-      { id: 'failed', label: 'Failed' },
-      { id: 'cancelled', label: 'Cancelled' },
-    ],
-  },
+  { id: 'scheduler', label: 'Scheduler', icon: Calendar, group: 'cognition' },
   { id: 'lists', label: 'Lists', icon: List, group: 'cognition' },
   {
     id: 'documents',

@@ -3,16 +3,12 @@
 from __future__ import annotations
 
 import datetime as _dt_module
-import json as _json
 import logging
 import uuid
 from datetime import timedelta
-from itertools import combinations
 from typing import TYPE_CHECKING, cast
 
-from services.database import Database
 from services.time_utils import utc_now, parse_utc
-from utils.data_utils import parse_json_column
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterable
@@ -101,16 +97,14 @@ except ImportError:  # pragma: no cover
 # ---------------------------------------------------------------------------
 
 _CONNECT_TIMEOUT = 10
-_BACK_TO_BACK_GAP = timedelta(minutes=5)
 _DEFAULT_PAST_DAYS = 30
 _DEFAULT_FUTURE_DAYS = 30
 
 _ERR_CALDAV_NOT_INSTALLED = "'caldav' package is not installed."
-_SQL_INSERT_NOTIFICATION = """INSERT OR IGNORE INTO scheduled_items
-                           (id, item_type, message, start_at, due_at, status, channel,
-                            source, external_uid, hidden, created_at)
-                         VALUES (?, 'notification', ?, ?, ?, 'pending', 'calendar',
-                                 'mail', ?, 1, ?)"""
+_ERR_CALENDAR_READS_MIGRATING = (
+    "Calendar reads are being migrated to the live CalDAV integration and are "
+    "temporarily unavailable."
+)
 
 # ---------------------------------------------------------------------------
 # Module-level helpers
@@ -125,53 +119,6 @@ def _make_date_utc(d: object) -> _dt_module.datetime:
     if isinstance(d, _dt_module.date):
         return parse_utc(_dt_module.datetime(d.year, d.month, d.day, 0, 0, 0))
     return parse_utc(cast("_dt_module.datetime | str", d))
-
-
-def _events_overlap(a: dict[str, object], b: dict[str, object]) -> bool:
-    return max(cast(_dt_module.datetime, a["dtstart"]), cast(_dt_module.datetime, b["dtstart"])) < min(cast(_dt_module.datetime, a["dtend"]), cast(_dt_module.datetime, b["dtend"]))
-
-
-def _find_overlap_pairs(
-    events: list[dict[str, object]], now: _dt_module.datetime
-) -> list[tuple[dict[str, object], dict[str, object], str]]:
-    upcoming = [
-        e for e in events
-        if e.get("dtstart") and e.get("uid")
-        and cast(_dt_module.datetime, e["dtstart"]) >= now
-        and not e.get("all_day")
-    ]
-    return [
-        (a, b, ":".join(sorted([cast(str, a["uid"]), cast(str, b["uid"])])))
-        for a, b in combinations(upcoming, 2)
-        if a["uid"] != b["uid"] and _events_overlap(a, b)
-    ]
-
-
-def _find_back_to_back_pairs(
-    events: list[dict[str, object]], now: _dt_module.datetime
-) -> list[tuple[dict[str, object], dict[str, object], int, str]]:
-    threshold = _BACK_TO_BACK_GAP.total_seconds() / 60
-    upcoming = sorted(
-        [e for e in events
-         if e.get("dtstart") and e.get("dtend") and e.get("uid")
-         and cast(_dt_module.datetime, e["dtstart"]) >= now and not e.get("all_day")],
-        key=lambda e: cast(_dt_module.datetime, e["dtstart"]),
-    )
-    pairs: list[tuple[dict[str, object], dict[str, object], int, str]] = []
-    for i in range(len(upcoming) - 1):
-        a, b = upcoming[i], upcoming[i + 1]
-        gap = (cast(_dt_module.datetime, b["dtstart"]) - cast(_dt_module.datetime, a["dtend"])).total_seconds() / 60
-        if a["uid"] != b["uid"] and 0 <= gap < threshold:
-            pairs.append((a, b, round(gap), ":".join(sorted([cast(str, a["uid"]), cast(str, b["uid"])]))))
-    return pairs
-
-
-def _get_user_tz() -> object:
-    from services.locale_service import get_timezone
-    tz = get_timezone()
-    if tz.key == "UTC":
-        return None
-    return tz
 
 
 # ---------------------------------------------------------------------------
@@ -333,125 +280,6 @@ class CaldavHandler:
             })
 
         return results
-
-    # ------------------------------------------------------------------
-    # Upsert (mark-sweep delta sync)
-    # ------------------------------------------------------------------
-
-    def upsert_events(self, events: list[dict[str, object]], now: _dt_module.datetime) -> None:
-        try:
-            with Database.transaction() as conn:
-                c = conn.cursor()
-
-                # Mark existing mail events for stale check
-                c.execute(
-                    "UPDATE scheduled_items SET status='stale_check' "
-                    "WHERE source='mail' AND item_type='event' AND status='pending'"
-                )
-
-                # Upsert each event
-                for ev in events:
-                    uid = cast(str, ev.get("uid"))
-                    if not uid:
-                        continue
-                    external_uid = f"caldav:{uid}"
-                    summary = cast(str, ev.get("summary", "Event"))
-                    cal_name = cast(str, ev.get("calendar_name", ""))
-                    location = cast(str, ev.get("location") or "")
-                    dtstart = cast("_dt_module.datetime | None", ev.get("dtstart"))
-                    dtend = cast("_dt_module.datetime | None", ev.get("dtend"))
-
-                    parts: list[str] = [summary]
-                    if cal_name:
-                        parts.append(f"[{cal_name}]")
-                    if location:
-                        parts.append(f"@ {location}")
-                    message = " ".join(parts)
-
-                    metadata = _json.dumps({
-                        "uid": uid,
-                        "dtstart": dtstart.isoformat() if dtstart else None,
-                        "dtend": dtend.isoformat() if dtend else None,
-                        "location": location,
-                        "attendees": ev.get("attendees", []),
-                        "recurrence": ev.get("recurrence"),
-                        "all_day": ev.get("all_day", False),
-                        "calendar_name": cal_name,
-                    })
-                    due_at = dtstart.isoformat() if dtstart else now.isoformat()
-
-                    c.execute(
-                        """INSERT INTO scheduled_items
-                           (id, item_type, message, start_at, due_at, status, channel,
-                            source, external_uid, metadata, hidden, created_at)
-                         VALUES (?, 'event', ?, ?, ?, 'pending', 'calendar',
-                                 'mail', ?, ?, 1, ?)
-                         ON CONFLICT(external_uid) DO UPDATE SET
-                            message=excluded.message,
-                            start_at=excluded.start_at,
-                            due_at=excluded.due_at,
-                            metadata=excluded.metadata,
-                            hidden=1,
-                            status='pending'""",
-                        (uuid.uuid4().hex[:8], message, due_at, due_at,
-                         external_uid, metadata, now.isoformat()),
-                    )
-
-                # Cancel stale events not seen in this sync
-                c.execute(
-                    "UPDATE scheduled_items SET status='cancelled' "
-                    "WHERE source='mail' AND item_type='event' AND status='stale_check'"
-                )
-
-                # 15-min alerts for upcoming non-all-day events within 24h
-                upcoming_cutoff = now + timedelta(hours=24)
-                for ev in events:
-                    dtstart = cast("_dt_module.datetime | None", ev.get("dtstart"))
-                    uid = cast(str, ev.get("uid"))
-                    if (not dtstart or not uid or dtstart < now
-                            or dtstart > upcoming_cutoff or ev.get("all_day")):
-                        continue
-                    alert_msg = f"In 15 min: {ev.get('summary', 'Event')}"
-                    if ev.get("location"):
-                        alert_msg += f" @ {ev['location']}"
-                    alert_due_at = (dtstart - timedelta(minutes=15)).isoformat()
-                    c.execute(
-                        _SQL_INSERT_NOTIFICATION,
-                        (uuid.uuid4().hex[:8], alert_msg, alert_due_at, alert_due_at,
-                         f"caldav:{uid}:alert", now.isoformat()),
-                    )
-
-                # Conflict detection
-                for ev_a, ev_b, canon_key in _find_overlap_pairs(events, now):
-                    conflict_msg = (
-                        f"Schedule conflict: \"{ev_a.get('summary', 'Event')}\" and "
-                        f"\"{ev_b.get('summary', 'Event')}\" overlap"
-                    )
-                    c.execute(
-                        _SQL_INSERT_NOTIFICATION,
-                        (uuid.uuid4().hex[:8], conflict_msg, now.isoformat(), now.isoformat(),
-                         f"caldav:conflict:{canon_key}", now.isoformat()),
-                    )
-                # Back-to-back warnings (< 5 min gap)
-                for ev_a, ev_b, gap_min, canon_key in _find_back_to_back_pairs(events, now):
-                    b2b_msg = (
-                        f"Tight transition ({gap_min}min gap): "
-                        f"\"{ev_a.get('summary', 'Event')}\" \u2192 "
-                        f"\"{ev_b.get('summary', 'Event')}\""
-                    )
-                    b2b_due_at = cast(_dt_module.datetime, ev_a.get("dtend", now)).isoformat()
-                    c.execute(
-                        _SQL_INSERT_NOTIFICATION,
-                        (uuid.uuid4().hex[:8], b2b_msg, b2b_due_at, b2b_due_at,
-                         f"caldav:b2b:{canon_key}", now.isoformat()),
-                    )
-
-                conn.commit()
-                logger.info(
-                    "[caldav_handler] upserted %d events + derivative items", len(events)
-                )
-        except Exception as exc:
-            logger.error("[caldav_handler] upsert_events failed: %s", exc)
 
     # ------------------------------------------------------------------
     # Tool handlers — server mutations (client passed in)
@@ -624,106 +452,15 @@ class CaldavHandler:
             return {"error": str(exc)}
 
     # ------------------------------------------------------------------
-    # Tool handlers — DB queries continued
+    # Tool handlers — reads over the (now-removed) scheduled_items mirror.
+    # DECOMMISSIONED (TKT-1434): both queried the CalDAV-to-scheduled_items
+    # mirror; there is no replacement live-CalDAV read path yet (a separate
+    # effort re-homes calendar reads). Return a clean error rather than
+    # reference dropped columns.
     # ------------------------------------------------------------------
 
-    def find_free_slots(self, params: dict[str, object]) -> dict[str, object]:
-        try:
-            from datetime import timezone as _tz
+    def find_free_slots(self, params: dict[str, object]) -> dict[str, object]:  # noqa: ARG002
+        return {"error": _ERR_CALENDAR_READS_MIGRATING}
 
-            date_from = cast(str, params.get("date_from", utc_now().isoformat()))
-            date_to = cast(str, params.get("date_to", (utc_now() + timedelta(days=7)).isoformat()))
-            min_minutes = int(cast(int, params.get("min_duration_minutes", 30)))
-            wh_start = int(cast(int, params.get("working_hours_start", 8)))
-            wh_end = int(cast(int, params.get("working_hours_end", 18)))
-
-            rows = Database.conn().execute(
-                "SELECT due_at, metadata FROM scheduled_items "
-                "WHERE source='mail' AND item_type='event' AND status='pending' "
-                "AND due_at >= ? AND due_at <= ? ORDER BY due_at ASC",
-                (date_from, date_to),
-            ).fetchall()
-
-            busy: list[tuple[_dt_module.datetime, _dt_module.datetime]] = []
-            for due_at_str, meta_raw in rows:
-                meta = cast("dict[str, object]", parse_json_column(meta_raw))
-                start = parse_utc(due_at_str)
-                end_str = cast("str | None", meta.get("dtend"))
-                end = parse_utc(end_str) if end_str else start + timedelta(hours=1)
-                if not meta.get("all_day", False):
-                    busy.append((start, end))
-            busy.sort(key=lambda x: x[0])
-
-            tz = cast("_dt_module.tzinfo", _get_user_tz() or _tz.utc)
-            window_start = parse_utc(date_from)
-            window_end = parse_utc(date_to)
-            work_windows: list[tuple[_dt_module.datetime, _dt_module.datetime]] = []
-            day = window_start.astimezone(tz).replace(hour=0, minute=0, second=0, microsecond=0)
-            last_day = window_end.astimezone(tz).replace(hour=0, minute=0, second=0, microsecond=0)
-            while day <= last_day:
-                ws = max(day.replace(hour=wh_start).astimezone(_tz.utc), window_start)
-                we = min(day.replace(hour=wh_end).astimezone(_tz.utc), window_end)
-                if ws < we:
-                    work_windows.append((ws, we))
-                day += timedelta(days=1)
-
-            slots = []
-            for ww_start, ww_end in work_windows:
-                cursor_time = ww_start
-                for bstart, bend in busy:
-                    if bend <= ww_start:
-                        continue
-                    if bstart >= ww_end:
-                        break
-                    clamped_start = max(bstart, ww_start)
-                    if clamped_start > cursor_time:
-                        gap = (clamped_start - cursor_time).total_seconds() / 60
-                        if gap >= min_minutes:
-                            slots.append({
-                                "start": cursor_time.isoformat(),
-                                "end": clamped_start.isoformat(),
-                                "duration_minutes": int(gap),
-                            })
-                    cursor_time = max(cursor_time, min(bend, ww_end))
-                if cursor_time < ww_end:
-                    gap = (ww_end - cursor_time).total_seconds() / 60
-                    if gap >= min_minutes:
-                        slots.append({
-                            "start": cursor_time.isoformat(),
-                            "end": ww_end.isoformat(),
-                            "duration_minutes": int(gap),
-                        })
-
-            return {"free_slots": slots, "count": len(slots)}
-        except Exception as exc:
-            return {"error": f"Failed to find free slots: {exc}"}
-
-    def get_attendees(self, params: dict[str, object]) -> dict[str, object]:
-        uid = cast(str, params.get("uid") or params.get("event_uid"))
-        if not uid:
-            return {"error": "uid is required"}
-        try:
-            from capabilities.contact_resolver import resolve
-
-            row = Database.conn().execute(
-                "SELECT message, metadata FROM scheduled_items "
-                "WHERE external_uid = ? AND item_type='event'",
-                (f"caldav:{uid}",),
-            ).fetchone()
-
-            if not row:
-                return {"error": f"Event '{uid}' not found"}
-
-            title, meta_raw = row
-            meta = cast("dict[str, object]", parse_json_column(meta_raw))
-            resolved: list[dict[str, object]] = []
-            for email in cast("list[str]", meta.get("attendees", [])):
-                matches = resolve(email, limit=1)
-                resolved.append({
-                    "email": email,
-                    "name": cast(str, matches[0].get("name", "")) if matches else "",
-                })
-
-            return {"event_title": title, "attendees": resolved, "count": len(resolved)}
-        except Exception as exc:
-            return {"error": f"Failed to get attendees: {exc}"}
+    def get_attendees(self, params: dict[str, object]) -> dict[str, object]:  # noqa: ARG002
+        return {"error": _ERR_CALENDAR_READS_MIGRATING}

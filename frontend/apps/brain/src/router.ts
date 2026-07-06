@@ -24,13 +24,6 @@ import ErrorsSub from './views/cognition/ErrorsSub.vue';
 import UsageSub from './views/cognition/UsageSub.vue';
 import CompactionSub from './views/cognition/CompactionSub.vue';
 
-// Scheduler filter tabs are routed for deep-link / breadcrumb support.
-import SchedulerAllSub from './views/scheduler/AllSub.vue';
-import SchedulerPendingSub from './views/scheduler/PendingSub.vue';
-import SchedulerFiredSub from './views/scheduler/FiredSub.vue';
-import SchedulerFailedSub from './views/scheduler/FailedSub.vue';
-import SchedulerCancelledSub from './views/scheduler/CancelledSub.vue';
-
 import DocumentsActiveSub from './views/documents/ActiveSub.vue';
 import DocumentsProcessingSub from './views/documents/ProcessingSub.vue';
 import DocumentsUploadsSub from './views/documents/UploadsSub.vue';
@@ -65,19 +58,7 @@ export const router = createRouter({
       ],
     },
 
-    {
-      path: '/scheduler',
-      name: 'scheduler',
-      component: SchedulerView,
-      redirect: '/scheduler/all',
-      children: [
-        { path: 'all', name: 'scheduler-all', component: SchedulerAllSub },
-        { path: 'pending', name: 'scheduler-pending', component: SchedulerPendingSub },
-        { path: 'fired', name: 'scheduler-fired', component: SchedulerFiredSub },
-        { path: 'failed', name: 'scheduler-failed', component: SchedulerFailedSub },
-        { path: 'cancelled', name: 'scheduler-cancelled', component: SchedulerCancelledSub },
-      ],
-    },
+    { path: '/scheduler', name: 'scheduler', component: SchedulerView },
 
     { path: '/lists', name: 'lists', component: ListsView },
 

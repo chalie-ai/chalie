@@ -190,30 +190,18 @@ CREATE TABLE IF NOT EXISTS master_account (
 -- SCHEDULED ITEMS
 -- ────────────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS scheduled_items (
-    id TEXT PRIMARY KEY,
-    item_type TEXT NOT NULL DEFAULT 'prompt',  -- 'prompt' = user schedule (fires as a turn); 'event' = CalDAV calendar row (display-only, never fired)
+    id INTEGER PRIMARY KEY AUTOINCREMENT,     -- also the thread's turn_id on the 'schedule' channel (§13.1). AUTOINCREMENT: a cancelled schedule's id is never reissued, so a dead thread can never be re-entered.
     message TEXT NOT NULL,
-    start_at TEXT NOT NULL,                   -- UTC; activation floor ("Start Time"). due_at never fires before this. Defaults to creation time.
-    due_at TEXT NOT NULL,                     -- UTC; materialized next fire = first cron match >= start_at, advanced after each fire
-    cron_dom INTEGER,                         -- day-of-month 1-31 in USER-LOCAL tz; NULL = every
-    cron_hour INTEGER,                        -- hour 0-23 in USER-LOCAL tz; NULL = every
-    cron_minute INTEGER,                      -- minute 0-59 in USER-LOCAL tz; NULL = every
-    status TEXT NOT NULL DEFAULT 'pending',   -- 'pending' is the initial lifecycle state; intentionally repeated in documents.status
-    channel TEXT,
+    start_at TEXT NOT NULL,                    -- UTC activation floor; the cron never fires before this instant
+    cron_dom INTEGER,                          -- day-of-month 1-31 in USER-LOCAL tz; NULL = every
+    cron_hour INTEGER,                         -- hour 0-23 in USER-LOCAL tz; NULL = every
+    cron_minute INTEGER,                       -- minute 0-59 in USER-LOCAL tz; NULL = every
+    enabled INTEGER NOT NULL DEFAULT 1,        -- 0 = disabled: the poller skips it (series paused)
+    channel TEXT,                              -- creating context's channel (audit only; the fire always runs on 'schedule')
     created_by_session TEXT,
-    created_at TEXT NOT NULL DEFAULT (datetime('now')),
-    enabled INTEGER NOT NULL DEFAULT 1,       -- 0 = disabled: the poller skips it (series paused); re-enable resumes firing
-    group_id TEXT,
-    source TEXT,                              -- origin: 'caldav', 'imap', NULL = user-created
-    external_uid TEXT,                        -- dedup key for external sources
-    metadata TEXT DEFAULT '{}',               -- JSON blob (location, attendees, etc.)
-    hidden INTEGER DEFAULT 0,                 -- hide from user-facing list/API
-    turn_id INTEGER                           -- the schedule's thread on the 'schedule' channel; one per series (COALESCE(group_id,id)); NULL until first fire
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
-
-CREATE INDEX IF NOT EXISTS idx_scheduled_items_pending ON scheduled_items(due_at) WHERE status = 'pending';
-CREATE INDEX IF NOT EXISTS idx_scheduled_items_group_id ON scheduled_items(group_id, due_at DESC);
-CREATE UNIQUE INDEX IF NOT EXISTS idx_scheduled_items_external_uid ON scheduled_items(external_uid);
+CREATE INDEX IF NOT EXISTS idx_scheduled_items_enabled ON scheduled_items(enabled, start_at);
 
 
 -- ────────────────────────────────────────────────────────────────
@@ -312,7 +300,7 @@ CREATE TABLE IF NOT EXISTS documents (
     file_path TEXT NOT NULL,
     file_hash TEXT,
     page_count INTEGER,
-    status TEXT DEFAULT 'pending',            -- 'pending' initial state mirrors scheduled_items.status; same literal, different table
+    status TEXT DEFAULT 'pending',            -- 'pending' is the initial lifecycle state
     error_message TEXT,
     chunk_count INTEGER DEFAULT 0,
     source_type TEXT DEFAULT 'upload',

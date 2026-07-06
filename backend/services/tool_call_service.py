@@ -79,7 +79,9 @@ class ToolCallService:
             )
             return None
         self._emit(call)
-        return call.id
+        # tool_calls PK is INTEGER autoincrement; the str arm of Model.id
+        # exists only for TEXT-UUID models (episodes).
+        return cast("int | None", call.id)
 
     def finish(self, call_id: "int | None", result: str, state: str) -> None:
         """Write the terminal ``result``/``state`` onto a row :meth:`start`

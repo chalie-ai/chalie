@@ -5,6 +5,7 @@ import pytest
 
 from abilities._result import ToolResult
 from abilities.find_tools import FindToolsAbility
+from services.database import Database
 from services.file_mapper_service import FileMapperService
 from services.mcp_client_service import McpClientService, _open_tools_db
 from controllers.message_processor import MessageProcessor
@@ -36,12 +37,12 @@ def _seed_server_online(svc: McpClientService, name: str, tools: list[dict[str, 
     server = svc.add_server(name=name, host=f"http://fake-{name}.lan:9000",
                              headers={}, enabled=True)
     svc._write_tools(cast(str, server["id"]), name, tools)
-    with svc._db.connection() as conn:
-        conn.execute(
-            "UPDATE mcp_client_servers SET status='online' WHERE id=?",
-            (server["id"],),
-        )
-        conn.commit()
+    # mcp_client_servers lives in chalie.db (the Database gateway's default path);
+    # the connection is autocommit, so the UPDATE persists on execute.
+    Database.conn().execute(
+        "UPDATE mcp_client_servers SET status='online' WHERE id=?",
+        (server["id"],),
+    )
     return server
 
 
@@ -230,31 +231,25 @@ class TestEmbeddingsSurviveHeartbeatSync:
             }
         ])
 
-        # Capture the mcp_tools.id values before the churn.
-        conn = _open_tools_db()
-        try:
-            ids_before = {
-                r[0] for r in conn.execute(
-                    "SELECT id FROM mcp_tools WHERE server_id=?", (server["id"],)
-                ).fetchall()
-            }
-        finally:
-            conn.close()
+        # Capture the mcp_tools.id values before the churn. _open_tools_db() returns
+        # the Database gateway's cached connection — never closed by callers (the db
+        # fixture's Database.close() teardown owns it).
+        ids_before = {
+            r[0] for r in _open_tools_db().execute(
+                "SELECT id FROM mcp_tools WHERE server_id=?", (server["id"],)
+            ).fetchall()
+        }
 
         # Simulate a heartbeat re-sync: _write_tools deletes + re-inserts.
         # With the second server having advanced the high-water mark, taskie's
         # re-insert gets fresh ids above the previous range.
         svc._write_tools(cast(str, server["id"]), "taskie", _TASKIE_TOOLS)
 
-        conn = _open_tools_db()
-        try:
-            ids_after = {
-                r[0] for r in conn.execute(
-                    "SELECT id FROM mcp_tools WHERE server_id=?", (server["id"],)
-                ).fetchall()
-            }
-        finally:
-            conn.close()
+        ids_after = {
+            r[0] for r in _open_tools_db().execute(
+                "SELECT id FROM mcp_tools WHERE server_id=?", (server["id"],)
+            ).fetchall()
+        }
 
         assert ids_before != ids_after, (
             "Precondition: _write_tools must reassign mcp_tools.id to new values. "
@@ -304,26 +299,18 @@ class TestAddOnlyEmbeddingTrigger:
         svc.embed_server_tools(cast(str, server["id"]))
 
         # Snapshot the vector rows (rowid + tool_name pairs) before the sync.
-        conn = _open_tools_db()
-        try:
-            rows_before = set(conn.execute(
-                "SELECT rowid, tool_name FROM mcp_tool_vectors ORDER BY rowid"
-            ).fetchall())
-        finally:
-            conn.close()
+        rows_before = set(_open_tools_db().execute(
+            "SELECT rowid, tool_name FROM mcp_tool_vectors ORDER BY rowid"
+        ).fetchall())
 
         assert rows_before, "Precondition: embed_server_tools must have written mcp_tool_vectors rows."
 
         # Simulate a heartbeat: _write_tools is the re-sync path.
         svc._write_tools(cast(str, server["id"]), "taskie", _TASKIE_TOOLS)
 
-        conn = _open_tools_db()
-        try:
-            rows_after = set(conn.execute(
-                "SELECT rowid, tool_name FROM mcp_tool_vectors ORDER BY rowid"
-            ).fetchall())
-        finally:
-            conn.close()
+        rows_after = set(_open_tools_db().execute(
+            "SELECT rowid, tool_name FROM mcp_tool_vectors ORDER BY rowid"
+        ).fetchall())
 
         assert rows_before == rows_after, (
             f"_write_tools (heartbeat) must NOT alter mcp_tool_vectors rows. "

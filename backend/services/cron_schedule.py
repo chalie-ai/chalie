@@ -8,10 +8,11 @@ A schedule fires on a coarse-to-fine crontab of three fields:
     cron_minute minute        0-59   (NULL = every)
 
 The fields are expressed in the USER'S LOCAL timezone (they come straight from
-the World State wall clock — the LLM and UI never perform timezone maths). The
-stored ``start_at`` / ``due_at`` are UTC. ``next_fire`` bridges the two: it walks
-forward in local wall-clock time to the first instant that matches the fixed
-fields, then hands back the UTC instant for storage and the poller.
+the World State wall clock — the LLM and UI never perform timezone maths).
+There is no materialized ``due_at`` to walk toward: the poller wakes on every
+wall-clock minute and asks ``matches`` a stateless yes/no question — does the
+current instant, converted to local time, satisfy the three fields? A NULL
+field always answers yes.
 
 Invariant (``validate_cron``): the "every" (NULL) fields must form a prefix from
 the coarse end — you cannot set "every" on a field finer than a fixed one. Only
@@ -23,17 +24,9 @@ these four shapes are legal (E = every, F = fixed):
     F F F   monthly on day DD at HH:MM
 """
 
-from datetime import datetime, timedelta, timezone
-from zoneinfo import ZoneInfo
+from datetime import datetime
 
 from services.locale_service import get_timezone
-from services.time_utils import parse_utc, utc_now
-
-# Safety bound for the wall-clock walk. Real searches converge in well under a
-# hundred jumps (minute/hour jumps are direct; day steps are one per day and a
-# valid day-of-month recurs at least every ~2 months). This only guards against
-# a pathological tz making the loop spin.
-_MAX_STEPS = 400_000
 
 
 def validate_cron(dom: int | None, hour: int | None, minute: int | None) -> None:
@@ -61,84 +54,24 @@ def validate_cron(dom: int | None, hour: int | None, minute: int | None) -> None
         )
 
 
-def next_fire(
-    not_before: datetime | str,
-    dom: int | None,
-    hour: int | None,
-    minute: int | None,
-) -> tuple[datetime, datetime]:
-    """Return the first cron match at or after ``not_before``.
+def matches(now_utc: datetime, dom: int | None, hour: int | None, minute: int | None) -> bool:
+    """True iff now (converted to the user's local wall clock) matches the cron
+    fields; a NULL field matches every value (§ every-prefix invariant).
 
-    Args:
-        not_before: UTC datetime (naive assumed UTC) or ISO string. The returned
-            fire is the earliest cron match whose instant is >= this.
-        dom/hour/minute: the cron fields (NULL/None = every), in local wall clock.
+    Two wall-clock edge cases are accepted by design (the dumb-cron model owns
+    no calendar arithmetic, only a per-minute equality test):
 
-    Returns:
-        (utc_datetime, local_datetime) of the next fire.
-
-    Raises:
-        ValueError: if the cron triple is invalid, or no match is found within
-            the safety bound.
+    - DST transitions. A fixed local HH:MM that the spring-forward gap skips
+      never matches that day (the minute has no UTC instant); a fall-back
+      repeat makes the local minute occur twice, so a fixed HH:MM fires twice.
+      Callers who cannot tolerate either use ``cron_hour=None`` (every-hour).
+    - Short months. ``cron_dom`` is a literal local day number, so 29/30/31
+      simply never match in months without that day (e.g. dom=31 skips
+      February and the 30-day months) — there is no "last day of month" roll.
     """
-    validate_cron(dom, hour, minute)
-
-    tz = get_timezone()
-    floor_utc = parse_utc(not_before)
-
-    # Walk in NAIVE local wall-clock time so day/DST arithmetic is correct, then
-    # re-attach the zone to get the true UTC instant.
-    naive = floor_utc.astimezone(tz).replace(second=0, microsecond=0, tzinfo=None)
-    if _to_utc(naive, tz) < floor_utc:
-        # Rounding down to the minute landed before the floor — step to next minute.
-        naive += timedelta(minutes=1)
-
-    for _ in range(_MAX_STEPS):
-        if (
-            (minute is None or naive.minute == minute)
-            and (hour is None or naive.hour == hour)
-            and (dom is None or naive.day == dom)
-        ):
-            aware = naive.replace(tzinfo=tz)
-            return aware.astimezone(timezone.utc), aware
-
-        # Jump to the next plausible candidate. The every-prefix invariant means a
-        # fixed coarser field always sits above fixed finer fields, so fixing the
-        # finest mismatch never disturbs an already-matched finer field.
-        if minute is not None and naive.minute != minute:
-            naive += timedelta(minutes=(minute - naive.minute) % 60)
-        elif hour is not None and naive.hour != hour:
-            naive += timedelta(hours=(hour - naive.hour) % 24)
-        else:  # dom fixed and mismatched — step a day, keeping HH:MM
-            naive += timedelta(days=1)
-
-    raise ValueError(
-        f"No cron match within bound for dom={dom} hour={hour} minute={minute}."
+    local = now_utc.astimezone(get_timezone())
+    return (
+        (minute is None or local.minute == minute)
+        and (hour is None or local.hour == hour)
+        and (dom is None or local.day == dom)
     )
-
-
-def next_due_from(
-    anchor: datetime | str,
-    dom: int | None,
-    hour: int | None,
-    minute: int | None,
-) -> tuple[datetime, datetime]:
-    """Compute the next materialized ``due_at`` from an anchor, never in the past.
-
-    The anchor is floored to "now" so a future ``start_at`` is honoured while a
-    stalled poller or a past ``start_at`` never triggers a catch-up storm of
-    missed occurrences — cron only fires forward.
-
-    Use with ``anchor = start_at`` for the first fire, or
-    ``anchor = <previous due_at> + 1 minute`` to advance after a fire.
-
-    Returns:
-        (utc_datetime, local_datetime) of the next fire.
-    """
-    floored = max(parse_utc(anchor), utc_now())
-    return next_fire(floored, dom, hour, minute)
-
-
-def _to_utc(naive_local: datetime, tz: ZoneInfo) -> datetime:
-    """Attach ``tz`` to a naive local datetime and convert to UTC."""
-    return naive_local.replace(tzinfo=tz).astimezone(timezone.utc)

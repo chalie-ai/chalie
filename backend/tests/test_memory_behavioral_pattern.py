@@ -10,7 +10,7 @@ Three behaviours under test:
 
 All three are pure-function or real-DataGraph tests — zero mocks except the
 single network-boundary patch already established by the project's conftest db
-fixture (which patches get_shared_db_service to an isolated SQLite instance).
+fixture (which points the Database gateway at an isolated SQLite instance).
 """
 
 import json
@@ -31,7 +31,7 @@ class TestRenderBehavioralPattern:
 
     def test_valid_json_produces_readable_line(self) -> None:
         """Full JSON with all fields renders as 'name (freq @ anchor): summary [confidence=N]'."""
-        from services.memory_retrieval import _render_behavioral_pattern
+        from models.behavioral_pattern import BehavioralPattern
 
         raw = json.dumps({
             "name": "dawn_meditation_practice",
@@ -40,7 +40,7 @@ class TestRenderBehavioralPattern:
             "summary": "Practises 20 minutes of silent meditation before breakfast",
             "confidence": 8.0,
         })
-        result = _render_behavioral_pattern(raw)
+        result = BehavioralPattern.render(raw)
 
         assert result.startswith("dawn_meditation_practice"), (
             f"Expected name at start, got: {result!r}"
@@ -52,7 +52,7 @@ class TestRenderBehavioralPattern:
 
     def test_missing_time_anchor_omits_at_segment(self) -> None:
         """When time_anchor is absent the '@ HH:MM' segment is omitted entirely."""
-        from services.memory_retrieval import _render_behavioral_pattern
+        from models.behavioral_pattern import BehavioralPattern
 
         raw = json.dumps({
             "name": "evening_walk",
@@ -60,7 +60,7 @@ class TestRenderBehavioralPattern:
             "summary": "30 min walk after dinner",
             "confidence": 5.5,
         })
-        result = _render_behavioral_pattern(raw)
+        result = BehavioralPattern.render(raw)
 
         assert "@" not in result, (
             f"No time_anchor means no '@', got: {result!r}"
@@ -69,10 +69,10 @@ class TestRenderBehavioralPattern:
 
     def test_invalid_json_returns_raw_string(self) -> None:
         """Unparseable JSON is returned verbatim — no crash, no data loss."""
-        from services.memory_retrieval import _render_behavioral_pattern
+        from models.behavioral_pattern import BehavioralPattern
 
         raw = "not valid { json"
-        result = _render_behavioral_pattern(raw)
+        result = BehavioralPattern.render(raw)
 
         assert result == raw, (
             f"Expected raw passthrough for invalid JSON, got: {result!r}"
@@ -80,9 +80,9 @@ class TestRenderBehavioralPattern:
 
     def test_non_string_input_returns_raw(self) -> None:
         """Non-string input (e.g. already-decoded dict) is handled without crash."""
-        from services.memory_retrieval import _render_behavioral_pattern
+        from models.behavioral_pattern import BehavioralPattern
 
-        result = _render_behavioral_pattern(cast(str, None))
+        result = BehavioralPattern.render(cast(str, None))
         assert result == "", f"None input should produce empty string, got: {result!r}"
 
 

@@ -11,6 +11,7 @@ import json
 import logging
 from typing import cast
 
+from models.behavioral_pattern import BehavioralPattern
 from services.database import Database
 from services.file_mapper_service import FileMapperService
 from services.time_utils import utc_now
@@ -57,14 +58,10 @@ class SkillAssociationService:
         return written
 
     def _load_patterns(self, row_ids: set[int]) -> list[tuple[str, str]]:
-        placeholders = ",".join("?" * len(row_ids))
-        conn = Database.conn()
-        return cast(list[tuple[str, str]], conn.execute(
-            f"SELECT key, value FROM data_graph "
-            f"WHERE id IN ({placeholders}) "
-            f"AND kind='behavioral_pattern' AND active=1 AND deleted_at IS NULL",
-            tuple(row_ids),
-        ).fetchall())
+        ids = sorted(row_ids)
+        placeholders = ",".join("?" * len(ids))
+        rows = BehavioralPattern.live().filter(f"id IN ({placeholders})", *ids).get()
+        return cast(list[tuple[str, str]], [(row.key, row.value) for row in rows])
 
     def _load_skill_index(self) -> list[tuple[str, str, str]]:
         conn = Database.conn(str(_SKILLS_DB))

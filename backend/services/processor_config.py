@@ -12,11 +12,11 @@ from __future__ import annotations
 
 from abc import ABC
 from dataclasses import dataclass
-from enum import Enum
 from typing import TYPE_CHECKING, ClassVar
 
 if TYPE_CHECKING:
-    from services.config_type import ConfigTypeEnum
+    from configs.enums.config_type import ConfigTypeEnum
+    from configs.enums.policy_channel import PolicyChannel
 
 
 @dataclass(frozen=True)
@@ -34,8 +34,8 @@ class ProcessorConfig(ABC):
     BROADCASTS_STATE: ClassVar[bool] = False
     """True → this channel streams its live progress to its surface: the lean
     ``updated`` turn-state signal via ``mp.broadcast``, the turn-execution
-    lifecycle frame via ExecutionTracker, and the single tool-call frame via
-    ActTrail. Only UserConfig sets it; every other channel stays silent (each
+    lifecycle frame via TurnExecutionService, and the single tool-call frame via
+    ToolCallService. Only UserConfig sets it; every other channel stays silent (each
     chokepoint no-ops). The single state-gate — replaces the scattered
     ``broadcast_to == 'user'`` checks. Distinct from ``broadcast_to`` (message-
     delivery target)."""
@@ -58,12 +58,6 @@ class ProcessorConfig(ABC):
     web_browse). Vision takes precedence: VisionConfig keeps uses_vision_provider
     and never sets this (vision > delegate > chat)."""
 
-    # ── Policy channel (nested enum keeps processor_config.py dependency-free) ──
-    class PolicyChannel(str, Enum):
-        CHAT           = "chat"
-        SUBCONSCIOUS   = "subconscious"
-        EXTERNAL_AGENT = "external_agent"
-
     # ── Identity ──────────────────────────────────────────────────────────────
 
     channel: str
@@ -74,7 +68,7 @@ class ProcessorConfig(ABC):
     """Transcript role for the input row.  E.g. 'user', 'proactive_thought',
     'external_agent', 'pattern_match'."""
 
-    policy_channel: "ProcessorConfig.PolicyChannel"
+    policy_channel: "PolicyChannel"
     """Which policy channel this processor's tool calls are gated under.
     usage_class (the llm_call_log string) is derived from it."""
 
@@ -136,6 +130,15 @@ class ProcessorConfig(ABC):
     yet share another channel's prompt assembly set this — DiscoveryConfig
     (``= "user"``) reuses the user prompts; EAMPConfig (``= "external_agent"``)
     has a per-agent dynamic ``channel``."""
+
+    # ── External turn-id ownership ────────────────────────────────────────────
+
+    external_turn_id: bool = False
+    """When True, the caller assigns ``turn_id`` from an external key space it
+    owns (e.g. the schedule id on the ``'schedule'`` channel). A supplied
+    turn_id that does not yet exist opens a new MAIN turn rather than being
+    rejected as an invalid fork; forked-ness is derived from whether the turn
+    already exists, not the -1 sentinel."""
 
     # ── Derived properties ────────────────────────────────────────────────────
 

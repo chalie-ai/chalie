@@ -9,17 +9,17 @@
 import { api } from '@chalie/shared';
 
 export interface ScheduleItem {
-  id: string | number;
+  id: number;
   message?: string | null;
   prompt?: string | null;
-  status: string;
   enabled: number;
   start_at?: string | null;
-  due_at?: string | null;
-  due?: string | null;
   day: number | null;
   hour: number | null;
   minute: number | null;
+  channel?: string | null;
+  created_by_session?: string | null;
+  created_at?: string;
   [key: string]: unknown;
 }
 
@@ -41,11 +41,11 @@ export const scheduler = {
     return api.post('/api/scheduler', body);
   },
 
-  update(id: string | number, body: Partial<ScheduleInput>): Promise<{ schedule?: ScheduleItem }> {
+  update(id: number, body: Partial<ScheduleInput>): Promise<{ schedule?: ScheduleItem }> {
     return api.put(`/api/scheduler/${id}`, body);
   },
 
-  delete(id: string | number): Promise<unknown> {
+  delete(id: number): Promise<unknown> {
     return api.del(`/api/scheduler/${id}`);
   },
 };

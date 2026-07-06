@@ -20,8 +20,8 @@ import pytest
 
 from abilities.browser import BrowserAbility
 from configs.channels.web_browse import WebBrowseConfig
+from configs.enums.policy_channel import PolicyChannel
 from controllers.message_processor import MessageProcessor
-from services.processor_config import ProcessorConfig
 
 pytestmark = pytest.mark.unit
 
@@ -29,7 +29,7 @@ _VERBS = ["open", "read", "find", "click", "fill", "select", "scroll", "back", "
 
 
 def _browse_mp() -> MessageProcessor:
-    mp = MessageProcessor(WebBrowseConfig(ProcessorConfig.PolicyChannel.CHAT), raw_input="drive a web page")
+    mp = MessageProcessor(WebBrowseConfig(PolicyChannel.CHAT), raw_input="drive a web page")
     mp.active_tools = list(mp.config.always_available or [])
     return mp
 

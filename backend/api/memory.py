@@ -15,6 +15,7 @@ from typing import cast
 from flask.typing import ResponseReturnValue
 from flask_restx import Namespace, Resource
 
+from models.episode import Episode
 from services.time_utils import parse_utc
 from .auth import require_session
 from .dto import Error, expects, register_dto, responds
@@ -40,13 +41,13 @@ def _error(message: str, status: int) -> ResponseReturnValue:
     return Error(error=message).model_dump(mode="json"), status
 
 
-def _episode_hit(row: dict[str, object]) -> MemoryHit:
-    """Build a ``MemoryHit`` from an episodic-retrieval episode row."""
+def _episode_hit(ep: Episode) -> MemoryHit:
+    """Build a ``MemoryHit`` from an episodic-retrieval :class:`Episode`."""
     return MemoryHit(
         type="episode",
-        content=cast(str, row.get("gist", "")),
-        score=cast(float, row.get("composite_score", row.get("score", 0))),
-        created_at=parse_utc(cast(str, row.get("created_at") or "")),
+        content=ep.gist,
+        score=getattr(ep, "composite_score", 0.0),
+        created_at=parse_utc(ep.created_at or ""),
     )
 
 
@@ -72,17 +73,15 @@ class MemorySearchResource(Resource):
         """Search episodic memory + the data graph and return ranked, merged hits."""
         results: list[MemoryHit] = []
         try:
-            from services import episodic_retrieval_service
+            from services.episodic_service import EpisodicService
             from services.data_graph_service import get_data_graph_service
 
             try:
                 results.extend(
                     _episode_hit(ep)
                     for ep in cast(
-                        "list[dict[str, object]]",
-                        episodic_retrieval_service.retrieve(
-                            query_text=dto.q, channel=None
-                        ),
+                        "list[Episode]",
+                        EpisodicService().retrieve(query_text=dto.q, channel=None),
                     )
                 )
             except Exception as exc:

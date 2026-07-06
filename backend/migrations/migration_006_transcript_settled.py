@@ -2,7 +2,7 @@
 
 ``settled`` is a positive flag: 1 on assistant rows that carry no model-driven
 tool (the turn's settle0), 0 on every other row. Written as 1 by the write path;
-``ActTrail.start()`` demotes to 0 when a settling tool is recorded. ``schema.sql``
+``ToolCallService.start()`` demotes to 0 when a settling tool is recorded. ``schema.sql``
 declares the column; SchemaConvergenceService adds it automatically on the next
 boot. This file is the standalone idempotent script for operators applying the
 change manually.

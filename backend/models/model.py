@@ -47,7 +47,10 @@ class Model(Serializable):
     _connection_getter: ClassVar[Callable[[], sqlite3.Connection] | None] = None
 
     def __init__(self, **fields: object) -> None:
-        self.id: int | None = None
+        # int for INTEGER-autoincrement PKs (read back off cursor.lastrowid in
+        # save()); str for TEXT-UUID PKs (episodes), whose model overrides
+        # save() to generate the id itself.
+        self.id: int | str | None = None
         for name, value in fields.items():
             setattr(self, name, value)
 

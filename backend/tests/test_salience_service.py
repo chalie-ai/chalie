@@ -1,6 +1,6 @@
 import pytest
 
-from services.salience_service import compute_salience
+from services.episodic_service import compute_salience
 
 pytestmark = pytest.mark.unit
 

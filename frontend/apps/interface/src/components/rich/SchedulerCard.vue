@@ -3,30 +3,18 @@ import { computed } from 'vue';
 import { formatCadence } from '../../utils/time';
 
 export interface SchedulerRecord {
-  id: string | number;
+  id: number;
   message: string;
   /** Localized (user-timezone) ISO string — the schedule's activation floor. */
   start_at: string;
-  /** Localized next fire, when the backend has one to report. */
-  due_at?: string | null;
-  /** Cron fields (`null` = "every" on that field); absent entirely on the
-   *  already-existed dedup path, where no cadence is known to show. */
+  /** Cron fields (`null` = "every" on that field). */
   day?: number | null;
   hour?: number | null;
   minute?: number | null;
-  /** Present only on the already-existed dedup path. */
-  note?: string;
-}
-
-export interface SchedulerSameDayItem {
-  id: string | number;
-  message: string;
-  due_at: string | null;
 }
 
 export interface SchedulerPayload {
   record: SchedulerRecord;
-  same_day_items?: SchedulerSameDayItem[];
 }
 
 const props = defineProps<{
@@ -50,8 +38,8 @@ const MONTHS = [
   'Dec',
 ] as const;
 
-// The backend already localizes start_at/due_at to the user's timezone — parse
-// and read the components directly, no client-side offset math.
+// The backend already localizes start_at to the user's timezone — parse and
+// read the components directly, no client-side offset math.
 function parseLocal(isoStr: string | null | undefined): Date | null {
   if (!isoStr) return null;
   const d = new Date(isoStr);
@@ -62,14 +50,9 @@ function formatTime(d: Date): string {
   return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
 }
 
-function formatDayTime(d: Date): string {
-  return `${DAYS[d.getDay()]} ${formatTime(d)}`;
-}
-
 const record = computed(() => props.payload.record);
 
 const startAt = computed(() => parseLocal(record.value.start_at));
-const nextDueAt = computed(() => parseLocal(record.value.due_at));
 
 const whenDay = computed(() => (startAt.value ? DAYS[startAt.value.getDay()] : '—'));
 const whenDate = computed(() => (startAt.value ? String(startAt.value.getDate()) : '—'));
@@ -79,8 +62,7 @@ const title = computed(() => record.value.message || props.synthesis || '');
 
 const metaTime = computed(() => (startAt.value ? formatTime(startAt.value) : null));
 
-/** Cadence label, only when the record actually carries cron fields (absent on
- *  the already-existed dedup path — nothing to derive a cadence from there). */
+/** Cadence label, only when the record actually carries cron fields. */
 const cadenceText = computed((): string | null => {
   const r = record.value;
   if (r.day === undefined && r.hour === undefined && r.minute === undefined) return null;
@@ -88,16 +70,9 @@ const cadenceText = computed((): string | null => {
 });
 
 const metaText = computed((): string => {
-  const parts: string[] = [];
-  if (cadenceText.value) parts.push(cadenceText.value);
-  if (nextDueAt.value) parts.push(`Next ${formatDayTime(nextDueAt.value)}`);
-  if (parts.length === 0) return '';
-  return (metaTime.value ? ' · ' : '') + parts.join(' · ');
+  if (!cadenceText.value) return '';
+  return (metaTime.value ? ' · ' : '') + cadenceText.value;
 });
-
-const sameDay = computed(() =>
-  Array.isArray(props.payload.same_day_items) ? props.payload.same_day_items : [],
-);
 </script>
 
 <template>
@@ -113,16 +88,6 @@ const sameDay = computed(() =>
       <div class="scheduler-card__meta">
         <b v-if="metaTime">{{ metaTime }}</b>
         <template v-if="metaText">{{ metaText }}</template>
-      </div>
-    </div>
-
-    <div v-if="sameDay.length > 0" class="scheduler-card__same-day">
-      <div class="scheduler-card__same-day-label">Also on this day · {{ sameDay.length }}</div>
-      <div v-for="item in sameDay" :key="item.id" class="scheduler-card__same-day-item">
-        <span class="scheduler-card__same-day-text">{{ item.message || '' }}</span>
-        <span v-if="parseLocal(item.due_at)" class="scheduler-card__same-day-time">{{
-          formatTime(parseLocal(item.due_at)!)
-        }}</span>
       </div>
     </div>
   </div>
@@ -195,50 +160,4 @@ const sameDay = computed(() =>
   }
 }
 
-.scheduler-card__same-day {
-  grid-column: 1 / -1;
-  margin-top: 14px;
-  padding-top: 12px;
-  border-top: 1px solid color-mix(in oklab, var(--border) 60%, transparent);
-}
-
-.scheduler-card__same-day-label {
-  font-family: var(--font-mono, 'JetBrains Mono', ui-monospace, monospace);
-  font-size: 0.62rem;
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
-  color: var(--text-tertiary);
-  margin-bottom: 8px;
-}
-
-.scheduler-card__same-day-item {
-  display: flex;
-  justify-content: space-between;
-  align-items: baseline;
-  gap: 12px;
-  padding: 5px 0;
-  font-size: 0.88rem;
-  color: var(--text-secondary);
-  border-bottom: 1px solid color-mix(in oklab, var(--border) 35%, transparent);
-
-  &:last-child {
-    border-bottom: none;
-  }
-}
-
-.scheduler-card__same-day-text {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.scheduler-card__same-day-time {
-  font-family: var(--font-mono, 'JetBrains Mono', ui-monospace, monospace);
-  font-size: 0.72rem;
-  color: var(--text-tertiary);
-  letter-spacing: 0.04em;
-  flex-shrink: 0;
-}
 </style>

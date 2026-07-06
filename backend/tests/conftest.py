@@ -14,19 +14,6 @@ if TYPE_CHECKING:
     from services.memory_store import MemoryStore
 
 
-# ── NOTE: get_shared_db_service import-time-binding hazard ────────────────────
-# Modules that do `from services.database_service import get_shared_db_service`
-# at module scope copy the function reference at import time. If such a module's
-# FIRST import happens inside a `patch('services.database_service
-# .get_shared_db_service', ...)` block, its local name binds permanently to the
-# MagicMock and never recovers — polluting every later test. The `db` fixture
-# below is immune: it rebinds the `_shared_db_service` singleton (not the
-# function). But if a test `patch()`es the function directly, also patch the
-# CONSUMING module's own reference — see test_policies_api.py (mcp_client_service).
-# A blanket pre-load guard used to live here; it rotted (pointed at the deleted
-# `services.dmn_service`) and was removed.
-
-
 # ── Real-SQLite fixtures ──────────────────────────────────────────
 # Session-scoped template: full schema + migrations applied once.
 # Function-scoped `db`: fresh copy per test, patched as the singleton.
@@ -78,9 +65,11 @@ def _db_template(tmp_path_factory: pytest.TempPathFactory) -> str:
 def db(_db_template: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[sqlite3.Connection]:
     """Fresh, fully-migrated SQLite database — one per test.
 
-    Copies the session-scoped template, creates a real DatabaseService, and
-    patches ``get_shared_db_service`` so every service in the call chain sees
-    this database.  Yields the raw ``sqlite3.Connection`` for seeding data.
+    Copies the session-scoped template, points the ``Database`` gateway
+    (``FileMapperService.get_db_path``) at it, and drops any stale thread
+    connection so every ``Database.conn()`` call — on-spine and off-spine alike
+    — lands on this test's file. Yields the raw ``sqlite3.Connection`` for
+    seeding data.
 
     Usage::
 
@@ -91,43 +80,31 @@ def db(_db_template: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> It
             assert result['name'] == 'Groceries'
     """
     import services.database as _newdb
-    import services.database_service as _db_mod
-    from services.database_service import DatabaseService
     from services.file_mapper_service import FileMapperService
 
     test_db_path = str(tmp_path / 'test.db')
     shutil.copy2(_db_template, test_db_path)
 
-    db_service = DatabaseService(test_db_path)
-
-    # Clear thread-local cache so _get_connection() opens the new file
-    _db_mod._local.conn = None
-    _db_mod._local.db_path = None
-
-    # Inject as the process-wide singleton — still consulted by auth code and any
-    # off-spine service not yet migrated to the Database gateway.
-    original = _db_mod._shared_db_service
-    _db_mod._shared_db_service = db_service
-
-    # Point the Database gateway (used by migrated off-spine services) at this
-    # test's db and drop any stale thread connection so conn()/transaction() open
-    # the test file rather than the real chalie.db.
+    # Point the Database gateway at this test's file (the default path resolves
+    # through FileMapperService) so every Database.conn() call lands on it, then
+    # drop any stale thread connection bound to another path.
     monkeypatch.setattr(FileMapperService, 'get_db_path', lambda *_: Path(test_db_path))
     _newdb.Database.close()
+    # Bind the connection getter onto Model — the boot step run.py runs once at
+    # startup (``Database().bind()``). Repeated per test because each Database()
+    # captures this test's patched path, so the getter must point at the current
+    # test's file, not a prior test's or the real chalie.db.
+    _newdb.Database().bind()
 
-    # Invalidate heartbeat cache so it reads from this test's DB
+    # Invalidate heartbeat cache so it reads from this test's DB.
     from services.heartbeat_service import heartbeat_service
     heartbeat_service._ctx = None
 
-    conn = db_service._get_connection()
+    conn = _newdb.Database.conn()
     try:
         yield conn
     finally:
-        db_service.close_pool()
         _newdb.Database.close()
-        _db_mod._shared_db_service = original
-        _db_mod._local.conn = None
-        _db_mod._local.db_path = None
         heartbeat_service._ctx = None
 
 
@@ -166,8 +143,8 @@ def store() -> "Iterator[MemoryStore]":
 def authed_client(db: sqlite3.Connection) -> Iterator[tuple[object, sqlite3.Connection, object]]:
     """Flask test client with real blueprints registered, auth bypassed.
 
-    Uses the real ``db`` fixture (which patches ``get_shared_db_service``),
-    so Flask route handlers hit a real SQLite database.  The memory store is a
+    Uses the real ``db`` fixture (which points the ``Database`` gateway at a
+    per-test SQLite file), so Flask route handlers hit a real SQLite database.  The memory store is a
     real ``MemoryStore`` instance (not a ``MagicMock``), so route handlers that
     read or write store state work correctly in integration tests.
 

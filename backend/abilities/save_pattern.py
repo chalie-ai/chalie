@@ -1,17 +1,13 @@
 """SavePattern — record a repeating behavioural pattern in the data graph."""
-import json
-import math
 import re
-import sqlite3
-from typing import ClassVar, cast
+from typing import TYPE_CHECKING, ClassVar, cast
 
 from abilities._budget import BudgetCappedAbility
 from abilities._params import Keys
-from abilities._pattern_provenance import pattern_provenance
 from abilities._result import ToolResult
-from services.database import Database
-from services.time_utils import utc_now
-from utils.data_utils import parse_json_column
+
+if TYPE_CHECKING:
+    from controllers.message_processor import MessageProcessor
 
 _NAME_PATTERN = re.compile(r"[a-z][a-z0-9_]*")
 _VALID_FREQUENCIES = frozenset({"daily", "weekly", "weekday", "weekend", "ad-hoc"})
@@ -152,9 +148,9 @@ class SavePattern(BudgetCappedAbility):
             "evidence": evidence,
             "time_anchor": params.get(Keys.time_anchor, "") or "",
         }
-        proc = self.mp
-        source = pattern_provenance(proc)
-        row_id, confidence_out, reinforced = _upsert_pattern(validated, source)
+        row_id, confidence_out, reinforced = cast(
+            "MessageProcessor", self.mp
+        ).behavioral_pattern_service.store(validated)
 
         body: dict[str, object] = {"saved": 1}
         if reinforced:
@@ -163,74 +159,3 @@ class SavePattern(BudgetCappedAbility):
         body["confidence"] = confidence_out
         body["row_id"] = row_id
         return ToolResult.ok(body)
-
-
-def _upsert_pattern(validated: dict[str, object], source: str) -> tuple[int, float, bool]:
-    """``source`` is the provenance of the pass that produced this pattern"""
-    now_iso = utc_now().isoformat()
-
-    with Database.transaction() as conn:
-        existing = conn.execute(
-            "SELECT id, value, storage_strength, evidence_count FROM data_graph "
-            "WHERE kind=? AND key=? AND active=1 AND deleted_at IS NULL "
-            "ORDER BY id DESC LIMIT 1",
-            ("behavioral_pattern", validated["name"]),
-        ).fetchone()
-
-        if existing:
-            row_id, conf = _update_existing_pattern(conn, existing, validated, now_iso, source)
-            return row_id, conf, True
-        row_id, conf = _insert_new_pattern(conn, validated, now_iso, source)
-        return row_id, conf, False
-
-
-def _update_existing_pattern(
-    conn: sqlite3.Connection, existing: sqlite3.Row, validated: dict[str, object], now_iso: str, source: str
-) -> tuple[int, float]:
-    existing_id = cast("int", existing[0])
-    existing_value = existing[1]
-    old_strength = float(existing[2]) if existing[2] is not None else 0.5
-    old_evidence = int(existing[3]) if existing[3] is not None else 1
-    prev = cast("dict[str, object]", parse_json_column(existing_value))
-    prev_conf = float(cast("float", prev.get("confidence") or 0.0))
-    new_conf = min(10.0, prev_conf + 7.0)
-    merged_evidence = list(dict.fromkeys([*(cast("list[object]", prev.get("evidence_transcript_ids") or [])), *cast("list[object]", validated["evidence"])]))
-    new_value = {
-        "name": validated["name"],
-        "frequency": validated["frequency"],
-        "time_anchor": validated["time_anchor"],
-        "summary": validated["summary"],
-        "confidence": new_conf,
-        "last_seen_at": now_iso,
-        "evidence_transcript_ids": merged_evidence,
-    }
-    new_evidence = old_evidence + 1
-    boost = 0.05 / math.log2(new_evidence + 1)
-    new_strength = min(1.0, old_strength + boost)
-    conn.execute(
-        "UPDATE data_graph "
-        "SET value=?, last_confirmed_at=?, last_accessed_at=?, source=?, "
-        "    evidence_count=?, storage_strength=?, retrieval_weight=1.0 "
-        "WHERE id=?",
-        (json.dumps(new_value), now_iso, now_iso, source, new_evidence, new_strength, existing_id),
-    )
-    return existing_id, new_conf
-
-
-def _insert_new_pattern(conn: sqlite3.Connection, validated: dict[str, object], now_iso: str, source: str) -> tuple[int, float]:
-    new_value = {
-        "name": validated["name"],
-        "frequency": validated["frequency"],
-        "time_anchor": validated["time_anchor"],
-        "summary": validated["summary"],
-        "confidence": 7.0,
-        "last_seen_at": now_iso,
-        "evidence_transcript_ids": list(cast("list[object]", validated["evidence"])),
-    }
-    cur = conn.execute(
-        "INSERT INTO data_graph "
-        "(kind, key, value, first_seen_at, last_confirmed_at, source, active) "
-        "VALUES (?, ?, ?, ?, ?, ?, 1)",
-        ("behavioral_pattern", validated["name"], json.dumps(new_value), now_iso, now_iso, source),
-    )
-    return cast("int", cur.lastrowid), 7.0

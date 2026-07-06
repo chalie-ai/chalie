@@ -36,9 +36,11 @@ fallback hint naming ``document`` and ``schedule`` tools.
 import hashlib
 import json
 import logging
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Literal, cast, overload
 
 from abilities._result import ToolResult
+from models.behavioral_pattern import BehavioralPattern
+from models.episode import Episode
 from services.database import Database
 
 if TYPE_CHECKING:
@@ -286,7 +288,7 @@ def handle_recall(mp: "MessageProcessor | None", channel: str, params: dict[str,
         loc_ids = {h["id"] for h in loc_hits}
         loc_by_id = {h["id"]: h for h in loc_hits}
 
-        sem_hits, sem_status = _search_episodes(mp, query, limit * 3, caller=caller)
+        sem_hits, sem_status = recall_episodes(mp, query, caller=caller, limit=limit * 3)
         sem_ids = {h["id"] for h in sem_hits}
         sem_by_id = {h["id"]: h for h in sem_hits}
 
@@ -311,7 +313,7 @@ def handle_recall(mp: "MessageProcessor | None", channel: str, params: dict[str,
         dg_hits, dg_status = _search_data_graph(query, limit)
         results.extend(dg_hits)
 
-        ep_hits, sem_status = _search_episodes(mp, query, limit, caller=caller)
+        ep_hits, sem_status = recall_episodes(mp, query, caller=caller, limit=limit)
         results.extend(ep_hits)
         statuses.extend([dg_status, sem_status])
 
@@ -392,7 +394,7 @@ def handle_reflect(mp: "MessageProcessor | None", params: dict[str, object]) -> 
     return ToolResult.ok(body, action="reflect", query=query)
 
 
-def _expand_episode_layers(episode: dict[str, object]) -> list[dict[str, object]]:
+def _expand_episode_layers(episode: Episode) -> list[dict[str, object]]:
     try:
         results: list[dict[str, object]] = []
         _expand_recursive(episode, results, depth=0, max_depth=3)
@@ -403,13 +405,13 @@ def _expand_episode_layers(episode: dict[str, object]) -> list[dict[str, object]
 
 
 def _expand_recursive(
-    episode: dict[str, object], results: list[dict[str, object]], depth: int, max_depth: int
+    episode: Episode, results: list[dict[str, object]], depth: int, max_depth: int
 ) -> None:
     if depth >= max_depth:
         return
 
-    consolidated_from = _parse_json_list(episode.get("consolidated_from"))
-    transcript_ids = _parse_json_list(episode.get("transcript_ids"))
+    consolidated_from = _parse_json_list(episode.consolidated_from)
+    transcript_ids = _parse_json_list(episode.transcript_ids)
 
     if transcript_ids and not consolidated_from:
         results.extend(_fetch_transcript_entries(transcript_ids))
@@ -420,8 +422,8 @@ def _expand_recursive(
         for child in children:
             results.append({
                 "type": "episode",
-                "content": child.get("gist", ""),
-                "salience": child.get("salience", 0),
+                "content": child.gist,
+                "salience": child.salience,
             })
             _expand_recursive(child, results, depth + 1, max_depth)
 
@@ -438,19 +440,11 @@ def _parse_json_list(raw: object) -> list[object]:
         return []
 
 
-def _fetch_episodes_by_ids(episode_ids: list[object]) -> list[dict[str, object]]:
+def _fetch_episodes_by_ids(episode_ids: list[object]) -> list[Episode]:
     if not episode_ids:
         return []
     try:
-        conn = Database.conn()
-        placeholders = ",".join("?" for _ in episode_ids)
-        cursor = conn.execute(
-            f"SELECT id, gist, salience, transcript_ids, consolidated_from "
-            f"FROM episodes WHERE id IN ({placeholders}) AND deleted_at IS NULL "
-            f"ORDER BY salience DESC",
-            list(episode_ids),
-        )
-        return [dict(r) for r in cursor.fetchall()]
+        return Episode.by_ids([str(i) for i in episode_ids])
     except Exception as exc:
         logger.warning(f"{LOG_PREFIX} Episode fetch by IDs failed: {exc}")
         return []
@@ -472,7 +466,7 @@ def _fetch_transcript_entries(transcript_ids: list[object]) -> list[dict[str, ob
 
 def _format_reflect(
     query: str,
-    top_episode: dict[str, object] | None,
+    top_episode: Episode | None,
     supporting: list[dict[str, object]],
     dg_hits: list[dict[str, object]],
 ) -> str:
@@ -481,7 +475,7 @@ def _format_reflect(
     lines.append("## Main Memory")
     if top_episode:
         lines.append(f'**The most relevant memory to "{query}"**')
-        lines.append(cast("str", top_episode.get("gist", "")))
+        lines.append(top_episode.gist)
     else:
         lines.append(f'No episode memories found for "{query}"')
 
@@ -519,21 +513,6 @@ def _relevance_label(score: float) -> str:
     return "low"
 
 
-def _render_behavioral_pattern(raw_value: str) -> str:
-    """Parse a behavioral_pattern JSON value into a compact human-readable line."""
-    try:
-        c = json.loads(raw_value) if isinstance(raw_value, str) else raw_value
-        name = c.get("name", "unknown")
-        freq = c.get("frequency", "?")
-        anchor = c.get("time_anchor") or ""
-        summary = c.get("summary", "")
-        confidence = c.get("confidence", 0)
-        anchor_part = f" @ {anchor}" if anchor else ""
-        return f"{name} ({freq}{anchor_part}): {summary} [confidence={confidence}]"
-    except (json.JSONDecodeError, TypeError, AttributeError):
-        return str(raw_value) if raw_value is not None else ""
-
-
 def _search_data_graph(query: str, limit: int) -> tuple[list[dict[str, object]], str]:
     try:
         from services.data_graph_service import (
@@ -563,7 +542,7 @@ def _search_data_graph(query: str, limit: int) -> tuple[list[dict[str, object]],
             kind = cast("str", row.get("kind", ""))
             text = cast("str", row.get("value", ""))
             if kind == KIND_BEHAVIORAL_PATTERN:
-                text = _render_behavioral_pattern(text)
+                text = BehavioralPattern.render(text)
             hits.append({
                 "id": row.get("key", ""),
                 "kind": kind,
@@ -653,6 +632,28 @@ def _turn_context(proc: object) -> tuple[str, object, str | None]:
     return turn_uid, transcript_id, cast("str | None", _channel)
 
 
+@overload
+def recall_episodes(
+    mp: "MessageProcessor | None",
+    query: str,
+    *,
+    caller: str = ...,
+    limit: int = ...,
+    return_raw: Literal[False] = ...,
+) -> tuple[list[dict[str, object]], str]: ...
+
+
+@overload
+def recall_episodes(
+    mp: "MessageProcessor | None",
+    query: str,
+    *,
+    caller: str = ...,
+    limit: int = ...,
+    return_raw: Literal[True],
+) -> tuple[list[Episode], str]: ...
+
+
 def recall_episodes(
     mp: "MessageProcessor | None",
     query: str,
@@ -660,12 +661,12 @@ def recall_episodes(
     caller: str = "llm_recall",
     limit: int = 10,
     return_raw: bool = False,
-) -> tuple[list[dict[str, object]], str]:
+) -> tuple[list[dict[str, object]] | list[Episode], str]:
     """Public entry point for episode recall.
 
     Used by both the `memory` skill's recall action (``caller='llm_recall'``)
     and the pre-turn seed path (``caller='seed'``). Ranking and the relative
-    score floor live in ``episodic_retrieval_service.retrieve``; this function
+    score floor live in ``EpisodicService.retrieve``; this function
     only embeds the query, routes it, records telemetry, and projects results.
 
     Episode recall is cross-channel by design (, Decision 1): an episode
@@ -676,8 +677,8 @@ def recall_episodes(
     is still recorded in ``memory_recall_log`` for provenance via ``_turn_context``.
     """
     try:
-        from services import episodic_retrieval_service
         from services.embedding_service import get_embedding_service
+        from services.episodic_service import EpisodicService
     except Exception as exc:
         logger.warning(f"{LOG_PREFIX} Episode recall imports failed: {exc}")
         return [], f"error: {exc}"
@@ -689,8 +690,8 @@ def recall_episodes(
         turn_uid, transcript_id, provenance_channel = _turn_context(mp)
 
         episodes, telemetry = cast(
-            "tuple[list[dict[str, object]], dict[str, object]]",
-            episodic_retrieval_service.retrieve(
+            "tuple[list[Episode], dict[str, object]]",
+            EpisodicService().retrieve(
                 query_text=query,
                 query_embedding=q_embedding,
                 channel=None,
@@ -719,19 +720,19 @@ def recall_episodes(
 
         hits = []
         for ep in episodes[:limit]:
-            gist = ep.get("gist", "")
-            conf = min(1.0, cast("float", ep.get("composite_score", 0)) / 100.0)
+            gist = ep.gist
+            conf = min(1.0, ep.composite_score / 100.0)
             hits.append({
-                "id": str(ep.get("id", "")),
+                "id": str(ep.id),
                 # Full gist verbatim — NO truncation (). The recall block
                 # is bounded by the result limit + the request-level cap, not by
                 # clipping the text the model reads mid-sentence.
                 "text": gist,
                 "relevance": _relevance_label(conf),
                 "confidence": conf,
-                "location": ep.get("location_name"),
+                "location": ep.location_name,
                 "kind": "episode",
-                "created_at": ep.get("created_at"),
+                "created_at": ep.created_at,
             })
 
         return hits, f"{len(hits)} matches"
@@ -739,17 +740,6 @@ def recall_episodes(
     except Exception as e:
         logger.warning(f"{LOG_PREFIX} Episode search failed: {e}", exc_info=True)
         return [], f"error: {e}"
-
-
-def _search_episodes(
-    mp: "MessageProcessor | None", query: str, limit: int, caller: str = "llm_recall"
-) -> tuple[list[dict[str, object]], str]:
-    return recall_episodes(
-        mp,
-        query=query,
-        caller=caller,
-        limit=limit,
-    )
 
 
 def _count_episode_candidates() -> int:
@@ -832,35 +822,22 @@ def _search_episodes_by_location(
         except Exception as _resolve_exc:
             logger.debug("%s Place label resolution failed: %s", LOG_PREFIX, _resolve_exc)
 
-        like_clauses = " OR ".join(["e.location_name LIKE ?"] * len(location_names))
-        like_params = [f"%{name}%" for name in location_names]
+        episodes = Episode.located_at(location_names, limit)
 
-        conn = Database.conn()
-        sql = (
-            "SELECT e.id, e.gist, e.location_name, e.created_at "
-            "FROM episodes e "
-            f"WHERE e.deleted_at IS NULL AND ({like_clauses}) "
-            "AND e.location_name IS NOT NULL "
-            "ORDER BY e.created_at DESC LIMIT ?"
-        )
-        db_params = like_params + [limit]
-        rows = conn.execute(sql, db_params).fetchall()
-
-        if not rows:
+        if not episodes:
             return [], "0 matches"
 
         hits = []
-        for row in rows:
-            ep_id, gist, loc_name, created_at = row
+        for ep in episodes:
             hits.append({
-                "id": str(ep_id),
+                "id": str(ep.id),
                 # Full gist verbatim — NO truncation ().
-                "text": gist or "",
+                "text": ep.gist or "",
                 "relevance": _LOCATION_SEARCH_RELEVANCE,
                 "confidence": _LOCATION_SEARCH_CONFIDENCE,
-                "location": loc_name,
+                "location": ep.location_name,
                 "kind": "episode",
-                "created_at": created_at,
+                "created_at": ep.created_at,
             })
 
         return hits, f"{len(hits)} matches"

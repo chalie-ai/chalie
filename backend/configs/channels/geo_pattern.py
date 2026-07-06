@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from configs.enums.policy_channel import PolicyChannel
 from services.processor_config import ProcessorConfig
 
 
@@ -16,7 +17,7 @@ class GeoConfig(ProcessorConfig):
         super().__init__(
             channel="geo_pattern",
             role="geo_pattern",
-            policy_channel=ProcessorConfig.PolicyChannel.SUBCONSCIOUS,
+            policy_channel=PolicyChannel.SUBCONSCIOUS,
             always_available=["save_pattern", "save_graph"],
             skip_transcript=True,
             skip_input_row=False,

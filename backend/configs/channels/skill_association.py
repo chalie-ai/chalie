@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from configs.enums.policy_channel import PolicyChannel
 from services.processor_config import ProcessorConfig
 
 
@@ -10,7 +11,7 @@ class SkillAssociationConfig(ProcessorConfig):
         super().__init__(
             channel="skill_association",
             role="skill_association",
-            policy_channel=ProcessorConfig.PolicyChannel.SUBCONSCIOUS,
+            policy_channel=PolicyChannel.SUBCONSCIOUS,
             always_available=[],
             skip_transcript=True,
             skip_input_row=True,

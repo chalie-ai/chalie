@@ -1,72 +1,18 @@
 from __future__ import annotations
 
-from services.database import Database
+from configs.enums.policy_channel import PolicyChannel
 from services.processor_config import ProcessorConfig
 
 
-def _should_synthesise() -> bool:
-    """True only when re-synthesis is needed:
-    no traits/patterns → False;
-    traits/patterns exist but no summary → True;
-    otherwise → True iff the latest trait/pattern is newer than the summary row.
-    """
-    import logging as _logging  # noqa: PLC0415
-    _log = _logging.getLogger(__name__)
-    try:
-        from services.time_utils import parse_utc  # noqa: PLC0415
-        with Database.transaction() as conn:
-            row = conn.execute(
-                """
-                SELECT MAX(last_confirmed_at)
-                FROM data_graph
-                WHERE kind IN ('user_specific', 'behavioral_pattern')
-                  AND active = 1
-                  AND deleted_at IS NULL
-                """
-            ).fetchone()
-            latest_trait_ts = row[0] if row else None
-            if latest_trait_ts is None:
-                return False
-            summary_row = conn.execute(
-                """
-                SELECT last_confirmed_at
-                FROM data_graph
-                WHERE kind = 'system'
-                  AND key = 'user_summary'
-                  AND active = 1
-                  AND deleted_at IS NULL
-                LIMIT 1
-                """
-            ).fetchone()
-        if summary_row is None:
-            return True
-        try:
-            trait_dt = parse_utc(latest_trait_ts)
-            summary_dt = parse_utc(summary_row[0])
-        except Exception as exc:
-            _log.error(
-                "[USER_SUMMARY_CONFIG] _should_synthesise: parse_utc failed "
-                "trait_ts=%r summary_ts=%r: %s",
-                latest_trait_ts,
-                summary_row[0],
-                exc,
-            )
-            return False
-        return trait_dt > summary_dt
-    except Exception as exc:
-        _log.warning("[USER_SUMMARY_CONFIG] _should_synthesise failed: %s", exc)
-        return False
-
-
 class UserSummaryConfig(ProcessorConfig):
-    """Caller gates on _should_synthesise() BEFORE calling
+    """Caller gates on ``UserSynthesis.needs_refresh()`` BEFORE calling
     MessageProcessor.process()."""
 
     def __init__(self) -> None:
         super().__init__(
             channel="user_summary",
             role="user_summary",
-            policy_channel=ProcessorConfig.PolicyChannel.SUBCONSCIOUS,
+            policy_channel=PolicyChannel.SUBCONSCIOUS,
             always_available=[],
             skip_transcript=True,
             skip_input_row=False,

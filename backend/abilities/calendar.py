@@ -1,16 +1,23 @@
 """
 CalendarAbility — List, view, create, update, and delete calendar events.
 
-Read operations (``list_events``, ``get_event``) query ``scheduled_items`` via the
-shared ``query_items`` engine in the schedule ability — the scheduler owns the
-single SQL path for that table. Calendar events are the rows the CalDAV ingest
-mirrors there (``source='mail'``, ``item_type='event'``, ``hidden=1``,
-``external_uid='caldav:<uid>'``).
+Read operations (``list_events``, ``get_event``) used to query ``scheduled_items``
+via the shared ``query_items`` engine in the schedule ability, over rows the
+CalDAV ingest mirrored there. That mirror has been decommissioned (TKT-1434):
+``scheduled_items`` is now a prompt-only cron table with zero CalDAV columns
+(no ``item_type``/``source``/``external_uid``/``hidden``/``metadata``/``due_at``).
+Both read actions now return a clean, deliberate ``err(...)`` instead of
+querying dropped columns — calendar reads are being re-homed to a live CalDAV
+integration by a separate effort.
 
 Write operations (``create_event``, ``update_event``, ``delete_event``) delegate
 to MailCapability's CalDAV handler via the shared :class:`CapabilityAbility`
 base, which owns capability loading, the not-connected / unknown-action /
-handler-unavailable errors, handler dispatch, and result wrapping.
+handler-unavailable errors, handler dispatch, and result wrapping. uid-addressed
+writes reach the live CalDAV server directly with zero ``scheduled_items``
+coupling; title-addressed writes used the same decommissioned mirror to
+fuzzy-resolve a uid and now return the same clean error asking for the uid
+directly.
 
 Two write-path safeguards live here, ahead of the base's connected gate so they
 fire loudly regardless of CalDAV state:
@@ -21,9 +28,11 @@ fire loudly regardless of CalDAV state:
   value returns ``code=invalid-time`` with example forms and NOTHING is written —
   the old path ran the raw string through ``parse_utc``, which returns the
   ``datetime.min`` (year-0001) sentinel and persisted it to the CalDAV server.
-* **fuzzy addressing:** ``update_event`` / ``delete_event`` / ``get_event`` accept
-  a ``title`` that is resolved to a CalDAV uid by fuzzy match; >1 match returns
-  ``code=ambiguous-match`` listing the candidate uids — never a silent first-hit.
+* **fuzzy addressing:** ``update_event`` / ``delete_event`` / ``get_event`` used to
+  accept a ``title`` resolved to a CalDAV uid by fuzzy match over the (now
+  decommissioned) ``scheduled_items`` mirror. With that mirror gone, a call that
+  supplies ``title`` without a ``uid`` gets the same clean migrating-away error;
+  pass ``uid`` directly for writes in the meantime.
 
 Every action returns a :class:`ToolResult` built only via ``ok`` / ``err``. The
 rich calendar card travels via ``ToolResult(rich=…)``; the dispatcher owns the
@@ -32,14 +41,12 @@ channel broadcasts to the user. This ability never formats a wire envelope.
 """
 
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from typing import ClassVar, cast
 
 from abilities._capability import CapabilityAbility
 from abilities._params import Keys
 from abilities._result import ToolResult
-from services.time_utils import utc_now
-from utils.data_utils import parse_json_column
 
 logger = logging.getLogger(__name__)
 LOG_PREFIX = "[CALENDAR ABILITY]"
@@ -48,15 +55,21 @@ LOG_PREFIX = "[CALENDAR ABILITY]"
 # self-correct without re-reading the schema.
 _DT_EXAMPLES = "'tomorrow 3pm', 'friday 9am', or ISO 8601 like '2026-03-20T15:00:00+02:00'"
 
-# Default list window when the model passes no bounds — the schema advertises it,
-# so the code now honours it instead of returning everything.
-_DEFAULT_WINDOW_DAYS = 7
-
-# Read actions answered directly from scheduled_items; write actions delegate to
-# the CalDAV handler via the CapabilityAbility base.
+# Read actions used to be answered directly from scheduled_items; that mirror is
+# decommissioned (TKT-1434) so both now return a clean error. Write actions still
+# delegate to the CalDAV handler via the CapabilityAbility base.
 _READ_ACTIONS = ("list_events", "get_event")
 _WRITE_ACTIONS = ("create_event", "update_event", "delete_event")
 _ALL_ACTIONS = (*_READ_ACTIONS, *_WRITE_ACTIONS)
+
+# Calendar reads (list_events/get_event) and fuzzy title→uid resolution both read
+# the CalDAV→scheduled_items mirror, decommissioned in TKT-1434 (scheduled_items is
+# now a prompt-only cron table with zero CalDAV columns). Both surfaces return this
+# clean, deliberate error instead of referencing dropped columns.
+_ERR_CALENDAR_READS_MIGRATING = (
+    "Calendar reads are being migrated to the live CalDAV integration and are "
+    "temporarily unavailable."
+)
 
 
 class CalendarAbility(CapabilityAbility):
@@ -122,44 +135,48 @@ class CalendarAbility(CapabilityAbility):
                 "enum": list(_ALL_ACTIONS),
                 "description": (
                     "The calendar action to perform. "
-                    "list_events — list events within a date range. "
-                    "get_event — fetch one event by uid or fuzzy title. "
+                    "list_events / get_event — TEMPORARILY UNAVAILABLE while calendar "
+                    "reads migrate to a live CalDAV integration; both return a clean error. "
                     "create_event — add a new event (needs summary, dtstart, dtend). "
-                    "update_event — change fields of an event addressed by uid or title. "
-                    "delete_event — remove an event addressed by uid or title."
+                    "update_event — change fields of an event addressed by uid. "
+                    "delete_event — remove an event addressed by uid."
                 ),
             },
             Keys.date_from: {
                 "type": "string",
                 "description": (
-                    "list_events: ISO date lower bound (YYYY-MM-DD). "
-                    "Defaults to today when omitted."
+                    "list_events: ISO date lower bound (YYYY-MM-DD). Unused while "
+                    "list_events is temporarily unavailable."
                 ),
             },
             Keys.date_to: {
                 "type": "string",
                 "description": (
-                    "list_events: ISO date upper bound (YYYY-MM-DD). "
-                    "Defaults to 7 days after date_from when omitted."
+                    "list_events: ISO date upper bound (YYYY-MM-DD). Unused while "
+                    "list_events is temporarily unavailable."
                 ),
             },
             Keys.limit: {
                 "type": "integer",
-                "description": "list_events: maximum number of events to return (1–200, default 50).",
+                "description": (
+                    "list_events: maximum number of events to return (1–200, default 50). "
+                    "Unused while list_events is temporarily unavailable."
+                ),
             },
             Keys.uid: {
                 "type": "string",
                 "description": (
                     "get_event / update_event / delete_event: the event's CalDAV UID. "
-                    "Prefer this when known; otherwise pass title for a fuzzy match."
+                    "Required for update_event / delete_event — title-based fuzzy match is "
+                    "temporarily unavailable, so uid must be passed directly."
                 ),
             },
             Keys.title: {
                 "type": "string",
                 "description": (
                     "get_event / update_event / delete_event: event title for a fuzzy "
-                    "match when the uid is unknown. If more than one event matches you "
-                    "get the candidate uids back to disambiguate."
+                    "uid match. TEMPORARILY UNAVAILABLE (returns a clean error) while "
+                    "calendar reads migrate to a live CalDAV integration — pass uid instead."
                 ),
             },
             Keys.summary: {
@@ -263,9 +280,12 @@ def _normalise_write_datetimes(params: dict[str, object]) -> ToolResult | None:
 # ---------------------------------------------------------------------------
 
 def _resolve_target_uid(params: dict[str, object]) -> ToolResult | None:
-    """For uid-addressed write actions, fill ``params['uid']`` from a fuzzy
-    ``title`` match when no uid was given. Returns an error ToolResult on a
-    missing target, no match, or an ambiguous (>1) match; ``None`` on success."""
+    """For uid-addressed write actions, a supplied ``uid`` passes straight
+    through to the CalDAV handler with zero ``scheduled_items`` coupling.
+    Fuzzy title-to-uid resolution used to read the CalDAV→scheduled_items
+    mirror; that mirror is decommissioned (TKT-1434), so a ``title`` given
+    without a ``uid`` now returns the same clean migrating-away error. Returns
+    ``None`` on success (uid already present)."""
     if (cast(str, params.get(Keys.uid)) or "").strip():
         return None
 
@@ -277,143 +297,32 @@ def _resolve_target_uid(params: dict[str, object]) -> ToolResult | None:
             hint="pass the event's uid, or a title to fuzzy-match.",
         )
 
-    matches = _match_events_by_title(title)
-    if not matches:
-        return ToolResult.err(
-            f"No event matching title {title!r} was found.",
-            code="not-found",
-            hint="call calendar with action=list_events to see what exists.",
-        )
-    if len(matches) > 1:
-        return _ambiguous_match(title, matches, "re-issue the action with the chosen uid.")
-
-    params[Keys.uid] = matches[0]["uid"]
-    return None
-
-
-def _ambiguous_match(title: str, matches: list[dict[str, object]], hint: str) -> ToolResult:
-    """Build the disambiguation error: the candidate uids + titles go in the BODY
-    (never a silent first-hit pick) so the model can re-issue with a chosen uid."""
-    candidates = ", ".join(f"{m['title']!r} (uid:{m['uid']})" for m in matches)
     return ToolResult.err(
-        f"Multiple events match title {title!r}: {candidates}. Pick one by uid.",
-        code="ambiguous-match",
-        hint=hint,
+        _ERR_CALENDAR_READS_MIGRATING,
+        code="calendar-read-unavailable",
+        hint="pass the event's uid directly until fuzzy title lookup returns.",
     )
-
-
-def _match_events_by_title(title: str) -> list[dict[str, object]]:
-    """Return upcoming events whose title contains *title* (case-insensitive),
-    each as the contract event dict. Reads through the shared scheduler query
-    engine over the next default window so the match set is bounded."""
-    from abilities.schedule import query_items
-
-    rows = query_items(
-        hidden=1, source="mail", item_type="event",
-        date_from=utc_now().isoformat(),
-        columns=_EVENT_COLUMNS,
-    )
-    needle = title.lower()
-    return [ev for ev in (_format_event(r) for r in rows) if needle in cast(str, ev["title"]).lower()]
 
 
 # ---------------------------------------------------------------------------
-# Read helpers — query scheduled_items via schedule.query_items
+# Read helpers — DECOMMISSIONED (TKT-1434)
+#
+# list_events / get_event used to query scheduled_items via schedule.query_items
+# over rows the CalDAV ingest mirrored there (source='mail', item_type='event',
+# hidden=1, external_uid='caldav:<uid>'). That mirror has been removed outright
+# — scheduled_items is now a prompt-only cron table with zero CalDAV columns.
+# Calendar reads are being re-homed to a live CalDAV integration by a separate
+# effort; until then both actions return a clean, deliberate error instead of
+# referencing dropped columns.
 # ---------------------------------------------------------------------------
 
-_EVENT_COLUMNS = ("message", "due_at", "metadata", "external_uid")
 
-
-def _read_events(action: str, params: dict[str, object]) -> ToolResult:
-    from abilities.schedule import query_items
-
-    if action == "get_event":
-        uid = (cast(str, params.get(Keys.uid)) or "").strip()
-        title = (cast(str, params.get(Keys.title)) or "").strip()
-        if not uid and not title:
-            return ToolResult.err(
-                "uid or title is required for get_event.",
-                code="missing-target",
-                hint="pass the event's uid, or a title to fuzzy-match.",
-            )
-
-        if uid:
-            rows = query_items(
-                hidden=1, source="mail", item_type="event",
-                external_uid=f"caldav:{uid}",
-                columns=_EVENT_COLUMNS, limit=1,
-            )
-            if not rows:
-                return ToolResult.err(
-                    f"Event not found (uid: {uid}).",
-                    code="not-found",
-                    hint="call calendar with action=list_events to see what exists.",
-                )
-            event = _format_event(rows[0])
-        else:
-            matches = _match_events_by_title(title)
-            if not matches:
-                return ToolResult.err(
-                    f"No event matching title {title!r} was found.",
-                    code="not-found",
-                    hint="call calendar with action=list_events to see what exists.",
-                )
-            if len(matches) > 1:
-                return _ambiguous_match(title, matches, "re-issue get_event with the chosen uid.")
-            event = matches[0]
-
-        body: dict[str, object] = {"action_performed": "get_event", "event": event}
-        return ToolResult.ok(body, rich=dict(body), action="get_event")
-
-    # list_events — honour the advertised default window (today → +7 days).
-    limit = min(int(cast(int, params.get(Keys.limit)) or 50), 200)
-    date_from, date_to = _resolve_window(params)
-
-    rows = query_items(
-        hidden=1, source="mail", item_type="event",
-        date_from=date_from, date_to=date_to,
-        limit=limit, columns=_EVENT_COLUMNS,
+def _read_events(action: str, params: dict[str, object]) -> ToolResult:  # noqa: ARG001
+    return ToolResult.err(
+        _ERR_CALENDAR_READS_MIGRATING,
+        code="calendar-read-unavailable",
+        hint="calendar writes (create_event/update_event/delete_event by uid) still work.",
+        action=action,
     )
 
-    events = [_format_event(row) for row in rows]
-    body = {"action_performed": "list_events", "events": events, "count": len(events)}
-    return ToolResult.ok(body, rich=dict(body), action="list_events", count=len(events))
 
-
-def _resolve_window(params: dict[str, object]) -> tuple[str, str]:
-    """Return the (date_from, date_to) ISO bounds for list_events, applying the
-    advertised defaults (today → +7 days) when the model omits them. A bare-date
-    upper bound (YYYY-MM-DD, exactly as the schema instructs the model to pass) is
-    widened to an inclusive end-of-day instant: stored ``due_at`` values carry a
-    time-of-day, and the lexical ``due_at <= ?`` compare in ``query_items`` sorts a
-    timestamped value AFTER the bare date, so it would otherwise drop every event
-    on that final day."""
-    date_from = (cast(str, params.get(Keys.date_from)) or "").strip()
-    date_to = (cast(str, params.get(Keys.date_to)) or "").strip()
-
-    if not date_from:
-        start = utc_now().replace(hour=0, minute=0, second=0, microsecond=0)
-        date_from = start.isoformat()
-    if not date_to:
-        base = _parse_dt(date_from) or utc_now()
-        date_to = (base + timedelta(days=_DEFAULT_WINDOW_DAYS)).isoformat()
-    elif "T" not in date_to:
-        date_to = f"{date_to}T23:59:59.999999+00:00"
-
-    return date_from, date_to
-
-
-def _format_event(row: dict[str, object]) -> dict[str, object]:
-    meta = cast("dict[str, object]", parse_json_column(row.get("metadata")))
-    ext_uid = cast(str, row.get("external_uid", ""))
-    uid = ext_uid.removeprefix("caldav:") if ext_uid else cast(str, meta.get("uid", ""))
-    return {
-        "uid": uid,
-        "title": cast(str, row.get("message", "")),
-        "dtstart": row.get("due_at"),
-        "dtend": meta.get("dtend"),
-        "location": meta.get("location"),
-        "attendees": meta.get("attendees", []),
-        "all_day": meta.get("all_day", False),
-        "calendar_name": meta.get("calendar_name"),
-    }

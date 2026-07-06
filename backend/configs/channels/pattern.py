@@ -2,45 +2,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from services.database import Database
+from configs.enums.policy_channel import PolicyChannel
 from services.processor_config import ProcessorConfig
-
-# ── Pattern-match prompt helper ───────────────────────────────────────────────
-
-_TOP_PATTERN_CAP = 50
-
-
-def _pattern_existing_patterns_block() -> str:
-    """Return the top-confidence active behavioral_pattern rows as JSON."""
-    import json as _json  # noqa: PLC0415
-    import logging as _logging  # noqa: PLC0415
-    _log = _logging.getLogger(__name__)
-    try:
-        rows = Database.conn().execute(
-            "SELECT value FROM data_graph "
-            "WHERE kind='behavioral_pattern' AND active=1 "
-            "AND deleted_at IS NULL "
-            "AND json_valid(value)=1 "
-            "AND json_extract(value, '$.confidence') IS NOT NULL "
-            "ORDER BY CAST(json_extract(value, '$.confidence') AS REAL) "
-            "DESC LIMIT ?",
-            (_TOP_PATTERN_CAP,),
-        ).fetchall()
-        if not rows:
-            return "(none yet)"
-        patterns = {}
-        for (val,) in rows:
-            try:
-                d = _json.loads(val) or {}
-                name = d.get("name")
-                if name:
-                    patterns[name] = d.get("summary", "")
-            except Exception:
-                continue
-        return _json.dumps(patterns, indent=2) if patterns else "(none yet)"
-    except Exception as exc:
-        _log.warning("[PATTERN_CONFIG] existing_patterns_block failed: %s", exc)
-        return "(none yet)"
 
 
 class PatternConfig(ProcessorConfig):
@@ -54,7 +17,7 @@ class PatternConfig(ProcessorConfig):
         super().__init__(
             channel="pattern_match",
             role="pattern_match",
-            policy_channel=ProcessorConfig.PolicyChannel.SUBCONSCIOUS,
+            policy_channel=PolicyChannel.SUBCONSCIOUS,
             always_available=["save_pattern", "save_graph"],
             skip_transcript=True,
             skip_input_row=False,

@@ -18,9 +18,12 @@ ends. Paired with ``WebBrowseAbility`` (abilities/web_browse.py).
 
 from __future__ import annotations
 
-from typing import ClassVar
+from typing import TYPE_CHECKING, ClassVar
 
 from services.processor_config import ProcessorConfig
+
+if TYPE_CHECKING:
+    from configs.enums.policy_channel import PolicyChannel
 
 _WEB_BROWSE_TOOLS: tuple[str, ...] = ("browser", "read", "vision")
 
@@ -31,7 +34,7 @@ class WebBrowseConfig(ProcessorConfig):
 
     uses_delegate_provider: ClassVar[bool] = True
 
-    def __init__(self, policy_channel: "ProcessorConfig.PolicyChannel") -> None:
+    def __init__(self, policy_channel: "PolicyChannel") -> None:
         super().__init__(
             channel="delegate:web_browse",
             role="web_browse",

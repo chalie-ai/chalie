@@ -13,7 +13,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Optional
 
-from models.provider_enums import ProviderType, ThinkingLevel
+from configs.enums.provider_type import ProviderType
+from configs.enums.thinking_level import ThinkingLevel
 from models.serializable import Serializable
 
 

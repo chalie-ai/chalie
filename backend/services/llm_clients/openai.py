@@ -41,6 +41,7 @@ if TYPE_CHECKING:
         content: "str | None"
         tool_calls: "list[_ToolCall] | None"
 
+from configs.enums.thinking_level import ThinkingLevel
 from contracts.provider_client import ProviderClient
 from services.provider_api import (
     ProviderApiRequest,
@@ -48,7 +49,6 @@ from services.provider_api import (
     RateLimitError,
     ResponseOverLimitError,
     ProviderResponseError,
-    ThinkingLevel,
 )
 
 logger = logging.getLogger(__name__)

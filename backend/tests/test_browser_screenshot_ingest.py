@@ -17,10 +17,10 @@ import pytest
 
 from abilities.document import ingest_file
 from configs.channels.web_browse import WebBrowseConfig
+from configs.enums.policy_channel import PolicyChannel
 from controllers.message_processor import MessageProcessor
 from services.document_service import DocumentService
 from services.file_mapper_service import FileMapperService
-from services.processor_config import ProcessorConfig
 from services.provider_db_service import ProviderDbService
 from services.tmp_storage import new_tmp_path
 
@@ -78,7 +78,7 @@ def test_screenshot_ingest_lands_in_screenshots_subdir_and_vision_reads_it(db: s
     # The delegate reads its own screenshot via the REAL dispatch chokepoint.
     mp = object.__new__(MessageProcessor)
     MessageProcessor.__init__(
-        mp, WebBrowseConfig(ProcessorConfig.PolicyChannel.CHAT), raw_input="look at the screenshot",
+        mp, WebBrowseConfig(PolicyChannel.CHAT), raw_input="look at the screenshot",
     )
     mp._setup()
     out = mp.dispatch_service.dispatch(

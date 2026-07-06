@@ -66,6 +66,11 @@ def mem_db() -> Generator[sqlite3.Connection, None, None]:
     with patch.object(FileMapperService, "get_db_path", return_value=sentinel):
         _db_gateway._local.conns = {str(sentinel): conn}
         _db_gateway._local.depths = {}
+        # Bind the Model base's connection getter onto this exact handle — the
+        # active-record Episode model derives every write/read connection through
+        # Model._bound_connection(), so without this bind the service's INSERTs
+        # would land on a stale (or unbound) connection, not this in-memory db.
+        _db_gateway.Database().bind()
         try:
             yield conn
         finally:

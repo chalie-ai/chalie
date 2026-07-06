@@ -12,12 +12,12 @@ to live on a frozen config side-car (its ``get_system_prompt`` /
 in Phase E — the configs are now pure declarative data. Each builder's docstring
 names the config it was ported from.
 
-Memory boundary (§3.11): every structured user-context read goes through
-``self.mp.data_graph_service`` — never a raw ``data_graph`` read here.
-``DataGraphService`` today exposes ``patterns()`` recency-ordered (no cap); the
-pattern channel's existing-patterns block needs confidence order + a 50-row cap,
-so this file does that ranking/capping in Python over the rows the service
-already returned, rather than adding a second read method to a sibling service.
+Memory boundary (§3.11): every structured user-context read goes through a
+sibling service — ``self.mp.data_graph_service`` for the traits lane and
+``self.mp.behavioral_pattern_service`` for the pattern lane — never a raw
+``data_graph`` read here. The behavioural-pattern confidence ranking + cap lives
+on ``BehavioralPatternService.top_patterns``; this file only formats the rows the
+service hands back.
 
 Cross-turn / cross-channel reads (skill-building's trigger-turn tool trail,
 thread-gist's opener rows) are the trigger turn's identity — a DIFFERENT
@@ -39,11 +39,13 @@ import json
 import logging
 from typing import TYPE_CHECKING, cast
 
+from models.behavioral_pattern import BehavioralPattern
 from models.tool_call import ToolCall
 from models.transcript import Transcript
 from services.locale_service import CHAT_TIMESTAMP_FMT, format_date
 from services.personality.personality_service import personality_service
 from services.time_formatter_service import TimeFormatterService
+from services.user_synthesis import UserSynthesis
 from services.world_state import world_state
 
 if TYPE_CHECKING:
@@ -106,7 +108,6 @@ Choose `async: true` when the user asks for something to happen "in the backgrou
 
 _MAX_TRAIT_ROWS = 200
 _MAX_PATTERN_ROWS = 25
-_TOP_PATTERN_CAP = 50
 
 
 class PromptService:
@@ -148,9 +149,9 @@ class PromptService:
         return config.system_prompt
 
     def user_definition(self) -> str:
-        """``UserConfig.get_user_definition``: the live ``user_summary`` system
-        row via ``self.mp.data_graph_service``, or the peer-to-peer fallback."""
-        return self.mp.data_graph_service.user_summary() or _USER_DEFINITION_FALLBACK
+        """``UserConfig.get_user_definition``: the short user synthesis via
+        :class:`UserSynthesis`, or the peer-to-peer fallback."""
+        return UserSynthesis.get(shorthand=True) or _USER_DEFINITION_FALLBACK
 
     def user_prompt(self) -> str:
         """The turn's user-message body, ported from each config's
@@ -367,29 +368,17 @@ class PromptService:
     def _user_summary_patterns_block(self) -> str:
         """Section 2 of ``UserSummaryConfig.get_user_prompt``: up to
         ``_MAX_PATTERN_ROWS`` active behavioural patterns, most-recently-confirmed
-        first, via ``self.mp.data_graph_service.patterns()``."""
+        first, via ``self.mp.behavioral_pattern_service.patterns()``."""
         lines: list[str] = []
-        for row in self.mp.data_graph_service.patterns()[:_MAX_PATTERN_ROWS]:
-            content = self._parse_pattern(row.value)
+        for row in self.mp.behavioral_pattern_service.patterns()[:_MAX_PATTERN_ROWS]:
+            content = BehavioralPattern.parse(row.value)
             if content is not None:
-                lines.append(self._format_pattern_line(content))
+                lines.append(BehavioralPattern.render_line(content, include_last_seen=True))
         if not lines:
             return ""
         return "## Behavioural patterns (frequency, last seen)\n" + "\n".join(
             f"- {line}" for line in lines
         )
-
-    def _format_pattern_line(self, content: dict[str, object]) -> str:
-        """``_format_pattern_line``: one behavioural-pattern JSON blob rendered
-        ``name (freq @ anchor): summary [confidence=…, last …]``."""
-        name = cast("str", content.get("name", "unknown"))
-        freq = content.get("frequency", "?")
-        anchor = cast("str", content.get("time_anchor") or "")
-        summary = content.get("summary", "")
-        confidence = content.get("confidence", 0)
-        last_seen = cast("str", content.get("last_seen_at") or "")[:10] or "?"
-        anchor_part = f" @ {anchor}" if anchor else ""
-        return f"{name} ({freq}{anchor_part}): {summary} [confidence={confidence}, last {last_seen}]"
 
     # ── PatternConfig (channel="pattern_match") ──────────────────────────────
 
@@ -415,38 +404,12 @@ class PromptService:
         return "\n\n".join(parts)
 
     def _pattern_existing_patterns_block(self) -> str:
-        """``_pattern_existing_patterns_block``: the top ``_TOP_PATTERN_CAP``
-        active behavioural patterns by confidence, as a ``name -> summary`` JSON
-        object. Ranked/capped here in Python over ``self.mp.data_graph_service.
-        patterns()`` (recency-ordered) — see the module docstring."""
-        scored: list[tuple[float, dict[str, object]]] = []
-        for row in self.mp.data_graph_service.patterns():
-            content = self._parse_pattern(row.value)
-            if content is None or "confidence" not in content or not content.get("name"):
-                continue
-            try:
-                confidence = float(cast("str | float", content["confidence"]))
-            except (TypeError, ValueError):
-                continue
-            scored.append((confidence, content))
-        scored.sort(key=lambda pair: pair[0], reverse=True)
-        patterns = {
-            cast("str", content["name"]): content.get("summary", "")
-            for _, content in scored[:_TOP_PATTERN_CAP]
-        }
+        """The top behavioural patterns by confidence as a ``name -> summary``
+        JSON object — the pattern/geo channels' existing-patterns block. The
+        confidence ranking + cap live on ``BehavioralPatternService.top_patterns``;
+        this builder only renders the result as prompt text."""
+        patterns = self.mp.behavioral_pattern_service.top_patterns()
         return json.dumps(patterns, indent=2) if patterns else "(none yet)"
-
-    def _parse_pattern(self, value: str | None) -> dict[str, object] | None:
-        """One ``behavioral_pattern`` row's JSON ``value`` parsed to a dict, or
-        ``None`` on a missing/malformed blob — the JSON-validity guard the
-        original raw SQL applied (``json_valid(value) = 1``)."""
-        if not value:
-            return None
-        try:
-            content = json.loads(value)
-        except (TypeError, ValueError):
-            return None
-        return content if isinstance(content, dict) else None
 
     # ── ScheduledConfig (channel="schedule") ─────────────────────────────────
 
@@ -579,7 +542,7 @@ class PromptService:
         config = cast("_ExternalAgentConfig", self.mp.config)
         try:
             body = self._substitute_content_field(config.system_prompt)
-            summary = self.mp.data_graph_service.user_summary()
+            summary = UserSynthesis.get(shorthand=True)
             user_name = summary.split()[0] if summary and summary.split() else "the user"
             body = (
                 body
@@ -696,10 +659,7 @@ class PromptService:
         falling back to the short one), the recent-salient-episodes reflection
         context, then this turn's act trail."""
         parts: list[str] = []
-        synthesis = (
-            self.mp.data_graph_service.user_summary_long()
-            or self.mp.data_graph_service.user_summary()
-        )
+        synthesis = UserSynthesis.get()
         if synthesis:
             parts.append(f"## About the User\n{synthesis}")
         episodes = self._dmn_episodes_block()

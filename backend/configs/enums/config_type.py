@@ -9,8 +9,8 @@
 """ConfigTypeEnum — top-level API routing identifier for ProcessorConfig.
 
 Distinct from ``channel`` (the transcript channel string) and
-``ProcessorConfig.PolicyChannel`` (policy gating). The three configs exposed
-via the thread API carry a type; every other config has none.
+``PolicyChannel`` (policy gating). The three configs exposed via the thread
+API carry a type; every other config has none.
 """
 
 from __future__ import annotations

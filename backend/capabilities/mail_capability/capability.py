@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import datetime
 from typing import TYPE_CHECKING, cast
 
 import yaml
@@ -17,7 +16,6 @@ from capabilities.mail_capability.providers import ServerSettings, UnifiedProvid
     discover_provider
 from services.database import Database
 from services.file_mapper_service import FileMapperService
-from services.time_utils import utc_now
 from utils.data_utils import parse_json_column
 
 if TYPE_CHECKING:
@@ -460,18 +458,6 @@ class MailCapability(AbstractCapability):
         except Exception as exc:
             logger.error("[mail] _do_monitor() IMAP: %s", exc)
 
-    def _monitor_caldav(self, email: str, password: str, provider: UnifiedProvider, now: datetime) -> None:
-        try:
-            caldav_url = cast(str, provider.caldav_url).replace(_PLACEHOLDER_USERNAME, email)
-            client = self._caldav_handler.open_client(
-                url=caldav_url, username=email, password=password
-            )
-            if client is not None:
-                events = self._caldav_handler.ingest(client)
-                self._caldav_handler.upsert_events(events, now)
-        except Exception as exc:
-            logger.error("[mail] _do_monitor() CalDAV: %s", exc)
-
     def _monitor_carddav(self, email: str, password: str, provider: UnifiedProvider) -> None:
         try:
             carddav_url = cast(str, provider.carddav_url).replace(_PLACEHOLDER_USERNAME, email)
@@ -489,8 +475,6 @@ class MailCapability(AbstractCapability):
         if not self.is_connected():
             return
 
-        now = utc_now()
-
         email = self.load_credential(_K_EMAIL)
         password = self.load_credential(_K_PASSWORD)
         provider = self._resolve_provider(email or "")
@@ -499,9 +483,6 @@ class MailCapability(AbstractCapability):
 
         if self._imap_ok and provider.imap:
             self._monitor_imap(cast(str, email), cast(str, password), provider)
-
-        if self._caldav_ok and self._cycle_count % 3 == 0 and provider.caldav_url:
-            self._monitor_caldav(cast(str, email), cast(str, password), provider, now)
 
         if self._carddav_ok and self._cycle_count % 12 == 0 and provider.carddav_url:
             self._monitor_carddav(cast(str, email), cast(str, password), provider)

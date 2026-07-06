@@ -33,7 +33,9 @@ def send_image_with_config(config: Dict[str, object], image_bytes: bytes,
     Returns None on any failure.
     """
     try:
-        from services.provider_api import ProviderApiRequest, ProviderType, ThinkingLevel  # noqa: PLC0415
+        from configs.enums.provider_type import ProviderType  # noqa: PLC0415
+        from configs.enums.thinking_level import ThinkingLevel  # noqa: PLC0415
+        from services.provider_api import ProviderApiRequest  # noqa: PLC0415
         from services.llm_clients.factory import build_client  # noqa: PLC0415
 
         b64 = base64.b64encode(image_bytes).decode('ascii')

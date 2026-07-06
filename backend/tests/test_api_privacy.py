@@ -103,10 +103,10 @@ class TestPrivacyAPI:
             ("item-1", "list-1", "Milk"),
         )
 
-        # ── Seed scheduled_items ──────────────────────────────────────────────
+        # ── Seed scheduled_items (TKT-1434 prompt-only dumb-cron schema) ──────
         db.execute(
-            "INSERT INTO scheduled_items (id, message, due_at) VALUES (?, ?, ?)",
-            ("sched-1", "Buy groceries", "2026-05-01T10:00:00+00:00"),
+            "INSERT INTO scheduled_items (message, start_at, created_at) VALUES (?, ?, ?)",
+            ("Buy groceries", "2026-05-01T10:00:00+00:00", "2026-05-01T10:00:00+00:00"),
         )
 
         # ── Seed documents ────────────────────────────────────────────────────

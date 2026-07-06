@@ -23,6 +23,7 @@ from abilities._registry import AbilityRegistry
 from abilities.find_tools import FindToolsAbility
 from abilities.vision import VisionAbility
 from configs.channels import DmnConfig, UserConfig
+from configs.enums.policy_channel import PolicyChannel
 from run import _migrate_legacy_policy_rules
 from services.database import Database
 from services.file_mapper_service import FileMapperService
@@ -33,7 +34,7 @@ from services.schema_convergence_service import SchemaConvergenceService
 
 pytestmark = pytest.mark.unit
 
-_CHANNEL = ProcessorConfig.PolicyChannel
+_CHANNEL = PolicyChannel
 
 
 # ---------------------------------------------------------------------------

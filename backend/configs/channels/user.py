@@ -3,10 +3,11 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from configs.channels._common import DEFAULT_ALWAYS_AVAILABLE
+from configs.enums.policy_channel import PolicyChannel
 from services.processor_config import ProcessorConfig
 
 if TYPE_CHECKING:
-    from services.config_type import ConfigTypeEnum
+    from configs.enums.config_type import ConfigTypeEnum
 
 
 class UserConfig(ProcessorConfig):
@@ -20,7 +21,7 @@ class UserConfig(ProcessorConfig):
         super().__init__(
             channel="user",
             role="user",
-            policy_channel=ProcessorConfig.PolicyChannel.CHAT,
+            policy_channel=PolicyChannel.CHAT,
             always_available=DEFAULT_ALWAYS_AVAILABLE,
             skip_transcript=False,
             skip_input_row=bool(_metadata.get("hidden_input")),
@@ -30,7 +31,7 @@ class UserConfig(ProcessorConfig):
         )
 
     def type(self) -> "ConfigTypeEnum":
-        from services.config_type import ConfigTypeEnum  # noqa: PLC0415
+        from configs.enums.config_type import ConfigTypeEnum  # noqa: PLC0415
         return ConfigTypeEnum.USER
 
     @property

@@ -134,3 +134,21 @@ class ToolCall(Model):
         with a single input row; the turn-keyed read is preferred in the loop
         because it also spans async / delegate re-entries."""
         return cls.filter("transcript_id = ?", transcript_id).order_by("id").get()
+
+    @classmethod
+    def memory_recall_results(cls, transcript_ids: list[int]) -> list[str]:
+        """The non-null ``result`` payloads of every ``memory`` tool call
+        anchored to the given input rows — the recall envelopes an episode
+        window already cited (``tool_name='memory'`` covers both auto-seed and
+        LLM-invoked recall). Empty input short-circuits to ``[]``."""
+        if not transcript_ids:
+            return []
+        placeholders = ",".join("?" * len(transcript_ids))
+        cursor = cls._bound_connection().execute(
+            f"SELECT result FROM tool_calls "
+            f"WHERE transcript_id IN ({placeholders}) "
+            f"  AND tool_name = 'memory' "
+            f"  AND result IS NOT NULL",
+            transcript_ids,
+        )
+        return [row[0] for row in cursor.fetchall()]

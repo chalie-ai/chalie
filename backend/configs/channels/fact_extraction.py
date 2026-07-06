@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 
+from configs.enums.policy_channel import PolicyChannel
 from services.processor_config import ProcessorConfig
 
 # ── Fact-extraction config (subconscious worker fact pipeline) ────────
@@ -101,7 +102,7 @@ class FactExtractionConfig(ProcessorConfig):
         super().__init__(
             channel="fact_extraction",
             role="fact_extraction",
-            policy_channel=ProcessorConfig.PolicyChannel.SUBCONSCIOUS,
+            policy_channel=PolicyChannel.SUBCONSCIOUS,
             always_available=[],
             skip_transcript=True,
             skip_input_row=False,

@@ -19,6 +19,7 @@ from flask import request
 from flask.typing import ResponseReturnValue
 from flask_restx import Namespace, Resource
 
+from models.episode import Episode
 from services.database import Database
 from services.file_mapper_service import FileMapperService
 from services.time_utils import utc_now
@@ -223,21 +224,28 @@ class SystemStatusResource(Resource):
             try:
                 with Database.transaction() as conn:
                     cursor = conn.cursor()
-                    for table_label, query in [
-                        ("episodes", "SELECT COUNT(*) FROM episodes"),
-                        ("concepts", "SELECT COUNT(*) FROM data_graph WHERE kind = 'user_specific' AND deleted_at IS NULL AND active=1"),
-                    ]:
-                        try:
-                            cursor.execute(query)
-                            row = cursor.fetchone()
-                            storage[table_label] = row[0] if row else 0
-                        except sqlite3.OperationalError as e:
-                            logger.warning(f"[SYSTEM] Count query failed for '{table_label}': {e}")
-                            storage[table_label] = -1
-                            status = "degraded"
-                        except Exception as e:
-                            logger.warning(f"[SYSTEM] Count query failed for '{table_label}': {e}")
-                            storage[table_label] = -1
+
+                    try:
+                        storage["episodes"] = Episode.all().count()
+                    except sqlite3.OperationalError as e:
+                        logger.warning(f"[SYSTEM] Count query failed for 'episodes': {e}")
+                        storage["episodes"] = -1
+                        status = "degraded"
+                    except Exception as e:
+                        logger.warning(f"[SYSTEM] Count query failed for 'episodes': {e}")
+                        storage["episodes"] = -1
+
+                    try:
+                        cursor.execute("SELECT COUNT(*) FROM data_graph WHERE kind = 'user_specific' AND deleted_at IS NULL AND active=1")
+                        row = cursor.fetchone()
+                        storage["concepts"] = row[0] if row else 0
+                    except sqlite3.OperationalError as e:
+                        logger.warning(f"[SYSTEM] Count query failed for 'concepts': {e}")
+                        storage["concepts"] = -1
+                        status = "degraded"
+                    except Exception as e:
+                        logger.warning(f"[SYSTEM] Count query failed for 'concepts': {e}")
+                        storage["concepts"] = -1
             except Exception as e:
                 status = "degraded"
                 database_error = str(e)
@@ -286,17 +294,20 @@ class ObservabilityRecordsResource(Resource):
             q = (request.args.get("q", "") or "")[:200]
 
             if source == "episodes":
-                rows = [dict(r) for r in Database.conn().execute(
-                    "SELECT created_at AS created, "
-                    "COALESCE(last_relevant_at, created_at) AS last_accessed, "
-                    "gist AS value, location_name "
-                    "FROM episodes "
-                    "WHERE deleted_at IS NULL "
-                    "AND (? = '' OR gist LIKE ?) "
-                    "ORDER BY COALESCE(last_relevant_at, created_at) DESC, created_at DESC "
-                    "LIMIT ? OFFSET ?",
-                    (q, f"%{q}%", _RECORDS_LIMIT, offset),
-                ).fetchall()]
+                rows = [
+                    {
+                        "created": ep.created_at,
+                        "last_accessed": ep.last_relevant_at or ep.created_at,
+                        "value": ep.gist,
+                        "location_name": ep.location_name,
+                    }
+                    for ep in Episode.live()
+                    .filter("(? = '' OR gist LIKE ?)", q, f"%{q}%")
+                    .order_by("COALESCE(last_relevant_at, created_at) DESC, created_at DESC")
+                    .limit(_RECORDS_LIMIT)
+                    .offset(offset)
+                    .get()
+                ]
             else:
                 kind = "user_specific" if source == "user" else "system"
                 rows = [dict(r) for r in Database.conn().execute(

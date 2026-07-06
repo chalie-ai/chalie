@@ -6,16 +6,17 @@ Backed by SQLite (scheduled_items table). Provides create, list, search, cancel,
 remaining params — no bespoke UPDATE path to keep in sync with create's validation.
 All DB access via the ``Database`` gateway.
 
-Every user schedule created here is ``item_type='prompt'`` — it fires as a
-conversational turn. The scheduler no longer models a notification/prompt
-choice or a keyword ``recurrence`` string: a schedule is a day-of-month / hour
-/ minute crontab (``cron_dom`` / ``cron_hour`` / ``cron_minute``, NULL = "every")
-anchored to a ``start_at`` activation floor. ``start_at`` is a plain LOCAL
-wall-clock ISO string (optional — defaults to local now); the model is
-instructed to copy it straight from the World State's ``local_time`` telemetry
-and never compute a UTC offset. ``validate_cron``/``next_due_from``
-(``services.cron_schedule``) own the crontab math; this ability only calls
-them and surfaces ``ValueError`` as a clear user/LLM-facing error.
+``scheduled_items`` is a prompt-only, dumb-cron table now: one row per schedule, forever
+(``id`` INTEGER PRIMARY KEY AUTOINCREMENT, also the thread's ``turn_id`` on the ``'schedule'``
+channel). There is no ``item_type``/notification-vs-prompt choice, no stored ``due_at``/
+``status``/``group_id`` — a stateless poller wakes every wall-clock minute and fires any enabled
+row whose ``start_at`` floor has passed and whose ``cron_dom``/``cron_hour``/``cron_minute``
+(NULL = "every") match the current LOCAL minute. Cancel is a hard ``DELETE``; a cancelled id is
+never reissued (AUTOINCREMENT), so its thread can never be re-entered. ``start_at`` is a plain
+LOCAL wall-clock ISO string (optional — defaults to local now); the model is instructed to copy it
+straight from the World State's ``local_time`` telemetry and never compute a UTC offset.
+``validate_cron`` (``services.cron_schedule``) owns the crontab shape rule; this ability calls it
+and surfaces ``ValueError`` as a clear user/LLM-facing error.
 
 Every action returns a :class:`ToolResult` built only via ``ok`` / ``err``. The
 rich scheduler card travels via ``ToolResult(rich=…)``; the dispatcher owns the
@@ -24,25 +25,29 @@ invoking channel broadcasts to the user. This ability never formats a wire
 envelope.
 """
 
-import json
 import logging
-import uuid
-from datetime import datetime, timezone, timedelta
+from datetime import datetime
 from typing import ClassVar, cast
 
 from abilities._ability import Ability
 from abilities._params import Keys
 from abilities._result import ToolResult
-from services.cron_schedule import next_due_from, validate_cron
+from services.cron_schedule import validate_cron
 from services.database import Database
-from services.locale_service import format_date, local_now, parse_local, to_local
+from services.locale_service import format_date, parse_local
 from services.time_utils import utc_now
 
 logger = logging.getLogger(__name__)
 LOG_PREFIX = "[SCHEDULER SKILL]"
 
-# ISO 8601 with offset, used by format_date() to render start_at/due_at in the user's timezone.
+# ISO 8601 with offset, used by format_date() to render start_at in the user's timezone.
 _LOCAL_ISO_FMT = "%Y-%m-%dT%H:%M:%S%z"
+
+_COLS: tuple[str, ...] = (
+    "id", "message", "start_at",
+    "cron_dom", "cron_hour", "cron_minute",
+    "enabled", "channel", "created_by_session", "created_at",
+)
 
 
 # ---------------------------------------------------------------------------
@@ -51,57 +56,18 @@ _LOCAL_ISO_FMT = "%Y-%m-%dT%H:%M:%S%z"
 
 def query_items(
     *,
-    hidden: int | None = 0,
-    source: str | None = None,
-    item_type: str | None = None,
-    status: tuple[str, ...] = ("pending",),
-    date_from: str | None = None,
-    date_to: str | None = None,
-    external_uid: str | None = None,
     limit: int | None = None,
-    columns: tuple[str, ...] = (
-        "id", "item_type", "message", "start_at", "due_at",
-        "cron_dom", "cron_hour", "cron_minute", "status",
-    ),
+    columns: tuple[str, ...] = _COLS,
 ) -> list[dict[str, object]]:
-    """This is the single query path for all callers — the schedule ability,
-    the calendar ability, and anything else that reads scheduled_items.
+    """This is the single query path for all callers of the prompt-only
+    ``scheduled_items`` table — the schedule ability and anything else that
+    reads it. There is no lifecycle to filter on any more (no status/hidden/
+    item_type/group_id/due_at columns exist): every row is a live schedule
+    until it is hard-deleted.
     """
     col_str = ", ".join(columns)
-    clauses: list[str] = []
+    query = f"SELECT {col_str} FROM scheduled_items ORDER BY start_at ASC"
     params: list[object] = []
-
-    if status:
-        placeholders = ", ".join("?" for _ in status)
-        clauses.append(f"status IN ({placeholders})")
-        params.extend(status)
-
-    if hidden is not None:
-        clauses.append("COALESCE(hidden, 0) = ?")
-        params.append(hidden)
-
-    if source:
-        clauses.append("source = ?")
-        params.append(source)
-
-    if item_type:
-        clauses.append("item_type = ?")
-        params.append(item_type)
-
-    if date_from:
-        clauses.append("due_at >= ?")
-        params.append(date_from)
-
-    if date_to:
-        clauses.append("due_at <= ?")
-        params.append(date_to)
-
-    if external_uid:
-        clauses.append("external_uid = ?")
-        params.append(external_uid)
-
-    where = " AND ".join(clauses) if clauses else "1=1"
-    query = f"SELECT {col_str} FROM scheduled_items WHERE {where} ORDER BY due_at ASC"
     if limit is not None:
         query += " LIMIT ?"
         params.append(limit)
@@ -138,18 +104,17 @@ class ScheduleAbility(Ability):
     def get_summary(self) -> str:
         return (
             "Create, list, cancel, or enable/disable persistent reminders and recurring "
-            "prompts at a specific calendar date/time, with optional destination for departure "
-            "reminders. Disable pauses a recurring prompt without deleting it; enable resumes it. "
-            "For a short ephemeral countdown the user wants "
-            "to watch tick down on screen (focus blocks, kitchen timers, breath holds), "
-            "use the `timer` tool instead — not `schedule`."
+            "prompts at a specific calendar date/time. Disable pauses a recurring prompt "
+            "without deleting it; enable resumes it. For a short ephemeral countdown the "
+            "user wants to watch tick down on screen (focus blocks, kitchen timers, breath "
+            "holds), use the `timer` tool instead — not `schedule`."
         )
 
     def get_examples(self) -> list[str]:
         return [
             "remind me to call the dentist tomorrow at 3pm",
             "set a daily reminder at 8am to take my vitamins",
-            "what reminders do I have this week",
+            "what reminders do I have",
             "cancel my dentist reminder",
             "schedule a weekly check-in every Monday at 9am",
             "remind me to email the quarterly report by Friday 5pm",
@@ -232,14 +197,6 @@ class ScheduleAbility(Ability):
                     "recreated with the new values."
                 ),
             },
-            Keys.time_range: {
-                "type": "string",
-                "enum": ["today", "tomorrow", "this_week", "next_hour", "soon", "all"],
-                "description": (
-                    "Optional for list: filter results by time window. "
-                    "'soon' = next 6 hours. Default 'all'."
-                ),
-            },
             Keys.query: {
                 "type": "string",
                 "description": (
@@ -251,14 +208,6 @@ class ScheduleAbility(Ability):
                 "description": (
                     "Optional for search: maximum number of matching items to "
                     "return (default 5, clamped to 1–50)."
-                ),
-            },
-            Keys.destination_location: {
-                "type": "string",
-                "description": (
-                    "Name of a saved place or address for the destination. "
-                    "Used for location-triggered reminders — both departure-time "
-                    "and arrival-based (e.g. 'remind me when I get home')."
                 ),
             },
         },
@@ -275,7 +224,7 @@ class ScheduleAbility(Ability):
             channel = getattr(getattr(self.mp, "config", None), "channel", "") or ""
             return _create(channel, params)
         if action == "list":
-            return _list(params)
+            return _list()
         if action == "search":
             return _search(self, params, self.mp)
         if action == "cancel":
@@ -286,14 +235,12 @@ class ScheduleAbility(Ability):
             return _set_enabled(params, enabled=False)
         if action == "update":
             # Compose, don't duplicate: retire the target then recreate from the
-            # same params. Cancelling first clears create's pending-dedup guard so
-            # a same-message time change isn't swallowed as a duplicate.
-            #
-            # Order matters. Validate the replacement BEFORE cancelling so an
-            # illegal cron can't destroy the existing schedule (validation is
-            # pure — no DB writes). Then require the cancel to LAND before
-            # recreating, so a bad item_id surfaces the error instead of silently
-            # creating a duplicate under the guise of an update.
+            # same params. Order matters. Validate the replacement BEFORE
+            # cancelling so an illegal cron can't destroy the existing schedule
+            # (validation is pure — no DB writes). Then require the cancel to
+            # LAND before recreating, so a bad item_id surfaces the error
+            # instead of silently creating a duplicate under the guise of an
+            # update.
             _, err = _parse_create_params(params)
             if err is not None:
                 return err
@@ -311,39 +258,6 @@ class ScheduleAbility(Ability):
             hint="choose one of the valid actions below.",
             valid=_ACTIONS,
         )
-
-
-
-def _resolve_place_coords(name: str) -> tuple[float, float] | None:
-    try:
-        from models.data_graph import DataGraph
-        from services.data_graph_service import KIND_PLACE
-        rows = [r.to_dict() for r in DataGraph.live(KIND_PLACE).get()]
-        matched = next((r for r in rows if r and cast(str, r.get("key", "")).lower() == name.lower()), None)
-        if not matched:
-            return None
-        raw_value = cast(str, matched.get("value")) or "{}"
-        import json as _json
-        place_data: dict[str, object] = _json.loads(raw_value) if isinstance(raw_value, str) else cast(dict[str, object], raw_value)
-        lat = place_data.get("lat")
-        lon = place_data.get("lon")
-        if lat is None or lon is None:
-            return None
-        return float(cast(float, lat)), float(cast(float, lon))
-    except Exception as exc:
-        import logging as _logging
-        _logging.debug(f"[SCHEDULE] _resolve_place_coords failed for {name!r}: {exc}")
-        return None
-
-
-def _build_destination_metadata(destination: str) -> dict[str, object]:
-    """When no matching saved place is found, stores the destination name as-is (no geocoding)."""
-    coords = _resolve_place_coords(destination)
-    meta: dict[str, object] = {"destination": destination}
-    if coords:
-        meta["destination_lat"] = coords[0]
-        meta["destination_lon"] = coords[1]
-    return meta
 
 
 def _validate_message(params: dict[str, object]) -> tuple[str, ToolResult | None]:
@@ -415,21 +329,18 @@ def _coerce_cron_field(
 
 
 def _format_record(
-    item_id: str,
+    item_id: int,
     message: str,
     start_at: datetime,
-    due_at: datetime,
     dom: int | None,
     hour: int | None,
     minute: int | None,
 ) -> dict[str, object]:
-    """The user/LLM-facing shape for a scheduled item — ``item_type`` is internal
-    only and never surfaces here."""
+    """The user/LLM-facing shape for a scheduled item."""
     return {
         "id": item_id,
         "message": message,
         "start_at": format_date(start_at, fmt=_LOCAL_ISO_FMT, for_ui=True),
-        "due_at": format_date(due_at, fmt=_LOCAL_ISO_FMT, for_ui=True),
         "day": dom,
         "hour": hour,
         "minute": minute,
@@ -496,60 +407,18 @@ def _create(channel: str, params: dict[str, object]) -> ToolResult:
             return ToolResult.err("Create failed: parameters vanished", code="create-failed")
         message, start_at, dom, hour, minute = parsed
 
-        due_at = next_due_from(start_at, dom, hour, minute)[0]
-
-        item_id = uuid.uuid4().hex[:8]
-
         conn = Database.conn()
         cursor = conn.cursor()
-
-        # Atomic dedup: INSERT only when no pending row with the same message
-        # was created in the last 60 seconds.  A single statement eliminates
-        # the SELECT-then-INSERT race window that caused duplicate rows when
-        # the model invoked schedule(...) twice in the same turn.
-        cursor.execute("""
+        cursor.execute(
+            """
             INSERT INTO scheduled_items
-              (id, item_type, message, start_at, due_at, cron_dom, cron_hour, cron_minute,
-               status, channel, created_by_session, created_at, group_id)
-            SELECT ?, 'prompt', ?, ?, ?, ?, ?, ?, 'pending', ?, ?, datetime('now'), ?
-            WHERE NOT EXISTS (
-                SELECT 1 FROM scheduled_items
-                WHERE status = 'pending'
-                  AND message = ?
-                  AND created_at > datetime('now', '-60 seconds')
-            )
-        """, (
-            item_id, message, start_at.isoformat(), due_at.isoformat(), dom, hour, minute,
-            channel, None,
-            item_id,  # group_id = own id (root of new series)
-            message,  # WHERE NOT EXISTS param
-        ))
-
-        if cursor.rowcount == 0:
-            cursor.execute("""
-                SELECT id FROM scheduled_items
-                WHERE status = 'pending'
-                  AND message = ?
-                  AND created_at > datetime('now', '-60 seconds')
-                LIMIT 1
-            """, (message,))
-            existing_row = cursor.fetchone()
-            existing_id = existing_row[0] if existing_row else item_id
-            logger.info(f"{LOG_PREFIX} Dedup: '{message[:60]}' already exists as {existing_id}")
-            record = _format_record(existing_id, message, start_at, due_at, dom, hour, minute)
-            record["note"] = "already_existed"
-            return _create_result(record, item_id=existing_id, due_at_utc=due_at)
-
-        destination = (cast(str, params.get(Keys.destination_location)) or "").strip()
-        if destination:
-            dest_meta = _build_destination_metadata(destination)
-            try:
-                Database.conn().execute(
-                    "UPDATE scheduled_items SET metadata=? WHERE id=?",
-                    (json.dumps(dest_meta), item_id),
-                )
-            except Exception as meta_err:
-                logger.warning(f"{LOG_PREFIX} Failed to write destination metadata (non-fatal): {meta_err}")
+              (message, start_at, cron_dom, cron_hour, cron_minute,
+               enabled, channel, created_by_session)
+            VALUES (?, ?, ?, ?, ?, 1, ?, ?)
+            """,
+            (message, start_at.isoformat(), dom, hour, minute, channel, None),
+        )
+        item_id = cast(int, cursor.lastrowid)
 
         try:
             from services.scheduler_service import embed_scheduled_item
@@ -558,22 +427,19 @@ def _create(channel: str, params: dict[str, object]) -> ToolResult:
             logger.warning(f"{LOG_PREFIX} Embedding failed (non-fatal): {emb_err}")
 
         logger.info(f"{LOG_PREFIX} Created prompt: {item_id}")
-        record = _format_record(item_id, message, start_at, due_at, dom, hour, minute)
-        return _create_result(record, item_id=item_id, due_at_utc=due_at)
+        record = _format_record(item_id, message, start_at, dom, hour, minute)
+        return _create_result(record)
 
     except Exception as e:
         logger.exception(f"{LOG_PREFIX} Create failed: {e}")
         return ToolResult.err(f"Create failed: {e}", code="create-failed")
 
 
-def _create_result(record: dict[str, object], *, item_id: str, due_at_utc: datetime) -> ToolResult:
+def _create_result(record: dict[str, object]) -> ToolResult:
     """The dispatcher injects the ordinal + span instruction only when the
     invoking channel broadcasts to the user."""
     body: dict[str, object] = {"status": "success", "action_performed": "create", "record": record}
     card: dict[str, object] = {"action_performed": "create", "record": record}
-    same_day = _fetch_same_day_items(item_id, due_at_utc)
-    if same_day:
-        card["same_day_items"] = same_day
     return ToolResult.ok(body, rich=card, action="create")
 
 
@@ -602,15 +468,12 @@ def _search(ability: "ScheduleAbility", params: dict[str, object], mp: object = 
         conn = Database.conn()
         cursor = conn.execute(
             """
-            SELECT s.id, s.message, s.start_at, s.due_at,
-                   s.cron_dom, s.cron_hour, s.cron_minute, s.status,
-                   s.item_type, v.distance
+            SELECT s.id, s.message, s.start_at,
+                   s.cron_dom, s.cron_hour, s.cron_minute, v.distance
             FROM scheduled_items_vec v
             JOIN scheduled_items s ON s.rowid = v.rowid
             WHERE v.embedding MATCH ?
               AND k = ?
-              AND s.status = 'pending'
-              AND s.hidden = 0
             ORDER BY v.distance
             """,
             (blob, limit),
@@ -633,18 +496,9 @@ def _search(ability: "ScheduleAbility", params: dict[str, object], mp: object = 
         return ToolResult.err(f"Search failed: {e}", code="search-failed")
 
 
-def _list(params: dict[str, object]) -> ToolResult:
+def _list() -> ToolResult:
     try:
-        time_range = (cast(str, params.get(Keys.time_range)) or "all").lower()
-        start_dt, end_dt, _ = _resolve_time_range(time_range)
-
-        rows = query_items(
-            hidden=0,
-            status=("pending", "fired") if start_dt else ("pending",),
-            date_from=cast(str | None, start_dt),
-            date_to=cast(str | None, end_dt),
-        )
-
+        rows = query_items()
         records = [_serialise_item_row(row) for row in rows]
         return ToolResult.ok(
             {"status": "success", "action_performed": "list", "records": records},
@@ -657,65 +511,25 @@ def _list(params: dict[str, object]) -> ToolResult:
 
 
 def _serialise_item_row(row: dict[str, object]) -> dict[str, object]:
-    """The user/LLM-facing shape for a scheduled item row — ``item_type`` is
-    internal only and never surfaces here (drop it if present on *row*)."""
+    """The user/LLM-facing shape for a scheduled item row."""
     return {
         "id": row.get("id"),
         "message": row.get("message"),
         "start_at": format_date(cast("datetime | str | None", row.get("start_at")), fmt=_LOCAL_ISO_FMT, for_ui=True),
-        "due_at": format_date(cast("datetime | str | None", row.get("due_at")), fmt=_LOCAL_ISO_FMT, for_ui=True),
         "day": row.get("cron_dom"),
         "hour": row.get("cron_hour"),
         "minute": row.get("cron_minute"),
-        "status": row.get("status"),
     }
 
 
-def _resolve_time_range(time_range: str) -> tuple[datetime | None, datetime | None, str]:
-    now_utc = utc_now()
-    client_now = local_now()
+def _resolve_pending_target(params: dict[str, object], *, verb: str) -> tuple[object, ToolResult | None]:
+    """Resolve the item a mutating action targets.
 
-    def _start_of_day(dt: datetime) -> datetime:
-        return dt.replace(hour=0, minute=0, second=0, microsecond=0)
-
-    if time_range == "today":
-        start = _start_of_day(client_now).astimezone(timezone.utc)
-        end = start + timedelta(days=1)
-        return start, end, "Today's Schedule"
-
-    elif time_range == "tomorrow":
-        start = (_start_of_day(client_now) + timedelta(days=1)).astimezone(timezone.utc)
-        end = start + timedelta(days=1)
-        return start, end, "Tomorrow's Schedule"
-
-    elif time_range == "this_week":
-        start = _start_of_day(client_now).astimezone(timezone.utc)
-        end = start + timedelta(days=7)
-        return start, end, "This Week's Schedule"
-
-    elif time_range == "next_hour":
-        start = now_utc
-        end = now_utc + timedelta(hours=1)
-        return start, end, "Coming Up Next Hour"
-
-    elif time_range == "soon":
-        start = now_utc
-        end = now_utc + timedelta(hours=6)
-        return start, end, "Coming Up Soon"
-
-    else:
-        return None, None, "All Scheduled Items"
-
-
-def _resolve_pending_target(params: dict[str, object], *, verb: str) -> tuple[str | None, ToolResult | None]:
-    """Resolve the pending item a mutating action targets.
-
-    Accepts ``item_id`` (exact) or ``message`` (fuzzy ``LIKE`` match, hidden
-    rows excluded). Returns ``(item_id, None)`` on a unique hit, or
-    ``(None, error)`` when neither was given, nothing matched, or the fuzzy
-    match was ambiguous. ``verb`` names the operation in the error text so
-    cancel/enable/disable each read naturally. One resolver for every
-    id-or-message action (Law 9)."""
+    Accepts ``item_id`` (exact) or ``message`` (fuzzy ``LIKE`` match). Returns
+    ``(item_id, None)`` on a unique hit, or ``(None, error)`` when neither was
+    given, nothing matched, or the fuzzy match was ambiguous. ``verb`` names
+    the operation in the error text so cancel/enable/disable each read
+    naturally. One resolver for every id-or-message action (Law 9)."""
     item_id = (cast(str, params.get(Keys.item_id)) or "").strip()
     message_query = (cast(str, params.get(Keys.message)) or "").strip()
 
@@ -730,40 +544,39 @@ def _resolve_pending_target(params: dict[str, object], *, verb: str) -> tuple[st
 
     pattern = f"%{message_query}%"
     matches = Database.conn().execute(
-        "SELECT id, message FROM scheduled_items "
-        "WHERE status='pending' AND hidden = 0 AND message LIKE ? ORDER BY due_at ASC",
+        "SELECT id, message FROM scheduled_items WHERE message LIKE ? ORDER BY created_at ASC",
         (pattern,),
     ).fetchall()
 
     if not matches:
         return None, ToolResult.err(
-            f"No pending reminder matching {message_query!r} found.",
+            f"No reminder matching {message_query!r} found.",
             code="not-found",
             hint="call schedule with action=list to see what exists.",
         )
     if len(matches) > 1:
         descriptions = ", ".join(f"'{r[1][:40]}' (id:{r[0]})" for r in matches)
         return None, ToolResult.err(
-            f"Multiple pending reminders match {message_query!r}: {descriptions}.",
+            f"Multiple reminders match {message_query!r}: {descriptions}.",
             code="ambiguous-match",
             hint="pass item_id to target the specific one.",
         )
     return matches[0][0], None
 
 
-def _fetch_item_record(item_id: str) -> dict[str, object]:
+def _fetch_item_record(item_id: object) -> dict[str, object]:
     """Serialise a single item row for a tool result; ``{"id": item_id}`` on any
     failure (the record is advisory — never fatal to the mutating action)."""
     try:
         row = Database.conn().execute(
-            "SELECT id, message, start_at, due_at, cron_dom, cron_hour, cron_minute, status "
+            "SELECT id, message, start_at, cron_dom, cron_hour, cron_minute "
             "FROM scheduled_items WHERE id = ?",
             (item_id,),
         ).fetchone()
         if row:
             return _serialise_item_row({
-                "id": row[0], "message": row[1], "start_at": row[2], "due_at": row[3],
-                "cron_dom": row[4], "cron_hour": row[5], "cron_minute": row[6], "status": row[7],
+                "id": row[0], "message": row[1], "start_at": row[2],
+                "cron_dom": row[3], "cron_hour": row[4], "cron_minute": row[5],
             })
     except Exception as fetch_err:
         logger.debug(f"{LOG_PREFIX} Could not fetch row {item_id} (non-fatal): {fetch_err}")
@@ -778,20 +591,27 @@ def _cancel(params: dict[str, object]) -> ToolResult:
 
         with Database.transaction() as conn:
             affected = conn.execute(
-                "UPDATE scheduled_items SET status='cancelled' WHERE id=? AND status='pending'",
+                "DELETE FROM scheduled_items WHERE id=?",
                 (item_id,),
             ).rowcount
+            # rowid == id under INTEGER PRIMARY KEY, so the vec row keyed on
+            # rowid is the same id. Drop it in the same transaction to avoid
+            # orphaning the embedding when the schedule is hard-deleted.
+            conn.execute(
+                "DELETE FROM scheduled_items_vec WHERE rowid=?",
+                (item_id,),
+            )
 
         if affected == 0:
             return ToolResult.err(
-                f"Item {item_id} not found or already fired/cancelled.",
+                f"Item {item_id} not found.",
                 code="not-found",
-                hint="call schedule with action=list to see pending items.",
+                hint="call schedule with action=list to see items.",
             )
 
         logger.info(f"{LOG_PREFIX} Cancelled {item_id}")
         return ToolResult.ok(
-            {"status": "success", "action_performed": "cancel", "record": _fetch_item_record(cast(str, item_id))},
+            {"status": "success", "action_performed": "cancel", "record": {"id": item_id}},
             action="cancel",
         )
 
@@ -801,12 +621,12 @@ def _cancel(params: dict[str, object]) -> ToolResult:
 
 
 def _set_enabled(params: dict[str, object], *, enabled: bool) -> ToolResult:
-    """Enable or disable a pending series. Disabling makes the poller skip it;
-    enabling recomputes ``due_at`` forward, anchored on the row's stored
-    ``start_at`` (via ``next_due_from``, which floors its anchor to now). A past
-    ``start_at`` resumes at the NEXT occurrence rather than firing the one missed
-    while disabled — the approved skip-the-catch-up rule — while a future-dated
-    ``start_at`` still holds the series until its start, never re-floored to now."""
+    """Enable or disable a schedule. Disabling sets ``enabled=0`` so the poller
+    skips it; enabling flips it back to 1. There is no ``due_at`` to recompute —
+    the poller matches purely off the row's ``start_at`` floor and cron fields
+    against the current wall-clock minute, so a re-enabled series simply
+    resumes matching from the next minute a cron field lines up. A past
+    ``start_at`` never re-floors to now; it already satisfies the floor check."""
     verb = "enable" if enabled else "disable"
     try:
         item_id, err = _resolve_pending_target(params, verb=verb)
@@ -814,77 +634,24 @@ def _set_enabled(params: dict[str, object], *, enabled: bool) -> ToolResult:
             return err
 
         with Database.transaction() as conn:
-            cursor = conn.cursor()
-            if enabled:
-                cron = cursor.execute(
-                    "SELECT start_at, cron_dom, cron_hour, cron_minute FROM scheduled_items "
-                    "WHERE id=? AND status='pending'",
-                    (item_id,),
-                ).fetchone()
-                if cron is None:
-                    affected = 0
-                else:
-                    due_at = next_due_from(cron[0], cron[1], cron[2], cron[3])[0]
-                    affected = cursor.execute(
-                        "UPDATE scheduled_items SET enabled=1, due_at=? WHERE id=? AND status='pending'",
-                        (due_at.isoformat(), item_id),
-                    ).rowcount
-            else:
-                affected = cursor.execute(
-                    "UPDATE scheduled_items SET enabled=0 WHERE id=? AND status='pending'",
-                    (item_id,),
-                ).rowcount
+            affected = conn.execute(
+                "UPDATE scheduled_items SET enabled=? WHERE id=?",
+                (1 if enabled else 0, item_id),
+            ).rowcount
 
         if affected == 0:
             return ToolResult.err(
-                f"Item {item_id} not found or not pending.",
+                f"Item {item_id} not found.",
                 code="not-found",
-                hint="call schedule with action=list to see pending items.",
+                hint="call schedule with action=list to see items.",
             )
 
         logger.info(f"{LOG_PREFIX} {verb.capitalize()}d {item_id}")
         return ToolResult.ok(
-            {"status": "success", "action_performed": verb, "record": _fetch_item_record(cast(str, item_id))},
+            {"status": "success", "action_performed": verb, "record": _fetch_item_record(item_id)},
             action=verb,
         )
 
     except Exception as e:
         logger.exception(f"{LOG_PREFIX} {verb.capitalize()} failed: {e}")
         return ToolResult.err(f"{verb.capitalize()} failed: {e}", code=f"{verb}-failed")
-
-
-def _fetch_same_day_items(exclude_id: str, due_at_utc: datetime) -> list[dict[str, object]]:
-    """Returns an empty list on any failure — the rich-media card is the only
-    consumer and the missing section degrades gracefully on the client.
-    """
-    try:
-        local_dt = to_local(due_at_utc)
-        start_local = local_dt.replace(hour=0, minute=0, second=0, microsecond=0)
-        start_utc = start_local.astimezone(timezone.utc)
-        end_utc = start_utc + timedelta(days=1)
-
-        conn = Database.conn()
-        cursor = conn.cursor()
-        cursor.execute("""
-            SELECT id, message, due_at
-            FROM scheduled_items
-            WHERE status = 'pending'
-              AND hidden = 0
-              AND id != ?
-              AND due_at >= ?
-              AND due_at < ?
-            ORDER BY due_at ASC
-        """, (exclude_id, start_utc.strftime("%Y-%m-%d %H:%M:%S"), end_utc.strftime("%Y-%m-%d %H:%M:%S")))
-        rows = cursor.fetchall()
-
-        items = []
-        for item_id, message, due_at in rows:
-            items.append({
-                "id": item_id,
-                "message": message,
-                "due_at": format_date(due_at, fmt=_LOCAL_ISO_FMT, for_ui=True) or str(due_at),
-            })
-        return items
-    except Exception as e:
-        logger.warning(f"{LOG_PREFIX} same-day fetch failed: {e}")
-        return []

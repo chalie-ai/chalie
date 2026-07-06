@@ -7,22 +7,22 @@ never reaches upstream. It only stores its fields, projects itself (inherited
 onto the :class:`Model` base. This model is the SOLE home of ``data_graph`` SQL
 (I6); the ``DataGraphService`` reads/writes exclusively through it.
 
-Scope is the spine's structured user-context slice ONLY — the three lanes the
-prompt builder needs at assembly time and the post-turn writes back into them:
+Scope is the spine's structured user-context slice ONLY — the lanes the prompt
+builder needs at assembly time and the post-turn writes back into them:
 
 * ``kind='system'``            — the user_summary rows (:meth:`system`).
 * ``kind='user_specific'``     — user traits (:meth:`traits`).
-* ``kind='behavioral_pattern'``— behavioural patterns (:meth:`patterns` for the
-  user-summary channel's recency read, :meth:`top_patterns` for the
-  pattern channel's confidence-ranked read).
+
+The ``behavioral_pattern`` slice has its own model
+(:class:`models.behavioral_pattern.BehavioralPattern`) so this generic row model
+carries no pattern-specific logic.
 
 The write side is :meth:`store` (exact-``(kind, key)`` upsert: insert / reinforce
 / temporal-supersede, ported from ``DataGraphService.store`` +
-``_store_existing_row`` + ``_reinforce_row`` + ``_apply_temporal_supersession``)
-and :meth:`decay` (the behavioural-pattern confidence sweep, ported from
-``PatternDecayHook``). Episodic recall, FTS/vec KNN, the concept-LUT
-canonicalization, graph edges, embedding writes and the off-spine decay cycle
-are deliberately NOT here — they stay in their own layers.
+``_store_existing_row`` + ``_reinforce_row`` + ``_apply_temporal_supersession``).
+Episodic recall, FTS/vec KNN, the concept-LUT canonicalization, graph edges,
+embedding writes and the off-spine decay cycle are deliberately NOT here — they
+stay in their own layers.
 
 Live-fact filters mirror today's code verbatim: the lane reads mirror
 ``DataGraphService.fetch`` (``active = 1 AND deleted_at IS NULL``; note ``fetch``
@@ -42,7 +42,7 @@ from services.time_utils import utc_now
 
 
 class DataGraph(Model):
-    """One ``data_graph`` row: field storage + CRUD + the structured
+    """One generic ``data_graph`` row: field storage + CRUD + the structured
     user-context lane scopes and the upsert/reinforce/supersede write path."""
 
     __table__: ClassVar[str] = "data_graph"
@@ -75,8 +75,8 @@ class DataGraph(Model):
     # The kinds whose exact-key value change reconciles by temporal supersession
     # (``DataGraphService._KIND_POLICY`` contradiction 'cosine_supersede' /
     # 'lut_canonicalize'); with the embedding path out of scope both collapse to
-    # the exact-key supersede fallback the service takes on a LUT/vec miss.
-    # 'behavioral_pattern' (contradiction ``None``) instead inserts a fresh row.
+    # the exact-key supersede fallback the service takes on a LUT/vec miss. Every
+    # other kind (contradiction ``None``) instead inserts a fresh row.
     _SUPERSEDING_KINDS: ClassVar[frozenset[str]] = frozenset({"system", "user_specific"})
     # Retrieval-weight haircut on the demoted row (``_SUPERSEDE_RW_FACTOR``).
     _SUPERSEDE_RW_FACTOR: ClassVar[float] = 0.5
@@ -104,26 +104,6 @@ class DataGraph(Model):
         """Live ``user_specific`` traits, ``retrieval_weight DESC`` — the
         user-summary channel's facts section (``UserSummaryConfig`` section 1)."""
         return cls.live("user_specific").order_by("retrieval_weight DESC")
-
-    @classmethod
-    def patterns(cls) -> Query[Self]:
-        """Live ``behavioral_pattern`` rows, ``last_confirmed_at DESC`` — the
-        user-summary channel's active-patterns section (``UserSummaryConfig``
-        section 2)."""
-        return cls.live("behavioral_pattern").order_by("last_confirmed_at DESC")
-
-    @classmethod
-    def top_patterns(cls) -> Query[Self]:
-        """Live ``behavioral_pattern`` rows with a valid JSON confidence,
-        ranked ``confidence DESC`` — the pattern channel's existing-patterns
-        block (``_pattern_existing_patterns_block``). The JSON guards mirror the
-        ported SQL verbatim so a malformed row can never break the ORDER BY."""
-        return (
-            cls.live("behavioral_pattern")
-            .filter("json_valid(value) = 1")
-            .filter("json_extract(value, '$.confidence') IS NOT NULL")
-            .order_by("CAST(json_extract(value, '$.confidence') AS REAL) DESC")
-        )
 
     # ── write path (§3.11 C) ────────────────────────────────────────────
 
@@ -183,29 +163,3 @@ class DataGraph(Model):
         self.retrieval_weight *= self._SUPERSEDE_RW_FACTOR
         self.valid_to = utc_now().isoformat()
         return self.save()
-
-    @classmethod
-    def decay(cls, touched_keys: set[str]) -> None:
-        """The behavioural-pattern confidence sweep, ported from
-        ``PatternDecayHook``: decrement ``$.confidence`` by 0.005 on every live
-        pattern row NOT touched this turn, then soft-delete (``active = 0``) any
-        whose confidence has fallen to zero. ``touched_keys`` are the pattern
-        names written this turn and so exempt from the decrement."""
-        connection = cls._bound_connection()
-        touched_filter = ""
-        params: list[object] = []
-        if touched_keys:
-            placeholders = ",".join("?" * len(touched_keys))
-            touched_filter = f"AND key NOT IN ({placeholders})"
-            params = list(touched_keys)
-        connection.execute(
-            "UPDATE data_graph SET value = json_set(value, '$.confidence', "
-            "MAX(0.0, CAST(json_extract(value, '$.confidence') AS REAL) - 0.005)) "
-            "WHERE kind = 'behavioral_pattern' AND active = 1 AND deleted_at IS NULL "
-            f"AND json_extract(value, '$.confidence') IS NOT NULL {touched_filter}",
-            params,
-        )
-        connection.execute(
-            "UPDATE data_graph SET active = 0 WHERE kind = 'behavioral_pattern' "
-            "AND active = 1 AND CAST(json_extract(value, '$.confidence') AS REAL) <= 0.0"
-        )

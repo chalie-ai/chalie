@@ -397,8 +397,10 @@ def _test_api_provider(config: "dict[str, object]", platform: str, model: str, s
         host = config.get('host')
         if host:
             test_config['host'] = host
+        from configs.enums.provider_type import ProviderType
+        from configs.enums.thinking_level import ThinkingLevel
         from services.llm_clients.factory import build_client
-        from services.provider_api import ProviderApiRequest, ThinkingLevel, ProviderType
+        from services.provider_api import ProviderApiRequest
         client = build_client(test_config)
         dto = ProviderApiRequest(
             system="You are a test assistant.",

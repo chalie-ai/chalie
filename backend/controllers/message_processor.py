@@ -54,7 +54,8 @@ import re
 from threading import Thread
 from typing import TYPE_CHECKING, Protocol, cast
 
-from models.provider_enums import ProviderType, ThinkingLevel
+from configs.enums.provider_type import ProviderType
+from configs.enums.thinking_level import ThinkingLevel
 from models.provider_errors import (
     ProviderResponseError,
     ProviderRetriesExhaustedError,
@@ -63,6 +64,7 @@ from models.provider_errors import (
 )
 from models.provider_request import ProviderRequest
 from models.turn_execution import TurnExecution
+from services.behavioral_pattern_service import BehavioralPatternService
 from services.compaction_service import CompactionService
 from services.data_graph_service import DataGraphService
 from services.database import Database
@@ -75,6 +77,7 @@ from services.thinking_override_service import get_thinking_override
 from services.tool_call_service import ToolCallService
 from services.transcript_service import TranscriptService
 from services.turn_execution_service import TurnExecutionService
+from services.user_synthesis import UserSynthesis
 from services.websocket import Websocket
 
 if TYPE_CHECKING:
@@ -153,6 +156,7 @@ class MessageProcessor:
         self.provider_service = ProviderService(self)
         self.compaction_service = CompactionService(self)
         self.data_graph_service = DataGraphService(self)
+        self.behavioral_pattern_service = BehavioralPatternService(self)
         self.dispatch_service = DispatchService(self)
         self.llm_log_service = LlmLogService(self)
         self.prompt_service = PromptService(self)
@@ -198,7 +202,12 @@ class MessageProcessor:
         joins — it returns the instant the daemon is running."""
         with self.db.transaction():
             self.turn_id = self.transcript_service.allocate_turn()
-            if self._forked and not self.transcript_service.turn_exists():
+            if self.config.external_turn_id:
+                # turn_id came from a key space the caller owns (schedule id). Its first
+                # use opens a MAIN turn; a repeat appends as FORK. Derive forked-ness from
+                # existence, never reject — a fresh external key is legitimately new.
+                self._forked = self.transcript_service.turn_exists()
+            elif self._forked and not self.transcript_service.turn_exists():
                 raise ValueError("Invalid turn_id specified")
             self.uid = self._open_input_row()
             self.current_transcript_id = self.uid
@@ -403,7 +412,7 @@ class MessageProcessor:
             if role == "user" and self.channel == "user":
                 self._proactive_suggestion()
             elif role == "user_summary":
-                self.data_graph_service.persist_user_summary(response_text)
+                UserSynthesis.persist_user_summary(response_text)
             elif role == "pattern_match":
                 self._pattern_skill_sync()
             elif role == "external_agent":
@@ -428,9 +437,9 @@ class MessageProcessor:
         patterns written this turn (legacy ``PatternDecayHook`` +
         ``PatternSkillSyncHook``, both self-guarding on an empty touched set)."""
         touched = self._touched_pattern_names()
-        self.data_graph_service.decay(touched)
+        self.behavioral_pattern_service.decay(touched)
         from services.skill_association_service import SkillAssociationService  # noqa: PLC0415
-        SkillAssociationService().run_pass(self.data_graph_service.ids_for_touched(touched))
+        SkillAssociationService().run_pass(self.behavioral_pattern_service.ids_for_touched(touched))
 
     def _touched_pattern_names(self) -> set[str]:
         """Names of the patterns saved this turn — the ``save_pattern`` calls'

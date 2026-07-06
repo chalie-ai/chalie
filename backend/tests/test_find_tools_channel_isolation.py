@@ -34,6 +34,7 @@ from abilities._registry import AbilityRegistry
 from abilities.find_tools import FindToolsAbility
 from configs.channels import DmnConfig, UserConfig
 from configs.channels.web_browse import WebBrowseConfig
+from configs.enums.policy_channel import PolicyChannel
 from controllers.message_processor import MessageProcessor
 from services.processor_config import ProcessorConfig
 
@@ -161,7 +162,7 @@ class TestWebBrowseDelegateHasBrowser:
         resolves a real 'browser' tool schema for the delegate — the channel
         raw browser is exclusive to. (always_available bypasses discovery
         entirely: a non-discoverable tool is reached ONLY this way.)"""
-        mp = _mp_for(WebBrowseConfig(ProcessorConfig.PolicyChannel.CHAT))
+        mp = _mp_for(WebBrowseConfig(PolicyChannel.CHAT))
         assert "browser" in mp.config.always_available
 
         schemas = AbilityRegistry.build_tools(mp)

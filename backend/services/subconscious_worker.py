@@ -15,9 +15,11 @@ if TYPE_CHECKING:
     from services.episodic_service import EpisodicService
     from services.data_graph_service import DataGraphService
 
+from models.episode import Episode
 from services.database import Database
 from services.durable_timestamp import DurableTimestamp
 from services.time_utils import utc_now, parse_utc
+from services.user_synthesis import UserSynthesis
 
 logger = logging.getLogger(__name__)
 
@@ -52,9 +54,6 @@ _DISCOVERY_TIMESTAMP = DurableTimestamp(
     source="discovery_worker",
 )
 
-# Keys checked to determine whether DMN has a synthesis to work from.
-# SubconsciousWorker._step_dmn() skips when neither row is present.
-_DMN_SYNTHESIS_KEYS = ('user_summary', 'user_summary_long')
 
 # Per-tick consolidation summarization cap: at most this many cluster→parent LLM
 # summarization calls run per tick across all channels and both roll-up rounds,
@@ -258,15 +257,7 @@ class SubconsciousWorker:
 
         channels = list(consolidating_exact_channels())
         try:
-            with Database.transaction() as conn:
-                rows = conn.execute(
-                    "SELECT DISTINCT channel FROM episodes "
-                    "WHERE deleted_at IS NULL "
-                    "  AND consolidated_into IS NULL "
-                    "  AND channel LIKE ?",
-                    (LIKE_EXTERNAL_AGENT,),
-                ).fetchall()
-            channels.extend(r[0] for r in rows if r[0])
+            channels.extend(Episode.apex_channels(LIKE_EXTERNAL_AGENT))
         except Exception as exc:
             logger.warning(
                 f"{LOG_PREFIX} external-agent channel discovery failed: {exc}"
@@ -280,7 +271,6 @@ class SubconsciousWorker:
             EpisodicService,
             cluster_apex_embeddings,
             find_super_candidates,
-            _fetch_apex_embeddings,
         )
 
         episodic_svc = EpisodicService()
@@ -303,7 +293,7 @@ class SubconsciousWorker:
         # "fix" this into a same-tick re-read.
         era_clusters: list[list[str]] = []
         try:
-            l1_ids, l1_embs = _fetch_apex_embeddings(channel, level=1)
+            l1_ids, l1_embs = Episode.apex_embeddings(channel, level=1)
             if len(l1_ids) >= ERA_DIGEST_TRIGGER:
                 era_clusters = cluster_apex_embeddings(l1_ids, l1_embs)
         except Exception as exc:
@@ -333,16 +323,14 @@ class SubconsciousWorker:
         episodic_svc: "EpisodicService",
     ) -> int:
         """Write one roll-up round's clusters at ``level``. Returns supers written."""
-        from services.episodic_service import _fetch_novelty_comparison_set  # noqa: PLC0415
-
         if not clusters or self._summarization_budget_remaining <= 0:
             return 0
 
         try:
-            prior_embeddings = _fetch_novelty_comparison_set(channel)
+            prior_embeddings = Episode.novelty_comparison_blobs(channel)
         except Exception as exc:
             logger.warning(
-                f"{LOG_PREFIX} _fetch_novelty_comparison_set failed "
+                f"{LOG_PREFIX} novelty comparison-set fetch failed "
                 f"(channel={channel}): {exc}"
             )
             prior_embeddings = []
@@ -375,14 +363,13 @@ class SubconsciousWorker:
             _safe_json_load_object,
         )
         from services.episodic_constants import HDBSCAN_MIN_CLUSTER_SIZE  # noqa: PLC0415
-        from services.episodic_service import compute_novelty  # noqa: PLC0415
+        from services.episodic_service import compute_novelty, compute_salience  # noqa: PLC0415
         from controllers.message_processor import MessageProcessor  # noqa: PLC0415
-        from services.salience_service import compute_salience  # noqa: PLC0415
 
         try:
             sources = [
-                ep for ep in (
-                    episodic_svc.get_episode_by_id(eid) for eid in cluster_ids
+                ep.to_dict() for ep in (
+                    Episode.by_id(eid) for eid in cluster_ids
                 )
                 if ep
             ]
@@ -429,7 +416,7 @@ class SubconsciousWorker:
 
             new_id = episodic_svc.store_episode(super_ep, embedding=embedding)
             for src_id in cluster_ids:
-                episodic_svc.set_consolidated_into(src_id, new_id)
+                Episode.set_consolidated_into(src_id, new_id)
 
             logger.info(
                 f"{LOG_PREFIX} level-{level} episode {new_id} created from cluster "
@@ -448,11 +435,9 @@ class SubconsciousWorker:
         """Step 2 — route hard facts from new episodes into data_graph."""
         from configs.channels import FactExtractionConfig, parse_fact_ops  # noqa: PLC0415
         from services.data_graph_service import get_data_graph_service  # noqa: PLC0415
-        from services.episodic_service import EpisodicService  # noqa: PLC0415
         from controllers.message_processor import MessageProcessor  # noqa: PLC0415
 
-        episodic_svc = EpisodicService()
-        backlog = episodic_svc.fetch_fact_extraction_backlog(_FACT_EXTRACTION_CALL_BUDGET)
+        backlog = Episode.fact_extraction_backlog(_FACT_EXTRACTION_CALL_BUDGET)
         if not backlog:
             return "no backlog"
 
@@ -465,13 +450,13 @@ class SubconsciousWorker:
         for episode in backlog:
             try:
                 self._extract_facts_for_episode(
-                    episode, episodic_svc, dg, counters,
+                    episode, dg, counters,
                     FactExtractionConfig, parse_fact_ops, MessageProcessor,
                 )
             except Exception as exc:
                 logger.warning(
                     f"{LOG_PREFIX} fact_extraction failed for episode "
-                    f"{episode.get('id')}: {exc}"
+                    f"{episode.id}: {exc}"
                 )
 
         return (
@@ -483,8 +468,7 @@ class SubconsciousWorker:
 
     def _extract_facts_for_episode(
         self,
-        episode: dict[str, object],
-        episodic_svc: "EpisodicService",
+        episode: Episode,
         dg: "DataGraphService",
         counters: dict[str, int],
         config_cls: object,
@@ -492,7 +476,7 @@ class SubconsciousWorker:
         processor_cls: object,
     ) -> None:
         """Run the constrained-op pipeline for a single episode and stamp it."""
-        gist = cast(str, episode.get("gist") or "")
+        gist = episode.gist or ""
         neighbours = dg.recall(gist, limit=_FACT_NEIGHBOUR_LIMIT) if gist else []
 
         from collections.abc import Callable as _Callable  # noqa: PLC0415
@@ -508,7 +492,7 @@ class SubconsciousWorker:
             counters["unparseable"] += 1
             logger.warning(
                 f"{LOG_PREFIX} fact_extraction unparseable output for episode "
-                f"{episode.get('id')} — NOOP: {exc}"
+                f"{episode.id} — NOOP: {exc}"
             )
             ops = []
 
@@ -516,11 +500,11 @@ class SubconsciousWorker:
         # specific external agent) is recoverable from data_graph.source. dmn and
         # external-agent facts are wanted, so there is no channel gate here — the
         # backlog feeds every episode-producing channel.
-        source = _fact_source_for(cast(Optional[str], episode.get("channel")))
+        source = _fact_source_for(episode.channel)
         for op in ops:
             self._apply_fact_op(op, dg, counters, source)
 
-        episodic_svc.set_facts_extracted_at(cast(str, episode["id"]))
+        Episode.set_facts_extracted_at(cast(str, episode.id))
         counters["episodes"] += 1
 
     def _apply_fact_op(self, op: dict[str, object], dg: "DataGraphService", counters: dict[str, int], source: str) -> None:
@@ -631,10 +615,10 @@ class SubconsciousWorker:
 
     def _step_synthesis(self) -> str:
         """Step 5 — refresh the user synopsis (short + long)."""
-        from configs.channels import UserSummaryConfig, _should_synthesise  # noqa: PLC0415
+        from configs.channels import UserSummaryConfig  # noqa: PLC0415
         from controllers.message_processor import MessageProcessor  # noqa: PLC0415
 
-        if not _should_synthesise():
+        if not UserSynthesis.needs_refresh():
             logger.info(f"{LOG_PREFIX} No new traits since last synthesis; skipping")
             return "no new traits/patterns; skipped"
 
@@ -645,23 +629,7 @@ class SubconsciousWorker:
     def _step_dmn(self) -> str:
         """Step 6 — background DMN reflection via DMNMessageProcessor."""
         # DMN needs a user synthesis to reflect on; skip when none exists yet.
-        # Reads the same data_graph keys the (removed) _load_user_synthesis did.
-        synthesis: Optional[str] = None
-        try:
-            placeholders = ",".join("?" * len(_DMN_SYNTHESIS_KEYS))
-            with Database.transaction() as conn:
-                rows = conn.execute(
-                    "SELECT key, value FROM data_graph "
-                    "WHERE kind = 'system' "
-                    "  AND key IN (" + placeholders + ") "
-                    "  AND active = 1 AND deleted_at IS NULL",
-                    _DMN_SYNTHESIS_KEYS,
-                ).fetchall()
-            by_key = {row[0]: row[1] for row in rows if row[1]}
-            synthesis = by_key.get('user_summary_long') or by_key.get('user_summary')
-        except Exception as exc:
-            logger.warning(f"{LOG_PREFIX} DMN synthesis read failed: {exc}")
-        if not synthesis:
+        if not UserSynthesis.get():
             logger.info(f"{LOG_PREFIX} Skipping DMN — no user synthesis available")
             return "skipped: no user synthesis"
 

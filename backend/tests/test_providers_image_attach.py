@@ -24,12 +24,12 @@ def test_build_send_messages_attaches_image_from_get_image(
     tmp_path: Path, db: sqlite3.Connection
 ) -> None:
     from configs.channels.vision import VisionConfig
-    from services.processor_config import ProcessorConfig
+    from configs.enums.policy_channel import PolicyChannel
 
     img = tmp_path / "a.png"
     img.write_bytes(_png_bytes())
 
-    config = VisionConfig(ProcessorConfig.PolicyChannel.CHAT)
+    config = VisionConfig(PolicyChannel.CHAT)
     mp = MessageProcessor(
         config, raw_input="what is this",
         metadata={"image_path": str(img), "mime_type": "image/png"},
@@ -44,9 +44,9 @@ def test_build_send_messages_attaches_image_from_get_image(
 
 def test_build_send_messages_no_image_when_get_image_returns_none(db: sqlite3.Connection) -> None:
     from configs.channels.vision import VisionConfig
-    from services.processor_config import ProcessorConfig
+    from configs.enums.policy_channel import PolicyChannel
 
-    config = VisionConfig(ProcessorConfig.PolicyChannel.CHAT)
+    config = VisionConfig(PolicyChannel.CHAT)
     mp = MessageProcessor(config, raw_input="what is this")
 
     messages = mp._build_messages()

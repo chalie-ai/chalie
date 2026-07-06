@@ -22,7 +22,7 @@ from __future__ import annotations
 import re
 from typing import TYPE_CHECKING, cast
 
-from models.provider_enums import ProviderType
+from configs.enums.provider_type import ProviderType
 from models.provider_errors import ProviderError, RequestOverCapError
 from models.turn_signal import TurnSignal
 from services.llm_clients.factory import build_client
