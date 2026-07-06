@@ -20,12 +20,8 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from services.data_graph_service import (
-    KIND_USER_SPECIFIC,
-    _CONCEPT_LUT_PATH,
-    _CONCEPT_LUT_THRESHOLD,
-    _l2_dist_to_cosine,
-)
+from services.data_graph_service import KIND_USER_SPECIFIC
+from services.fact_service import _CONCEPT_LUT_PATH, _CONCEPT_LUT_THRESHOLD, _l2_dist_to_cosine
 from services.database import Database
 from services.embedding_service import EmbeddingService
 from services.embedding_utils import pack_embedding

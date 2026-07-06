@@ -33,6 +33,14 @@ class FactRow(DataGraphRow):
                    .filter("active = 1").first())
 
     @classmethod
+    def active_values(cls, key: str) -> list[str]:
+        """Every currently-active value for this kind's exact ``key`` — the
+        coexist key's live value set (mirrors ``_fetch_coexist_values``:
+        ``active = 1 AND deleted_at IS NULL``)."""
+        return [v for row in cls.live().filter("key = ?", key).get()
+                if (v := row.value) is not None]
+
+    @classmethod
     def store(cls, key: str, value: str, source: str | None = None) -> tuple[Self, str, str | None]:
         """Exact-key upsert. Returns ``(row, status, old_value)`` where status is
         ``created`` | ``reinforced`` | ``superseded`` (user_specific always
@@ -50,6 +58,43 @@ class FactRow(DataGraphRow):
         row = cls(kind=cls.KIND, key=key, value=value, source=source,
                   first_seen_at=now, last_confirmed_at=now, valid_from=now).save()
         return row, "superseded", old_value
+
+    @classmethod
+    def store_coexist(cls, key: str, value: str,
+                      source: str | None = None) -> tuple[Self, str, list[str] | None]:
+        """Coexist multi-value upsert at the canonical ``key``: each distinct
+        value is its own live row. An exact-value dup already live (case-folded/
+        trimmed) reinforces that row with NO new insert (``reinforced``,
+        ``all_values`` None). A new value inserts a fresh row — ``appended`` when
+        a prior live row exists under the key, else ``created`` — and returns
+        every currently-active value for the key."""
+        now = utc_now().isoformat()
+        norm = (value or "").lower().strip()
+        live_rows = cls.live().filter("key = ?", key).get()
+        for existing in live_rows:
+            if (existing.value or "").lower().strip() == norm:
+                return existing.reinforce(), "reinforced", None
+        row = cls(kind=cls.KIND, key=key, value=value, source=source,
+                  first_seen_at=now, last_confirmed_at=now).save()
+        return row, ("appended" if live_rows else "created"), cls.active_values(key)
+
+    @classmethod
+    def store_immutable(cls, key: str, value: str,
+                        source: str | None = None) -> tuple[Self, str, str | None]:
+        """Immutable single-value upsert at the canonical ``key``. No live row →
+        insert (``created``). Same value (case-folded/trimmed) → reinforce
+        (``reinforced``). A contradicting value is REJECTED: status ``conflict``,
+        NO write (no insert, no demote); the untouched existing row and its value
+        (as ``old_value``) are returned so the caller renders "kept X, rejected Y"."""
+        now = utc_now().isoformat()
+        existing = cls.active_by_key(key)
+        if existing is None:
+            row = cls(kind=cls.KIND, key=key, value=value, source=source,
+                      first_seen_at=now, last_confirmed_at=now).save()
+            return row, "created", None
+        if (value or "").lower().strip() == (existing.value or "").lower().strip():
+            return existing.reinforce(), "reinforced", None
+        return existing, "conflict", existing.value
 
     def demote(self) -> Self:
         """Close this row out on supersession: ``active = 0``, halve

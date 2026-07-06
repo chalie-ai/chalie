@@ -129,8 +129,24 @@ def _format_store_response(result: dict[str, object]) -> str:
         old = result.get("old_value", "")
         return f"{key_display} updated to '{value}'. Supersedes '{old}' (previously set on {date})."
 
-    # coexist/immutable (conflict, appended) and the LUT-miss statuses land in E1b
-    # with the concept-LUT layer; this slice cannot emit them.
+    if status == "conflict":
+        old = result.get("old_value", "")
+        return (
+            f"{key_display} is immutable. Existing value '{old}' (set {date}) kept. "
+            f"New value '{value}' rejected. Use 'forget' first if you're sure."
+        )
+
+    if status == "appended":
+        all_vals = cast("list[object]", result.get("all_values") or [])
+        vals_str = ", ".join(f"'{v}'" for v in all_vals)
+        return f"{key_display} updated. Values now: [{vals_str}] (previously updated on {date})."
+
+    if status == "lut_miss_created":
+        return f"'{provided}' saved as '{value}'."
+
+    # A bare store for the other data_graph kinds yields no status and falls
+    # through to this plain confirmation. The `lut_miss_reinforced`/
+    # `lut_miss_appended` statuses were never emitted and stay unhandled by design.
     return f"'{provided}' stored."
 
 

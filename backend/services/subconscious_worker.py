@@ -525,7 +525,9 @@ class SubconsciousWorker:
                 FactRow.forget(cast(str, op["key"]))
                 counters["delete"] += 1
                 return
-            env = FactService().store(cast(str, op["key"]), cast(str, op["value"]), source=source)
+            env = FactService().store(
+                cast(str, op["key"]), cast(str, op["value"]), source=source, canonicalize=False
+            )
             counters[_FACT_STATUS_COUNTER.get(cast(str, env["status"]), "add")] += 1
         except Exception as exc:
             counters["failed"] += 1
