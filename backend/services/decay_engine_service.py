@@ -12,6 +12,7 @@ from __future__ import annotations
 import logging
 
 from orchestrators import DecayEngine
+from services.discovery_service import DiscoveryService
 from services.episodic_service import EpisodicService
 from services.fact_service import FactService
 
@@ -26,6 +27,7 @@ class DecayEngineService:
             DecayEngine()
             .register(EpisodicService())
             .register(FactService())
+            .register(DiscoveryService())
             # Transcript retention sweep deferred: its model GC was cut in the
             # spine rewrite and no unlinked-GC method exists on models.transcript
             # yet, so there is nothing to run — re-register once that lands.

@@ -98,6 +98,9 @@ def handle_store(channel: str, params: dict[str, object]) -> ToolResult:
     elif kind == "system":
         from services.system_service import SystemService
         result = SystemService().store(key, str(value), source=source)  # full envelope
+    elif kind == "discovery":
+        from services.discovery_service import DiscoveryService
+        result = DiscoveryService().store(key, str(value), source=source)  # full envelope
     else:
         # Transitional: other kinds land on their own verticals in later work. The
         # bare-row store gives no status, so non-FACTS/system kinds fall through to
