@@ -32,7 +32,7 @@ from typing import ClassVar, Self, cast
 
 from models.model import Model
 from models.query import Query
-from services.search_expander_service import enqueue
+from services.search_expander_service import enqueue, should_fts_index
 from services.time_utils import utc_now
 
 logger = logging.getLogger(__name__)
@@ -102,7 +102,14 @@ class DataGraphRow(Model):
         backfill + doc2query variants (the resync the old
         ``DataGraphService.store`` fired after commit — regression R2). The
         model owns only the trigger; a queue-push failure never breaks the
-        write."""
+        write.
+
+        Kinds excluded by
+        :func:`services.search_expander_service.should_fts_index` (behavioural
+        patterns, machine-written system rows) never enter the index — the same
+        authority ``_self_heal`` consults, so neither enqueue path indexes them."""
+        if not should_fts_index(self.kind, self.source):
+            return
         try:
             enqueue("data_graph", cast("int", self.id))
         except Exception:

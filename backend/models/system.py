@@ -74,14 +74,3 @@ class SystemRow(DataGraphRow):
             row.save()
             closed += 1
         return closed
-
-    def _sync_search_index(self) -> None:
-        """Enqueue for FTS only when the row was written by the memory tool.
-
-        The machine writers of this lane — user-summary prose, subconscious
-        pattern/geo cursors, durable clocks — are read back by exact key and
-        must never surface as recall candidates. Their ``source`` is a fixed
-        machine constant; only a memory-tool store stamps the
-        ``skill:memory:store:`` prefix, so that is the sole enqueue trigger."""
-        if (self.source or "").startswith("skill:memory:store:"):
-            super()._sync_search_index()
