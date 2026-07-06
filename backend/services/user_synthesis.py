@@ -5,7 +5,7 @@ The user synthesis is two ``kind='system'`` ``data_graph`` rows: a short
 The user-summary channel writes both once per synthesis turn; the prompt spine and
 the DMN reflection loop read them back at assembly time.
 
-This is thin CRUD over :class:`models.data_graph.DataGraph` — no ``mp``, no sibling
+This is thin CRUD over :class:`models.system.SystemRow` — no ``mp``, no sibling
 service, no prompt assembly. It exists so there is exactly ONE home for the
 ``user_summary`` / ``user_summary_long`` read/write pair (Law 9): the DB-reaching
 statics that used to live in ``DmnConfig`` (§2.5 config strip), the raw reads in
@@ -27,12 +27,12 @@ import logging
 
 from models.behavioral_pattern import BehavioralPattern
 from models.data_graph import DataGraph
+from models.system import SystemRow
 from services.time_utils import parse_utc
 
 logger = logging.getLogger(__name__)
 
 # The two system-lane keys and their one write source.
-_KIND = "system"
 _KEY_SHORT = "user_summary"
 _KEY_LONG = "user_summary_long"
 _SOURCE = "user_summary"
@@ -46,7 +46,7 @@ class UserSynthesis:
         """The user synthesis prose — the short (``shorthand=True``) portrait, or
         the long one falling back to the short when no long row exists. ``""`` when
         neither row is present. Live-row scope mirrors the spine's exact-key read
-        (``DataGraph.active_by_key`` — ``active = 1``)."""
+        (``SystemRow.active_by_key`` — ``active = 1``)."""
         if shorthand:
             return cls._value(_KEY_SHORT)
         return cls._value(_KEY_LONG) or cls._value(_KEY_SHORT)
@@ -58,7 +58,7 @@ class UserSynthesis:
         never raised, so one bad synthesis can never crash the post-turn pipeline."""
         key = _KEY_SHORT if shorthand else _KEY_LONG
         try:
-            DataGraph.store(_KIND, key, content, source=_SOURCE)
+            SystemRow.store(key, content, source=_SOURCE)
         except Exception as exc:  # noqa: BLE001 — a bad synthesis write must not crash the turn
             logger.exception("user_synthesis.upsert failed key=%r: %s", key, exc)
 
@@ -73,7 +73,7 @@ class UserSynthesis:
             newest = cls._newest_trait_ts()
             if newest is None:
                 return False
-            summary_row = DataGraph.live(_KIND).filter("key = ?", _KEY_SHORT).first()
+            summary_row = SystemRow.live().filter("key = ?", _KEY_SHORT).first()
             if summary_row is None:
                 return True
             try:
@@ -130,5 +130,5 @@ class UserSynthesis:
     @staticmethod
     def _value(key: str) -> str:
         """The live value at ``('system', key)`` — ``""`` when no active row."""
-        row = DataGraph.active_by_key(_KIND, key)
+        row = SystemRow.active_by_key(key)
         return (row.value if row else "") or ""

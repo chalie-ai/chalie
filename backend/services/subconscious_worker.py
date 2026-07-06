@@ -604,9 +604,8 @@ class SubconsciousWorker:
         # minor double-fire risk; logging at WARNING so an unexpected
         # cursor-stuck pattern is observable in operator logs.
         try:
-            from models.data_graph import DataGraph
-            DataGraph.store(
-                kind="system",
+            from models.system import SystemRow
+            SystemRow.store(
                 key=_DG_KEY_CURSOR,
                 value=str(latest),
                 source="subconscious_worker",
@@ -701,9 +700,8 @@ class SubconsciousWorker:
         MessageProcessor.process(GeoConfig(cursor, latest))
 
         try:
-            from models.data_graph import DataGraph
-            DataGraph.store(
-                kind="system",
+            from models.system import SystemRow
+            SystemRow.store(
                 key=_DG_KEY_CURSOR,
                 value=str(latest),
                 source="subconscious_worker",

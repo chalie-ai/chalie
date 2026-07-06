@@ -189,14 +189,7 @@ class DataGraph(DataGraphRow):
     # Retrieval-weight haircut on the demoted row (``_SUPERSEDE_RW_FACTOR``).
     _SUPERSEDE_RW_FACTOR: ClassVar[float] = 0.5
 
-    # ── lane reads (§3.11 A/B) — live scopes, late-binding (Critical 3) ──
-
-    @classmethod
-    def system(cls) -> Query[Self]:
-        """Live ``system`` rows, ``retrieval_weight DESC`` — the user_summary
-        lane (``UserConfig.get_user_definition`` / ``EAMPConfig.get_system_prompt``
-        read ``key='user_summary'`` from this set)."""
-        return cls.live("system").order_by("retrieval_weight DESC")
+    # ── lane reads — live scopes, late-binding ──────────────────────────
 
     @classmethod
     def traits(cls) -> Query[Self]:

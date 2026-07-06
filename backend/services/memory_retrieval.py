@@ -95,9 +95,12 @@ def handle_store(channel: str, params: dict[str, object]) -> ToolResult:
     if kind == "user_specific":
         from services.fact_service import FactService
         result = FactService().store(key, str(value), source=source)  # full envelope
+    elif kind == "system":
+        from services.system_service import SystemService
+        result = SystemService().store(key, str(value), source=source)  # full envelope
     else:
-        # Transitional: other kinds land on their own verticals in E2–E6. The
-        # bare-row store gives no status, so non-FACTS fall through to
+        # Transitional: other kinds land on their own verticals in later work. The
+        # bare-row store gives no status, so non-FACTS/system kinds fall through to
         # _format_store_response's plain-stored fallback — intended here.
         from models.data_graph import DataGraph
         DataGraph.store(kind, key, str(value), source=source)
@@ -166,19 +169,22 @@ def handle_forget(params: dict[str, object]) -> ToolResult:
             hint="pass the canonical 'key' of the fact to forget.",
         )
 
-    if kind != "user_specific":
-        # Non-FACTS forget has no model method after the spine rewrite; each
-        # vertical restores it (E2–E6). A loud, stable error beats a crash.
+    if kind == "user_specific":
+        from services.fact_service import FactService
+        result = FactService().forget(key, value)
+    elif kind == "system":
+        from services.system_service import SystemService
+        result = SystemService().forget(key, value)
+    else:
+        # Every other kind's forget has no model method yet; each vertical
+        # restores it as it lands. A loud, stable error beats a crash.
         return ToolResult.err(
             f"Forget for '{kind}' memories isn't available yet.",
             code="kind-not-migrated",
             action="forget",
             key=key,
-            valid=("user_specific",),
+            valid=("user_specific", "system"),
         )
-
-    from services.fact_service import FactService
-    result = FactService().forget(key, value)
 
     body = _format_forget_response(result)
     return ToolResult.ok(body, action="forget", key=key)

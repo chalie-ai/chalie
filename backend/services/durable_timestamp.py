@@ -1,10 +1,8 @@
 
 import logging
 from datetime import datetime, timezone
-from typing import Optional, cast
+from typing import Optional
 
-from services.data_graph_service import KIND_SYSTEM
-from services.database import Database
 from services.time_utils import parse_utc
 
 logger = logging.getLogger(__name__)
@@ -16,11 +14,6 @@ _PARSE_SENTINEL = datetime.min.replace(tzinfo=timezone.utc)
 
 
 class DurableTimestamp:
-
-    # data_graph kind under which all durable system timestamps are stored.
-    # Bound to the canonical constant so this class and data_graph_service never
-    # drift on the kind string.
-    _DG_KIND = KIND_SYSTEM
 
     def __init__(self, memory_key: str, data_graph_key: str, source: str):
         self._memory_key = memory_key
@@ -72,9 +65,8 @@ class DurableTimestamp:
 
     def _persist_data_graph(self, iso: str) -> None:
         try:
-            from models.data_graph import DataGraph
-            DataGraph.store(
-                kind=self._DG_KIND,
+            from models.system import SystemRow
+            SystemRow.store(
                 key=self._data_graph_key,
                 value=iso,
                 source=self._source,
@@ -87,16 +79,9 @@ class DurableTimestamp:
 
     def _read_data_graph(self) -> Optional[str]:
         try:
-            conn = Database.conn()
-            row = conn.execute(
-                "SELECT value FROM data_graph "
-                "WHERE kind=? AND key=? AND active=1 AND deleted_at IS NULL "
-                "LIMIT 1",
-                (self._DG_KIND, self._data_graph_key),
-            ).fetchone()
-            if row and row[0]:
-                return cast(str, row[0])
-            return None
+            from models.system import SystemRow
+            row = SystemRow.active_by_key(self._data_graph_key)
+            return row.value if row and row.value else None
         except Exception as exc:
             logger.debug(
                 "[DurableTimestamp] data_graph hydrate skipped for %s: %s",
