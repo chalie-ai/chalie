@@ -18,46 +18,22 @@ import json
 import math
 from typing import ClassVar, Self, cast
 
-from models.model import Model
+from models.data_graph import DataGraphRow
 from models.query import Query
 from services.time_utils import utc_now
 from utils.data_utils import parse_json_column
 
 
-class BehavioralPattern(Model):
-    """One ``data_graph`` behavioural-pattern row: field storage + CRUD + the
-    pattern lane scopes, the upsert/reinforce write path, the confidence decay
-    sweep and the shared value renderer."""
-
-    __table__: ClassVar[str] = "data_graph"
-    __columns__: ClassVar[tuple[str, ...]] = (
-        "id", "kind", "key", "value", "storage_strength", "retrieval_weight",
-        "salience_score", "evidence_count", "first_seen_at", "last_confirmed_at",
-        "last_accessed_at", "source", "deleted_at", "active", "search_queries",
-        "valid_from", "valid_to",
-    )
-
-    # Real columns (annotation-only; populated by Model.__init__ from kwargs /
-    # hydrate, so mypy knows their types on attribute access).
-    kind: str
-    key: str
-    value: str | None
-    storage_strength: float
-    retrieval_weight: float
-    salience_score: float
-    evidence_count: int
-    first_seen_at: str
-    last_confirmed_at: str
-    last_accessed_at: str | None
-    source: str | None
-    deleted_at: str | None
-    active: int
-    search_queries: str | None
-    valid_from: str | None
-    valid_to: str | None
+class BehavioralPattern(DataGraphRow):
+    """One ``data_graph`` behavioural-pattern row: the shared shell from
+    :class:`~models.data_graph.DataGraphRow` (table binding, columns, reinforce
+    path, kind-bound reads and the FTS/vec write-sync) plus the pattern-specific
+    upsert/reinforce write path, the confidence decay sweep and the value
+    renderer."""
 
     #: The ``data_graph.kind`` this model owns — the one source of truth for the
-    #: literal every other layer imports.
+    #: literal every other layer imports. Binds the inherited kind-bound reads
+    #: (:meth:`~models.data_graph.DataGraphRow.live` / ``search``) to this lane.
     KIND: ClassVar[str] = "behavioral_pattern"
 
     # Write-path constants, ported verbatim from the legacy ``save_pattern`` SQL.
@@ -72,15 +48,10 @@ class BehavioralPattern(Model):
     # ── lane reads — live scopes, late-binding (zero I/O until terminal) ──
 
     @classmethod
-    def live(cls) -> Query[Self]:
-        """The live-pattern scope — ``kind = 'behavioral_pattern' AND active = 1
-        AND deleted_at IS NULL`` (mirroring ``DataGraph.live``'s filters)."""
-        return cls.filter("kind = ?", cls.KIND).filter("active = 1").filter("deleted_at IS NULL")
-
-    @classmethod
     def recent(cls) -> Query[Self]:
         """Live patterns, ``last_confirmed_at DESC`` — the user-summary channel's
-        active-patterns read (ported from ``DataGraph.patterns``)."""
+        active-patterns read (ported from ``DataGraph.patterns``). Builds on the
+        inherited kind-bound :meth:`~models.data_graph.DataGraphRow.live`."""
         return cls.live().order_by("last_confirmed_at DESC")
 
     # ── write path (ported from abilities/save_pattern.py) ───────────────────
