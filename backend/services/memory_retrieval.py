@@ -778,14 +778,13 @@ def _search_episodes_by_location(
     kind='place' to pick up alternate location_name strings stored at save time.
     """
     try:
-        from models.data_graph import DataGraph
-        from services.data_graph_service import KIND_PLACE
+        from models.place import PlaceRow
 
         # Build the list of strings to LIKE-match against location_name.
         # Start with the raw input and add any resolved name from saved places.
         location_names = [location]
         try:
-            places = [r.to_dict() for r in DataGraph.live(KIND_PLACE).get()]
+            places = [r.to_dict() for r in PlaceRow.live().get()]
             for place in places:
                 raw_value = cast("str | None", place.get("value") or "{}")
                 val = json.loads(raw_value) if isinstance(raw_value, str) else raw_value
