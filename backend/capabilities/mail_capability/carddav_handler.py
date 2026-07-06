@@ -7,11 +7,7 @@ from typing import TYPE_CHECKING, cast
 
 if TYPE_CHECKING:
     from collections.abc import Callable
-    from typing import Optional, Protocol
-
-    class _DgsProtocol(Protocol):
-        def store(self, kind: str, key: str, value: str, *, source: Optional[str] = None) -> object: ...
-        def recall(self, query: str, *, kinds: Optional[list[str]] = None, limit: int = 10) -> list[dict[str, object]]: ...
+    from typing import Protocol
 
     class _CaldavClientProto(Protocol):
         url: object
@@ -43,7 +39,7 @@ if TYPE_CHECKING:
         data: object
         def load(self) -> None: ...
 
-from models.data_graph import DataGraph
+from models.contact import ContactRow
 
 logger = logging.getLogger(__name__)
 
@@ -205,7 +201,7 @@ class CarddavHandler:
         try:
             rows = [
                 r.to_dict()
-                for r in DataGraph.live("contact").order_by("key ASC").limit(limit).get()
+                for r in ContactRow.live().order_by("key ASC").limit(limit).get()
             ]
             contacts: list[dict[str, object]] = []
             for r in rows:
