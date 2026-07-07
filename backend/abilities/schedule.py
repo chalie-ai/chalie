@@ -4,7 +4,8 @@ ScheduleAbility — Native innate skill for reminders and scheduled tasks.
 Backed by SQLite (scheduled_items table). Provides create, list, search, cancel, and update actions.
 ``update`` is a thin compose: it cancels the target ``item_id`` then creates a fresh item from the
 remaining params — no bespoke UPDATE path to keep in sync with create's validation.
-All DB access via the ``Database`` gateway.
+All DB access via the :class:`~models.scheduled_item.ScheduledItem` model; this ability owns
+orchestration, validation, embedding generation, and response shaping only — no SQL of its own.
 
 ``scheduled_items`` is a prompt-only, dumb-cron table now: one row per schedule, forever
 (``id`` INTEGER PRIMARY KEY AUTOINCREMENT, also the thread's ``turn_id`` on the ``'schedule'``
@@ -32,6 +33,7 @@ from typing import ClassVar, cast
 from abilities._ability import Ability
 from abilities._params import Keys
 from abilities._result import ToolResult
+from models.scheduled_item import ScheduledItem
 from services.cron_schedule import validate_cron
 from services.database import Database
 from services.locale_service import format_date, parse_local
@@ -48,35 +50,6 @@ _COLS: tuple[str, ...] = (
     "cron_dom", "cron_hour", "cron_minute",
     "enabled", "channel", "created_by_session", "created_at",
 )
-
-
-# ---------------------------------------------------------------------------
-# Shared query engine — single SQL path for all scheduled_items readers
-# ---------------------------------------------------------------------------
-
-def query_items(
-    *,
-    limit: int | None = None,
-    columns: tuple[str, ...] = _COLS,
-) -> list[dict[str, object]]:
-    """This is the single query path for all callers of the prompt-only
-    ``scheduled_items`` table — the schedule ability and anything else that
-    reads it. There is no lifecycle to filter on any more (no status/hidden/
-    item_type/group_id/due_at columns exist): every row is a live schedule
-    until it is hard-deleted.
-    """
-    col_str = ", ".join(columns)
-    query = f"SELECT {col_str} FROM scheduled_items ORDER BY start_at ASC"
-    params: list[object] = []
-    if limit is not None:
-        query += " LIMIT ?"
-        params.append(limit)
-
-    conn = Database.conn()
-    rows = conn.execute(query, params).fetchall()
-
-    return [dict(zip(columns, row)) for row in rows]
-
 
 _ACTIONS = ("create", "list", "search", "cancel", "update", "enable", "disable")
 
@@ -411,18 +384,17 @@ def _create(channel: str, params: dict[str, object]) -> ToolResult:
             return ToolResult.err("Create failed: parameters vanished", code="create-failed")
         message, start_at, dom, hour, minute = parsed
 
-        conn = Database.conn()
-        cursor = conn.cursor()
-        cursor.execute(
-            """
-            INSERT INTO scheduled_items
-              (message, start_at, cron_dom, cron_hour, cron_minute,
-               enabled, channel, created_by_session)
-            VALUES (?, ?, ?, ?, ?, 1, ?, ?)
-            """,
-            (message, start_at.isoformat(), dom, hour, minute, channel, None),
-        )
-        item_id = cast(int, cursor.lastrowid)
+        item = ScheduledItem(
+            message=message,
+            start_at=start_at.isoformat(),
+            cron_dom=dom,
+            cron_hour=hour,
+            cron_minute=minute,
+            enabled=1,
+            channel=channel,
+            created_by_session=None,
+        ).save()
+        item_id = cast(int, item.id)
 
         try:
             from services.scheduler_service import embed_scheduled_item
@@ -469,20 +441,7 @@ def _search(ability: "ScheduleAbility", params: dict[str, object], mp: object = 
                 action="search", count=0,
             )
 
-        conn = Database.conn()
-        cursor = conn.execute(
-            """
-            SELECT s.id, s.message, s.start_at,
-                   s.cron_dom, s.cron_hour, s.cron_minute, v.distance
-            FROM scheduled_items_vec v
-            JOIN scheduled_items s ON s.rowid = v.rowid
-            WHERE v.embedding MATCH ?
-              AND k = ?
-            ORDER BY v.distance
-            """,
-            (blob, limit),
-        )
-        rows = cursor.fetchall()
+        rows = ScheduledItem.vector_search(blob, cast(int, limit))
 
         records = []
         for row in rows:
@@ -502,7 +461,7 @@ def _search(ability: "ScheduleAbility", params: dict[str, object], mp: object = 
 
 def _list() -> ToolResult:
     try:
-        rows = query_items()
+        rows = ScheduledItem.by_start_at(_COLS)
         records = [_serialise_item_row(row) for row in rows]
         return ToolResult.ok(
             {"status": "success", "action_performed": "list", "records": records},
@@ -547,10 +506,7 @@ def _resolve_pending_target(params: dict[str, object], *, verb: str) -> tuple[ob
         return item_id, None
 
     pattern = f"%{message_query}%"
-    matches = Database.conn().execute(
-        "SELECT id, message FROM scheduled_items WHERE message LIKE ? ORDER BY created_at ASC",
-        (pattern,),
-    ).fetchall()
+    matches = ScheduledItem.search_by_message(pattern)
 
     if not matches:
         return None, ToolResult.err(
@@ -559,29 +515,22 @@ def _resolve_pending_target(params: dict[str, object], *, verb: str) -> tuple[ob
             hint="call schedule with action=list to see what exists.",
         )
     if len(matches) > 1:
-        descriptions = ", ".join(f"'{r[1][:40]}' (id:{r[0]})" for r in matches)
+        descriptions = ", ".join(f"'{cast(str, m['message'])[:40]}' (id:{m['id']})" for m in matches)
         return None, ToolResult.err(
             f"Multiple reminders match {message_query!r}: {descriptions}.",
             code="ambiguous-match",
             hint="pass item_id to target the specific one.",
         )
-    return matches[0][0], None
+    return matches[0]["id"], None
 
 
 def _fetch_item_record(item_id: object) -> dict[str, object]:
     """Serialise a single item row for a tool result; ``{"id": item_id}`` on any
     failure (the record is advisory — never fatal to the mutating action)."""
     try:
-        row = Database.conn().execute(
-            "SELECT id, message, start_at, cron_dom, cron_hour, cron_minute "
-            "FROM scheduled_items WHERE id = ?",
-            (item_id,),
-        ).fetchone()
-        if row:
-            return _serialise_item_row({
-                "id": row[0], "message": row[1], "start_at": row[2],
-                "cron_dom": row[3], "cron_hour": row[4], "cron_minute": row[5],
-            })
+        item = ScheduledItem.get(item_id)
+        if item is not None:
+            return _serialise_item_row(item.to_dict())
     except Exception as fetch_err:
         logger.debug(f"{LOG_PREFIX} Could not fetch row {item_id} (non-fatal): {fetch_err}")
     return {"id": item_id}
@@ -593,18 +542,12 @@ def _cancel(params: dict[str, object]) -> ToolResult:
         if err is not None:
             return err
 
-        with Database.transaction() as conn:
-            affected = conn.execute(
-                "DELETE FROM scheduled_items WHERE id=?",
-                (item_id,),
-            ).rowcount
+        with Database.transaction():
+            affected = ScheduledItem.filter("id", item_id).delete()
             # rowid == id under INTEGER PRIMARY KEY, so the vec row keyed on
             # rowid is the same id. Drop it in the same transaction to avoid
             # orphaning the embedding when the schedule is hard-deleted.
-            conn.execute(
-                "DELETE FROM scheduled_items_vec WHERE rowid=?",
-                (item_id,),
-            )
+            ScheduledItem.delete_embedding(cast(int, item_id))
 
         if affected == 0:
             return ToolResult.err(
@@ -637,11 +580,8 @@ def _set_enabled(params: dict[str, object], *, enabled: bool) -> ToolResult:
         if err is not None:
             return err
 
-        with Database.transaction() as conn:
-            affected = conn.execute(
-                "UPDATE scheduled_items SET enabled=? WHERE id=?",
-                (1 if enabled else 0, item_id),
-            ).rowcount
+        with Database.transaction():
+            affected = ScheduledItem.filter("id", item_id).update(enabled=1 if enabled else 0)
 
         if affected == 0:
             return ToolResult.err(
