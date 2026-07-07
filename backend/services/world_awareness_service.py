@@ -68,8 +68,8 @@ class WorldAwarenessService:
 
     def _extract_trait_interests(self) -> list[dict[str, str | float]]:
         try:
-            from models.data_graph import DataGraph
-            rows = [r.to_dict() for r in DataGraph.traits().get()]
+            from models.fact import FactRow
+            rows = [r.to_dict() for r in FactRow.traits().get()]
             traits = [
                 r for r in rows
                 if cast(float, r.get('retrieval_weight') or 0) >= TRAIT_MIN_CONFIDENCE

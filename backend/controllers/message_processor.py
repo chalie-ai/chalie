@@ -66,7 +66,6 @@ from models.provider_request import ProviderRequest
 from models.turn_execution import TurnExecution
 from services.behavioral_pattern_service import BehavioralPatternService
 from services.compaction_service import CompactionService
-from services.data_graph_service import DataGraphService
 from services.database import Database
 from services.dispatch_service import DispatchService
 from services.gist_service import GistService
@@ -155,7 +154,6 @@ class MessageProcessor:
         self.turn_execution_service = TurnExecutionService(self)
         self.provider_service = ProviderService(self)
         self.compaction_service = CompactionService(self)
-        self.data_graph_service = DataGraphService(self)
         self.behavioral_pattern_service = BehavioralPatternService(self)
         self.dispatch_service = DispatchService(self)
         self.llm_log_service = LlmLogService(self)

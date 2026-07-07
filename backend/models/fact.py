@@ -10,6 +10,7 @@ from __future__ import annotations
 from typing import ClassVar, Self
 
 from models.data_graph import DataGraphRow
+from models.query import Query
 from services.time_utils import utc_now
 
 
@@ -39,6 +40,12 @@ class FactRow(DataGraphRow):
         ``active = 1 AND deleted_at IS NULL``)."""
         return [v for row in cls.live().filter("key = ?", key).get()
                 if (v := row.value) is not None]
+
+    @classmethod
+    def traits(cls) -> Query[Self]:
+        """Live ``user_specific`` traits, ``retrieval_weight DESC`` — the
+        user-summary channel's facts section and the prompt's traits block."""
+        return cls.live().order_by("retrieval_weight DESC")
 
     @classmethod
     def store(cls, key: str, value: str, source: str | None = None) -> tuple[Self, str, str | None]:

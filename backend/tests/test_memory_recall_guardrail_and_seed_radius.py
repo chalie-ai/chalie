@@ -129,11 +129,9 @@ def test_invalidated_fact_never_surfaces_in_recall(db: sqlite3.Connection) -> No
     import json
     from typing import cast
 
-    from models.data_graph import DataGraph
+    from models.fact import FactRow
 
-    DataGraph.store(
-        kind="user_specific", key="residence", value="Valletta", source="test:seed",
-    )
+    FactRow.store("residence", "Valletta", source="test:seed")
 
     def _recall_residence_rows() -> list[object]:
         out = _build_user_mp("where do I live").dispatch_service.dispatch(

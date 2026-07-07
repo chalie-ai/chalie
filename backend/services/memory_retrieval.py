@@ -65,7 +65,7 @@ def handle_store(channel: str, params: dict[str, object]) -> ToolResult:
     # a discovery memory. Routing by channel keeps a weak model from misfiling it.
     from services.source_profiles import CHANNEL_DISCOVERY
     if channel == CHANNEL_DISCOVERY:
-        from services.data_graph_service import KIND_DISCOVERY
+        from contracts.constants.data_graph import KIND_DISCOVERY
         kind = KIND_DISCOVERY
 
     if not key:
@@ -84,14 +84,14 @@ def handle_store(channel: str, params: dict[str, object]) -> ToolResult:
         )
 
     # Validate the kind ourselves now (the deleted thin service used to).
-    from services.data_graph_service import VALID_KINDS
+    from contracts.constants.data_graph import VALID_KINDS
     if kind not in VALID_KINDS:
         return ToolResult.err(
             f"Could not store '{key}': '{kind}' is not a valid memory kind.",
             code="invalid-kind",
             action="store",
             key=key,
-            valid=("user_specific", "system", "misc"),
+            valid=tuple(sorted(VALID_KINDS)),
         )
 
     source = f"skill:memory:store:{channel}"
@@ -108,13 +108,21 @@ def handle_store(channel: str, params: dict[str, object]) -> ToolResult:
     elif kind == "misc":
         from services.misc_service import MiscService
         result = MiscService().store(key, str(value), source=source)  # full envelope
-    else:
-        # Transitional: other kinds land on their own verticals in later work. The
-        # bare-row store gives no status, so non-FACTS/system kinds fall through to
-        # _format_store_response's plain-stored fallback — intended here.
-        from models.data_graph import DataGraph
-        DataGraph.store(kind, key, str(value), source=source)
-        result = {"status": "", "provided_key": key, "canonical_key": key, "value": str(value)}
+    elif kind == "place":
+        from services.place_service import PlaceService
+        env = PlaceService().store(key, str(value), source=source)  # {status, old_value, row, …}
+        row = env.get("row")
+        result = {
+            "status": env["status"], "provided_key": key, "canonical_key": key,
+            "value": str(value), "old_value": env.get("old_value"),
+            "date": getattr(row, "last_confirmed_at", None),
+        }
+    elif kind == "contact":
+        from services.contact_service import ContactService
+        ContactService().store(key, str(value), source=source)  # returns ContactRow, no envelope
+        result = {"status": "created", "provided_key": key, "canonical_key": key, "value": str(value)}
+    else:  # unreachable — the VALID_KINDS gate above rejects any other kind
+        raise RuntimeError(f"handle_store: no vertical wired for kind {kind!r}")
 
     body = _format_store_response(result)
     return ToolResult.ok(body, action="store", key=key)

@@ -6,11 +6,12 @@ from abilities._budget import BudgetCappedAbility
 from abilities._params import Keys
 from abilities._pattern_provenance import pattern_provenance
 from abilities._result import ToolResult
+from contracts.constants.data_graph import VALID_KINDS
 from models.tool_call import ToolCall
-from services.data_graph_service import VALID_KINDS
 
-# Subset: exclude behavioral_pattern (own tool) and system (internal use).
-ALLOWED_KINDS = sorted(VALID_KINDS - {"behavioral_pattern", "system"})
+# Subset: exclude system (internal-write only). VALID_KINDS already omits
+# document (ingest-only) and behavioral_pattern (save_pattern's tool).
+ALLOWED_KINDS = sorted(VALID_KINDS - {"system"})
 
 # One-line invalid-kind recovery hint carrying a minimal, fully-valid example so
 # a weak model can self-correct without re-reading the schema.
@@ -133,9 +134,8 @@ class SaveGraph(BudgetCappedAbility):
         if dedup_key in seen:
             return ToolResult.ok({"saved": 0, "deduped": 1, "key": key})
 
-        # Every non-document kind routes to its vertical (rich status →
-        # reinforced-dedup; place = supersede). `document` alone stays on the
-        # generic gateway transitionally, until its two-table vertical lands.
+        # Every ALLOWED_KIND routes to its vertical (rich status →
+        # reinforced-dedup; place = supersede).
         source = pattern_provenance(proc)
         if kind == "user_specific":
             from services.fact_service import FactService
@@ -153,10 +153,8 @@ class SaveGraph(BudgetCappedAbility):
             from services.contact_service import ContactService
             ContactService().store(key, value, source=source)  # returns ContactRow, NOT a status envelope
             status = "created"
-        else:  # document — stays on the generic gateway until its vertical lands
-            from models.data_graph import DataGraph
-            DataGraph.store(kind, key, value, source=source)
-            status = "created"
+        else:  # unreachable — run() gates kind ∈ ALLOWED_KINDS, all of which branch above
+            raise RuntimeError(f"save_graph: no vertical wired for kind {kind!r}")
 
         if status == "reinforced":
             return ToolResult.ok({"saved": 0, "deduped": 1, "key": key})

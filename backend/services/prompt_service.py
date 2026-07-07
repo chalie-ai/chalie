@@ -13,7 +13,7 @@ in Phase E — the configs are now pure declarative data. Each builder's docstri
 names the config it was ported from.
 
 Memory boundary (§3.11): every structured user-context read goes through a
-sibling service — ``self.mp.data_graph_service`` for the traits lane and
+sibling service — the FACTS vertical (``FactRow.traits``) for the traits lane and
 ``self.mp.behavioral_pattern_service`` for the pattern lane — never a raw
 ``data_graph`` read here. The behavioural-pattern confidence ranking + cap lives
 on ``BehavioralPatternService.top_patterns``; this file only formats the rows the
@@ -40,6 +40,7 @@ import logging
 from typing import TYPE_CHECKING, cast
 
 from models.behavioral_pattern import BehavioralPattern
+from models.fact import FactRow
 from models.tool_call import ToolCall
 from models.transcript import Transcript
 from services.locale_service import CHAT_TIMESTAMP_FMT, format_date
@@ -358,8 +359,8 @@ class PromptService:
     def _traits_block(self) -> str:
         """Section 1 of ``UserSummaryConfig.get_user_prompt``: up to
         ``_MAX_TRAIT_ROWS`` live ``user_specific`` facts, most-reinforced first,
-        via ``self.mp.data_graph_service.traits()``."""
-        rows = self.mp.data_graph_service.traits()[:_MAX_TRAIT_ROWS]
+        via ``FactRow.traits()``."""
+        rows = FactRow.traits().get()[:_MAX_TRAIT_ROWS]
         lines = [f"{row.key}: {row.value}" for row in rows if row.key and row.value]
         if not lines:
             return "Facts:\n(no facts available)"

@@ -26,7 +26,7 @@ import json
 import logging
 
 from models.behavioral_pattern import BehavioralPattern
-from models.data_graph import DataGraph
+from models.fact import FactRow
 from models.system import SystemRow
 from services.time_utils import parse_utc
 
@@ -93,7 +93,7 @@ class UserSynthesis:
         """The most recent ``last_confirmed_at`` across live traits and patterns,
         or ``None`` when neither lane has a row."""
         rows = [
-            DataGraph.live("user_specific").order_by("last_confirmed_at DESC").first(),
+            FactRow.live().order_by("last_confirmed_at DESC").first(),
             BehavioralPattern.live().order_by("last_confirmed_at DESC").first(),
         ]
         stamps = [row.last_confirmed_at for row in rows if row is not None]
