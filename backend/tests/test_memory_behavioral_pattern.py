@@ -1,20 +1,19 @@
-"""Feature tests for behavioral_pattern support in the memory ability.
+"""Unit tests for behavioral_pattern support in the memory ability.
 
 Three behaviours under test:
-1. _render_behavioral_pattern() produces a human-readable line from a valid
-   JSON string and degrades gracefully on invalid input.
+1. BehavioralPattern.render() produces a human-readable line from a valid JSON
+   string and degrades gracefully on invalid input.
 2. _recall_payload() projects every hit into a structured row that carries its
    own kind field (behavioral_pattern, user_specific, …).
-3. _search_data_graph() includes KIND_BEHAVIORAL_PATTERN in the kinds list
-   passed to DataGraphService.recall() so the rows actually surface.
+3. behavioral_pattern stays in the cross-kind recall span — both the memory
+   tool's _DG_RECALL_KINDS and the recall service's _VERTICALS — so its rows are
+   never silently dropped from recall.
 
-All three are pure-function or real-DataGraph tests — zero mocks except the
-single network-boundary patch already established by the project's conftest db
-fixture (which points the Database gateway at an isolated SQLite instance).
+All are pure-function or constant-wiring assertions: deterministic and
+embedder-free, matching the unit tier.
 """
 
 import json
-import sqlite3
 from typing import cast
 
 import pytest
@@ -142,88 +141,32 @@ class TestRecallPayload:
 
 
 # ---------------------------------------------------------------------------
-# 3. _search_data_graph — real DataGraph, real SQLite, real recall path
+# 3. behavioral_pattern stays in the cross-kind recall span (the wiring guard)
 # ---------------------------------------------------------------------------
 
 
-class TestSearchDataGraphIncludesBehavioralPattern:
-    """_search_data_graph surfaces behavioral_pattern rows from the real DB."""
+class TestBehavioralPatternInRecallSpan:
+    """behavioral_pattern must remain a recall lane. The live data proves it is
+    a valuable, fully-indexed kind (rich cosine-searchable summary prose), so
+    dropping it from the span is a silent regression. These assert the wiring
+    directly — deterministic and embedder-free — unlike an end-to-end surfacing
+    check, which can only skip in an env with no embedding service and so proves
+    nothing in the unit tier."""
 
-    def test_behavioral_pattern_row_is_returned_by_search(self, db: sqlite3.Connection) -> None:
-        """A seeded behavioral_pattern row is visible in _search_data_graph results.
+    def test_tool_recall_span_lists_behavioral_pattern(self) -> None:
+        """The memory tool's cross-kind data-graph recall span includes it."""
+        from models.behavioral_pattern import BehavioralPattern
+        from services.memory_retrieval import _DG_RECALL_KINDS
 
-        This is the regression-protection case: before the fix,
-        KIND_BEHAVIORAL_PATTERN was absent from the kinds filter passed to
-        dgs.recall(), so behavioral_pattern rows were silently dropped.
-        """
-        from models.data_graph import DataGraph
-        from services.data_graph_service import KIND_BEHAVIORAL_PATTERN
-
-        pattern_value = json.dumps({
-            "name": "dawn_meditation_practice",
-            "frequency": "daily",
-            "time_anchor": "06:00",
-            "summary": "Practises 20 minutes of silent meditation before breakfast",
-            "confidence": 8.0,
-        })
-        DataGraph.store(
-            kind=KIND_BEHAVIORAL_PATTERN,
-            key="dawn_meditation_practice",
-            value=pattern_value,
-            source="test:seed",
+        assert BehavioralPattern.KIND in _DG_RECALL_KINDS, (
+            f"behavioral_pattern dropped from the tool recall span: {_DG_RECALL_KINDS}"
         )
 
-        from services.memory_retrieval import _search_data_graph
+    def test_recall_service_fuses_behavioral_pattern_vertical(self) -> None:
+        """The modelless recall service fuses it as one of its verticals."""
+        from models.behavioral_pattern import BehavioralPattern
+        from services.memory_recall_service import _VERTICALS
 
-        hits, _ = _search_data_graph("meditation morning routine", limit=10)
-
-        if not hits:
-            pytest.skip(
-                "FTS/vec did not surface this hit — embedding service unavailable in this env"
-            )
-
-        kinds_returned = {h.get("kind") for h in hits}
-        assert KIND_BEHAVIORAL_PATTERN in kinds_returned, (
-            f"behavioral_pattern kind not present in hits. Kinds returned: {kinds_returned}"
+        assert BehavioralPattern in _VERTICALS, (
+            f"behavioral_pattern vertical missing from the recall span: {_VERTICALS}"
         )
-
-    def test_behavioral_pattern_hit_text_is_rendered_not_raw_json(self, db: sqlite3.Connection) -> None:
-        """The text field for a behavioral_pattern hit is the rendered line, not raw JSON."""
-        from models.data_graph import DataGraph
-        from services.data_graph_service import KIND_BEHAVIORAL_PATTERN
-
-        pattern_value = json.dumps({
-            "name": "evening_run",
-            "frequency": "weekdays",
-            "time_anchor": "18:30",
-            "summary": "Runs 5 km along the seafront",
-            "confidence": 7.2,
-        })
-        DataGraph.store(
-            kind=KIND_BEHAVIORAL_PATTERN,
-            key="evening_run",
-            value=pattern_value,
-            source="test:seed",
-        )
-
-        from services.memory_retrieval import _search_data_graph
-
-        hits, _ = _search_data_graph("evening exercise running", limit=10)
-
-        if not hits:
-            pytest.skip(
-                "FTS/vec did not surface this hit — embedding service unavailable in this env"
-            )
-
-        bp_hits = [h for h in hits if h.get("kind") == KIND_BEHAVIORAL_PATTERN]
-        assert bp_hits, "Expected at least one behavioral_pattern hit"
-
-        for hit in bp_hits:
-            text = cast(str, hit.get("text", ""))
-            # Must be the rendered form, not raw JSON
-            assert not text.strip().startswith("{"), (
-                f"text must be rendered, not raw JSON: {text!r}"
-            )
-            assert "[confidence=" in text, (
-                f"Rendered line must include [confidence=...]: {text!r}"
-            )

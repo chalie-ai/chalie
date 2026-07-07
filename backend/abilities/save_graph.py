@@ -133,16 +133,27 @@ class SaveGraph(BudgetCappedAbility):
         if dedup_key in seen:
             return ToolResult.ok({"saved": 0, "deduped": 1, "key": key})
 
-        # FACTS route through their vertical (rich status → reinforced-dedup);
-        # every other kind lands transitionally on the alive DataGraph model
-        # classmethod (E2–E6 give each its own vertical + status). Neither raises
-        # for a valid kind, so the pre-gate + ALLOWED_KINDS check above are the
-        # only rejection points — no None store-failure branch remains.
+        # Every non-document kind routes to its vertical (rich status →
+        # reinforced-dedup; place = supersede). `document` alone stays on the
+        # generic gateway transitionally, until its two-table vertical lands.
         source = pattern_provenance(proc)
         if kind == "user_specific":
             from services.fact_service import FactService
             status = FactService().store(key, value, source=source)["status"]
-        else:
+        elif kind == "place":
+            from services.place_service import PlaceService
+            status = PlaceService().store(key, value, source=source)["status"]
+        elif kind == "discovery":
+            from services.discovery_service import DiscoveryService
+            status = DiscoveryService().store(key, value, source=source)["status"]
+        elif kind == "misc":
+            from services.misc_service import MiscService
+            status = MiscService().store(key, value, source=source)["status"]
+        elif kind == "contact":
+            from services.contact_service import ContactService
+            ContactService().store(key, value, source=source)  # returns ContactRow, NOT a status envelope
+            status = "created"
+        else:  # document — stays on the generic gateway until its vertical lands
             from models.data_graph import DataGraph
             DataGraph.store(kind, key, value, source=source)
             status = "created"

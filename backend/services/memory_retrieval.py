@@ -48,6 +48,10 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 LOG_PREFIX = "[MEMORY]"
 
+# Recall span — the six kinds fused into cross-kind data-graph recall (identical to the
+# pre-rewrite span). Mirrors services.memory_recall_service._VERTICALS.
+_DG_RECALL_KINDS = ["user_specific", "system", "misc", "behavioral_pattern", "place", "discovery"]
+
 
 # ── Store ────────────────────────────────────────────────────────────
 
@@ -516,23 +520,28 @@ def _relevance_label(score: float) -> str:
 
 
 def _search_data_graph(query: str, limit: int) -> tuple[list[dict[str, object]], str]:
-    # Transitional FACTS-only recall: E7's modelless recall service fuses every
-    # vertical's search() + Episodic with real cosine/RRF; here only the
-    # user_specific lane is ported, searched via FTS. The error:-prefix status
-    # contract (the backend-down discriminator) is preserved.
     try:
-        from models.fact import FactRow
-        rows = FactRow.search(query, limit)
+        from services.memory_recall_service import recall
+        from models.behavioral_pattern import BehavioralPattern
+
+        rows = recall(query, kinds=_DG_RECALL_KINDS, limit=limit)
         if not rows:
             return [], "0 matches"
-        hits: list[dict[str, object]] = [{
-            "id": r.key,
-            "kind": r.kind,
-            "text": r.value or "",
-            "relevance": "medium",     # FTS-only has no cosine; E7 restores true scoring
-            "confidence": 0.6,          # keep >= 0.5 so the partial-confidence gate is unaffected
-            "created_at": None,
-        } for r in rows]
+
+        hits: list[dict[str, object]] = []
+        for row in rows:
+            kind = cast("str", row.get("kind", ""))
+            value = cast("str", row.get("value", "") or "")
+            text = BehavioralPattern.render(value) if kind == "behavioral_pattern" else value
+            cos = cast("float", row.get("cos_score") or 0.0)
+            hits.append({
+                "id": row.get("key", ""),
+                "kind": kind,
+                "text": text,
+                "relevance": _relevance_label(cos),
+                "confidence": cos,
+                "created_at": None,
+            })
         return hits, f"{len(hits)} matches"
     except Exception as e:
         logger.warning(f"{LOG_PREFIX} Data graph search failed: {e}")

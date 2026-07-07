@@ -73,10 +73,9 @@ class MemorySearchResource(Resource):
         """Search episodic memory + the data graph and return ranked, merged hits."""
         results: list[MemoryHit] = []
         try:
-            from services.episodic_service import EpisodicService
-            from services.data_graph_service import get_data_graph_service
-
             try:
+                from services.episodic_service import EpisodicService
+
                 results.extend(
                     _episode_hit(ep)
                     for ep in cast(
@@ -88,10 +87,10 @@ class MemorySearchResource(Resource):
                 logger.warning("[Memory] Episode search failed: %s", exc)
 
             try:
-                dgs = get_data_graph_service()
+                from services.memory_recall_service import recall
                 results.extend(
                     _concept_hit(c)
-                    for c in dgs.recall(dto.q, kinds=_RECALL_KINDS, limit=_RECALL_LIMIT)
+                    for c in recall(dto.q, kinds=_RECALL_KINDS, limit=_RECALL_LIMIT)
                 )
             except Exception as exc:
                 logger.warning("[Memory] Data graph search failed: %s", exc)
