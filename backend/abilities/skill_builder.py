@@ -18,20 +18,19 @@ that corrupted such bodies is gone.
 """
 
 import logging
-import sqlite3
 from typing import ClassVar, cast
 
 from abilities._ability import Ability
 from abilities._params import Keys
 from abilities._result import ToolResult
 from configs.enums.channels import Channel
+from models.skill import Skill
 from services.database import Database
 from services.file_mapper_service import FileMapperService
 from utils.skills_io import (
     DEFAULT_VERSION,
     SKILLS_DB_PATH,
     ensure_user_skills_dir,
-    open_skills_db,
     remove_search_entries,
     skill_yaml_path,
     write_skill_file,
@@ -189,27 +188,6 @@ class SkillBuilderAbility(Ability):
         return result
 
 
-# ── Helpers ────────────────────────────────────────────────────────────────────
-
-
-def _find_user_skill_by_title(conn: sqlite3.Connection, title: str) -> dict[str, object] | None:
-    row = conn.execute(
-        "SELECT id, title, use_for, content, tags, version "
-        "FROM skills WHERE source = 'user' AND lower(title) = lower(?)",
-        (title,),
-    ).fetchone()
-    if row is None:
-        return None
-    return {
-        "id": row[0],
-        "title": row[1],
-        "use_for": row[2],
-        "content": row[3],
-        "tags": row[4],
-        "version": row[5],
-    }
-
-
 # ── Action handlers ────────────────────────────────────────────────────────────
 
 
@@ -227,52 +205,57 @@ def _handle_create(params: dict[str, object]) -> ToolResult:
             action="create",
         )
 
-    conn = open_skills_db()
-    try:
-        existing = _find_user_skill_by_title(conn, title)
-        if existing is not None:
-            return ToolResult.err(
-                f'A skill titled "{title}" already exists.',
-                code="skill-already-exists",
-                hint="Use action=edit to update an existing skill",
-                action="create",
-            )
-
-        tags = (cast("str", params.get(Keys.tags)) or "").strip()
-        meta = {
-            "title": title,
-            "use_for": use_for,
-            "content": content,
-            "tags": tags,
-            "version": DEFAULT_VERSION,
-        }
-
-        conn.execute(
-            "INSERT INTO skills(title, use_for, content, tags, version, source) "
-            "VALUES (?, ?, ?, ?, ?, 'user')",
-            (title, use_for, content, tags, DEFAULT_VERSION),
-        )
-        skill_id: int = cast("int", conn.execute("SELECT last_insert_rowid()").fetchone()[0])
-
-        from services.embedding_service import EmbeddingService
-        from utils.build_skills_db import index_skill
-        emb_service = EmbeddingService()
-        index_skill(conn, emb_service, skill_id, title, use_for, tags)
-
-        conn.commit()
-
-        ensure_user_skills_dir()
-        path = skill_yaml_path(title)
-        write_skill_file(path, cast("dict[str, str | int]", meta))
-
-        logger.info("%s Created skill '%s' (id=%d, file=%s)", _LOG_PREFIX, title, skill_id, path.name)
-        return ToolResult.ok(
-            f'Skill "{title}" created and indexed.',
+    existing = Skill.find_by_title_ci(title, source="user")
+    if existing is not None:
+        return ToolResult.err(
+            f'A skill titled "{title}" already exists.',
+            code="skill-already-exists",
+            hint="Use action=edit to update an existing skill",
             action="create",
-            skill_id=skill_id,
         )
-    finally:
-        conn.close()
+
+    tags = (cast("str", params.get(Keys.tags)) or "").strip()
+    meta = {
+        "title": title,
+        "use_for": use_for,
+        "content": content,
+        "tags": tags,
+        "version": DEFAULT_VERSION,
+    }
+
+    # Column list intentionally matches the DDL default columns (enabled,
+    # based_on) left unset: save() only INSERTs the fields set on the
+    # instance, the same explicit (title, use_for, content, tags, version,
+    # source) list the raw INSERT used, so `enabled`/`based_on` still fall
+    # through to their DDL defaults exactly as before.
+    skill = Skill(
+        title=title,
+        use_for=use_for,
+        content=content,
+        tags=tags,
+        version=DEFAULT_VERSION,
+        source="user",
+    ).save()
+    skill_id: int = cast("int", skill.id)
+
+    conn = Database.conn(str(SKILLS_DB_PATH))
+    from services.embedding_service import EmbeddingService
+    from utils.build_skills_db import index_skill
+    emb_service = EmbeddingService()
+    index_skill(conn, emb_service, skill_id, title, use_for, tags)
+
+    conn.commit()
+
+    ensure_user_skills_dir()
+    path = skill_yaml_path(title)
+    write_skill_file(path, cast("dict[str, str | int]", meta))
+
+    logger.info("%s Created skill '%s' (id=%d, file=%s)", _LOG_PREFIX, title, skill_id, path.name)
+    return ToolResult.ok(
+        f'Skill "{title}" created and indexed.',
+        action="create",
+        skill_id=skill_id,
+    )
 
 
 def _handle_edit(params: dict[str, object]) -> ToolResult:
@@ -285,58 +268,50 @@ def _handle_edit(params: dict[str, object]) -> ToolResult:
             action="edit",
         )
 
-    conn = open_skills_db()
-    try:
-        existing = _find_user_skill_by_title(conn, title)
-        if existing is None:
-            return ToolResult.err(
-                f'No user skill titled "{title}" was found.',
-                code="skill-not-found",
-                hint="Only user-created skills can be edited",
-                action="edit",
-            )
-
-        skill_id: int = cast("int", existing["id"])
-        updated_meta: dict[str, object] = {
-            "title": title,
-            "use_for": (cast("str", params.get(Keys.use_for)) or "").strip() or existing["use_for"],
-            "content": (cast("str", params.get(Keys.content)) or "").strip() or existing["content"],
-            "tags": (cast("str", params.get(Keys.tags)) or "").strip() if params.get(Keys.tags) is not None else (existing["tags"] or ""),
-            "version": cast("int", existing["version"]) + 1,
-        }
-
-        conn.execute(
-            "UPDATE skills SET use_for=?, content=?, tags=?, version=? "
-            "WHERE id=?",
-            (
-                updated_meta["use_for"],
-                updated_meta["content"],
-                updated_meta["tags"],
-                updated_meta["version"],
-                skill_id,
-            ),
-        )
-
-        remove_search_entries(conn, skill_id)
-
-        from services.embedding_service import EmbeddingService
-        from utils.build_skills_db import index_skill
-        emb_service = EmbeddingService()
-        index_skill(conn, emb_service, skill_id, title, cast("str", updated_meta["use_for"]), cast("str", updated_meta["tags"]))
-
-        conn.commit()
-
-        ensure_user_skills_dir()
-        write_skill_file(skill_yaml_path(title), cast("dict[str, str | int]", updated_meta))
-
-        logger.info("%s Updated skill '%s' (id=%d, version=%d)", _LOG_PREFIX, title, skill_id, updated_meta["version"])
-        return ToolResult.ok(
-            f'Skill "{title}" updated to version {updated_meta["version"]}.',
+    existing = Skill.find_by_title_ci(title, source="user")
+    if existing is None:
+        return ToolResult.err(
+            f'No user skill titled "{title}" was found.',
+            code="skill-not-found",
+            hint="Only user-created skills can be edited",
             action="edit",
-            skill_id=skill_id,
         )
-    finally:
-        conn.close()
+
+    skill_id: int = cast("int", existing.id)
+    updated_meta: dict[str, object] = {
+        "title": title,
+        "use_for": (cast("str", params.get(Keys.use_for)) or "").strip() or existing.use_for,
+        "content": (cast("str", params.get(Keys.content)) or "").strip() or existing.content,
+        "tags": (cast("str", params.get(Keys.tags)) or "").strip() if params.get(Keys.tags) is not None else (existing.tags or ""),
+        "version": existing.version + 1,
+    }
+
+    Skill.filter("id", skill_id).update(
+        use_for=updated_meta["use_for"],
+        content=updated_meta["content"],
+        tags=updated_meta["tags"],
+        version=updated_meta["version"],
+    )
+
+    conn = Database.conn(str(SKILLS_DB_PATH))
+    remove_search_entries(conn, skill_id)
+
+    from services.embedding_service import EmbeddingService
+    from utils.build_skills_db import index_skill
+    emb_service = EmbeddingService()
+    index_skill(conn, emb_service, skill_id, title, cast("str", updated_meta["use_for"]), cast("str", updated_meta["tags"]))
+
+    conn.commit()
+
+    ensure_user_skills_dir()
+    write_skill_file(skill_yaml_path(title), cast("dict[str, str | int]", updated_meta))
+
+    logger.info("%s Updated skill '%s' (id=%d, version=%d)", _LOG_PREFIX, title, skill_id, updated_meta["version"])
+    return ToolResult.ok(
+        f'Skill "{title}" updated to version {updated_meta["version"]}.',
+        action="edit",
+        skill_id=skill_id,
+    )
 
 
 def _handle_delete(params: dict[str, object]) -> ToolResult:
@@ -349,34 +324,31 @@ def _handle_delete(params: dict[str, object]) -> ToolResult:
             action="delete",
         )
 
-    conn = open_skills_db()
-    try:
-        existing = _find_user_skill_by_title(conn, title)
-        if existing is None:
-            return ToolResult.err(
-                f'No user skill titled "{title}" was found.',
-                code="skill-not-found",
-                hint="Only user-created skills can be deleted",
-                action="delete",
-            )
-
-        skill_id: int = cast("int", existing["id"])
-        path = skill_yaml_path(title)
-
-        remove_search_entries(conn, skill_id)
-        conn.execute("DELETE FROM skills WHERE id = ?", (skill_id,))
-        conn.commit()
-
-        if path.exists():
-            path.unlink()
-
-        logger.info("%s Deleted skill '%s' (id=%d, file=%s)", _LOG_PREFIX, title, skill_id, path.name)
-        return ToolResult.ok(
-            f'Skill "{title}" deleted.',
+    existing = Skill.find_by_title_ci(title, source="user")
+    if existing is None:
+        return ToolResult.err(
+            f'No user skill titled "{title}" was found.',
+            code="skill-not-found",
+            hint="Only user-created skills can be deleted",
             action="delete",
         )
-    finally:
-        conn.close()
+
+    skill_id: int = cast("int", existing.id)
+    path = skill_yaml_path(title)
+
+    conn = Database.conn(str(SKILLS_DB_PATH))
+    remove_search_entries(conn, skill_id)
+    Skill.filter("id", skill_id).delete()
+    conn.commit()
+
+    if path.exists():
+        path.unlink()
+
+    logger.info("%s Deleted skill '%s' (id=%d, file=%s)", _LOG_PREFIX, title, skill_id, path.name)
+    return ToolResult.ok(
+        f'Skill "{title}" deleted.',
+        action="delete",
+    )
 
 
 def _handle_list(params: dict[str, object]) -> ToolResult:  # noqa: ARG001
@@ -387,25 +359,24 @@ def _handle_list(params: dict[str, object]) -> ToolResult:  # noqa: ARG001
             action="list",
         )
 
-    rows = Database.conn(str(SKILLS_DB_PATH)).execute(
-        "SELECT id, title, use_for, tags, version, source, enabled "
-        "FROM skills ORDER BY source, title"
-    ).fetchall()
+    rows = Skill.order_by("source, title").select(
+        "id", "title", "use_for", "tags", "version", "source", "enabled"
+    )
 
     # Structured rows (JSON), not prose: a weak model can read each skill's
     # fields directly. count meta mirrors len(body) so the model sees the total
     # without parsing.
     skills = [
         {
-            "id": skill_id,
-            "title": title,
-            "use_for": use_for,
-            "tags": tags or "",
-            "version": version,
-            "source": source,
-            "enabled": bool(enabled),
+            "id": row["id"],
+            "title": row["title"],
+            "use_for": row["use_for"],
+            "tags": row["tags"] or "",
+            "version": row["version"],
+            "source": row["source"],
+            "enabled": bool(row["enabled"]),
         }
-        for skill_id, title, use_for, tags, version, source, enabled in rows
+        for row in rows
     ]
     return ToolResult.ok(skills, action="list", count=len(skills))
 
@@ -424,13 +395,9 @@ def _handle_read(params: dict[str, object]) -> ToolResult:
     # Match any source; prefer the editable user copy when a title collides
     # with a curated skill. Unlike list, this returns the full `content` so
     # the model can read a skill's steps before action=edit merges into them.
-    row = Database.conn(str(SKILLS_DB_PATH)).execute(
-        "SELECT id, title, use_for, content, tags, version, source, enabled "
-        "FROM skills WHERE lower(title) = lower(?) ORDER BY (source = 'user') DESC",
-        (title,),
-    ).fetchone()
+    skill = Skill.find_by_title_ci_prefer_user(title)
 
-    if row is None:
+    if skill is None:
         return ToolResult.err(
             f'No skill titled "{title}" was found.',
             code="skill-not-found",
@@ -438,17 +405,16 @@ def _handle_read(params: dict[str, object]) -> ToolResult:
             action="read",
         )
 
-    skill_id, title_, use_for, content, tags, version, source, enabled = row
     return ToolResult.ok(
         {
-            "id": skill_id,
-            "title": title_,
-            "use_for": use_for,
-            "content": content,
-            "tags": tags or "",
-            "version": version,
-            "source": source,
-            "enabled": bool(enabled),
+            "id": skill.id,
+            "title": skill.title,
+            "use_for": skill.use_for,
+            "content": skill.content,
+            "tags": skill.tags or "",
+            "version": skill.version,
+            "source": skill.source,
+            "enabled": bool(skill.enabled),
         },
         action="read",
     )

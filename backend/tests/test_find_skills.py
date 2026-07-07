@@ -27,7 +27,6 @@ from typing import cast
 
 import pytest
 
-from abilities.find_skills import FindSkillsAbility
 from configs.channels import UserConfig
 from controllers.message_processor import MessageProcessor
 from services.file_mapper_service import FileMapperService
@@ -42,12 +41,14 @@ _REAL_SKILLS_DB = FileMapperService.get_skills_db_path()
 
 @pytest.fixture
 def skills_db(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    """A real skills.sqlite COPY under tmp_path, with ``FindSkillsAbility._DB_PATH``
-    redirected to it. The repo's checked-in skills.sqlite is NEVER touched — every
-    SQL statement runs against the read-only byte copy (Rule 0)."""
+    """A real skills.sqlite COPY under tmp_path, with the path authority
+    ``FileMapperService.get_skills_db_path`` redirected to it — the Skill model
+    and the ability both resolve it at call time. The repo's checked-in
+    skills.sqlite is NEVER touched — every SQL statement runs against the
+    read-only byte copy (Rule 0)."""
     dest = tmp_path / "skills.sqlite"
     shutil.copy2(str(_REAL_SKILLS_DB), str(dest))
-    monkeypatch.setattr(FindSkillsAbility, "_DB_PATH", dest)
+    monkeypatch.setattr(FileMapperService, "get_skills_db_path", lambda *_: dest)
     return dest
 
 
@@ -102,7 +103,9 @@ def test_empty_query_array_is_missing_params(skills_db: Path, db: sqlite3.Connec
 
 
 def test_missing_db_is_skill_index_error(skills_db: Path, db: sqlite3.Connection, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(FindSkillsAbility, "_DB_PATH", skills_db.parent / "gone.sqlite")
+    monkeypatch.setattr(
+        FileMapperService, "get_skills_db_path", lambda *_: skills_db.parent / "gone.sqlite"
+    )
     mp = _mp(db)
     out = mp.dispatch_service.dispatch("find_skills", {"query": ["analysis"], "act_summary": "x"})
     assert "[find_skills(status=error, code=skill-index-error" in out
