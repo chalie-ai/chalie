@@ -15,10 +15,7 @@ directly.
 """
 
 import logging
-from typing import TYPE_CHECKING, ClassVar, cast
-
-if TYPE_CHECKING:
-    from controllers.message_processor import MessageProcessor
+from typing import ClassVar
 
 from abilities._ability import Ability
 from abilities._params import Keys
@@ -145,7 +142,9 @@ class MemoryAbility(Ability):
     def run(self, params: dict[str, object]) -> ToolResult:
         action = params.get(Keys.action, "recall")
         mp = self.mp
-        channel = getattr(getattr(mp, "config", None), "channel", "") or ""
+        if mp is None:
+            raise RuntimeError("memory.run() dispatched without a bound MessageProcessor")
+        channel = mp.config.channel
 
         # The dispatcher's ACTION_REQUIRED pre-gate has already rejected unknown
         # actions and missing required params before run() is reached; this maps
@@ -156,9 +155,9 @@ class MemoryAbility(Ability):
             if action == "store":
                 return memory_retrieval.handle_store(channel, params)
             if action == "recall":
-                return memory_retrieval.handle_recall(cast("MessageProcessor | None", mp), channel, params)
+                return memory_retrieval.handle_recall(mp, channel, params)
             if action == "reflect":
-                return memory_retrieval.handle_reflect(cast("MessageProcessor | None", mp), params)
+                return memory_retrieval.handle_reflect(mp, params)
             if action == "forget":
                 return memory_retrieval.handle_forget(params)
             return ToolResult.err(

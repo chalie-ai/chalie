@@ -38,8 +38,8 @@ Design:
   `tool_name`-bearing frame (state=started/done/error) emitted by
   ToolCallService (services/tool_call_service.py); the turn's lifecycle
   (working/completed/cancelled/crashed) is a separate `turn_execution`
-  WS frame emitted by its ExecutionTracker (services/execution_tracker.py) on
-  every state flip, including a crash (so the surface always learns a failed
+  WS frame emitted by its TurnExecutionService (services/turn_execution_service.py)
+  on every state flip, including a crash (so the surface always learns a failed
   turn ended, even one that died before producing a reply). The only signal
   originating here is the channel-wide error toast a crashed turn also needs.
 """
@@ -52,6 +52,7 @@ from typing import Sequence
 from flask.typing import ResponseReturnValue
 from flask_restx import Namespace, Resource
 
+from configs.enums.channels import Channel
 from configs.enums.policy_channel import PolicyChannel
 from services.markup import sanitize
 from services.processor_config import ProcessorConfig
@@ -138,7 +139,7 @@ class _ActionButtonConfig(ProcessorConfig):
 
     def __init__(self) -> None:
         super().__init__(
-            channel="action_button",
+            channel=Channel.ACTION_BUTTON.value,
             role="action_button",
             policy_channel=PolicyChannel.CHAT,
             always_available=[],

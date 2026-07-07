@@ -42,7 +42,6 @@ class Episode(Model):
     """One ``episodes`` row: field storage + CRUD + the retrieval lanes,
     embedding writes, consolidation markers, and the off-spine decay cycle."""
 
-    __table__: ClassVar[str] = "episodes"
     __columns__: ClassVar[tuple[str, ...]] = (
         "id", "gist", "salience", "channel", "created_at", "updated_at",
         "last_accessed_at", "access_count", "deleted_at", "transcript_ids",
@@ -51,6 +50,10 @@ class Episode(Model):
         "location_name", "level", "last_relevant_at", "tombstoned_at",
         "facts_extracted_at",
     )
+
+    @classmethod
+    def get_table(cls) -> str:
+        return "episodes"
 
     # Real columns (annotation-only; populated by Model.__init__ from kwargs /
     # hydrate, so mypy knows their types on attribute access).
@@ -119,7 +122,7 @@ class Episode(Model):
         column_list = ", ".join(columns)
         placeholders = ", ".join("?" for _ in columns)
         cursor = connection.execute(
-            f"INSERT INTO {self.__table__} ({column_list}) VALUES ({placeholders})",
+            f"INSERT INTO {self.get_table()} ({column_list}) VALUES ({placeholders})",
             values,
         )
         connection.execute(
@@ -134,12 +137,12 @@ class Episode(Model):
     def live(cls) -> Query[Self]:
         """The live-episode scope — ``deleted_at IS NULL``. The one shared
         predicate every non-deleted read builds on."""
-        return cls.filter("deleted_at IS NULL")
+        return cls.filter("deleted_at", None, "IS")
 
     @classmethod
     def by_id(cls, episode_id: str) -> Self | None:
         """The single live episode for an exact id, or ``None``."""
-        return cls.live().filter("id = ?", episode_id).first()
+        return cls.live().filter("id", episode_id).first()
 
     @classmethod
     def by_ids(cls, ids: list[str]) -> list[Self]:
@@ -147,8 +150,7 @@ class Episode(Model):
         ``_fetch_episodes_by_ids``). Empty input short-circuits to ``[]``."""
         if not ids:
             return []
-        placeholders = ",".join("?" * len(ids))
-        return cls.live().filter(f"id IN ({placeholders})", *ids).order_by("salience DESC").get()
+        return cls.live().filter_in("id", ids).order_by("salience DESC").get()
 
     @classmethod
     def fact_extraction_backlog(cls, limit: int) -> list[Self]:
@@ -156,7 +158,7 @@ class Episode(Model):
         oldest-first (``created_at ASC, id ASC``) — the self-healing backlog."""
         return (
             cls.live()
-            .filter("facts_extracted_at IS NULL")
+            .filter("facts_extracted_at", None, "IS")
             .order_by("created_at ASC, id ASC")
             .limit(limit)
             .get()
@@ -179,21 +181,20 @@ class Episode(Model):
     ) -> list[Self]:
         """Recent, non-decayed episodes of ``channel`` — ``retrieval_weight``
         at or above ``weight_floor`` and touched or created within
-        ``lookback_days`` — ranked ``retrieval_weight DESC, created_at DESC``."""
+        ``lookback_days`` — ranked ``retrieval_weight DESC, created_at DESC``.
+
+        Raw SQL: the touched-or-created OR-across-columns predicate can't be
+        expressed by the AND-only structured filter builder."""
         lookback = f"-{lookback_days} days"
-        return (
-            cls.live()
-            .filter("channel = ?", channel)
-            .filter("retrieval_weight >= ?", weight_floor)
-            .filter(
-                "(last_accessed_at >= datetime('now', ?) "
-                "OR created_at >= datetime('now', ?))",
-                lookback, lookback,
-            )
-            .order_by("retrieval_weight DESC, created_at DESC")
-            .limit(limit)
-            .get()
+        cursor = cls._bound_connection().execute(
+            "SELECT * FROM episodes "
+            "WHERE deleted_at IS NULL AND channel = ? AND retrieval_weight >= ? "
+            "  AND (last_accessed_at >= datetime('now', ?) "
+            "       OR created_at >= datetime('now', ?)) "
+            "ORDER BY retrieval_weight DESC, created_at DESC LIMIT ?",
+            (channel, weight_floor, lookback, lookback, limit),
         )
+        return [cls.hydrate(row) for row in cursor.fetchall()]
 
     @classmethod
     def apex_channels(cls, like_pattern: str) -> list[str]:
@@ -408,21 +409,15 @@ class Episode(Model):
         the fast tombstone τ, so a child can never carry a back-pointer without a
         tombstone."""
         now_iso = utc_now().isoformat()
-        cls._bound_connection().execute(
-            "UPDATE episodes "
-            "SET consolidated_into = ?, last_relevant_at = ?, tombstoned_at = ? "
-            "WHERE id = ?",
-            (super_id, now_iso, now_iso, leaf_id),
+        cls.filter("id", leaf_id).update(
+            consolidated_into=super_id, last_relevant_at=now_iso, tombstoned_at=now_iso
         )
 
     @classmethod
     def set_facts_extracted_at(cls, episode_id: str) -> None:
         """Stamp the fact-extraction cursor, removing the episode from the
         backlog — a durable progress marker across interrupted ticks."""
-        cls._bound_connection().execute(
-            "UPDATE episodes SET facts_extracted_at = ? WHERE id = ?",
-            (utc_now().isoformat(), episode_id),
-        )
+        cls.filter("id", episode_id).update(facts_extracted_at=utc_now().isoformat())
 
     @classmethod
     def hard_delete(cls, episode_id: str) -> None:
@@ -450,7 +445,6 @@ class Episode(Model):
         Each change is a targeted single-column UPDATE (not ``save()``) so a
         concurrent consolidation write to other columns is never clobbered."""
         now = utc_now()
-        connection = cls._bound_connection()
         updated = 0
         for episode in cls.live().get():
             new_weight = episode._decayed_weight(now)
@@ -458,10 +452,7 @@ class Episode(Model):
                 continue
             current = episode.retrieval_weight if episode.retrieval_weight is not None else 0.0
             if abs(new_weight - current) > cls._RW_EPSILON:
-                connection.execute(
-                    "UPDATE episodes SET retrieval_weight = ? WHERE id = ?",
-                    (new_weight, episode.id),
-                )
+                cls.filter("id", episode.id).update(retrieval_weight=new_weight)
                 updated += 1
         if updated > 0:
             logger.info(f"[DECAY ENGINE] Recomputed {updated} episodic retrieval weights")

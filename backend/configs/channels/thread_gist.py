@@ -4,13 +4,15 @@ Fired once when a turn first grows into a thread (the first reply past its
 settle0). The MP reads ONLY two non-assistant messages from the DB — the thread's
 opening message and the first message beyond settle0 (no carried state) — sends a
 single delegate call, and the daemon target persists the label via
-``ThreadGistService.upsert``. No tools, no act trail, no transcript row.
+``GistService.upsert`` (the ``ThreadGist`` model). No tools, no act trail, no
+transcript row.
 """
 
 from __future__ import annotations
 
 from typing import ClassVar
 
+from configs.enums.channels import Channel
 from configs.enums.policy_channel import PolicyChannel
 from services.processor_config import ProcessorConfig
 
@@ -23,7 +25,7 @@ class ThreadGistConfig(ProcessorConfig):
 
     def __init__(self) -> None:
         super().__init__(
-            channel="delegate:thread_gist",
+            channel=Channel.DELEGATE_THREAD_GIST.value,
             role="thread_gist",
             policy_channel=PolicyChannel.SUBCONSCIOUS,
             always_available=[],

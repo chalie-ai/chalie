@@ -252,8 +252,8 @@ class EpisodicService:
         try:
             from models.transcript import Transcript
             untriggered = (
-                Transcript.filter("channel = ?", config.channel)
-                .filter("id > ?", Episode.watermark(config.channel))
+                Transcript.filter("channel", config.channel)
+                .filter("id", Episode.watermark(config.channel), ">")
                 .count()
             )
             if untriggered >= EXTRACTION_THRESHOLD:
@@ -275,7 +275,7 @@ class EpisodicService:
 
             # ── 1. Fetch the latest window ───────────────────────────────────
             rows = (
-                Transcript.filter("channel = ?", channel)
+                Transcript.filter("channel", channel)
                 .order_by("id DESC")
                 .limit(EXTRACTION_WINDOW)
                 .get()
@@ -569,7 +569,7 @@ def _count_episodes(channel: str | None = None) -> int:
     try:
         query = Episode.live()
         if channel is not None:
-            query = query.filter("channel = ?", channel)
+            query = query.filter("channel", channel)
         return query.count()
     except Exception:
         return 0

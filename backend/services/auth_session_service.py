@@ -82,8 +82,8 @@ def _cookie_secure() -> bool:
     Sourced from the ``ssl_enabled`` DB setting (the same flag that drives TLS
     serving) so cookie scope tracks the wire scheme without any environment var.
     """
-    from services.settings_service import SettingsService
-    return SettingsService().get_bool(SettingsService.SSL_ENABLED)
+    from models.setting import Setting
+    return Setting.get_bool(Setting.SSL_ENABLED)
 
 
 def create_session(response: Response) -> str:

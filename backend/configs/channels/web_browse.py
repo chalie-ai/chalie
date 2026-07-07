@@ -20,6 +20,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, ClassVar
 
+from configs.enums.channels import Channel
 from services.processor_config import ProcessorConfig
 
 if TYPE_CHECKING:
@@ -36,7 +37,7 @@ class WebBrowseConfig(ProcessorConfig):
 
     def __init__(self, policy_channel: "PolicyChannel") -> None:
         super().__init__(
-            channel="delegate:web_browse",
+            channel=Channel.DELEGATE_WEB_BROWSE.value,
             role="web_browse",
             policy_channel=policy_channel,
             always_available=[*_WEB_BROWSE_TOOLS, "memory"],

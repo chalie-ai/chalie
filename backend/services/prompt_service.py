@@ -39,6 +39,7 @@ import json
 import logging
 from typing import TYPE_CHECKING, cast
 
+from configs.enums.channels import Channel
 from models.behavioral_pattern import BehavioralPattern
 from models.fact import FactRow
 from models.tool_call import ToolCall
@@ -69,24 +70,24 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-_CHANNEL_USER = "user"
-_CHANNEL_USER_SUMMARY = "user_summary"
-_CHANNEL_PATTERN_MATCH = "pattern_match"
-_CHANNEL_SCHEDULE = "schedule"
-_CHANNEL_FACT_EXTRACTION = "fact_extraction"
-_CHANNEL_SKILL_ASSOCIATION = "skill_association"
-_CHANNEL_SKILLS_BUILDING = "skills_building"
-_CHANNEL_THREAD_GIST = "delegate:thread_gist"
-_CHANNEL_VISION = "delegate:vision"
-_CHANNEL_WEB_BROWSE = "delegate:web_browse"
-_CHANNEL_WEB_SEARCH = "delegate:web_search"
+_CHANNEL_USER = Channel.USER
+_CHANNEL_USER_SUMMARY = Channel.USER_SUMMARY
+_CHANNEL_PATTERN_MATCH = Channel.PATTERN_MATCH
+_CHANNEL_SCHEDULE = Channel.SCHEDULE
+_CHANNEL_FACT_EXTRACTION = Channel.FACT_EXTRACTION
+_CHANNEL_SKILL_ASSOCIATION = Channel.SKILL_ASSOCIATION
+_CHANNEL_SKILLS_BUILDING = Channel.SKILLS_BUILDING
+_CHANNEL_THREAD_GIST = Channel.DELEGATE_THREAD_GIST
+_CHANNEL_VISION = Channel.DELEGATE_VISION
+_CHANNEL_WEB_BROWSE = Channel.DELEGATE_WEB_BROWSE
+_CHANNEL_WEB_SEARCH = Channel.DELEGATE_WEB_SEARCH
 _CHANNEL_EXTERNAL_AGENT = "external_agent"
-_CHANNEL_COMPACTION = "compaction"
-_CHANNEL_ACTION_BUTTON = "action_button"
-_CHANNEL_SUPER_EPISODE = "super_episode_encoder"
-_CHANNEL_GEO_PATTERN = "geo_pattern"
-_CHANNEL_DMN = "dmn"
-_CHANNEL_EPISODE_ENCODER = "episode_encoder"
+_CHANNEL_COMPACTION = Channel.COMPACTION
+_CHANNEL_ACTION_BUTTON = Channel.ACTION_BUTTON
+_CHANNEL_SUPER_EPISODE = Channel.SUPER_EPISODE_ENCODER
+_CHANNEL_GEO_PATTERN = Channel.GEO_PATTERN
+_CHANNEL_DMN = Channel.DMN
+_CHANNEL_EPISODE_ENCODER = Channel.EPISODE_ENCODER
 
 _USER_DEFINITION_FALLBACK = (
     "The user is a real human. Treat this conversation as peer-to-peer dialogue."

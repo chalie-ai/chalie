@@ -12,9 +12,10 @@ import logging
 from typing import cast
 
 from models.behavioral_pattern import BehavioralPattern
+from models.skill import Skill
+from models.skill_association import SkillAssociation
 from services.database import Database
 from services.file_mapper_service import FileMapperService
-from services.time_utils import utc_now
 
 logger = logging.getLogger(__name__)
 LOG_PREFIX = "[SKILL_ASSOC]"
@@ -58,16 +59,15 @@ class SkillAssociationService:
         return written
 
     def _load_patterns(self, row_ids: set[int]) -> list[tuple[str, str]]:
-        ids = sorted(row_ids)
-        placeholders = ",".join("?" * len(ids))
-        rows = BehavioralPattern.live().filter(f"id IN ({placeholders})", *ids).get()
+        rows = BehavioralPattern.live().filter_in("id", sorted(row_ids)).get()
         return cast(list[tuple[str, str]], [(row.key, row.value) for row in rows])
 
     def _load_skill_index(self) -> list[tuple[str, str, str]]:
-        conn = Database.conn(str(_SKILLS_DB))
-        return cast(list[tuple[str, str, str]], conn.execute(
-            "SELECT id, title, use_for FROM skills"
-        ).fetchall())
+        rows = Skill.all().get()
+        return cast(
+            list[tuple[str, str, str]],
+            [(row.id, row.title, row.use_for) for row in rows],
+        )
 
     def _request_associations(
         self,
@@ -110,11 +110,9 @@ class SkillAssociationService:
         valid_skill_ids: set[str],
         pattern_names: set[str],
     ) -> int:
-        now = utc_now().isoformat()
         written = 0
 
-        with Database.transaction(str(_SKILLS_DB)) as conn:
-            conn.execute("PRAGMA foreign_keys = ON")
+        with Database.transaction(str(_SKILLS_DB)):
             for assoc in associations:
                 sid = assoc.get("skill_id")
                 pname = assoc.get("pattern_name")
@@ -125,11 +123,7 @@ class SkillAssociationService:
                     continue
                 if pname not in pattern_names:
                     continue
-                conn.execute(
-                    "INSERT OR REPLACE INTO skill_associations "
-                    "(skill_id, pattern_name, rule, created_at) VALUES (?, ?, ?, ?)",
-                    (sid, pname, rule, now),
-                )
+                SkillAssociation.upsert(cast(int, sid), pname, cast(str, rule))
                 written += 1
 
         return written

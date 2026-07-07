@@ -18,25 +18,30 @@ freeze a connection themselves.
 from __future__ import annotations
 
 import sqlite3
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from typing import ClassVar, Self, TypeVar
 
+from contracts.has_table import HasTable
 from models.query import Query
 from models.serializable import Serializable
 
 T = TypeVar("T", bound="Model")
 
 
-class Model(Serializable):
+class Model(Serializable, HasTable):
     """Base active-record row: field storage + CRUD + late-binding query.
 
     Subclasses :class:`~models.serializable.Serializable` for the one shared
     wire-encoding step (``to_json`` over a per-subclass ``to_dict``) so a
     persisted-row frame and a transient frame on the same socket can never
     encode a value two different ways (Essential 8); this class supplies only
-    the column-filtered ``to_dict`` projection."""
+    the column-filtered ``to_dict`` projection.
 
-    __table__: ClassVar[str] = ""
+    Also explicitly subclasses :class:`~contracts.has_table.HasTable` — its
+    abstract ``get_table()`` is left unimplemented here on purpose, so a
+    subclass that forgets to override it stays abstract too (enforcement
+    detail lives on the Protocol itself)."""
+
     # The real table columns, in schema order. A persisted subclass declares
     # this so persistence + projection are driven by the schema, not by whatever
     # attributes happen to sit on the instance: a service may attach transient
@@ -78,14 +83,22 @@ class Model(Serializable):
         return cls(**dict(row))
 
     @classmethod
-    def filter(cls: type[T], predicate: str, *values: object) -> Query[T]:
-        """Start a late-binding query with a predicate; no DB I/O yet."""
-        return Query(cls).filter(predicate, *values)
+    def filter(cls: type[T], key: str, value: object, operator: str = "=") -> Query[T]:
+        """Start a late-binding query with one structured predicate
+        (``key <operator> ?``); no DB I/O yet."""
+        return Query(cls).filter(key, value, operator)
 
     @classmethod
-    def where(cls: type[T], predicate: str, *values: object) -> Query[T]:
+    def where(cls: type[T], key: str, value: object, operator: str = "=") -> Query[T]:
         """Alias of :meth:`filter`."""
-        return Query(cls).where(predicate, *values)
+        return Query(cls).where(key, value, operator)
+
+    @classmethod
+    def filter_in(cls: type[T], key: str, values: Sequence[object]) -> Query[T]:
+        """Start a late-binding query with a ``key IN (...)`` predicate; no DB
+        I/O yet. An empty ``values`` matches nothing (see
+        :meth:`~models.query.Query.filter_in`)."""
+        return Query(cls).filter_in(key, values)
 
     @classmethod
     def order_by(cls: type[T], column: str) -> Query[T]:
@@ -96,6 +109,29 @@ class Model(Serializable):
     def all(cls: type[T]) -> Query[T]:
         """Start a late-binding query with no predicate."""
         return Query(cls)
+
+    @classmethod
+    def count(cls) -> int:
+        """Bare ``SELECT COUNT(*)`` over the whole table, no predicate."""
+        return Query(cls).count()
+
+    @classmethod
+    def get(cls: type[T], pk: object) -> T | None:
+        """Fetch one row by primary key (the ``id`` column); ``None`` if no
+        row matches. The single-row "fetchone by id" verb."""
+        return Query(cls).filter("id", pk).first()
+
+    @classmethod
+    def first(cls: type[T]) -> T | None:
+        """Whole-table convenience: the first row, or ``None`` if the table
+        is empty. Delegates to :meth:`~models.query.Query.first`."""
+        return Query(cls).first()
+
+    @classmethod
+    def exists(cls) -> bool:
+        """Whole-table convenience: whether the table holds at least one
+        row. Delegates to :meth:`~models.query.Query.exists`."""
+        return Query(cls).exists()
 
     def _fields(self) -> list[str]:
         """The instance's currently-set values that are real table columns
@@ -125,20 +161,21 @@ class Model(Serializable):
         and ``Database.transaction()`` groups multi-write atomic blocks
         (I6 — ``Database`` owns transaction/commit)."""
         connection = self._bound_connection()
+        table = self.get_table()
         columns = [name for name in self._fields() if name != "id"]
         values = [getattr(self, name) for name in columns]
         if self.id is None:
             column_list = ", ".join(columns)
             placeholders = ", ".join("?" for _ in columns)
             cursor = connection.execute(
-                f"INSERT INTO {self.__table__} ({column_list}) VALUES ({placeholders})",
+                f"INSERT INTO {table} ({column_list}) VALUES ({placeholders})",
                 values,
             )
             self.id = cursor.lastrowid
         else:
             assignments = ", ".join(f"{name} = ?" for name in columns)
             connection.execute(
-                f"UPDATE {self.__table__} SET {assignments} WHERE id = ?",
+                f"UPDATE {table} SET {assignments} WHERE id = ?",
                 [*values, self.id],
             )
         return self
@@ -149,5 +186,5 @@ class Model(Serializable):
         if self.id is None:
             return
         connection = self._bound_connection()
-        connection.execute(f"DELETE FROM {self.__table__} WHERE id = ?", (self.id,))
+        connection.execute(f"DELETE FROM {self.get_table()} WHERE id = ?", (self.id,))
         self.id = None

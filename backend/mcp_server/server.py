@@ -171,16 +171,14 @@ def _build_app(mcp: FastMCP) -> Starlette:
 
 def run_mcp_server() -> None:
     """Run the MCP server (blocking). Intended as a WorkerManager service."""
-    from services.settings_service import SettingsService
+    from models.setting import Setting
 
-    settings = SettingsService()
-
-    enabled = settings.get("mcp_server_enabled")
+    enabled = Setting.get("mcp_server_enabled")
     if enabled is not None and str(enabled).lower() in ("false", "0", "no"):
         logger.info("[MCP] Server disabled via settings (mcp_server_enabled=false)")
         return
 
-    port_setting = settings.get("mcp_server_port")
+    port_setting = Setting.get("mcp_server_port")
     try:
         port = int(port_setting) if port_setting else _DEFAULT_PORT
     except (ValueError, TypeError):
@@ -198,10 +196,9 @@ def run_mcp_server() -> None:
 def _ensure_mcp_token() -> None:
     """Generate an MCP auth token on first boot if none exists."""
     from services.wrapper_auth_service import WrapperAuthService
-    from services.settings_service import SettingsService
+    from models.setting import Setting
 
-    settings = SettingsService()
-    existing = settings.get("mcp_server_token_wrapper_id")
+    existing = Setting.get("mcp_server_token_wrapper_id")
     if existing:
         auth_svc = WrapperAuthService()
         wrapper = auth_svc.get_wrapper(existing)
@@ -218,7 +215,7 @@ def _ensure_mcp_token() -> None:
         logger.info("[MCP] Token already exists (concurrent boot); skipping")
         return
 
-    settings.set("mcp_server_token_wrapper_id", wrapper_id)
+    Setting.set("mcp_server_token_wrapper_id", wrapper_id)
 
     logger.info(
         "[MCP] Generated MCP auth token (wrapper_id=%s). "

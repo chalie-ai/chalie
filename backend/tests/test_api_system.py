@@ -6,6 +6,7 @@ import pytest
 from flask.testing import FlaskClient
 
 from api.system import health_ns, system_ns
+from configs.enums.channels import Channel
 from services import compaction_persistence
 from services.memory_store import MemoryStore
 from tests.restx_test_app import mount_namespace
@@ -287,7 +288,7 @@ class TestSystemAPI:
         """A success compaction on the 'user' channel surfaces its summary, watermark, and a
         backend-formatted timestamp (locale_service, for_ui — UTC fallback with no telemetry)."""
         watermark = self._seed_compaction(
-            db, channel='user',
+            db, channel=Channel.USER.value,
             summary='Earlier turns condensed here.',
             created_at='2026-01-01 00:00:01',
         )
@@ -307,7 +308,7 @@ class TestSystemAPI:
         clean human-readable string with NO 'T', NO offset, and NO 'Z' (the exact
         regression the UI scenario guards)."""
         self._seed_compaction(
-            db, channel='user',
+            db, channel=Channel.USER.value,
             summary='Condensed.',
             created_at='2026-05-30T22:45:01.123456+00:00',
         )
@@ -335,11 +336,11 @@ class TestSystemAPI:
         compactor only writes a row when summary extraction succeeds, so there is
         no failure-row state to filter — the latest row is always canonical."""
         self._seed_compaction(
-            db, channel='user',
+            db, channel=Channel.USER.value,
             summary='old summary', created_at='2026-01-01 00:00:01', compacted_up_to=10,
         )
         new_watermark = self._seed_compaction(
-            db, channel='user',
+            db, channel=Channel.USER.value,
             summary='new summary', created_at='2026-01-02 00:00:01', compacted_up_to=20,
         )
         resp = client.get('/api/system/observability/compaction')

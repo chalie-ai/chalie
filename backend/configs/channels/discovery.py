@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from configs.channels.user import UserConfig
+from configs.enums.channels import Channel
 
 if TYPE_CHECKING:
     from configs.enums.config_type import ConfigTypeEnum
@@ -45,10 +46,10 @@ class DiscoveryConfig(UserConfig):
 
     def __init__(self) -> None:
         super().__init__()
-        object.__setattr__(self, "channel", "discovery")
-        object.__setattr__(self, "read_channel", "user")
+        object.__setattr__(self, "channel", Channel.DISCOVERY.value)
+        object.__setattr__(self, "read_channel", Channel.USER.value)
         object.__setattr__(self, "broadcast_to", None)
-        object.__setattr__(self, "prompt_channel", "user")
+        object.__setattr__(self, "prompt_channel", Channel.USER.value)
 
     def type(self) -> "ConfigTypeEnum":
         from configs.enums.config_type import ConfigTypeEnum  # noqa: PLC0415

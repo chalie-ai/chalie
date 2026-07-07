@@ -13,7 +13,7 @@ only ``__dict__ ∩ __columns__``). Holds no mp, calls no service (Rule-3 depth)
 
 from __future__ import annotations
 
-from typing import ClassVar
+from typing import ClassVar, cast
 
 from models.model import Model
 from services.time_utils import utc_now
@@ -22,8 +22,11 @@ from services.time_utils import utc_now
 class ThreadGist(Model):
     """One per-thread topical label, keyed by the composite ``(channel, turn_id)``."""
 
-    __table__: ClassVar[str] = "thread_gist"
     __columns__: ClassVar[tuple[str, ...]] = ("channel", "turn_id", "gist", "created_at")
+
+    @classmethod
+    def get_table(cls) -> str:
+        return "thread_gist"
 
     channel: str
     turn_id: int
@@ -51,10 +54,5 @@ class ThreadGist(Model):
         for every turn_id in ``turn_ids`` that has a label on ``channel``."""
         if not turn_ids:
             return {}
-        placeholders = ",".join("?" * len(turn_ids))
-        rows = cls._bound_connection().execute(
-            f"SELECT turn_id, gist FROM thread_gist "
-            f"WHERE channel = ? AND turn_id IN ({placeholders})",
-            (channel, *turn_ids),
-        ).fetchall()
-        return {int(row[0]): row[1] for row in rows}
+        rows = cls.filter("channel", channel).filter_in("turn_id", turn_ids).select("turn_id", "gist")
+        return {int(cast("int", row["turn_id"])): cast("str", row["gist"]) for row in rows}

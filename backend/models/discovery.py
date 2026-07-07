@@ -46,8 +46,8 @@ class DiscoveryRow(DataGraphRow):
         """The single active row for this kind's exact ``key`` — the store lookup
         (mirrors ``_SELECT_ACTIVE_BY_KIND_KEY_SQL``: ``active = 1`` only, NOT
         ``deleted_at``-filtered)."""
-        return (cls.filter("kind = ?", cls.KIND).filter("key = ?", key)
-                   .filter("active = 1").first())
+        return (cls.filter("kind", cls.KIND).filter("key", key)
+                   .filter("active", 1).first())
 
     @classmethod
     def store(cls, key: str, value: str, source: str | None = None) -> tuple[Self, str, str | None]:
@@ -81,7 +81,7 @@ class DiscoveryRow(DataGraphRow):
         cutoff = (now - timedelta(hours=1)).isoformat()
         now_ts = now.timestamp()
         updated = 0
-        for row in cls.live().filter("last_confirmed_at < ?", cutoff).get():
+        for row in cls.live().filter("last_confirmed_at", cutoff, "<").get():
             new_rw = cls._decayed_rw(row.last_confirmed_at, now_ts)
             if new_rw is not None and abs(new_rw - row.retrieval_weight) > cls._DECAY_RW_EPSILON:
                 row.retrieval_weight = new_rw

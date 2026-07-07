@@ -39,25 +39,27 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Callable
 
+from configs.enums.channels import Channel
+
 # ── Channel keys (exact) ──────────────────────────────────────────────────────
 # Named constants so no consumer hard-codes a channel literal.
-CHANNEL_USER = "user"
-CHANNEL_DMN = "dmn"
-CHANNEL_SKILLS_BUILDING = "skills_building"
-CHANNEL_SCHEDULE = "schedule"
-CHANNEL_DISCOVERY = "discovery"
+CHANNEL_USER = Channel.USER.value
+CHANNEL_DMN = Channel.DMN.value
+CHANNEL_SKILLS_BUILDING = Channel.SKILLS_BUILDING.value
+CHANNEL_SCHEDULE = Channel.SCHEDULE.value
+CHANNEL_DISCOVERY = Channel.DISCOVERY.value
 
 # ── Channel patterns (SQL LIKE prefixes) ──────────────────────────────────────
 # External-agent channels are tagged ``external-agent:<id>`` (HYPHEN + colon);
 # delegate channels are ``delegate:<tool>``.
-LIKE_EXTERNAL_AGENT = "external-agent:%"
+LIKE_EXTERNAL_AGENT = f"{Channel.EXTERNAL_AGENT.value}:%"
 LIKE_DELEGATE = "delegate:%"
 
 # ── Provenance tags ───────────────────────────────────────────────────────────
 # Provenance is derived at write time from the running processor's config
 # channel (see abilities/_pattern_provenance.py) and from the episode channel in
 # fact extraction; this constant is the shared default for the pattern pass.
-PROVENANCE_PATTERN_MATCH = "pattern_match"
+PROVENANCE_PATTERN_MATCH = Channel.PATTERN_MATCH.value
 
 
 @dataclass(frozen=True)

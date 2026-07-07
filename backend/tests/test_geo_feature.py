@@ -21,6 +21,8 @@ from typing import cast
 
 import pytest
 
+from configs.enums.channels import Channel
+
 pytestmark = pytest.mark.unit
 
 # ---------------------------------------------------------------------------
@@ -152,10 +154,10 @@ class TestGeoPatternWindowChannelFilter:
         from configs.channels.geo_pattern import _geo_pattern_load_transcript_block
 
         # One row per representative channel, all located, all in the window.
-        _seed_located_row(db, channel="user", content="USER at the gym")
-        _seed_located_row(db, channel="dmn", content="DMN reflection located")
+        _seed_located_row(db, channel=Channel.USER.value, content="USER at the gym")
+        _seed_located_row(db, channel=Channel.DMN.value, content="DMN reflection located")
         _seed_located_row(db, channel="delegate:research", content="DELEGATE located")
-        _seed_located_row(db, channel="external-agent:bob", content="EXT located")
+        _seed_located_row(db, channel=Channel.for_external_agent("bob"), content="EXT located")
 
         last_id = db.execute("SELECT MAX(id) FROM transcript").fetchone()[0]
         block = _geo_pattern_load_transcript_block(0, last_id)

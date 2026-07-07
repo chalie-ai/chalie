@@ -19,6 +19,7 @@ from flask import request
 from flask.typing import ResponseReturnValue
 from flask_restx import Namespace, Resource
 
+from configs.enums.channels import Channel
 from models.episode import Episode
 from services.database import Database
 from services.file_mapper_service import FileMapperService
@@ -294,19 +295,24 @@ class ObservabilityRecordsResource(Resource):
             q = (request.args.get("q", "") or "")[:200]
 
             if source == "episodes":
+                # Raw SQL: the "unfiltered or substring-match" OR predicate
+                # can't be expressed by the AND-only structured filter builder.
+                cursor = Database.conn().execute(
+                    "SELECT created_at, last_relevant_at, gist, location_name "
+                    "FROM episodes "
+                    "WHERE deleted_at IS NULL AND (? = '' OR gist LIKE ?) "
+                    "ORDER BY COALESCE(last_relevant_at, created_at) DESC, created_at DESC "
+                    "LIMIT ? OFFSET ?",
+                    (q, f"%{q}%", _RECORDS_LIMIT, offset),
+                )
                 rows = [
                     {
-                        "created": ep.created_at,
-                        "last_accessed": ep.last_relevant_at or ep.created_at,
-                        "value": ep.gist,
-                        "location_name": ep.location_name,
+                        "created": r["created_at"],
+                        "last_accessed": r["last_relevant_at"] or r["created_at"],
+                        "value": r["gist"],
+                        "location_name": r["location_name"],
                     }
-                    for ep in Episode.live()
-                    .filter("(? = '' OR gist LIKE ?)", q, f"%{q}%")
-                    .order_by("COALESCE(last_relevant_at, created_at) DESC, created_at DESC")
-                    .limit(_RECORDS_LIMIT)
-                    .offset(offset)
-                    .get()
+                    for r in cursor.fetchall()
                 ]
             else:
                 kind = "user_specific" if source == "user" else "system"
@@ -441,7 +447,7 @@ class ObservabilityCompactionResource(Resource):
             from services import compaction_persistence, locale_service
             # MAIN-spine checkpoint (for_turn_id NULL): the watermark is a turn_id.
             # The DTO field keeps its name so the existing Brain view needs no change.
-            record = compaction_persistence.get_compaction("user", None)
+            record = compaction_persistence.get_compaction(Channel.USER.value, None)
             if not record:
                 return CompactionView(compaction=None)
             return CompactionView(
@@ -587,10 +593,9 @@ class SettingsResource(Resource):
     @responds(Setting, code=200)
     def get(self, key: str) -> Setting | ResponseReturnValue:
         """Read an opaque setting by key."""
-        from services.settings_service import SettingsService
+        from models.setting import Setting as SettingModel
         try:
-            svc = SettingsService()
-            return Setting(key=key, value=svc.get(key))
+            return Setting(key=key, value=SettingModel.get(key))
         except Exception as e:
             logger.error(f"[REST API] get setting error: {e}")
             return error("Failed to get setting", 500)
@@ -603,14 +608,13 @@ class SettingsResource(Resource):
     @expects(SettingWrite)
     def put(self, key: str, dto: SettingWrite) -> Setting | ResponseReturnValue:
         """Write (or, on empty/falsey value, delete) an opaque setting."""
-        from services.settings_service import SettingsService
+        from models.setting import Setting as SettingModel
         try:
-            svc = SettingsService()
             value = dto.value
             if not value:
-                svc.delete(key)
+                SettingModel.delete(key)
             else:
-                svc.set(key, str(value))
+                SettingModel.set(key, str(value))
             return Setting(key=key, value=value or None)
         except Exception as e:
             logger.error(f"[REST API] set setting error: {e}")
@@ -664,12 +668,11 @@ class NetworkResource(Resource):
     @responds(NetworkState, code=200)
     def get(self) -> NetworkState | ResponseReturnValue:
         """Current deployment domain + TLS state for the System page."""
-        from services.settings_service import SettingsService
+        from models.setting import Setting as SettingModel
         try:
-            svc = SettingsService()
             return NetworkState(
-                deployment_domain=svc.get(SettingsService.DEPLOYMENT_DOMAIN) or "",
-                ssl_enabled=svc.get_bool(SettingsService.SSL_ENABLED),
+                deployment_domain=SettingModel.get(SettingModel.DEPLOYMENT_DOMAIN) or "",
+                ssl_enabled=SettingModel.get_bool(SettingModel.SSL_ENABLED),
                 ssl_cert_present=FileMapperService.get_ssl_cert_path().is_file(),
             )
         except Exception:
@@ -690,7 +693,7 @@ class NetworkResource(Resource):
         by loading it; ``ssl_enabled`` is honored only when a usable cert is on
         file, so a bad upload can never crash-loop the server.
         """
-        from services.settings_service import SettingsService
+        from models.setting import Setting as SettingModel
         from services.restart_service import request_restart
         try:
             if (dto.ssl_cert is None) != (dto.ssl_key is None):
@@ -704,9 +707,8 @@ class NetworkResource(Resource):
             if dto.ssl_enabled and not cert_ready:
                 return error("Cannot enable SSL without a certificate and key", 422)
 
-            svc = SettingsService()
-            svc.set(SettingsService.DEPLOYMENT_DOMAIN, dto.deployment_domain)
-            svc.set_bool(SettingsService.SSL_ENABLED, dto.ssl_enabled)
+            SettingModel.set(SettingModel.DEPLOYMENT_DOMAIN, dto.deployment_domain)
+            SettingModel.set_bool(SettingModel.SSL_ENABLED, dto.ssl_enabled)
 
             request_restart()
             return NetworkUpdateResult(ssl_enabled=dto.ssl_enabled, restarting=True)

@@ -28,11 +28,14 @@ class TurnExecution(Model):
     lifecycle frame AND the REST ``TurnExecutionDTO`` payload (dual shape, §6.3);
     ``type`` rides along because it is a column, not a transient envelope."""
 
-    __table__: ClassVar[str] = "turn_executions"
     __columns__: ClassVar[tuple[str, ...]] = (
         "id", "channel", "type", "turn_id", "started_at", "ended_at",
         "cancel_requested", "state", "stop_reason",
     )
+
+    @classmethod
+    def get_table(cls) -> str:
+        return "turn_executions"
 
     #: The ``state`` vocabulary — one non-terminal, three terminal (DB CHECK, §6.5).
     WORKING: ClassVar[str] = "working"
@@ -58,9 +61,9 @@ class TurnExecution(Model):
         the match is channel-scoped; ``ended_at IS NULL`` restricts it to the one
         still-running row (mirrors today's ``request_cancel_by_turn`` targeting)."""
         return (
-            cls.filter("channel = ?", channel)
-            .filter("turn_id = ?", turn_id)
-            .filter("ended_at IS NULL")
+            cls.filter("channel", channel)
+            .filter("turn_id", turn_id)
+            .filter("ended_at", None, "IS")
             .first()
         )
 
@@ -69,4 +72,4 @@ class TurnExecution(Model):
         """Every row a killed process left open (``ended_at IS NULL``) — the boot
         orphan sweep reads these and stamps each ``crashed`` (§6.6: a real DB read,
         never a fabricated in-memory row)."""
-        return cls.filter("ended_at IS NULL").get()
+        return cls.filter("ended_at", None, "IS").get()

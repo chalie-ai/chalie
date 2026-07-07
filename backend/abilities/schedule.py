@@ -218,15 +218,19 @@ class ScheduleAbility(Ability):
         return self._PARAMETERS
 
     def run(self, params: dict[str, object]) -> ToolResult:
+        mp = self.mp
+        if mp is None:
+            raise RuntimeError("schedule.run() dispatched without a bound MessageProcessor")
+
         action = (cast(str, params.get(Keys.action)) or "list").lower()
 
         if action == "create":
-            channel = getattr(getattr(self.mp, "config", None), "channel", "") or ""
+            channel = mp.config.channel
             return _create(channel, params)
         if action == "list":
             return _list()
         if action == "search":
-            return _search(self, params, self.mp)
+            return _search(self, params, mp)
         if action == "cancel":
             return _cancel(params)
         if action == "enable":
@@ -247,7 +251,7 @@ class ScheduleAbility(Ability):
             cancel_result = _cancel(params)
             if cancel_result.status == "error":
                 return cancel_result
-            channel = getattr(getattr(self.mp, "config", None), "channel", "") or ""
+            channel = mp.config.channel
             return _create(channel, params)
 
         # Unreachable in practice (ACTION_REQUIRED pre-gates unknown actions);

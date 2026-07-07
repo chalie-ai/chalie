@@ -77,7 +77,7 @@ class TurnExecutionService:
         if execution is None or execution.id is None:
             return False
         try:
-            row = TurnExecution.filter("id = ?", execution.id).first()
+            row = TurnExecution.filter("id", execution.id).first()
         except Exception as exc:
             logger.warning("[TurnExecutionService] should_stop failed for id=%s: %s", execution.id, exc)
             return False
@@ -189,8 +189,8 @@ class TurnExecutionService:
         target (channel, turn_id) reads it via ``self.mp``)."""
         try:
             return (
-                TurnExecution.filter("channel = ?", self.mp.channel)
-                .filter("turn_id = ?", self.mp.turn_id)
+                TurnExecution.filter("channel", self.mp.channel)
+                .filter("turn_id", self.mp.turn_id)
                 .order_by("id DESC")
                 .limit(1)
                 .first()

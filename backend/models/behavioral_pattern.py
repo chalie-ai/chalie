@@ -78,7 +78,7 @@ class BehavioralPattern(DataGraphRow):
         the exact key, newest first). ``source`` records which pass produced the
         row (its config channel)."""
         now = utc_now().isoformat()
-        existing = cls.live().filter("key = ?", validated["name"]).order_by("id DESC").first()
+        existing = cls.live().filter("key", validated["name"]).order_by("id DESC").first()
         if existing is not None:
             row_id, confidence = existing._reinforce(validated, now, source)
             return row_id, confidence, True

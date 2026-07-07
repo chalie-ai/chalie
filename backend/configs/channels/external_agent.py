@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from configs.channels._common import DEFAULT_ALWAYS_AVAILABLE
+from configs.enums.channels import Channel
 from configs.enums.policy_channel import PolicyChannel
 from services.processor_config import ProcessorConfig
 
@@ -25,7 +26,7 @@ class EAMPConfig(ProcessorConfig):
         loop_in_human: bool,
     ) -> None:
         super().__init__(
-            channel=f"external-agent:{agent_name}",
+            channel=Channel.for_external_agent(agent_name),
             role="external_agent",
             policy_channel=PolicyChannel.EXTERNAL_AGENT,
             always_available=DEFAULT_ALWAYS_AVAILABLE,

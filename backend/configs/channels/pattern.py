@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from configs.enums.channels import Channel
 from configs.enums.policy_channel import PolicyChannel
 from services.processor_config import ProcessorConfig
 
@@ -15,7 +16,7 @@ class PatternConfig(ProcessorConfig):
 
     def __init__(self, window_start: int, window_end: int) -> None:
         super().__init__(
-            channel="pattern_match",
+            channel=Channel.PATTERN_MATCH.value,
             role="pattern_match",
             policy_channel=PolicyChannel.SUBCONSCIOUS,
             always_available=["save_pattern", "save_graph"],

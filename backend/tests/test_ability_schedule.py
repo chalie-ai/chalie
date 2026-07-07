@@ -15,11 +15,11 @@ the ``'schedule'`` channel). There is no ``item_type``/``due_at``/``status``/
 floor has passed and whose cron fields match the current wall-clock minute.
 Cancel is a hard ``DELETE`` (no soft-cancel state to assert on).
 
-Calls ``ScheduleAbility().run(params)`` directly against a real, fully-migrated
-SQLite database (the ``db`` fixture). ``self.mp`` is left ``None`` —
-``_create``/``_cancel`` read ``self.mp.config.channel`` via a safe ``getattr``
-chain that degrades to ``""`` on ``None``, so no fake/mock collaborator is
-needed.
+Calls ``run(params)`` directly against a real, fully-migrated SQLite database
+(the ``db`` fixture), on an ability bound to a real inert ``MessageProcessor``
+under ``ScheduledConfig`` — the same collaborator the dispatcher binds in
+production (construction is side-effect-free, §6.13/I2). ``run()`` raises on an
+unbound instance by contract, so no fake/mock collaborator is possible.
 """
 
 import json
@@ -30,6 +30,8 @@ from typing import cast
 import pytest
 
 from abilities.schedule import ScheduleAbility
+from configs.channels.scheduled import ScheduledConfig
+from controllers.message_processor import MessageProcessor
 from services.time_utils import utc_now
 
 pytestmark = pytest.mark.unit
@@ -67,6 +69,12 @@ def _row(db: sqlite3.Connection, item_id: object) -> "dict[str, object] | None":
     }
 
 
+def _ability() -> ScheduleAbility:
+    """A schedule ability bound the way the dispatcher binds it in production:
+    to a real, inert ``MessageProcessor`` on the ``schedule`` channel."""
+    return ScheduleAbility(MessageProcessor(ScheduledConfig()))
+
+
 def _count(db: sqlite3.Connection) -> int:
     return cast(int, db.execute("SELECT COUNT(*) FROM scheduled_items").fetchone()[0])
 
@@ -80,7 +88,7 @@ def _record_of(tr: object) -> dict[str, object]:
 
 def test_create_persists_prompt_only_row_with_local_cron_fields_verbatim(db: sqlite3.Connection) -> None:
     _seed_timezone(db)
-    tr = ScheduleAbility().run({
+    tr = _ability().run({
         "action": "create", "message": "Water the plants",
         "day": None, "hour": 14, "minute": 30,  # E F F — every day at 14:30
     })
@@ -107,7 +115,7 @@ def test_create_persists_prompt_only_row_with_local_cron_fields_verbatim(db: sql
 def test_create_without_start_at_defaults_to_now(db: sqlite3.Connection) -> None:
     _seed_timezone(db)
     before = utc_now()
-    tr = ScheduleAbility().run({
+    tr = _ability().run({
         "action": "create", "message": "Every-minute ping",
         # day/hour/minute all omitted — E E E, every minute; start_at omitted too.
     })
@@ -138,7 +146,7 @@ def test_create_rejects_illegal_every_prefix_shapes(
     _seed_timezone(db)
     before = _count(db)
 
-    tr = ScheduleAbility().run({
+    tr = _ability().run({
         "action": "create", "message": "Illegal shape",
         "day": day, "hour": hour, "minute": minute,
     })
@@ -153,13 +161,13 @@ def test_create_rejects_illegal_every_prefix_shapes(
 
 def test_cancel_by_message_hard_deletes_the_row(db: sqlite3.Connection) -> None:
     _seed_timezone(db)
-    create = ScheduleAbility().run({
+    create = _ability().run({
         "action": "create", "message": "Dentist appointment",
         "day": None, "hour": 15, "minute": 0,
     })
     item_id = _record_of(create)["id"]
 
-    tr = ScheduleAbility().run({"action": "cancel", "message": "Dentist"})
+    tr = _ability().run({"action": "cancel", "message": "Dentist"})
 
     assert tr.status == "success"
     assert _row(db, item_id) is None, "cancel must hard-delete the row, not soft-cancel it"
@@ -167,16 +175,16 @@ def test_cancel_by_message_hard_deletes_the_row(db: sqlite3.Connection) -> None:
 
 def test_cancelled_id_is_never_reissued_by_a_later_create(db: sqlite3.Connection) -> None:
     _seed_timezone(db)
-    first = ScheduleAbility().run({
+    first = _ability().run({
         "action": "create", "message": "First schedule",
         "day": None, "hour": 10, "minute": 0,
     })
     first_id = cast(int, _record_of(first)["id"])
 
-    cancel = ScheduleAbility().run({"action": "cancel", "item_id": str(first_id)})
+    cancel = _ability().run({"action": "cancel", "item_id": str(first_id)})
     assert cancel.status == "success"
 
-    second = ScheduleAbility().run({
+    second = _ability().run({
         "action": "create", "message": "Second schedule",
         "day": None, "hour": 11, "minute": 0,
     })
@@ -189,7 +197,7 @@ def test_cancelled_id_is_never_reissued_by_a_later_create(db: sqlite3.Connection
 
 def test_cancel_without_target_errors_cancel_target_required(db: sqlite3.Connection) -> None:
     _seed_timezone(db)
-    tr = ScheduleAbility().run({"action": "cancel"})
+    tr = _ability().run({"action": "cancel"})
 
     assert tr.status == "error"
     assert tr.code == "cancel-target-required"
@@ -200,13 +208,13 @@ def test_cancel_without_target_errors_cancel_target_required(db: sqlite3.Connect
 
 def test_update_hard_deletes_target_and_creates_fresh_row_with_new_values(db: sqlite3.Connection) -> None:
     _seed_timezone(db)
-    create = ScheduleAbility().run({
+    create = _ability().run({
         "action": "create", "message": "Call the plumber",
         "day": None, "hour": 15, "minute": 0,
     })
     old_id = cast(int, _record_of(create)["id"])
 
-    tr = ScheduleAbility().run({
+    tr = _ability().run({
         "action": "update", "item_id": str(old_id),
         "message": "Call the electrician", "day": None, "hour": 17, "minute": 0,
     })
@@ -226,17 +234,17 @@ def test_update_hard_deletes_target_and_creates_fresh_row_with_new_values(db: sq
 
 def test_disable_then_enable_toggles_the_enabled_flag(db: sqlite3.Connection) -> None:
     _seed_timezone(db)
-    create = ScheduleAbility().run({
+    create = _ability().run({
         "action": "create", "message": "Weekly check-in",
         "day": None, "hour": 9, "minute": 0,
     })
     item_id = cast(int, _record_of(create)["id"])
     assert cast("dict[str, object]", _row(db, item_id))["enabled"] == 1
 
-    disable = ScheduleAbility().run({"action": "disable", "item_id": str(item_id)})
+    disable = _ability().run({"action": "disable", "item_id": str(item_id)})
     assert disable.status == "success"
     assert cast("dict[str, object]", _row(db, item_id))["enabled"] == 0
 
-    enable = ScheduleAbility().run({"action": "enable", "item_id": str(item_id)})
+    enable = _ability().run({"action": "enable", "item_id": str(item_id)})
     assert enable.status == "success"
     assert cast("dict[str, object]", _row(db, item_id))["enabled"] == 1

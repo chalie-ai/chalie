@@ -5,7 +5,8 @@ import time
 import uuid
 from typing import Dict, cast
 
-from services.database import Database
+from configs.enums.channels import Channel
+from models.transcript import Transcript
 from services.memory_client import MemoryClientService
 from services.memory_store import MemoryStore
 
@@ -75,7 +76,9 @@ class MetricsService:
         # writes exactly one transcript row with channel='user' AND role='user'
         # (UMP hardcodes both), so the value is an exact on-read COUNT. Exact as
         # long as history compaction never hard-deletes user transcript rows.
-        cast(Dict[str, object], dashboard['counters'])['user_messages_total'] = self._count_user_messages()
+        cast(Dict[str, object], dashboard['counters'])['user_messages_total'] = (
+            Transcript.filter("role", "user").filter("channel", Channel.USER.value).count()
+        )
 
         timing_operations = [
             'embedding', 'response_generation',
@@ -94,20 +97,3 @@ class MetricsService:
                 }
 
         return dashboard
-
-    @staticmethod
-    def _count_user_messages() -> int:
-        """COUNT of user-channel user-role transcript rows.
-
-        Best-effort: returns 0 if the transcript table is unavailable (e.g.
-        store-only test contexts) so the dashboard never fails on a missing DB.
-        """
-        try:
-            conn = Database.conn()
-            row = conn.execute(
-                "SELECT COUNT(*) FROM transcript "
-                "WHERE role = 'user' AND channel = 'user'"
-            ).fetchone()
-            return int(row[0]) if row else 0
-        except Exception:
-            return 0

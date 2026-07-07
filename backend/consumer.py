@@ -160,9 +160,8 @@ if __name__ == "__main__":
 
     # Initialize API key
     try:
-        from services.settings_service import SettingsService
-        settings_service = SettingsService()
-        api_key = settings_service.get_api_key_or_generate()
+        from models.setting import Setting
+        api_key = Setting.get_api_key_or_generate()
         logging.info(f"[Settings] API key initialized (key: ...{api_key[-8:]})")
     except Exception as e:
         logging.warning(f"Settings initialization failed: {e}")

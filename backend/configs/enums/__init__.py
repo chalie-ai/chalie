@@ -10,12 +10,14 @@
 
 from __future__ import annotations
 
+from configs.enums.channels import Channel
 from configs.enums.config_type import ConfigTypeEnum
 from configs.enums.policy_channel import PolicyChannel
 from configs.enums.provider_type import ProviderType
 from configs.enums.thinking_level import ThinkingLevel
 
 __all__ = [
+    "Channel",
     "ConfigTypeEnum",
     "PolicyChannel",
     "ProviderType",

@@ -123,15 +123,14 @@ class RuntimeDepsService:
         removing the stale stamp (one-time migration).
         """
         try:
-            from services.settings_service import SettingsService
-            settings = SettingsService()
-            voice_enabled = settings.get("voice_enabled")
+            from models.setting import Setting
+            voice_enabled = Setting.get("voice_enabled")
 
             if voice_enabled is None:
                 stamp = FileMapperService.get_chalie_root() / ".voice-deps-installed"
                 if stamp.exists():
                     voice_enabled = "true"
-                    settings.set("voice_enabled", "true")
+                    Setting.set("voice_enabled", "true")
                     stamp.unlink()
                     logger.info("[RuntimeDeps] Migrated legacy voice stamp → voice_enabled=true")
                 else:

@@ -47,13 +47,16 @@ class DataGraphRow(Model):
     gateway leaves ``KIND`` unset and passes the kind explicitly to
     :meth:`live`."""
 
-    __table__: ClassVar[str] = "data_graph"
     __columns__: ClassVar[tuple[str, ...]] = (
         "id", "kind", "key", "value", "storage_strength", "retrieval_weight",
         "salience_score", "evidence_count", "first_seen_at", "last_confirmed_at",
         "last_accessed_at", "source", "deleted_at", "active", "search_queries",
         "valid_from", "valid_to",
     )
+
+    @classmethod
+    def get_table(cls) -> str:
+        return "data_graph"
 
     # Real columns (annotation-only; populated by Model.__init__ from kwargs /
     # hydrate, so mypy knows their types on attribute access).
@@ -129,7 +132,7 @@ class DataGraphRow(Model):
         ``live()``; the generic :class:`DataGraph` gateway (which spans kinds)
         passes the kind explicitly."""
         resolved = kind if kind is not None else cls.KIND
-        return cls.filter("kind = ?", resolved).filter("active = 1").filter("deleted_at IS NULL")
+        return cls.filter("kind", resolved).filter("active", 1).filter("deleted_at", None, "IS")
 
     @classmethod
     def search(cls, query: str, k: int) -> list[Self]:
@@ -253,8 +256,8 @@ class DataGraphRow(Model):
         only supersession neighbours are its own predecessors — read backward
         off the temporal chain rather than an edge table (out of scope; the
         richer relatedness graph stays deleted)."""
-        return (cls.filter("kind = ?", cls.KIND).filter("key = ?", key)
-                   .filter("valid_to IS NOT NULL")
+        return (cls.filter("kind", cls.KIND).filter("key", key)
+                   .filter("valid_to", None, "IS NOT")
                    .order_by("valid_from DESC")
                    .limit(limit).get())
 
@@ -266,8 +269,7 @@ class DataGraphRow(Model):
         if not signals:
             return {}
         ids = list(signals.keys())
-        placeholders = ",".join("?" * len(ids))
-        rows = {row.id: row for row in cls.filter(f"id IN ({placeholders})", *ids).get()}
+        rows = {row.id: row for row in cls.filter_in("id", ids).get()}
         return {rowid: {"row": rows[rowid], **sig} for rowid, sig in signals.items() if rowid in rows}
 
     @classmethod

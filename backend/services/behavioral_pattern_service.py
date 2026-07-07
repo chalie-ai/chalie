@@ -79,12 +79,10 @@ class BehavioralPatternService:
         out."""
         if not touched_keys:
             return set()
-        keys = sorted(touched_keys)
-        placeholders = ", ".join("?" * len(keys))
         rows = (
             BehavioralPattern.live()
-            .filter("source = ?", self.mp.config.channel)
-            .filter(f"key IN ({placeholders})", *keys)
+            .filter("source", self.mp.config.channel)
+            .filter_in("key", sorted(touched_keys))
             .get()
         )
         return {cast("int", row.id) for row in rows if row.id is not None}

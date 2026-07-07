@@ -19,9 +19,12 @@ from __future__ import annotations
 import copy
 import typing
 from abc import ABC, abstractmethod
-from typing import Callable, ClassVar, cast
+from typing import TYPE_CHECKING, Callable, ClassVar, cast
 
 from abilities._result import ToolParamError, ToolResult
+
+if TYPE_CHECKING:
+    from controllers.message_processor import MessageProcessor
 
 # Sentinel distinguishing "no default supplied" from an explicit default of None
 # in Ability.param(): a required param with no value raises; an optional one with
@@ -97,7 +100,7 @@ class Ability(ABC):
     # "no pre-validation" so unmigrated tools are untouched by the contract.
     ACTION_REQUIRED: ClassVar[dict[str, tuple[str, ...]]] = {}
 
-    def __init__(self, mp: "object | None" = None) -> None:
+    def __init__(self, mp: "MessageProcessor | None" = None) -> None:
         self.mp = mp
         # Set by ToolDispatcher._run() immediately before run(): the flattened
         # client telemetry dict (location / locale / time / currency …) or None
@@ -240,7 +243,7 @@ class Ability(ABC):
         if "act_summary" not in required:
             required.append("act_summary")
 
-        if getattr(getattr(self.mp, "config", None), "SUPPORTS_ASYNC", False):
+        if self.mp is not None and self.mp.config.SUPPORTS_ASYNC:
             properties["async"] = dict(_ASYNC_PROPERTY)
 
         return schema

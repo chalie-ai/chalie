@@ -20,6 +20,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, ClassVar
 
+from configs.enums.channels import Channel
 from services.processor_config import ProcessorConfig
 
 if TYPE_CHECKING:
@@ -33,7 +34,7 @@ class VisionConfig(ProcessorConfig):
 
     def __init__(self, policy_channel: "PolicyChannel") -> None:
         super().__init__(
-            channel="delegate:vision",
+            channel=Channel.DELEGATE_VISION.value,
             role="vision",
             policy_channel=policy_channel,
             always_available=[],

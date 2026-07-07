@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 
+from configs.enums.channels import Channel
 from configs.enums.policy_channel import PolicyChannel
 from services.processor_config import ProcessorConfig
 
@@ -100,7 +101,7 @@ class FactExtractionConfig(ProcessorConfig):
 
     def __init__(self, gist: str, neighbours: list[object]) -> None:
         super().__init__(
-            channel="fact_extraction",
+            channel=Channel.FACT_EXTRACTION.value,
             role="fact_extraction",
             policy_channel=PolicyChannel.SUBCONSCIOUS,
             always_available=[],

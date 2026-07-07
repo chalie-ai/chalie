@@ -23,8 +23,11 @@ from models.model import Model
 class Compaction(Model):
     """One ``compactions`` row: a checkpoint on a MAIN or FORK watermark axis."""
 
-    __table__ = "compactions"
     __columns__ = ("id", "channel", "for_turn_id", "compacted_up_to", "content", "created_at")
+
+    @classmethod
+    def get_table(cls) -> str:
+        return "compactions"
 
     channel: str
     for_turn_id: int | None
@@ -38,8 +41,8 @@ class Compaction(Model):
         or ``None``. ``compacted_up_to`` is a turn_id. Ports ``get_compaction``'s
         ``channel = ? AND for_turn_id IS NULL ORDER BY id DESC LIMIT 1``."""
         return (
-            cls.filter("channel = ?", channel)
-            .filter("for_turn_id IS NULL")
+            cls.filter("channel", channel)
+            .filter("for_turn_id", None, "IS")
             .order_by("id DESC")
             .first()
         )
@@ -50,8 +53,8 @@ class Compaction(Model):
         ``compacted_up_to`` is a transcript.id. Ports ``get_compaction``'s
         ``channel = ? AND for_turn_id = ? ORDER BY id DESC LIMIT 1``."""
         return (
-            cls.filter("channel = ?", channel)
-            .filter("for_turn_id = ?", for_turn_id)
+            cls.filter("channel", channel)
+            .filter("for_turn_id", for_turn_id)
             .order_by("id DESC")
             .first()
         )

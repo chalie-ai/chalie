@@ -21,6 +21,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, ClassVar
 
+from configs.enums.channels import Channel
 from configs.enums.policy_channel import PolicyChannel
 from services.processor_config import ProcessorConfig
 
@@ -41,7 +42,7 @@ class ScheduledConfig(ProcessorConfig):
 
     def __init__(self) -> None:
         super().__init__(
-            channel="schedule",
+            channel=Channel.SCHEDULE.value,
             role="user",
             policy_channel=PolicyChannel.SUBCONSCIOUS,
             always_available=list(DEFAULT_ALWAYS_AVAILABLE),

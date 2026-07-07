@@ -24,6 +24,7 @@ from typing import ClassVar, cast
 from abilities._ability import Ability
 from abilities._params import Keys
 from abilities._result import ToolResult
+from configs.enums.channels import Channel
 from services.database import Database
 from services.file_mapper_service import FileMapperService
 from utils.skills_io import (
@@ -165,7 +166,7 @@ class SkillBuilderAbility(Ability):
         # swallow: an unexpected failure bubbles to the dispatcher's _run, which
         # renders it as code=unhandled-exception (errors must surface).
         action = params.get(Keys.action, "list")
-        channel = getattr(getattr(self.mp, "config", None), "channel", None)
+        channel = self.mp.config.channel
         logger.info("%s action=%s channel=%s", _LOG_PREFIX, action, channel)
 
         if action == "create":
@@ -183,10 +184,8 @@ class SkillBuilderAbility(Ability):
         # ONE skill per turn: the instant a create/edit succeeds, halt the recursive
         # ACT loop so the model cannot keep emitting near-duplicate writes. Other
         # channels (a user explicitly building a skill) are unaffected.
-        if channel == "skills_building" and action in ("create", "edit") and result.status == "success":
-            request_cancel = getattr(self.mp, "request_cancel", None)
-            if request_cancel is not None:
-                request_cancel()
+        if channel == Channel.SKILLS_BUILDING and action in ("create", "edit") and result.status == "success":
+            self.mp.turn_execution_service.cancel()
         return result
 
 

@@ -22,7 +22,7 @@ internal projection, distinct from this wire-safe whitelist.
 from __future__ import annotations
 
 import json
-from typing import ClassVar, Self
+from typing import ClassVar, Self, cast
 
 from models.model import Model
 
@@ -30,7 +30,6 @@ from models.model import Model
 class ToolCall(Model):
     """One ``tool_calls`` row: field storage + CRUD + wire-safe projection."""
 
-    __table__: ClassVar[str] = "tool_calls"
     __columns__: ClassVar[tuple[str, ...]] = (
         "id",
         "transcript_id",
@@ -42,6 +41,10 @@ class ToolCall(Model):
         "ended_at",
         "state",
     )
+
+    @classmethod
+    def get_table(cls) -> str:
+        return "tool_calls"
 
     # The ``tool_calls.state`` vocabulary — one non-terminal, two terminal
     # (§6.5, DB CHECK).
@@ -133,7 +136,14 @@ class ToolCall(Model):
         — the narrow single-anchor read. Equivalent to :meth:`by_turn` for a turn
         with a single input row; the turn-keyed read is preferred in the loop
         because it also spans async / delegate re-entries."""
-        return cls.filter("transcript_id = ?", transcript_id).order_by("id").get()
+        return cls.filter("transcript_id", transcript_id).order_by("id").get()
+
+    @classmethod
+    def by_transcripts(cls, transcript_ids: list[int]) -> list[Self]:
+        """All tool calls anchored to any of the given input rows, ordered by
+        autoincrement id — the batch-anchor read. Empty input short-circuits to
+        ``[]``."""
+        return cls.filter_in("transcript_id", transcript_ids).order_by("id").get()
 
     @classmethod
     def memory_recall_results(cls, transcript_ids: list[int]) -> list[str]:
@@ -141,14 +151,10 @@ class ToolCall(Model):
         anchored to the given input rows — the recall envelopes an episode
         window already cited (``tool_name='memory'`` covers both auto-seed and
         LLM-invoked recall). Empty input short-circuits to ``[]``."""
-        if not transcript_ids:
-            return []
-        placeholders = ",".join("?" * len(transcript_ids))
-        cursor = cls._bound_connection().execute(
-            f"SELECT result FROM tool_calls "
-            f"WHERE transcript_id IN ({placeholders}) "
-            f"  AND tool_name = 'memory' "
-            f"  AND result IS NOT NULL",
-            transcript_ids,
-        )
-        return [row[0] for row in cursor.fetchall()]
+        return [
+            cast("str", result)
+            for result in cls.filter_in("transcript_id", transcript_ids)
+            .filter("tool_name", "memory")
+            .filter("result", None, "IS NOT")
+            .pluck("result")
+        ]

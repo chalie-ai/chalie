@@ -253,7 +253,9 @@ class BrowserAbility(Ability):
         })
 
     def _session_key(self) -> int:
-        return getattr(self.mp, "uid", None) or 0
+        if self.mp is None:
+            raise RuntimeError("browser._session_key() requires a bound MessageProcessor")
+        return self.mp.uid or 0
 
     @staticmethod
     def _reply(envelope: dict[str, object]) -> ToolResult:

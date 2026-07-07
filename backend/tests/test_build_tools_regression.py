@@ -21,8 +21,9 @@ pytestmark = pytest.mark.unit
 
 def _make_mp(active: list[str], config: ProcessorConfig | None = None) -> MessageProcessor:
     mp = object.__new__(MessageProcessor)
-    if config is not None:
-        mp.config = config
+    # Schema injection reads mp.config directly (typed contract) — every bound
+    # processor has one, so the fake must too.
+    mp.config = config if config is not None else UserConfig({"channel": "user"})
     mp.active_tools = list(active)
     return mp
 

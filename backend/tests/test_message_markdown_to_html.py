@@ -12,7 +12,7 @@ from configs.channels.dmn import DmnConfig
 from controllers.message_processor import MessageProcessor
 from models.provider_response import ProviderResponse
 from services.processor_config import ProcessorConfig
-from services.transcript_service import Transcript
+from models.transcript import Transcript
 
 pytestmark = pytest.mark.unit
 
@@ -46,7 +46,7 @@ def _recent(channel: str, limit: int = 10) -> list[dict[str, object]]:
     """The channel's last ``limit`` transcript rows, oldest first — composed from
     the model's Query primitives (the same ``filter``/``order_by``/``get``/
     ``to_dict()`` shape ``Transcript.by_turn`` uses)."""
-    rows = Transcript.filter("channel = ?", channel).order_by("id DESC").limit(limit).get()
+    rows = Transcript.filter("channel", channel).order_by("id DESC").limit(limit).get()
     rows.reverse()
     return [row.to_dict() for row in rows]
 

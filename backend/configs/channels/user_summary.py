@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from configs.enums.channels import Channel
 from configs.enums.policy_channel import PolicyChannel
 from services.processor_config import ProcessorConfig
 
@@ -10,7 +11,7 @@ class UserSummaryConfig(ProcessorConfig):
 
     def __init__(self) -> None:
         super().__init__(
-            channel="user_summary",
+            channel=Channel.USER_SUMMARY.value,
             role="user_summary",
             policy_channel=PolicyChannel.SUBCONSCIOUS,
             always_available=[],

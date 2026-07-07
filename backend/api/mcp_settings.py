@@ -22,13 +22,13 @@ from typing import TYPE_CHECKING
 from flask.typing import ResponseReturnValue
 from flask_restx import Namespace, Resource
 
+from models.setting import Setting
 from .auth import require_session
 from .dto import Error, expects, register_dto, responds
 from .dto.boundary import error
 from .dto.mcp_settings import McpServerSettings, McpSettingsUpdate, RegenerateTokenResult
 
 if TYPE_CHECKING:
-    from services.settings_service import SettingsService
     from services.wrapper_auth_service import WrapperAuthService
 
 logger = logging.getLogger(__name__)
@@ -52,15 +52,14 @@ register_dto(
 _M = mcp_settings_ns.models
 
 
-def _get_services() -> "tuple[SettingsService, WrapperAuthService]":
-    from services.settings_service import SettingsService
+def _get_auth_service() -> "WrapperAuthService":
     from services.wrapper_auth_service import WrapperAuthService
 
-    return SettingsService(), WrapperAuthService()
+    return WrapperAuthService()
 
 
-def _get_stored_token(settings: "SettingsService") -> str | None:
-    return settings.get("mcp_server_token")
+def _get_stored_token() -> str | None:
+    return Setting.get("mcp_server_token")
 
 
 def _short_id() -> str:
@@ -68,15 +67,15 @@ def _short_id() -> str:
     return uuid.uuid4().hex[:8]
 
 
-def _settings_dto(settings: "SettingsService", auth_svc: "WrapperAuthService") -> McpServerSettings:
+def _settings_dto(auth_svc: "WrapperAuthService") -> McpServerSettings:
     """Build the read DTO from the settings keys, preserving the truthiness/port parsing."""
-    enabled = settings.get("mcp_server_enabled")
-    port = settings.get("mcp_server_port") or str(_DEFAULT_PORT)
-    wrapper_id = settings.get("mcp_server_token_wrapper_id")
+    enabled = Setting.get("mcp_server_enabled")
+    port = Setting.get("mcp_server_port") or str(_DEFAULT_PORT)
+    wrapper_id = Setting.get("mcp_server_token_wrapper_id")
 
     token_display = None
     if wrapper_id and auth_svc.get_wrapper(wrapper_id):
-        token_display = _get_stored_token(settings)
+        token_display = _get_stored_token()
 
     return McpServerSettings(
         enabled=enabled is None or str(enabled).lower() not in ("false", "0", "no"),
@@ -95,8 +94,8 @@ class McpSettingsResource(Resource):
     def get(self) -> McpServerSettings | ResponseReturnValue:
         """Read the MCP server settings record."""
         try:
-            settings, auth_svc = _get_services()
-            return _settings_dto(settings, auth_svc)
+            auth_svc = _get_auth_service()
+            return _settings_dto(auth_svc)
         except Exception as exc:
             logger.exception("[MCP SETTINGS] GET failed: %s", exc)
             return error(_ERR_READ, 500)
@@ -111,11 +110,10 @@ class McpSettingsResource(Resource):
     def put(self, dto: McpSettingsUpdate) -> None | ResponseReturnValue:
         """Partially update the MCP server settings (only provided fields are written)."""
         try:
-            settings, _ = _get_services()
             if dto.enabled is not None:
-                settings.set("mcp_server_enabled", "true" if dto.enabled else "false")
+                Setting.set("mcp_server_enabled", "true" if dto.enabled else "false")
             if dto.port is not None:
-                settings.set("mcp_server_port", str(dto.port))
+                Setting.set("mcp_server_port", str(dto.port))
             return None
         except Exception as exc:
             logger.exception("[MCP SETTINGS] PUT failed: %s", exc)
@@ -131,9 +129,9 @@ class RegenerateTokenResource(Resource):
     def post(self) -> RegenerateTokenResult | ResponseReturnValue:
         """Mint a fresh MCP server bearer token, revoking the prior one if present."""
         try:
-            settings, auth_svc = _get_services()
+            auth_svc = _get_auth_service()
 
-            old_wrapper_id = settings.get("mcp_server_token_wrapper_id")
+            old_wrapper_id = Setting.get("mcp_server_token_wrapper_id")
             if old_wrapper_id:
                 auth_svc.revoke(old_wrapper_id)
 
@@ -142,8 +140,8 @@ class RegenerateTokenResource(Resource):
                 wrapper_id_override=f"__mcp_server_{_short_id()}__",
             )
 
-            settings.set("mcp_server_token_wrapper_id", wrapper_id)
-            settings.set("mcp_server_token", raw_token)
+            Setting.set("mcp_server_token_wrapper_id", wrapper_id)
+            Setting.set("mcp_server_token", raw_token)
 
             return RegenerateTokenResult(token=raw_token, wrapper_id=wrapper_id)
         except Exception as exc:

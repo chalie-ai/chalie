@@ -419,9 +419,8 @@ def _init_services() -> None:
 
     # Initialize API key
     try:
-        from services.settings_service import SettingsService
-        settings_service = SettingsService()
-        api_key = settings_service.get_api_key_or_generate()
+        from models.setting import Setting
+        api_key = Setting.get_api_key_or_generate()
         logger.info(f"[Settings] API key initialized (key: ...{api_key[-8:]})")
     except Exception as e:
         logger.warning(f"Settings initialization failed: {e}")
@@ -481,8 +480,8 @@ def _disable_ssl_setting() -> None:
     server runs HTTP — issuing ``Secure`` cookies the browser drops, locking out login.
     """
     try:
-        from services.settings_service import SettingsService
-        SettingsService().set_bool(SettingsService.SSL_ENABLED, False)
+        from models.setting import Setting
+        Setting.set_bool(Setting.SSL_ENABLED, False)
     except Exception:
         logger.exception("[SSL] could not clear ssl_enabled after TLS fallback")
 
@@ -495,8 +494,8 @@ def _resolve_ssl_context() -> "ssl.SSLContext | None":
     rather than crash-looping, and keeping the cookie Secure-scope honest.
     """
     try:
-        from services.settings_service import SettingsService
-        if not SettingsService().get_bool(SettingsService.SSL_ENABLED):
+        from models.setting import Setting
+        if not Setting.get_bool(Setting.SSL_ENABLED):
             return None
         from services.file_mapper_service import FileMapperService
         cert = FileMapperService.get_ssl_cert_path()

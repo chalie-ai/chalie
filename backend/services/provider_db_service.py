@@ -1,9 +1,10 @@
 """Provider database service — manages provider configuration in DB (SQLite)."""
 
 import logging
-import sqlite3
 from typing import Dict, Optional, List, cast
 
+from models.provider import Provider as ProviderModel
+from models.setting import Setting
 from services.database import Database
 from services.log_utils import safe
 
@@ -19,12 +20,6 @@ PROVIDER_IN_USE_MSG = (
 
 
 class ProviderDbService:
-
-    # Column list used by all SELECT queries — order matters for positional access
-    _PROVIDER_COLS = (
-        "id, name, platform, model, host, api_key, "
-        "dimensions, timeout, supports_vision, max_tokens"
-    )
 
     @staticmethod
     def _seal_api_key(value: str) -> str:
@@ -43,102 +38,53 @@ class ProviderDbService:
         except VaultLockedError:
             return None
 
-    def _row_to_provider(self, row: "sqlite3.Row | tuple[object, ...]") -> Dict[str, object]:
-        if isinstance(row, dict):
-            result = {
-                "id": row['id'],
-                "name": row['name'],
-                "platform": row['platform'],
-                "model": row['model'],
-                "host": row['host'],
-                "api_key": None,
-                "dimensions": row['dimensions'],
-                "timeout": row['timeout'],
-                "supports_vision": bool(row.get('supports_vision', 0)),
-                "max_tokens": row.get('max_tokens'),
-            }
-            if row.get('api_key'):
-                try:
-                    result["api_key"] = self._unseal_api_key(row['api_key'])
-                except Exception:
-                    logger.warning(
-                        "[Provider] Decrypt failed for provider id=%s", row['id'],
-                    )
-                    result["decrypt_failed"] = True
-            return result
-        # Positional access (tuple row)
-        result = {
-            "id": row[0],
-            "name": row[1],
-            "platform": row[2],
-            "model": row[3],
-            "host": row[4],
+    def _provider_to_dict(self, provider: ProviderModel) -> Dict[str, object]:
+        result: Dict[str, object] = {
+            "id": provider.id,
+            "name": provider.name,
+            "platform": provider.platform,
+            "model": provider.model,
+            "host": provider.host,
             "api_key": None,
-            "dimensions": row[6],
-            "timeout": row[7],
-            "supports_vision": bool(row[8]) if len(row) > 8 else False,
-            "max_tokens": row[9] if len(row) > 9 else None,
+            "dimensions": provider.dimensions,
+            "timeout": provider.timeout,
+            "supports_vision": bool(provider.supports_vision),
+            "max_tokens": provider.max_tokens,
         }
-        if row[5]:
+        if provider.api_key:
             try:
-                result["api_key"] = self._unseal_api_key(cast(Optional[str], row[5]))
+                result["api_key"] = self._unseal_api_key(provider.api_key)
             except Exception:
                 logger.warning(
-                    "[Provider] Decrypt failed for provider id=%s", row[0],
+                    "[Provider] Decrypt failed for provider id=%s", provider.id,
                 )
                 result["decrypt_failed"] = True
         return result
 
     def get_all_providers(self) -> List[Dict[str, object]]:
-        conn = Database.conn()
-        cursor = conn.cursor()
-        cursor.execute(
-            f"SELECT {self._PROVIDER_COLS} "
-            "FROM providers ORDER BY name"
-        )
-        rows = cursor.fetchall()
-        cursor.close()
-        return [self._row_to_provider(row) for row in rows]
+        return [self._provider_to_dict(p) for p in ProviderModel.order_by("name").get()]
 
     def list_providers_summary(self) -> List[Dict[str, object]]:
-        conn = Database.conn()
-        cursor = conn.cursor()
-        cursor.execute(
-            "SELECT id, name, platform, model, host, "
-            "(api_key IS NOT NULL) AS has_api_key, "
-            "dimensions, timeout, supports_vision "
-            "FROM providers ORDER BY name"
-        )
-        rows = cursor.fetchall()
-        cursor.close()
         return [
             {
-                "id": row[0],
-                "name": row[1],
-                "platform": row[2],
-                "model": row[3],
-                "host": row[4],
-                "api_key": "***" if row[5] else None,
-                "dimensions": row[6],
-                "timeout": row[7],
-                "supports_vision": bool(row[8]),
+                "id": row["id"],
+                "name": row["name"],
+                "platform": row["platform"],
+                "model": row["model"],
+                "host": row["host"],
+                "api_key": "***" if row["has_api_key"] else None,
+                "dimensions": row["dimensions"],
+                "timeout": row["timeout"],
+                "supports_vision": bool(cast(int, row["supports_vision"])),
             }
-            for row in rows
+            for row in ProviderModel.list_summaries()
         ]
 
     def get_provider_by_id(self, provider_id: int) -> Optional[Dict[str, object]]:
-        conn = Database.conn()
-        cursor = conn.cursor()
-        cursor.execute(
-            f"SELECT {self._PROVIDER_COLS} "
-            "FROM providers WHERE id = ?",
-            (provider_id,)
-        )
-        row = cursor.fetchone()
-        cursor.close()
-        if not row:
+        provider = ProviderModel.get(provider_id)
+        if provider is None:
             return None
-        return self._row_to_provider(row)
+        return self._provider_to_dict(provider)
 
     def create_provider(self, data: Dict[str, object]) -> Optional[Dict[str, object]]:
         default_model = data.get("model")
@@ -183,25 +129,18 @@ class ProviderDbService:
             }
             vision = 1 if probe_provider(probe_config) else 0
 
-        with Database.transaction() as conn:
-            cursor = conn.cursor()
-            cursor.execute(
-                "INSERT INTO providers (name, platform, model, host, api_key, "
-                "dimensions, timeout, supports_vision) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                (
-                    data["name"],
-                    data["platform"],
-                    default_model,
-                    data.get("host"),
-                    encrypted_key,
-                    data.get("dimensions"),
-                    data.get("timeout", 120),
-                    vision,
-                )
-            )
-            new_id = cursor.lastrowid
-            cursor.close()
+        with Database.transaction():
+            provider = ProviderModel(
+                name=data["name"],
+                platform=data["platform"],
+                model=default_model,
+                host=data.get("host"),
+                api_key=encrypted_key,
+                dimensions=data.get("dimensions"),
+                timeout=data.get("timeout", 120),
+                supports_vision=vision,
+            ).save()
+        new_id = provider.id
 
         # Backfill max_tokens + compact_at for the newly-created provider.
         # Same code path as the boot-time backfill — single source of truth.
@@ -229,13 +168,11 @@ class ProviderDbService:
         return self.get_provider_by_id(cast(int, new_id))
 
     def update_provider(self, provider_id: int, data: Dict[str, object]) -> Optional[Dict[str, object]]:
-        updates = []
-        params = []
+        updates: Dict[str, object] = {}
 
         for key in ["name", "platform", "model", "host", "dimensions", "timeout"]:
             if key in data:
-                updates.append(f"{key} = ?")
-                params.append(data[key])
+                updates[key] = data[key]
 
         # Re-probe vision support only when a probe-relevant field changes
         # (platform/model/host/api_key). Name-only edits never re-probe.
@@ -261,29 +198,21 @@ class ProviderDbService:
                     'api_key': eff_api_key, 'host': eff_host,
                     'name': current.get('name'),
                 }
-                updates.append("supports_vision = ?")
-                params.append(1 if probe_provider(probe_config) else 0)
+                updates["supports_vision"] = 1 if probe_provider(probe_config) else 0
 
         # Handle api_key separately for encryption
         if "api_key" in data:
             if data["api_key"] is None:
-                updates.append("api_key = NULL")
+                updates["api_key"] = None
             else:
-                updates.append("api_key = ?")
-                params.append(self._seal_api_key(cast(str, data["api_key"])))
+                updates["api_key"] = self._seal_api_key(cast(str, data["api_key"]))
 
         if not updates:
             return self.get_provider_by_id(provider_id)
 
-        updates.append("updated_at = CURRENT_TIMESTAMP")
-        params.append(provider_id)
-
-        query = f"UPDATE providers SET {', '.join(updates)} WHERE id = ?"
-
-        with Database.transaction() as conn:
-            cursor = conn.cursor()
-            cursor.execute(query, tuple(params))
-            cursor.close()
+        with Database.transaction():
+            ProviderModel.filter("id", provider_id).update(**updates)
+            ProviderModel.touch(provider_id)
 
         return self.get_provider_by_id(provider_id)
 
@@ -295,16 +224,14 @@ class ProviderDbService:
             'vision_provider_id': 'vision',
             'delegate_provider_id': 'delegate',
         }
-        conn = Database.conn()
-        cursor = conn.cursor()
-        cursor.execute(
-            "SELECT key, value FROM settings WHERE key IN "
-            "('selected_provider_id', 'vision_provider_id', 'delegate_provider_id')"
-        )
-        rows = cursor.fetchall()
-        cursor.close()
+        rows = Setting.filter_in(
+            "key",
+            ['selected_provider_id', 'vision_provider_id', 'delegate_provider_id'],
+        ).select("key", "value")
         assigned = set()
-        for key, value in rows:
+        for row in rows:
+            key = cast(str, row["key"])
+            value = cast(str, row["value"])
             if not value:
                 continue
             try:
@@ -324,59 +251,38 @@ class ProviderDbService:
     def delete_provider(self, provider_id: int) -> bool:
         if self._provider_roles(provider_id):
             raise ValueError(PROVIDER_IN_USE_MSG)
-        with Database.transaction() as conn:
-            cursor = conn.cursor()
-            cursor.execute(
-                "DELETE FROM providers WHERE id = ?",
-                (provider_id,)
-            )
-            cursor.close()
+        with Database.transaction():
+            ProviderModel.filter("id", provider_id).delete()
         return True
 
     # ── Selected Provider ──────────────────────────────────────────
 
     def get_selected_provider(self) -> Optional[Dict[str, object]]:
-        conn = Database.conn()
-        cursor = conn.cursor()
-        cursor.execute(
-            "SELECT value FROM settings WHERE key = 'selected_provider_id'"
-        )
-        row = cursor.fetchone()
-        cursor.close()
-        if not row or not row[0]:
+        value = Setting.get('selected_provider_id')
+        if not value:
             return None
         try:
-            provider_id = int(row[0])
+            provider_id = int(value)
             return self.get_provider_by_id(provider_id)
         except (ValueError, TypeError):
             return None
 
     def set_selected_provider(self, provider_id: int) -> None:
-        with Database.transaction() as conn:
-            cursor = conn.cursor()
-            cursor.execute(
-                "INSERT INTO settings (key, value, value_type, description, is_sensitive) "
-                "VALUES ('selected_provider_id', ?, 'int', 'ID of the active LLM provider', 0) "
-                "ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = CURRENT_TIMESTAMP",
-                (str(provider_id),)
+        with Database.transaction():
+            Setting.set(
+                'selected_provider_id', str(provider_id), 'int',
+                'ID of the active LLM provider',
             )
-            cursor.close()
 
     # ── Vision Provider ────────────────────────────────────────────
 
     _KEY_REQUIRING = ('anthropic', 'openai', 'gemini', 'openai_compatible')
 
     def _resolve_vision_provider(self) -> tuple[Optional[Dict[str, object]], str]:
-        conn = Database.conn()
-        cursor = conn.cursor()
-        cursor.execute(
-            "SELECT value FROM settings WHERE key = 'vision_provider_id'"
-        )
-        row = cursor.fetchone()
-        cursor.close()
-        if row and row[0]:
+        value = Setting.get('vision_provider_id')
+        if value:
             try:
-                pid = int(row[0])
+                pid = int(value)
                 provider = self.get_provider_by_id(pid)  # active-only
                 if provider and provider.get('supports_vision'):
                     return provider, 'explicit'
@@ -398,20 +304,14 @@ class ProviderDbService:
 
     def set_vision_provider(self, provider_id: Optional[int]) -> None:
         """Persist the explicit vision provider id, or clear it when None."""
-        with Database.transaction() as conn:
-            cursor = conn.cursor()
+        with Database.transaction():
             if provider_id is None:
-                cursor.execute(
-                    "DELETE FROM settings WHERE key = 'vision_provider_id'"
-                )
+                Setting.delete('vision_provider_id')
             else:
-                cursor.execute(
-                    "INSERT INTO settings (key, value, value_type, description, is_sensitive) "
-                    "VALUES ('vision_provider_id', ?, 'int', 'ID of the provider used for image understanding', 0) "
-                    "ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = CURRENT_TIMESTAMP",
-                    (str(provider_id),)
+                Setting.set(
+                    'vision_provider_id', str(provider_id), 'int',
+                    'ID of the provider used for image understanding',
                 )
-            cursor.close()
 
     # ── Delegate Provider ──────────────────────────────────────────
     #
@@ -422,16 +322,10 @@ class ProviderDbService:
     # also no supports_vision requirement — any active provider can be pinned.
 
     def _resolve_delegate_provider(self) -> tuple[Optional[Dict[str, object]], str]:
-        conn = Database.conn()
-        cursor = conn.cursor()
-        cursor.execute(
-            "SELECT value FROM settings WHERE key = 'delegate_provider_id'"
-        )
-        row = cursor.fetchone()
-        cursor.close()
-        if row and row[0]:
+        value = Setting.get('delegate_provider_id')
+        if value:
             try:
-                pid = int(row[0])
+                pid = int(value)
                 provider = self.get_provider_by_id(pid)  # active-only
                 if provider:
                     return provider, 'explicit'
@@ -457,17 +351,11 @@ class ProviderDbService:
 
         Clearing does NOT disable delegate turns — resolution then falls back
         to the selected (main) provider (see _resolve_delegate_provider)."""
-        with Database.transaction() as conn:
-            cursor = conn.cursor()
+        with Database.transaction():
             if provider_id is None:
-                cursor.execute(
-                    "DELETE FROM settings WHERE key = 'delegate_provider_id'"
-                )
+                Setting.delete('delegate_provider_id')
             else:
-                cursor.execute(
-                    "INSERT INTO settings (key, value, value_type, description, is_sensitive) "
-                    "VALUES ('delegate_provider_id', ?, 'int', 'ID of the provider used for subagent (delegate) turns', 0) "
-                    "ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = CURRENT_TIMESTAMP",
-                    (str(provider_id),)
+                Setting.set(
+                    'delegate_provider_id', str(provider_id), 'int',
+                    'ID of the provider used for subagent (delegate) turns',
                 )
-            cursor.close()

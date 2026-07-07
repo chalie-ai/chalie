@@ -31,11 +31,12 @@ from unittest.mock import patch
 
 import pytest
 
+from configs.enums.channels import Channel
 from models.provider_response import ProviderResponse
 from models.thread_gist import ThreadGist
 from services.scheduler_service import _fire_item, _poll_and_fire
 from services.time_utils import utc_now
-from services.transcript_service import Transcript
+from models.transcript import Transcript
 
 pytestmark = pytest.mark.unit
 
@@ -120,7 +121,7 @@ def _join_named_thread(name: str, timeout: float = _JOIN_TIMEOUT) -> bool:
 
 
 def _schedule_turn_rows(turn_id: int) -> list[dict[str, object]]:
-    rows = Transcript.filter("channel = ?", "schedule").filter("turn_id = ?", turn_id).get()
+    rows = Transcript.filter("channel", Channel.SCHEDULE.value).filter("turn_id", turn_id).get()
     return [r.to_dict() for r in rows]
 
 
@@ -172,7 +173,7 @@ def test_first_fire_opens_main_turn_second_fire_forks_the_same_turn(
     # (`MessageProcessor._maybe_fire_gist`) short-circuits instead of spawning
     # its own nested, unpatched background MessageProcessor for gisting.
     ThreadGist(
-        channel="schedule", turn_id=item_id, gist="Watering reminder",
+        channel=Channel.SCHEDULE.value, turn_id=item_id, gist="Watering reminder",
         created_at=utc_now().isoformat(),
     ).upsert()
     db.commit()

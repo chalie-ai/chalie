@@ -13,6 +13,7 @@ from __future__ import annotations
 
 from typing import ClassVar
 
+from configs.enums.channels import Channel
 from configs.enums.policy_channel import PolicyChannel
 from services.processor_config import ProcessorConfig
 
@@ -31,7 +32,7 @@ class CompactionConfig(ProcessorConfig):
 
     def __init__(self) -> None:
         super().__init__(
-            channel="compaction",
+            channel=Channel.COMPACTION.value,
             role="compaction",
             policy_channel=PolicyChannel.SUBCONSCIOUS,
             always_available=[],

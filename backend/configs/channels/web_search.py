@@ -22,6 +22,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, ClassVar
 
+from configs.enums.channels import Channel
 from services.processor_config import ProcessorConfig
 
 if TYPE_CHECKING:
@@ -45,7 +46,7 @@ class WebSearchConfig(ProcessorConfig):
     def __init__(self, policy_channel: "PolicyChannel") -> None:
         tools = list(_WEB_SEARCH_TOOLS)
         super().__init__(
-            channel="delegate:web_search",
+            channel=Channel.DELEGATE_WEB_SEARCH.value,
             role="web_search",
             policy_channel=policy_channel,
             always_available=[*tools, "memory"],

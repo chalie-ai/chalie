@@ -30,15 +30,15 @@ class FactRow(DataGraphRow):
         """The single active row for this kind's exact ``key`` — the store lookup
         (mirrors ``_SELECT_ACTIVE_BY_KIND_KEY_SQL``: ``active = 1`` only, NOT
         ``deleted_at``-filtered)."""
-        return (cls.filter("kind = ?", cls.KIND).filter("key = ?", key)
-                   .filter("active = 1").first())
+        return (cls.filter("kind", cls.KIND).filter("key", key)
+                   .filter("active", 1).first())
 
     @classmethod
     def active_values(cls, key: str) -> list[str]:
         """Every currently-active value for this kind's exact ``key`` — the
         coexist key's live value set (mirrors ``_fetch_coexist_values``:
         ``active = 1 AND deleted_at IS NULL``)."""
-        return [v for row in cls.live().filter("key = ?", key).get()
+        return [v for row in cls.live().filter("key", key).get()
                 if (v := row.value) is not None]
 
     @classmethod
@@ -77,7 +77,7 @@ class FactRow(DataGraphRow):
         every currently-active value for the key."""
         now = utc_now().isoformat()
         norm = (value or "").lower().strip()
-        live_rows = cls.live().filter("key = ?", key).get()
+        live_rows = cls.live().filter("key", key).get()
         for existing in live_rows:
             if (existing.value or "").lower().strip() == norm:
                 return existing.reinforce(), "reinforced", None
@@ -121,7 +121,7 @@ class FactRow(DataGraphRow):
         Returns the number of rows closed. Ported from ``invalidate``."""
         now = utc_now().isoformat()
         closed = 0
-        for row in cls.live().filter("key = ?", key).get():
+        for row in cls.live().filter("key", key).get():
             if value is not None and (row.value or "").lower().strip() != value.lower().strip():
                 continue
             row.active = 0
@@ -143,7 +143,7 @@ class FactRow(DataGraphRow):
         cutoff = (now - timedelta(hours=1)).isoformat()
         now_ts = now.timestamp()
         updated = 0
-        for row in cls.live().filter("last_confirmed_at < ?", cutoff).get():
+        for row in cls.live().filter("last_confirmed_at", cutoff, "<").get():
             new_rw = cls._decayed_rw(row.last_confirmed_at, now_ts)
             if new_rw is not None and abs(new_rw - row.retrieval_weight) > cls._DECAY_RW_EPSILON:
                 row.retrieval_weight = new_rw

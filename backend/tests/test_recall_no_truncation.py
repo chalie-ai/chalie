@@ -23,15 +23,14 @@ truncated content cannot equal the full gist.
 
 import json
 import sqlite3
-from typing import TYPE_CHECKING, cast
+from typing import cast
 
 import pytest
 
 from abilities.memory import MemoryAbility
+from configs.channels.user import UserConfig
+from controllers.message_processor import MessageProcessor
 from services.dispatch_service import DispatchService
-
-if TYPE_CHECKING:
-    from controllers.message_processor import MessageProcessor
 
 pytestmark = pytest.mark.unit
 
@@ -60,9 +59,10 @@ def _parse_body(rendered: str) -> dict[str, object]:
 
 def _render_recall(params: dict[str, object]) -> str:
     """Run a real recall through the ability entry point and render the
-    dispatcher envelope — the exact string the model reads. Unbound mp mirrors
-    the data-graph/location/REST recall lanes that do not need a processor."""
-    result = MemoryAbility().run(params)
+    dispatcher envelope — the exact string the model reads. The ability is
+    bound to a real inert ``MessageProcessor`` under ``UserConfig``, exactly
+    as the dispatcher binds it on a user turn (``run()`` raises unbound)."""
+    result = MemoryAbility(MessageProcessor(UserConfig())).run(params)
     assert result is not None, "MemoryAbility.run() returned None"
     return DispatchService(mp=cast("MessageProcessor", None))._render("memory", result, None)
 

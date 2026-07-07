@@ -30,6 +30,9 @@ from configs.channels.super_episode import (
 from configs.channels.thread_gist import ThreadGistConfig
 from configs.channels.user import UserConfig
 from configs.channels.user_summary import UserSummaryConfig
+from configs.channels.vision import VisionConfig
+from configs.channels.web_browse import WebBrowseConfig
+from configs.channels.web_search import WebSearchConfig
 from services.processor_config import ProcessorConfig
 
 __all__ = [
@@ -49,6 +52,9 @@ __all__ = [
     "ThreadGistConfig",
     "UserConfig",
     "UserSummaryConfig",
+    "VisionConfig",
+    "WebBrowseConfig",
+    "WebSearchConfig",
     "_collect_transcript_ids",
     "_fetch_transcript_spans",
     "_safe_json_load_object",

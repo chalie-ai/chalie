@@ -26,8 +26,8 @@ class SystemRow(DataGraphRow):
         """The single active row for this kind's exact ``key`` — the store lookup
         (mirrors ``_SELECT_ACTIVE_BY_KIND_KEY_SQL``: ``active = 1`` only, NOT
         ``deleted_at``-filtered)."""
-        return (cls.filter("kind = ?", cls.KIND).filter("key = ?", key)
-                   .filter("active = 1").first())
+        return (cls.filter("kind", cls.KIND).filter("key", key)
+                   .filter("active", 1).first())
 
     @classmethod
     def store(cls, key: str, value: str, source: str | None = None) -> tuple[Self, str, str | None]:
@@ -65,7 +65,7 @@ class SystemRow(DataGraphRow):
         VERBATIM (no canonicalisation). Returns the number of rows closed."""
         now = utc_now().isoformat()
         closed = 0
-        for row in cls.live().filter("key = ?", key).get():
+        for row in cls.live().filter("key", key).get():
             if value is not None and (row.value or "").lower().strip() != value.lower().strip():
                 continue
             row.active = 0

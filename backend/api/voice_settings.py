@@ -3,16 +3,13 @@
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, cast
+from typing import cast
 
 from flask_restx import Namespace, Resource
 
 from .auth import require_session
 from .dto import Error, expects, register_dto, responds
 from .dto.voice_settings import VoiceSettings, VoiceSettingsState, VoiceSettingsUpdate
-
-if TYPE_CHECKING:
-    from services.settings_service import SettingsService
 
 logger = logging.getLogger(__name__)
 
@@ -23,12 +20,6 @@ register_dto(voice_settings_ns, VoiceSettings, VoiceSettingsUpdate, VoiceSetting
 _VS = voice_settings_ns.models
 
 
-def _get_services() -> "SettingsService":
-    from services.settings_service import SettingsService
-
-    return SettingsService()
-
-
 @voice_settings_ns.route("")
 class VoiceSettingsResource(Resource):
     @require_session
@@ -36,11 +27,12 @@ class VoiceSettingsResource(Resource):
     @voice_settings_ns.response(500, "Server error", model=_VS["Error"])
     @responds(VoiceSettings, code=200)
     def get(self) -> VoiceSettings:
+        from models.setting import Setting
         from services.runtime_deps_service import RuntimeDepsService
 
         status = RuntimeDepsService.get_status()["voice"]
         return VoiceSettings(
-            enabled=_get_services().get("voice_enabled") == "true",
+            enabled=Setting.get("voice_enabled") == "true",
             install_status=cast(str, status["status"]),
             error=status["error"],
         )
@@ -53,9 +45,10 @@ class VoiceSettingsResource(Resource):
     @responds(VoiceSettingsState, code=200)
     @expects(VoiceSettingsUpdate)
     def put(self, dto: VoiceSettingsUpdate) -> VoiceSettingsState:
+        from models.setting import Setting
         from services.runtime_deps_service import RuntimeDepsService
 
-        _get_services().set("voice_enabled", "true" if dto.enabled else "false")
+        Setting.set("voice_enabled", "true" if dto.enabled else "false")
 
         if dto.enabled:
             result = RuntimeDepsService.enable_voice()

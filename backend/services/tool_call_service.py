@@ -91,7 +91,7 @@ class ToolCallService:
         if call_id is None:
             return
         try:
-            call = ToolCall.filter("id = ?", call_id).first()
+            call = ToolCall.filter("id", call_id).first()
             if call is None:
                 return
             call.result = result

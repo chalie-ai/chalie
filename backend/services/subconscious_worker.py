@@ -14,6 +14,7 @@ if TYPE_CHECKING:
     from services.embedding_service import EmbeddingService
     from services.episodic_service import EpisodicService
 
+from configs.enums.channels import Channel
 from models.episode import Episode
 from services.database import Database
 from services.durable_timestamp import DurableTimestamp
@@ -575,7 +576,7 @@ class SubconsciousWorker:
         # background-loop rows (dmn writes many) would advance the delta past the
         # _MIN_DELTA trigger and fire spurious pattern passes the load discards.
         from services.transcript_service import Transcript  # noqa: PLC0415
-        latest = Transcript.latest_id(["user"]) or 0
+        latest = Transcript.latest_id([Channel.USER.value]) or 0
 
         delta = latest - cursor
         if delta < _MIN_DELTA:
@@ -680,7 +681,7 @@ class SubconsciousWorker:
             # user geo-activity channels advance the cursor, so a located row on
             # a muted channel can never fire the geo pass.
             from services.transcript_service import Transcript  # noqa: PLC0415
-            latest = Transcript.latest_id(["user"], require_location=True) or 0
+            latest = Transcript.latest_id([Channel.USER.value], require_location=True) or 0
         except Exception as exc:
             logger.debug(f"{LOG_PREFIX} geo_patterns no db: {exc}")
             return "skip: no db"

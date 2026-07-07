@@ -1,6 +1,7 @@
 """ProcessorConfig.policy_channel enum + derived usage_class (PolicyManager redesign)."""
 import pytest
 
+from configs.enums.channels import Channel
 from configs.enums.policy_channel import PolicyChannel
 from tests.helpers import StubProcessorConfig
 
@@ -9,7 +10,7 @@ pytestmark = pytest.mark.unit
 
 def _make(policy_channel: PolicyChannel) -> StubProcessorConfig:
     return StubProcessorConfig(
-        channel="user", role="user", policy_channel=policy_channel,
+        channel=Channel.USER.value, role="user", policy_channel=policy_channel,
         always_available=[],
         skip_transcript=False,
         skip_input_row=False, suppress_history=False, broadcast_to=None,

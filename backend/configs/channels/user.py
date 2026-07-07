@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from configs.channels._common import DEFAULT_ALWAYS_AVAILABLE
+from configs.enums.channels import Channel
 from configs.enums.policy_channel import PolicyChannel
 from services.processor_config import ProcessorConfig
 
@@ -19,7 +20,7 @@ class UserConfig(ProcessorConfig):
     def __init__(self, metadata: dict[str, object] | None = None) -> None:
         _metadata = metadata or {}
         super().__init__(
-            channel="user",
+            channel=Channel.USER.value,
             role="user",
             policy_channel=PolicyChannel.CHAT,
             always_available=DEFAULT_ALWAYS_AVAILABLE,

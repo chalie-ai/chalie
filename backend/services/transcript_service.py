@@ -18,6 +18,7 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING, cast
 
+from configs.enums.channels import Channel
 from models.transcript import Transcript
 from models.turn_signal import TurnSignal
 
@@ -62,16 +63,17 @@ class TranscriptService:
         if self.mp._forked:
             ceiling = self.mp.uid if self.mp.uid is not None else _NO_CEILING
             return (
-                Transcript.filter("channel = ?", channel)
-                .filter("turn_id = ?", self.mp.turn_id)
-                .filter("id > ? AND id < ?", watermark, ceiling)
+                Transcript.filter("channel", channel)
+                .filter("turn_id", self.mp.turn_id)
+                .filter("id", watermark, ">")
+                .filter("id", ceiling, "<")
                 .order_by("id ASC")
                 .get()
             )
         by_turn: dict[int, list[Transcript]] = {}
         for row in (
-            Transcript.filter("channel = ?", channel)
-            .filter("turn_id > ?", watermark)
+            Transcript.filter("channel", channel)
+            .filter("turn_id", watermark, ">")
             .order_by("id ASC")
             .get()
         ):
@@ -87,8 +89,8 @@ class TranscriptService:
         """Every row of this turn, oldest-first, unfloored — the FORK/act-
         trail view of the turn currently in flight."""
         return (
-            Transcript.filter("channel = ?", self.mp.channel)
-            .filter("turn_id = ?", self.mp.turn_id)
+            Transcript.filter("channel", self.mp.channel)
+            .filter("turn_id", self.mp.turn_id)
             .order_by("id ASC")
             .get()
         )
@@ -103,9 +105,11 @@ class TranscriptService:
         bounds are config fields, reachable off ``self.mp.config``."""
         config = cast("PatternConfig", self.mp.config)
         return (
-            Transcript.filter("channel = ?", "user")
-            .filter("id > ? AND id <= ?", config._window_start, config._window_end)
-            .filter("content IS NOT NULL AND content != ''")
+            Transcript.filter("channel", Channel.USER.value)
+            .filter("id", config._window_start, ">")
+            .filter("id", config._window_end, "<=")
+            .filter("content", None, "IS NOT")
+            .filter("content", "", "!=")
             .order_by("id ASC")
             .get()
         )
@@ -120,10 +124,13 @@ class TranscriptService:
         latitude/longitude and real content survive. Zero-param (§2.4)."""
         config = cast("GeoConfig", self.mp.config)
         return (
-            Transcript.filter("channel = ?", "user")
-            .filter("id > ? AND id <= ?", config._window_start, config._window_end)
-            .filter("location_lat IS NOT NULL AND location_lon IS NOT NULL")
-            .filter("content IS NOT NULL AND content != ''")
+            Transcript.filter("channel", Channel.USER.value)
+            .filter("id", config._window_start, ">")
+            .filter("id", config._window_end, "<=")
+            .filter("location_lat", None, "IS NOT")
+            .filter("location_lon", None, "IS NOT")
+            .filter("content", None, "IS NOT")
+            .filter("content", "", "!=")
             .order_by("id ASC")
             .get()
         )
@@ -151,8 +158,8 @@ class TranscriptService:
         row — the fork guard (§6.8): a reply can only fork a turn that exists,
         else ``begin()`` rejects the request."""
         return (
-            Transcript.filter("channel = ?", self.mp.channel)
-            .filter("turn_id = ?", self.mp.turn_id)
+            Transcript.filter("channel", self.mp.channel)
+            .filter("turn_id", self.mp.turn_id)
             .exists()
         )
 
@@ -192,7 +199,7 @@ class TranscriptService:
         settle_id = self.settle()
         if settle_id is None:
             return
-        row = Transcript.filter("id = ?", settle_id).first()
+        row = Transcript.filter("id", settle_id).first()
         if row is not None:
             row.unsettle()
 
@@ -250,7 +257,7 @@ class TranscriptService:
         """This turn's anchoring input row, or ``None`` before it exists."""
         if self.mp.uid is None:
             return None
-        return Transcript.filter("id = ?", self.mp.uid).first()
+        return Transcript.filter("id", self.mp.uid).first()
 
     def _append(self, content: str, *, role: str, settled: int) -> int:
         """Write one transcript row for this turn and return its id."""

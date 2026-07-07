@@ -1,25 +1,38 @@
 """Skills namespace — Brain Skills tab API.
 
-CRUD over skills.sqlite plus user-skill YAML write-back to data/skills/user/.
-DTO-typed through the foundation boundary decorators (``@expects``/``@responds``)
-following the lists reference shape.
+CRUD over skills.sqlite (via the :class:`~models.skill.Skill` /
+:class:`~models.skill_association.SkillAssociation` active-record models)
+plus user-skill YAML write-back to data/skills/user/. DTO-typed through the
+foundation boundary decorators (``@expects``/``@responds``) following the
+lists reference shape.
+
+The embedding search index (``skill_search_entries``/``skill_search_vec``/
+``skill_search_fts``) is out of scope for the two models above — it is
+written through ``utils.build_skills_db.index_skill`` /
+``utils.skills_io.remove_search_entries`` on a raw connection, obtained the
+same way the models reach skills.sqlite (``Database.conn`` on the skills db
+path), grouped with the model write in one ``Database.transaction`` block so
+a skill row and its index entries commit atomically.
 """
 
 from __future__ import annotations
 
 import logging
 import sqlite3
+from typing import cast
 
 from flask.typing import ResponseReturnValue
 from flask_restx import Namespace, Resource
 
+from models.skill import Skill as SkillModel
+from models.skill_association import SkillAssociation as SkillAssociationModel
+from services.database import Database
 from services.time_utils import parse_utc
 from utils.skills_io import (
     DEFAULT_VERSION,
     SKILLS_DB_PATH,
     USER_SKILLS_DIR,
     ensure_user_skills_dir,
-    open_skills_db,
     remove_search_entries,
     skill_yaml_path,
     write_skill_file,
@@ -55,40 +68,36 @@ _ONLY_USER_EDIT = "Only user-created skills can be edited"
 _ONLY_USER_DELETE = "Only user-created skills can be deleted"
 _ONLY_CURATED_COPY = "Only curated skills can be copied"
 
+#: Same path the models bind ``skills.sqlite`` writes to
+#: (``Skill._bound_connection`` / ``SkillAssociation._bound_connection``) —
+#: reused here for ``Database.transaction`` so a model write and a raw
+#: search-index write land on the same connection and commit atomically.
+_SKILLS_DB = str(SKILLS_DB_PATH)
 
-def _open_db() -> sqlite3.Connection:
-    """Open skills.sqlite with row_factory for API dict conversion."""
-    return open_skills_db(row_factory=True)
 
-
-def _row_to_dict(row: sqlite3.Row) -> dict[str, object]:
+def _row_to_dict(skill: SkillModel) -> dict[str, object]:
     return {
-        "id": row["id"],
-        "title": row["title"],
-        "use_for": row["use_for"],
-        "content": row["content"],
-        "tags": row["tags"] or "",
-        "version": row["version"],
-        "source": row["source"],
-        "enabled": bool(row["enabled"]),
-        "based_on": row["based_on"],
+        "id": skill.id,
+        "title": skill.title,
+        "use_for": skill.use_for,
+        "content": skill.content,
+        "tags": skill.tags or "",
+        "version": skill.version,
+        "source": skill.source,
+        "enabled": bool(skill.enabled),
+        "based_on": skill.based_on,
     }
 
 
-def _load_associations(conn: sqlite3.Connection) -> list[dict[str, object]]:
-    rows = conn.execute(
-        "SELECT sa.skill_id, s.title AS skill_title, sa.pattern_name, sa.rule, sa.created_at "
-        "FROM skill_associations sa "
-        "JOIN skills s ON s.id = sa.skill_id "
-        "ORDER BY sa.created_at DESC"
-    ).fetchall()
+def _load_associations() -> list[dict[str, object]]:
+    rows = SkillAssociationModel.with_skill_titles()
     return [
         {
             "skill_id": r["skill_id"],
             "skill_title": r["skill_title"],
             "pattern_name": r["pattern_name"],
             "rule": r["rule"],
-            "created_at": parse_utc(r["created_at"]),
+            "created_at": parse_utc(cast(str, r["created_at"])),
         }
         for r in rows
     ]
@@ -116,17 +125,9 @@ class SkillsListResource(Resource):
             return SkillListResult(skills=[], associations=[])
 
         try:
-            conn = _open_db()
-            try:
-                rows = conn.execute(
-                    "SELECT id, title, use_for, content, tags, version, "
-                    "source, enabled, based_on "
-                    "FROM skills ORDER BY source, title"
-                ).fetchall()
-                skills = [Skill.model_validate(_row_to_dict(r)) for r in rows]
-                associations = [SkillAssociation.model_validate(a) for a in _load_associations(conn)]
-            finally:
-                conn.close()
+            rows = SkillModel.order_by("source, title").get()
+            skills = [Skill.model_validate(_row_to_dict(r)) for r in rows]
+            associations = [SkillAssociation.model_validate(a) for a in _load_associations()]
 
             return SkillListResult(skills=skills, associations=associations)
         except Exception as exc:
@@ -147,47 +148,36 @@ class SkillsListResource(Resource):
             return error(_DB_UNAVAILABLE, 503)
 
         try:
-            conn = _open_db()
-            try:
-                existing = conn.execute(
-                    "SELECT id FROM skills WHERE source = 'user' AND lower(title) = lower(?)",
-                    (dto.title,),
-                ).fetchone()
-                if existing is not None:
-                    return error(f"A user skill named '{dto.title}' already exists", 409)
+            if SkillModel.find_by_title_ci(dto.title) is not None:
+                return error(f"A user skill named '{dto.title}' already exists", 409)
 
-                conn.execute(
-                    "INSERT INTO skills(title, use_for, content, tags, version, source) "
-                    "VALUES (?, ?, ?, ?, ?, 'user')",
-                    (dto.title, dto.use_for, dto.content, dto.tags, DEFAULT_VERSION),
-                )
-                skill_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+            with Database.transaction(_SKILLS_DB) as conn:
+                skill = SkillModel(
+                    title=dto.title,
+                    use_for=dto.use_for,
+                    content=dto.content,
+                    tags=dto.tags,
+                    version=DEFAULT_VERSION,
+                    source="user",
+                ).save()
+                skill_id = cast(int, skill.id)
 
                 _index_new_skill(conn, skill_id, dto.title, dto.use_for, dto.tags)
-                conn.commit()
 
-                ensure_user_skills_dir()
-                write_skill_file(
-                    skill_yaml_path(dto.title),
-                    {
-                        "title": dto.title,
-                        "use_for": dto.use_for,
-                        "content": dto.content,
-                        "tags": dto.tags,
-                        "version": DEFAULT_VERSION,
-                    },
-                )
-
-                row = conn.execute(
-                    "SELECT id, title, use_for, content, tags, version, "
-                    "source, enabled, based_on FROM skills WHERE id = ?",
-                    (skill_id,),
-                ).fetchone()
-            finally:
-                conn.close()
+            ensure_user_skills_dir()
+            write_skill_file(
+                skill_yaml_path(dto.title),
+                {
+                    "title": dto.title,
+                    "use_for": dto.use_for,
+                    "content": dto.content,
+                    "tags": dto.tags,
+                    "version": DEFAULT_VERSION,
+                },
+            )
 
             logger.info("[SKILLS API] Created skill '%s' (id=%d)", dto.title, skill_id)
-            return Skill.model_validate(_row_to_dict(row))
+            return Skill.model_validate(_row_to_dict(skill))
         except Exception as exc:
             logger.error("[SKILLS API] POST /api/skills failed: %s", exc)
             return error("Failed to create skill", 500)
@@ -211,56 +201,42 @@ class SkillItemResource(Resource):
             return error(_DB_UNAVAILABLE, 503)
 
         try:
-            conn = _open_db()
-            try:
-                row = conn.execute(
-                    "SELECT id, title, use_for, content, tags, version, "
-                    "source, enabled, based_on FROM skills WHERE id = ?",
-                    (skill_id,),
-                ).fetchone()
-                if row is None:
-                    return error(_NOT_FOUND, 404)
-                if row["source"] != "user":
-                    return error(_ONLY_USER_EDIT, 403)
+            skill = SkillModel.filter("id", skill_id).first()
+            if skill is None:
+                return error(_NOT_FOUND, 404)
+            if skill.source != "user":
+                return error(_ONLY_USER_EDIT, 403)
 
-                title = row["title"]
-                use_for = dto.use_for if dto.use_for is not None else row["use_for"]
-                content = dto.content if dto.content is not None else row["content"]
-                tags = dto.tags if dto.tags is not None else (row["tags"] or "")
-                version = row["version"] + 1
+            title = skill.title
+            use_for = dto.use_for if dto.use_for is not None else skill.use_for
+            content = dto.content if dto.content is not None else skill.content
+            tags = dto.tags if dto.tags is not None else (skill.tags or "")
+            version = skill.version + 1
 
-                conn.execute(
-                    "UPDATE skills SET use_for=?, content=?, tags=?, version=? "
-                    "WHERE id=?",
-                    (use_for, content, tags, version, skill_id),
-                )
+            with Database.transaction(_SKILLS_DB) as conn:
+                skill.use_for = use_for
+                skill.content = content
+                skill.tags = tags
+                skill.version = version
+                skill.save()
 
                 remove_search_entries(conn, skill_id)
                 _index_new_skill(conn, skill_id, title, use_for, tags)
-                conn.commit()
 
-                ensure_user_skills_dir()
-                write_skill_file(
-                    skill_yaml_path(title),
-                    {
-                        "title": title,
-                        "use_for": use_for,
-                        "content": content,
-                        "tags": tags,
-                        "version": version,
-                    },
-                )
-
-                row = conn.execute(
-                    "SELECT id, title, use_for, content, tags, version, "
-                    "source, enabled, based_on FROM skills WHERE id = ?",
-                    (skill_id,),
-                ).fetchone()
-            finally:
-                conn.close()
+            ensure_user_skills_dir()
+            write_skill_file(
+                skill_yaml_path(title),
+                {
+                    "title": title,
+                    "use_for": use_for,
+                    "content": content,
+                    "tags": tags,
+                    "version": version,
+                },
+            )
 
             logger.info("[SKILLS API] Updated skill id=%d '%s' to v%d", skill_id, title, version)
-            return Skill.model_validate(_row_to_dict(row))
+            return Skill.model_validate(_row_to_dict(skill))
         except Exception as exc:
             logger.error("[SKILLS API] PUT /api/skills/%d failed: %s", skill_id, exc)
             return error("Failed to update skill", 500)
@@ -278,27 +254,21 @@ class SkillItemResource(Resource):
             return error(_DB_UNAVAILABLE, 503)
 
         try:
-            conn = _open_db()
-            try:
-                row = conn.execute(
-                    "SELECT id, title, source FROM skills WHERE id = ?", (skill_id,)
-                ).fetchone()
-                if row is None:
-                    return error(_NOT_FOUND, 404)
-                if row["source"] != "user":
-                    return error(_ONLY_USER_DELETE, 403)
+            skill = SkillModel.filter("id", skill_id).first()
+            if skill is None:
+                return error(_NOT_FOUND, 404)
+            if skill.source != "user":
+                return error(_ONLY_USER_DELETE, 403)
 
-                title = row["title"]
-                path = skill_yaml_path(title)
+            title = skill.title
+            path = skill_yaml_path(title)
 
+            with Database.transaction(_SKILLS_DB) as conn:
                 remove_search_entries(conn, skill_id)
-                conn.execute("DELETE FROM skills WHERE id = ?", (skill_id,))
-                conn.commit()
+                skill.delete()
 
-                if path.exists() and path.resolve().is_relative_to(USER_SKILLS_DIR.resolve()):
-                    path.unlink()
-            finally:
-                conn.close()
+            if path.exists() and path.resolve().is_relative_to(USER_SKILLS_DIR.resolve()):
+                path.unlink()
 
             logger.info("[SKILLS API] Deleted skill id=%d '%s'", skill_id, title)
             return None
@@ -321,21 +291,13 @@ class SkillToggleResource(Resource):
             return error(_DB_UNAVAILABLE, 503)
 
         try:
-            conn = _open_db()
-            try:
-                row = conn.execute(
-                    "SELECT id, enabled FROM skills WHERE id = ?", (skill_id,)
-                ).fetchone()
-                if row is None:
-                    return error(_NOT_FOUND, 404)
+            skill = SkillModel.filter("id", skill_id).first()
+            if skill is None:
+                return error(_NOT_FOUND, 404)
 
-                new_enabled = 0 if row["enabled"] else 1
-                conn.execute(
-                    "UPDATE skills SET enabled = ? WHERE id = ?", (new_enabled, skill_id)
-                )
-                conn.commit()
-            finally:
-                conn.close()
+            new_enabled = 0 if skill.enabled else 1
+            skill.enabled = new_enabled
+            skill.save()
 
             logger.info("[SKILLS API] Toggled skill id=%d enabled=%d", skill_id, new_enabled)
             return SkillToggleResult(skill_id=skill_id, enabled=bool(new_enabled))
@@ -360,65 +322,53 @@ class SkillCopyResource(Resource):
             return error(_DB_UNAVAILABLE, 503)
 
         try:
-            conn = _open_db()
-            try:
-                row = conn.execute(
-                    "SELECT id, title, use_for, content, tags, version, source "
-                    "FROM skills WHERE id = ?",
-                    (skill_id,),
-                ).fetchone()
-                if row is None:
-                    return error(_NOT_FOUND, 404)
-                if row["source"] != "curated":
-                    return error(_ONLY_CURATED_COPY, 422)
+            skill = SkillModel.filter("id", skill_id).first()
+            if skill is None:
+                return error(_NOT_FOUND, 404)
+            if skill.source != "curated":
+                return error(_ONLY_CURATED_COPY, 422)
 
-                base_title = row["title"]
-                copy_title = f"{base_title} (Custom)"
-                tags = row["tags"] or ""
+            base_title = skill.title
+            copy_title = f"{base_title} (Custom)"
+            tags = skill.tags or ""
 
-                existing_copy = conn.execute(
-                    "SELECT id FROM skills WHERE source = 'user' AND lower(title) = lower(?)",
-                    (copy_title,),
-                ).fetchone()
-                if existing_copy is not None:
-                    return error(f"A user copy named '{copy_title}' already exists", 409)
+            if SkillModel.find_by_title_ci(copy_title) is not None:
+                return error(f"A user copy named '{copy_title}' already exists", 409)
 
-                conn.execute(
-                    "INSERT INTO skills(title, use_for, content, tags, version, source, based_on) "
-                    "VALUES (?, ?, ?, ?, ?, 'user', ?)",
-                    (copy_title, row["use_for"], row["content"], tags, DEFAULT_VERSION, skill_id),
-                )
-                new_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
-                conn.execute("UPDATE skills SET enabled = 0 WHERE id = ?", (skill_id,))
+            with Database.transaction(_SKILLS_DB) as conn:
+                copy = SkillModel(
+                    title=copy_title,
+                    use_for=skill.use_for,
+                    content=skill.content,
+                    tags=tags,
+                    version=DEFAULT_VERSION,
+                    source="user",
+                    based_on=skill_id,
+                ).save()
+                new_id = cast(int, copy.id)
 
-                _index_new_skill(conn, new_id, copy_title, row["use_for"], tags)
-                conn.commit()
+                skill.enabled = 0
+                skill.save()
 
-                ensure_user_skills_dir()
-                write_skill_file(
-                    skill_yaml_path(copy_title),
-                    {
-                        "title": copy_title,
-                        "use_for": row["use_for"],
-                        "content": row["content"],
-                        "tags": tags,
-                        "version": DEFAULT_VERSION,
-                    },
-                )
+                _index_new_skill(conn, new_id, copy_title, skill.use_for, tags)
 
-                new_row = conn.execute(
-                    "SELECT id, title, use_for, content, tags, version, "
-                    "source, enabled, based_on FROM skills WHERE id = ?",
-                    (new_id,),
-                ).fetchone()
-            finally:
-                conn.close()
+            ensure_user_skills_dir()
+            write_skill_file(
+                skill_yaml_path(copy_title),
+                {
+                    "title": copy_title,
+                    "use_for": skill.use_for,
+                    "content": skill.content,
+                    "tags": tags,
+                    "version": DEFAULT_VERSION,
+                },
+            )
 
             logger.info(
                 "[SKILLS API] Copied curated skill id=%d '%s' -> user skill id=%d '%s'",
                 skill_id, base_title, new_id, copy_title,
             )
-            return Skill.model_validate(_row_to_dict(new_row))
+            return Skill.model_validate(_row_to_dict(copy))
         except Exception as exc:
             logger.error("[SKILLS API] POST /api/skills/%d/copy failed: %s", skill_id, exc)
             return error("Failed to copy skill", 500)

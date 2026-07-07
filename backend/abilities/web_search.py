@@ -38,16 +38,13 @@ happens at the outer ``web_search`` tool.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, ClassVar, cast
+from typing import ClassVar, cast
 
 from abilities._ability import Ability
 from abilities._delegate import delegate_result
 from abilities._params import Keys
 from abilities._result import ToolResult
 from configs.channels.web_search import WebSearchConfig
-
-if TYPE_CHECKING:
-    from services.processor_config import ProcessorConfig
 
 
 class WebSearchAbility(Ability):
@@ -100,8 +97,12 @@ class WebSearchAbility(Ability):
     def run(self, params: dict[str, object]) -> ToolResult:
         from controllers.message_processor import MessageProcessor  # noqa: PLC0415
 
+        mp = self.mp
+        if mp is None:
+            raise RuntimeError("web_search.run() dispatched without a bound MessageProcessor")
+
         result = MessageProcessor.process(
-            WebSearchConfig(cast("ProcessorConfig", getattr(self.mp, "config", None)).policy_channel),
+            WebSearchConfig(mp.config.policy_channel),
             raw_input=cast(str, self.param(params, Keys.query, required=True)),
         ).result()
         return delegate_result(

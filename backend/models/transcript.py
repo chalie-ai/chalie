@@ -23,12 +23,15 @@ from models.query import Query
 class Transcript(Model):
     """One ``transcript`` row: the persistent conversation record."""
 
-    __table__: ClassVar[str] = "transcript"
     __columns__: ClassVar[tuple[str, ...]] = (
         "id", "channel", "role", "content", "tool_call_id", "tool_name",
         "internal", "deliberation_score", "created_at", "xml_migrated",
         "location_lat", "location_lon", "location_name", "turn_id", "settled",
     )
+
+    @classmethod
+    def get_table(cls) -> str:
+        return "transcript"
 
     # settle0 — the FIRST assistant row of a turn with settled=1: the boundary
     # between a turn's main exchange and its fork continuation. The write path
@@ -50,7 +53,7 @@ class Transcript(Model):
     def settled_assistants(cls) -> Query[Self]:
         """Late-binding scope over the settle predicate — the settled-assistant
         rows (turn settle0 candidates); compose channel/turn filters onto it."""
-        return cls.filter(cls._SETTLE_PREDICATE)
+        return cls.filter("role", "assistant").filter("settled", 1)
 
     # ── turn-id allocation (§6.8, atomic in a single-writer begin()) ─────────
 
@@ -251,8 +254,8 @@ class Transcript(Model):
         ``r['id']``/``r['role']``/``r['content']``/``r['created_at']``."""
         return [
             row.to_dict()
-            for row in cls.filter("channel = ?", channel)
-            .filter("turn_id = ?", turn_id)
+            for row in cls.filter("channel", channel)
+            .filter("turn_id", turn_id)
             .order_by("id ASC")
             .get()
         ]
@@ -269,7 +272,7 @@ class Transcript(Model):
             return []
         return [
             row.to_dict()
-            for row in cls.filter(f"id IN ({cls._placeholders(len(ids))})", *ids)
+            for row in cls.filter_in("id", ids)
             .order_by("id ASC")
             .get()
         ]

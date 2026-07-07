@@ -15,8 +15,9 @@ from .base import DTO
 class TurnExecutionDTO(DTO):
     """One turn's DB-backed lifecycle row. POST and DELETE /api/thread/<turn_id>
     both return this shape, and it is exactly the payload the turn's
-    ExecutionTracker broadcasts on every state flip — one shape, so no surface
-    ever has to reconcile two versions of "what a turn_execution looks like"."""
+    TurnExecutionService broadcasts on every state flip — one shape, so no
+    surface ever has to reconcile two versions of "what a turn_execution
+    looks like"."""
 
     id: int
     channel: str

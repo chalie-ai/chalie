@@ -26,12 +26,15 @@ parent ``documents`` row, so this vertical declares no ``decay()``.
 
 from __future__ import annotations
 
-from typing import ClassVar, Self
+from typing import TYPE_CHECKING, ClassVar, Self
 
 from models.data_graph import DataGraphRow
 from models.query import Query
 from services._fts_delete import fts5_external_delete
 from services.time_utils import utc_now
+
+if TYPE_CHECKING:
+    from models.document_meta import DocumentMetaData
 
 
 class DocumentRow(DataGraphRow):
@@ -52,7 +55,26 @@ class DocumentRow(DataGraphRow):
     def for_document_id(cls, doc_id: str) -> Query[Self]:
         """Live fragments for one document, chunk (``key``) order — the join
         every read (view/preview/full-content) resolves through."""
-        return cls.live().filter("source = ?", f"document:{doc_id}").order_by("key")
+        return cls.live().filter("source", f"document:{doc_id}").order_by("key")
+
+    def get_meta_data(self) -> "DocumentMetaData | None":
+        """This fragment's parent ``documents`` row — the metadata half of
+        the two-table join documented above, resolved off ``source``
+        (``"document:{doc_id}"``, the same convention :meth:`for_document_id`
+        builds). ``None`` if the fragment carries no source (shouldn't happen
+        for a real row, but ``source`` is nullable on the shared
+        ``data_graph`` shell) or the parent row is gone.
+
+        Deferred import: ``models.document_meta`` imports THIS module at top
+        level for the inverse relationship
+        (``DocumentMetaData.get_document``), so importing it back at module
+        scope here would be circular."""
+        from models.document_meta import DocumentMetaData  # noqa: PLC0415
+
+        if self.source is None:
+            return None
+        doc_id = self.source.split(":", 1)[1]
+        return DocumentMetaData.filter("id", doc_id).first()
 
     @classmethod
     def set_fragments_active(cls, doc_id: str, active: int) -> None:
@@ -60,10 +82,7 @@ class DocumentRow(DataGraphRow):
         (soft-delete) stops them surfacing in
         :meth:`~models.data_graph.DataGraphRow.live` and in cross-kind recall;
         ``active=1`` (restore) reverses it."""
-        cls._bound_connection().execute(
-            "UPDATE data_graph SET active = ? WHERE kind = ? AND source = ?",
-            (active, cls.KIND, f"document:{doc_id}"),
-        )
+        cls.filter("kind", cls.KIND).filter("source", f"document:{doc_id}").update(active=active)
 
     @classmethod
     def purge_by_document_id(cls, doc_id: str) -> int:

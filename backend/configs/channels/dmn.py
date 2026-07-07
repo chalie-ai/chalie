@@ -4,6 +4,7 @@ from models.episode import Episode
 from services.processor_config import ProcessorConfig
 
 from configs.channels._common import DEFAULT_ALWAYS_AVAILABLE
+from configs.enums.channels import Channel
 from configs.enums.policy_channel import PolicyChannel
 
 _EPISODE_RETRIEVAL_WEIGHT_FLOOR = 0.3
@@ -24,7 +25,7 @@ class DmnConfig(ProcessorConfig):
 
     def __init__(self) -> None:
         super().__init__(
-            channel="dmn",
+            channel=Channel.DMN.value,
             role="proactive_thought",
             policy_channel=PolicyChannel.SUBCONSCIOUS,
             always_available=DEFAULT_ALWAYS_AVAILABLE,

@@ -54,6 +54,7 @@ import re
 from threading import Thread
 from typing import TYPE_CHECKING, Protocol, cast
 
+from configs.enums.channels import Channel
 from configs.enums.provider_type import ProviderType
 from configs.enums.thinking_level import ThinkingLevel
 from models.provider_errors import (
@@ -407,7 +408,7 @@ class MessageProcessor:
         post-turn work can never fail an otherwise-complete turn."""
         role = self.config.role
         try:
-            if role == "user" and self.channel == "user":
+            if role == "user" and self.channel == Channel.USER:
                 self._proactive_suggestion()
             elif role == "user_summary":
                 UserSynthesis.persist_user_summary(response_text)
@@ -483,7 +484,7 @@ class MessageProcessor:
         ``user`` channel, seed the turn-zero flashback + any attachments, and
         ingest the reply's parent gist on a fork."""
         self.active_tools = list(self.config.always_available or [])
-        if self.channel == "user":
+        if self.channel == Channel.USER:
             self._run_thinking_gate()
         self._seed_turn_zero()
         self._maybe_fire_gist()

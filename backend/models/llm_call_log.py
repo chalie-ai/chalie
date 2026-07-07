@@ -9,7 +9,7 @@ No mp, no service, no WS.
 
 from __future__ import annotations
 
-from typing import ClassVar
+from typing import ClassVar, cast
 
 from models.model import Model
 
@@ -17,7 +17,6 @@ from models.model import Model
 class LlmCallLog(Model):
     """One ``llm_call_log`` row plus the table's token-aggregate query scopes."""
 
-    __table__: ClassVar[str] = "llm_call_log"
     __columns__: ClassVar[tuple[str, ...]] = (
         "id",
         "job_name",
@@ -34,6 +33,10 @@ class LlmCallLog(Model):
     )
 
     @classmethod
+    def get_table(cls) -> str:
+        return "llm_call_log"
+
+    @classmethod
     def last_request_tokens(cls, job_name: str) -> int | None:
         """``tokens_input`` of the most recent call for ``job_name``, or None.
 
@@ -41,12 +44,8 @@ class LlmCallLog(Model):
         indicator tracks the real user turn rather than a delegate's tiny
         sub-request that shares usage_class 'chat'.
         """
-        row = cls._bound_connection().execute(
-            "SELECT tokens_input FROM llm_call_log WHERE job_name = ? "
-            "ORDER BY id DESC LIMIT 1",
-            (job_name,),
-        ).fetchone()
-        return int(row["tokens_input"]) if row is not None else None
+        values = cls.filter("job_name", job_name).order_by("id DESC").limit(1).pluck("tokens_input")
+        return int(cast("int", values[0])) if values else None
 
     @classmethod
     def tokens_today(cls) -> int:

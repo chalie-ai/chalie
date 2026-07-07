@@ -73,7 +73,7 @@ class UserSynthesis:
             newest = cls._newest_trait_ts()
             if newest is None:
                 return False
-            summary_row = SystemRow.live().filter("key = ?", _KEY_SHORT).first()
+            summary_row = SystemRow.live().filter("key", _KEY_SHORT).first()
             if summary_row is None:
                 return True
             try:
