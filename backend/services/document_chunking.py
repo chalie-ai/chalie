@@ -69,15 +69,9 @@ def split_into_artifacts(text: str, min_chars: int = 512, max_chars: int = 1024,
 def create_document_artifacts(doc_id: str, text_content: str) -> int:
     artifacts = split_into_artifacts(text_content)
 
-    from models.data_graph import DataGraph
-    from services.data_graph_service import KIND_DOCUMENT
+    from models.document import DocumentRow
 
     for i, artifact_text in enumerate(artifacts):
-        DataGraph.store(
-            kind=KIND_DOCUMENT,
-            key=f"doc:{doc_id}:{i:03d}",
-            value=artifact_text,
-            source=f"document:{doc_id}",
-        )
+        DocumentRow.create_fragment(doc_id, i, artifact_text)
 
     return len(artifacts)

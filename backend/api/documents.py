@@ -341,18 +341,15 @@ class DocumentResource(Resource):
             if not doc:
                 return error(_ERR_NOT_FOUND, 404)
 
-            from services.data_graph_service import get_data_graph_service
-            dgs = get_data_graph_service()
-            with dgs.db.connection() as conn:
-                rows = conn.execute(
-                    "SELECT key, substr(value, 1, 200) as preview FROM data_graph "
-                    "WHERE source=? AND active=1 ORDER BY key LIMIT 5",
-                    (f"document:{doc_id}",),
-                ).fetchall()
+            from models.document import DocumentRow
+            fragments = DocumentRow.for_document_id(doc_id).limit(5).get()
             detail = _document_dto(doc)
             return DocumentDetail(
                 **detail.model_dump(mode="python"),
-                artifacts=[ArtifactPreview(key=r[0], preview=r[1]) for r in rows],
+                artifacts=[
+                    ArtifactPreview(key=f.key, preview=(f.value or "")[:200])
+                    for f in fragments
+                ],
             )
         except Exception as e:
             logger.error(f"[DOCS API] get_document error: {e}")
@@ -390,19 +387,13 @@ class DocumentContentResource(Resource):
             if not svc.get_document(doc_id):
                 return error(_ERR_NOT_FOUND, 404)
 
-            from services.data_graph_service import get_data_graph_service
-            dgs = get_data_graph_service()
-            with dgs.db.connection() as conn:
-                rows = conn.execute(
-                    "SELECT key, value FROM data_graph "
-                    "WHERE source=? AND active=1 ORDER BY key",
-                    (f"document:{doc_id}",),
-                ).fetchall()
+            from models.document import DocumentRow
+            fragments = DocumentRow.for_document_id(doc_id).get()
 
             return DocumentContent(
                 document_id=doc_id,
-                total_artifacts=len(rows),
-                artifacts=[ArtifactContent(key=r[0], content=r[1]) for r in rows],
+                total_artifacts=len(fragments),
+                artifacts=[ArtifactContent(key=f.key, content=f.value or "") for f in fragments],
             )
         except Exception as e:
             logger.error(f"[DOCS API] get_content error: {e}")
@@ -583,10 +574,9 @@ class DocumentSearchResource(Resource):
     def get(self, dto: SearchQuery) -> SearchResponse | ResponseReturnValue:
         """Search across document artifacts in data_graph."""
         try:
-            from services.data_graph_service import get_data_graph_service, KIND_DOCUMENT
+            from services.memory_recall_service import recall
 
-            dgs = get_data_graph_service()
-            results = dgs.recall(dto.q, kinds=[KIND_DOCUMENT], limit=dto.limit)
+            results = recall(dto.q, kinds=["document"], limit=dto.limit)
 
             return SearchResponse(
                 results=[_search_result_dto(row) for row in results],

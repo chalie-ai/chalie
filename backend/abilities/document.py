@@ -267,10 +267,9 @@ def _group_results_by_doc(results: list[dict[str, object]]) -> dict[str, list[di
 def _handle_search(service: "_DocumentService", params: dict[str, object]) -> ToolResult:
     query = cast(str, params.get(Keys.query, "")).strip()
 
-    from services.data_graph_service import KIND_DOCUMENT, get_data_graph_service
+    from services.memory_recall_service import recall
 
-    dgs = get_data_graph_service()
-    results = dgs.recall(query, kinds=[KIND_DOCUMENT], limit=10)
+    results = recall(query, kinds=["document"], limit=10)
 
     rows = []
     for doc_id, artifacts in _group_results_by_doc(results).items():
@@ -336,14 +335,8 @@ def _append_meta_summary(lines: list[str], doc: dict[str, object], meta: dict[st
 
 
 def _fetch_doc_fragments(doc_id: str) -> list[str]:
-    from services.data_graph_service import get_data_graph_service
-    dgs = get_data_graph_service()
-    with dgs.db.connection() as conn:
-        cursor = conn.execute(
-            "SELECT value FROM data_graph WHERE source=? AND active=1 ORDER BY key",
-            (f'document:{doc_id}',),
-        )
-        return [row[0] for row in cursor.fetchall() if row[0]]
+    from models.document import DocumentRow
+    return [f.value for f in DocumentRow.for_document_id(doc_id).get() if f.value]
 
 
 def _handle_view(service: "_DocumentService", params: dict[str, object]) -> ToolResult:
@@ -396,8 +389,8 @@ def _handle_delete(service: "_DocumentService", params: dict[str, object]) -> To
             action="delete",
         )
 
-    from services.data_graph_service import get_data_graph_service
-    deleted_count = get_data_graph_service().hard_delete_by_source_prefix(f"document:{doc_id}")
+    from models.document import DocumentRow
+    deleted_count = DocumentRow.purge_by_document_id(doc_id)
 
     return ToolResult.ok(
         {"id": doc_id, "name": doc["original_name"], "artifacts_removed": deleted_count},

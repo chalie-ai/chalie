@@ -11,9 +11,14 @@ through a vertical model's ORM primitives —
 query against ``data_graph`` or its shadow tables.
 
 Recall span (ruling 4): ``user_specific``, ``system``, ``misc``,
-``behavioral_pattern``, ``place``, ``discovery`` — deliberately NOT
-``contact`` (no recall need identified) and NOT ``document`` (stays on the
-generic write gateway until E8).
+``behavioral_pattern``, ``place``, ``discovery``, ``document`` —
+deliberately NOT ``contact`` (no recall need identified). ``document`` is in
+``_VERTICALS`` so an explicit ``kinds=["document"]`` call (document search,
+``abilities/document.py`` / ``api/documents.py``) reaches it through this
+service; it is deliberately absent from every default span
+(``memory_retrieval._DG_RECALL_KINDS``, ``api/memory.py._RECALL_KINDS``),
+which pass their own explicit ``kinds=`` lists that omit it — so it never
+enters generic cross-kind recall uninvited.
 
 Embedding backfill — why this service does NOT port
 ``_backfill_missing_embeddings`` (f035ebc0:services/data_graph_service.py):
@@ -47,6 +52,7 @@ from typing import cast
 from models.behavioral_pattern import BehavioralPattern
 from models.data_graph import DataGraphRow
 from models.discovery import DiscoveryRow
+from models.document import DocumentRow
 from models.fact import FactRow
 from models.misc import MiscRow
 from models.place import PlaceRow
@@ -55,9 +61,11 @@ from services.time_utils import parse_utc, utc_now
 
 logger = logging.getLogger(__name__)
 
-# Recall span (ruling 4) — every kind fused into cross-kind recall.
+# Recall span (ruling 4) — every kind fused into cross-kind recall. `document`
+# only surfaces for a caller that explicitly asks (`kinds=["document"]`); every
+# default-span caller passes its own explicit `kinds=` list that omits it.
 _VERTICALS: tuple[type[DataGraphRow], ...] = (
-    FactRow, SystemRow, MiscRow, BehavioralPattern, PlaceRow, DiscoveryRow,
+    FactRow, SystemRow, MiscRow, BehavioralPattern, PlaceRow, DiscoveryRow, DocumentRow,
 )
 
 # Fusion weights (ruling 2, ported VERBATIM from the deleted

@@ -60,6 +60,20 @@ def _ocrable_invoice_png_path() -> str:
     return path
 
 
+def _drain_search_index() -> None:
+    """Drive the REAL async search-expander pipeline synchronously against the
+    bound test DB — the exact production code path, no mocks. In prod the
+    search_expander_worker daemon does this continuously; a test must do it
+    explicitly because no worker runs under pytest."""
+    from services.search_expander_service import SearchExpanderService
+    svc = SearchExpanderService()
+    svc._self_heal()
+    item = svc._dequeue()
+    while item is not None:
+        svc._process(item)
+        item = svc._dequeue()
+
+
 def _blank_png_path() -> str:
     """A 1x1 white PNG (no words -> empty OCR), written under the temp prefix."""
     path = new_tmp_path("blank.png")
@@ -86,6 +100,11 @@ def test_uploaded_image_is_findable_via_document_search(db: sqlite3.Connection) 
     assert up.status == "success", up
     assert cast(dict[str, object], up.body)["id"], up.body
     assert cast(dict[str, object], up.body)["hash"], up.body
+
+    # The FTS/vec posting is written by the async search-expander pipeline
+    # (services/search_expander_service.py), never synchronously by save() —
+    # drive it explicitly since no worker daemon runs under pytest.
+    _drain_search_index()
 
     found = ability.run({"action": "search", "query": "invoice"})
     # : search returns a JSON list of document rows; the matched image

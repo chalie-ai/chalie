@@ -448,13 +448,8 @@ class DocumentService:
                 logger.info("[DOCS] Soft-deleted document %s", safe(doc_id))
                 # Deactivate data_graph artifacts so they stop surfacing in recall.
                 try:
-                    from services.data_graph_service import get_data_graph_service
-                    dgs = get_data_graph_service()
-                    with dgs.db.connection() as conn:
-                        conn.execute(
-                            "UPDATE data_graph SET active=0 WHERE source LIKE ?",
-                            (f'document:{doc_id}%',),
-                        )
+                    from models.document import DocumentRow
+                    DocumentRow.set_fragments_active(doc_id, 0)
                 except Exception as exc:
                     logger.warning("[DOCS] Failed to deactivate artifacts for %s: %s", safe(doc_id), exc)
             return updated
@@ -485,13 +480,8 @@ class DocumentService:
                 logger.info("[DOCS] Restored document %s", safe(doc_id))
                 # Reactivate data_graph artifacts so they surface in recall again.
                 try:
-                    from services.data_graph_service import get_data_graph_service
-                    dgs = get_data_graph_service()
-                    with dgs.db.connection() as conn:
-                        conn.execute(
-                            "UPDATE data_graph SET active=1 WHERE source LIKE ?",
-                            (f'document:{doc_id}%',),
-                        )
+                    from models.document import DocumentRow
+                    DocumentRow.set_fragments_active(doc_id, 1)
                 except Exception as exc:
                     logger.warning("[DOCS] Failed to reactivate artifacts for %s: %s", safe(doc_id), exc)
             return updated
@@ -527,8 +517,8 @@ class DocumentService:
             # Cascade-delete data_graph artifacts for this document.
             if deleted:
                 try:
-                    from services.data_graph_service import get_data_graph_service
-                    get_data_graph_service().hard_delete_by_source_prefix(f'document:{doc_id}')
+                    from models.document import DocumentRow
+                    DocumentRow.purge_by_document_id(doc_id)
                 except Exception as exc:
                     logger.warning("[DOCS] Failed to cascade-delete data_graph artifacts for %s: %s", safe(doc_id), exc)
 
