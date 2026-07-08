@@ -144,7 +144,7 @@ class TestPrivacyAPI:
     def test_delete_all_tables_all_exist_in_schema(self) -> None:
         import re
 
-        from api.privacy import _DELETE_ALL_TABLES
+        from api.privacy import _DELETE_ALL_MODELLESS_TABLES, _DELETE_ALL_MODELS
         from services.file_mapper_service import FileMapperService
 
         schema_path = FileMapperService.get_schema_path()
@@ -159,7 +159,10 @@ class TestPrivacyAPI:
             )
         )
 
-        dead = [t for t in _DELETE_ALL_TABLES if t not in schema_tables]
+        # Every table the nuclear delete touches — resolved through each model's
+        # own get_table() plus the model-less residuals — must exist in schema.
+        wiped_tables = [m.get_table() for m in _DELETE_ALL_MODELS] + list(_DELETE_ALL_MODELLESS_TABLES)
+        dead = [t for t in wiped_tables if t not in schema_tables]
         assert dead == [], (
-            f"_DELETE_ALL_TABLES references tables not in schema.sql: {dead}"
+            f"nuclear-delete references tables not in schema.sql: {dead}"
         )

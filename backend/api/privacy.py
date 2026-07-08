@@ -24,6 +24,18 @@ from flask import Response, stream_with_context
 from flask.typing import ResponseReturnValue
 from flask_restx import Namespace, Resource
 
+from models.model import Model
+from models.tool_call import ToolCall
+from models.list_item import ListItem
+from models.transcript import Transcript
+from models.episode import Episode
+from models.data_graph import DataGraphRow
+from models.list import List
+from models.scheduled_item import ScheduledItem
+from models.document_meta import DocumentMetaData
+from models.watched_folder import WatchedFolder
+from models.memory_recall_log import MemoryRecallLog
+from models.llm_call_log import LlmCallLog
 from services.database import Database
 from services.time_utils import utc_now
 from .auth import require_session
@@ -45,24 +57,27 @@ register_dto(privacy_ns, DeleteAllResult, Error)
 
 _P = privacy_ns.models
 
-# Ordered list of user-data tables for the nuclear delete operation.
-# Children must appear before parents to satisfy FK constraints.
-# System / auth / config tables are deliberately excluded.
-_DELETE_ALL_TABLES = (
-    # ── FK children first ─────────────────────────────────────────────────
-    "tool_calls",          # FK → transcript(id)
-    "list_items",          # FK → lists(id)
-    "data_graph_edges",    # FK → data_graph(id) ON DELETE CASCADE
-    # ── Parents / independents ────────────────────────────────────────────
-    "transcript",
-    "episodes",
-    "data_graph",
-    "lists",
-    "scheduled_items",
-    "documents",
-    "watched_folders",
-    "memory_recall_log",
-    "llm_call_log",
+# Modeled user-data tables for the nuclear delete, FK-children before
+# parents. .truncate() clears each. System / auth / config tables excluded.
+_DELETE_ALL_MODELS: tuple[type[Model], ...] = (
+    ToolCall,          # tool_calls   FK -> transcript(id)
+    ListItem,          # list_items   FK -> lists(id)
+    Transcript,
+    Episode,
+    DataGraphRow,      # data_graph
+    List,              # lists
+    ScheduledItem,
+    DocumentMetaData,  # documents
+    WatchedFolder,
+    MemoryRecallLog,
+    LlmCallLog,
+)
+
+# User-data tables with no model yet — cleared by explicit DELETE, children
+# first so data_graph_edges (FK child of data_graph) goes before the model
+# loop empties data_graph.
+_DELETE_ALL_MODELLESS_TABLES = (
+    "data_graph_edges",   # FK -> data_graph(id) ON DELETE CASCADE
     "concept_lut_misses",
 )
 
@@ -300,14 +315,20 @@ class DeleteAllResource(Resource):
             truncate_failures: list[str] = []
 
             with Database.transaction() as conn:
-                cursor = conn.cursor()
-                for table in _DELETE_ALL_TABLES:
+                # Model-less residual tables first (children before parents).
+                for table in _DELETE_ALL_MODELLESS_TABLES:
                     try:
-                        cursor.execute(f"DELETE FROM {table}")
+                        conn.execute(f"DELETE FROM {table}")
                     except Exception as e:
                         logger.warning(f"[REST API] Failed to delete from {table}: {e}")
                         truncate_failures.append(table)
-                cursor.close()
+                # Every modeled user-data table, FK-children before parents.
+                for model in _DELETE_ALL_MODELS:
+                    try:
+                        model.truncate()
+                    except Exception as e:
+                        logger.warning(f"[REST API] Failed to truncate {model.get_table()}: {e}")
+                        truncate_failures.append(model.get_table())
 
             # Clear user-owned MemoryStore keys
             try:
