@@ -41,6 +41,11 @@ def db() -> Iterator[sqlite3.Connection]:
     with patch.object(FileMapperService, "get_db_path", return_value=sentinel):
         _db_gateway._local.conns = {str(sentinel): conn}
         _db_gateway._local.depths = {}
+        # Bind the Model connection getter — same boot step run.py runs once at
+        # startup (``Database().bind()``). Repeated per test because each Database()
+        # captures this test's patched path, so the getter must point at the current
+        # test's in-memory handle.
+        _db_gateway.Database().bind()
         try:
             yield conn
         finally:

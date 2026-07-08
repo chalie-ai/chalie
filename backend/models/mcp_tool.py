@@ -4,16 +4,24 @@ Active-record row-model (Rule 5 / §4.1). ``id`` is the DDL's own
 ``INTEGER PRIMARY KEY`` (auto-assigned), so the base's ``save``/``get``/
 ``delete`` id-centric verbs apply unmodified; no id-generation override is
 needed here (contrast :class:`~models.mcp_client_server.McpClientServer`'s
-TEXT-PK). This model is the SOLE home of ``mcp_tools`` row SQL;
-:class:`~services.mcp_client_service.McpClientService` reads and writes
-exclusively through it. Holds no mp, calls no service (Rule-3 depth).
+TEXT-PK). The table lives in the dedicated ``mcp_tools.sqlite`` runtime
+file (schema owned by ``McpClientService._open_tools_db``, not chalie.db's
+schema.sql), so :meth:`_bound_connection` is overridden to reach that file
+directly through the gateway — the same sanctioned separate-db-file
+exception as :class:`~models.skill.Skill`. This model is the SOLE home of
+``mcp_tools`` row SQL; :class:`~services.mcp_client_service.McpClientService`
+reads and writes exclusively through it. Holds no mp, calls no business
+service (Rule-3 depth).
 """
 
 from __future__ import annotations
 
+import sqlite3
 from typing import TYPE_CHECKING, ClassVar
 
 from models.model import Model
+from services.database import Database
+from services.file_mapper_service import FileMapperService
 
 if TYPE_CHECKING:
     from models.mcp_client_server import McpClientServer
@@ -29,6 +37,13 @@ class McpTool(Model):
     @classmethod
     def get_table(cls) -> str:
         return "mcp_tools"
+
+    @classmethod
+    def _bound_connection(cls) -> sqlite3.Connection:
+        """Reach mcp_tools.sqlite directly rather than the chalie.db-bound
+        getter ``Database.bind()`` installs on the base — the sanctioned
+        exception for this table's dedicated db file (owner ruling)."""
+        return Database.conn(str(FileMapperService.get_mcp_tools_db_path()))
 
     # Real columns (annotation-only; populated by Model.__init__ from kwargs /
     # hydrate, so mypy knows their types on attribute access).

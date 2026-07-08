@@ -7,6 +7,7 @@ import sqlite3
 import pytest
 from flask.testing import FlaskClient
 
+from models.telemetry import Telemetry
 from services.world_state import world_state
 
 
@@ -27,13 +28,7 @@ def _reset_world_state(db_conn: sqlite3.Connection | None = None) -> None:
 def _seed_telemetry(db_conn: sqlite3.Connection, ctx: dict[str, object]) -> None:
     from services.heartbeat_service import heartbeat_service
     heartbeat_service._ctx = None
-    flat = heartbeat_service._flatten(ctx)
-    db_conn.execute("DELETE FROM telemetry")
-    db_conn.executemany(
-        "INSERT INTO telemetry (key, value) VALUES (?, ?)",
-        list(flat.items()),
-    )
-    db_conn.commit()
+    Telemetry.replace(ctx)
     heartbeat_service._ctx = None
 
 
@@ -135,3 +130,4 @@ class TestWorldStateFullLifecycle:
         assert inputs["telemetry"]["location_name"] == "Sliema, MT"
         assert "news_service" in inputs["signals"]
         assert "schedule" not in inputs
+

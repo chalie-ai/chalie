@@ -295,9 +295,15 @@ class McpClientService:
             updated_at=utc_now().isoformat(),
         )
         server.save()
-        server_id = server.id  # type: ignore[misc]
+        server_id = cast(str, server.id)
         logger.info("%s Added server %r (id=%s)", _LOG_PREFIX, name, server_id)
-        return self._server_to_dict(server)
+        # Re-read the row: columns left unset so their SQL defaults fire
+        # (last_pinged_at) exist only on a hydrated instance, and
+        # _server_to_dict projects every column.
+        saved = McpClientServer.get(server_id)
+        if saved is None:
+            raise RuntimeError(f"mcp server row vanished after insert: {server_id}")
+        return self._server_to_dict(saved)
 
     def _find_by_normalized_host(self, host: str) -> dict[str, object] | None:
         """Return an existing server resolving to the same endpoint, else None."""

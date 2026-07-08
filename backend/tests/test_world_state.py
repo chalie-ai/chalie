@@ -10,6 +10,7 @@ import time as _time
 
 import pytest
 
+from models.telemetry import Telemetry
 from services.world_state import WorldState
 
 _HEADER = "### Background Telemetry,Processes & Signals"
@@ -26,13 +27,7 @@ def _fresh() -> WorldState:
 def _seed_telemetry(db: sqlite3.Connection, ctx: dict[str, object]) -> None:
     from services.heartbeat_service import heartbeat_service
     heartbeat_service._ctx = None
-    flat = heartbeat_service._flatten(ctx)
-    db.execute("DELETE FROM telemetry")
-    db.executemany(
-        "INSERT INTO telemetry (key, value) VALUES (?, ?)",
-        list(flat.items()),
-    )
-    db.commit()
+    Telemetry.replace(ctx)
     heartbeat_service._ctx = None
 
 

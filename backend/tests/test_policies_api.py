@@ -45,6 +45,11 @@ def client(monkeypatch: pytest.MonkeyPatch) -> "Generator[FlaskClient, None, Non
 
     _db_gateway._local.conns = {str(sentinel): conn}
     _db_gateway._local.depths = {}
+    # Bind the Model connection getter — same boot step run.py runs once at
+    # startup (``Database().bind()``). Repeated per test because each Database()
+    # captures this test's patched path, so the getter must point at the current
+    # test's in-memory handle.
+    _db_gateway.Database().bind()
     try:
         app = mount_namespace(mod.policies_ns)
         yield app.test_client()
@@ -104,6 +109,11 @@ def mcp_client(monkeypatch: pytest.MonkeyPatch) -> "Generator[FlaskClient, None,
 
     _db_gateway._local.conns = {str(sentinel): conn}
     _db_gateway._local.depths = {}
+    # Bind the Model connection getter — same boot step run.py runs once at
+    # startup (``Database().bind()``). Repeated per test because each Database()
+    # captures this test's patched path, so the getter must point at the current
+    # test's in-memory handle.
+    _db_gateway.Database().bind()
     try:
         app = mount_namespace(mod.policies_ns)
         yield app.test_client()
