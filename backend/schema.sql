@@ -736,8 +736,10 @@ CREATE INDEX IF NOT EXISTS idx_policy_blocked_log_created ON policy_blocked_log(
 -- truth for which keys are collected; the backend persists whatever is sent.
 -- Nested payload keys are flattened with dots, e.g.
 --   {"device": {"name": "iPhone"}}  →  key='device.name', value='iPhone'
--- One row per key; UPSERT on every push. WorldState renders by reading the
--- whole table and grouping by the top-level prefix.
+-- One row per flattened key. Each push is a whole-snapshot SWAP (DELETE-all +
+-- re-INSERT in one txn, owned by the Telemetry model), NOT a per-key upsert:
+-- a key absent from the new payload disappears. WorldState renders by reading
+-- the whole table and grouping by the top-level prefix.
 CREATE TABLE IF NOT EXISTS telemetry (
     key   TEXT PRIMARY KEY,
     value TEXT
