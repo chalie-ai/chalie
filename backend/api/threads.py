@@ -37,6 +37,8 @@ from configs.enums.config_type import ConfigTypeEnum
 from services.database import Database
 from services.locale_service import CHAT_TIMESTAMP_FMT, format_date
 from services.rich_media_parser import parse as _parse_rich_media
+from models.tool_call import ToolCall
+from models.transcript import Transcript
 from .auth import require_session
 from .dto import Error, expects, register_dto, responds
 from .dto.attachment import Attachment
@@ -74,7 +76,7 @@ _FILE_PLACEHOLDER = "[File attached]"
 # ── Row → message projection ──────────────────────────────────────────────────
 
 
-def _fetch_tool_calls_for_transcripts(conn: sqlite3.Connection, transcript_ids: list[int]) -> list[dict[str, object]]:
+def _fetch_tool_calls_for_transcripts(transcript_ids: list[int]) -> list[dict[str, object]]:
     """Tool-call rows anchored to any of the given transcript ids, ordered by id.
 
     Rows within the 7-day retention window carry the rich-media payloads the
@@ -85,52 +87,21 @@ def _fetch_tool_calls_for_transcripts(conn: sqlite3.Connection, transcript_ids: 
     """
     if not transcript_ids:
         return []
-    placeholders = ",".join("?" * len(transcript_ids))
-    tc_rows = conn.execute(
-        f"SELECT transcript_id, tool_name, params, result, summary, created_at, ended_at, state FROM tool_calls "
-        f"WHERE transcript_id IN ({placeholders}) ORDER BY id",
-        tuple(transcript_ids),
-    ).fetchall()
+    tc_rows = ToolCall.by_transcripts(transcript_ids)
     return [
         {
-            "transcript_id": r[0],
-            "tool_name": r[1],
-            "params": r[2],
-            "result": r[3] or "",
-            "summary": r[4] or "",
-            "created_at": r[5],
-            "ended_at": r[6],
-            "state": r[7],
+            "transcript_id": tc.transcript_id,
+            "tool_name": tc.tool_name,
+            "params": tc.params,
+            "result": tc.result or "",
+            "summary": tc.summary or "",
+            "created_at": tc.created_at,
+            "ended_at": tc.ended_at,
+            "state": tc.state,
         }
-        for r in tc_rows
+        for tc in tc_rows
     ]
 
-
-def _resolve_turn_transcript_ids(conn: sqlite3.Connection, assistant_ids: list[int]) -> list[int]:
-    """Return every transcript row ID of the turn(s) that own the given assistant ids.
-
-    Mirrors the logic in ``resolve_tool_call_transcript_ids`` but resolves all
-    assistant rows in a single query rather than one per row, eliminating the N+1
-    when projecting a full turn block. Falls back to the supplied ids when any
-    row has no turn_id (skip_transcript channels).
-    """
-    if not assistant_ids:
-        return []
-    placeholders = ",".join("?" * len(assistant_ids))
-    channel_turn_rows = conn.execute(
-        f"SELECT DISTINCT channel, turn_id FROM transcript WHERE id IN ({placeholders}) AND turn_id IS NOT NULL",
-        tuple(assistant_ids),
-    ).fetchall()
-    if not channel_turn_rows:
-        return assistant_ids
-    all_ids: list[int] = []
-    for channel, turn_id in channel_turn_rows:
-        ids = conn.execute(
-            "SELECT id FROM transcript WHERE channel = ? AND turn_id = ? ORDER BY id",
-            (channel, turn_id),
-        ).fetchall()
-        all_ids.extend(r[0] for r in ids)
-    return all_ids or assistant_ids
 
 
 def _fetch_attachments_for_transcripts(conn: sqlite3.Connection, transcript_ids: list[int]) -> dict[int, list[dict[str, object]]]:
@@ -232,11 +203,11 @@ def _rows_to_messages(rows: list[dict[str, object]]) -> list[dict[str, object]]:
     # tool-only call anchors to the user input row, and a turn whose only row
     # so far is that input row has zero assistant rows — keying off assistant
     # ids alone would resolve to an empty scope and silently drop its chips.
-    turn_scope_ids = _resolve_turn_transcript_ids(
-        conn, [cast("int", r['id']) for r in rows]
+    turn_scope_ids = Transcript.turn_scope_ids(
+        [cast("int", r['id']) for r in rows]
     )
     # One query for all tool calls across the whole turn scope (chips + segments).
-    turn_calls = _fetch_tool_calls_for_transcripts(conn, turn_scope_ids)
+    turn_calls = _fetch_tool_calls_for_transcripts(turn_scope_ids)
     # Group by transcript_id for per-row chip lookup.
     calls_by_transcript = _group_calls_by_transcript(turn_calls)
 
@@ -277,7 +248,6 @@ def serialize_turn(channel: str, turn_id: int) -> dict[str, object]:
     metadata (gist, preview, last activity) and the turn-level render state
     (``working`` — unsettled/in-flight — and ``duration_ms``, derived from the row
     span) are folded in."""
-    from models.transcript import Transcript
     from services.time_utils import parse_utc
 
     rows = Transcript.by_turn(channel, turn_id)
@@ -343,8 +313,6 @@ class ThreadsResource(Resource):
     @expects(ThreadFeedQuery, source="args")
     def get(self, dto: ThreadFeedQuery) -> ThreadFeed:
         """List threads with collapsed metadata (gist, preview, last activity)."""
-        from models.transcript import Transcript  # noqa: PLC0415
-
         limit, offset = (_SEARCH_LIMIT, 0) if dto.q else (dto.limit, dto.offset)
         channel = ConfigTypeEnum.get_by_type(dto.type).channel
         threads, has_more, threads_returned = Transcript.recent_threads(

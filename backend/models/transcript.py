@@ -277,6 +277,40 @@ class Transcript(Model):
             .get()
         ]
 
+    @classmethod
+    def turn_scope_ids(cls, ids: list[int]) -> list[int]:
+        """Every transcript id that shares a turn with any of the given ids.
+
+        Given a mixed set of transcript row ids, return every transcript id
+        belonging to the same turn(s). Rows whose ``turn_id`` is NULL (e.g.
+        skip_transcript channels) are excluded from the turn-key lookup; if
+        every input row has a NULL turn_id the input list is returned
+        unchanged as a fallback. Ordered by ``id`` ascending. Empty input
+        short-circuits to ``[]``."""
+        if not ids:
+            return []
+        conn = cls._bound_connection()
+        placeholders = cls._placeholders(len(ids))
+        channel_turn_rows = conn.execute(
+            f"SELECT DISTINCT channel, turn_id FROM transcript "
+            f"WHERE id IN ({placeholders}) AND turn_id IS NOT NULL",
+            tuple(ids),
+        ).fetchall()
+        if not channel_turn_rows:
+            return list(ids)
+        # Row-value IN needs each element parenthesised — ``(?,?),(?,?)`` — not a
+        # flat ``?,?`` list (SQLite: "IN(...) element has 1 term - expected 2").
+        scope_placeholders = ",".join("(?,?)" for _ in channel_turn_rows)
+        scope_ids = conn.execute(
+            f"SELECT id FROM transcript "
+            f"WHERE (channel, turn_id) IN ({scope_placeholders}) "
+            f"ORDER BY id",
+            tuple(c for pair in channel_turn_rows for c in pair),
+        ).fetchall()
+        if not scope_ids:
+            return list(ids)
+        return [int(r[0]) for r in scope_ids]
+
     # ── SQL fragment builders (shared, no duplication) ───────────────────────
 
     @classmethod
