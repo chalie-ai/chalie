@@ -7,7 +7,7 @@ import sqlite3
 import threading
 from typing import Optional, cast
 
-from contracts.search_config import is_searchable
+from contracts.search_config import SearchConfig, config_for_kind, is_searchable
 from services.database import Database
 from services.embedding_utils import pack_embedding
 
@@ -148,14 +148,20 @@ class SearchExpanderService:
             logger.debug("[SES] data_graph rowid=%s gone — skipping", rowid)
             return
 
-        key, value, _ = row[0], row[1], row[2]
+        key, value, kind = row[0], row[1], row[2]
+        config = config_for_kind(kind)
+        if config is None:
+            logger.warning(
+                "[SES] no search config for kind=%s rowid=%s — skipping", kind, rowid
+            )
+            return
         variants = self._generate_variants(key, value)
 
         with Database.transaction() as conn:
-            # Absorbs _schedule_embeddings: populate key_vec/value_vec if missing.
-            self._backfill_key_value_vec(conn, rowid, key, value)
-            self._write_variants(conn, _TABLE_DATA_GRAPH, rowid, variants)
-            self._update_search_queries_data_graph(conn, rowid, variants)
+            # Absorbs _schedule_embeddings: populate the declared vec lanes if missing.
+            self._backfill_key_value_vec(conn, rowid, key, value, config)
+            self._write_variants(conn, _TABLE_DATA_GRAPH, rowid, variants, config)
+            self._update_search_queries_data_graph(conn, rowid, variants, config)
 
     def _generate_variants(self, key: str, value: str) -> list[str]:
         """Empty return means skip variant writes but still mark search_queries so self-heal doesn't re-enqueue the row."""
@@ -170,14 +176,20 @@ class SearchExpanderService:
             logger.warning("[SES] doc2query failed for key='%s': %s", key, e)
             return []
 
-    def _write_variants(self, conn: sqlite3.Connection, table: str, rowid: int, variants: list[str]) -> None:
-        """Write each variant string + embedding into expanded_semantic / expanded_semantic_vec.
+    def _write_variants(
+        self, conn: sqlite3.Connection, table: str, rowid: int,
+        variants: list[str], config: SearchConfig,
+    ) -> None:
+        """Write each variant string + embedding into the declared variant tables
+        (``config.variant_table`` / ``config.variant_vec_table``).
 
         Clears existing variants for this (table, rowid) first so re-processing
-        is idempotent. The cascade trigger on expanded_semantic handles vec cleanup.
+        is idempotent. The cascade trigger on the variant table handles vec
+        cleanup. ``table`` is the ``relates_to_table`` value (the base table the
+        variant points back at), distinct from the variant storage table.
         """
         conn.execute(
-            "DELETE FROM expanded_semantic "
+            f"DELETE FROM {config.variant_table} "
             "WHERE relates_to_table = ? AND related_to_id = ?",
             (table, rowid)
         )
@@ -196,7 +208,7 @@ class SearchExpanderService:
             try:
                 cursor = conn.cursor()
                 cursor.execute(
-                    "INSERT INTO expanded_semantic (relates_to_table, related_to_id, str) "
+                    f"INSERT INTO {config.variant_table} (relates_to_table, related_to_id, str) "
                     "VALUES (?, ?, ?)",
                     (table, rowid, variant_text)
                 )
@@ -207,48 +219,46 @@ class SearchExpanderService:
                 blob = pack_embedding(emb)
                 if blob:
                     conn.execute(
-                        "INSERT OR REPLACE INTO expanded_semantic_vec (rowid, embedding) "
+                        f"INSERT OR REPLACE INTO {config.variant_vec_table} (rowid, embedding) "
                         "VALUES (?, ?)",
                         (new_id, blob)
                     )
             except Exception as e:
                 logger.warning("[SES] Failed to write variant '%s': %s", variant_text[:60], e)
 
-    def _backfill_key_value_vec(self, conn: sqlite3.Connection, rowid: int, key: str, value: str) -> None:
-        """Populate data_graph_key_vec / data_graph_value_vec if the row is missing.
+    def _backfill_key_value_vec(
+        self, conn: sqlite3.Connection, rowid: int, key: str, value: str,
+        config: SearchConfig,
+    ) -> None:
+        """Populate each declared vec lane (``config.vec_lanes``) if the row is
+        missing it — one embedding per lane, sourced from the base-table column
+        the lane names, falling back to ``key`` when that column is empty
+        (preserving data_graph's value→key fallback).
 
-        Absorbs the old _schedule_embeddings thread. Noop when both vecs exist.
+        Absorbs the old _schedule_embeddings thread. Noop when every lane's vec
+        row already exists.
         """
+        sources = {"key": key, "value": value}
         try:
-            key_exists = conn.execute(
-                "SELECT 1 FROM data_graph_key_vec WHERE rowid = ?", (rowid,)
-            ).fetchone()
-            if not key_exists:
-                from services.embedding_service import get_embedding_service
-                emb_svc = get_embedding_service()
-                key_emb = emb_svc.generate_embedding(key) if key else None
-                if key_emb:
-                    blob = pack_embedding(key_emb)
+            emb_svc = None
+            for lane in config.vec_lanes:
+                exists = conn.execute(
+                    f"SELECT 1 FROM {lane.table} WHERE rowid = ?", (rowid,)
+                ).fetchone()
+                if exists:
+                    continue
+                text = sources.get(lane.source) or key
+                if not text:
+                    continue
+                if emb_svc is None:
+                    from services.embedding_service import get_embedding_service
+                    emb_svc = get_embedding_service()
+                emb = emb_svc.generate_embedding(text)
+                if emb:
+                    blob = pack_embedding(emb)
                     if blob:
                         conn.execute(
-                            "INSERT OR REPLACE INTO data_graph_key_vec (rowid, embedding) "
-                            "VALUES (?, ?)",
-                            (rowid, blob)
-                        )
-
-            value_exists = conn.execute(
-                "SELECT 1 FROM data_graph_value_vec WHERE rowid = ?", (rowid,)
-            ).fetchone()
-            if not value_exists:
-                from services.embedding_service import get_embedding_service
-                emb_svc = get_embedding_service()
-                value_text = value if value else key
-                val_emb = emb_svc.generate_embedding(value_text) if value_text else None
-                if val_emb:
-                    blob = pack_embedding(val_emb)
-                    if blob:
-                        conn.execute(
-                            "INSERT OR REPLACE INTO data_graph_value_vec (rowid, embedding) "
+                            f"INSERT OR REPLACE INTO {lane.table} (rowid, embedding) "
                             "VALUES (?, ?)",
                             (rowid, blob)
                         )
@@ -256,54 +266,77 @@ class SearchExpanderService:
             logger.warning("[SES] backfill_key_value_vec failed for rowid=%s: %s", rowid, e)
 
     def _update_search_queries_data_graph(
-        self, conn: sqlite3.Connection, rowid: int, variants: list[str]
+        self, conn: sqlite3.Connection, rowid: int, variants: list[str],
+        config: SearchConfig,
     ) -> None:
-        """Persist variant texts in data_graph.search_queries and resync FTS."""
+        """Persist variant texts in the declared queries column and resync the
+        declared FTS table. Table + column names come from ``config`` so the same
+        path serves any searchable model; data_graph's behaviour is unchanged."""
+        base_cols = [c for c in config.fts_columns if c != config.queries_column]
         old = conn.execute(
-            "SELECT key, value, kind, search_queries FROM data_graph WHERE id = ?",
+            f"SELECT {', '.join(base_cols)}, {config.queries_column} "
+            "FROM data_graph WHERE id = ?",
             (rowid,)
         ).fetchone()
         if old is None:
             return
+        row_vals = dict(zip(base_cols, old))
+        prior_queries = old[len(base_cols)]
+        queries_json = json.dumps(variants)
 
         # The external-content FTS index is populated ONLY here, in lock-step
-        # with search_queries: this method sets search_queries non-NULL exactly
-        # when it inserts the posting, and no trigger writes the index. So
-        # search_queries IS NULL <=> the row was never indexed, and issuing the
-        # FTS5 'delete' command for a posting that was never inserted corrupts
-        # the index (delete-before-first-insert). Only remove a prior posting
-        # when one exists; a first index goes straight to INSERT.
-        if old[3] is not None:
-            self._delete_data_graph_fts(conn, rowid, old[0], old[1], old[2], old[3])
+        # with the queries column: this method sets it non-NULL exactly when it
+        # inserts the posting, and no trigger writes the index. So the queries
+        # column IS NULL <=> the row was never indexed, and issuing the FTS5
+        # 'delete' command for a posting that was never inserted corrupts the
+        # index (delete-before-first-insert). Only remove a prior posting when
+        # one exists; a first index goes straight to INSERT.
+        if prior_queries is not None:
+            self._delete_data_graph_fts(
+                conn, rowid, {**row_vals, config.queries_column: prior_queries}, config
+            )
 
         conn.execute(
-            "UPDATE data_graph SET search_queries = ? WHERE id = ?",
-            (json.dumps(variants), rowid)
+            f"UPDATE data_graph SET {config.queries_column} = ? WHERE id = ?",
+            (queries_json, rowid)
         )
+        cols = ", ".join(config.fts_columns)
+        placeholders = ", ".join(["?"] * (len(config.fts_columns) + 1))
+        fts_values = [
+            queries_json if col == config.queries_column else (row_vals.get(col) or '')
+            for col in config.fts_columns
+        ]
         try:
             conn.execute(
-                "INSERT INTO data_graph_fts(rowid, key, value, kind, search_queries) "
-                "VALUES (?, ?, ?, ?, ?)",
-                (rowid, old[0], old[1] or '', old[2], json.dumps(variants))
+                f"INSERT INTO {config.fts_table}(rowid, {cols}) VALUES ({placeholders})",
+                (rowid, *fts_values)
             )
         except Exception as e:
             logger.warning("[SES] data_graph FTS sync failed for rowid=%s: %s", rowid, e)
 
     # ── Private: FTS helpers ──────────────────────────────────────────────────
 
-    def _delete_data_graph_fts(self, conn: sqlite3.Connection, rowid: int, key: str, value: str,
-                                kind: str, search_queries: str) -> None:
-        """Remove a data_graph FTS entry using the external-content delete command."""
+    def _delete_data_graph_fts(
+        self, conn: sqlite3.Connection, rowid: int,
+        indexed: dict[str, object], config: SearchConfig,
+    ) -> None:
+        """Remove an FTS entry via the external-content 'delete' command. The
+        indexed column values (``indexed``, keyed by column name) MUST be listed
+        in ``config.fts_columns`` order — the FTS5 external-content requirement —
+        with None coerced to ''."""
+        cols = ", ".join(config.fts_columns)
+        placeholders = ", ".join(["?"] * (len(config.fts_columns) + 1))
+        values = [indexed.get(col) or '' for col in config.fts_columns]
         try:
             conn.execute(
-                "INSERT INTO data_graph_fts"
-                "(data_graph_fts, rowid, key, value, kind, search_queries) "
-                "VALUES('delete', ?, ?, ?, ?, ?)",
-                (rowid, key, value or '', kind, search_queries)
+                f"INSERT INTO {config.fts_table}"
+                f"({config.fts_table}, rowid, {cols}) "
+                f"VALUES('delete', {placeholders})",
+                (rowid, *values)
             )
         except Exception:
             try:
-                conn.execute("DELETE FROM data_graph_fts WHERE rowid = ?", (rowid,))
+                conn.execute(f"DELETE FROM {config.fts_table} WHERE rowid = ?", (rowid,))
             except Exception as e:
                 logger.warning("[SES] data_graph FTS delete failed for rowid=%s: %s", rowid, e)
 
