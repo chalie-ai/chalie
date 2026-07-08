@@ -30,6 +30,18 @@ class SystemRow(DataGraphRow):
                    .filter("active", 1).first())
 
     @classmethod
+    def newest_active_by_key(cls, key: str) -> Self | None:
+        """The newest *live* row for this kind's exact ``key`` — the shared live
+        predicate (``active = 1 AND deleted_at IS NULL``) plus a deterministic
+        ``ORDER BY id DESC`` so that if more than one active row exists for the
+        key (a historical or concurrent UPSERT collision in the store path) the
+        newest deterministically wins, rather than SQLite's
+        implementation-defined order. Distinct from :meth:`active_by_key` — the
+        store lookup, which is ``active``-only and unordered — this is the read
+        for durable cursors that must survive duplicate-active rows."""
+        return cls.live().filter("key", key).order_by("id DESC").first()
+
+    @classmethod
     def store(cls, key: str, value: str, source: str | None = None) -> tuple[Self, str, str | None]:
         """Exact-key upsert. Returns ``(row, status, old_value)`` where status is
         ``created`` | ``reinforced`` | ``superseded`` (system always temporally

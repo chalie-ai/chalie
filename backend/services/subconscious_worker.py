@@ -16,7 +16,6 @@ if TYPE_CHECKING:
 
 from configs.enums.channels import Channel
 from models.episode import Episode
-from services.database import Database
 from services.durable_timestamp import DurableTimestamp
 from services.time_utils import utc_now, parse_utc
 from services.user_synthesis import UserSynthesis
@@ -547,28 +546,20 @@ class SubconsciousWorker:
 
     def _step_pattern_match(self) -> str:
         """Step 4 — single-pass LLM pattern matcher over a transcript-id window."""
+        from models.system import SystemRow  # noqa: PLC0415
         _DG_KEY_CURSOR = "pattern_match_cursor"
         _MIN_DELTA = 50
 
-        # 1. Read cursor — newest active row wins. The deterministic
-        # ORDER BY id DESC defends against historical / concurrent writes
-        # leaving more than one active row (UPSERT collisions in
-        # data_graph_service.store path); SQLite's default ordering is
-        # implementation-defined and would silently pick the wrong row.
+        # 1. Read cursor — newest active row wins (SystemRow.newest_active_by_key
+        # owns the deterministic ORDER BY id DESC that defends against historical
+        # / concurrent writes leaving more than one active row).
         cursor = 0
-        with Database.transaction() as conn:
-            row = conn.execute(
-                "SELECT value FROM data_graph "
-                "WHERE kind='system' AND key=? "
-                "AND active=1 AND deleted_at IS NULL "
-                "ORDER BY id DESC LIMIT 1",
-                (_DG_KEY_CURSOR,),
-            ).fetchone()
-            if row and row[0]:
-                try:
-                    cursor = int(row[0])
-                except (TypeError, ValueError):
-                    cursor = 0
+        row = SystemRow.newest_active_by_key(_DG_KEY_CURSOR)
+        if row and row.value:
+            try:
+                cursor = int(row.value)
+            except (TypeError, ValueError):
+                cursor = 0
 
         # 2. Read latest transcript id.
         # The cursor must count only rows the pattern LOAD window (pattern.py)
@@ -605,7 +596,6 @@ class SubconsciousWorker:
         # minor double-fire risk; logging at WARNING so an unexpected
         # cursor-stuck pattern is observable in operator logs.
         try:
-            from models.system import SystemRow
             SystemRow.store(
                 key=_DG_KEY_CURSOR,
                 value=str(latest),
@@ -658,24 +648,18 @@ class SubconsciousWorker:
 
     def _step_geo_patterns(self) -> str:
         """Step 8 — single-pass LLM geo-spatial pattern extractor."""
+        from models.system import SystemRow  # noqa: PLC0415
         _DG_KEY_CURSOR = "geo_pattern_cursor"
         _MIN_DELTA = 30
 
         cursor = 0
         try:
-            with Database.transaction() as conn:
-                row = conn.execute(
-                    "SELECT value FROM data_graph "
-                    "WHERE kind='system' AND key=? "
-                    "AND active=1 AND deleted_at IS NULL "
-                    "ORDER BY id DESC LIMIT 1",
-                    (_DG_KEY_CURSOR,),
-                ).fetchone()
-                if row and row[0]:
-                    try:
-                        cursor = int(row[0])
-                    except (TypeError, ValueError):
-                        cursor = 0
+            row = SystemRow.newest_active_by_key(_DG_KEY_CURSOR)
+            if row and row.value:
+                try:
+                    cursor = int(row.value)
+                except (TypeError, ValueError):
+                    cursor = 0
 
             # Same allowlist as the geo-pattern window (geo_pattern.py): only
             # user geo-activity channels advance the cursor, so a located row on
@@ -701,7 +685,6 @@ class SubconsciousWorker:
         MessageProcessor.process(GeoConfig(cursor, latest))
 
         try:
-            from models.system import SystemRow
             SystemRow.store(
                 key=_DG_KEY_CURSOR,
                 value=str(latest),
