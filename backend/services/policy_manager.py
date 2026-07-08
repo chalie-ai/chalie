@@ -26,7 +26,8 @@ from collections.abc import Callable
 from typing import cast
 
 from configs.enums.policy_channel import PolicyChannel
-from services.database import Database
+from models.policy import Policy
+from models.policy_blocked_log import PolicyBlockedLog
 from services.time_utils import utc_now
 from services.websocket import Websocket
 
@@ -88,7 +89,7 @@ class PolicyManager:
     ) -> str:
         if permission.split(".", 1)[0] in INTERNAL:
             return callback()                       # INTERNAL tools always bypass (no channel, no row)
-        setting = self._setting(channel.value, permission)
+        setting = Policy.get_or_create_default(channel.value, permission)
         if setting in ("internal", "allow"):
             return callback()
         if setting == "ask" and channel not in _NO_HUMAN and self._ask_user(permission, channel.value, should_stop):
@@ -105,18 +106,9 @@ class PolicyManager:
     # ── Lookup-or-create: the entire provisioning story ───────────────────────
 
     def _setting(self, channel: str, permission: str) -> str:
-        with Database.transaction() as conn:
-            row = conn.execute(
-                "SELECT setting FROM policy WHERE channel = ? AND permission = ?",
-                (channel, permission),
-            ).fetchone()
-            if row:
-                return cast(str, row[0])
-            conn.execute(
-                "INSERT OR IGNORE INTO policy (channel, permission, setting) VALUES (?, ?, 'ask')",
-                (channel, permission),
-            )
-            return "ask"
+        # Kept as a thin wrapper so the gate's call site stays readable; the
+        # bespoke classmethod on Policy owns the INSERT OR IGNORE default.
+        return Policy.get_or_create_default(channel, permission)
 
     # ── Interactive prompt (CHAT only; fail-open per D6) ──────────────────────
 
@@ -147,49 +139,38 @@ class PolicyManager:
             return True  # fail-open (D6)
 
     def _log_blocked(self, channel: str, permission: str, reason: str) -> None:
-        with Database.transaction() as conn:
-            conn.execute(
-                "INSERT INTO policy_blocked_log (action_id, context, reason, created_at) "
-                "VALUES (?, ?, ?, ?)",
-                (permission, channel, reason, utc_now().isoformat()),
-            )
+        PolicyBlockedLog.log_blocked(
+            action_id=permission,
+            context=channel,
+            reason=reason,
+            created_at=utc_now().isoformat(),
+        )
 
     # ── Brain REST surface (api/policies.py) ──────────────────────────────────
 
     def get_all(self) -> list[dict[str, str]]:
         """All rows EXCLUDING internal (hidden in Brain), as flat triples."""
-        conn = Database.conn()
-        rows = conn.execute(
-            "SELECT channel, permission, setting FROM policy "
-            "WHERE setting != 'internal' ORDER BY channel, permission"
-        ).fetchall()
-        return [{"channel": r[0], "permission": r[1], "setting": r[2]} for r in rows]
+        return (
+            Policy.filter("setting", "internal", "!=")
+            .order_by("channel, permission")
+            .select("channel", "permission", "setting")
+        )
 
     def upsert(self, channel: str, permission: str, setting: str) -> int:
         """Single-cell upsert. Returns rows affected (0 on invalid input)."""
         if channel not in VALID_CHANNELS or setting not in VALID_SETTINGS:
             return 0
-        with Database.transaction() as conn:
-            cur = conn.execute(
-                "INSERT INTO policy (channel, permission, setting) VALUES (?, ?, ?) "
-                "ON CONFLICT(channel, permission) DO UPDATE SET setting = ?",
-                (channel, permission, setting, setting),
-            )
-            return cur.rowcount
+        return Policy.upsert(channel, permission, setting)
 
     def get_blocked_log(self, limit: int = 50) -> list[dict[str, str]]:
-        conn = Database.conn()
-        rows = conn.execute(
-            "SELECT action_id, context, reason, created_at FROM policy_blocked_log "
-            "ORDER BY created_at DESC LIMIT ?",
-            (limit,),
-        ).fetchall()
-        return [{"action_id": r[0], "context": r[1], "reason": r[2], "created_at": r[3]} for r in rows]
+        return (
+            PolicyBlockedLog.order_by("created_at DESC")
+            .limit(limit)
+            .select("action_id", "context", "reason", "created_at")
+        )
 
     def clear_blocked_log(self) -> int:
-        with Database.transaction() as conn:
-            cur = conn.execute("DELETE FROM policy_blocked_log")
-            return cur.rowcount
+        return PolicyBlockedLog.clear_all()
 
     # ── Seed / reset (static policy_defaults.json) ────────────────────────────
 
@@ -199,16 +180,11 @@ class PolicyManager:
         with open(FileMapperService.get_policy_defaults_path()) as f:
             seed = cast(list[dict[str, str]], json.load(f))
         inserted = 0
-        with Database.transaction() as conn:
-            for r in seed:
-                inserted += conn.execute(
-                    "INSERT OR IGNORE INTO policy (channel, permission, setting) VALUES (?, ?, ?)",
-                    (r["channel"], r["permission"], r["setting"]),
-                ).rowcount
+        for r in seed:
+            inserted += Policy.insert_or_ignore(r["channel"], r["permission"], r["setting"])
         return inserted
 
     def reset_to_defaults(self) -> int:
         """Wipe and re-apply the static seed."""
-        with Database.transaction() as conn:
-            conn.execute("DELETE FROM policy")
+        Policy.clear_all()
         return self.apply_seed()
