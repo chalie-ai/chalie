@@ -7,8 +7,6 @@ logger = logging.getLogger(__name__)
 
 _LOG_PREFIX = "[SKILL_SUGGEST]"
 
-_SKILLS_DB_PATH = FileMapperService.get_skills_db_path()
-
 
 def maybe_suggest_skill(
     act_trail: list[str],
@@ -19,7 +17,7 @@ def maybe_suggest_skill(
     if not act_trail:
         return
 
-    if not _SKILLS_DB_PATH.exists():
+    if not FileMapperService.get_skills_db_path().exists():
         return
 
     logger.info(

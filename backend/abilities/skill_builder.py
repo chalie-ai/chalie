@@ -29,7 +29,6 @@ from services.database import Database
 from services.file_mapper_service import FileMapperService
 from utils.skills_io import (
     DEFAULT_VERSION,
-    SKILLS_DB_PATH,
     ensure_user_skills_dir,
     remove_search_entries,
     skill_yaml_path,
@@ -198,7 +197,7 @@ def _handle_create(params: dict[str, object]) -> ToolResult:
     use_for = (cast("str", params.get(Keys.use_for)) or "").strip()
     content = (cast("str", params.get(Keys.content)) or "").strip()
 
-    if not SKILLS_DB_PATH.exists():
+    if not FileMapperService.get_skills_db_path().exists():
         return ToolResult.err(
             "The skill store is unavailable.",
             code="skill-db-unavailable",
@@ -238,7 +237,7 @@ def _handle_create(params: dict[str, object]) -> ToolResult:
     ).save()
     skill_id: int = cast("int", skill.id)
 
-    conn = Database.conn(str(SKILLS_DB_PATH))
+    conn = Database.conn(str(FileMapperService.get_skills_db_path()))
     from services.embedding_service import EmbeddingService
     from utils.build_skills_db import index_skill
     emb_service = EmbeddingService()
@@ -261,7 +260,7 @@ def _handle_create(params: dict[str, object]) -> ToolResult:
 def _handle_edit(params: dict[str, object]) -> ToolResult:
     title = (cast("str", params.get(Keys.title)) or "").strip()  # presence guaranteed by pre-gate
 
-    if not SKILLS_DB_PATH.exists():
+    if not FileMapperService.get_skills_db_path().exists():
         return ToolResult.err(
             "The skill store is unavailable.",
             code="skill-db-unavailable",
@@ -293,7 +292,7 @@ def _handle_edit(params: dict[str, object]) -> ToolResult:
         version=updated_meta["version"],
     )
 
-    conn = Database.conn(str(SKILLS_DB_PATH))
+    conn = Database.conn(str(FileMapperService.get_skills_db_path()))
     remove_search_entries(conn, skill_id)
 
     from services.embedding_service import EmbeddingService
@@ -317,7 +316,7 @@ def _handle_edit(params: dict[str, object]) -> ToolResult:
 def _handle_delete(params: dict[str, object]) -> ToolResult:
     title = (cast("str", params.get(Keys.title)) or "").strip()  # presence guaranteed by pre-gate
 
-    if not SKILLS_DB_PATH.exists():
+    if not FileMapperService.get_skills_db_path().exists():
         return ToolResult.err(
             "The skill store is unavailable.",
             code="skill-db-unavailable",
@@ -336,7 +335,7 @@ def _handle_delete(params: dict[str, object]) -> ToolResult:
     skill_id: int = cast("int", existing.id)
     path = skill_yaml_path(title)
 
-    conn = Database.conn(str(SKILLS_DB_PATH))
+    conn = Database.conn(str(FileMapperService.get_skills_db_path()))
     remove_search_entries(conn, skill_id)
     Skill.filter("id", skill_id).delete()
     conn.commit()
@@ -352,7 +351,7 @@ def _handle_delete(params: dict[str, object]) -> ToolResult:
 
 
 def _handle_list(params: dict[str, object]) -> ToolResult:  # noqa: ARG001
-    if not SKILLS_DB_PATH.exists():
+    if not FileMapperService.get_skills_db_path().exists():
         return ToolResult.err(
             "The skill store is unavailable.",
             code="skill-db-unavailable",
@@ -385,7 +384,7 @@ def _handle_read(params: dict[str, object]) -> ToolResult:
     # title presence is guaranteed by the ACTION_REQUIRED pre-gate.
     title = (cast("str", params.get(Keys.title)) or "").strip()
 
-    if not SKILLS_DB_PATH.exists():
+    if not FileMapperService.get_skills_db_path().exists():
         return ToolResult.err(
             "The skill store is unavailable.",
             code="skill-db-unavailable",

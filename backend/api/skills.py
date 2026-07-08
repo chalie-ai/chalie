@@ -27,11 +27,10 @@ from flask_restx import Namespace, Resource
 from models.skill import Skill as SkillModel
 from models.skill_association import SkillAssociation as SkillAssociationModel
 from services.database import Database
+from services.file_mapper_service import FileMapperService
 from services.time_utils import parse_utc
 from utils.skills_io import (
     DEFAULT_VERSION,
-    SKILLS_DB_PATH,
-    USER_SKILLS_DIR,
     ensure_user_skills_dir,
     remove_search_entries,
     skill_yaml_path,
@@ -68,11 +67,10 @@ _ONLY_USER_EDIT = "Only user-created skills can be edited"
 _ONLY_USER_DELETE = "Only user-created skills can be deleted"
 _ONLY_CURATED_COPY = "Only curated skills can be copied"
 
-#: Same path the models bind ``skills.sqlite`` writes to
-#: (``Skill._bound_connection`` / ``SkillAssociation._bound_connection``) —
-#: reused here for ``Database.transaction`` so a model write and a raw
-#: search-index write land on the same connection and commit atomically.
-_SKILLS_DB = str(SKILLS_DB_PATH)
+# Write handlers open ``Database.transaction`` on the same path the models bind
+# ``skills.sqlite`` writes to (``Skill._bound_connection`` /
+# ``SkillAssociation._bound_connection``) so a model write and a raw
+# search-index write land on the same connection and commit atomically.
 
 
 def _row_to_dict(skill: SkillModel) -> dict[str, object]:
@@ -121,7 +119,7 @@ class SkillsListResource(Resource):
     @skills_ns.response(500, "Failed to load skills", model=_S["Error"])
     @responds(SkillListResult, code=200)
     def get(self) -> SkillListResult | ResponseReturnValue:
-        if not SKILLS_DB_PATH.exists():
+        if not FileMapperService.get_skills_db_path().exists():
             return SkillListResult(skills=[], associations=[])
 
         try:
@@ -144,14 +142,14 @@ class SkillsListResource(Resource):
     @responds(Skill, code=201)
     @expects(SkillCreate)
     def post(self, dto: SkillCreate) -> Skill | ResponseReturnValue:
-        if not SKILLS_DB_PATH.exists():
+        if not FileMapperService.get_skills_db_path().exists():
             return error(_DB_UNAVAILABLE, 503)
 
         try:
             if SkillModel.find_by_title_ci(dto.title) is not None:
                 return error(f"A user skill named '{dto.title}' already exists", 409)
 
-            with Database.transaction(_SKILLS_DB) as conn:
+            with Database.transaction(str(FileMapperService.get_skills_db_path())) as conn:
                 skill = SkillModel(
                     title=dto.title,
                     use_for=dto.use_for,
@@ -197,7 +195,7 @@ class SkillItemResource(Resource):
     @responds(Skill, code=200)
     @expects(SkillUpdate)
     def put(self, skill_id: int, dto: SkillUpdate) -> Skill | ResponseReturnValue:
-        if not SKILLS_DB_PATH.exists():
+        if not FileMapperService.get_skills_db_path().exists():
             return error(_DB_UNAVAILABLE, 503)
 
         try:
@@ -213,7 +211,7 @@ class SkillItemResource(Resource):
             tags = dto.tags if dto.tags is not None else (skill.tags or "")
             version = skill.version + 1
 
-            with Database.transaction(_SKILLS_DB) as conn:
+            with Database.transaction(str(FileMapperService.get_skills_db_path())) as conn:
                 skill.use_for = use_for
                 skill.content = content
                 skill.tags = tags
@@ -250,7 +248,7 @@ class SkillItemResource(Resource):
     @skills_ns.response(500, "Failed to delete skill", model=_S["Error"])
     @responds(code=204)
     def delete(self, skill_id: int) -> None | ResponseReturnValue:
-        if not SKILLS_DB_PATH.exists():
+        if not FileMapperService.get_skills_db_path().exists():
             return error(_DB_UNAVAILABLE, 503)
 
         try:
@@ -263,11 +261,11 @@ class SkillItemResource(Resource):
             title = skill.title
             path = skill_yaml_path(title)
 
-            with Database.transaction(_SKILLS_DB) as conn:
+            with Database.transaction(str(FileMapperService.get_skills_db_path())) as conn:
                 remove_search_entries(conn, skill_id)
                 skill.delete()
 
-            if path.exists() and path.resolve().is_relative_to(USER_SKILLS_DIR.resolve()):
+            if path.exists() and path.resolve().is_relative_to(FileMapperService.get_user_skills_path().resolve()):
                 path.unlink()
 
             logger.info("[SKILLS API] Deleted skill id=%d '%s'", skill_id, title)
@@ -287,7 +285,7 @@ class SkillToggleResource(Resource):
     @skills_ns.response(500, "Failed to toggle skill", model=_S["Error"])
     @responds(SkillToggleResult, code=200)
     def put(self, skill_id: int) -> SkillToggleResult | ResponseReturnValue:
-        if not SKILLS_DB_PATH.exists():
+        if not FileMapperService.get_skills_db_path().exists():
             return error(_DB_UNAVAILABLE, 503)
 
         try:
@@ -318,7 +316,7 @@ class SkillCopyResource(Resource):
     @skills_ns.response(500, "Failed to copy skill", model=_S["Error"])
     @responds(Skill, code=201)
     def post(self, skill_id: int) -> Skill | ResponseReturnValue:
-        if not SKILLS_DB_PATH.exists():
+        if not FileMapperService.get_skills_db_path().exists():
             return error(_DB_UNAVAILABLE, 503)
 
         try:
@@ -335,7 +333,7 @@ class SkillCopyResource(Resource):
             if SkillModel.find_by_title_ci(copy_title) is not None:
                 return error(f"A user copy named '{copy_title}' already exists", 409)
 
-            with Database.transaction(_SKILLS_DB) as conn:
+            with Database.transaction(str(FileMapperService.get_skills_db_path())) as conn:
                 copy = SkillModel(
                     title=copy_title,
                     use_for=skill.use_for,
