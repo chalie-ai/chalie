@@ -33,6 +33,7 @@ from abilities._ability import Ability
 from abilities._compaction_config import CompactionConfig
 from abilities._result import ToolResult
 from configs.enums.thinking_level import ThinkingLevel
+from models.compaction import Compaction
 
 if TYPE_CHECKING:
     from typing import Protocol
@@ -122,7 +123,6 @@ class ChatHistoryCompactor(Ability):
 
     def run(self, params: dict[str, object]) -> ToolResult:
         from controllers.message_processor import MessageProcessor  # noqa: PLC0415
-        from services import compaction_persistence  # noqa: PLC0415
 
         mp = cast("_CompactionParent", self.mp)
         # The checkpoint is keyed on the channel the parent READS cross-turn
@@ -140,8 +140,8 @@ class ChatHistoryCompactor(Ability):
 
         # Carry forward the prior checkpoint so continuity chains across
         # compactions instead of restarting from the recent tail each time.
-        prior_row = compaction_persistence.get_compaction(channel, for_turn_id)
-        prior = (cast(str, prior_row.get("compacted_text")) or "").strip() if prior_row else ""
+        prior_row = Compaction.latest_main(channel) if for_turn_id is None else Compaction.latest_fork(channel, for_turn_id)
+        prior = (prior_row.content or "").strip() if prior_row is not None else ""
 
         combined = self._fit_compaction_input(mp, prior)
         if combined is None:
@@ -175,7 +175,7 @@ class ChatHistoryCompactor(Ability):
             max(cast(int, r["id"]) for r in rows) if mp._forked
             else max(cast(int, r["turn_id"]) for r in rows if r["turn_id"] is not None)
         )
-        compaction_persistence.write_compaction(channel, for_turn_id, compacted_up_to, summary)
+        Compaction.write(channel, for_turn_id, compacted_up_to, summary)
         return ToolResult.ok("Chat history compacted.", rows_compacted=rows_compacted)
 
     @staticmethod

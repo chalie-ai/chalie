@@ -6,6 +6,7 @@ import logging
 from typing import TYPE_CHECKING, cast
 
 from models.llm_call_log import LlmCallLog
+from services.database import Database
 from services.time_utils import utc_now
 
 if TYPE_CHECKING:
@@ -51,14 +52,22 @@ class LlmLogService:
         except Exception as e:
             logger.debug(f"[LLM_LOG] Failed to log call: {e}")
 
-    def last_request_tokens(self, job_name: str = 'user:user') -> int | None:
-        """``tokens_input`` of the most recent call logged for ``job_name``."""
-        return LlmCallLog.last_request_tokens(job_name)
+    @staticmethod
+    def last_request_tokens(job_name: str = 'user:user') -> int | None:
+        """``tokens_input`` of the most recent call logged for ``job_name``.
 
-    def token_usage(self, window: str, usage_class: str | None = None) -> dict[str, object]:
+        Keys off ``job_name`` ('channel:role'), not ``usage_class``, so the
+        indicator tracks the real user turn rather than a delegate's tiny
+        sub-request that shares usage_class 'chat'.
+        """
+        values = LlmCallLog.filter("job_name", job_name).order_by("id DESC").limit(1).pluck("tokens_input")
+        return int(cast("int", values[0])) if values else None
+
+    @staticmethod
+    def token_usage(window: str, usage_class: str | None = None) -> dict[str, object]:
         """Time-bucketed token usage statistics for ``window``, optionally filtered by class."""
         bucket_fmt = "%Y-%m-%dT%H:00:00" if window in ('hour', 'day') else "%Y-%m-%d"
-        rows = LlmCallLog.usage_buckets(bucket_fmt, _WINDOW_OFFSETS[window], usage_class)
+        rows = LlmLogService._usage_buckets(bucket_fmt, _WINDOW_OFFSETS[window], usage_class)
 
         entries = [
             {
@@ -78,11 +87,65 @@ class LlmLogService:
         return {
             'generated_at': utc_now().isoformat(),
             'window': window,
-            'summary': self._summarize(entries),
+            'summary': LlmLogService._summarize(entries),
             'entries': entries,
         }
 
-    def _summarize(self, entries: list[dict[str, object]]) -> dict[str, object]:
+    @staticmethod
+    def _usage_buckets(
+        bucket_fmt: str,
+        offset: str | None,
+        usage_class: str | None,
+    ) -> list[dict[str, object]]:
+        """Token sums grouped by (bucket, usage_class, model, provider).
+
+        ``bucket_fmt`` is the ``strftime`` bucket width (by-hour or by-day),
+        ``offset`` an optional ``datetime('now', ?)`` window bound (None =
+        lifetime), ``usage_class`` an optional class filter.
+        """
+        where_clauses: list[str] = []
+        params: list[object] = []
+        if offset is not None:
+            where_clauses.append("created_at >= datetime('now', ?)")
+            params.append(offset)
+        if usage_class:
+            where_clauses.append("usage_class = ?")
+            params.append(usage_class)
+        where_sql = ("WHERE " + " AND ".join(where_clauses)) if where_clauses else ""
+
+        cursor = Database.conn().execute(
+            f"""SELECT
+                   strftime('{bucket_fmt}', created_at) AS bucket,
+                   usage_class,
+                   model,
+                   provider,
+                   SUM(tokens_input)        AS tokens_input,
+                   SUM(tokens_output)       AS tokens_output,
+                   SUM(tokens_cache_read)   AS tokens_cache_read,
+                   SUM(tokens_cache_create) AS tokens_cache_create,
+                   SUM(tokens_thinking)     AS tokens_thinking
+               FROM llm_call_log
+               {where_sql}
+               GROUP BY bucket, usage_class, model, provider
+               ORDER BY bucket DESC""",
+            params,
+        )
+        return [dict(row) for row in cursor.fetchall()]
+
+    @staticmethod
+    def _tokens_today() -> int:
+        """Total tokens (all classes) logged since the start of the UTC day."""
+        row = Database.conn().execute(
+            """SELECT COALESCE(SUM(tokens_input + tokens_output +
+                                  tokens_cache_read + tokens_cache_create +
+                                  tokens_thinking), 0) AS total
+               FROM llm_call_log
+               WHERE created_at >= date('now')""",
+        ).fetchone()
+        return int(row["total"]) if row is not None else 0
+
+    @staticmethod
+    def _summarize(entries: list[dict[str, object]]) -> dict[str, object]:
         """Derive aggregate summary stats (totals, cache hit %, most-active model) from bucketed entries."""
         total_input = sum(cast(int, e['tokens_input']) for e in entries)
         total_output = sum(cast(int, e['tokens_output']) for e in entries)
@@ -108,6 +171,6 @@ class LlmLogService:
         return {
             'total_tokens': total_tokens,
             'cache_hit_pct': cache_hit_pct,
-            'tokens_today': LlmCallLog.tokens_today(),
+            'tokens_today': LlmLogService._tokens_today(),
             'most_active_model': most_active_model,
         }

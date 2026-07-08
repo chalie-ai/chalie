@@ -20,9 +20,12 @@ from flask.typing import ResponseReturnValue
 from flask_restx import Namespace, Resource
 
 from configs.enums.channels import Channel
+from models.compaction import Compaction
 from models.episode import Episode
 from services.database import Database
 from services.file_mapper_service import FileMapperService
+from services.llm_log_service import LlmLogService, VALID_WINDOWS
+from services.locale_service import format_date
 from services.time_utils import utc_now
 from utils.logger import LOG_FILE_PATH as _LOG_FILE_PATH  # Written exclusively by utils/logger.py in the same process
 from .auth import require_session
@@ -399,13 +402,12 @@ class ObservabilityTokenUsageResource(Resource):
     @responds(code=200)
     def get(self) -> ResponseReturnValue:
         """Token usage aggregated by time window, model, provider, and usage class (raw passthrough)."""
-        from services.llm_call_log_service import get_token_usage, VALID_WINDOWS
         window = request.args.get("window", "day")
         if window not in VALID_WINDOWS:
             return error(f"Invalid window '{window}'. Use: {', '.join(sorted(VALID_WINDOWS))}", 422)
         usage_class = request.args.get("usage_class") or None
         try:
-            return get_token_usage(window=window, usage_class=usage_class)
+            return LlmLogService.token_usage(window=window, usage_class=usage_class)
         except Exception as e:
             logger.error(f"[REST API] observability/token-usage error: {e}")
             return error("Failed to retrieve token usage data", 500)
@@ -444,17 +446,16 @@ class ObservabilityCompactionResource(Resource):
     def get(self) -> CompactionView | ResponseReturnValue:
         """Continuity-compaction synthesis for the chat ('user') channel (read-only)."""
         try:
-            from services import compaction_persistence, locale_service
             # MAIN-spine checkpoint (for_turn_id NULL): the watermark is a turn_id.
             # The DTO field keeps its name so the existing Brain view needs no change.
-            record = compaction_persistence.get_compaction(Channel.USER.value, None)
-            if not record:
+            record = Compaction.latest_main(Channel.USER.value)
+            if record is None:
                 return CompactionView(compaction=None)
             return CompactionView(
                 compaction=CompactionRecord(
-                    summary=cast(str, record["compacted_text"]),
-                    compacted_up_to_id=cast(int, record["compacted_up_to"]),
-                    compacted_at=locale_service.format_date(cast(str, record["created_at"]), for_ui=True) or "",
+                    summary=cast(str, record.content),
+                    compacted_up_to_id=cast(int, record.compacted_up_to),
+                    compacted_at=format_date(cast(str, record.created_at), for_ui=True) or "",
                 ),
             )
         except Exception:
@@ -571,9 +572,8 @@ class ContextUsageResource(Resource):
     def get(self) -> ContextUsage | ResponseReturnValue:
         """Last user-turn request size + context window for the composer indicator."""
         try:
-            from services.llm_call_log_service import get_last_chat_request_tokens
             from services.provider_cache_service import ProviderCacheService
-            last = get_last_chat_request_tokens()
+            last = LlmLogService.last_request_tokens()
             selected = ProviderCacheService.get_selected_provider() or {}
             return ContextUsage(
                 last_request_tokens=last,

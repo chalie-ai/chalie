@@ -7,7 +7,7 @@ from flask.testing import FlaskClient
 
 from api.system import health_ns, system_ns
 from configs.enums.channels import Channel
-from services import compaction_persistence
+from models.compaction import Compaction
 from services.memory_store import MemoryStore
 from tests.restx_test_app import mount_namespace
 
@@ -264,12 +264,12 @@ class TestSystemAPI:
     def _seed_compaction(db: sqlite3.Connection, *, channel: str, summary: str,
                          created_at: str, compacted_up_to: int = 42) -> int:
         """Seed a compaction the way production does: the real
-        ``write_compaction`` writer appends a row to the dedicated ``compactions``
+        ``Compaction.write`` writer appends a row to the dedicated ``compactions``
         table on the MAIN axis (``for_turn_id`` NULL). The table default fills
         ``created_at``; we then pin the known timestamp under test so the API's
         date-formatting asserts against a fixed value. Returns ``compacted_up_to``
         — the turn_id watermark the endpoint surfaces as ``compacted_up_to_id``."""
-        compaction_persistence.write_compaction(channel, None, compacted_up_to, summary)
+        Compaction.write(channel, None, compacted_up_to, summary)
         db.execute(
             "UPDATE compactions SET created_at = ? WHERE id = "
             "(SELECT MAX(id) FROM compactions WHERE channel = ? AND for_turn_id IS NULL)",
@@ -332,7 +332,7 @@ class TestSystemAPI:
 
     def test_observability_compaction_latest_wins(self, client: FlaskClient, db: sqlite3.Connection) -> None:
         """When several compactions exist on a scope, the newest (highest-id) row
-        in the compactions table wins (get_compaction orders by id DESC). The
+        in the compactions table wins (Compaction.latest_main orders by id DESC). The
         compactor only writes a row when summary extraction succeeds, so there is
         no failure-row state to filter — the latest row is always canonical."""
         self._seed_compaction(
