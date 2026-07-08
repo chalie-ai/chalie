@@ -10,37 +10,20 @@ need to deal with cryptographic details.
 Credential storage
 ------------------
 Credentials are stored in the ``tool_configs`` table via
-:class:`~services.tool_config_service.ToolConfigService`.  Values are encrypted
+:class:`~models.tool_config.ToolConfig`.  Values are encrypted
 with AES-256-GCM via :class:`~services.vault_service.VaultService` before being
 written; the vault must be unlocked (via
 :meth:`~services.vault_service.VaultService.unlock`) before any credential
 operations can succeed.
-
-Lazy imports
-------------
-All service imports are performed *inside* method bodies rather than at module
-level to prevent circular-import issues during early application boot.
 """
 
 import logging
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING
 
-if TYPE_CHECKING:
-    from typing import Protocol
-
-    class _ToolConfigService(Protocol):
-        def set_tool_config(self, tool_name: str, config: dict[str, object]) -> bool: ...
-        def get_tool_config(self, tool_name: str) -> dict[str, str]: ...
-        def delete_tool_config(self, tool_name: str) -> bool: ...
+from models.tool_config import ToolConfig
+from services.vault_service import VaultLockedError
 
 logger = logging.getLogger(__name__)
-
-def _get_tool_config_service() -> "_ToolConfigService":
-    """Return a :class:`~services.tool_config_service.ToolConfigService` instance via deferred import."""
-    from services.tool_config_service import ToolConfigService
-
-    return ToolConfigService()
 
 
 class AbstractCapability(ABC):
@@ -144,12 +127,7 @@ class AbstractCapability(ABC):
                 after logging.
         """
         try:
-            import base64
-            from services.vault_service import get_vault_service
-            blob = get_vault_service().encrypt_str(value)
-            encrypted = base64.b64encode(blob).decode()
-            svc = _get_tool_config_service()
-            svc.set_tool_config(self.get_id(), {key: encrypted})
+            ToolConfig.set_encrypted(self.get_id(), key, value)
         except Exception as exc:
             logger.error(
                 "[%s] store_credential(%r) failed: %s",
@@ -161,9 +139,12 @@ class AbstractCapability(ABC):
     def load_credential(self, key: str) -> str | None:
         """Load and AES-256-GCM–decrypt a stored credential via VaultService.
 
-        Returns ``None`` if the key is absent, the vault is locked, or
-        decryption fails (e.g. the vault has been re-initialised and the DEK
-        has rotated).
+        Returns ``None`` if the key is absent or decryption fails (e.g. the
+        vault has been re-initialised and the DEK has rotated). A *locked*
+        vault is different: :exc:`~services.vault_service.VaultLockedError` is
+        re-raised so the caller (e.g. capability setup) can surface a clear
+        "unlock the vault" response rather than treating the credential as
+        merely absent.
 
         The stored value is expected to be a base64-encoded blob as written by
         :meth:`store_credential`.
@@ -172,18 +153,15 @@ class AbstractCapability(ABC):
             key: Config key, e.g. ``"caldav:password"``.
 
         Returns:
-            str | None: Decrypted plaintext value, or ``None`` on any failure.
+            str | None: Decrypted plaintext value, or ``None`` on absent/failed
+            decryption.
+
+        Raises:
+            :exc:`~services.vault_service.VaultLockedError`: If the vault has
+                not yet been unlocked.
         """
         try:
-            svc = _get_tool_config_service()
-            config = svc.get_tool_config(self.get_id())
-            encrypted = config.get(key)
-            if encrypted is None:
-                return None
-            import base64
-            from services.vault_service import get_vault_service, VaultLockedError
-            raw = base64.b64decode(encrypted.encode())
-            return get_vault_service().decrypt_str(raw)
+            return ToolConfig.get_encrypted(self.get_id(), key)
         except VaultLockedError:
             raise
         except Exception as exc:
@@ -197,15 +175,14 @@ class AbstractCapability(ABC):
         """Remove ALL ``tool_configs`` rows associated with this capability.
 
         This is equivalent to calling
-        :meth:`~services.tool_config_service.ToolConfigService.delete_tool_config`
+        :meth:`~models.tool_config.ToolConfig.delete_all`
         with ``self.get_id()`` as the tool name.
 
         Returns:
             None
         """
         try:
-            svc = _get_tool_config_service()
-            svc.delete_tool_config(self.get_id())
+            ToolConfig.delete_all(self.get_id())
         except Exception as exc:
             logger.error(
                 "[%s] delete_credentials() failed: %s",

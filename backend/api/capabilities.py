@@ -75,11 +75,8 @@ def _load_caps() -> "Mapping[str, object]":
 def _get_last_sync_at(cap_id: str) -> str | None:
     """Read the stored last-sync timestamp; returns ``None`` on any read error."""
     try:
-        from services.tool_config_service import ToolConfigService
-
-        svc = ToolConfigService()
-        config = svc.get_tool_config(cap_id)
-        return config.get(f"{cap_id}:last_sync_at")
+        from models.tool_config import ToolConfig
+        return ToolConfig.get(cap_id, f"{cap_id}:last_sync_at")
     except Exception as exc:  # noqa: BLE001
         logger.warning("[capabilities] Could not read last_sync_at for '%s': %s", cap_id, exc)
         return None
