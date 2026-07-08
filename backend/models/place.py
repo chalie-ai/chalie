@@ -37,7 +37,7 @@ class PlaceRow(DataGraphRow):
         """Exact-key supersede upsert. Returns ``(row, status, old_value)``;
         status is ``created`` | ``reinforced`` | ``superseded``. ``value`` is a
         JSON blob, so it is compared EXACTLY (no case-fold / strip — unlike
-        ``SystemRow``, which stores free text): any change to the stored
+        ``ExactKeyRow``, which stores free text): any change to the stored
         coordinates/label supersedes the prior row (ruling #4 — embedding-free
         exact-key supersede restored in the vertical itself)."""
         now = utc_now().isoformat()

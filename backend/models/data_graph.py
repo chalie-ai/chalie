@@ -110,9 +110,9 @@ class DataGraphRow(Model):
 
         Kinds excluded by
         :func:`services.search_expander_service.should_fts_index` (behavioural
-        patterns, machine-written system rows) never enter the index — the same
+        patterns, ``machine_state`` rows) never enter the index — the same
         authority ``_self_heal`` consults, so neither enqueue path indexes them."""
-        if not should_fts_index(self.kind, self.source):
+        if not should_fts_index(self.kind):
             return
         try:
             enqueue("data_graph", cast("int", self.id))

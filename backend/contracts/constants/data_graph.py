@@ -18,6 +18,11 @@ KIND_BEHAVIORAL_PATTERN = "behavioral_pattern"
 KIND_PLACE = "place"
 KIND_CONTACT = "contact"
 KIND_DISCOVERY = "discovery"
+# Operational state read only by exact key (subconscious cursors, durable clocks,
+# user-summary prose) — never memory-tool-writable and never recalled, so it is
+# NOT in VALID_KINDS below. Split out of the conflated ``system`` kind so the
+# searchable ``system`` memories and this machine state stop sharing a discriminator.
+KIND_MACHINE_STATE = "machine_state"
 
 # The kinds a user or agent may write through the memory tools (``save_graph``,
 # ``memory`` store). ``document`` is fragment-based (ingest-only) and

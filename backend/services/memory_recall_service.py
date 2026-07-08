@@ -56,7 +56,7 @@ from models.document import DocumentRow
 from models.fact import FactRow
 from models.misc import MiscRow
 from models.place import PlaceRow
-from models.system import SystemRow
+from models.system_memory import SystemMemoryRow
 from services.time_utils import parse_utc, utc_now
 
 logger = logging.getLogger(__name__)
@@ -65,7 +65,7 @@ logger = logging.getLogger(__name__)
 # only surfaces for a caller that explicitly asks (`kinds=["document"]`); every
 # default-span caller passes its own explicit `kinds=` list that omits it.
 _VERTICALS: tuple[type[DataGraphRow], ...] = (
-    FactRow, SystemRow, MiscRow, BehavioralPattern, PlaceRow, DiscoveryRow, DocumentRow,
+    FactRow, SystemMemoryRow, MiscRow, BehavioralPattern, PlaceRow, DiscoveryRow, DocumentRow,
 )
 
 # Fusion weights (ruling 2, ported VERBATIM from the deleted

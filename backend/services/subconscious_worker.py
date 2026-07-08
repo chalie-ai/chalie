@@ -546,15 +546,15 @@ class SubconsciousWorker:
 
     def _step_pattern_match(self) -> str:
         """Step 4 — single-pass LLM pattern matcher over a transcript-id window."""
-        from models.system import SystemRow  # noqa: PLC0415
+        from models.machine_state import MachineStateRow  # noqa: PLC0415
         _DG_KEY_CURSOR = "pattern_match_cursor"
         _MIN_DELTA = 50
 
-        # 1. Read cursor — newest active row wins (SystemRow.newest_active_by_key
+        # 1. Read cursor — newest active row wins (MachineStateRow.newest_active_by_key
         # owns the deterministic ORDER BY id DESC that defends against historical
         # / concurrent writes leaving more than one active row).
         cursor = 0
-        row = SystemRow.newest_active_by_key(_DG_KEY_CURSOR)
+        row = MachineStateRow.newest_active_by_key(_DG_KEY_CURSOR)
         if row and row.value:
             try:
                 cursor = int(row.value)
@@ -596,7 +596,7 @@ class SubconsciousWorker:
         # minor double-fire risk; logging at WARNING so an unexpected
         # cursor-stuck pattern is observable in operator logs.
         try:
-            SystemRow.store(
+            MachineStateRow.store(
                 key=_DG_KEY_CURSOR,
                 value=str(latest),
                 source="subconscious_worker",
@@ -648,13 +648,13 @@ class SubconsciousWorker:
 
     def _step_geo_patterns(self) -> str:
         """Step 8 — single-pass LLM geo-spatial pattern extractor."""
-        from models.system import SystemRow  # noqa: PLC0415
+        from models.machine_state import MachineStateRow  # noqa: PLC0415
         _DG_KEY_CURSOR = "geo_pattern_cursor"
         _MIN_DELTA = 30
 
         cursor = 0
         try:
-            row = SystemRow.newest_active_by_key(_DG_KEY_CURSOR)
+            row = MachineStateRow.newest_active_by_key(_DG_KEY_CURSOR)
             if row and row.value:
                 try:
                     cursor = int(row.value)
@@ -685,7 +685,7 @@ class SubconsciousWorker:
         MessageProcessor.process(GeoConfig(cursor, latest))
 
         try:
-            SystemRow.store(
+            MachineStateRow.store(
                 key=_DG_KEY_CURSOR,
                 value=str(latest),
                 source="subconscious_worker",

@@ -1,11 +1,11 @@
-"""The ``system`` vertical of ``data_graph`` — operational state read and
-written by exact key: the user-summary prose the prompt builder reads every
-turn, the subconscious worker's pattern/geo cursors, durable clocks, and
-user-authored "system" memories saved via the memory tool. Subclasses the
-shared :class:`~models.data_graph.DataGraphRow` shell (persistence, FTS/vec
-write-sync, reinforce, kind-scoped live/search); adds only the SYSTEM kind,
-its exact-key store/forget/supersede, and a narrowed FTS write-sync. Sole
-home of this lane's SQL (I6)."""
+"""``ExactKeyRow`` — the shared exact-key upsert base for the two ``data_graph``
+verticals that address rows by an exact ``key`` rather than by semantic search:
+:class:`~models.system_memory.SystemMemoryRow` (searchable knowledge memories)
+and :class:`~models.machine_state.MachineStateRow` (operational cursors/clocks/
+summary). Abstract — it leaves :attr:`KIND` unset (each subclass declares it) and
+adds only the exact-key store/forget/supersede lifecycle on top of the shared
+:class:`~models.data_graph.DataGraphRow` shell. Sole home of this lane's SQL (I6).
+"""
 
 from __future__ import annotations
 
@@ -15,8 +15,10 @@ from models.data_graph import DataGraphRow
 from services.time_utils import utc_now
 
 
-class SystemRow(DataGraphRow):
-    KIND: ClassVar[str] = "system"
+class ExactKeyRow(DataGraphRow):
+    """Exact-key upsert with temporal supersession. Abstract: subclasses set
+    :attr:`KIND`; every read/write below scopes to it via the inherited
+    kind-bound helpers."""
 
     # Retrieval-weight haircut on the demoted (superseded) row (_SUPERSEDE_RW_FACTOR).
     _SUPERSEDE_RW_FACTOR: ClassVar[float] = 0.5
@@ -30,21 +32,9 @@ class SystemRow(DataGraphRow):
                    .filter("active", 1).first())
 
     @classmethod
-    def newest_active_by_key(cls, key: str) -> Self | None:
-        """The newest *live* row for this kind's exact ``key`` — the shared live
-        predicate (``active = 1 AND deleted_at IS NULL``) plus a deterministic
-        ``ORDER BY id DESC`` so that if more than one active row exists for the
-        key (a historical or concurrent UPSERT collision in the store path) the
-        newest deterministically wins, rather than SQLite's
-        implementation-defined order. Distinct from :meth:`active_by_key` — the
-        store lookup, which is ``active``-only and unordered — this is the read
-        for durable cursors that must survive duplicate-active rows."""
-        return cls.live().filter("key", key).order_by("id DESC").first()
-
-    @classmethod
     def store(cls, key: str, value: str, source: str | None = None) -> tuple[Self, str, str | None]:
         """Exact-key upsert. Returns ``(row, status, old_value)`` where status is
-        ``created`` | ``reinforced`` | ``superseded`` (system always temporally
+        ``created`` | ``reinforced`` | ``superseded`` (this lane always temporally
         supersedes on a contradicting value)."""
         now = utc_now().isoformat()
         existing = cls.active_by_key(key)

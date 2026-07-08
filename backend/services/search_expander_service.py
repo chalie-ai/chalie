@@ -24,29 +24,23 @@ _VALID_TABLES = frozenset({_TABLE_DATA_GRAPH})
 # them is dead weight — and their indexed value drifts after insert
 # (behavioral_pattern decays confidence every turn via raw SQL, bypassing
 # save()), which would leave orphaned postings. Kept as literals here rather than
-# imported from the owning models (models.behavioral_pattern / models.system),
+# imported from the owning models (models.behavioral_pattern / models.machine_state),
 # because those import this module and the reverse import would cycle.
 _KIND_BEHAVIORAL_PATTERN = "behavioral_pattern"
-_KIND_SYSTEM = "system"
-_MEMORY_STORE_SOURCE_PREFIX = "skill:memory:store:"
+_KIND_MACHINE_STATE = "machine_state"
 
 
-def should_fts_index(kind: str, source: str | None) -> bool:
+def should_fts_index(kind: str) -> bool:
     """The single authority for whether a data_graph row earns an FTS posting.
 
     Consulted both at save-time (``DataGraphRow._sync_search_index``) and by
     ``_self_heal`` — the two only enqueue paths — so an excluded row is never
-    fed into the index from either. ``behavioral_pattern`` is never searched
-    (recall reads it via ``recent()``/``live()``) and its value decays every
-    turn, so it is never indexed. ``system`` rows are machine cursors read by
-    exact key EXCEPT memory-tool stores (``source`` prefixed
-    ``skill:memory:store:``), the one genuine recall candidate on that lane.
-    Every other kind is indexed."""
-    if kind == _KIND_BEHAVIORAL_PATTERN:
-        return False
-    if kind == _KIND_SYSTEM:
-        return (source or "").startswith(_MEMORY_STORE_SOURCE_PREFIX)
-    return True
+    fed into the index from either. Two kinds are excluded: ``behavioral_pattern``
+    is never searched (recall reads it via ``recent()``/``live()``) and its value
+    decays every turn; ``machine_state`` holds operational cursors/clocks/summary
+    read only by exact key. Every other kind — including ``system`` (memory-tool
+    knowledge memories) — is indexed."""
+    return kind not in (_KIND_BEHAVIORAL_PATTERN, _KIND_MACHINE_STATE)
 
 
 # ── Module-level singleton references ─────────────────────────────────────────
@@ -123,10 +117,10 @@ class SearchExpanderService:
             conn = Database.conn()
             data_graph_ids = [
                 r[0] for r in conn.execute(
-                    "SELECT id, kind, source FROM data_graph "
+                    "SELECT id, kind FROM data_graph "
                     "WHERE search_queries IS NULL AND deleted_at IS NULL AND active=1"
                 ).fetchall()
-                if should_fts_index(r[1], r[2])
+                if should_fts_index(r[1])
             ]
 
             for rowid in data_graph_ids:

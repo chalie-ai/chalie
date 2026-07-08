@@ -1,6 +1,6 @@
-"""Regression guard for ``SystemRow.newest_active_by_key`` — the hardened
-system-cursor read the subconscious worker uses for its ``pattern_match_cursor``
-and ``geo_pattern_cursor`` watermarks.
+"""Regression guard for ``MachineStateRow.newest_active_by_key`` — the hardened
+machine-state cursor read the subconscious worker uses for its
+``pattern_match_cursor`` and ``geo_pattern_cursor`` watermarks.
 
 Unlike ``active_by_key`` (the store lookup: ``active``-only, unordered), this
 read adds ``deleted_at IS NULL`` and a deterministic ``ORDER BY id DESC`` so a
@@ -14,16 +14,16 @@ import sqlite3
 
 import pytest
 
-from models.system import SystemRow
+from models.machine_state import MachineStateRow
 
 pytestmark = pytest.mark.integration
 
 
 def _seed(db: sqlite3.Connection, key: str, value: str, *, active: int = 1, deleted: bool = False) -> int:
-    """Insert one ``system``-kind data_graph row and return its id."""
+    """Insert one ``machine_state``-kind data_graph row and return its id."""
     db.execute(
         "INSERT INTO data_graph (kind, key, value, active, deleted_at) "
-        "VALUES ('system', ?, ?, ?, ?)",
+        "VALUES ('machine_state', ?, ?, ?, ?)",
         (key, value, active, "2025-01-01T00:00:00" if deleted else None),
     )
     return int(db.execute("SELECT last_insert_rowid()").fetchone()[0])
@@ -36,7 +36,7 @@ def test_newest_active_row_wins(db: sqlite3.Connection) -> None:
     _seed(db, "pattern_match_cursor", "250")
     db.commit()
 
-    row = SystemRow.newest_active_by_key("pattern_match_cursor")
+    row = MachineStateRow.newest_active_by_key("pattern_match_cursor")
 
     assert row is not None
     assert row.value == "250"
@@ -49,8 +49,8 @@ def test_deleted_and_inactive_rows_excluded(db: sqlite3.Connection) -> None:
     _seed(db, "geo_pattern_cursor", "9", active=0)
     db.commit()
 
-    assert SystemRow.newest_active_by_key("geo_pattern_cursor") is None
+    assert MachineStateRow.newest_active_by_key("geo_pattern_cursor") is None
 
 
 def test_missing_key_returns_none(db: sqlite3.Connection) -> None:
-    assert SystemRow.newest_active_by_key("never_written") is None
+    assert MachineStateRow.newest_active_by_key("never_written") is None

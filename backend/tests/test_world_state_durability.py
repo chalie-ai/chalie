@@ -3,7 +3,7 @@
 ``last_user_message_at`` lives only in WorldState's in-memory ``_store`` dict
 at HEAD, so a container restart wipes it and starves the subconscious worker
 (observed 57 ticks vs 3029 skips). It must be persisted durably next to
-``subconscious_last_fired_at`` — MemoryStore (fast) + data_graph kind='system'
+``subconscious_last_fired_at`` — MemoryStore (fast) + data_graph kind='machine_state'
 (durable) — and hydrated on construction, mirroring
 ``SubconsciousWorker._persist_last_fired`` / ``_load_last_fired_from_storage``.
 
@@ -85,7 +85,7 @@ class TestWorldStateDurabilityAcrossRestart:
 
         assert survived is not None, (
             "last_user_message_at did not survive the restart — it must be "
-            "persisted durably (data_graph kind='system'), not memory-only."
+            "persisted durably (data_graph kind='machine_state'), not memory-only."
         )
         # The durable read must be the value we wrote (second precision — the
         # stored representation round-trips through isoformat/parse_utc).

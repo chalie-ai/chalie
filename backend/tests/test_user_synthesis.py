@@ -16,7 +16,7 @@ import sqlite3
 
 import pytest
 
-from models.system import SystemRow
+from models.machine_state import MachineStateRow
 from services.user_synthesis import UserSynthesis
 
 pytestmark = pytest.mark.unit
@@ -65,17 +65,17 @@ class TestUpsertRouting:
         """upsert defaults to shorthand=True → the 'user_summary' row."""
         UserSynthesis.upsert("Short portrait.")
 
-        short = SystemRow.active_by_key("user_summary")
+        short = MachineStateRow.active_by_key("user_summary")
         assert short is not None and short.value == "Short portrait."
-        assert SystemRow.active_by_key("user_summary_long") is None
+        assert MachineStateRow.active_by_key("user_summary_long") is None
 
     def test_upsert_long_targets_long_key(self, db: sqlite3.Connection) -> None:
         """upsert(shorthand=False) → the 'user_summary_long' row."""
         UserSynthesis.upsert("Long portrait.", shorthand=False)
 
-        long_ = SystemRow.active_by_key("user_summary_long")
+        long_ = MachineStateRow.active_by_key("user_summary_long")
         assert long_ is not None and long_.value == "Long portrait."
-        assert SystemRow.active_by_key("user_summary") is None
+        assert MachineStateRow.active_by_key("user_summary") is None
 
     def test_upsert_overwrites_prior_value(self, db: sqlite3.Connection) -> None:
         """A second upsert supersedes the first — get returns the latest."""

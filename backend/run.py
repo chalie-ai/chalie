@@ -203,6 +203,7 @@ def _run_startup_migrations() -> None:
     _purge_stale_adaptive_layer_rows()
     _wipe_scheduled_items_for_cron()
     _rebuild_scheduled_items_prompt_only()
+    _migrate_system_kind_split()
 
 
 def _backfill_provider_token_limits() -> None:
@@ -250,6 +251,28 @@ def _migrate_compactions_table() -> None:
                 _f.write('done')
     except Exception as _comp_err:
         logger.warning(f"[Startup] compactions-table migration skipped: {_comp_err}")
+
+
+def _migrate_system_kind_split() -> None:
+    """One-time re-kind of operational ``data_graph`` rows out of the ``system``
+    kind into ``machine_state`` (migration_009). The ``system`` kind was split
+    into a searchable memory vertical (keeps ``system``) and an operational
+    machine-state vertical (``machine_state``); this moves cursors/clocks/summary
+    across. Idempotent; sentinel-gated to one run per database.
+    """
+    try:
+        from services.file_mapper_service import FileMapperService
+        _kind_split_sentinel = os.path.join(
+            os.path.dirname(str(FileMapperService.get_db_path())),
+            '.system-kind-split-migration-v1.done',
+        )
+        if not os.path.exists(_kind_split_sentinel):
+            from migrations.migration_009_system_kind_split import apply as _apply_kind_split
+            _apply_kind_split(str(FileMapperService.get_db_path()))
+            with open(_kind_split_sentinel, 'w') as _f:
+                _f.write('done')
+    except Exception as _kind_split_err:
+        logger.warning(f"[Startup] system-kind-split migration skipped: {_kind_split_err}")
 
 
 def _drop_invoked_by_column() -> None:

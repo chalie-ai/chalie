@@ -65,8 +65,8 @@ class DurableTimestamp:
 
     def _persist_data_graph(self, iso: str) -> None:
         try:
-            from models.system import SystemRow
-            SystemRow.store(
+            from models.machine_state import MachineStateRow
+            MachineStateRow.store(
                 key=self._data_graph_key,
                 value=iso,
                 source=self._source,
@@ -79,8 +79,8 @@ class DurableTimestamp:
 
     def _read_data_graph(self) -> Optional[str]:
         try:
-            from models.system import SystemRow
-            row = SystemRow.active_by_key(self._data_graph_key)
+            from models.machine_state import MachineStateRow
+            row = MachineStateRow.active_by_key(self._data_graph_key)
             return row.value if row and row.value else None
         except Exception as exc:
             logger.debug(
