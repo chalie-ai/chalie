@@ -10,7 +10,9 @@ they build the parametrized SQL, execute it on the bound connection, and
 ``filter``/``where``/``filter_in`` never accept a raw predicate string: the
 value is always bound as a ``?`` parameter, the operator is checked against a
 fixed whitelist, and the column name is checked against a safe-identifier
-pattern — so a caller can never smuggle SQL through either argument. A
+pattern — so a caller can never smuggle SQL through either argument.
+``order_by`` holds itself to the same standard: every term is validated as
+``column [ASC|DESC]`` and the clause is rebuilt from the validated parts. A
 predicate this builder genuinely cannot express (a join, an OR across
 columns, an UPSERT, FTS/vec0 MATCH, DDL) stays hand-rolled SQL on the owning
 model, same as before.
@@ -48,6 +50,10 @@ class Query(Generic[T]):
     #: :meth:`filter_in` answer to an empty ``values`` sequence, so
     #: "IN ()" (invalid SQL) never gets generated.
     _NEVER_MATCHES: ClassVar[str] = "1 = 0"
+
+    #: The only sort directions an ORDER BY term may carry — anything else
+    #: after a column name is rejected loudly by :meth:`order_by`.
+    _ALLOWED_DIRECTIONS: ClassVar[frozenset[str]] = frozenset({"ASC", "DESC"})
 
     def __init__(self, model_class: type[T]) -> None:
         table = model_class.get_table()
@@ -109,9 +115,25 @@ class Query(Generic[T]):
         self._values.extend(values)
         return self
 
-    def order_by(self, column: str) -> "Query[T]":
-        """Set the ORDER BY clause."""
-        self._order_by_column = column
+    def order_by(self, terms: str) -> "Query[T]":
+        """Set the ORDER BY clause from comma-separated ``column [ASC|DESC]``
+        terms (e.g. ``"created_at ASC, id ASC"``). Like a filter key, none of
+        this can be bound as a ``?`` parameter, so each column is
+        identifier-validated and each direction whitelist-checked, and the
+        stored clause is rebuilt from the validated parts only."""
+        validated = []
+        for term in terms.split(","):
+            parts = term.split()
+            if len(parts) == 1:
+                validated.append(self._validate_identifier(parts[0]))
+            elif len(parts) == 2 and parts[1].upper() in self._ALLOWED_DIRECTIONS:
+                validated.append(f"{self._validate_identifier(parts[0])} {parts[1].upper()}")
+            else:
+                raise ValueError(
+                    f"unsafe ORDER BY term: {term.strip()!r} "
+                    "(expected 'column' or 'column ASC|DESC')"
+                )
+        self._order_by_column = ", ".join(validated)
         return self
 
     def limit(self, count: int) -> "Query[T]":

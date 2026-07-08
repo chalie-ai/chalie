@@ -101,9 +101,10 @@ class Model(Serializable, HasTable):
         return Query(cls).filter_in(key, values)
 
     @classmethod
-    def order_by(cls: type[T], column: str) -> Query[T]:
-        """Start a late-binding query ordered by ``column``."""
-        return Query(cls).order_by(column)
+    def order_by(cls: type[T], terms: str) -> Query[T]:
+        """Start a late-binding query ordered by ``terms`` — comma-separated
+        ``column [ASC|DESC]`` entries (see :meth:`~models.query.Query.order_by`)."""
+        return Query(cls).order_by(terms)
 
     @classmethod
     def all(cls: type[T]) -> Query[T]:
