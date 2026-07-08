@@ -33,7 +33,6 @@ Routes (all require session auth):
 
 from __future__ import annotations
 
-import json
 import logging
 import os
 import uuid
@@ -167,13 +166,7 @@ def _validate_file_path(full_path: str) -> bool:
 def _read_existing_metadata(svc: "DocumentService", doc_id: str) -> "dict[str, object]":
     """Read prior extracted_metadata so concurrent writes are not clobbered."""
     existing = svc.get_document(doc_id) or {}
-    meta = existing.get("extracted_metadata") or {}
-    if isinstance(meta, str):
-        try:
-            return cast("dict[str, object]", json.loads(meta))
-        except Exception:
-            return {}
-    return cast("dict[str, object]", meta)
+    return cast("dict[str, object]", existing.get("extracted_metadata") or {})
 
 
 def _derive_summary(text: str) -> str:

@@ -141,19 +141,6 @@ class DocumentAbility(Ability):
         return _dispatch(service, action, params)
 
 
-def _parse_extracted_metadata(raw: object) -> dict[str, object]:
-    if isinstance(raw, dict):
-        return raw
-    if isinstance(raw, str):
-        try:
-            parsed = _json.loads(raw)
-            if isinstance(parsed, dict):
-                return parsed
-        except Exception:
-            pass
-    return {}
-
-
 _VALID_ACTIONS = ("search", "list", "view", "delete", "restore", "create")
 
 
@@ -291,7 +278,7 @@ def _handle_list(service: "_DocumentService") -> ToolResult:
 
     rows = []
     for doc in docs:
-        meta = _parse_extracted_metadata(doc.get("extracted_metadata"))
+        meta = cast("dict[str, object]", doc.get("extracted_metadata") or {})
         doc_type = meta.get("document_type", {})
         if isinstance(doc_type, dict):
             doc_type = doc_type.get("value", "")
@@ -359,7 +346,7 @@ def _handle_view(service: "_DocumentService", params: dict[str, object]) -> Tool
             action="view",
         )
 
-    meta = _parse_extracted_metadata(doc.get("extracted_metadata"))
+    meta = cast("dict[str, object]", doc.get("extracted_metadata") or {})
     lines = [f"[DOCUMENT] {doc['original_name']}:"]
     _append_meta_summary(lines, doc, meta)
 
