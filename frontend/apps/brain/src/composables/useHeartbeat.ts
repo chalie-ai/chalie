@@ -4,18 +4,15 @@
  * /login. Module-scoped state makes useHeartbeat() a process-wide singleton.
  */
 
+import { system } from '../api';
+
 let _intervalId: ReturnType<typeof setInterval> | null = null;
 let _redirected = false;
 
 async function _checkSession(): Promise<void> {
   if (_redirected) return;
   try {
-    const res = await fetch('/api/auth/status', { credentials: 'same-origin' });
-    if (!res.ok) return;
-    const data = (await res.json()) as {
-      has_master_account: boolean;
-      has_session: boolean;
-    };
+    const data = await system.authStatus();
     if (data.has_master_account && !data.has_session) {
       _redirected = true;
       stop();

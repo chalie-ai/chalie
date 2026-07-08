@@ -2,6 +2,7 @@
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
 import type { CatalogEntry, Provider } from '../api/providers';
 import { providers } from '../api/providers';
+import { system } from '../api';
 import { apiErrorMessage } from '../api/http';
 import { useToast } from '../composables/useToast';
 import { useConfirm } from '../composables/useConfirm';
@@ -432,11 +433,8 @@ async function saveProvider(): Promise<void> {
     // Providers-only lift check
     if (shell.providersOnly) {
       try {
-        const res = await fetch('/api/auth/status', { credentials: 'same-origin' });
-        if (res.ok) {
-          const sd = (await res.json()) as { has_providers?: boolean };
-          if (sd.has_providers) shell.liftProvidersOnly();
-        }
+        const sd = await system.authStatus();
+        if (sd.has_providers) shell.liftProvidersOnly();
       } catch {
         // keep locked
       }

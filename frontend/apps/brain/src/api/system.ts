@@ -57,19 +57,6 @@ export const system = {
     form.append('ssl_enabled', String(payload.ssl_enabled));
     if (payload.ssl_cert) form.append('ssl_cert', payload.ssl_cert);
     if (payload.ssl_key) form.append('ssl_key', payload.ssl_key);
-    const res = await fetch('/api/system/network', {
-      method: 'PUT',
-      credentials: 'same-origin',
-      body: form,
-    });
-    if (!res.ok) {
-      const body = await res.json().catch(() => null);
-      const msg =
-        body && typeof body === 'object' && 'error' in body && typeof (body as { error?: unknown }).error === 'string'
-          ? (body as { error: string }).error
-          : `HTTP ${res.status}`;
-      throw new Error(msg);
-    }
-    return (await res.json()) as NetworkSaveResult;
+    return api.putForm<NetworkSaveResult>('/api/system/network', form);
   },
 };

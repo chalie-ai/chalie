@@ -85,7 +85,7 @@ export class ApiClient {
       typeof body === 'object' &&
       'error' in body &&
       typeof (body as { error?: unknown }).error === 'string'
-        ? (body as { error?: string }).error
+        ? (body as { error: string }).error
         : undefined;
     throw new HttpError(res.status, msg, body ?? undefined);
   }
@@ -125,6 +125,23 @@ export class ApiClient {
   async upload<T>(path: string, formData: FormData, opts?: RequestOpts): Promise<T> {
     const res = await fetch(this.buildUrl(path), {
       method: 'POST',
+      credentials: 'same-origin',
+      headers: { ...this.authHeaders() },
+      body: formData,
+    });
+    if (res.status === 401) this.fail401(opts);
+    if (!res.ok) return this.throwHttp(res);
+    return (await res.json()) as T;
+  }
+
+  /**
+   * Multipart PUT — same contract as `upload` but with `method:'PUT'`. No
+   * Content-Type header so the browser sets the boundary; 401 → fail401, non-ok
+   * → throwHttp.
+   */
+  async putForm<T>(path: string, formData: FormData, opts?: RequestOpts): Promise<T> {
+    const res = await fetch(this.buildUrl(path), {
+      method: 'PUT',
       credentials: 'same-origin',
       headers: { ...this.authHeaders() },
       body: formData,
