@@ -40,6 +40,7 @@ from typing import TYPE_CHECKING, Literal, cast, overload
 
 from abilities._result import ToolResult
 from models.episode import Episode
+from models.memory_recall_log import MemoryRecallLog
 from services.database import Database
 
 if TYPE_CHECKING:
@@ -586,27 +587,18 @@ def _write_recall_telemetry(
     count, and the top vector distances.
     """
     try:
-        Database.conn().execute(
-            """
-            INSERT INTO memory_recall_log (
-                turn_uid, transcript_id, channel, caller, query,
-                query_embedding_hash, episode_count, floor_cut_count,
-                final_rrf_count, top_distances
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                turn_uid,
-                transcript_id,
-                channel,
-                caller,
-                query,
-                embedding_hash,
-                telemetry.get("episode_count", 0),
-                telemetry.get("floor_cut_count", 0),
-                telemetry.get("final_rrf_count", 0),
-                json.dumps(telemetry.get("top_distances", [])),
-            ),
-        )
+        MemoryRecallLog(
+            turn_uid=turn_uid,
+            transcript_id=transcript_id,
+            channel=channel,
+            caller=caller,
+            query=query,
+            query_embedding_hash=embedding_hash,
+            episode_count=telemetry.get("episode_count", 0),
+            floor_cut_count=telemetry.get("floor_cut_count", 0),
+            final_rrf_count=telemetry.get("final_rrf_count", 0),
+            top_distances=json.dumps(telemetry.get("top_distances", [])),
+        ).save()
     except Exception as e:
         logger.warning(f"{LOG_PREFIX} Failed to write memory_recall_log row: {e}")
 
