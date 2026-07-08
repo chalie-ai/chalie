@@ -22,6 +22,7 @@ import sqlite3
 from typing import ClassVar
 
 from models.model import Model
+from services.database import Database
 
 
 class ScheduledItem(Model):
@@ -78,6 +79,22 @@ class ScheduledItem(Model):
         )
 
     @classmethod
+    def due_at(cls, now_iso: str) -> list[dict[str, object]]:
+        """Enabled, already-started rows the poller tests against the current
+        minute — ``id``/``message`` plus the ``cron_*`` fields ``matches()``
+        needs. A LOCKLESS builder read (never ``Database.transaction()``'s
+        ``BEGIN IMMEDIATE``): the poll must not take the write lock, or a
+        contended minute could stall past ``busy_timeout`` and be skipped —
+        and a fixed-time schedule due in that minute is then missed until its
+        next natural occurrence. ``_bound_connection()`` is the autocommit
+        ``Database.conn()`` handle, so a bare ``SELECT`` reads without locking."""
+        return (
+            cls.filter("enabled", 1)
+            .filter("start_at", now_iso, "<=")
+            .select("id", "message", "cron_dom", "cron_hour", "cron_minute")
+        )
+
+    @classmethod
     def vector_search(cls, embedding_blob: bytes, limit: int) -> list[sqlite3.Row]:
         """Nearest-neighbour lookup over ``scheduled_items_vec`` joined back
         to the row it embeds, closest first. Raw SQL: a vec0 ``MATCH`` join
@@ -98,6 +115,24 @@ class ScheduledItem(Model):
         return cursor.fetchall()
 
     # ── Writes ──────────────────────────────────────────────────────────────
+
+    @classmethod
+    def write_embedding(cls, item_id: int, embedding_blob: bytes) -> None:
+        """Upsert this item's vec0 embedding, skipping a row that has since
+        been cancelled (rowid == id under ``INTEGER PRIMARY KEY``) so a stale
+        embedding is never written for a gone schedule. Best-effort companion
+        to :meth:`delete_embedding`. Raw SQL grouped under its own
+        ``Database.transaction()``: the vec0 shadow table has no model, and the
+        existence guard + upsert commit as one."""
+        with Database.transaction() as conn:
+            if conn.execute(
+                "SELECT 1 FROM scheduled_items WHERE id = ?", (item_id,)
+            ).fetchone() is None:
+                return
+            conn.execute(
+                "INSERT OR REPLACE INTO scheduled_items_vec (rowid, embedding) VALUES (?, ?)",
+                (item_id, embedding_blob),
+            )
 
     @classmethod
     def delete_embedding(cls, item_id: int) -> None:

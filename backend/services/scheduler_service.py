@@ -19,9 +19,10 @@ Entry point: scheduler_worker() registered in run.py.
 import logging
 import threading
 import time
+from typing import cast
 
+from models.scheduled_item import ScheduledItem
 from services.cron_schedule import matches
-from services.database import Database
 from services.embedding_utils import pack_embedding
 from services.time_utils import utc_now
 from utils.logger import Logger
@@ -47,21 +48,9 @@ def embed_scheduled_item(item_id: int, message: str) -> None:
             return
 
         packed = pack_embedding(embedding)
-
-        with Database.transaction() as conn:
-            cursor = conn.cursor()
-            cursor.execute(
-                "SELECT rowid FROM scheduled_items WHERE id = ?", (item_id,)
-            )
-            row = cursor.fetchone()
-            if not row:
-                return
-
-            item_rowid = row[0]
-            cursor.execute(
-                "INSERT OR REPLACE INTO scheduled_items_vec (rowid, embedding) VALUES (?, ?)",
-                (item_rowid, packed),
-            )
+        if packed is None:
+            return
+        ScheduledItem.write_embedding(item_id, packed)
 
         logger.debug(f"{LOG_PREFIX} Embedded scheduled item {item_id}")
     except Exception as e:
@@ -89,24 +78,19 @@ def _poll_and_fire() -> None:
     try:
         now = utc_now()
 
-        # A plain read — do NOT wrap in Database.transaction() (it opens with
-        # BEGIN IMMEDIATE and takes the write lock). Under contention that lock
-        # could stall past busy_timeout and skip the whole minute; because
-        # matches() is a function of the current wall-clock minute only, a
-        # fixed-time schedule due in a skipped minute is missed until its next
-        # natural occurrence. Database.conn() reads without locking.
-        rows = Database.conn().execute(
-            """
-            SELECT id, message, cron_dom, cron_hour, cron_minute
-            FROM scheduled_items
-            WHERE enabled = 1 AND start_at <= ?
-            """,
-            (now.isoformat(),),
-        ).fetchall()
+        # ScheduledItem.due_at is a LOCKLESS read (it must never take the write
+        # lock, or a contended minute is skipped and a fixed-time schedule
+        # missed until its next occurrence — see the model method's docstring).
+        rows = ScheduledItem.due_at(now.isoformat())
 
-        for item_id, message, dom, hour, minute in rows:
-            if matches(now, dom, hour, minute):
-                _fire_item(item_id, message)
+        for row in rows:
+            if matches(
+                now,
+                cast("int | None", row["cron_dom"]),
+                cast("int | None", row["cron_hour"]),
+                cast("int | None", row["cron_minute"]),
+            ):
+                _fire_item(cast(int, row["id"]), cast(str, row["message"]))
 
     except Exception as e:
         logger.error(f"{LOG_PREFIX} Poll and fire error: {e}")
