@@ -59,4 +59,8 @@ def build_client(config: dict[str, object]) -> ProviderClient:
         from services.llm_clients.gemini import GeminiClient  # noqa: PLC0415
         return GeminiClient(config)
 
+    if platform == 'codex_cli':
+        from services.llm_clients.codex_cli import CodexCliClient  # noqa: PLC0415
+        return CodexCliClient(config)
+
     raise ValueError(f"Unknown platform: {platform}")

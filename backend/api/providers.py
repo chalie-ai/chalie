@@ -327,6 +327,14 @@ def _fetch_openai_compatible_models(host: str, api_key: str) -> "tuple[list[dict
         return None, "Failed to fetch models"
 
 
+def _fetch_codex_models() -> "tuple[list[dict[str, str | None]] | None, str | None]":
+    from services.llm_clients.codex_cli import list_codex_models  # noqa: PLC0415
+    models = list_codex_models()
+    if not models:
+        return None, "Codex CLI not initialised — install the codex CLI and run `codex login`"
+    return models, None
+
+
 def _map_api_error(error_str: str, platform: str, model: str) -> str:
     el = error_str.lower()
     if any(k in el for k in ('authentication', 'auth_token', 'api_key', 'invalid_api', '401', 'unauthorized', 'invalid x-api-key')):
@@ -415,6 +423,46 @@ def _test_api_provider(config: "dict[str, object]", platform: str, model: str, s
         return ProviderTestResult(success=True, model=model, latency_ms=latency_ms, message="Connected successfully")
     except Exception as e:
         return ProviderTestResult(success=False, error=_map_api_error(str(e), platform, model))
+
+
+def _test_codex_provider(model: str, start: float) -> ProviderTestResult:
+    # codex_cli is subscription-billed on a scarce free tier — never run inference
+    # to test it. A binary + login presence check is sufficient and costs 0 tokens.
+    import os
+    import subprocess
+    import time
+
+    from services.llm_clients.codex_cli import _codex_home
+    binary = os.environ.get("CODEX_BIN", "codex")
+    try:
+        proc = subprocess.run(
+            [binary, "--version"], capture_output=True, text=True, timeout=10,
+        )
+    except (FileNotFoundError, subprocess.SubprocessError):
+        return ProviderTestResult(
+            success=False,
+            error="Codex CLI not found",
+            hint="Install the codex CLI and ensure it is on PATH",
+        )
+    if proc.returncode != 0:
+        return ProviderTestResult(
+            success=False,
+            error="Codex CLI not found",
+            hint="Install the codex CLI and ensure it is on PATH",
+        )
+
+    if not (_codex_home() / "auth.json").exists():
+        return ProviderTestResult(
+            success=False,
+            error="Codex CLI is not logged in",
+            hint="Run `codex login`",
+        )
+
+    latency_ms = int((time.time() - start) * 1000)
+    return ProviderTestResult(
+        success=True, model=model, latency_ms=latency_ms,
+        message=f"Codex CLI ready ({(proc.stdout or '').strip()})",
+    )
 
 
 def get_provider_service() -> "ProviderDbService":
@@ -588,6 +636,8 @@ class ProviderListModelsResource(Resource):
             models, err = _fetch_openai_compatible_models(
                 dto.host or '', (dto.api_key or '').strip(),
             )
+        elif platform == 'codex_cli':
+            models, err = _fetch_codex_models()
         else:
             return ListModelsResult(models=[], error=f"Unsupported platform '{platform}'").model_dump(mode="json"), 400
 
@@ -634,6 +684,8 @@ class ProviderTestResource(Resource):
             start = time.time()
             if platform == 'ollama':
                 return _test_ollama_provider(config, model, start)
+            if platform == 'codex_cli':
+                return _test_codex_provider(model, start)
             return _test_api_provider(config, platform, model, start)
 
         except Exception as e:

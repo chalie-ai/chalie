@@ -111,11 +111,13 @@ class ProviderDbService:
         # A key-requiring platform with no key cannot be probed — skip the
         # (guaranteed-to-fail) network call and default to 0; a later key edit
         # re-probes. Mirrors the update-path guard for create/update symmetry.
-        if platform in self._KEY_REQUIRING and not api_key_val:
+        # codex_cli is chat-only and has no api_key — never probe it.
+        if platform == 'codex_cli' or (platform in self._KEY_REQUIRING and not api_key_val):
             logger.warning(
                 "[Provider] Skipping vision probe on create for '%s' — "
-                "no api_key available",
+                "%s",
                 safe(data.get('name')),
+                "codex_cli is chat-only" if platform == 'codex_cli' else "no api_key available",
             )
             vision = 0
         else:
@@ -184,8 +186,10 @@ class ProviderDbService:
             eff_host = data.get('host', current.get('host'))
             # explicit new api_key wins; else reuse current (decrypted) value
             eff_api_key = data['api_key'] if 'api_key' in data else current.get('api_key')
-            needs_key = eff_platform in self._KEY_REQUIRING
-            if needs_key and not eff_api_key:
+            if eff_platform == 'codex_cli':
+                # codex_cli is chat-only — no vision probe, no api_key needed
+                updates["supports_vision"] = 0
+            elif eff_platform in self._KEY_REQUIRING and not eff_api_key:
                 # vault locked / no credential — cannot probe, leave column as-is
                 logger.warning(
                     "[Provider] Skipping vision re-probe for id=%s — no api_key available",

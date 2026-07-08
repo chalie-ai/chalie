@@ -87,6 +87,12 @@ function avatar(name: string): string {
   return s ? s[0].toUpperCase() : '?';
 }
 
+function platformLabel(platform: string): string {
+  if (platform === 'openai_compatible') return 'OpenAI-compatible';
+  if (platform === 'codex_cli') return 'Codex CLI';
+  return platform;
+}
+
 onMounted(async () => {
   await load();
 });
@@ -253,7 +259,7 @@ function presetFor(provider: Provider): CatalogEntry {
     name: provider.name,
     platform: provider.platform,
     host: provider.host || '',
-    needs_key: provider.platform !== 'ollama',
+    needs_key: provider.platform !== 'ollama' && provider.platform !== 'codex_cli',
   };
 }
 
@@ -587,9 +593,7 @@ async function saveProvider(): Promise<void> {
         >
           <span class="provider-tile-avatar">{{ avatar(t.name) }}</span>
           <span class="provider-tile-name">{{ t.name }}</span>
-          <span class="provider-tile-platform">{{
-            t.platform === 'openai_compatible' ? 'OpenAI-compatible' : t.platform
-          }}</span>
+          <span class="provider-tile-platform">{{ platformLabel(t.platform) }}</span>
         </button>
       </div>
     </div>

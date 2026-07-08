@@ -4,7 +4,7 @@ Drives the real Flask app (``create_app`` via ``authed_client``) against a real
 SQLite database and the real curated catalog. No mocks.
 
 The wizard's design: a curated preset maps a popular provider to one of Chalie's
-five existing platforms plus a base URL, so the host is pre-filled and the live
+existing platforms plus a base URL, so the host is pre-filled and the live
 model-fetch path (``POST /providers/list-models``) is reused unchanged. A preset
 is NEVER a runtime platform of its own — the old catalog-id-as-platform branch is
 gone, and these tests pin both the new catalog shape and the removal of that branch.
@@ -22,7 +22,7 @@ from services.vault_service import _vault_state, get_vault_service
 # The seven providers the product owner named explicitly. The curated list is
 # allowed to carry more, but never fewer than these, and never the 111-entry dump.
 _NAMED_IDS = {"ollama", "anthropic", "gemini", "openai", "deepseek", "minimax", "nvidia"}
-_CHALIE_PLATFORMS = {"ollama", "openai", "anthropic", "gemini", "openai_compatible"}
+_CHALIE_PLATFORMS = {"ollama", "openai", "anthropic", "gemini", "openai_compatible", "codex_cli"}
 
 
 def _unlock_vault(password: str = "test-password") -> None:
