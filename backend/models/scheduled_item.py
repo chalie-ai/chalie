@@ -68,6 +68,20 @@ class ScheduledItem(Model):
         return query.select(*columns)
 
     @classmethod
+    def recent(
+        cls, *, limit: int | None = None, offset: int = 0
+    ) -> list[ScheduledItem]:
+        """Live schedules newest-first (``created_at`` DESC) as hydrated
+        instances — the REST list read (paged via ``limit``/``offset``) and the
+        REST turns read (unpaged, ``limit=None``). Builder-only: ORDER BY +
+        LIMIT/OFFSET are all expressible by the structured filter. ``offset`` is
+        applied only alongside a ``limit`` (SQLite OFFSET requires LIMIT)."""
+        query = cls.order_by("created_at DESC")
+        if limit is not None:
+            query = query.limit(limit).offset(offset)
+        return query.get()
+
+    @classmethod
     def search_by_message(cls, pattern: str) -> list[dict[str, object]]:
         """Fuzzy ``LIKE`` lookup by content, oldest first — the cancel/enable/
         disable target resolver when ``item_id`` is unknown. Builder-only:

@@ -1,9 +1,12 @@
 """Scheduler namespace — CRUD over scheduled_items via Pydantic DTOs.
 
-All routes require session auth. The API owns its SQL (raw inline against the
-``scheduled_items`` table); the only service touchpoint is the fire-and-forget
-``embed_scheduled_item`` thread on create. DTO-typed through the foundation
-boundary decorators (``@expects``/``@responds``), following the lists reference.
+All routes require session auth. Persistence is owned by the
+:class:`~models.scheduled_item.ScheduledItem` model (the sole home of
+``scheduled_items`` + ``scheduled_items_vec`` SQL); the ``/turns`` gist column is
+read through :class:`~models.thread_gist.ThreadGist`. The only service touchpoint
+is the fire-and-forget ``embed_scheduled_item`` thread on create. DTO-typed
+through the foundation boundary decorators (``@expects``/``@responds``),
+following the lists reference.
 
 ``scheduled_items`` is a prompt-only, dumb-cron table: one row per schedule,
 forever. There is no ``item_type``/``due_at``/``status``/``group_id`` — a
@@ -18,11 +21,13 @@ from __future__ import annotations
 
 import logging
 import threading
-from typing import TYPE_CHECKING, cast
+from typing import cast
 
 from flask.typing import ResponseReturnValue
 from flask_restx import Namespace, Resource
 
+from models.scheduled_item import ScheduledItem
+from models.thread_gist import ThreadGist
 from services.database import Database
 from services.locale_service import parse_local
 from services.time_utils import utc_now
@@ -38,13 +43,12 @@ from .dto.scheduler_item import (
 )
 from .dto.scheduler_query import SchedulerListQuery
 
-if TYPE_CHECKING:
-    from collections.abc import Iterable
-
 logger = logging.getLogger(__name__)
 
 _ERR_INTERNAL = "Internal server error"
 _ERR_NOT_FOUND = "Not found"
+
+_SCHEDULE_CHANNEL = "schedule"
 
 scheduler_ns = Namespace("scheduler", description="Scheduled item management", path="/api/scheduler")
 
@@ -60,24 +64,26 @@ register_dto(
 
 _S = scheduler_ns.models
 
-_COLS = [
-    "id", "message", "start_at",
-    "cron_dom", "cron_hour", "cron_minute",
-    "enabled", "channel", "created_by_session", "created_at",
-]
 
+def _item_dto(item: ScheduledItem) -> SchedulerItem:
+    """Project a :class:`~models.scheduled_item.ScheduledItem` into the
+    :class:`SchedulerItem` read DTO.
 
-def _item_dto(row: "Iterable[object]", cols: "list[str]") -> SchedulerItem:
-    """Zip a select row into a :class:`SchedulerItem` read DTO.
-
-    Renames the DB's ``cron_dom``/``cron_hour``/``cron_minute`` columns to the
-    read DTO's ``day``/``hour``/``minute`` field names.
+    Renames the model's ``cron_dom``/``cron_hour``/``cron_minute`` fields to the
+    read DTO's ``day``/``hour``/``minute`` names.
     """
-    data = dict(zip(cols, row))
-    data["day"] = data.pop("cron_dom", None)
-    data["hour"] = data.pop("cron_hour", None)
-    data["minute"] = data.pop("cron_minute", None)
-    return SchedulerItem.model_validate(data)
+    return SchedulerItem.model_validate({
+        "id": item.id,
+        "message": item.message,
+        "start_at": item.start_at,
+        "day": item.cron_dom,
+        "hour": item.cron_hour,
+        "minute": item.cron_minute,
+        "enabled": item.enabled,
+        "channel": item.channel,
+        "created_by_session": item.created_by_session,
+        "created_at": item.created_at,
+    })
 
 
 def _embed(item_id: int, message: str) -> None:
@@ -109,16 +115,8 @@ class SchedulerListResource(Resource):
         active/disabled by ``enabled``.
         """
         try:
-            cols = ", ".join(_COLS)
-            cursor = Database.conn().cursor()
-            cursor.execute(
-                f"SELECT {cols} FROM scheduled_items "
-                "ORDER BY created_at DESC "
-                "LIMIT ? OFFSET ?",
-                [dto.limit, dto.offset],
-            )
-            rows = cursor.fetchall()
-            return [_item_dto(r, _COLS) for r in rows]
+            items = ScheduledItem.recent(limit=dto.limit, offset=dto.offset)
+            return [_item_dto(item) for item in items]
         except Exception:
             logger.exception("[SCHEDULER API] list error")
             return error(_ERR_INTERNAL, 500)
@@ -135,34 +133,26 @@ class SchedulerListResource(Resource):
         try:
             now = utc_now()
             start_at_utc = parse_local(dto.start_at) if dto.start_at else now
-            with Database.transaction() as conn:
-                cursor = conn.cursor()
-                cursor.execute(
-                    """
-                    INSERT INTO scheduled_items
-                      (message, start_at, cron_dom, cron_hour, cron_minute,
-                       enabled, channel, created_by_session)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    (
-                        dto.message, start_at_utc.isoformat(),
-                        dto.day, dto.hour, dto.minute,
-                        1 if dto.enabled else 0,
-                        dto.channel, None,
-                    ),
-                )
-                item_id = cursor.lastrowid
-                cursor.execute(
-                    f"SELECT {', '.join(_COLS)} FROM scheduled_items WHERE id = ?",
-                    (item_id,),
-                )
-                row = cursor.fetchone()
+            item = ScheduledItem(
+                message=dto.message,
+                start_at=start_at_utc.isoformat(),
+                cron_dom=dto.day,
+                cron_hour=dto.hour,
+                cron_minute=dto.minute,
+                enabled=1 if dto.enabled else 0,
+                channel=dto.channel,
+                created_by_session=None,
+            )
+            item.save()  # INSERT; id autoincrements, created_at defaults in SQL
+            item_id = cast(int, item.id)
+            # Re-read so created_at (SQL default) is populated for the response.
+            saved = ScheduledItem.get(item_id)
 
             threading.Thread(
                 target=_embed, args=(item_id, dto.message),
                 daemon=True, name="scheduler-embed",
             ).start()
-            return _item_dto(cast("Iterable[object]", row), _COLS)
+            return _item_dto(cast(ScheduledItem, saved))
         except Exception:
             logger.exception("[SCHEDULER API] create error")
             return error(_ERR_INTERNAL, 500)
@@ -170,8 +160,6 @@ class SchedulerListResource(Resource):
 
 @scheduler_ns.route("/turns")
 class SchedulerTurnsResource(Resource):
-    _TURN_COLS = ["turn_id", "gist", "preview", "day", "hour", "minute"]
-
     @require_session
     @scheduler_ns.response(200, "Active schedule threads", model=_S["SchedulerTurn"])
     @scheduler_ns.response(500, _ERR_INTERNAL, model=_S["Error"])
@@ -182,17 +170,23 @@ class SchedulerTurnsResource(Resource):
         Every live schedule is its own thread now — ``turn_id`` is simply the
         schedule's own ``id`` (no series ``group_id`` to collapse occurrences
         into). The gist is sourced from ``thread_gist`` (keyed by
-        channel=schedule, turn_id).
+        channel=schedule, turn_id) — read separately and merged here, each model
+        owning its own table's SQL rather than a cross-table JOIN.
         """
         try:
-            rows = Database.conn().execute(
-                "SELECT si.id AS turn_id, tg.gist, si.message, "
-                "       si.cron_dom, si.cron_hour, si.cron_minute "
-                "FROM scheduled_items si "
-                "LEFT JOIN thread_gist tg ON tg.channel = 'schedule' AND tg.turn_id = si.id "
-                "ORDER BY si.created_at DESC"
-            ).fetchall()
-            return [SchedulerTurn.model_validate(dict(zip(self._TURN_COLS, r))) for r in rows]
+            schedules = ScheduledItem.recent()
+            gists = ThreadGist.bulk_get(_SCHEDULE_CHANNEL, [cast(int, s.id) for s in schedules])
+            return [
+                SchedulerTurn.model_validate({
+                    "turn_id": s.id,
+                    "gist": gists.get(cast(int, s.id)),
+                    "preview": s.message,
+                    "day": s.cron_dom,
+                    "hour": s.cron_hour,
+                    "minute": s.cron_minute,
+                })
+                for s in schedules
+            ]
         except Exception:
             logger.exception("[SCHEDULER API] turns error")
             return error(_ERR_INTERNAL, 500)
@@ -213,13 +207,10 @@ class SchedulerItemResource(Resource):
     def get(self, item_id: int) -> SchedulerItem | ResponseReturnValue:
         """Fetch a single scheduled item by ID."""
         try:
-            row = Database.conn().execute(
-                f"SELECT {', '.join(_COLS)} FROM scheduled_items WHERE id = ?",
-                (item_id,),
-            ).fetchone()
-            if row is None:
+            item = ScheduledItem.get(item_id)
+            if item is None:
                 return error(_ERR_NOT_FOUND, 404)
-            return _item_dto(row, _COLS)
+            return _item_dto(item)
         except Exception:
             logger.exception("[SCHEDULER API] get item error")
             return error(_ERR_INTERNAL, 500)
@@ -241,37 +232,20 @@ class SchedulerItemResource(Resource):
         poller derives everything else at fire time.
         """
         try:
-            with Database.transaction() as conn:
-                cursor = conn.cursor()
-                existing = cursor.execute(
-                    "SELECT start_at FROM scheduled_items WHERE id = ?",
-                    (item_id,),
-                ).fetchone()
-                if existing is None:
-                    return error(_ERR_NOT_FOUND, 404)
-                # Anchor: the caller's new start_at when supplied, else the
-                # row's existing one (a plain enabled-toggle omits it) — a
-                # future-dated start_at is never re-floored to now.
-                start_at_stored = parse_local(dto.start_at).isoformat() if dto.start_at else existing[0]
-                cursor.execute(
-                    """
-                    UPDATE scheduled_items
-                    SET message = ?, start_at = ?,
-                        cron_dom = ?, cron_hour = ?, cron_minute = ?, enabled = ?
-                    WHERE id = ?
-                    """,
-                    (
-                        dto.message, start_at_stored,
-                        dto.day, dto.hour, dto.minute, 1 if dto.enabled else 0, item_id,
-                    ),
-                )
-                row = cursor.execute(
-                    f"SELECT {', '.join(_COLS)} FROM scheduled_items WHERE id = ?",
-                    (item_id,),
-                ).fetchone()
-            if row is None:
+            item = ScheduledItem.get(item_id)
+            if item is None:
                 return error(_ERR_NOT_FOUND, 404)
-            return _item_dto(row, _COLS)
+            # Anchor: the caller's new start_at when supplied, else the row's
+            # existing one (a plain enabled-toggle omits it) — a future-dated
+            # start_at is never re-floored to now.
+            item.start_at = parse_local(dto.start_at).isoformat() if dto.start_at else item.start_at
+            item.message = dto.message
+            item.cron_dom = dto.day
+            item.cron_hour = dto.hour
+            item.cron_minute = dto.minute
+            item.enabled = 1 if dto.enabled else 0
+            item.save()  # UPDATE (id set); channel/created_by_session/created_at unchanged
+            return _item_dto(item)
         except Exception as exc:
             logger.error("[SCHEDULER API] update error: %s", exc)
             return error(_ERR_INTERNAL, 500)
@@ -284,21 +258,15 @@ class SchedulerItemResource(Resource):
     def delete(self, item_id: int) -> None | ResponseReturnValue:
         """Cancel a scheduled item — a hard delete (no soft-cancel state)."""
         try:
-            with Database.transaction() as conn:
-                cursor = conn.cursor()
-                cursor.execute(
-                    "DELETE FROM scheduled_items WHERE id = ?",
-                    (item_id,),
-                )
-                affected = cursor.rowcount
-                # rowid == id under INTEGER PRIMARY KEY — drop the matching vec
-                # row in the same transaction so the embedding isn't orphaned.
-                cursor.execute(
-                    "DELETE FROM scheduled_items_vec WHERE rowid = ?",
-                    (item_id,),
-                )
-            if affected == 0:
+            item = ScheduledItem.get(item_id)
+            if item is None:
                 return error(_ERR_NOT_FOUND, 404)
+            # Drop the main row and its vec embedding in one transaction so a
+            # cancelled schedule never orphans its embedding (delete_embedding
+            # rides in this transaction — rowid == id under INTEGER PRIMARY KEY).
+            with Database.transaction():
+                item.delete()
+                ScheduledItem.delete_embedding(item_id)
             return None
         except Exception:
             logger.exception("[SCHEDULER API] cancel error")
