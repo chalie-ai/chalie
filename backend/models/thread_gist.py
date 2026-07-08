@@ -47,6 +47,12 @@ class ThreadGist(Model):
         )
 
     @classmethod
+    def for_turn(cls, channel: str, turn_id: int) -> ThreadGist | None:
+        """The single label for one thread, or ``None`` — the row-level sibling
+        of :meth:`bulk_get`, keyed by the composite ``(channel, turn_id)``."""
+        return cls.filter("channel", channel).filter("turn_id", turn_id).first()
+
+    @classmethod
     def bulk_get(cls, channel: str, turn_ids: list[int]) -> dict[int, str]:
         """Labels for a batch of turn_ids — the thread feed's collapsed labels.
 

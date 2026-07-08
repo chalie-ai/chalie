@@ -145,6 +145,32 @@ class TestSchedulerAPI:
         after = db.execute("SELECT COUNT(*) FROM scheduled_items").fetchone()[0]
         assert after == before, "an illegal cron shape must persist nothing"
 
+    # ----- Eager 1-1 gist: a schedule is born with its prompt as its label -----
+
+    def test_create_seeds_thread_gist_from_prompt(
+        self, client: FlaskClient, db: sqlite3.Connection
+    ) -> None:
+        resp = client.post(
+            "/api/scheduler",
+            json={"message": "Water the plants", "day": None, "hour": 9, "minute": 0},
+        )
+        assert resp.status_code == 201, resp.get_json()
+        item_id = resp.get_json()["id"]
+
+        # The gist is written synchronously at create time (no fork-time LLM
+        # wait): keyed (channel='schedule', turn_id=id), content == the prompt.
+        row = db.execute(
+            "SELECT gist FROM thread_gist WHERE channel = ? AND turn_id = ?",
+            ("schedule", item_id),
+        ).fetchone()
+        assert row is not None, "create must seed a thread_gist row"
+        assert row["gist"] == "Water the plants"
+
+        # …and it surfaces on /turns as that schedule's label.
+        turns = client.get("/api/scheduler/turns").get_json()
+        mine = next(t for t in turns if t["turn_id"] == item_id)
+        assert mine["gist"] == "Water the plants"
+
     # ----- GET /scheduler/<id> -----
 
     def test_get_item_returns_item_when_found(self, client: FlaskClient, db: sqlite3.Connection) -> None:

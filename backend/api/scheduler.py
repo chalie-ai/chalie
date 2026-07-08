@@ -48,8 +48,6 @@ logger = logging.getLogger(__name__)
 _ERR_INTERNAL = "Internal server error"
 _ERR_NOT_FOUND = "Not found"
 
-_SCHEDULE_CHANNEL = "schedule"
-
 scheduler_ns = Namespace("scheduler", description="Scheduled item management", path="/api/scheduler")
 
 register_dto(
@@ -133,7 +131,7 @@ class SchedulerListResource(Resource):
         try:
             now = utc_now()
             start_at_utc = parse_local(dto.start_at) if dto.start_at else now
-            item = ScheduledItem(
+            item = ScheduledItem.create(
                 message=dto.message,
                 start_at=start_at_utc.isoformat(),
                 cron_dom=dto.day,
@@ -142,8 +140,7 @@ class SchedulerListResource(Resource):
                 enabled=1 if dto.enabled else 0,
                 channel=dto.channel,
                 created_by_session=None,
-            )
-            item.save()  # INSERT; id autoincrements, created_at defaults in SQL
+            )  # INSERT + 1-1 gist seed, atomic; id autoincrements, created_at defaults in SQL
             item_id = cast(int, item.id)
             # Re-read so created_at (SQL default) is populated for the response.
             saved = ScheduledItem.get(item_id)
@@ -175,7 +172,7 @@ class SchedulerTurnsResource(Resource):
         """
         try:
             schedules = ScheduledItem.recent()
-            gists = ThreadGist.bulk_get(_SCHEDULE_CHANNEL, [cast(int, s.id) for s in schedules])
+            gists = ThreadGist.bulk_get(ScheduledItem.SCHEDULE_CHANNEL, [cast(int, s.id) for s in schedules])
             return [
                 SchedulerTurn.model_validate({
                     "turn_id": s.id,

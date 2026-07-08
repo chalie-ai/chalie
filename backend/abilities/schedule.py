@@ -384,7 +384,7 @@ def _create(channel: str, params: dict[str, object]) -> ToolResult:
             return ToolResult.err("Create failed: parameters vanished", code="create-failed")
         message, start_at, dom, hour, minute = parsed
 
-        item = ScheduledItem(
+        item = ScheduledItem.create(
             message=message,
             start_at=start_at.isoformat(),
             cron_dom=dom,
@@ -393,7 +393,7 @@ def _create(channel: str, params: dict[str, object]) -> ToolResult:
             enabled=1,
             channel=channel,
             created_by_session=None,
-        ).save()
+        )  # INSERT + 1-1 gist seed, atomic
         item_id = cast(int, item.id)
 
         try:
