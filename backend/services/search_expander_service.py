@@ -7,6 +7,7 @@ import sqlite3
 import threading
 from typing import Optional, cast
 
+from contracts.search_config import is_searchable
 from services.database import Database
 from services.embedding_utils import pack_embedding
 
@@ -18,29 +19,14 @@ _QUEUE_KEY = "ses:queue"          # MemoryStore list key — FIFO via rpush/lpop
 _TABLE_DATA_GRAPH = "data_graph"
 _VALID_TABLES = frozenset({_TABLE_DATA_GRAPH})
 
-# ── FTS-indexing policy ───────────────────────────────────────────────────────
-# Which data_graph rows earn an FTS posting. Two kinds are read back only by
-# exact key / kind-scoped scans (recent()/live()), never by MATCH, so indexing
-# them is dead weight — and their indexed value drifts after insert
-# (behavioral_pattern decays confidence every turn via raw SQL, bypassing
-# save()), which would leave orphaned postings. Kept as literals here rather than
-# imported from the owning models (models.behavioral_pattern / models.machine_state),
-# because those import this module and the reverse import would cycle.
-_KIND_BEHAVIORAL_PATTERN = "behavioral_pattern"
-_KIND_MACHINE_STATE = "machine_state"
-
-
-def should_fts_index(kind: str) -> bool:
-    """The single authority for whether a data_graph row earns an FTS posting.
-
-    Consulted both at save-time (``DataGraphRow._sync_search_index``) and by
-    ``_self_heal`` — the two only enqueue paths — so an excluded row is never
-    fed into the index from either. Two kinds are excluded: ``behavioral_pattern``
-    is never searched (recall reads it via ``recent()``/``live()``) and its value
-    decays every turn; ``machine_state`` holds operational cursors/clocks/summary
-    read only by exact key. Every other kind — including ``system`` (memory-tool
-    knowledge memories) — is indexed."""
-    return kind not in (_KIND_BEHAVIORAL_PATTERN, _KIND_MACHINE_STATE)
+# ── FTS-indexing policy — the ``Searchable`` trait ──────────────────────────────
+# Whether a data_graph row earns a search posting is the model's declared config:
+# ``is_searchable(kind)`` reflects the kind→config registry populated by
+# ``DataGraphRow.__init_subclass__``, mirroring the save path's
+# ``self.__search__ is not None``. Non-searchable kinds (behavioral_pattern,
+# machine_state) declare ``__search__ = None`` and are excluded here too, so
+# neither enqueue path (save-time or self-heal) indexes them. ``contracts``
+# imports nothing from models/services, so this dependency does not cycle.
 
 
 # ── Module-level singleton references ─────────────────────────────────────────
@@ -120,7 +106,7 @@ class SearchExpanderService:
                     "SELECT id, kind FROM data_graph "
                     "WHERE search_queries IS NULL AND deleted_at IS NULL AND active=1"
                 ).fetchall()
-                if should_fts_index(r[1])
+                if is_searchable(r[1])
             ]
 
             for rowid in data_graph_ids:
@@ -285,8 +271,8 @@ class SearchExpanderService:
         # when it inserts the posting, and no trigger writes the index. So
         # search_queries IS NULL <=> the row was never indexed, and issuing the
         # FTS5 'delete' command for a posting that was never inserted corrupts
-        # the index (TKT-1456: delete-before-first-insert). Only remove a prior
-        # posting when one exists; a first index goes straight to INSERT.
+        # the index (delete-before-first-insert). Only remove a prior posting
+        # when one exists; a first index goes straight to INSERT.
         if old[3] is not None:
             self._delete_data_graph_fts(conn, rowid, old[0], old[1], old[2], old[3])
 

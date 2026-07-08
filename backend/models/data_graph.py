@@ -28,12 +28,15 @@ from __future__ import annotations
 import logging
 import math
 import re
+import sqlite3
 from typing import ClassVar, Self, cast
 
+from contracts.search_config import DATA_GRAPH_SEARCH, SearchConfig, register_kind
 from models.model import Model
 from models.query import Query
+from services._fts_delete import fts5_external_delete
 from services.embedding_utils import pack_embedding
-from services.search_expander_service import enqueue, should_fts_index
+from services.search_expander_service import enqueue
 from services.time_utils import utc_now
 
 logger = logging.getLogger(__name__)
@@ -81,8 +84,28 @@ class DataGraphRow(Model):
     #: base (subclasses set it); the kind-bound reads below scope to it.
     KIND: ClassVar[str]
 
+    #: The declared search-index footprint (the ``Searchable`` trait). Full
+    #: ``data_graph`` config by default — inherited by every searchable vertical;
+    #: non-searchable kinds (``behavioral_pattern``, ``machine_state``) override
+    #: to ``None``. Presence of a config IS the enablement signal: the save path
+    #: gates on ``self.__search__ is not None`` and the write-side engine reads
+    #: it (no flags, no policy table — one authority per Rule 5).
+    __search__: ClassVar[SearchConfig | None] = DATA_GRAPH_SEARCH
+
     # Evidence-diminishing reinforcement boost numerator (``_reinforce_row``).
     _REINFORCE_BOOST: ClassVar[float] = 0.05
+
+    def __init_subclass__(cls, **kwargs: object) -> None:
+        """Register each concrete vertical's ``KIND → __search__`` mapping so the
+        write-side engine can resolve a raw ``kind`` string (from a SQL row, with
+        no model instance) to its declared config. Only classes that directly
+        define ``KIND`` register — abstract rungs (``ExactKeyRow``) are skipped;
+        ``__search__`` resolves through the MRO, so an override or an inherited
+        default is picked up correctly."""
+        super().__init_subclass__(**kwargs)
+        kind = cls.__dict__.get("KIND")
+        if kind is not None:
+            register_kind(kind, cls.__search__)
 
     # ── persistence + write-sync ─────────────────────────────────────────
 
@@ -108,11 +131,12 @@ class DataGraphRow(Model):
         model owns only the trigger; a queue-push failure never breaks the
         write.
 
-        Kinds excluded by
-        :func:`services.search_expander_service.should_fts_index` (behavioural
-        patterns, ``machine_state`` rows) never enter the index — the same
-        authority ``_self_heal`` consults, so neither enqueue path indexes them."""
-        if not should_fts_index(self.kind):
+        Enablement is the ``Searchable`` trait: a kind with ``__search__ = None``
+        (behavioural patterns, ``machine_state``) declares no search footprint
+        and never enters the index. The write-side ``_self_heal`` consults the
+        same declaration via the kind→config registry, so neither enqueue path
+        indexes a non-searchable row."""
+        if self.__search__ is None:
             return
         try:
             enqueue("data_graph", cast("int", self.id))
@@ -120,6 +144,34 @@ class DataGraphRow(Model):
             logger.warning(
                 "[DATA GRAPH] search-index enqueue failed for id=%s", self.id, exc_info=True
             )
+
+    @classmethod
+    def _purge_search_index(
+        cls, conn: sqlite3.Connection, rowid: int, indexed: dict[str, object]
+    ) -> None:
+        """Tear down one row's search-index footprint before its base
+        ``data_graph`` row is deleted: the external-content FTS posting (FTS5
+        must be told the indexed values *before* the source row disappears) and
+        every declared key/value-vec shadow. The doc2query variants are left to
+        the base table's AFTER-DELETE trigger, which cascades
+        ``expanded_semantic`` / ``expanded_semantic_vec`` on its own.
+
+        Config-driven via the ``Searchable`` trait (``cls.__search__``) — the
+        same declaration the save path gates on — so teardown reads the fts
+        table + column order and the vec-lane tables from one authority instead
+        of hard-coded literals duplicated per vertical. A non-searchable kind
+        holds no postings, so this is a no-op. ``indexed`` supplies the FTS
+        content-column values captured from the row before deletion, keyed by
+        column name; a missing column is coerced to empty inside the delete."""
+        config = cls.__search__
+        if config is None:
+            return
+        fts5_external_delete(
+            conn, config.fts_table, rowid,
+            {col: cast("str | None", indexed.get(col)) for col in config.fts_columns},
+        )
+        for lane in config.vec_lanes:
+            conn.execute(f"DELETE FROM {lane.table} WHERE rowid = ?", (rowid,))
 
     # ── the shared live predicate + kind-bound reads ─────────────────────
 
@@ -303,11 +355,11 @@ class DataGraphRow(Model):
     ) -> dict[int, dict[str, object]]:
         """This vertical's raw per-lane recall signals — vec (key/value) +
         doc2query variant + FTS bonus — composed from the primitives above
-        (ruling 1, layer 2). Shared here since six of the seven verticals
-        compose the identical set of lanes;
-        :class:`~models.behavioral_pattern.BehavioralPattern` overrides this to
-        be vec-only (TKT-1455 — no FTS posting, no variants for that kind).
-        Each entry is ``{'row': <hydrated Self>, 'key_cos', 'value_cos',
+        (ruling 1, layer 2). Shared here since every searchable vertical composes
+        the identical set of lanes. Non-searchable kinds (behavioural patterns,
+        ``machine_state``) declare the ``Searchable`` trait off (``__search__ =
+        None``) and sit outside the recall span entirely, so this never runs for
+        them. Each entry is ``{'row': <hydrated Self>, 'key_cos', 'value_cos',
         'fts_bonus', 'variant_cos'}``; fusing these into one composite score is
         the recall service's job (ruling 2), not this layer's."""
         signals = cls.vec_candidates(query_embedding, k)

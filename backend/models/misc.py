@@ -29,7 +29,6 @@ from datetime import timedelta
 from typing import ClassVar, Self
 
 from models.data_graph import DataGraphRow
-from services._fts_delete import fts5_external_delete
 from services.time_utils import utc_now
 
 
@@ -129,12 +128,9 @@ class MiscRow(DataGraphRow):
             (cls.KIND, cutoff),
         ).fetchall()
         for rowid, key, value, kind, search_queries in dead:
-            fts5_external_delete(
-                conn, "data_graph_fts", rowid,
-                {"key": key, "value": value, "kind": kind,
-                 "search_queries": search_queries or ""},
+            cls._purge_search_index(
+                conn, rowid,
+                {"key": key, "value": value, "kind": kind, "search_queries": search_queries},
             )
             conn.execute("DELETE FROM data_graph WHERE rowid = ?", (rowid,))
-            conn.execute("DELETE FROM data_graph_key_vec WHERE rowid = ?", (rowid,))
-            conn.execute("DELETE FROM data_graph_value_vec WHERE rowid = ?", (rowid,))
         return len(dead)

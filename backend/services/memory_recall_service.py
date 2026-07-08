@@ -42,9 +42,10 @@ reads carry the full active set (capped, not query-filtered), so a semantic
 recall lane over patterns is redundant with what is already in context; and
 because a pattern's value is rewritten every turn as its confidence decays,
 vec-indexing it would be per-turn embedding churn for no gain.
-``should_fts_index`` therefore excludes the kind from the entire write-side
-pipeline, and this span omits it — the two now agree instead of one indexing
-gate starving a span that lists it.
+``BehavioralPattern`` therefore declares no search config (``__search__ =
+None``, the ``Searchable`` trait off), excluding the kind from the entire
+write-side pipeline, and this span omits it — the two now agree instead of one
+indexing gate starving a span that lists it.
 """
 
 from __future__ import annotations

@@ -18,6 +18,7 @@ import json
 import math
 from typing import ClassVar, Self, cast
 
+from contracts.search_config import SearchConfig
 from models.data_graph import DataGraphRow
 from models.query import Query
 from services.time_utils import utc_now
@@ -35,6 +36,14 @@ class BehavioralPattern(DataGraphRow):
     #: literal every other layer imports. Binds the inherited kind-bound reads
     #: (:meth:`~models.data_graph.DataGraphRow.live` / ``search``) to this lane.
     KIND: ClassVar[str] = "behavioral_pattern"
+
+    #: Non-searchable: patterns reach the model deterministically every turn
+    #: (``PromptService.patterns`` / ``top_patterns``), so a semantic-recall lane
+    #: is redundant — and vec-indexing a value rewritten every turn (confidence
+    #: decays) is pure churn. Overrides the base ``data_graph`` config to
+    #: ``None``; presence of a config IS enablement, so ``None`` keeps this kind
+    #: out of the search-index pipeline and the recall span.
+    __search__: ClassVar[SearchConfig | None] = None
 
     # Write-path constants, ported verbatim from the legacy ``save_pattern`` SQL.
     _NEW_CONFIDENCE: ClassVar[float] = 7.0          # a first sighting's confidence

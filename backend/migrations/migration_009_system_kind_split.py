@@ -13,9 +13,9 @@ This migration re-kinds the operational rows OUT of ``system`` into
 sources (``"user_summary"``, ``"fact_extraction"``, cursor sources, …) that
 never start ``skill:memory:store:``, so the predicate moves ONLY machine rows and
 leaves the memory-tool ``system`` memories in place. No sidecar cleanup is
-needed — machine rows were excluded from FTS/vec indexing by ``should_fts_index``,
-so they hold no ``data_graph_fts``/``*_vec`` postings and their
-``search_queries`` is NULL.
+needed — these operational rows were never FTS/vec-indexed (the ``machine_state``
+vertical declares no search config, the ``Searchable`` trait off), so they hold
+no ``data_graph_fts``/``*_vec`` postings and their ``search_queries`` is NULL.
 
 Idempotent: re-running matches nothing (the moved rows are no longer ``system``).
 The run-once sentinel gate lives in the boot caller (backend/run.py), not here.

@@ -91,11 +91,21 @@ class TestBehavioralPatternNotInRecallSpan:
         )
 
     def test_indexing_gate_excludes_behavioral_pattern(self) -> None:
-        """The write-side index gate agrees: the kind earns no FTS/vec posting."""
-        from models.behavioral_pattern import BehavioralPattern
-        from services.search_expander_service import should_fts_index
+        """The write-side index gate agrees: the kind earns no FTS/vec posting.
 
-        assert should_fts_index(BehavioralPattern.KIND) is False, (
+        Enablement is the ``Searchable`` trait — ``BehavioralPattern`` declares
+        ``__search__ = None`` (imported here so it registers), so both the class
+        declaration and the write-side registry (``is_searchable``) report it
+        non-searchable, keeping the indexing gate and the (empty) recall span in
+        agreement."""
+        from models.behavioral_pattern import BehavioralPattern
+        from contracts.search_config import is_searchable
+
+        assert BehavioralPattern.__search__ is None, (
+            "behavioral_pattern must declare no search config (the Searchable "
+            "trait off) so it earns no FTS/vec posting."
+        )
+        assert is_searchable(BehavioralPattern.KIND) is False, (
             "behavioral_pattern must stay out of the search-index pipeline so "
             "the indexing gate and the (empty) recall span never disagree."
         )

@@ -12,9 +12,10 @@ a repeated identical value reinforces, but a *different* value under the same
 key coexists as a fresh row — never demotes the prior one. Findings are never
 forgotten by any caller, so this vertical carries no ``forget``/``demote``/
 ``delete_by_id``. Every row is FTS-indexed on insert (the recall-first premise
-depends on it): ``discovery`` is not one of the exact-key-only kinds
-(:class:`~models.machine_state.MachineStateRow`) that ``should_fts_index``
-excludes from the shared write-sync.
+depends on it): ``discovery`` inherits the base ``data_graph`` search config (the
+``Searchable`` trait), unlike the exact-key-only kinds
+(:class:`~models.machine_state.MachineStateRow`) that declare ``__search__ =
+None`` and are excluded from the shared write-sync.
 
 Decay is a straight power-law rw-decay toward a floor, identical in shape and
 constants to :class:`~models.fact.FactRow` (the legacy ``KIND_DISCOVERY``
