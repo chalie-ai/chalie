@@ -41,7 +41,6 @@ from typing import TYPE_CHECKING, Literal, cast, overload
 from abilities._result import ToolResult
 from models.episode import Episode
 from models.memory_recall_log import MemoryRecallLog
-from services.database import Database
 
 if TYPE_CHECKING:
     from controllers.message_processor import MessageProcessor
@@ -739,14 +738,7 @@ def _count_episode_candidates() -> int:
     slice — to honestly report how many candidates the empty recall searched.
     """
     try:
-        cursor = Database.conn().cursor()
-        cursor.execute(
-            "SELECT COUNT(*) FROM episodes WHERE deleted_at IS NULL",
-        )
-        row = cursor.fetchone()
-        count = cast("int", row[0]) if row else 0
-        cursor.close()
-        return count
+        return Episode.live().count()
     except Exception:
         return 0
 

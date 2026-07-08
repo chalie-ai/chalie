@@ -18,34 +18,10 @@ from __future__ import annotations
 import json
 import logging
 import re
-import sqlite3
 from typing import cast
 
 logger = logging.getLogger(__name__)
 
-
-def resolve_tool_call_transcript_ids(assistant_transcript_id: int, conn: sqlite3.Connection) -> list[int]:
-    """Return every transcript row ID of the turn that owns ``assistant_transcript_id``.
-
-    Under the chain model a turn is many rows (input → step rows that each
-    emitted the tool calls → final synthesis row), all sharing one turn_id. A
-    rich-media span lives on the FINAL row, but the tool that produced the card
-    ran on a STEP row, so pairing needs the WHOLE turn's transcript ids, not just
-    the row's own. Both the live broadcast path and the refresh path call this,
-    so they resolve the same id set. Falls back to ``[assistant_transcript_id]``
-    when the row has no turn (skip_transcript channels) or is unknown.
-    """
-    row = conn.execute(
-        "SELECT channel, turn_id FROM transcript WHERE id = ?",
-        (assistant_transcript_id,),
-    ).fetchone()
-    if row is None or row[1] is None:
-        return [assistant_transcript_id]
-    ids = conn.execute(
-        "SELECT id FROM transcript WHERE channel = ? AND turn_id = ? ORDER BY id",
-        (row[0], row[1]),
-    ).fetchall()
-    return [r[0] for r in ids] or [assistant_transcript_id]
 
 # Matches <span id='tool_name_N'>…</span> or <span id="tool_name_N">…</span>,
 # optionally with a single ``data-image='url'`` attribute that lets the LLM
