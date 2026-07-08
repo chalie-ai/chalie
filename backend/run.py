@@ -204,6 +204,7 @@ def _run_startup_migrations() -> None:
     _wipe_scheduled_items_for_cron()
     _rebuild_scheduled_items_prompt_only()
     _migrate_system_kind_split()
+    _migrate_episode_search_queries()
 
 
 def _backfill_provider_token_limits() -> None:
@@ -273,6 +274,31 @@ def _migrate_system_kind_split() -> None:
                 _f.write('done')
     except Exception as _kind_split_err:
         logger.warning(f"[Startup] system-kind-split migration skipped: {_kind_split_err}")
+
+
+def _migrate_episode_search_queries() -> None:
+    """One-time stamp of pre-existing episodes as FTS-indexed (migration_010).
+
+    Episodes now route their FTS posting through SearchExpanderService; schema
+    convergence adds ``episodes.search_queries`` and rebuilds ``episodes_fts``
+    (repopulating ``gist``). This marks the still-NULL rows the rebuild left so
+    the worker's self-heal doesn't double-post their ``gist`` entries. Runs after
+    convergence, before workers start. Idempotent; sentinel-gated to one run per
+    database.
+    """
+    try:
+        from services.file_mapper_service import FileMapperService
+        _sentinel = os.path.join(
+            os.path.dirname(str(FileMapperService.get_db_path())),
+            '.episode-search-queries-migration-v1.done',
+        )
+        if not os.path.exists(_sentinel):
+            from migrations.migration_010_episode_search_queries import apply as _apply_ep_sq
+            _apply_ep_sq(str(FileMapperService.get_db_path()))
+            with open(_sentinel, 'w') as _f:
+                _f.write('done')
+    except Exception as _ep_sq_err:
+        logger.warning(f"[Startup] episode-search-queries migration skipped: {_ep_sq_err}")
 
 
 def _drop_invoked_by_column() -> None:

@@ -29,10 +29,12 @@ import uuid
 from datetime import datetime, timedelta
 from typing import ClassVar, Self
 
+from contracts.search_config import EPISODE_SEARCH, SearchConfig
 from models.model import Model
 from models.query import Query
 from services._fts_delete import fts5_external_delete
 from services.episodic_constants import NOVELTY_ACTIVATION_LIMIT, NOVELTY_RECENT_LIMIT
+from services.search_expander_service import enqueue
 from services.time_utils import PARSE_SENTINEL, parse_utc, utc_now
 
 logger = logging.getLogger(__name__)
@@ -48,12 +50,20 @@ class Episode(Model):
         "transcript_id_start", "transcript_id_end", "consolidated_from",
         "consolidated_into", "retrieval_weight", "location_lat", "location_lon",
         "location_name", "level", "last_relevant_at", "tombstoned_at",
-        "facts_extracted_at",
+        "facts_extracted_at", "search_queries",
     )
 
     @classmethod
     def get_table(cls) -> str:
         return "episodes"
+
+    #: The declared search-index footprint (the ``Searchable`` trait). Episodes
+    #: carry their vectors synchronously (``EpisodicService`` writes
+    #: ``episodes_vec`` on the store path); this config drives only the async FTS
+    #: posting + doc2query keyword variants through ``SearchExpanderService``.
+    #: Presence of a config IS the enablement signal (Rule 5: one authority, no
+    #: flags) — the save path gates on it and the write-side engine reads it.
+    __search__: ClassVar[SearchConfig | None] = EPISODE_SEARCH
 
     # Real columns (annotation-only; populated by Model.__init__ from kwargs /
     # hydrate, so mypy knows their types on attribute access).
@@ -78,6 +88,7 @@ class Episode(Model):
     last_relevant_at: str | None
     tombstoned_at: str | None
     facts_extracted_at: str | None
+    search_queries: str | None
 
     # Transient retrieval overlays (NOT columns) — the lanes set these on the
     # hit and the service reranks on them; they never persist or project.
@@ -108,11 +119,18 @@ class Episode(Model):
     # ── Persistence ───────────────────────────────────────────────────────
 
     def save(self) -> Self:
-        """INSERT a new episode (TEXT-UUID PK generated here) and its paired
-        ``episodes_fts`` row in one breath, or UPDATE the existing row.
+        """INSERT a new episode (TEXT-UUID PK generated here), or UPDATE the
+        existing row.
 
-        The FTS table is external-content, so its index row must be inserted
-        explicitly alongside the source row."""
+        On insert, enqueue the freshly-inserted rowid for the async FTS +
+        doc2query resync through ``SearchExpanderService`` — the same
+        declaration-driven engine ``data_graph`` rows flow through — instead of
+        an inline ``episodes_fts`` write. The vector lane is unaffected:
+        ``EpisodicService`` still writes ``episodes_vec`` synchronously on the
+        store path, so vector recall finds a new episode immediately while the
+        FTS posting catches up on the worker. A queue-push failure never breaks
+        the write; ``_self_heal`` re-indexes any row left with a NULL
+        ``search_queries``."""
         if self.id is not None:
             return super().save()
         self.id = str(uuid.uuid4())
@@ -125,10 +143,13 @@ class Episode(Model):
             f"INSERT INTO {self.get_table()} ({column_list}) VALUES ({placeholders})",
             values,
         )
-        connection.execute(
-            "INSERT INTO episodes_fts(rowid, gist) VALUES (?, ?)",
-            (cursor.lastrowid, self.gist),
-        )
+        if self.__search__ is not None and cursor.lastrowid is not None:
+            try:
+                enqueue(self.get_table(), cursor.lastrowid)
+            except Exception:
+                logger.warning(
+                    "[EPISODE] search-index enqueue failed for id=%s", self.id, exc_info=True
+                )
         return self
 
     # ── Live scope + id reads ─────────────────────────────────────────────
@@ -442,15 +463,20 @@ class Episode(Model):
     @classmethod
     def hard_delete(cls, episode_id: str) -> None:
         """Physically remove an episode and its FTS + vec index rows. The FTS
-        table is external-content, so its posting must be deleted with the
-        indexed value via the shared external-delete idiom."""
+        table is external-content over both indexed columns (``gist`` and the
+        doc2query ``search_queries``), so its posting must be deleted with the
+        indexed values — in FTS column order — via the shared external-delete
+        idiom (a NULL ``search_queries`` coerces to '' inside the helper)."""
         connection = cls._bound_connection()
         row = connection.execute(
-            "SELECT rowid, gist FROM episodes WHERE id = ?", (episode_id,)
+            "SELECT rowid, gist, search_queries FROM episodes WHERE id = ?", (episode_id,)
         ).fetchone()
         if row is not None:
-            rowid, gist = row[0], row[1]
-            fts5_external_delete(connection, "episodes_fts", rowid, {"gist": gist})
+            rowid, gist, search_queries = row[0], row[1], row[2]
+            fts5_external_delete(
+                connection, "episodes_fts", rowid,
+                {"gist": gist, "search_queries": search_queries},
+            )
             connection.execute("DELETE FROM episodes_vec WHERE rowid = ?", (rowid,))
         connection.execute("DELETE FROM episodes WHERE id = ?", (episode_id,))
 

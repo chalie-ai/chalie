@@ -7,7 +7,12 @@ import sqlite3
 import threading
 from typing import Optional, cast
 
-from contracts.search_config import SearchConfig, config_for_kind, is_searchable
+from contracts.search_config import (
+    SearchConfig,
+    config_for_table,
+    is_searchable,
+    searchable_tables,
+)
 from services.database import Database
 from services.embedding_utils import pack_embedding
 
@@ -16,17 +21,18 @@ logger = logging.getLogger(__name__)
 # ── Constants ─────────────────────────────────────────────────────────────────
 
 _QUEUE_KEY = "ses:queue"          # MemoryStore list key — FIFO via rpush/lpop
-_TABLE_DATA_GRAPH = "data_graph"
-_VALID_TABLES = frozenset({_TABLE_DATA_GRAPH})
 
 # ── FTS-indexing policy — the ``Searchable`` trait ──────────────────────────────
-# Whether a data_graph row earns a search posting is the model's declared config:
-# ``is_searchable(kind)`` reflects the kind→config registry populated by
-# ``DataGraphRow.__init_subclass__``, mirroring the save path's
-# ``self.__search__ is not None``. Non-searchable kinds (behavioral_pattern,
-# machine_state) declare ``__search__ = None`` and are excluded here too, so
-# neither enqueue path (save-time or self-heal) indexes them. ``contracts``
-# imports nothing from models/services, so this dependency does not cycle.
+# The engine is table-driven: every sidecar table/column name comes from the
+# model's declared ``SearchConfig`` (contracts.search_config), resolved by the
+# queued base-table name via ``config_for_table``. A table with no config is
+# never indexed. For a table that holds many kinds in one shell (``data_graph``,
+# via ``kind_column``), ``is_searchable(kind)`` further gates each row against
+# the kind→config registry populated by ``DataGraphRow.__init_subclass__``,
+# mirroring the save path's ``self.__search__ is not None`` — so non-searchable
+# kinds (behavioral_pattern, machine_state) enter no index from either enqueue
+# path (save-time or self-heal). ``contracts`` imports nothing from
+# models/services, so this dependency does not cycle.
 
 
 # ── Module-level singleton references ─────────────────────────────────────────
@@ -46,7 +52,7 @@ def _get_service() -> "SearchExpanderService":
 
 
 def enqueue(table: str, rowid: int) -> None:
-    if table not in _VALID_TABLES:
+    if config_for_table(table) is None:
         logger.warning("[SES] enqueue: unknown table '%s', ignoring", table)
         return
     _get_service().enqueue(table, rowid)
@@ -99,25 +105,33 @@ class SearchExpanderService:
     # ── Private: self-heal ────────────────────────────────────────────────────
 
     def _self_heal(self) -> None:
+        """Re-enqueue every searchable row missing its index — a row whose
+        ``queries_column`` is still NULL (never indexed) and still live under the
+        table's ``heal_where`` predicate. Scans each registered base table; for a
+        table with a ``kind_column`` (``data_graph``), each row is further gated
+        through ``is_searchable(kind)`` so non-searchable kinds are skipped."""
         try:
             conn = Database.conn()
-            data_graph_ids = [
-                r[0] for r in conn.execute(
-                    "SELECT id, kind FROM data_graph "
-                    "WHERE search_queries IS NULL AND deleted_at IS NULL AND active=1"
+            total = 0
+            for table in searchable_tables():
+                config = config_for_table(table)
+                if config is None:
+                    continue
+                select = "rowid" + (f", {config.kind_column}" if config.kind_column else "")
+                rows = conn.execute(
+                    f"SELECT {select} FROM {config.base_table} "
+                    f"WHERE {config.queries_column} IS NULL AND {config.heal_where}"
                 ).fetchall()
-                if is_searchable(r[1])
-            ]
-
-            for rowid in data_graph_ids:
-                self._store.rpush(_QUEUE_KEY, json.dumps({"table": _TABLE_DATA_GRAPH, "rowid": rowid}))
-
-            total = len(data_graph_ids)
+                enqueued = 0
+                for r in rows:
+                    if config.kind_column and not is_searchable(r[1]):
+                        continue
+                    self._store.rpush(_QUEUE_KEY, json.dumps({"table": table, "rowid": r[0]}))
+                    enqueued += 1
+                if enqueued:
+                    logger.info("[SES] Self-heal enqueued %d row(s) (%s)", enqueued, table)
+                total += enqueued
             if total:
-                logger.info(
-                    "[SES] Self-heal enqueued %d row(s) (data_graph=%d)",
-                    total, len(data_graph_ids),
-                )
                 self._event.set()
         except Exception as e:
             logger.warning("[SES] Self-heal scan failed: %s", e)
@@ -128,52 +142,77 @@ class SearchExpanderService:
         table = item.get("table")
         rowid = item.get("rowid")
 
-        if table not in _VALID_TABLES or rowid is None:
+        config = config_for_table(table) if isinstance(table, str) else None
+        if config is None or not isinstance(table, str) or rowid is None:
             logger.warning("[SES] Invalid item — skipping: %r", item)
             return
 
         try:
-            self._process_data_graph(cast(int, rowid))
+            self._process_row(table, cast(int, rowid), config)
         except Exception as e:
             logger.warning("[SES] Processing failed for %s rowid=%s: %s", table, rowid, e)
 
-    def _process_data_graph(self, rowid: int) -> None:
+    def _process_row(self, table: str, rowid: int, config: SearchConfig) -> None:
+        """Index one base-table row through its declared config: backfill the vec
+        lanes, write the doc2query variants, and resync the FTS posting — all
+        addressed by ``rowid``, all names read off ``config``."""
         conn = Database.conn()
+
+        # The columns the write path reads: doc2query/embedding source text, the
+        # vec-lane sources, and the kind discriminator when the table gates on one.
+        needed = list(dict.fromkeys(
+            [*config.text_columns, *(lane.source for lane in config.vec_lanes)]
+            + ([config.kind_column] if config.kind_column else [])
+        ))
         row = conn.execute(
-            "SELECT key, value, kind FROM data_graph WHERE id = ?",
+            f"SELECT {', '.join(needed)} FROM {config.base_table} WHERE rowid = ?",
             (rowid,)
         ).fetchone()
-
         if row is None:
-            logger.debug("[SES] data_graph rowid=%s gone — skipping", rowid)
+            logger.debug("[SES] %s rowid=%s gone — skipping", table, rowid)
             return
+        vals = dict(zip(needed, row))
 
-        key, value, kind = row[0], row[1], row[2]
-        config = config_for_kind(kind)
-        if config is None:
+        if config.kind_column and not is_searchable(vals[config.kind_column]):
             logger.warning(
-                "[SES] no search config for kind=%s rowid=%s — skipping", kind, rowid
+                "[SES] no search config for kind=%s rowid=%s — skipping",
+                vals[config.kind_column], rowid,
             )
             return
-        variants = self._generate_variants(key, value)
+
+        variants = self._generate_variants(self._source_text(vals, config))
 
         with Database.transaction() as conn:
             # Absorbs _schedule_embeddings: populate the declared vec lanes if missing.
-            self._backfill_key_value_vec(conn, rowid, key, value, config)
-            self._write_variants(conn, _TABLE_DATA_GRAPH, rowid, variants, config)
-            self._update_search_queries_data_graph(conn, rowid, variants, config)
+            self._backfill_vec(conn, rowid, vals, config)
+            self._write_variants(conn, table, rowid, variants, config)
+            self._update_search_queries(conn, rowid, variants, config)
 
-    def _generate_variants(self, key: str, value: str) -> list[str]:
+    @staticmethod
+    def _source_text(vals: dict[str, object], config: SearchConfig) -> str:
+        """The doc2query / embedding seed text: the first ``text_columns`` value
+        verbatim, then each later column appended as ``": {value}"`` only when
+        non-empty. Reproduces data_graph's ``f"{key}: {value}" if value else
+        key`` for ``("key", "value")`` and yields the bare column for a single
+        text column (episodes' ``gist``)."""
+        cols = config.text_columns
+        text = str(vals.get(cols[0]) or "")
+        for col in cols[1:]:
+            v = vals.get(col)
+            if v:
+                text = f"{text}: {v}"
+        return text
+
+    def _generate_variants(self, text: str) -> list[str]:
         """Empty return means skip variant writes but still mark search_queries so self-heal doesn't re-enqueue the row."""
         try:
             from services.doc2query_service import get_doc2query_service
             d2q = get_doc2query_service()
             if not d2q.is_available():
                 return []
-            text = f"{key}: {value}" if value else key
             return d2q.generate_queries(text) or []
         except Exception as e:
-            logger.warning("[SES] doc2query failed for key='%s': %s", key, e)
+            logger.warning("[SES] doc2query failed for text='%s': %s", text[:60], e)
             return []
 
     def _write_variants(
@@ -187,7 +226,13 @@ class SearchExpanderService:
         is idempotent. The cascade trigger on the variant table handles vec
         cleanup. ``table`` is the ``relates_to_table`` value (the base table the
         variant points back at), distinct from the variant storage table.
-        """
+
+        No-op when the model declares no semantic-variant lane
+        (``variant_table is None``) — e.g. episodes, whose recall never reads the
+        variant table, so the doc2query expansions live only in the FTS
+        ``search_queries`` column."""
+        if config.variant_table is None:
+            return
         conn.execute(
             f"DELETE FROM {config.variant_table} "
             "WHERE relates_to_table = ? AND related_to_id = ?",
@@ -226,19 +271,20 @@ class SearchExpanderService:
             except Exception as e:
                 logger.warning("[SES] Failed to write variant '%s': %s", variant_text[:60], e)
 
-    def _backfill_key_value_vec(
-        self, conn: sqlite3.Connection, rowid: int, key: str, value: str,
+    def _backfill_vec(
+        self, conn: sqlite3.Connection, rowid: int, vals: dict[str, object],
         config: SearchConfig,
     ) -> None:
         """Populate each declared vec lane (``config.vec_lanes``) if the row is
         missing it — one embedding per lane, sourced from the base-table column
-        the lane names, falling back to ``key`` when that column is empty
-        (preserving data_graph's value→key fallback).
+        the lane names, falling back to the first ``text_columns`` value when
+        that column is empty (preserving data_graph's value→key fallback).
 
-        Absorbs the old _schedule_embeddings thread. Noop when every lane's vec
-        row already exists.
+        Absorbs the old _schedule_embeddings thread. Noop when a model declares
+        no vec lanes (episodes carry their vectors synchronously) or when every
+        lane's vec row already exists.
         """
-        sources = {"key": key, "value": value}
+        fallback = str(vals.get(config.text_columns[0]) or "")
         try:
             emb_svc = None
             for lane in config.vec_lanes:
@@ -247,7 +293,7 @@ class SearchExpanderService:
                 ).fetchone()
                 if exists:
                     continue
-                text = sources.get(lane.source) or key
+                text = str(vals.get(lane.source) or "") or fallback
                 if not text:
                     continue
                 if emb_svc is None:
@@ -265,7 +311,7 @@ class SearchExpanderService:
         except Exception as e:
             logger.warning("[SES] backfill_key_value_vec failed for rowid=%s: %s", rowid, e)
 
-    def _update_search_queries_data_graph(
+    def _update_search_queries(
         self, conn: sqlite3.Connection, rowid: int, variants: list[str],
         config: SearchConfig,
     ) -> None:
@@ -275,7 +321,7 @@ class SearchExpanderService:
         base_cols = [c for c in config.fts_columns if c != config.queries_column]
         old = conn.execute(
             f"SELECT {', '.join(base_cols)}, {config.queries_column} "
-            "FROM data_graph WHERE id = ?",
+            f"FROM {config.base_table} WHERE rowid = ?",
             (rowid,)
         ).fetchone()
         if old is None:
@@ -292,12 +338,12 @@ class SearchExpanderService:
         # index (delete-before-first-insert). Only remove a prior posting when
         # one exists; a first index goes straight to INSERT.
         if prior_queries is not None:
-            self._delete_data_graph_fts(
+            self._delete_fts(
                 conn, rowid, {**row_vals, config.queries_column: prior_queries}, config
             )
 
         conn.execute(
-            f"UPDATE data_graph SET {config.queries_column} = ? WHERE id = ?",
+            f"UPDATE {config.base_table} SET {config.queries_column} = ? WHERE rowid = ?",
             (queries_json, rowid)
         )
         cols = ", ".join(config.fts_columns)
@@ -312,11 +358,11 @@ class SearchExpanderService:
                 (rowid, *fts_values)
             )
         except Exception as e:
-            logger.warning("[SES] data_graph FTS sync failed for rowid=%s: %s", rowid, e)
+            logger.warning("[SES] %s FTS sync failed for rowid=%s: %s", config.fts_table, rowid, e)
 
     # ── Private: FTS helpers ──────────────────────────────────────────────────
 
-    def _delete_data_graph_fts(
+    def _delete_fts(
         self, conn: sqlite3.Connection, rowid: int,
         indexed: dict[str, object], config: SearchConfig,
     ) -> None:
@@ -338,7 +384,7 @@ class SearchExpanderService:
             try:
                 conn.execute(f"DELETE FROM {config.fts_table} WHERE rowid = ?", (rowid,))
             except Exception as e:
-                logger.warning("[SES] data_graph FTS delete failed for rowid=%s: %s", rowid, e)
+                logger.warning("[SES] %s FTS delete failed for rowid=%s: %s", config.fts_table, rowid, e)
 
 
 # ── Worker entry point ────────────────────────────────────────────────────────

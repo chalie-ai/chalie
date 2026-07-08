@@ -34,7 +34,8 @@ CREATE TABLE IF NOT EXISTS episodes (
     level INTEGER DEFAULT 0,                   -- hierarchy depth: 0=leaf, 1=super-episode, 2+=era digest
     last_relevant_at TEXT,                     -- timestamp of the last write-relevant event; drives absolute decay (backfilled on boot)
     tombstoned_at TEXT,                        -- set when an episode is tombstoned ahead of hard deletion (NULL = live)
-    facts_extracted_at TEXT                    -- fact-extraction backlog cursor; NULL = not yet processed by the worker
+    facts_extracted_at TEXT,                   -- fact-extraction backlog cursor; NULL = not yet processed by the worker
+    search_queries    TEXT DEFAULT NULL        -- doc2query keyword variants (JSON); NULL = not yet indexed by SearchExpanderService
 );
 
 CREATE INDEX IF NOT EXISTS idx_episodes_channel ON episodes(channel) WHERE deleted_at IS NULL;
@@ -49,7 +50,7 @@ CREATE INDEX IF NOT EXISTS idx_episodes_apex ON episodes(retrieval_weight DESC, 
 -- all fts5 tables — each table binds to its own source table by name. Not a
 -- copy-paste error; SQLite FTS5 requires these per-table parameters.
 CREATE VIRTUAL TABLE IF NOT EXISTS episodes_fts USING fts5(
-    gist, content='episodes', content_rowid='rowid'
+    gist, search_queries, content='episodes', content_rowid='rowid'
 );
 
 -- cortex_iterations removed — CortexIterationService not wired into runtime.
