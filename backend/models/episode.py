@@ -209,6 +209,26 @@ class Episode(Model):
         ).fetchall()
         return [str(row[0]) for row in rows if row[0]]
 
+    @classmethod
+    def records_page(cls, q: str, limit: int, offset: int) -> list[dict[str, object]]:
+        """One page of live episodes for the observability record browser —
+        ``{created_at, last_relevant_at, gist, location_name}`` per row, most
+        recently relevant first. ``q`` substring-filters the ``gist``; an empty
+        ``q`` returns the unfiltered page.
+
+        Raw SQL: the "unfiltered OR substring-match" predicate
+        (``? = '' OR gist LIKE ?``) can't be expressed by the AND-only
+        structured filter builder."""
+        cursor = cls._bound_connection().execute(
+            "SELECT created_at, last_relevant_at, gist, location_name "
+            "FROM episodes "
+            "WHERE deleted_at IS NULL AND (? = '' OR gist LIKE ?) "
+            "ORDER BY COALESCE(last_relevant_at, created_at) DESC, created_at DESC "
+            "LIMIT ? OFFSET ?",
+            (q, f"%{q}%", limit, offset),
+        )
+        return [dict(row) for row in cursor.fetchall()]
+
     # ── Retrieval lanes ───────────────────────────────────────────────────
 
     @classmethod

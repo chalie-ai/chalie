@@ -22,6 +22,7 @@ internal projection, distinct from this wire-safe whitelist.
 from __future__ import annotations
 
 import json
+from collections.abc import Sequence
 from typing import ClassVar, Self, cast
 
 from models.model import Model
@@ -158,3 +159,25 @@ class ToolCall(Model):
             .filter("result", None, "IS NOT")
             .pluck("result")
         ]
+
+    @classmethod
+    def usage_counts(cls, exclude: Sequence[str] = ()) -> list[dict[str, object]]:
+        """Per-tool usage aggregate — ``{tool_name, count, last_used_at}`` for
+        every tool, most-recently-used first. ``exclude`` drops infra tool names
+        (compaction/thinking families) the observability view hides; an empty
+        ``exclude`` counts every tool. A cross-row ``GROUP BY`` the AND-only
+        builder can't express, so it owns its raw SQL on the bound connection."""
+        clause = ""
+        params: tuple[str, ...] = ()
+        if exclude:
+            placeholders = ",".join("?" for _ in exclude)
+            clause = f"WHERE tool_name NOT IN ({placeholders}) "
+            params = tuple(exclude)
+        cursor = cls._bound_connection().execute(
+            "SELECT tool_name, COUNT(*) AS count, MAX(created_at) AS last_used_at "
+            f"FROM {cls.get_table()} {clause}"
+            "GROUP BY tool_name "
+            "ORDER BY last_used_at DESC",
+            params,
+        )
+        return [dict(row) for row in cursor.fetchall()]

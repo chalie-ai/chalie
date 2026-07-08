@@ -21,8 +21,9 @@ from flask_restx import Namespace, Resource
 
 from configs.enums.channels import Channel
 from models.compaction import Compaction
+from models.data_graph import DataGraphRow
 from models.episode import Episode
-from services.database import Database
+from models.tool_call import ToolCall
 from services.file_mapper_service import FileMapperService
 from services.llm_log_service import LlmLogService, VALID_WINDOWS
 from services.locale_service import format_date
@@ -59,6 +60,9 @@ _SIGNAL_SOURCE_HEALTH = "/health"
 # Records browser bounds + valid sources (invalid source is a preserved 400, not 422).
 _RECORDS_LIMIT = 250
 _VALID_SOURCES = {"episodes", "user", "system"}
+# Infra tool names the usage view hides — compaction/thinking families are
+# housekeeping calls, not user-facing tool usage.
+_USAGE_EXCLUDED_TOOLS = ("compaction", "tool_compaction", "trail_compaction", "chat_history_compactor", "thinking")
 
 _LOG_TAIL_BYTES = 256 * 1024   # 256 KB tail read — never loads the full file
 _ERROR_LEVELS = frozenset({"ERROR", "CRITICAL"})
@@ -226,30 +230,25 @@ class SystemStatusResource(Resource):
 
             # SQLite counts
             try:
-                with Database.transaction() as conn:
-                    cursor = conn.cursor()
+                try:
+                    storage["episodes"] = Episode.all().count()
+                except sqlite3.OperationalError as e:
+                    logger.warning(f"[SYSTEM] Count query failed for 'episodes': {e}")
+                    storage["episodes"] = -1
+                    status = "degraded"
+                except Exception as e:
+                    logger.warning(f"[SYSTEM] Count query failed for 'episodes': {e}")
+                    storage["episodes"] = -1
 
-                    try:
-                        storage["episodes"] = Episode.all().count()
-                    except sqlite3.OperationalError as e:
-                        logger.warning(f"[SYSTEM] Count query failed for 'episodes': {e}")
-                        storage["episodes"] = -1
-                        status = "degraded"
-                    except Exception as e:
-                        logger.warning(f"[SYSTEM] Count query failed for 'episodes': {e}")
-                        storage["episodes"] = -1
-
-                    try:
-                        cursor.execute("SELECT COUNT(*) FROM data_graph WHERE kind = 'user_specific' AND deleted_at IS NULL AND active=1")
-                        row = cursor.fetchone()
-                        storage["concepts"] = row[0] if row else 0
-                    except sqlite3.OperationalError as e:
-                        logger.warning(f"[SYSTEM] Count query failed for 'concepts': {e}")
-                        storage["concepts"] = -1
-                        status = "degraded"
-                    except Exception as e:
-                        logger.warning(f"[SYSTEM] Count query failed for 'concepts': {e}")
-                        storage["concepts"] = -1
+                try:
+                    storage["concepts"] = DataGraphRow.live("user_specific").count()
+                except sqlite3.OperationalError as e:
+                    logger.warning(f"[SYSTEM] Count query failed for 'concepts': {e}")
+                    storage["concepts"] = -1
+                    status = "degraded"
+                except Exception as e:
+                    logger.warning(f"[SYSTEM] Count query failed for 'concepts': {e}")
+                    storage["concepts"] = -1
             except Exception as e:
                 status = "degraded"
                 database_error = str(e)
@@ -298,16 +297,6 @@ class ObservabilityRecordsResource(Resource):
             q = (request.args.get("q", "") or "")[:200]
 
             if source == "episodes":
-                # Raw SQL: the "unfiltered or substring-match" OR predicate
-                # can't be expressed by the AND-only structured filter builder.
-                cursor = Database.conn().execute(
-                    "SELECT created_at, last_relevant_at, gist, location_name "
-                    "FROM episodes "
-                    "WHERE deleted_at IS NULL AND (? = '' OR gist LIKE ?) "
-                    "ORDER BY COALESCE(last_relevant_at, created_at) DESC, created_at DESC "
-                    "LIMIT ? OFFSET ?",
-                    (q, f"%{q}%", _RECORDS_LIMIT, offset),
-                )
                 rows = [
                     {
                         "created": r["created_at"],
@@ -315,20 +304,11 @@ class ObservabilityRecordsResource(Resource):
                         "value": r["gist"],
                         "location_name": r["location_name"],
                     }
-                    for r in cursor.fetchall()
+                    for r in Episode.records_page(q, _RECORDS_LIMIT, offset)
                 ]
             else:
                 kind = "user_specific" if source == "user" else "system"
-                rows = [dict(r) for r in Database.conn().execute(
-                    "SELECT first_seen_at AS created, last_accessed_at AS last_accessed, "
-                    "key, value "
-                    "FROM data_graph "
-                    "WHERE kind = ? AND active = 1 AND deleted_at IS NULL "
-                    "AND (? = '' OR key LIKE ? OR value LIKE ?) "
-                    "ORDER BY last_accessed_at IS NULL, last_accessed_at DESC, first_seen_at DESC "
-                    "LIMIT ? OFFSET ?",
-                    (kind, q, f"%{q}%", f"%{q}%", _RECORDS_LIMIT, offset),
-                ).fetchall()]
+                rows = DataGraphRow.records_page(kind, q, _RECORDS_LIMIT, offset)
 
             rows = rows or []
             serialised: list[dict[str, object]] = []
@@ -367,14 +347,7 @@ class ObservabilityToolsResource(Resource):
     def get(self) -> ToolUsageList | ResponseReturnValue:
         """Tool usage counts from tool_calls — count + last_used per tool."""
         try:
-            rows = [dict(r) for r in Database.conn().execute(
-                "SELECT tool_name, COUNT(*) AS count, MAX(created_at) AS last_used_at "
-                "FROM tool_calls "
-                "WHERE tool_name NOT IN ('compaction', 'tool_compaction', 'trail_compaction', "
-                "'chat_history_compactor', 'thinking') "
-                "GROUP BY tool_name "
-                "ORDER BY last_used_at DESC"
-            ).fetchall()]
+            rows = ToolCall.usage_counts(_USAGE_EXCLUDED_TOOLS)
             return ToolUsageList(
                 generated_at=utc_now(),
                 tools=[

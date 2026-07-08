@@ -165,6 +165,31 @@ class DataGraphRow(Model):
             )
             return []
 
+    @classmethod
+    def records_page(
+        cls, kind: str, q: str, limit: int, offset: int
+    ) -> list[dict[str, object]]:
+        """One page of live facts of ``kind`` for the observability record
+        browser — ``{created, last_accessed, key, value}`` per row, most
+        recently accessed first (NULL access last). ``q`` substring-filters
+        ``key`` or ``value``; an empty ``q`` returns the unfiltered page.
+
+        Raw SQL: the "unfiltered OR substring-match" predicate across two
+        columns (``? = '' OR key LIKE ? OR value LIKE ?``) plus the
+        NULL-last ordering can't be expressed by the AND-only structured
+        filter builder."""
+        cursor = cls._bound_connection().execute(
+            "SELECT first_seen_at AS created, last_accessed_at AS last_accessed, "
+            "key, value "
+            "FROM data_graph "
+            "WHERE kind = ? AND active = 1 AND deleted_at IS NULL "
+            "AND (? = '' OR key LIKE ? OR value LIKE ?) "
+            "ORDER BY last_accessed_at IS NULL, last_accessed_at DESC, first_seen_at DESC "
+            "LIMIT ? OFFSET ?",
+            (kind, q, f"%{q}%", f"%{q}%", limit, offset),
+        )
+        return [dict(row) for row in cursor.fetchall()]
+
     # ── cross-kind recall primitives (E7 — ruling 1, layer 1) ────────────
     #
     # These are raw DB primitives: vec-KNN and the supersession-neighbour walk,
