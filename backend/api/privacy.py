@@ -9,7 +9,7 @@ header gates the irreversible delete.
 
 User data tables covered: episodes, transcript, tool_calls, list_items,
 data_graph_edges, data_graph, lists, scheduled_items, documents, watched_folders,
-user_tool_preferences, memory_recall_log, llm_call_log, concept_lut_misses.
+memory_recall_log, llm_call_log, concept_lut_misses.
 """
 
 import collections.abc
@@ -61,7 +61,6 @@ _DELETE_ALL_TABLES = (
     "scheduled_items",
     "documents",
     "watched_folders",
-    "user_tool_preferences",
     "memory_recall_log",
     "llm_call_log",
     "concept_lut_misses",
@@ -78,7 +77,6 @@ _EXPORT_TABLES = [
     "episodes",
     "transcript",
     "scheduled_items", "lists", "list_items",
-    "user_tool_preferences",
     "documents", "watched_folders",
     "data_graph",
 ]
