@@ -48,9 +48,11 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 LOG_PREFIX = "[MEMORY]"
 
-# Recall span — the six kinds fused into cross-kind data-graph recall (identical to the
-# pre-rewrite span). Mirrors services.memory_recall_service._VERTICALS.
-_DG_RECALL_KINDS = ["user_specific", "system", "misc", "behavioral_pattern", "place", "discovery"]
+# Recall span — the kinds fused into cross-kind data-graph recall. Mirrors
+# services.memory_recall_service._VERTICALS. ``behavioral_pattern`` is absent by
+# design: patterns are surfaced deterministically (PromptService.patterns/
+# top_patterns), never semantically, so they are not a recall lane.
+_DG_RECALL_KINDS = ["user_specific", "system", "misc", "place", "discovery"]
 
 
 # ── Store ────────────────────────────────────────────────────────────
@@ -530,7 +532,6 @@ def _relevance_label(score: float) -> str:
 def _search_data_graph(query: str, limit: int) -> tuple[list[dict[str, object]], str]:
     try:
         from services.memory_recall_service import recall
-        from models.behavioral_pattern import BehavioralPattern
 
         rows = recall(query, kinds=_DG_RECALL_KINDS, limit=limit)
         if not rows:
@@ -539,8 +540,7 @@ def _search_data_graph(query: str, limit: int) -> tuple[list[dict[str, object]],
         hits: list[dict[str, object]] = []
         for row in rows:
             kind = cast("str", row.get("kind", ""))
-            value = cast("str", row.get("value", "") or "")
-            text = BehavioralPattern.render(value) if kind == "behavioral_pattern" else value
+            text = cast("str", row.get("value", "") or "")
             cos = cast("float", row.get("cos_score") or 0.0)
             hits.append({
                 "id": row.get("key", ""),

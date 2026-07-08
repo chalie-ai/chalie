@@ -54,19 +54,6 @@ class BehavioralPattern(DataGraphRow):
         inherited kind-bound :meth:`~models.data_graph.DataGraphRow.live`."""
         return cls.live().order_by("last_confirmed_at DESC")
 
-    @classmethod
-    def gather_candidates(
-        cls, query: str, query_embedding: list[float] | None, k: int
-    ) -> dict[int, dict[str, object]]:
-        """Vec-only candidate gather (ruling 1): this kind carries no FTS
-        posting and no doc2query variants —
-        ``services.search_expander_service.should_fts_index`` excludes
-        ``behavioral_pattern`` from the entire async write-side enqueue, not
-        just its FTS half (commit 5a343e7b), so only the key/value vec KNN
-        lane (:meth:`~models.data_graph.DataGraphRow.vec_candidates`) ever has
-        signal for this kind. Overrides the base's vec+variant+FTS composition."""
-        return cls._hydrate_candidates(cls.vec_candidates(query_embedding, k))
-
     # ── write path (ported from abilities/save_pattern.py) ───────────────────
 
     @classmethod
@@ -202,13 +189,3 @@ class BehavioralPattern(DataGraphRow):
             last_seen = cast("str", content.get("last_seen_at") or "")[:10] or "?"
             return f"{base}, last {last_seen}]"
         return f"{base}]"
-
-    @classmethod
-    def render(cls, value: str | None, *, include_last_seen: bool = False) -> str:
-        """Render a raw JSON ``value`` string, passing it through verbatim on a
-        parse failure — the memory-recall renderer (ported from
-        ``memory_retrieval._render_behavioral_pattern``)."""
-        content = cls.parse(value)
-        if content is None:
-            return value if isinstance(value, str) else ""
-        return cls.render_line(content, include_last_seen=include_last_seen)

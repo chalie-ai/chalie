@@ -11,8 +11,9 @@ through a vertical model's ORM primitives —
 query against ``data_graph`` or its shadow tables.
 
 Recall span (ruling 4): ``user_specific``, ``system``, ``misc``,
-``behavioral_pattern``, ``place``, ``discovery``, ``document`` —
-deliberately NOT ``contact`` (no recall need identified). ``document`` is in
+``place``, ``discovery``, ``document`` — deliberately NOT ``contact`` (no
+recall need identified) and deliberately NOT ``behavioral_pattern`` (surfaced
+deterministically, never semantically — see the note below). ``document`` is in
 ``_VERTICALS`` so an explicit ``kinds=["document"]`` call (document search,
 ``abilities/document.py`` / ``api/documents.py``) reaches it through this
 service; it is deliberately absent from every default span
@@ -31,16 +32,19 @@ same work through the ORM would mean writing vec rows from a service — a
 second write path alongside ``DataGraphRow._sync_search_index``'s ``enqueue``,
 violating "one source of truth per concept" for search-index writes. Write-side
 embedding population is owned exclusively by
-``services/search_expander_service.py``'s async ``enqueue()`` pipeline — out of
-this ticket's touch-list. ``behavioral_pattern`` rows are unconditionally
-excluded from that whole pipeline (``should_fts_index`` returns ``False`` for
-that kind, commit ``5a343e7b``): a regression that commit introduces — the
-live database shows every ``behavioral_pattern`` row already key/value-vec-
-indexed and cosine-recallable (that commit is local + in-review, not yet
-deployed), but rows written once it lands earn neither vec nor FTS. This
-service's span correctly surfaces the already-indexed rows; the write-side fix
-is a tracked follow-up against ``search_expander_service.should_fts_index``,
-not something papered over here.
+``services/search_expander_service.py``'s async ``enqueue()`` pipeline.
+
+``behavioral_pattern`` is intentionally NOT a recall vertical. Patterns reach
+the model deterministically every turn — ``PromptService`` injects them via
+``BehavioralPatternService.patterns()`` (user-summary channel, most-recent
+first) and ``top_patterns()`` (pattern/geo channels, top by confidence). Those
+reads carry the full active set (capped, not query-filtered), so a semantic
+recall lane over patterns is redundant with what is already in context; and
+because a pattern's value is rewritten every turn as its confidence decays,
+vec-indexing it would be per-turn embedding churn for no gain.
+``should_fts_index`` therefore excludes the kind from the entire write-side
+pipeline, and this span omits it — the two now agree instead of one indexing
+gate starving a span that lists it.
 """
 
 from __future__ import annotations
@@ -49,7 +53,6 @@ import logging
 import math
 from typing import cast
 
-from models.behavioral_pattern import BehavioralPattern
 from models.data_graph import DataGraphRow
 from models.discovery import DiscoveryRow
 from models.document import DocumentRow
@@ -65,7 +68,7 @@ logger = logging.getLogger(__name__)
 # only surfaces for a caller that explicitly asks (`kinds=["document"]`); every
 # default-span caller passes its own explicit `kinds=` list that omits it.
 _VERTICALS: tuple[type[DataGraphRow], ...] = (
-    FactRow, SystemMemoryRow, MiscRow, BehavioralPattern, PlaceRow, DiscoveryRow, DocumentRow,
+    FactRow, SystemMemoryRow, MiscRow, PlaceRow, DiscoveryRow, DocumentRow,
 )
 
 # Fusion weights (ruling 2, ported VERBATIM from the deleted
