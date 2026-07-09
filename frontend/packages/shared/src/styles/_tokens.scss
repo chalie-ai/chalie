@@ -121,7 +121,6 @@
 
   /* Panel scrims — near-opaque backdrop for sliding panels */
   --scrim-panel-main:       rgba(15, 14, 24, 0.95);
-  --scrim-panel-thread:     rgba(22, 12, 21, 0.95);
 
   /* Legacy aliases kept for backward compat */
   --accent:                 var(--violet);
@@ -216,7 +215,6 @@
 
   /* Panel scrims — near-opaque light panels */
   --scrim-panel-main:       rgba(250, 249, 252, 0.95);
-  --scrim-panel-thread:     rgba(252, 245, 250, 0.95);
 
   --bg-card:                var(--bg-surface);
 }

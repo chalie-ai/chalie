@@ -112,7 +112,7 @@ onBeforeUnmount(() => document.removeEventListener('keydown', onKeydown));
   z-index: 120;
   display: flex;
   flex-direction: column;
-  background: var(--scrim-panel-thread);
+  background: var(--scrim-panel-main);
   backdrop-filter: blur(10px);
   -webkit-backdrop-filter: blur(10px);
   border-left: 1px solid var(--border);
