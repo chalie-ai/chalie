@@ -42,8 +42,7 @@ const decoratedLists = computed(() => listsData.value.map((list) => ({ list, c: 
 
 async function fetchListDetail(list: List): Promise<void> {
   try {
-    const d = await listsApi.get(list.id);
-    list.items = d.item.items ?? [];
+    list.items = await listsApi.items(list.id);
   } catch {
     showToast('Failed to load list items', 'error');
   }
@@ -56,9 +55,8 @@ function toggle(list: List): void {
 }
 
 async function toggleItem(list: List, item: ListItem, checked: boolean): Promise<void> {
-  const endpoint = checked ? 'check' : 'uncheck';
   try {
-    await listsApi.toggleItem(list.id, endpoint, { content: item.content });
+    await listsApi.toggleItem(list.id, item.id, checked);
     item.checked = checked;
   } catch {
     showToast('Failed to update item', 'error');
@@ -76,7 +74,7 @@ function onAddKey(e: KeyboardEvent, list: List): void {
 
 async function addItem(list: List, text: string): Promise<void> {
   try {
-    await listsApi.addItems(list.id, [text]);
+    await listsApi.addItem(list.id, text);
     await fetchListDetail(list);
   } catch (e) {
     // silent on non-ok; toast only on network error

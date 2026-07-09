@@ -1,13 +1,25 @@
 /**
- * Lists API — endpoints derived from frontend/brain/lists.js fetch calls.
+ * Lists API — thin wrapper over the new Endpoint-contract routes.
  *
- * GET    /lists                          → { items: List[] }
- * GET    /lists/:id                      → { item: List }
- * POST   /lists                          → { item: List } create with { name }
- * DELETE /lists/:id                      → delete list
- * PUT    /lists/:id/rename               → rename list { name }
- * POST   /lists/:id/items                → add items { items: string[] }
- * PUT    /lists/:id/items/:endpoint      → toggle item (check/uncheck) { items }
+ * Envelope: every JSON response is { success, result, pagination?, error? }.
+ * Listing responses carry `result` as an array plus `pagination`;
+ * single-resource responses carry `result` as the bare DTO object.
+ * Errors use { success: false, result: [], error: "..." }.
+ *
+ * Routes consumed here:
+ *   GET    /api/lists/all?page=N&limit=M    paginated listing (limit 1..100;
+ *                                          we fetch limit=100 and loop pages
+ *                                          until pagination.total collected).
+ *   POST   /api/lists/-1                    create { name } → 201, result DTO.
+ *   POST   /api/lists/<id>                  update (rename via { name }).
+ *   DELETE /api/lists/<id>                  → 204 empty body.
+ *   GET    /api/lists/items/<list_id>       list a list's items.
+ *   POST   /api/lists/items/<list_id>       add ONE item { content }.
+ *   POST   /api/lists/items/<list_id>:<item_id>
+ *                                          update item (toggle checked).
+ *
+ * Deliberately keeps the exported names stable so calling views need minimal
+ * changes.
  */
 import { api } from '@chalie/shared';
 
@@ -25,32 +37,62 @@ export interface List {
   items?: ListItem[];
 }
 
+interface ListingEnvelope<T> {
+  success: true;
+  result: T[];
+  pagination: { page: number; limit: number; total: number };
+}
+
+interface SingleEnvelope<T> {
+  success: true;
+  result: T;
+}
+
 export const lists = {
-  list(): Promise<List[]> {
-    return api.get('/api/lists');
+  async list(): Promise<List[]> {
+    const all: List[] = [];
+    let page = 1;
+    while (true) {
+      const body = await api.get<ListingEnvelope<List>>(`/api/lists/all?page=${page}&limit=100`);
+      const items = body.result;
+      if (items.length === 0) break; // stale total must not loop forever
+      const total = body.pagination?.total ?? items.length;
+      all.push(...items);
+      if (all.length >= total) break;
+      page++;
+    }
+    return all;
   },
 
-  get(listId: string | number): Promise<{ item: List }> {
-    return api.get(`/api/lists/${listId}`);
+  async items(listId: string | number): Promise<ListItem[]> {
+    const body = await api.get<ListingEnvelope<ListItem>>(`/api/lists/items/${listId}`);
+    return body.result;
   },
 
-  create(name: string): Promise<{ item: List }> {
-    return api.post('/api/lists', { name });
+  async create(name: string): Promise<List> {
+    const body = await api.post<SingleEnvelope<List>>(`/api/lists/-1`, { name });
+    return body.result;
   },
 
-  delete(listId: string | number): Promise<unknown> {
-    return api.del(`/api/lists/${listId}`);
+  async rename(listId: string | number, name: string): Promise<List> {
+    const body = await api.post<SingleEnvelope<List>>(`/api/lists/${listId}`, { name });
+    return body.result;
   },
 
-  rename(listId: string | number, name: string): Promise<unknown> {
-    return api.put(`/api/lists/${listId}/rename`, { name });
+  async delete(listId: string | number): Promise<void> {
+    // 204 → empty body; shared `api.del` tolerates this via .catch(() => ({})).
+    await api.del(`/api/lists/${listId}`);
   },
 
-  addItems(listId: string | number, items: string[]): Promise<unknown> {
-    return api.post(`/api/lists/${listId}/items`, { items });
+  async addItem(listId: string | number, content: string): Promise<void> {
+    await api.post(`/api/lists/items/${listId}`, { content });
   },
 
-  toggleItem(listId: string | number, endpoint: string, item: { content: string }): Promise<unknown> {
-    return api.put(`/api/lists/${listId}/items/${endpoint}`, { items: [item.content] });
+  async toggleItem(listId: string | number, itemId: string | number, checked: boolean): Promise<ListItem> {
+    const body = await api.post<SingleEnvelope<ListItem>>(
+      `/api/lists/items/${listId}:${itemId}`,
+      { checked },
+    );
+    return body.result;
   },
 };
