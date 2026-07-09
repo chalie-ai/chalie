@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed } from 'vue';
-import { formatCadence } from '../../utils/time';
+import { formatCadence, isRecurringCadence } from '../../utils/time';
 
 export interface SchedulerRecord {
   id: number;
@@ -62,17 +62,22 @@ const title = computed(() => record.value.message || props.synthesis || '');
 
 const metaTime = computed(() => (startAt.value ? formatTime(startAt.value) : null));
 
-/** Cadence label, only when the record actually carries cron fields. */
-const cadenceText = computed((): string | null => {
+/**
+ * Cadence label: "Once" for a one-time item (no cron field pinned — the
+ * backend always sends `day`/`hour`/`minute` as JSON `null`, never omits
+ * them, so an `undefined` check can never distinguish "one-time" from
+ * "every minute"; see `isRecurringCadence`), otherwise the real recurring
+ * cadence.
+ */
+const cadenceText = computed((): string => {
   const r = record.value;
-  if (r.day === undefined && r.hour === undefined && r.minute === undefined) return null;
-  return formatCadence(r.day ?? null, r.hour ?? null, r.minute ?? null);
+  const day = r.day ?? null;
+  const hour = r.hour ?? null;
+  const minute = r.minute ?? null;
+  return isRecurringCadence(day, hour, minute) ? formatCadence(day, hour, minute) : 'Once';
 });
 
-const metaText = computed((): string => {
-  if (!cadenceText.value) return '';
-  return (metaTime.value ? ' · ' : '') + cadenceText.value;
-});
+const metaText = computed((): string => (metaTime.value ? ' · ' : '') + cadenceText.value);
 </script>
 
 <template>

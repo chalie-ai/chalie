@@ -18,6 +18,28 @@ export function formatCadence(
 }
 
 /**
+ * Whether a scheduled item's cron fields encode a recurring cadence, as
+ * opposed to a one-time item that fires once at `start_at` and never again.
+ *
+ * The backend's cron model (`services/cron_schedule.py::validate_cron`) only
+ * permits four "every-prefix" shapes — EEE/EEF/EFF/FFF (E = "every"/null,
+ * F = fixed) — and a one-time create leaves every field unset, landing on
+ * EEE (all three null): the same on-disk shape `formatCadence` reads as
+ * "every minute". Pinning ANY field (EEF/EFF/FFF) is only reachable through
+ * an explicit recurring request, so "at least one field is non-null" is the
+ * unambiguous, evidence-backed discriminator over the legal shape space —
+ * not a heuristic. Call this BEFORE `formatCadence` and only invoke that
+ * formatter when this returns true.
+ */
+export function isRecurringCadence(
+  day: number | null,
+  hour: number | null,
+  minute: number | null,
+): boolean {
+  return day != null || hour != null || minute != null;
+}
+
+/**
  * Elapsed wall-clock time since an ISO start, for a delegate's live timer:
  * mm:ss under an hour, h:mm:ss beyond. `nowMs` is supplied by the caller (not
  * read from the clock) so a reactive tick drives the update and this stays a
