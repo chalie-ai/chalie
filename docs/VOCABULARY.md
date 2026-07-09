@@ -8,7 +8,7 @@ Domain-specific terminology used throughout the Chalie system.
 | `transcript` | The persistent, channel-scoped conversation log table (`transcript` rows: role, content, turn_id, settled). | A row with `role='assistant'`, `turn_id=42`, `settled=1` |
 | `channel` | The transcript/telemetry namespace string that scopes a conversation. | `'user'`, `'dmn'`, `'delegate:web_search'` |
 | `thread` | A turn grown past its settle0 by one or more user replies. | `turn_id=42` once a user replies into it |
-| `turn_execution` | The DB-backed lifecycle record for one turn's run: `state` (`working`/`completed`/`cancelled`/`crashed`), `cancel_requested`, `started_at`/`ended_at`. Cancel is two-phase — `cancel_requested=1` is the request, `state='cancelled'` is the honoured outcome. | `state='working'`, `cancel_requested=0` |
+| `turn_execution` | The DB-backed lifecycle record for one turn's run: `state` (`working`/`completed`/`cancelled`/`crashed`), `cancel_requested`, `started_at`/`ended_at`. `cancel()` is the sole authority (P10) for a turn's terminal state — it stamps `cancel_requested=1` and `state='cancelled'` synchronously in one call, without waiting for the still-running step loop; `finish()` becomes a no-op once it observes the row already closed. | `state='cancelled'`, `cancel_requested=1` |
 | `settle0` | The id of the first settled assistant row in a turn — the boundary between the main spine and fork views. | `settle0=15` |
 | `settled` | Per-row flag marking the assistant row that closes a turn. | `settled=1` on the closing reply |
 | `model` | The specific LLM model id associated with one provider row. | `claude-opus-4-7`, `gpt-4o`, `gemma4:31b` |
