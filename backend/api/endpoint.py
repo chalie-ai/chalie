@@ -22,7 +22,7 @@ from abc import ABC, abstractmethod
 from collections.abc import Callable
 from typing import ClassVar
 
-from flask import request
+from flask import g, request
 from flask.typing import ResponseReturnValue
 from flask_restx import Namespace, Resource
 from pydantic import ValidationError
@@ -44,6 +44,12 @@ class NotFoundError(EndpointError):
     status: ClassVar[int] = 404
 
 
+class ForbiddenError(EndpointError):
+    """Authenticated, but not permitted to perform this action."""
+
+    status: ClassVar[int] = 403
+
+
 class Endpoint(ABC):
     """Base for every CRUD endpoint group; subclasses hold controller logic only.
 
@@ -59,6 +65,11 @@ class Endpoint(ABC):
 
     max_limit: ClassVar[int] = 100
     """Upper bound the ``limit`` pagination arg is clamped to."""
+
+    cookie_only_methods: ClassVar[frozenset[str]] = frozenset()
+    """Handler names (``get_all``/``get``/``post``/``delete``) restricted to human
+    cookie sessions — a bearer wrapper gets an enveloped 403. Declared where a
+    wrapper must never act on its own behalf (e.g. minting wrapper tokens)."""
 
     @abstractmethod
     def slug(self) -> str:
@@ -162,19 +173,44 @@ class Endpoint(ABC):
             return Response.failure("Invalid pagination"), 400
         page = max(1, page)
         limit = min(max(1, limit), self.max_limit)
-        return self._guard(lambda: self.get_all(page, limit))
+
+        def dispatch() -> ResponseReturnValue:
+            self._require_cookie("get_all")
+            return self.get_all(page, limit)
+
+        return self._guard(dispatch)
 
     def _handle_get(self, raw_id: str) -> ResponseReturnValue:
         """Coerce the id and dispatch to :meth:`get`."""
-        return self._guard(lambda: self.get(self._coerce_id(raw_id)))
+
+        def dispatch() -> ResponseReturnValue:
+            self._require_cookie("get")
+            return self.get(self._coerce_id(raw_id))
+
+        return self._guard(dispatch)
 
     def _handle_post(self, raw_id: str) -> ResponseReturnValue:
         """Coerce the id, validate the body, and dispatch to :meth:`post`."""
-        return self._guard(lambda: self.post(self._coerce_id(raw_id), self._read_body()))
+
+        def dispatch() -> ResponseReturnValue:
+            self._require_cookie("post")
+            return self.post(self._coerce_id(raw_id), self._read_body())
+
+        return self._guard(dispatch)
 
     def _handle_delete(self, raw_id: str) -> ResponseReturnValue:
         """Coerce the id and dispatch to :meth:`delete`."""
-        return self._guard(lambda: self.delete(self._coerce_id(raw_id)))
+
+        def dispatch() -> ResponseReturnValue:
+            self._require_cookie("delete")
+            return self.delete(self._coerce_id(raw_id))
+
+        return self._guard(dispatch)
+
+    def _require_cookie(self, method: str) -> None:
+        """Reject bearer-wrapper callers on methods declared cookie-only."""
+        if method in self.cookie_only_methods and getattr(g, "wrapper_id", None) is not None:
+            raise ForbiddenError("This action requires cookie session auth")
 
     def _guard(self, call: Callable[[], ResponseReturnValue]) -> ResponseReturnValue:
         """Run a handler call, mapping typed failures onto the error envelope."""
