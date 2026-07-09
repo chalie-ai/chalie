@@ -24,7 +24,7 @@ explicit profile row — silence is the safe default, never a leak.
 
 Consumers (bidirectional dependency note):
   - services/transcript_service.py          — episode gate + location back-fill
-  - services/subconscious_worker.py         — consolidation set, geo cursor
+  - cron/jobs/consolidate.py, geo_patterns.py — consolidation set, geo cursor
   - services/decay_engine_service.py        — janitor HEAVY-channel protection
   - configs/channels/pattern.py             — pattern-window channel filter
   - configs/channels/geo_pattern.py         — geo-window channel filter

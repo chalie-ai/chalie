@@ -1,11 +1,10 @@
 """Feature tests for  worker-gate durability across a process restart.
 
 ``last_user_message_at`` lives only in WorldState's in-memory ``_store`` dict
-at HEAD, so a container restart wipes it and starves the subconscious worker
-(observed 57 ticks vs 3029 skips). It must be persisted durably next to
-``subconscious_last_fired_at`` — MemoryStore (fast) + data_graph kind='machine_state'
-(durable) — and hydrated on construction, mirroring
-``SubconsciousWorker._persist_last_fired`` / ``_load_last_fired_from_storage``.
+at HEAD, so a container restart wipes it and starves the idle-gated cognition
+jobs (observed 57 ticks vs 3029 skips). It must be persisted durably —
+MemoryStore (fast) + data_graph kind='machine_state' (durable) — and hydrated
+on construction, mirroring ``IdleGatedJob``'s durable last-fired clock.
 
 At HEAD the durable-survival and gate-de-starvation tests FAIL; they pass once
 persistence+hydrate land.
@@ -20,6 +19,7 @@ from unittest.mock import patch
 
 import pytest
 
+from cron.base import IdleGatedJob
 from services.memory_store import MemoryStore
 from services.time_utils import utc_now
 from services.world_state import WorldState, Signal
@@ -136,15 +136,28 @@ class TestWorldStateDurabilityAcrossRestart:
 
 
 @pytest.mark.integration
-class TestSubconsciousGateDeStarvationAfterRestart:
-    """The real worker gate must see the hydrated timestamp post-restart."""
+class TestIdleGateDeStarvationAfterRestart:
+    """The real idle-gated cron job must see the hydrated timestamp post-restart.
+
+    The subconscious tick is now nine independent ``IdleGatedJob`` classes fired
+    by ``cron-runner``; the user-active gate that used to live in
+    ``SubconsciousWorker._check_gates`` is ``IdleGatedJob._is_idle`` +
+    ``_interval_elapsed``. This exercises the base gate through a minimal
+    concrete job so the durability contract is verified against real cron code.
+    """
+
+    class _GateProbe(IdleGatedJob):
+        """A minimal concrete idle-gated job — the base gates run unchanged."""
+
+        name = "test_idle_gate_probe"
 
     @contextmanager
     def _gate_against(self, world_state_instance: WorldState) -> Generator[None, None, None]:
         """Point the module-level world_state singleton at the given instance.
 
         Models the restarted process rebuilding its singletons. The real
-        ``_check_gates`` runs unchanged - no gate logic is mocked.
+        gate logic (``_is_idle`` / ``_interval_elapsed``) runs unchanged - no
+        gate logic is mocked.
         """
         import services.world_state as _ws_mod
         original = _ws_mod.world_state
@@ -157,11 +170,10 @@ class TestSubconsciousGateDeStarvationAfterRestart:
     def test_idle_user_message_lets_gate_run_after_restart(self, db: sqlite3.Connection, warm_store: MemoryStore) -> None:
         """User last spoke 45 min ago: hydrated-but-old timestamp must not trip the gate.
 
-        With no prior fire, ``_check_gates`` must return None, proving the
-        hydrated value is compared correctly, not merely 'present, skip'.
+        With no prior fire, the idle + interval gates must both clear (job may
+        run), proving the hydrated value is compared correctly, not merely
+        'present, skip'.
         """
-        from services.subconscious_worker import SubconsciousWorker
-
         WorldState().absorb(
             Signal(source="http_chat", kind="user_message",
                    payload={"text": "talked a while ago"},
@@ -169,12 +181,12 @@ class TestSubconsciousGateDeStarvationAfterRestart:
         )
 
         with _simulated_restart() as restarted, self._gate_against(restarted):
-            # Fresh worker that has never fired (no last_fired persisted).
-            worker = SubconsciousWorker()
-            assert worker.last_fired_at is None
-            gate = worker._check_gates()
+            # Fresh job that has never fired (no last_fired persisted).
+            job = self._GateProbe()
+            assert job._get_last_fired().load() is None
+            may_run = job._is_idle() and job._interval_elapsed()
 
-        assert gate is None, (
+        assert may_run, (
             "an idle (45-min-old) hydrated user message must not trip the "
-            f"user-active gate; expected None, got {gate!r}."
+            "user-active gate; the job must be allowed to run."
         )

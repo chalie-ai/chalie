@@ -6,9 +6,10 @@
 #
 #     http://www.apache.org/licenses/LICENSE-2.0
 
-"""Feature tests for ``services.scheduler_service`` — the dumb-cron poller
-(TKT-1434). ``_poll_and_fire`` must select only enabled, already-started,
-cron-matching rows and fire them asynchronously; a fired row runs the real
+"""Feature tests for the user-schedule dispatcher,
+``cron.jobs.scheduled_items.ScheduledItemsDispatcherJob``. ``_run`` must select
+only enabled, already-started, cron-matching rows and fire them asynchronously;
+a fired row runs the real
 ``MessageProcessor`` keyed to the schedule's own turn identity — the integer
 ``id`` IS the ``turn_id`` on the ``schedule`` channel — so a first fire opens a
 MAIN turn and any later fire of the SAME id appends as a FORK to that SAME
@@ -32,13 +33,18 @@ from unittest.mock import patch
 import pytest
 
 from configs.enums.channels import Channel
+from cron.jobs.scheduled_items import ScheduledItemsDispatcherJob
 from models.provider_response import ProviderResponse
 from models.thread_gist import ThreadGist
-from services.scheduler_service import _fire_item, _poll_and_fire
 from services.time_utils import utc_now
 from models.transcript import Transcript
 
 pytestmark = pytest.mark.unit
+
+# The dispatcher is stateless across ticks (no per-run instance state), so one
+# shared instance exercises the real production object — the runner builds it
+# exactly once in ``cron.JOBS`` too.
+_DISPATCHER = ScheduledItemsDispatcherJob()
 
 _BUILD_CLIENT = "services.provider_service.build_client"
 _JOIN_TIMEOUT = 10.0
@@ -141,7 +147,7 @@ def test_poll_and_fire_selects_only_enabled_started_cron_matching_rows(
     )
 
     with patch(_BUILD_CLIENT, return_value=_RecordingProvider()):
-        _poll_and_fire()
+        _DISPATCHER._run()
         fired = _join_named_thread(f"scheduled-work-{matching_id}")
         assert fired, "the matching, enabled, already-started row must be fired"
         _join_named_thread(f"turn-{matching_id}")
@@ -162,7 +168,7 @@ def test_first_fire_opens_main_turn_second_fire_forks_the_same_turn(
     item_id = _insert_item(db, message="Water the plants")
 
     with patch(_BUILD_CLIENT, return_value=_RecordingProvider("first response")):
-        _fire_item(item_id, "Water the plants")
+        _DISPATCHER._fire_item(item_id, "Water the plants")
         assert _join_named_thread(f"scheduled-work-{item_id}")
         assert _join_named_thread(f"turn-{item_id}")
 
@@ -179,7 +185,7 @@ def test_first_fire_opens_main_turn_second_fire_forks_the_same_turn(
     db.commit()
 
     with patch(_BUILD_CLIENT, return_value=_RecordingProvider("second response")):
-        _fire_item(item_id, "Water the plants")
+        _DISPATCHER._fire_item(item_id, "Water the plants")
         assert _join_named_thread(f"scheduled-work-{item_id}")
         assert _join_named_thread(f"turn-{item_id}")
 

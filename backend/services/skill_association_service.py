@@ -4,7 +4,7 @@ SkillAssociationService — Layer 2 of the Self-Refining Skill Library.
 Maps the user's active behavioural patterns to curated skill playbooks and
 writes personalisation rules into skill_associations in skills.sqlite.
 
-Called by SubconsciousWorker after every PatternMatchProcessor pass.
+Called by the pattern_match cron job after every PatternMatchProcessor pass.
 """
 
 import json

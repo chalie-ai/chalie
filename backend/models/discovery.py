@@ -1,6 +1,6 @@
 """The ``discovery`` vertical of ``data_graph`` — findings from the
-proactive-research loop (:class:`~services.subconscious_worker.SubconsciousWorker`
-``_step_discovery``), stored via the memory tool on the ``discovery`` channel
+proactive-research loop (:class:`~cron.jobs.discovery.DiscoveryJob`),
+stored via the memory tool on the ``discovery`` channel
 and recalled (recall-first dedup, restored in a later slice) via FTS.
 Subclasses the shared :class:`~models.data_graph.DataGraphRow` shell
 (persistence, FTS/vec write-sync, reinforce, kind-scoped live/search); adds

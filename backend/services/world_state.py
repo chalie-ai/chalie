@@ -137,7 +137,7 @@ class WorldState:
 
         ``last_user_message_at`` is loaded from the dual-write store at
         construction so the first read after a process/container restart sees
-        the persisted value (mirrors ``SubconsciousWorker.__init__``). Hydrate
+        the persisted value (mirrors ``IdleGatedJob``'s last-fired hydrate). Hydrate
         failure is non-fatal — the field simply starts unset.
         """
         self._store: dict[str, object] = {}           # arbitrary type → dict fragments

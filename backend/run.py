@@ -484,23 +484,28 @@ def _init_services() -> None:
 
 
 def _register_workers(manager: "_WorkerManager", host: str, port: int) -> None:
-    """Register all service workers with the WorkerManager."""
-    from services.scheduler_service import scheduler_worker
+    """Register all service workers with the WorkerManager.
+
+    The user-schedule poller (``scheduler_service``) and the idle-gated
+    cognition loop (``subconscious_worker``) were unified into the ``cron``
+    package: ``cron-runner`` fires every registered ``ScheduledJob`` on its own
+    schedule (``ScheduledItemsDispatcherJob`` folds in the schedule poller; the
+    nine idle-gated cognition jobs fold in the subconscious tick).
+    """
     from workers.document_worker import document_purge_worker
     from services.world_awareness_service import world_awareness_worker
 
-    manager.register_service("scheduler-service", scheduler_worker)
     manager.register_service("document-purge-service", document_purge_worker)
     manager.register_service("world-awareness-service", world_awareness_worker)
 
     from workers.folder_watcher_worker import folder_watcher_worker
     manager.register_service("folder-watcher-service", folder_watcher_worker)
 
-    from services.subconscious_worker import subconscious_worker
-    manager.register_service("subconscious-worker", subconscious_worker)
-
     from workers.tmp_cleanup_worker import tmp_cleanup_worker
     manager.register_service("tmp-cleanup-service", tmp_cleanup_worker)
+
+    from cron.runner import cron_runner
+    manager.register_service("cron-runner", cron_runner)
 
     _bootstrap_capability_sync()
     _try_register(manager, "search-expander-service",

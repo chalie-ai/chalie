@@ -10,10 +10,10 @@ This is thin CRUD over :class:`models.machine_state.MachineStateRow` — no ``mp
 service, no prompt assembly. It exists so there is exactly ONE home for the
 ``user_summary`` / ``user_summary_long`` read/write pair (Law 9): the DB-reaching
 statics that used to live in ``DmnConfig`` (§2.5 config strip), the raw reads in
-``subconscious_worker`` and the ``user_summary*`` accessors that used to sit on
+the cron cognition jobs and the ``user_summary*`` accessors that used to sit on
 ``DataGraphService`` all collapse onto :meth:`get` / :meth:`upsert` here. The
 "should we re-synthesise?" freshness gate — the trait/pattern-vs-summary timestamp
-check the subconscious step runs before firing the channel — lives here too as
+check the synthesis cron job runs before firing the channel — lives here too as
 :meth:`needs_refresh`, since it reads the same ``user_summary`` row.
 
 Provenance: ``persist_user_summary`` — the only writer — runs solely on the
