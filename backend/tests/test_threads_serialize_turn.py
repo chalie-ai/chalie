@@ -35,7 +35,10 @@ import pytest
 
 from api.threads import serialize_turn
 from configs.channels.scheduled import ScheduledConfig
+from configs.channels.user import UserConfig
 from controllers.message_processor import MessageProcessor
+from models.tool_call import ToolCall
+from models.transcript import Transcript
 from models.turn_execution import TurnExecution
 
 pytestmark = pytest.mark.unit
@@ -109,3 +112,107 @@ def test_finished_execution_with_settled_reply_is_not_working(db: sqlite3.Connec
     messages = cast("list[dict[str, object]]", result["messages"])
     contents = [m["content"] for m in messages]
     assert "Standup reminder: 9am daily sync." in contents
+
+
+# ── ``thread_message`` boundary (§ same function, different field) ────────────
+#
+# The companion regression: ``thread_message`` used to derive from
+# ``Transcript.settle0`` (mutable — a reply's own tool call can retroactively
+# demote it, erasing every row's tag on re-fetch), then from "first assistant
+# row" (wrong the moment an interim tool-using step precedes a turn's own
+# final answer). The fix keys the boundary on the id of the turn's SECOND
+# ``role='user'`` row — structural and immutable once written — tagging every
+# row from that id onward. No second user row → nothing is tagged.
+
+_USER_CHANNEL = "user"
+
+
+def test_single_exchange_with_interim_tool_step_has_no_thread_replies(db: sqlite3.Connection) -> None:
+    """A single exchange with an interim tool step, never replied: one user
+    row, an INTERIM assistant row ("Let me check the docs…") whose own tool
+    call fires and settles, then the FINAL answer. There is no second
+    ``role='user'`` row anywhere in this turn, so the fix's boundary tags
+    NOTHING here. The rejected "first assistant row and everything after it
+    is a reply" heuristic would have tagged BOTH the interim row and the
+    final answer, since the interim row is the first assistant row in turn
+    order — wrongly turning this single, never-replied exchange into a
+    thread the moment it has a tool step in the middle, which is the common
+    case, not an edge case."""
+    assert db is not None  # fixture is taken for its binding side effect (real DB gateway)
+    turn_id = 7001
+    mp = MessageProcessor(UserConfig(), turn_id, "What tools do I have connected?")  # inert (I2)
+
+    uid = mp.transcript_service.append_input(mp.raw_input)
+    mp.uid = uid
+    mp.current_transcript_id = uid
+
+    interim_id = mp.transcript_service.append_assistant("Let me check the docs for that.")
+    mp.current_transcript_id = interim_id  # mirrors MessageProcessor._store's real wiring
+    call_id = mp.tool_call_service.start("web_search", {"query": "connected tools"})
+    assert call_id is not None  # sanity: the real tool-call write succeeded
+    mp.tool_call_service.finish(call_id, "no direct hit", ToolCall.DONE)
+
+    final_id = mp.transcript_service.append_assistant("Here's what I found connected.")
+
+    result = serialize_turn(_USER_CHANNEL, turn_id)
+    messages = cast("list[dict[str, object]]", result["messages"])
+
+    assert [m["id"] for m in messages] == [str(uid), str(interim_id), str(final_id)]
+    assert all("thread_message" not in m for m in messages)
+
+
+def test_reply_with_settling_tool_call_tags_only_the_reply_rows(db: sqlite3.Connection) -> None:
+    """Opener plus a reply whose tool call settles: an opener (user row +
+    settled answer) that later gets a REPLY whose own tool call is a
+    SETTLING ability — when a reply's tool call is a settling ability, it
+    unsettles the opener's row: ``ToolCallService.start`` calls
+    ``TranscriptService.unsettle()`` on the OPENER's settle0 row the instant
+    the reply's tool fires. This is the exact cross-table mutation that broke
+    the old ``settle0``-derived
+    boundary: settle0 moves off the opener and onto the reply's own answer,
+    so re-deriving the boundary from settle0 AFTER the tool call tags
+    nothing at all (opener and reply both read as "not thread"). The fix's
+    boundary — the second user row's id, written once and never mutated by
+    anything downstream — is unaffected: the opener stays untagged and BOTH
+    reply rows are tagged, tool chip included."""
+    assert db is not None  # fixture is taken for its binding side effect (real DB gateway)
+    turn_id = 7002
+    opener = MessageProcessor(UserConfig(), turn_id, "Can you check my calendar for today?")  # inert (I2)
+    opener_uid = opener.transcript_service.append_input(opener.raw_input)
+    opener.uid = opener_uid
+    opener.current_transcript_id = opener_uid
+    opener_answer_id = opener.transcript_service.append_assistant("You have no events today.")
+    assert Transcript.settle0(_USER_CHANNEL, turn_id) == opener_answer_id  # sanity: opener settled
+
+    reply = MessageProcessor(UserConfig(), turn_id, "Actually, add a 3pm meeting.")  # forked reply, inert (I2)
+    reply_uid = reply.transcript_service.append_input(reply.raw_input)
+    reply.uid = reply_uid
+    reply.current_transcript_id = reply_uid
+
+    call_id = reply.tool_call_service.start(
+        "calendar", {"action": "create_event", "summary": "Meeting", "dtstart": "15:00"},
+    )
+    assert call_id is not None  # sanity: the real tool-call write succeeded
+    # sanity: the settling tool call demoted the OPENER's settle0 row (a
+    # reply's own tool activity un-settling the original exchange's row) —
+    # the exact cross-table mutation the old settle0-derived boundary broke on.
+    opener_row = Transcript.filter("id", opener_answer_id).first()
+    assert opener_row is not None
+    assert opener_row.settled == 0
+    assert Transcript.settle0(_USER_CHANNEL, turn_id) is None  # nothing settled mid-tool-call
+
+    reply.tool_call_service.finish(call_id, "created", ToolCall.DONE)
+    reply_answer_id = reply.transcript_service.append_assistant("Added a 3pm meeting to your calendar.")
+
+    result = serialize_turn(_USER_CHANNEL, turn_id)
+    messages = cast("list[dict[str, object]]", result["messages"])
+    by_id = {cast("str", m["id"]): m for m in messages}
+
+    assert "thread_message" not in by_id[str(opener_uid)]
+    assert "thread_message" not in by_id[str(opener_answer_id)]
+    assert by_id[str(reply_uid)]["thread_message"] is True
+    assert by_id[str(reply_answer_id)]["thread_message"] is True
+
+    reply_input_msg = by_id[str(reply_uid)]
+    tool_calls = cast("list[dict[str, object]]", reply_input_msg.get("tool_calls", []))
+    assert any(c["tool_name"] == "calendar" for c in tool_calls)

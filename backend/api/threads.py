@@ -242,22 +242,35 @@ def serialize_turn(channel: str, turn_id: int) -> dict[str, object]:
     refetch all flow through here, so one fetch fully determines a turn's render
     with no signal memory.
 
-    Returns the WHOLE turn (no settle0 floor) projected into messages, with every
-    row PAST settle0 tagged ``thread_message: true`` — the reply continuation the
-    main spine drops (it renders only through settle0) and whose mere presence
-    makes the turn a thread (the feed shows the opener). The collapsed-feed
-    metadata (gist, preview, last activity) and the turn-level render state
-    (``working`` — an open ``turn_executions`` row for this (channel, turn_id),
-    i.e. a currently in-flight execution, not merely "never settled" — and
-    ``duration_ms``, derived from the row span) are folded in."""
+    Returns the WHOLE turn (no floor) projected into messages, with every row
+    from the turn's SECOND user-role row onward tagged ``thread_message: true``
+    — the reply continuation the main spine drops (it renders only the opener)
+    and whose mere presence makes the turn a thread (the feed shows the
+    opener). The opener is one user row plus every assistant row that follows
+    it (interim "let me check…" rows AND the final settled reply alike) up to
+    (not including) the next user row a reply appends — so the boundary keys
+    on the second user row's id, the one thing about a reply that is both
+    structural (a fresh input row, not a column flip) and immutable once
+    written. Neither ``Transcript.settle0`` NOR "first assistant row" work
+    here: settle0 is deliberately mutable (a reply's own tool activity
+    unsettles the ORIGINAL exchange's row via ``TranscriptService.unsettle()``,
+    so re-querying it retroactively erases every row's tag), and "first
+    assistant row" wrongly tags a single-exchange turn's own final reply once
+    an interim assistant row (a tool-using turn's "let me check…" row) precedes
+    it. The collapsed-feed metadata (gist, preview, last activity) and the
+    turn-level render state (``working`` — an open ``turn_executions`` row for
+    this (channel, turn_id), i.e. a currently in-flight execution, not merely
+    "never settled" — and ``duration_ms``, derived from the row span) are
+    folded in."""
     from services.time_utils import parse_utc
 
     rows = Transcript.by_turn(channel, turn_id)
     messages = _rows_to_messages(rows)
 
-    settle = Transcript.settle0(channel, turn_id)
+    user_ids = [cast("int", r["id"]) for r in rows if r["role"] == "user"]
+    boundary = user_ids[1] if len(user_ids) > 1 else None
     for m in messages:
-        if settle is not None and int(cast("str", m["id"])) > settle:
+        if boundary is not None and int(cast("str", m["id"])) >= boundary:
             m["thread_message"] = True
 
     duration_ms = 0
