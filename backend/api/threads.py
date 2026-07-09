@@ -39,6 +39,7 @@ from services.locale_service import CHAT_TIMESTAMP_FMT, format_date
 from services.rich_media_parser import parse as _parse_rich_media
 from models.tool_call import ToolCall
 from models.transcript import Transcript
+from models.turn_execution import TurnExecution
 from .auth import require_session
 from .dto import Error, expects, register_dto, responds
 from .dto.attachment import Attachment
@@ -246,8 +247,9 @@ def serialize_turn(channel: str, turn_id: int) -> dict[str, object]:
     main spine drops (it renders only through settle0) and whose mere presence
     makes the turn a thread (the feed shows the opener). The collapsed-feed
     metadata (gist, preview, last activity) and the turn-level render state
-    (``working`` — unsettled/in-flight — and ``duration_ms``, derived from the row
-    span) are folded in."""
+    (``working`` — an open ``turn_executions`` row for this (channel, turn_id),
+    i.e. a currently in-flight execution, not merely "never settled" — and
+    ``duration_ms``, derived from the row span) are folded in."""
     from services.time_utils import parse_utc
 
     rows = Transcript.by_turn(channel, turn_id)
@@ -268,7 +270,7 @@ def serialize_turn(channel: str, turn_id: int) -> dict[str, object]:
         "gist": _bulk_gists(channel, [turn_id]).get(turn_id),
         "preview": cast("str", rows[0]["content"] or "")[:_PREVIEW_CHARS] if rows else "",
         "last_activity_at": rows[-1]["created_at"] if rows else None,
-        "working": settle is None,
+        "working": TurnExecution.open_turn(channel, turn_id) is not None,
         "duration_ms": duration_ms,
         "messages": messages,
     }
