@@ -13,7 +13,7 @@ import { useSessionStore } from '../../stores/session';
 import type { SchedulerTurn } from '../../api/scheduler';
 import { scheduler } from '../../api/scheduler';
 import { useConversationFeed } from '../../composables/useConversationFeed';
-import { formatCadence, isRecurringCadence } from '../../utils/time';
+import { formatCadence } from '../../utils/time';
 
 const POLL_INTERVAL_MS = 60_000;
 
@@ -110,15 +110,9 @@ function openTurn(turn: SchedulerTurn): void {
   session.closeSchedulerDock();
 }
 
-/**
- * Cadence sub-label for a dock row, derived from the series' cron fields:
- * "Once" for a one-time item (no field pinned), otherwise the real
- * recurring cadence — see `isRecurringCadence`.
- */
+/** Cadence sub-label for a dock row, derived from the series' cron fields. */
 function cadence(turn: SchedulerTurn): string {
-  return isRecurringCadence(turn.day, turn.hour, turn.minute)
-    ? formatCadence(turn.day, turn.hour, turn.minute)
-    : 'Once';
+  return formatCadence(turn.day, turn.hour, turn.minute);
 }
 </script>
 
