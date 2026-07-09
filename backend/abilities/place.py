@@ -22,7 +22,7 @@ import logging
 from typing import ClassVar, cast
 
 from abilities._ability import Ability
-from abilities._params import Keys
+from configs.enums.param_key import Keys
 from abilities._result import ToolResult
 from models.place import PlaceRow
 from services.place_service import PlaceService
@@ -53,10 +53,10 @@ class PlaceAbility(Ability):
     # whose valid= names these keys; a known action missing 'name' → one
     # missing-params error. The ability's run() never sees a malformed call.
     ACTION_REQUIRED: ClassVar[dict[str, tuple[str, ...]]] = {
-        _ACTION_SAVE: (Keys.name,),
+        _ACTION_SAVE: (Keys.name_,),
         _ACTION_LIST: (),
-        _ACTION_GET: (Keys.name,),
-        _ACTION_DELETE: (Keys.name,),
+        _ACTION_GET: (Keys.name_,),
+        _ACTION_DELETE: (Keys.name_,),
     }
 
     def get_name(self) -> str:
@@ -96,7 +96,7 @@ class PlaceAbility(Ability):
                     "delete — remove a saved place by name."
                 ),
             },
-            Keys.name: {
+            Keys.name_: {
                 "type": "string",
                 "description": (
                     "The label for the place (e.g. 'home', 'work', 'gym'). "
@@ -112,7 +112,7 @@ class PlaceAbility(Ability):
 
     def run(self, params: dict[str, object]) -> ToolResult:
         action = cast(str, params.get(Keys.action) or "").lower()
-        name = cast(str, params.get(Keys.name) or "").strip().lower()
+        name = cast(str, params.get(Keys.name_) or "").strip().lower()
 
         if action == _ACTION_SAVE:
             return self._handle_save(name, self.telemetry)

@@ -9,7 +9,7 @@
 """Registry-invariant checks for the parameter-key healer - TEST-ONLY surface.
 
 Lives here so production code never imports a validator it never calls. Imports
-the real registry from ``abilities._params`` and reflects over the real
+the real registry from ``configs.enums.param_key`` and reflects over the real
 ``AbilityRegistry`` supplied by the caller. Re-implements NO production logic,
 adds NO mocks, and creates NO alternative code path. The ``_`` prefix keeps pytest
 from collecting it as a test module while ``test_param_key_resilience`` imports it.
@@ -20,7 +20,8 @@ from __future__ import annotations
 from typing import cast
 
 from abilities._ability import Ability
-from abilities._params import VARIANTS, KeyNormalizer, Keys
+from configs.enums.param_key import VARIANTS, Keys
+from services.key_normalizer import KeyNormalizer
 
 # The two keys the framework injects into / strips from every call (see
 # Ability.get_input_schema and ToolDispatcher.dispatch/_execute). No parameter and

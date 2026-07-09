@@ -48,7 +48,7 @@ import logging
 from typing import TYPE_CHECKING, Callable, cast
 
 from abilities._mcp_ability import _MCPAbility
-from abilities._params import KeyHealer
+from services.key_healer import KeyHealer
 from abilities._registry import AbilityRegistry
 from abilities._result import ToolParamError, ToolResult
 from models.tool_call import ToolCall

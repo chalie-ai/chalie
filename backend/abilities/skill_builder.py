@@ -21,7 +21,7 @@ import logging
 from typing import ClassVar, cast
 
 from abilities._ability import Ability
-from abilities._params import Keys
+from configs.enums.param_key import Keys
 from abilities._result import ToolResult
 from configs.enums.channels import Channel
 from models.skill import Skill
@@ -63,10 +63,10 @@ class SkillBuilderAbility(Ability):
     # one missing-params error naming ALL of them. edit/delete/read need only a
     # title (the existence/ownership checks live in run()); list needs nothing.
     ACTION_REQUIRED: ClassVar[dict[str, tuple[str, ...]]] = {
-        "create": (Keys.title, Keys.use_for, Keys.content),
-        "edit": (Keys.title,),
-        "delete": (Keys.title,),
-        "read": (Keys.title,),
+        "create": (Keys.title_, Keys.use_for, Keys.content),
+        "edit": (Keys.title_,),
+        "delete": (Keys.title_,),
+        "read": (Keys.title_,),
         "list": (),
     }
 
@@ -112,7 +112,7 @@ class SkillBuilderAbility(Ability):
                     "list: list all skills (both curated and user-created), titles and use_for only."
                 ),
             },
-            Keys.title: {
+            Keys.title_: {
                 "type": "string",
                 "description": (
                     "The skill title — a short noun phrase describing what the skill does "
@@ -193,7 +193,7 @@ class SkillBuilderAbility(Ability):
 def _handle_create(params: dict[str, object]) -> ToolResult:
     # title / use_for / content presence is guaranteed by the ACTION_REQUIRED
     # pre-gate; here we only normalise.
-    title = (cast("str", params.get(Keys.title)) or "").strip()
+    title = (cast("str", params.get(Keys.title_)) or "").strip()
     use_for = (cast("str", params.get(Keys.use_for)) or "").strip()
     content = (cast("str", params.get(Keys.content)) or "").strip()
 
@@ -258,7 +258,7 @@ def _handle_create(params: dict[str, object]) -> ToolResult:
 
 
 def _handle_edit(params: dict[str, object]) -> ToolResult:
-    title = (cast("str", params.get(Keys.title)) or "").strip()  # presence guaranteed by pre-gate
+    title = (cast("str", params.get(Keys.title_)) or "").strip()  # presence guaranteed by pre-gate
 
     if not FileMapperService.get_skills_db_path().exists():
         return ToolResult.err(
@@ -314,7 +314,7 @@ def _handle_edit(params: dict[str, object]) -> ToolResult:
 
 
 def _handle_delete(params: dict[str, object]) -> ToolResult:
-    title = (cast("str", params.get(Keys.title)) or "").strip()  # presence guaranteed by pre-gate
+    title = (cast("str", params.get(Keys.title_)) or "").strip()  # presence guaranteed by pre-gate
 
     if not FileMapperService.get_skills_db_path().exists():
         return ToolResult.err(
@@ -382,7 +382,7 @@ def _handle_list(params: dict[str, object]) -> ToolResult:  # noqa: ARG001
 
 def _handle_read(params: dict[str, object]) -> ToolResult:
     # title presence is guaranteed by the ACTION_REQUIRED pre-gate.
-    title = (cast("str", params.get(Keys.title)) or "").strip()
+    title = (cast("str", params.get(Keys.title_)) or "").strip()
 
     if not FileMapperService.get_skills_db_path().exists():
         return ToolResult.err(

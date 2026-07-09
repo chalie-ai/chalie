@@ -3,7 +3,7 @@ import re
 from typing import TYPE_CHECKING, ClassVar, cast
 
 from abilities._budget import BudgetCappedAbility
-from abilities._params import Keys
+from configs.enums.param_key import Keys
 from abilities._result import ToolResult
 
 if TYPE_CHECKING:
@@ -33,7 +33,7 @@ class SavePattern(BudgetCappedAbility):
     # evidence list is rejected there too, while whitespace-only name/summary
     # residue still reaches run().
     ACTION_REQUIRED: ClassVar[dict[str, tuple[str, ...]]] = {
-        "": (Keys.name, Keys.frequency, Keys.summary, Keys.evidence_transcript_ids)
+        "": (Keys.name_, Keys.frequency, Keys.summary, Keys.evidence_transcript_ids)
     }
 
     def get_name(self) -> str:
@@ -63,7 +63,7 @@ class SavePattern(BudgetCappedAbility):
     _PARAMETERS: ClassVar[dict[str, object]] = {
         "type": "object",
         "properties": {
-            Keys.name: {
+            Keys.name_: {
                 "type": "string",
                 "description": "snake_case identifier; mirror existing names when reinforcing.",
             },
@@ -84,7 +84,7 @@ class SavePattern(BudgetCappedAbility):
                 "items": {"type": "integer"},
             },
         },
-        "required": [Keys.name, Keys.frequency, Keys.summary, Keys.evidence_transcript_ids],
+        "required": [Keys.name_, Keys.frequency, Keys.summary, Keys.evidence_transcript_ids],
     }
 
     def get_parameters(self) -> dict[str, object]:
@@ -98,7 +98,7 @@ class SavePattern(BudgetCappedAbility):
         # The validation ORDER and rules are frozen (regex → frequency set →
         # min-2 evidence); only the failure shape changes from a phantom-success
         # dict to a loud ToolResult error, in parity with save_graph.
-        name = (cast("str", params.get(Keys.name) or "")).strip()
+        name = (cast("str", params.get(Keys.name_) or "")).strip()
         # The dispatcher pre-gate is truthiness-based, so a whitespace-only name
         # slips past it as a non-empty string and must be rejected here
         # (precedent: save_graph.py, file_permissions.py).

@@ -2,10 +2,11 @@ from typing import cast
 
 import pytest
 
-from capabilities.mail_capability.providers import ServerSettings
-from capabilities.provider_autodiscovery import (
-    EmailProviderSettings,
-    discover_email_settings, list_supported_providers,
+from capabilities.mail_capability.providers import (
+    ServerSettings,
+    UnifiedProvider,
+    discover_provider,
+    list_supported_providers,
 )
 
 
@@ -21,10 +22,11 @@ from capabilities.provider_autodiscovery import (
     ("weird@name@gmail.com", "Google", "imap.gmail.com"),
 ])
 def test_known_provider(email: str, expected_name: str, expected_imap_host: str) -> None:
-    s = discover_email_settings(email)
-    assert s is not None
-    assert s.provider_name == expected_name
-    assert s.imap.host == expected_imap_host
+    p = discover_provider(email)
+    assert p is not None
+    assert p.name == expected_name
+    assert p.imap is not None
+    assert p.imap.host == expected_imap_host
 
 
 @pytest.mark.unit
@@ -32,15 +34,15 @@ def test_known_provider(email: str, expected_name: str, expected_imap_host: str)
     "", "not-an-email", "user@unknown-startup.xyz",
 ])
 def test_returns_none_for_invalid_or_unknown(email: str) -> None:
-    assert discover_email_settings(email) is None
+    assert discover_provider(email) is None
 
 
 @pytest.mark.unit
 def test_full_settings_gmail() -> None:
-    g = discover_email_settings("a@gmail.com")
-    assert cast(EmailProviderSettings, g).imap == ServerSettings("imap.gmail.com", 993, True)
-    assert cast(EmailProviderSettings, g).smtp == ServerSettings("smtp.gmail.com", 465, True)
-    assert cast(EmailProviderSettings, g).requires_app_password is True
+    g = discover_provider("a@gmail.com")
+    assert cast(UnifiedProvider, g).imap == ServerSettings("imap.gmail.com", 993, True)
+    assert cast(UnifiedProvider, g).smtp == ServerSettings("smtp.gmail.com", 465, True)
+    assert cast(UnifiedProvider, g).requires_app_password is True
 
 
 @pytest.mark.unit

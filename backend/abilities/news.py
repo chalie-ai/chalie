@@ -21,7 +21,7 @@ import logging
 from typing import ClassVar, Optional, cast
 
 from abilities._ability import Ability
-from abilities._params import Keys
+from configs.enums.param_key import Keys
 from abilities._result import ToolResult
 from services import news_sources
 from services.news_service import NewsFetchError, NewsService

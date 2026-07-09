@@ -18,7 +18,7 @@ import logging
 from typing import ClassVar
 
 from abilities._ability import Ability
-from abilities._params import Keys
+from configs.enums.param_key import Keys
 from abilities._result import ToolResult
 from services import memory_retrieval
 
@@ -84,7 +84,7 @@ class MemoryAbility(Ability):
                     "fits one of the 27 concepts."
                 ),
             },
-            Keys.value: {
+            Keys.value_: {
                 "type": "string",
                 "description": (
                     "For store: the fact itself, atomic — a single value. "
@@ -133,7 +133,7 @@ class MemoryAbility(Ability):
     # ``query`` OR ``location`` (an OR the flat map cannot express), and the
     # handler validates that pair itself, returning ``code=no-query-or-location``.
     ACTION_REQUIRED: ClassVar[dict[str, tuple[str, ...]]] = {
-        "store": (Keys.key, Keys.value),
+        "store": (Keys.key, Keys.value_),
         "recall": (),
         "reflect": (Keys.query,),
         "forget": (Keys.key,),

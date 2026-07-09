@@ -30,7 +30,7 @@ import logging
 from typing import ClassVar, NamedTuple, cast
 
 from abilities._capability import CapabilityAbility
-from abilities._params import Keys
+from configs.enums.param_key import Keys
 from abilities._result import ToolResult
 
 logger = logging.getLogger(__name__)

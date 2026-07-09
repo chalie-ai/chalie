@@ -22,10 +22,10 @@ it — the semantic-synonym ladders the healer resolves against, scoped per-tool
 
 The no-overlap invariant the whole design rests on — that no variant of one
 parameter can collide with another parameter (or a framework key) within the same
-tool — is enforced as a feature test by ``tests/_registry_invariants.py``
-(``RegistryInvariant``), NOT at import: importing every ability here would be a
-circular import, and the invariant is a property of the live registry, not of this
-module.
+tool — is expressed as ``RegistryInvariant`` in ``tests/_registry_invariants.py``
+(a test-only helper), NOT checked at import: importing every ability here would be
+a circular import, and the invariant is a property of the live registry, not of
+this module.
 """
 
 from __future__ import annotations
@@ -101,6 +101,7 @@ class Keys(StrEnum):
     message = "message"
     minute = "minute"
     minutes = "minutes"
+    month = "month"
     name_ = "name"  # trailing underscore: bare ``name`` is reserved by Enum
     operation = "operation"
     page = "page"
@@ -138,6 +139,7 @@ class Keys(StrEnum):
     url = "url"
     use_for = "use_for"
     value_ = "value"  # trailing underscore: bare ``value`` is reserved by Enum
+    weekday = "weekday"
     wlan_id = "wlan_id"
 
 
@@ -161,11 +163,11 @@ class Keys(StrEnum):
 # msg, id). The squeeze layer already covers junk/case/separator, so listing both
 # ``filepath`` and ``file_path`` is redundant — one covers both. The no-overlap
 # invariant (no variant of one parameter may collide with another parameter or a
-# framework key within the same tool) is enforced by ``RegistryInvariant`` — a
-# feature test in ``tests/_registry_invariants.py`` — NOT at import: importing
-# every ability here would be a circular import, and the invariant is a property
-# of the live registry, not of this module. ``test_real_registry_has_no_variant_
-# overlaps`` is the ship gate; the change cannot land unless it passes.
+# framework key within the same tool) is expressed as ``RegistryInvariant`` — a
+# test-only helper in ``tests/_registry_invariants.py`` — NOT checked at import:
+# importing every ability here would be a circular import, and the invariant is a
+# property of the live registry, not of this module. (That helper is not currently
+# wired into the suite — see the follow-up on restoring its ship-gate test.)
 #
 # Three tokens were auto-dropped during invariant derivation (kept on a better
 # semantic home where there is no collision): ``start_date`` (dropped from

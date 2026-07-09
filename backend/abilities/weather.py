@@ -25,7 +25,7 @@ from typing import ClassVar, cast
 import requests
 
 from abilities._ability import Ability
-from abilities._params import Keys
+from configs.enums.param_key import Keys
 from abilities._result import ToolResult
 from services.time_utils import utc_now
 

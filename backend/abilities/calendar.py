@@ -45,7 +45,7 @@ from datetime import datetime, timezone
 from typing import ClassVar, cast
 
 from abilities._capability import CapabilityAbility
-from abilities._params import Keys
+from configs.enums.param_key import Keys
 from abilities._result import ToolResult
 
 logger = logging.getLogger(__name__)
@@ -171,7 +171,7 @@ class CalendarAbility(CapabilityAbility):
                     "temporarily unavailable, so uid must be passed directly."
                 ),
             },
-            Keys.title: {
+            Keys.title_: {
                 "type": "string",
                 "description": (
                     "get_event / update_event / delete_event: event title for a fuzzy "
@@ -289,7 +289,7 @@ def _resolve_target_uid(params: dict[str, object]) -> ToolResult | None:
     if (cast(str, params.get(Keys.uid)) or "").strip():
         return None
 
-    title = (cast(str, params.get(Keys.title)) or "").strip()
+    title = (cast(str, params.get(Keys.title_)) or "").strip()
     if not title:
         return ToolResult.err(
             "uid or title is required to address the event.",

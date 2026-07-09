@@ -18,7 +18,7 @@ the ACTION_REQUIRED pre-gate, the policy gate, or ``run()`` ever sees the params
    per-tool knowledge. (This heals a common model defect: a model stores
    ``{"source\"": "https://…"}`` and ``read`` bounces on
    ``source-required`` because the corrupt KEY never matched.) This layer is
-   :class:`KeyNormalizer`.
+   :class:`~services.key_normalizer.KeyNormalizer`.
 
 2. **Variant resolution (registry-driven, per-tool).** A sanitised key that is
    not one of the tool's declared parameters is matched against the variant
@@ -45,43 +45,12 @@ that consumes them.
 from __future__ import annotations
 
 import logging
-import re
 from typing import cast
 
 from configs.enums.param_key import VARIANTS
+from services.key_normalizer import KeyNormalizer
 
 logger = logging.getLogger(__name__)
-
-
-class KeyNormalizer:
-    """Reduce a raw argument key to the canonical form keys are matched on.
-
-    One responsibility: the character-level sanitisation that gives every tool
-    junk/case/separator resilience for free, independent of any registry.
-    Stateless; injected into :class:`KeyHealer` so the healer never hard-codes its
-    own matching rule and either layer can be swapped or tested in isolation.
-    """
-
-    _DROP = re.compile(r"[^a-z0-9_-]")
-
-    def normalize(self, key: str) -> str:
-        """Lower-case *key* and drop every character outside ``[a-z0-9_-]``.
-
-        The generic sanitisation layer: ``source"`` → ``source``, ``"URL"`` →
-        ``url``, ``max chars`` → ``maxchars`` (space dropped). Separators ``-`` /
-        ``_`` are preserved so ``max_chars`` keeps its shape for the exact match;
-        :meth:`squeeze` removes them for the loose match.
-        """
-        return self._DROP.sub("", str(key).lower())
-
-    def squeeze(self, key: str) -> str:
-        """:meth:`normalize` then drop ``-`` / ``_`` — the form keys are matched on.
-
-        Collapses every spelling of one key to a single token, so ``MAX_CHARS``,
-        ``max-chars`` and ``maxchars`` all compare equal (``maxchars``). Used for
-        both the exact (declared-param) match and the variant match.
-        """
-        return self.normalize(key).replace("-", "").replace("_", "")
 
 
 class KeyHealer:
@@ -93,9 +62,9 @@ class KeyHealer:
 
     Dependencies are injected (DIP): the
     :data:`~configs.enums.param_key.VARIANTS` registry and the
-    :class:`KeyNormalizer` both default to the shared module values but can be
-    supplied — for a test with a probe registry, or an alternative normalisation
-    policy — without touching this class.
+    :class:`~services.key_normalizer.KeyNormalizer` both default to the shared
+    module values but can be supplied — for a test with a probe registry, or an
+    alternative normalisation policy — without touching this class.
     """
 
     def __init__(

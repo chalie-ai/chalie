@@ -26,7 +26,7 @@ import time
 from typing import TYPE_CHECKING, ClassVar, cast
 
 from abilities._ability import Ability
-from abilities._params import Keys
+from configs.enums.param_key import Keys
 from abilities._result import ToolResult, truncate
 
 if TYPE_CHECKING:

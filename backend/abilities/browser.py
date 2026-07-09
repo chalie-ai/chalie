@@ -25,7 +25,7 @@ from typing import ClassVar, cast
 from urllib.parse import urlparse
 
 from abilities._ability import Ability
-from abilities._params import Keys
+from configs.enums.param_key import Keys
 from abilities._result import ToolResult
 from tools.browser.session import record_screenshot, run_verb
 
@@ -89,7 +89,7 @@ class BrowserAbility(Ability):
                     "'Email'). Used by click/fill/select/style."
                 ),
             },
-            Keys.value: {
+            Keys.value_: {
                 "type": "string",
                 "description": "Text to type ('fill') or option to choose ('select').",
             },
@@ -123,8 +123,8 @@ class BrowserAbility(Ability):
         "read": (),
         "find": (Keys.query,),
         "click": (Keys.target,),
-        "fill": (Keys.target, Keys.value),
-        "select": (Keys.target, Keys.value),
+        "fill": (Keys.target, Keys.value_),
+        "select": (Keys.target, Keys.value_),
         "scroll": (Keys.direction,),
         "back": (),
         "screenshot": (),
@@ -138,8 +138,8 @@ class BrowserAbility(Ability):
         "read": (Keys.section,),
         "find": (Keys.query,),
         "click": (Keys.target,),
-        "fill": (Keys.target, Keys.value),
-        "select": (Keys.target, Keys.value),
+        "fill": (Keys.target, Keys.value_),
+        "select": (Keys.target, Keys.value_),
         "scroll": (Keys.direction,),
         "back": (),
         "screenshot": (),

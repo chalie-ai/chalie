@@ -42,7 +42,7 @@ from typing import ClassVar, cast
 
 from abilities._ability import Ability
 from abilities._delegate import delegate_result
-from abilities._params import Keys
+from configs.enums.param_key import Keys
 from abilities._result import ToolResult
 from configs.channels.web_search import WebSearchConfig
 

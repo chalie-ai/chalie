@@ -31,7 +31,7 @@ import logging
 from typing import TYPE_CHECKING, ClassVar, Optional, cast
 
 from abilities._ability import Ability
-from abilities._params import Keys
+from configs.enums.param_key import Keys
 from abilities._result import ToolResult
 
 if TYPE_CHECKING:
@@ -54,13 +54,13 @@ class ListAbility(Ability):
     # handlers raise the precise missing-target error.
     ACTION_REQUIRED: ClassVar[dict[str, tuple[str, ...]]] = {
         "list_all": (),
-        "create": (Keys.name,),
+        "create": (Keys.name_,),
         "view": (),
         "add": (Keys.items,),
         "check": (Keys.items,),
         "remove": (Keys.items,),
         "clear": (),
-        "rename": (Keys.name,),
+        "rename": (Keys.name_,),
         "delete": (),
     }
 
@@ -110,7 +110,7 @@ class ListAbility(Ability):
                     "matches more than one list returns the candidates to pick from by id."
                 ),
             },
-            Keys.name: {
+            Keys.name_: {
                 "type": "string",
                 "description": "New list name; used for create and rename only.",
             },
@@ -379,7 +379,7 @@ def _handle_list_all(service: "_ListService") -> ToolResult:
 
 
 def _handle_create(ability: "ListAbility", service: "_ListService", params: dict[str, object]) -> ToolResult:
-    name = str(ability.param(params, Keys.name, default="")).strip()
+    name = str(ability.param(params, Keys.name_, default="")).strip()
     if not name:
         return ToolResult.err("'name' is required.", code="missing-name")
 
@@ -498,7 +498,7 @@ def _handle_rename(ability: "ListAbility", service: "_ListService", params: dict
     if isinstance(lst, ToolResult):
         return lst
 
-    new_name = str(ability.param(params, Keys.name, default="")).strip()
+    new_name = str(ability.param(params, Keys.name_, default="")).strip()
     if not new_name:
         return ToolResult.err("'name' is required.", code="missing-name")
 

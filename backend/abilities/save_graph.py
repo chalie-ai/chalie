@@ -3,7 +3,7 @@ import json
 from typing import ClassVar, cast
 
 from abilities._budget import BudgetCappedAbility
-from abilities._params import Keys
+from configs.enums.param_key import Keys
 from abilities._pattern_provenance import pattern_provenance
 from abilities._result import ToolResult
 from contracts.constants.data_graph import VALID_KINDS
@@ -49,7 +49,7 @@ class SaveGraph(BudgetCappedAbility):
                 continue
             k = p.get(Keys.kind, "")
             key = p.get(Keys.key, "")
-            val = p.get(Keys.value, "")
+            val = p.get(Keys.value_, "")
             if k and key and val:
                 seen.add((k, key.lower(), val.lower()))
         return seen
@@ -58,7 +58,7 @@ class SaveGraph(BudgetCappedAbility):
     # or empty kind/key/value as code=missing-params before run() is reached
     # (precedent: _delegate.py, file_permissions.py). The pre-gate is
     # truthiness-based, so whitespace-only residue still reaches run().
-    ACTION_REQUIRED: ClassVar[dict[str, tuple[str, ...]]] = {"": (Keys.kind, Keys.key, Keys.value)}
+    ACTION_REQUIRED: ClassVar[dict[str, tuple[str, ...]]] = {"": (Keys.kind, Keys.key, Keys.value_)}
 
     def get_name(self) -> str:
         return "save_graph"
@@ -90,9 +90,9 @@ class SaveGraph(BudgetCappedAbility):
         "properties": {
             Keys.kind: {"type": "string", "enum": ALLOWED_KINDS},
             Keys.key: {"type": "string"},
-            Keys.value: {"type": "string"},
+            Keys.value_: {"type": "string"},
         },
-        "required": [Keys.kind, Keys.key, Keys.value],
+        "required": [Keys.kind, Keys.key, Keys.value_],
     }
 
     def get_parameters(self) -> dict[str, object]:
@@ -117,7 +117,7 @@ class SaveGraph(BudgetCappedAbility):
         # whitespace-only key/value slips past it and must be rejected here
         # (precedent: file_permissions.py).
         key = cast("str", params.get(Keys.key, "")).strip()
-        value = cast("str", params.get(Keys.value, "")).strip()
+        value = cast("str", params.get(Keys.value_, "")).strip()
         if not key or not value:
             missing = ", ".join(
                 name for name, val in (("key", key), ("value", value)) if not val

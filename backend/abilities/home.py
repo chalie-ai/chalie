@@ -43,7 +43,7 @@ if TYPE_CHECKING:
         def get_tools(self) -> list[dict[str, object]]: ...
 
 from abilities._capability import CapabilityAbility
-from abilities._params import Keys
+from configs.enums.param_key import Keys
 from abilities._result import ToolResult
 
 # Actions whose ``entity_id`` must name a real entity. ``control`` is the silent-

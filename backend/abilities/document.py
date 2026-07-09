@@ -36,7 +36,7 @@ import shutil as _shutil
 from typing import TYPE_CHECKING, ClassVar, cast
 
 from abilities._ability import Ability
-from abilities._params import Keys
+from configs.enums.param_key import Keys
 from abilities._result import ToolResult
 from services.document_chunking import create_document_artifacts
 
@@ -62,7 +62,7 @@ class DocumentAbility(Ability):
         "view": (),
         "delete": (),
         "restore": (),
-        "create": (Keys.name, Keys.content),
+        "create": (Keys.name_, Keys.content),
         "upload": (),
     }
 
@@ -116,7 +116,7 @@ class DocumentAbility(Ability):
                     "delete only proceeds on an exact id or a single exact-name match."
                 ),
             },
-            Keys.name: {
+            Keys.name_: {
                 "type": "string",
                 "description": (
                     "Required for `create`; use a filename like 'research-notes.md' "
@@ -206,7 +206,7 @@ def _resolve_unique(service: "_DocumentService", params: dict[str, object]) -> "
             )
         return doc
 
-    name = cast(str, params.get(Keys.name) or "").strip()
+    name = cast(str, params.get(Keys.name_) or "").strip()
     if not name:
         return ToolResult.err(
             "id or name is required to address the document.",
@@ -387,7 +387,7 @@ def _handle_delete(service: "_DocumentService", params: dict[str, object]) -> To
 
 def _handle_restore(service: "_DocumentService", params: dict[str, object]) -> ToolResult:
     doc_id = cast(str, params.get(Keys.id) or "").strip()
-    name = cast(str, params.get(Keys.name) or "").strip()
+    name = cast(str, params.get(Keys.name_) or "").strip()
 
     if doc_id:
         doc = service.get_document(doc_id)
@@ -547,7 +547,7 @@ def _handle_upload(service: "_DocumentService", params: dict[str, object]) -> To
     result = ingest_file(
         service,
         cast(str, params.get(Keys.path)),
-        name=cast("str | None", params.get(Keys.name)),
+        name=cast("str | None", params.get(Keys.name_)),
     )
     if result.get("error"):
         return ToolResult.err(cast(str, result["error"]), code="upload-failed", action="upload")
@@ -570,7 +570,7 @@ def _handle_upload(service: "_DocumentService", params: dict[str, object]) -> To
 
 
 def _handle_create(service: "_DocumentService", params: dict[str, object]) -> ToolResult:
-    name = cast(str, params.get(Keys.name, "")).strip()
+    name = cast(str, params.get(Keys.name_, "")).strip()
     content = cast(str, params.get(Keys.content, "")).strip()
 
     if "." not in name:
