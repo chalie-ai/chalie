@@ -1,7 +1,7 @@
 import { expect, test } from '@playwright/test';
 
 // Real production pairing path: the Brain mints a wrapper token against the
-// LIVE POST /api/wrappers (cookie-authed, no mocks), reads its OWN served
+// LIVE POST /api/wrappers/-1 (cookie-authed, no mocks), reads its OWN served
 // origin, and encodes the locked PairingPayload into a QR. We decode the exact
 // JSON the QR carries (data-pairing) and assert the contract + that host
 // mirrors the actual served origin (protocol/host/port permutation coverage on
