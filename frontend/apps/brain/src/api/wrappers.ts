@@ -1,7 +1,7 @@
 /**
  * Wrappers API — mints an external bearer token for device pairing.
  *
- *   POST /api/wrappers/-1 → 201 envelope { success, result: [{ wrapper_id, token }] }
+ *   POST /api/wrappers/-1 → 201 envelope { success, result: { wrapper_id, token } }
  *     `token` is the raw bearer, shown ONCE and not recoverable. It becomes
  *     PairingPayload.token. `wrapper_id` is retained for later revocation via
  *     DELETE /api/wrappers/<wrapper_id>. Backed by
@@ -17,7 +17,7 @@ interface WrapperCreated {
 
 interface Envelope<T> {
   success: true;
-  result: T[];
+  result: T;
 }
 
 interface EnvelopeError {
@@ -36,6 +36,6 @@ export const wrappers = {
   async create(input: { name: string }): Promise<WrapperCreated> {
     const res = (await api.post<ApiResponse<WrapperCreated>>('/api/wrappers/-1', input)) as ApiResponse<WrapperCreated>;
     if (!res.success) throw new Error(res.error);
-    return res.result[0];
+    return res.result;
   },
 };
