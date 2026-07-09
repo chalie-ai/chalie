@@ -99,7 +99,7 @@ onBeforeUnmount(() => {
     </div>
 
     <template v-for="entry in feedEntries" :key="`i-${entry.block.turn_id}`">
-      <!-- The turn's rows through settle0 — always inline, never collapsed. -->
+      <!-- The turn's rows through settle0 — inline for every turn (forked or not). Forked turns also get a thread pill below. -->
       <TurnView :block="entry.block" @reply="onReply" />
 
       <!-- Thread opener: a forked turn gets a Weave pill. -->

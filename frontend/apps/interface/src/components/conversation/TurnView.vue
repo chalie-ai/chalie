@@ -71,8 +71,12 @@ const displayRows = computed<DisplayRow[]>(() => {
     }
   }
 
-  // Live trails: appended at the tail while the turn is working.
-  if (props.block.working) {
+  // Live trails: appended at the tail while the turn is working, but only when
+  // this render is the authoritative live view of the turn (thread panel, or a
+  // non-forked turn in the spine). Forked turns in the spine show the thread
+  // pill's animated dot instead — rendering "thinking..." inline would duplicate
+  // that indicator and misattribute thread activity to the top-level timeline.
+  if (props.block.working && (props.fullThread || !feed.value.isForkedThread(props.block.turn_id))) {
     const trails = feed.value.liveTrailsFor(props.block.turn_id);
     if (trails.length) {
       for (const t of trails) {
