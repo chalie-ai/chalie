@@ -255,7 +255,14 @@ class MessageProcessor:
         Send → on over-cap, compact and continue (re-enter with the transcript
         reviewer armed) → store any prose the model emitted → if it made no tool
         calls the turn is done (end); otherwise dispatch the calls and recurse.
-        A cancel observed at the top of any step aborts the whole turn."""
+        A cancel observed at the top of any step aborts the whole turn. Every
+        provider client is a single blocking, non-streaming call (§ llm_clients/*)
+        with no mid-flight abort hook, so a cancel requested while that call is
+        in flight can only be observed once it returns — the checkpoint right
+        after it, BEFORE the response is stored, is what makes that observation
+        count: without it a cancel that lands mid-generation is silently
+        ignored and the full response is persisted and rendered as if the turn
+        had completed normally."""
         if self.turn_execution_service.should_stop():
             raise _TurnCancelled()
         try:
@@ -267,6 +274,8 @@ class MessageProcessor:
                 self.active_tools.append("review_transcript")
             return self._step()
         self.post_compaction_continuation = False
+        if self.turn_execution_service.should_stop():
+            raise _TurnCancelled()
         tool_calls = response.tool_calls
         if not tool_calls:
             self._store(response.text)

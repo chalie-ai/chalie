@@ -313,20 +313,48 @@ class Transcript(Model):
 
     # ── SQL fragment builders (shared, no duplication) ───────────────────────
 
+    # A turn's trailing, reply-less exchange whose most recent turn_executions
+    # row ended cancelled (MessageProcessor._step's cancel checkpoint discards
+    # the in-flight response before any reply row is stored, §2.7) — excluded
+    # from the feed so it never surfaces as a dangling, unanswered thread.
+    # ``MAX(CASE WHEN role != 'user' THEN 1 ELSE 0 END) = 0`` means NO row in
+    # the turn-group is non-user — i.e. every row is role='user', zero
+    # assistant/tool content — deliberately generalized from an earlier
+    # ``COUNT(*) = 1`` (a lone reply-less row only ever gated by the FE) since
+    # a direct API/automation POST into an open turn_id can append a second
+    # (or third) reply-less user row before the cancel lands, and this still
+    # correctly leaves a partially-completed turn (any real assistant/tool
+    # content already written) alone per existing doctrine. The correlated
+    # subquery mirrors ``recent_threads``' own
+    # ``MIN(CASE WHEN {predicate} THEN id END) IS NULL AS working`` idiom —
+    # an aggregate over a per-row expression, not a join, so it costs nothing
+    # on the common case and needs no schema change. COALESCE to '' guards
+    # legacy NULL-``turn_id`` rows (no turn_executions row exists for them at
+    # all): a bare comparison against a NULL subquery result is NULL, not
+    # FALSE, and HAVING drops NULL rows just like FALSE ones — silently
+    # excluding every legacy singleton thread from the feed.
+    _CANCELLED_ORPHAN_HAVING: ClassVar[str] = (
+        "NOT (MAX(CASE WHEN role != 'user' THEN 1 ELSE 0 END) = 0 "
+        "AND MAX(COALESCE((SELECT te.state FROM turn_executions te "
+        "WHERE te.channel = transcript.channel AND te.turn_id = transcript.turn_id "
+        "ORDER BY te.id DESC LIMIT 1), '')) = 'cancelled')"
+    )
+
     @classmethod
     def _thread_query_filter(cls, query: str) -> tuple[str, tuple[str, ...]]:
-        """The search filter as a HAVING clause over a per-turn GROUP: keep only
-        threads carrying a user-role row whose content matches ``query`` (case-
-        insensitive substring). Empty query → no clause. Shared by
-        ``recent_threads`` (the page) and ``count_turns`` (its ``has_more``) so
-        search and feed run one identical path."""
+        """The feed's HAVING clause over a per-turn GROUP: always drops a
+        cancelled reply-less orphan (``_CANCELLED_ORPHAN_HAVING``), and when
+        ``query`` is non-empty additionally keeps only threads carrying a
+        user-role row whose content matches it (case-insensitive substring).
+        Shared by ``recent_threads`` (the page) and ``count_turns`` (its
+        ``has_more``) so search and feed run one identical path."""
+        conditions = [cls._CANCELLED_ORPHAN_HAVING]
+        params: list[str] = []
         query = (query or "").strip()
-        if not query:
-            return "", ()
-        return (
-            " HAVING MAX(CASE WHEN role = 'user' AND content LIKE ? THEN 1 ELSE 0 END) = 1",
-            (f"%{query}%",),
-        )
+        if query:
+            conditions.append("MAX(CASE WHEN role = 'user' AND content LIKE ? THEN 1 ELSE 0 END) = 1")
+            params.append(f"%{query}%")
+        return " HAVING " + " AND ".join(conditions), tuple(params)
 
     @classmethod
     def _placeholders(cls, count: int) -> str:

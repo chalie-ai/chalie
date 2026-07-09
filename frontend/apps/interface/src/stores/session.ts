@@ -18,6 +18,7 @@ import { on } from '../composables/useEventBus';
 import { extractText } from '../composables/useMarkup';
 import { getHost } from '../api/index';
 import { showToast } from '../utils/toast';
+import { conversation as convoApi } from '../api/conversation';
 import { useConversationFeed } from '../composables/useConversationFeed';
 import { useActionCard } from '../composables/useActionCard';
 import { laneKey, useQueueStore } from './queue';
@@ -108,18 +109,23 @@ export const useSessionStore = defineStore('session', {
 
       ws.onConnect(() => {
         conn.setConnected(true);
+        void this._reconcileLanes();
       });
 
       ws.onDisconnect(() => {
         conn.setConnected(false);
         // A mid-turn drop strands spinners: the terminal `turn_execution` frame
-        // lands on the dead socket and is never resent. Clear ALL lanes' working
-        // state so nothing hangs.
+        // lands on the dead socket and is never resent. Clear ONLY the transient
+        // visual working state so nothing hangs — but keep the lane records
+        // themselves (draft text + busy identity). `requestStop` (undo/restore,
+        // D1) and the send queue guard (D3) both key off lane presence, and the
+        // backend may still be mid-turn behind the dead socket. `_reconcileLanes`
+        // settles anything that actually finished while offline once the WS
+        // reconnects.
         for (const k in this.lanes) {
           const lane = this.lanes[k];
           if (lane.liveTurnId != null) useConversationFeed(lane.type).setWorking(lane.liveTurnId, false);
         }
-        this.lanes = {};
       });
 
       ws.onDrift((data: WsPushEvent) => {
@@ -176,6 +182,36 @@ export const useSessionStore = defineStore('session', {
     },
 
     /**
+     * Reconcile every surviving lane against the backend after a WS reconnect.
+     * `onDisconnect` clears the transient spinner but deliberately keeps the
+     * lane record (see there) since the backend may still be mid-turn; this
+     * re-fetches each lane's bound turn and either restores its spinner (still
+     * genuinely in-flight — `working` is a server-derived field, see
+     * ConversationTurnBlock) or settles it via `_finishTurn` (it actually
+     * completed/crashed/cancelled while offline). Lanes with no bound turn_id
+     * yet (a main-spine send whose POST hadn't resolved when the drop hit) are
+     * left alone — the pending `send()` promise resolves them independently.
+     */
+    async _reconcileLanes(): Promise<void> {
+      for (const key of Object.keys(this.lanes)) {
+        const lane = this.lanes[key];
+        const turnId = lane.liveTurnId;
+        if (turnId == null) continue;
+        const convo = useConversationFeed(lane.type);
+        try {
+          await convo.fetchTurn(turnId);
+        } catch {
+          continue; // best-effort; leave the lane as-is, retried on the next reconnect
+        }
+        if (convo.blocks[turnId]?.working) {
+          convo.setWorking(turnId, true);
+        } else {
+          void this._finishTurn(turnId, lane.type);
+        }
+      }
+    },
+
+    /**
      * True when a given surface is currently busy — gates sends and drains.
      * Main spine shares its surface with ACT cycles (no stable turn id);
      * threads have a stable id plus the conversation working-set.
@@ -203,7 +239,7 @@ export const useSessionStore = defineStore('session', {
       const body = text || FILE_PLACEHOLDER;
 
       if (this.isLaneBusy(threadId, type)) {
-        useQueueStore().enqueue(threadId, body, type);
+        useQueueStore().enqueue(threadId, body, type, files);
         return;
       }
 
@@ -279,8 +315,8 @@ export const useSessionStore = defineStore('session', {
       const queue = useQueueStore();
       const type = queue.typeFor(threadId);
       if (this.isLaneBusy(threadId, type)) return;
-      const text = queue.take(threadId);
-      if (text) void this.sendMessage(text, [], threadId, type);
+      const { text, files } = queue.take(threadId);
+      if (text) void this.sendMessage(text, files, threadId, type);
     },
 
     /**
@@ -296,21 +332,42 @@ export const useSessionStore = defineStore('session', {
       const key = this._laneOwning(turnId);
       const lane = key == null ? undefined : this.lanes[key];
       const stopId = lane?.liveTurnId ?? turnId;
+      const laneType = lane?.type ?? type;
 
       // Restore text from lane record (no optimistic form to read from any more).
       const restoredText = lane?.userText ?? '';
 
-      // Undo the whole turn: drop its block + all signal state.
-      if (lane?.liveTurnId != null) useConversationFeed(lane?.type ?? ConfigType.USER).dropLiveTurn(lane.liveTurnId);
+      // The dock scope id InputDock keys its `turnId` prop by: null for the main
+      // spine, the thread's root turn_id for a thread reply dock. That is the
+      // LANE key, not necessarily the live turn id passed in (they only diverge
+      // for a still-resolving main-spine send, where `liveTurnId` is null until
+      // the POST returns) — derive it from the owning lane key so the restore
+      // event lands on the dock that actually owns this turn.
+      const scopeId = key == null ? turnId : key === 'main' ? null : Number(key.slice(1));
+
+      // Undo the whole turn: drop its block + all signal state. For a fork
+      // turn (real prior content already settled) this optimistically blanks
+      // that content too — there is no per-row "just the pending bubble"
+      // removal, a fork's settled exchange and its still-open reply share one
+      // block — but the reconcile below restores it within one round-trip
+      // once the DELETE ack lands, well before a WS frame would.
+      if (lane?.liveTurnId != null) useConversationFeed(laneType).dropLiveTurn(lane.liveTurnId);
       if (key != null) delete this.lanes[key];
 
       ws.abort();
 
       document.dispatchEvent(
-        new CustomEvent('session:turn-interrupted', { detail: { text: restoredText } }),
+        new CustomEvent('session:turn-interrupted', { detail: { text: restoredText, turnId: scopeId } }),
       );
 
-      await this._postInterrupt(stopId, type);
+      await this._postInterrupt(stopId, laneType);
+
+      // Reconcile against the backend now, rather than waiting on the WS
+      // 'cancelled' frame (`_handleCancelled`) — that frame can be delayed or
+      // dropped on a flaky connection, and it's also what actually restores a
+      // fork turn's content after the blanket drop above. Idempotent against
+      // a WS frame that also arrives later.
+      if (stopId != null) await this._handleCancelled(stopId, laneType);
     },
 
     /** DELETE /api/thread/<turn_id>?type=<type> — best-effort interrupt, never throws. */
@@ -455,6 +512,50 @@ export const useSessionStore = defineStore('session', {
     },
 
     /**
+     * Cancelled turn — the DELETE-triggered terminal state
+     * (backend `TurnExecutionService.cancel`, the single authority: the row
+     * is already stamped CANCELLED, with `ended_at` set, by the time this
+     * frame is broadcast) AND the post-`_postInterrupt` reconcile `requestStop`
+     * runs regardless of whether that frame ever arrives. The backend's
+     * `serialize_turn` strips a cancelled turn's trailing, reply-less user
+     * row(s) before this refetch ever runs (real content a turn already wrote
+     * before the cancel landed always stays), so re-fetching now IS the
+     * authoritative post-cancel state. Written via `forceUpsertTurn` — the
+     * genuinely UNGUARDED buffer write (composables/useConversationFeed.ts) —
+     * rather than `upsertTurn`/`fetchTurn`: this is the one case where the
+     * freshest read can legitimately be SMALLER than what's already buffered
+     * (a fork turn's earlier-settled content is version-N buffered, the
+     * now-stripped orphan reply never raises that version), and `upsertTurn`'s
+     * monotonic version guard would silently reject such a write, leaving a
+     * phantom orphan bubble on any tab that had buffered the higher version.
+     * Empty messages → the turn never happened from the surface's
+     * perspective, dropped exactly like an aborted send; any remaining
+     * content (a fork turn whose reply-less LAST exchange alone was
+     * cancelled) re-renders in place. Idempotent — safe to call twice for the
+     * same turn (once from `requestStop`'s reconcile, once from this WS
+     * frame, in either order).
+     */
+    async _handleCancelled(turnId: number, type: string): Promise<void> {
+      const convo = useConversationFeed(type);
+      const owningKey = this._laneOwning(turnId);
+      if (owningKey != null) delete this.lanes[owningKey];
+      try {
+        const block = await convoApi.thread(turnId, type);
+        if (block.messages.length) {
+          convo.forceUpsertTurn(block);
+          convo.setWorking(turnId, false);
+        } else {
+          convo.dropLiveTurn(turnId);
+        }
+      } catch {
+        // Best-effort — leave whatever is buffered; a later fetchTurn (panel
+        // open, page refresh) will reconcile against the DB regardless.
+        convo.setWorking(turnId, false);
+      }
+      this._drainQueues();
+    },
+
+    /**
      * Turn lifecycle — the DB-backed turn_executions row, pushed whole on every
      * state flip (see services/execution_tracker.py). This frame carries no
      * separate kind tag, so it is recognised structurally: `state` must be one
@@ -463,11 +564,14 @@ export const useSessionStore = defineStore('session', {
      * TURN_EXECUTION_STATES; `home_state_changed` also carries a `state` string
      * with no `turn_id`/`started_at`, and claiming it here drained its queue into
      * a garbage _finishTurn call). `working` opens exactly like the old `working`
-     * signal; every terminal state (completed/cancelled/crashed) settles the turn
-     * exactly like the old `done` signal — a crash now reaches this path too, so
-     * a turn that dies before producing a reply never leaves a spinner hanging.
-     * `crashed` additionally raises the 'turn failed' dock toast — derived from
-     * the lifecycle state itself, so no separate error frame is needed.
+     * signal; `completed`/`crashed` settle the turn exactly like the old `done`
+     * signal — a crash now reaches this path too, so a turn that dies before
+     * producing a reply never leaves a spinner hanging. `cancelled` is its own
+     * branch (`_handleCancelled`): a normal settle would leave a fully-rendered,
+     * discarded response looking exactly like a completed one, when the whole
+     * point of cancel is that it never counted. `crashed` additionally raises
+     * the 'turn failed' dock toast — derived from the lifecycle state itself,
+     * so no separate error frame is needed.
      */
     _routeTurnExecution(data: WsPushEvent): boolean {
       const exec = data as unknown as WsTurnExecutionEvent;
@@ -482,6 +586,10 @@ export const useSessionStore = defineStore('session', {
         useConversationFeed(type).setWorking(exec.turn_id, true);
         // Pull the block so every surface renders the user bubble from the API.
         void useConversationFeed(type).fetchTurn(exec.turn_id);
+        return true;
+      }
+      if (exec.state === 'cancelled') {
+        void this._handleCancelled(exec.turn_id, type);
         return true;
       }
       if (exec.state === 'crashed') this.errorMessage = 'Turn failed unexpectedly';

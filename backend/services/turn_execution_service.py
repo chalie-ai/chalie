@@ -86,20 +86,34 @@ class TurnExecutionService:
     def cancel(self) -> TurnExecution | None:
         """The single cancel-request chokepoint (§2.7): both DELETE
         /api/thread/<turn_id> (an inert MP built for the target turn) and a
-        turn's own self-cancelling ability route through here. Flips
-        ``cancel_requested`` on the live (``ended_at IS NULL``) row for this
-        (channel, turn_id) — the row IS the cross-request handle, since the
-        turn is (almost always) running in another thread/instance.
-        ``turn_id`` is a per-channel monotonic counter, not globally unique,
-        so the match is channel-scoped. The broadcast gate/type derives from
-        the target row, NOT ``self.mp.config`` (§6.7) — the canceller may
-        hold a config for a different channel than the one that opened the
-        turn."""
+        turn's own self-cancelling ability route through here — and, per
+        Dylan's ruling, the single AUTHORITY for the turn's terminal state.
+        Every provider client is one blocking, non-streaming call with no
+        mid-flight abort hook (§ llm_clients/*), so the running turn cannot
+        physically be stopped the instant this is called — the in-flight call
+        is left to finish server-side, and :meth:`MessageProcessor._step`'s
+        cancel checkpoint discards its response instead of storing it. Ending
+        the turn's LIFECYCLE does not have to wait for that: this stamps the
+        live (``ended_at IS NULL``) row for this (channel, turn_id) CANCELLED
+        with ``ended_at`` set right here, synchronously, so the WS frame and
+        the DB state both flip the instant cancel is requested rather than
+        after the full generation wall-clock. The row IS the cross-request
+        handle, since the turn is (almost always) running in another
+        thread/instance; ``turn_id`` is a per-channel monotonic counter, not
+        globally unique, so the match is channel-scoped. The broadcast
+        gate/type derives from the target row, NOT ``self.mp.config`` (§6.7)
+        — the canceller may hold a config for a different channel than the
+        one that opened the turn. :meth:`finish` becomes a no-op once it
+        observes this row already terminal — the row closed here always
+        wins, never resurrected or overwritten by the doomed turn's own
+        eventual finish()."""
         try:
             execution = TurnExecution.open_turn(self.mp.channel, self.mp.turn_id)
             if execution is None:
                 return None
             execution.cancel_requested = True
+            execution.state = TurnExecution.CANCELLED
+            execution.ended_at = utc_now().isoformat()
             execution.save()
         except Exception as exc:
             logger.warning(
@@ -126,34 +140,58 @@ class TurnExecutionService:
     def finish(self, state: str, stop_reason: str | None = None) -> TurnExecution | None:
         """Stamp the terminal state ONCE — ``cancel_requested`` is never
         touched here, so a crash after a cancel request preserves both facts
-        with zero special-casing. Builds a fresh row (same id, carried-over
-        fields) rather than mutating ``self.mp.execution`` in place, so a
-        failed ``save()`` can never leave the shared object holding a
-        synthesized terminal state that was never written to the DB (§6.6):
-        on a write failure this returns ``None`` and ``self.mp.execution``
-        is untouched, still reflecting the last real DB read. The terminal
-        state — CRASHED included — travels on the lifecycle frame alone; the
-        surface derives the 'turn failed' toast from ``state == 'crashed'``,
-        so there is no separate error frame to emit."""
+        with zero special-casing. The terminal state — CRASHED included —
+        travels on the lifecycle frame alone; the surface derives the 'turn
+        failed' toast from ``state == 'crashed'``, so there is no separate
+        error frame to emit.
+
+        Race-safe against :meth:`cancel`, which can land on a DIFFERENT
+        connection/thread (the Flask request thread vs. this turn's own
+        drive loop, services/database.py) at any point, including between
+        two separate statements here — a read-then-write is NOT enough to
+        close that window (a plain re-read-then-``save()`` narrows it but
+        does not close it: cancel's UPDATE can still land in the gap between
+        the read and this write and get silently overwritten). So the close
+        is ONE atomic conditional UPDATE — ``WHERE id = ? AND ended_at IS
+        NULL`` — SQLite executes a single UPDATE atomically, no explicit lock
+        needed. ``rowcount == 0`` means the row was already closed (cancel()
+        — or a racing finish() — won outright): that row is authoritative,
+        re-read and returned as-is, no further write, no re-broadcast, never
+        resurrecting or overwriting a cancelled turn with a synthesized
+        'completed'/'crashed' state."""
         current: TurnExecution | None = self.mp.execution
-        if current is None:
+        if current is None or current.id is None:
             return None
+        ended_at = utc_now().isoformat()
+        try:
+            closed = (
+                TurnExecution.filter("id", current.id)
+                .filter("ended_at", None, "IS")
+                .update(ended_at=ended_at, state=state, stop_reason=stop_reason)
+            )
+        except Exception as exc:
+            logger.warning("[TurnExecutionService] finish failed for id=%s: %s", current.id, exc)
+            return None
+        if closed == 0:
+            try:
+                row = TurnExecution.get(current.id)
+            except Exception as exc:
+                logger.warning("[TurnExecutionService] finish re-read failed for id=%s: %s", current.id, exc)
+                return None
+            if row is not None:
+                self.mp.execution = row
+            return row
         execution = TurnExecution(
             id=current.id,
             channel=current.channel,
             type=current.type,
             turn_id=current.turn_id,
             started_at=current.started_at,
-            ended_at=utc_now().isoformat(),
+            ended_at=ended_at,
             cancel_requested=current.cancel_requested,
             state=state,
             stop_reason=stop_reason,
         )
-        try:
-            execution.save()
-        except Exception as exc:
-            logger.warning("[TurnExecutionService] finish failed for id=%s: %s", current.id, exc)
-            return None
         self.mp.execution = execution
         self.mp.push_websocket(execution)
         return execution

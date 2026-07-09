@@ -121,10 +121,9 @@ function _blockVersion(block: ConversationTurnBlock): number {
 
 // ── Core buffer operations ────────────────────────────────────────────────────
 
-function _upsertTurn(s: FeedState, block: ConversationTurnBlock): void {
-  const incoming = _blockVersion(block);
-  if ((s.versions[block.turn_id] ?? -1) > incoming) return;
-  s.versions[block.turn_id] = incoming;
+/** The actual buffer write, shared by the guarded and unguarded entry points. */
+function _writeTurn(s: FeedState, block: ConversationTurnBlock, version: number): void {
+  s.versions[block.turn_id] = version;
   s.blocks[block.turn_id] = block;
 
   // §6.5 step 4 — the turn's persisted tool_calls supersede its resolved live
@@ -135,6 +134,26 @@ function _upsertTurn(s: FeedState, block: ConversationTurnBlock): void {
     else delete s.liveTools[block.turn_id];
   }
   _maybeStopTimer(s);
+}
+
+function _upsertTurn(s: FeedState, block: ConversationTurnBlock): void {
+  const incoming = _blockVersion(block);
+  if ((s.versions[block.turn_id] ?? -1) > incoming) return;
+  _writeTurn(s, block, incoming);
+}
+
+/**
+ * Unconditional write, bypassing `_upsertTurn`'s monotonic version guard.
+ * The ONE legitimate case where the freshest server read can be SMALLER than
+ * what's already buffered: a cancelled turn's trailing orphan row(s) were
+ * stripped server-side (`api.threads.serialize_turn`), so a post-cancel
+ * re-fetch is authoritative even though its content shrank — the version
+ * guard exists to reject a stale/out-of-order WS-triggered fetch racing a
+ * newer one, which does not apply here (this write follows a cancel the
+ * caller just confirmed). Used by `session.ts`'s `_handleCancelled`.
+ */
+function _forceUpsertTurn(s: FeedState, block: ConversationTurnBlock): void {
+  _writeTurn(s, block, _blockVersion(block));
 }
 
 async function _fetchTurn(s: FeedState, turnId: number, type: string): Promise<void> {
@@ -332,6 +351,8 @@ export interface ConversationFeedApi {
   readonly hasMore: boolean;
 
   upsertTurn(block: ConversationTurnBlock): void;
+  /** Unguarded write — see `_forceUpsertTurn`. Only for the post-cancel reconcile path. */
+  forceUpsertTurn(block: ConversationTurnBlock): void;
   fetchTurn(turnId: number): Promise<void>;
   loadRecent(): Promise<void>;
   loadMore(): Promise<void>;
@@ -375,6 +396,7 @@ function makeApi(type: string): ConversationFeedApi {
     get hasMore() { return s.hasMore; },
 
     upsertTurn: (block) => _upsertTurn(s, block),
+    forceUpsertTurn: (block) => _forceUpsertTurn(s, block),
     fetchTurn: (turnId) => _fetchTurn(s, turnId, type),
     loadRecent: () => _loadRecent(s, type),
     loadMore: () => _loadMore(s, type),

@@ -237,6 +237,34 @@ def _bulk_gists(channel: str, turn_ids: list[int]) -> dict[int, str]:
     return mp.gist_service.bulk_get(channel, turn_ids)
 
 
+def _drop_trailing_cancelled_orphan(
+    rows: list[dict[str, object]], channel: str, turn_id: int,
+) -> list[dict[str, object]]:
+    """A cancel observed at :meth:`MessageProcessor._step`'s checkpoint
+    discards the in-flight response before any reply row is stored (§2.7),
+    leaving one or more trailing, reply-less user rows behind — filtered out
+    here so a cancelled exchange never surfaces as a dangling, unanswered
+    bubble on refetch/refresh. Normally the FE gates this to exactly one
+    trailing user row, but a direct API/automation POST into an open
+    turn_id can append a second (or third) reply-less user row before the
+    cancel lands, so every CONSECUTIVE trailing user row is stripped, not
+    just the last — the loop stops the instant it hits a non-user row,
+    since a cancel observed mid-turn, after real assistant/tool content was
+    already written, leaves that content in place per existing doctrine
+    ('every row it already wrote stays'). Rows are dropped only when the
+    turn's own most recent execution actually ended cancelled, never on
+    role alone."""
+    if not rows or rows[-1]["role"] != "user":
+        return rows
+    latest = TurnExecution.latest(channel, turn_id)
+    if latest is None or latest.state != TurnExecution.CANCELLED:
+        return rows
+    cutoff = len(rows)
+    while cutoff > 0 and rows[cutoff - 1]["role"] == "user":
+        cutoff -= 1
+    return rows[:cutoff]
+
+
 def serialize_turn(channel: str, turn_id: int) -> dict[str, object]:
     """The single turn-block getter — the REST single/batch reads and the WS
     refetch all flow through here, so one fetch fully determines a turn's render
@@ -265,6 +293,7 @@ def serialize_turn(channel: str, turn_id: int) -> dict[str, object]:
     from services.time_utils import parse_utc
 
     rows = Transcript.by_turn(channel, turn_id)
+    rows = _drop_trailing_cancelled_orphan(rows, channel, turn_id)
     messages = _rows_to_messages(rows)
 
     user_ids = [cast("int", r["id"]) for r in rows if r["role"] == "user"]
@@ -415,13 +444,20 @@ class ThreadItemResource(Resource):
     @responds(code=200)
     def delete(self, turn_id: int) -> "TurnExecutionDTO | Interrupted | ResponseReturnValue":
         """Interrupt the running turn for this turn_id — the FE stop button's call.
-        Flips ``cancel_requested`` on the turn's open execution row; the turn polls
-        it cooperatively, stops its step loop and stamps itself cancelled — every
-        row it already wrote stays, nothing is deleted. The
-        id is the same one the send response handed the surface, so no body beyond
-        the turn_id is needed; ``type`` resolves the channel the row was opened
-        under (turn_id is only unique per channel). An idle/finished turn_id (no
-        open row on that channel) is a harmless ``no_active_turn`` ack."""
+        Stamps the turn's open execution row CANCELLED right here, synchronously
+        (:meth:`TurnExecutionService.cancel` — the single authority for a turn's
+        terminal state) and broadcasts that row on the same lifecycle WS channel
+        every other state flip uses, so the surface's 'cancelled' frame fires the
+        instant this call returns rather than waiting on the still-running step
+        loop. The loop itself keeps running the in-flight provider call to
+        completion — there is no mid-flight abort — but its own cancel checkpoint
+        (§ ``MessageProcessor._step``) observes ``cancel_requested`` and discards
+        the response instead of storing it; every row the turn already wrote before
+        that point stays, nothing is deleted. The id is the same one the send
+        response handed the surface, so no body beyond the turn_id is needed;
+        ``type`` resolves the channel the row was opened under (turn_id is only
+        unique per channel). An idle/finished turn_id (no open row on that
+        channel) is a harmless ``no_active_turn`` ack."""
         from controllers.message_processor import MessageProcessor  # noqa: PLC0415
 
         try:

@@ -14,17 +14,25 @@ export function laneKey(threadId: number | null): string {
   return threadId == null ? 'main' : `t${threadId}`;
 }
 
+/** One deferred send: its text plus any attachments that were pending when the
+ *  lane was busy. Files ride alongside the text so a flush replays the whole
+ *  original send, not just the words. */
+export interface QueuedMessage {
+  text: string;
+  files: File[];
+}
+
 export const useQueueStore = defineStore('queue', {
   state: () => ({
-    /** Queued texts per scope key, oldest first. */
-    byScope: {} as Record<string, string[]>,
+    /** Queued entries per scope key, oldest first. */
+    byScope: {} as Record<string, QueuedMessage[]>,
     /** ConfigType each scope belongs to, so a drain re-sends on the right surface. */
     typeByScope: {} as Record<string, string>,
   }),
 
   getters: {
-    /** The queued texts for a scope, in send order. */
-    queuedFor(state): (threadId: number | null) => string[] {
+    /** The queued entries for a scope, in send order. */
+    queuedFor(state): (threadId: number | null) => QueuedMessage[] {
       return (threadId) => state.byScope[laneKey(threadId)] ?? [];
     },
     /** Scope keys that hold at least one queued message — drives draining. */
@@ -34,10 +42,10 @@ export const useQueueStore = defineStore('queue', {
   },
 
   actions: {
-    enqueue(threadId: number | null, text: string, type: string = ConfigType.USER): void {
+    enqueue(threadId: number | null, text: string, type: string = ConfigType.USER, files: File[] = []): void {
       const key = laneKey(threadId);
       this.byScope[key] ??= [];
-      this.byScope[key].push(text);
+      this.byScope[key].push({ text, files });
       this.typeByScope[key] = type;
     },
     removeAt(threadId: number | null, index: number): void {
@@ -47,13 +55,17 @@ export const useQueueStore = defineStore('queue', {
     typeFor(threadId: number | null): string {
       return this.typeByScope[laneKey(threadId)] ?? ConfigType.USER;
     },
-    /** Take the whole scope's queue as ONE newline-joined message, clearing it. */
-    take(threadId: number | null): string {
+    /** Take the whole scope's queue, clearing it. Texts join into ONE
+     *  newline-joined message (unchanged shape for the send API); every queued
+     *  entry's files concatenate, in order, into one attachment batch. */
+    take(threadId: number | null): { text: string; files: File[] } {
       const k = laneKey(threadId);
-      const joined = (this.byScope[k] ?? []).join('\n');
+      const entries = this.byScope[k] ?? [];
+      const text = entries.map((e) => e.text).join('\n');
+      const files = entries.flatMap((e) => e.files);
       delete this.byScope[k];
       delete this.typeByScope[k];
-      return joined;
+      return { text, files };
     },
   },
 });

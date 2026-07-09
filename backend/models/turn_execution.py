@@ -16,6 +16,7 @@ the emit/envelope and cross-instance cancel logic are the service's job.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from typing import ClassVar
 
 from models.model import Model
@@ -68,8 +69,27 @@ class TurnExecution(Model):
         )
 
     @classmethod
-    def open_rows(cls) -> list["TurnExecution"]:
+    def open_rows(cls) -> Sequence["TurnExecution"]:
         """Every row a killed process left open (``ended_at IS NULL``) — the boot
         orphan sweep reads these and stamps each ``crashed`` (§6.6: a real DB read,
-        never a fabricated in-memory row)."""
+        never a fabricated in-memory row). ``Sequence``, not ``list``: ``Query.get()``
+        actually returns ``list[Self]`` (a subclass's own type), and ``list`` is
+        invariant while ``Sequence`` is covariant — a plain ``list[TurnExecution]``
+        return annotation here does not accept that (pyright reportReturnType)."""
         return cls.filter("ended_at", None, "IS").get()
+
+    @classmethod
+    def latest(cls, channel: str, turn_id: int) -> "TurnExecution | None":
+        """The most recent execution row for (channel, turn_id) regardless of
+        open/closed state — the GET-side counterpart to :meth:`open_turn`'s
+        live-row lookup, used to tell whether a turn's trailing, reply-less
+        exchange was cancelled (``api.threads.serialize_turn``'s orphan
+        filter) without requiring an ``mp`` handle (unlike the service's
+        ``latest_for_turn``, this is reachable from a free function)."""
+        return (
+            cls.filter("channel", channel)
+            .filter("turn_id", turn_id)
+            .order_by("id DESC")
+            .limit(1)
+            .first()
+        )

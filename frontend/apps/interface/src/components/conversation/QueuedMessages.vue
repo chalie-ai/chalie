@@ -18,9 +18,11 @@ function remove(i: number): void {
 }
 
 /** Move a queued message back into its scope's composer for editing — drop it
- *  from the queue and hand the text to the matching InputDock. */
+ *  from the queue and hand its text to the matching InputDock. Any files it
+ *  carried are dropped from the edit (re-attaching isn't supported here); the
+ *  original behavior before D3b already never restored files to the strip. */
 function edit(i: number): void {
-  const text = items.value[i];
+  const text = items.value[i].text;
   queue.removeAt(props.threadId, i);
   void nextTick(() =>
     document.dispatchEvent(
@@ -32,7 +34,7 @@ function edit(i: number): void {
 
 <template>
   <div v-if="items.length" class="pending">
-    <div v-for="(text, i) in items" :key="i" class="pending__row">
+    <div v-for="(entry, i) in items" :key="i" class="pending__row">
       <button
         type="button"
         class="pending__remove"
@@ -42,7 +44,7 @@ function edit(i: number): void {
         <X :size="13" />
       </button>
       <button type="button" class="pending__chip" title="Click to edit" @click="edit(i)">
-        <span class="pending__text">{{ text }}</span>
+        <span class="pending__text">{{ entry.text }}</span>
       </button>
     </div>
   </div>
