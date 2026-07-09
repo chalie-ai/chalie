@@ -1,60 +1,55 @@
-"""Parameter-key canonicalisation — the shared key registry and the dispatch-seam
-key healer that make every tool resilient to the argument keys a weak model emits.
+# Copyright 2026 Chalie AI
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
 
-Two cooperating layers, applied to every tool call at the dispatch seam BEFORE
-the ACTION_REQUIRED pre-gate, the policy gate, or ``run()`` ever sees the params:
+"""The parameter-key registry — canonical native parameter names and their variants.
 
-1. **Key sanitisation (generic, all tools).** An incoming argument key is
-   lower-cased and stripped of every character outside ``[a-z0-9_-]``. This alone
-   heals the single commonest model defect — a stray escaped quote or a capital,
-   e.g. ``source"`` → ``source`` and ``MAX_CHARS`` → ``max_chars`` — with zero
-   per-tool knowledge. (This heals a common model defect: a model stores
-   ``{"source\"": "https://…"}`` and ``read`` bounces on
-   ``source-required`` because the corrupt KEY never matched.) This layer is
-   :class:`KeyNormalizer`.
-
-2. **Variant resolution (registry-driven, per-tool).** A sanitised key that is
-   not one of the tool's declared parameters is matched against the variant
-   ladders in :data:`VARIANTS`; when it belongs to exactly one of *that tool's
-   own* declared parameters it is rewritten to that parameter's canonical key.
-   This is what lets ``read({"url": …})`` resolve to ``source`` while ``url``
-   stays canonical for ``web_download`` — resolution is scoped to the tool's
-   declared keys, never a global rename. This layer is :class:`KeyHealer`.
-
-Resolution is two-pass and **declared-canonical-first**, so a parameter that is
-itself a synonym of another (calendar's ``summary`` vs ``title``; ``document``'s
-``id`` vs the ``list`` tool's ``id`` alias) always wins as itself and is never
-rewritten away. An unrecognised key passes through **verbatim** (never the lossy
-lower-cased form), so MCP camelCase keys (``serverName``) and any out-of-band key
-survive intact for the tool or framework to handle.
+Two declarative structures the key healer (:mod:`services.key_healer`) consumes at
+the dispatch seam to make every tool resilient to the argument keys a weak model
+emits:
 
 :class:`Keys` is the single source of truth for every native parameter name: each
 ability references ``Keys.<name>`` in its schema and its reads, so the registry
-keys and the wire keys can never drift. The no-overlap invariant the whole design
-rests on — that no variant of one parameter can collide with another parameter (or
-a framework key) within the same tool — is enforced as a feature test by
-``tests/_registry_invariants.py`` (``RegistryInvariant``), NOT at import:
-importing every ability here would be a circular import, and the invariant is a
-property of the live registry, not of this module.
+keys and the wire keys can never drift. Each member's VALUE is the exact wire key
+the model sees in the tool schema; the member name mirrors that wire key 1:1.
+
+:data:`VARIANTS` maps each canonical key to the alternative keys a model emits for
+it — the semantic-synonym ladders the healer resolves against, scoped per-tool.
+
+The no-overlap invariant the whole design rests on — that no variant of one
+parameter can collide with another parameter (or a framework key) within the same
+tool — is enforced as a feature test by ``tests/_registry_invariants.py``
+(``RegistryInvariant``), NOT at import: importing every ability here would be a
+circular import, and the invariant is a property of the live registry, not of this
+module.
 """
 
 from __future__ import annotations
 
-import logging
-import re
-from typing import cast
-
-logger = logging.getLogger(__name__)
+from enum import StrEnum
 
 
-class Keys:
+class Keys(StrEnum):
     """Canonical names for every native ability parameter — one source of truth.
 
-    Each constant's VALUE is the exact wire key the model sees in the tool schema;
-    abilities reference the constant (``Keys.source``) instead of a bare string so
+    Each member's VALUE is the exact wire key the model sees in the tool schema;
+    abilities reference the member (``Keys.source``) instead of a bare string so
     the schema, the reads, and the :data:`VARIANTS` ladders can never drift apart.
-    Attribute names mirror the wire key 1:1 (``id``/``list`` shadow builtins by
-    design — the wire key is what matters).
+    As a :class:`~enum.StrEnum` each member *is* its wire string — ``Keys.source ==
+    "source"``, ``str(Keys.source) == "source"``, and it serialises and hashes as
+    that string — so it is a drop-in for the literal everywhere the schema, JSON
+    encoding, or ``params.get`` sees it. Member names mirror the wire key 1:1
+    (``id``/``list`` shadow builtins by design — the wire key is what matters),
+    with three exceptions that ``Enum``/``str`` reserve: the wire keys ``name``,
+    ``value`` and ``title`` are declared as ``name_``/``value_``/``title_`` (PEP 8
+    trailing-underscore) because bare ``name``/``value`` clash with ``Enum``'s own
+    descriptors and ``title`` with ``str.title``. The VALUE is unchanged, so the
+    model still sees ``name``/``value``/``title`` — only the Python attribute is
+    spelled with a trailing underscore.
     """
 
     action = "action"
@@ -89,7 +84,7 @@ class Keys:
     headers = "headers"
     host = "host"
     hour = "hour"
-    id = "id"  # noqa: A003 — attr name mirrors the wire key (shadows builtin)
+    id = "id"  # noqa: A003 — member name mirrors the wire key (shadows builtin)
     identifier = "identifier"
     image = "image"
     include_subagent_transcripts = "include_subagent_transcripts"
@@ -100,13 +95,13 @@ class Keys:
     kind = "kind"
     language = "language"
     limit = "limit"
-    list = "list"  # noqa: A003 — attr name mirrors the wire key (shadows builtin)
+    list = "list"  # noqa: A003 — member name mirrors the wire key (shadows builtin)
     location = "location"
     max_chars = "max_chars"
     message = "message"
     minute = "minute"
     minutes = "minutes"
-    name = "name"
+    name_ = "name"  # trailing underscore: bare ``name`` is reserved by Enum
     operation = "operation"
     page = "page"
     path = "path"
@@ -133,7 +128,7 @@ class Keys:
     time_range = "time_range"
     timeout = "timeout"
     timeout_s = "timeout_s"
-    title = "title"
+    title_ = "title"  # trailing underscore: bare ``title`` clashes with ``str.title``
     to = "to"
     triage = "triage"
     uid = "uid"
@@ -142,7 +137,7 @@ class Keys:
     updates = "updates"
     url = "url"
     use_for = "use_for"
-    value = "value"
+    value_ = "value"  # trailing underscore: bare ``value`` is reserved by Enum
     wlan_id = "wlan_id"
 
 
@@ -156,7 +151,8 @@ class Keys:
 # squeezed key that is not one of the tool's declared parameters against this
 # registry, scoped to the tool's own declared keys (declared-canonical-first, so a
 # parameter that is itself a synonym of another always wins as itself). An
-# unrecognised key passes through verbatim.
+# unrecognised key passes through verbatim. Both layers live in
+# :mod:`services.key_healer`.
 #
 # Evidence basis: each variant here was kept only when TWO weak models (a Sonnet
 # agent and a Haiku agent) EACH independently reached for it as an alternative name
@@ -214,13 +210,13 @@ VARIANTS: "dict[str, frozenset[str]]" = {
     Keys.action: frozenset({"method"}),
     Keys.query: frozenset({"keyword", "q", "search_query", "search_term", "term"}),
     Keys.limit: frozenset({"count", "max", "max_results", "n", "num", "top"}),
-    Keys.name: frozenset({"filename", "label", "title"}),
+    Keys.name_: frozenset({"filename", "label", "title"}),
     Keys.content: frozenset({Keys.body, "text"}),
-    Keys.value: frozenset({"input", "text"}),
+    Keys.value_: frozenset({"input", "text"}),
     Keys.date_from: frozenset({"begin_date", "from_date", "since"}),
     Keys.date_time: frozenset({"anchor_time", "time", "timestamp"}),
     Keys.date_to: frozenset({"to_date", "until"}),
-    Keys.key: frozenset({"field", Keys.name}),
+    Keys.key: frozenset({"field", Keys.name_}),
     Keys.location: frozenset({"city", "loc", "place", "region"}),
     Keys.path: frozenset({"directory", "filepath", "location"}),
     Keys.uid: frozenset({"email_id", "event_id", Keys.id, "identifier", "message_id", "uuid"}),
@@ -268,127 +264,3 @@ VARIANTS: "dict[str, frozenset[str]]" = {
     Keys.updates: frozenset({"changes", "fields"}),
     Keys.wlan_id: frozenset({"network", "network_id", "wifi_id"}),
 }
-
-
-class KeyNormalizer:
-    """Reduce a raw argument key to the canonical form keys are matched on.
-
-    One responsibility: the character-level sanitisation that gives every tool
-    junk/case/separator resilience for free, independent of any registry.
-    Stateless; injected into :class:`KeyHealer` so the healer never hard-codes its
-    own matching rule and either layer can be swapped or tested in isolation.
-    """
-
-    _DROP = re.compile(r"[^a-z0-9_-]")
-
-    def normalize(self, key: str) -> str:
-        """Lower-case *key* and drop every character outside ``[a-z0-9_-]``.
-
-        The generic sanitisation layer: ``source"`` → ``source``, ``"URL"`` →
-        ``url``, ``max chars`` → ``maxchars`` (space dropped). Separators ``-`` /
-        ``_`` are preserved so ``max_chars`` keeps its shape for the exact match;
-        :meth:`squeeze` removes them for the loose match.
-        """
-        return self._DROP.sub("", str(key).lower())
-
-    def squeeze(self, key: str) -> str:
-        """:meth:`normalize` then drop ``-`` / ``_`` — the form keys are matched on.
-
-        Collapses every spelling of one key to a single token, so ``MAX_CHARS``,
-        ``max-chars`` and ``maxchars`` all compare equal (``maxchars``). Used for
-        both the exact (declared-param) match and the variant match.
-        """
-        return self.normalize(key).replace("-", "").replace("_", "")
-
-
-class KeyHealer:
-    """Heal a tool call's argument KEYS against the tool's declared schema.
-
-    One responsibility: turn the keys a weak model emitted into the tool's
-    canonical parameter keys, so a stray quote, a capital, a separator, or a known
-    synonym never bounces an otherwise-valid call.
-
-    Dependencies are injected (DIP): the :data:`VARIANTS` registry and the
-    :class:`KeyNormalizer` both default to the shared module values but can be
-    supplied — for a test with a probe registry, or an alternative normalisation
-    policy — without touching this class.
-    """
-
-    def __init__(
-        self,
-        variants: "dict[str, frozenset[str]]" = VARIANTS,
-        normalizer: "KeyNormalizer | None" = None,
-    ) -> None:
-        self._variants = variants
-        self._normalizer = normalizer or KeyNormalizer()
-
-    def heal(self, params: dict[str, object], schema: dict[str, object]) -> dict[str, object]:
-        """Return *params* with its keys healed against a tool's declared *schema*.
-
-        For each incoming key, in order:
-          1. **exact** — if its squeezed form matches a declared parameter, emit
-             that parameter's canonical key (heals quotes/case/separators, e.g.
-             ``source"`` → ``source``, ``MAX_CHARS`` → ``max_chars``).
-          2. **variant** — else if its squeezed form is a variant of exactly one
-             declared parameter (via :data:`VARIANTS`), emit that parameter's key
-             (e.g. ``url`` → ``source`` for ``read``).
-          3. **passthrough** — else emit the ORIGINAL key verbatim, so MCP
-             camelCase and any unknown key survive untouched.
-
-        First write wins if two incoming keys resolve to the same canonical,
-        mirroring the historical alias-ladder's "first key present wins". *schema*
-        is the bare ``get_parameters()`` body (no framework fields); an
-        empty/parameterless schema or empty params is returned unchanged.
-        """
-        properties = cast("dict[str, object]", schema.get("properties")) if schema else None
-        if not properties or not params:
-            return dict(params)
-
-        squeeze = self._normalizer.squeeze
-        declared = list(properties.keys())
-        by_squeeze = {squeeze(k): k for k in declared}     # squeezed form → canonical key
-        variant_map = self._variant_map(declared, by_squeeze)  # squeezed variant → canonical key
-
-        healed: dict[str, object] = {}
-        source_key: dict[str, str] = {}                    # canonical → the raw key that filled it
-        for key, value in params.items():
-            sq = squeeze(key)
-            canonical = by_squeeze.get(sq) or variant_map.get(sq) or key
-            if canonical not in healed:
-                healed[canonical] = value
-                source_key[canonical] = key
-            elif key != source_key[canonical]:
-                # Two DISTINCT incoming keys resolved to one canonical (e.g. a model
-                # sent both ``source`` and its ``url`` alias). First write wins —
-                # mirroring the historical alias ladder — but the dropped value is
-                # never silent: a weak model double-emitting a key is exactly the
-                # confusion worth surfacing.
-                logger.warning(
-                    "[KeyHealer] %r and %r both map to %r — keeping %r, dropping %r",
-                    source_key[canonical], key, canonical, source_key[canonical], key,
-                )
-        return healed
-
-    def _variant_map(
-        self, declared: "list[str]", by_squeeze: "dict[str, str]"
-    ) -> "dict[str, str]":
-        """Build ``squeezed variant → canonical key`` for one tool's declared params.
-
-        A variant that squeezes onto a declared parameter is dropped (the real
-        parameter always wins as itself), and a variant claimed by two declared
-        parameters is dropped as ambiguous. ``RegistryInvariant`` forbids both for
-        the real registry, so this is defensive: a future bad edit degrades to "no
-        aliasing for that key", never silent mis-routing.
-        """
-        squeeze = self._normalizer.squeeze
-        out: "dict[str, str | None]" = {}
-        for canonical in declared:
-            for variant in self._variants.get(canonical, ()):
-                sq = squeeze(variant)
-                if sq in by_squeeze:
-                    continue                       # a real parameter owns this form
-                if sq in out and out[sq] != canonical:
-                    out[sq] = None                 # ambiguous across two params → drop
-                elif sq not in out:
-                    out[sq] = canonical
-        return {sq: c for sq, c in out.items() if c is not None}
