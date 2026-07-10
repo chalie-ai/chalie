@@ -8,7 +8,8 @@ Routes:
                              body (no WS frame).
 
   Async-delegate (subagent) lifecycle lives in its own resource group —
-  GET /api/subagents and DELETE /api/subagent/<sub_id> (see api/subagents.py).
+  GET /api/subagents/all and DELETE /api/subagents/<id>
+  (see api/endpoints/subagents.py).
 
 Send path:
   User messages are sent via POST /api/thread (new thread) or

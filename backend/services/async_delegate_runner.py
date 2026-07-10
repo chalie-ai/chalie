@@ -19,7 +19,7 @@ plus the cooperative ``cancel_event`` the panel's stop button flips. Lifecycle
 is pushed to every open client as ``subagent_start`` / ``subagent_end``; a
 client that connects mid-flight rehydrates the same snapshot via ``active()``.
 
-**MP lifetime (§6.13):** this runner outlives the turn that spawned the
+**MP lifetime:** this runner outlives the turn that spawned the
 delegate — the turn is very likely already finished by the time the tool
 actually completes. So each delegate gets its OWN dedicated **inert**
 ``MessageProcessor`` for its background span (live ``ws``/``dispatch_service``,
@@ -31,7 +31,7 @@ synthesis reply on the right channel/thread; only the in-flight execution
 (dispatch + lifecycle broadcasts) runs off the dedicated one.
 
 A single owned registry (the module-level ``async_delegate_runner``) lets
-``cancel`` from ``api/subagents`` reach delegates spawned by any processor.
+``cancel`` from ``api/endpoints/subagents`` reach delegates spawned by any processor.
 """
 
 from __future__ import annotations
@@ -97,7 +97,7 @@ class AsyncDelegateRunner:
         ``summary`` is the model's act-summary (what the delegate is doing).
         ``mp`` is the ORIGINATING (already-authorized) turn's mp: captured only to
         thread through to ``deliver_async_result`` later, since the actual
-        execution runs off this delegate's own dedicated inert MP (§6.13).
+        execution runs off this delegate's own dedicated inert MP.
         Copies the calling thread's contextvars so locale/timezone propagate
         exactly as on the synchronous path."""
         name = ability.get_name()
@@ -131,7 +131,7 @@ class AsyncDelegateRunner:
         return [delegate.snapshot(sub_id) for sub_id, delegate in self._active.items()]
 
     def _dedicated_mp(self, origin_mp: object) -> "MessageProcessor | None":
-        """Build this delegate's OWN inert MP (§6.13): live ``ws``/``dispatch_service``
+        """Build this delegate's OWN inert MP: live ``ws``/``dispatch_service``
         for the background span, mapped from the originating mp's config/turn_id —
         never begun (no DB/WS side-effect at construction, I2), and never the
         finished originating turn's own mp instance. ``None`` only when the
@@ -217,5 +217,5 @@ class AsyncDelegateRunner:
 
 
 # The shared registry — one across every processor; each delegate holds its own
-# dedicated inert MP for its background span (§6.13), never a module-level MP.
+# dedicated inert MP for its background span, never a module-level MP.
 async_delegate_runner = AsyncDelegateRunner()

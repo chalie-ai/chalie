@@ -7,7 +7,7 @@
  * A delegate row shows the model's summary of what it's doing (bold title), the
  * delegate's tool name (subtitle), and a foot row with a live elapsed timer on
  * the left and a stop control on the right. Stop flips the delegate's cancel
- * event server-side (DELETE /api/subagent/<id>); the row shows "Stopping…"
+ * event server-side (DELETE /api/subagents/<id>); the row shows "Stopping…"
  * until the subagent_end push removes it.
  *
  * The trigger button lives in PresenceBar.vue. This component owns the scrim,

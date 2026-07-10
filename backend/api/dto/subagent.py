@@ -1,4 +1,10 @@
-"""DTOs for subagent / turn-control endpoints."""
+"""DTOs for turn-control endpoints.
+
+The subagent-cancel DTOs formerly here moved to ``api/response/subagent.py``
+with the subagents namespace's migration onto the Endpoint base contract
+(``api/endpoints/subagents.py``); this module keeps only :class:`Interrupted`,
+still consumed by the legacy ``api/threads.py`` turn-interrupt route.
+"""
 
 from __future__ import annotations
 
@@ -12,21 +18,3 @@ class Interrupted(DTO):
     ok: bool = True
     interrupted: bool | None = None
     reason: str | None = None
-
-
-class SubagentStopResult(DTO):
-    """200 ack for DELETE /api/subagent/<sub_id> (subagent cancel). ``cancelled``
-    is True when a live delegate was stopped, else ``reason`` is ``not_found``."""
-
-    ok: bool = True
-    cancelled: bool | None = None
-    reason: str | None = None
-
-
-class ActiveSubagents(DTO):
-    """GET /api/subagents body.
-
-    Elements are free-form ``delegate.snapshot()`` dicts — no typed element DTO.
-    """
-
-    subagents: list[dict[str, object]]

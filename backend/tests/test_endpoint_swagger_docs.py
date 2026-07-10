@@ -42,7 +42,7 @@ from flask.testing import FlaskClient
 
 pytestmark = pytest.mark.unit
 
-_MIGRATED_PREFIXES = ("/api/lists", "/api/skills", "/api/policies", "/api/wrappers")
+_MIGRATED_PREFIXES = ("/api/lists", "/api/skills", "/api/policies", "/api/wrappers", "/api/subagents")
 """Endpoint groups migrated onto the Endpoint/Action base contract as of this
 test's writing — the prefixes the base-contract swagger bridge is responsible
 for documenting."""

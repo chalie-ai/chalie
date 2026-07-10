@@ -1,8 +1,8 @@
 /**
- * Tasks store — active delegates (GET /api/subagents, each a full snapshot an
- * Activity row renders) plus forked-thread activity. Live updates arrive via
- * applyDriftEvent() from the session store. Recurring prompt-schedules live
- * exclusively in the scheduler dock, not here.
+ * Tasks store — active delegates (GET /api/subagents/all, each a full
+ * snapshot an Activity row renders) plus forked-thread activity. Live
+ * updates arrive via applyDriftEvent() from the session store. Recurring
+ * prompt-schedules live exclusively in the scheduler dock, not here.
  */
 import { defineStore } from 'pinia';
 import type { WsPushEvent } from '@chalie/shared';
@@ -65,7 +65,7 @@ export const useTasksStore = defineStore('tasks', {
       this.isOpen = false;
     },
 
-    /** Refresh the active-delegate snapshot; leaves prior state intact on failure. */
+    /** Refresh the active-delegate snapshot (GET /api/subagents/all); leaves prior state intact on failure. */
     async loadActiveTasks(): Promise<void> {
       let result;
       try {
