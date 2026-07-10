@@ -34,6 +34,7 @@ import logging
 import threading
 import time
 import uuid
+from datetime import datetime
 from typing import TYPE_CHECKING, Sequence, cast
 
 from flask import Blueprint, jsonify, request
@@ -80,15 +81,24 @@ def _clear_active_ump(turn: "_ActiveTurn") -> None:
 
 class _ActiveTurn:
     """Holds the cancel_event (so interrupt/stop endpoints can signal
-    cancellation) and the original raw_input (so dispatch_message can combine
-    mid-turn messages).
+    cancellation), the original raw_input (so dispatch_message can combine
+    mid-turn messages), and the UTC start time (so /chat/status can report it
+    and the staleness guard can age out a wedged turn).
     """
 
-    __slots__ = ("_cancel_event", "_raw_input")
+    __slots__ = ("_cancel_event", "_raw_input", "request_id", "started_at")
 
-    def __init__(self, cancel_event: threading.Event, raw_input: str) -> None:
+    def __init__(
+        self,
+        cancel_event: threading.Event,
+        raw_input: str,
+        request_id: str,
+        started_at: datetime,
+    ) -> None:
         self._cancel_event = cancel_event
         self._raw_input = raw_input
+        self.request_id = request_id
+        self.started_at = started_at
 
     def cancel(self) -> None:
         self._cancel_event.set()
@@ -315,7 +325,12 @@ def _start_turn(text: str, source: str, attachments: list[object], hidden_input:
 
     config = UserConfig(metadata)
     cancel_event = threading.Event()
-    turn = _ActiveTurn(cancel_event=cancel_event, raw_input=text)
+    turn = _ActiveTurn(
+        cancel_event=cancel_event,
+        raw_input=text,
+        request_id=request_id,
+        started_at=utc_now(),
+    )
     _set_active_ump(turn)
 
     thread = threading.Thread(

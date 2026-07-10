@@ -5,6 +5,7 @@ Pins synchronous endpoint contracts only; the async full-turn path (real UMP + L
 """
 
 import sqlite3
+from datetime import datetime, timezone
 
 import pytest
 from flask.testing import FlaskClient
@@ -67,3 +68,26 @@ class TestChatEndpoints:
 
         assert resp.status_code == 202
         assert resp.get_json() == {'status': 'accepted'}
+
+    def test_start_turn_records_utc_started_at(self, authed_client: tuple[FlaskClient, sqlite3.Connection, object], monkeypatch: pytest.MonkeyPatch) -> None:
+        """_start_turn populates _active_ump with a timezone-aware UTC started_at,
+        so /chat/status can report it and the staleness guard can compute age.
+
+        The real background daemon (_run_chat_background -> MessageProcessor +
+        LLM) is out of scope here (see module docstring); stubbing it to a no-op
+        keeps this test synchronous and prevents it from clearing _active_ump
+        before the assertion.
+        """
+        import api.chat as chat_mod
+
+        fixed = datetime(2026, 7, 10, 12, 0, 0, tzinfo=timezone.utc)
+        monkeypatch.setattr(chat_mod, 'utc_now', lambda: fixed)
+        monkeypatch.setattr(chat_mod, '_run_chat_background', lambda *a, **kw: None)
+
+        client, _db_conn, _store = authed_client
+        client.post('/chat', data={'text': 'hello'})
+
+        active = chat_mod._get_active_ump()
+        assert active is not None
+        assert active.started_at == fixed
+        assert active.started_at.tzinfo is not None  # timezone-aware
