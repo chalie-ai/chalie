@@ -19,6 +19,7 @@ from models.setting import Setting
 from services.file_mapper_service import FileMapperService
 from .auth import internal_only
 from .auth import require_session as require_session
+from .response.response import Response as ApiResponse
 
 logger = logging.getLogger(__name__)
 
@@ -245,6 +246,11 @@ def _register_static_routes(app: Flask) -> None:
     # ── Interface chat SPA — catch-all (MUST be registered last) ──────────
     @app.route('/<path:filename>', methods=["GET"])
     def interface_static(filename: str) -> ResponseReturnValue:
+        # /api/* is API namespace, never static: an unregistered API path must
+        # fail loud as JSON 404, not silently serve the SPA index as HTML 200
+        # (which masks a missing/renamed route as a success to every client).
+        if filename == 'api' or filename.startswith('api/'):
+            return ApiResponse.failure("Not found"), 404
         candidate = interface_dir / filename
         if candidate.is_file():
             if filename.startswith('assets/'):
