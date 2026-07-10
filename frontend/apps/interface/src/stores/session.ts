@@ -1,9 +1,15 @@
 /**
- * Session store — WS coordinator, turn state-machine, drift router.
+ * Session store — WS coordinator + turn lane state-machine.
  *
- * Single WS owner rule: ONLY this store may touch WebSocketService handlers
- * (send/sendAction/abort/onDrift/onAny/onConnect/onDisconnect/connect/ensureAlive).
- * Everything else goes through this store or the event bus.
+ * Single WS owner rule: ONLY this store may touch WebSocketService's
+ * send/sendAction/abort/onDrift/onAny/ensureAlive handlers, and it is the
+ * only place `connect()` is called for the interface app. `onConnect` /
+ * `onDisconnect` are NOT exclusive to this store — `@chalie/shared`'s
+ * `useWebSocket()` composable also registers them, but only to drive the
+ * connection-status pill (`useConnectionStore`); it never touches `onDrift`
+ * or the send/abort surface. Drift routing itself lives in
+ * `utils/driftDispatcher.ts` (see `init()` below) — this store no longer
+ * inspects WS payload shapes at all.
  *
  * Lane model: every independent conversation surface (the main spine + each
  * open thread reply) is a "lane" keyed by laneKey(threadId). The four former
@@ -12,21 +18,18 @@
  * and vice-versa.
  */
 import { defineStore } from 'pinia';
-import type { WsInboundEvent, WsPushEvent, WsTurnExecutionEvent } from '@chalie/shared';
+import type { WsInboundEvent, WsPushEvent } from '@chalie/shared';
 import { AuthError, ConfigType, getWebSocket, useConnectionStore } from '@chalie/shared';
 import { on } from '../composables/useEventBus';
 import { extractText } from '../composables/useMarkup';
 import { getHost } from '../api/index';
-import { showToast } from '../utils/toast';
 import { conversation as convoApi } from '../api/conversation';
 import { useConversationFeed } from '../composables/useConversationFeed';
-import { finishLiveTool, startLiveTool } from '../utils/liveActTrail';
 import { useActionCard } from '../composables/useActionCard';
+import { dispatchDrift } from '../utils/driftDispatcher';
+import { setTurnDone } from '../utils/turnDom';
 import { laneKey, useQueueStore } from './queue';
-import { useTasksStore } from './tasks';
-import type { TipState, UpdateState } from './notifications';
 import { useNotificationsStore } from './notifications';
-import { usePermissionsStore } from './permissions';
 import { useContextUsageStore } from './contextUsage';
 import { useAmbientSensor } from '../composables/useAmbientSensor';
 
@@ -37,16 +40,6 @@ let _initialized = false;
 const _busUnbinds: Array<() => void> = [];
 
 const FILE_PLACEHOLDER = '[File attached]';
-
-/** Runtime membership check backing `_routeTurnExecution`'s discriminator — a
- *  `state` key alone does not prove a frame is a turn_execution row (e.g. the
- *  Home capability's `home_state_changed` push also carries an unrelated
- *  `state` string, an HA entity state that could coincidentally collide with
- *  one of these four literals). Combined with a required `turn_id` + `started_at`
- *  (execution-only fields no other push family emits) the match is unambiguous. */
-const TURN_EXECUTION_STATES: ReadonlySet<string> = new Set([
-  'working', 'completed', 'cancelled', 'crashed',
-]);
 
 interface LaneState {
   /** Bound turn_id; null for a new main-spine turn until the POST 200 body claims one. */
@@ -88,6 +81,16 @@ export const useSessionStore = defineStore('session', {
 
     /** Registered auth-failure callback (set by App bootstrap). */
     _onAuthFailure: null as (() => void) | null,
+
+    /**
+     * Registered history-load callback (set by ConversationFeed.vue —
+     * D17: the pagination cursor is UI-local, this store only owns the
+     * shared `historyLoading` flag + the AuthError/initial-load event
+     * semantics around it). Returns whether this call was the very first
+     * load and whether it actually loaded anything, so the initial-load
+     * event fires exactly once, only when there was something to show.
+     */
+    _loadRecentCallback: null as (() => Promise<{ isInitialLoad: boolean; loadedAny: boolean }>) | null,
   }),
 
   getters: {
@@ -130,7 +133,7 @@ export const useSessionStore = defineStore('session', {
       });
 
       ws.onDrift((data: WsPushEvent) => {
-        this.routeDrift(data);
+        dispatchDrift(data);
       });
 
       // onAny feeds the context-usage indicator — must never throw.
@@ -227,7 +230,7 @@ export const useSessionStore = defineStore('session', {
      * Send a user turn. Signal-only: the `turn_execution` working refetch renders
      * the user bubble from the API — no optimistic echo. Everything — the
      * spinner, the rows, the reply — flows back through the `updated` broadcast
-     * signal and the `turn_execution` lifecycle frame (→ routeDrift → refetch).
+     * signal and the `turn_execution` lifecycle frame (→ dispatchDrift → refetch).
      */
     async sendMessage(
       text: string,
@@ -387,19 +390,21 @@ export const useSessionStore = defineStore('session', {
     },
 
     /**
-     * Load (or paginate) the thread list via the composable. Initial load fetches
-     * the 20 most-recent collapsed threads; scroll-up pagination prepends 20 more.
+     * D17 — the pagination cursor (offset/hasMore) is UI-local, owned by
+     * ConversationFeed.vue's own `_loadRecent` callback (registered via
+     * `registerHistoryLoader`); this store keeps only what's genuinely
+     * shared: the `historyLoading` flag (also gates scroll-pagination) and
+     * the AuthError / initial-load event semantics around it. Smaller diff
+     * than moving `historyLoading` itself out — every other consumer
+     * (InputDock, PresenceBar) reads it off this store already.
      */
     async loadRecentConversation(): Promise<void> {
-      const convo = useConversationFeed();
-      if (!convo.hasMore || this.historyLoading) return;
+      if (!this._loadRecentCallback || this.historyLoading) return;
       this.historyLoading = true;
 
       try {
-        const isInitialLoad = convo.sortedBlocks.value.length === 0;
-        await (isInitialLoad ? convo.loadRecent() : convo.loadMore());
-
-        if (isInitialLoad && convo.sortedBlocks.value.length > 0) {
+        const { isInitialLoad, loadedAny } = await this._loadRecentCallback();
+        if (isInitialLoad && loadedAny) {
           document.dispatchEvent(new CustomEvent('session:history-initial-loaded'));
         }
       } catch (err) {
@@ -413,19 +418,23 @@ export const useSessionStore = defineStore('session', {
       }
     },
 
-    /** Open a thread in the slide-over panel, loading its rows on first open. */
-    async openThreadPanel(turnId: number, type: string = ConfigType.USER): Promise<void> {
+    /** Register the feed's history-load callback (called once, on mount). */
+    registerHistoryLoader(cb: () => Promise<{ isInitialLoad: boolean; loadedAny: boolean }>): void {
+      this._loadRecentCallback = cb;
+    },
+
+    /**
+     * Open a thread in the slide-over panel. ThreadPanel.vue owns the actual
+     * fetch + surface upsert (it watches panelThreadId/panelType) — this just
+     * sets identity and clears the standing "done" marker: the buffer's own
+     * `seenThread` (interim — tasks.ts's Activity dock still reads it) plus
+     * the DOM's `data-done` attribute (D16).
+     */
+    openThreadPanel(turnId: number, type: string = ConfigType.USER): void {
       this.panelThreadId = turnId;
       this.panelType = type;
-      const convo = useConversationFeed(type);
-      convo.seenThread(turnId);
-      if (convo.isHydrated(turnId)) return;
-      this.threadExpanding = true;
-      try {
-        await convo.fetchTurn(turnId);
-      } finally {
-        this.threadExpanding = false;
-      }
+      useConversationFeed(type).seenThread(turnId);
+      setTurnDone(turnId, type, false);
     },
 
     /** Close the slide-over panel. */
@@ -450,91 +459,14 @@ export const useSessionStore = defineStore('session', {
     },
 
     /**
-     * Route a drift push event. The live tool-call frame is claimed first (it is
-     * recognised by `tool_name`, checked before the `state`/`status` discriminants
-     * the other turn frames key on). Every push is a content-free signal — the
-     * scheduler runs prompts only now, so its fires arrive as ordinary turn
-     * lifecycle frames on the `scheduled` type, not a distinct `notification` push.
-     */
-    routeDrift(data: WsPushEvent): void {
-      if (this._routeToolCall(data)) return;
-      if (this._routeTurnSignal(data)) return;
-      if (this._routeTurnExecution(data)) return;
-      this._routeSimpleEvent(data);
-    },
-
-    /**
-     * Mid-turn progress signals — stateless and turn-addressed, discriminated on
-     * `status` (the sole turn chokepoint; pushes key on `type`). `type` names the
-     * ProcessorConfig surface to route by. Returns true when handled; a frame with
-     * no `status` falls through (to `_routeTurnExecution`, then `_routeSimpleEvent`).
-     */
-    _routeTurnSignal(data: WsPushEvent): boolean {
-      const status = (data as { status?: string }).status;
-      if (status == null) return false;
-      const convo = useConversationFeed((data as { type?: string }).type ?? ConfigType.USER);
-      const turnId = (data as { turn_id?: number | null }).turn_id ?? null;
-      switch (status) {
-        case 'updated':
-          if (turnId != null) void convo.fetchTurn(turnId);
-          return true;
-        case 'provider_retry':
-          // Transient: a provider call failed mid-turn and is being resent. The
-          // turn stays in flight (no error bubble) — just a toast.
-          showToast((data as { message?: string }).message ?? 'The AI provider had a problem — retrying…');
-          return true;
-        default:
-          return false;
-      }
-    },
-
-    /**
-     * Live tool-call frame — the `tool_calls` row's WS projection, pushed on every
-     * state flip by ActTrail (see services/act_trail.py). It carries no kind tag, so
-     * it is recognised by the presence of `tool_name` (claimed before the
-     * `state`/`status` frames). `started` opens the live pill + elapsed timer;
-     * `done`/`error` resolve it (ok = state === 'done'), the ONLY place the pill's
-     * error state is set. A frame with no anchor turn (`turn_id` null) is dropped —
-     * no pill to hang it on. Returns true when the frame is a tool call.
-     */
-    _routeToolCall(data: WsPushEvent): boolean {
-      const toolName = (data as { tool_name?: string }).tool_name;
-      if (toolName == null) return false;
-      const turnId = (data as { turn_id?: number | null }).turn_id ?? null;
-      if (turnId == null) return true;
-      const type = (data as { type?: string }).type ?? ConfigType.USER;
-      const frame = data as { id?: number; summary?: string; state?: string; transcript_row_id?: number | null };
-      if (frame.state === 'started') {
-        startLiveTool(type, turnId, frame.id ?? null, toolName, frame.summary, frame.transcript_row_id ?? null);
-      } else {
-        finishLiveTool(type, turnId, frame.id ?? null, frame.state === 'done');
-      }
-      return true;
-    },
-
-    /**
-     * Cancelled turn — the DELETE-triggered terminal state
-     * (backend `TurnExecutionService.cancel`, the single authority: the row
-     * is already stamped CANCELLED, with `ended_at` set, by the time this
-     * frame is broadcast) AND the post-`_postInterrupt` reconcile `requestStop`
-     * runs regardless of whether that frame ever arrives. The backend's
-     * `serialize_turn` strips a cancelled turn's trailing, reply-less user
-     * row(s) before this refetch ever runs (real content a turn already wrote
-     * before the cancel landed always stays), so re-fetching now IS the
-     * authoritative post-cancel state. Written via `forceUpsertTurn` — the
-     * genuinely UNGUARDED buffer write (composables/useConversationFeed.ts) —
-     * rather than `upsertTurn`/`fetchTurn`: this is the one case where the
-     * freshest read can legitimately be SMALLER than what's already buffered
-     * (a fork turn's earlier-settled content is version-N buffered, the
-     * now-stripped orphan reply never raises that version), and `upsertTurn`'s
-     * monotonic version guard would silently reject such a write, leaving a
-     * phantom orphan bubble on any tab that had buffered the higher version.
-     * Empty messages → the turn never happened from the surface's
-     * perspective, dropped exactly like an aborted send; any remaining
-     * content (a fork turn whose reply-less LAST exchange alone was
-     * cancelled) re-renders in place. Idempotent — safe to call twice for the
-     * same turn (once from `requestStop`'s reconcile, once from this WS
-     * frame, in either order).
+     * Cancelled turn — lane/buffer bookkeeping ONLY (interim seam). Called
+     * from `requestStop`'s post-interrupt reconcile AND from
+     * `driftDispatcher._dispatchCancelled` (idempotent either order, or
+     * both). The DOM-rendering side of a cancel — the force-upserted refetch
+     * and `removeTurn` for an emptied turn — lives in the dispatcher now (see
+     * its comment for the full rationale); this just releases the owning
+     * lane, mirrors the buffer write for tasks.ts's Activity dock (still
+     * buffer-driven this slice), and drains queues.
      */
     async _handleCancelled(turnId: number, type: string): Promise<void> {
       const convo = useConversationFeed(type);
@@ -554,72 +486,6 @@ export const useSessionStore = defineStore('session', {
         convo.setWorking(turnId, false);
       }
       this._drainQueues();
-    },
-
-    /**
-     * Turn lifecycle — the DB-backed turn_executions row, pushed whole on every
-     * state flip (see services/execution_tracker.py). This frame carries no
-     * separate kind tag, so it is recognised structurally: `state` must be one
-     * of the four lifecycle literals AND `turn_id` + `started_at` (execution-only
-     * fields) must be present — a `state` key alone is not enough (see
-     * TURN_EXECUTION_STATES; `home_state_changed` also carries a `state` string
-     * with no `turn_id`/`started_at`, and claiming it here drained its queue into
-     * a garbage _finishTurn call). `working` opens exactly like the old `working`
-     * signal; `completed`/`crashed` settle the turn exactly like the old `done`
-     * signal — a crash now reaches this path too, so a turn that dies before
-     * producing a reply never leaves a spinner hanging. `cancelled` is its own
-     * branch (`_handleCancelled`): a normal settle would leave a fully-rendered,
-     * discarded response looking exactly like a completed one, when the whole
-     * point of cancel is that it never counted. `crashed` additionally raises
-     * the 'turn failed' dock toast — derived from the lifecycle state itself,
-     * so no separate error frame is needed.
-     */
-    _routeTurnExecution(data: WsPushEvent): boolean {
-      const exec = data as unknown as WsTurnExecutionEvent;
-      if (
-        typeof exec.state !== 'string' || !TURN_EXECUTION_STATES.has(exec.state)
-        || exec.turn_id == null || exec.started_at == null
-      ) {
-        return false;
-      }
-      const type = exec.type ?? ConfigType.USER;
-      if (exec.state === 'working') {
-        useConversationFeed(type).setWorking(exec.turn_id, true);
-        // Pull the block so every surface renders the user bubble from the API.
-        void useConversationFeed(type).fetchTurn(exec.turn_id);
-        return true;
-      }
-      if (exec.state === 'cancelled') {
-        void this._handleCancelled(exec.turn_id, type);
-        return true;
-      }
-      if (exec.state === 'crashed') this.errorMessage = 'Turn failed unexpectedly';
-      void this._finishTurn(exec.turn_id, type);
-      return true;
-    },
-
-    /** Route content-free push event types (keyed on `type`); returns true when
-     *  handled. */
-    _routeSimpleEvent(data: WsPushEvent): boolean {
-      switch (data.type as string) {
-        case 'app_update':
-          useNotificationsStore().handleUpdate(data as unknown as UpdateState);
-          return true;
-        case 'subagent_start':
-        case 'subagent_end':
-          useTasksStore().applyDriftEvent(data);
-          return true;
-        case 'capability_alert':
-          return true;
-        case 'permission_request':
-          usePermissionsStore().enqueue(data);
-          return true;
-        case 'quick_tip':
-          useNotificationsStore().handleTip(data as unknown as TipState);
-          return true;
-        default:
-          return false;
-      }
     },
 
     /** Fire a background notification when the tab is not focused. */

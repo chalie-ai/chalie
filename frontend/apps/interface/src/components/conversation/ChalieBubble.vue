@@ -1,14 +1,11 @@
 <script setup lang="ts">
-import { computed } from 'vue';
+import { computed, ref } from 'vue';
 import type { ConversationMessage } from '../../api/conversation';
 import { messagePlaintext } from '../../utils/speech';
-import { useConversationFeed } from '../../composables/useConversationFeed';
 import { renderMarkup } from '../../composables/useMarkup';
 import { emit as busEmit } from '../../composables/useEventBus';
 import { Reply, Volume2 } from '@lucide/vue';
 import SegmentRenderer from './SegmentRenderer.vue';
-
-const feed = useConversationFeed();
 
 const props = withDefaults(
   defineProps<{ message: ConversationMessage; isLast?: boolean; canReply?: boolean }>(),
@@ -19,15 +16,26 @@ const emit = defineEmits<{ reply: [] }>();
 
 const speakText = computed(() => messagePlaintext(props.message));
 
-// Speak plays the WHOLE turn (every assistant row), not just this row.
+const rootRef = ref<HTMLElement | null>(null);
+
+// Speak plays the WHOLE turn (every assistant row), not just this row) — read
+// straight off the rendered DOM (the `data-speech` attribute every Chalie
+// bubble in the same turn carries) rather than the retired buffer's
+// `turnSpeechText`, matching the DOM-contract (no shared client store).
 function onSpeak(): void {
-  if (props.message.turn_id == null) return;
-  busEmit('chalie:speak-message', { text: feed.turnSpeechText(props.message.turn_id) });
+  const turnHost = rootRef.value?.closest<HTMLElement>('[data-turn-id]');
+  if (!turnHost) return;
+  const text = Array.from(turnHost.querySelectorAll<HTMLElement>('.speech-form--chalie[data-speech]'))
+    .map((el) => el.dataset.speech ?? '')
+    .filter(Boolean)
+    .join(' ');
+  if (text) busEmit('chalie:speak-message', { text });
 }
 </script>
 
 <template>
   <div
+    ref="rootRef"
     class="speech-form speech-form--chalie"
     :data-transcript-row-id="message.id"
     :data-speech="speakText"

@@ -19,6 +19,7 @@ import type { ConversationThread, ConversationTurnBlock } from '../api/conversat
 import { conversation as convoApi } from '../api/conversation';
 import { messagePlaintext } from '../utils/speech';
 import { clearLiveTurn, clearLiveTurnsForToolCallsResolved } from '../utils/liveActTrail';
+import { isThreadActive } from '../utils/threadActivity';
 
 // ── Per-type state ──────────────────────────────────────────────────────────
 
@@ -201,18 +202,6 @@ function _isHydrated(s: FeedState, turnId: number): boolean {
   return turnId in s.blocks;
 }
 
-/**
- * True when a thread's last activity was within the 1-hour active window.
- * Display/ordering only — no behavioral branch (spec §4.B).
- */
-function _isThreadActive(lastActivityAt: string | null): boolean {
-  if (!lastActivityAt) return false;
-  // SQLite stores naive UTC ("YYYY-MM-DD HH:MM:SS"); mark it as UTC.
-  const ts = new Date(`${lastActivityAt.replace(' ', 'T')}Z`).getTime();
-  if (Number.isNaN(ts)) return false;
-  return Date.now() - ts < 3_600_000;
-}
-
 /** Derive collapsed thread metadata from the block buffer (layer-2 getter). */
 function _threadList(s: FeedState): ConversationThread[] {
   return Object.keys(s.blocks)
@@ -313,7 +302,7 @@ function makeApi(type: string): ConversationFeedApi {
     isForkedThread: (turnId) => _isForkedThread(s, turnId),
     threadPhase: (turnId) => _threadPhase(s, turnId),
     isHydrated: (turnId) => _isHydrated(s, turnId),
-    isThreadActive: (lastActivityAt) => _isThreadActive(lastActivityAt),
+    isThreadActive: (lastActivityAt) => isThreadActive(lastActivityAt),
     threadList: () => _threadList(s),
     searchThreads: (query) => _searchThreads(type, query),
 

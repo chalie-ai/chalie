@@ -1,55 +1,119 @@
-<!-- Slide-over thread panel: a focused, full-height view of one thread. -->
+<!-- Slide-over thread panel: a focused, full-height view of one thread.
+     Registers its body as a DOM-contract surface (D14) and fetches its own
+     turn via REST — no buffer read for rendering. -->
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { ArrowLeft } from '@lucide/vue';
 import { useSessionStore } from '../../stores/session';
-import { useConversationFeed } from '../../composables/useConversationFeed';
+import { conversation as convoApi } from '../../api/conversation';
+import { registerSurface, unregisterSurface, clearSurfaceContainer, upsertTurnToSurfaces } from '../../utils/turnDom';
 import TurnView from './TurnView.vue';
 import InputDock from '../layout/InputDock.vue';
 
+const PANEL_SURFACE_ID = 'thread-panel';
+
 const session = useSessionStore();
-const feed = computed(() => useConversationFeed(session.panelType));
 
 const open = computed(() => session.panelThreadId != null);
 
-const block = computed(() =>
-  session.panelThreadId == null ? null : (feed.value.blocks[session.panelThreadId] ?? null),
-);
+const heading = ref('Thread');
+const hydrated = ref(false);
 
-const heading = computed(() => block.value?.gist || block.value?.preview || 'Thread');
-const showLoader = computed(() => session.threadExpanding && block.value == null);
-
+// `bodyRef` is the scrollable wrapper (kept for scrollTop pinning);
+// `turnsRef` is the DEDICATED surface container — kept separate from the
+// loader's own Vue-rendered node so imperative host divs (turnDom.mount)
+// never share a parent with vdom-owned siblings.
 const bodyRef = ref<HTMLElement | null>(null);
+const turnsRef = ref<HTMLElement | null>(null);
 
 function close(): void {
   session.closeThreadPanel();
 }
 
-// Follow live reply growth: pin the body to its bottom whenever the open
-// thread's block changes. flush:'post' lets it measure settled height.
+/** Tear down the panel's surface registration and unmount its rendered turn. */
+function _teardownSurface(): void {
+  unregisterSurface(PANEL_SURFACE_ID);
+  if (turnsRef.value) clearSurfaceContainer(turnsRef.value);
+  hydrated.value = false;
+}
+
+/** (Re-)register the surface for the currently-open turn and fetch it. */
+async function _openTurn(turnId: number, type: string): Promise<void> {
+  _teardownSurface();
+  await nextTick(); // let `v-if="open"` mount <aside> so turnsRef exists.
+  if (!turnsRef.value || session.panelThreadId !== turnId || session.panelType !== type) return;
+
+  registerSurface({
+    id: PANEL_SURFACE_ID,
+    type,
+    container: turnsRef.value,
+    component: TurnView,
+    props: { canReply: false, fullThread: true },
+    accepts: (id) => id === turnId,
+  });
+
+  session.threadExpanding = true;
+  try {
+    const block = await convoApi.thread(turnId, type);
+    if (session.panelThreadId !== turnId || session.panelType !== type) return; // superseded
+    heading.value = block.gist || block.preview || 'Thread';
+    upsertTurnToSurfaces(block, type);
+    hydrated.value = true;
+  } catch {
+    if (session.panelThreadId !== turnId || session.panelType !== type) return; // superseded
+    hydrated.value = true; // stop the spinner — nothing more is coming
+    session.errorMessage = 'Failed to load this thread';
+  } finally {
+    if (session.panelThreadId === turnId && session.panelType === type) {
+      session.threadExpanding = false;
+    }
+  }
+}
+
 watch(
-  block,
-  () => {
-    if (!open.value) return;
-    nextTick(() => {
-      const el = bodyRef.value;
-      if (el) el.scrollTop = el.scrollHeight;
-    });
+  () => [session.panelThreadId, session.panelType] as const,
+  ([turnId, type]) => {
+    if (turnId == null) {
+      _teardownSurface();
+      return;
+    }
+    void _openTurn(turnId, type);
   },
-  { deep: true, flush: 'post' },
 );
+
+// Follow live reply growth: pin the body to its bottom whenever the open
+// turn re-renders (turnDom's 'turn-upserted' signal, dispatched after every
+// DOM write — replaces the old watch on the buffer's block).
+function onTurnUpserted(e: Event): void {
+  if (!open.value) return;
+  const turnId = (e as CustomEvent<{ turnId: number }>).detail.turnId;
+  if (turnId !== session.panelThreadId) return;
+  nextTick(() => {
+    const el = bodyRef.value;
+    if (el) el.scrollTop = el.scrollHeight;
+  });
+}
 
 function onKeydown(e: KeyboardEvent): void {
   if (e.key === 'Escape' && open.value) close();
 }
 
-onMounted(() => document.addEventListener('keydown', onKeydown));
-onBeforeUnmount(() => document.removeEventListener('keydown', onKeydown));
+onMounted(() => {
+  document.addEventListener('keydown', onKeydown);
+  document.addEventListener('turn-upserted', onTurnUpserted);
+  if (session.panelThreadId != null) void _openTurn(session.panelThreadId, session.panelType);
+});
+
+onBeforeUnmount(() => {
+  document.removeEventListener('keydown', onKeydown);
+  document.removeEventListener('turn-upserted', onTurnUpserted);
+  _teardownSurface();
+});
 </script>
 
 <template>
   <Transition name="thread-panel">
-    <aside v-if="open" class="thread-panel" role="dialog" aria-modal="true" :aria-label="heading" :data-turn-id="session.panelThreadId" :data-type="session.panelType">
+    <aside v-if="open" class="thread-panel" role="dialog" aria-modal="true" :aria-label="heading">
       <header class="thread-panel__header">
         <button
           class="thread-panel__back"
@@ -81,16 +145,10 @@ onBeforeUnmount(() => document.removeEventListener('keydown', onKeydown));
       </header>
 
       <div ref="bodyRef" class="thread-panel__body">
-        <div v-if="showLoader" class="thread-panel__loader">
+        <div v-if="!hydrated" class="thread-panel__loader">
           <output class="thread-panel__spinner" aria-label="Loading thread" />
         </div>
-        <TurnView
-          v-else-if="block"
-          :block="block"
-          :can-reply="false"
-          :full-thread="true"
-          :type="session.panelType"
-        />
+        <div ref="turnsRef" class="thread-panel__turns" />
       </div>
 
       <InputDock
