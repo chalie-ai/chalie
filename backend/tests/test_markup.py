@@ -59,13 +59,13 @@ class TestSanitize:
         out = sanitize(html)
         assert "<tfoot>" in out
 
-    def test_strips_table_attributes(self) -> None:
-        html = '<table class="fancy" style="width:100%"><tr><td colspan="2">x</td></tr></table>'
+    def test_preserves_table_cell_attrs_strips_unsafe(self) -> None:
+        html = '<table class="fancy" style="width:100%"><tr><td colspan="2" style="color:red">x</td></tr></table>'
         out = sanitize(html)
         assert "<table>" in out
         assert "class=" not in out
-        assert "style=" not in out
-        assert "colspan=" not in out
+        assert "style=" not in out  # stripped from table and td alike
+        assert 'colspan="2"' in out  # structural attr preserved
 
 
 @pytest.mark.unit
