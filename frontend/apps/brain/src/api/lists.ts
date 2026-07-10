@@ -22,6 +22,7 @@
  * changes.
  */
 import { api } from '@chalie/shared';
+import { fetchAllPages, type ListingEnvelope } from './paginate';
 
 export interface ListItem {
   id: string | number;
@@ -37,31 +38,14 @@ export interface List {
   items?: ListItem[];
 }
 
-interface ListingEnvelope<T> {
-  success: true;
-  result: T[];
-  pagination: { page: number; limit: number; total: number };
-}
-
 interface SingleEnvelope<T> {
   success: true;
   result: T;
 }
 
 export const lists = {
-  async list(): Promise<List[]> {
-    const all: List[] = [];
-    let page = 1;
-    while (true) {
-      const body = await api.get<ListingEnvelope<List>>(`/api/lists/all?page=${page}&limit=100`);
-      const items = body.result;
-      if (items.length === 0) break; // stale total must not loop forever
-      const total = body.pagination?.total ?? items.length;
-      all.push(...items);
-      if (all.length >= total) break;
-      page++;
-    }
-    return all;
+  list(): Promise<List[]> {
+    return fetchAllPages<List>('/api/lists/all');
   },
 
   async items(listId: string | number): Promise<ListItem[]> {

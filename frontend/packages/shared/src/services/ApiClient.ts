@@ -98,6 +98,8 @@ export class ApiClient {
     });
     if (res.status === 401) this.fail401(opts);
     if (!res.ok) return this.throwHttp(res);
+    // Mutation routes answer 204 with an empty body — there is nothing to parse.
+    if (res.status === 204) return undefined as T;
     return (await res.json()) as T;
   }
 

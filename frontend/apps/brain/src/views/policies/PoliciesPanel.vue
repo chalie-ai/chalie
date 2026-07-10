@@ -132,8 +132,9 @@ onMounted(load);
     </button>
     <div v-if="blockedOpen" class="blocked-list">
       <div v-for="(b, idx) in blocked" :key="idx" class="blocked-item">
-        <span class="badge badge-danger">{{ b.action_id || '' }}</span>
-        <span>{{ b.context || '' }}</span>
+        <span class="badge badge-danger">{{ b.action_id }}</span>
+        <span>{{ b.context }}</span>
+        <span class="blocked-reason">{{ b.reason }}</span>
         <span class="blocked-time">{{ formatDate(b.created_at) }}</span>
       </div>
     </div>
