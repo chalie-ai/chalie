@@ -28,9 +28,9 @@ export const auth = {
     return api.post<void>('/api/auth/register', { username, password }, NO_REDIRECT);
   },
 
-  /** PUT /api/voice-settings */
+  /** POST /api/voice-settings/-1 */
   setVoiceEnabled(enabled: boolean): Promise<void> {
-    return api.put<void>('/api/voice-settings', { enabled }, NO_REDIRECT);
+    return api.post<void>('/api/voice-settings/-1', { enabled }, NO_REDIRECT);
   },
 };
 

@@ -5,7 +5,7 @@ Voice namespace — STT + TTS via two single-purpose ONNX libraries.
 * STT → ``moonshine_onnx.MoonshineOnnxModel`` (Moonshine base, ONNX)
 
 The ONNX model files are downloaded on demand, not bundled with the install.
-Turning voice on in Settings (``PUT /api/voice-settings``) calls
+Turning voice on in Settings (``POST /api/voice-settings/-1``) calls
 ``RuntimeDepsService.enable_voice()``, which background-installs the voice deps
 and downloads the models into ``resources/voice-models/``. Until the deps or
 model files are present every route returns ``{"status":"unavailable"}`` or 503
