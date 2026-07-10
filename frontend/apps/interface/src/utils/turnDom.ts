@@ -34,6 +34,72 @@ function getAllTurnEls(turnId: number, type: string): HTMLElement[] {
   );
 }
 
+// ── Live-working bookkeeping (mount-time race fix) ───────────────────────────
+//
+// A WS 'working' frame for a brand-new turn always arrives BEFORE its first
+// fetch-driven upsertTurn/mount. setTurnWorking's early-return (preserved
+// below for turnDom.spec.ts's asserted "silent no-op" behaviour when no
+// element exists yet) would otherwise silently drop that signal, leaving a
+// freshly-mounted turn with no data-working attribute until the NEXT signal
+// arrives. `_liveWorking` records the signal regardless of whether an
+// element exists yet; `upsertTurn` consults it at mount/patch time so a live
+// 'true' always wins over a stale fetched snapshot's `false` (a fetch can
+// only race BEHIND the WS frame that triggered it, never ahead of it — a
+// `false` snapshot never legitimately overrides an already-recorded live
+// 'true'). The reverse isn't specially protected: once a settle signal
+// clears the set, a very late in-flight fetch resolving afterwards reads the
+// already-settled `block.working` correctly regardless.
+const _liveWorking = new Set<string>();
+
+function workingKey(turnId: number, type: string): string {
+  return `${type}:${turnId}`;
+}
+
+/** Snapshot of every `type:turnId` key currently recorded as live-working —
+ *  includes turns whose 'working' frame arrived before any element rendered.
+ *  Consumed by session's disconnect handler, which must remember what was in
+ *  flight BEFORE clearing the visual state it would otherwise scan for on
+ *  reconnect. */
+export function liveWorkingKeys(): string[] {
+  return Array.from(_liveWorking);
+}
+
+/** True if the DOM contract currently considers this turn in flight — a live
+ *  'working' signal recorded (even before any element existed) OR an actual
+ *  rendered copy still carrying `data-working`. */
+export function isTurnWorking(turnId: number, type: string): boolean {
+  return (
+    _liveWorking.has(workingKey(turnId, type)) ||
+    getAllTurnEls(turnId, type).some((el) => el.hasAttribute('data-working'))
+  );
+}
+
+/** The spine's registered surface id — shared between ConversationFeed.vue
+ *  (which registers it) and any code that needs to ask "is the main spine
+ *  busy" without a stable turn_id to key off (D3/D5). */
+export const SPINE_SURFACE_ID = 'spine';
+
+/** True if any rendered copy inside a registered surface's own container is
+ *  currently working. */
+export function isSurfaceWorking(surfaceId: string): boolean {
+  const surface = _surfaces.get(surfaceId);
+  if (!surface) return false;
+  return surface.container.querySelector('[data-working]') != null;
+}
+
+/** The raw text of the LAST user row inside a given turn host — used by
+ *  `session.requestStop` (D6) to restore an interrupted turn's draft without
+ *  a lane record. Deliberately scoped to a CALLER-SUPPLIED host rather than
+ *  looked up document-wide: the same turn_id can render two different row
+ *  sets on different surfaces (the spine hides thread-reply rows a
+ *  full-thread panel copy would show), so only the copy the stop actually
+ *  originated from is unambiguous. */
+export function lastUserText(turnHost: ParentNode): string {
+  const rows = turnHost.querySelectorAll<HTMLElement>('[data-user-text]');
+  const last = rows[rows.length - 1];
+  return last?.dataset.userText ?? '';
+}
+
 // ── D14 — surface registry ───────────────────────────────────────────────────
 
 /**
@@ -111,6 +177,7 @@ export function upsertTurn(
     if (!options.force && currentVersion > version) return null;
     host.dataset.version = String(version);
     mount(host, component, block, type, extraProps);
+    stampWorking(host, block, type);
     notifyUpserted(block.turn_id);
     return host;
   }
@@ -119,8 +186,27 @@ export function upsertTurn(
   host.dataset.version = String(version);
   insertInOrder(container, host, block.turn_id);
   mount(host, component, block, type, extraProps);
+  stampWorking(host, block, type);
   notifyUpserted(block.turn_id);
   return host;
+}
+
+/** Stamp `data-working` on a just-(re)mounted turn's own root element
+ *  (found via `getTurnEl` scoped to `host` — the component's rendered root
+ *  sits one level BELOW the wrapper `host` div, not on it). Combines the
+ *  freshly-rendered block's own `working` flag with any live WS signal
+ *  recorded before this element existed (see `_liveWorking` above) — the
+ *  live signal wins over a stale snapshot's `false`. This is the mount-time
+ *  fix for the gap where `setTurnWorking` no-ops on a not-yet-rendered turn. */
+function stampWorking(host: HTMLElement, block: ConversationTurnBlock, type: string): void {
+  const el = getTurnEl(block.turn_id, type, host);
+  if (!el) return;
+  const working = block.working || _liveWorking.has(workingKey(block.turn_id, type));
+  if (working) {
+    el.setAttribute('data-working', 'true');
+  } else {
+    el.removeAttribute('data-working');
+  }
 }
 
 /**
@@ -190,14 +276,32 @@ export function removeTurn(turnId: number, type: string): void {
       host.remove();
     }
   }
+  // A removed turn cannot be "working": drop any live record so
+  // `isTurnWorking` (which checks the record before the DOM) doesn't keep
+  // answering true for a turn that no longer exists, and tell consumers.
+  if (_liveWorking.delete(workingKey(turnId, type))) {
+    document.dispatchEvent(
+      new CustomEvent('turn-state-changed', {
+        detail: { turnId, type, working: false },
+      }),
+    );
+  }
 }
 
 /** Toggle the `data-working` attribute on every rendered copy and broadcast
  *  the change. */
 export function setTurnWorking(turnId: number, type: string, working: boolean): void {
-  const els = getAllTurnEls(turnId, type);
-  if (!els.length) return;
-  for (const el of els) {
+  const key = workingKey(turnId, type);
+  if (working) {
+    _liveWorking.add(key);
+  } else {
+    _liveWorking.delete(key);
+  }
+
+  // Dispatch even when no element is rendered yet: `isTurnWorking` derives
+  // from the `_liveWorking` record above, so consumers (useDockBusy) must be
+  // told the answer changed regardless of whether a DOM copy exists.
+  for (const el of getAllTurnEls(turnId, type)) {
     if (working) {
       el.setAttribute('data-working', 'true');
     } else {

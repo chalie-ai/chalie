@@ -1,5 +1,5 @@
 /**
- * Session store — WS coordinator + turn lane state-machine.
+ * Session store — WS coordinator + turn send/stop orchestration.
  *
  * Single WS owner rule: ONLY this store may touch WebSocketService's
  * send/sendAction/abort/onDrift/onAny/ensureAlive handlers, and it is the
@@ -11,11 +11,12 @@
  * `utils/driftDispatcher.ts` (see `init()` below) — this store no longer
  * inspects WS payload shapes at all.
  *
- * Lane model: every independent conversation surface (the main spine + each
- * open thread reply) is a "lane" keyed by laneKey(threadId). The four former
- * global single-flight fields (isSending, _liveTurnId, _lastUserFormId,
- * _lastUserText) are now per-lane so a working thread never blocks the spine
- * and vice-versa.
+ * D3 — no lane model: busy/working state for every independent conversation
+ * surface (the main spine + each open thread reply) lives as a DOM
+ * attribute (`data-working`, see `utils/turnDom.ts`) rather than a store-held
+ * record. `isSurfaceBusy` derives it via a DOM query for a stable turn_id
+ * (a thread), or a registered surface's own container (the main spine, which
+ * has no stable id until a brand-new send's POST resolves one).
  */
 import { defineStore } from 'pinia';
 import type { WsInboundEvent, WsPushEvent } from '@chalie/shared';
@@ -27,7 +28,15 @@ import { conversation as convoApi } from '../api/conversation';
 import { useConversationFeed } from '../composables/useConversationFeed';
 import { useActionCard } from '../composables/useActionCard';
 import { dispatchDrift } from '../utils/driftDispatcher';
-import { setTurnDone } from '../utils/turnDom';
+import { clearLiveTurn } from '../utils/liveActTrail';
+import {
+  isSurfaceWorking,
+  isTurnWorking,
+  liveWorkingKeys,
+  setTurnDone,
+  setTurnWorking,
+  SPINE_SURFACE_ID,
+} from '../utils/turnDom';
 import { laneKey, useQueueStore } from './queue';
 import { useNotificationsStore } from './notifications';
 import { useContextUsageStore } from './contextUsage';
@@ -41,20 +50,42 @@ const _busUnbinds: Array<() => void> = [];
 
 const FILE_PLACEHOLDER = '[File attached]';
 
-interface LaneState {
-  /** Bound turn_id; null for a new main-spine turn until the POST 200 body claims one. */
-  liveTurnId: number | null;
-  /** Captured text from the last user turn (for requestStop restore). */
-  userText: string;
-  /** ConfigType this lane belongs to — used to pick the correct feed on settle. */
-  type: string;
-}
-
 export const useSessionStore = defineStore('session', {
   state: () => ({
-    /** Per-lane single-flight state. Key = laneKey(threadId). A key's presence
-     *  means that lane is actively sending. */
-    lanes: {} as Record<string, LaneState>,
+    /** Synchronous send-in-flight guard, keyed by laneKey(threadId). D3: this
+     *  is NOT a lane record — it holds no turn identity or draft text, only a
+     *  scope key. It bridges the gap between "we decided to send" and the
+     *  DOM's own `data-working` state existing: held from the send decision
+     *  until the turn's FIRST `turn_execution` frame is observed (see
+     *  `_pendingByTurn` below), because the POST resolves as soon as the
+     *  backend allocates the turn_id — execution proceeds in the background,
+     *  so there is no ordering guarantee between the POST 200 and the WS
+     *  'working' frame that stamps the DOM. */
+    _pendingSends: new Set<string>(),
+
+    /** `type:turnId` → laneKey for sends whose POST resolved but whose first
+     *  `turn_execution` frame hasn't been observed yet — the dispatcher
+     *  releases the matching `_pendingSends` hold via `_releasePendingSend`.
+     *  Mirrors HEAD's lane binding ("bind the lane handle the moment the
+     *  server allocates it, release on the finish signal") without a lane
+     *  record. */
+    _pendingByTurn: new Map<string, string>(),
+
+    /** True when the main spine had a working turn at the moment the WS
+     *  dropped — the spine's counterpart to `_offlineWorking` (it has no
+     *  stable turn id for `isSurfaceBusy` to key off). Keeps the spine dock
+     *  queueing rather than dropping drafts while the backend may still be
+     *  mid-turn behind the dead socket; cleared once `_reconcileWorking`
+     *  restores the real state. */
+    _offlineSpineWorking: false,
+
+    /** `type:turnId` keys that were in flight when the WS dropped. The
+     *  disconnect handler clears every visual `data-working` marker — the
+     *  same marker `_reconcileWorking` would otherwise scan — so what was
+     *  working MUST be remembered here or nothing gets reconciled on
+     *  reconnect (spinner restore / offline-settle / queue drain would all
+     *  silently die). */
+    _offlineWorking: new Set<string>(),
 
     /** Turn-level provider/quota error, surfaced as a closable toast above the
      *  input dock. Null when there is nothing to show. */
@@ -93,14 +124,6 @@ export const useSessionStore = defineStore('session', {
     _loadRecentCallback: null as (() => Promise<{ isInitialLoad: boolean; loadedAny: boolean }>) | null,
   }),
 
-  getters: {
-    /**
-     * True when the MAIN spine is busy (lane present).
-     * Consumed by PresenceBar (logo pulse) and ConversationFeed (live-turn spinner).
-     */
-    isSending: (state): boolean => 'main' in state.lanes,
-  },
-
   actions: {
     /** Wire the WebSocket singleton and connect. Idempotent (HMR / StrictMode). */
     init(): void {
@@ -113,22 +136,34 @@ export const useSessionStore = defineStore('session', {
 
       ws.onConnect(() => {
         conn.setConnected(true);
-        void this._reconcileLanes();
+        void this._reconcileWorking();
       });
 
       ws.onDisconnect(() => {
         conn.setConnected(false);
         // A mid-turn drop strands spinners: the terminal `turn_execution` frame
-        // lands on the dead socket and is never resent. Clear ONLY the transient
-        // visual working state so nothing hangs — but keep the lane records
-        // themselves (draft text + busy identity). `requestStop` (undo/restore,
-        // D1) and the send queue guard (D3) both key off lane presence, and the
-        // backend may still be mid-turn behind the dead socket. `_reconcileLanes`
-        // settles anything that actually finished while offline once the WS
-        // reconnects.
-        for (const k in this.lanes) {
-          const lane = this.lanes[k];
-          if (lane.liveTurnId != null) useConversationFeed(lane.type).setWorking(lane.liveTurnId, false);
+        // lands on the dead socket and is never resent. Snapshot what was in
+        // flight FIRST (liveWorkingKeys covers turns whose 'working' frame
+        // arrived before any element rendered), THEN clear the transient
+        // visual state so nothing hangs — `_reconcileWorking` walks the
+        // snapshot on reconnect and either restores the spinner (backend
+        // still genuinely mid-turn — `working` is a server-derived field,
+        // see ConversationTurnBlock) or settles it via `_finishTurn`.
+        for (const key of liveWorkingKeys()) this._offlineWorking.add(key);
+        for (const el of Array.from(document.querySelectorAll<HTMLElement>('[data-working][data-turn-id]'))) {
+          const turnId = Number(el.getAttribute('data-turn-id'));
+          const type = el.getAttribute('data-type') ?? ConfigType.USER;
+          if (!Number.isNaN(turnId)) this._offlineWorking.add(`${type}:${turnId}`);
+        }
+        // Spine snapshot too (it has no stable id for the key set) — read
+        // BEFORE the clearing loop below strips the very markers it scans.
+        if (isSurfaceWorking(SPINE_SURFACE_ID)) this._offlineSpineWorking = true;
+        for (const key of this._offlineWorking) {
+          const idx = key.indexOf(':');
+          const type = key.slice(0, idx);
+          const turnId = Number(key.slice(idx + 1));
+          setTurnWorking(turnId, type, false);
+          useConversationFeed(type).setWorking(turnId, false);
         }
       });
 
@@ -186,44 +221,56 @@ export const useSessionStore = defineStore('session', {
     },
 
     /**
-     * Reconcile every surviving lane against the backend after a WS reconnect.
-     * `onDisconnect` clears the transient spinner but deliberately keeps the
-     * lane record (see there) since the backend may still be mid-turn; this
-     * re-fetches each lane's bound turn and either restores its spinner (still
-     * genuinely in-flight — `working` is a server-derived field, see
-     * ConversationTurnBlock) or settles it via `_finishTurn` (it actually
-     * completed/crashed/cancelled while offline). Lanes with no bound turn_id
-     * yet (a main-spine send whose POST hadn't resolved when the drop hit) are
-     * left alone — the pending `send()` promise resolves them independently.
+     * Reconcile every turn that was in flight when the WS dropped against
+     * the backend after reconnect. Walks the `_offlineWorking` snapshot the
+     * disconnect handler recorded — NOT the DOM: the disconnect handler
+     * already cleared every `data-working` marker, so a DOM scan here would
+     * find nothing. Re-fetches each candidate turn and either restores its
+     * spinner (backend still genuinely mid-turn — `working` is a
+     * server-derived field, see ConversationTurnBlock) or settles it via
+     * `_finishTurn` (it actually completed/crashed/cancelled while offline).
      */
-    async _reconcileLanes(): Promise<void> {
-      for (const key of Object.keys(this.lanes)) {
-        const lane = this.lanes[key];
-        const turnId = lane.liveTurnId;
-        if (turnId == null) continue;
-        const convo = useConversationFeed(lane.type);
+    async _reconcileWorking(): Promise<void> {
+      for (const key of Array.from(this._offlineWorking)) {
+        const idx = key.indexOf(':');
+        const type = key.slice(0, idx);
+        const turnId = Number(key.slice(idx + 1));
+
+        const convo = useConversationFeed(type);
         try {
           await convo.fetchTurn(turnId);
         } catch {
-          continue; // best-effort; leave the lane as-is, retried on the next reconnect
+          continue; // best-effort; key stays snapshotted, retried on the next reconnect
         }
+        this._offlineWorking.delete(key);
         if (convo.blocks[turnId]?.working) {
+          setTurnWorking(turnId, type, true);
           convo.setWorking(turnId, true);
         } else {
-          void this._finishTurn(turnId, lane.type);
+          void this._finishTurn(turnId, type);
         }
       }
+      // Real state is restored above (still-working turns have their DOM
+      // markers back), so the blanket offline flag can drop — best-effort
+      // even when a fetch failed and its key stayed snapshotted.
+      this._offlineSpineWorking = false;
     },
 
     /**
      * True when a given surface is currently busy — gates sends and drains.
      * Main spine shares its surface with ACT cycles (no stable turn id);
-     * threads have a stable id plus the conversation working-set.
+     * threads have a stable id and are checked directly against the DOM.
      */
-    isLaneBusy(threadId: number | null, type: string = ConfigType.USER): boolean {
-      return threadId == null
-        ? this.isSending
-        : laneKey(threadId) in this.lanes || useConversationFeed(type).isTurnWorking(threadId);
+    isSurfaceBusy(threadId: number | null, type: string = ConfigType.USER): boolean {
+      if (this._pendingSends.has(laneKey(threadId))) return true;
+      // Offline snapshots count as busy: the backend may still be mid-turn
+      // behind the dead socket even though the visual markers were cleared —
+      // a send now should queue (drained after `_reconcileWorking`), not
+      // silently drop the draft on the disconnected transport.
+      if (threadId == null) {
+        return this._offlineSpineWorking || isSurfaceWorking(SPINE_SURFACE_ID);
+      }
+      return this._offlineWorking.has(`${type}:${threadId}`) || isTurnWorking(threadId, type);
     },
 
     /**
@@ -242,71 +289,72 @@ export const useSessionStore = defineStore('session', {
 
       const body = text || FILE_PLACEHOLDER;
 
-      if (this.isLaneBusy(threadId, type)) {
+      if (this.isSurfaceBusy(threadId, type)) {
         useQueueStore().enqueue(threadId, body, type, files);
         return;
       }
 
       const key = laneKey(threadId);
-      this.lanes[key] = {
-        liveTurnId: threadId,
-        userText: text,
-        type,
-      };
-      const result = await getWebSocket().send(body, (m) => this._onSendFailure(key, m), files, threadId, type);
-      if (result != null && key in this.lanes) {
-        this.lanes[key].liveTurnId = result.turn_id;
+      this._pendingSends.add(key);
+      let heldForFrame = false;
+      try {
+        const result = await getWebSocket().send(
+          body, (m) => this._onSendFailure(m), files, threadId, type,
+        );
+        // POST resolved with the allocated turn_id but execution runs in the
+        // background — keep the busy hold until the dispatcher observes the
+        // turn's first `turn_execution` frame (unless one already beat the
+        // POST response here). `null` result = local send failure; nothing
+        // will ever arrive, release now.
+        if (result && !isTurnWorking(result.turn_id, result.type)) {
+          this._pendingByTurn.set(`${result.type}:${result.turn_id}`, key);
+          heldForFrame = true;
+        }
+      } finally {
+        if (!heldForFrame) this._pendingSends.delete(key);
       }
+    },
+
+    /** Release a send's POST-scoped busy hold once its turn's first
+     *  `turn_execution` frame arrives (called by the dispatcher for EVERY
+     *  execution state — a crash/settle that beat the 'working' frame must
+     *  release too). No-op for turns with no hold registered. */
+    _releasePendingSend(turnId: number, type: string): void {
+      const key = this._pendingByTurn.get(`${type}:${turnId}`);
+      if (key == null) return;
+      this._pendingByTurn.delete(`${type}:${turnId}`);
+      this._pendingSends.delete(key);
     },
 
     /** A local send failure (offline / POST rejected) — no signal will ever
-     *  arrive, so release this lane's guard and surface the message. */
-    _onSendFailure(key: string, message: string): void {
+     *  arrive for a turn that never got created; just surface the message. */
+    _onSendFailure(message: string): void {
       this.errorMessage = message;
-      const lane = this.lanes[key];
-      if (lane?.liveTurnId != null) useConversationFeed(lane.type).setWorking(lane.liveTurnId, false);
-      delete this.lanes[key];
     },
 
     /** `done(turn_id, type)` — settle the turn on its type's feed. Leave a
-     *  standing done marker unless the user is viewing it; release the owning lane
-     *  only when ITS own turn finished. Drain queues, record ambient, and fire an
-     *  OS notification for the final reply when the tab is unfocused. Identical for
-     *  every type — only the dock the settled thread lives in differs. */
-    async _finishTurn(turnId: number | null, type: string = ConfigType.USER): Promise<void> {
+     *  standing done marker unless the user is viewing it. Drain queues,
+     *  record ambient, and fire an OS notification for the final reply when
+     *  the tab is unfocused. Identical for every type — only the dock the
+     *  settled thread lives in differs. */
+    async _finishTurn(turnId: number, type: string = ConfigType.USER): Promise<void> {
       const convo = useConversationFeed(type);
-      const owningKey = this._laneOwning(turnId);
-      const id = turnId ?? (owningKey == null ? null : this.lanes[owningKey]?.liveTurnId ?? null);
 
-      if (id != null) {
-        if (id === this.panelThreadId) convo.setWorking(id, false);
-        else convo.markThreadDone(id);
-      }
-
-      if (owningKey != null) delete this.lanes[owningKey];
+      if (turnId === this.panelThreadId) convo.setWorking(turnId, false);
+      else convo.markThreadDone(turnId);
 
       this._drainQueues();
       useAmbientSensor().recordResponse();
 
-      if (id != null && !document.hasFocus()) {
-        await convo.fetchTurn(id);
-        const t = convo.turnSpeechText(id);
+      if (!document.hasFocus()) {
+        // Buffer-sourced deliberately (interim seam): the awaited fetchTurn
+        // just populated this exact block, so the read can't race — whereas
+        // the DOM copy is written by a SEPARATE, unawaited `updated`-signal
+        // refetch (and may not exist at all for a turn no surface renders).
+        await convo.fetchTurn(turnId);
+        const t = convo.turnSpeechText(turnId);
         if (t) this._notifyBackground(t);
       }
-    },
-
-    /**
-     * Find the lane key that owns the given turnId — used to release ONLY the
-     * correct lane on `done` without disturbing peer lanes.
-     */
-    _laneOwning(turnId: number | null): string | null {
-      if ('main' in this.lanes && (turnId == null || this.lanes['main'].liveTurnId === turnId)) {
-        return 'main';
-      }
-      for (const k in this.lanes) {
-        if (k !== 'main' && this.lanes[k].liveTurnId === turnId) return k;
-      }
-      return null;
     },
 
     /** Drain ALL pending scopes independently. */
@@ -318,60 +366,68 @@ export const useSessionStore = defineStore('session', {
       const threadId = key === 'main' ? null : Number(key.slice(1));
       const queue = useQueueStore();
       const type = queue.typeFor(threadId);
-      if (this.isLaneBusy(threadId, type)) return;
+      if (this.isSurfaceBusy(threadId, type)) return;
       const { text, files } = queue.take(threadId);
       if (text) void this.sendMessage(text, files, threadId, type);
     },
 
     /**
      * Stop + undo the in-flight turn identified by `turnId`. Emits
-     * 'session:turn-interrupted' so InputDock can restore the textarea. `type`
-     * (default user) names the owning thread's ProcessorConfig — DELETE resolves
-     * the channel from it server-side, and turn_id alone is only unique per
-     * channel, so a non-user thread's stop must carry its own type through.
+     * 'session:turn-interrupted' so InputDock can restore the textarea.
+     * `type` (default user) names the owning thread's ProcessorConfig —
+     * DELETE resolves the channel from it server-side, and turn_id alone is
+     * only unique per channel, so a non-user thread's stop must carry its
+     * own type through. `dockScope` (D6) is the dock's own identity — null
+     * for the main spine, the thread's root turn_id for a thread reply dock
+     * — read by the caller off the DOM's `data-dock-scope` marker (see
+     * ThreadPanel.vue), since there is no lane record any more to derive it
+     * from. `restoreText` is the exact text to hand back to that dock,
+     * likewise read by the caller off the DOM (`data-user-text`, see
+     * UserBubble.vue / turnDom's `lastUserText`) before this call.
      */
-    async requestStop(turnId: number | null = null, type: string = ConfigType.USER): Promise<void> {
+    async requestStop(
+      turnId: number | null = null,
+      type: string = ConfigType.USER,
+      dockScope: number | null = null,
+      restoreText: string = '',
+    ): Promise<void> {
       const ws = getWebSocket();
 
-      const key = this._laneOwning(turnId);
-      const lane = key == null ? undefined : this.lanes[key];
-      const stopId = lane?.liveTurnId ?? turnId;
-      const laneType = lane?.type ?? type;
+      // D6: confirm turnId is genuinely still in flight (per the DOM's own
+      // data-working marker) before firing the DELETE — a stale/late click
+      // could otherwise target an already-settled turn.
+      const stopId = turnId != null && isTurnWorking(turnId, type) ? turnId : null;
 
-      // Restore text from lane record (no optimistic form to read from any more).
-      const restoredText = lane?.userText ?? '';
+      const text = restoreText === FILE_PLACEHOLDER ? '' : restoreText;
 
-      // The dock scope id InputDock keys its `turnId` prop by: null for the main
-      // spine, the thread's root turn_id for a thread reply dock. That is the
-      // LANE key, not necessarily the live turn id passed in (they only diverge
-      // for a still-resolving main-spine send, where `liveTurnId` is null until
-      // the POST returns) — derive it from the owning lane key so the restore
-      // event lands on the dock that actually owns this turn.
-      const scopeId = key == null ? turnId : key === 'main' ? null : Number(key.slice(1));
-
-      // Undo the whole turn: drop its block + all signal state. For a fork
-      // turn (real prior content already settled) this optimistically blanks
-      // that content too — there is no per-row "just the pending bubble"
-      // removal, a fork's settled exchange and its still-open reply share one
-      // block — but the reconcile below restores it within one round-trip
-      // once the DELETE ack lands, well before a WS frame would.
-      if (lane?.liveTurnId != null) useConversationFeed(laneType).dropLiveTurn(lane.liveTurnId);
-      if (key != null) delete this.lanes[key];
+      if (stopId != null) {
+        // Optimistic: hide the spinner/stop control/live pill trail
+        // immediately, rather than waiting on the DELETE round-trip or a WS
+        // 'cancelled' frame that can be delayed or dropped on a flaky
+        // connection. `_handleCancelled` below (idempotent alongside a later
+        // WS frame, same as before) reconciles the actual content once
+        // confirmed.
+        setTurnWorking(stopId, type, false);
+        clearLiveTurn(type, stopId);
+        // Interim seam (tasks.ts / SchedulerDock) — dies with the buffer in
+        // a later slice.
+        useConversationFeed(type).dropLiveTurn(stopId);
+      }
 
       ws.abort();
 
       document.dispatchEvent(
-        new CustomEvent('session:turn-interrupted', { detail: { text: restoredText, turnId: scopeId } }),
+        new CustomEvent('session:turn-interrupted', { detail: { text, turnId: dockScope } }),
       );
 
-      await this._postInterrupt(stopId, laneType);
+      await this._postInterrupt(stopId, type);
 
       // Reconcile against the backend now, rather than waiting on the WS
       // 'cancelled' frame (`_handleCancelled`) — that frame can be delayed or
       // dropped on a flaky connection, and it's also what actually restores a
       // fork turn's content after the blanket drop above. Idempotent against
       // a WS frame that also arrives later.
-      if (stopId != null) await this._handleCancelled(stopId, laneType);
+      if (stopId != null) await this._handleCancelled(stopId, type);
     },
 
     /** DELETE /api/thread/<turn_id>?type=<type> — best-effort interrupt, never throws. */
@@ -459,19 +515,17 @@ export const useSessionStore = defineStore('session', {
     },
 
     /**
-     * Cancelled turn — lane/buffer bookkeeping ONLY (interim seam). Called
-     * from `requestStop`'s post-interrupt reconcile AND from
+     * Cancelled turn — buffer bookkeeping ONLY (interim seam). Called from
+     * `requestStop`'s post-interrupt reconcile AND from
      * `driftDispatcher._dispatchCancelled` (idempotent either order, or
      * both). The DOM-rendering side of a cancel — the force-upserted refetch
      * and `removeTurn` for an emptied turn — lives in the dispatcher now (see
-     * its comment for the full rationale); this just releases the owning
-     * lane, mirrors the buffer write for tasks.ts's Activity dock (still
-     * buffer-driven this slice), and drains queues.
+     * its comment for the full rationale); this mirrors the buffer write for
+     * tasks.ts's Activity dock (still buffer-driven this slice) and drains
+     * queues.
      */
     async _handleCancelled(turnId: number, type: string): Promise<void> {
       const convo = useConversationFeed(type);
-      const owningKey = this._laneOwning(turnId);
-      if (owningKey != null) delete this.lanes[owningKey];
       try {
         const block = await convoApi.thread(turnId, type);
         if (block.messages.length) {

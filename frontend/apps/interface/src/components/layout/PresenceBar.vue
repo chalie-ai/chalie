@@ -3,11 +3,15 @@ import { Brain, CalendarClock, Clock, Moon, Search, Sun } from '@lucide/vue';
 import { storeToRefs } from 'pinia';
 import { useSessionStore } from '../../stores/session';
 import { useTasksStore } from '../../stores/tasks';
-import { platform, useTheme } from '@chalie/shared';
+import { ConfigType, platform, useTheme } from '@chalie/shared';
 import { emit } from '../../composables/useEventBus';
+import { useDockBusy } from '../../composables/useDockBusy';
 
 const session = useSessionStore();
-const { isSending } = storeToRefs(session);
+
+// D3: replaces the retired `session.isSending` store getter — the logo
+// breathes while the main spine (no stable turn_id) has anything working.
+const isSending = useDockBusy(() => null, () => ConfigType.USER);
 
 const tasks = useTasksStore();
 const { totalCount } = storeToRefs(tasks);

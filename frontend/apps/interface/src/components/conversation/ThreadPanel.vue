@@ -113,7 +113,14 @@ onBeforeUnmount(() => {
 
 <template>
   <Transition name="thread-panel">
-    <aside v-if="open" class="thread-panel" role="dialog" aria-modal="true" :aria-label="heading">
+    <aside
+      v-if="open"
+      class="thread-panel"
+      role="dialog"
+      aria-modal="true"
+      :aria-label="heading"
+      :data-dock-scope="session.panelThreadId"
+    >
       <header class="thread-panel__header">
         <button
           class="thread-panel__back"

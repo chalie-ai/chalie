@@ -54,14 +54,17 @@ vi.mock('./turnDom', () => ({
 const { fakeSession, finishTurnMock } = vi.hoisted(() => {
   const finishTurnMock = vi.fn();
   const handleCancelledMock = vi.fn();
+  const releasePendingSendMock = vi.fn();
   return {
     finishTurnMock,
     handleCancelledMock,
+    releasePendingSendMock,
     fakeSession: {
       panelThreadId: null as number | null,
       errorMessage: null as string | null,
       _finishTurn: finishTurnMock,
       _handleCancelled: handleCancelledMock,
+      _releasePendingSend: releasePendingSendMock,
     },
   };
 });
@@ -230,6 +233,18 @@ describe('dispatchDrift — turn_execution frame', () => {
     await Promise.resolve();
     expect(removeTurnMock).toHaveBeenCalledWith(34, 'user');
     expect(upsertTurnToSurfacesMock).not.toHaveBeenCalled();
+    // The cancel is terminal on EVERY branch — a remote-initiated cancel
+    // (another tab/device) whose turn emptied must still clear the live
+    // working record, or the thread's send gate stays wedged for the tab's
+    // lifetime.
+    expect(setTurnWorkingMock).toHaveBeenCalledWith(34, 'user', false);
+  });
+
+  it('every turn_execution state releases the send\'s POST-scoped busy hold', () => {
+    for (const [i, state] of (['working', 'completed', 'cancelled', 'crashed'] as const).entries()) {
+      dispatchDrift(frame({ state, turn_id: 50 + i, started_at: '2026-01-01T00:00:00Z', type: 'user' }));
+      expect(fakeSession._releasePendingSend).toHaveBeenCalledWith(50 + i, 'user');
+    }
   });
 
   it('state=cancelled still clears data-working when the refetch rejects', async () => {

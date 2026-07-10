@@ -2,6 +2,7 @@
 import { computed, onUnmounted, ref, watch } from 'vue';
 import { Undo2 } from '@lucide/vue';
 import { readDomContext } from '../../utils/domContext';
+import { lastUserText } from '../../utils/turnDom';
 import type { LiveToolPill } from '../../utils/liveActTrail';
 import { useSessionStore } from '../../stores/session';
 
@@ -11,9 +12,14 @@ const session = useSessionStore();
 const rootRef = ref<HTMLElement | null>(null);
 
 async function onStop(): Promise<void> {
-  const { turnId, type } = readDomContext(rootRef.value);
+  const { turnId, type, dockScope } = readDomContext(rootRef.value);
   if (turnId == null) return; // Guard: never fire a stop without a target
-  await session.requestStop(turnId, type);
+  // The restore text (D6) must come from the SAME rendered copy this stop
+  // button belongs to — the same turn_id can render different row sets on
+  // different surfaces (see lastUserText's own doc comment).
+  const turnHost = rootRef.value?.closest<HTMLElement>('[data-turn-id]') ?? null;
+  const restoreText = turnHost ? lastUserText(turnHost) : '';
+  await session.requestStop(turnId, type, dockScope, restoreText);
 }
 
 // Live timer: ticks ONLY while a pill is unresolved.

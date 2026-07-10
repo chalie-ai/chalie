@@ -1,70 +1,52 @@
+// @vitest-environment happy-dom
 /**
- * Session store — feature specs for two just-fixed defects:
+ * Session store — feature specs for the DOM-held busy contract (D3): no lane
+ * model, no `isSending` flag. Busy/working state for every independent
+ * conversation surface (the main spine + each open thread) is derived from
+ * the DOM (`utils/turnDom.ts`'s `data-working` attribute + its live-signal
+ * bookkeeping), not a store-held record.
  *
- *  1. `requestStop` undo restores the draft to the CORRECT dock: the dispatched
- *     'session:turn-interrupted' event now carries the owning lane's scope id
- *     (null for the main spine, the thread's root turn_id for a thread lane —
- *     NOT necessarily the specific in-flight turn_id, which can differ once a
- *     thread has run more than one turn) plus the original draft text.
- *  2. `sendMessage` is scoped per lane: a send onto a BUSY lane defers to the
- *     queue store instead of hitting the network, while a different, non-busy
- *     lane still posts immediately — pinning turn_id-scoping (not a single
- *     global send-in-flight flag).
+ * Real DOM (happy-dom — the project's established Vue-mounting environment,
+ * see turnDom.spec.ts), real Pinia, real turnDom/queue/useConversationFeed
+ * modules. Only the WS/network boundary is mocked: `getWebSocket` (send/abort
+ * are the only stubbed calls, per convention), `getHost`, and the REST
+ * `conversation` API (`api/conversation.ts`) — the actual `fetch`/XHR
+ * transport this app would otherwise hit.
  *
- * Real Pinia stores, real WebSocketService call shape (only `send`/`abort` are
- * stubbed — the network/ws boundary, per convention). `document`/`window`/
- * `navigator` are stubbed with real EventTarget instances so the module's
- * ambient-sensor and event-bus code (both real, unmocked) can run under
- * vitest's `environment: 'node'` — this is DOM scaffolding, not a mock of
- * behaviour under test.
+ * The session store, turnDom, queue, and useConversationFeed all carry
+ * module-level singleton state, so each test re-imports a fresh module graph
+ * via `vi.resetModules()` (the pattern established by
+ * `utils/turnDom.spec.ts` / `composables/useConversationFeed.spec.ts`) —
+ * otherwise a surface/turn registered in one test would leak into the next.
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createPinia, setActivePinia } from 'pinia';
 
-// ── Hoisted DOM scaffolding — vitest hoists vi.hoisted() above the module's
-// own static imports, so `document`/`window`/`navigator` exist before
-// `./session` (and its transitive `useAmbientSensor` import) ever evaluates.
-vi.hoisted(() => {
-  class FakeEventTarget extends EventTarget {}
-  const fakeDocument = Object.assign(new FakeEventTarget(), {
-    hasFocus: () => true,
-    visibilityState: 'visible' as DocumentVisibilityState,
-    documentElement: { dataset: {} as Record<string, string> },
-    // @vue/runtime-dom probes `document.createElement('template')` once at
-    // import time (client-hydration detection) even though nothing in this
-    // spec ever mounts a component — a stub element is enough to satisfy it.
-    createElement: () => ({}) as unknown as HTMLElement,
-  });
-  // Node's own `navigator` global is a read-only getter — plain assignment
-  // throws. `vi.stubGlobal` overrides it (and `document`/`window`, absent in
-  // vitest's `environment: 'node'`) safely.
-  vi.stubGlobal('document', fakeDocument);
-  vi.stubGlobal('window', new FakeEventTarget());
-  vi.stubGlobal('navigator', { onLine: true });
-});
-
-// ── The WS/network boundary — the only thing this spec mocks. `getWebSocket`,
-// `useConnectionStore`, `platform`, `api`, `getHost` are re-exported here
-// (rather than importing the real `@chalie/shared` barrel) purely to dodge an
-// unrelated vitest config gap: the interface app's vitest.config.ts has no Vue
-// SFC plugin, so the real barrel's `.vue` re-exports fail to parse. `ConfigType`
-// carries its real production values.
-const { fakeWs, sendMock, abortMock } = vi.hoisted(() => {
+// ── The WS/network boundary — the only thing this spec mocks. `getWebSocket`
+// captures whatever onConnect/onDisconnect callbacks `session.init()`
+// registers so reconnect tests can fire them directly, the same way the real
+// WebSocketService would invoke them on an actual drop/restore.
+const { fakeWs, sendMock, abortMock, wsCallbacks } = vi.hoisted(() => {
   const sendMock = vi.fn();
   const abortMock = vi.fn();
+  const wsCallbacks: { onConnect: () => void; onDisconnect: () => void } = {
+    onConnect: () => { /* replaced by session.init() */ },
+    onDisconnect: () => { /* replaced by session.init() */ },
+  };
   return {
     sendMock,
     abortMock,
+    wsCallbacks,
     fakeWs: {
       send: sendMock,
       abort: abortMock,
-      onConnect: () => {},
-      onDisconnect: () => {},
-      onDrift: () => {},
-      onAny: () => {},
-      connect: () => {},
-      ensureAlive: () => {},
-      sendAction: () => {},
+      onConnect: (cb: () => void) => { wsCallbacks.onConnect = cb; },
+      onDisconnect: (cb: () => void) => { wsCallbacks.onDisconnect = cb; },
+      onDrift: () => { /* not under test */ },
+      onAny: () => { /* not under test */ },
+      connect: () => { /* not under test */ },
+      ensureAlive: () => { /* not under test */ },
+      sendAction: () => { /* not under test */ },
     },
   };
 });
@@ -73,82 +55,175 @@ vi.mock('@chalie/shared', () => ({
   ConfigType: { USER: 'user', SCHEDULED: 'scheduled', DISCOVERY: 'discovery' },
   AuthError: class AuthError extends Error {},
   getWebSocket: () => fakeWs,
-  useConnectionStore: () => ({ setConnected: () => {} }),
+  useConnectionStore: () => ({ setConnected: () => { /* not under test */ } }),
   platform: {},
   api: {},
   getHost: () => '',
 }));
 
+// The REST boundary `_reconcileWorking`/`_handleCancelled`/`_finishTurn`
+// (via useConversationFeed.fetchTurn) hit — mocked at the network edge only,
+// per the boundary rule (everything downstream of the response, including
+// the real feed buffer, runs unmocked).
+const threadMock = vi.fn();
+vi.mock('../api/conversation', () => ({
+  conversation: {
+    thread: (...args: unknown[]) => threadMock(...args),
+    threads: vi.fn(),
+    batch: vi.fn(),
+  },
+}));
+
 import { ConfigType } from '@chalie/shared';
-import { useSessionStore } from './session';
-import { useQueueStore } from './queue';
+
+/** A minimal but well-formed ConversationTurnBlock for the mocked thread() calls. */
+function stubBlock(turnId: number, working: boolean): unknown {
+  return {
+    turn_id: turnId,
+    gist: null,
+    preview: `turn ${turnId}`,
+    last_activity_at: null,
+    working,
+    duration_ms: 0,
+    messages: [],
+  };
+}
+
+/** Fresh module graph per test — session, turnDom, queue, and the feed all
+ *  share the SAME instances within one test (imported in the same epoch,
+ *  before the next resetModules() call), but never leak into the next test. */
+async function freshSession() {
+  vi.resetModules();
+  setActivePinia(createPinia());
+  const turnDom = await import('../utils/turnDom');
+  const { useSessionStore } = await import('./session');
+  const { useQueueStore } = await import('./queue');
+  const { useConversationFeed } = await import('../composables/useConversationFeed');
+  return {
+    session: useSessionStore(),
+    queue: useQueueStore(),
+    turnDom,
+    feed: useConversationFeed(ConfigType.USER),
+  };
+}
 
 beforeEach(() => {
-  setActivePinia(createPinia());
   sendMock.mockReset();
   abortMock.mockReset();
+  threadMock.mockReset();
   vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true } as Response));
+  document.body.innerHTML = '';
 });
 
-describe('requestStop — undo restores the draft to the correct dock', () => {
-  it('for a thread lane, dispatches the THREAD ROOT turn_id (the lane key), not the specific ACT turn_id', async () => {
-    const session = useSessionStore();
-    // The lane is keyed by the thread's root turn_id (100) but the currently
-    // in-flight ACT turn within that thread has its own, different id (105) —
-    // exactly the case that would restore to the wrong dock before the fix.
-    session.lanes['t100'] = { liveTurnId: 105, userText: 'draft in the thread', type: ConfigType.USER };
+describe('isSurfaceBusy', () => {
+  it('reads a thread\'s busy state from a rendered [data-working][data-turn-id][data-type] element', async () => {
+    const { session } = await freshSession();
+    const container = document.body.appendChild(document.createElement('div'));
+    container.innerHTML = '<div data-working data-turn-id="42" data-type="user"></div>';
 
-    const received: Array<{ text: string; turnId: number | null }> = [];
-    document.addEventListener('session:turn-interrupted', (e) => {
-      received.push((e as CustomEvent<{ text: string; turnId: number | null }>).detail);
-    });
-
-    await session.requestStop(105, ConfigType.USER);
-
-    expect(received).toHaveLength(1);
-    expect(received[0].turnId).toBe(100);
-    expect(received[0].text).toBe('draft in the thread');
+    expect(session.isSurfaceBusy(42, ConfigType.USER)).toBe(true);
+    expect(session.isSurfaceBusy(43, ConfigType.USER)).toBe(false);
   });
 
-  it('for the main spine, dispatches turnId: null and the original draft text', async () => {
-    const session = useSessionStore();
-    session.lanes['main'] = { liveTurnId: 55, userText: 'draft on the spine', type: ConfigType.USER };
+  it('is busy via _pendingSends while a POST is in flight, before any element has rendered', async () => {
+    const { session } = await freshSession();
+    let resolveSend: (v: unknown) => void = () => { /* replaced below */ };
+    sendMock.mockImplementationOnce(
+      () => new Promise((resolve) => { resolveSend = resolve; }),
+    );
 
-    const received: Array<{ text: string; turnId: number | null }> = [];
-    document.addEventListener('session:turn-interrupted', (e) => {
-      received.push((e as CustomEvent<{ text: string; turnId: number | null }>).detail);
+    const pending = session.sendMessage('hello', [], null, ConfigType.USER);
+    expect(session.isSurfaceBusy(null, ConfigType.USER)).toBe(true);
+
+    resolveSend(null);
+    await pending;
+    expect(session.isSurfaceBusy(null, ConfigType.USER)).toBe(false);
+  });
+
+  it('stays busy after the POST resolves with a turn_id, until that turn\'s first execution frame releases the hold', async () => {
+    const { session } = await freshSession();
+    sendMock.mockResolvedValueOnce({ turn_id: 42, type: ConfigType.USER });
+
+    await session.sendMessage('hello', [], null, ConfigType.USER);
+    // POST resolved, but execution runs in the background — no WS 'working'
+    // frame has been observed yet, so the surface must still gate sends.
+    expect(session.isSurfaceBusy(null, ConfigType.USER)).toBe(true);
+
+    session._releasePendingSend(42, ConfigType.USER);
+    expect(session.isSurfaceBusy(null, ConfigType.USER)).toBe(false);
+  });
+
+  it('treats offline-snapshotted turns (and an offline spine) as busy so drafts queue instead of dropping', async () => {
+    const { session, turnDom, queue } = await freshSession();
+    session.init();
+
+    const spineContainer = document.body.appendChild(document.createElement('div'));
+    turnDom.registerSurface({
+      id: turnDom.SPINE_SURFACE_ID,
+      type: ConfigType.USER,
+      container: spineContainer,
+      component: {},
+    });
+    spineContainer.innerHTML = '<div data-working data-turn-id="7" data-type="user"></div>';
+
+    wsCallbacks.onDisconnect();
+
+    // Visual markers are cleared, but the backend may still be mid-turn
+    // behind the dead socket — both the thread and the spine stay busy.
+    expect(turnDom.isTurnWorking(7, ConfigType.USER)).toBe(false);
+    expect(session.isSurfaceBusy(7, ConfigType.USER)).toBe(true);
+    expect(session.isSurfaceBusy(null, ConfigType.USER)).toBe(true);
+
+    // A send while offline into the mid-turn thread queues rather than
+    // hitting the dead transport and losing the draft.
+    await session.sendMessage('typed while offline', [], 7, ConfigType.USER);
+    expect(sendMock).not.toHaveBeenCalled();
+    expect(queue.queuedFor(7)).toEqual([{ text: 'typed while offline', files: [] }]);
+
+    // Reconcile settles the turn on reconnect and drops the blanket flags.
+    threadMock.mockResolvedValue(stubBlock(7, false));
+    sendMock.mockResolvedValue({ turn_id: 7, type: ConfigType.USER });
+    await session._reconcileWorking();
+    expect(session.isSurfaceBusy(null, ConfigType.USER)).toBe(false);
+  });
+
+  it('the main spine reads busy off its registered SPINE_SURFACE_ID container, not a stable turn_id', async () => {
+    const { session, turnDom } = await freshSession();
+    const spineContainer = document.body.appendChild(document.createElement('div'));
+    turnDom.registerSurface({
+      id: turnDom.SPINE_SURFACE_ID,
+      type: ConfigType.USER,
+      container: spineContainer,
+      component: {},
     });
 
-    await session.requestStop(55, ConfigType.USER);
+    expect(session.isSurfaceBusy(null, ConfigType.USER)).toBe(false);
 
-    expect(received).toHaveLength(1);
-    expect(received[0].turnId).toBeNull();
-    expect(received[0].text).toBe('draft on the spine');
+    spineContainer.innerHTML = '<div data-working></div>';
+    expect(session.isSurfaceBusy(null, ConfigType.USER)).toBe(true);
   });
 });
 
-describe('sendMessage — turn_id-scoped busy gate', () => {
-  it('enqueues onto a busy lane instead of posting, while a different, non-busy lane still sends over the wire', async () => {
-    const session = useSessionStore();
-    const queue = useQueueStore();
+describe('sendMessage — surface-scoped busy gate', () => {
+  it('enqueues onto a busy surface instead of posting, while a different idle surface still sends over the wire', async () => {
+    const { session, queue } = await freshSession();
 
-    // First send on the main spine never settles during this test — the lane
-    // stays busy for its whole duration.
-    let resolveFirst: (v: { turn_id: number; type: string } | null) => void = () => {};
+    // First send on the main spine never settles during this test — the
+    // surface stays busy for its whole duration.
+    let resolveFirst: (v: unknown) => void = () => { /* replaced below */ };
     sendMock.mockImplementationOnce(
       () => new Promise((resolve) => { resolveFirst = resolve; }),
     );
     const p1 = session.sendMessage('first message', [], null, ConfigType.USER);
-    expect(session.isSending).toBe(true); // lane registered synchronously before the await
+    expect(session.isSurfaceBusy(null, ConfigType.USER)).toBe(true); // registered synchronously before the await
 
-    // A second send on the SAME (main) lane while it's busy must defer to the
-    // queue, not touch the network again.
+    // A second send on the SAME (main) surface while it's busy must defer to
+    // the queue, not touch the network again.
     await session.sendMessage('second message while busy', [], null, ConfigType.USER);
     expect(sendMock).toHaveBeenCalledTimes(1);
     expect(queue.queuedFor(null)).toEqual([{ text: 'second message while busy', files: [] }]);
 
-    // A send on a DIFFERENT scope (a thread, not busy) must post immediately —
-    // pinning turn_id-scoping over a single global "sending" flag.
+    // A send on a DIFFERENT scope (a thread, not busy) must post immediately.
     sendMock.mockResolvedValueOnce({ turn_id: 909, type: ConfigType.USER });
     await session.sendMessage('thread message', [], 555, ConfigType.USER);
     expect(sendMock).toHaveBeenCalledTimes(2);
@@ -157,8 +232,8 @@ describe('sendMessage — turn_id-scoped busy gate', () => {
     );
     expect(queue.queuedFor(555)).toEqual([]);
 
-    // Cleanup: settle the still-pending first send so no dangling promise leaks
-    // across tests.
+    // Cleanup: settle the still-pending first send so no dangling promise
+    // leaks across tests.
     resolveFirst({ turn_id: 42, type: ConfigType.USER });
     await p1;
   });
@@ -166,16 +241,16 @@ describe('sendMessage — turn_id-scoped busy gate', () => {
 
 describe('_drainLane — queued sends replay their files, not just their text', () => {
   it('replays a queued message\'s text AND its attached files into the resumed send call', async () => {
-    const session = useSessionStore();
-    const queue = useQueueStore();
+    const { session, queue } = await freshSession();
 
     const file = new File(['contents'], 'photo.png', { type: 'image/png' });
     queue.enqueue(77, 'queued while the thread was busy', ConfigType.USER, [file]);
 
     sendMock.mockResolvedValueOnce({ turn_id: 77, type: ConfigType.USER });
     session._drainQueues();
-    // sendMessage's own network call is fire-and-forget from _drainLane (`void`)
-    // — flush microtasks so the underlying send() call has actually happened.
+    // sendMessage's own network call is fire-and-forget from _drainLane
+    // (`void`) — flush microtasks so the underlying send() call has
+    // actually happened.
     await Promise.resolve();
     await Promise.resolve();
 
@@ -183,5 +258,100 @@ describe('_drainLane — queued sends replay their files, not just their text', 
     expect(sendMock).toHaveBeenCalledWith(
       'queued while the thread was busy', expect.any(Function), [file], 77, ConfigType.USER,
     );
+  });
+});
+
+describe('requestStop — undo event', () => {
+  it('dispatches session:turn-interrupted with {text: restoreText, turnId: dockScope}, turning the FILE_PLACEHOLDER back into empty text', async () => {
+    const { session } = await freshSession();
+    const received: Array<{ text: string; turnId: number | null }> = [];
+    document.addEventListener('session:turn-interrupted', (e) => {
+      received.push((e as CustomEvent<{ text: string; turnId: number | null }>).detail);
+    });
+
+    await session.requestStop(null, ConfigType.USER, 100, 'draft text');
+    expect(received[0]).toEqual({ text: 'draft text', turnId: 100 });
+
+    // '[File attached]' is the file-only placeholder the InputDock echoes as
+    // restoreText when the interrupted turn carried no typed text — it must
+    // never be handed back to the user as literal draft content.
+    await session.requestStop(null, ConfigType.USER, null, '[File attached]');
+    expect(received[1]).toEqual({ text: '', turnId: null });
+  });
+});
+
+describe('requestStop — DELETE only fires for a confirmed in-flight turn', () => {
+  it('skips the DELETE for a turnId with no rendered element and no live signal, but fires it once the turn is confirmed working', async () => {
+    const { session, turnDom } = await freshSession();
+    threadMock.mockResolvedValue(stubBlock(11, false));
+
+    // Turn 10 was never confirmed working (stale/late click on an
+    // already-settled turn) — must not hit the network.
+    await session.requestStop(10, ConfigType.USER, null, '');
+    expect(fetch).not.toHaveBeenCalled();
+
+    // Turn 11 is confirmed working via a live setTurnWorking signal alone
+    // (no rendered element) — the DELETE must fire.
+    turnDom.setTurnWorking(11, ConfigType.USER, true);
+    await session.requestStop(11, ConfigType.USER, null, '');
+    expect(fetch).toHaveBeenCalledWith(
+      '/api/thread/11?type=user',
+      expect.objectContaining({ method: 'DELETE' }),
+    );
+  });
+});
+
+describe('reconnect reconcile', () => {
+  it('onDisconnect snapshots every in-flight turn (rendered AND live-only) into _offlineWorking, then clears all visual working state', async () => {
+    const { session, turnDom } = await freshSession();
+    session.init();
+
+    const container = document.body.appendChild(document.createElement('div'));
+    container.innerHTML = '<div data-working data-turn-id="5" data-type="user"></div>';
+    turnDom.setTurnWorking(6, ConfigType.USER, true); // live signal only, never rendered
+
+    wsCallbacks.onDisconnect();
+
+    expect(session._offlineWorking).toEqual(new Set(['user:5', 'user:6']));
+    expect(container.querySelector('[data-turn-id="5"]')?.hasAttribute('data-working')).toBe(false);
+    expect(turnDom.isTurnWorking(5, ConfigType.USER)).toBe(false);
+    expect(turnDom.isTurnWorking(6, ConfigType.USER)).toBe(false);
+  });
+
+  it('_reconcileWorking settles a snapshotted turn whose refetch says it is no longer working (drains queues), and restores the spinner for one still working', async () => {
+    const { session, turnDom, feed, queue } = await freshSession();
+    session._offlineWorking.add('user:5'); // will refetch as settled
+    session._offlineWorking.add('user:6'); // will refetch as still working
+    threadMock.mockImplementation(async (turnId: number) => {
+      if (turnId === 5) return stubBlock(5, false);
+      if (turnId === 6) return stubBlock(6, true);
+      throw new Error(`unexpected turnId ${turnId}`);
+    });
+
+    // A queued send on an unrelated, idle scope proves _finishTurn's
+    // _drainQueues actually ran as part of settling turn 5.
+    sendMock.mockResolvedValueOnce({ turn_id: 909, type: ConfigType.USER });
+    queue.enqueue(909, 'queued while offline', ConfigType.USER, []);
+
+    await session._reconcileWorking();
+    await Promise.resolve(); // flush _finishTurn's fire-and-forget _drainQueues -> sendMessage
+
+    expect(session._offlineWorking.size).toBe(0);
+    expect(feed.threadPhase(5)).toBe('done'); // settled via _finishTurn -> markThreadDone
+    expect(turnDom.isTurnWorking(6, ConfigType.USER)).toBe(true); // restored
+    expect(feed.working[6]).toBe(true);
+    expect(sendMock).toHaveBeenCalledWith(
+      'queued while offline', expect.any(Function), [], 909, ConfigType.USER,
+    );
+  });
+
+  it('keeps a key snapshotted when its refetch fails, so the next reconnect retries it', async () => {
+    const { session } = await freshSession();
+    session._offlineWorking.add('user:9');
+    threadMock.mockRejectedValueOnce(new Error('network down'));
+
+    await session._reconcileWorking();
+
+    expect(session._offlineWorking.has('user:9')).toBe(true);
   });
 });

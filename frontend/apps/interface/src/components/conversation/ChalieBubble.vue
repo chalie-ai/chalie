@@ -18,10 +18,10 @@ const speakText = computed(() => messagePlaintext(props.message));
 
 const rootRef = ref<HTMLElement | null>(null);
 
-// Speak plays the WHOLE turn (every assistant row), not just this row) — read
+// Speak plays the WHOLE turn (every assistant row, not just this row) — read
 // straight off the rendered DOM (the `data-speech` attribute every Chalie
-// bubble in the same turn carries) rather than the retired buffer's
-// `turnSpeechText`, matching the DOM-contract (no shared client store).
+// bubble in the same turn carries), matching the DOM-contract (no shared
+// client store).
 function onSpeak(): void {
   const turnHost = rootRef.value?.closest<HTMLElement>('[data-turn-id]');
   if (!turnHost) return;

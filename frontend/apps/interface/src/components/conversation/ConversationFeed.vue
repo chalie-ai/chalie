@@ -9,10 +9,9 @@ import { conversation as convoApi } from '../../api/conversation';
 import { useConversationFeed } from '../../composables/useConversationFeed';
 import { useSessionStore } from '../../stores/session';
 import { useAutoscroll } from '../../composables/useAutoscroll';
-import { registerSurface, unregisterSurface, upsertTurnToSurfaces } from '../../utils/turnDom';
+import { registerSurface, unregisterSurface, upsertTurnToSurfaces, SPINE_SURFACE_ID } from '../../utils/turnDom';
 import SpineTurn from './SpineTurn.vue';
 
-const SPINE_SURFACE_ID = 'spine';
 const PAGE_SIZE = 20;
 
 const feed = useConversationFeed();

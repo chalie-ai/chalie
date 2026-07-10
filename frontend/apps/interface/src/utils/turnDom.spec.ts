@@ -32,13 +32,13 @@ const StubComponent: Component = {
   },
 };
 
-function block(turnId: number, messageIds: number[]): ConversationTurnBlock {
+function block(turnId: number, messageIds: number[], opts: { working?: boolean } = {}): ConversationTurnBlock {
   return {
     turn_id: turnId,
     gist: null,
     preview: `turn ${turnId}`,
     last_activity_at: null,
-    working: false,
+    working: opts.working ?? false,
     duration_ms: 0,
     messages: messageIds.map((id) => ({
       id: String(id),
@@ -165,6 +165,28 @@ describe('removeTurn', () => {
     containerA.remove();
     containerB.remove();
   });
+
+  it('drops the live-working record for the removed turn and announces the change', async () => {
+    const { setTurnWorking, removeTurn, isTurnWorking } = await freshTurnDom();
+    setTurnWorking(1, 'user', true); // live signal only — never rendered
+    expect(isTurnWorking(1, 'user')).toBe(true);
+
+    const listener = vi.fn();
+    document.addEventListener('turn-state-changed', listener);
+    removeTurn(1, 'user');
+    document.removeEventListener('turn-state-changed', listener);
+
+    // A removed turn can't stay "working" — a leaked record would gate the
+    // thread's sends (isTurnWorking checks the record before the DOM).
+    expect(isTurnWorking(1, 'user')).toBe(false);
+    expect(listener).toHaveBeenCalledOnce();
+
+    // No record, no announcement: removing an unknown turn stays silent.
+    document.addEventListener('turn-state-changed', listener);
+    removeTurn(2, 'user');
+    document.removeEventListener('turn-state-changed', listener);
+    expect(listener).toHaveBeenCalledOnce();
+  });
 });
 
 describe('setTurnWorking / setTurnDone — attribute flips and events', () => {
@@ -195,20 +217,41 @@ describe('setTurnWorking / setTurnDone — attribute flips and events', () => {
     containerB.remove();
   });
 
-  // KNOWN QUIRK, encoded as-is (not a bug to fix here): setTurnWorking
-  // early-returns without dispatching when NO element is rendered for the
-  // turn, while setTurnDone (below) dispatches unconditionally — asymmetric
-  // by design of the current implementation.
-  it('setTurnWorking is a silent no-op (no event) when no element is rendered for the turn', async () => {
-    const { setTurnWorking } = await freshTurnDom();
+  // D-mount-race fix: a WS 'working' frame can arrive before the turn's
+  // first fetch-driven mount. setTurnWorking records the signal into a
+  // module-level live-working set regardless of whether any element is
+  // rendered yet, and ALWAYS dispatches 'turn-state-changed' — consumers
+  // like useDockBusy must hear about the change even with zero DOM copies.
+  it('with no element rendered: mutates no attribute anywhere, but still dispatches the event and records isTurnWorking as true', async () => {
+    const { setTurnWorking, isTurnWorking } = await freshTurnDom();
     const events: CustomEvent[] = [];
     const listener = (e: Event) => events.push(e as CustomEvent);
     document.addEventListener('turn-state-changed', listener);
 
     setTurnWorking(999, 'user', true);
 
-    expect(events).toHaveLength(0);
+    expect(events).toHaveLength(1);
+    expect(events[0].detail).toMatchObject({ turnId: 999, type: 'user', working: true });
+    expect(document.querySelector('[data-working]')).toBeNull();
+    expect(isTurnWorking(999, 'user')).toBe(true);
     document.removeEventListener('turn-state-changed', listener);
+  });
+
+  it('a later upsertTurn of a live-recorded turn stamps data-working at mount time, even though its own block.working is false', async () => {
+    const { registerSurface, upsertTurnToSurfaces, setTurnWorking, getTurnEl } = await freshTurnDom();
+    const container = document.body.appendChild(document.createElement('div'));
+    registerSurface({ id: 'a', type: 'user', container, component: StubComponent });
+
+    // The WS 'working' frame for turn 999 arrives before any fetch-driven
+    // mount exists — recorded live-only, same as the test above.
+    setTurnWorking(999, 'user', true);
+
+    // block.working itself is false (a stale/plain snapshot) — the live
+    // signal recorded above must still win at mount time.
+    upsertTurnToSurfaces(block(999, [9990]), 'user');
+
+    expect(getTurnEl(999, 'user', container)?.hasAttribute('data-working')).toBe(true);
+    container.remove();
   });
 
   it('setTurnDone flips data-done on every rendered copy', async () => {
@@ -253,5 +296,92 @@ describe("'turn-upserted' event", () => {
     expect(events).toHaveLength(2);
     expect(events.every((e) => e.detail.turnId === 7)).toBe(true);
     document.removeEventListener('turn-upserted', listener);
+  });
+});
+
+describe('stampWorking (applied by upsertTurn at mount/patch time)', () => {
+  it('stamps data-working when the block itself reports working:true', async () => {
+    const { upsertTurn, getTurnEl } = await freshTurnDom();
+    const container = document.createElement('div');
+    upsertTurn(block(1, [10], { working: true }), 'user', container, StubComponent);
+    expect(getTurnEl(1, 'user', container)?.hasAttribute('data-working')).toBe(true);
+  });
+
+  it('leaves no data-working attribute when block.working is false and there is no live signal', async () => {
+    const { upsertTurn, getTurnEl } = await freshTurnDom();
+    const container = document.createElement('div');
+    upsertTurn(block(1, [10], { working: false }), 'user', container, StubComponent);
+    expect(getTurnEl(1, 'user', container)?.hasAttribute('data-working')).toBe(false);
+  });
+});
+
+describe('isTurnWorking — set-based (live signal) and attribute-based (rendered) paths', () => {
+  it('is true from a live signal alone, with no rendered element at all', async () => {
+    const { setTurnWorking, isTurnWorking } = await freshTurnDom();
+    setTurnWorking(42, 'user', true);
+    expect(isTurnWorking(42, 'user')).toBe(true);
+  });
+
+  it('is true from a rendered data-working attribute alone, with no live signal ever recorded', async () => {
+    const { upsertTurn, isTurnWorking } = await freshTurnDom();
+    const container = document.body.appendChild(document.createElement('div'));
+    // block.working:true stamps the attribute directly at mount — no
+    // setTurnWorking call, so no live signal is ever recorded for turn 1.
+    upsertTurn(block(1, [10], { working: true }), 'user', container, StubComponent);
+    expect(isTurnWorking(1, 'user')).toBe(true);
+    container.remove();
+  });
+
+  it('is false once neither a live signal nor a rendered attribute exists for the turn', async () => {
+    const { isTurnWorking } = await freshTurnDom();
+    expect(isTurnWorking(777, 'user')).toBe(false);
+  });
+});
+
+describe('isSurfaceWorking — scoped to its own registered container only', () => {
+  it('is true only for the surface whose OWN container holds the working element', async () => {
+    const { registerSurface, isSurfaceWorking } = await freshTurnDom();
+    const containerA = document.body.appendChild(document.createElement('div'));
+    const containerB = document.body.appendChild(document.createElement('div'));
+    registerSurface({ id: 'a', type: 'user', container: containerA, component: StubComponent });
+    registerSurface({ id: 'b', type: 'user', container: containerB, component: StubComponent });
+
+    containerB.innerHTML = '<div data-working></div>';
+
+    expect(isSurfaceWorking('a')).toBe(false);
+    expect(isSurfaceWorking('b')).toBe(true);
+    expect(isSurfaceWorking('never-registered')).toBe(false);
+    containerA.remove();
+    containerB.remove();
+  });
+});
+
+describe('lastUserText', () => {
+  it('reads the LAST [data-user-text] row within the supplied host, ignoring earlier rows', async () => {
+    const { lastUserText } = await freshTurnDom();
+    const host = document.createElement('div');
+    host.innerHTML =
+      '<div data-user-text="first message"></div>'
+      + '<div data-user-text="second message"></div>';
+
+    expect(lastUserText(host)).toBe('second message');
+  });
+
+  it('returns empty string for a host with no user-text rows', async () => {
+    const { lastUserText } = await freshTurnDom();
+    expect(lastUserText(document.createElement('div'))).toBe('');
+  });
+});
+
+describe('liveWorkingKeys', () => {
+  it('snapshots every type:turnId key currently recorded as live-working, updating as signals clear', async () => {
+    const { setTurnWorking, liveWorkingKeys } = await freshTurnDom();
+    setTurnWorking(1, 'user', true);
+    setTurnWorking(2, 'scheduled', true);
+
+    expect(liveWorkingKeys().sort()).toEqual(['scheduled:2', 'user:1']);
+
+    setTurnWorking(1, 'user', false);
+    expect(liveWorkingKeys()).toEqual(['scheduled:2']);
   });
 });

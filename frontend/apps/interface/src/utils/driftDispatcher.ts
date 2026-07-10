@@ -139,6 +139,11 @@ function _dispatchTurnExecution(data: WsPushEvent): boolean {
   const type = exec.type ?? ConfigType.USER;
   const session = useSessionStore();
 
+  // ANY execution frame proves the send's turn is now tracked by its own
+  // working/settle signals — release the POST-scoped busy hold (see
+  // session.sendMessage's `_pendingByTurn` comment).
+  session._releasePendingSend(exec.turn_id, type);
+
   if (exec.state === 'working') {
     setTurnWorking(exec.turn_id, type, true);
     // Interim seam: tasks.ts / SchedulerDock still read the buffer's working
@@ -194,18 +199,22 @@ async function _refetchAndUpsert(
 async function _dispatchCancelled(turnId: number, type: string): Promise<void> {
   const session = useSessionStore();
   void session._handleCancelled(turnId, type);
+  // A cancel is terminal regardless of what the refetch returns (or whether
+  // it fails), so clear working FIRST — this frame can originate from
+  // another tab/device (any WS push, not just this client's stop button),
+  // and clearing only on some branches would leave a live-working record
+  // behind that permanently gates the thread's sends.
+  setTurnWorking(turnId, type, false);
   try {
     const block = await convoApi.thread(turnId, type);
     if (block.messages.length) {
       upsertTurnToSurfaces(block, type, { force: true });
-      setTurnWorking(turnId, type, false);
     } else {
       removeTurn(turnId, type);
     }
   } catch {
     // Best-effort — leave whatever is rendered; a later refetch (panel open,
     // page refresh) reconciles against the DB regardless.
-    setTurnWorking(turnId, type, false);
   }
 }
 

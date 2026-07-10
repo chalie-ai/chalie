@@ -19,6 +19,7 @@ import { storeToRefs } from 'pinia';
 import { ConfigType } from '@chalie/shared';
 import { readDomContext } from '../../utils/domContext';
 import { on } from '../../composables/useEventBus';
+import { useDockBusy } from '../../composables/useDockBusy';
 import { useSessionStore } from '../../stores/session';
 import { useVoiceStore } from '../../stores/voice';
 import { useAttachmentsStore } from '../../stores/attachments';
@@ -57,6 +58,12 @@ const ambient = useAmbientSensor();
 
 const { available: voiceAvailable, recorderState } = storeToRefs(voiceStore);
 const { level, levelLabel, usageDisplay } = storeToRefs(contextUsage);
+
+// D3: this dock's own busy state, scoped to its own target (null = main
+// spine, else the thread it replies in) — replaces the old GLOBAL
+// `session.isSending`, which incorrectly drove every dock's spinner off the
+// main spine alone, even inside a thread reply dock.
+const sending = useDockBusy(() => props.turnId, () => props.type);
 
 const THINKING_ITEMS = [
   { level: 'auto', label: 'Auto' },
@@ -104,7 +111,7 @@ async function handleSend(): Promise<void> {
 
   // Clear the image strip only when this actually dispatches a turn. When the
   // lane is busy the send is queued (text-only) and the attachments stay pending.
-  const wasBusy = session.isLaneBusy(turnId, type);
+  const wasBusy = session.isSurfaceBusy(turnId, type);
 
   // Clear textarea before awaiting so the UI feels instant.
   text.value = '';
@@ -354,11 +361,11 @@ onBeforeUnmount(() => {
 
         <button
           class="btn-action btn-action--send"
-          :aria-label="session.isSending ? 'Sending...' : 'Send message'"
-          :disabled="!canSend || session.isSending"
+          :aria-label="sending ? 'Sending...' : 'Send message'"
+          :disabled="!canSend || sending"
           @click="handleSend()"
         >
-          <LoaderCircle v-if="session.isSending" class="btn-action--send__spinner" :size="20" />
+          <LoaderCircle v-if="sending" class="btn-action--send__spinner" :size="20" />
           <Send v-else :size="20" />
         </button>
       </div>
