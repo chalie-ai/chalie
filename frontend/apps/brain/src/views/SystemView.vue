@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue';
+import { computed, ref } from 'vue';
+import { useAsyncResource } from '@chalie/shared';
 import { Lock, Network } from '@lucide/vue';
 import ToggleSwitch from '../ui/ToggleSwitch.vue';
 import { useToast } from '../composables/useToast';
@@ -10,7 +11,6 @@ import { system } from '../api/system';
 const { show: showToast } = useToast();
 const { confirm } = useConfirm();
 
-const loading = ref(true);
 const restarting = ref(false);
 
 const domain = ref('');
@@ -25,18 +25,15 @@ const sslSaveBlocked = computed(
     !!sslCertFile.value !== !!sslKeyFile.value,
 );
 
-onMounted(async () => {
-  try {
+const { loading } = useAsyncResource(
+  async (): Promise<void> => {
     const cfg: NetworkConfig = await system.getNetwork();
     domain.value = cfg.deployment_domain;
     sslEnabled.value = cfg.ssl_enabled;
     sslCertPresent.value = cfg.ssl_cert_present;
-  } catch {
-    showToast('Failed to load network settings', 'error');
-  } finally {
-    loading.value = false;
-  }
-});
+  },
+  { initial: undefined, onError: () => showToast('Failed to load network settings', 'error') },
+);
 
 function onCertChosen(e: Event): void {
   sslCertFile.value = (e.target as HTMLInputElement).files?.[0] ?? null;

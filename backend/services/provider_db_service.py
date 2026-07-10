@@ -11,8 +11,8 @@ from services.log_utils import safe
 logger = logging.getLogger(__name__)
 
 # User-facing 409 message when a provider still holds an assigned role.
-# Must stay byte-identical to the entry in api/providers._SAFE_VALIDATION_MESSAGES
-# (imported there) — it is the single source of truth surfaced to the admin.
+# Included in services/provider_probe.SAFE_VALIDATION_MESSAGES (imported there) —
+# this constant is the single source of truth surfaced to the admin.
 PROVIDER_IN_USE_MSG = (
     "This provider is in use as the main, vision, or delegate provider and "
     "cannot be deleted. Clear or reassign that role first."

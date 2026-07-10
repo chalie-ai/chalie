@@ -2,7 +2,7 @@
 import { onMounted, ref } from 'vue';
 import type { MemoryRecord } from '../../api/cognition';
 import { cognition } from '../../api/cognition';
-import { formatDate } from '../../utils/format';
+import { capitalize, formatDate } from '../../utils/format';
 import EmptyState from '../../ui/EmptyState.vue';
 
 type MemorySource = 'episodes' | 'user' | 'system';
@@ -73,7 +73,7 @@ onMounted(load);
           :class="{ active: source === s }"
           @click="selectSource(s)"
         >
-          {{ s.charAt(0).toUpperCase() + s.slice(1) }}
+          {{ capitalize(s) }}
         </button>
       </div>
       <input

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed } from 'vue';
-
+import { DAYS, MONTHS, parseDate, formatClock } from '../../utils/time';
 export interface CalendarEvent {
   dtstart?: string;
   dtend?: string;
@@ -19,32 +19,6 @@ export interface CalendarPayload {
 }
 
 const props = defineProps<{ payload: CalendarPayload; synthesis?: string }>();
-
-const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'] as const;
-const MONTHS = [
-  'Jan',
-  'Feb',
-  'Mar',
-  'Apr',
-  'May',
-  'Jun',
-  'Jul',
-  'Aug',
-  'Sep',
-  'Oct',
-  'Nov',
-  'Dec',
-] as const;
-
-function parseISO(s: string | undefined | null): Date | null {
-  if (!s) return null;
-  const d = new Date(s);
-  return Number.isNaN(d.getTime()) ? null : d;
-}
-
-function formatTime(d: Date): string {
-  return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
-}
 
 function dateKey(d: Date): string {
   return `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
@@ -65,7 +39,7 @@ interface WhenBlock {
 
 const whenBlock = computed<WhenBlock>(() => {
   const ev = singleEvent.value;
-  const d = ev ? parseISO(ev.dtstart) : null;
+  const d = ev ? parseDate(ev.dtstart) : null;
   return {
     day: d ? DAYS[d.getDay()] : '—',
     date: d ? d.getDate() : '—',
@@ -82,11 +56,11 @@ const singleMeta = computed<SingleMeta>(() => {
   const ev = singleEvent.value;
   if (!ev) return { timePart: null, calendarName: null };
 
-  const dtstart = ev.all_day ? null : parseISO(ev.dtstart);
-  const dtend = dtstart && parseISO(ev.dtend);
+  const dtstart = ev.all_day ? null : parseDate(ev.dtstart);
+  const dtend = dtstart && parseDate(ev.dtend);
   let timePart: string | null = ev.all_day ? 'All day' : null;
   if (dtstart) {
-    timePart = dtend ? `${formatTime(dtstart)} – ${formatTime(dtend)}` : formatTime(dtstart);
+    timePart = dtend ? `${formatClock(dtstart)} – ${formatClock(dtend)}` : formatClock(dtstart);
   }
 
   return { timePart, calendarName: ev.calendar_name ?? null };
@@ -111,7 +85,7 @@ const dayGroups = computed<DayGroup[]>(() => {
   const groupMap = new Map<string, { date: Date | null; rows: ListRow[] }>();
 
   for (const ev of evs) {
-    const dt = parseISO(ev.dtstart);
+    const dt = parseDate(ev.dtstart);
     const key = dt ? dateKey(dt) : 'unknown';
 
     if (!groupMap.has(key)) {
@@ -119,7 +93,7 @@ const dayGroups = computed<DayGroup[]>(() => {
     }
 
     groupMap.get(key)!.rows.push({
-      timeText: ev.all_day ? 'All day' : dt ? formatTime(dt) : '',
+      timeText: ev.all_day ? 'All day' : dt ? formatClock(dt) : '',
       title: ev.title ?? '',
       location: ev.location ?? null,
     });

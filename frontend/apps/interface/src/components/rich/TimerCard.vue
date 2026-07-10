@@ -9,6 +9,7 @@
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
 import { Pause, Play, Square } from '@lucide/vue';
 import { webPlatformAdapter } from '@chalie/shared';
+import { formatClock, formatDuration } from '../../utils/time';
 
 export interface TimerPayload {
   id: string | number;
@@ -35,27 +36,6 @@ function parseStartedAt(s: string | undefined | null): number | null {
   if (!s) return null;
   const t = Date.parse(s);
   return Number.isFinite(t) ? t : null;
-}
-
-function pad2(n: number): string {
-  return n < 10 ? `0${n}` : String(n);
-}
-
-function formatRemaining(totalSeconds: number): string {
-  const h = Math.floor(totalSeconds / 3_600);
-  const m = Math.floor((totalSeconds % 3_600) / 60);
-  const s = totalSeconds % 60;
-  if (h > 0) return `${h}:${pad2(m)}:${pad2(s)}`;
-  return `${pad2(m)}:${pad2(s)}`;
-}
-
-function formatHMS(d: Date): string {
-  return d.toLocaleTimeString([], {
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit',
-    hour12: false,
-  });
 }
 
 interface AlarmHandle {
@@ -168,7 +148,7 @@ function update(): void {
   const remainingSeconds = Math.max(0, Math.ceil(remainingMs / 1_000));
   setProgress(Math.min(1, 1 - remainingSeconds / totalSeconds));
   if (remainingMs > 0) {
-    timeHtml.value = `<b>${formatRemaining(remainingSeconds)}</b> remaining · ends ${formatHMS(new Date(endsAtMs))}`;
+    timeHtml.value = `<b>${formatDuration(remainingSeconds)}</b> remaining · ends ${formatClock(new Date(endsAtMs), { seconds: true })}`;
   }
 }
 

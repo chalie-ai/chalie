@@ -115,7 +115,7 @@ async function load(): Promise<void> {
       providers.getDelegate(),
     ]);
     providerList.value = provRes;
-    selectedId.value = selRes ? selRes.id : null;
+    selectedId.value = selRes.provider ? selRes.provider.id : null;
     visionId.value = visRes.provider ? visRes.provider.id : null;
     visionSource.value = visRes.source || 'none';
     delegateId.value = delRes.provider ? delRes.provider.id : null;
@@ -267,7 +267,7 @@ async function ensureCatalog(): Promise<void> {
   if (catalogLoaded.value) return;
   try {
     const res = await providers.getCatalog();
-    catalog.value = Array.isArray(res.catalog) ? res.catalog : [];
+    catalog.value = Array.isArray(res) ? res : [];
     catalogLoaded.value = true; // only on success, so a failed load retries next open
   } catch {
     catalog.value = [];

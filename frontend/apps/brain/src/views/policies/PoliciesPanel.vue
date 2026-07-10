@@ -2,7 +2,7 @@
 import { computed, onMounted, ref } from 'vue';
 import type { BlockedEntry, PolicyRow } from '../../api/policies';
 import { policies } from '../../api/policies';
-import { formatDate } from '../../utils/format';
+import { capitalize, formatDate } from '../../utils/format';
 import { HttpError } from '@chalie/shared';
 import { useToast } from '../../composables/useToast';
 
@@ -11,7 +11,6 @@ const props = defineProps<{ channel: 'chat' | 'subconscious' | 'external_agent' 
 const { show: showToast } = useToast();
 
 const SETTINGS = ['allow', 'ask', 'deny'] as const;
-const cap = (v: string): string => v.charAt(0).toUpperCase() + v.slice(1);
 
 const rows = ref<PolicyRow[]>([]);
 const blocked = ref<BlockedEntry[]>([]);
@@ -95,7 +94,7 @@ onMounted(load);
     <div class="panel-header-actions">
       <div class="segmented policy-bulk" title="Set every permission in this channel">
         <button v-for="v in SETTINGS" :key="v" class="seg-btn" @click="setAll(v)">
-          {{ cap(v) }}
+          {{ capitalize(v) }}
         </button>
       </div>
     </div>
@@ -119,7 +118,7 @@ onMounted(load);
             :class="{ active: v === r.setting }"
             @click="setPermission(r, v)"
           >
-            {{ cap(v) }}
+            {{ capitalize(v) }}
           </button>
         </div>
       </div>

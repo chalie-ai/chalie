@@ -11,7 +11,7 @@ import json
 import sqlite3
 import stat
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 import pytest
 from flask.testing import FlaskClient
@@ -21,6 +21,20 @@ if TYPE_CHECKING:
 
 import services.vault_service as _vault_mod
 from services.vault_service import _vault_state, get_vault_service
+
+
+def _unwrap_listing(body: "dict[str, object]") -> "list[dict[str, object]]":
+    """Assert the success listing envelope shape and return the result array."""
+    assert body.get("success") is True
+    assert "error" not in body
+    return cast("list[dict[str, object]]", body["result"])
+
+
+def _unwrap_single(body: "dict[str, object]") -> "dict[str, object]":
+    """Assert the success single-resource envelope shape and return the result dict."""
+    assert body.get("success") is True
+    assert "error" not in body
+    return cast("dict[str, object]", body["result"])
 
 # A stub that impersonates `codex`. `--version` prints a banner; `exec` reads the
 # prompt from stdin, writes the agent message to the -o file, and emits the 0.143.0
@@ -108,8 +122,9 @@ class TestCodexCliProvider:
 
     def test_codex_cli_is_in_the_curated_catalog(self, authed_client: tuple[FlaskClient, sqlite3.Connection, object]) -> None:
         client, _db, _store = authed_client
-        catalog = client.get('/api/providers/catalog').get_json()['catalog']
-        by_id = {p['id']: p for p in catalog}
+        body = cast("dict[str, object]", client.get('/api/providers/catalog').get_json())
+        catalog = _unwrap_listing(body)
+        by_id = {cast(str, p['id']): p for p in catalog}
         assert 'codex_cli' in by_id, "codex_cli preset missing from catalog"
         preset = by_id['codex_cli']
         assert preset['platform'] == 'codex_cli'
@@ -136,13 +151,13 @@ class TestCodexCliProvider:
         client, _db, _store = authed_client
         _unlock_vault()
 
-        resp = client.post('/api/providers', json={
+        resp = client.post('/api/providers/-1', json={
             'name': 'my-codex',
             'platform': 'codex_cli',
             'model': 'gpt-5.5',
         })
         assert resp.status_code == 201, resp.get_data(as_text=True)
-        created = resp.get_json()
+        created = _unwrap_single(cast("dict[str, object]", resp.get_json()))
         assert created['platform'] == 'codex_cli'
         assert created['model'] == 'gpt-5.5'
         # chat-only: the vision probe must be skipped (never spawns codex).
@@ -253,9 +268,9 @@ class TestCodexCliProvider:
             'platform': 'codex_cli', 'model': 'gpt-5.5',
         })
         assert resp.status_code == 200
-        body = resp.get_json()
-        assert body['success'] is False
-        assert 'not found' in body['error'].lower()
+        result = _unwrap_single(cast("dict[str, object]", resp.get_json()))
+        assert result['success'] is False
+        assert 'not found' in cast(str, result['error']).lower()
 
     def test_test_endpoint_reports_not_logged_in(self, authed_client: tuple[FlaskClient, sqlite3.Connection, object], tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         client, _db, _store = authed_client
@@ -266,9 +281,9 @@ class TestCodexCliProvider:
             'platform': 'codex_cli', 'model': 'gpt-5.5',
         })
         assert resp.status_code == 200
-        body = resp.get_json()
-        assert body['success'] is False
-        assert 'logged in' in body['error'].lower()
+        result = _unwrap_single(cast("dict[str, object]", resp.get_json()))
+        assert result['success'] is False
+        assert 'logged in' in cast(str, result['error']).lower()
 
     def test_test_endpoint_ready_when_binary_and_auth_present(self, authed_client: tuple[FlaskClient, sqlite3.Connection, object], tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         client, _db, _store = authed_client
@@ -279,9 +294,9 @@ class TestCodexCliProvider:
             'platform': 'codex_cli', 'model': 'gpt-5.5',
         })
         assert resp.status_code == 200
-        body = resp.get_json()
-        assert body['success'] is True
-        assert 'ready' in body['message'].lower()
+        result = _unwrap_single(cast("dict[str, object]", resp.get_json()))
+        assert result['success'] is True
+        assert 'ready' in cast(str, result['message']).lower()
 
     # ------------------------------------------------------------------
     # list-models endpoint routes codex_cli to the local cache.
@@ -293,6 +308,7 @@ class TestCodexCliProvider:
 
         resp = client.post('/api/providers/list-models', json={'platform': 'codex_cli'})
         assert resp.status_code == 200
-        body = resp.get_json()
-        ids = {m['id'] for m in body['models']}
+        result = _unwrap_single(cast("dict[str, object]", resp.get_json()))
+        models = cast("list[dict[str, object]]", result['models'])
+        ids = {m['id'] for m in models}
         assert 'gpt-5.5' in ids

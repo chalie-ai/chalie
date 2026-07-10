@@ -1,14 +1,11 @@
 <script setup lang="ts">
-import { onMounted, reactive, ref } from 'vue';
+import { reactive } from 'vue';
 import { cognition } from '../../api/cognition';
 import { useToast } from '../../composables/useToast';
-import { HttpError } from '@chalie/shared';
+import { HttpError, useAsyncResource } from '@chalie/shared';
 import EmptyState from '../../ui/EmptyState.vue';
 
 const { show: showToast } = useToast();
-
-const loading = ref(true);
-const loadFailed = ref(false);
 
 const personality = reactive<{
   warmth: number;
@@ -26,8 +23,8 @@ const sliders = [
   { key: 'humor' as const, label: 'Humor', left: 'Dry', right: 'Playful' },
 ];
 
-onMounted(async () => {
-  try {
+const { loading, error: loadFailed } = useAsyncResource<void>(
+  async (): Promise<void> => {
     const data = await cognition.personality();
     const t = data.tuple || [0, 0, 0, 0, 0];
     personality.warmth = t[0];
@@ -35,12 +32,9 @@ onMounted(async () => {
     personality.expressiveness = t[2];
     personality.curiosity = t[3];
     personality.humor = t[4];
-  } catch {
-    loadFailed.value = true;
-  } finally {
-    loading.value = false;
-  }
-});
+  },
+  { initial: undefined },
+);
 
 async function save() {
   const tuple: [number, number, number, number, number] = [

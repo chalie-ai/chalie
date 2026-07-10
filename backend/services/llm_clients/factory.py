@@ -19,13 +19,13 @@ def build_client(config: dict[str, object]) -> ProviderClient:
     if not platform:
         raise ValueError(
             "LLM config missing 'platform'. No provider configured — "
-            "add one via POST /api/providers"
+            "add one via POST /api/providers/-1"
         )
 
     model = config.get('model')
     if not model:
         raise ValueError(
-            "LLM config missing 'model'. Configure it via POST /api/providers"
+            "LLM config missing 'model'. Configure it via the providers API"
         )
 
     if platform == 'ollama':

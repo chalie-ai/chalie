@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue';
 import { describeCron } from '@chalie/shared';
+import { DAYS, MONTHS, parseDate, formatClock } from '../../utils/time';
 
 export interface SchedulerRecord {
   id: number;
@@ -24,37 +25,9 @@ const props = defineProps<{
   synthesis?: string;
 }>();
 
-const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'] as const;
-const MONTHS = [
-  'Jan',
-  'Feb',
-  'Mar',
-  'Apr',
-  'May',
-  'Jun',
-  'Jul',
-  'Aug',
-  'Sep',
-  'Oct',
-  'Nov',
-  'Dec',
-] as const;
-
-// The backend already localizes start_at to the user's timezone — parse and
-// read the components directly, no client-side offset math.
-function parseLocal(isoStr: string | null | undefined): Date | null {
-  if (!isoStr) return null;
-  const d = new Date(isoStr);
-  return Number.isNaN(d.getTime()) ? null : d;
-}
-
-function formatTime(d: Date): string {
-  return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
-}
-
 const record = computed(() => props.payload.record);
 
-const startAt = computed(() => parseLocal(record.value.start_at));
+const startAt = computed(() => parseDate(record.value.start_at));
 
 const whenDay = computed(() => (startAt.value ? DAYS[startAt.value.getDay()] : '—'));
 const whenDate = computed(() => (startAt.value ? String(startAt.value.getDate()) : '—'));
@@ -62,7 +35,7 @@ const whenMon = computed(() => (startAt.value ? MONTHS[startAt.value.getMonth()]
 
 const title = computed(() => record.value.message || props.synthesis || '');
 
-const metaTime = computed(() => (startAt.value ? formatTime(startAt.value) : null));
+const metaTime = computed(() => (startAt.value ? formatClock(startAt.value) : null));
 
 /** Cadence label, only when the record actually carries cron fields. */
 const cadenceText = computed((): string | null => {
@@ -76,7 +49,13 @@ const cadenceText = computed((): string | null => {
   ) {
     return null;
   }
-  return describeCron(r.minute ?? '*', r.hour ?? '*', r.day ?? '*', r.month ?? '*', r.weekday ?? '*');
+  return describeCron(
+    r.minute ?? '*',
+    r.hour ?? '*',
+    r.day ?? '*',
+    r.month ?? '*',
+    r.weekday ?? '*',
+  );
 });
 
 const metaText = computed((): string => {
@@ -169,5 +148,4 @@ const metaText = computed((): string => {
     font-weight: 500;
   }
 }
-
 </style>

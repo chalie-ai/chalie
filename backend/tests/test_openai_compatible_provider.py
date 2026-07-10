@@ -3,6 +3,7 @@
 
 import secrets
 import sqlite3
+from typing import cast
 
 import pytest
 from flask.testing import FlaskClient
@@ -19,6 +20,27 @@ def _unlock_vault(password: str = "test-password") -> None:
     vault = get_vault_service()
     vault.initialize(password)
     vault.unlock(password)
+
+
+def _unwrap_listing(body: "dict[str, object]") -> "list[dict[str, object]]":
+    """Assert the success listing envelope shape and return the result array."""
+    assert body.get("success") is True
+    assert "error" not in body
+    return cast("list[dict[str, object]]", body["result"])
+
+
+def _unwrap_single(body: "dict[str, object]") -> "dict[str, object]":
+    """Assert the success single-resource envelope shape and return the result dict."""
+    assert body.get("success") is True
+    assert "error" not in body
+    return cast("dict[str, object]", body["result"])
+
+
+def _unwrap_error(body: "dict[str, object]") -> str:
+    """Assert the error envelope shape and return the error message."""
+    assert body.get("success") is False
+    assert body.get("result") == []
+    return cast(str, body["error"])
 
 
 # ---------------------------------------------------------------------------
@@ -44,7 +66,7 @@ class TestOpenAICompatibleProvider:
         client, _, _store = authed_client
         _unlock_vault()
 
-        resp = client.post('/api/providers', json={
+        resp = client.post('/api/providers/-1', json={
             'name': 'minimax-m2',
             'platform': 'openai_compatible',
             'model': 'MiniMax-M2',
@@ -53,15 +75,15 @@ class TestOpenAICompatibleProvider:
         })
 
         assert resp.status_code == 201, resp.get_data(as_text=True)
-        created = resp.get_json()
+        created = _unwrap_single(cast("dict[str, object]", resp.get_json()))
         assert created['platform'] == 'openai_compatible'
         assert created['model'] == 'MiniMax-M2'
         assert created['host'] == 'https://api.minimax.io/v1'
         assert 'api_key' not in created  # write-only: never on the read shape
 
-        list_resp = client.get('/api/providers')
+        list_resp = client.get('/api/providers/all')
         assert list_resp.status_code == 200
-        providers = list_resp.get_json()
+        providers = _unwrap_listing(cast("dict[str, object]", list_resp.get_json()))
         names = [p['name'] for p in providers]
         assert 'minimax-m2' in names
 
@@ -79,7 +101,7 @@ class TestOpenAICompatibleProvider:
         _unlock_vault()
 
         test_key = secrets.token_hex(16)
-        resp = client.post('/api/providers', json={
+        resp = client.post('/api/providers/-1', json={
             'name': 'minimax-vault-roundtrip',
             'platform': 'openai_compatible',
             'model': 'MiniMax-M2',
@@ -87,7 +109,7 @@ class TestOpenAICompatibleProvider:
             'api_key': test_key,
         })
         assert resp.status_code == 201
-        provider_id = resp.get_json()['id']
+        provider_id = cast(int, _unwrap_single(cast("dict[str, object]", resp.get_json()))['id'])
 
         # Read back via the DB service (decrypts the key)
         from services.provider_db_service import ProviderDbService
@@ -171,7 +193,7 @@ class TestOpenAICompatibleProvider:
         client, _, _store = authed_client
         _unlock_vault()
 
-        resp = client.post('/api/providers', json={
+        resp = client.post('/api/providers/-1', json={
             'name': 'minimax-no-host',
             'platform': 'openai_compatible',
             'model': 'MiniMax-M2',
@@ -179,11 +201,12 @@ class TestOpenAICompatibleProvider:
             # host is intentionally omitted
         })
 
-        assert resp.status_code in (400, 422), (
-            f"Expected 4xx for missing host, got {resp.status_code}: "
+        # Legacy returned 422 here; the new base contract's EndpointError default
+        # is 400 for the same validation failure surfaced by the provider service.
+        assert resp.status_code == 400, (
+            f"Expected 400 for missing host, got {resp.status_code}: "
             f"{resp.get_data(as_text=True)}"
         )
-        body = resp.get_json()
-        assert body is not None
-        error_text = str(body).lower()
+        body = cast("dict[str, object]", resp.get_json())
+        error_text = _unwrap_error(body).lower()
         assert 'host' in error_text or 'required' in error_text or 'error' in error_text

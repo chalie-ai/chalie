@@ -66,6 +66,7 @@ def _resolve_api_key(config: dict[str, object]) -> str:
     if not api_key:
         raise ValueError(
             "API key not found in provider configuration. "
-            "Store the API key in the database via POST /api/providers or update via PUT /api/providers/<id>"
+            "Store the API key in the database via the providers API "
+            "(create: POST /api/providers/-1, update: POST /api/providers/<id>)"
         )
     return cast(str, api_key)

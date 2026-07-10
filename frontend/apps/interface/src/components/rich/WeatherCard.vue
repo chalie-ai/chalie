@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue';
 import { renderMarkup } from '../../composables/useMarkup';
+import { DAYS, parseDate, formatClock } from '../../utils/time';
 
 export interface WeatherPayload {
   location?: string;
@@ -17,14 +18,7 @@ export interface WeatherPayload {
 
 const props = defineProps<{ payload: WeatherPayload; synthesis?: string }>();
 
-const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'] as const;
-
-/** Parse an Open-Meteo local ISO ("YYYY-MM-DDTHH:MM") into a Date. */
-function parseLocalISO(s: string | undefined): Date | null {
-  if (!s) return null;
-  const d = new Date(s);
-  return Number.isNaN(d.getTime()) ? null : d;
-}
+const now = new Date();
 
 /** Sky phase from local hour + sunrise/sunset; coarse day/night when astro times missing. */
 function pickPhase(
@@ -32,8 +26,8 @@ function pickPhase(
   sunrise: string | undefined,
   sunset: string | undefined,
 ): 'dawn' | 'day' | 'sunset' | 'night' {
-  const sr = parseLocalISO(sunrise);
-  const ss = parseLocalISO(sunset);
+  const sr = parseDate(sunrise);
+  const ss = parseDate(sunset);
   if (!sr || !ss) {
     return now.getHours() >= 6 && now.getHours() < 20 ? 'day' : 'night';
   }
@@ -46,12 +40,6 @@ function pickPhase(
   return 'night';
 }
 
-function formatHM(d: Date): string {
-  return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
-}
-
-const now = new Date();
-
 const phase = computed<'dawn' | 'day' | 'sunset' | 'night'>(() =>
   pickPhase(now, props.payload.sunrise, props.payload.sunset),
 );
@@ -60,7 +48,7 @@ const roundedTemp = computed<number>(() => Math.round(props.payload.temperature_
 
 const dayLabel = computed<string>(() => DAYS[now.getDay()]);
 
-const timeLabel = computed<string>(() => formatHM(now));
+const timeLabel = computed<string>(() => formatClock(now));
 
 const captionHtml = computed<string>(() => (props.synthesis ? renderMarkup(props.synthesis) : ''));
 
