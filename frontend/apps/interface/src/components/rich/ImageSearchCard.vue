@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, reactive } from 'vue';
+import { computed, reactive, ref, onMounted, onBeforeUnmount } from 'vue';
 
 /**
  * Image search payload shape from the backend.
@@ -17,6 +17,7 @@ export interface ImageSearchPayload {
 
 const props = defineProps<{
   payload: ImageSearchPayload;
+  /** Part of the shared rich-card prop contract; the image summary is not shown here. */
   synthesis?: string;
 }>();
 
@@ -40,11 +41,43 @@ function isHttp(url: string): boolean {
   }
 }
 
+/** Hostname of an absolute URL, `www.` stripped. Best-effort: falls back to the
+ * raw string when parsing fails (only fed gated http(s) URLs, so it won't). */
+function extractDomain(url: string): string {
+  try {
+    return new URL(url).hostname.replace(/^www\./, '');
+  } catch {
+    return url;
+  }
+}
+
+/** Two-character initials for a source pill's icon. */
+function initials(name: string): string {
+  return name
+    .replace(/^https?:\/\/(www\.)?/, '')
+    .replace(/\.com|\.org|\.net|\.io|\.eu|\.co\.uk/g, '')
+    .slice(0, 2)
+    .toUpperCase();
+}
+
+/** Deterministic pill-icon colour hashed from the domain (stable per source). */
+const SOURCE_COLORS: readonly string[] = [
+  '#4ea2ff', '#FF2FD1', '#F2C94C', '#00F0FF', '#34d399',
+  '#fb7185', '#8A5CFF', '#fbbf24', '#6E3FE6', '#B07CFF',
+] as const;
+function pickColor(name: string): string {
+  let hash = 0;
+  for (let i = 0; i < name.length; i++) {
+    hash = Math.trunc((hash << 5) - hash + (name.codePointAt(i) ?? 0));
+  }
+  return SOURCE_COLORS[Math.abs(hash) % SOURCE_COLORS.length] as string;
+}
+
 interface ResolvedImage {
   thumbSrc: string;
   linkHref: string;
   title: string;
-  source: string;
+  domain: string;
   verified: boolean;
 }
 
@@ -59,52 +92,129 @@ const resolved = computed<ResolvedImage[]>(() => {
     const src = thumb || fallback;
     if (!src) continue;
     const href = isHttp(img.url) ? img.url : '';
+    const domainSrc = img.source && isHttp(img.source) ? img.source : href;
     out.push({
       thumbSrc: src,
       linkHref: href,
       title: img.title || '',
-      source: img.source || '',
+      domain: domainSrc ? extractDomain(domainSrc) : '',
       verified: Boolean(img.verified),
     });
   }
   return out;
 });
 
-/** Grid indices whose thumbnail 404'd at load time — swapped for the `⊘`
- * placeholder while keeping the cell's aspect box so layout stays intact. */
+/** Deduped source domains across the resolved images, in first-seen order —
+ * folded into clean pills instead of a full URL under every thumbnail. */
+const domains = computed<string[]>(() => {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const img of resolved.value) {
+    if (!img.domain || seen.has(img.domain)) continue;
+    seen.add(img.domain);
+    out.push(img.domain);
+  }
+  return out;
+});
+
+/** Carousel indices whose thumbnail 404'd at load time — swapped for the `⊘`
+ * placeholder while keeping the slide's aspect box so layout stays intact. */
 const failed = reactive(new Set<number>());
+
+// ── Carousel navigation ─────────────────────────────────────────────────────
+// Local view state only (no fetch/store/WS): a scroll-snap track paged by the
+// ‹ / › buttons. Buttons appear only when the slides overflow, and each disables
+// at its end of the track.
+const track = ref<HTMLElement | null>(null);
+const overflowing = ref(false);
+const atStart = ref(true);
+const atEnd = ref(false);
+const GAP = 16;
+
+function updateNav(): void {
+  const el = track.value;
+  if (!el) return;
+  const max = el.scrollWidth - el.clientWidth;
+  overflowing.value = max > 1;
+  atStart.value = el.scrollLeft <= 1;
+  atEnd.value = el.scrollLeft >= max - 1;
+}
+
+function step(dir: 1 | -1): void {
+  const el = track.value;
+  if (!el) return;
+  const cell = el.querySelector<HTMLElement>('.image-card__cell');
+  const width = cell ? cell.getBoundingClientRect().width + GAP : el.clientWidth;
+  el.scrollBy({ left: dir * width, behavior: 'smooth' });
+}
+
+let ro: ResizeObserver | null = null;
+onMounted(() => {
+  updateNav();
+  if (track.value && 'ResizeObserver' in window) {
+    ro = new ResizeObserver(() => updateNav());
+    ro.observe(track.value);
+  }
+});
+onBeforeUnmount(() => {
+  ro?.disconnect();
+  ro = null;
+});
 </script>
 
 <template>
   <div v-if="resolved.length" class="rich-card image-card">
     <div class="image-card__header">
       <span class="image-card__query">{{ payload.query }}</span>
-      <span v-if="synthesis" class="image-card__synthesis">{{ synthesis }}</span>
     </div>
 
-    <div class="image-card__grid">
-      <div v-for="(img, idx) in resolved" :key="idx" class="image-card__cell">
-        <component
-          :is="img.linkHref ? 'a' : 'div'"
-          class="image-card__link"
-          v-bind="img.linkHref ? { href: img.linkHref, target: '_blank', rel: 'noopener noreferrer' } : {}"
-        >
-          <img
-            v-if="!failed.has(idx)"
-            :src="img.thumbSrc"
-            :alt="img.title || 'Image'"
-            class="image-card__img"
-            loading="lazy"
-            @error="failed.add(idx)"
-          />
-          <div v-else class="image-card__img image-card__img--broken" aria-hidden="true">⊘</div>
-        </component>
-        <div v-if="img.verified" class="image-card__badge" role="img" aria-label="Verified">✓</div>
-        <div class="image-card__meta">
-          <span v-if="img.title" class="image-card__title">{{ img.title }}</span>
-          <span v-if="img.source" class="image-card__source">{{ img.source }}</span>
+    <div class="image-card__carousel">
+      <button
+        v-if="overflowing"
+        type="button"
+        class="image-card__nav image-card__nav--prev"
+        :disabled="atStart"
+        aria-label="Previous images"
+        @click="step(-1)"
+      >‹</button>
+
+      <div ref="track" class="image-card__track" @scroll="updateNav">
+        <div v-for="(img, idx) in resolved" :key="idx" class="image-card__cell">
+          <component
+            :is="img.linkHref ? 'a' : 'div'"
+            class="image-card__link"
+            v-bind="img.linkHref ? { href: img.linkHref, target: '_blank', rel: 'noopener noreferrer' } : {}"
+          >
+            <img
+              v-if="!failed.has(idx)"
+              :src="img.thumbSrc"
+              :alt="img.title || 'Image'"
+              class="image-card__img"
+              loading="lazy"
+              @error="failed.add(idx)"
+            />
+            <div v-else class="image-card__img image-card__img--broken" aria-hidden="true">⊘</div>
+          </component>
+          <div v-if="img.verified" class="image-card__badge" role="img" aria-label="Verified">✓</div>
         </div>
       </div>
+
+      <button
+        v-if="overflowing"
+        type="button"
+        class="image-card__nav image-card__nav--next"
+        :disabled="atEnd"
+        aria-label="Next images"
+        @click="step(1)"
+      >›</button>
+    </div>
+
+    <div v-if="domains.length" class="image-card__sources">
+      <span v-for="domain in domains" :key="domain" class="image-card__src">
+        <span
+          class="image-card__src-ico"
+          :style="{ background: pickColor(domain) }"
+        >{{ initials(domain) }}</span>{{ domain }}</span>
     </div>
   </div>
 </template>
@@ -112,18 +222,18 @@ const failed = reactive(new Set<number>());
 <style scoped lang="scss">
 /* Card-specific rules only; base .rich-card chrome lives globally in rich-card-base.scss. */
 
+/* No card frame: the images ARE the content. Unset the base bg/border/padding and
+   let the carousel span the full message column (mirrors weather-card). */
 .rich-card.image-card {
-  max-width: 620px;
+  background: none;
+  border: none;
+  padding: 0;
+  width: 100%;
+  max-width: 100%;
 }
 
 .image-card__header {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  gap: 6px 12px;
-  margin-bottom: 12px;
-  padding-bottom: 10px;
-  border-bottom: 1px solid var(--border);
+  margin-bottom: 8px;
 }
 
 .image-card__query {
@@ -133,29 +243,40 @@ const failed = reactive(new Set<number>());
   letter-spacing: -0.01em;
 }
 
-.image-card__synthesis {
-  font-size: 0.78rem;
-  color: var(--text-tertiary);
-  font-style: italic;
-  margin-left: auto;
+/* Carousel: a scroll-snap track (no visible scrollbar) paged by the edge buttons.
+   1 slide per view on small screens, 2 on larger ones. */
+.image-card__carousel {
+  position: relative;
 }
 
-.image-card__grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
-  gap: 10px;
+.image-card__track {
+  display: flex;
+  gap: 16px;
+  overflow-x: auto;
+  scroll-snap-type: x mandatory;
+  scroll-behavior: smooth;
+  scrollbar-width: none; /* Firefox */
+  -ms-overflow-style: none; /* legacy Edge */
+
+  &::-webkit-scrollbar {
+    display: none; /* WebKit */
+  }
 }
 
 .image-card__cell {
   position: relative;
-  border-radius: 10px;
-  overflow: hidden;
-  border: 1px solid var(--border);
-  background: var(--bg-input);
-  transition: border-color 160ms ease;
+  flex: 0 0 100%; /* 1-up on small screens */
+  scroll-snap-align: start;
+  transition: opacity 160ms ease;
 
   &:hover {
-    border-color: var(--border-strong);
+    opacity: 0.92;
+  }
+}
+
+@media (min-width: 641px) {
+  .image-card__cell {
+    flex-basis: calc((100% - 16px) / 2); /* 2-up on larger screens */
   }
 }
 
@@ -170,6 +291,7 @@ const failed = reactive(new Set<number>());
   width: 100%;
   aspect-ratio: 4 / 3;
   object-fit: cover;
+  border-radius: 12px;
   background: color-mix(in oklab, var(--violet) 6%, var(--bg-2));
 }
 
@@ -183,8 +305,8 @@ const failed = reactive(new Set<number>());
 
 .image-card__badge {
   position: absolute;
-  top: 5px;
-  right: 5px;
+  top: 7px;
+  right: 7px;
   width: 18px;
   height: 18px;
   border-radius: 50%;
@@ -195,36 +317,83 @@ const failed = reactive(new Set<number>());
   align-items: center;
   justify-content: center;
   pointer-events: none;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.25);
 }
 
-.image-card__meta {
-  padding: 7px 8px 8px;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-
-.image-card__title {
-  font-size: 0.76rem;
-  font-weight: 500;
+/* Edge navigation buttons — overlaid, vertically centred; hidden at their bound. */
+.image-card__nav {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  z-index: 2;
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  border: 1px solid var(--border);
+  background: color-mix(in oklab, var(--bg-surface) 85%, transparent);
+  backdrop-filter: blur(4px);
   color: var(--text-primary);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  line-height: 1.25;
-  /* title/source are third-party search strings — isolate bidi control chars
-     so a hostile RTL override can't visually reorder the attribution label. */
+  font-size: 1.35rem;
+  line-height: 1;
+  padding: 0 0 3px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: opacity 160ms ease, background 160ms ease;
+
+  &:hover {
+    background: var(--bg-surface);
+  }
+
+  &:disabled {
+    opacity: 0;
+    pointer-events: none;
+  }
+
+  &--prev {
+    left: 8px;
+  }
+
+  &--next {
+    right: 8px;
+  }
+}
+
+/* Deduped source pills — folds every thumbnail's origin into clean domain chips,
+   mirroring the web-search card. */
+.image-card__sources {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-top: 12px;
+  font-family: var(--font-mono, 'JetBrains Mono', ui-monospace, monospace);
+  font-size: 0.66rem;
+  letter-spacing: 0.06em;
+}
+
+.image-card__src {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 9px 3px 3px;
+  border-radius: 999px;
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  color: var(--text-secondary);
   unicode-bidi: isolate;
 }
 
-.image-card__source {
-  font-size: 0.68rem;
-  color: var(--text-tertiary);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-family: var(--font-mono, 'JetBrains Mono', ui-monospace, monospace);
-  unicode-bidi: isolate;
+.image-card__src-ico {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.52rem;
+  font-weight: 600;
+  color: white;
+  flex-shrink: 0;
 }
 </style>
