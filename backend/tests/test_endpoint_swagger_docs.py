@@ -56,6 +56,9 @@ _MIGRATED_PREFIXES = (
     "/api/mcp-clients",
     "/api/providers",
     "/api/scheduler",
+    "/api/voice-settings",
+    "/api/memory",
+    "/api/settings",
 )
 """Endpoint groups migrated onto the Endpoint/Action base contract as of this
 test's writing — the prefixes the base-contract swagger bridge is responsible
