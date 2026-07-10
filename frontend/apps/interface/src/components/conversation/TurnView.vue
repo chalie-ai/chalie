@@ -6,8 +6,9 @@ import { computed } from 'vue';
 import { User } from '@lucide/vue';
 import { ConfigType } from '@chalie/shared';
 import type { ConversationMessage, ConversationTurnBlock } from '../../api/conversation';
-import type { LiveToolPill } from '../../composables/useConversationFeed';
+import type { LiveToolPill } from '../../utils/liveActTrail';
 import { useConversationFeed } from '../../composables/useConversationFeed';
+import { liveTrailsFor } from '../../utils/liveActTrail';
 import UserBubble from './UserBubble.vue';
 import ChalieBubble from './ChalieBubble.vue';
 import ActCycle from './ActCycle.vue';
@@ -77,7 +78,7 @@ const displayRows = computed<DisplayRow[]>(() => {
   // pill's animated dot instead — rendering "thinking..." inline would duplicate
   // that indicator and misattribute thread activity to the top-level timeline.
   if (props.block.working && (props.fullThread || !feed.value.isForkedThread(props.block.turn_id))) {
-    const trails = feed.value.liveTrailsFor(props.block.turn_id);
+    const trails = liveTrailsFor(props.type, props.block.turn_id);
     if (trails.length) {
       for (const t of trails) {
         rows.push({ kind: 'live-act', rowId: t.rowId, pills: t.pills });

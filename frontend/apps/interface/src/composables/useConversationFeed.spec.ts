@@ -3,10 +3,15 @@
  *
  * Exercises the core buffer invariants against hand-built sample blocks.
  * No network: all assertions are on in-memory state driven by direct calls
- * to upsertTurn, startLiveTool, finishLiveTool, and setWorking.
+ * to upsertTurn and setWorking.
+ *
+ * Pill mechanics themselves are tested in ../utils/liveActTrail.spec.ts;
+ * here we only cover the feed→trail handoff (§6.5 step 4 reconcile).
  *
  * Because useConversationFeed is a module-level singleton we re-import a
- * fresh module per test via vi.resetModules() to get clean state.
+ * fresh module per test via vi.resetModules() to get clean state — the
+ * liveActTrail module must be re-imported alongside it so both sides of a
+ * handoff test share the same module instance.
  */
 import { describe, expect, it, vi } from 'vitest';
 import type { ConversationTurnBlock } from '../api/conversation';
@@ -38,7 +43,9 @@ function block(
   };
 }
 
-// Re-import a fresh singleton for each test so state is isolated.
+// Re-import a fresh singleton for each test so state is isolated. Returns the
+// feed plus the SAME-registry liveActTrail module (the feed's default type is
+// ConfigType.USER = 'user').
 async function freshFeed() {
   vi.resetModules();
   // Stub the api module so upsertTurn calls never hit the network.
@@ -50,28 +57,29 @@ async function freshFeed() {
     },
   }));
   const { useConversationFeed } = await import('./useConversationFeed');
-  return useConversationFeed();
+  const trail = await import('../utils/liveActTrail');
+  return { feed: useConversationFeed(), trail, type: 'user' };
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 describe('upsertTurn — version guard', () => {
   it('accepts a newer block (higher max message id)', async () => {
-    const feed = await freshFeed();
+    const { feed } = await freshFeed();
     feed.upsertTurn(block(1, [10, 11]));
     feed.upsertTurn(block(1, [10, 11, 12]));
     expect(feed.blocks[1]?.messages).toHaveLength(3);
   });
 
   it('drops a strictly stale block (lower max message id)', async () => {
-    const feed = await freshFeed();
+    const { feed } = await freshFeed();
     feed.upsertTurn(block(1, [10, 11, 12]));
     feed.upsertTurn(block(1, [10, 11])); // older — must be dropped
     expect(feed.blocks[1]?.messages).toHaveLength(3);
   });
 
   it('re-applies an equal-version block (idempotent self-heal)', async () => {
-    const feed = await freshFeed();
+    const { feed } = await freshFeed();
     feed.upsertTurn(block(1, [10, 11]));
     const same = block(1, [10, 11]);
     same.preview = 'updated preview';
@@ -82,7 +90,7 @@ describe('upsertTurn — version guard', () => {
 
 describe('upsertTurn — turn_id ordering in sortedBlocks', () => {
   it('sorts turns by ascending turn_id regardless of insertion order', async () => {
-    const feed = await freshFeed();
+    const { feed } = await freshFeed();
     feed.upsertTurn(block(3, [30]));
     feed.upsertTurn(block(1, [10]));
     feed.upsertTurn(block(2, [20]));
@@ -91,66 +99,37 @@ describe('upsertTurn — turn_id ordering in sortedBlocks', () => {
   });
 });
 
-describe('live-pill clear-on-upsert handoff (§6.5 step 4)', () => {
-  it('removes a live trail for a turn once that turn has persisted tool_calls', async () => {
-    const feed = await freshFeed();
-    // Turn 1 has an in-flight live pill.
-    feed.startLiveTool(1, 999, 'search', 'searching…');
-    expect(feed.liveTools[1]).toBeDefined();
-
-    // Upsert a block where message id 11 now carries tool_calls.
-    feed.upsertTurn(block(1, [10, 11], { toolCalls: [11] }));
-
-    // The live trail for turn 1 must be gone — summaries take over.
-    expect(feed.liveTools[1]).toBeUndefined();
-  });
-
-  it('does not clear trails for a turn that has no persisted tool_calls yet', async () => {
-    const feed = await freshFeed();
-    feed.startLiveTool(1, 999, 'search');
-    feed.upsertTurn(block(1, [10, 11])); // no message carries tool_calls
-    expect(feed.liveTools[1]).toBeDefined();
-  });
-});
-
-describe('startLiveTool / finishLiveTool', () => {
-  it('adds an unresolved pill on startLiveTool', async () => {
-    const feed = await freshFeed();
-    feed.startLiveTool(1, 42, 'calendar', 'checking calendar');
-    const pills = feed.liveTools[1];
-    expect(pills).toHaveLength(1);
-    expect(pills?.[0]).toMatchObject({ id: '42', name: 'calendar', resolved: false });
-  });
-
-  it('resolves the correct pill on finishLiveTool, preserving others', async () => {
-    const feed = await freshFeed();
-    feed.startLiveTool(1, 42, 'calendar');
-    feed.startLiveTool(1, 43, 'weather');
-    feed.finishLiveTool(1, 42, true);
-    const pills = feed.liveTools[1] ?? [];
-    expect(pills.find((p) => p.id === '42')?.resolved).toBe(true);
-    expect(pills.find((p) => p.id === '43')?.resolved).toBe(false);
-  });
-
-  it('is a no-op for null callId', async () => {
-    const feed = await freshFeed();
-    expect(() => feed.finishLiveTool(1, null, true)).not.toThrow();
-  });
-});
-
 describe('setWorking', () => {
   it('marks a turn working then clears it', async () => {
-    const feed = await freshFeed();
+    const { feed } = await freshFeed();
     feed.setWorking(7, true);
     expect(feed.working[7]).toBe(true);
     feed.setWorking(7, false);
     expect(feed.working[7]).toBeUndefined();
   });
+});
 
-  it('clearing working also purges that turn live trails', async () => {
-    const feed = await freshFeed();
-    feed.startLiveTool(7, 1, 'search');
+describe('feed → liveActTrail handoff (§6.5 step 4)', () => {
+  it('upsertTurn with persisted tool_calls clears resolved live pills for that turn', async () => {
+    const { feed, trail, type } = await freshFeed();
+    trail.startLiveTool(type, 1, 42, 'search');
+    trail.finishLiveTool(type, 1, 42, true);
+    feed.upsertTurn(block(1, [10, 11], { toolCalls: [11] }));
+    expect(trail.liveTrailsFor(type, 1)).toEqual([]);
+  });
+
+  it('upsertTurn without tool_calls leaves live pills untouched', async () => {
+    const { feed, trail, type } = await freshFeed();
+    trail.startLiveTool(type, 1, 42, 'search');
+    feed.upsertTurn(block(1, [10, 11]));
+    expect(trail.liveTrailsFor(type, 1)[0]?.pills).toHaveLength(1);
+  });
+
+  it('setWorking(false) purges the live trail for that turn', async () => {
+    const { feed, trail, type } = await freshFeed();
+    trail.startLiveTool(type, 7, 42, 'search');
+    feed.setWorking(7, true);
     feed.setWorking(7, false);
-    expect(feed.liveTools[7]).toBeUndefined();
+    expect(trail.liveTrailsFor(type, 7)).toEqual([]);
   });
 });

@@ -2,7 +2,7 @@
 import { computed, onUnmounted, ref, watch } from 'vue';
 import { Undo2 } from '@lucide/vue';
 import { readDomContext } from '../../utils/domContext';
-import type { LiveToolPill } from '../../composables/useConversationFeed';
+import type { LiveToolPill } from '../../utils/liveActTrail';
 import { useSessionStore } from '../../stores/session';
 
 const props = defineProps<{ pills: LiveToolPill[] }>();
