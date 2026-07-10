@@ -59,6 +59,7 @@ _MIGRATED_PREFIXES = (
     "/api/voice-settings",
     "/api/memory",
     "/api/settings",
+    "/api/capabilities",
 )
 """Endpoint groups migrated onto the Endpoint/Action base contract as of this
 test's writing — the prefixes the base-contract swagger bridge is responsible
