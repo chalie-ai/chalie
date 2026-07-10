@@ -25,7 +25,12 @@ class SkillToggle(Action):
     """Action for flipping a skill's enabled state."""
 
     id_type: ClassVar[type[int] | type[str]] = int
-    response_dto = {"post": DocumentedResponse(SkillToggleResponse)}
+    response_dto = {
+        "post": DocumentedResponse(
+            SkillToggleResponse,
+            extras=((503, "Skills database unavailable"),),
+        )
+    }
 
     def slug(self) -> str:
         return "skills"

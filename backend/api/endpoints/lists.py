@@ -30,7 +30,10 @@ class Lists(Endpoint):
     response_dto = {
         "get_all": DocumentedResponse(ListResponse, listing=True),
         "get": DocumentedResponse(ListResponse),
-        "post": DocumentedResponse(ListResponse),
+        "post": DocumentedResponse(
+            ListResponse,
+            extras=((409, "A list with this name already exists"),),
+        ),
     }
 
     def slug(self) -> str:

@@ -29,9 +29,13 @@ from flask_restx import Namespace, Resource
 from pydantic import ValidationError
 
 from .auth import require_auth
-from .dto.openapi import register_dto, register_envelope, register_error_envelope
+from .dto.openapi import register_auth_error, register_dto, register_envelope, register_error_envelope
 from .request import Request
 from .response import Response
+
+_DECLARABLE_HANDLERS = frozenset({"get_all", "get", "post", "delete"})
+"""Handler names :attr:`Endpoint.response_dto` may key on — the same set
+:meth:`Endpoint.namespace`/:meth:`Action.namespace` dispatch to."""
 
 
 class EndpointError(Exception):
@@ -57,14 +61,21 @@ class DocumentedResponse:
     """Declares one handler's documented success shape for the swagger bridge.
 
     ``dto`` is the :class:`Response` subclass the envelope's ``result`` wraps;
-    ``listing`` selects the paginated-collection envelope (``result`` an array
-    plus a ``pagination`` block) over the single-resource envelope. Purely
-    declarative — never consulted at request time, only when
-    :meth:`Endpoint.namespace` builds the swagger doc.
+    ``None`` documents ``204 No Content`` (the base contract's own success
+    shape for a handler with nothing to declare — e.g. ``delete``) while still
+    letting :attr:`extras` attach genuinely-emitted error statuses. ``listing``
+    selects the paginated-collection envelope (``result`` an array plus a
+    ``pagination`` block) over the single-resource envelope. ``extras`` are
+    ``(status, description)`` pairs for real non-2xx statuses a handler emits
+    beyond the structurally-guaranteed 400/403/404/422/405 — each documented
+    against the uniform error envelope; only declare a status a handler
+    actually returns. Purely declarative — never consulted at request time,
+    only when :meth:`Endpoint.namespace` builds the swagger doc.
     """
 
-    dto: type[Response]
+    dto: type[Response] | None = None
     listing: bool = False
+    extras: tuple[tuple[int, str], ...] = ()
 
 
 class Endpoint(ABC):
@@ -92,8 +103,10 @@ class Endpoint(ABC):
     """Per-handler documented success shape, keyed by handler name
     (``get_all``/``get``/``post``/``delete``). A handler implemented but absent
     from this mapping is documented as ``204 No Content``, matching the base
-    contract's ``"", 204`` convention. Declaring a DTO here is the only swagger
-    wiring a subclass ever does — :meth:`namespace` does the rest."""
+    contract's ``"", 204`` convention. A key naming a handler this subclass
+    does not override raises at namespace-build time — such a declaration can
+    never render, so it is a bug, not a default. Declaring entries here is the
+    only swagger wiring a subclass ever does — :meth:`namespace` does the rest."""
 
     @abstractmethod
     def slug(self) -> str:
@@ -205,23 +218,35 @@ class Endpoint(ABC):
         it is the sole swagger wiring point, driven entirely by
         :attr:`request_dto` and :attr:`response_dto`.
         """
+        for declared_handler in self.response_dto:
+            if (
+                declared_handler not in _DECLARABLE_HANDLERS
+                or getattr(type(self), declared_handler) is getattr(Endpoint, declared_handler)
+            ):
+                raise ValueError(
+                    f"{type(self).__name__}.response_dto declares {declared_handler!r}, which this "
+                    "class does not override — a declaration that can never render is a bug, "
+                    "not a default"
+                )
+
         if self.request_dto is not None:
             register_dto(ns, self.request_dto)
 
         dto_classes: list[type[Response]] = []
         seen: set[str] = set()
         for doc in self.response_dto.values():
-            if doc.dto.__name__ not in seen:
+            if doc.dto is not None and doc.dto.__name__ not in seen:
                 dto_classes.append(doc.dto)
                 seen.add(doc.dto.__name__)
         if dto_classes:
             register_dto(ns, *dto_classes)
 
         error_model = ns.models[register_error_envelope(ns)]
+        auth_error_model = ns.models[register_auth_error(ns)]
 
         for resource, verb_map in resources:
             for http_verb, handler_name in verb_map.items():
-                self._document_method(ns, resource, http_verb, handler_name, error_model)
+                self._document_method(ns, resource, http_verb, handler_name, error_model, auth_error_model)
 
     def _document_method(
         self,
@@ -230,16 +255,23 @@ class Endpoint(ABC):
         http_verb: str,
         handler_name: str | None,
         error_model: object,
+        auth_error_model: object,
     ) -> None:
         """Attach swagger response/expect metadata to one generated Resource method.
 
-        A ``handler_name`` that resolves to the inherited :class:`Endpoint`
-        default (never overridden by this subclass) documents only the uniform
-        405; an implemented handler documents the structurally-guaranteed
-        error codes plus its success shape from :attr:`response_dto` (``204``
-        when the handler is implemented but declares no DTO).
+        Every verb documents 401 first — ``require_auth`` wraps every
+        generated method (see :meth:`namespace`), so authentication failure
+        structurally precedes dispatch, including the ``put``/unimplemented
+        stubs that never reach a handler at all. A ``handler_name`` that
+        resolves to the inherited :class:`Endpoint` default (never overridden
+        by this subclass) documents only the uniform 405 on top of that;
+        an implemented handler documents the structurally-guaranteed error
+        codes plus its success shape and any declared :attr:`DocumentedResponse.extras`
+        from :attr:`response_dto` (``204`` when the handler declares no DTO).
         """
         func = getattr(resource, http_verb)
+        func = ns.response(401, "Authentication required", model=auth_error_model)(func)
+
         if handler_name is None or getattr(type(self), handler_name) is getattr(Endpoint, handler_name):
             setattr(resource, http_verb, ns.response(405, "Method not allowed", model=error_model)(func))
             return
@@ -253,13 +285,17 @@ class Endpoint(ABC):
             func = ns.response(422, "Invalid request body", model=error_model)(func)
 
         doc = self.response_dto.get(handler_name)
-        if doc is None:
+        if doc is None or doc.dto is None:
             func = ns.response(204, "No Content")(func)
         else:
             envelope_model = ns.models[register_envelope(ns, doc.dto, listing=doc.listing)]
             func = ns.response(200, "OK", model=envelope_model)(func)
             if handler_name == "post":
                 func = ns.response(201, "Created", model=envelope_model)(func)
+
+        if doc is not None:
+            for status, description in doc.extras:
+                func = ns.response(status, description, model=error_model)(func)
 
         setattr(resource, http_verb, func)
 

@@ -17,6 +17,12 @@ same bridge to document the response *envelope* (``{"success", "result",
 ...}``) that :class:`api.response.response.Response` wraps every DTO in —
 the ``Endpoint``/``Action`` base contract's generated routes never emit a
 bare DTO, so documenting the DTO alone would misdescribe the wire shape.
+
+:func:`register_auth_error` documents a third, deliberately different shape:
+``api.auth.require_auth`` rejects an unauthenticated request with a bare
+``{"error": str}`` body before dispatch ever reaches an endpoint/action, so a
+401 is never wrapped in the ``{success, result, error}`` envelope every other
+failure uses.
 """
 
 from __future__ import annotations
@@ -76,6 +82,31 @@ def register_error_envelope(api: _SchemaRegistrar) -> str:
     """
     api.schema_model(_ERROR_ENVELOPE_NAME, _error_envelope_schema())
     return _ERROR_ENVELOPE_NAME
+
+
+_AUTH_ERROR_NAME = "AuthError"
+"""Model name for the bare authentication-failure body — one definition,
+shared by every namespace, distinct from :data:`_ERROR_ENVELOPE_NAME`."""
+
+
+def _auth_error_schema() -> dict[str, object]:
+    """OpenAPI 2.0 schema for ``require_auth``'s bare ``{"error": str}`` body."""
+    return {
+        "type": "object",
+        "properties": {"error": {"type": "string"}},
+        "required": ["error"],
+    }
+
+
+def register_auth_error(api: _SchemaRegistrar) -> str:
+    """Register the bare auth-failure model (idempotent); return its name.
+
+    Every route's 401 shares this one shape — ``require_auth`` runs before any
+    endpoint/action dispatch, so it is registered once per namespace rather
+    than derived from :func:`register_error_envelope`.
+    """
+    api.schema_model(_AUTH_ERROR_NAME, _auth_error_schema())
+    return _AUTH_ERROR_NAME
 
 
 def _single_envelope_schema(dto_name: str) -> dict[str, object]:

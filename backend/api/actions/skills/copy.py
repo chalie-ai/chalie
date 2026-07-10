@@ -31,7 +31,16 @@ class SkillCopy(Action):
     """Action for copying a curated skill into an editable user skill."""
 
     id_type: ClassVar[type[int] | type[str]] = int
-    response_dto = {"post": DocumentedResponse(SkillResponse)}
+    response_dto = {
+        "post": DocumentedResponse(
+            SkillResponse,
+            extras=(
+                (409, "A user copy of this skill already exists"),
+                (422, "Only curated skills can be copied"),
+                (503, "Skills database unavailable"),
+            ),
+        )
+    }
 
     def slug(self) -> str:
         return "skills"

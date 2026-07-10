@@ -60,7 +60,14 @@ class Skills(Endpoint):
     request_dto: ClassVar[type[Request] | None] = SkillRequest
     response_dto = {
         "get_all": DocumentedResponse(SkillResponse, listing=True),
-        "post": DocumentedResponse(SkillResponse),
+        "post": DocumentedResponse(
+            SkillResponse,
+            extras=(
+                (409, "A user skill with this title already exists"),
+                (503, "Skills database unavailable"),
+            ),
+        ),
+        "delete": DocumentedResponse(extras=((503, "Skills database unavailable"),)),
     }
 
     def slug(self) -> str:

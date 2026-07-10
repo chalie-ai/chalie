@@ -45,7 +45,10 @@ class WrappersEndpoint(Endpoint):
     response_dto = {
         "get_all": DocumentedResponse(Wrapper, listing=True),
         "get": DocumentedResponse(Wrapper),
-        "post": DocumentedResponse(WrapperCreated),
+        "post": DocumentedResponse(
+            WrapperCreated,
+            extras=((405, "POST only supports the create sentinel id (-1)"),),
+        ),
     }
 
     def slug(self) -> str:
