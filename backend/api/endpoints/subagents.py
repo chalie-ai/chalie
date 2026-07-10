@@ -43,7 +43,7 @@ class SubagentsEndpoint(Endpoint):
     id_type: ClassVar[type[int] | type[str]] = str
     response_dto = {
         "get_all": DocumentedResponse(Subagent, listing=True),
-        "delete": DocumentedResponse(SubagentStopResult),
+        "delete": DocumentedResponse(SubagentStopResult, not_found=False),  # ack-style: always 200
     }
 
     def slug(self) -> str:

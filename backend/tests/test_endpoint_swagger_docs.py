@@ -22,7 +22,12 @@ representative slice of real, migrated routes:
   * a handler that resolves to the inherited default (never overridden by the
     concrete subclass) documents only 401 plus the uniform 405;
   * per-handler ``DocumentedResponse.extras`` surface the real non-2xx
-    statuses a handler emits beyond the structurally-guaranteed set.
+    statuses a handler emits beyond the structurally-guaranteed set;
+  * ``DocumentedResponse(not_found=False)`` suppresses the structural 404 on
+    a handler that provably never emits one (ack-style or idempotent);
+  * 201 is documented only where POST can really create: every ``Endpoint``
+    POST (the create-or-update path) and the ``Action`` verbs that opt back
+    in via ``_post_may_create``; all other ``Action`` POSTs never advertise it.
 
 Real production path, zero mocks: the real ``create_app()`` Flask app (which
 walks the real ``api/endpoints`` and ``api/actions`` packages and builds each
@@ -223,6 +228,59 @@ class TestDeclaredExtrasDocumentRealHandlerStatuses:
         for status in ("409", "422", "503"):
             assert _ref(responses, status, "schema") == "#/definitions/ErrorEnvelope"
         assert _ref(responses, "200", "schema") == "#/definitions/SkillResponseEnvelope"
+
+
+class TestNeverEmitted404IsNotDocumented:
+    def test_subagents_ack_style_delete_documents_no_404(self, swagger_spec: dict[str, object]) -> None:
+        # SubagentsEndpoint.delete is an ack-style cancel: an unknown id is a
+        # benign race answered with a 200 result body, never 404 — so its
+        # DocumentedResponse(not_found=False) must drop the structural 404 doc
+        # while the real branches stay documented.
+        responses = _at(swagger_spec, "paths", "/api/subagents/{id}", "delete", "responses")
+        assert "404" not in responses
+        assert _ref(responses, "200", "schema") == "#/definitions/SubagentStopResultEnvelope"
+        assert _ref(responses, "401", "schema") == "#/definitions/AuthError"
+
+    def test_providers_idempotent_delete_documents_no_404(self, swagger_spec: dict[str, object]) -> None:
+        # Providers.delete is idempotent: 204 even when the row is already
+        # gone; its only real error branch beyond the structural set is the
+        # declared 409 (provider in use).
+        responses = _at(swagger_spec, "paths", "/api/providers/{id}", "delete", "responses")
+        assert "404" not in responses
+        assert responses["204"] == {"description": "No Content"}
+        assert _ref(responses, "409", "schema") == "#/definitions/ErrorEnvelope"
+
+    def test_policies_blocked_log_verbs_document_no_404(self, swagger_spec: dict[str, object]) -> None:
+        # BlockedAction ignores id on both verbs (reads/clears the whole log),
+        # so neither can miss a lookup — no 404 on either.
+        for verb in ("get", "delete"):
+            responses = _at(swagger_spec, "paths", "/api/policies/blocked/{id}", verb, "responses")
+            assert "404" not in responses, f"blocked {verb} must not document 404"
+
+    def test_lookup_backed_delete_still_documents_404(self, swagger_spec: dict[str, object]) -> None:
+        # The opt-out must stay opt-in: a delete that really raises
+        # NotFoundError (scheduler) keeps the structural 404 by default.
+        responses = _at(swagger_spec, "paths", "/api/scheduler/{id}", "delete", "responses")
+        assert _ref(responses, "404", "schema") == "#/definitions/ErrorEnvelope"
+
+
+class TestActionPostDocuments201OnlyWhenItCanCreate:
+    def test_non_creating_action_post_documents_200_only(self, swagger_spec: dict[str, object]) -> None:
+        # SkillToggle.post flips an existing skill's enabled flag and only
+        # ever 200s — a 201 here would be an impossible status, so the Action
+        # default (_post_may_create=False) must keep it out of the doc.
+        responses = _at(swagger_spec, "paths", "/api/skills/toggle/{id}", "post", "responses")
+        assert "201" not in responses
+        assert _ref(responses, "200", "schema") == "#/definitions/SkillToggleResponseEnvelope"
+
+    def test_creating_action_post_keeps_its_real_201(self, swagger_spec: dict[str, object]) -> None:
+        # SkillCopy.post genuinely creates the user copy and returns 201, so
+        # its _post_may_create opt-in must keep both success codes documented.
+        # Endpoint POSTs keep 200+201 by default (asserted in
+        # TestPostWithRequestDtoDocumentsExpectAnd422).
+        responses = _at(swagger_spec, "paths", "/api/skills/copy/{id}", "post", "responses")
+        assert _ref(responses, "200", "schema") == "#/definitions/SkillResponseEnvelope"
+        assert _ref(responses, "201", "schema") == "#/definitions/SkillResponseEnvelope"
 
 
 class TestEveryRefInMigratedNamespacesResolves:

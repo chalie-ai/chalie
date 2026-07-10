@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import re
 from abc import abstractmethod
+from typing import ClassVar
 
 from flask.typing import ResponseReturnValue
 from flask_restx import Namespace, Resource
@@ -29,6 +30,10 @@ generated Flask endpoint name (``{slug}__{verb}`` separators below)."""
 
 class Action(Endpoint):
     """Base for every verb endpoint; subclasses hold controller logic only."""
+
+    _post_may_create: ClassVar[bool] = False
+    """Most Action verbs act on existing resources and never 201; the few
+    that genuinely create (skill copy, list add-item) override to ``True``."""
 
     @abstractmethod
     def verb(self) -> str:

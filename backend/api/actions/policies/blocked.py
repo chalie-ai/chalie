@@ -18,7 +18,12 @@ from services.time_utils import parse_utc
 class BlockedAction(Action):
     """Action to read or clear the blocked-action log."""
 
-    response_dto = {"get": DocumentedResponse(BlockedEntryResponse, listing=True)}
+    # id is ignored on both verbs (reads/clears the whole log, no per-id
+    # lookup to miss), so neither can ever emit 404.
+    response_dto = {
+        "get": DocumentedResponse(BlockedEntryResponse, listing=True, not_found=False),
+        "delete": DocumentedResponse(not_found=False),
+    }
 
     def slug(self) -> str:
         return "policies"

@@ -31,6 +31,9 @@ class SkillCopy(Action):
     """Action for copying a curated skill into an editable user skill."""
 
     id_type: ClassVar[type[int] | type[str]] = int
+    # Unlike most Action verbs this one creates a resource (the user copy),
+    # so its POST genuinely returns 201.
+    _post_may_create: ClassVar[bool] = True
     response_dto = {
         "post": DocumentedResponse(
             SkillResponse,

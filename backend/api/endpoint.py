@@ -69,13 +69,19 @@ class DocumentedResponse:
     ``(status, description)`` pairs for real non-2xx statuses a handler emits
     beyond the structurally-guaranteed 400/403/404/422/405 — each documented
     against the uniform error envelope; only declare a status a handler
-    actually returns. Purely declarative — never consulted at request time,
-    only when :meth:`Endpoint.namespace` builds the swagger doc.
+    actually returns. ``not_found`` (default ``True``) documents the
+    structural 404 on an id-addressed ``get``/``delete`` handler; declare
+    ``False`` only on a handler that provably never emits 404 — e.g. an
+    ack-style handler that always 200s, or an idempotent delete that 204s
+    even when the row is already gone. Purely declarative — never consulted
+    at request time, only when :meth:`Endpoint.namespace` builds the swagger
+    doc.
     """
 
     dto: type[Response] | None = None
     listing: bool = False
     extras: tuple[tuple[int, str], ...] = ()
+    not_found: bool = True
 
 
 class Endpoint(ABC):
@@ -98,6 +104,11 @@ class Endpoint(ABC):
     """Handler names (``get_all``/``get``/``post``/``delete``) restricted to human
     cookie sessions — a bearer wrapper gets an enveloped 403. Declared where a
     wrapper must never act on its own behalf (e.g. minting wrapper tokens)."""
+
+    _post_may_create: ClassVar[bool] = True
+    """Internal swagger plumbing: whether POST has a create path that can
+    return 201. :class:`Action` defaults it to ``False`` (most verbs act on
+    existing resources); a creating verb overrides back to ``True``."""
 
     response_dto: ClassVar[Mapping[str, DocumentedResponse]] = {}
     """Per-handler documented success shape, keyed by handler name
@@ -278,19 +289,20 @@ class Endpoint(ABC):
 
         func = ns.response(400, "Invalid request", model=error_model)(func)
         func = ns.response(403, "Forbidden", model=error_model)(func)
-        if handler_name in ("get", "delete"):
+
+        doc = self.response_dto.get(handler_name)
+        if handler_name in ("get", "delete") and (doc is None or doc.not_found):
             func = ns.response(404, "Not found", model=error_model)(func)
         if handler_name == "post" and self.request_dto is not None:
             func = ns.expect(ns.models[self.request_dto.__name__])(func)
             func = ns.response(422, "Invalid request body", model=error_model)(func)
 
-        doc = self.response_dto.get(handler_name)
         if doc is None or doc.dto is None:
             func = ns.response(204, "No Content")(func)
         else:
             envelope_model = ns.models[register_envelope(ns, doc.dto, listing=doc.listing)]
             func = ns.response(200, "OK", model=envelope_model)(func)
-            if handler_name == "post":
+            if handler_name == "post" and self._post_may_create:
                 func = ns.response(201, "Created", model=envelope_model)(func)
 
         if doc is not None:

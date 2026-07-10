@@ -15,7 +15,7 @@ colon the segment is treated as a plain list_id (the create/add path).
 from __future__ import annotations
 
 from datetime import datetime
-from typing import cast
+from typing import ClassVar, cast
 
 from flask.typing import ResponseReturnValue
 
@@ -35,6 +35,9 @@ class ListItems(Action):
     """
 
     request_dto = ItemRequest
+    # Unlike most Action verbs, add-item creates a resource (the new list
+    # item), so its POST genuinely returns 201.
+    _post_may_create: ClassVar[bool] = True
     response_dto = {
         "get": DocumentedResponse(ListItemResponse, listing=True),
         "post": DocumentedResponse(ListItemResponse),

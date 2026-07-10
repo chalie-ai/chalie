@@ -49,7 +49,9 @@ class Providers(Endpoint):
                 (409, "A provider with that name already exists"),
             ),
         ),
-        "delete": DocumentedResponse(extras=((409, "Provider is in use"),)),
+        "delete": DocumentedResponse(
+            extras=((409, "Provider is in use"),), not_found=False
+        ),  # idempotent: 204 even when already gone
     }
 
     def slug(self) -> str:
