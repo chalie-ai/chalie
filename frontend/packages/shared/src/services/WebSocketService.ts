@@ -330,6 +330,17 @@ export class WebSocketService {
   }
 
   /**
+   * Arm the chat-callback routing WITHOUT starting a turn. Used by reload
+   * re-attach: the page discovered (via GET /chat/status) that a turn is
+   * already in flight, so it must receive the still-broadcasting frames into
+   * a "thinking…" indicator — but must NOT POST /chat, which would start a
+   * fresh turn. Sets the same field send() sets so dispatch() routes frames.
+   */
+  arm(callbacks: ChatCallbacks): void {
+    this.chatCallbacks = callbacks;
+  }
+
+  /**
    * Mint a globally-unique echo id and remember it so this surface ignores its
    * own broadcast echo. Uniqueness must be global (every surface checks echoes
    * against its own set), hence crypto.randomUUID with a random-token fallback
