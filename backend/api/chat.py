@@ -34,7 +34,7 @@ import logging
 import threading
 import time
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Sequence, cast
 
 from flask import Blueprint, jsonify, request
@@ -60,9 +60,23 @@ chat_bp = Blueprint("chat", __name__)
 _active_ump: "_ActiveTurn | None" = None
 _ump_lock = threading.Lock()
 
+# Belt-and-braces: a turn older than this is assumed wedged (the daemon thread
+# exited without clearing _active_ump) and lazily cleared on read. Not a
+# correctness mechanism for normal operation — normal turns clear on exit.
+_MAX_TURN_AGE = timedelta(minutes=5)
+
 
 def _get_active_ump() -> "_ActiveTurn | None":
+    """The active UMP turn, or None. Lazily clears an entry older than
+    _MAX_TURN_AGE so a wedged registry slot can never block status reads."""
     with _ump_lock:
+        global _active_ump
+        if (
+            _active_ump is not None
+            and utc_now() - _active_ump.started_at > _MAX_TURN_AGE
+        ):
+            logger.warning("[Chat API] clearing stale active UMP (age > %s)", _MAX_TURN_AGE)
+            _active_ump = None
         return _active_ump
 
 

@@ -91,3 +91,23 @@ class TestChatEndpoints:
         assert active is not None
         assert active.started_at == fixed
         assert active.started_at.tzinfo is not None  # timezone-aware
+
+    def test_stale_active_ump_is_cleared_on_read(self, authed_client, monkeypatch) -> None:
+        """A turn older than _MAX_TURN_AGE is lazily cleared by _get_active_ump,
+        so a wedged registry entry can never block /chat/status forever."""
+        from datetime import timedelta
+        import api.chat as chat_mod
+
+        # Start a real turn to populate _active_ump, but stub the background
+        # runner so it doesn't invoke the UMP/LLM or clear _active_ump.
+        monkeypatch.setattr(chat_mod, '_run_chat_background', lambda *a, **kw: None)
+        client, _db_conn, _store = authed_client
+        client.post('/chat', data={'text': 'hello'})
+
+        # Freeze "now" well past the turn's real started_at, then read.
+        started = chat_mod._active_ump.started_at
+        future = started + chat_mod._MAX_TURN_AGE + timedelta(minutes=1)
+        monkeypatch.setattr(chat_mod, 'utc_now', lambda: future)
+
+        assert chat_mod._get_active_ump() is None  # stale entry cleared
+        assert chat_mod._active_ump is None
