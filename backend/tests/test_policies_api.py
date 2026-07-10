@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-import api.policies as mod
+from api.endpoints.policies import PoliciesEndpoint
 from tests.restx_test_app import mount_namespace
 
 if TYPE_CHECKING:
@@ -51,7 +51,7 @@ def client(monkeypatch: pytest.MonkeyPatch) -> "Generator[FlaskClient, None, Non
     # test's in-memory handle.
     _db_gateway.Database().bind()
     try:
-        app = mount_namespace(mod.policies_ns)
+        app = mount_namespace(PoliciesEndpoint().namespace())
         yield app.test_client()
     finally:
         _db_gateway._local.conns = {}
@@ -60,9 +60,11 @@ def client(monkeypatch: pytest.MonkeyPatch) -> "Generator[FlaskClient, None, Non
 
 
 def test_get_returns_flat_rows_excluding_internal(client: "FlaskClient") -> None:
-    r = client.get("/api/policies")
+    r = client.get("/api/policies/all?limit=100")
     assert r.status_code == 200
-    rows = r.get_json()
+    body = r.get_json()
+    assert body["success"] is True and "pagination" in body
+    rows = body["result"]
     row = next(x for x in rows if x["permission"] == "email.search")
     # Native rows keep the flat triple and gain an action-only display label:
     # `email.search` -> `Search` (the `tool.` prefix is dropped + humanized).
@@ -74,7 +76,7 @@ def test_get_returns_flat_rows_excluding_internal(client: "FlaskClient") -> None
 
 
 def test_put_single_upsert(client: "FlaskClient") -> None:
-    r = client.put("/api/policies", json={"channel": "chat", "permission": "email.send", "setting": "deny"})
+    r = client.post("/api/policies/-1", json={"channel": "chat", "permission": "email.send", "setting": "deny"})
     # Single-cell upsert is a non-CRUD action → 204 no-body (rowcount no longer surfaced).
     assert r.status_code == 204
     assert r.data == b""
@@ -115,7 +117,7 @@ def mcp_client(monkeypatch: pytest.MonkeyPatch) -> "Generator[FlaskClient, None,
     # test's in-memory handle.
     _db_gateway.Database().bind()
     try:
-        app = mount_namespace(mod.policies_ns)
+        app = mount_namespace(PoliciesEndpoint().namespace())
         yield app.test_client()
     finally:
         _db_gateway._local.conns = {}
@@ -133,9 +135,9 @@ def test_get_groups_and_humanizes_mcp_rows(mcp_client: "FlaskClient") -> None:
         name="GitHub", host="https://gh.example.com/mcp", headers={}, enabled=True)
     PolicyManager().upsert("chat", "_mcp_github_add_comment_to_pending_review", "ask")
 
-    resp = mcp_client.get("/api/policies")
+    resp = mcp_client.get("/api/policies/all?limit=100")
     assert resp.status_code == 200
-    rows = resp.get_json()
+    rows = resp.get_json()["result"]
     row = next(r for r in rows if r["permission"] == "_mcp_github_add_comment_to_pending_review")
     assert row["group"] == "GitHub"
     assert row["label"] == "Add Comment to Pending Review"
