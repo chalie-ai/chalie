@@ -27,7 +27,21 @@ def _seed_item(db: sqlite3.Connection, item_id: str, list_id: str, content: str,
     db.commit()
 
 
-# ─── GET /lists ───────────────────────────────────────────────────────────
+def _unwrap_success(body: dict) -> dict:
+    """Assert the success envelope shape and return the bare result payload."""
+    assert body.get("success") is True
+    assert "error" not in body
+    return body["result"]
+
+
+def _unwrap_error(body: dict) -> str:
+    """Assert the error envelope shape and return the error message."""
+    assert body.get("success") is False
+    assert body.get("result") == []
+    return body["error"]
+
+
+# ─── GET /api/lists/all ───────────────────────────────────────────────────
 
 class TestGetLists:
     def test_returns_summaries(self, authed_client: tuple[FlaskClient, sqlite3.Connection, MemoryStore]) -> None:
@@ -35,24 +49,26 @@ class TestGetLists:
         _seed_list(db, list_id='aaa11111', name='Groceries')
         _seed_list(db, list_id='bbb22222', name='To-Do')
 
-        resp = client.get('/api/lists')
+        resp = client.get('/api/lists/all')
         assert resp.status_code == 200
-        data = resp.get_json()
+        body = resp.get_json()
+        data = _unwrap_success(body)
         assert isinstance(data, list)
         names = {item['name'] for item in data}
         assert names == {'Groceries', 'To-Do'}
         first = data[0]
         assert {'id', 'name', 'list_type', 'item_count', 'checked_count', 'created_at', 'updated_at'} <= set(first)
+        assert "pagination" in body
 
 
-# ─── POST /lists ──────────────────────────────────────────────────────────
+# ─── POST /api/lists/-1 ──────────────────────────────────────────────────
 
 class TestCreateList:
     def test_creates_and_returns_201(self, authed_client: tuple[FlaskClient, sqlite3.Connection, MemoryStore]) -> None:
         client, db, _ = authed_client
-        resp = client.post('/api/lists', json={"name": "Chores"})
+        resp = client.post('/api/lists/-1', json={"name": "Chores"})
         assert resp.status_code == 201
-        data = resp.get_json()
+        data = _unwrap_success(resp.get_json())
         assert data['name'] == 'Chores'
         assert data['list_type'] == 'checklist'
         assert len(data['id']) == 8
@@ -61,26 +77,28 @@ class TestCreateList:
         row = db.execute("SELECT name FROM lists WHERE id = ?", (data['id'],)).fetchone()
         assert row['name'] == 'Chores'
 
-    def test_missing_name_returns_422(self, authed_client: tuple[FlaskClient, sqlite3.Connection, MemoryStore]) -> None:
+    def test_missing_name_returns_400(self, authed_client: tuple[FlaskClient, sqlite3.Connection, MemoryStore]) -> None:
         client, _, _ = authed_client
-        resp = client.post('/api/lists', json={})
-        assert resp.status_code == 422
-        assert resp.get_json()['error'] == 'Validation failed'
+        resp = client.post('/api/lists/-1', json={})
+        assert resp.status_code == 400
+        assert _unwrap_error(resp.get_json()) == 'name is required'
 
     def test_blank_name_returns_422(self, authed_client: tuple[FlaskClient, sqlite3.Connection, MemoryStore]) -> None:
         client, _, _ = authed_client
-        resp = client.post('/api/lists', json={"name": ""})
+        resp = client.post('/api/lists/-1', json={"name": ""})
         assert resp.status_code == 422
+        err = _unwrap_error(resp.get_json())
+        assert err.startswith('Invalid request body — name:')
 
     def test_duplicate_name_returns_409(self, authed_client: tuple[FlaskClient, sqlite3.Connection, MemoryStore]) -> None:
         client, db, _ = authed_client
         _seed_list(db, name='Groceries')
-        resp = client.post('/api/lists', json={"name": "Groceries"})
+        resp = client.post('/api/lists/-1', json={"name": "Groceries"})
         assert resp.status_code == 409
-        assert 'already exists' in resp.get_json()['error']
+        assert 'already exists' in _unwrap_error(resp.get_json())
 
 
-# ─── GET /lists/<id> ──────────────────────────────────────────────────────
+# ─── GET /api/lists/<id> ──────────────────────────────────────────────────
 
 class TestGetList:
     def test_returns_list_with_counts(self, authed_client: tuple[FlaskClient, sqlite3.Connection, MemoryStore]) -> None:
@@ -91,7 +109,7 @@ class TestGetList:
 
         resp = client.get('/api/lists/abc12345')
         assert resp.status_code == 200
-        data = resp.get_json()
+        data = _unwrap_success(resp.get_json())
         assert data['name'] == 'Groceries'
         assert data['item_count'] == 2
         assert data['checked_count'] == 1
@@ -102,41 +120,43 @@ class TestGetList:
         client, _, _ = authed_client
         resp = client.get('/api/lists/nope0000')
         assert resp.status_code == 404
-        assert resp.get_json()['error'] == 'Not found'
+        assert _unwrap_error(resp.get_json()) == 'Not found'
 
 
-# ─── PUT /lists/<id> ──────────────────────────────────────────────────────
+# ─── POST /api/lists/<id> (update) ────────────────────────────────────────
 
 class TestUpdateList:
     def test_renames(self, authed_client: tuple[FlaskClient, sqlite3.Connection, MemoryStore]) -> None:
         client, db, _ = authed_client
         _seed_list(db, list_id='abc12345', name='Old')
-        resp = client.put('/api/lists/abc12345', json={"name": "New"})
+        resp = client.post('/api/lists/abc12345', json={"name": "New"})
         assert resp.status_code == 200
-        assert resp.get_json()['name'] == 'New'
+        assert _unwrap_success(resp.get_json())['name'] == 'New'
         assert db.execute("SELECT name FROM lists WHERE id = 'abc12345'").fetchone()['name'] == 'New'
 
     def test_updates_type(self, authed_client: tuple[FlaskClient, sqlite3.Connection, MemoryStore]) -> None:
         client, db, _ = authed_client
         _seed_list(db, list_id='abc12345', name='Chores')
-        resp = client.put('/api/lists/abc12345', json={"list_type": "todo"})
+        resp = client.post('/api/lists/abc12345', json={"list_type": "todo"})
         assert resp.status_code == 200
-        assert resp.get_json()['list_type'] == 'todo'
+        assert _unwrap_success(resp.get_json())['list_type'] == 'todo'
 
     def test_rename_collision_returns_409(self, authed_client: tuple[FlaskClient, sqlite3.Connection, MemoryStore]) -> None:
         client, db, _ = authed_client
         _seed_list(db, list_id='abc12345', name='A')
         _seed_list(db, list_id='ddd22222', name='B')
-        resp = client.put('/api/lists/abc12345', json={"name": "B"})
+        resp = client.post('/api/lists/abc12345', json={"name": "B"})
         assert resp.status_code == 409
+        assert 'already exists' in _unwrap_error(resp.get_json())
 
     def test_missing_returns_404(self, authed_client: tuple[FlaskClient, sqlite3.Connection, MemoryStore]) -> None:
         client, _, _ = authed_client
-        resp = client.put('/api/lists/nope0000', json={"name": "X"})
+        resp = client.post('/api/lists/nope0000', json={"name": "X"})
         assert resp.status_code == 404
+        assert _unwrap_error(resp.get_json()) == 'Not found'
 
 
-# ─── DELETE /lists/<id> ───────────────────────────────────────────────────
+# ─── DELETE /api/lists/<id> ───────────────────────────────────────────────
 
 class TestDeleteList:
     def test_soft_deletes_204(self, authed_client: tuple[FlaskClient, sqlite3.Connection, MemoryStore]) -> None:
@@ -151,9 +171,10 @@ class TestDeleteList:
         client, _, _ = authed_client
         resp = client.delete('/api/lists/nope0000')
         assert resp.status_code == 404
+        assert _unwrap_error(resp.get_json()) == 'Not found'
 
 
-# ─── GET /lists/<id>/items ────────────────────────────────────────────────
+# ─── GET /api/lists/items/<list_id> ───────────────────────────────────────
 
 class TestGetItems:
     def test_lists_items_ordered(self, authed_client: tuple[FlaskClient, sqlite3.Connection, MemoryStore]) -> None:
@@ -162,27 +183,30 @@ class TestGetItems:
         _seed_item(db, 'i1', 'abc12345', 'milk', position=0)
         _seed_item(db, 'i2', 'abc12345', 'eggs', position=1)
 
-        resp = client.get('/api/lists/abc12345/items')
+        resp = client.get('/api/lists/items/abc12345')
         assert resp.status_code == 200
-        data = resp.get_json()
+        body = resp.get_json()
+        data = _unwrap_success(body)
         assert [i['content'] for i in data] == ['milk', 'eggs']
         assert {'id', 'content', 'checked', 'position', 'added_at', 'updated_at'} <= set(data[0])
+        assert "pagination" in body
 
     def test_missing_list_returns_404(self, authed_client: tuple[FlaskClient, sqlite3.Connection, MemoryStore]) -> None:
         client, _, _ = authed_client
-        resp = client.get('/api/lists/nope0000/items')
+        resp = client.get('/api/lists/items/nope0000')
         assert resp.status_code == 404
+        assert _unwrap_error(resp.get_json()) == 'Not found'
 
 
-# ─── POST /lists/<id>/items ───────────────────────────────────────────────
+# ─── POST /api/lists/items/<list_id> ──────────────────────────────────────
 
 class TestAddItem:
     def test_adds_and_returns_201(self, authed_client: tuple[FlaskClient, sqlite3.Connection, MemoryStore]) -> None:
         client, db, _ = authed_client
         _seed_list(db)
-        resp = client.post('/api/lists/abc12345/items', json={"content": "Milk"})
+        resp = client.post('/api/lists/items/abc12345', json={"content": "Milk"})
         assert resp.status_code == 201
-        data = resp.get_json()
+        data = _unwrap_success(resp.get_json())
         assert data['content'] == 'Milk'
         assert data['checked'] is False
         assert len(data['id']) == 8
@@ -193,17 +217,20 @@ class TestAddItem:
 
     def test_missing_list_returns_404(self, authed_client: tuple[FlaskClient, sqlite3.Connection, MemoryStore]) -> None:
         client, _, _ = authed_client
-        resp = client.post('/api/lists/nope0000/items', json={"content": "Milk"})
+        resp = client.post('/api/lists/items/nope0000', json={"content": "Milk"})
         assert resp.status_code == 404
+        assert _unwrap_error(resp.get_json()) == 'Not found'
 
     def test_blank_content_returns_422(self, authed_client: tuple[FlaskClient, sqlite3.Connection, MemoryStore]) -> None:
         client, db, _ = authed_client
         _seed_list(db)
-        resp = client.post('/api/lists/abc12345/items', json={"content": ""})
+        resp = client.post('/api/lists/items/abc12345', json={"content": ""})
         assert resp.status_code == 422
+        err = _unwrap_error(resp.get_json())
+        assert err.startswith('Invalid request body — content:')
 
 
-# ─── PUT /lists/<id>/items/<item_id> ──────────────────────────────────────
+# ─── POST /api/lists/items/<list_id>:<item_id> (update) ──────────────────
 
 class TestUpdateItem:
     def test_checks_item(self, authed_client: tuple[FlaskClient, sqlite3.Connection, MemoryStore]) -> None:
@@ -211,9 +238,9 @@ class TestUpdateItem:
         _seed_list(db)
         _seed_item(db, 'i1', 'abc12345', 'milk', position=0)
 
-        resp = client.put('/api/lists/abc12345/items/i1', json={"checked": True})
+        resp = client.post('/api/lists/items/abc12345:i1', json={"checked": True})
         assert resp.status_code == 200
-        assert resp.get_json()['checked'] is True
+        assert _unwrap_success(resp.get_json())['checked'] is True
         assert db.execute("SELECT checked FROM list_items WHERE id = 'i1'").fetchone()['checked'] == 1
 
     def test_unchecks_item(self, authed_client: tuple[FlaskClient, sqlite3.Connection, MemoryStore]) -> None:
@@ -221,9 +248,9 @@ class TestUpdateItem:
         _seed_list(db)
         _seed_item(db, 'i1', 'abc12345', 'milk', checked=1, position=0)
 
-        resp = client.put('/api/lists/abc12345/items/i1', json={"checked": False})
+        resp = client.post('/api/lists/items/abc12345:i1', json={"checked": False})
         assert resp.status_code == 200
-        assert resp.get_json()['checked'] is False
+        assert _unwrap_success(resp.get_json())['checked'] is False
         assert db.execute("SELECT checked FROM list_items WHERE id = 'i1'").fetchone()['checked'] == 0
 
     def test_renames_content(self, authed_client: tuple[FlaskClient, sqlite3.Connection, MemoryStore]) -> None:
@@ -231,18 +258,19 @@ class TestUpdateItem:
         _seed_list(db)
         _seed_item(db, 'i1', 'abc12345', 'milk', position=0)
 
-        resp = client.put('/api/lists/abc12345/items/i1', json={"content": "oat milk"})
+        resp = client.post('/api/lists/items/abc12345:i1', json={"content": "oat milk"})
         assert resp.status_code == 200
-        assert resp.get_json()['content'] == 'oat milk'
+        assert _unwrap_success(resp.get_json())['content'] == 'oat milk'
 
     def test_missing_item_returns_404(self, authed_client: tuple[FlaskClient, sqlite3.Connection, MemoryStore]) -> None:
         client, db, _ = authed_client
         _seed_list(db)
-        resp = client.put('/api/lists/abc12345/items/none00000', json={"checked": True})
+        resp = client.post('/api/lists/items/abc12345:none00000', json={"checked": True})
         assert resp.status_code == 404
+        assert _unwrap_error(resp.get_json()) == 'Not found'
 
 
-# ─── DELETE /lists/<id>/items/<item_id> ───────────────────────────────────
+# ─── DELETE /api/lists/items/<list_id>:<item_id> ──────────────────────────
 
 class TestDeleteItem:
     def test_soft_removes_204(self, authed_client: tuple[FlaskClient, sqlite3.Connection, MemoryStore]) -> None:
@@ -250,7 +278,7 @@ class TestDeleteItem:
         _seed_list(db)
         _seed_item(db, 'i1', 'abc12345', 'milk', position=0)
 
-        resp = client.delete('/api/lists/abc12345/items/i1')
+        resp = client.delete('/api/lists/items/abc12345:i1')
         assert resp.status_code == 204
         assert resp.data == b''
         assert db.execute("SELECT removed_at FROM list_items WHERE id = 'i1'").fetchone()['removed_at'] is not None
@@ -258,5 +286,6 @@ class TestDeleteItem:
     def test_missing_item_returns_404(self, authed_client: tuple[FlaskClient, sqlite3.Connection, MemoryStore]) -> None:
         client, db, _ = authed_client
         _seed_list(db)
-        resp = client.delete('/api/lists/abc12345/items/none00000')
+        resp = client.delete('/api/lists/items/abc12345:none00000')
         assert resp.status_code == 404
+        assert _unwrap_error(resp.get_json()) == 'Not found'
