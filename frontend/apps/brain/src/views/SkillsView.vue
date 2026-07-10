@@ -74,10 +74,10 @@ async function saveEdit(skill: Skill): Promise<void> {
   const content = editContent.value.trim();
   const tags = editTags.value.trim();
   try {
-    const data = await skillsApi.update(skill.id, { use_for, content, tags });
+    const updated = await skillsApi.update(skill.id, { use_for, content, tags });
     showToast('Skill updated', 'success');
     skillsPayload.value.skills = skillsPayload.value.skills.map((s) =>
-      s.id === skill.id ? data.skill : s,
+      s.id === skill.id ? updated : s,
     );
     editingId.value = null;
   } catch (e) {
@@ -124,8 +124,8 @@ async function copySkill(skill: Skill): Promise<void> {
   });
   if (!ok) return;
   try {
-    const data = await skillsApi.copy(skill.id);
-    showToast(`Skill copied as "${data.skill.title}"`, 'success');
+    const copied = await skillsApi.copy(skill.id);
+    showToast(`Skill copied as "${copied.title}"`, 'success');
     await load();
   } catch (e) {
     showToast(apiErrorMessage(e, 'Failed to copy skill'), 'error');
@@ -146,9 +146,9 @@ async function submitCreate(): Promise<void> {
   const content = createContent.value.trim();
   const tags = createTags.value.trim();
   try {
-    const data = await skillsApi.create({ title, use_for, content, tags });
+    const newSkill = await skillsApi.create({ title, use_for, content, tags });
     showToast(`Skill "${title}" created`, 'success');
-    skillsPayload.value.skills = [...skillsPayload.value.skills, data.skill];
+    skillsPayload.value.skills = [...skillsPayload.value.skills, newSkill];
     editingId.value = null;
     viewMode.value = 'list';
   } catch (e) {
