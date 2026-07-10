@@ -11,7 +11,7 @@ Real production path, zero mocks (same shape as test_voice_auth.py):
   * real create_app() Flask app + the real require_auth cookie→bearer guard;
   * the real db SQLite fixture (patches the DB singleton);
   * a real wrapper token minted by the real WrapperAuthService.create_token —
-    the exact call POST /api/wrappers makes.
+    the exact call POST /api/wrappers/-1 makes.
 
 Against the pre-impl tree there is no /auth/username route, so Flask answers
 404 and every assertion fails RED. All pass GREEN once the endpoint lands.
