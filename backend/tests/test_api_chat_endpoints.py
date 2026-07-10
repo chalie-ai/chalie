@@ -11,6 +11,16 @@ import pytest
 from flask.testing import FlaskClient
 
 
+def _make_unauthed_client() -> FlaskClient:
+    """Real, unauthenticated Flask client -- the authed_client fixture patches
+    validate_session, which would hide the require_auth guard these tests exist
+    to prove (same pattern as test_voice_auth._make_client)."""
+    from api import create_app
+    app = create_app()
+    app.config['TESTING'] = True
+    return app.test_client()
+
+
 @pytest.mark.unit
 class TestChatEndpoints:
 
@@ -91,6 +101,46 @@ class TestChatEndpoints:
         assert active is not None
         assert active.started_at == fixed
         assert active.started_at.tzinfo is not None  # timezone-aware
+
+    def test_chat_status_idle_when_no_turn(self, authed_client) -> None:
+        """GET /chat/status with no turn in flight returns in_progress: False."""
+        client, _db_conn, _store = authed_client
+
+        resp = client.get('/chat/status')
+
+        assert resp.status_code == 200
+        assert resp.get_json() == {'in_progress': False}
+
+    def test_chat_status_in_progress_when_turn_active(self, authed_client, monkeypatch) -> None:
+        """GET /chat/status while a turn is in flight returns in_progress: True
+        and the timezone-aware ISO started_at."""
+        import api.chat as chat_mod
+
+        # Stub the background runner so _active_ump stays populated (module
+        # docstring: async full-turn path is out of scope for this file).
+        monkeypatch.setattr(chat_mod, '_run_chat_background', lambda *a, **kw: None)
+
+        fixed = datetime(2026, 7, 10, 12, 0, 0, tzinfo=timezone.utc)
+        monkeypatch.setattr(chat_mod, 'utc_now', lambda: fixed)
+
+        client, _db_conn, _store = authed_client
+        client.post('/chat', data={'text': 'hello'})
+
+        resp = client.get('/chat/status')
+
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data['in_progress'] is True
+        assert data['started_at'] == '2026-07-10T12:00:00+00:00'
+
+    def test_chat_status_requires_auth(self, db) -> None:
+        """GET /chat/status without a session is rejected -- the chat
+        blueprint's require_auth gate applies to status too."""
+        client = _make_unauthed_client()
+        resp = client.get('/chat/status')
+
+        assert resp.status_code == 401
+        assert resp.get_json() == {"error": "Authentication required"}
 
     def test_stale_active_ump_is_cleared_on_read(self, authed_client, monkeypatch) -> None:
         """A turn older than _MAX_TURN_AGE is lazily cleared by _get_active_ump,

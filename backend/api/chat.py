@@ -402,6 +402,26 @@ def _broadcast_user_echo(text: str, echo_id: str) -> None:
     })
 
 
+@chat_bp.route("/chat/status", methods=["GET"])
+@require_auth
+def chat_status() -> ResponseReturnValue:
+    """Whether a UMP turn is currently in flight.
+
+    Powers reload re-attach: a freshly loaded page calls this on mount. If a
+    turn is in flight, the surface arms its WS callbacks (without POST /chat)
+    so the still-broadcasting frames stream into a "thinking..." indicator.
+    Returns only the boolean + ISO started_at; the input text lives in the
+    transcript and is served by /conversation/recent.
+    """
+    active = _get_active_ump()
+    if active is None:
+        return jsonify({"in_progress": False})
+    return jsonify({
+        "in_progress": True,
+        "started_at": active.started_at.isoformat(),
+    })
+
+
 @chat_bp.route("/chat", methods=["POST"])
 @require_auth
 def post_chat() -> ResponseReturnValue:
