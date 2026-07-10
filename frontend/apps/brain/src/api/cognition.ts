@@ -4,8 +4,8 @@
  * GET  /system/observability/records?source=&limit=&offset=&q=  → memory records
  * GET  /system/observability/tools                               → tool list
  * GET  /system/observability/world-state                         → world state
- * GET  /settings/personality                                     → personality tuple + voice
- * PUT  /settings/personality                                     → update personality
+ * GET  /settings/personality                                     → personality tuple + voice (Action contract)
+ * POST /settings/personality                                     → update personality (legacy PUT → POST)
  * GET  /system/observability/errors                              → recent errors
  * GET  /system/observability/token-usage?window=                 → token usage
  * GET  /system/observability/compaction                          → compaction summary
@@ -61,6 +61,11 @@ export interface WorldState {
 export interface Personality {
   tuple: [number, number, number, number, number];
   voice: string;
+}
+
+interface SingleEnvelope<T> {
+  success: true;
+  result: T;
 }
 
 export interface ErrorEntry {
@@ -123,12 +128,14 @@ export const cognition = {
     return api.get('/api/system/observability/world-state');
   },
 
-  personality(): Promise<Personality> {
-    return api.get('/api/settings/personality');
+  async personality(): Promise<Personality> {
+    const res = await api.get<SingleEnvelope<Personality>>('/api/settings/personality');
+    return res.result;
   },
 
-  setPersonality(data: Partial<Personality>): Promise<unknown> {
-    return api.put('/api/settings/personality', data);
+  async setPersonality(data: Partial<Personality>): Promise<Personality> {
+    const res = await api.post<SingleEnvelope<Personality>>('/api/settings/personality', data);
+    return res.result;
   },
 
   errors(): Promise<{ errors: ErrorEntry[] }> {
