@@ -23,7 +23,7 @@ from typing import ClassVar, cast
 from api.request import Request
 from api.request.wrapper import WrapperCreate
 from api.response.wrapper import Wrapper, WrapperCreated
-from api.endpoint import Endpoint, EndpointError, NotFoundError
+from api.endpoint import DocumentedResponse, Endpoint, EndpointError, NotFoundError
 from flask.typing import ResponseReturnValue
 from services.wrapper_auth_service import WrapperAuthService
 
@@ -42,6 +42,11 @@ class WrappersEndpoint(Endpoint):
     id_type: ClassVar[type[int] | type[str]] = str
     cookie_only_methods: ClassVar[frozenset[str]] = frozenset({"post"})
     request_dto: ClassVar[type[Request] | None] = WrapperCreate
+    response_dto = {
+        "get_all": DocumentedResponse(Wrapper, listing=True),
+        "get": DocumentedResponse(Wrapper),
+        "post": DocumentedResponse(WrapperCreated),
+    }
 
     def slug(self) -> str:
         return "wrappers"

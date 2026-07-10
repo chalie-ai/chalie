@@ -8,7 +8,7 @@ from flask import request
 from flask.typing import ResponseReturnValue
 
 from api.action import Action
-from api.endpoint import EndpointError
+from api.endpoint import DocumentedResponse, EndpointError
 from api.response.policies import BlockedEntryResponse
 from api.response.response import Response
 from services.policy_manager import PolicyManager
@@ -17,6 +17,8 @@ from services.time_utils import parse_utc
 
 class BlockedAction(Action):
     """Action to read or clear the blocked-action log."""
+
+    response_dto = {"get": DocumentedResponse(BlockedEntryResponse, listing=True)}
 
     def slug(self) -> str:
         return "policies"

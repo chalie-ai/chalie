@@ -28,12 +28,21 @@ _BACKEND_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _BACKEND_DIR not in sys.path:
     sys.path.insert(0, _BACKEND_DIR)
 
+from migrations.connection import connect  # noqa: E402
 from services.file_mapper_service import FileMapperService  # noqa: E402
+
+
+def needed(conn: sqlite3.Connection) -> bool:
+    """Legacy ``role='compaction'`` transcript rows still present? Nothing
+    writes that role anymore, so any hit is pre-migration residue."""
+    return conn.execute(
+        "SELECT 1 FROM transcript WHERE role = 'compaction' LIMIT 1"
+    ).fetchone() is not None
 
 
 def apply(db_path: str) -> None:
     """Purge legacy ``role='compaction'`` transcript rows (delete-only)."""
-    conn = sqlite3.connect(db_path, timeout=30)
+    conn = connect(db_path)
     try:
         # Children before parent: tool_calls FK-references transcript with no
         # ON DELETE CASCADE, so drop any audit rows anchored to a compaction

@@ -5,9 +5,9 @@ callees) into the new ``ScheduledJob`` contract. Self-contained: every
 constant, import, and helper that the poll-and-fire path relies on is pulled
 into this module so ``scheduler_service`` can be deleted without breaking it.
 
-The poller wakes once per minute (``dom/hour/minute = None`` → base
-``should_run()`` returns True every minute) and asks each enabled, already-
-started row a stateless yes/no question via ``services.cron_schedule.matches``
+The poller wakes once per minute (its own cron fields all default to ``"*"``
+→ base ``should_run()`` returns True every minute) and asks each enabled,
+already-started row a stateless yes/no question via ``services.cron_schedule.matches``
 — there is no materialized ``due_at`` to walk toward, no status machine, no
 successor row to insert. A match fires the prompt through the chat chokepoint
 for LLM execution with full tool access, keyed to the schedule's own thread:
@@ -41,8 +41,8 @@ class ScheduledItemsDispatcherJob(ScheduledJob):
     """Minute-aligned cron job that polls ``scheduled_items`` and fires matches.
 
     Unlike :class:`~cron.base.IdleGatedJob`, this job is NOT idle-gated — it
-    fires user schedules regardless of user activity. The cron triple stays
-    ``None`` (inherited from :class:`ScheduledJob`), so ``should_run()`` returns
+    fires user schedules regardless of user activity. Its own cron fields stay
+    ``"*"`` (inherited from :class:`ScheduledJob`), so ``should_run()`` returns
     True every minute; the minute-alignment sleep loop is owned by the cron
     runner, not by ``execute()``.
     """
@@ -70,9 +70,11 @@ class ScheduledItemsDispatcherJob(ScheduledJob):
             checked += 1
             if matches(
                 now,
-                cast("int | None", row["cron_dom"]),
-                cast("int | None", row["cron_hour"]),
-                cast("int | None", row["cron_minute"]),
+                cast(str, row["cron_minute"]),
+                cast(str, row["cron_hour"]),
+                cast(str, row["cron_dom"]),
+                cast(str, row["cron_month"]),
+                cast(str, row["cron_dow"]),
             ):
                 self._fire_item(cast(int, row["id"]), cast(str, row["message"]))
                 fired += 1

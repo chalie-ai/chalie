@@ -18,7 +18,7 @@ vertical declares no search config, the ``Searchable`` trait off), so they hold
 no ``data_graph_fts``/``*_vec`` postings and their ``search_queries`` is NULL.
 
 Idempotent: re-running matches nothing (the moved rows are no longer ``system``).
-The run-once sentinel gate lives in the boot caller (backend/run.py), not here.
+The run-once ledger gate lives in ``migrations/runner.py``, not here.
 
 Usage: `python backend/migrations/migration_009_system_kind_split.py`
 """
@@ -32,13 +32,26 @@ _BACKEND_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _BACKEND_DIR not in sys.path:
     sys.path.insert(0, _BACKEND_DIR)
 
+from migrations.connection import connect  # noqa: E402
 from services.file_mapper_service import FileMapperService  # noqa: E402
 
-_REKIND_SQL = (
-    "UPDATE data_graph SET kind = 'machine_state' "
-    "WHERE kind = 'system' "
-    "AND (source IS NULL OR source NOT LIKE 'skill:memory:store:%')"
+# Operational rows still parked under the legacy conflated kind: internal
+# sources never start 'skill:memory:store:'. Shared by needed() and apply() so
+# the check and the re-kind can never drift apart.
+_OPERATIONAL_FILTER = (
+    "kind = 'system' AND (source IS NULL OR source NOT LIKE 'skill:memory:store:%')"
 )
+
+_REKIND_SQL = f"UPDATE data_graph SET kind = 'machine_state' WHERE {_OPERATIONAL_FILTER}"
+
+
+def needed(conn: sqlite3.Connection) -> bool:
+    """Operational rows still parked under ``kind='system'``? The post-split
+    model layer writes them as ``machine_state``, so any match is pre-split
+    residue."""
+    return conn.execute(
+        f"SELECT 1 FROM data_graph WHERE {_OPERATIONAL_FILTER} LIMIT 1"
+    ).fetchone() is not None
 
 
 def apply(db_path: str) -> None:
@@ -48,7 +61,7 @@ def apply(db_path: str) -> None:
     The memory-tool ``system`` memories (``source`` prefixed
     ``skill:memory:store:``) are left untouched.
     """
-    conn = sqlite3.connect(db_path, timeout=30)
+    conn = connect(db_path)
     try:
         cursor = conn.execute(_REKIND_SQL)
         conn.commit()

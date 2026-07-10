@@ -9,9 +9,10 @@ start fresh. The column reshape itself (add start_at/cron_*, drop
 recurrence/is_prompt) is handled declaratively by SchemaConvergenceService from
 ``schema.sql`` on the same boot; this script only clears the now-incompatible
 rows. The wipe is UNCONDITIONAL — every call deletes every scheduled_items row —
-so it must run exactly once; the run-once gate (a boot sentinel) lives in the
-caller, not here. Do not re-invoke it against a database whose rows the scheduler
-has already re-materialised.
+so it must run exactly once; the run-once gate (the migrations/runner.py ledger)
+lives in the caller, not here, and needed() only answers True while the table
+still carries the pre-cron TEXT ``id`` shape. Do not re-invoke it against a
+database whose rows the scheduler has already re-materialised.
 
 Usage: `python backend/migrations/migration_007_scheduler_cron.py`
 """
@@ -25,7 +26,22 @@ _BACKEND_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _BACKEND_DIR not in sys.path:
     sys.path.insert(0, _BACKEND_DIR)
 
+from migrations.connection import connect  # noqa: E402
 from services.file_mapper_service import FileMapperService  # noqa: E402
+
+
+def needed(conn: sqlite3.Connection) -> bool:
+    """Rows present under the pre-cron scheduler shape? migration_008's rebuild
+    declares ``id`` INTEGER PRIMARY KEY and SchemaConvergenceService never
+    retypes columns, so a TEXT ``id`` reliably marks rows that predate the cron
+    model. A current-shape or empty table needs no wipe."""
+    cols = {
+        row[1]: str(row[2] or "").upper()
+        for row in conn.execute("PRAGMA table_info(scheduled_items)")
+    }
+    if cols.get("id") != "TEXT":
+        return False
+    return conn.execute("SELECT 1 FROM scheduled_items LIMIT 1").fetchone() is not None
 
 
 def apply(db_path: str) -> None:
@@ -34,7 +50,7 @@ def apply(db_path: str) -> None:
     NOT self-idempotent: re-running deletes any rows the scheduler has since
     created. The run-once gate lives in the boot caller, not this script.
     """
-    conn = sqlite3.connect(db_path, timeout=30)
+    conn = connect(db_path)
     try:
         conn.execute("DELETE FROM scheduled_items")
         # Clear the vector shadow table too, if present, so no orphan embeddings

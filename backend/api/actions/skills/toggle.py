@@ -12,7 +12,7 @@ from typing import ClassVar, cast
 from flask.typing import ResponseReturnValue
 
 from api.action import Action
-from api.endpoint import NotFoundError
+from api.endpoint import DocumentedResponse, NotFoundError
 from api.request import Request
 from api.response.skills import SkillToggleResponse
 from models.skill import Skill as SkillModel
@@ -25,6 +25,7 @@ class SkillToggle(Action):
     """Action for flipping a skill's enabled state."""
 
     id_type: ClassVar[type[int] | type[str]] = int
+    response_dto = {"post": DocumentedResponse(SkillToggleResponse)}
 
     def slug(self) -> str:
         return "skills"

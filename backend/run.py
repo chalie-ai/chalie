@@ -192,23 +192,25 @@ def _init_database() -> None:
 
 
 def _run_startup_migrations() -> None:
-    """Run all one-time startup migrations and data backfills."""
+    """Every-boot data upkeep, then the one-time migrations.
+
+    One-time migrations live in the ``migrations`` package: each module
+    self-checks via ``needed()`` (no-op on databases already in target shape)
+    and ``migrations.runner`` records outcomes in the ``schema_migrations``
+    ledger, so nothing here changes when a migration is added or retired.
+    """
     _backfill_provider_token_limits()
     _run_transcript_rebuild()
-    _migrate_compactions_table()
-    _drop_invoked_by_column()
-    _drop_ephemeral_column()
-    _backfill_transcript_settled()
-    _rebuild_episodes_fts()
     _purge_stale_adaptive_layer_rows()
-    _wipe_scheduled_items_for_cron()
-    _rebuild_scheduled_items_prompt_only()
-    _migrate_system_kind_split()
-    _migrate_episode_search_queries()
+
+    from migrations.runner import run_all
+    from services.file_mapper_service import FileMapperService
+    run_all(str(FileMapperService.get_db_path()))
 
 
 def _backfill_provider_token_limits() -> None:
-    """One-time provider token-limit (max_tokens/compact_at) backfill."""
+    """Refresh providers.max_tokens from each client's context limit. Runs
+    every boot; a provider whose client fails keeps its previous value."""
     try:
         from services.provider_token_limits import backfill_all
         with Database.transaction() as _conn:
@@ -230,210 +232,6 @@ def _run_transcript_rebuild() -> None:
         run_once_on_boot(db_path=str(FileMapperService.get_db_path()))
     except Exception as _mig_err:
         logger.warning(f"[Startup] Transcript migration skipped: {_mig_err}")
-
-
-def _migrate_compactions_table() -> None:
-    """One-time compactions-table migration — purge legacy role='compaction'
-    transcript rows now that compaction state lives in its own table. Runs after
-    the rebuild above (which leaves those rows in place). Idempotent; sentinel
-    gates it to one run per database.
-    """
-    try:
-        from services.file_mapper_service import FileMapperService
-        _db_path = str(FileMapperService.get_db_path())
-        _compaction_sentinel = os.path.join(
-            os.path.dirname(_db_path),
-            '.compactions-table-migration-v1.done',
-        )
-        if not os.path.exists(_compaction_sentinel):
-            from migrations.migration_002_compactions_table import apply as _apply_compactions
-            _apply_compactions(_db_path)
-            with open(_compaction_sentinel, 'w') as _f:
-                _f.write('done')
-    except Exception as _comp_err:
-        logger.warning(f"[Startup] compactions-table migration skipped: {_comp_err}")
-
-
-def _migrate_system_kind_split() -> None:
-    """One-time re-kind of operational ``data_graph`` rows out of the ``system``
-    kind into ``machine_state`` (migration_009). The ``system`` kind was split
-    into a searchable memory vertical (keeps ``system``) and an operational
-    machine-state vertical (``machine_state``); this moves cursors/clocks/summary
-    across. Idempotent; sentinel-gated to one run per database.
-    """
-    try:
-        from services.file_mapper_service import FileMapperService
-        _kind_split_sentinel = os.path.join(
-            os.path.dirname(str(FileMapperService.get_db_path())),
-            '.system-kind-split-migration-v1.done',
-        )
-        if not os.path.exists(_kind_split_sentinel):
-            from migrations.migration_009_system_kind_split import apply as _apply_kind_split
-            _apply_kind_split(str(FileMapperService.get_db_path()))
-            with open(_kind_split_sentinel, 'w') as _f:
-                _f.write('done')
-    except Exception as _kind_split_err:
-        logger.warning(f"[Startup] system-kind-split migration skipped: {_kind_split_err}")
-
-
-def _migrate_episode_search_queries() -> None:
-    """One-time stamp of pre-existing episodes as FTS-indexed (migration_010).
-
-    Episodes now route their FTS posting through SearchExpanderService; schema
-    convergence adds ``episodes.search_queries`` and rebuilds ``episodes_fts``
-    (repopulating ``gist``). This marks the still-NULL rows the rebuild left so
-    the worker's self-heal doesn't double-post their ``gist`` entries. Runs after
-    convergence, before workers start. Idempotent; sentinel-gated to one run per
-    database.
-    """
-    try:
-        from services.file_mapper_service import FileMapperService
-        _sentinel = os.path.join(
-            os.path.dirname(str(FileMapperService.get_db_path())),
-            '.episode-search-queries-migration-v1.done',
-        )
-        if not os.path.exists(_sentinel):
-            from migrations.migration_010_episode_search_queries import apply as _apply_ep_sq
-            _apply_ep_sq(str(FileMapperService.get_db_path()))
-            with open(_sentinel, 'w') as _f:
-                _f.write('done')
-    except Exception as _ep_sq_err:
-        logger.warning(f"[Startup] episode-search-queries migration skipped: {_ep_sq_err}")
-
-
-def _drop_invoked_by_column() -> None:
-    """Drop zombie invoked_by column."""
-    try:
-        from services.file_mapper_service import FileMapperService
-        _drop_sentinel = os.path.join(
-            os.path.dirname(str(FileMapperService.get_db_path())),
-            '.tool-calls-drop-invoked-by-v1.done',
-        )
-        if not os.path.exists(_drop_sentinel):
-            with Database.transaction() as _conn:
-                _cols = [r[1] for r in _conn.execute("PRAGMA table_info(tool_calls)").fetchall()]
-                if 'invoked_by' in _cols:
-                    _conn.execute("ALTER TABLE tool_calls DROP COLUMN invoked_by")
-                    _conn.commit()
-                    logger.info("[Startup] Dropped zombie invoked_by column from tool_calls")
-            with open(_drop_sentinel, 'w') as _f:
-                _f.write('done')
-    except Exception as _drop_err:
-        logger.warning(f"[Startup] tool_calls invoked_by drop skipped: {_drop_err}")
-
-
-def _drop_ephemeral_column() -> None:
-    """Drop legacy ephemeral column — every tool call is now durable; rows older
-    than 7 days are removed by DecayEngineService._purge_tool_calls() instead.
-    """
-    try:
-        from services.file_mapper_service import FileMapperService
-        _ephem_sentinel = os.path.join(
-            os.path.dirname(str(FileMapperService.get_db_path())),
-            '.tool-calls-drop-ephemeral-v1.done',
-        )
-        if not os.path.exists(_ephem_sentinel):
-            with Database.transaction() as _conn:
-                _cols = [r[1] for r in _conn.execute("PRAGMA table_info(tool_calls)").fetchall()]
-                if 'ephemeral' in _cols:
-                    _conn.execute("ALTER TABLE tool_calls DROP COLUMN ephemeral")
-                    _conn.commit()
-                    logger.info("[Startup] Dropped ephemeral column from tool_calls (durable retention)")
-            with open(_ephem_sentinel, 'w') as _f:
-                _f.write('done')
-    except Exception as _ephem_err:
-        logger.warning(f"[Startup] tool_calls ephemeral drop skipped: {_ephem_err}")
-
-
-def _backfill_transcript_settled() -> None:
-    """One-time transcript.settled backfill. SchemaConvergence adds the column as
-    all-zeros (NOT NULL DEFAULT 0); without this every pre-existing assistant
-    row reads settled=0, so settle0 is NULL for all historical turns and the
-    spine/feed/GC break. migration_006 re-derives settled from tool_calls to the
-    exact runtime predicate. Idempotent; sentinel-gated to one run per database.
-    """
-    try:
-        from services.file_mapper_service import FileMapperService
-        _settled_sentinel = os.path.join(
-            os.path.dirname(str(FileMapperService.get_db_path())),
-            '.transcript-settled-backfill-v1.done',
-        )
-        if not os.path.exists(_settled_sentinel):
-            from migrations.migration_006_transcript_settled import apply as _apply_settled
-            _apply_settled(str(FileMapperService.get_db_path()))
-            with open(_settled_sentinel, 'w') as _f:
-                _f.write('done')
-    except Exception as _settled_err:
-        logger.warning(f"[Startup] transcript.settled backfill skipped: {_settled_err}")
-
-
-def _wipe_scheduled_items_for_cron() -> None:
-    """One-time wipe of scheduled_items for the cron-model migration.
-
-    The scheduler's recurrence model changed with no backwards compatibility
-    (keyword recurrence + notification/prompt type → day/hour/minute cron +
-    start_at floor). Legacy rows have no cron representation, so migration_007
-    clears them and the scheduler starts fresh. Idempotent; sentinel-gated to
-    one run per database.
-    """
-    try:
-        from services.file_mapper_service import FileMapperService
-        _sentinel = os.path.join(
-            os.path.dirname(str(FileMapperService.get_db_path())),
-            '.scheduled-items-cron-wipe-v1.done',
-        )
-        if not os.path.exists(_sentinel):
-            from migrations.migration_007_scheduler_cron import apply as _apply_wipe
-            _apply_wipe(str(FileMapperService.get_db_path()))
-            with open(_sentinel, 'w') as _f:
-                _f.write('done')
-    except Exception as _wipe_err:
-        logger.warning(f"[Startup] scheduled_items cron wipe skipped: {_wipe_err}")
-
-
-def _rebuild_scheduled_items_prompt_only() -> None:
-    """One-time rebuild of scheduled_items for the prompt-only model.
-
-    The scheduler drops every lifecycle/CalDAV column (item_type, due_at,
-    status, group_id, turn_id, source, external_uid, metadata, hidden) and its
-    id column changes from TEXT PRIMARY KEY to INTEGER PRIMARY KEY
-    AUTOINCREMENT so id can double as the schedule's turn_id on the
-    'schedule' channel. That primary-key type change is outside what
-    SchemaConvergenceService performs (it only logs type mismatches), so
-    migration_008 does the rebuild explicitly. Idempotent; sentinel-gated to
-    one run per database.
-    """
-    try:
-        from services.file_mapper_service import FileMapperService
-        _sentinel = os.path.join(
-            os.path.dirname(str(FileMapperService.get_db_path())),
-            '.scheduled-items-prompt-only-v1.done',
-        )
-        if not os.path.exists(_sentinel):
-            from migrations.migration_008_scheduler_prompt_only import apply as _apply_rebuild
-            _apply_rebuild(str(FileMapperService.get_db_path()))
-            with open(_sentinel, 'w') as _f:
-                _f.write('done')
-    except Exception as _rebuild_err:
-        logger.warning(f"[Startup] scheduled_items prompt-only rebuild skipped: {_rebuild_err}")
-
-
-def _rebuild_episodes_fts() -> None:
-    """One-time episodes FTS rebuild."""
-    try:
-        from services.file_mapper_service import FileMapperService
-        _sentinel = os.path.join(
-            os.path.dirname(str(FileMapperService.get_db_path())), '.episodes-fts-rebuild-v1.done'
-        )
-        if not os.path.exists(_sentinel):
-            with Database.transaction() as _conn:
-                _conn.execute("INSERT INTO episodes_fts(episodes_fts) VALUES('rebuild')")
-                _conn.commit()
-            with open(_sentinel, 'w') as _f:
-                _f.write('done')
-            logger.info("[Startup] episodes_fts rebuilt from content table")
-    except Exception as _fts_err:
-        logger.warning(f"[Startup] episodes FTS rebuild skipped: {_fts_err}")
 
 
 def _purge_stale_adaptive_layer_rows() -> None:

@@ -8,12 +8,11 @@
  */
 import { onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { X } from '@lucide/vue';
-import { ConfigType } from '@chalie/shared';
+import { ConfigType, describeCron } from '@chalie/shared';
 import { useSessionStore } from '../../stores/session';
 import type { SchedulerTurn } from '../../api/scheduler';
 import { scheduler } from '../../api/scheduler';
 import { useConversationFeed } from '../../composables/useConversationFeed';
-import { formatCadence } from '../../utils/time';
 
 const POLL_INTERVAL_MS = 60_000;
 
@@ -110,9 +109,9 @@ function openTurn(turn: SchedulerTurn): void {
   session.closeSchedulerDock();
 }
 
-/** Cadence sub-label for a dock row, derived from the series' cron fields. */
+/** Cadence sub-label for a dock row, derived from the schedule's cron fields. */
 function cadence(turn: SchedulerTurn): string {
-  return formatCadence(turn.day, turn.hour, turn.minute);
+  return describeCron(turn.minute, turn.hour, turn.day, turn.month, turn.weekday);
 }
 </script>
 

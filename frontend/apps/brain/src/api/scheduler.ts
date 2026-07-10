@@ -14,9 +14,12 @@ export interface ScheduleItem {
   prompt?: string | null;
   enabled: number;
   start_at?: string | null;
-  day: number | null;
-  hour: number | null;
-  minute: number | null;
+  /** Crontab field expressions mirroring cron_minute/hour/dom/month/dow (`*` = every). */
+  minute: string;
+  hour: string;
+  day: string;
+  month: string;
+  weekday: string;
   channel?: string | null;
   created_by_session?: string | null;
   created_at?: string;
@@ -26,9 +29,12 @@ export interface ScheduleItem {
 export interface ScheduleInput {
   message: string;
   start_at?: string;
-  day: number | null;
-  hour: number | null;
-  minute: number | null;
+  /** Crontab field expressions — values, ranges, steps and comma-unions; `*` = every. */
+  minute: string;
+  hour: string;
+  day: string;
+  month: string;
+  weekday: string;
   enabled?: boolean;
 }
 

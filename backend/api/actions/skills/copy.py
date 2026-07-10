@@ -15,7 +15,7 @@ from typing import ClassVar, cast
 from flask.typing import ResponseReturnValue
 
 from api.action import Action
-from api.endpoint import NotFoundError
+from api.endpoint import DocumentedResponse, NotFoundError
 from api.endpoints.skills import _index_new_skill
 from api.request import Request
 from api.response.skills import SkillResponse
@@ -31,6 +31,7 @@ class SkillCopy(Action):
     """Action for copying a curated skill into an editable user skill."""
 
     id_type: ClassVar[type[int] | type[str]] = int
+    response_dto = {"post": DocumentedResponse(SkillResponse)}
 
     def slug(self) -> str:
         return "skills"

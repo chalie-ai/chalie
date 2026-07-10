@@ -14,7 +14,7 @@ from typing import cast
 from flask.typing import ResponseReturnValue
 
 from api.action import Action
-from api.endpoint import NotFoundError
+from api.endpoint import DocumentedResponse, NotFoundError
 from api.response.skills import SkillAssociationResponse
 from models.skill_association import SkillAssociation as SkillAssociationModel
 from services.file_mapper_service import FileMapperService
@@ -23,6 +23,8 @@ from services.time_utils import parse_utc
 
 class SkillAssociations(Action):
     """Action listing every pattern -> skill association rule."""
+
+    response_dto = {"get": DocumentedResponse(SkillAssociationResponse, listing=True)}
 
     def slug(self) -> str:
         return "skills"

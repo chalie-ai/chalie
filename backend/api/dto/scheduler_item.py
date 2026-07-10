@@ -1,13 +1,15 @@
 """DTOs for the scheduler resource — read/create/update HTTP contract.
 
 One file per concept (the namespace convention; mirrors ``dto/list.py``).
-Field-level rules (message length) live on ``pydantic.Field`` /
-validators; the cross-field cron rule (the every-prefix invariant on
-``day``/``hour``/``minute``) lives on a model validator shared by create and
-update, delegating to :func:`services.cron_schedule.validate_cron` — the
-single source of truth for the cron shape. Datetimes serialize as ISO-8601
-UTC via :class:`backend.api.dto.base.DTO`; the read DTO additionally
-localizes ``start_at`` to the user's timezone for display.
+Field-level rules (message length) live on ``pydantic.Field`` / validators;
+the crontab-shape rule on the five field expressions
+(``minute``/``hour``/``day``/``month``/``weekday``) lives on a model validator
+shared by create and update, delegating to
+:func:`services.cron_schedule.validate_cron` — the single source of truth for
+the cron shape. Each field is a standard crontab expression (``*``, ``N``,
+``N-M``, ``*/S``, ``N-M/S`` and comma-unions; ``*`` = every). Datetimes
+serialize as ISO-8601 UTC via :class:`backend.api.dto.base.DTO`; the read DTO
+additionally localizes ``start_at`` to the user's timezone for display.
 """
 
 from __future__ import annotations
@@ -31,22 +33,26 @@ _LOCAL_ISO_FMT = "%Y-%m-%dT%H:%M:%S%z"
 class SchedulerItem(DTO):
     """Read shape for a scheduled item — the full list row.
 
-    ``scheduled_items`` is a prompt-only, dumb-cron table: one row per
+    ``scheduled_items`` is a prompt-only, crontab table: one row per
     schedule, forever. ``id`` is the SQLite ``INTEGER PRIMARY KEY
     AUTOINCREMENT`` — also the schedule's ``turn_id`` on the ``'schedule'``
     channel. ``start_at`` is localized to the user's timezone for display
-    (the DB always stores it as UTC). ``day``/``hour``/``minute`` mirror the
-    DB's ``cron_dom``/``cron_hour``/``cron_minute`` (``None`` = every). There
-    is no ``due_at``/``status``/``group_id``/``source``/``external_uid`` —
-    those columns, and the lifecycle they modeled, no longer exist.
+    (the DB always stores it as UTC). ``minute``/``hour``/``day``/``month``/
+    ``weekday`` mirror the DB's ``cron_minute``/``cron_hour``/``cron_dom``/
+    ``cron_month``/``cron_dow`` — each a crontab field expression (``*`` =
+    every). There is no ``due_at``/``status``/``group_id``/``source``/
+    ``external_uid`` — those columns, and the lifecycle they modeled, no
+    longer exist.
     """
 
     id: int
     message: str
     start_at: str | None
-    day: int | None
-    hour: int | None
-    minute: int | None
+    minute: str
+    hour: str
+    day: str
+    month: str
+    weekday: str
     enabled: int
     channel: str | None
     created_by_session: str | None
@@ -65,42 +71,47 @@ class SchedulerTurn(DTO):
     ``schedule`` channel. ``turn_id`` is now simply the schedule's own ``id``
     (no separate stored turn key). ``preview`` is the prompt; ``gist`` its
     generated one-line label (``None`` until the first fire generates it);
-    ``day``/``hour``/``minute`` are the schedule's cron fields (``None`` =
-    every)."""
+    ``minute``/``hour``/``day``/``month``/``weekday`` are the schedule's crontab
+    field expressions (``*`` = every)."""
 
     turn_id: int
     gist: str | None = None
     preview: str
-    day: int | None = None
-    hour: int | None = None
-    minute: int | None = None
+    minute: str = "*"
+    hour: str = "*"
+    day: str = "*"
+    month: str = "*"
+    weekday: str = "*"
 
 
 class _ScheduledItemWrite(DTO):
-    """Shared create/update body + the cron every-prefix validation rule.
+    """Shared create/update body + the crontab-shape validation rule.
 
     ``channel`` is create-only; ``SchedulerItemCreate`` adds it while
     ``SchedulerItemUpdate`` inherits this base unchanged (PUT never writes
     ``channel``). ``start_at`` is optional local wall-clock ISO text (default
     = local now, applied by the handler via ``parse_local``); a past
     ``start_at`` is legal — it simply means the schedule is already past its
-    activation floor. ``enabled`` is a plain field on this write body (not a
-    separate verb): a disabled schedule is skipped by the poller, and
-    re-enabling via update simply resumes matching against the current
-    wall-clock minute — there is no ``due_at`` to recompute.
+    activation floor. The five cron fields each default to ``"*"`` (every) and
+    are validated as crontab expressions by ``validate_cron``. ``enabled`` is a
+    plain field on this write body (not a separate verb): a disabled schedule is
+    skipped by the poller, and re-enabling via update simply resumes matching
+    against the current wall-clock minute — there is no ``due_at`` to recompute.
     """
 
     message: str = Field(..., min_length=1, max_length=1000)
     start_at: str | None = None
-    day: int | None = None
-    hour: int | None = None
-    minute: int | None = None
+    minute: str = "*"
+    hour: str = "*"
+    day: str = "*"
+    month: str = "*"
+    weekday: str = "*"
     enabled: bool = True
 
     @model_validator(mode="after")
     def _validate_cron_fields(self) -> Self:
         try:
-            validate_cron(self.day, self.hour, self.minute)
+            validate_cron(self.minute, self.hour, self.day, self.month, self.weekday)
         except ValueError as exc:
             raise PydanticCustomError("value_error", str(exc), None) from exc
         return self

@@ -8,12 +8,18 @@
 
 """Feature tests for the user-schedule dispatcher,
 ``cron.jobs.scheduled_items.ScheduledItemsDispatcherJob``. ``_run`` must select
-only enabled, already-started, cron-matching rows and fire them asynchronously;
-a fired row runs the real
-``MessageProcessor`` keyed to the schedule's own turn identity — the integer
-``id`` IS the ``turn_id`` on the ``schedule`` channel — so a first fire opens a
-MAIN turn and any later fire of the SAME id appends as a FORK to that SAME
-turn (never a second turn).
+only enabled, already-started rows whose real 5-field crontab expression
+(``cron_minute``/``cron_hour``/``cron_dom``/``cron_month``/``cron_dow`` — see
+``services.cron_schedule.matches``) matches the current wall-clock minute, and
+fire them asynchronously; a fired row runs the real ``MessageProcessor`` keyed
+to the schedule's own turn identity — the integer ``id`` IS the ``turn_id`` on
+the ``schedule`` channel — so a first fire opens a MAIN turn and any later fire
+of the SAME id appends as a FORK to that SAME turn (never a second turn).
+
+The exhaustive per-field / timezone truth table for ``matches`` lives in
+``tests/test_cron_schedule.py``; this file only proves the dispatcher wires
+ALL FIVE stored fields into that call (not just minute/hour) and drives the
+real fire-and-turn side effects.
 
 The LLM boundary (``ProviderService``'s client factory) is swapped for a fixed,
 hand-built recorder class (never a ``Mock``) — the one exception rule H
@@ -27,7 +33,6 @@ import json
 import sqlite3
 import threading
 from datetime import timedelta
-from typing import cast
 from unittest.mock import patch
 
 import pytest
@@ -38,6 +43,7 @@ from models.provider_response import ProviderResponse
 from models.thread_gist import ThreadGist
 from services.time_utils import utc_now
 from models.transcript import Transcript
+from tests.helpers import insert_scheduled_item
 
 pytestmark = pytest.mark.unit
 
@@ -84,37 +90,6 @@ def _seed_timezone(db: sqlite3.Connection, tz_name: str = "UTC") -> None:
     heartbeat_service._ctx = None
 
 
-def _insert_item(db: sqlite3.Connection, **overrides: object) -> int:
-    now = utc_now().isoformat()
-    defaults: dict[str, object] = dict(
-        message="Ping the user",
-        start_at=now,
-        cron_dom=None,
-        cron_hour=None,
-        cron_minute=None,
-        enabled=1,
-        channel="general",
-        created_by_session=None,
-        created_at=now,
-    )
-    defaults.update(overrides)
-    d = defaults
-    cur = db.execute(
-        """
-        INSERT INTO scheduled_items
-          (message, start_at, cron_dom, cron_hour, cron_minute,
-           enabled, channel, created_by_session, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """,
-        (
-            d["message"], d["start_at"], d["cron_dom"], d["cron_hour"], d["cron_minute"],
-            d["enabled"], d["channel"], d["created_by_session"], d["created_at"],
-        ),
-    )
-    db.commit()
-    return cast(int, cur.lastrowid)
-
-
 def _join_named_thread(name: str, timeout: float = _JOIN_TIMEOUT) -> bool:
     """Find a live thread by its exact name and join it — the real
     synchronization primitive for a fire-and-forget daemon thread. Returns
@@ -136,13 +111,15 @@ def test_poll_and_fire_selects_only_enabled_started_cron_matching_rows(
 ) -> None:
     _seed_timezone(db, "UTC")
     now = utc_now()
-    matching_id = _insert_item(db, message="Fire me", cron_hour=now.hour, cron_minute=now.minute)
-    wrong_minute = (now.minute + 30) % 60
-    non_matching_id = _insert_item(db, message="Wrong minute", cron_minute=wrong_minute)
-    disabled_id = _insert_item(
-        db, message="Disabled", cron_hour=now.hour, cron_minute=now.minute, enabled=0
+    matching_id = insert_scheduled_item(
+        db, message="Fire me", cron_hour=str(now.hour), cron_minute=str(now.minute)
     )
-    future_id = _insert_item(
+    wrong_minute = (now.minute + 30) % 60
+    non_matching_id = insert_scheduled_item(db, message="Wrong minute", cron_minute=str(wrong_minute))
+    disabled_id = insert_scheduled_item(
+        db, message="Disabled", cron_hour=str(now.hour), cron_minute=str(now.minute), enabled=0
+    )
+    future_id = insert_scheduled_item(
         db, message="Future", start_at=(now + timedelta(days=1)).isoformat()
     )
 
@@ -161,11 +138,44 @@ def test_poll_and_fire_selects_only_enabled_started_cron_matching_rows(
         assert not _schedule_turn_rows(skipped_id)
 
 
+def test_poll_wires_month_and_weekday_fields_not_just_minute_and_hour(
+    db: sqlite3.Connection,
+) -> None:
+    """The old dumb-cron model only ever stored/matched dom/hour/minute; the
+    real crontab engine adds ``cron_month``/``cron_dow``. A row whose minute
+    and hour match but whose month does NOT must still be skipped — proving
+    ``_run`` actually forwards all five stored fields into ``matches()``
+    rather than silently dropping the two new ones."""
+    _seed_timezone(db, "UTC")
+    now = utc_now()
+    wrong_month = (now.month % 12) + 1  # any month other than the current one
+
+    matching_id = insert_scheduled_item(
+        db, message="Right month",
+        cron_minute=str(now.minute), cron_hour=str(now.hour), cron_month=str(now.month),
+    )
+    wrong_month_id = insert_scheduled_item(
+        db, message="Wrong month",
+        cron_minute=str(now.minute), cron_hour=str(now.hour), cron_month=str(wrong_month),
+    )
+
+    with patch(_BUILD_CLIENT, return_value=_RecordingProvider()):
+        _DISPATCHER._run()
+        assert _join_named_thread(f"scheduled-work-{matching_id}"), (
+            "a row whose month matches the current month must fire"
+        )
+
+    assert not _join_named_thread(f"scheduled-work-{wrong_month_id}", timeout=0.1), (
+        "a row restricted to a different month must never fire even if minute/hour match"
+    )
+    assert not _schedule_turn_rows(wrong_month_id)
+
+
 def test_first_fire_opens_main_turn_second_fire_forks_the_same_turn(
     db: sqlite3.Connection,
 ) -> None:
     _seed_timezone(db, "UTC")
-    item_id = _insert_item(db, message="Water the plants")
+    item_id = insert_scheduled_item(db, message="Water the plants")
 
     with patch(_BUILD_CLIENT, return_value=_RecordingProvider("first response")):
         _DISPATCHER._fire_item(item_id, "Water the plants")

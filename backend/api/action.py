@@ -100,4 +100,6 @@ class Action(Endpoint):
         # named "item" or "x-item" can never forge another route's name.
         ns.route(f"/{verb}", endpoint=f"{self.slug()}__{verb}")(VerbResource)
         ns.route(f"/{verb}/<string:id>", endpoint=f"{self.slug()}__{verb}__item")(VerbItemResource)
+        verb_map: dict[str, str | None] = {"get": "get", "post": "post", "put": None, "delete": "delete"}
+        self._document(ns, [(VerbResource, verb_map), (VerbItemResource, verb_map)])
         return ns

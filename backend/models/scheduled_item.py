@@ -34,7 +34,7 @@ class ScheduledItem(Model):
 
     __columns__: ClassVar[tuple[str, ...]] = (
         "id", "message", "start_at",
-        "cron_dom", "cron_hour", "cron_minute",
+        "cron_minute", "cron_hour", "cron_dom", "cron_month", "cron_dow",
         "enabled", "channel", "created_by_session", "created_at",
     )
 
@@ -49,12 +49,17 @@ class ScheduledItem(Model):
         return "scheduled_items"
 
     # Real columns (annotation-only; populated by Model.__init__ from kwargs /
-    # hydrate, so mypy knows their types on attribute access).
+    # hydrate, so mypy knows their types on attribute access). The cron_* fields
+    # are crontab field expressions (numeric only): ``*``, ``N``, ``N-M``,
+    # ``*/S``, ``N-M/S`` and comma-unions; ``*`` = every. Parsed and matched by
+    # :mod:`services.cron_schedule` against the current USER-LOCAL minute.
     message: str
     start_at: str
-    cron_dom: int | None
-    cron_hour: int | None
-    cron_minute: int | None
+    cron_minute: str
+    cron_hour: str
+    cron_dom: str
+    cron_month: str
+    cron_dow: str
     enabled: int
     channel: str | None
     created_by_session: str | None
@@ -113,7 +118,10 @@ class ScheduledItem(Model):
         return (
             cls.filter("enabled", 1)
             .filter("start_at", now_iso, "<=")
-            .select("id", "message", "cron_dom", "cron_hour", "cron_minute")
+            .select(
+                "id", "message",
+                "cron_minute", "cron_hour", "cron_dom", "cron_month", "cron_dow",
+            )
         )
 
     @classmethod
@@ -125,7 +133,8 @@ class ScheduledItem(Model):
         cursor = cls._bound_connection().execute(
             """
             SELECT s.id, s.message, s.start_at,
-                   s.cron_dom, s.cron_hour, s.cron_minute, v.distance
+                   s.cron_minute, s.cron_hour, s.cron_dom, s.cron_month, s.cron_dow,
+                   v.distance
             FROM scheduled_items_vec v
             JOIN scheduled_items s ON s.rowid = v.rowid
             WHERE v.embedding MATCH ?

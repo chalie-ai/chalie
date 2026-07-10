@@ -2,16 +2,18 @@ import { api } from '@chalie/shared';
 
 /**
  * One active prompt-schedule thread, collapsed to its turn_id (§13.5).
- * Mirrors backend SchedulerTurn DTO exactly. `day`/`hour`/`minute` are the
- * series' cron fields (`null` = "every").
+ * Mirrors backend SchedulerTurn DTO exactly. `minute`/`hour`/`day`/`month`/
+ * `weekday` are the schedule's crontab field expressions (`*` = every).
  */
 export interface SchedulerTurn {
   turn_id: number;
   gist: string | null;
   preview: string;
-  day: number | null;
-  hour: number | null;
-  minute: number | null;
+  minute: string;
+  hour: string;
+  day: string;
+  month: string;
+  weekday: string;
 }
 
 /** An active delegate (backgrounded tool call) from /api/subagents. */

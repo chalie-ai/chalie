@@ -40,22 +40,26 @@ class ScheduledJobProtocol(Protocol):
 class ScheduledJob:
     """Concrete base for every cron job. Never registered directly.
 
-    Subclasses set ``name`` and the cron triple (``dom`` / ``hour`` /
-    ``minute`` — ``None`` means "every"). The runner acquires ``_lock``
-    non-reentrantly so a slow job can never stall the minute tick.
+    Subclasses set ``name`` and the five cron fields (``minute`` / ``hour`` /
+    ``dom`` / ``month`` / ``dow`` — ``"*"`` means "every"). The runner acquires
+    ``_lock`` non-reentrantly so a slow job can never stall the minute tick.
     """
 
     name: str = ""
-    dom: int | None = None
-    hour: int | None = None
-    minute: int | None = None
+    minute: str = "*"
+    hour: str = "*"
+    dom: str = "*"
+    month: str = "*"
+    dow: str = "*"
 
     def __init__(self) -> None:
         self._lock = threading.Lock()
 
     def should_run(self) -> bool:
-        """True when the cron triple matches the current local minute."""
-        return matches(utc_now(), self.dom, self.hour, self.minute)
+        """True when the five cron fields match the current local minute."""
+        return matches(
+            utc_now(), self.minute, self.hour, self.dom, self.month, self.dow
+        )
 
     def execute(self) -> None:
         """Run the job's work and log its status detail.
@@ -78,8 +82,8 @@ class IdleGatedJob(ScheduledJob):
     Subclasses implement ``_run`` (the actual work). The base provides
     ``execute`` which wraps ``_run`` and, in a ``finally`` block, stamps the
     durable last-fired timestamp — so a failing job still respects its
-    interval. The cron triple stays ``None`` (fire every minute); the gates
-    live in ``should_run``.
+    interval. The cron fields stay at their ``"*"`` defaults (fire every
+    minute); the gates live in ``should_run``.
     """
 
     idle_window: timedelta = timedelta(minutes=30)

@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue';
+import { computed, ref } from 'vue';
+import { describeCron } from '@chalie/shared';
 import type { ScheduleInput, ScheduleItem } from '../../api/scheduler';
 import { scheduler } from '../../api/scheduler';
 import { formatDate } from '../../utils/format';
@@ -26,60 +27,54 @@ const formMode = ref<'list' | 'form'>('list');
 const editingId = ref<number | null>(null);
 const formMsg = ref('');
 const formStart = ref('');
-const formDay = ref<number | null>(null);
-const formHour = ref<number | null>(null);
-const formMinute = ref<number | null>(null);
+// Crontab fields — free-text expressions (`*`, `N`, `N-M`, `*/S`, comma-lists);
+// `*` = every. There is no every-prefix invariant any more, so no cross-field
+// coupling or auto-correction: each field stands alone and the backend
+// validates the full 5-field shape on save.
+const formMinute = ref('*');
+const formHour = ref('*');
+const formDay = ref('*');
+const formMonth = ref('*');
+const formWeekday = ref('*');
 const formEnabled = ref(true);
 
-const days = Array.from({ length: 31 }, (_, i) => i + 1);
-const hours = Array.from({ length: 24 }, (_, i) => i);
-const minutes = Array.from({ length: 60 }, (_, i) => i);
-
-function pad(n: number): string {
-  return String(n).padStart(2, '0');
-}
-
-// A field may only be "Every" if every finer field is also "Every" — the
-// submittable shapes are EEE / EEF / EFF / FFF (E=Every, F=Fixed, ordered
-// day > hour > minute). Disable the "Every" option on a finer selector once
-// a coarser one is fixed, and auto-correct now-illegal values below.
-const hourEveryDisabled = computed(() => formDay.value !== null);
-const minuteEveryDisabled = computed(() => formHour.value !== null);
-
-function enforceEveryPrefix(): void {
-  if (formDay.value !== null && formHour.value === null) formHour.value = 0;
-  if (formHour.value !== null && formMinute.value === null) formMinute.value = 0;
-}
-
-watch(formDay, enforceEveryPrefix);
-watch(formHour, enforceEveryPrefix);
+// Live human-readable preview as the user edits — the same describeCron the
+// interface uses, so a schedule reads identically on both surfaces.
+const cronPreview = computed(() =>
+  describeCron(formMinute.value, formHour.value, formDay.value, formMonth.value, formWeekday.value),
+);
 
 function cadenceLabel(s: ScheduleItem): string {
-  const { day, hour, minute } = s;
-  if (day == null && hour == null && minute == null) return 'Every minute';
-  if (day == null && hour == null) return `Every hour at :${pad(minute as number)}`;
-  if (day == null) return `Every day at ${pad(hour as number)}:${pad(minute as number)}`;
-  return `Monthly on day ${day} at ${pad(hour as number)}:${pad(minute as number)}`;
+  return describeCron(s.minute, s.hour, s.day, s.month, s.weekday);
 }
 
 function openForm(item: ScheduleItem | null): void {
   formMsg.value = item?.message ?? item?.prompt ?? '';
   formStart.value = item?.start_at ? item.start_at.slice(0, 16) : '';
-  formDay.value = item?.day ?? null;
-  formHour.value = item?.hour ?? null;
-  formMinute.value = item?.minute ?? null;
+  formMinute.value = item?.minute ?? '*';
+  formHour.value = item?.hour ?? '*';
+  formDay.value = item?.day ?? '*';
+  formMonth.value = item?.month ?? '*';
+  formWeekday.value = item?.weekday ?? '*';
   formEnabled.value = item?.enabled !== 0;
-  enforceEveryPrefix();
   editingId.value = item?.id ?? null;
   formMode.value = 'form';
+}
+
+// A blank field is normalized to '*' so an empty input reads as "every" rather
+// than failing validation; the backend is the sole authority on cron validity.
+function cronField(v: string): string {
+  return v.trim() || '*';
 }
 
 async function save(): Promise<void> {
   const body: ScheduleInput = {
     message: formMsg.value.trim(),
-    day: formDay.value,
-    hour: formHour.value,
-    minute: formMinute.value,
+    minute: cronField(formMinute.value),
+    hour: cronField(formHour.value),
+    day: cronField(formDay.value),
+    month: cronField(formMonth.value),
+    weekday: cronField(formWeekday.value),
     enabled: formEnabled.value,
   };
   if (formStart.value) body.start_at = formStart.value;
@@ -105,9 +100,11 @@ async function toggleEnabled(s: ScheduleItem, next: boolean): Promise<void> {
   try {
     await scheduler.update(s.id, {
       message: s.message || s.prompt || '',
-      day: s.day,
-      hour: s.hour,
       minute: s.minute,
+      hour: s.hour,
+      day: s.day,
+      month: s.month,
+      weekday: s.weekday,
       enabled: next,
     });
     showToast(next ? 'Schedule enabled' : 'Schedule disabled', 'success');
@@ -172,25 +169,34 @@ async function cancelSchedule(s: ScheduleItem): Promise<void> {
         <input id="schedStart" v-model="formStart" type="datetime-local" />
       </div>
       <div class="form-group">
-        <label for="schedDay">Day of month</label>
-        <select id="schedDay" v-model="formDay">
-          <option :value="null">Every</option>
-          <option v-for="d in days" :key="d" :value="d">{{ d }}</option>
-        </select>
-      </div>
-      <div class="form-group">
-        <label for="schedHour">Hour</label>
-        <select id="schedHour" v-model="formHour">
-          <option :value="null" :disabled="hourEveryDisabled">Every</option>
-          <option v-for="h in hours" :key="h" :value="h">{{ pad(h) }}</option>
-        </select>
-      </div>
-      <div class="form-group">
-        <label for="schedMinute">Minute</label>
-        <select id="schedMinute" v-model="formMinute">
-          <option :value="null" :disabled="minuteEveryDisabled">Every</option>
-          <option v-for="m in minutes" :key="m" :value="m">{{ pad(m) }}</option>
-        </select>
+        <label>Recurrence (crontab)</label>
+        <div class="cron-grid">
+          <div class="cron-field">
+            <label for="cronMinute">Minute</label>
+            <input id="cronMinute" v-model="formMinute" placeholder="*" spellcheck="false" />
+          </div>
+          <div class="cron-field">
+            <label for="cronHour">Hour</label>
+            <input id="cronHour" v-model="formHour" placeholder="*" spellcheck="false" />
+          </div>
+          <div class="cron-field">
+            <label for="cronDay">Day</label>
+            <input id="cronDay" v-model="formDay" placeholder="*" spellcheck="false" />
+          </div>
+          <div class="cron-field">
+            <label for="cronMonth">Month</label>
+            <input id="cronMonth" v-model="formMonth" placeholder="*" spellcheck="false" />
+          </div>
+          <div class="cron-field">
+            <label for="cronWeekday">Weekday</label>
+            <input id="cronWeekday" v-model="formWeekday" placeholder="*" spellcheck="false" />
+          </div>
+        </div>
+        <p class="cron-preview">{{ cronPreview }}</p>
+        <p class="form-hint">
+          Standard crontab: <code>*</code> = every, <code>*/5</code> = every 5th,
+          <code>1-5</code> = range, <code>1,15</code> = list. Weekday 0–6 (0 = Sunday).
+        </p>
       </div>
       <div class="form-group">
         <label>Enabled</label>
@@ -256,5 +262,32 @@ async function cancelSchedule(s: ScheduleItem): Promise<void> {
 }
 .state-disabled {
   color: var(--text-muted);
+}
+
+/* Crontab field grid — five compact expression inputs on one row. */
+.cron-grid {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 0.5rem;
+}
+.cron-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+.cron-field label {
+  font-size: 0.72rem;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.cron-field input {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  text-align: center;
+}
+.cron-preview {
+  margin: 0.5rem 0 0.25rem;
+  font-weight: 500;
+  color: var(--text-primary);
 }
 </style>

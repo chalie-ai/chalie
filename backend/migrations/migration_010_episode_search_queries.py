@@ -23,8 +23,8 @@ episodes flow through the engine and earn their doc2query variants.
 
 Runs AFTER schema convergence and BEFORE the worker's self-heal (run.py boot
 order: converge → startup migrations → workers). Idempotent: a re-run matches no
-rows (they are no longer NULL). The run-once sentinel gate lives in
-backend/run.py, not here.
+rows (they are no longer NULL). The run-once ledger gate lives in
+``migrations/runner.py``, not here.
 
 Usage: `python backend/migrations/migration_010_episode_search_queries.py`
 """
@@ -38,6 +38,7 @@ _BACKEND_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _BACKEND_DIR not in sys.path:
     sys.path.insert(0, _BACKEND_DIR)
 
+from migrations.connection import connect  # noqa: E402
 from services.file_mapper_service import FileMapperService  # noqa: E402
 
 _MARK_INDEXED_SQL = (
@@ -46,10 +47,21 @@ _MARK_INDEXED_SQL = (
 )
 
 
+def needed(conn: sqlite3.Connection) -> bool:
+    """Live episodes with ``search_queries`` still NULL? Only time-valid at the
+    upgrade boot itself — before workers start, a NULL row can only be the
+    convergence-rebuild backlog described above; once the engine is live, NULL
+    simply means "not yet indexed". The runner's run-once ledger guarantees this
+    is evaluated exactly then and never again."""
+    return conn.execute(
+        "SELECT 1 FROM episodes WHERE search_queries IS NULL AND deleted_at IS NULL LIMIT 1"
+    ).fetchone() is not None
+
+
 def apply(db_path: str) -> None:
     """Mark still-NULL live episodes as FTS-indexed to block a self-heal
     double-post. Idempotent: already-stamped rows no longer match."""
-    conn = sqlite3.connect(db_path, timeout=30)
+    conn = connect(db_path)
     try:
         cursor = conn.execute(_MARK_INDEXED_SQL)
         conn.commit()

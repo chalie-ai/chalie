@@ -191,14 +191,16 @@ CREATE TABLE IF NOT EXISTS master_account (
 -- SCHEDULED ITEMS
 -- ────────────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS scheduled_items (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,     -- also the thread's turn_id on the 'schedule' channel (§13.1). AUTOINCREMENT: a cancelled schedule's id is never reissued, so a dead thread can never be re-entered.
+    id INTEGER PRIMARY KEY AUTOINCREMENT,          -- also the thread's turn_id on the 'schedule' channel (§13.1). AUTOINCREMENT: a cancelled schedule's id is never reissued, so a dead thread can never be re-entered.
     message TEXT NOT NULL,
-    start_at TEXT NOT NULL,                    -- UTC activation floor; the cron never fires before this instant
-    cron_dom INTEGER,                          -- day-of-month 1-31 in USER-LOCAL tz; NULL = every
-    cron_hour INTEGER,                         -- hour 0-23 in USER-LOCAL tz; NULL = every
-    cron_minute INTEGER,                       -- minute 0-59 in USER-LOCAL tz; NULL = every
-    enabled INTEGER NOT NULL DEFAULT 1,        -- 0 = disabled: the poller skips it (series paused)
-    channel TEXT,                              -- creating context's channel (audit only; the fire always runs on 'schedule')
+    start_at TEXT NOT NULL,                         -- UTC activation floor; the cron never fires before this instant
+    cron_minute TEXT NOT NULL DEFAULT '*',          -- crontab minute expr, 0-59 USER-LOCAL; '*' = every (also N, N-M, */S, N-M/S, comma-union)
+    cron_hour   TEXT NOT NULL DEFAULT '*',          -- crontab hour expr, 0-23 USER-LOCAL; '*' = every
+    cron_dom    TEXT NOT NULL DEFAULT '*',          -- crontab day-of-month expr, 1-31 USER-LOCAL; '*' = every
+    cron_month  TEXT NOT NULL DEFAULT '*',          -- crontab month expr, 1-12 USER-LOCAL; '*' = every
+    cron_dow    TEXT NOT NULL DEFAULT '*',          -- crontab day-of-week expr, 0-7 USER-LOCAL (0 or 7 = Sun); '*' = every. Vixie: dom & dow OR only when BOTH restricted
+    enabled INTEGER NOT NULL DEFAULT 1,             -- 0 = disabled: the poller skips it (series paused)
+    channel TEXT,                                   -- creating context's channel (audit only; the fire always runs on 'schedule')
     created_by_session TEXT,
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
@@ -333,10 +335,10 @@ CREATE TABLE IF NOT EXISTS schema_version (
 
 INSERT OR IGNORE INTO schema_version (version) VALUES (1);
 
--- schema_migrations table removed — SchemaConvergenceService is now the
--- single source of truth.  schema.sql declares the desired shape and the
--- service converges the live DB to match.  Numbered migration files are
--- gone; legacy schema_migrations rows are auto-dropped on the next boot.
+-- Schema SHAPE carries no version ledger — SchemaConvergenceService converges
+-- the live DB to the shape this file declares.  One-time DATA migrations are
+-- tracked separately: migrations/runner.py records each step in the
+-- schema_migrations table declared at the end of this file.
 
 -- ────────────────────────────────────────────────────────────────
 -- CONCEPT LUT MISSES — keys that didn't match the concept LUT
@@ -744,6 +746,22 @@ CREATE INDEX IF NOT EXISTS idx_policy_blocked_log_created ON policy_blocked_log(
 CREATE TABLE IF NOT EXISTS telemetry (
     key   TEXT PRIMARY KEY,
     value TEXT
+);
+
+-- ============================================================================
+-- SCHEMA MIGRATIONS — run-once ledger for the startup migration runner.
+-- ============================================================================
+-- One row per migration step (migrations/runner.py), written the first boot
+-- that resolves it. outcome: 'applied' (the migration executed), 'noop' (its
+-- needed() check found the database already in target shape — e.g. a fresh
+-- install), 'sentinel' (imported from a pre-ledger `.<key>.done` boot sentinel
+-- file). Living inside the database, the ledger travels with it through
+-- snapshot export/restore. Deleting a row re-arms that step for the next boot;
+-- destructive steps still re-check needed() before running.
+CREATE TABLE IF NOT EXISTS schema_migrations (
+    key        TEXT PRIMARY KEY,
+    outcome    TEXT NOT NULL CHECK (outcome IN ('applied', 'noop', 'sentinel')),
+    applied_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
 -- ============================================================================

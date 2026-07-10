@@ -20,7 +20,7 @@ from typing import cast
 from flask.typing import ResponseReturnValue
 
 from api.action import Action
-from api.endpoint import EndpointError, NotFoundError
+from api.endpoint import DocumentedResponse, EndpointError, NotFoundError
 from api.request import Request
 from api.request.lists import ItemRequest
 from api.response.lists import ListItemResponse
@@ -35,6 +35,10 @@ class ListItems(Action):
     """
 
     request_dto = ItemRequest
+    response_dto = {
+        "get": DocumentedResponse(ListItemResponse, listing=True),
+        "post": DocumentedResponse(ListItemResponse),
+    }
 
     def slug(self) -> str:
         return "lists"

@@ -1,12 +1,13 @@
 """Cron package — minute-aligned runner over ScheduledJob classes.
 
-The runner iterates ``JOBS`` every wall-clock minute. Each job declares its
-own cron schedule via ``ScheduledJob.dom/hour/minute`` and its own work via
-``ScheduledJob.execute``. Idle-gated cognition jobs subclass ``IdleGatedJob``
-which adds user-idle-window and min-interval gates on top of the cron match.
+The runner iterates ``JOBS`` every wall-clock minute. Each job declares its own
+cron schedule via ``ScheduledJob.minute/hour/dom/month/dow`` (5-field crontab,
+all defaulting to ``"*"``) and its own work via ``ScheduledJob.execute``.
+Idle-gated cognition jobs subclass ``IdleGatedJob`` which adds user-idle-window
+and min-interval gates on top of the cron match.
 
-``JOBS`` is intentionally empty in this skeleton — later tasks populate it
-with singleton job instances. An empty tuple means the runner does nothing.
+``JOBS`` holds one singleton instance per registered job (see below); the runner
+fires each independently as its cron matches.
 """
 
 from cron.base import IdleGatedJob, ScheduledJob, ScheduledJobProtocol

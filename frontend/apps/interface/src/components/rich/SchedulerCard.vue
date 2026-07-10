@@ -1,16 +1,18 @@
 <script setup lang="ts">
 import { computed } from 'vue';
-import { formatCadence } from '../../utils/time';
+import { describeCron } from '@chalie/shared';
 
 export interface SchedulerRecord {
   id: number;
   message: string;
   /** Localized (user-timezone) ISO string — the schedule's activation floor. */
   start_at: string;
-  /** Cron fields (`null` = "every" on that field). */
-  day?: number | null;
-  hour?: number | null;
-  minute?: number | null;
+  /** Crontab field expressions (`*` = every) — absent on cards without timing. */
+  minute?: string;
+  hour?: string;
+  day?: string;
+  month?: string;
+  weekday?: string;
 }
 
 export interface SchedulerPayload {
@@ -65,8 +67,16 @@ const metaTime = computed(() => (startAt.value ? formatTime(startAt.value) : nul
 /** Cadence label, only when the record actually carries cron fields. */
 const cadenceText = computed((): string | null => {
   const r = record.value;
-  if (r.day === undefined && r.hour === undefined && r.minute === undefined) return null;
-  return formatCadence(r.day ?? null, r.hour ?? null, r.minute ?? null);
+  if (
+    r.minute === undefined &&
+    r.hour === undefined &&
+    r.day === undefined &&
+    r.month === undefined &&
+    r.weekday === undefined
+  ) {
+    return null;
+  }
+  return describeCron(r.minute ?? '*', r.hour ?? '*', r.day ?? '*', r.month ?? '*', r.weekday ?? '*');
 });
 
 const metaText = computed((): string => {

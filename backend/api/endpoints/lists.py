@@ -16,7 +16,7 @@ from typing import cast
 
 from flask.typing import ResponseReturnValue
 
-from api.endpoint import Endpoint, EndpointError, NotFoundError
+from api.endpoint import DocumentedResponse, Endpoint, EndpointError, NotFoundError
 from api.request import Request
 from api.request.lists import ListRequest
 from api.response.lists import ListResponse
@@ -27,6 +27,11 @@ class Lists(Endpoint):
     """CRUD endpoint for lists."""
 
     request_dto = ListRequest
+    response_dto = {
+        "get_all": DocumentedResponse(ListResponse, listing=True),
+        "get": DocumentedResponse(ListResponse),
+        "post": DocumentedResponse(ListResponse),
+    }
 
     def slug(self) -> str:
         return "lists"

@@ -5,7 +5,9 @@ All factories return tuples unless noted otherwise. Override any field via keywo
 
 from __future__ import annotations
 
+import sqlite3
 from datetime import datetime, timezone
+from typing import cast
 
 from configs.enums.policy_channel import PolicyChannel
 from services.processor_config import ProcessorConfig
@@ -64,32 +66,52 @@ def make_stub_config(
 
 
 # ─── scheduled_items ─────────────────────────────────────────────────
-# Column order matches schema.sql (TKT-1434 prompt-only dumb-cron table):
-#   message, start_at, cron_dom, cron_hour, cron_minute, enabled, channel,
-#   created_by_session, created_at
+# Column order matches schema.sql (the real 5-field crontab engine):
+#   message, start_at, cron_minute, cron_hour, cron_dom, cron_month, cron_dow,
+#   enabled, channel, created_by_session, created_at
 # ``id`` is INTEGER PRIMARY KEY AUTOINCREMENT — never supplied on insert, always
 # read back via cursor.lastrowid (it also doubles as the schedule's turn_id on
-# the 'schedule' channel). cron_dom/cron_hour/cron_minute are NULL = "every" in
-# the every-prefix cron model (services.cron_schedule.validate_cron); start_at
-# is a UTC activation floor.
+# the 'schedule' channel). All five cron_* columns are TEXT NOT NULL DEFAULT '*'
+# crontab expressions (services.cron_schedule.validate_cron / matches); '*' =
+# every. start_at is a UTC activation floor.
+#
+# This is the SINGLE shared seed path for a real scheduled_items row — every
+# test that needs a pre-existing row (rather than driving one through the
+# ability/REST create path) calls this, so the INSERT's column list can never
+# drift out of step with schema.sql in more than one place (the exact bug
+# class a hand-rolled per-file INSERT reintroduces).
 
-def make_scheduled_item(
+def insert_scheduled_item(
+    db: sqlite3.Connection,
     message: str = "Test reminder",
     start_at: str | None = None,
-    cron_dom: int | None = None,
-    cron_hour: int | None = None,
-    cron_minute: int | None = None,
+    cron_minute: str = "*",
+    cron_hour: str = "*",
+    cron_dom: str = "*",
+    cron_month: str = "*",
+    cron_dow: str = "*",
     enabled: int = 1,
-    channel: str | None = None,
+    channel: str | None = "general",
     created_by_session: str | None = None,
     created_at: str | None = None,
-) -> tuple[object, ...]:
+) -> int:
+    """Insert a real ``scheduled_items`` row and return its auto-assigned id."""
     start_at = start_at or datetime.now(timezone.utc).isoformat()
     created_at = created_at or datetime.now(timezone.utc).isoformat()
-    return (
-        message, start_at, cron_dom, cron_hour, cron_minute,
-        enabled, channel, created_by_session, created_at,
+    cur = db.execute(
+        """
+        INSERT INTO scheduled_items
+          (message, start_at, cron_minute, cron_hour, cron_dom, cron_month, cron_dow,
+           enabled, channel, created_by_session, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            message, start_at, cron_minute, cron_hour, cron_dom, cron_month, cron_dow,
+            enabled, channel, created_by_session, created_at,
+        ),
     )
+    db.commit()
+    return cast(int, cur.lastrowid)
 
 
 # ─── providers ───────────────────────────────────────────────────────

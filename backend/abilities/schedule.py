@@ -7,15 +7,17 @@ remaining params — no bespoke UPDATE path to keep in sync with create's valida
 All DB access via the :class:`~models.scheduled_item.ScheduledItem` model; this ability owns
 orchestration, validation, embedding generation, and response shaping only — no SQL of its own.
 
-``scheduled_items`` is a prompt-only, dumb-cron table now: one row per schedule, forever
+``scheduled_items`` is a prompt-only, crontab table now: one row per schedule, forever
 (``id`` INTEGER PRIMARY KEY AUTOINCREMENT, also the thread's ``turn_id`` on the ``'schedule'``
 channel). There is no ``item_type``/notification-vs-prompt choice, no stored ``due_at``/
 ``status``/``group_id`` — a stateless poller wakes every wall-clock minute and fires any enabled
-row whose ``start_at`` floor has passed and whose ``cron_dom``/``cron_hour``/``cron_minute``
-(NULL = "every") match the current LOCAL minute. Cancel is a hard ``DELETE``; a cancelled id is
-never reissued (AUTOINCREMENT), so its thread can never be re-entered. ``start_at`` is a plain
-LOCAL wall-clock ISO string (optional — defaults to local now); the model is instructed to copy it
-straight from the World State's ``local_time`` telemetry and never compute a UTC offset.
+row whose ``start_at`` floor has passed and whose five crontab fields
+(``cron_minute``/``cron_hour``/``cron_dom``/``cron_month``/``cron_dow``, ``*`` = every) match the
+current LOCAL minute. Each field is a standard crontab expression — ``*``, ``5``, ``*/5``,
+``0,15,30,45``, ``9-17`` (numeric only, no ``mon``/``jan`` names). Cancel is a hard ``DELETE``; a
+cancelled id is never reissued (AUTOINCREMENT), so its thread can never be re-entered. ``start_at``
+is a plain LOCAL wall-clock ISO string (optional — defaults to local now); the model is instructed
+to copy it straight from the World State's ``local_time`` telemetry and never compute a UTC offset.
 ``validate_cron`` (``services.cron_schedule``) owns the crontab shape rule; this ability calls it
 and surfaces ``ValueError`` as a clear user/LLM-facing error.
 
@@ -47,7 +49,7 @@ _LOCAL_ISO_FMT = "%Y-%m-%dT%H:%M:%S%z"
 
 _COLS: tuple[str, ...] = (
     "id", "message", "start_at",
-    "cron_dom", "cron_hour", "cron_minute",
+    "cron_minute", "cron_hour", "cron_dom", "cron_month", "cron_dow",
     "enabled", "channel", "created_by_session", "created_at",
 )
 
@@ -77,10 +79,13 @@ class ScheduleAbility(Ability):
     def get_summary(self) -> str:
         return (
             "Create, list, cancel, or enable/disable persistent reminders and recurring "
-            "prompts at a specific calendar date/time. Disable pauses a recurring prompt "
-            "without deleting it; enable resumes it. For a short ephemeral countdown the "
-            "user wants to watch tick down on screen (focus blocks, kitchen timers, breath "
-            "holds), use the `timer` tool instead — not `schedule`."
+            "prompts. Supports full crontab-style recurrence — a fixed calendar time, "
+            "every N minutes/hours, specific weekdays, day-of-month, or any combination "
+            "(e.g. 'every 5 minutes', 'every weekday at 9am', 'the 1st of each month'). "
+            "Disable pauses a recurring prompt without deleting it; enable resumes it. "
+            "For a short ephemeral countdown the user wants to watch tick down on screen "
+            "(focus blocks, kitchen timers, breath holds), use the `timer` tool instead "
+            "— not `schedule`."
         )
 
     def get_examples(self) -> list[str]:
@@ -89,10 +94,10 @@ class ScheduleAbility(Ability):
             "set a daily reminder at 8am to take my vitamins",
             "what reminders do I have",
             "cancel my dentist reminder",
-            "schedule a weekly check-in every Monday at 9am",
-            "remind me to email the quarterly report by Friday 5pm",
-            "remind me to go to the gym at 7pm",
-            "set a reminder to leave for work at 8am",
+            "remind me every 5 minutes to check the oven",
+            "ping me every weekday at 9am for standup",
+            "check the mail every 2 hours during the day",
+            "remind me on the 1st and 15th of each month to pay rent",
         ]
 
     def get_search_tooltip(self) -> str:
@@ -130,35 +135,58 @@ class ScheduleAbility(Ability):
                     "the user's own local wall-clock time. Example: '2026-03-20T09:00:00'."
                 ),
             },
-            Keys.day: {
-                "type": "integer",
+            Keys.minute: {
+                "type": "string",
                 "description": (
-                    "Optional for create: the day-of-month (1-31) this reminder fires "
-                    "on, in the user's LOCAL wall-clock time. Omit it (or pass null) to "
-                    "mean 'every day' — required only for a monthly schedule. "
-                    "Constraint: you can only set 'every' (omit) on a field that is "
-                    "COARSER than every field you DO fix — so if you fix 'day' you must "
-                    "also fix hour and minute (you cannot have a fixed day with an "
-                    "'every' hour or minute)."
+                    "Optional for create: WHICH MINUTE of the hour this fires, as a "
+                    "standard crontab field (0-59) in the user's LOCAL time. Default "
+                    "'*' = every minute. Examples: '0' = on the hour, '30' = at :30, "
+                    "'*/5' = every 5 minutes, '0,15,30,45' = every quarter hour, "
+                    "'0-29' = the first half of each hour. Numeric only. For 'every 5 "
+                    "minutes' set minute='*/5' and leave the rest '*'."
                 ),
             },
             Keys.hour: {
-                "type": "integer",
+                "type": "string",
                 "description": (
-                    "Optional for create: the hour (0-23) this reminder fires at, in "
-                    "the user's LOCAL wall-clock time. Omit it (or pass null) to mean "
-                    "'every hour'. Constraint: if you fix 'hour' you must also fix "
-                    "minute (you cannot have a fixed hour with an 'every' minute) — "
-                    "e.g. day: every, hour: 3, minute: 0 means 'every day at 03:00'."
+                    "Optional for create: WHICH HOUR this fires, as a standard crontab "
+                    "field (0-23, 24-hour clock) in the user's LOCAL time. Default '*' "
+                    "= every hour. Examples: '9' = 9am, '17' = 5pm, '*/2' = every 2 "
+                    "hours, '9-17' = every hour 9am-5pm. For a once-a-day reminder set "
+                    "hour and minute (e.g. hour='8', minute='0' = 08:00 daily)."
                 ),
             },
-            Keys.minute: {
-                "type": "integer",
+            Keys.day: {
+                "type": "string",
                 "description": (
-                    "Optional for create: the minute (0-59) this reminder fires at, in "
-                    "the user's LOCAL wall-clock time. Omit it (or pass null) to mean "
-                    "'every minute' — only valid when hour and day are ALSO omitted. "
-                    "You cannot set minute to 'every' while hour is fixed."
+                    "Optional for create: WHICH DAY-OF-MONTH this fires, as a standard "
+                    "crontab field (1-31) in the user's LOCAL time. Default '*' = every "
+                    "day. Examples: '1' = the 1st, '15' = the 15th, '1,15' = 1st and "
+                    "15th. Note: a day number missing from a short month (e.g. '31') "
+                    "simply never fires that month. Use 'weekday' instead for "
+                    "'every Monday'-style schedules."
+                ),
+            },
+            Keys.month: {
+                "type": "string",
+                "description": (
+                    "Optional for create: WHICH MONTH this fires, as a standard crontab "
+                    "field (1-12, 1=January) in the user's LOCAL time. Default '*' = "
+                    "every month. Examples: '1' = January only, '*/3' = quarterly "
+                    "(Jan/Apr/Jul/Oct), '6-8' = the summer months. Numeric only."
+                ),
+            },
+            Keys.weekday: {
+                "type": "string",
+                "description": (
+                    "Optional for create: WHICH DAY-OF-WEEK this fires, as a standard "
+                    "crontab field (0-6, 0=Sunday, 1=Monday, … 6=Saturday; 7 also = "
+                    "Sunday) in the user's LOCAL time. Default '*' = every day. "
+                    "Examples: '1' = every Monday, '1-5' = weekdays, '0,6' = weekends, "
+                    "'5' = every Friday. Combine with hour/minute: weekday='1', "
+                    "hour='9', minute='0' = every Monday at 09:00. (If BOTH day and "
+                    "weekday are set, the schedule fires on days matching EITHER — "
+                    "standard crontab.)"
                 ),
             },
             Keys.item_id: {
@@ -166,8 +194,8 @@ class ScheduleAbility(Ability):
                 "description": (
                     "Optional for cancel: exact ID returned at create time. Prefer this when known. "
                     "Required for update: the existing item to replace — pass the new message/"
-                    "start_at/day/hour/minute alongside it and the old item is cancelled and "
-                    "recreated with the new values."
+                    "start_at/minute/hour/day/month/weekday alongside it and the old item is "
+                    "cancelled and recreated with the new values."
                 ),
             },
             Keys.query: {
@@ -277,62 +305,59 @@ def _resolve_start_at(params: dict[str, object]) -> tuple[datetime, ToolResult |
         )
 
 
-def _coerce_cron_field(
-    params: dict[str, object], key: str, label: str
-) -> tuple[int | None, ToolResult | None]:
-    """Read one of ``day``/``hour``/``minute`` as ``int | None`` (``None`` = every).
+def _parse_cron_field(params: dict[str, object], key: str) -> str:
+    """Read one crontab field (``minute``/``hour``/``day``/``month``/``weekday``)
+    as a string expression; an omitted, null, or blank field means ``*`` (every).
 
-    Range/every-prefix validity is enforced afterwards by ``validate_cron`` —
-    this only coerces the raw value to an int (or rejects a non-numeric one).
+    A weak model may emit the field as a JSON number (``5``) or a string
+    (``"*/5"``); both are normalised to the trimmed string form here — a
+    whole-number float like ``5.0`` is folded to ``"5"`` so it never stringifies
+    as ``"5.0"``. Crontab-shape validity (range, malformed token) is enforced
+    afterwards by ``validate_cron``, the single source of truth for the shape.
     """
     raw = params.get(key)
-    if raw is None or raw == "":
-        return None, None
-    if isinstance(raw, float) and not raw.is_integer():
-        # int(3.5) would silently truncate to 3 and reschedule; reject it loudly.
-        return None, ToolResult.err(
-            f"{label} must be a whole number, got {raw!r}.",
-            code="invalid-cron",
-            hint=f"omit {key} (or pass null) to mean 'every {label}'.",
-        )
-    try:
-        return int(cast(int, raw)), None
-    except (TypeError, ValueError):
-        return None, ToolResult.err(
-            f"{label} must be an integer, got {raw!r}.",
-            code="invalid-cron",
-            hint=f"omit {key} (or pass null) to mean 'every {label}'.",
-        )
+    if raw is None:
+        return "*"
+    if isinstance(raw, float) and raw.is_integer():
+        raw = int(raw)
+    text = str(raw).strip()
+    return text or "*"
 
 
 def _format_record(
     item_id: int,
     message: str,
     start_at: datetime,
-    dom: int | None,
-    hour: int | None,
-    minute: int | None,
+    minute: str,
+    hour: str,
+    day: str,
+    month: str,
+    weekday: str,
 ) -> dict[str, object]:
-    """The user/LLM-facing shape for a scheduled item."""
+    """The user/LLM-facing shape for a scheduled item — the five raw crontab
+    field expressions verbatim (``day`` = day-of-month, ``weekday`` =
+    day-of-week)."""
     return {
         "id": item_id,
         "message": message,
         "start_at": format_date(start_at, fmt=_LOCAL_ISO_FMT, for_ui=True),
-        "day": dom,
-        "hour": hour,
         "minute": minute,
+        "hour": hour,
+        "day": day,
+        "month": month,
+        "weekday": weekday,
     }
 
 
 def _parse_create_params(
     params: dict[str, object],
-) -> tuple[tuple[str, datetime, int | None, int | None, int | None] | None, ToolResult | None]:
+) -> tuple[tuple[str, datetime, str, str, str, str, str] | None, ToolResult | None]:
     """Validate + coerce the shared create/update inputs WITHOUT touching the DB.
 
-    Returns ``((message, start_at, dom, hour, minute), None)`` when every field is
-    legal, or ``(None, error)`` on the first invalid one. Pure — the ``update``
-    path relies on this to reject an illegal replacement *before* cancelling the
-    existing schedule (see :meth:`ScheduleAbility.run`).
+    Returns ``((message, start_at, minute, hour, day, month, weekday), None)``
+    when every field is legal, or ``(None, error)`` on the first invalid one.
+    Pure — the ``update`` path relies on this to reject an illegal replacement
+    *before* cancelling the existing schedule (see :meth:`ScheduleAbility.run`).
     """
     message, err = _validate_message(params)
     if err:
@@ -340,39 +365,37 @@ def _parse_create_params(
     start_at, err = _resolve_start_at(params)
     if err:
         return None, err
-    dom, err = _coerce_cron_field(params, Keys.day, "day")
-    if err:
-        return None, err
-    hour, err = _coerce_cron_field(params, Keys.hour, "hour")
-    if err:
-        return None, err
-    minute, err = _coerce_cron_field(params, Keys.minute, "minute")
-    if err:
-        return None, err
+
+    minute = _parse_cron_field(params, Keys.minute)
+    hour = _parse_cron_field(params, Keys.hour)
+    day = _parse_cron_field(params, Keys.day)
+    month = _parse_cron_field(params, Keys.month)
+    weekday = _parse_cron_field(params, Keys.weekday)
 
     try:
-        validate_cron(dom, hour, minute)
+        validate_cron(minute, hour, day, month, weekday)
     except ValueError as cron_err:
         return None, ToolResult.err(
             str(cron_err),
             code="invalid-cron",
             hint=(
-                "'every' (omit/null) is only allowed on a field COARSER than "
-                "every fixed field — e.g. day: every, hour: 3, minute: 0 means "
-                "'every day at 03:00', but minute cannot be 'every' while hour "
-                "is fixed."
+                "each field is a numeric crontab expression: '*' (every), a "
+                "number, a 'N-M' range, a '*/S' step, or a comma list — e.g. "
+                "minute='*/5' fires every 5 minutes; hour='9', minute='0' fires "
+                "at 09:00; weekday='1-5' restricts to weekdays."
             ),
         )
 
-    return (message, start_at, dom, hour, minute), None
+    return (message, start_at, minute, hour, day, month, weekday), None
 
 
 def _create(channel: str, params: dict[str, object]) -> ToolResult:
     try:
         logger.debug(
             f"{LOG_PREFIX} _create called — message={params.get(Keys.message, '')!r:.80}, "
-            f"start_at={params.get(Keys.start_at, '')!r}, day={params.get(Keys.day)!r}, "
-            f"hour={params.get(Keys.hour)!r}, minute={params.get(Keys.minute)!r}"
+            f"start_at={params.get(Keys.start_at, '')!r}, minute={params.get(Keys.minute)!r}, "
+            f"hour={params.get(Keys.hour)!r}, day={params.get(Keys.day)!r}, "
+            f"month={params.get(Keys.month)!r}, weekday={params.get(Keys.weekday)!r}"
         )
 
         parsed, err = _parse_create_params(params)
@@ -382,14 +405,16 @@ def _create(channel: str, params: dict[str, object]) -> ToolResult:
             # Unreachable: _parse_create_params returns a tuple whenever err is
             # None. Kept as a loud belt-and-braces guard rather than an assert.
             return ToolResult.err("Create failed: parameters vanished", code="create-failed")
-        message, start_at, dom, hour, minute = parsed
+        message, start_at, minute, hour, day, month, weekday = parsed
 
         item = ScheduledItem.create(
             message=message,
             start_at=start_at.isoformat(),
-            cron_dom=dom,
-            cron_hour=hour,
             cron_minute=minute,
+            cron_hour=hour,
+            cron_dom=day,
+            cron_month=month,
+            cron_dow=weekday,
             enabled=1,
             channel=channel,
             created_by_session=None,
@@ -403,7 +428,7 @@ def _create(channel: str, params: dict[str, object]) -> ToolResult:
             logger.warning(f"{LOG_PREFIX} Embedding failed (non-fatal): {emb_err}")
 
         logger.info(f"{LOG_PREFIX} Created prompt: {item_id}")
-        record = _format_record(item_id, message, start_at, dom, hour, minute)
+        record = _format_record(item_id, message, start_at, minute, hour, day, month, weekday)
         return _create_result(record)
 
     except Exception as e:
@@ -474,14 +499,17 @@ def _list() -> ToolResult:
 
 
 def _serialise_item_row(row: dict[str, object]) -> dict[str, object]:
-    """The user/LLM-facing shape for a scheduled item row."""
+    """The user/LLM-facing shape for a scheduled item row — the five raw crontab
+    field expressions (``day`` = day-of-month, ``weekday`` = day-of-week)."""
     return {
         "id": row.get("id"),
         "message": row.get("message"),
         "start_at": format_date(cast("datetime | str | None", row.get("start_at")), fmt=_LOCAL_ISO_FMT, for_ui=True),
-        "day": row.get("cron_dom"),
-        "hour": row.get("cron_hour"),
         "minute": row.get("cron_minute"),
+        "hour": row.get("cron_hour"),
+        "day": row.get("cron_dom"),
+        "month": row.get("cron_month"),
+        "weekday": row.get("cron_dow"),
     }
 
 

@@ -6,14 +6,15 @@
 #
 #     http://www.apache.org/licenses/LICENSE-2.0
 
-"""Feature tests for the ``schedule`` ability — the prompt-only dumb-cron model
-(TKT-1434): ``scheduled_items`` is one row per schedule, forever
-(``id`` INTEGER PRIMARY KEY AUTOINCREMENT — also the thread's ``turn_id`` on
-the ``'schedule'`` channel). There is no ``item_type``/``due_at``/``status``/
-``group_id``/``turn_id`` column any more — a stateless poller
-(``services.scheduler_service``) fires any enabled row whose ``start_at``
-floor has passed and whose cron fields match the current wall-clock minute.
-Cancel is a hard ``DELETE`` (no soft-cancel state to assert on).
+"""Feature tests for the ``schedule`` ability — the real 5-field crontab
+engine: ``scheduled_items`` is one row per schedule, forever (``id`` INTEGER
+PRIMARY KEY AUTOINCREMENT — also the thread's ``turn_id`` on the ``'schedule'``
+channel), and its five ``cron_minute``/``cron_hour``/``cron_dom``/``cron_month``/
+``cron_dow`` columns are TEXT crontab expressions (``'*'`` = every) validated by
+``services.cron_schedule.validate_cron``. There is no every-prefix invariant any
+more — any combination of fields is legal standard crontab; only a malformed or
+out-of-range expression is rejected. Cancel is a hard ``DELETE`` (no soft-cancel
+state to assert on).
 
 Calls ``run(params)`` directly against a real, fully-migrated SQLite database
 (the ``db`` fixture), on an ability bound to a real inert ``MessageProcessor``
@@ -56,7 +57,7 @@ def _seed_timezone(db: sqlite3.Connection, tz_name: str = _TZ) -> None:
 
 def _row(db: sqlite3.Connection, item_id: object) -> "dict[str, object] | None":
     cur = db.execute(
-        "SELECT id, message, start_at, cron_dom, cron_hour, cron_minute, enabled "
+        "SELECT id, message, start_at, cron_minute, cron_hour, cron_dom, cron_month, cron_dow, enabled "
         "FROM scheduled_items WHERE id = ?",
         (item_id,),
     )
@@ -65,7 +66,8 @@ def _row(db: sqlite3.Connection, item_id: object) -> "dict[str, object] | None":
         return None
     return {
         "id": r[0], "message": r[1], "start_at": r[2],
-        "cron_dom": r[3], "cron_hour": r[4], "cron_minute": r[5], "enabled": r[6],
+        "cron_minute": r[3], "cron_hour": r[4], "cron_dom": r[5],
+        "cron_month": r[6], "cron_dow": r[7], "enabled": r[8],
     }
 
 
@@ -90,7 +92,7 @@ def test_create_persists_prompt_only_row_with_local_cron_fields_verbatim(db: sql
     _seed_timezone(db)
     tr = _ability().run({
         "action": "create", "message": "Water the plants",
-        "day": None, "hour": 14, "minute": 30,  # E F F — every day at 14:30
+        "hour": "14", "minute": "30",  # day/month/weekday omitted -> "*" (every)
     })
 
     assert tr.status == "success"
@@ -104,9 +106,11 @@ def test_create_persists_prompt_only_row_with_local_cron_fields_verbatim(db: sql
     assert persisted["enabled"] == 1
     # cron fields land on the row exactly as passed — no timezone conversion
     # is ever applied to them (they are already local by contract).
-    assert persisted["cron_dom"] is None
-    assert persisted["cron_hour"] == 14
-    assert persisted["cron_minute"] == 30
+    assert persisted["cron_hour"] == "14"
+    assert persisted["cron_minute"] == "30"
+    assert persisted["cron_dom"] == "*"
+    assert persisted["cron_month"] == "*"
+    assert persisted["cron_dow"] == "*"
     # start_at is a real, parseable UTC instant, close to "now".
     start_at = datetime.fromisoformat(cast(str, persisted["start_at"]))
     assert start_at <= utc_now() + timedelta(seconds=5)
@@ -117,43 +121,66 @@ def test_create_without_start_at_defaults_to_now(db: sqlite3.Connection) -> None
     before = utc_now()
     tr = _ability().run({
         "action": "create", "message": "Every-minute ping",
-        # day/hour/minute all omitted — E E E, every minute; start_at omitted too.
+        # every cron field omitted -> all "*" (every minute); start_at omitted too.
     })
     after = utc_now()
 
     assert tr.status == "success"
     persisted = _row(db, _record_of(tr)["id"])
     assert persisted is not None
+    assert (
+        persisted["cron_minute"], persisted["cron_hour"], persisted["cron_dom"],
+        persisted["cron_month"], persisted["cron_dow"],
+    ) == ("*", "*", "*", "*", "*")
     start_at = datetime.fromisoformat(cast(str, persisted["start_at"]))
     assert before - timedelta(seconds=2) <= start_at <= after + timedelta(seconds=2)
 
 
-# ── Every-prefix violations are rejected with code=invalid-cron, nothing persists ──
+# ── New capability: any combination is now legal, incl. step/comma/Vixie OR ──
+
+
+def test_create_persists_new_crontab_capabilities_verbatim(db: sqlite3.Connection) -> None:
+    """The every-prefix invariant is gone — any combination of crontab shapes
+    is now legal, including ones the old dumb-cron model could never express:
+    a step (``hour``), a comma-union (``minute``), and BOTH day-of-month and
+    day-of-week restricted at once (the Vixie OR quirk, ``day`` + ``weekday``)."""
+    _seed_timezone(db)
+    tr = _ability().run({
+        "action": "create", "message": "Multi-shape schedule",
+        "minute": "0,15,30,45", "hour": "*/2", "day": "13", "month": "*", "weekday": "1-5",
+    })
+
+    assert tr.status == "success"
+    persisted = _row(db, _record_of(tr)["id"])
+    assert persisted is not None
+    assert persisted["cron_minute"] == "0,15,30,45"
+    assert persisted["cron_hour"] == "*/2"
+    assert persisted["cron_dom"] == "13"
+    assert persisted["cron_month"] == "*"
+    assert persisted["cron_dow"] == "1-5"
 
 
 @pytest.mark.parametrize(
-    ("day", "hour", "minute"),
+    ("field", "value"),
     [
-        (None, 3, None),   # E F E — minute cannot be 'every' when hour is fixed
-        (15, None, None),  # F E E — day fixed forces hour+minute fixed
-        (15, None, 30),    # F E F — day fixed forces hour fixed too
-        (15, 9, None),     # F F E — day fixed forces minute fixed too
+        ("minute", "60"),    # out of range: 0-59
+        ("hour", "24"),      # out of range: 0-23
+        ("day", "0"),        # out of range: 1-31 (dom lower bound is 1)
+        ("month", "13"),     # out of range: 1-12
+        ("weekday", "mon"),  # numeric only, no name tokens
     ],
 )
-def test_create_rejects_illegal_every_prefix_shapes(
-    db: sqlite3.Connection, day: int | None, hour: int | None, minute: int | None
+def test_create_rejects_out_of_range_or_malformed_cron_expressions(
+    db: sqlite3.Connection, field: str, value: str
 ) -> None:
     _seed_timezone(db)
     before = _count(db)
 
-    tr = _ability().run({
-        "action": "create", "message": "Illegal shape",
-        "day": day, "hour": hour, "minute": minute,
-    })
+    tr = _ability().run({"action": "create", "message": "Bad shape", field: value})
 
     assert tr.status == "error"
     assert tr.code == "invalid-cron"
-    assert _count(db) == before, "an illegal cron shape must persist nothing"
+    assert _count(db) == before, "an invalid cron expression must persist nothing"
 
 
 # ── cancel = hard DELETE; id never reissued (AUTOINCREMENT) ───────────────────
@@ -163,7 +190,7 @@ def test_cancel_by_message_hard_deletes_the_row(db: sqlite3.Connection) -> None:
     _seed_timezone(db)
     create = _ability().run({
         "action": "create", "message": "Dentist appointment",
-        "day": None, "hour": 15, "minute": 0,
+        "hour": "15", "minute": "0",
     })
     item_id = _record_of(create)["id"]
 
@@ -177,7 +204,7 @@ def test_cancelled_id_is_never_reissued_by_a_later_create(db: sqlite3.Connection
     _seed_timezone(db)
     first = _ability().run({
         "action": "create", "message": "First schedule",
-        "day": None, "hour": 10, "minute": 0,
+        "hour": "10", "minute": "0",
     })
     first_id = cast(int, _record_of(first)["id"])
 
@@ -186,7 +213,7 @@ def test_cancelled_id_is_never_reissued_by_a_later_create(db: sqlite3.Connection
 
     second = _ability().run({
         "action": "create", "message": "Second schedule",
-        "day": None, "hour": 11, "minute": 0,
+        "hour": "11", "minute": "0",
     })
     second_id = cast(int, _record_of(second)["id"])
 
@@ -210,13 +237,13 @@ def test_update_hard_deletes_target_and_creates_fresh_row_with_new_values(db: sq
     _seed_timezone(db)
     create = _ability().run({
         "action": "create", "message": "Call the plumber",
-        "day": None, "hour": 15, "minute": 0,
+        "hour": "15", "minute": "0",
     })
     old_id = cast(int, _record_of(create)["id"])
 
     tr = _ability().run({
         "action": "update", "item_id": str(old_id),
-        "message": "Call the electrician", "day": None, "hour": 17, "minute": 0,
+        "message": "Call the electrician", "hour": "17", "minute": "0",
     })
 
     assert tr.status == "success"
@@ -226,7 +253,7 @@ def test_update_hard_deletes_target_and_creates_fresh_row_with_new_values(db: sq
     new_row = _row(db, new_id)
     assert new_row is not None
     assert new_row["message"] == "Call the electrician"
-    assert new_row["cron_hour"] == 17
+    assert new_row["cron_hour"] == "17"
 
 
 # ── enable/disable toggle the poller-visible enabled flag ─────────────────────
@@ -236,7 +263,7 @@ def test_disable_then_enable_toggles_the_enabled_flag(db: sqlite3.Connection) ->
     _seed_timezone(db)
     create = _ability().run({
         "action": "create", "message": "Weekly check-in",
-        "day": None, "hour": 9, "minute": 0,
+        "hour": "9", "minute": "0",
     })
     item_id = cast(int, _record_of(create)["id"])
     assert cast("dict[str, object]", _row(db, item_id))["enabled"] == 1

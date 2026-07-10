@@ -67,16 +67,19 @@ def _item_dto(item: ScheduledItem) -> SchedulerItem:
     """Project a :class:`~models.scheduled_item.ScheduledItem` into the
     :class:`SchedulerItem` read DTO.
 
-    Renames the model's ``cron_dom``/``cron_hour``/``cron_minute`` fields to the
-    read DTO's ``day``/``hour``/``minute`` names.
+    Renames the model's ``cron_minute``/``cron_hour``/``cron_dom``/``cron_month``/
+    ``cron_dow`` columns to the read DTO's ``minute``/``hour``/``day``/``month``/
+    ``weekday`` names.
     """
     return SchedulerItem.model_validate({
         "id": item.id,
         "message": item.message,
         "start_at": item.start_at,
-        "day": item.cron_dom,
-        "hour": item.cron_hour,
         "minute": item.cron_minute,
+        "hour": item.cron_hour,
+        "day": item.cron_dom,
+        "month": item.cron_month,
+        "weekday": item.cron_dow,
         "enabled": item.enabled,
         "channel": item.channel,
         "created_by_session": item.created_by_session,
@@ -134,9 +137,11 @@ class SchedulerListResource(Resource):
             item = ScheduledItem.create(
                 message=dto.message,
                 start_at=start_at_utc.isoformat(),
-                cron_dom=dto.day,
-                cron_hour=dto.hour,
                 cron_minute=dto.minute,
+                cron_hour=dto.hour,
+                cron_dom=dto.day,
+                cron_month=dto.month,
+                cron_dow=dto.weekday,
                 enabled=1 if dto.enabled else 0,
                 channel=dto.channel,
                 created_by_session=None,
@@ -178,9 +183,11 @@ class SchedulerTurnsResource(Resource):
                     "turn_id": s.id,
                     "gist": gists.get(cast(int, s.id)),
                     "preview": s.message,
-                    "day": s.cron_dom,
-                    "hour": s.cron_hour,
                     "minute": s.cron_minute,
+                    "hour": s.cron_hour,
+                    "day": s.cron_dom,
+                    "month": s.cron_month,
+                    "weekday": s.cron_dow,
                 })
                 for s in schedules
             ]
@@ -237,9 +244,11 @@ class SchedulerItemResource(Resource):
             # start_at is never re-floored to now.
             item.start_at = parse_local(dto.start_at).isoformat() if dto.start_at else item.start_at
             item.message = dto.message
-            item.cron_dom = dto.day
-            item.cron_hour = dto.hour
             item.cron_minute = dto.minute
+            item.cron_hour = dto.hour
+            item.cron_dom = dto.day
+            item.cron_month = dto.month
+            item.cron_dow = dto.weekday
             item.enabled = 1 if dto.enabled else 0
             item.save()  # UPDATE (id set); channel/created_by_session/created_at unchanged
             return _item_dto(item)

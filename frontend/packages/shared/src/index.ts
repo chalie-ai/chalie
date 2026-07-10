@@ -21,6 +21,7 @@ export type { PlatformAdapter, WakeLockHandle } from './platform/PlatformAdapter
 export { webPlatformAdapter } from './platform/webPlatformAdapter';
 export { tauriPlatformAdapter } from './platform/tauriPlatformAdapter';
 export { platform, isTauri } from './platform';
+export { describeCron } from './utils/describeCron';
 export { useThemeStore } from './stores/theme';
 export type { Theme } from './stores/theme';
 export { useConnectionStore } from './stores/connection';

@@ -15,7 +15,7 @@ import logging
 
 from flask.typing import ResponseReturnValue
 
-from api.endpoint import Endpoint
+from api.endpoint import DocumentedResponse, Endpoint
 from api.request import Request
 from api.request.policies import PolicyUpsertRequest
 from api.response.policies import PolicyResponse
@@ -31,6 +31,7 @@ class PoliciesEndpoint(Endpoint):
 
     id_type: ClassVar[type[str]] = str
     request_dto = PolicyUpsertRequest
+    response_dto = {"get_all": DocumentedResponse(PolicyResponse, listing=True)}
 
     def slug(self) -> str:
         return "policies"

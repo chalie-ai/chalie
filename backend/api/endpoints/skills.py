@@ -24,7 +24,7 @@ from typing import ClassVar, cast
 
 from flask.typing import ResponseReturnValue
 
-from api.endpoint import Endpoint, EndpointError, ForbiddenError, NotFoundError
+from api.endpoint import DocumentedResponse, Endpoint, EndpointError, ForbiddenError, NotFoundError
 from api.request import Request
 from api.request.skills import SkillRequest
 from api.response.skills import SkillResponse
@@ -58,6 +58,10 @@ class Skills(Endpoint):
 
     id_type: ClassVar[type[int] | type[str]] = int
     request_dto: ClassVar[type[Request] | None] = SkillRequest
+    response_dto = {
+        "get_all": DocumentedResponse(SkillResponse, listing=True),
+        "post": DocumentedResponse(SkillResponse),
+    }
 
     def slug(self) -> str:
         return "skills"
