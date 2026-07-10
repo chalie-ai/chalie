@@ -1,12 +1,15 @@
 /**
- * Scheduler API — endpoints for managing scheduled prompts.
+ * Scheduler API — thin wrapper over the Endpoint-contract routes in
+ * backend/api/endpoints/scheduler.py + backend/api/actions/scheduler/turns.py.
+ * Envelope: every JSON response is { success, result, pagination?, error? }.
  *
- * GET    /api/scheduler          → list schedules (one row per series)
- * POST   /api/scheduler          → create schedule (enabled is a field on the body)
- * PUT    /api/scheduler/:id      → update schedule, incl. enable/disable
- * DELETE /api/scheduler/:id      → delete/cancel schedule
+ *   GET    /api/scheduler/all           paginated listing (fetchAllPages).
+ *   POST   /api/scheduler/-1            create schedule → 201, result DTO.
+ *   POST   /api/scheduler/<id>          update schedule → result DTO (legacy PUT → POST).
+ *   DELETE /api/scheduler/<id>          → 204 empty body.
  */
 import { api } from '@chalie/shared';
+import { fetchAllPages } from './paginate';
 
 export interface ScheduleItem {
   id: number;
@@ -38,17 +41,24 @@ export interface ScheduleInput {
   enabled?: boolean;
 }
 
+interface SingleEnvelope<T> {
+  success: true;
+  result: T;
+}
+
 export const scheduler = {
   list(): Promise<ScheduleItem[]> {
-    return api.get('/api/scheduler');
+    return fetchAllPages<ScheduleItem>('/api/scheduler/all');
   },
 
-  create(body: ScheduleInput): Promise<{ schedule?: ScheduleItem }> {
-    return api.post('/api/scheduler', body);
+  async create(body: ScheduleInput): Promise<ScheduleItem> {
+    const res = await api.post<SingleEnvelope<ScheduleItem>>('/api/scheduler/-1', body);
+    return res.result;
   },
 
-  update(id: number, body: Partial<ScheduleInput>): Promise<{ schedule?: ScheduleItem }> {
-    return api.put(`/api/scheduler/${id}`, body);
+  async update(id: number, body: Partial<ScheduleInput>): Promise<ScheduleItem> {
+    const res = await api.post<SingleEnvelope<ScheduleItem>>(`/api/scheduler/${id}`, body);
+    return res.result;
   },
 
   delete(id: number): Promise<unknown> {

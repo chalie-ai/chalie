@@ -63,8 +63,13 @@ export const scheduler = {
     return body.result;
   },
 
-  /** GET /api/scheduler/turns — active prompt-schedule threads for the dock. */
-  turns(): Promise<SchedulerTurn[]> {
-    return api.get('/api/scheduler/turns');
+  /**
+   * GET /api/scheduler/turns — active prompt-schedule threads for the dock.
+   * Backed by backend/api/actions/scheduler/turns.py; envelope is
+   * { success, result: [...], pagination }.
+   */
+  async turns(): Promise<SchedulerTurn[]> {
+    const body = await api.get<ListingEnvelope<SchedulerTurn>>('/api/scheduler/turns');
+    return body.result;
   },
 };

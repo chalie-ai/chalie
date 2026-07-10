@@ -5,7 +5,8 @@ The minute-aligned poll-and-fire loop that used to live here was unified into
 the ``cron`` package: ``cron.jobs.scheduled_items.ScheduledItemsDispatcherJob``
 now owns the dumb-cron dispatch (fired by ``cron-runner``). What remains here is
 the semantic-search embedding helper used when a schedule row is written —
-``abilities.schedule`` and ``api.scheduler`` call it to index a new item.
+``abilities.schedule`` and ``api.endpoints.scheduler`` call it to index a new
+item.
 """
 
 import logging
