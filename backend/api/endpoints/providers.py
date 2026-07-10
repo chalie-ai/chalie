@@ -44,7 +44,10 @@ class Providers(Endpoint):
         "get": DocumentedResponse(Provider),
         "post": DocumentedResponse(
             Provider,
-            extras=((409, "A provider with that name already exists"),),
+            extras=(
+                (404, "Provider not found"),
+                (409, "A provider with that name already exists"),
+            ),
         ),
         "delete": DocumentedResponse(extras=((409, "Provider is in use"),)),
     }
@@ -105,9 +108,11 @@ class Providers(Endpoint):
         if dto.platform is None:
             raise EndpointError("platform is required")
         try:
+            # exclude_none: an explicit null on create means "use the default"
+            # (the service fills absent keys), never "store SQL NULL".
             row = cast(
                 "dict[str, object]",
-                self._service().create_provider(dto.model_dump(mode="json", exclude_none=False)),
+                self._service().create_provider(dto.model_dump(mode="json", exclude_none=True)),
             )
         except ValueError as exc:
             return Provider.failure(safe_validation_msg(exc)), 400
