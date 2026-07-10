@@ -49,7 +49,7 @@ onBeforeUnmount(() => document.removeEventListener('keydown', onKeydown));
 
 <template>
   <Transition name="thread-panel">
-    <aside v-if="open" class="thread-panel" role="dialog" aria-modal="true" :aria-label="heading">
+    <aside v-if="open" class="thread-panel" role="dialog" aria-modal="true" :aria-label="heading" :data-turn-id="session.panelThreadId" :data-type="session.panelType">
       <header class="thread-panel__header">
         <button
           class="thread-panel__back"
@@ -95,6 +95,7 @@ onBeforeUnmount(() => document.removeEventListener('keydown', onKeydown));
 
       <InputDock
         v-if="session.panelThreadId != null"
+        dock-id="thread_view_dock"
         :turn-id="session.panelThreadId"
         :type="session.panelType"
       />

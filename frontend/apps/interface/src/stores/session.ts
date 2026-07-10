@@ -502,9 +502,9 @@ export const useSessionStore = defineStore('session', {
       const turnId = (data as { turn_id?: number | null }).turn_id ?? null;
       if (turnId == null) return true;
       const convo = useConversationFeed((data as { type?: string }).type ?? ConfigType.USER);
-      const frame = data as { id?: number; summary?: string; state?: string };
+      const frame = data as { id?: number; summary?: string; state?: string; transcript_row_id?: number | null };
       if (frame.state === 'started') {
-        convo.startLiveTool(turnId, frame.id ?? null, toolName, frame.summary);
+        convo.startLiveTool(turnId, frame.id ?? null, toolName, frame.summary, frame.transcript_row_id ?? null);
       } else {
         convo.finishLiveTool(turnId, frame.id ?? null, frame.state === 'done');
       }

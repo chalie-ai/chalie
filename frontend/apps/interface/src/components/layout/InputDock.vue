@@ -17,6 +17,7 @@ const activeDockKey = ref<string>('main');
  */
 import { storeToRefs } from 'pinia';
 import { ConfigType } from '@chalie/shared';
+import { readDomContext } from '../../utils/domContext';
 import { on } from '../../composables/useEventBus';
 import { useSessionStore } from '../../stores/session';
 import { useVoiceStore } from '../../stores/voice';
@@ -25,7 +26,6 @@ import { useContextUsageStore } from '../../stores/contextUsage';
 import { useAmbientSensor } from '../../composables/useAmbientSensor';
 import { system } from '../../api/system';
 import { lsGet, lsSet } from '../../utils/storage';
-
 import ImageAttachStrip from '../upload/ImageAttachStrip.vue';
 import QueuedMessages from '../conversation/QueuedMessages.vue';
 import { FileText, Image, Plus, Mic, Send, X, AlertTriangle, LoaderCircle } from '@lucide/vue';
@@ -36,7 +36,7 @@ import { FileText, Image, Plus, Mic, Send, X, AlertTriangle, LoaderCircle } from
  * scaffolds a new thread. The footer dock is fixed; the thread panel's reply
  * dock sets `turnId` and renders in-flow at the foot of the panel.
  */
-const props = withDefaults(defineProps<{ turnId?: number | null; type?: string }>(), {
+const props = withDefaults(defineProps<{ dockId: string; turnId?: number | null; type?: string }>(), {
   turnId: null,
   type: ConfigType.USER,
 });
@@ -84,6 +84,7 @@ const hasVisionProvider = ref(true);
 
 const thinkingMenuOpen = ref(false);
 const thinkingWrapRef = ref<HTMLDivElement | null>(null);
+const footerRef = ref<HTMLElement | null>(null);
 
 /** True when there is something to send: non-empty text OR ≥1 attachment.
  *  Mirrors the handleSend guard — both gate on getFiles(). */
@@ -96,15 +97,20 @@ async function handleSend(): Promise<void> {
   // Guard here too so we don't clear needlessly. Same gate as canSend.
   if (!trimmed && files.length === 0) return;
 
+  // Read the dock's DOM contract at click time — the ref can go null if the
+  // dock unmounts across an await, and the busy check must target the same
+  // lane the send dispatches to.
+  const { turnId, type } = readDomContext(footerRef.value);
+
   // Clear the image strip only when this actually dispatches a turn. When the
   // lane is busy the send is queued (text-only) and the attachments stay pending.
-  const wasBusy = session.isLaneBusy(props.turnId, props.type);
+  const wasBusy = session.isLaneBusy(turnId, type);
 
   // Clear textarea before awaiting so the UI feels instant.
   text.value = '';
   await nextTick();
 
-  await session.sendMessage(trimmed, files, props.turnId, props.type);
+  await session.sendMessage(trimmed, files, turnId, type);
 
   if (!wasBusy) attachments.clear();
 
@@ -257,9 +263,12 @@ onBeforeUnmount(() => {
 
 <template>
   <footer
+    ref="footerRef"
+    :id="dockId"
     class="input-dock"
     :class="{ 'input-dock--inline': turnId != null }"
     :data-turn-id="turnId"
+    :data-type="type"
     @focusin="markActive"
     @pointerdown="markActive"
   >

@@ -140,6 +140,7 @@ class MessageProcessor:
         self.thinking_level: str = "low"
         self.thinking_override: str | None = None
         self.post_compaction_continuation: bool = False
+        self.seeding_turn_zero: bool = False
         self._trigger_channel: str | None = cast("str | None", self.metadata.get("trigger_channel"))
         self._trigger_turn_id: int | None = cast("int | None", self.metadata.get("trigger_turn_id"))
         self._thread: Thread | None = None
@@ -525,16 +526,24 @@ class MessageProcessor:
         attachments in parallel before the first send. The recall dispatches like a
         normal tool call — ``_auto`` marks it the framework seed (``caller='seed'``
         in ``handle_recall``); the recorded row grounds the model's first request
-        and is turn-scoped, so it drops at the next turn."""
-        if self.config.memory_seed:
-            self.dispatch_service.dispatch(
-                "memory", {"action": "recall", "query": self.raw_input, "_auto": True}
-            )
-        attachments = list(cast("list[str]", self.metadata.get("attachments") or []))
-        if attachments:
-            from concurrent.futures import ThreadPoolExecutor  # noqa: PLC0415
-            with ThreadPoolExecutor(max_workers=min(len(attachments), 8)) as pool:
-                list(pool.map(self._seed_upload_attachment, attachments))
+        and is turn-scoped, so it drops at the next turn.
+
+        ``seeding_turn_zero`` is raised for the duration: seed dispatches are
+        recorded on the trail but never surface a live pill (§6.10 — the WS
+        silence lives in ``ToolCallService._emit``)."""
+        self.seeding_turn_zero = True
+        try:
+            if self.config.memory_seed:
+                self.dispatch_service.dispatch(
+                    "memory", {"action": "recall", "query": self.raw_input, "_auto": True}
+                )
+            attachments = list(cast("list[str]", self.metadata.get("attachments") or []))
+            if attachments:
+                from concurrent.futures import ThreadPoolExecutor  # noqa: PLC0415
+                with ThreadPoolExecutor(max_workers=min(len(attachments), 8)) as pool:
+                    list(pool.map(self._seed_upload_attachment, attachments))
+        finally:
+            self.seeding_turn_zero = False
 
     def _seed_upload_attachment(self, path: str) -> None:
         """Upload one attachment through the document ability and link the stored

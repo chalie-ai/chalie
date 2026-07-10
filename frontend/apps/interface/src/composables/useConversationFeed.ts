@@ -32,6 +32,8 @@ export interface LiveToolPill {
   ms?: number;
   ok?: boolean;
   resolved: boolean;
+  /** The transcript row this tool call anchors to (from WS frame transcript_row_id). */
+  transcriptRowId: number | null;
 }
 
 export interface LiveTrail {
@@ -49,18 +51,19 @@ interface FeedState {
   /** Transient working-spinner flags per turn_id. NOT turn data. */
   working: Record<number, boolean>;
   /**
+   * Live act-trail pills keyed by turn_id — the frame now carries transcript_row_id
+   * (the anchor row the tool call lives on), so the pill knows its transcript row.
+   * The turn REMAINS the visual anchor by design (consecutive tool-only steps
+   * collapse onto one binder anyway). Visual-only; no turn data. Resolved pills are
+   * dropped when the turn's persisted tool_calls arrive (upsertTurn §6.5 step 4).
+   */
+  liveTools: Record<number, LiveToolPill[]>;
+  /**
    * turn_ids whose reply has settled (`done`) but the user hasn't viewed yet —
    * the Activity dock's "done" (blue) state. Independent of the block map so
    * fetchTurn/upsertTurn never clear a standing notification.
    */
   done: Set<number>;
-  /**
-   * Live act-trail pills keyed by turn_id — the single tool frame carries no
-   * transcript_row_id, so the turn is the anchor (consecutive tool-only steps
-   * collapse onto one binder anyway). Visual-only; no turn data. Resolved pills are
-   * dropped when the turn's persisted tool_calls arrive (upsertTurn §6.5 step 4).
-   */
-  liveTools: Record<number, LiveToolPill[]>;
   /** Pagination cursor (count of thread items seen so far). */
   offset: number;
   hasMore: boolean;
@@ -221,6 +224,7 @@ function _startLiveTool(
   callId: number | null,
   name: string,
   summary?: string,
+  transcriptRowId: number | null = null,
 ): void {
   if (callId == null) return;
   const pill: LiveToolPill = {
@@ -230,6 +234,7 @@ function _startLiveTool(
     startedAt: Date.now(),
     ok: false,
     resolved: false,
+    transcriptRowId,
   };
   s.liveTools[turnId] = [...(s.liveTools[turnId] ?? []), pill];
   _ensureTimerRunning(s);
@@ -362,7 +367,7 @@ export interface ConversationFeedApi {
   seenThread(turnId: number): void;
   dropLiveTurn(turnId: number): void;
 
-  startLiveTool(turnId: number, callId: number | null, name: string, summary?: string): void;
+  startLiveTool(turnId: number, callId: number | null, name: string, summary?: string, transcriptRowId?: number | null): void;
   finishLiveTool(turnId: number, callId: number | null, ok: boolean): void;
   liveTrailsFor(turnId: number): LiveTrail[];
 
@@ -406,8 +411,8 @@ function makeApi(type: string): ConversationFeedApi {
     seenThread: (turnId) => _seenThread(s, turnId),
     dropLiveTurn: (turnId) => _dropLiveTurn(s, turnId),
 
-    startLiveTool: (turnId, callId, name, summary) =>
-      _startLiveTool(s, turnId, callId, name, summary),
+    startLiveTool: (turnId, callId, name, summary, transcriptRowId) =>
+      _startLiveTool(s, turnId, callId, name, summary, transcriptRowId),
     finishLiveTool: (turnId, callId, ok) => _finishLiveTool(s, turnId, callId, ok),
     liveTrailsFor: (turnId) => _liveTrailsFor(s, turnId),
 

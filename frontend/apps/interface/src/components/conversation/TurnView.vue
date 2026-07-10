@@ -156,12 +156,7 @@ function onReply(): void {
         />
 
         <!-- Live act-trail anchor -->
-        <ActCycle
-          v-else-if="ar.row.kind === 'live-act'"
-          :pills="(ar.row as LiveActRow).pills"
-          :turn-id="block.turn_id"
-          :type="type"
-        />
+        <ActCycle v-else-if="ar.row.kind === 'live-act'" :pills="(ar.row as LiveActRow).pills" />
 
         <!-- Message rows -->
         <template v-else>
@@ -174,7 +169,6 @@ function onReply(): void {
             :message="(ar.row as MsgRow).message"
             :is-last="(ar.row as MsgRow).message.id === lastAssistantMsgId"
             :can-reply="canReply"
-            :data-transcript-row-id="(ar.row as MsgRow).message.id"
             @reply="onReply"
           />
         </template>

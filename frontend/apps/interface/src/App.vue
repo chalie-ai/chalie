@@ -96,7 +96,7 @@ onBeforeUnmount(() => {
        here scaffolds a new thread). Multiple docks share global stores, so the
        focus-routed handlers (voice/interrupt/attach strip) target the active
        dock only — see InputDock. -->
-  <InputDock :class="{ 'weave-dimmed': baseDimmed }" />
+  <InputDock dock-id="main_spine_dock" :class="{ 'weave-dimmed': baseDimmed }" />
 
   <!-- Slide-over thread panel — opens over the feed when a pill or Reply action
        sets session.panelThreadId; carries its own reply dock. -->

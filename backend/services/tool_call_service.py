@@ -197,12 +197,13 @@ class ToolCallService:
             return True
 
     def _emit(self, call: ToolCall) -> None:
-        """The sole tool-frame emitter. Silenced outright for the turn-zero memory
-        seed (§6.10) — that seed must never surface a live pill; the broadcast-state
-        gate itself lives in ``mp.push_websocket``. Sets the transient envelope
-        (``type``/``turn_id``) on the row before pushing; ``Websocket`` serializes
-        it via ``ToolCall.to_json`` (§6.2)."""
-        if self.mp.config.memory_seed:
+        """The sole tool-frame emitter. Silenced outright while the turn-zero
+        seed phase runs (§6.10, ``mp.seeding_turn_zero``) — the seed must never
+        surface a live pill; the broadcast-state gate itself lives in
+        ``mp.push_websocket``. Sets the transient envelope (``type``/``turn_id``)
+        on the row before pushing; ``Websocket`` serializes it via
+        ``ToolCall.to_json`` (§6.2)."""
+        if self.mp.seeding_turn_zero:
             return
         config_type = self.mp.config.type()
         call.type = config_type.value if config_type is not None else ""

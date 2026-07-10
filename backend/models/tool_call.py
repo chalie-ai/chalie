@@ -72,14 +72,12 @@ class ToolCall(Model):
 
     def to_json(self) -> str:
         """The single WS tool frame (§6.2). Carries the row's identity + live
-        pill fields plus the transient ``type``/``turn_id`` routing envelope ONLY
-        — ``params`` and ``result`` NEVER cross the wire (the surface refetches
-        the turn over REST for those). Bespoke whitelist: does NOT inherit
-        :meth:`Model.to_json`'s full-field dump."""
+        pill fields — ``params`` and ``result`` NEVER cross the wire (the surface
+        refetches the turn over REST for those). The shared DOM-contract keys
+        ``turn_id`` and ``type`` are injected by :meth:`Websocket.broadcast`'s
+        enrichment step, never hand-written here."""
         return json.dumps(
             {
-                "type": self.type,
-                "turn_id": self.turn_id,
                 "id": self.id,
                 "tool_name": self.tool_name,
                 "summary": self.summary,

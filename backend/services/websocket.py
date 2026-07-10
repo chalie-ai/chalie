@@ -22,6 +22,7 @@ delivery to healthy clients.
 
 from __future__ import annotations
 
+import json
 import logging
 import threading
 from typing import Protocol
@@ -69,14 +70,27 @@ class Websocket:
         model (e.g. one forwarded through ``mp.push_websocket``) without an extra
         guard at the call site. No-op too if nobody is listening. Sockets that fail to send
         (closed/half-open) are pruned so a stale connection cannot accumulate
-        or block delivery to healthy clients."""
+        or block delivery to healthy clients.
+
+        Turn-scoped frames are enriched with the shared DOM-contract keys
+        ``turn_id`` / ``type`` / ``transcript_row_id`` here and only here —
+        models never hand-write these keys into their own WS serialization."""
         if instance is None:
             return
         with Websocket._lock:
             targets = list(Websocket._connections)
         if not targets:
             return
-        payload = instance.to_json()
+        payload_dict = json.loads(instance.to_json())
+        if getattr(instance, "turn_id", None) is not None:
+            payload_dict.setdefault("turn_id", instance.turn_id)
+            type_val = getattr(instance, "type", None)
+            if type_val is not None:
+                payload_dict.setdefault("type", type_val)
+            row_ref = getattr(instance, "transcript_id", None)
+            if row_ref is not None:
+                payload_dict.setdefault("transcript_row_id", row_ref)
+        payload = json.dumps(payload_dict)
         dead: list[_WebSocket] = []
         for ws in targets:
             try:

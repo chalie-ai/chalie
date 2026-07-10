@@ -1,19 +1,19 @@
 <script setup lang="ts">
 import { computed, onUnmounted, ref, watch } from 'vue';
 import { Undo2 } from '@lucide/vue';
-import { ConfigType } from '@chalie/shared';
+import { readDomContext } from '../../utils/domContext';
 import type { LiveToolPill } from '../../composables/useConversationFeed';
 import { useSessionStore } from '../../stores/session';
 
-const props = withDefaults(
-  defineProps<{ pills: LiveToolPill[]; turnId: number | null; type?: string }>(),
-  { type: ConfigType.USER },
-);
+const props = defineProps<{ pills: LiveToolPill[] }>();
 
 const session = useSessionStore();
+const rootRef = ref<HTMLElement | null>(null);
 
 async function onStop(): Promise<void> {
-  await session.requestStop(props.turnId, props.type);
+  const { turnId, type } = readDomContext(rootRef.value);
+  if (turnId == null) return; // Guard: never fire a stop without a target
+  await session.requestStop(turnId, type);
 }
 
 // Live timer: ticks ONLY while a pill is unresolved.
@@ -52,7 +52,7 @@ function pillSeconds(pill: LiveToolPill): string {
 </script>
 
 <template>
-  <div class="act-cycle">
+  <div ref="rootRef" class="act-cycle">
     <!-- Live working anchor (logo + stop). -->
     <div class="act-row">
       <span class="act-logo" />
@@ -81,6 +81,7 @@ function pillSeconds(pill: LiveToolPill): string {
           'act-tool--error': pill.resolved && !pill.ok,
         }"
         :data-call-id="pill.id"
+        :data-transcript-row-id="pill.transcriptRowId"
       >
         <span v-if="pill.summary" class="act-tool__label">
           <span class="act-tool__name">{{ pill.name }}</span>

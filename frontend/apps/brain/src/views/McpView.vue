@@ -6,6 +6,7 @@ import { apiErrorMessage } from '../api/http';
 import { HttpError } from '@chalie/shared';
 import { useToast } from '../composables/useToast';
 import { useConfirm } from '../composables/useConfirm';
+import { type HeaderRow, addHeaderRow, removeHeaderRow, collectHeaders } from './mcpHeaders';
 import { Copy } from '@lucide/vue';
 
 const { show: showToast } = useToast();
@@ -22,12 +23,12 @@ const loadingOutbound = ref(true);
 const addEnabled = ref(true);
 const addName = ref('');
 const addHost = ref('');
-const addHeaders = ref<{ key: string; value: string }[]>([]);
+const addHeaders = ref<HeaderRow[]>([]);
 
 const editEnabled = ref(true);
 const editName = ref('');
 const editHost = ref('');
-const editHeaders = ref<{ key: string; value: string }[]>([]);
+const editHeaders = ref<HeaderRow[]>([]);
 
 async function loadInbound(): Promise<void> {
   try {
@@ -90,24 +91,6 @@ async function loadOutbound(): Promise<void> {
   } finally {
     loadingOutbound.value = false;
   }
-}
-
-function addHeaderRow(list: { key: string; value: string }[]): void {
-  list.push({ key: '', value: '' });
-}
-
-function removeHeaderRow(list: { key: string; value: string }[], idx: number): void {
-  list.splice(idx, 1);
-}
-
-function collectHeaders(list: { key: string; value: string }[]): Record<string, string> {
-  const headers: Record<string, string> = {};
-  for (const row of list) {
-    const k = row.key.trim();
-    const v = row.value.trim();
-    if (k) headers[k] = v;
-  }
-  return headers;
 }
 
 async function addServer(): Promise<void> {

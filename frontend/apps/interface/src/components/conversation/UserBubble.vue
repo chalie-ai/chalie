@@ -61,7 +61,7 @@ function open(att: ConversationAttachment): void {
 </script>
 
 <template>
-  <div class="user-message">
+  <div class="user-message" :data-transcript-row-id="message.id">
     <div
       v-if="showText"
       ref="textEl"
