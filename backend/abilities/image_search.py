@@ -139,6 +139,21 @@ class ImageSearchAbility(Ability):
             )
 
         body = "\n".join(lines)
+        if checked:
+            rich: dict[str, object] = {
+                "query": query,
+                "images": [
+                    {
+                        "url": r.get("url", ""),
+                        "thumb_url": r.get("thumb_url", ""),
+                        "title": r.get("title", ""),
+                        "source": r.get("source", ""),
+                        "verified": bool(r.get("verified")),
+                    }
+                    for r in checked
+                ],
+            }
+            return ToolResult.ok(body, rich=rich, count=len(checked), degraded=degraded)
         return ToolResult.ok(body, count=len(checked), degraded=degraded)
 
     def _verify(
