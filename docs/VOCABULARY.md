@@ -20,6 +20,7 @@ Domain-specific terminology used throughout the Chalie system.
 | `act_summary` | The 3–10 word "what I'm doing" string required on every ability call. | `"Checking the weather in Valletta"` |
 | `act_trail` | The cumulative record of tool_calls rows for one ACT loop. | `[weather] Valletta, MT → 22°C, sunny` |
 | `ToolResult` | The frozen dataclass every `Ability.run` returns. | `ToolResult.ok(body=...)`, `ToolResult.err(code='not-connected')` |
+| `image_search` | Built-in ability that finds images on the web for a text query, then vision-verifies each candidate when a vision provider is configured. | `verified=true` per image, or `degraded=true` with no vision provider configured |
 | `skill` | A step-by-step YAML playbook discoverable via `find_skills`. | `a3-problem-analysis.yaml` |
 | `delegate` | A tool call opted into async background execution. | `delegate_id="web_search_a3b2c1d4"` |
 | `subagent` | User-facing label for a backgrounded delegate. | `GET /api/subagents/all` |
