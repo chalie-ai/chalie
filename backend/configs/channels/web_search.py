@@ -14,7 +14,7 @@ Without that row the turn uid is never assigned and ``_render_act_trail``
 returns "" — the loop would re-search blind to its own results with no way to
 converge. ``skip_input_row`` (HiddenInput) is
 deliberately *not* set: it is the async-return mechanism
-(``deliver_async_result`` / ``with_hidden_input``), not a delegate property.
+(``AsyncDelegateRunner._deliver`` / ``with_hidden_input``), not a delegate property.
 Paired with ``WebSearchAbility`` (abilities/web_search.py).
 """
 

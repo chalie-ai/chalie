@@ -74,42 +74,6 @@ _M = chat_ns.models
 # ── Background helpers ────────────────────────────────────────────────────────
 
 
-def deliver_async_result(mp: object, result_text: str) -> None:
-    """Appends another assistant turn for a finished async delegate — a plain
-    MessageProcessor.process() call, independent of any foreground turn (each runs
-    on its own thread, keyed by its own turn_id). The synthesis turn opens its OWN
-    turn_executions row (see MessageProcessor.__init__), so the Processes-panel
-    stop control cancels it the same way as any other turn — no cancel handle
-    needs threading in from the originating delegate.
-
-    Inherits the originating turn's ``turn_id`` so the synthesised reply lands
-    in the same thread the delegate was spawned from.
-    """
-    from controllers.message_processor import MessageProcessor  # noqa: PLC0415
-
-    config = getattr(mp, "config", None)
-    if config is None:
-        logger.warning("[Chat API] async delivery skipped: captured mp has no config")
-        return
-
-    synth_config = config.with_hidden_input()
-    # Clone the originating metadata but suppress the input row and drop
-    # attachments — they were already ingested on the originating turn and must
-    # not re-upload on the synthesis turn. Inherit the originating turn id so
-    # the synthesised reply lands in the same thread. A delegate produces an
-    # assistant row AFTER the turn's settle0, so the synthesis IS a forked reply:
-    # it inherits turn_id → the MessageProcessor switches itself to FORK view
-    # internally (no external flag).
-    metadata = dict(getattr(mp, "metadata", None) or {})
-    metadata["hidden_input"] = True
-    metadata["attachments"] = []
-    turn_id = getattr(mp, "turn_id", None)
-    # The synthesis turn is a full UserConfig turn, so its lifecycle signals
-    # come from MessageProcessor itself — nothing to emit here. Fire-and-forget:
-    # nothing here consumes the final text, so the drive thread is never joined.
-    MessageProcessor.process(synth_config, result_text, metadata, turn_id if turn_id is not None else -1)
-
-
 def _stage_chat_uploads(files: Sequence[object]) -> list[object]:
     """Returns temp paths that _seed_turn_zero feeds to document.upload — which
     ingests by PATH, never bytes, so no file blob ever reaches the act-trail.

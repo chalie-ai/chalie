@@ -25,10 +25,10 @@ actually completes. So each delegate gets its OWN dedicated **inert**
 ``MessageProcessor`` for its background span (live ``ws``/``dispatch_service``,
 built from the originating turn's config/turn_id but never begun), instead of
 holding a reference to the finished turn's mp. The originating ``mp`` is still
-captured and threaded through to ``deliver_async_result`` unchanged — that
-delivery step needs the ORIGINATING turn's config/turn_id/metadata to land the
-synthesis reply on the right channel/thread; only the in-flight execution
-(dispatch + lifecycle broadcasts) runs off the dedicated one.
+captured and threaded through to ``_deliver`` unchanged — that delivery step
+needs the ORIGINATING turn's config/turn_id/metadata to land the synthesis
+reply on the right channel/thread; only the in-flight execution (dispatch +
+lifecycle broadcasts) runs off the dedicated one.
 
 A single owned registry (the module-level ``async_delegate_runner``) lets
 ``cancel`` from ``api/endpoints/subagents`` reach delegates spawned by any processor.
@@ -96,8 +96,8 @@ class AsyncDelegateRunner:
         the tool on a daemon thread — the ACT iteration is never blocked.
         ``summary`` is the model's act-summary (what the delegate is doing).
         ``mp`` is the ORIGINATING (already-authorized) turn's mp: captured only to
-        thread through to ``deliver_async_result`` later, since the actual
-        execution runs off this delegate's own dedicated inert MP.
+        thread through to ``_deliver`` later, since the actual execution runs off
+        this delegate's own dedicated inert MP.
         Copies the calling thread's contextvars so locale/timezone propagate
         exactly as on the synchronous path."""
         name = ability.get_name()
@@ -158,6 +158,38 @@ class AsyncDelegateRunner:
             return
         Websocket.broadcast(WsMessage(type=event_type, **payload))
 
+    def _deliver(self, origin_mp: object, result_text: str) -> None:
+        """Append the finished delegate's outcome as a fresh assistant turn on the
+        ORIGINATING thread — a plain ``MessageProcessor.process()`` call,
+        independent of any foreground turn (each runs on its own thread, keyed by
+        its own turn_id). The synthesis turn opens its OWN turn_executions row (see
+        ``MessageProcessor.__init__``), so the Processes-panel stop control cancels
+        it the same way as any other turn — no cancel handle needs threading in
+        from the delegate.
+
+        Reads the ORIGINATING mp's config/turn_id/metadata (never this delegate's
+        dedicated inert mp): the reply must land on the channel/thread the delegate
+        was spawned from. Inheriting the originating ``turn_id`` makes the
+        synthesised reply a FORK into that same thread — the MessageProcessor
+        switches itself to FORK view internally (no external flag). The input row
+        is suppressed (``with_hidden_input``) and attachments dropped — both were
+        already ingested on the originating turn and must not repeat here.
+        """
+        config = getattr(origin_mp, "config", None)
+        if config is None:
+            logger.warning("[AsyncDelegateRunner] async delivery skipped: captured mp has no config")
+            return
+
+        synth_config = config.with_hidden_input()
+        metadata = dict(getattr(origin_mp, "metadata", None) or {})
+        metadata["hidden_input"] = True
+        metadata["attachments"] = []
+        turn_id = getattr(origin_mp, "turn_id", None)
+        # Full UserConfig turn: its lifecycle signals come from MessageProcessor
+        # itself. Fire-and-forget — nothing consumes the final text, so the drive
+        # thread is never joined.
+        MessageProcessor.process(synth_config, result_text, metadata, turn_id if turn_id is not None else -1)
+
     def _run(
         self,
         ability: Ability,
@@ -168,17 +200,14 @@ class AsyncDelegateRunner:
         cancel_event: threading.Event,
     ) -> None:
         """Run the tool through this delegate's dedicated mp and deliver its
-        outcome as a later turn through the captured (originating) ``mp``, then
-        always deregister and emit ``subagent_end`` on exit.
+        outcome as a later turn through the captured (originating) ``mp`` via
+        :meth:`_deliver`, then always deregister and emit ``subagent_end`` on exit.
 
         If the delegate was cancelled while the tool was still running, the
         now-unwanted result is replaced by a short "cancelled by the user"
         notice — telling the model the work stopped so it can ask the user
         what to do next (never a silent drop). Delivery always proceeds: the
-        notice is itself a normal synthesis turn, not a special case.
-
-        Lazy import breaks the mutual deferral: ``api.chat`` imports this
-        module for the cancel endpoints, so it can never be top-level here."""
+        notice is itself a normal synthesis turn, not a special case."""
         try:
             try:
                 if dedicated_mp is None:
@@ -204,8 +233,7 @@ class AsyncDelegateRunner:
 
             if body is not None:
                 try:
-                    from api.chat import deliver_async_result  # noqa: PLC0415
-                    deliver_async_result(mp, body)
+                    self._deliver(mp, body)
                 except Exception as exc:  # noqa: BLE001
                     logger.warning(
                         "[AsyncDelegateRunner] delivery failed for %s: %s",
