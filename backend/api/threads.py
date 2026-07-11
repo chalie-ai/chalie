@@ -179,11 +179,10 @@ def _tool_call_chips(own_calls: list[dict[str, object]]) -> list[dict[str, objec
 
 def _apply_assistant_fields(
     msg: dict[str, object],
-    r: dict[str, object],
-    turn_calls: list[dict[str, object]],
+    cycle_calls: list[dict[str, object]],
 ) -> None:
     content = msg["content"]
-    segments = _parse_rich_media(str(content), turn_calls)
+    segments = _parse_rich_media(str(content), cycle_calls)
     if not segments and content:
         segments = [{"type": "text", "content": content}]
     msg["segments"] = segments
@@ -207,20 +206,35 @@ def _rows_to_messages(rows: list[dict[str, object]]) -> list[dict[str, object]]:
     turn_scope_ids = Transcript.turn_scope_ids(
         [cast("int", r['id']) for r in rows]
     )
-    # One query for all tool calls across the whole turn scope (chips + segments).
+    # One query for all tool calls across the whole turn scope (chips per row,
+    # segments per cycle — see the cycle-scoping note below).
     turn_calls = _fetch_tool_calls_for_transcripts(turn_scope_ids)
     # Group by transcript_id for per-row chip lookup.
     calls_by_transcript = _group_calls_by_transcript(turn_calls)
 
+    # Rich-media spans resolve PER ACT CYCLE, not per turn. A turn_id spans the
+    # whole thread — many user requests — and each request runs its own ACT loop
+    # with its own rich-media ordinal counter that restarts at 1 (DispatchService
+    # is constructed per request). So two image_search calls in the same turn
+    # both carry ``image_search_1``; resolving an assistant row's span against
+    # the FLAT turn scope returns the turn's FIRST such call for every card
+    # (every image card rendered the first query's images). Scope each assistant
+    # row to its cycle instead: reset at every user row (the cycle boundary),
+    # accumulate any assistant-anchored calls, and resolve the span within that
+    # window — the one scope where the per-request ordinal is unique.
+    cycle_calls: list[dict[str, object]] = []
     for r in rows:
         msg = _base_message(r)
-        chips = _tool_call_chips(calls_by_transcript.get(cast("int", r['id']), []))
+        own = calls_by_transcript.get(cast("int", r['id']), [])
+        chips = _tool_call_chips(own)
         if chips:
             msg["tool_calls"] = chips
         if r['role'] == 'user':
+            cycle_calls = list(own)
             _apply_user_fields(msg, r, attachments_by_id)
         else:
-            _apply_assistant_fields(msg, r, turn_calls)
+            cycle_calls = cycle_calls + own
+            _apply_assistant_fields(msg, cycle_calls)
         messages.append(msg)
 
     return messages
