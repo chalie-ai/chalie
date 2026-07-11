@@ -81,6 +81,7 @@ _CHANNEL_THREAD_GIST = Channel.DELEGATE_THREAD_GIST
 _CHANNEL_VISION = Channel.DELEGATE_VISION
 _CHANNEL_WEB_BROWSE = Channel.DELEGATE_WEB_BROWSE
 _CHANNEL_WEB_SEARCH = Channel.DELEGATE_WEB_SEARCH
+_CHANNEL_PIM = Channel.DELEGATE_PIM
 _CHANNEL_EXTERNAL_AGENT = "external_agent"
 _CHANNEL_COMPACTION = Channel.COMPACTION
 _CHANNEL_ACTION_BUTTON = Channel.ACTION_BUTTON
@@ -177,6 +178,8 @@ class PromptService:
             return self._web_browse_prompt()
         if channel == _CHANNEL_WEB_SEARCH:
             return self._web_search_prompt()
+        if channel == _CHANNEL_PIM:
+            return self._pim_prompt()
         if channel == _CHANNEL_EXTERNAL_AGENT:
             return self._external_agent_prompt()
         if channel == _CHANNEL_SUPER_EPISODE:
@@ -519,6 +522,17 @@ class PromptService:
         """``WebSearchConfig.get_user_prompt``: the research query then this
         turn's act trail."""
         parts = [f"Research query:\n{self.mp.raw_input}"]
+        trail = self._trail()
+        if trail:
+            parts.append(trail)
+        return "\n\n".join(parts)
+
+    # ── PimConfig (channel="delegate:pim") ───────────────────────────────────
+
+    def _pim_prompt(self) -> str:
+        """``PimConfig.get_user_prompt``: the personal-information instruction
+        then this turn's act trail."""
+        parts = [f"Instruction:\n{self.mp.raw_input}"]
         trail = self._trail()
         if trail:
             parts.append(trail)

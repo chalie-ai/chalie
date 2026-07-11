@@ -88,6 +88,7 @@ class Keys(StrEnum):
     identifier = "identifier"
     image = "image"
     include_subagent_transcripts = "include_subagent_transcripts"
+    instructions = "instructions"
     item_id = "item_id"
     items = "items"
     key = "key"

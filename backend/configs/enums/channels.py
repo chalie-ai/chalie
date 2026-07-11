@@ -47,6 +47,7 @@ class Channel(str, Enum):
     COMPACTION      = "compaction"
 
     # ── Delegates (tool-driven sub-loops) ────────────────────────────────────
+    DELEGATE_PIM        = "delegate:pim"
     DELEGATE_THREAD_GIST = "delegate:thread_gist"
     DELEGATE_WEB_BROWSE  = "delegate:web_browse"
     DELEGATE_WEB_SEARCH  = "delegate:web_search"

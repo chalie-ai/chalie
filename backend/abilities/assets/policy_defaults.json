@@ -89,6 +89,7 @@
   {"channel": "chat", "permission": "weather", "setting": "allow"},
   {"channel": "chat", "permission": "web_browse", "setting": "allow"},
   {"channel": "chat", "permission": "web_search", "setting": "allow"},
+  {"channel": "chat", "permission": "pim", "setting": "allow"},
   {"channel": "external_agent", "permission": "bash.compound", "setting": "deny"},
   {"channel": "external_agent", "permission": "bash.installation", "setting": "deny"},
   {"channel": "external_agent", "permission": "bash.modify_file", "setting": "deny"},
@@ -179,6 +180,7 @@
   {"channel": "external_agent", "permission": "weather", "setting": "allow"},
   {"channel": "external_agent", "permission": "web_browse", "setting": "deny"},
   {"channel": "external_agent", "permission": "web_search", "setting": "deny"},
+  {"channel": "external_agent", "permission": "pim", "setting": "deny"},
   {"channel": "subconscious", "permission": "bash.compound", "setting": "deny"},
   {"channel": "subconscious", "permission": "bash.installation", "setting": "deny"},
   {"channel": "subconscious", "permission": "bash.modify_file", "setting": "deny"},
@@ -267,6 +269,7 @@
   {"channel": "subconscious", "permission": "ubiquiti.update_wifi", "setting": "deny"},
   {"channel": "subconscious", "permission": "vision", "setting": "deny"},
   {"channel": "subconscious", "permission": "weather", "setting": "allow"},
+  {"channel": "subconscious", "permission": "pim", "setting": "deny"},
   {"channel": "subconscious", "permission": "web_browse", "setting": "deny"},
   {"channel": "subconscious", "permission": "web_search", "setting": "deny"}
 ]
