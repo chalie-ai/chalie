@@ -25,6 +25,7 @@ import { useAttachmentsStore } from '../../stores/attachments';
 import { useContextUsageStore } from '../../stores/contextUsage';
 import { useAmbientSensor } from '../../composables/useAmbientSensor';
 import { lsGet, lsSet } from '../../utils/storage';
+import { system } from '../../api';
 import ImageAttachStrip from '../upload/ImageAttachStrip.vue';
 import QueuedMessages from '../conversation/QueuedMessages.vue';
 import { Plus, Mic, Send, X, AlertTriangle } from '@lucide/vue';
@@ -53,9 +54,8 @@ const voiceStore = useVoiceStore();
 const attachments = useAttachmentsStore();
 const contextUsage = useContextUsageStore();
 const ambient = useAmbientSensor();
-
 const { available: voiceAvailable, recorderState } = storeToRefs(voiceStore);
-const { level, levelLabel, usageDisplay } = storeToRefs(contextUsage);
+const usageDisplay = computed(() => contextUsage.usageDisplayFor(props.type, props.turnId ?? -1));
 
 const THINKING_ITEMS = [
   { level: 'auto', label: 'Auto' },
@@ -83,6 +83,9 @@ const thinkingMenuOpen = ref(false);
 const thinkingWrapRef = ref<HTMLDivElement | null>(null);
 const footerRef = ref<HTMLElement | null>(null);
 
+const level = ref<'auto' | 'medium' | 'high'>('auto');
+const levelLabel = computed(() => level.value.charAt(0).toUpperCase() + level.value.slice(1));
+
 /** True when there is something to send: non-empty text OR ≥1 attachment.
  *  Mirrors the handleSend guard — both gate on getFiles(). */
 const canSend = computed(() => text.value.trim().length > 0 || attachments.getFiles().length > 0);
@@ -102,7 +105,7 @@ async function handleSend(): Promise<void> {
   text.value = '';
   await nextTick();
 
-  await session.sendMessage(trimmed, files, turnId, type);
+  await session.sendMessage(trimmed, files, turnId, type, level.value);
 
   // sendMessage takes ownership of `files` in BOTH branches — a direct dispatch
   // uploads them; a busy send queues the whole {text, files} (queue.ts stores
@@ -130,7 +133,7 @@ function onFileInputChange(e: Event): void {
 }
 
 function selectLevel(next: (typeof THINKING_ITEMS)[number]['level']): void {
-  void contextUsage.setLevel(next);
+  level.value = next;
   thinkingMenuOpen.value = false;
 }
 
@@ -211,8 +214,11 @@ onMounted(() => {
   // Behavioral signals: typing cadence feeds the ambient snapshot.
   if (textareaRef.value) ambient.bindTypingInput(textareaRef.value);
 
-  void contextUsage.loadLevel();
-  void contextUsage.refresh();
+  void system.thinkingLevel(props.type, props.turnId ?? -1).then((r) => {
+    const v = r?.level;
+    level.value = v === 'medium' || v === 'high' ? v : 'auto';
+  }).catch(() => { level.value = 'auto'; });
+  void contextUsage.refresh(props.type, props.turnId ?? -1);
 });
 
 onBeforeUnmount(() => {

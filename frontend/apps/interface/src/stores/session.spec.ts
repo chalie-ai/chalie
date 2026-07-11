@@ -196,7 +196,7 @@ describe('isSurfaceBusy', () => {
     // hitting the dead transport and losing the draft.
     await session.sendMessage('typed while offline', [], 7, ConfigType.USER);
     expect(sendMock).not.toHaveBeenCalled();
-    expect(queue.queuedFor(7)).toEqual([{ text: 'typed while offline', files: [] }]);
+    expect(queue.queuedFor(7)).toEqual([{ text: 'typed while offline', files: [], thinkingLevel: null }]);
 
     // Reconcile settles the turn on reconnect and drops the blanket flags.
     threadMock.mockResolvedValue(stubBlock(7, false));
@@ -239,14 +239,14 @@ describe('sendMessage — surface-scoped busy gate', () => {
     // the queue, not touch the network again.
     await session.sendMessage('second message while busy', [], null, ConfigType.USER);
     expect(sendMock).toHaveBeenCalledTimes(1);
-    expect(queue.queuedFor(null)).toEqual([{ text: 'second message while busy', files: [] }]);
+    expect(queue.queuedFor(null)).toEqual([{ text: 'second message while busy', files: [], thinkingLevel: null }]);
 
     // A send on a DIFFERENT scope (a thread, not busy) must post immediately.
     sendMock.mockResolvedValueOnce({ turn_id: 909, type: ConfigType.USER });
     await session.sendMessage('thread message', [], 555, ConfigType.USER);
     expect(sendMock).toHaveBeenCalledTimes(2);
     expect(sendMock).toHaveBeenLastCalledWith(
-      'thread message', expect.any(Function), [], 555, ConfigType.USER,
+      'thread message', expect.any(Function), [], 555, ConfigType.USER, null,
     );
     expect(queue.queuedFor(555)).toEqual([]);
 
@@ -274,7 +274,7 @@ describe('_drainLane — queued sends replay their files, not just their text', 
 
     expect(sendMock).toHaveBeenCalledTimes(1);
     expect(sendMock).toHaveBeenCalledWith(
-      'queued while the thread was busy', expect.any(Function), [file], 77, ConfigType.USER,
+      'queued while the thread was busy', expect.any(Function), [file], 77, ConfigType.USER, null,
     );
   });
 });
@@ -387,7 +387,7 @@ describe('reconnect reconcile', () => {
     expect(turnDom.isTurnWorking(6, ConfigType.USER)).toBe(true); // restored
     expect(threadPhase(6, ConfigType.USER)).toBe('working');
     expect(sendMock).toHaveBeenCalledWith(
-      'queued while offline', expect.any(Function), [], 909, ConfigType.USER,
+      'queued while offline', expect.any(Function), [], 909, ConfigType.USER, null,
     );
   });
 

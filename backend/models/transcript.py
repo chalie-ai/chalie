@@ -27,6 +27,7 @@ class Transcript(Model):
         "id", "channel", "role", "content", "tool_call_id", "tool_name",
         "internal", "deliberation_score", "created_at", "xml_migrated",
         "location_lat", "location_lon", "location_name", "turn_id", "settled",
+        "thinking_level",
     )
 
     @classmethod
@@ -83,6 +84,26 @@ class Transcript(Model):
             (channel, turn_id),
         ).fetchone()
         return int(row[0]) if row and row[0] is not None else None
+
+    @classmethod
+    def latest_thinking_level(cls, channel: str, turn_id: int | None = None) -> str | None:
+        """``thinking_level`` of the most recent row (highest id) for ``channel``
+        that has a non-NULL ``thinking_level``. When ``turn_id`` is given, also
+        filter on it — used to read back the level written onto the current
+        turn's input row; when ``turn_id`` is None, span every turn of the
+        channel (the spine's "latest level for this type"). Returns None when
+        no such row exists (legacy/empty channel)."""
+        sql = (
+            "SELECT thinking_level FROM transcript WHERE channel = ? "
+            "AND thinking_level IS NOT NULL"
+        )
+        params: list[object] = [channel]
+        if turn_id is not None:
+            sql += " AND turn_id = ?"
+            params.append(turn_id)
+        sql += " ORDER BY id DESC LIMIT 1"
+        row = cls._bound_connection().execute(sql, tuple(params)).fetchone()
+        return row[0] if row and row[0] is not None else None
 
     def unsettle(self) -> Self:
         """Demote this row's settle flag to 0 — the transcript-table half of the

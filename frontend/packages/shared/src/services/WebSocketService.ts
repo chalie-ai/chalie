@@ -342,12 +342,13 @@ export class WebSocketService {
     files: File[] = [],
     threadId: number | null = null,
     type: string = ConfigType.USER,
+    thinkingLevel: string | null = null,
   ): Promise<{ turn_id: number; type: string } | null> {
     if (!this.isConnected) {
       onSendFailure('Not connected. Please wait...');
       return Promise.resolve(null);
     }
-    return this.postChat(text, files, threadId, onSendFailure, type);
+    return this.postChat(text, files, threadId, onSendFailure, type, thinkingLevel);
   }
 
   /** Rich-card control dispatch — POST /action and resolve the card's optimistic
@@ -394,10 +395,12 @@ export class WebSocketService {
     threadId: number | null,
     onSendFailure: (message: string) => void,
     type: string = ConfigType.USER,
+    thinkingLevel: string | null = null,
   ): Promise<{ turn_id: number; type: string } | null> {
     const form = new FormData();
     form.append('text', text);
     form.append('type', type);
+    if (thinkingLevel) form.append('thinking_level', thinkingLevel);
     for (const file of files) form.append('files', file, file.name);
     // POST /api/thread/<turn_id> — -1 creates a new thread, a real id replies
     // into it. Both return HTTP 200 with {turn_id, type} — the caller binds the

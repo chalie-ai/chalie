@@ -36,6 +36,6 @@ describe('enqueue / take — queued files survive the flush', () => {
     expect(text).toBe('first queued line\nsecond queued line');
     expect(files).toEqual([fileA, fileB]);
     // take() clears the scope — a second take on the same scope is empty.
-    expect(queue.take(42)).toEqual({ text: '', files: [] });
+    expect(queue.take(42)).toEqual({ text: '', files: [], thinkingLevel: null });
   });
 });

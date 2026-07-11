@@ -85,9 +85,12 @@ class ThreadSendRequest(DTO):
     Files arrive as repeatable ``files`` parts read directly via ``request.files``
     (one DTO field can't hold many uploads), so this model ignores the merged file
     key rather than forbidding it. ``turn_id`` is path-only, never in the body.
+    ``thinking_level`` is optional — accepted values are ``auto``, ``medium``,
+    ``high``; absence/None stores NULL on the transcript row.
     """
 
     model_config = ConfigDict(extra="ignore")
 
     text: str
     type: str = "user"
+    thinking_level: str | None = None

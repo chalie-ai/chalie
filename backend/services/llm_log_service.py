@@ -48,19 +48,27 @@ class LlmLogService:
                 tokens_thinking=response.tokens_thinking or 0,
                 latency_ms=response.latency_ms or 0,
                 usage_class=self.mp.config.usage_class,
+                turn_id=self.mp.turn_id,
             ).save()
         except Exception as e:
             logger.debug(f"[LLM_LOG] Failed to log call: {e}")
 
     @staticmethod
-    def last_request_tokens(job_name: str = 'user:user') -> int | None:
+    def last_request_tokens(job_name: str = 'user:user', turn_id: int | None = None) -> int | None:
         """``tokens_input`` of the most recent call logged for ``job_name``.
 
         Keys off ``job_name`` ('channel:role'), not ``usage_class``, so the
         indicator tracks the real user turn rather than a delegate's tiny
         sub-request that shares usage_class 'chat'.
+
+        When ``turn_id`` is provided, narrows to only that turn's calls —
+        useful for per-thread context; when ``None`` (default), returns the
+        latest across all turns for the job (the main composer/footer case).
         """
-        values = LlmCallLog.filter("job_name", job_name).order_by("id DESC").limit(1).pluck("tokens_input")
+        query = LlmCallLog.filter("job_name", job_name)
+        if turn_id is not None:
+            query = query.filter("turn_id", turn_id)
+        values = query.order_by("id DESC").limit(1).pluck("tokens_input")
         return int(cast("int", values[0])) if values else None
 
     @staticmethod

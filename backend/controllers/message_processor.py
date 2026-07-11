@@ -27,15 +27,21 @@ on lands here:
 **The process/begin/_step contract (Dylan's ruling, §4.3):**
 
 ``process()`` (the single public entrypoint, Critical 1) constructs the inert
-instance, resolves the thinking override, and calls ``begin()``, then returns the
-instance. ``begin()`` runs the synchronous side-effects — atomic per-channel
-turn-id allocation + input row + execution-row open, all inside one
-single-writer ``BEGIN IMMEDIATE`` transaction (§6.8) — then fires a daemon thread
-running ``_drive`` and returns immediately (it does **not** join). Because the
-execution row is opened synchronously before the thread spawns, ``mp.execution``
-is populated the moment ``process()`` returns: a POST handler reads the WORKING
-execution handle instantly and live output then streams over WS, while
-fire-and-forget callers (scheduler) read the allocated id off ``mp.metadata``.
+instance, calls ``begin()``, then returns the instance. ``begin()`` runs the
+synchronous side-effects — atomic per-channel turn-id allocation + input row +
+execution-row open, all inside one single-writer ``BEGIN IMMEDIATE`` transaction
+(§6.8) — then fires a daemon thread running ``_drive`` and returns immediately
+(it does **not** join). Because the execution row is opened synchronously before
+the thread spawns, ``mp.execution`` is populated the moment ``process()``
+returns: a POST handler reads the WORKING execution handle instantly and live
+output then streams over WS, while fire-and-forget callers (scheduler) read the
+allocated id off ``mp.metadata``.
+
+The thinking override is resolved per-turn in ``_setup`` (after ``begin()`` has
+allocated ``turn_id`` and written the input row) by reading the transcript's
+``thinking_level`` column for the current (channel, turn_id); ``medium``/``high``
+becomes the override, ``auto``/NULL leaves it unset so the deliberation gate
+decides normally.
 
 ``_step()`` is the **recursive** step loop: send → (compact-and-continue on
 over-cap) → store any prose → dispatch tool calls → recurse; it bottoms out when
@@ -65,6 +71,7 @@ from models.provider_errors import (
 )
 from models.provider_request import ProviderRequest
 from models.turn_execution import TurnExecution
+from models.transcript import Transcript
 from services.behavioral_pattern_service import BehavioralPatternService
 from services.compaction_service import CompactionService
 from services.database import Database
@@ -73,7 +80,6 @@ from services.gist_service import GistService
 from services.llm_log_service import LlmLogService
 from services.prompt_service import PromptService
 from services.provider_service import ProviderService
-from services.thinking_override_service import get_thinking_override
 from services.tool_call_service import ToolCallService
 from services.transcript_service import TranscriptService
 from services.turn_execution_service import TurnExecutionService
@@ -187,10 +193,10 @@ class MessageProcessor:
         turn_id: int = -1,
     ) -> MessageProcessor:
         """The single public entrypoint (Critical 1): construct inert, resolve
-        the thinking override, kick off ``begin()`` (which spawns the drive
+        the thinking override per-turn in ``_setup`` (read from the transcript
+        row written by ``begin``), kick off ``begin()`` (which spawns the drive
         thread), and return the live instance."""
         mp = cls(config, turn_id=turn_id, raw_input=raw_input, metadata=metadata)
-        mp.thinking_override = get_thinking_override()
         mp.begin()
         return mp
 
@@ -221,7 +227,10 @@ class MessageProcessor:
         config skips it (channels whose input is not a transcript utterance)."""
         if self.config.skip_input_row:
             return None
-        return self.transcript_service.append_input(self.raw_input)
+        raw_level = self.metadata.get("thinking_level")
+        return self.transcript_service.append_input(
+            self.raw_input, thinking_level=raw_level if isinstance(raw_level, str) else None,
+        )
 
     def result(self) -> str:
         """Join the drive thread and return the turn's final text — the
@@ -494,6 +503,11 @@ class MessageProcessor:
         ``user`` channel, seed the turn-zero flashback + any attachments, and
         ingest the reply's parent gist on a fork."""
         self.active_tools = list(self.config.always_available or [])
+        # Resolve thinking override from the transcript row written by begin()
+        # (the current turn's input row). medium/high becomes the override,
+        # auto/NULL leaves it unset so the deliberation gate decides normally.
+        level = Transcript.latest_thinking_level(self.channel, self.turn_id)
+        self.thinking_override = level if level in ("medium", "high") else None
         if self.channel == Channel.USER:
             self._run_thinking_gate()
         self._seed_turn_zero()
@@ -571,6 +585,6 @@ class MessageProcessor:
         try:
             if not self.gist_service.bulk_get(self.channel, [self.turn_id]):
                 from services.thread_gist_message_processor import maybe_ingest_gist  # noqa: PLC0415
-                maybe_ingest_gist(self.channel, self.turn_id)
+                maybe_ingest_gist(self.channel, self.turn_id, self.config.type_value())
         except Exception as exc:  # noqa: BLE001 — gist ingest is best-effort context
             logger.debug("[MessageProcessor] gist ingest skipped for turn %s: %s", self.turn_id, exc)

@@ -413,6 +413,7 @@ CREATE TABLE IF NOT EXISTS llm_call_log (
     tokens_thinking INTEGER NOT NULL DEFAULT 0,
     latency_ms INTEGER NOT NULL DEFAULT 0,
     usage_class TEXT NOT NULL DEFAULT 'chat',
+    turn_id     INTEGER,
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
@@ -420,6 +421,8 @@ CREATE INDEX IF NOT EXISTS idx_llm_call_log_job_created
     ON llm_call_log (job_name, created_at);
 CREATE INDEX IF NOT EXISTS idx_llm_call_log_usage_class
     ON llm_call_log (usage_class, created_at);
+CREATE INDEX IF NOT EXISTS idx_llm_call_log_job_turn
+    ON llm_call_log (job_name, turn_id);
 
 -- ────────────────────────────────────────────────────────────────
 -- MEMORY RECALL LOG — telemetry for the per-lane retrieval pipeline
@@ -499,7 +502,11 @@ CREATE TABLE IF NOT EXISTS transcript (
     -- (the turn's settle0). Written as 1 by write_assistant_row / append;
     -- ActTrail.start() demotes to 0 when a settling tool is recorded against the
     -- row. Internal passes (chat_history_compactor, thinking) never demote.
-    settled     INTEGER NOT NULL DEFAULT 0
+    settled     INTEGER NOT NULL DEFAULT 0,
+    -- Per-turn thinking level chosen by the sender (auto|medium|high); NULL =
+    -- legacy row or not-yet-set, lets a later query distinguish "chose auto"
+    -- from "never set".
+    thinking_level TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_transcript_channel ON transcript(channel, created_at);

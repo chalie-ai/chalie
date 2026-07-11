@@ -182,11 +182,18 @@ export const useSessionStore = defineStore('session', {
         dispatchDrift(data);
       });
 
-      // onAny feeds the context-usage indicator — must never throw.
+      // onAny — route each inbound frame's refresh to its own (type, turnId) key.
       ws.onAny((data: WsInboundEvent) => {
         try {
-          void data;
-          void contextUsage.refresh();
+          const rawType = (data as { type?: unknown }).type;
+          const type =
+            typeof rawType === 'string' && Object.values(ConfigType).includes(rawType as ConfigType)
+              ? rawType
+              : 'user';
+          const rawTurnId = (data as { turn_id?: unknown }).turn_id;
+          if (typeof rawTurnId === 'number') void contextUsage.refresh(type, rawTurnId);
+          // Always keep the main-spine / footer dock (keyed at turnId -1) live.
+          void contextUsage.refresh(type, -1);
         } catch {
           /* never break the WS pipe */
         }
@@ -314,13 +321,14 @@ export const useSessionStore = defineStore('session', {
       files: File[] = [],
       threadId: number | null = null,
       type: string = ConfigType.USER,
+      thinkingLevel: string | null = null,
     ): Promise<void> {
       if (!text && !files.length) return;
 
       const body = text || FILE_PLACEHOLDER;
 
       if (this.isSurfaceBusy(threadId, type)) {
-        useQueueStore().enqueue(threadId, body, type, files);
+        useQueueStore().enqueue(threadId, body, type, files, thinkingLevel);
         return;
       }
 
@@ -330,7 +338,7 @@ export const useSessionStore = defineStore('session', {
       try {
         mountSendEcho(body, threadId, type);
         const result = await getWebSocket().send(
-          body, (m) => this._onSendFailure(m, threadId, type), files, threadId, type,
+          body, (m) => this._onSendFailure(m, threadId, type), files, threadId, type, thinkingLevel,
         );
         // POST resolved with the allocated turn_id but execution runs in the
         // background — keep the busy hold until the dispatcher observes the
@@ -401,8 +409,8 @@ export const useSessionStore = defineStore('session', {
       const queue = useQueueStore();
       const type = queue.typeFor(threadId);
       if (this.isSurfaceBusy(threadId, type)) return;
-      const { text, files } = queue.take(threadId);
-      if (text) void this.sendMessage(text, files, threadId, type);
+      const { text, files, thinkingLevel } = queue.take(threadId);
+      if (text) void this.sendMessage(text, files, threadId, type, thinkingLevel);
     },
 
     /**

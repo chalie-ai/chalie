@@ -20,6 +20,7 @@ from flask.typing import ResponseReturnValue
 from flask_restx import Namespace, Resource
 
 from configs.enums.channels import Channel
+from configs.enums.config_type import ConfigTypeEnum
 from models.compaction import Compaction
 from models.data_graph import DataGraphRow
 from models.episode import Episode
@@ -543,10 +544,26 @@ class ContextUsageResource(Resource):
     @system_ns.response(500, "Failed to retrieve context usage", model=_S["Error"])
     @responds(ContextUsage, code=200)
     def get(self) -> ContextUsage | ResponseReturnValue:
-        """Last user-turn request size + context window for the composer indicator."""
+        """Last user-turn request size + context window for the composer indicator.
+
+        Optional query params: ``type`` (default ``user``) selects the config
+        type to derive the job name from; ``turn_id`` (int, optional) narrows
+        the lookup to a specific thread — omit or pass -1 for the latest
+        across all turns (the footer/spine case).
+        """
         try:
             from services.provider_cache_service import ProviderCacheService
-            last = LlmLogService.last_request_tokens()
+            config_type = request.args.get("type", "user")
+            turn_id_raw = request.args.get("turn_id")
+            if turn_id_raw is not None and turn_id_raw != "-1":
+                try:
+                    turn_id = int(turn_id_raw)
+                except (ValueError, TypeError):
+                    turn_id = None
+            else:
+                turn_id = None
+            job_name = ConfigTypeEnum.get_by_type(config_type).job
+            last = LlmLogService.last_request_tokens(job_name, turn_id)
             selected = ProviderCacheService.get_selected_provider() or {}
             return ContextUsage(
                 last_request_tokens=last,

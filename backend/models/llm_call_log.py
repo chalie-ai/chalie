@@ -27,6 +27,7 @@ class LlmCallLog(Model):
         "tokens_thinking",
         "latency_ms",
         "usage_class",
+        "turn_id",
         "created_at",
     )
 

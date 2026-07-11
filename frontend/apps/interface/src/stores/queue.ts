@@ -16,10 +16,12 @@ export function laneKey(threadId: number | null): string {
 
 /** One deferred send: its text plus any attachments that were pending when the
  *  lane was busy. Files ride alongside the text so a flush replays the whole
- *  original send, not just the words. */
+ *  original send, not just the words. `thinkingLevel` is the per-thread
+ *  thinking level chosen by the user; null means "omit the field downstream". */
 export interface QueuedMessage {
   text: string;
   files: File[];
+  thinkingLevel: string | null;
 }
 
 export const useQueueStore = defineStore('queue', {
@@ -42,10 +44,10 @@ export const useQueueStore = defineStore('queue', {
   },
 
   actions: {
-    enqueue(threadId: number | null, text: string, type: string = ConfigType.USER, files: File[] = []): void {
+    enqueue(threadId: number | null, text: string, type: string = ConfigType.USER, files: File[] = [], thinkingLevel: string | null = null): void {
       const key = laneKey(threadId);
       this.byScope[key] ??= [];
-      this.byScope[key].push({ text, files });
+      this.byScope[key].push({ text, files, thinkingLevel });
       this.typeByScope[key] = type;
     },
     removeAt(threadId: number | null, index: number): void {
@@ -57,15 +59,18 @@ export const useQueueStore = defineStore('queue', {
     },
     /** Take the whole scope's queue, clearing it. Texts join into ONE
      *  newline-joined message (unchanged shape for the send API); every queued
-     *  entry's files concatenate, in order, into one attachment batch. */
-    take(threadId: number | null): { text: string; files: File[] } {
+     *  entry's files concatenate, in order, into one attachment batch. The
+     *  thinkingLevel is the last queued entry's level (most recent send wins);
+     *  null means no level was set on that entry. */
+    take(threadId: number | null): { text: string; files: File[]; thinkingLevel: string | null } {
       const k = laneKey(threadId);
       const entries = this.byScope[k] ?? [];
       const text = entries.map((e) => e.text).join('\n');
       const files = entries.flatMap((e) => e.files);
+      const thinkingLevel = entries.length > 0 ? entries[entries.length - 1].thinkingLevel : null;
       delete this.byScope[k];
       delete this.typeByScope[k];
-      return { text, files };
+      return { text, files, thinkingLevel };
     },
   },
 });

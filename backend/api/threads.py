@@ -463,7 +463,7 @@ class ThreadItemResource(Resource):
         # scheduled → ScheduledConfig, its own growing thread on the schedule channel).
         # forked-ness is derived internally by the MessageProcessor from the turn_id.
         config = ConfigTypeEnum.get_by_type(dto.type)
-        mp = MessageProcessor.process(config, text, {"attachments": attachments}, turn_id)
+        mp = MessageProcessor.process(config, text, {"attachments": attachments, "thinking_level": dto.thinking_level}, turn_id)
         if mp.execution is None:
             return error("Failed to open turn execution", 500)
         return TurnExecutionDTO.model_validate(mp.execution.to_dict())
@@ -502,3 +502,20 @@ class ThreadItemResource(Resource):
             return Interrupted(reason="no_active_turn")
         logger.info("[Threads API] cancel requested for turn %s channel=%s", turn_id, config.channel)
         return TurnExecutionDTO.model_validate(execution.to_dict())
+
+
+@threads_ns.route("/thread/<int(signed=True):turn_id>/thinking-level")
+class ThinkingLevelResource(Resource):
+    @require_session
+    @threads_ns.param("turn_id", "Turn id", _in="path", type="integer")
+    @threads_ns.param("type", "Config type (default: user)", _in="query", type="string")
+    @threads_ns.response(200, "Current thinking level")
+    def get(self, turn_id: int) -> dict[str, str]:
+        """Return the thread's current thinking level — the literal value
+        persisted on the input row (auto/medium/high), or 'auto' when none is
+        set. ``turn_id == -1`` (new/spine thread) spans every turn of the
+        channel; a real id reads that turn's own row."""
+        config_type = request.args.get("type", _TYPE)
+        channel = ConfigTypeEnum.get_by_type(config_type).channel
+        level = Transcript.latest_thinking_level(channel, turn_id if turn_id != -1 else None)
+        return {"level": level if level is not None else "auto"}
