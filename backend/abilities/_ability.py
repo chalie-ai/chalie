@@ -4,8 +4,10 @@ An Ability declares what a tool *is* through five zero-arg getters
 (``get_name`` / ``get_summary`` / ``get_examples`` / ``get_search_tooltip`` /
 ``get_parameters``) and how it *runs* (``run()``). The full LLM-facing tool
 descriptor is assembled in ONE place — the ``final`` ``get_input_schema()`` — which
-is also the SINGLE site that injects the two framework fields (``act_summary``
-and ``async``). Subclasses cannot override it; they only fill in the getters.
+is also the SINGLE site that injects the ``act_summary`` framework field.
+Subclasses cannot override it; they only fill in the getters. The ``async``
+backgrounding flag is NOT injected here: it is a delegate-only primitive added by
+``DelegateAbility`` (``abilities/_delegate.py``), so plain tools never carry it.
 
 Dispatch — matching, binding, policy gating, execution, recording — lives in
 ``ToolDispatcher`` (``abilities/_dispatcher.py``), the single chokepoint every
@@ -31,25 +33,16 @@ if TYPE_CHECKING:
 # default=None returns None.
 _MISSING = object()
 
-# The framework fields injected into EVERY tool descriptor by get_input_schema —
-# the one place either is declared. act_summary is the per-call act-trail tooltip
-# (always present, required); async is the per-call backgrounding flag, injected
-# only on channels whose config sets SUPPORTS_ASYNC.
+# The act_summary framework field, injected into EVERY tool descriptor by
+# get_input_schema — the one place it is declared. It is the per-call act-trail
+# tooltip (always present, required). The ``async`` backgrounding flag lives with
+# ``DelegateAbility`` in abilities/_delegate.py — it is delegate-only.
 _ACT_SUMMARY_PROPERTY: dict[str, object] = {
     "type": "string",
     "description": (
         "A ~3-10 word summary of what this specific tool call does, shown to"
         ' the user as a tooltip (e.g. "Searching for laptops in Malta",'
         ' "Looking up the weather in London").'
-    ),
-}
-_ASYNC_PROPERTY: dict[str, object] = {
-    "type": "boolean",
-    "default": False,
-    "description": (
-        "Run in the background instead of blocking this step. You get an "
-        "immediate acknowledgement and the result is delivered on this channel "
-        "when it completes. Use for long-running calls."
     ),
 }
 
@@ -69,7 +62,8 @@ class Ability(ABC):
     the processor only carries when ``find_tools`` is in its always_available).
     There is no per-config discoverable/blocked allow-list. Whether a call blocks
     or runs in the background is a per-call decision (the framework ``async``
-    flag), not an ability-level trait.
+    flag, exposed ONLY on delegate tools via ``DelegateAbility``), not an
+    ability-level trait.
     """
 
     # Global discovery flag. True (the default) means find_tools may surface this
@@ -109,17 +103,25 @@ class Ability(ABC):
 
     def __init_subclass__(cls, **kwargs: object) -> None:
         super().__init_subclass__(**kwargs)
-        # get_input_schema / _inject_framework_fields are the single assembler and
-        # the single injection site — sealed. A subclass that redefines either
-        # (e.g. to "also enrich the schema") would silently fork the async /
-        # act_summary contract, so it is rejected at import. Subclasses enrich via
+        # get_input_schema / param are the single assembler and the one sanctioned
+        # param path — sealed. A subclass that redefines either would silently fork
+        # the contract, so it is rejected at import. Subclasses enrich via
         # get_parameters() / get_summary() instead.
-        for sealed in ("get_input_schema", "_inject_framework_fields", "param"):
+        for sealed in ("get_input_schema", "param"):
             if sealed in cls.__dict__:
                 raise TypeError(
                     f"{cls.__name__} must not override Ability.{sealed} — "
                     f"enrich get_parameters()/get_summary() instead"
                 )
+        # _inject_framework_fields is the single injection site — sealed against
+        # arbitrary subclasses (redefining it would fork the act_summary/async
+        # contract). The lone sanctioned override is DelegateAbility, which adds
+        # the delegate-only ``async`` property on top of super()'s act_summary.
+        if "_inject_framework_fields" in cls.__dict__ and cls.__name__ != "DelegateAbility":
+            raise TypeError(
+                f"{cls.__name__} must not override Ability._inject_framework_fields — "
+                f"enrich get_parameters()/get_summary() instead"
+            )
 
         # Synthetic proxies (e.g. _MCPAbility) source their metadata from a remote
         # schema and are constructed with arguments — skip metadata validation.
@@ -225,7 +227,8 @@ class Ability(ABC):
     @typing.final
     def get_input_schema(self) -> dict[str, object]:
         """This is the ONE place a tool schema is built and the ONE place
-        ``act_summary`` + ``async`` are declared. ``final`` — sealed at import
+        ``act_summary`` is declared (``async`` is added on top by
+        ``DelegateAbility`` for delegate tools only). ``final`` — sealed at import
         by ``__init_subclass__``."""
         return {
             "name": self.get_name(),
@@ -242,9 +245,6 @@ class Ability(ABC):
         properties["act_summary"] = dict(_ACT_SUMMARY_PROPERTY)
         if "act_summary" not in required:
             required.append("act_summary")
-
-        if self.mp is not None and self.mp.config.SUPPORTS_ASYNC:
-            properties["async"] = dict(_ASYNC_PROPERTY)
 
         return schema
 

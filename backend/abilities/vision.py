@@ -24,7 +24,7 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING, ClassVar, cast
 
-from abilities._ability import Ability
+from abilities._delegate import DelegateAbility
 from configs.enums.param_key import Keys
 from abilities._result import ToolResult
 from configs.channels.vision import VisionConfig
@@ -81,7 +81,7 @@ def describe_image(image_path: str, mime_type: str, query: str, *, policy_channe
     }
 
 
-class VisionAbility(Ability):
+class VisionAbility(DelegateAbility):
     def get_name(self) -> str:
         return "vision"
 

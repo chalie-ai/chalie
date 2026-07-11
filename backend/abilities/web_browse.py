@@ -28,14 +28,13 @@ from __future__ import annotations
 
 from typing import ClassVar, cast
 
-from abilities._ability import Ability
-from abilities._delegate import delegate_result
+from abilities._delegate import DelegateAbility, delegate_result
 from configs.enums.param_key import Keys
 from abilities._result import ToolResult
 from configs.channels.web_browse import WebBrowseConfig
 
 
-class WebBrowseAbility(Ability):
+class WebBrowseAbility(DelegateAbility):
     def get_name(self) -> str:
         return "web_browse"
 
