@@ -16,7 +16,8 @@ from typing import cast
 
 from flask.typing import ResponseReturnValue
 
-from api.endpoint import DocumentedResponse, Endpoint, EndpointError, NotFoundError
+from api.endpoint import DocumentedResponse, Endpoint
+from exceptions import EndpointError, NotFoundError
 from api.request import Request
 from api.request.lists import ListRequest
 from api.response.lists import ListResponse

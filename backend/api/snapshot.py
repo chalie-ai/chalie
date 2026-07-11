@@ -23,6 +23,7 @@ from flask.typing import ResponseReturnValue
 from flask_restx import Namespace, Resource
 from werkzeug.utils import secure_filename
 
+from exceptions import SnapshotError
 from .auth import require_session
 from .dto import Error, expects, register_dto, responds
 from .dto.snapshot import SnapshotExportRequest, SnapshotImportRequest, SnapshotImportResult
@@ -127,7 +128,7 @@ class SnapshotImportResource(Resource):
         loudly on a bad password, corrupt zip, or unsafe schema before anything
         is staged.
         """
-        from services.snapshot_service import SnapshotError, SnapshotService
+        from services.snapshot_service import SnapshotService
 
         tmp_dir = Path(tempfile.mkdtemp(prefix="chalie-snapshot-upload-"))
         try:

@@ -39,7 +39,8 @@ from configs.enums.param_key import Keys
 from abilities._result import ToolResult, truncate
 from services.file_mapper_service import FileMapperService
 from services.text_extractor import extract_html
-from services.web_fetch import BROWSER, FetchBlocked, fetch_page
+from services.web_fetch import BROWSER, fetch_page
+from exceptions import FetchBlocked
 
 _VERSION_FILE = FileMapperService.get_version_path()
 

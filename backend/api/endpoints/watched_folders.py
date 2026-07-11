@@ -28,7 +28,8 @@ from typing import ClassVar, cast
 from flask import request
 from flask.typing import ResponseReturnValue
 
-from api.endpoint import DocumentedResponse, Endpoint, EndpointError, NotFoundError
+from api.endpoint import DocumentedResponse, Endpoint
+from exceptions import EndpointError, NotFoundError
 from api.request import Request
 from api.request.watched_folder import WatchedFolderRequest
 from api.response.response import Response

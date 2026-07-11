@@ -50,7 +50,8 @@ from typing import TYPE_CHECKING, Callable, cast
 from abilities._mcp_ability import _MCPAbility
 from services.key_healer import KeyHealer
 from abilities._registry import AbilityRegistry
-from abilities._result import ToolParamError, ToolResult
+from abilities._result import ToolResult
+from exceptions import ToolParamError, VaultLockedError
 from models.tool_call import ToolCall
 from services.client_context import ClientContext
 from services.policy_manager import PolicyManager
@@ -343,7 +344,6 @@ class DispatchService:
         except Exception as exc:  # noqa: BLE001
             # VaultLockedError gets a friendlier message.
             try:
-                from services.vault_service import VaultLockedError  # noqa: PLC0415
                 if isinstance(exc, VaultLockedError):
                     return ToolResult.err(
                         "This function is currently unavailable. "

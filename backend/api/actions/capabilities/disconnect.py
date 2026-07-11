@@ -14,7 +14,8 @@ from typing import TYPE_CHECKING, cast
 from flask.typing import ResponseReturnValue
 
 from api.action import Action
-from api.endpoint import DocumentedResponse, NotFoundError
+from api.endpoint import DocumentedResponse
+from exceptions import NotFoundError
 from api.endpoints.capabilities import _load_caps
 from api.request import Request
 

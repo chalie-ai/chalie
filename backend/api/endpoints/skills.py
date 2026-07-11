@@ -24,7 +24,8 @@ from typing import ClassVar, cast
 
 from flask.typing import ResponseReturnValue
 
-from api.endpoint import DocumentedResponse, Endpoint, EndpointError, ForbiddenError, NotFoundError
+from api.endpoint import DocumentedResponse, Endpoint
+from exceptions import EndpointError, ForbiddenError, NotFoundError
 from api.request import Request
 from api.request.skills import SkillRequest
 from api.response.skills import SkillResponse

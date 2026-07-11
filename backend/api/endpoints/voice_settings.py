@@ -20,7 +20,8 @@ from typing import ClassVar, cast
 
 from flask.typing import ResponseReturnValue
 
-from api.endpoint import DocumentedResponse, Endpoint, NotFoundError
+from api.endpoint import DocumentedResponse, Endpoint
+from exceptions import NotFoundError
 from api.request import Request
 from api.request.voice_settings import VoiceSettingsRequest
 from api.response.voice_settings import VoiceSettingsResponse, VoiceSettingsStateResponse

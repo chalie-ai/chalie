@@ -27,7 +27,8 @@ from typing import ClassVar, cast
 
 from flask.typing import ResponseReturnValue
 
-from api.endpoint import DocumentedResponse, Endpoint, EndpointError, NotFoundError
+from api.endpoint import DocumentedResponse, Endpoint
+from exceptions import EndpointError, NotFoundError
 from api.request import Request
 from api.request.mcp_server import McpServerRequest
 from api.response.mcp_server import McpServer

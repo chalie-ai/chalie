@@ -36,7 +36,8 @@ from typing import ClassVar, cast
 
 from flask.typing import ResponseReturnValue
 
-from api.endpoint import DocumentedResponse, Endpoint, NotFoundError
+from api.endpoint import DocumentedResponse, Endpoint
+from exceptions import NotFoundError
 from api.request import Request
 from api.request.scheduler_item import SchedulerItemRequest
 from api.response.scheduler_item import SchedulerItem

@@ -16,7 +16,8 @@ from typing import ClassVar, cast
 from flask.typing import ResponseReturnValue
 
 from api.action import Action
-from api.endpoint import DocumentedResponse, EndpointError, NotFoundError
+from api.endpoint import DocumentedResponse
+from exceptions import EndpointError, NotFoundError
 from api.request import Request
 from api.request.provider_models import ListModelsRequest
 from api.response.provider_models import ListModelsResult, ModelInfo

@@ -33,6 +33,7 @@ from typing import cast
 
 import pyzipper
 
+from exceptions import SnapshotError
 from services.file_mapper_service import FileMapperService
 from services.time_utils import utc_now
 
@@ -80,11 +81,6 @@ _TREE_KINDS = (_KIND_SECURE, _KIND_DOCUMENTS, _KIND_SKILLS_USER)
 # skips the unknown artifact with a warning rather than aborting the whole
 # restore — see _swap_in.
 _KNOWN_KINDS = frozenset((*_SINGLE_FILE_DB_KINDS, _KIND_VERSION, *_TREE_KINDS))
-
-
-class SnapshotError(Exception):
-    """Raised when an import is rejected loudly (bad password handled by the
-    zip layer, corrupt zip, checksum mismatch, or a schema-downgrade block)."""
 
 
 class SnapshotService:

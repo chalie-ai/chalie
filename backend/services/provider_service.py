@@ -23,7 +23,7 @@ import re
 from typing import TYPE_CHECKING, cast
 
 from configs.enums.provider_type import ProviderType
-from models.provider_errors import ProviderError, RequestOverCapError
+from exceptions import ProviderError, RequestOverCapError
 from models.turn_signal import TurnSignal
 from services.llm_clients.factory import build_client
 from services.provider_api import MAX_CONTEXT_WINDOW

@@ -29,7 +29,7 @@ from abilities._result import ToolResult
 from services.database import Database
 from services.file_mapper_service import FileMapperService
 from tools.search.fetcher import fetch_ddg_fallback, fetch_providers
-from exceptions.rate_limit import RateLimitException
+from exceptions import RateLimitException
 
 logger = logging.getLogger(__name__)
 

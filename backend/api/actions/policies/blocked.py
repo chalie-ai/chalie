@@ -8,7 +8,8 @@ from flask import request
 from flask.typing import ResponseReturnValue
 
 from api.action import Action
-from api.endpoint import DocumentedResponse, EndpointError
+from api.endpoint import DocumentedResponse
+from exceptions import EndpointError
 from api.response.policies import BlockedEntryResponse
 from api.response.response import Response
 from services.policy_manager import PolicyManager

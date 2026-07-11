@@ -20,7 +20,7 @@ from urllib.parse import quote_plus
 import requests
 
 from tools.search.transformers import transform
-from exceptions.rate_limit import RateLimitException
+from exceptions import RateLimitException
 
 logger = logging.getLogger(__name__)
 

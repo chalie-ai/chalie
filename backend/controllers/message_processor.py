@@ -63,7 +63,7 @@ from typing import TYPE_CHECKING, Protocol, cast
 from configs.enums.channels import Channel
 from configs.enums.provider_type import ProviderType
 from configs.enums.thinking_level import ThinkingLevel
-from models.provider_errors import (
+from exceptions import (
     ProviderResponseError,
     ProviderRetriesExhaustedError,
     RequestOverCapError,

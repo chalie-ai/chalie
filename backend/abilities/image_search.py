@@ -24,6 +24,7 @@ from typing import TYPE_CHECKING, ClassVar, cast
 from abilities._ability import Ability
 from abilities._result import ToolResult
 from configs.enums.param_key import Keys
+from exceptions import DownloadTooLarge, FetchBlocked
 from tools.image_search import fetcher
 
 if TYPE_CHECKING:
@@ -207,7 +208,7 @@ class ImageSearchAbility(Ability):
     ) -> tuple[dict[str, object] | None, str | None]:
         # Local imports to avoid import cycles (precedent: vision.py:62-71).
         from services import tmp_storage  # noqa: PLC0415
-        from services.web_fetch import DownloadTooLarge, FetchBlocked, stream_to_file  # noqa: PLC0415
+        from services.web_fetch import stream_to_file  # noqa: PLC0415
         from abilities.vision import describe_image  # noqa: PLC0415
 
         dest = tmp_storage.new_tmp_path(f"imgsearch_{uuid.uuid4().hex[:8]}")

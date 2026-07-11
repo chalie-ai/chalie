@@ -22,12 +22,12 @@ from typing import TYPE_CHECKING, ClassVar, cast
 from flask.typing import ResponseReturnValue
 
 from api.action import Action
-from api.endpoint import DocumentedResponse, NotFoundError
+from api.endpoint import DocumentedResponse
 from api.endpoints.capabilities import _load_caps
 from api.request import Request
 from api.request.capabilities import CapabilitySetupRequest
 from api.response.response import Response
-from services.vault_service import VaultLockedError
+from exceptions import NotFoundError, VaultLockedError
 
 if TYPE_CHECKING:
     from api.endpoints.capabilities import _Capability

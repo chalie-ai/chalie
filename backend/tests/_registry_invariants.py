@@ -30,11 +30,6 @@ from services.key_normalizer import KeyNormalizer
 FRAMEWORK_KEYS = ("act_summary", "async")
 
 
-class RegistryOverlapError(Exception):
-    """Raised when a tool's variant ladders overlap with another parameter or a
-    framework key - the invariant that keeps key healing unambiguous."""
-
-
 class RegistryInvariant:
     """Asserts structural invariants the key-healing design rests on.
 
@@ -63,7 +58,7 @@ class RegistryInvariant:
         )
 
     def check_no_overlaps(self, abilities: "list[Ability]") -> None:
-        """Raises :class:`RegistryOverlapError` listing ALL violations found (not
+        """Raises ``AssertionError`` listing ALL violations found (not
         just the first), so one run surfaces the entire registry state.
         """
         squeeze = self._normalizer.squeeze
@@ -114,6 +109,6 @@ class RegistryInvariant:
             )
 
         if problems:
-            raise RegistryOverlapError(
+            raise AssertionError(
                 "Parameter-key registry overlap(s):\n  " + "\n  ".join(problems)
             )

@@ -25,6 +25,7 @@ import requests
 # rapidfuzz: SIMD-accelerated Levenshtein, replaces two-row DP implementation
 from rapidfuzz.distance import Levenshtein as _Levenshtein
 
+from exceptions import NewsFetchError
 from services import news_sources
 from services.embedding_service import EmbeddingService
 from services.memory_store import MemoryStore
@@ -33,20 +34,6 @@ from services.time_utils import utc_now
 logger = logging.getLogger(__name__)
 
 LOG_PREFIX = "[news]"
-
-
-class NewsFetchError(Exception):
-    """A news provider was unreachable or returned a transport-level error.
-
-    Raised by :meth:`NewsService.fetch_google_news` when the HTTP fetch to the
-    Google News RSS endpoint fails (connection refused, timeout, non-2xx). The
-    message carries the provider/URL context. The ability maps this to
-    ``code=provider-unreachable`` instead of letting a dead provider masquerade
-    as an empty result set.
-
-    Per-feed RSS failures inside :meth:`NewsService._parse_feed` are NOT raised:
-    a single dead feed in a multi-feed aggregate is normal and tolerated.
-    """
 
 
 # ── Constants ─────────────────────────────────────────────────
@@ -208,7 +195,6 @@ class NewsService:
             )
             resp.raise_for_status()
         except Exception as e:
-            logger.debug(f"{LOG_PREFIX} Google News fetch failed: {e}")
             raise NewsFetchError(f"Google News fetch failed for {url!r}: {e}") from e
 
         feed = feedparser.parse(resp.content)

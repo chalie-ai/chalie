@@ -28,6 +28,7 @@ from flask.typing import ResponseReturnValue
 from flask_restx import Namespace, Resource
 from pydantic import ValidationError
 
+from exceptions import EndpointError, ForbiddenError
 from .auth import require_auth
 from .dto.openapi import register_auth_error, register_dto, register_envelope, register_error_envelope
 from .request import Request
@@ -36,24 +37,6 @@ from .response import Response
 _DECLARABLE_HANDLERS = frozenset({"get_all", "get", "post", "delete"})
 """Handler names :attr:`Endpoint.response_dto` may key on — the same set
 :meth:`Endpoint.namespace`/:meth:`Action.namespace` dispatch to."""
-
-
-class EndpointError(Exception):
-    """Typed endpoint failure; the base maps it onto the error envelope with its status."""
-
-    status: ClassVar[int] = 400
-
-
-class NotFoundError(EndpointError):
-    """Requested resource does not exist."""
-
-    status: ClassVar[int] = 404
-
-
-class ForbiddenError(EndpointError):
-    """Authenticated, but not permitted to perform this action."""
-
-    status: ClassVar[int] = 403
 
 
 @dataclass(frozen=True)

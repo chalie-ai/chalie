@@ -24,7 +24,8 @@ from typing import TYPE_CHECKING, cast
 
 from flask.typing import ResponseReturnValue
 
-from api.endpoint import DocumentedResponse, Endpoint, NotFoundError
+from api.endpoint import DocumentedResponse, Endpoint
+from exceptions import NotFoundError
 from api.response.capabilities import CapabilityDetailResponse, CapabilitySummaryResponse
 
 if TYPE_CHECKING:

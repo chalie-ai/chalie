@@ -14,7 +14,8 @@ from typing import ClassVar, cast
 from flask.typing import ResponseReturnValue
 
 from api.action import Action
-from api.endpoint import DocumentedResponse, NotFoundError
+from api.endpoint import DocumentedResponse
+from exceptions import NotFoundError
 from api.response.provider_catalog import CatalogEntry
 from services.provider_catalog_service import get_catalog
 

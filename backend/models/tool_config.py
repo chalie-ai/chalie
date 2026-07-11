@@ -27,7 +27,8 @@ from typing import ClassVar
 
 from models.model import Model
 from services.database import Database
-from services.vault_service import get_vault_service, VaultLockedError
+from services.vault_service import get_vault_service
+from exceptions import VaultLockedError
 
 logger = logging.getLogger(__name__)
 

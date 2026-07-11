@@ -96,13 +96,15 @@ if TYPE_CHECKING:
 
 from configs.enums.thinking_level import ThinkingLevel
 from contracts.provider_client import ProviderClient
+from exceptions import (
+    ProviderResponseError,
+    ProviderTimeoutError,
+    RateLimitError,
+    ResponseOverLimitError,
+)
 from services.provider_api import (
     ProviderApiRequest,
     ProviderApiResponse,
-    RateLimitError,
-    ResponseOverLimitError,
-    ProviderResponseError,
-    ProviderTimeoutError,
 )
 
 logger = logging.getLogger(__name__)
@@ -369,7 +371,6 @@ class GeminiClient(ProviderClient):
         text, tool_calls, finish_reason = self._parse_response(cast("_GenResponse", response))
 
         if not text and not tool_calls:
-            logger.warning("[GeminiClient] Empty response, finish_reason=%s", finish_reason)
             raise ProviderResponseError(
                 f"Empty Gemini response (finish_reason={finish_reason})",
                 response_code=200, provider='gemini',

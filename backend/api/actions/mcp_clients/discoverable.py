@@ -14,7 +14,8 @@ from typing import ClassVar
 from flask.typing import ResponseReturnValue
 
 from api.action import Action
-from api.endpoint import DocumentedResponse, NotFoundError
+from api.endpoint import DocumentedResponse
+from exceptions import NotFoundError
 from api.response.mcp_tool import DiscoverableTools
 from services.mcp_client_service import McpClientService
 

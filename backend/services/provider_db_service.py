@@ -3,6 +3,7 @@
 import logging
 from typing import Dict, Optional, List, cast
 
+from exceptions import VaultLockedError
 from models.provider import Provider as ProviderModel
 from models.setting import Setting
 from services.database import Database
@@ -32,7 +33,7 @@ class ProviderDbService:
         if not encrypted_val:
             return None
         import base64
-        from services.vault_service import get_vault_service, VaultLockedError
+        from services.vault_service import get_vault_service
         try:
             return get_vault_service().decrypt_str(base64.b64decode(encrypted_val))
         except VaultLockedError:

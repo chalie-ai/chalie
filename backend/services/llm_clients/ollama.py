@@ -28,12 +28,16 @@ import requests
 
 from configs.enums.thinking_level import ThinkingLevel
 from contracts.provider_client import ProviderClient
-from services.provider_api import (
-    ProviderApiRequest,
-    ProviderApiResponse,
+from exceptions import (
+    ProviderResponseError,
+    ProviderTimeoutError,
     RateLimitError,
     ResponseOverLimitError,
-    ProviderResponseError,
+)
+from services.provider_api import (
+    PROVIDER_CALL_TIMEOUT_S,
+    ProviderApiRequest,
+    ProviderApiResponse,
 )
 
 logger = logging.getLogger(__name__)
@@ -212,12 +216,10 @@ class OllamaClient(ProviderClient):
         if status == 429:
             raise RateLimitError(str(exc), provider='ollama') from exc
         if status == 413:
-            logger.warning("[OllamaClient] HTTP 413 — raising ResponseOverLimitError")
             raise ResponseOverLimitError(
                 f"Ollama rejected payload with HTTP 413 (model={self.model})",
                 response_code=413, provider='ollama',
             ) from exc
-        logger.error("[OllamaClient] HTTP %s error from upstream", status)
         raise ProviderResponseError(str(exc), response_code=status or 0, provider='ollama') from exc
 
     def send(self, dto: ProviderApiRequest) -> ProviderApiResponse:
@@ -226,7 +228,6 @@ class OllamaClient(ProviderClient):
         api_messages = _ollama_convert_messages(dto.messages)
         payload = self._build_payload(dto.system, api_messages, dto.tools, dto.thinking_mode)
 
-        from services.provider_api import PROVIDER_CALL_TIMEOUT_S, ProviderTimeoutError  # noqa: PLC0415
 
         start = time.time()
         try:

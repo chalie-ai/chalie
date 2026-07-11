@@ -14,7 +14,8 @@ from typing import cast
 from flask.typing import ResponseReturnValue
 
 from api.action import Action
-from api.endpoint import DocumentedResponse, NotFoundError
+from api.endpoint import DocumentedResponse
+from exceptions import NotFoundError
 from api.response.skills import SkillAssociationResponse
 from models.skill_association import SkillAssociation as SkillAssociationModel
 from services.file_mapper_service import FileMapperService

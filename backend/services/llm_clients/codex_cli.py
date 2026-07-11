@@ -27,12 +27,14 @@ from pathlib import Path
 from typing import ClassVar, Optional, cast
 
 from contracts.provider_client import ProviderClient
+from exceptions import (
+    ProviderResponseError,
+    ProviderTimeoutError,
+)
 from services.provider_api import (
     PROVIDER_CALL_TIMEOUT_S,
     ProviderApiRequest,
     ProviderApiResponse,
-    ProviderResponseError,
-    ProviderTimeoutError,
 )
 
 logger = logging.getLogger(__name__)

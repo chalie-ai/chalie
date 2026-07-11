@@ -23,7 +23,8 @@ from typing import ClassVar, cast
 from api.request import Request
 from api.request.wrapper import WrapperCreate
 from api.response.wrapper import Wrapper, WrapperCreated
-from api.endpoint import DocumentedResponse, Endpoint, EndpointError, NotFoundError
+from api.endpoint import DocumentedResponse, Endpoint
+from exceptions import EndpointError, NotFoundError
 from flask.typing import ResponseReturnValue
 from services.wrapper_auth_service import WrapperAuthService
 

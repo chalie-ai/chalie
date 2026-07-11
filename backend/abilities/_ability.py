@@ -23,7 +23,8 @@ import typing
 from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, Callable, ClassVar, cast
 
-from abilities._result import ToolParamError, ToolResult
+from abilities._result import ToolResult
+from exceptions import ToolParamError
 
 if TYPE_CHECKING:
     from controllers.message_processor import MessageProcessor

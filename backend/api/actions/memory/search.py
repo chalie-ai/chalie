@@ -15,7 +15,8 @@ from flask import request
 from flask.typing import ResponseReturnValue
 
 from api.action import Action
-from api.endpoint import DocumentedResponse, EndpointError
+from api.endpoint import DocumentedResponse
+from exceptions import EndpointError
 from api.response.memory import MemoryHitResponse
 from models.episode import Episode
 from services.episodic_service import EpisodicService

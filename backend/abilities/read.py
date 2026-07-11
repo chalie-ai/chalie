@@ -43,7 +43,8 @@ import requests
 from abilities._ability import Ability
 from configs.enums.param_key import Keys
 from abilities._result import ToolResult, truncate
-from services.web_fetch import BROWSER, FetchBlocked, fetch_page
+from services.web_fetch import BROWSER, fetch_page
+from exceptions import FetchBlocked
 
 logger = logging.getLogger(__name__)
 

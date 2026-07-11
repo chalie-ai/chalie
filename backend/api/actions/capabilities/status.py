@@ -15,7 +15,8 @@ from typing import TYPE_CHECKING, cast
 from flask.typing import ResponseReturnValue
 
 from api.action import Action
-from api.endpoint import DocumentedResponse, NotFoundError
+from api.endpoint import DocumentedResponse
+from exceptions import NotFoundError
 from api.endpoints.capabilities import _get_last_sync_at, _load_caps
 from api.response.capabilities import CapabilityStatusResponse
 

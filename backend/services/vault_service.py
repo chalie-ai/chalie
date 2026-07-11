@@ -6,6 +6,7 @@ import os
 from dataclasses import dataclass, field
 from typing import Optional, cast
 
+from exceptions import VaultLockedError
 from services.database import Database
 
 # FileMapperService owns every repository-layout path (CLAUDE.md rule #9). The
@@ -33,16 +34,6 @@ _KDF_ALGORITHM = "pbkdf2_sha256"
 _SECURE_DIR_MODE = 0o700  # owner rwx only — the data/secure/ backup directory
 _SECURE_FILE_MODE = 0o400 # owner read-only — each backup file
 _BACKUP_RETENTION = 6     # keep only the newest N vault_backup_*.json files
-
-
-# ── Custom exception ───────────────────────────────────────────────────────────
-
-class VaultLockedError(Exception):
-    """Raised when an encrypt/decrypt operation is attempted on a sealed vault.
-
-    The vault must be unlocked via :meth:`VaultService.unlock` before any
-    cryptographic operations can be performed.
-    """
 
 
 # ── Module-level DEK cache (singleton) ────────────────────────────────────────

@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import cast
 from urllib.parse import urlsplit, urlunsplit
 
+from exceptions import McpServerUnreachable, McpToolUnknown
 from models.mcp_client_server import McpClientServer
 from models.mcp_tool import McpTool
 from services.database import Database
@@ -35,28 +36,6 @@ _STATUS_OFFLINE = "offline"
 
 # Name-sanitization pattern: keep lowercase alpha, digits, underscore.
 _SANITIZE_RE = re.compile(r"[^a-z0-9_]")
-
-
-class McpToolUnknown(Exception):
-    """An ``_mcp_*`` name resolves to no enabled/registered server.
-
-    Distinct from a reachable-but-failing call: the tool name itself cannot be
-    routed (no matching server, or the matching server is disabled), so retrying
-    is pointless until the server is (re-)added/enabled.
-    """
-
-
-class McpServerUnreachable(Exception):
-    """The remote MCP server could not be reached (transport/connect/timeout).
-
-    Carries the human-facing ``server_name`` so the proxy can NAME the failing
-    endpoint in its error envelope instead of leaking a transport stack trace.
-    """
-
-    def __init__(self, server_name: str, detail: str) -> None:
-        super().__init__(f"MCP server {server_name!r} is unreachable: {detail}")
-        self.server_name = server_name
-        self.detail: str = detail
 
 
 def _sanitize_name(name: str) -> str:
@@ -573,7 +552,6 @@ class McpClientService:
                 _async_call_tool(host, cast(dict[str, str], headers), remote_tool, params)
             )
         except Exception as exc:
-            logger.warning("%s Tool dispatch failed for %r: %s", _LOG_PREFIX, tool_name, exc)
             raise McpServerUnreachable(cast(str, server["name"]), str(exc)) from exc
 
         logger.info(

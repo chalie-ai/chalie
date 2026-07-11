@@ -15,7 +15,7 @@ import logging
 
 from ddgs.exceptions import RatelimitException as DDGRatelimitException
 
-from exceptions.rate_limit import RateLimitException
+from exceptions import RateLimitException
 
 logger = logging.getLogger(__name__)
 

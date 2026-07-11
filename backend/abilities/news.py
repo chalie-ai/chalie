@@ -24,7 +24,8 @@ from abilities._ability import Ability
 from configs.enums.param_key import Keys
 from abilities._result import ToolResult
 from services import news_sources
-from services.news_service import NewsFetchError, NewsService
+from services.news_service import NewsService
+from exceptions import NewsFetchError
 
 logger = logging.getLogger(__name__)
 

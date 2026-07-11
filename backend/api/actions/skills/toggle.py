@@ -12,7 +12,8 @@ from typing import ClassVar, cast
 from flask.typing import ResponseReturnValue
 
 from api.action import Action
-from api.endpoint import DocumentedResponse, NotFoundError
+from api.endpoint import DocumentedResponse
+from exceptions import NotFoundError
 from api.request import Request
 from api.response.skills import SkillToggleResponse
 from models.skill import Skill as SkillModel

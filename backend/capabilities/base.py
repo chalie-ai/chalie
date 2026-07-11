@@ -21,7 +21,7 @@ import logging
 from abc import ABC, abstractmethod
 
 from models.tool_config import ToolConfig
-from services.vault_service import VaultLockedError
+from exceptions import VaultLockedError
 
 logger = logging.getLogger(__name__)
 

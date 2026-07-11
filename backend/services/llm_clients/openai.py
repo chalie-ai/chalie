@@ -43,12 +43,15 @@ if TYPE_CHECKING:
 
 from configs.enums.thinking_level import ThinkingLevel
 from contracts.provider_client import ProviderClient
+from exceptions import (
+    ProviderResponseError,
+    ProviderTimeoutError,
+    RateLimitError,
+    ResponseOverLimitError,
+)
 from services.provider_api import (
     ProviderApiRequest,
     ProviderApiResponse,
-    RateLimitError,
-    ResponseOverLimitError,
-    ProviderResponseError,
 )
 
 logger = logging.getLogger(__name__)
@@ -173,7 +176,6 @@ class OpenAIClient(ProviderClient):
         """Call chat.completions.create, mapping SDK errors with a thinking-retry fallback."""
         import openai as openai_mod  # noqa: PLC0415
         from services.llm_service import _is_thinking_rejection  # noqa: PLC0415
-        from services.provider_api import ProviderTimeoutError  # noqa: PLC0415
         try:
             return cast("Callable[..., _openai_mod.types.chat.ChatCompletion]", client.chat.completions.create)(**create_kwargs)
         except openai_mod.RateLimitError as exc:
