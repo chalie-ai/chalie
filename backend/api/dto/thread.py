@@ -29,8 +29,12 @@ class ThreadFeedQuery(DTO):
 class ThreadSummary(DTO):
     """One collapsed feed row: the thread's id, last-activity timestamp, opener
     preview, row count, one-sentence gist, and whether the turn is still working.
-    The internal recency sort key (the latest transcript row id) drives ordering
-    server-side and is not exposed."""
+    ``type`` is the ConfigType identity (``user``/``scheduled``/``discovery``)
+    this summary was resolved under — required so a client that learns of a
+    thread from this feed can refetch it (GET /api/thread/<turn_id>) with the
+    right ``type`` instead of silently falling back to the ``user`` default and
+    resolving to the wrong channel. The internal recency sort key (the latest
+    transcript row id) drives ordering server-side and is not exposed."""
 
     turn_id: int | None = None
     last_activity_at: str | None = None
@@ -38,6 +42,7 @@ class ThreadSummary(DTO):
     row_count: int
     gist: str | None = None
     working: bool = False
+    type: str
 
 
 class ThreadFeed(DTO):
@@ -51,7 +56,12 @@ class ThreadFeed(DTO):
 class TurnBlock(DTO):
     """One turn's full block — the single read, every batch entry and the WS
     refetch all return this shape, so one fetch fully determines a turn's render.
-    Rows past the turn's settle0 carry ``thread_message`` on the message."""
+    Rows past the turn's settle0 carry ``thread_message`` on the message.
+    ``type`` is the ConfigType identity (``user``/``scheduled``/``discovery``)
+    this block was resolved under — required so a client that refetches a
+    thread it learned about elsewhere (e.g. a WS ``updated`` signal) can carry
+    the right ``type`` forward instead of silently falling back to the
+    ``user`` default and resolving to the wrong (empty) channel."""
 
     turn_id: int
     gist: str | None = None
@@ -60,6 +70,7 @@ class TurnBlock(DTO):
     working: bool
     duration_ms: int
     messages: list[Message]
+    type: str
 
 
 class ThreadBatch(DTO):

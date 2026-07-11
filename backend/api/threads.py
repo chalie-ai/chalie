@@ -279,10 +279,18 @@ def _drop_trailing_cancelled_orphan(
     return rows[:cutoff]
 
 
-def serialize_turn(channel: str, turn_id: int) -> dict[str, object]:
+def serialize_turn(channel: str, turn_id: int, config_type: str = _TYPE) -> dict[str, object]:
     """The single turn-block getter — the REST single/batch reads and the WS
     refetch all flow through here, so one fetch fully determines a turn's render
     with no signal memory.
+
+    ``config_type`` is the ConfigType identity string the caller resolved
+    ``channel`` from (the same value passed to :meth:`ConfigTypeEnum.get_by_type`)
+    and is stamped onto the returned block as ``type`` — the one piece of state
+    a refetching client needs to keep addressing the right channel, since
+    ``channel`` alone isn't recoverable from a turn_id (a thread refetched
+    without the right ``type`` would otherwise silently resolve to the wrong
+    channel and render as an empty block).
 
     Returns the WHOLE turn (no floor) projected into messages, with every row
     from the turn's SECOND user-role row onward tagged ``thread_message: true``
@@ -329,13 +337,17 @@ def serialize_turn(channel: str, turn_id: int) -> dict[str, object]:
         "working": TurnExecution.open_turn(channel, turn_id) is not None,
         "duration_ms": duration_ms,
         "messages": messages,
+        "type": config_type,
     }
 
 
-def _thread_summaries(threads: list[dict[str, object]], channel: str) -> list[ThreadSummary]:
+def _thread_summaries(threads: list[dict[str, object]], channel: str, config_type: str) -> list[ThreadSummary]:
     """Project raw recent_threads rows into feed DTOs, bulk-injecting each thread's
-    one-sentence gist (scoped to ``channel``). The internal latest-row-id recency
-    key is dropped here."""
+    one-sentence gist (scoped to ``channel``). ``config_type`` is the ConfigType
+    identity string ``channel`` was resolved from and is stamped onto every
+    summary as ``type``, so a client refetching a thread found via the feed can
+    carry the right type forward. The internal latest-row-id recency key is
+    dropped here."""
     if not threads:
         return []
 
@@ -349,6 +361,7 @@ def _thread_summaries(threads: list[dict[str, object]], channel: str) -> list[Th
             row_count=cast("int", t["row_count"]),
             gist=gists.get(cast("int", t["turn_id"])) if t.get("turn_id") is not None else None,
             working=bool(t.get("working", False)),
+            type=config_type,
         )
         for t in threads
     ]
@@ -377,7 +390,7 @@ class ThreadsResource(Resource):
             channel, exclude_roles=_THREAD_EXCLUDE, limit=limit, offset=offset, query=dto.q,
         )
         return ThreadFeed(
-            threads=_thread_summaries(threads, channel),
+            threads=_thread_summaries(threads, channel, dto.type),
             has_more=has_more,
             threads_returned=threads_returned,
         )
@@ -393,9 +406,12 @@ class ThreadsBatchResource(Resource):
     def get(self) -> ThreadBatch:
         """Many turn blocks in one round-trip — a pure concatenation of the
         single-turn getter over the requested ids. Non-numeric ids are ignored."""
-        channel = ConfigTypeEnum.get_by_type(request.args.get("type", _TYPE)).channel
+        config_type = request.args.get("type", _TYPE)
+        channel = ConfigTypeEnum.get_by_type(config_type).channel
         ids = [int(t) for t in request.args.getlist("id[]") if t.isdigit()]
-        return ThreadBatch(blocks=[TurnBlock.model_validate(serialize_turn(channel, t)) for t in ids])
+        return ThreadBatch(
+            blocks=[TurnBlock.model_validate(serialize_turn(channel, t, config_type)) for t in ids]
+        )
 
 
 # werkzeug's converter-arg grammar has no negative literals, so min=-1 can't be
@@ -411,7 +427,9 @@ class ThreadItemResource(Resource):
     def get(self, turn_id: int) -> TurnBlock:
         """One turn's full block — the WS-refetch + expand-on-click read. ``type``
         defaults to ``user``."""
-        return TurnBlock.model_validate(serialize_turn(ConfigTypeEnum.get_by_type(request.args.get("type", _TYPE)).channel, turn_id))
+        config_type = request.args.get("type", _TYPE)
+        channel = ConfigTypeEnum.get_by_type(config_type).channel
+        return TurnBlock.model_validate(serialize_turn(channel, turn_id, config_type))
 
     @require_session
     @threads_ns.param("turn_id", "Turn id (-1 creates a new thread)")

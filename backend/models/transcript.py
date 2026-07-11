@@ -340,20 +340,38 @@ class Transcript(Model):
         "ORDER BY te.id DESC LIMIT 1), '')) = 'cancelled')"
     )
 
+    # A thread matches a search term when either its user-role content or its
+    # (LLM-generated) gist label carries it. The gist half is a correlated
+    # subquery keyed on the real ``transcript.turn_id`` (not the NULL-safe
+    # ``_TURN_KEY``) — ``thread_gist`` rows only ever exist for a real turn_id,
+    # never for a legacy NULL-turn_id singleton, so this correctly matches
+    # nothing for those. Wrapped in MAX(COALESCE(..., 0)) to mirror the
+    # ``_CANCELLED_ORPHAN_HAVING`` idiom: a per-row correlated subquery
+    # aggregated across the GROUP, since HAVING cannot reference a
+    # non-aggregated, non-grouped column directly.
+    _GIST_MATCH: ClassVar[str] = (
+        "MAX(COALESCE((SELECT 1 FROM thread_gist tg WHERE tg.channel = transcript.channel "
+        "AND tg.turn_id = transcript.turn_id AND tg.gist LIKE ?), 0)) = 1"
+    )
+
     @classmethod
     def _thread_query_filter(cls, query: str) -> tuple[str, tuple[str, ...]]:
         """The feed's HAVING clause over a per-turn GROUP: always drops a
         cancelled reply-less orphan (``_CANCELLED_ORPHAN_HAVING``), and when
         ``query`` is non-empty additionally keeps only threads carrying a
-        user-role row whose content matches it (case-insensitive substring).
-        Shared by ``recent_threads`` (the page) and ``count_turns`` (its
-        ``has_more``) so search and feed run one identical path."""
+        user-role row OR a thread_gist label matching it (case-insensitive
+        substring). Shared by ``recent_threads`` (the page) and ``count_turns``
+        (its ``has_more``) so search and feed run one identical path."""
         conditions = [cls._CANCELLED_ORPHAN_HAVING]
         params: list[str] = []
         query = (query or "").strip()
         if query:
-            conditions.append("MAX(CASE WHEN role = 'user' AND content LIKE ? THEN 1 ELSE 0 END) = 1")
-            params.append(f"%{query}%")
+            term = f"%{query}%"
+            conditions.append(
+                "(MAX(CASE WHEN role = 'user' AND content LIKE ? THEN 1 ELSE 0 END) = 1"
+                f" OR {cls._GIST_MATCH})",
+            )
+            params.extend([term, term])
         return " HAVING " + " AND ".join(conditions), tuple(params)
 
     @classmethod

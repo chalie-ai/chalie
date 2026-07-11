@@ -34,6 +34,7 @@ from flask.testing import FlaskClient
 
 from configs.channels.user import UserConfig
 from controllers.message_processor import MessageProcessor
+from models.thread_gist import ThreadGist
 from models.transcript import Transcript
 from models.turn_execution import TurnExecution
 
@@ -161,3 +162,46 @@ def test_recent_threads_keeps_turn_with_real_exchange_despite_trailing_cancelled
 
     assert turn_id in [t.get("turn_id") for t in threads]
     assert Transcript.count_turns(_CHANNEL) == 1
+
+
+# ── (c) thread feed search matches a thread_gist label ───────────
+
+
+def test_recent_threads_search_matches_thread_gist_label_not_just_user_content(
+    db: sqlite3.Connection,
+) -> None:
+    """``GET /api/threads?q=`` must find a thread by its (LLM-generated) gist
+    label even when the raw user message never used the search term — e.g. a
+    user typed "send an email to Jane about the invoice" but the gist labelled
+    the thread "Testing and Debugging", and the user later searches "debug".
+    A sibling thread with neither matching content nor a matching gist must
+    stay excluded from every search, matched or not."""
+    assert db is not None  # fixture is taken for its binding side effect (real DB gateway)
+    gisted_turn_id = 8501
+    plain_turn_id = 8502
+
+    _open_exchange(gisted_turn_id, "Send an email to Jane about the invoice.", "Sent.")
+    ThreadGist(channel=_CHANNEL, turn_id=gisted_turn_id, gist="Testing and Debugging", created_at="").upsert()
+
+    _open_exchange(plain_turn_id, "What's the weather tomorrow?", "Sunny, 22C.")
+
+    # (1) matches via the gist only — user content never said "debug"
+    debug_threads, _has_more, _returned = Transcript.recent_threads(_CHANNEL, query="debug")
+    debug_ids = [t.get("turn_id") for t in debug_threads]
+    assert gisted_turn_id in debug_ids
+    assert plain_turn_id not in debug_ids
+    assert Transcript.count_turns(_CHANNEL, query="debug") == 1
+
+    # (2) same thread also found via the other half of the gist ("Testing")
+    test_threads, _has_more, _returned = Transcript.recent_threads(_CHANNEL, query="test")
+    test_ids = [t.get("turn_id") for t in test_threads]
+    assert gisted_turn_id in test_ids
+    assert plain_turn_id not in test_ids
+    assert Transcript.count_turns(_CHANNEL, query="test") == 1
+
+    # (3) a term present in neither content nor gist excludes both threads
+    none_threads, _has_more, _returned = Transcript.recent_threads(_CHANNEL, query="zzz_no_match")
+    none_ids = [t.get("turn_id") for t in none_threads]
+    assert gisted_turn_id not in none_ids
+    assert plain_turn_id not in none_ids
+    assert Transcript.count_turns(_CHANNEL, query="zzz_no_match") == 0

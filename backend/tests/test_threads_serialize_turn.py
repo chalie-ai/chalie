@@ -33,6 +33,7 @@ import sqlite3
 from typing import cast
 
 import pytest
+from flask.testing import FlaskClient
 
 from api.threads import serialize_turn
 from configs.channels.scheduled import ScheduledConfig
@@ -314,3 +315,113 @@ def test_same_tool_rich_cards_in_one_turn_resolve_per_cycle(db: sqlite3.Connecti
     # Each card resolves to ITS OWN cycle's query — not the turn's first call.
     assert rich_query(by_id[str(a1)]) == "northern lights"
     assert rich_query(by_id[str(a2)]) == "southern lights"
+
+
+# ── ``type`` stamping — the ConfigType identity carried on every read ──
+#
+# ``ThreadSummary`` and ``TurnBlock`` both carry a required ``type: str`` — the
+# ConfigType identity string (``user``/``scheduled``/``discovery``) the caller
+# resolved ``channel`` from. A client that discovers a thread via the feed or a
+# WS ``updated`` signal has no other way to recover which channel a turn_id
+# lives on, so it must carry ``type`` forward on any refetch. Before the fix,
+# neither DTO exposed it, so a client that dropped ``type`` on refetch silently
+# fell back to the ``user`` default, resolved to the WRONG channel, and a real
+# scheduled-thread turn rendered as an empty block — the reported
+# "disappearing answer" defect. These tests pin the contract at both the
+# service level (``serialize_turn``/``_thread_summaries``) and the REST
+# boundary (``authed_client``, real Flask routes, real DB) so a regression in
+# either the stamping or the channel resolution it depends on is caught.
+
+_SCHEDULED_TYPE = "scheduled"
+_USER_TYPE = "user"
+
+
+def test_serialize_turn_stamps_the_config_type_it_was_called_with(db: sqlite3.Connection) -> None:
+    """A scheduled-channel turn fetched with ``config_type="scheduled"`` carries
+    ``type == "scheduled"`` on its block; a user-channel turn fetched with the
+    default arg carries ``type == "user"``. Each is the one signal a
+    refetching client needs to keep addressing the right channel instead of
+    silently resolving to the ``user`` default."""
+    assert db is not None  # fixture is taken for its binding side effect (real DB gateway)
+    scheduled_turn_id = 9101
+    scheduled_mp = MessageProcessor(ScheduledConfig(), scheduled_turn_id)  # inert (I2)
+    assert scheduled_mp.turn_execution_service.open() is not None
+    scheduled_mp.transcript_service.append_assistant("Standup reminder: 9am daily sync.")
+    assert scheduled_mp.turn_execution_service.finish(TurnExecution.COMPLETED) is not None
+
+    scheduled_result = serialize_turn(_CHANNEL, scheduled_turn_id, config_type=_SCHEDULED_TYPE)
+    assert scheduled_result["type"] == _SCHEDULED_TYPE
+
+    user_turn_id = 7101
+    user_mp = MessageProcessor(UserConfig(), user_turn_id, "What's the weather?")  # inert (I2)
+    uid = user_mp.transcript_service.append_input(user_mp.raw_input)
+    user_mp.uid = uid
+    user_mp.current_transcript_id = uid
+    user_mp.transcript_service.append_assistant("Sunny, 22C.")
+
+    user_result = serialize_turn(_USER_CHANNEL, user_turn_id)  # default config_type
+
+    assert user_result["type"] == _USER_TYPE
+
+
+def test_thread_feed_stamps_every_summary_with_the_requested_type(
+    authed_client: tuple[FlaskClient, sqlite3.Connection, object],
+) -> None:
+    """``GET /api/threads?type=scheduled`` must resolve to the ``schedule``
+    channel and stamp EVERY summary it returns ``type == "scheduled"`` — the
+    identity a client needs to correctly refetch any thread it discovers via
+    this feed. A sibling thread on the ``user`` channel must not leak into
+    the scheduled feed at all, proving the stamped type actually matches the
+    channel the summaries were resolved from, not just a hardcoded label."""
+    client, _db, _store = authed_client
+    scheduled_turn_id = 9104
+    scheduled_mp = MessageProcessor(ScheduledConfig(), scheduled_turn_id)  # inert (I2)
+    assert scheduled_mp.turn_execution_service.open() is not None
+    scheduled_mp.transcript_service.append_assistant("Weekly digest is ready.")
+    assert scheduled_mp.turn_execution_service.finish(TurnExecution.COMPLETED) is not None
+
+    user_turn_id = 7104
+    user_mp = MessageProcessor(UserConfig(), user_turn_id, "What's on my plate today?")  # inert (I2)
+    uid = user_mp.transcript_service.append_input(user_mp.raw_input)
+    user_mp.uid = uid
+    user_mp.current_transcript_id = uid
+    user_mp.transcript_service.append_assistant("Nothing scheduled.")
+
+    resp = client.get(f"/api/threads?type={_SCHEDULED_TYPE}")
+    assert resp.status_code == 200
+    threads = resp.get_json()["threads"]
+
+    assert threads  # sanity: the seeded scheduled thread is actually returned
+    assert all(t["type"] == _SCHEDULED_TYPE for t in threads)
+    assert scheduled_turn_id in [t["turn_id"] for t in threads]
+    assert user_turn_id not in [t["turn_id"] for t in threads]
+
+
+def test_scheduled_turn_fetched_with_wrong_type_renders_empty_but_right_type_renders_full_thread(
+    authed_client: tuple[FlaskClient, sqlite3.Connection, object],
+) -> None:
+    """The regression pinned at the REST boundary: a real
+    scheduled-channel turn refetched with the WRONG (default) ``type=user``
+    resolves to the ``user`` channel, where this turn_id names no rows —
+    the empty-turn shape a client would render after a WS refetch that
+    dropped ``type`` (the reported "disappearing answer"). The SAME turn_id
+    fetched with the correct ``type=scheduled`` must return its full, real
+    message list, stamped ``type == "scheduled"``."""
+    client, _db, _store = authed_client
+    turn_id = 9103
+    mp = MessageProcessor(ScheduledConfig(), turn_id)  # inert (I2)
+    assert mp.turn_execution_service.open() is not None
+    mp.transcript_service.append_assistant("Standup reminder: 9am daily sync.")
+    assert mp.turn_execution_service.finish(TurnExecution.COMPLETED) is not None
+
+    wrong_type_resp = client.get(f"/api/thread/{turn_id}")  # default type=user
+    assert wrong_type_resp.status_code == 200
+    wrong_body = wrong_type_resp.get_json()
+    assert wrong_body["messages"] == []
+
+    right_type_resp = client.get(f"/api/thread/{turn_id}?type={_SCHEDULED_TYPE}")
+    assert right_type_resp.status_code == 200
+    right_body = right_type_resp.get_json()
+    assert right_body["type"] == _SCHEDULED_TYPE
+    contents = [m["content"] for m in right_body["messages"]]
+    assert "Standup reminder: 9am daily sync." in contents
