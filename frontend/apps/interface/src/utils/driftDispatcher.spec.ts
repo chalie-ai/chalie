@@ -47,17 +47,23 @@ vi.mock('./liveActTrail', () => ({
   clearLiveTurn: clearLiveTurnMock,
 }));
 
-const { setTurnWorkingMock, setTurnDoneMock, removeTurnMock, upsertTurnToSurfacesMock } = vi.hoisted(() => ({
+const { setTurnWorkingMock, setTurnDoneMock, removeTurnMock, upsertTurnToSurfacesMock, findTurnTypeMock } = vi.hoisted(() => ({
   setTurnWorkingMock: vi.fn(),
   setTurnDoneMock: vi.fn(),
   removeTurnMock: vi.fn(),
   upsertTurnToSurfacesMock: vi.fn(),
+  // Defaults to "no rendered copy anywhere" — see beforeEach's reset. Real
+  // DOM-backed resolution (a rendered node actually naming a turn's type) is
+  // covered separately in driftDispatcher.typeResolution.spec.ts, which runs
+  // against the REAL turnDom module rather than this mock.
+  findTurnTypeMock: vi.fn(() => null as string | null),
 }));
 vi.mock('./turnDom', () => ({
   setTurnWorking: setTurnWorkingMock,
   setTurnDone: setTurnDoneMock,
   removeTurn: removeTurnMock,
   upsertTurnToSurfaces: upsertTurnToSurfacesMock,
+  findTurnType: findTurnTypeMock,
 }));
 
 const { handleUpdateMock, handleTipMock } = vi.hoisted(() => ({
@@ -82,15 +88,19 @@ const { dispatchDrift, registerSessionHooks } = await import('./driftDispatcher'
 
 // Fake stand-in for the SessionHooks a real `session.init()` would register —
 // the only session-owned side effects `_dispatchTurnExecution` still needs.
-// `panelThreadId` is mutable per-test state read live by `getPanelThreadId`.
+// `panelThreadId`/`panelType` are mutable per-test state read live by
+// `getPanelThreadId`/`getPanelType` — the D16 gate is the FULL (turn_id,
+// type) pair (see `isOpenPanelTurn`'s own doc comment), so both must be
+// independently controllable per test, not just the turn id.
 const releasePendingSendMock = vi.fn();
 const setErrorMessageMock = vi.fn();
 const finishTurnMock = vi.fn();
 const drainQueuesMock = vi.fn();
-const hooksState = { panelThreadId: null as number | null };
+const hooksState = { panelThreadId: null as number | null, panelType: 'user' };
 registerSessionHooks({
   releasePendingSend: releasePendingSendMock,
   getPanelThreadId: () => hooksState.panelThreadId,
+  getPanelType: () => hooksState.panelType,
   setErrorMessage: setErrorMessageMock,
   finishTurn: finishTurnMock,
   drainQueues: drainQueuesMock,
@@ -103,6 +113,8 @@ function frame(data: Record<string, unknown>): WsPushEvent {
 beforeEach(() => {
   vi.clearAllMocks();
   hooksState.panelThreadId = null;
+  hooksState.panelType = 'user';
+  findTurnTypeMock.mockReturnValue(null);
   threadMock.mockResolvedValue({
     turn_id: 1,
     gist: null,
@@ -111,6 +123,7 @@ beforeEach(() => {
     working: false,
     duration_ms: 0,
     messages: [],
+    type: 'user',
   });
 });
 
@@ -211,9 +224,55 @@ describe('dispatchDrift — turn_execution frame', () => {
     expect(finishTurnMock).toHaveBeenCalledWith(21, 'user');
   });
 
+  // D16 pair gate — the panel identifies a turn by (turn_id, type) TOGETHER,
+  // never turn_id alone (turn_id is only unique PER TYPE). A same-numbered
+  // turn settling in a DIFFERENT channel than the one open in the panel must
+  // still be marked done, exactly as if no panel were open at all — this is
+  // the gate the old `getPanelType?.() === undefined` fallback would have
+  // silently collapsed back to a turn_id-only match.
+  it('D16 pair gate: a settled turn sharing the panel\'s turn_id but a DIFFERENT type is still marked done', () => {
+    hooksState.panelThreadId = 5;
+    hooksState.panelType = 'user';
+
+    // Same turn_id as the open panel, but a different channel — the pair
+    // does not match, so this settle is NOT the one open in the panel.
+    dispatchDrift(frame({ state: 'completed', turn_id: 5, started_at: '2026-01-01T00:00:00Z', type: 'scheduled' }));
+    expect(setTurnDoneMock).toHaveBeenCalledWith(5, 'scheduled', true);
+
+    setTurnDoneMock.mockClear();
+
+    // The FULL pair now matches (same turn_id AND same type as the panel) —
+    // this one genuinely is the open turn, so done must NOT be stamped.
+    dispatchDrift(frame({ state: 'completed', turn_id: 5, started_at: '2026-01-01T00:00:00Z', type: 'user' }));
+    expect(setTurnDoneMock).not.toHaveBeenCalled();
+  });
+
+  it('resolveFrameType falls back to the open panel\'s type only when its turn_id matches — a frame for a DIFFERENT turn is dropped rather than guessed', () => {
+    hooksState.panelThreadId = 5;
+    hooksState.panelType = 'user';
+    findTurnTypeMock.mockReturnValue(null); // nothing rendered for either turn yet
+
+    // No `type` on the frame, and its turn_id matches the open panel's — the
+    // panel's type is used to resolve it.
+    dispatchDrift(frame({ status: 'updated', turn_id: 5 }));
+    expect(threadMock).toHaveBeenCalledWith(5, 'user');
+
+    threadMock.mockClear();
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => { /* silence */ });
+
+    // No `type`, and this turn_id does NOT match the panel's — nothing can
+    // name its channel, so the frame is dropped rather than defaulted to
+    // the panel's (or any other) type.
+    dispatchDrift(frame({ status: 'updated', turn_id: 6 }));
+    expect(threadMock).not.toHaveBeenCalled();
+    expect(warnSpy).toHaveBeenCalled();
+
+    warnSpy.mockRestore();
+  });
+
   it('state=cancelled with a non-empty fetched block re-renders with force and clears working (version can shrink), then drains queues', async () => {
     threadMock.mockResolvedValue({
-      turn_id: 33, gist: null, preview: 'x', last_activity_at: null, working: false, duration_ms: 0,
+      turn_id: 33, gist: null, preview: 'x', last_activity_at: null, working: false, duration_ms: 0, type: 'user',
       messages: [{ id: '1', role: 'user', content: 'hi', timestamp: '2026-01-01 00:00:00', turn_id: 33 }],
     });
     dispatchDrift(frame({ state: 'cancelled', turn_id: 33, started_at: '2026-01-01T00:00:00Z', type: 'user' }));
@@ -228,7 +287,7 @@ describe('dispatchDrift — turn_execution frame', () => {
 
   it('state=cancelled with an empty fetched block removes the turn nodes, then drains queues', async () => {
     threadMock.mockResolvedValue({
-      turn_id: 34, gist: null, preview: '', last_activity_at: null, working: false, duration_ms: 0, messages: [],
+      turn_id: 34, gist: null, preview: '', last_activity_at: null, working: false, duration_ms: 0, messages: [], type: 'user',
     });
     dispatchDrift(frame({ state: 'cancelled', turn_id: 34, started_at: '2026-01-01T00:00:00Z', type: 'user' }));
     await new Promise((resolve) => setTimeout(resolve, 0));

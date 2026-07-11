@@ -55,6 +55,13 @@ type DisplayRow = MsgRow | LiveActRow | CollapsedGroupRow;
 
 const displayRows = computed<DisplayRow[]>(() => {
   const rows: DisplayRow[] = [];
+  // Pre-turn tools (memory, document) attach tool_calls to the USER row, but
+  // the trail must always read as "what happened before this reply" — so a
+  // non-assistant row's group is held back until the exchange's assistant row
+  // lands, then flushed just ahead of the assistant's own group. If the block
+  // ends without an assistant row (still working, or crashed mid-turn), any
+  // pending groups flush at the end so chips are never silently dropped.
+  let pending: CollapsedGroupRow[] = [];
 
   for (const message of props.block.messages) {
     // Spine renders only through settle0 — drop thread reply rows. The thread
@@ -63,16 +70,26 @@ const displayRows = computed<DisplayRow[]>(() => {
 
     rows.push({ kind: 'msg', message });
 
-    // Collapsed tool group immediately after WHATEVER row anchors the chips —
-    // user input row or assistant text row alike (the ratified feed vision).
+    if (message.role === 'assistant') {
+      rows.push(...pending);
+      pending = [];
+    }
+
     if (message.tool_calls?.length) {
-      rows.push({
+      const group: CollapsedGroupRow = {
         kind: 'collapsed-group',
         id: message.id,
         summaries: message.tool_calls,
-      });
+      };
+      if (message.role === 'assistant') {
+        rows.push(group);
+      } else {
+        pending.push(group);
+      }
     }
   }
+
+  rows.push(...pending);
 
   // Live trails: appended at the tail while the turn is working, but only when
   // this render is the authoritative live view of the turn (thread panel, or a

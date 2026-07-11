@@ -27,6 +27,16 @@ export function getTurnEl(
   return scope.querySelector<HTMLElement>(`[data-turn-id="${turnId}"][data-type="${type}"]`);
 }
 
+/** The type stamped on the first rendered copy of a turn, UNSCOPED by type —
+ *  deliberately, since resolving the type is exactly the point (a turn_id is
+ *  only unique per type, so scanning by type would require already knowing
+ *  the answer). Used to recover a WS frame's identity when the frame itself
+ *  omits `type` rather than guessing it. Null when no copy is rendered
+ *  anywhere yet. */
+export function findTurnType(turnId: number): string | null {
+  return document.querySelector<HTMLElement>(`[data-turn-id="${turnId}"]`)?.dataset.type ?? null;
+}
+
 /** Every rendered copy of a turn, across ALL surfaces — used by effects that
  *  must reach every visible copy of a turn (working/done flags, removal). */
 function getAllTurnEls(turnId: number, type: string): HTMLElement[] {
@@ -161,6 +171,27 @@ export function clearSurfaceContainer(container: HTMLElement): void {
   }
 }
 
+/** Resolve the surface container that will host the UPCOMING turn for a send
+ *  scope — the spine's own container for a new top-level send (`threadId`
+ *  null), or the specific non-spine surface currently accepting that turn_id
+ *  for a thread reply (the open thread panel). `getSurfaceContainer` above
+ *  resolves by surface id; this resolves by SCOPE instead, since callers here
+ *  (`utils/sendEcho.ts`) know only the scope, not a surface id.
+ *  Null when nothing currently claims the scope — the caller no-ops. */
+export function resolveScopeContainer(threadId: number | null, type: string): HTMLElement | null {
+  if (threadId == null) {
+    const spine = _surfaces.get(SPINE_SURFACE_ID);
+    return spine && spine.type === type ? spine.container : null;
+  }
+  for (const surface of _surfaces.values()) {
+    if (surface.id === SPINE_SURFACE_ID) continue;
+    if (surface.type !== type) continue;
+    if (surface.accepts && !surface.accepts(threadId)) continue;
+    return surface.container;
+  }
+  return null;
+}
+
 // ── D13 — version guard ──────────────────────────────────────────────────────
 
 export interface UpsertOptions {
@@ -202,7 +233,7 @@ export function upsertTurn(
     host.dataset.version = String(version);
     mount(host, component, block, type, extraProps);
     stampWorking(host, block, type);
-    notifyUpserted(block.turn_id);
+    notifyUpserted(block.turn_id, type);
     return host;
   }
 
@@ -211,7 +242,7 @@ export function upsertTurn(
   insertInOrder(container, host, block.turn_id);
   mount(host, component, block, type, extraProps);
   stampWorking(host, block, type);
-  notifyUpserted(block.turn_id);
+  notifyUpserted(block.turn_id, type);
   return host;
 }
 
@@ -238,6 +269,23 @@ function stampWorking(host: HTMLElement, block: ConversationTurnBlock, type: str
   }
 }
 
+/** Registered by `utils/sendEcho.ts`, lazily on its first real
+ *  use rather than at that module's own top level (this module's default
+ *  surface component, TurnView, transitively imports stores/session.ts,
+ *  which imports sendEcho.ts back — an eager top-level registration call
+ *  would run mid-cycle, before this file's own `let` below has executed).
+ *  Notified after every real-content upsert below so the transient send echo
+ *  can clear the moment the content it was standing in for actually lands.
+ *  Dependency injection rather than a static import: sendEcho.ts already
+ *  imports this module's surface registry (`resolveScopeContainer` above) to
+ *  resolve where to mount its echo, so a reverse import here would cycle —
+ *  same rationale as driftDispatcher's `registerSessionHooks`/`hooks()`. */
+type TurnLandedHook = (turnId: number, type: string, isNewTopLevelTurn: boolean) => void;
+let _turnLandedHook: TurnLandedHook | null = null;
+export function onTurnLanded(hook: TurnLandedHook): void {
+  _turnLandedHook = hook;
+}
+
 /**
  * Fan a block out to EVERY registered surface of its type whose `accepts`
  * passes (default: all). The dispatcher fetches a block ONCE per signal and
@@ -260,11 +308,28 @@ export function upsertTurnToSurfaces(
     block.messages.some((m) => m.tool_calls?.length),
   );
 
+  // Captured BEFORE the loop below mutates the DOM: true only when
+  // this block's turn_id has never rendered on the spine before (a genuinely
+  // NEW top-level send, not a thread reply's refetch of an already-known
+  // turn — see onTurnLanded's doc comment above).
+  const spine = _surfaces.get(SPINE_SURFACE_ID);
+  const isNewTopLevelTurn =
+    spine != null && spine.type === type && !getTurnEl(block.turn_id, type, spine.container);
+
+  let applied = false;
   for (const surface of _surfaces.values()) {
     if (surface.type !== type) continue;
     if (surface.accepts && !surface.accepts(block.turn_id)) continue;
-    upsertTurn(block, type, surface.container, surface.component, surface.props, options);
+    if (upsertTurn(block, type, surface.container, surface.component, surface.props, options)) {
+      applied = true;
+    }
   }
+
+  // Only signal a landing that actually rendered. A version-rejected no-op
+  // (every surface dropped a strictly-stale block) wrote nothing, so it must
+  // not fire the land hook that clears a live send echo — that would blank the
+  // echoed text for content the DOM never received.
+  if (applied) _turnLandedHook?.(block.turn_id, type, isNewTopLevelTurn);
 }
 
 function mount(
@@ -279,8 +344,8 @@ function mount(
   render(vnode, host);
 }
 
-function notifyUpserted(turnId: number): void {
-  document.dispatchEvent(new CustomEvent('turn-upserted', { detail: { turnId } }));
+function notifyUpserted(turnId: number, type: string): void {
+  document.dispatchEvent(new CustomEvent('turn-upserted', { detail: { turnId, type } }));
 }
 
 /** Find the right slot in `container` so children stay sorted by turn_id. */

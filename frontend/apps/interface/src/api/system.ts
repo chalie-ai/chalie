@@ -6,7 +6,6 @@ export interface AuthStatus {
   has_providers: boolean;
   has_session: boolean;
   vault_state: 'unlocked' | 'locked' | 'uninitialized';
-  has_vision_provider: boolean;
 }
 
 /** Response from GET /system/context-usage. */

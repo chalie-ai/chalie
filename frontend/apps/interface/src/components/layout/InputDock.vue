@@ -19,17 +19,15 @@ import { storeToRefs } from 'pinia';
 import { ConfigType } from '@chalie/shared';
 import { readDomContext } from '../../utils/domContext';
 import { on } from '../../composables/useEventBus';
-import { useDockBusy } from '../../composables/useDockBusy';
 import { useSessionStore } from '../../stores/session';
 import { useVoiceStore } from '../../stores/voice';
 import { useAttachmentsStore } from '../../stores/attachments';
 import { useContextUsageStore } from '../../stores/contextUsage';
 import { useAmbientSensor } from '../../composables/useAmbientSensor';
-import { system } from '../../api/system';
 import { lsGet, lsSet } from '../../utils/storage';
 import ImageAttachStrip from '../upload/ImageAttachStrip.vue';
 import QueuedMessages from '../conversation/QueuedMessages.vue';
-import { FileText, Image, Plus, Mic, Send, X, AlertTriangle, LoaderCircle } from '@lucide/vue';
+import { Plus, Mic, Send, X, AlertTriangle } from '@lucide/vue';
 
 /**
  * `turnId` is the only thing that distinguishes a thread reply from a main-dock
@@ -59,17 +57,15 @@ const ambient = useAmbientSensor();
 const { available: voiceAvailable, recorderState } = storeToRefs(voiceStore);
 const { level, levelLabel, usageDisplay } = storeToRefs(contextUsage);
 
-// D3: this dock's own busy state, scoped to its own target (null = main
-// spine, else the thread it replies in) — replaces the old GLOBAL
-// `session.isSending`, which incorrectly drove every dock's spinner off the
-// main spine alone, even inside a thread reply dock.
-const sending = useDockBusy(() => props.turnId, () => props.type);
-
 const THINKING_ITEMS = [
   { level: 'auto', label: 'Auto' },
   { level: 'medium', label: 'Medium' },
   { level: 'high', label: 'High' },
 ] as const;
+
+/** Union of every attachable kind — one field, images and documents alike. */
+const ATTACH_ACCEPT =
+  'image/jpeg,image/png,image/webp,image/gif,.pdf,.docx,.pptx,.html,.htm,.txt,.md,.csv,.json,.xml';
 
 const textareaRef = ref<HTMLTextAreaElement | null>(null);
 const text = ref('');
@@ -81,13 +77,7 @@ const stored = lsGet(DRAFT_KEY);
 if (stored) text.value = stored;
 watch(text, (v) => lsSet(DRAFT_KEY, v));
 
-const attachMenuOpen = ref(false);
-const attachBtnRef = ref<HTMLButtonElement | null>(null);
-const attachMenuRef = ref<HTMLDivElement | null>(null);
-const imageInputRef = ref<HTMLInputElement | null>(null);
-const docInputRef = ref<HTMLInputElement | null>(null);
-/** Hidden when no vision-capable provider is configured. */
-const hasVisionProvider = ref(true);
+const fileInputRef = ref<HTMLInputElement | null>(null);
 
 const thinkingMenuOpen = ref(false);
 const thinkingWrapRef = ref<HTMLDivElement | null>(null);
@@ -105,13 +95,8 @@ async function handleSend(): Promise<void> {
   if (!trimmed && files.length === 0) return;
 
   // Read the dock's DOM contract at click time — the ref can go null if the
-  // dock unmounts across an await, and the busy check must target the same
-  // lane the send dispatches to.
+  // dock unmounts across an await, and the send must target the same lane.
   const { turnId, type } = readDomContext(footerRef.value);
-
-  // Clear the image strip only when this actually dispatches a turn. When the
-  // lane is busy the send is queued (text-only) and the attachments stay pending.
-  const wasBusy = session.isSurfaceBusy(turnId, type);
 
   // Clear textarea before awaiting so the UI feels instant.
   text.value = '';
@@ -119,7 +104,12 @@ async function handleSend(): Promise<void> {
 
   await session.sendMessage(trimmed, files, turnId, type);
 
-  if (!wasBusy) attachments.clear();
+  // sendMessage takes ownership of `files` in BOTH branches — a direct dispatch
+  // uploads them; a busy send queues the whole {text, files} (queue.ts stores
+  // and replays them on drain). Either way the strip must clear: leaving files
+  // pending after a queued send re-attaches them to the user's NEXT message,
+  // a duplicate upload.
+  attachments.clear();
 
   textareaRef.value?.focus();
 }
@@ -128,17 +118,11 @@ async function handleSend(): Promise<void> {
 // so there is no keydown handler. Cancelling an in-flight turn is the act-trail's
 // stop/undo button, not the dock.
 
-function chooseDocument(): void {
-  attachMenuOpen.value = false;
-  docInputRef.value?.click();
+function openFilePicker(): void {
+  fileInputRef.value?.click();
 }
 
-function chooseImage(): void {
-  attachMenuOpen.value = false;
-  imageInputRef.value?.click();
-}
-
-/** Shared by both pickers — addFiles dispatches on type. */
+/** addFiles dispatches on type, so one input covers images and documents alike. */
 function onFileInputChange(e: Event): void {
   const input = e.target as HTMLInputElement;
   if (input.files?.length) void attachments.addFiles(input.files);
@@ -152,20 +136,9 @@ function selectLevel(next: (typeof THINKING_ITEMS)[number]['level']): void {
 
 function onDocumentClick(e: MouseEvent): void {
   const target = e.target as Node;
-  if (
-    attachMenuOpen.value &&
-    !attachMenuRef.value?.contains(target) &&
-    !attachBtnRef.value?.contains(target)
-  ) {
-    attachMenuOpen.value = false;
-  }
   if (thinkingMenuOpen.value && !thinkingWrapRef.value?.contains(target)) {
     thinkingMenuOpen.value = false;
   }
-}
-
-function onWindowScroll(): void {
-  if (attachMenuOpen.value) attachMenuOpen.value = false;
 }
 
 // Raw File objects are structurally non-persistable, so the only loss the
@@ -233,7 +206,6 @@ onMounted(() => {
   document.addEventListener('chalie:edit-queued', onEditQueued);
   _unsubVoiceTranscript = on('chalie:voice-transcript', onVoiceTranscript);
   document.addEventListener('click', onDocumentClick);
-  globalThis.addEventListener('scroll', onWindowScroll, { passive: true });
   globalThis.addEventListener('beforeunload', onBeforeUnload);
 
   // Behavioral signals: typing cadence feeds the ambient snapshot.
@@ -241,16 +213,6 @@ onMounted(() => {
 
   void contextUsage.loadLevel();
   void contextUsage.refresh();
-
-  // Vision-provider gating for the image attach option.
-  system
-    .authStatus()
-    .then((s) => {
-      hasVisionProvider.value = s.has_vision_provider;
-    })
-    .catch(() => {
-      /* leave the image option visible on error */
-    });
 });
 
 onBeforeUnmount(() => {
@@ -258,7 +220,6 @@ onBeforeUnmount(() => {
   document.removeEventListener('chalie:edit-queued', onEditQueued);
   _unsubVoiceTranscript?.();
   document.removeEventListener('click', onDocumentClick);
-  globalThis.removeEventListener('scroll', onWindowScroll);
   globalThis.removeEventListener('beforeunload', onBeforeUnload);
   // Hand focus routing back to the footer when an inline dock collapses.
   if (activeDockKey.value === dockKey) activeDockKey.value = 'main';
@@ -296,30 +257,6 @@ onBeforeUnmount(() => {
          active dock so the footer and an open thread don't show duplicates. -->
     <ImageAttachStrip v-if="isActiveDock" />
 
-    <div
-      id="attachMenu"
-      ref="attachMenuRef"
-      class="attach-menu"
-      :class="{ hidden: !attachMenuOpen }"
-    >
-      <div class="attach-menu__inner">
-        <button class="attach-menu__item" type="button" @click="chooseDocument">
-          <FileText :size="16" />
-          <span>Attach Document</span>
-        </button>
-        <button
-          v-if="hasVisionProvider"
-          id="attachImageBtn"
-          class="attach-menu__item"
-          type="button"
-          @click="chooseImage"
-        >
-          <Image :size="16" />
-          <span>Take Photo / Pick Image</span>
-        </button>
-      </div>
-    </div>
-
     <!-- Pending (queued) sends for this dock's scope, floating above the composer. -->
     <QueuedMessages :thread-id="turnId" />
 
@@ -327,11 +264,9 @@ onBeforeUnmount(() => {
       <div class="input-dock__inner">
         <button
           id="attachBtn"
-          ref="attachBtnRef"
           class="btn-action btn-action--attach"
-          :class="{ active: attachMenuOpen }"
           aria-label="Attach"
-          @click.stop="attachMenuOpen = !attachMenuOpen"
+          @click="openFilePicker"
         >
           <Plus :size="20" />
         </button>
@@ -361,12 +296,11 @@ onBeforeUnmount(() => {
 
         <button
           class="btn-action btn-action--send"
-          :aria-label="sending ? 'Sending...' : 'Send message'"
-          :disabled="!canSend || sending"
+          aria-label="Send message"
+          :disabled="!canSend"
           @click="handleSend()"
         >
-          <LoaderCircle v-if="sending" class="btn-action--send__spinner" :size="20" />
-          <Send v-else :size="20" />
+          <Send :size="20" />
         </button>
       </div>
     </div>
@@ -415,22 +349,11 @@ onBeforeUnmount(() => {
     <!-- No capture attr: lets mobile show the standard OS picker (library +
          take-photo), WhatsApp-style. -->
     <input
-      id="imageFileInput"
-      ref="imageInputRef"
+      id="attachFileInput"
+      ref="fileInputRef"
       type="file"
-      accept="image/jpeg,image/png,image/webp,image/gif"
-      aria-label="Attach image"
-      multiple
-      hidden
-      @change="onFileInputChange"
-    />
-
-    <input
-      id="docFileInput"
-      ref="docInputRef"
-      type="file"
-      accept=".pdf,.docx,.pptx,.html,.htm,.txt,.md,.csv,.json,.xml"
-      aria-label="Attach document"
+      :accept="ATTACH_ACCEPT"
+      aria-label="Attach file"
       multiple
       hidden
       @change="onFileInputChange"

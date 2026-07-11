@@ -18,6 +18,7 @@ function block(messages: ConversationMessage[]): ConversationTurnBlock {
     working: false,
     duration_ms: 0,
     messages,
+    type: 'user',
   };
 }
 

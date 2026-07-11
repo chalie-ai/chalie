@@ -60,6 +60,12 @@ export interface ConversationThread {
   preview: string;
   /** Per-thread one-sentence gist (from thread_gist), null when not yet generated. */
   gist?: string | null;
+  /**
+   * The ConfigType identity (`user`/`scheduled`/`discovery`) this summary was
+   * resolved under. turn_id is only unique PER TYPE, so a caller that opens a
+   * thread from this list must carry this forward rather than assume `user`.
+   */
+  type: string;
 }
 
 /**
@@ -81,6 +87,14 @@ export interface ConversationTurnBlock {
   /** Row-span duration in ms (0 for a single-row turn). */
   duration_ms: number;
   messages: ConversationMessage[];
+  /**
+   * The ConfigType identity (`user`/`scheduled`/`discovery`) this block was
+   * resolved under — turn_id is only unique PER TYPE, so a refetch must trust
+   * this over whatever type it requested with. Required on the backend DTO,
+   * so required here: a missing stamp is a contract violation, not a case to
+   * fall back from.
+   */
+  type: string;
 }
 
 export const conversation = {

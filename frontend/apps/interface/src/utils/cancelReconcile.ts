@@ -58,10 +58,16 @@ export function reconcileCancelledTurn(turnId: number, type: string): Promise<vo
 async function _reconcile(turnId: number, type: string): Promise<void> {
   try {
     const block = await convoApi.thread(turnId, type);
+    if (block.type !== type) {
+      console.warn(
+        '[cancelReconcile] refetched turn', turnId, 'came back as type', block.type,
+        'but was requested as', type, '— trusting the fetched type',
+      );
+    }
     if (block.messages.length) {
-      upsertTurnToSurfaces(block, type, { force: true });
+      upsertTurnToSurfaces(block, block.type, { force: true });
     } else {
-      removeTurn(turnId, type);
+      removeTurn(turnId, block.type);
     }
   } catch {
     // Best-effort — leave whatever is rendered; a later refetch (panel open,

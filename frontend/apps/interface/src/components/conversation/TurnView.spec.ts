@@ -29,6 +29,7 @@ import { createPinia, setActivePinia } from 'pinia';
 import { ConfigType } from '@chalie/shared';
 import TurnView from './TurnView.vue';
 import ActCycle from './ActCycle.vue';
+import ActCycleGroup from './ActCycleGroup.vue';
 import type { ConversationMessage, ConversationTurnBlock } from '../../api/conversation';
 
 function msg(
@@ -37,6 +38,7 @@ function msg(
   content: string,
   turnId: number,
   threadMessage = false,
+  toolCalls?: ConversationMessage['tool_calls'],
 ): ConversationMessage {
   return {
     id,
@@ -45,6 +47,7 @@ function msg(
     timestamp: '2026-01-01 00:00:00',
     turn_id: turnId,
     ...(threadMessage ? { thread_message: true } : {}),
+    ...(toolCalls ? { tool_calls: toolCalls } : {}),
   };
 }
 
@@ -57,6 +60,7 @@ function block(turnId: number, messages: ConversationMessage[]): ConversationTur
     working: true,
     duration_ms: 0,
     messages,
+    type: 'user',
   };
 }
 
@@ -129,5 +133,82 @@ describe('live act-trail visibility — working turn in the thread panel', () =>
     expect(wrapper.text()).toContain('settle0 panel reply');
     // fullThread renders the WHOLE thread, continuations included.
     expect(wrapper.text()).toContain('panel thread continuation');
+  });
+});
+
+describe('collapsed tool-call trail placement', () => {
+  const toolCalls: NonNullable<ConversationMessage['tool_calls']> = [
+    { tool_name: 'memory_recall', summary: 'recalled a memory', state: 'done', ended_at: null },
+  ];
+
+  it('renders a trail anchored on the USER row after the assistant reply, not above it', () => {
+    const turnId = 201;
+    const b = block(turnId, [
+      msg('2010', 'user', 'user question with pre-turn tools', turnId, false, toolCalls),
+      msg('2011', 'assistant', 'assistant answer', turnId),
+    ]);
+    b.working = false;
+
+    const wrapper = mount(TurnView, {
+      props: { block: b, type: ConfigType.USER, fullThread: false },
+    });
+
+    const rows = wrapper.findAll('.msg-row');
+    const kinds = rows.map((r) =>
+      r.findComponent(ActCycleGroup).exists()
+        ? 'group'
+        : r.text().includes('assistant answer')
+          ? 'assistant'
+          : r.text().includes('user question')
+            ? 'user'
+            : 'other',
+    );
+
+    expect(kinds).toEqual(['user', 'assistant', 'group']);
+  });
+
+  it('still renders a trail anchored on the ASSISTANT row after that assistant message', () => {
+    const turnId = 202;
+    const b = block(turnId, [
+      msg('2020', 'user', 'plain user question', turnId),
+      msg('2021', 'assistant', 'assistant answer with tools', turnId, false, toolCalls),
+    ]);
+    b.working = false;
+
+    const wrapper = mount(TurnView, {
+      props: { block: b, type: ConfigType.USER, fullThread: false },
+    });
+
+    const rows = wrapper.findAll('.msg-row');
+    const kinds = rows.map((r) =>
+      r.findComponent(ActCycleGroup).exists()
+        ? 'group'
+        : r.text().includes('assistant answer')
+          ? 'assistant'
+          : r.text().includes('plain user question')
+            ? 'user'
+            : 'other',
+    );
+
+    expect(kinds).toEqual(['user', 'assistant', 'group']);
+  });
+
+  it('flushes a pending trail at the end when the block has no assistant row yet', () => {
+    const turnId = 203;
+    const b = block(turnId, [
+      msg('2030', 'user', 'user question, still working', turnId, false, toolCalls),
+    ]);
+    b.working = true;
+
+    const wrapper = mount(TurnView, {
+      props: { block: b, type: ConfigType.USER, fullThread: false },
+    });
+
+    const rows = wrapper.findAll('.msg-row');
+    const userIdx = rows.findIndex((r) => r.text().includes('user question, still working'));
+    const groupIdx = rows.findIndex((r) => r.findComponent(ActCycleGroup).exists());
+
+    expect(userIdx).toBeGreaterThanOrEqual(0);
+    expect(groupIdx).toBeGreaterThan(userIdx);
   });
 });

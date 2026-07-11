@@ -54,7 +54,7 @@ function onKey(e: KeyboardEvent): void {
 
 function pick(item: ConversationThread): void {
   if (item.turn_id === null) return;
-  session.openThreadPanel(item.turn_id);
+  session.openThreadPanel(item.turn_id, item.type);
   session.closeSearch();
 }
 </script>

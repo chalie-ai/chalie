@@ -20,6 +20,8 @@
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createPinia, setActivePinia } from 'pinia';
+import { h } from 'vue';
+import type { Component } from 'vue';
 
 // ── The WS/network boundary — the only thing this spec mocks. `getWebSocket`
 // captures whatever onConnect/onDisconnect callbacks `session.init()`
@@ -88,9 +90,24 @@ function stubBlock(turnId: number, working: boolean): unknown {
   };
 }
 
-/** Fresh module graph per test — session, turnDom, and queue all share the
- *  SAME instances within one test (imported in the same epoch, before the
- *  next resetModules() call), but never leak into the next test. */
+// A minimal render-function stub standing in for a turn's real render
+// component (same pattern as turnDom.spec.ts/sendEcho.spec.ts) — renders its
+// identity as data-attributes so a settled turn's content landing in the DOM
+// is directly observable, not just inferred from a mock call.
+const StubComponent: Component = {
+  props: ['block', 'type'],
+  render(this: { block: { turn_id: number }; type: string }) {
+    return h(
+      'div',
+      { 'data-turn-id': this.block.turn_id, 'data-type': this.type },
+      `stub-${this.block.turn_id}`,
+    );
+  },
+};
+
+/** Fresh module graph per test — session, turnDom, queue, and sendEcho all
+ *  share the SAME instances within one test (imported in the same epoch,
+ *  before the next resetModules() call), but never leak into the next test. */
 async function freshSession() {
   vi.resetModules();
   setActivePinia(createPinia());
@@ -98,11 +115,13 @@ async function freshSession() {
   const { threadPhase } = await import('../utils/threadActivity');
   const { useSessionStore } = await import('./session');
   const { useQueueStore } = await import('./queue');
+  const sendEcho = await import('../utils/sendEcho');
   return {
     session: useSessionStore(),
     queue: useQueueStore(),
     turnDom,
     threadPhase,
+    sendEcho,
   };
 }
 
@@ -380,5 +399,41 @@ describe('reconnect reconcile', () => {
     await session._reconcileWorking();
 
     expect(session._offlineWorking.has('user:9')).toBe(true);
+  });
+
+  it('the settled branch renders the turn\'s real content into the spine surface AND clears a send echo stranded by the outage', async () => {
+    const { session, turnDom, sendEcho } = await freshSession();
+    const spineContainer = document.body.appendChild(document.createElement('div'));
+    turnDom.registerSurface({
+      id: turnDom.SPINE_SURFACE_ID,
+      type: ConfigType.USER,
+      container: spineContainer,
+      component: StubComponent,
+    });
+
+    // A send echo was standing in for turn 21's content when the WS dropped
+    // mid-turn — the outage swallowed its updated/completed frames (no
+    // replay), so nothing else will EVER upsert this turn or clear the echo
+    // except this reconcile.
+    sendEcho.mountSendEcho('typed right before the drop', null, ConfigType.USER);
+    expect(spineContainer.querySelector('[data-send-echo]')).not.toBeNull();
+
+    session._offlineWorking.add(`${ConfigType.USER}:21`);
+    threadMock.mockResolvedValue({
+      turn_id: 21, gist: null, preview: 'reply', last_activity_at: null,
+      working: false, duration_ms: 0, type: ConfigType.USER,
+      messages: [{ id: '210', role: 'assistant', content: 'the real reply', timestamp: '2026-01-01 00:00:00', turn_id: 21 }],
+    });
+
+    await session._reconcileWorking();
+
+    // The real content actually rendered — without this, a turn whose
+    // frames were lost during the outage would never appear on reconnect.
+    expect(turnDom.getTurnEl(21, ConfigType.USER, spineContainer)).not.toBeNull();
+    // And the stranded echo is gone — the land hook fired as part of that
+    // same upsert, exactly as it would for a live 'updated' frame.
+    expect(spineContainer.querySelector('[data-send-echo]')).toBeNull();
+
+    spineContainer.remove();
   });
 });

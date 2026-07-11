@@ -35,6 +35,10 @@ export function isThreadActive(lastActivityAt: string | null): boolean {
  *  now (`working`, pink) or has settled unseen (`done`, blue). */
 export interface ThreadActivityItem {
   turn_id: number;
+  /** The ConfigType identity this item was scoped under — turn_id is only
+   *  unique PER TYPE, so a caller opening this item's thread must carry this
+   *  forward rather than assume `user`. */
+  type: string;
   label: string;
   snippet: string;
   kind: 'working' | 'done';
@@ -71,6 +75,7 @@ export function deriveThreadActivity(type: string = ConfigType.USER): ThreadActi
     rows.push({
       item: {
         turn_id: turnId,
+        type,
         label: gist || preview,
         snippet: preview,
         kind: working ? 'working' : 'done',

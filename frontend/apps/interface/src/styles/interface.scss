@@ -586,14 +586,6 @@ body.speaker-user #ambientBloom {
   cursor: not-allowed;
 }
 
-.btn-action--send__spinner {
-  animation: spin 800ms linear infinite;
-}
-
-@keyframes spin {
-  to { transform: rotate(360deg); }
-}
-
 .btn-action--attach {
   background: transparent;
   color: var(--text-secondary);
@@ -601,10 +593,6 @@ body.speaker-user #ambientBloom {
 }
 
 .btn-action--attach:hover  { color: var(--accent-primary); }
-.btn-action--attach.active {
-  color: var(--accent-primary);
-  transform: rotate(45deg);
-}
 
 .btn-icon {
   background: none;
@@ -621,51 +609,6 @@ body.speaker-user #ambientBloom {
 
 .btn-icon:hover  { color: var(--text-primary); }
 .btn-icon--small { padding: var(--space-xs); }
-
-.attach-menu {
-  max-width: 680px;
-  margin: 0 auto;
-  padding-bottom: var(--space-xs);
-  opacity: 0;
-  transform: translateY(8px);
-  transition: opacity 220ms ease, transform 220ms ease;
-  pointer-events: none;
-}
-
-.attach-menu:not(.hidden) {
-  opacity: 1;
-  transform: translateY(0);
-  pointer-events: auto;
-}
-
-.attach-menu__inner {
-  background: color-mix(in oklab, var(--text) 5%, transparent);
-  border: 1px solid color-mix(in oklab, var(--text) 8%, transparent);
-  border-radius: var(--radius-md);
-  backdrop-filter: blur(20px);
-  -webkit-backdrop-filter: blur(20px);
-  padding: var(--space-xs);
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-
-.attach-menu__item {
-  display: flex;
-  align-items: center;
-  gap: var(--space-sm);
-  padding: var(--space-sm) var(--space-md);
-  border: none;
-  background: transparent;
-  color: var(--text-primary);
-  font-size: var(--font-size-sm);
-  border-radius: var(--radius-sm);
-  cursor: pointer;
-  transition: background 220ms ease;
-}
-
-.attach-menu__item:hover { background: color-mix(in oklab, var(--violet) 8%, transparent); }
-.attach-menu__item svg   { color: var(--text-secondary); flex-shrink: 0; }
 
 .dock-controls {
   max-width: var(--dock-width);

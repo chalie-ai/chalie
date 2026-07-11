@@ -5,9 +5,17 @@
       <span class="voice-player__spinner" aria-label="Loading audio…" />
     </div>
 
-    <p v-if="errorMsg" class="voice-player__error">{{ errorMsg }}</p>
+    <p
+      v-if="errorMsg"
+      class="voice-player__error"
+      role="button"
+      tabindex="0"
+      title="Dismiss"
+      @click="_close"
+      @keydown.enter="_close"
+    >{{ errorMsg }}</p>
 
-    <div v-show="uiState !== 'loading'" class="voice-player__controls">
+    <div v-show="uiState !== 'loading' && !errorMsg" class="voice-player__controls">
       <button
         ref="playBtnEl"
         class="voice-player__btn voice-player__btn--play"
@@ -476,6 +484,7 @@ function _unbindKeyboard(): void {
   font-size: 0.8125rem;
   margin: 0;
   max-width: 22rem;
+  cursor: pointer;
 }
 
 .voice-player__controls {

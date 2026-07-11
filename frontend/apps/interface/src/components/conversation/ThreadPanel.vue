@@ -56,8 +56,16 @@ async function _openTurn(turnId: number, type: string): Promise<void> {
   try {
     const block = await convoApi.thread(turnId, type);
     if (session.panelThreadId !== turnId || session.panelType !== type) return; // superseded
+    // turn_id is only unique PER TYPE — trust the block's own authoritative
+    // type over whatever this fetch was requested with, loudly on disagreement.
+    if (block.type !== type) {
+      console.warn(
+        '[ThreadPanel] refetched turn', turnId, 'came back as type', block.type,
+        'but was requested as', type, '— trusting the fetched type',
+      );
+    }
     heading.value = block.gist || block.preview || 'Thread';
-    upsertTurnToSurfaces(block, type);
+    upsertTurnToSurfaces(block, block.type);
     hydrated.value = true;
   } catch {
     if (session.panelThreadId !== turnId || session.panelType !== type) return; // superseded
@@ -86,8 +94,8 @@ watch(
 // DOM write — replaces the old watch on the buffer's block).
 function onTurnUpserted(e: Event): void {
   if (!open.value) return;
-  const turnId = (e as CustomEvent<{ turnId: number }>).detail.turnId;
-  if (turnId !== session.panelThreadId) return;
+  const detail = (e as CustomEvent<{ turnId: number; type: string }>).detail;
+  if (detail.turnId !== session.panelThreadId || detail.type !== session.panelType) return;
   nextTick(() => {
     const el = bodyRef.value;
     if (el) el.scrollTop = el.scrollHeight;
@@ -148,7 +156,7 @@ onBeforeUnmount(() => {
           <circle cx="18" cy="18" r="3" />
           <path d="M6 9c0 6 6 3 6 9" />
         </svg>
-        <span class="thread-panel__title">Thread: {{ heading }}</span>
+        <span class="thread-panel__title">{{ heading }}</span>
       </header>
 
       <div ref="bodyRef" class="thread-panel__body">
@@ -179,6 +187,9 @@ onBeforeUnmount(() => {
   display: flex;
   flex-direction: column;
   background: var(--scrim-panel-main);
+  // Published for .user-text--clamped::after (conversation.scss) — rows in
+  // this panel sit on the translucent scrim, not the page background.
+  --row-fade-bg: var(--scrim-panel-main);
   backdrop-filter: blur(10px);
   -webkit-backdrop-filter: blur(10px);
   border-left: 1px solid var(--border);

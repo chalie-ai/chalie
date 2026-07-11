@@ -30,6 +30,7 @@ import { dispatchDrift, registerSessionHooks } from '../utils/driftDispatcher';
 import { reconcileCancelledTurn } from '../utils/cancelReconcile';
 import { clearLiveTurn } from '../utils/liveActTrail';
 import { blockSpeechText } from '../utils/speech';
+import { clearSendEcho, mountSendEcho } from '../utils/sendEcho';
 import {
   isSurfaceWorking,
   isTurnWorking,
@@ -37,6 +38,7 @@ import {
   setTurnDone,
   setTurnWorking,
   SPINE_SURFACE_ID,
+  upsertTurnToSurfaces,
 } from '../utils/turnDom';
 import { laneKey, useQueueStore } from './queue';
 import { useNotificationsStore } from './notifications';
@@ -138,6 +140,7 @@ export const useSessionStore = defineStore('session', {
       registerSessionHooks({
         releasePendingSend: (turnId, type) => this._releasePendingSend(turnId, type),
         getPanelThreadId: () => this.panelThreadId,
+        getPanelType: () => this.panelType,
         setErrorMessage: (message) => { this.errorMessage = message; },
         finishTurn: (turnId, type) => this._finishTurn(turnId, type),
         drainQueues: () => this._drainQueues(),
@@ -258,7 +261,17 @@ export const useSessionStore = defineStore('session', {
         if (block.working) {
           setTurnWorking(turnId, type, true);
         } else {
-          if (turnId !== this.panelThreadId) setTurnDone(turnId, type, true);
+          // Render the settled turn's real content. The outage swallowed this
+          // turn's `updated`/`completed` frames (fire-and-forget, no replay),
+          // so nothing else ever upserts it — without this the user + reply
+          // rows never appear, and any send echo mounted for this scope has no
+          // terminal clear path and ghosts forever (the land hook fired here
+          // clears it).
+          upsertTurnToSurfaces(block, type);
+          // D16 gate is the FULL (turn_id, type) pair — turn_id alone is only
+          // unique per channel, so a same-id turn in a different channel must
+          // not be treated as the one open in the panel.
+          if (turnId !== this.panelThreadId || type !== this.panelType) setTurnDone(turnId, type, true);
           void this._finishTurn(turnId, type);
         }
       }
@@ -286,10 +299,15 @@ export const useSessionStore = defineStore('session', {
     },
 
     /**
-     * Send a user turn. Signal-only: the `turn_execution` working refetch renders
-     * the user bubble from the API — no optimistic echo. Everything — the
-     * spinner, the rows, the reply — flows back through the `updated` broadcast
-     * signal and the `turn_execution` lifecycle frame (→ dispatchDrift → refetch).
+     * Send a user turn. The REAL user bubble still renders only from the API —
+     * the `turn_execution` working refetch and the `updated` broadcast signal
+     * remain the sole path for actual turn content (no optimistic write to any
+     * store). The immediate-dispatch branch below additionally mounts
+     * a transient, DOM-only echo of the submitted text (`utils/sendEcho.ts`) so
+     * the first paint after submit is never empty — cleared the moment real
+     * content lands, the dispatch fails (`_onSendFailure`), or the turn is
+     * interrupted (`requestStop`). The busy branch already gets a visible chip
+     * from the queue store, so it gets no echo here.
      */
     async sendMessage(
       text: string,
@@ -310,8 +328,9 @@ export const useSessionStore = defineStore('session', {
       this._pendingSends.add(key);
       let heldForFrame = false;
       try {
+        mountSendEcho(body, threadId, type);
         const result = await getWebSocket().send(
-          body, (m) => this._onSendFailure(m), files, threadId, type,
+          body, (m) => this._onSendFailure(m, threadId, type), files, threadId, type,
         );
         // POST resolved with the allocated turn_id but execution runs in the
         // background — keep the busy hold until the dispatcher observes the
@@ -339,8 +358,10 @@ export const useSessionStore = defineStore('session', {
     },
 
     /** A local send failure (offline / POST rejected) — no signal will ever
-     *  arrive for a turn that never got created; just surface the message. */
-    _onSendFailure(message: string): void {
+     *  arrive for a turn that never got created; clear its echo
+     *  and surface the message. */
+    _onSendFailure(message: string, threadId: number | null, type: string): void {
+      clearSendEcho(threadId, type);
       this.errorMessage = message;
     },
 
@@ -429,6 +450,10 @@ export const useSessionStore = defineStore('session', {
       document.dispatchEvent(
         new CustomEvent('session:turn-interrupted', { detail: { text, turnId: dockScope } }),
       );
+      // A cancelled/failed dispatch must never leave a ghost echo
+      // bubble behind; dockScope is this dock's own scope identity, the same
+      // one `sendMessage` mounted the echo under.
+      clearSendEcho(dockScope, type);
 
       await this._postInterrupt(stopId, type);
 
@@ -493,9 +518,11 @@ export const useSessionStore = defineStore('session', {
     /**
      * Open a thread in the slide-over panel. ThreadPanel.vue owns the actual
      * fetch + surface upsert (it watches panelThreadId/panelType) — this just
-     * sets identity and clears the standing "done" marker (D16).
+     * sets identity and clears the standing "done" marker (D16). `type` has
+     * no default: turn_id is only unique PER TYPE, so every caller must name
+     * its channel explicitly rather than risk an implicit `user` guess.
      */
-    openThreadPanel(turnId: number, type: string = ConfigType.USER): void {
+    openThreadPanel(turnId: number, type: string): void {
       this.panelThreadId = turnId;
       this.panelType = type;
       setTurnDone(turnId, type, false);

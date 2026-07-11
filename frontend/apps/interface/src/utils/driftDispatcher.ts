@@ -18,13 +18,12 @@
  * `init()` — dependency injection instead of a static import, breaking the
  * cycle in both directions.
  */
-import { ConfigType } from '@chalie/shared';
 import type { WsPushEvent, WsTurnExecutionEvent } from '@chalie/shared';
 import { conversation as convoApi } from '../api/conversation';
 import { showToast } from './toast';
 import { clearLiveTurn, finishLiveTool, startLiveTool } from './liveActTrail';
 import { reconcileCancelledTurn } from './cancelReconcile';
-import { setTurnDone, setTurnWorking, upsertTurnToSurfaces } from './turnDom';
+import { findTurnType, setTurnDone, setTurnWorking, upsertTurnToSurfaces } from './turnDom';
 import { useNotificationsStore } from '../stores/notifications';
 import type { TipState, UpdateState } from '../stores/notifications';
 import { useTasksStore } from '../stores/tasks';
@@ -38,6 +37,12 @@ export interface SessionHooks {
   releasePendingSend(turnId: number, type: string): void;
   /** turn_id currently open in the slide-over panel, or null (D16 gate). */
   getPanelThreadId(): number | null;
+  /** ConfigType of the panel identified by `getPanelThreadId` — paired with it
+   *  so a settle/refetch can match the FULL (turn_id, type) identity rather
+   *  than turn_id alone (turn_id is only unique PER TYPE). Required: leaving it
+   *  off would silently collapse the D16 gate back to a turn_id-only match, so
+   *  every hooks provider — production and test doubles alike — must supply it. */
+  getPanelType(): string;
   /** Surface a turn-level provider/quota error as a closable toast. */
   setErrorMessage(message: string): void;
   /** Settle bookkeeping for a completed/crashed turn (queue drain, ambient
@@ -59,6 +64,35 @@ function hooks(): SessionHooks {
     throw new Error('driftDispatcher: session hooks not registered — session.init() must run first');
   }
   return _hooks;
+}
+
+/**
+ * Resolve a WS push frame's ConfigType identity when the frame itself omits
+ * it — the `type` field on `WsTurnExecutionEvent`/`WsToolCallEvent` is
+ * nullable, and a scheduler tick is exactly the kind of frame that can arrive
+ * this way. turn_id is only unique PER TYPE, so a missing type can NEVER be
+ * defaulted to `user` — that is precisely how a scheduled turn's tick would
+ * refetch and paint over a same-numbered user turn. Resolution order: (1)
+ * the already-rendered node's own stamped type (authoritative once a turn
+ * has painted); (2) the open panel's type, when this frame's turn IS the
+ * panel's turn. Returns null when neither resolves — the caller must drop
+ * the frame rather than guess.
+ */
+function resolveFrameType(turnId: number, rawType: string | null | undefined): string | null {
+  if (rawType != null) return rawType;
+  const domType = findTurnType(turnId);
+  if (domType != null) return domType;
+  const h = hooks();
+  if (h.getPanelThreadId() === turnId) return h.getPanelType();
+  return null;
+}
+
+/** True when `(turnId, type)` identifies the turn currently open in the
+ *  slide-over panel (D16 gate) — the FULL pair must match, since turn_id
+ *  alone is only unique PER TYPE. */
+function isOpenPanelTurn(turnId: number, type: string): boolean {
+  const h = hooks();
+  return h.getPanelThreadId() === turnId && h.getPanelType() === type;
 }
 
 /** Runtime membership check backing `isTurnExecutionEvent`'s discriminator — a
@@ -111,12 +145,21 @@ export function dispatchDrift(data: WsPushEvent): void {
  * pill + elapsed timer; `done`/`error` resolve it (ok = state === 'done'), the
  * ONLY place the pill's error state is set. A frame with no anchor turn
  * (`turn_id` null) is dropped — no pill to hang it on. No fetch: purely visual.
+ *
+ * `type` is resolved rather than trusted — turn_id is only unique PER TYPE, so
+ * a null/absent type is never coerced to `user`; it's looked up from the
+ * rendered DOM node or the open panel instead (see `resolveFrameType`), and
+ * the frame is dropped with a loud warning if neither source can name it.
  */
 function _dispatchToolCall(data: WsPushEvent): boolean {
   if (!isToolCallEvent(data)) return false;
   const turnId = (data as { turn_id?: number | null }).turn_id ?? null;
   if (turnId == null) return true;
-  const type = (data as { type?: string }).type ?? ConfigType.USER;
+  const type = resolveFrameType(turnId, (data as { type?: string | null }).type);
+  if (type == null) {
+    console.warn('[driftDispatcher] tool_call frame for turn', turnId, 'has no resolvable type — dropped');
+    return true;
+  }
   const frame = data as {
     id?: number;
     tool_name?: string;
@@ -137,16 +180,25 @@ function _dispatchToolCall(data: WsPushEvent): boolean {
  * `status`. `updated` re-fetches the turn ONCE and fans it out to every
  * registered surface of its type; `provider_retry` is a transient toast (the
  * turn stays in flight, no error bubble). Returns true when handled.
+ *
+ * `updated`'s type is resolved (never coerced to `user`) since turn_id alone
+ * doesn't identify a turn across channels — see `resolveFrameType`.
  */
 function _dispatchTurnSignal(data: WsPushEvent): boolean {
   if (!isTurnSignal(data)) return false;
   const status = (data as { status?: string }).status;
-  const type = (data as { type?: string }).type ?? ConfigType.USER;
   const turnId = (data as { turn_id?: number | null }).turn_id ?? null;
   switch (status) {
-    case 'updated':
-      if (turnId != null) void _refetchAndUpsert(turnId, type);
+    case 'updated': {
+      if (turnId == null) return true;
+      const type = resolveFrameType(turnId, (data as { type?: string | null }).type);
+      if (type == null) {
+        console.warn('[driftDispatcher] turn_signal "updated" for turn', turnId, 'has no resolvable type — dropped');
+        return true;
+      }
+      void _refetchAndUpsert(turnId, type);
       return true;
+    }
     case 'provider_retry':
       showToast((data as { message?: string }).message ?? 'The AI provider had a problem — retrying…');
       return true;
@@ -166,11 +218,21 @@ function _dispatchTurnSignal(data: WsPushEvent): boolean {
  * its own branch (see `_dispatchCancelled`) — a normal settle would leave a
  * fully-rendered, discarded response looking exactly like a completed one,
  * when the whole point of cancel is that it never counted.
+ *
+ * `type` is resolved (never coerced to `user`) since turn_id alone doesn't
+ * identify a turn across channels — see `resolveFrameType`. The D16 panel
+ * check below is likewise a (turn_id, type) pair via `isOpenPanelTurn`, not
+ * turn_id alone, so a same-id turn in a different channel can't be mistaken
+ * for the one open in the panel.
  */
 function _dispatchTurnExecution(data: WsPushEvent): boolean {
   if (!isTurnExecutionEvent(data)) return false;
   const exec = data as unknown as WsTurnExecutionEvent;
-  const type = exec.type ?? ConfigType.USER;
+  const type = resolveFrameType(exec.turn_id, exec.type);
+  if (type == null) {
+    console.warn('[driftDispatcher] turn_execution frame for turn', exec.turn_id, 'has no resolvable type — dropped');
+    return true;
+  }
   const h = hooks();
 
   // ANY execution frame proves the send's turn is now tracked by its own
@@ -194,21 +256,32 @@ function _dispatchTurnExecution(data: WsPushEvent): boolean {
   if (exec.state === 'crashed') {
     h.setErrorMessage('Turn failed unexpectedly');
   }
-  if (exec.turn_id !== h.getPanelThreadId()) {
+  if (!isOpenPanelTurn(exec.turn_id, type)) {
     setTurnDone(exec.turn_id, type, true);
   }
   void h.finishTurn(exec.turn_id, type);
   return true;
 }
 
-/** Fetch a turn block once and fan it into every accepting surface. */
+/**
+ * Fetch a turn block once and fan it into every accepting surface. The block
+ * carries its own authoritative `type` (turn_id is only unique PER TYPE) —
+ * that's trusted over whatever type this call was made with, loudly warning
+ * on disagreement rather than silently upserting under the wrong channel.
+ */
 async function _refetchAndUpsert(
   turnId: number,
   type: string,
   options: { force?: boolean } = {},
 ): Promise<void> {
   const block = await convoApi.thread(turnId, type);
-  upsertTurnToSurfaces(block, type, options);
+  if (block.type !== type) {
+    console.warn(
+      '[driftDispatcher] refetched turn', turnId, 'came back as type', block.type,
+      'but was requested as', type, '— trusting the fetched type',
+    );
+  }
+  upsertTurnToSurfaces(block, block.type, options);
 }
 
 /**

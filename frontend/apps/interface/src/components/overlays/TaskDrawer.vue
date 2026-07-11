@@ -41,8 +41,8 @@ const threadActivity = useThreadActivity();
 const totalCount = computed(() => subagents.value.size + threadActivity.value.length);
 
 /** Open a thread's slide-over from its Activity row, then close the drawer. */
-function openThread(turnId: number): void {
-  session.openThreadPanel(turnId);
+function openThread(turnId: number, type: string): void {
+  session.openThreadPanel(turnId, type);
   tasks.close();
 }
 
@@ -234,7 +234,7 @@ onBeforeUnmount(() => {
           :key="`thread-${ta.turn_id}`"
           class="task-drawer__thread"
           :class="`task-drawer__thread--${ta.kind}`"
-          @click="openThread(ta.turn_id)"
+          @click="openThread(ta.turn_id, ta.type)"
         >
           <span class="task-drawer__thread-top">
             <span class="task-drawer__thread-label">{{ ta.label }}</span>

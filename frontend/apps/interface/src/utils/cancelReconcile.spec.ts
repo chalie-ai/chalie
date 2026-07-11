@@ -37,6 +37,7 @@ function block(turnId: number, messageIds: number[]): ConversationTurnBlock {
     last_activity_at: null,
     working: false,
     duration_ms: 0,
+    type: 'user',
     messages: messageIds.map((id) => ({
       id: String(id), role: 'user', content: `msg ${id}`, timestamp: '2026-01-01 00:00:00', turn_id: turnId,
     })),
@@ -110,6 +111,34 @@ describe('reconcileCancelledTurn', () => {
     await Promise.all([p1, p2]);
 
     expect(threadMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('trusts the fetched block\'s own type over the requested one on divergence, upserting under the authoritative type and warning about the mismatch', async () => {
+    const { turnDom, reconcileCancelledTurn } = await fresh();
+    const userContainer = document.body.appendChild(document.createElement('div'));
+    const scheduledContainer = document.body.appendChild(document.createElement('div'));
+    turnDom.registerSurface({ id: 'user-surface', type: 'user', container: userContainer, component: StubComponent });
+    turnDom.registerSurface({ id: 'scheduled-surface', type: 'scheduled', container: scheduledContainer, component: StubComponent });
+
+    // Requested (and cancelled) as 'user', but the post-cancel fetch's
+    // authoritative block says this turn actually belongs to 'scheduled' —
+    // turn_id alone is only unique PER TYPE, so the requested type must
+    // never be trusted over what the fetch actually returned.
+    threadMock.mockResolvedValue({
+      turn_id: 6, gist: null, preview: 'x', last_activity_at: null, working: false, duration_ms: 0, type: 'scheduled',
+      messages: [{ id: '60', role: 'user', content: 'hi', timestamp: '2026-01-01 00:00:00', turn_id: 6 }],
+    });
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => { /* silence */ });
+
+    await reconcileCancelledTurn(6, 'user');
+
+    expect(turnDom.getTurnEl(6, 'scheduled', scheduledContainer)).not.toBeNull();
+    expect(turnDom.getTurnEl(6, 'user', userContainer)).toBeNull();
+    expect(warnSpy).toHaveBeenCalled();
+
+    warnSpy.mockRestore();
+    userContainer.remove();
+    scheduledContainer.remove();
   });
 
   it('a fetch failure never throws, and clears the in-flight cache so the next call fetches again', async () => {

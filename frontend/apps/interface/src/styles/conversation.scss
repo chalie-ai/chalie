@@ -50,8 +50,9 @@
 }
 
 // Collapsed long message: clamp to 5 lines with a soft fade hinting at more text
-// below. The fade resolves to the feed background (--bg) so it matches both the
-// dark and light themes — the text sits on the page, not on a panel.
+// below. The fade resolves to --row-fade-bg, a custom property the hosting
+// surface publishes (feed vs. panel) so it matches whichever backdrop the row
+// sits on, in both the dark and light themes.
 .user-text--clamped {
   display: -webkit-box;
   -webkit-line-clamp: 5;
@@ -67,7 +68,7 @@
   inset-inline: 0;
   bottom: 0;
   height: 2.4em;
-  background: linear-gradient(to bottom, transparent, var(--bg));
+  background: linear-gradient(to bottom, transparent, var(--row-fade-bg, var(--bg)));
   pointer-events: none;
 }
 

@@ -39,6 +39,7 @@ function block(turnId: number, messageIds: number[], opts: { working?: boolean }
     last_activity_at: null,
     working: opts.working ?? false,
     duration_ms: 0,
+    type: 'user',
     messages: messageIds.map((id) => ({
       id: String(id),
       role: 'user',
@@ -166,6 +167,37 @@ describe('upsertTurnToSurfaces — fan-out', () => {
     unregisterSurface('x');
     upsertTurnToSurfaces(block(2, [20]), 'user');
     expect(getTurnEl(2, 'user', container)).toBeNull();
+  });
+});
+
+describe('upsertTurnToSurfaces — land hook gating on the version guard', () => {
+  it('does not fire the land hook when a strictly-stale block is rejected by every surface, but does fire once a version actually applies', async () => {
+    const { registerSurface, upsertTurnToSurfaces, onTurnLanded, SPINE_SURFACE_ID } = await freshTurnDom();
+    const container = document.createElement('div');
+    // Registered as the spine so the FIRST mount below is a genuine new
+    // top-level turn (isNewTopLevelTurn — see upsertTurnToSurfaces's own
+    // doc comment) — not load-bearing for this test's actual assertion
+    // (whether the hook fires at all), just realistic setup.
+    registerSurface({ id: SPINE_SURFACE_ID, type: 'user', container, component: StubComponent });
+
+    const landed: Array<[number, string, boolean]> = [];
+    onTurnLanded((turnId, type, isNewTopLevelTurn) => landed.push([turnId, type, isNewTopLevelTurn]));
+
+    // First-ever mount at version 11 — applies, fires the hook.
+    upsertTurnToSurfaces(block(1, [10, 11]), 'user');
+    expect(landed).toEqual([[1, 'user', true]]);
+
+    // Strictly-stale re-upsert (version 10 < already-rendered 11) — every
+    // surface rejects it (upsertTurn returns null), so `applied` stays
+    // false and the hook must NOT fire again — a version-rejected no-op
+    // wrote nothing, so signalling a "landing" here would incorrectly clear
+    // a live send echo for content the DOM never actually received.
+    upsertTurnToSurfaces(block(1, [10]), 'user');
+    expect(landed).toEqual([[1, 'user', true]]);
+
+    // An equal-or-higher version applies — the hook fires again.
+    upsertTurnToSurfaces(block(1, [10, 11, 12]), 'user');
+    expect(landed).toEqual([[1, 'user', true], [1, 'user', false]]);
   });
 });
 
