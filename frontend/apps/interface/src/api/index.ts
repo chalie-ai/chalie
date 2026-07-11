@@ -9,7 +9,6 @@ export { conversation } from './conversation';
 export { voice } from './voice';
 export { scheduler } from './scheduler';
 export { system } from './system';
-export { tips } from './tips';
 export { policies } from './policies';
 
 export { getHost } from '@chalie/shared';

@@ -25,7 +25,7 @@ import { clearLiveTurn, finishLiveTool, startLiveTool } from './liveActTrail';
 import { reconcileCancelledTurn } from './cancelReconcile';
 import { findTurnType, setTurnDone, setTurnWorking, upsertTurnToSurfaces } from './turnDom';
 import { useNotificationsStore } from '../stores/notifications';
-import type { TipState, UpdateState } from '../stores/notifications';
+import type { UpdateState } from '../stores/notifications';
 import { useTasksStore } from '../stores/tasks';
 import { usePermissionsStore } from '../stores/permissions';
 
@@ -312,9 +312,6 @@ function _dispatchSimpleEvent(data: WsPushEvent): boolean {
       return true;
     case 'permission_request':
       usePermissionsStore().enqueue(data);
-      return true;
-    case 'quick_tip':
-      useNotificationsStore().handleTip(data as unknown as TipState);
       return true;
     default:
       return false;

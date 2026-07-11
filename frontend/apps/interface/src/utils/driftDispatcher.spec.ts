@@ -66,12 +66,11 @@ vi.mock('./turnDom', () => ({
   findTurnType: findTurnTypeMock,
 }));
 
-const { handleUpdateMock, handleTipMock } = vi.hoisted(() => ({
+const { handleUpdateMock } = vi.hoisted(() => ({
   handleUpdateMock: vi.fn(),
-  handleTipMock: vi.fn(),
 }));
 vi.mock('../stores/notifications', () => ({
-  useNotificationsStore: () => ({ handleUpdate: handleUpdateMock, handleTip: handleTipMock }),
+  useNotificationsStore: () => ({ handleUpdate: handleUpdateMock }),
 }));
 
 const { applyDriftEventMock } = vi.hoisted(() => ({ applyDriftEventMock: vi.fn() }));
@@ -323,11 +322,6 @@ describe('dispatchDrift — simple (content-free) events', () => {
     expect(handleUpdateMock).toHaveBeenCalled();
   });
 
-  it('quick_tip reaches the notifications store', () => {
-    dispatchDrift(frame({ type: 'quick_tip', tip_id: 't1' }));
-    expect(handleTipMock).toHaveBeenCalled();
-  });
-
   it('permission_request reaches the permissions store', () => {
     dispatchDrift(frame({ type: 'permission_request', request_id: 'r1', action_id: 'email.send' }));
     expect(enqueueMock).toHaveBeenCalled();
@@ -341,7 +335,6 @@ describe('dispatchDrift — simple (content-free) events', () => {
   it('an unknown type is a no-op — no throw, no store touched', () => {
     expect(() => dispatchDrift(frame({ type: 'something_nobody_emits' }))).not.toThrow();
     expect(handleUpdateMock).not.toHaveBeenCalled();
-    expect(handleTipMock).not.toHaveBeenCalled();
     expect(enqueueMock).not.toHaveBeenCalled();
     expect(applyDriftEventMock).not.toHaveBeenCalled();
   });

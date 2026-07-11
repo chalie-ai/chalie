@@ -1,17 +1,16 @@
 /**
- * Notifications store — audio chime, OS notifications, tip card, update prompt.
+ * Notifications store — audio chime, OS notifications, update prompt.
  *
  * Browser-API access goes exclusively through the runtime platform adapter (no raw
  * window.Notification / localStorage / new AudioContext()); HTTP through api
  * wrappers only.
  *
- * QuickTipCard and UpdatePrompt are DORMANT — the backend does not currently
- * emit `quick_tip` or `app_update` WS events — but the state is kept so they
- * activate automatically when the backend ships.
+ * UpdatePrompt is DORMANT — the backend does not currently emit `app_update`
+ * WS events — but the state is kept so it activates automatically when the
+ * backend ships.
  */
 import { defineStore } from 'pinia';
 import { platform as adapter } from '@chalie/shared';
-import { tips } from '../api/tips';
 import { system } from '../api/system';
 
 const CHIME_FREQ_HZ = 880;        // A5
@@ -28,16 +27,6 @@ const LS_UPDATE_DISMISSED = 'chalie_update_dismissed';
 export interface NotificationItem {
   id?: string;
   [key: string]: unknown;
-}
-
-/** Shape of a quick_tip WS payload (dormant — backend does not yet emit this). */
-export interface TipState {
-  tip_id: string;
-  title?: string;
-  body: string;
-  example?: string;
-  icon_svg?: string;
-  category?: string;
 }
 
 /** Shape of an app_update WS payload (dormant — backend does not yet emit this). */
@@ -92,8 +81,6 @@ function showOsNotification(text: string): void {
 export const useNotificationsStore = defineStore('notifications', {
   state: () => ({
     notifications: [] as NotificationItem[],
-    /** Current quick tip; no-stacking: a new tip replaces the existing one. */
-    currentTip: null as TipState | null,
     /** Currently available update. null when none or dismissed. */
     currentUpdate: null as UpdateState | null,
     updateApplyMessage: null as string | null,
@@ -124,29 +111,6 @@ export const useNotificationsStore = defineStore('notifications', {
       showOsNotification(text);
       playChime();
       this.notifications.push({ id: String(Date.now()), text });
-    },
-
-    /** No-stacking: replaces any existing tip. DORMANT — backend doesn't emit yet. */
-    handleTip(payload: TipState): void {
-      if (!payload || !payload.tip_id) return;
-      this.currentTip = payload;
-    },
-
-    dismissTip(): void {
-      const tip = this.currentTip;
-      if (!tip) return;
-      this.currentTip = null;
-      tips.dismiss(tip.tip_id).catch((e: unknown) => {
-        console.warn('[notifications] tips.dismiss failed:', e);
-      });
-    },
-
-    muteTip(): void {
-      if (!this.currentTip) return;
-      this.currentTip = null;
-      tips.mute().catch((e: unknown) => {
-        console.warn('[notifications] tips.mute failed:', e);
-      });
     },
 
     /** Skips display if this version was already dismissed. DORMANT. */

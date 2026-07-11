@@ -83,7 +83,6 @@ export type WsPushType =
   | 'intent'
   | 'capability_alert'
   | 'app_update'
-  | 'quick_tip'
   | 'subagent_start'
   | 'subagent_end';
 export interface WsPushEvent {
