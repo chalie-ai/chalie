@@ -15,6 +15,14 @@ export interface AsyncResourceOptions<T> {
   immediate?: boolean;
   /** Imperative side-effect for a failed fetch; the error is also on `error`. */
   onError?: (e: unknown) => void;
+  /**
+   * Drop stale fetches. When `reload()` is called again before an earlier fetch
+   * settles (e.g. a tab/window/search switch that re-fetches on every change),
+   * the superseded fetch discards its result instead of clobbering the newer
+   * `data`/`error`/`loading`. Opt-in — only panels whose fetch inputs change
+   * under rapid user input need it.
+   */
+  guarded?: boolean;
 }
 
 /**
@@ -32,16 +40,24 @@ export function useAsyncResource<T>(
   const loading = ref(opts.immediate !== false);
   const error = ref<unknown>(null);
 
+  // Each reload() claims the next generation; when `guarded`, a fetch that is no
+  // longer the latest drops its result rather than overwriting fresher state.
+  let generation = 0;
+
   async function reload(): Promise<void> {
+    const gen = ++generation;
     loading.value = true;
     error.value = null;
     try {
-      data.value = await fetcher();
+      const result = await fetcher();
+      if (opts.guarded && gen !== generation) return;
+      data.value = result;
     } catch (e) {
+      if (opts.guarded && gen !== generation) return;
       error.value = e;
       opts.onError?.(e);
     } finally {
-      loading.value = false;
+      if (!opts.guarded || gen === generation) loading.value = false;
     }
   }
 

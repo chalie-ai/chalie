@@ -1,40 +1,27 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue';
+import { computed, ref } from 'vue';
 import type { UsageResponse } from '../../api/cognition';
 import { cognition } from '../../api/cognition';
 import { capitalize } from '../../utils/format';
+import { useAsyncResource } from '@chalie/shared';
 import EmptyState from '../../ui/EmptyState.vue';
 import { type UsageWindow, type BucketValue, type SlotRow, fmtTokens, buildTableSlots, tableHeaderFor } from './usageSlots';
 
 const usageWindow = ref<UsageWindow>('day');
-const data = ref<UsageResponse | null>(null);
-const loading = ref(true);
-const loadFailed = ref(false);
-
-let fetchGen = 0;
-
-async function load(): Promise<void> {
-  const gen = ++fetchGen;
-  loading.value = true;
-  loadFailed.value = false;
-  try {
-    const result = await cognition.tokenUsage(usageWindow.value);
-    if (gen !== fetchGen) return;
-    data.value = result;
-  } catch {
-    if (gen !== fetchGen) return;
-    loadFailed.value = true;
-  } finally {
-    if (gen === fetchGen) loading.value = false;
-  }
-}
+const {
+  data,
+  loading,
+  error: loadFailed,
+  reload,
+} = useAsyncResource<UsageResponse | null>(() => cognition.tokenUsage(usageWindow.value), {
+  initial: null,
+  guarded: true,
+});
 
 function selectWindow(w: UsageWindow): void {
   usageWindow.value = w;
-  load();
+  reload();
 }
-
-onMounted(load);
 
 const bucketMap = computed((): Record<string, BucketValue> => {
   const entries = data.value?.entries ?? [];
