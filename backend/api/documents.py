@@ -1,11 +1,10 @@
-"""Documents namespace — upload, search, lifecycle, and watched-folder CRUD.
+"""Documents namespace — upload, search, and lifecycle.
 
-Two resource families (documents, watched-folders) plus non-CRUD operations
-(file I/O, semantic search, lifecycle transitions) that stay as named endpoints
-but are DTO-typed through the foundation boundary decorators
-(``@expects``/``@responds``). Mutation/lifecycle endpoints return 204 no-body on
-success; errors normalize to 404/403/409/422. No hand-woven JSON envelopes or
-local datetime serializers — DTOs own the wire shape.
+Non-CRUD operations (file I/O, semantic search, lifecycle transitions) that
+stay as named endpoints but are DTO-typed through the foundation boundary
+decorators (``@expects``/``@responds``). Mutation/lifecycle endpoints return
+204 no-body on success; errors normalize to 404/403/409/422. No hand-woven
+JSON envelopes or local datetime serializers — DTOs own the wire shape.
 
 Routes (all require session auth):
   POST   /api/documents/upload                  — multipart file upload
@@ -23,12 +22,6 @@ Routes (all require session auth):
   POST   /api/documents/<id>/confirm           — confirm after synthesis review
   POST   /api/documents/<id>/augment           — add user context and confirm
   POST   /api/documents/<id>/supersede         — mark as superseding a prior doc
-  GET    /api/documents/watched-folders         — list watched folders
-  POST   /api/documents/watched-folders         — add watched folder
-  PUT    /api/documents/watched-folders/<id>    — update watched folder
-  DELETE /api/documents/watched-folders/<id>    — remove watched folder
-  POST   /api/documents/watched-folders/<id>/scan — trigger immediate scan
-  POST   /api/documents/watched-folders/browse  — browse host directories
 """
 
 from __future__ import annotations
@@ -66,24 +59,15 @@ from .dto.document import (
     UploadRequest,
     UploadResponse,
 )
-from .dto.watched_folder import (
-    BrowseRequest,
-    BrowseResponse,
-    WatchedFolder,
-    WatchedFolderCreate,
-    WatchedFolderUpdate,
-)
 
 if TYPE_CHECKING:
     from services.document_service import DocumentService
-    from services.folder_watcher_service import FolderWatcherService
 
 logger = logging.getLogger(__name__)
 
 _ERR_INTERNAL = "Internal server error"
 _ERR_NOT_FOUND = "Not found"
 _ERR_FILE_NOT_FOUND = "File not found on disk"
-_ERR_ALREADY_WATCHED = "This folder is already being watched"
 
 _OptDatetime: TypeAlias = "datetime | None"
 _OptStr: TypeAlias = "str | None"
@@ -109,11 +93,6 @@ register_dto(
     SearchResult,
     SearchResponse,
     SearchQuery,
-    WatchedFolder,
-    WatchedFolderCreate,
-    WatchedFolderUpdate,
-    BrowseRequest,
-    BrowseResponse,
     Error,
 )
 
@@ -142,12 +121,6 @@ ALLOWED_EXTENSIONS = {
 def _get_document_service() -> "DocumentService":
     from services.document_service import DocumentService
     return DocumentService()
-
-
-def _get_watcher_service() -> "FolderWatcherService":
-    from services.folder_watcher_service import FolderWatcherService
-    return FolderWatcherService()
-
 
 
 # ---------------------------------------------------------------------------
@@ -671,154 +644,6 @@ class DocumentSupersedeResource(Resource):
 
 
 # ---------------------------------------------------------------------------
-# Watched Folders
-# ---------------------------------------------------------------------------
-
-@documents_ns.route("/watched-folders")
-class WatchedFoldersResource(Resource):
-    @require_session
-    @documents_ns.response(200, "All watched folders", model=_D["WatchedFolder"])
-    @documents_ns.response(500, _ERR_INTERNAL, model=_D["Error"])
-    @responds(WatchedFolder, code=200)
-    def get(self) -> list[WatchedFolder] | ResponseReturnValue:
-        """List all watched folders."""
-        try:
-            return [_watched_folder_dto(row) for row in _get_watcher_service().get_all_folders()]
-        except Exception as e:
-            logger.error(f"[DOCS API] list watched folders error: {e}")
-            return error(_ERR_INTERNAL, 500)
-
-    @require_session
-    @documents_ns.expect(_D["WatchedFolderCreate"])
-    @documents_ns.response(201, "Watched folder created", model=_D["WatchedFolder"])
-    @documents_ns.response(403, "Permission denied", model=_D["Error"])
-    @documents_ns.response(409, _ERR_ALREADY_WATCHED, model=_D["Error"])
-    @documents_ns.response(422, "Validation failed", model=_D["Error"])
-    @documents_ns.response(500, _ERR_INTERNAL, model=_D["Error"])
-    @responds(WatchedFolder, code=201)
-    @expects(WatchedFolderCreate)
-    def post(self, dto: WatchedFolderCreate) -> WatchedFolder | ResponseReturnValue:
-        """Register a new watched folder."""
-        try:
-            folder = _get_watcher_service().create_folder(
-                folder_path=dto.folder_path,
-                label=dto.label,
-                file_patterns=dto.file_patterns,
-                ignore_patterns=dto.ignore_patterns,
-                recursive=dto.recursive,
-                scan_interval=dto.scan_interval,
-            )
-            return _watched_folder_dto(folder)
-        except ValueError as e:
-            return error(str(e), 422)
-        except PermissionError as e:
-            return error(str(e), 403)
-        except Exception as e:
-            if "UNIQUE constraint" in str(e):
-                return error(_ERR_ALREADY_WATCHED, 409)
-            logger.error(f"[DOCS API] create watched folder error: {e}")
-            return error(_ERR_INTERNAL, 500)
-
-
-@documents_ns.route("/watched-folders/<folder_id>")
-@documents_ns.param("folder_id", "Folder identifier")
-class WatchedFolderResource(Resource):
-    @require_session
-    @documents_ns.expect(_D["WatchedFolderUpdate"])
-    @documents_ns.response(200, "Updated folder", model=_D["WatchedFolder"])
-    @documents_ns.response(404, _ERR_NOT_FOUND, model=_D["Error"])
-    @documents_ns.response(403, "Permission denied", model=_D["Error"])
-    @documents_ns.response(422, "Validation failed", model=_D["Error"])
-    @documents_ns.response(500, _ERR_INTERNAL, model=_D["Error"])
-    @responds(WatchedFolder, code=200)
-    @expects(WatchedFolderUpdate)
-    def put(self, folder_id: str, dto: WatchedFolderUpdate) -> WatchedFolder | ResponseReturnValue:
-        """Partially update a watched folder's mutable fields."""
-        try:
-            svc = _get_watcher_service()
-            if not svc.get_folder(folder_id):
-                return error(_ERR_NOT_FOUND, 404)
-            updates = dto.model_dump(exclude_none=True)
-            updated = svc.update_folder(folder_id, **updates)
-            if updated is None:
-                return error(_ERR_NOT_FOUND, 404)
-            return _watched_folder_dto(updated)
-        except ValueError as e:
-            return error(str(e), 422)
-        except PermissionError as e:
-            return error(str(e), 403)
-        except Exception as e:
-            logger.error(f"[DOCS API] update watched folder error: {e}")
-            return error(_ERR_INTERNAL, 500)
-
-    @require_session
-    @documents_ns.param("delete_documents", "Also soft-delete the folder's documents", type="boolean")
-    @documents_ns.response(204, "Watched folder deleted")
-    @documents_ns.response(404, _ERR_NOT_FOUND, model=_D["Error"])
-    @documents_ns.response(500, _ERR_INTERNAL, model=_D["Error"])
-    @responds(code=204)
-    def delete(self, folder_id: str) -> None | ResponseReturnValue:
-        """Remove a watched folder, optionally soft-deleting its documents."""
-        delete_documents = request.args.get("delete_documents", "false").lower() == "true"
-        try:
-            if not _get_watcher_service().delete_folder(folder_id, delete_documents=delete_documents):
-                return error(_ERR_NOT_FOUND, 404)
-            return None
-        except Exception as e:
-            logger.error(f"[DOCS API] delete watched folder error: {e}")
-            return error(_ERR_INTERNAL, 500)
-
-
-@documents_ns.route("/watched-folders/<folder_id>/scan")
-@documents_ns.param("folder_id", "Folder identifier")
-class WatchedFolderScanResource(Resource):
-    @require_session
-    @documents_ns.response(204, "Scan requested")
-    @documents_ns.response(404, _ERR_NOT_FOUND, model=_D["Error"])
-    @documents_ns.response(500, _ERR_INTERNAL, model=_D["Error"])
-    @responds(code=204)
-    def post(self, folder_id: str) -> None | ResponseReturnValue:
-        """Trigger an out-of-schedule immediate scan for a watched folder."""
-        try:
-            svc = _get_watcher_service()
-            if not svc.get_folder(folder_id):
-                return error(_ERR_NOT_FOUND, 404)
-            svc.trigger_scan(folder_id)
-            return None
-        except Exception as e:
-            logger.error(f"[DOCS API] trigger scan error: {e}")
-            return error(_ERR_INTERNAL, 500)
-
-
-@documents_ns.route("/watched-folders/browse")
-class WatchedFolderBrowseResource(Resource):
-    @require_session
-    @documents_ns.expect(_D["BrowseRequest"])
-    @documents_ns.response(200, "Directory listing", model=_D["BrowseResponse"])
-    @documents_ns.response(403, "Permission denied", model=_D["Error"])
-    @documents_ns.response(422, "Invalid path", model=_D["Error"])
-    @documents_ns.response(500, _ERR_INTERNAL, model=_D["Error"])
-    @responds(BrowseResponse, code=200)
-    @expects(BrowseRequest)
-    def post(self, dto: BrowseRequest) -> BrowseResponse | ResponseReturnValue:
-        """Browse readable sub-directories at a host filesystem path."""
-        try:
-            result = _get_watcher_service().browse_directory(dto.path)
-            return BrowseResponse(
-                current=cast(str, result["current"]),
-                parent=cast(_OptStr, result.get("parent")),
-                directories=cast(_StrList, result["directories"]),
-            )
-        except ValueError as e:
-            return error(str(e), 422)
-        except PermissionError as e:
-            return error(str(e), 403)
-        except Exception as e:
-            logger.error(f"[DOCS API] browse error: {e}")
-            return error(_ERR_INTERNAL, 500)
-
-
-# ---------------------------------------------------------------------------
 # DTO builders
 # ---------------------------------------------------------------------------
 
@@ -850,24 +675,6 @@ def _document_dto(row: "dict[str, object]") -> Document:
         updated_at=cast("datetime", row["updated_at"]),
         deleted_at=cast(_OptDatetime, row.get("deleted_at")),
         purge_after=cast(_OptDatetime, row.get("purge_after")),
-    )
-
-
-def _watched_folder_dto(row: "dict[str, object]") -> WatchedFolder:
-    """Build a :class:`WatchedFolder` DTO from a service row dict."""
-    return WatchedFolder(
-        id=cast(str, row["id"]),
-        folder_path=cast(str, row["folder_path"]),
-        label=cast(_OptStr, row.get("label")),
-        source_type=cast(str, row["source_type"]),
-        enabled=bool(cast(int, row.get("enabled"))),
-        file_patterns=cast(_StrList, row.get("file_patterns") or []),
-        ignore_patterns=cast(_StrList, row.get("ignore_patterns") or []),
-        recursive=bool(cast(int, row.get("recursive"))),
-        scan_interval=cast(int, row["scan_interval"]),
-        source_config=cast("dict[str, object]", row.get("source_config") or {}),
-        created_at=cast("datetime", row["created_at"]),
-        updated_at=cast("datetime", row["updated_at"]),
     )
 
 

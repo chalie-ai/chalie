@@ -3,12 +3,13 @@
  *
  * GET    /documents                       → { items: Document[] }
  * GET    /documents?include_deleted=true  → include deleted docs
- * GET    /documents/watched-folders       → { items: WatchedFolder[] }
+ * GET    /api/watched-folders/all         → WatchedFolder[] (listing envelope, page-walked)
  * GET    /documents/:id                   → { item: Document }
  * DELETE /documents/:id                   → delete document
  * POST   /documents/upload                → multipart upload
  */
 import { api } from '@chalie/shared';
+import { fetchAllPages } from './paginate';
 
 export interface Document {
   id: string | number;
@@ -19,9 +20,9 @@ export interface Document {
   [key: string]: unknown;
 }
 
-// Fields mirror the raw `watched_folders` columns — GET /documents/watched-folders
-// returns `dict(zip(cols, row))` from `FolderWatcherService.get_all_folders()`
-// (no serialization layer), so the keys are the DB column names verbatim.
+// Serialized from the WatchedFolder response DTO of GET /api/watched-folders/all
+// (the Endpoint-contract listing route). `last_scan_at`/`last_scan_files` are not
+// part of that DTO — the panel renders them defensively and they read as empty.
 export interface WatchedFolder {
   id: string | number;
   folder_path: string;
@@ -38,7 +39,7 @@ export const documents = {
   },
 
   watchedFolders(): Promise<WatchedFolder[]> {
-    return api.get('/api/documents/watched-folders');
+    return fetchAllPages<WatchedFolder>('/api/watched-folders/all');
   },
 
   get(id: string | number): Promise<{ item: Document }> {
