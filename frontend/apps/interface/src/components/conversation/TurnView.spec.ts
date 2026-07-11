@@ -12,9 +12,10 @@
  *   - working, FORKED turn,     thread panel (fullThread=true) → renders
  *
  * "Forked" is real production state: a block whose messages() contains a
- * `thread_message: true` row, read through the real
- * `useConversationFeed().isForkedThread()` — so the block is upserted into
- * the real feed buffer before mount, exactly as the app does on turn fetch.
+ * `thread_message: true` row — TurnView derives `isForkedThread` directly
+ * off the `block` prop (`computed(() => props.block.messages.some((m) =>
+ * m.thread_message))`), no store/composable involved, so the block is just
+ * mounted straight in, exactly as it's fetched off the wire.
  *
  * Real component tree throughout (TurnView → ActCycle/ActCycleGroup/
  * UserBubble/ChalieBubble), real Pinia, real `@chalie/shared` barrel — the
@@ -29,7 +30,6 @@ import { ConfigType } from '@chalie/shared';
 import TurnView from './TurnView.vue';
 import ActCycle from './ActCycle.vue';
 import type { ConversationMessage, ConversationTurnBlock } from '../../api/conversation';
-import { useConversationFeed } from '../../composables/useConversationFeed';
 
 function msg(
   id: string,
@@ -71,7 +71,6 @@ describe('live act-trail visibility — working turn on the spine', () => {
       msg('1010', 'user', 'settle0 question', turnId),
       msg('1011', 'assistant', 'settle0 answer', turnId),
     ]);
-    useConversationFeed(ConfigType.USER).upsertTurn(b);
 
     const wrapper = mount(TurnView, {
       props: { block: b, type: ConfigType.USER, fullThread: false },
@@ -81,6 +80,10 @@ describe('live act-trail visibility — working turn on the spine', () => {
     // settle0 rows always render regardless of the live-act guard.
     expect(wrapper.text()).toContain('settle0 question');
     expect(wrapper.text()).toContain('settle0 answer');
+    // A non-forked block must NOT stamp data-forked on the root — this is
+    // the Activity drawer's sole signal for which turns even qualify as
+    // forked (see utils/threadActivity.ts's `[data-forked]` selector).
+    expect(wrapper.attributes('data-forked')).toBeUndefined();
   });
 
   it('does NOT render the live-act row for a FORKED working turn (the thread pill owns that indicator)', () => {
@@ -90,7 +93,6 @@ describe('live act-trail visibility — working turn on the spine', () => {
       msg('1021', 'assistant', 'settle0 reply', turnId),
       msg('1022', 'user', 'a reply inside the thread', turnId, true),
     ]);
-    useConversationFeed(ConfigType.USER).upsertTurn(b);
 
     const wrapper = mount(TurnView, {
       props: { block: b, type: ConfigType.USER, fullThread: false },
@@ -104,6 +106,8 @@ describe('live act-trail visibility — working turn on the spine', () => {
     expect(wrapper.text()).toContain('settle0 reply');
     // The thread continuation itself is spine-dropped (fullThread=false).
     expect(wrapper.text()).not.toContain('a reply inside the thread');
+    // A forked block DOES stamp data-forked on the root.
+    expect(wrapper.attributes('data-forked')).toBe('true');
   });
 });
 
@@ -115,7 +119,6 @@ describe('live act-trail visibility — working turn in the thread panel', () =>
       msg('1031', 'assistant', 'settle0 panel reply', turnId),
       msg('1032', 'user', 'panel thread continuation', turnId, true),
     ]);
-    useConversationFeed(ConfigType.USER).upsertTurn(b);
 
     const wrapper = mount(TurnView, {
       props: { block: b, type: ConfigType.USER, fullThread: true },

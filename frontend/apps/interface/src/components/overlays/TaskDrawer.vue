@@ -24,6 +24,7 @@ import type { ActiveSubagent } from '../../api/scheduler';
 import { scheduler } from '../../api/scheduler';
 import { webPlatformAdapter } from '@chalie/shared';
 import { elapsedSince } from '../../utils/time';
+import { useThreadActivity } from '../../utils/threadActivity';
 
 const HINT_KEY = 'task_strip_hint_shown';
 const POLL_INTERVAL_MS = 60_000;
@@ -33,7 +34,11 @@ const TICK_INTERVAL_MS = 1_000;
 
 const tasks = useTasksStore();
 const session = useSessionStore();
-const { subagents, threadActivity, totalCount, isOpen } = storeToRefs(tasks);
+const { subagents, isOpen } = storeToRefs(tasks);
+
+/** DOM-derived (no store) — see `utils/threadActivity.ts`. */
+const threadActivity = useThreadActivity();
+const totalCount = computed(() => subagents.value.size + threadActivity.value.length);
 
 /** Open a thread's slide-over from its Activity row, then close the drawer. */
 function openThread(turnId: number): void {

@@ -7,16 +7,15 @@
  * bookkeeping), not a store-held record.
  *
  * Real DOM (happy-dom — the project's established Vue-mounting environment,
- * see turnDom.spec.ts), real Pinia, real turnDom/queue/useConversationFeed
- * modules. Only the WS/network boundary is mocked: `getWebSocket` (send/abort
- * are the only stubbed calls, per convention), `getHost`, and the REST
- * `conversation` API (`api/conversation.ts`) — the actual `fetch`/XHR
- * transport this app would otherwise hit.
+ * see turnDom.spec.ts), real Pinia, real turnDom/queue modules. Only the
+ * WS/network boundary is mocked: `getWebSocket` (send/abort are the only
+ * stubbed calls, per convention), `getHost`, and the REST `conversation` API
+ * (`api/conversation.ts`) — the actual `fetch`/XHR transport this app would
+ * otherwise hit.
  *
- * The session store, turnDom, queue, and useConversationFeed all carry
- * module-level singleton state, so each test re-imports a fresh module graph
- * via `vi.resetModules()` (the pattern established by
- * `utils/turnDom.spec.ts` / `composables/useConversationFeed.spec.ts`) —
+ * The session store, turnDom, and queue all carry module-level singleton
+ * state, so each test re-imports a fresh module graph via
+ * `vi.resetModules()` (the pattern established by `utils/turnDom.spec.ts`) —
  * otherwise a surface/turn registered in one test would leak into the next.
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -61,10 +60,10 @@ vi.mock('@chalie/shared', () => ({
   getHost: () => '',
 }));
 
-// The REST boundary `_reconcileWorking`/`_handleCancelled`/`_finishTurn`
-// (via useConversationFeed.fetchTurn) hit — mocked at the network edge only,
+// The REST boundary `_reconcileWorking`/`reconcileCancelledTurn`/`_finishTurn`
+// hit (via api/conversation's `thread()`) — mocked at the network edge only,
 // per the boundary rule (everything downstream of the response, including
-// the real feed buffer, runs unmocked).
+// the real turnDom/liveActTrail DOM effects, runs unmocked).
 const threadMock = vi.fn();
 vi.mock('../api/conversation', () => ({
   conversation: {
@@ -89,21 +88,21 @@ function stubBlock(turnId: number, working: boolean): unknown {
   };
 }
 
-/** Fresh module graph per test — session, turnDom, queue, and the feed all
- *  share the SAME instances within one test (imported in the same epoch,
- *  before the next resetModules() call), but never leak into the next test. */
+/** Fresh module graph per test — session, turnDom, and queue all share the
+ *  SAME instances within one test (imported in the same epoch, before the
+ *  next resetModules() call), but never leak into the next test. */
 async function freshSession() {
   vi.resetModules();
   setActivePinia(createPinia());
   const turnDom = await import('../utils/turnDom');
+  const { threadPhase } = await import('../utils/threadActivity');
   const { useSessionStore } = await import('./session');
   const { useQueueStore } = await import('./queue');
-  const { useConversationFeed } = await import('../composables/useConversationFeed');
   return {
     session: useSessionStore(),
     queue: useQueueStore(),
     turnDom,
-    feed: useConversationFeed(ConfigType.USER),
+    threadPhase,
   };
 }
 
@@ -299,6 +298,29 @@ describe('requestStop — DELETE only fires for a confirmed in-flight turn', () 
       expect.objectContaining({ method: 'DELETE' }),
     );
   });
+
+  it('clears working optimistically but starts the content refetch only AFTER the DELETE resolves (stale pre-cancel content must never be fetched ahead of the cancel)', async () => {
+    const { session, turnDom } = await freshSession();
+    threadMock.mockResolvedValue(stubBlock(12, false));
+
+    let resolveDelete: (v: unknown) => void = () => { /* replaced below */ };
+    vi.stubGlobal('fetch', vi.fn().mockImplementationOnce(
+      () => new Promise((resolve) => { resolveDelete = resolve; }),
+    ));
+
+    turnDom.setTurnWorking(12, ConfigType.USER, true);
+    const stopping = session.requestStop(12, ConfigType.USER, null, '');
+
+    // Spinner drops immediately (optimistic), but the reconcile fetch is
+    // held while the DELETE round-trip is still in flight.
+    expect(turnDom.isTurnWorking(12, ConfigType.USER)).toBe(false);
+    await Promise.resolve();
+    expect(threadMock).not.toHaveBeenCalled();
+
+    resolveDelete({ ok: true });
+    await stopping;
+    expect(threadMock).toHaveBeenCalledWith(12, ConfigType.USER);
+  });
 });
 
 describe('reconnect reconcile', () => {
@@ -319,7 +341,7 @@ describe('reconnect reconcile', () => {
   });
 
   it('_reconcileWorking settles a snapshotted turn whose refetch says it is no longer working (drains queues), and restores the spinner for one still working', async () => {
-    const { session, turnDom, feed, queue } = await freshSession();
+    const { session, turnDom, threadPhase, queue } = await freshSession();
     session._offlineWorking.add('user:5'); // will refetch as settled
     session._offlineWorking.add('user:6'); // will refetch as still working
     threadMock.mockImplementation(async (turnId: number) => {
@@ -337,9 +359,14 @@ describe('reconnect reconcile', () => {
     await Promise.resolve(); // flush _finishTurn's fire-and-forget _drainQueues -> sendMessage
 
     expect(session._offlineWorking.size).toBe(0);
-    expect(feed.threadPhase(5)).toBe('done'); // settled via _finishTurn -> markThreadDone
+    expect(turnDom.isTurnWorking(5, ConfigType.USER)).toBe(false); // settled, no longer working
+    // D16: _reconcileWorking stamps setTurnDone(5, ..., true) for any settled
+    // turn the panel doesn't have open (see session.ts _reconcileWorking) —
+    // turnDom's `_liveDone` record makes that observable via threadPhase even
+    // though nothing re-rendered turn 5's element in this test.
+    expect(threadPhase(5, ConfigType.USER)).toBe('done');
     expect(turnDom.isTurnWorking(6, ConfigType.USER)).toBe(true); // restored
-    expect(feed.working[6]).toBe(true);
+    expect(threadPhase(6, ConfigType.USER)).toBe('working');
     expect(sendMock).toHaveBeenCalledWith(
       'queued while offline', expect.any(Function), [], 909, ConfigType.USER,
     );

@@ -1,12 +1,24 @@
 <script setup lang="ts">
 import { nextTick, ref, watch } from 'vue';
 import { Search } from '@lucide/vue';
+import { ConfigType } from '@chalie/shared';
 import { useSessionStore } from '../../stores/session';
-import { useConversationFeed } from '../../composables/useConversationFeed';
+import { conversation as convoApi } from '../../api/conversation';
 import type { ConversationThread } from '../../api/conversation';
 
 const session = useSessionStore();
-const feed = useConversationFeed();
+
+/** Thread search — a direct GET /api/threads?q=, no client-side cache. */
+async function searchThreads(q: string): Promise<ConversationThread[]> {
+  if (!q.trim()) return [];
+  try {
+    const { threads } = await convoApi.threads(20, undefined, q, ConfigType.USER);
+    return threads;
+  } catch (e) {
+    console.warn('Thread search failed', e);
+    return [];
+  }
+}
 
 const query = ref('');
 const results = ref<ConversationThread[]>([]);
@@ -32,7 +44,7 @@ function onInput(e: Event): void {
   query.value = (e.target as HTMLInputElement).value;
   if (debounceTimer !== null) clearTimeout(debounceTimer);
   debounceTimer = setTimeout(async () => {
-    results.value = await feed.searchThreads(query.value);
+    results.value = await searchThreads(query.value);
   }, 120);
 }
 

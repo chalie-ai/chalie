@@ -7,7 +7,6 @@ import { User } from '@lucide/vue';
 import { ConfigType } from '@chalie/shared';
 import type { ConversationMessage, ConversationTurnBlock } from '../../api/conversation';
 import type { LiveToolPill } from '../../utils/liveActTrail';
-import { useConversationFeed } from '../../composables/useConversationFeed';
 import { liveTrailsFor } from '../../utils/liveActTrail';
 import UserBubble from './UserBubble.vue';
 import ChalieBubble from './ChalieBubble.vue';
@@ -26,7 +25,10 @@ const props = withDefaults(
 
 const emit = defineEmits<{ reply: [turnId: number] }>();
 
-const feed = computed(() => useConversationFeed(props.type));
+/** A forked thread carries at least one row past its settle0 (see
+ *  ConversationMessage.thread_message) — derived directly off the prop, no
+ *  store/composable needed. */
+const isForkedThread = computed(() => props.block.messages.some((m) => m.thread_message));
 
 // The live act-trail is derived from WS signals (spec §6.5). While the turn
 // works, append one transient non-collapsed ActRow carrying the turn's live tool
@@ -77,7 +79,7 @@ const displayRows = computed<DisplayRow[]>(() => {
   // non-forked turn in the spine). Forked turns in the spine show the thread
   // pill's animated dot instead — rendering "thinking..." inline would duplicate
   // that indicator and misattribute thread activity to the top-level timeline.
-  if (props.block.working && (props.fullThread || !feed.value.isForkedThread(props.block.turn_id))) {
+  if (props.block.working && (props.fullThread || !isForkedThread.value)) {
     const trails = liveTrailsFor(props.type, props.block.turn_id);
     if (trails.length) {
       for (const t of trails) {
@@ -133,7 +135,15 @@ function onReply(): void {
 </script>
 
 <template>
-  <div class="turn-view" :data-turn-id="block.turn_id" :data-type="type">
+  <div
+    class="turn-view"
+    :data-turn-id="block.turn_id"
+    :data-type="type"
+    :data-forked="isForkedThread || undefined"
+    :data-gist="block.gist ?? undefined"
+    :data-preview="block.preview"
+    :data-last-activity="block.last_activity_at ?? undefined"
+  >
     <div
       v-for="ar in avatarRows"
       :key="ar.key"

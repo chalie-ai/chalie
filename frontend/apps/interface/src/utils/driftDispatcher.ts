@@ -8,24 +8,58 @@
  * place that maps a raw WS drift push onto that DOM — session.ts no longer
  * routes drift itself (see its `init()`, which wires `ws.onDrift(dispatchDrift)`).
  *
- * Interim seam: lane lifecycle (single-flight bookkeeping, queue draining,
- * background notifications) still lives on the session store — `_finishTurn`
- * and `_handleCancelled` are called here for THAT side effect only. Nothing
- * renders from what they write any more; that buffer write dies in a later
- * slice once lanes/sendMessage move off it too.
+ * This module does NOT import `stores/session.ts` — session.ts imports
+ * `dispatchDrift` from here (it's the sole WS owner, see its docblock), so a
+ * static import back would be circular. The handful of session-owned side
+ * effects a turn_execution frame still needs (releasing a send's busy hold,
+ * reading the open panel's turn id, surfacing a crash toast, settle
+ * bookkeeping) are reached through `SessionHooks`, a small interface session
+ * registers an implementation of via `registerSessionHooks()` from its own
+ * `init()` — dependency injection instead of a static import, breaking the
+ * cycle in both directions.
  */
 import { ConfigType } from '@chalie/shared';
 import type { WsPushEvent, WsTurnExecutionEvent } from '@chalie/shared';
-import { useSessionStore } from '../stores/session';
 import { conversation as convoApi } from '../api/conversation';
 import { showToast } from './toast';
 import { clearLiveTurn, finishLiveTool, startLiveTool } from './liveActTrail';
-import { useConversationFeed } from '../composables/useConversationFeed';
-import { removeTurn, setTurnDone, setTurnWorking, upsertTurnToSurfaces } from './turnDom';
+import { reconcileCancelledTurn } from './cancelReconcile';
+import { setTurnDone, setTurnWorking, upsertTurnToSurfaces } from './turnDom';
 import { useNotificationsStore } from '../stores/notifications';
 import type { TipState, UpdateState } from '../stores/notifications';
 import { useTasksStore } from '../stores/tasks';
 import { usePermissionsStore } from '../stores/permissions';
+
+/** The session-owned side effects a turn_execution frame still needs — see
+ *  module docblock for why this is dependency-injected rather than a static
+ *  import of `stores/session.ts`. */
+export interface SessionHooks {
+  /** Release a send's POST-scoped busy hold — called for EVERY execution frame. */
+  releasePendingSend(turnId: number, type: string): void;
+  /** turn_id currently open in the slide-over panel, or null (D16 gate). */
+  getPanelThreadId(): number | null;
+  /** Surface a turn-level provider/quota error as a closable toast. */
+  setErrorMessage(message: string): void;
+  /** Settle bookkeeping for a completed/crashed turn (queue drain, ambient
+   *  sensor, background notification). */
+  finishTurn(turnId: number, type: string): Promise<void>;
+  /** Drain every pending queued send — called once a cancel has resolved. */
+  drainQueues(): void;
+}
+
+let _hooks: SessionHooks | null = null;
+
+/** Registered once, from `session.init()`. */
+export function registerSessionHooks(hooks: SessionHooks): void {
+  _hooks = hooks;
+}
+
+function hooks(): SessionHooks {
+  if (!_hooks) {
+    throw new Error('driftDispatcher: session hooks not registered — session.init() must run first');
+  }
+  return _hooks;
+}
 
 /** Runtime membership check backing `isTurnExecutionEvent`'s discriminator — a
  *  `state` key alone does not prove a frame is a turn_execution row (e.g. the
@@ -127,47 +161,43 @@ function _dispatchTurnSignal(data: WsPushEvent): boolean {
  * data-working attribute and re-fetches (renders the user bubble — no
  * optimistic echo). `completed` clears working, drops the live trail, marks
  * data-done UNLESS the settled turn is the one open in the panel (D16), then
- * hands lane bookkeeping to session._finishTurn. `crashed` does the same but
- * additionally raises the 'turn failed' toast. `cancelled` is its own branch
- * (see `_dispatchCancelled`) — a normal settle would leave a fully-rendered,
- * discarded response looking exactly like a completed one, when the whole
- * point of cancel is that it never counted.
+ * hands settle bookkeeping to the `finishTurn` session hook. `crashed` does
+ * the same but additionally raises the 'turn failed' toast. `cancelled` is
+ * its own branch (see `_dispatchCancelled`) — a normal settle would leave a
+ * fully-rendered, discarded response looking exactly like a completed one,
+ * when the whole point of cancel is that it never counted.
  */
 function _dispatchTurnExecution(data: WsPushEvent): boolean {
   if (!isTurnExecutionEvent(data)) return false;
   const exec = data as unknown as WsTurnExecutionEvent;
   const type = exec.type ?? ConfigType.USER;
-  const session = useSessionStore();
+  const h = hooks();
 
   // ANY execution frame proves the send's turn is now tracked by its own
   // working/settle signals — release the POST-scoped busy hold (see
   // session.sendMessage's `_pendingByTurn` comment).
-  session._releasePendingSend(exec.turn_id, type);
+  h.releasePendingSend(exec.turn_id, type);
 
   if (exec.state === 'working') {
     setTurnWorking(exec.turn_id, type, true);
-    // Interim seam: tasks.ts / SchedulerDock still read the buffer's working
-    // flag for the Activity dock's live phase; the settle paths (_finishTurn /
-    // _handleCancelled) clear it. Dies with the buffer in a later slice.
-    useConversationFeed(type).setWorking(exec.turn_id, true);
     void _refetchAndUpsert(exec.turn_id, type);
     return true;
   }
 
   if (exec.state === 'cancelled') {
-    void _dispatchCancelled(exec.turn_id, type);
+    _dispatchCancelled(exec.turn_id, type);
     return true;
   }
 
   setTurnWorking(exec.turn_id, type, false);
   clearLiveTurn(type, exec.turn_id);
   if (exec.state === 'crashed') {
-    session.errorMessage = 'Turn failed unexpectedly';
+    h.setErrorMessage('Turn failed unexpectedly');
   }
-  if (exec.turn_id !== session.panelThreadId) {
+  if (exec.turn_id !== h.getPanelThreadId()) {
     setTurnDone(exec.turn_id, type, true);
   }
-  void session._finishTurn(exec.turn_id, type);
+  void h.finishTurn(exec.turn_id, type);
   return true;
 }
 
@@ -182,40 +212,16 @@ async function _refetchAndUpsert(
 }
 
 /**
- * Cancelled turn — the DELETE-triggered terminal state. The backend's
- * `serialize_turn` strips a cancelled turn's trailing, reply-less user row(s)
- * before this refetch ever runs (real content a turn already wrote before the
- * cancel landed always stays), so re-fetching now IS the authoritative
- * post-cancel state. Upserted with `force: true` (D13) — this is the one case
- * where the freshest read can legitimately be SMALLER than what's already
- * rendered (a fork turn's earlier-settled content already stamped a higher
- * version; the now-stripped orphan reply never raises it), and the version
- * guard would otherwise reject the write, leaving a phantom orphan bubble.
- * Empty messages → the turn never happened from the surface's perspective,
- * removed from every surface exactly like an aborted send. `session.
- * _handleCancelled` runs alongside for lane/buffer bookkeeping (the `requestStop`
- * reconcile calls it too — idempotent either order).
+ * Cancelled turn — the DELETE-triggered terminal state. DOM reconciliation
+ * (the force-upserted refetch / `removeTurn` for an emptied turn) is the ONE
+ * shared `reconcileCancelledTurn` fetch (see `utils/cancelReconcile.ts`) —
+ * deduped against whatever `session.requestStop`'s own post-interrupt
+ * reconcile already kicked off for the same turn, since this frame can also
+ * be the ONLY signal for a cancel initiated from another tab/device. Queues
+ * are drained via the session hook once the shared reconcile settles.
  */
-async function _dispatchCancelled(turnId: number, type: string): Promise<void> {
-  const session = useSessionStore();
-  void session._handleCancelled(turnId, type);
-  // A cancel is terminal regardless of what the refetch returns (or whether
-  // it fails), so clear working FIRST — this frame can originate from
-  // another tab/device (any WS push, not just this client's stop button),
-  // and clearing only on some branches would leave a live-working record
-  // behind that permanently gates the thread's sends.
-  setTurnWorking(turnId, type, false);
-  try {
-    const block = await convoApi.thread(turnId, type);
-    if (block.messages.length) {
-      upsertTurnToSurfaces(block, type, { force: true });
-    } else {
-      removeTurn(turnId, type);
-    }
-  } catch {
-    // Best-effort — leave whatever is rendered; a later refetch (panel open,
-    // page refresh) reconciles against the DB regardless.
-  }
+function _dispatchCancelled(turnId: number, type: string): void {
+  void reconcileCancelledTurn(turnId, type).then(() => hooks().drainQueues());
 }
 
 /** Route content-free push event types (keyed on `type`); returns true when

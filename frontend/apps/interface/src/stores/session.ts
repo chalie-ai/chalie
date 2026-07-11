@@ -25,10 +25,11 @@ import { on } from '../composables/useEventBus';
 import { extractText } from '../composables/useMarkup';
 import { getHost } from '../api/index';
 import { conversation as convoApi } from '../api/conversation';
-import { useConversationFeed } from '../composables/useConversationFeed';
 import { useActionCard } from '../composables/useActionCard';
-import { dispatchDrift } from '../utils/driftDispatcher';
+import { dispatchDrift, registerSessionHooks } from '../utils/driftDispatcher';
+import { reconcileCancelledTurn } from '../utils/cancelReconcile';
 import { clearLiveTurn } from '../utils/liveActTrail';
+import { blockSpeechText } from '../utils/speech';
 import {
   isSurfaceWorking,
   isTurnWorking,
@@ -134,6 +135,14 @@ export const useSessionStore = defineStore('session', {
       const conn = useConnectionStore();
       const contextUsage = useContextUsageStore();
 
+      registerSessionHooks({
+        releasePendingSend: (turnId, type) => this._releasePendingSend(turnId, type),
+        getPanelThreadId: () => this.panelThreadId,
+        setErrorMessage: (message) => { this.errorMessage = message; },
+        finishTurn: (turnId, type) => this._finishTurn(turnId, type),
+        drainQueues: () => this._drainQueues(),
+      });
+
       ws.onConnect(() => {
         conn.setConnected(true);
         void this._reconcileWorking();
@@ -163,7 +172,6 @@ export const useSessionStore = defineStore('session', {
           const type = key.slice(0, idx);
           const turnId = Number(key.slice(idx + 1));
           setTurnWorking(turnId, type, false);
-          useConversationFeed(type).setWorking(turnId, false);
         }
       });
 
@@ -225,10 +233,14 @@ export const useSessionStore = defineStore('session', {
      * the backend after reconnect. Walks the `_offlineWorking` snapshot the
      * disconnect handler recorded — NOT the DOM: the disconnect handler
      * already cleared every `data-working` marker, so a DOM scan here would
-     * find nothing. Re-fetches each candidate turn and either restores its
-     * spinner (backend still genuinely mid-turn — `working` is a
-     * server-derived field, see ConversationTurnBlock) or settles it via
-     * `_finishTurn` (it actually completed/crashed/cancelled while offline).
+     * find nothing. Re-fetches each candidate turn straight off the REST API
+     * (the DOM contract's sole data source — no client-side cache to
+     * consult) and either restores its spinner (backend still genuinely
+     * mid-turn — `working` is a server-derived field, see
+     * ConversationTurnBlock) or settles it: marks `data-done` (D16, unless
+     * the panel has it open) and hands off to `_finishTurn` for the
+     * offline-settle bookkeeping the live WS settle path would otherwise
+     * have done.
      */
     async _reconcileWorking(): Promise<void> {
       for (const key of Array.from(this._offlineWorking)) {
@@ -236,17 +248,17 @@ export const useSessionStore = defineStore('session', {
         const type = key.slice(0, idx);
         const turnId = Number(key.slice(idx + 1));
 
-        const convo = useConversationFeed(type);
+        let block;
         try {
-          await convo.fetchTurn(turnId);
+          block = await convoApi.thread(turnId, type);
         } catch {
           continue; // best-effort; key stays snapshotted, retried on the next reconnect
         }
         this._offlineWorking.delete(key);
-        if (convo.blocks[turnId]?.working) {
+        if (block.working) {
           setTurnWorking(turnId, type, true);
-          convo.setWorking(turnId, true);
         } else {
+          if (turnId !== this.panelThreadId) setTurnDone(turnId, type, true);
           void this._finishTurn(turnId, type);
         }
       }
@@ -332,28 +344,29 @@ export const useSessionStore = defineStore('session', {
       this.errorMessage = message;
     },
 
-    /** `done(turn_id, type)` — settle the turn on its type's feed. Leave a
-     *  standing done marker unless the user is viewing it. Drain queues,
-     *  record ambient, and fire an OS notification for the final reply when
-     *  the tab is unfocused. Identical for every type — only the dock the
-     *  settled thread lives in differs. */
+    /** Settle bookkeeping for a completed/crashed/offline-settled turn.
+     *  `data-done` itself is already stamped by the caller (D16, see
+     *  `driftDispatcher`'s turn_execution branch and `_reconcileWorking`
+     *  above) — this only drains queues, records ambient activity, and fires
+     *  an OS notification for the final reply when the tab is unfocused.
+     *  Identical for every type — only the dock the settled thread lives in
+     *  differs. */
     async _finishTurn(turnId: number, type: string = ConfigType.USER): Promise<void> {
-      const convo = useConversationFeed(type);
-
-      if (turnId === this.panelThreadId) convo.setWorking(turnId, false);
-      else convo.markThreadDone(turnId);
-
       this._drainQueues();
       useAmbientSensor().recordResponse();
 
       if (!document.hasFocus()) {
-        // Buffer-sourced deliberately (interim seam): the awaited fetchTurn
-        // just populated this exact block, so the read can't race — whereas
-        // the DOM copy is written by a SEPARATE, unawaited `updated`-signal
-        // refetch (and may not exist at all for a turn no surface renders).
-        await convo.fetchTurn(turnId);
-        const t = convo.turnSpeechText(turnId);
-        if (t) this._notifyBackground(t);
+        // Fetched ONCE, here, for the notification — deliberately NOT read
+        // off the DOM: the DOM copy is written by a SEPARATE, unawaited
+        // `updated`-signal refetch and may not exist at all for a turn no
+        // surface renders (a critic HIGH in S4).
+        try {
+          const block = await convoApi.thread(turnId, type);
+          const t = blockSpeechText(block);
+          if (t) this._notifyBackground(t);
+        } catch {
+          // Best-effort — no notification if the fetch fails.
+        }
       }
     },
 
@@ -400,18 +413,15 @@ export const useSessionStore = defineStore('session', {
 
       const text = restoreText === FILE_PLACEHOLDER ? '' : restoreText;
 
+      // Optimistic: hide the spinner/live pill trail immediately rather than
+      // waiting on the DELETE round-trip. The CONTENT refetch, however, must
+      // NOT start yet — the backend only strips a cancelled turn's orphan
+      // user row once cancel() has committed, so a fetch racing ahead of the
+      // DELETE can force-upsert stale pre-cancel content that nothing
+      // corrects if the WS 'cancelled' frame is dropped.
       if (stopId != null) {
-        // Optimistic: hide the spinner/stop control/live pill trail
-        // immediately, rather than waiting on the DELETE round-trip or a WS
-        // 'cancelled' frame that can be delayed or dropped on a flaky
-        // connection. `_handleCancelled` below (idempotent alongside a later
-        // WS frame, same as before) reconciles the actual content once
-        // confirmed.
         setTurnWorking(stopId, type, false);
         clearLiveTurn(type, stopId);
-        // Interim seam (tasks.ts / SchedulerDock) — dies with the buffer in
-        // a later slice.
-        useConversationFeed(type).dropLiveTurn(stopId);
       }
 
       ws.abort();
@@ -422,12 +432,13 @@ export const useSessionStore = defineStore('session', {
 
       await this._postInterrupt(stopId, type);
 
-      // Reconcile against the backend now, rather than waiting on the WS
-      // 'cancelled' frame (`_handleCancelled`) — that frame can be delayed or
-      // dropped on a flaky connection, and it's also what actually restores a
-      // fork turn's content after the blanket drop above. Idempotent against
-      // a WS frame that also arrives later.
-      if (stopId != null) await this._handleCancelled(stopId, type);
+      if (stopId != null) {
+        // Post-DELETE, the fetch reads authoritative post-cancel state — and
+        // dedupes (same in-flight cache) with whatever reconcile a WS
+        // 'cancelled' frame may have kicked off during the round-trip.
+        await reconcileCancelledTurn(stopId, type);
+        this._drainQueues();
+      }
     },
 
     /** DELETE /api/thread/<turn_id>?type=<type> — best-effort interrupt, never throws. */
@@ -482,14 +493,11 @@ export const useSessionStore = defineStore('session', {
     /**
      * Open a thread in the slide-over panel. ThreadPanel.vue owns the actual
      * fetch + surface upsert (it watches panelThreadId/panelType) — this just
-     * sets identity and clears the standing "done" marker: the buffer's own
-     * `seenThread` (interim — tasks.ts's Activity dock still reads it) plus
-     * the DOM's `data-done` attribute (D16).
+     * sets identity and clears the standing "done" marker (D16).
      */
     openThreadPanel(turnId: number, type: string = ConfigType.USER): void {
       this.panelThreadId = turnId;
       this.panelType = type;
-      useConversationFeed(type).seenThread(turnId);
       setTurnDone(turnId, type, false);
     },
 
@@ -512,34 +520,6 @@ export const useSessionStore = defineStore('session', {
     },
     closeSchedulerDock(): void {
       this.schedulerDockOpen = false;
-    },
-
-    /**
-     * Cancelled turn — buffer bookkeeping ONLY (interim seam). Called from
-     * `requestStop`'s post-interrupt reconcile AND from
-     * `driftDispatcher._dispatchCancelled` (idempotent either order, or
-     * both). The DOM-rendering side of a cancel — the force-upserted refetch
-     * and `removeTurn` for an emptied turn — lives in the dispatcher now (see
-     * its comment for the full rationale); this mirrors the buffer write for
-     * tasks.ts's Activity dock (still buffer-driven this slice) and drains
-     * queues.
-     */
-    async _handleCancelled(turnId: number, type: string): Promise<void> {
-      const convo = useConversationFeed(type);
-      try {
-        const block = await convoApi.thread(turnId, type);
-        if (block.messages.length) {
-          convo.forceUpsertTurn(block);
-          convo.setWorking(turnId, false);
-        } else {
-          convo.dropLiveTurn(turnId);
-        }
-      } catch {
-        // Best-effort — leave whatever is buffered; a later fetchTurn (panel
-        // open, page refresh) will reconcile against the DB regardless.
-        convo.setWorking(turnId, false);
-      }
-      this._drainQueues();
     },
 
     /** Fire a background notification when the tab is not focused. */

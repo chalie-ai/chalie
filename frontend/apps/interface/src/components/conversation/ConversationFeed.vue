@@ -6,7 +6,6 @@
 import { nextTick, onBeforeUnmount, onMounted, ref } from 'vue';
 import { ConfigType } from '@chalie/shared';
 import { conversation as convoApi } from '../../api/conversation';
-import { useConversationFeed } from '../../composables/useConversationFeed';
 import { useSessionStore } from '../../stores/session';
 import { useAutoscroll } from '../../composables/useAutoscroll';
 import { registerSurface, unregisterSurface, upsertTurnToSurfaces, SPINE_SURFACE_ID } from '../../utils/turnDom';
@@ -14,17 +13,13 @@ import SpineTurn from './SpineTurn.vue';
 
 const PAGE_SIZE = 20;
 
-const feed = useConversationFeed();
 const session = useSessionStore();
 
 const feedRef = ref<HTMLElement | null>(null);
 const turnsRef = ref<HTMLElement | null>(null);
 const { scrollToBottom, forceScrollToBottom } = useAutoscroll(feedRef);
 
-// D17 — pagination cursor is UI-local. The legacy buffer (`feed`) is still
-// written alongside the DOM upsert: tasks.ts's Activity dock and
-// SchedulerDock.vue read it (isForkedThread/threadPhase) and are out of
-// scope for this slice, so their only data source stays fed.
+// D17 — the pagination cursor (offset/hasMore) is UI-local, owned here.
 const offset = ref(0);
 const hasMoreRef = ref(true);
 
@@ -38,7 +33,6 @@ async function _fetchPage(pageOffset: number): Promise<number> {
 
   const { blocks } = await convoApi.batch(ids, ConfigType.USER);
   for (const block of blocks) {
-    feed.upsertTurn(block);
     upsertTurnToSurfaces(block, ConfigType.USER);
   }
   return threads.length;

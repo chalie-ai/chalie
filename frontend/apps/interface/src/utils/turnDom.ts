@@ -2,6 +2,7 @@ import { createVNode, render } from 'vue';
 import type { App, AppContext, Component } from 'vue';
 import TurnView from '../components/conversation/TurnView.vue';
 import type { ConversationTurnBlock } from '../api/conversation';
+import { clearLiveTurnsForToolCallsResolved } from './liveActTrail';
 
 let appContext: AppContext | null = null;
 
@@ -85,6 +86,29 @@ export function isSurfaceWorking(surfaceId: string): boolean {
   const surface = _surfaces.get(surfaceId);
   if (!surface) return false;
   return surface.container.querySelector('[data-working]') != null;
+}
+
+/** `type:turnId` keys marked done (D16, "settled unseen") — the `done`
+ *  counterpart to `_liveWorking`, and needed for the same reason: a settle
+ *  frame routinely arrives for a turn NO surface renders (a scheduled turn
+ *  finishing with the dock closed is the common case, not the edge), where
+ *  `setTurnDone` would stamp zero elements and the state would be lost. The
+ *  record is authoritative; the DOM attribute is its rendered projection. */
+const _liveDone = new Set<string>();
+
+/** True if this turn is marked done (D16) — live record first (covers turns
+ *  with no rendered copy), then any rendered copy's `data-done` attribute. */
+export function isTurnDone(turnId: number, type: string): boolean {
+  return (
+    _liveDone.has(workingKey(turnId, type)) ||
+    getAllTurnEls(turnId, type).some((el) => el.hasAttribute('data-done'))
+  );
+}
+
+/** A registered surface's own container element, or null if unregistered —
+ *  used by `utils/threadActivity.ts` to scope its DOM scan to the spine only. */
+export function getSurfaceContainer(surfaceId: string): HTMLElement | null {
+  return _surfaces.get(surfaceId)?.container ?? null;
 }
 
 /** The raw text of the LAST user row inside a given turn host — used by
@@ -207,6 +231,11 @@ function stampWorking(host: HTMLElement, block: ConversationTurnBlock, type: str
   } else {
     el.removeAttribute('data-working');
   }
+  // Same catch-up for done (D16): a settle recorded while nothing rendered
+  // this turn must surface on its first mount.
+  if (_liveDone.has(workingKey(block.turn_id, type))) {
+    el.setAttribute('data-done', 'true');
+  }
 }
 
 /**
@@ -219,6 +248,18 @@ export function upsertTurnToSurfaces(
   type: string,
   options: UpsertOptions = {},
 ): void {
+  // §6.5 step 4 — the block's persisted tool_calls supersede its RESOLVED
+  // live pills (an unresolved pill, a step still running, is left to finish
+  // live). Fired here, the one shared upsert path every fetched block passes
+  // through — the DOM-contract port of the retired buffer's `_writeTurn`
+  // call, without which a mid-turn refetch renders the frozen pill AND its
+  // collapsed chip side by side until the turn settles.
+  clearLiveTurnsForToolCallsResolved(
+    type,
+    block.turn_id,
+    block.messages.some((m) => m.tool_calls?.length),
+  );
+
   for (const surface of _surfaces.values()) {
     if (surface.type !== type) continue;
     if (surface.accepts && !surface.accepts(block.turn_id)) continue;
@@ -276,9 +317,11 @@ export function removeTurn(turnId: number, type: string): void {
       host.remove();
     }
   }
-  // A removed turn cannot be "working": drop any live record so
-  // `isTurnWorking` (which checks the record before the DOM) doesn't keep
-  // answering true for a turn that no longer exists, and tell consumers.
+  // A removed turn cannot be "working" or "settled unseen": drop any live
+  // record so `isTurnWorking`/`isTurnDone` (which check the records before
+  // the DOM) don't keep answering true for a turn that no longer exists,
+  // and tell consumers.
+  _liveDone.delete(workingKey(turnId, type));
   if (_liveWorking.delete(workingKey(turnId, type))) {
     document.dispatchEvent(
       new CustomEvent('turn-state-changed', {
@@ -315,10 +358,18 @@ export function setTurnWorking(turnId: number, type: string, working: boolean): 
   );
 }
 
-/** D16 — toggle the `data-done` attribute (seen/unseen) on every rendered
- *  copy and broadcast the change. Replaces the buffer's `done` Set for
- *  rendering purposes. */
+/** D16 — record the done (seen/unseen) state, stamp `data-done` on every
+ *  rendered copy, and broadcast the change. The `_liveDone` record is kept
+ *  even with zero rendered copies (see its comment) so `isTurnDone` and a
+ *  later mount both still see the state. */
 export function setTurnDone(turnId: number, type: string, done: boolean): void {
+  const key = workingKey(turnId, type);
+  if (done) {
+    _liveDone.add(key);
+  } else {
+    _liveDone.delete(key);
+  }
+
   const els = getAllTurnEls(turnId, type);
   for (const el of els) {
     if (done) {

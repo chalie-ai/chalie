@@ -131,6 +131,31 @@ describe('upsertTurnToSurfaces — fan-out', () => {
     expect(getTurnEl(1, 'scheduled', otherType)).toBeNull();
   });
 
+  it('§6.5 step 4 — a block carrying persisted tool_calls drops the turn\'s RESOLVED live pills, keeps unresolved ones', async () => {
+    vi.resetModules();
+    const { registerSurface, upsertTurnToSurfaces } = await import('./turnDom');
+    const { startLiveTool, finishLiveTool, liveTrailsFor } = await import('./liveActTrail');
+    const container = document.createElement('div');
+    registerSurface({ id: 'x', type: 'user', container, component: StubComponent });
+
+    startLiveTool('user', 1, 100, 'search');
+    finishLiveTool('user', 1, 100, true); // resolved — superseded by the chip
+    startLiveTool('user', 1, 101, 'browse'); // still running — must survive
+
+    const b = block(1, [10]);
+    b.messages[0].tool_calls = [
+      { tool_name: 'search', summary: 's', state: 'done', ended_at: null },
+    ];
+    upsertTurnToSurfaces(b, 'user');
+
+    const pills = liveTrailsFor('user', 1)[0]?.pills ?? [];
+    expect(pills.map((p) => p.id)).toEqual(['101']);
+
+    // A block WITHOUT persisted tool_calls leaves the trail untouched.
+    upsertTurnToSurfaces(block(1, [10, 11]), 'user');
+    expect((liveTrailsFor('user', 1)[0]?.pills ?? []).map((p) => p.id)).toEqual(['101']);
+  });
+
   it('unregisterSurface stops further delivery to that surface', async () => {
     const { registerSurface, unregisterSurface, upsertTurnToSurfaces, getTurnEl } = await freshTurnDom();
     const container = document.createElement('div');
@@ -279,6 +304,50 @@ describe('setTurnWorking / setTurnDone — attribute flips and events', () => {
     expect(events).toHaveLength(1);
     expect(events[0].detail).toMatchObject({ turnId: 999, type: 'user', done: true });
     document.removeEventListener('turn-state-changed', listener);
+  });
+
+  // D16 — `_liveDone` mirrors `_liveWorking`: a settle frame routinely
+  // arrives for a turn NO surface renders (a scheduled turn finishing with
+  // the dock closed), where `setTurnDone` would stamp zero elements and the
+  // state would otherwise be lost.
+  it('isTurnDone is true from the live record alone, with no rendered element at all', async () => {
+    const { setTurnDone, isTurnDone } = await freshTurnDom();
+    setTurnDone(42, 'user', true);
+    expect(isTurnDone(42, 'user')).toBe(true);
+  });
+
+  it('a later upsertTurn of a live-done-recorded turn stamps data-done at mount time', async () => {
+    const { registerSurface, upsertTurnToSurfaces, setTurnDone, getTurnEl } = await freshTurnDom();
+    const container = document.body.appendChild(document.createElement('div'));
+    registerSurface({ id: 'a', type: 'user', container, component: StubComponent });
+
+    // The settle frame for turn 42 arrives before any fetch-driven mount
+    // exists — recorded live-only, exactly like the analogous working case.
+    setTurnDone(42, 'user', true);
+
+    upsertTurnToSurfaces(block(42, [420]), 'user');
+
+    expect(getTurnEl(42, 'user', container)?.hasAttribute('data-done')).toBe(true);
+    container.remove();
+  });
+
+  it('setTurnDone(false) clears the live record, so isTurnDone reverts to false', async () => {
+    const { setTurnDone, isTurnDone } = await freshTurnDom();
+    setTurnDone(42, 'user', true);
+    expect(isTurnDone(42, 'user')).toBe(true);
+
+    setTurnDone(42, 'user', false);
+    expect(isTurnDone(42, 'user')).toBe(false);
+  });
+
+  it('removeTurn clears the live-done record for the removed turn', async () => {
+    const { setTurnDone, removeTurn, isTurnDone } = await freshTurnDom();
+    setTurnDone(43, 'user', true);
+    expect(isTurnDone(43, 'user')).toBe(true);
+
+    removeTurn(43, 'user');
+
+    expect(isTurnDone(43, 'user')).toBe(false);
   });
 });
 

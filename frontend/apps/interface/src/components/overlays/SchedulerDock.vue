@@ -12,12 +12,11 @@ import { ConfigType, describeCron } from '@chalie/shared';
 import { useSessionStore } from '../../stores/session';
 import type { SchedulerTurn } from '../../api/scheduler';
 import { scheduler } from '../../api/scheduler';
-import { useConversationFeed } from '../../composables/useConversationFeed';
+import { threadPhase } from '../../utils/threadActivity';
 
 const POLL_INTERVAL_MS = 60_000;
 
 const session = useSessionStore();
-const feed = useConversationFeed(ConfigType.SCHEDULED);
 
 // ── Local state ───────────────────────────────────────────────────────────────
 
@@ -26,6 +25,18 @@ let pollTimer: ReturnType<typeof setInterval> | null = null;
 
 const drawerRef = ref<HTMLElement | null>(null);
 const scrimRef = ref<HTMLElement | null>(null);
+
+// Scheduled turns don't render on the spine, so `threadPhase` reads DOM
+// contract state globally (any rendered copy, e.g. an open thread panel) —
+// bumped on every 'turn-state-changed' so the dock's dots/borders stay live.
+const activityTick = ref(0);
+function bumpActivity(): void {
+  activityTick.value++;
+}
+function phase(turn: SchedulerTurn): 'working' | 'done' | null {
+  void activityTick.value;
+  return threadPhase(turn.turn_id, ConfigType.SCHEDULED);
+}
 
 // ── Polling ───────────────────────────────────────────────────────────────────
 
@@ -96,9 +107,13 @@ function handleKeydown(e: KeyboardEvent): void {
   if (e.key === 'Escape' && session.schedulerDockOpen) session.closeSchedulerDock();
 }
 
-onMounted(() => document.addEventListener('keydown', handleKeydown));
+onMounted(() => {
+  document.addEventListener('keydown', handleKeydown);
+  document.addEventListener('turn-state-changed', bumpActivity);
+});
 onBeforeUnmount(() => {
   document.removeEventListener('keydown', handleKeydown);
+  document.removeEventListener('turn-state-changed', bumpActivity);
   stopPolling();
 });
 
@@ -144,17 +159,15 @@ function cadence(turn: SchedulerTurn): string {
         v-for="turn in turns"
         :key="turn.turn_id"
         class="sched-dock__row"
-        :class="
-          feed.threadPhase(turn.turn_id) ? `sched-dock__row--${feed.threadPhase(turn.turn_id)}` : ''
-        "
+        :class="phase(turn) ? `sched-dock__row--${phase(turn)}` : ''"
         @click="openTurn(turn)"
       >
         <span class="sched-dock__row-top">
           <span class="sched-dock__row-label">{{ turn.gist || turn.preview }}</span>
           <span
-            v-if="feed.threadPhase(turn.turn_id)"
+            v-if="phase(turn)"
             class="task-drawer__thread-dot"
-            :class="feed.threadPhase(turn.turn_id) ?? ''"
+            :class="phase(turn) ?? ''"
             aria-hidden="true"
           />
         </span>

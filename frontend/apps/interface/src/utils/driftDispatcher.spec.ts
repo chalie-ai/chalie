@@ -8,9 +8,18 @@
  * Boundaries mocked (network + DOM-effect modules, per the project's
  * established convention — see stores/session.spec.ts's "only WS/network is
  * mocked" note): api/conversation, utils/toast, utils/liveActTrail,
- * utils/turnDom, and the four Pinia stores the router touches. `dispatchDrift`
- * itself is real and unmocked — these are the only seams that let it run
- * without a live WS connection or a real DB-backed turn fetch.
+ * utils/turnDom, and the four Pinia stores the router touches. Because
+ * `utils/cancelReconcile.ts` imports the SAME `./liveActTrail` and
+ * `./turnDom` modules (vi.mock is keyed by resolved path, not import
+ * specifier), the cancelled branch's real `reconcileCancelledTurn` runs
+ * unmocked and its effects surface through those same mocks — no separate
+ * mock of cancelReconcile itself is needed.
+ *
+ * This module no longer imports `stores/session.ts` (see its own docblock —
+ * that would be a circular import); the handful of session-owned side
+ * effects it still needs are reached through `SessionHooks`, registered via
+ * `registerSessionHooks()`. A fake implementation is registered once, here,
+ * standing in for `session.init()`.
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { WsPushEvent } from '@chalie/shared';
@@ -51,25 +60,6 @@ vi.mock('./turnDom', () => ({
   upsertTurnToSurfaces: upsertTurnToSurfacesMock,
 }));
 
-const { fakeSession, finishTurnMock } = vi.hoisted(() => {
-  const finishTurnMock = vi.fn();
-  const handleCancelledMock = vi.fn();
-  const releasePendingSendMock = vi.fn();
-  return {
-    finishTurnMock,
-    handleCancelledMock,
-    releasePendingSendMock,
-    fakeSession: {
-      panelThreadId: null as number | null,
-      errorMessage: null as string | null,
-      _finishTurn: finishTurnMock,
-      _handleCancelled: handleCancelledMock,
-      _releasePendingSend: releasePendingSendMock,
-    },
-  };
-});
-vi.mock('../stores/session', () => ({ useSessionStore: () => fakeSession }));
-
 const { handleUpdateMock, handleTipMock } = vi.hoisted(() => ({
   handleUpdateMock: vi.fn(),
   handleTipMock: vi.fn(),
@@ -88,7 +78,23 @@ vi.mock('../stores/permissions', () => ({
   usePermissionsStore: () => ({ enqueue: enqueueMock }),
 }));
 
-const { dispatchDrift } = await import('./driftDispatcher');
+const { dispatchDrift, registerSessionHooks } = await import('./driftDispatcher');
+
+// Fake stand-in for the SessionHooks a real `session.init()` would register —
+// the only session-owned side effects `_dispatchTurnExecution` still needs.
+// `panelThreadId` is mutable per-test state read live by `getPanelThreadId`.
+const releasePendingSendMock = vi.fn();
+const setErrorMessageMock = vi.fn();
+const finishTurnMock = vi.fn();
+const drainQueuesMock = vi.fn();
+const hooksState = { panelThreadId: null as number | null };
+registerSessionHooks({
+  releasePendingSend: releasePendingSendMock,
+  getPanelThreadId: () => hooksState.panelThreadId,
+  setErrorMessage: setErrorMessageMock,
+  finishTurn: finishTurnMock,
+  drainQueues: drainQueuesMock,
+});
 
 function frame(data: Record<string, unknown>): WsPushEvent {
   return data as unknown as WsPushEvent;
@@ -96,8 +102,7 @@ function frame(data: Record<string, unknown>): WsPushEvent {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  fakeSession.panelThreadId = null;
-  fakeSession.errorMessage = null;
+  hooksState.panelThreadId = null;
   threadMock.mockResolvedValue({
     turn_id: 1,
     gist: null,
@@ -192,7 +197,7 @@ describe('dispatchDrift — turn_execution frame', () => {
   });
 
   it('state=completed clears data-working and sets data-done when the turn is NOT the open panel thread', () => {
-    fakeSession.panelThreadId = 999;
+    hooksState.panelThreadId = 999;
     dispatchDrift(frame({ state: 'completed', turn_id: 21, started_at: '2026-01-01T00:00:00Z', type: 'user' }));
     expect(setTurnWorkingMock).toHaveBeenCalledWith(21, 'user', false);
     expect(setTurnDoneMock).toHaveBeenCalledWith(21, 'user', true);
@@ -200,37 +205,33 @@ describe('dispatchDrift — turn_execution frame', () => {
   });
 
   it('state=completed does NOT set data-done when the turn IS the open panel thread', () => {
-    fakeSession.panelThreadId = 21;
+    hooksState.panelThreadId = 21;
     dispatchDrift(frame({ state: 'completed', turn_id: 21, started_at: '2026-01-01T00:00:00Z', type: 'user' }));
     expect(setTurnDoneMock).not.toHaveBeenCalled();
     expect(finishTurnMock).toHaveBeenCalledWith(21, 'user');
   });
 
-  it('state=cancelled with a non-empty fetched block re-renders with force and clears working (version can shrink)', async () => {
+  it('state=cancelled with a non-empty fetched block re-renders with force and clears working (version can shrink), then drains queues', async () => {
     threadMock.mockResolvedValue({
       turn_id: 33, gist: null, preview: 'x', last_activity_at: null, working: false, duration_ms: 0,
       messages: [{ id: '1', role: 'user', content: 'hi', timestamp: '2026-01-01 00:00:00', turn_id: 33 }],
     });
     dispatchDrift(frame({ state: 'cancelled', turn_id: 33, started_at: '2026-01-01T00:00:00Z', type: 'user' }));
-    await Promise.resolve();
-    await Promise.resolve();
-    await Promise.resolve();
+    await new Promise((resolve) => setTimeout(resolve, 0));
     expect(upsertTurnToSurfacesMock).toHaveBeenCalledWith(
       expect.objectContaining({ turn_id: 33 }), 'user', { force: true },
     );
     expect(setTurnWorkingMock).toHaveBeenCalledWith(33, 'user', false);
     expect(removeTurnMock).not.toHaveBeenCalled();
-    expect(fakeSession._handleCancelled).toHaveBeenCalledWith(33, 'user');
+    expect(drainQueuesMock).toHaveBeenCalled();
   });
 
-  it('state=cancelled with an empty fetched block removes the turn nodes', async () => {
+  it('state=cancelled with an empty fetched block removes the turn nodes, then drains queues', async () => {
     threadMock.mockResolvedValue({
       turn_id: 34, gist: null, preview: '', last_activity_at: null, working: false, duration_ms: 0, messages: [],
     });
     dispatchDrift(frame({ state: 'cancelled', turn_id: 34, started_at: '2026-01-01T00:00:00Z', type: 'user' }));
-    await Promise.resolve();
-    await Promise.resolve();
-    await Promise.resolve();
+    await new Promise((resolve) => setTimeout(resolve, 0));
     expect(removeTurnMock).toHaveBeenCalledWith(34, 'user');
     expect(upsertTurnToSurfacesMock).not.toHaveBeenCalled();
     // The cancel is terminal on EVERY branch — a remote-initiated cancel
@@ -238,22 +239,22 @@ describe('dispatchDrift — turn_execution frame', () => {
     // working record, or the thread's send gate stays wedged for the tab's
     // lifetime.
     expect(setTurnWorkingMock).toHaveBeenCalledWith(34, 'user', false);
+    expect(drainQueuesMock).toHaveBeenCalled();
   });
 
   it('every turn_execution state releases the send\'s POST-scoped busy hold', () => {
     for (const [i, state] of (['working', 'completed', 'cancelled', 'crashed'] as const).entries()) {
       dispatchDrift(frame({ state, turn_id: 50 + i, started_at: '2026-01-01T00:00:00Z', type: 'user' }));
-      expect(fakeSession._releasePendingSend).toHaveBeenCalledWith(50 + i, 'user');
+      expect(releasePendingSendMock).toHaveBeenCalledWith(50 + i, 'user');
     }
   });
 
-  it('state=cancelled still clears data-working when the refetch rejects', async () => {
+  it('state=cancelled still clears data-working and drains queues when the refetch rejects', async () => {
     threadMock.mockRejectedValue(new Error('network down'));
     dispatchDrift(frame({ state: 'cancelled', turn_id: 35, started_at: '2026-01-01T00:00:00Z', type: 'user' }));
-    await Promise.resolve();
-    await Promise.resolve();
-    await Promise.resolve();
+    await new Promise((resolve) => setTimeout(resolve, 0));
     expect(setTurnWorkingMock).toHaveBeenCalledWith(35, 'user', false);
+    expect(drainQueuesMock).toHaveBeenCalled();
   });
 });
 

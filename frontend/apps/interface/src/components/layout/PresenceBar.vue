@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { computed } from 'vue';
 import { Brain, CalendarClock, Clock, Moon, Search, Sun } from '@lucide/vue';
 import { storeToRefs } from 'pinia';
 import { useSessionStore } from '../../stores/session';
@@ -6,6 +7,7 @@ import { useTasksStore } from '../../stores/tasks';
 import { ConfigType, platform, useTheme } from '@chalie/shared';
 import { emit } from '../../composables/useEventBus';
 import { useDockBusy } from '../../composables/useDockBusy';
+import { useThreadActivity } from '../../utils/threadActivity';
 
 const session = useSessionStore();
 
@@ -14,7 +16,11 @@ const session = useSessionStore();
 const isSending = useDockBusy(() => null, () => ConfigType.USER);
 
 const tasks = useTasksStore();
-const { totalCount } = storeToRefs(tasks);
+const { subagents } = storeToRefs(tasks);
+
+/** DOM-derived (no store) — see `utils/threadActivity.ts`. */
+const threadActivity = useThreadActivity();
+const totalCount = computed(() => subagents.value.size + threadActivity.value.length);
 
 const { toggle, theme } = useTheme();
 

@@ -1,27 +1,23 @@
 /**
  * Tasks store — active delegates (GET /api/subagents/all, each a full
- * snapshot an Activity row renders) plus forked-thread activity. Live
- * updates arrive via applyDriftEvent() from the session store. Recurring
- * prompt-schedules live exclusively in the scheduler dock, not here.
+ * snapshot an Activity row renders). Live updates arrive via
+ * applyDriftEvent() from the session store. Recurring prompt-schedules live
+ * exclusively in the scheduler dock, not here.
+ *
+ * Forked-thread Activity (the drawer's other row family) is DOM-derived —
+ * see `utils/threadActivity.ts`'s `useThreadActivity` — rather than a store
+ * getter: a Pinia getter/Vue computed can't reactively track a raw
+ * `querySelectorAll` read, so `totalCount` (subagents + forked threads) is
+ * combined at the component level (PresenceBar.vue, TaskDrawer.vue) instead.
  */
 import { defineStore } from 'pinia';
 import type { WsPushEvent } from '@chalie/shared';
 import type { ActiveSubagent } from '../api/scheduler';
 import { scheduler } from '../api/scheduler';
-import { useConversationFeed } from '../composables/useConversationFeed';
 
 export interface DriftTask {
   id?: string;
   [key: string]: unknown;
-}
-
-/** A forked thread surfaced in the Activity drawer: its reply is streaming right
- *  now (`working`, pink) or has settled unseen (`done`, blue). */
-export interface ThreadActivityItem {
-  turn_id: number;
-  label: string;
-  snippet: string;
-  kind: 'working' | 'done';
 }
 
 export const useTasksStore = defineStore('tasks', {
@@ -30,31 +26,6 @@ export const useTasksStore = defineStore('tasks', {
     subagents: new Map<string, ActiveSubagent>() as Map<string, ActiveSubagent>,
     isOpen: false,
   }),
-
-  getters: {
-    /** Forked threads with live Activity as dock rows — most recently active first. */
-    threadActivity(): ThreadActivityItem[] {
-      const convo = useConversationFeed();
-      return convo.threadList()
-        .filter(
-          (t) =>
-            t.turn_id != null &&
-            convo.isForkedThread(t.turn_id) &&
-            convo.threadPhase(t.turn_id) != null,
-        )
-        .sort((a, b) => (b.last_activity_at ?? '').localeCompare(a.last_activity_at ?? ''))
-        .map((t) => ({
-          turn_id: t.turn_id as number,
-          label: t.gist || t.preview,
-          snippet: t.preview,
-          kind: convo.threadPhase(t.turn_id as number) as ThreadActivityItem['kind'],
-        }));
-    },
-
-    totalCount(state): number {
-      return state.subagents.size + this.threadActivity.length;
-    },
-  },
 
   actions: {
     open(): void {
