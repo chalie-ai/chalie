@@ -15,8 +15,7 @@ export function messagePlaintext(msg: ConversationMessage): string {
 
 /**
  * TTS plaintext of every assistant row in a turn block — the unfocused-tab
- * background notification's source (session._finishTurn). Ported from the
- * retired useConversationFeed buffer's `_turnSpeechText`; reads straight off
+ * background notification's source (session._finishTurn); reads straight off
  * a freshly-fetched block rather than a cached copy, since the DOM contract
  * holds no turn data of its own.
  */

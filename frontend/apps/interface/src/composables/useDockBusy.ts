@@ -1,7 +1,6 @@
 /**
  * Reactive "is this dock's target currently working" read, derived from the
- * DOM contract's `data-working` attribute (D3) — replaces the retired
- * `session.isSending`/`isLaneBusy` store fields. `turnId() === null` means
+ * DOM contract's `data-working` attribute (D3). `turnId() === null` means
  * the main spine (no stable turn_id to key off until a brand-new send's POST
  * resolves one, so busy = anything working within the registered spine
  * surface); otherwise busy = that specific turn's own working state.

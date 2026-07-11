@@ -9,9 +9,8 @@
  * guard, ordering, removal, and the working/done attribute + event effects.
  *
  * The surface registry and `appContext` are module-level singletons, so each
- * test re-imports a fresh module via vi.resetModules() (see
- * composables/useConversationFeed.spec.ts for the established pattern) —
- * otherwise a surface registered in one test would leak into the next.
+ * test re-imports a fresh module via vi.resetModules() — otherwise a
+ * surface registered in one test would leak into the next.
  */
 import { describe, expect, it, vi } from 'vitest';
 import { h } from 'vue';
