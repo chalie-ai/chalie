@@ -12,24 +12,12 @@ engine succeeded and genuinely found nothing — the two are never conflated.
 from __future__ import annotations
 
 import logging
-import threading
-import time
+
+from ddgs.exceptions import RatelimitException as DDGRatelimitException
+
+from exceptions.rate_limit import RateLimitException
 
 logger = logging.getLogger(__name__)
-
-_ddg_last_call = 0.0
-_ddg_lock = threading.Lock()
-_DDG_COOLDOWN = 2.0
-
-
-def _enforce_ddg_cooldown() -> None:
-    """Serialise DDG image calls with a 2-second cooldown (thread-safe)."""
-    global _ddg_last_call
-    with _ddg_lock:
-        elapsed = time.time() - _ddg_last_call
-        if elapsed < _DDG_COOLDOWN:
-            time.sleep(_DDG_COOLDOWN - elapsed)
-        _ddg_last_call = time.time()
 
 
 def fetch(query: str, limit: int = 5) -> list[dict[str, str]]:
@@ -45,7 +33,8 @@ def fetch(query: str, limit: int = 5) -> list[dict[str, str]]:
         succeeded but found nothing.
 
     Raises:
-        RuntimeError: The DDG engine failed (rate-limited, network, parse).
+        RateLimitException: The DDG engine enforced a rate limit.
+        RuntimeError: The DDG engine failed (network, parse).
             Engine failure is loud so the caller can distinguish it from an
             empty result set.
     """
@@ -53,7 +42,6 @@ def fetch(query: str, limit: int = 5) -> list[dict[str, str]]:
         return []
 
     limit = max(1, min(5, limit))
-    _enforce_ddg_cooldown()
 
     seen: set[str] = set()
     results: list[dict[str, str]] = []
@@ -79,6 +67,8 @@ def fetch(query: str, limit: int = 5) -> list[dict[str, str]]:
                     "thumb_url": item.get("thumbnail") or "",
                 }
             )
+    except DDGRatelimitException:
+        raise RateLimitException("DDG image search rate-limited")
     except Exception as e:
         logger.warning("[IMAGE_SEARCH] DDG engine error for %r: %s", query, e)
         raise RuntimeError(f"image search engine failed: {e}") from e

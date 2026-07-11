@@ -20,15 +20,11 @@ from urllib.parse import quote_plus
 import requests
 
 from tools.search.transformers import transform
+from exceptions.rate_limit import RateLimitException
 
 logger = logging.getLogger(__name__)
 
 _MAX_WORKERS = 3
-
-# ── DuckDuckGo rate-limit guard ──────────────────────────────────────────────
-_DDG_COOLDOWN = 2.0
-_ddg_last_call = 0.0
-_ddg_lock = threading.Lock()
 
 _DDG_TIME_RANGE_MAP = {"day": "d", "week": "w", "month": "m", "year": "y"}
 
@@ -265,16 +261,6 @@ def fetch_providers(providers: list[dict[str, object]], query: str, limit: int =
     return all_results
 
 
-def _enforce_ddg_cooldown() -> None:
-    """Enforce the per-call DDG rate-limit cooldown inside the global lock."""
-    global _ddg_last_call
-    with _ddg_lock:
-        elapsed = time.time() - _ddg_last_call
-        if elapsed < _DDG_COOLDOWN:
-            time.sleep(_DDG_COOLDOWN - elapsed)
-        _ddg_last_call = time.time()
-
-
 def _transform_ddg_results(raw: list[dict[str, object]]) -> list[dict[str, object]]:
     """Convert raw DDG result dicts to the standard result format."""
     results: list[dict[str, object]] = []
@@ -296,24 +282,29 @@ def _transform_ddg_results(raw: list[dict[str, object]]) -> list[dict[str, objec
 
 
 def fetch_ddg_fallback(query: str, limit: int = 5) -> list[dict[str, object]]:
-    """Fall back to DDG web search. Returns results in standard format."""
+    """Fall back to DDG web search. Returns results in standard format.
+
+    Raises:
+        RateLimitException: DDG enforced a rate limit — let it surface to the
+            caller instead of retrying or silently returning empty.
+    """
     try:
         from ddgs import DDGS
         from ddgs.exceptions import RatelimitException, DDGSException as DuckDuckGoSearchException
 
         limit = max(1, min(8, limit))
 
-        for attempt in range(3):
-            _enforce_ddg_cooldown()
-            try:
-                raw = cast("list[dict[str, object]]", list(DDGS().text(query, max_results=limit)))
-                return _transform_ddg_results(raw)
-            except RatelimitException:
-                time.sleep(2 ** attempt * 3)
-            except (DuckDuckGoSearchException, Exception) as e:
-                logger.warning(f'[SEARCH] DDG fallback error (attempt {attempt+1}): {e}')
-                break
-        return []
+        try:
+            raw = cast("list[dict[str, object]]", list(DDGS().text(query, max_results=limit)))
+        except RatelimitException as e:
+            raise RateLimitException("DDG web search rate-limited") from e
+        except (DuckDuckGoSearchException, Exception) as e:
+            logger.warning(f'[SEARCH] DDG fallback error: {e}')
+            return []
+
+        return _transform_ddg_results(raw)
+    except RateLimitException:
+        raise
     except Exception as e:
         logger.warning(f'[SEARCH] DDG fallback failed: {e}')
         return []
