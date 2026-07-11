@@ -12,6 +12,7 @@ import UserBubble from './UserBubble.vue';
 import ChalieBubble from './ChalieBubble.vue';
 import ActCycle from './ActCycle.vue';
 import ActCycleGroup from './ActCycleGroup.vue';
+import BubbleFooter from './BubbleFooter.vue';
 
 const props = withDefaults(
   defineProps<{
@@ -51,45 +52,72 @@ interface CollapsedGroupRow {
   summaries: { tool_name: string; summary: string; state: string; ended_at: string | null }[];
 }
 
-type DisplayRow = MsgRow | LiveActRow | CollapsedGroupRow;
+// The completion-time footer (timestamp/speak/reply) — one per turn_exchange,
+// emitted as its own tail row AFTER that exchange's act-trail flush so it
+// paints below the tool-call chips, never above them.
+interface FooterRow {
+  kind: 'footer';
+  message: ConversationMessage;
+}
+
+type DisplayRow = MsgRow | LiveActRow | CollapsedGroupRow | FooterRow;
 
 const displayRows = computed<DisplayRow[]>(() => {
   const rows: DisplayRow[] = [];
-  // Pre-turn tools (memory, document) attach tool_calls to the USER row, but
-  // the trail must always read as "what happened before this reply" — so a
-  // non-assistant row's group is held back until the exchange's assistant row
-  // lands, then flushed just ahead of the assistant's own group. If the block
-  // ends without an assistant row (still working, or crashed mid-turn), any
-  // pending groups flush at the end so chips are never silently dropped.
+  // Tool-call chips render at the BOTTOM of the turn_exchange they belong to —
+  // below that exchange's final reply, never interleaved between an interim
+  // step and the reply, and never hoisted past a later exchange. A turn_exchange
+  // opens at each USER message and runs through its assistant reply(-ies); every
+  // tool group in it — pre-turn chips on the user row and chips on each assistant
+  // step alike — is buffered here and flushed when the next exchange opens (or at
+  // the end, for the last/still-working exchange), so chips are never dropped.
+  // The exchange's footer flushes right after its act-trail, so within one
+  // exchange the paint order is: assistant prose → act-trail → footer.
   let pending: CollapsedGroupRow[] = [];
+  let exchangeLastAssistant: ConversationMessage | null = null;
 
   for (const message of props.block.messages) {
     // Spine renders only through settle0 — drop thread reply rows. The thread
     // panel (fullThread) renders the WHOLE thread, continuations included.
     if (!props.fullThread && message.thread_message) continue;
 
-    rows.push({ kind: 'msg', message });
-
-    if (message.role === 'assistant') {
+    // A new user message opens the next exchange: flush the previous exchange's
+    // buffered tool chips beneath its last reply, then that exchange's footer,
+    // before this row.
+    if (message.role === 'user') {
       rows.push(...pending);
       pending = [];
+      if (exchangeLastAssistant) {
+        rows.push({ kind: 'footer', message: exchangeLastAssistant });
+        exchangeLastAssistant = null;
+      }
     }
 
+    rows.push({ kind: 'msg', message });
+    if (message.role === 'assistant') exchangeLastAssistant = message;
+
     if (message.tool_calls?.length) {
-      const group: CollapsedGroupRow = {
+      pending.push({
         kind: 'collapsed-group',
         id: message.id,
         summaries: message.tool_calls,
-      };
-      if (message.role === 'assistant') {
-        rows.push(group);
-      } else {
-        pending.push(group);
-      }
+      });
     }
   }
 
   rows.push(...pending);
+  // The turn's still-streaming reply is its LAST message; that exchange has
+  // nothing "complete" to timestamp yet, so its footer waits for the turn to
+  // settle. But a settled earlier exchange that only reaches this tail push —
+  // on the spine the streaming continuation is dropped, leaving the opener as
+  // the last VISIBLE reply — is already complete and keeps its footer while the
+  // fork streams, so the spine always shows exactly one footer per turn_id.
+  const streamingReply = props.block.working
+    ? props.block.messages[props.block.messages.length - 1]
+    : null;
+  if (exchangeLastAssistant && exchangeLastAssistant !== streamingReply) {
+    rows.push({ kind: 'footer', message: exchangeLastAssistant });
+  }
 
   // Live trails: appended at the tail while the turn is working, but only when
   // this render is the authoritative live view of the turn (thread panel, or a
@@ -110,16 +138,6 @@ const displayRows = computed<DisplayRow[]>(() => {
   return rows;
 });
 
-// Footer controls (timestamp/speak/reply) live once, on the LAST assistant
-// message of the rendered set.
-const lastAssistantMsgId = computed<string | null>(() => {
-  for (let i = props.block.messages.length - 1; i >= 0; i--) {
-    const m = props.block.messages[i];
-    if (m.role === 'assistant' && (props.fullThread || !m.thread_message)) return m.id;
-  }
-  return null;
-});
-
 // Avatar-role grouping for the Weave rhythm.
 type AvatarRole = 'user' | 'chalie';
 
@@ -130,14 +148,19 @@ interface AvatarRow {
   row: DisplayRow;
 }
 
-/** Key for a non-message row — collapsed tool group or live act-trail anchor. */
-function nonMsgKey(row: LiveActRow | CollapsedGroupRow): string {
-  return row.kind === 'collapsed-group' ? `cg-${row.id}` : `live-${row.rowId}`;
+/** Key for a non-message row — collapsed tool group, live act-trail anchor, or footer. */
+function nonMsgKey(row: LiveActRow | CollapsedGroupRow | FooterRow): string {
+  if (row.kind === 'collapsed-group') return `cg-${row.id}`;
+  if (row.kind === 'footer') return `footer-${row.message.id}`;
+  return `live-${row.rowId}`;
 }
 
 const avatarRows = computed<AvatarRow[]>(() => {
   let prevRole: AvatarRole | null = null;
   return displayRows.value.map((row) => {
+    // A footer row has no user branch to match, so it falls into 'chalie' —
+    // same as the collapsed-group/live-act rows — keeping it grouped under
+    // the exchange's chalie rows with no duplicate avatar.
     const role: AvatarRole = row.kind === 'msg' && row.message.role === 'user' ? 'user' : 'chalie';
     const key = row.kind === 'msg' ? `msg-${row.message.id}` : nonMsgKey(row);
     const ar: AvatarRow = { key, role, showAvatar: role !== prevRole, row };
@@ -186,19 +209,21 @@ function onReply(): void {
         <!-- Live act-trail anchor -->
         <ActCycle v-else-if="ar.row.kind === 'live-act'" :pills="(ar.row as LiveActRow).pills" />
 
+        <!-- Completion-time footer — one per turn_exchange, below its act-trail -->
+        <BubbleFooter
+          v-else-if="ar.row.kind === 'footer'"
+          :message="(ar.row as FooterRow).message"
+          :can-reply="canReply"
+          @reply="onReply"
+        />
+
         <!-- Message rows -->
         <template v-else>
           <UserBubble
             v-if="(ar.row as MsgRow).message.role === 'user'"
             :message="(ar.row as MsgRow).message"
           />
-          <ChalieBubble
-            v-else
-            :message="(ar.row as MsgRow).message"
-            :is-last="(ar.row as MsgRow).message.id === lastAssistantMsgId"
-            :can-reply="canReply"
-            @reply="onReply"
-          />
+          <ChalieBubble v-else :message="(ar.row as MsgRow).message" />
         </template>
       </div>
     </div>

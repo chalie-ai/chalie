@@ -88,6 +88,8 @@ describe('live act-trail visibility — working turn on the spine', () => {
     // the Activity drawer's sole signal for which turns even qualify as
     // forked (see utils/threadActivity.ts's `[data-forked]` selector).
     expect(wrapper.attributes('data-forked')).toBeUndefined();
+    // Working turns have nothing "complete" to timestamp — no footer yet.
+    expect(wrapper.find('.speech-form__meta').exists()).toBe(false);
   });
 
   it('does NOT render the live-act row for a FORKED working turn (the thread pill owns that indicator)', () => {
@@ -112,6 +114,11 @@ describe('live act-trail visibility — working turn on the spine', () => {
     expect(wrapper.text()).not.toContain('a reply inside the thread');
     // A forked block DOES stamp data-forked on the root.
     expect(wrapper.attributes('data-forked')).toBe('true');
+    // The opener exchange is SETTLED (the thread continuation replied to it),
+    // so its footer stays on the spine even while the fork works — exactly one
+    // per turn_id, never flickering away when a continuation starts streaming.
+    // Only a still-streaming exchange's own footer is withheld.
+    expect(wrapper.findAll('.speech-form__meta')).toHaveLength(1);
   });
 });
 
@@ -133,6 +140,22 @@ describe('live act-trail visibility — working turn in the thread panel', () =>
     expect(wrapper.text()).toContain('settle0 panel reply');
     // fullThread renders the WHOLE thread, continuations included.
     expect(wrapper.text()).toContain('panel thread continuation');
+    // Per-exchange footers: the SETTLED opener exchange keeps its footer even
+    // while the thread works on the (still footerless) continuation — only the
+    // in-progress exchange is suppressed. So exactly one footer, on the opener,
+    // sitting after the settled reply and before the working continuation.
+    expect(wrapper.findAll('.speech-form__meta')).toHaveLength(1);
+    const order = wrapper.findAll('.msg-row').map((r) =>
+      r.find('.speech-form__meta').exists()
+        ? 'footer'
+        : r.text().includes('settle0 panel reply')
+          ? 'settle0'
+          : r.text().includes('panel thread continuation')
+            ? 'continuation'
+            : 'other',
+    );
+    expect(order.indexOf('footer')).toBeGreaterThan(order.indexOf('settle0'));
+    expect(order.indexOf('footer')).toBeLessThan(order.indexOf('continuation'));
   });
 });
 
@@ -155,16 +178,20 @@ describe('collapsed tool-call trail placement', () => {
 
     const rows = wrapper.findAll('.msg-row');
     const kinds = rows.map((r) =>
-      r.findComponent(ActCycleGroup).exists()
-        ? 'group'
-        : r.text().includes('assistant answer')
-          ? 'assistant'
-          : r.text().includes('user question')
-            ? 'user'
-            : 'other',
+      r.find('.speech-form__meta').exists()
+        ? 'footer'
+        : r.findComponent(ActCycleGroup).exists()
+          ? 'group'
+          : r.text().includes('assistant answer')
+            ? 'assistant'
+            : r.text().includes('user question')
+              ? 'user'
+              : 'other',
     );
 
-    expect(kinds).toEqual(['user', 'assistant', 'group']);
+    // Settled exchange: act-trail flushes below the reply, then the footer
+    // below the act-trail — never above it.
+    expect(kinds).toEqual(['user', 'assistant', 'group', 'footer']);
   });
 
   it('still renders a trail anchored on the ASSISTANT row after that assistant message', () => {
@@ -181,16 +208,18 @@ describe('collapsed tool-call trail placement', () => {
 
     const rows = wrapper.findAll('.msg-row');
     const kinds = rows.map((r) =>
-      r.findComponent(ActCycleGroup).exists()
-        ? 'group'
-        : r.text().includes('assistant answer')
-          ? 'assistant'
-          : r.text().includes('plain user question')
-            ? 'user'
-            : 'other',
+      r.find('.speech-form__meta').exists()
+        ? 'footer'
+        : r.findComponent(ActCycleGroup).exists()
+          ? 'group'
+          : r.text().includes('assistant answer')
+            ? 'assistant'
+            : r.text().includes('plain user question')
+              ? 'user'
+              : 'other',
     );
 
-    expect(kinds).toEqual(['user', 'assistant', 'group']);
+    expect(kinds).toEqual(['user', 'assistant', 'group', 'footer']);
   });
 
   it('flushes a pending trail at the end when the block has no assistant row yet', () => {
@@ -210,5 +239,131 @@ describe('collapsed tool-call trail placement', () => {
 
     expect(userIdx).toBeGreaterThanOrEqual(0);
     expect(groupIdx).toBeGreaterThan(userIdx);
+  });
+
+  const stepTools: NonNullable<ConversationMessage['tool_calls']> = [
+    { tool_name: 'web_search', summary: 'searched the web', state: 'done', ended_at: null },
+  ];
+
+  it('pools every tool trail at the BOTTOM of a multi-step exchange, below the final reply', () => {
+    // The turn_exchange defect: when one user question yields several assistant
+    // steps that each ran tools, the chips must gather at the exchange's bottom —
+    // never interleaved between an interim step and the final reply.
+    const turnId = 204;
+    const b = block(turnId, [
+      msg('2040', 'user', 'the multi-step question', turnId),
+      msg('2041', 'assistant', 'interim step', turnId, false, stepTools),
+      msg('2042', 'assistant', 'final answer', turnId, false, toolCalls),
+    ]);
+    b.working = false;
+
+    const wrapper = mount(TurnView, {
+      props: { block: b, type: ConfigType.USER, fullThread: false },
+    });
+
+    const rows = wrapper.findAll('.msg-row');
+    const kinds = rows.map((r) =>
+      r.find('.speech-form__meta').exists()
+        ? 'footer'
+        : r.findComponent(ActCycleGroup).exists()
+          ? 'group'
+          : r.text().includes('final answer')
+            ? 'assistant-final'
+            : r.text().includes('interim step')
+              ? 'assistant-interim'
+              : r.text().includes('multi-step question')
+                ? 'user'
+                : 'other',
+    );
+
+    // Both chips pool at the exchange's bottom, and the ONE footer for this
+    // exchange sits below both — never between an interim step and the reply,
+    // and never above the act-trail.
+    expect(kinds).toEqual([
+      'user',
+      'assistant-interim',
+      'assistant-final',
+      'group',
+      'group',
+      'footer',
+    ]);
+  });
+
+  it('keeps each exchange tool trail at its own bottom across a multi-exchange thread', () => {
+    // Two turn_exchanges in one block (thread panel): exchange one's chips sit
+    // below its reply and BEFORE exchange two opens; exchange two's chips sit at
+    // the very bottom. The chips are never all pooled after the last reply.
+    const turnId = 205;
+    const b = block(turnId, [
+      msg('2050', 'user', 'first question', turnId),
+      msg('2051', 'assistant', 'first answer', turnId, false, stepTools),
+      msg('2052', 'user', 'second question', turnId, true),
+      msg('2053', 'assistant', 'second answer', turnId, true, toolCalls),
+    ]);
+    b.working = false;
+
+    const wrapper = mount(TurnView, {
+      props: { block: b, type: ConfigType.USER, fullThread: true },
+    });
+
+    const rows = wrapper.findAll('.msg-row');
+    const kinds = rows.map((r) =>
+      r.find('.speech-form__meta').exists()
+        ? 'footer'
+        : r.findComponent(ActCycleGroup).exists()
+          ? 'group'
+          : r.text().includes('first answer')
+            ? 'a1'
+            : r.text().includes('second answer')
+              ? 'a2'
+              : r.text().includes('first question')
+                ? 'u1'
+                : r.text().includes('second question')
+                  ? 'u2'
+                  : 'other',
+    );
+
+    // Each exchange gets its OWN footer, right after its own act-trail — the
+    // second exchange's footer never merges into or replaces the first's.
+    expect(kinds).toEqual(['u1', 'a1', 'group', 'footer', 'u2', 'a2', 'group', 'footer']);
+    expect(wrapper.findAll('.speech-form__meta')).toHaveLength(2);
+  });
+
+  it('renders exactly ONE footer for a forked spine turn — the openers, after its act-trail', () => {
+    // The other half of the cardinality fix: on the spine (fullThread=false)
+    // only the opener exchange survives the thread_message drop, so exactly
+    // one footer renders — the thread's continuation carries no footer of
+    // its own here (it isn't even rendered on the spine).
+    const turnId = 206;
+    const b = block(turnId, [
+      msg('2060', 'user', 'opener question', turnId, false, toolCalls),
+      msg('2061', 'assistant', 'opener reply', turnId),
+      msg('2062', 'user', 'thread continuation question', turnId, true),
+      msg('2063', 'assistant', 'thread continuation reply', turnId, true, stepTools),
+    ]);
+    b.working = false;
+
+    const wrapper = mount(TurnView, {
+      props: { block: b, type: ConfigType.USER, fullThread: false },
+    });
+
+    expect(wrapper.attributes('data-forked')).toBe('true');
+    expect(wrapper.text()).not.toContain('thread continuation');
+
+    const rows = wrapper.findAll('.msg-row');
+    const kinds = rows.map((r) =>
+      r.find('.speech-form__meta').exists()
+        ? 'footer'
+        : r.findComponent(ActCycleGroup).exists()
+          ? 'group'
+          : r.text().includes('opener reply')
+            ? 'assistant'
+            : r.text().includes('opener question')
+              ? 'user'
+              : 'other',
+    );
+
+    expect(kinds).toEqual(['user', 'assistant', 'group', 'footer']);
+    expect(wrapper.findAll('.speech-form__meta')).toHaveLength(1);
   });
 });
