@@ -179,7 +179,3 @@ export function extractText(content: string): string {
   }
   return out.join(' ').replaceAll(/\s+/g, ' ').trim();
 }
-
-export function useMarkup() {
-  return { renderMarkup, extractText };
-}
