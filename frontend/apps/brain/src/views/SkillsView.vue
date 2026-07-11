@@ -3,8 +3,8 @@ import { computed, ref } from 'vue';
 import type { Association, Skill } from '../api/skills';
 import { skills as skillsApi } from '../api/skills';
 import { formatDate } from '../utils/format';
-import { apiErrorMessage } from '../api/http';
 import { useToast } from '../composables/useToast';
+import { useBrainAction } from '../composables/useBrainAction';
 import { useConfirm } from '../composables/useConfirm';
 import { useBrainResource } from '../composables/useBrainResource';
 import {
@@ -19,6 +19,7 @@ import {
 } from '@lucide/vue';
 
 const { show: showToast } = useToast();
+const { run } = useBrainAction();
 const { confirm } = useConfirm();
 
 interface SkillsPayload {
@@ -68,32 +69,31 @@ function startEdit(skill: Skill): void {
   editContent.value = skill.content;
   editingId.value = skill.id;
 }
-
 async function saveEdit(skill: Skill): Promise<void> {
   const use_for = editUseFor.value.trim();
   const content = editContent.value.trim();
   const tags = editTags.value.trim();
-  try {
-    const updated = await skillsApi.update(skill.id, { use_for, content, tags });
-    showToast('Skill updated', 'success');
+  const { ok, data: updated } = await run(
+    () => skillsApi.update(skill.id, { use_for, content, tags }),
+    { success: 'Skill updated', failMsg: 'Failed to update skill' },
+  );
+  if (ok) {
     skillsPayload.value.skills = skillsPayload.value.skills.map((s) =>
       s.id === skill.id ? updated : s,
     );
     editingId.value = null;
-  } catch (e) {
-    showToast(apiErrorMessage(e, 'Failed to update skill'), 'error');
   }
 }
 
 async function toggleSkill(skill: Skill): Promise<void> {
-  try {
-    const data = await skillsApi.toggle(skill.id);
+  const { ok, data: t } = await run(() => skillsApi.toggle(skill.id), {
+    failMsg: 'Failed to toggle skill',
+  });
+  if (ok) {
     skillsPayload.value.skills = skillsPayload.value.skills.map((s) =>
-      s.id === skill.id ? { ...s, enabled: data.enabled } : s,
+      s.id === skill.id ? { ...s, enabled: t.enabled } : s,
     );
-    showToast(data.enabled ? 'Skill enabled' : 'Skill disabled', 'success');
-  } catch (e) {
-    showToast(apiErrorMessage(e, 'Failed to toggle skill'), 'error');
+    showToast(t.enabled ? 'Skill enabled' : 'Skill disabled', 'success');
   }
 }
 
@@ -105,13 +105,13 @@ async function deleteSkill(skill: Skill): Promise<void> {
     confirmClass: 'btn-danger',
   });
   if (!ok) return;
-  try {
-    await skillsApi.delete(skill.id);
-    showToast('Skill deleted', 'success');
+  const { ok: done } = await run(() => skillsApi.delete(skill.id), {
+    success: 'Skill deleted',
+    failMsg: 'Failed to delete skill',
+  });
+  if (done) {
     skillsPayload.value.skills = skillsPayload.value.skills.filter((s) => s.id !== skill.id);
     editingId.value = null;
-  } catch (e) {
-    showToast(apiErrorMessage(e, 'Failed to delete skill'), 'error');
   }
 }
 
@@ -123,12 +123,12 @@ async function copySkill(skill: Skill): Promise<void> {
     confirmClass: 'btn-primary',
   });
   if (!ok) return;
-  try {
-    const copied = await skillsApi.copy(skill.id);
+  const { ok: done, data: copied } = await run(() => skillsApi.copy(skill.id), {
+    failMsg: 'Failed to copy skill',
+  });
+  if (done) {
     showToast(`Skill copied as "${copied.title}"`, 'success');
     await load();
-  } catch (e) {
-    showToast(apiErrorMessage(e, 'Failed to copy skill'), 'error');
   }
 }
 
@@ -145,14 +145,14 @@ async function submitCreate(): Promise<void> {
   const use_for = createUseFor.value.trim();
   const content = createContent.value.trim();
   const tags = createTags.value.trim();
-  try {
-    const newSkill = await skillsApi.create({ title, use_for, content, tags });
-    showToast(`Skill "${title}" created`, 'success');
+  const { ok, data: newSkill } = await run(
+    () => skillsApi.create({ title, use_for, content, tags }),
+    { success: `Skill "${title}" created`, failMsg: 'Failed to create skill' },
+  );
+  if (ok) {
     skillsPayload.value.skills = [...skillsPayload.value.skills, newSkill];
     editingId.value = null;
     viewMode.value = 'list';
-  } catch (e) {
-    showToast(apiErrorMessage(e, 'Failed to create skill'), 'error');
   }
 }
 </script>

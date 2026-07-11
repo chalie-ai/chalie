@@ -5,11 +5,13 @@ import { providers } from '../api/providers';
 import { system } from '../api';
 import { apiErrorMessage } from '../api/http';
 import { useToast } from '../composables/useToast';
+import { useBrainAction } from '../composables/useBrainAction';
 import { useConfirm } from '../composables/useConfirm';
 import { useShellStore } from '../stores/shell';
 import { ChevronLeft, LayoutGrid, Plus } from '@lucide/vue';
 
 const { show: showToast } = useToast();
+const { run } = useBrainAction();
 const { confirm } = useConfirm();
 const shell = useShellStore();
 
@@ -145,35 +147,38 @@ const delegateSelectValue = computed(() =>
 // value '' clears the explicit pin → fall back to the main provider.
 async function setVision(value: string): Promise<void> {
   const pid = value === '' ? null : Number(value);
-  try {
-    const res = await providers.setVision(pid);
+  const { ok, data: res } = await run(() => providers.setVision(pid), {
+    success: 'Vision provider updated',
+    failMsg: 'Failed',
+    networkMsg: 'Failed to set vision provider',
+  });
+  if (ok && res) {
     visionId.value = res.provider ? res.provider.id : null;
     visionSource.value = res.source || (pid == null ? 'auto' : 'explicit');
-    showToast('Vision provider updated', 'success');
-  } catch (e: unknown) {
-    showToast(apiErrorMessage(e, 'Failed', 'Failed to set vision provider'), 'error');
   }
 }
 
 async function setDelegate(value: string): Promise<void> {
   const pid = value === '' ? null : Number(value);
-  try {
-    const res = await providers.setDelegate(pid);
+  const { ok, data: res } = await run(() => providers.setDelegate(pid), {
+    success: 'Delegate provider updated',
+    failMsg: 'Failed',
+    networkMsg: 'Failed to set delegate provider',
+  });
+  if (ok && res) {
     delegateId.value = res.provider ? res.provider.id : null;
     delegateSource.value = res.source || (pid == null ? 'auto' : 'explicit');
-    showToast('Delegate provider updated', 'success');
-  } catch (e: unknown) {
-    showToast(apiErrorMessage(e, 'Failed', 'Failed to set delegate provider'), 'error');
   }
 }
 
 async function selectProvider(id: number): Promise<void> {
-  try {
-    await providers.setSelected(id);
+  const { ok } = await run(() => providers.setSelected(id), {
+    success: 'Provider selected',
+    failMsg: 'Failed',
+    networkMsg: 'Failed to select provider',
+  });
+  if (ok) {
     selectedId.value = id;
-    showToast('Provider selected', 'success');
-  } catch (e: unknown) {
-    showToast(apiErrorMessage(e, 'Failed', 'Failed to select provider'), 'error');
   }
 }
 
@@ -197,12 +202,12 @@ async function confirmDelete(id: number): Promise<void> {
     confirmClass: 'btn-danger',
   });
   if (!confirmed) return;
-  try {
-    await providers.delete(id);
-    showToast('Provider deleted', 'success');
+  const { ok } = await run(() => providers.delete(id), {
+    success: 'Provider deleted',
+    failMsg: 'Delete failed',
+  });
+  if (ok) {
     await load();
-  } catch (e: unknown) {
-    showToast(apiErrorMessage(e, 'Delete failed'), 'error');
   }
 }
 
@@ -373,34 +378,33 @@ async function fetchModels(): Promise<void> {
 async function testConnection(): Promise<void> {
   if (!preset.value) return;
   testing.value = true;
-  try {
-    const body: {
-      platform: string;
-      name: string;
-      model: string;
-      host?: string;
-      api_key?: string;
-      provider_id?: number;
-    } = {
-      platform: preset.value.platform,
-      name: formName.value.trim(),
-      model: formModel.value,
-    };
-    if (needsHost.value) body.host = formHost.value.trim();
-    if (needsKey.value) body.api_key = formKey.value.trim();
-    if (editingId.value !== null) body.provider_id = editingId.value;
+  const body: {
+    platform: string;
+    name: string;
+    model: string;
+    host?: string;
+    api_key?: string;
+    provider_id?: number;
+  } = {
+    platform: preset.value.platform,
+    name: formName.value.trim(),
+    model: formModel.value,
+  };
+  if (needsHost.value) body.host = formHost.value.trim();
+  if (needsKey.value) body.api_key = formKey.value.trim();
+  if (editingId.value !== null) body.provider_id = editingId.value;
 
-    const data = await providers.test(body);
+  const { ok, data } = await run(() => providers.test(body), {
+    failMsg: 'Test failed',
+  });
+  if (ok && data) {
     if (data.success) {
       showToast(data.message || 'Connection successful', 'success');
     } else {
       showToast(data.error || 'Test failed', 'error');
     }
-  } catch (e: unknown) {
-    showToast(apiErrorMessage(e, 'Test failed'), 'error');
-  } finally {
-    testing.value = false;
   }
+  testing.value = false;
 }
 
 async function saveProvider(): Promise<void> {
@@ -426,17 +430,17 @@ async function saveProvider(): Promise<void> {
     if (k) body.api_key = k;
   }
 
-  try {
-    if (editingId.value !== null) {
-      await providers.update(editingId.value, body);
-    } else {
-      await providers.create(body);
-    }
-    showToast(editingId.value !== null ? 'Provider updated' : 'Provider added', 'success');
+  const id = editingId.value;
+  const { ok } = await run(
+    () => (id !== null ? providers.update(id, body) : providers.create(body)),
+    {
+      success: id !== null ? 'Provider updated' : 'Provider added',
+      failMsg: 'Save failed',
+    },
+  );
+  if (ok) {
     await load();
     mode.value = 'list';
-
-    // Providers-only lift check
     if (shell.providersOnly) {
       try {
         const sd = await system.authStatus();
@@ -445,8 +449,6 @@ async function saveProvider(): Promise<void> {
         // keep locked
       }
     }
-  } catch (e: unknown) {
-    showToast(apiErrorMessage(e, 'Save failed'), 'error');
   }
 }
 </script>

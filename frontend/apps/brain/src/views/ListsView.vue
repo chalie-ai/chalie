@@ -3,6 +3,7 @@ import { computed, reactive, ref } from 'vue';
 import type { List, ListItem } from '../api/lists';
 import { lists as listsApi } from '../api/lists';
 import { useToast } from '../composables/useToast';
+import { useBrainAction } from '../composables/useBrainAction';
 import { useConfirm } from '../composables/useConfirm';
 import { useBrainResource } from '../composables/useBrainResource';
 import BrainModal from '../ui/BrainModal.vue';
@@ -10,6 +11,7 @@ import { ChevronDown, ChevronRight, List as ListIcon, Plus, X } from '@lucide/vu
 import { HttpError } from '@chalie/shared';
 
 const { show: showToast } = useToast();
+const { run } = useBrainAction();
 const { confirm } = useConfirm();
 
 const {
@@ -55,12 +57,11 @@ function toggle(list: List): void {
 }
 
 async function toggleItem(list: List, item: ListItem, checked: boolean): Promise<void> {
-  try {
-    await listsApi.toggleItem(list.id, item.id, checked);
-    item.checked = checked;
-  } catch {
-    showToast('Failed to update item', 'error');
-  }
+  const { ok } = await run(() => listsApi.toggleItem(list.id, item.id, checked), {
+    failMsg: 'Failed to update item',
+    networkMsg: 'Failed to update item',
+  });
+  if (ok) item.checked = checked;
 }
 
 function onAddKey(e: KeyboardEvent, list: List): void {
@@ -89,25 +90,26 @@ function openRename(list: List): void {
 }
 
 async function createList(): Promise<void> {
-  try {
-    await listsApi.create(newListName.value.trim());
+  const { ok } = await run(() => listsApi.create(newListName.value.trim()), {
+    success: 'List created',
+    failMsg: 'Failed to create list',
+  });
+  if (ok) {
     showNew.value = false;
-    showToast('List created', 'success');
     await load();
-  } catch (e) {
-    showToast(e instanceof HttpError ? 'Failed to create list' : 'Network error', 'error');
   }
 }
 
 async function renameList(): Promise<void> {
-  if (renameId.value == null) return;
-  try {
-    await listsApi.rename(renameId.value, renameName.value.trim());
+  const id = renameId.value;
+  if (id == null) return;
+  const { ok } = await run(() => listsApi.rename(id, renameName.value.trim()), {
+    success: 'List renamed',
+    failMsg: 'Failed to rename',
+  });
+  if (ok) {
     showRename.value = false;
-    showToast('List renamed', 'success');
     await load();
-  } catch (e) {
-    showToast(e instanceof HttpError ? 'Failed to rename' : 'Network error', 'error');
   }
 }
 
@@ -119,13 +121,11 @@ async function deleteList(list: List): Promise<void> {
     confirmClass: 'btn-danger',
   });
   if (!ok) return;
-  try {
-    await listsApi.delete(list.id);
-    showToast('List deleted', 'success');
-    await load();
-  } catch (e) {
-    showToast(e instanceof HttpError ? 'Delete failed' : 'Network error', 'error');
-  }
+  const { ok: done } = await run(() => listsApi.delete(list.id), {
+    success: 'List deleted',
+    failMsg: 'Delete failed',
+  });
+  if (done) await load();
 }
 </script>
 

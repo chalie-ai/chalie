@@ -2,7 +2,7 @@
 import { onMounted, ref } from 'vue';
 import type { McpClient, McpServerConfig } from '../api/mcp';
 import { mcp } from '../api/mcp';
-import { apiErrorMessage } from '../api/http';
+import { useBrainAction } from '../composables/useBrainAction';
 import { HttpError } from '@chalie/shared';
 import { useToast } from '../composables/useToast';
 import { useConfirm } from '../composables/useConfirm';
@@ -10,6 +10,7 @@ import { type HeaderRow, addHeaderRow, removeHeaderRow, collectHeaders } from '.
 import { Copy } from '@lucide/vue';
 
 const { show: showToast } = useToast();
+const { run } = useBrainAction();
 const { confirm } = useConfirm();
 
 const inConfig = ref<McpServerConfig>({});
@@ -43,13 +44,11 @@ async function loadInbound(): Promise<void> {
 }
 
 async function saveInbound(updates: Partial<McpServerConfig>): Promise<void> {
-  try {
-    await mcp.updateServerConfig(updates);
-    Object.assign(inConfig.value, updates);
-    showToast('Settings saved', 'success');
-  } catch (e) {
-    showToast(e instanceof HttpError ? 'Save failed' : 'Network error', 'error');
-  }
+  const { ok } = await run(() => mcp.updateServerConfig(updates), {
+    success: 'Settings saved',
+    failMsg: 'Save failed',
+  });
+  if (ok) Object.assign(inConfig.value, updates);
 }
 
 function onEnabledChange(e: Event): void {
@@ -73,13 +72,11 @@ async function copyToken(): Promise<void> {
 }
 
 async function regenToken(): Promise<void> {
-  try {
-    const data = await mcp.regenerateToken();
-    inConfig.value = { ...inConfig.value, token: data.token };
-    showToast('Token regenerated', 'success');
-  } catch (e) {
-    showToast(e instanceof HttpError ? 'Regenerate failed' : 'Network error', 'error');
-  }
+  const { ok, data } = await run(() => mcp.regenerateToken(), {
+    success: 'Token regenerated',
+    failMsg: 'Regenerate failed',
+  });
+  if (ok) inConfig.value = { ...inConfig.value, token: data.token };
 }
 
 async function loadOutbound(): Promise<void> {
@@ -107,16 +104,16 @@ async function addServer(): Promise<void> {
     return;
   }
 
-  try {
-    await mcp.createClient({ name, host, headers, enabled: addEnabled.value });
-    showToast(`Server "${name}" added`, 'success');
+  const { ok } = await run(
+    () => mcp.createClient({ name, host, headers, enabled: addEnabled.value }),
+    { success: `Server "${name}" added`, failMsg: 'Failed to add server' },
+  );
+  if (ok) {
     addName.value = '';
     addHost.value = '';
     addEnabled.value = true;
     addHeaders.value = [];
     await loadOutbound();
-  } catch (e) {
-    showToast(apiErrorMessage(e, 'Failed to add server'), 'error');
   }
 }
 
@@ -149,13 +146,13 @@ async function saveEdit(id: string | number): Promise<void> {
     return;
   }
 
-  try {
-    await mcp.updateClient(id, { name, host, headers, enabled: editEnabled.value });
-    showToast(`Server "${name}" updated`, 'success');
+  const { ok } = await run(
+    () => mcp.updateClient(id, { name, host, headers, enabled: editEnabled.value }),
+    { success: `Server "${name}" updated`, failMsg: 'Failed to update server' },
+  );
+  if (ok) {
     editingId.value = null;
     await testServer(id, true);
-  } catch (e) {
-    showToast(apiErrorMessage(e, 'Failed to update server'), 'error');
   }
 }
 
@@ -178,13 +175,11 @@ async function testServer(id: string | number, silent = false): Promise<void> {
 
 async function toggleServer(server: McpClient): Promise<void> {
   const enabled = !server.enabled;
-  try {
-    await mcp.updateClient(server.id, { enabled });
-    showToast(enabled ? 'Server enabled' : 'Server disabled', 'success');
-    await loadOutbound();
-  } catch (e) {
-    showToast(e instanceof HttpError ? 'Update failed' : 'Network error', 'error');
-  }
+  const { ok } = await run(() => mcp.updateClient(server.id, { enabled }), {
+    success: enabled ? 'Server enabled' : 'Server disabled',
+    failMsg: 'Update failed',
+  });
+  if (ok) await loadOutbound();
 }
 
 async function deleteServer(server: McpClient): Promise<void> {
@@ -195,13 +190,11 @@ async function deleteServer(server: McpClient): Promise<void> {
     confirmClass: 'btn-danger',
   });
   if (!ok) return;
-  try {
-    await mcp.deleteClient(server.id);
-    showToast('Server deleted', 'success');
-    await loadOutbound();
-  } catch (e) {
-    showToast(e instanceof HttpError ? 'Delete failed' : 'Network error', 'error');
-  }
+  const { ok: deleted } = await run(() => mcp.deleteClient(server.id), {
+    success: 'Server deleted',
+    failMsg: 'Delete failed',
+  });
+  if (deleted) await loadOutbound();
 }
 
 onMounted(async () => {
