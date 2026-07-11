@@ -501,7 +501,7 @@ body.speaker-user #ambientBloom {
 // Thread activity marker (blinker) — one definition shared by the user activity
 // dock (TaskDrawer) and the scheduler dock. Working (pink) pulses while the reply
 // streams; done (blue) is a steady standing marker until the user opens the thread.
-.task-drawer__thread-dot {
+.thread-activity-dot {
   flex-shrink: 0;
   width: 8px;
   height: 8px;

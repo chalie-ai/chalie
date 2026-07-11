@@ -7,12 +7,12 @@
  * Open/close is driven by session.schedulerDockOpen. Polling runs only while open.
  */
 import { onBeforeUnmount, onMounted, ref, watch } from 'vue';
-import { X } from '@lucide/vue';
 import { ConfigType, describeCron } from '@chalie/shared';
 import { useSessionStore } from '../../stores/session';
 import type { SchedulerTurn } from '../../api/scheduler';
 import { scheduler } from '../../api/scheduler';
 import { threadPhase } from '../../utils/threadActivity';
+import SideDrawer from './SideDrawer.vue';
 
 const POLL_INTERVAL_MS = 60_000;
 
@@ -22,9 +22,6 @@ const session = useSessionStore();
 
 const turns = ref<SchedulerTurn[]>([]);
 let pollTimer: ReturnType<typeof setInterval> | null = null;
-
-const drawerRef = ref<HTMLElement | null>(null);
-const scrimRef = ref<HTMLElement | null>(null);
 
 // Scheduled turns don't render on the spine, so `threadPhase` reads DOM
 // contract state globally (any rendered copy, e.g. an open thread panel) —
@@ -62,57 +59,19 @@ function stopPolling(): void {
   }
 }
 
-// ── DOM open/close (mirrors TaskDrawer) ──────────────────────────────────────
-
-function openDrawerDom(): void {
-  if (!scrimRef.value || !drawerRef.value) return;
-  scrimRef.value.classList.remove('hidden');
-  drawerRef.value.classList.remove('hidden');
-  requestAnimationFrame(() => {
-    drawerRef.value?.classList.add('open');
-  });
-}
-
-function closeDrawerDom(): void {
-  const drawer = drawerRef.value;
-  const scrim = scrimRef.value;
-  if (!drawer) return;
-  drawer.classList.remove('open');
-  scrim?.classList.add('hidden');
-  drawer.addEventListener(
-    'transitionend',
-    () => {
-      if (!drawer.classList.contains('open')) drawer.classList.add('hidden');
-    },
-    { once: true },
-  );
-}
-
+// Polling runs only while the dock is open.
 watch(
   () => session.schedulerDockOpen,
   (open) => {
-    if (open) {
-      openDrawerDom();
-      startPolling();
-    } else {
-      closeDrawerDom();
-      stopPolling();
-    }
+    if (open) startPolling();
+    else stopPolling();
   },
 );
 
-// ── Keyboard ──────────────────────────────────────────────────────────────────
-
-function handleKeydown(e: KeyboardEvent): void {
-  if (e.key === 'Escape' && session.schedulerDockOpen) session.closeSchedulerDock();
-}
-
 onMounted(() => {
-  document.addEventListener('keydown', handleKeydown);
   document.addEventListener('turn-state-changed', bumpActivity);
 });
 onBeforeUnmount(() => {
-  document.removeEventListener('keydown', handleKeydown);
   document.removeEventListener('turn-state-changed', bumpActivity);
   stopPolling();
 });
@@ -131,127 +90,36 @@ function cadence(turn: SchedulerTurn): string {
 </script>
 
 <template>
-  <!-- Scrim -->
-  <div
-    class="sched-dock__scrim hidden"
-    ref="scrimRef"
-    aria-hidden="true"
-    @click="session.closeSchedulerDock()"
-  ></div>
+  <SideDrawer
+    :open="session.schedulerDockOpen"
+    title="Schedules"
+    @close="session.closeSchedulerDock()"
+  >
+    <p v-if="!turns.length" class="sched-dock__empty">No active schedules.</p>
 
-  <!-- Slide-out panel -->
-  <aside ref="drawerRef" class="sched-dock hidden" aria-label="Schedules">
-    <div class="sched-dock__header">
-      <h2 class="sched-dock__title">Schedules</h2>
-      <button
-        class="btn-icon sched-dock__close"
-        aria-label="Close schedules panel"
-        @click="session.closeSchedulerDock()"
-      >
-        <X :size="16" aria-hidden="true" />
-      </button>
-    </div>
-
-    <div class="sched-dock__list">
-      <p v-if="!turns.length" class="sched-dock__empty">No active schedules.</p>
-
-      <button
-        v-for="turn in turns"
-        :key="turn.turn_id"
-        class="sched-dock__row"
-        :class="phase(turn) ? `sched-dock__row--${phase(turn)}` : ''"
-        @click="openTurn(turn)"
-      >
-        <span class="sched-dock__row-top">
-          <span class="sched-dock__row-label">{{ turn.gist || turn.preview }}</span>
-          <span
-            v-if="phase(turn)"
-            class="task-drawer__thread-dot"
-            :class="phase(turn) ?? ''"
-            aria-hidden="true"
-          />
-        </span>
-        <span class="sched-dock__row-sub">{{ cadence(turn) }}</span>
-      </button>
-    </div>
-  </aside>
+    <button
+      v-for="turn in turns"
+      :key="turn.turn_id"
+      class="sched-dock__row"
+      :class="phase(turn) ? `sched-dock__row--${phase(turn)}` : ''"
+      @click="openTurn(turn)"
+    >
+      <span class="sched-dock__row-top">
+        <span class="sched-dock__row-label">{{ turn.gist || turn.preview }}</span>
+        <span
+          v-if="phase(turn)"
+          class="thread-activity-dot"
+          :class="phase(turn) ?? ''"
+          aria-hidden="true"
+        />
+      </span>
+      <span class="sched-dock__row-sub">{{ cadence(turn) }}</span>
+    </button>
+  </SideDrawer>
 </template>
 
 <style scoped lang="scss">
-// ── Scrim ─────────────────────────────────────────────────────────────────────
-
-.sched-dock__scrim {
-  position: fixed;
-  inset: 0;
-  background: var(--overlay-scrim, rgba(0, 0, 0, 0.35));
-  z-index: 199;
-  opacity: 1;
-  transition: opacity 0.2s ease;
-
-  &.hidden {
-    display: none;
-  }
-}
-
-// ── Panel ─────────────────────────────────────────────────────────────────────
-
-.sched-dock {
-  position: fixed;
-  top: 0;
-  right: 0;
-  height: 100%;
-  width: 320px;
-  max-width: 90vw;
-  background: var(--bg-2);
-  border-left: 1px solid var(--border);
-  box-shadow: -4px 0 24px var(--shadow, rgba(0, 0, 0, 0.15));
-  z-index: 200;
-  display: flex;
-  flex-direction: column;
-  transform: translateX(100%);
-  transition: transform 0.25s ease;
-  overflow: hidden;
-
-  &.open {
-    transform: translateX(0);
-  }
-
-  &.hidden {
-    display: none;
-  }
-}
-
-.sched-dock__header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 16px 16px 12px;
-  border-bottom: 1px solid var(--border);
-  flex-shrink: 0;
-}
-
-.sched-dock__title {
-  margin: 0;
-  font-size: 15px;
-  font-weight: 600;
-  color: var(--text-primary);
-}
-
-.sched-dock__close {
-  color: var(--text-secondary);
-
-  &:hover {
-    color: var(--text-primary);
-  }
-}
-
-// ── List ──────────────────────────────────────────────────────────────────────
-
-.sched-dock__list {
-  flex: 1;
-  overflow-y: auto;
-  padding: 8px 0;
-}
+// ── Empty state ───────────────────────────────────────────────────────────────
 
 .sched-dock__empty {
   font-size: 13px;
