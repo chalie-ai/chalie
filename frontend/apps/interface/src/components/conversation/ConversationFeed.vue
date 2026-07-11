@@ -82,6 +82,10 @@ onMounted(async () => {
   // Initial history load — this is the ONLY trigger (App.vue does NOT call it).
   await session.loadRecentConversation();
 
+  // After history settles, decide: re-attach to an in-flight turn, or surface
+  // an interrupted error. Runs once on mount; subsequent loads are pagination.
+  await session.checkTurnStatus();
+
   // Wire the pagination listener ONLY AFTER the initial load: registering it
   // earlier lets a short conversation (scrollY 0 < 150 during load) fire a
   // pagination cascade on startup.
@@ -92,6 +96,10 @@ onBeforeUnmount(() => {
   window.removeEventListener('scroll', _onScrollPaginate);
   document.removeEventListener('session:turn-done', forceScrollToBottom);
   document.removeEventListener('session:history-initial-loaded', forceScrollToBottom);
+  // Stop the re-attach safety poll if this component unmounted mid-reattach
+  // (e.g. user navigated away). Bounded leak otherwise — the poll self-heals
+  // when the backend goes idle — but explicit cleanup avoids retaining it.
+  session._stopReattachPoll();
 });
 </script>
 

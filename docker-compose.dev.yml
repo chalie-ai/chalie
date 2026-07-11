@@ -1,0 +1,42 @@
+# Dev test runner — builds the interface from local source, provisions a
+# backend account + provider, and runs the Playwright suite.
+#
+# Usage:
+#   cp .env.example .env  # fill in MINIMAX_API_KEY + CHALIE_TEST_PASSWORD
+#   podman compose -f docker-compose.dev.yml run --rm tests
+#   podman compose -f docker-compose.dev.yml run --rm tests -- -g "re-attaches"
+#
+# The repo is bind-mounted at /workspace, so local source changes are picked up
+# on every run (the entrypoint rebuilds frontend/apps/interface/dist/ each time).
+# data/ is a named volume so the DB/account/provider survive restarts.
+
+services:
+  tests:
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+    volumes:
+      # Live source — local edits picked up without rebuilding the image.
+      - ./:/workspace:Z
+      # Persist the SQLite DB + vault backups across container runs.
+      - chalie-dev-data:/workspace/data:Z
+      # Shadow node_modules so pnpm installs Linux-native binaries inside the
+      # container (not the Windows host mount — Rollup's optional native dep
+      # is platform-specific and the host lockfile resolves the Windows one).
+      - /workspace/frontend/node_modules
+      - /workspace/frontend/apps/interface/node_modules
+      - /workspace/frontend/packages/shared/node_modules
+      - /workspace/.venv
+    env_file:
+      - .env
+    # No port mapping needed — tests run inside the container against
+    # localhost:31025. Add `ports: ["31025:31025"]` if you want to inspect
+    # the running instance from the host while the container is up.
+    tty: true
+    stdin_open: true
+    # Hard resource cap — 4 cores max.
+    cpus: 4.0
+    mem_limit: 4g
+
+volumes:
+  chalie-dev-data: {}

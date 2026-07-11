@@ -7,10 +7,11 @@
  */
 import { defineStore } from 'pinia';
 import { getWebSocket, useConnectionStore, AuthError } from '@chalie/shared';
-import type { WsInboundEvent, WsPushEvent, WsMessageEvent } from '@chalie/shared';
+import type { WsInboundEvent, WsPushEvent, WsMessageEvent, ChatCallbacks } from '@chalie/shared';
 import { on } from '../composables/useEventBus';
 import { extractText } from '../composables/useMarkup';
 import { conversation } from '../api/conversation';
+import { chat } from '../api/chat';
 import { moments } from '../api/moments';
 import { getHost } from '../api/index';
 import { showToast } from '../utils/toast';
@@ -53,6 +54,9 @@ export const useSessionStore = defineStore('session', {
 
     /** Registered auth-failure callback (set by App bootstrap). */
     _onAuthFailure: null as (() => void) | null,
+
+    /** setInterval handle for the re-attach safety poll (null when not re-attaching). */
+    _reattachPoll: null as ReturnType<typeof setInterval> | null,
   }),
 
   actions: {
@@ -231,8 +235,17 @@ export const useSessionStore = defineStore('session', {
       // its pill in place; a tool-free turn evicts the empty group on resolve.
       this._activeActId = convo.appendAct();
 
-      // Capture the FINAL turn result across onMessage(final) / onDone — interim
-      // steps render immediately and are never cached.
+      ws.send(text, source, this._turnCallbacks(), files);
+    },
+
+    /**
+     * Build the WS turn-callback set shared by _startTurn (live send) and the
+     * reload re-attach path. Owns the final-response capture so both paths
+     * settle the turn identically.
+     */
+    _turnCallbacks(): ChatCallbacks {
+      const convo = useConversationStore();
+
       let responseContent = '';
       let responseMeta: {
         topic?: string;
@@ -244,105 +257,101 @@ export const useSessionStore = defineStore('session', {
         duration_ms?: number;
       } = {};
 
-      ws.send(
-        text,
-        source,
-        {
-          // Use d.id (NOT d.call_id) — frame is act_tool_start { type,name,id,summary }.
-          // Lazily open the step's tool group; its prose already landed via the
-          // preceding interim message.
-          onToolStart: (data) => {
-            const d = data as { id?: string; name?: string; summary?: string };
-            if (this._activeActId == null) this._activeActId = convo.appendAct();
-            convo.appendToolPill(this._activeActId, d.id ?? '', d.name ?? '', d.summary);
-          },
-
-          // act_tool_end has no duration field — pass ms=0, resolveToolPill
-          // computes client elapsed.
-          onToolEnd: (data) => {
-            const d = data as { id?: string; ok?: boolean };
-            convo.resolveToolPill(d.id ?? '', 0, !!d.ok);
-          },
-
-          onMessage: (data) => {
-            const d = data as WsMessageEvent & {
-              content?: string;
-              topic?: string;
-              exchange_id?: string;
-              mode?: string;
-              confidence?: number;
-              segments?: ConversationSegment[];
-              timestamp?: string;
-            };
-
-            if (d.interim) {
-              // Interim prose: supersede the previous step (collapse its tool
-              // group), then render this step's bubble; the next onToolStart
-              // opens a fresh group beneath it.
-              if (this._activeActId != null) {
-                convo.resolveAct(this._activeActId);
-                this._activeActId = null;
-              }
-              if (d.content) convo.appendChalie(d.content, { ts: d.timestamp ?? '' });
-              return;
-            }
-
-            // Final result — cached, rendered on done so duration_ms lands on the
-            // bubble (also carries turn-wide rich-media segments).
-            responseContent = d.content ?? '';
-            responseMeta = {
-              topic: d.topic,
-              exchange_id: d.exchange_id,
-              mode: d.mode ?? '',
-              confidence: d.confidence ?? 0,
-              segments: d.segments,
-              timestamp: d.timestamp ?? '',
-            };
-          },
-
-          onError: (data) => {
-            // Turn-level errors (provider failure, quota/429) are NOT auth events:
-            // collapse the in-flight step and surface the error as its own form.
-            // Only data.auth_failed redirects to login.
-            if (this._activeActId != null) {
-              convo.resolveAct(this._activeActId);
-              this._activeActId = null;
-            }
-            this.errorMessage = data.message;
-            const d = data as { auth_failed?: boolean };
-            if (d.auth_failed) this._onAuthFailure?.();
-          },
-
-          onDone: (data) => {
-            responseMeta.duration_ms = data.duration_ms;
-            // Settle the final step before the reply lands beneath it: collapse
-            // its tools, or evict the bare "thinking…" placeholder if none ran.
-            if (this._activeActId != null) {
-              convo.resolveAct(this._activeActId);
-              this._activeActId = null;
-            }
-            if (responseContent || responseMeta.segments?.length) {
-              convo.appendChalie(responseContent, {
-                topic: responseMeta.topic,
-                exchange_id: responseMeta.exchange_id,
-                mode: responseMeta.mode,
-                confidence: responseMeta.confidence,
-                segments: responseMeta.segments,
-                ts: responseMeta.timestamp,
-                duration_ms: responseMeta.duration_ms,
-              });
-            }
-            useAmbientSensor().recordResponse();
-            this.isSending = false;
-            document.dispatchEvent(new CustomEvent('session:turn-done'));
-
-            if (responseContent && !document.hasFocus()) {
-              this._notifyBackground(responseContent);
-            }
-          },
+      return {
+        // Use d.id (NOT d.call_id) — frame is act_tool_start { type,name,id,summary }.
+        // Lazily open the step's tool group; its prose already landed via the
+        // preceding interim message.
+        onToolStart: (data) => {
+          const d = data as { id?: string; name?: string; summary?: string };
+          if (this._activeActId == null) this._activeActId = convo.appendAct();
+          convo.appendToolPill(this._activeActId, d.id ?? '', d.name ?? '', d.summary);
         },
-        files,
-      );
+
+        // act_tool_end has no duration field — pass ms=0, resolveToolPill
+        // computes client elapsed.
+        onToolEnd: (data) => {
+          const d = data as { id?: string; ok?: boolean };
+          convo.resolveToolPill(d.id ?? '', 0, !!d.ok);
+        },
+
+        onMessage: (data) => {
+          const d = data as WsMessageEvent & {
+            content?: string;
+            topic?: string;
+            exchange_id?: string;
+            mode?: string;
+            confidence?: number;
+            segments?: ConversationSegment[];
+            timestamp?: string;
+          };
+
+          if (d.interim) {
+            // Interim prose: supersede the previous step (collapse its tool
+            // group), then render this step's bubble; the next onToolStart
+            // opens a fresh group beneath it.
+            if (this._activeActId != null) {
+              convo.resolveAct(this._activeActId);
+              this._activeActId = null;
+            }
+            if (d.content) convo.appendChalie(d.content, { ts: d.timestamp ?? '' });
+            return;
+          }
+
+          // Final result — cached, rendered on done so duration_ms lands on the
+          // bubble (also carries turn-wide rich-media segments).
+          responseContent = d.content ?? '';
+          responseMeta = {
+            topic: d.topic,
+            exchange_id: d.exchange_id,
+            mode: d.mode ?? '',
+            confidence: d.confidence ?? 0,
+            segments: d.segments,
+            timestamp: d.timestamp ?? '',
+          };
+        },
+
+        onError: (data) => {
+          // Turn-level errors (provider failure, quota/429) are NOT auth events:
+          // collapse the in-flight step and surface the error as its own form.
+          // Only data.auth_failed redirects to login.
+          if (this._activeActId != null) {
+            convo.resolveAct(this._activeActId);
+            this._activeActId = null;
+          }
+          this.errorMessage = data.message;
+          const d = data as { auth_failed?: boolean };
+          if (d.auth_failed) this._onAuthFailure?.();
+        },
+
+        onDone: (data) => {
+          responseMeta.duration_ms = data.duration_ms;
+          // Settle the final step before the reply lands beneath it: collapse
+          // its tools, or evict the bare "thinking…" placeholder if none ran.
+          if (this._activeActId != null) {
+            convo.resolveAct(this._activeActId);
+            this._activeActId = null;
+          }
+          if (responseContent || responseMeta.segments?.length) {
+            convo.appendChalie(responseContent, {
+              topic: responseMeta.topic,
+              exchange_id: responseMeta.exchange_id,
+              mode: responseMeta.mode,
+              confidence: responseMeta.confidence,
+              segments: responseMeta.segments,
+              ts: responseMeta.timestamp,
+              duration_ms: responseMeta.duration_ms,
+            });
+          }
+          useAmbientSensor().recordResponse();
+          this.isSending = false;
+          this._stopReattachPoll();
+          document.dispatchEvent(new CustomEvent('session:turn-done'));
+
+          if (responseContent && !document.hasFocus()) {
+            this._notifyBackground(responseContent);
+          }
+        },
+      };
     },
 
     /**
@@ -372,6 +381,8 @@ export const useSessionStore = defineStore('session', {
 
       // Abort WS callbacks so stale events are ignored.
       ws.abort();
+      // Stop the re-attach safety poll if one is running (re-attached stop).
+      this._stopReattachPoll();
 
       this.isSending = false;
 
@@ -464,6 +475,13 @@ export const useSessionStore = defineStore('session', {
         const isInitialLoad = this.historyOffset === 0;
         if (isInitialLoad) {
           convo.appendTurns(messages);
+          // After initial load, if the newest form is an unreplied user message,
+          // remember its id so checkTurnStatus can detect an interrupted turn.
+          const lastForm = convo.forms[convo.forms.length - 1];
+          if (lastForm && lastForm.kind === 'user') {
+            this._lastUserFormId = lastForm.id;
+            this._lastUserText = lastForm.text;
+          }
         } else {
           convo.prependTurns(messages);
         }
@@ -486,6 +504,125 @@ export const useSessionStore = defineStore('session', {
       } finally {
         this.historyLoading = false;
       }
+    },
+
+    /**
+     * After the initial history load, decide whether to re-attach to an
+     * in-flight turn or surface an interrupted error. Called once on mount.
+     */
+    async checkTurnStatus(): Promise<void> {
+      try {
+        const { in_progress } = await chat.status();
+        if (in_progress) {
+          this.attachToInflightTurn();
+        } else if (this._lastUserFormId != null && !this._receivedReply()) {
+          // Status idle + unreplied. This MAY be a race: the turn could have
+          // completed in the window between loadRecentConversation's fetch and
+          // this status check, committing the reply to the DB after we fetched.
+          // Confirm before surfacing a (possibly false) "interrupted" error.
+          await this._confirmInterrupted();
+        }
+      } catch {
+        // Indeterminate — do nothing. The user can still send a new message.
+      }
+    },
+
+    /**
+     * Re-fetch the latest turn before concluding the last user message was
+     * interrupted. If the reply committed in the race window, append it;
+     * only surface the error if it is genuinely unreplied.
+     */
+    async _confirmInterrupted(): Promise<void> {
+      const convo = useConversationStore();
+      try {
+        const data = await conversation.recent(1);
+        const replies = (data.messages ?? []).filter((m) => m.role === 'assistant');
+        if (replies.length) {
+          // The reply landed — append only the assistant messages (the user
+          // message is already rendered from the initial load).
+          for (const msg of replies) convo._appendMessage(msg, true);
+          return;
+        }
+      } catch {
+        // Refetch failed — fall through to the error. Better to surface
+        // "interrupted" (retryable) than to silently do nothing.
+      }
+      this.errorMessage = 'Chalie was interrupted. Tap retry to send again.';
+    },
+
+    /**
+     * Whether the form after the last user message is an assistant reply —
+     * i.e. the turn completed. Used by checkTurnStatus to distinguish "turn
+     * aborted" (user msg with no reply) from "turn completed" after a reload.
+     */
+    _receivedReply(): boolean {
+      const convo = useConversationStore();
+      if (this._lastUserFormId == null) return true; // no user msg → nothing to detect
+      const uidx = convo.forms.findIndex((f) => f.id === this._lastUserFormId);
+      if (uidx === -1) return true; // user msg already gone (e.g. requestStop)
+      const after = convo.forms[uidx + 1];
+      return !!after && after.kind === 'chalie';
+    },
+
+    /** Clear the safety-poll interval (no-op if not running). */
+    _stopReattachPoll(): void {
+      if (this._reattachPoll != null) {
+        clearInterval(this._reattachPoll);
+        this._reattachPoll = null;
+      }
+    },
+
+    /**
+     * Collapse the re-attached "thinking…" indicator. Called by the safety
+     * poll when status flips to idle and onDone hasn't fired. The final reply,
+     * if any, has already been refreshed by loadRecentConversation().
+     */
+    _settleReattachedTurn(): void {
+      const convo = useConversationStore();
+      if (this._activeActId != null) {
+        convo.resolveAct(this._activeActId);
+        this._activeActId = null;
+      }
+      this.isSending = false;
+      this._stopReattachPoll();
+      document.dispatchEvent(new CustomEvent('session:turn-done'));
+    },
+
+    /**
+     * Re-attach to a turn that is already in flight on the backend. Mirrors
+     * _startTurn minus the POST /chat: opens the "thinking…" ACT group and
+     * arms the WS callbacks so the still-broadcasting frames stream in. The
+     * safety poll guards against a lost `done` frame (socket-death→reconnect
+     * gap): if /chat/status flips to idle before `done` arrives, refetch the
+     * committed reply from history and settle.
+     */
+    attachToInflightTurn(): void {
+      const ws = getWebSocket();
+      const convo = useConversationStore();
+
+      this.isSending = true;
+      this._activeActId = convo.appendAct();
+      ws.arm(this._turnCallbacks());
+
+      // Safety poll: re-check status every 5s. Stops when isSending flips false
+      // (onDone) or status says idle (turn finished / aborted / restarted).
+      this._reattachPoll = setInterval(async () => {
+        try {
+          const { in_progress } = await chat.status();
+          if (!in_progress || !this.isSending) {
+            this._stopReattachPoll();
+            if (this.isSending) {
+              // Turn ended without our onDone firing (lost frame). Refetch the
+              // committed reply, then settle the indicator.
+              await this.loadRecentConversation();
+              this._settleReattachedTurn();
+            }
+          }
+        } catch {
+          // Indeterminate (network blip) — retry on the next tick. Do NOT
+          // treat as idle; that would spuriously surface an abort error.
+        }
+      }, 5000);
     },
 
     /**
