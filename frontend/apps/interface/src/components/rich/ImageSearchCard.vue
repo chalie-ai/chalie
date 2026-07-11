@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import { computed, reactive, ref, onMounted, onBeforeUnmount } from 'vue';
+import { isAbsoluteHttpUrl } from '../../utils/url';
 
 /**
- * Image search payload shape from the backend.
  */
 export interface ImageSearchPayload {
   query: string;
@@ -30,16 +30,9 @@ const props = defineProps<{
  * a same-origin, cookie-bearing request. Also rejects `javascript:`/`data:`/
  * `vbscript:`/`file:` via the allowlist. This is the security precedent for every
  * remote-media rich card — keep it strict; payload URLs are unsanitised.
+ *
+ * Now uses the shared `isAbsoluteHttpUrl()` from `../../utils/url`.
  */
-const HTTP_SCHEMES = new Set(['http:', 'https:']);
-function isHttp(url: string): boolean {
-  if (typeof url !== 'string' || !url.trim()) return false;
-  try {
-    return HTTP_SCHEMES.has(new URL(url).protocol);
-  } catch {
-    return false;
-  }
-}
 
 /** Hostname of an absolute URL, `www.` stripped. Best-effort: falls back to the
  * raw string when parsing fails (only fed gated http(s) URLs, so it won't). */
@@ -87,12 +80,12 @@ const resolved = computed<ResolvedImage[]>(() => {
   const raw = props.payload.images ?? [];
   const out: ResolvedImage[] = [];
   for (const img of raw.slice(0, MAX_IMAGES)) {
-    const thumb = img.thumb_url && isHttp(img.thumb_url) ? img.thumb_url : '';
-    const fallback = img.url && isHttp(img.url) ? img.url : '';
+    const thumb = img.thumb_url && isAbsoluteHttpUrl(img.thumb_url) ? img.thumb_url : '';
+    const fallback = img.url && isAbsoluteHttpUrl(img.url) ? img.url : '';
     const src = thumb || fallback;
     if (!src) continue;
-    const href = isHttp(img.url) ? img.url : '';
-    const domainSrc = img.source && isHttp(img.source) ? img.source : href;
+    const href = isAbsoluteHttpUrl(img.url) ? img.url : '';
+    const domainSrc = img.source && isAbsoluteHttpUrl(img.source) ? img.source : href;
     out.push({
       thumbSrc: src,
       linkHref: href,

@@ -10,11 +10,19 @@ frontend), so no arbitrary anchors can be injected into the rendered DOM.
 requires these tags at the WS-send boundary; only the ``id`` attribute is
 permitted — ``class``, ``style``, ``onclick``, and all other span attributes
 are stripped.
+
+``<img src>`` is gate-checked by ``_safe_img_src``: only absolute ``http:``
+and ``https:`` schemes survive — relative paths (``/api/logout``),
+protocol-relative URLs (``//evil.com/track.gif``), ``data:`` URIs, and
+``javascript:`` URIs are all dropped (src attr removed, leaving the img
+inert). The nh3 ``url_schemes`` kwarg alone would not have caught the
+scheme-less cases; ``attribute_filter`` closes that gap.
 """
 from __future__ import annotations
 
 import html as _html
 import re
+from urllib.parse import urlsplit
 
 import nh3
 
@@ -45,8 +53,11 @@ _ATTRIBUTES = {
     "th": {"colspan", "rowspan", "scope", "headers"},
 }
 
-# Image src URLs are restricted to http(s). ``data:`` and ``javascript:`` are
-# blocked by virtue of not matching this allowlist.
+# Image src URLs are restricted to absolute http(s) only. Relative paths,
+# protocol-relative URLs, ``data:`` URIs, and ``javascript:`` URIs are all
+# dropped by ``_safe_img_src`` (nh3 ``attribute_filter``). The nh3
+# ``url_schemes`` kwarg below additionally rejects any *present* scheme that
+# isn't http/https (e.g. ``ftp:``) — the two gates together close both sides.
 _URL_SCHEMES = {"http", "https"}
 
 # Bound input length to keep sanitiser memory + time predictable on hostile
@@ -55,6 +66,25 @@ _MAX_CONTENT_LEN = 5_000_000
 
 
 # ── Public API ──────────────────────────────────────────────────────────────
+
+
+def _safe_img_src(tag: str, attr: str, value: str) -> str | None:
+    """Gate for ``<img src>``: only absolute ``http:``/``https:`` schemes survive.
+
+    Closes the scheme-less bypass that nh3's ``url_schemes`` alone leaves open.
+    nh3 rejects *present* non-allowlisted schemes (e.g. ``ftp:``), but a URL
+    with no scheme at all (relative ``/api/logout``, protocol-relative
+    ``//evil.com/track.gif``, ``data:`` URI, ``javascript:`` URI) slips through
+    the ``url_schemes`` gate — ``urlsplit().scheme`` is empty for those. This
+    helper drops the ``src`` attribute entirely for anything that isn't an
+    absolute http/https URL, leaving the ``<img>`` inert. All other tags and
+    attributes pass through unchanged (``<action>`` ``value``, ``<span>``
+    ``id``, etc.).
+    """
+    if tag != "img" or attr != "src":
+        return value
+    scheme = urlsplit(value).scheme.lower()
+    return value if scheme in {"http", "https"} else None
 
 
 def sanitize(html: str | None) -> str:
@@ -67,6 +97,7 @@ def sanitize(html: str | None) -> str:
         tags=set(ALLOWED_TAGS),
         attributes=_ATTRIBUTES,
         url_schemes=_URL_SCHEMES,
+        attribute_filter=_safe_img_src,  # drops scheme-less / non-http(s) img src
         link_rel=None,  # we do not allow <a> from the LLM, so no rel injection needed
     )
 

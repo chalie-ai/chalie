@@ -8,22 +8,27 @@
  * lazy-loads (protocol-gated) <img>, and adds CSS classes. Because parsing
  * goes through the DOM, only nh3-allowed elements plus the safe wrappers added
  * here reach the v-html output. extractText strips all tags for TTS.
+ *
+ * The img/link gate uses a base-less ``new URL()`` parse (not an anchor-probe).
+ * Base-less ``new URL()`` throws on relative, scheme-less, and protocol-relative
+ * input, so those are refused — unlike ``a.href = url; a.protocol`` which
+ * resolves them against the page origin and would wrongly pass them through.
  */
 
 import { find as findLinks } from '../vendor/linkify.es.mjs';
 import { emit } from './useEventBus';
-
-const HTTP_PROTOCOLS = new Set(['http:', 'https:']);
+import { isAbsoluteHttpUrl } from '../utils/url';
 
 function _renderLinkAnchor(href: string, label: string): Node {
   const a = document.createElement('a');
   a.href = href;
+  const isMailto = href.trim().toLowerCase().startsWith('mailto:');
   // Belt-and-braces protocol gate — linkify only matches http(s)/mailto/etc.
-  if (!HTTP_PROTOCOLS.has(a.protocol) && a.protocol !== 'mailto:') {
+  if (!isAbsoluteHttpUrl(href) && !isMailto) {
     return document.createTextNode(label);
   }
   a.textContent = label;
-  if (HTTP_PROTOCOLS.has(a.protocol)) {
+  if (isAbsoluteHttpUrl(href)) {
     a.target = '_blank';
     a.rel = 'noopener noreferrer';
   }
@@ -73,17 +78,13 @@ function _linkifyTextNodesIn(root: Element): void {
   }
   for (const t of targets) _linkifyTextNode(t);
 }
-
 function _wireImage(img: HTMLImageElement): void {
-  const probe = document.createElement('a');
-  probe.href = img.getAttribute('src') ?? '';
-  if (!HTTP_PROTOCOLS.has(probe.protocol)) {
+  if (!isAbsoluteHttpUrl(img.getAttribute('src') ?? '')) {
     img.remove();
     return;
   }
   img.loading = 'lazy';
 }
-
 const _ACTION_DATA_ATTRS = ['execute', 'collect', 'target', 'open-url', 'payload'] as const;
 
 function _wireActionsContainer(container: Element): void {
