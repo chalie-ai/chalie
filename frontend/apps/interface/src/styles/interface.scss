@@ -234,7 +234,12 @@ body {
   --spine-pad-x: var(--space-lg);
   width: 100%;
   max-width: 100%;
-  padding: calc(56px + var(--space-xl)) var(--spine-pad-x) calc(80px + var(--space-xl));
+  // Bottom pad tracks the fixed footer dock's LIVE height (published as
+  // --dock-height by InputDock's ResizeObserver) plus a gap, so the composer —
+  // including its attachment strip and queued-message chips — never overlaps the
+  // last message / act-trail. The 80px fallback covers the first paint before
+  // the observer fires. Top pad clears the fixed 56px presence bar.
+  padding: calc(56px + var(--space-xl)) var(--spine-pad-x) calc(var(--dock-height, 80px) + var(--space-xl));
   display: flex;
   flex-direction: column;
   min-height: 100vh;
@@ -256,8 +261,14 @@ body {
   right: 0;
   z-index: 100;
   padding: var(--space-md) var(--space-lg);
-  background: linear-gradient(to top, var(--scrim-dock) 50%, transparent);
+  // Solid, near-opaque scrim + blur — same fixed-chrome treatment as
+  // .presence-bar. A gradient fading to transparent let the feed bleed through
+  // the composer; this reads as a clean ground on both themes (tokens flip).
+  background: var(--scrim-dock);
+  backdrop-filter: blur(24px) saturate(120%);
+  -webkit-backdrop-filter: blur(24px) saturate(120%);
   transition: background 420ms ease;
+  border-top: 1px solid var(--border-strong);
 }
 
 // Inline variant — the same composer rendered in-flow at the foot of the thread
@@ -266,6 +277,7 @@ body {
 .input-dock--inline {
   position: static;
   z-index: auto;
+  border-top: none;
 }
 
 .input-dock__outer {
@@ -327,22 +339,8 @@ body {
   flex: 1;
   display: flex;
   align-items: center;
-  gap: var(--space-sm);
-  background: var(--bg-surface-2);
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-full);
-  padding: var(--space-xs) var(--space-md);
-  backdrop-filter: blur(20px) saturate(120%);
-  -webkit-backdrop-filter: blur(20px) saturate(120%);
-  box-shadow: var(--shadow-card);
-  transition: background 420ms ease, border-color 220ms ease, box-shadow 220ms ease;
-}
-
-.input-dock__inner:focus-within {
-  border-color: color-mix(in oklab, var(--violet) 45%, transparent);
-  box-shadow:
-    var(--shadow-card),
-    0 0 0 4px color-mix(in oklab, var(--violet) 12%, transparent);
+  gap: 8px;
+  padding: 4px 2px;
 }
 
 .input-dock__textarea {
@@ -351,13 +349,14 @@ body {
   border: none;
   outline: none;
   color: var(--text-primary);
-  font-size: 0.9375rem;
-  line-height: 1.6;
+  font-size: 15px;
+  line-height: 1.4;
   resize: none;
   field-sizing: content;
-  max-height: var(--textarea-max-h);
+  padding: 8px 6px;
+  min-height: 20px;
+  max-height: 140px;
   overflow-y: auto;
-  padding: var(--space-sm) 0;
 }
 
 .input-dock__textarea::placeholder {
@@ -496,11 +495,11 @@ body {
   to   { opacity: 1; transform: translateY(0); }
 }
 
-// Action buttons (send / attach)
+// Action buttons (send / attach / voice)
 .btn-action {
-  width: 28px;
-  height: 28px;
-  border-radius: 50%;
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
   border: none;
   display: flex;
   align-items: center;
@@ -511,27 +510,31 @@ body {
   flex-shrink: 0;
 }
 
-.btn-action--attach svg { width: 16px; height: 16px; }
+.btn-action--attach {
+  background: var(--bg-surface-2);
+  color: var(--text-secondary);
+}
+
+.btn-action--attach svg { width: 18px; height: 18px; }
+
+.btn-action--attach:hover {
+  background: color-mix(in oklab, var(--accent-primary) 12%, transparent);
+  color: var(--accent-primary);
+}
 
 .btn-action--send {
-  background: transparent;
-  color: var(--accent-primary);
+  background: var(--accent-primary);
+  color: #fff;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.18);
   transition: all 220ms ease;
 }
 
-.btn-action--send:not(:disabled) {
-  filter: drop-shadow(0 0 8px rgba(var(--bs-primary-rgb), 0.40));
-}
-
 .btn-action--send:hover:not(:disabled) {
-  color: var(--violet-hover);
-  transform: translateY(-1px);
-  filter: drop-shadow(0 0 12px rgba(var(--bs-primary-rgb), 0.65));
+  filter: brightness(1.08);
 }
 
 .btn-action--send:active:not(:disabled) {
-  transform: translateY(0);
-  color: #7A4DE6;
+  transform: scale(0.92);
 }
 
 .btn-action--send:disabled {
@@ -539,118 +542,14 @@ body {
   cursor: not-allowed;
 }
 
-.btn-action--attach {
-  background: transparent;
-  color: var(--text-secondary);
-  transition: all 220ms ease;
-}
-
-.btn-action--attach:hover  { color: var(--accent-primary); }
-
-.btn-icon {
-  background: none;
-  border: none;
-  color: var(--text-secondary);
-  cursor: pointer;
-  padding: var(--space-sm);
-  border-radius: var(--radius-sm);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  transition: color var(--duration-fast);
-}
-
-.btn-icon:hover  { color: var(--text-primary); }
-.btn-icon--small { padding: var(--space-xs); }
-
-.dock-controls {
-  max-width: var(--dock-width);
-  margin: var(--space-xs) auto 0;
-  padding: 0 var(--space-sm);
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-}
-
-.thinking-select { position: relative; }
-
-.thinking-select__trigger {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  background: transparent;
-  border: none;
-  cursor: pointer;
-  padding: 2px 4px;
-  font-size: var(--font-size-sm);
-  color: var(--text-primary);
-}
-
-.thinking-select__caption { color: var(--text-tertiary); }
-.thinking-select__value   { color: var(--text-primary); font-weight: 500; }
-
-.thinking-select__menu {
-  position: absolute;
-  bottom: 100%;
-  left: 0;
-  margin-bottom: 6px;
-  min-width: 132px;
-  z-index: 200;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  padding: var(--space-xs);
-  background: color-mix(in oklab, var(--text) 5%, transparent);
-  border: 1px solid color-mix(in oklab, var(--text) 8%, transparent);
-  border-radius: var(--radius-md);
-  backdrop-filter: blur(20px);
-  -webkit-backdrop-filter: blur(20px);
-  box-shadow: var(--shadow-card);
-}
-
-.thinking-select__menu.hidden { display: none; }
-
-.thinking-select__item {
-  text-align: left;
-  background: transparent;
-  border: none;
-  cursor: pointer;
-  padding: var(--space-sm) var(--space-md);
-  border-radius: var(--radius-sm);
-  font-size: var(--font-size-sm);
-  color: var(--text-primary);
-  transition: background 220ms ease;
-}
-
-.thinking-select__item:hover  { background: color-mix(in oklab, var(--accent-primary) 8%, transparent); }
-.thinking-select__item.active { color: var(--accent-primary); font-weight: 600; }
-
-.context-display {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 2px 4px;
-  font-size: var(--font-size-sm);
-}
-
-.context-display__caption { color: var(--text-tertiary); }
-
-.context-indicator {
-  background: transparent;
-  color: var(--text-primary);
-  font-weight: 500;
-  font-variant-numeric: tabular-nums;
-}
-
 .voice-rec-btn {
   flex-shrink: 0;
   position: relative;
-  width: 34px;
-  height: 34px;
-  border-radius: 50%;
-  background: none;
-  border: none;
-  color: var(--text-tertiary);
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
+  background: var(--bg-surface-2);
+  color: var(--text-secondary);
   cursor: pointer;
   display: flex;
   align-items: center;
@@ -659,8 +558,8 @@ body {
 }
 
 .voice-rec-btn:hover {
-  color: var(--text-secondary);
-  background: color-mix(in oklab, var(--text) 5%, transparent);
+  background: color-mix(in oklab, var(--accent-primary) 12%, transparent);
+  color: var(--accent-primary);
 }
 
 .voice-rec-btn[data-state="idle"] .voice-rec-btn__mic     { display: block; }
@@ -702,6 +601,143 @@ body {
    spinner uses (history, thread panel, voice, action cards, update prompt). */
 @keyframes spin {
   to { transform: rotate(360deg); }
+}
+
+// Shared icon button — navbar, drawer close, update prompt, etc.
+.btn-icon {
+  background: none;
+  border: none;
+  color: var(--text-secondary);
+  cursor: pointer;
+  padding: var(--space-sm);
+  border-radius: var(--radius-sm);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: color var(--duration-fast);
+}
+
+.btn-icon:hover  { color: var(--text-primary); }
+.btn-icon--small { padding: var(--space-xs); }
+
+// Status line — thinking pill (left) and context indicator (right)
+.dock-controls {
+  max-width: var(--dock-width);
+  // Centre at the dock width like .input-dock__outer (was left-pinned at 4px, so
+  // the thinking pill + context meter drifted off the composer's edges). The 2px
+  // inset matches .input-dock__inner's padding so the pill lines up with the
+  // attach button and the meter with the send button (border-box).
+  margin: 11px auto 0;
+  padding: 0 2px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-tertiary);
+}
+
+.thinking-select { position: relative; }
+
+.thinking-select__trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 24px;
+  padding: 0 9px;
+  border-radius: var(--radius-full);
+  background: transparent;
+  border: 1px solid var(--border-strong);
+  cursor: pointer;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-secondary);
+  transition: border-color var(--duration-fast), color var(--duration-fast);
+}
+
+.thinking-select__trigger:hover {
+  border-color: color-mix(in oklab, var(--border-strong) 60%, transparent);
+  color: var(--text-primary);
+}
+
+.thinking-select__swirl {
+  display: block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent-primary);
+  flex-shrink: 0;
+}
+
+.thinking-select__value {
+  color: var(--text-secondary);
+  font-weight: 500;
+}
+
+.thinking-select__menu {
+  position: absolute;
+  bottom: 100%;
+  left: 0;
+  margin-bottom: 6px;
+  min-width: 132px;
+  z-index: 200;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: var(--space-xs);
+  background: color-mix(in oklab, var(--text) 5%, transparent);
+  border: 1px solid color-mix(in oklab, var(--text) 8%, transparent);
+  border-radius: var(--radius-md);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  box-shadow: var(--shadow-card);
+}
+
+.thinking-select__menu.hidden { display: none; }
+
+.thinking-select__item {
+  text-align: left;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  padding: var(--space-sm) var(--space-md);
+  border-radius: var(--radius-sm);
+  font-size: var(--font-size-sm);
+  color: var(--text-primary);
+  transition: background 220ms ease;
+}
+
+.thinking-select__item:hover  { background: color-mix(in oklab, var(--accent-primary) 8%, transparent); }
+.thinking-select__item.active { color: var(--accent-primary); font-weight: 600; }
+
+.context-display {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.context-indicator {
+  background: transparent;
+  color: var(--text-secondary);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.meter {
+  width: 96px;
+  height: 5px;
+  border-radius: 3px;
+  background: var(--bg-surface-2);
+  border: 1px solid var(--border-strong);
+  overflow: hidden;
+}
+
+.meter > i {
+  display: block;
+  height: 100%;
+  background: var(--accent-primary);
+  border-radius: 3px;
 }
 
 @media (max-width: 640px) {

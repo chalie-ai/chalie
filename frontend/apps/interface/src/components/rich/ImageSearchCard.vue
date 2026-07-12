@@ -114,6 +114,10 @@ const domains = computed<string[]>(() => {
  * placeholder while keeping the slide's aspect box so layout stays intact. */
 const failed = reactive(new Set<number>());
 
+/** Sources fold: collapsed to a "N sources" pill (same trace-pill affordance as
+ * the ACT trail), expanded to the domain chips on click. */
+const sourcesOpen = ref(false);
+
 // ── Carousel navigation ─────────────────────────────────────────────────────
 // Local view state only (no fetch/store/WS): a scroll-snap track paged by the
 // ‹ / › buttons. Buttons appear only when the slides overflow, and each disables
@@ -202,12 +206,30 @@ onBeforeUnmount(() => {
       >›</button>
     </div>
 
-    <div v-if="domains.length" class="image-card__sources">
-      <span v-for="domain in domains" :key="domain" class="image-card__src">
-        <span
-          class="image-card__src-ico"
-          :style="{ background: pickColor(domain) }"
-        >{{ initials(domain) }}</span>{{ domain }}</span>
+    <div v-if="domains.length" class="image-card__sources-wrap">
+      <button
+        class="trace-pill"
+        :class="{ 'trace-pill--open': sourcesOpen }"
+        type="button"
+        :aria-expanded="sourcesOpen"
+        :aria-label="sourcesOpen ? 'Collapse sources' : 'Expand sources'"
+        @click="sourcesOpen = !sourcesOpen"
+      >
+        <span class="trace-pill__dot" aria-hidden="true" />
+        {{ domains.length }} source{{ domains.length === 1 ? '' : 's' }}
+      </button>
+
+      <div class="trace-body" :class="{ 'trace-body--open': sourcesOpen }">
+        <div class="trace-body__inner">
+          <div class="image-card__sources">
+            <span v-for="domain in domains" :key="domain" class="image-card__src">
+              <span
+                class="image-card__src-ico"
+                :style="{ background: pickColor(domain) }"
+              >{{ initials(domain) }}</span>{{ domain }}</span>
+          </div>
+        </div>
+      </div>
     </div>
   </div>
 </template>
@@ -352,14 +374,19 @@ onBeforeUnmount(() => {
   }
 }
 
+/* Sources fold: a "N sources" trace-pill (see global .trace-pill / .trace-body)
+   that expands to the domain chips — mirrors the ACT trail's collapse. */
+.image-card__sources-wrap {
+  margin-top: 12px;
+}
+
 /* Deduped source pills — folds every thumbnail's origin into clean domain chips,
-   mirroring the web-search card. */
+   mirroring the web-search card. Revealed inside the expandable trace-body. */
 .image-card__sources {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 6px;
-  margin-top: 12px;
   font-family: var(--font-mono, 'JetBrains Mono', ui-monospace, monospace);
   font-size: 0.66rem;
   letter-spacing: 0.06em;

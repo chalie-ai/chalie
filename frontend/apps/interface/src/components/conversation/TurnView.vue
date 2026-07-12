@@ -1,9 +1,9 @@
-<!-- Renders a turn block as Weave avatar rows: a 32px avatar gutter that
-     shows on speaker change, then the message body. Shared by the main feed
-     (inline turns) and the thread panel so both keep identical row rhythm. -->
+<!-- Renders a turn block as gutterless speaker rows: assistant prose runs open
+     to the left, the user message sits as a right-set bubble, and speaker-change
+     spacing gives the rhythm (no avatar gutter). Shared by the main feed (inline
+     turns) and the thread panel so both keep identical row rhythm. -->
 <script setup lang="ts">
 import { computed } from 'vue';
-import { User } from '@lucide/vue';
 import { ConfigType } from '@chalie/shared';
 import type { ConversationMessage, ConversationTurnBlock } from '../../api/conversation';
 import type { LiveToolPill } from '../../utils/liveActTrail';
@@ -20,11 +20,16 @@ const props = withDefaults(
     canReply?: boolean;
     type?: string;
     fullThread?: boolean;
+    // When this turn is a forked thread, the spine passes its collapsed thread
+    // pill (status + gist label) so it can ride INLINE on the settle0 footer's
+    // meta line, next to the trace — no separate pill row. Null on the thread
+    // panel (fullThread) and on non-forked turns.
+    threadPill?: { status: 'working' | 'done' | 'thread' | 'idle'; label: string } | null;
   }>(),
-  { canReply: true, type: ConfigType.USER, fullThread: false },
+  { canReply: true, type: ConfigType.USER, fullThread: false, threadPill: null },
 );
 
-const emit = defineEmits<{ reply: [turnId: number] }>();
+const emit = defineEmits<{ reply: [turnId: number]; openThread: [turnId: number] }>();
 
 /** A forked thread carries at least one row past its settle0 (see
  *  ConversationMessage.thread_message) — derived directly off the prop, no
@@ -46,77 +51,82 @@ interface MsgRow {
   message: ConversationMessage;
 }
 
+/** One tool call's collapsed summary, as carried by the API model. */
+type ToolSummary = { tool_name: string; summary: string; state: string; ended_at: string | null };
+
 interface CollapsedGroupRow {
   kind: 'collapsed-group';
   id: string;
-  summaries: { tool_name: string; summary: string; state: string; ended_at: string | null }[];
+  summaries: ToolSummary[];
 }
 
-// The completion-time footer (timestamp/speak/reply) — one per turn_exchange,
-// emitted as its own tail row AFTER that exchange's act-trail flush so it
-// paints below the tool-call chips, never above them.
+// The completion-time footer — one per turn_exchange. It carries that exchange's
+// aggregated tool calls (`toolCalls`) so its meta line can show the "N tools used"
+// trace inline (expandable), matching the design: assistant prose → footer(trace).
 interface FooterRow {
   kind: 'footer';
   message: ConversationMessage;
+  toolCalls: ToolSummary[];
 }
 
 type DisplayRow = MsgRow | LiveActRow | CollapsedGroupRow | FooterRow;
 
 const displayRows = computed<DisplayRow[]>(() => {
   const rows: DisplayRow[] = [];
-  // Tool-call chips render at the BOTTOM of the turn_exchange they belong to —
-  // below that exchange's final reply, never interleaved between an interim
-  // step and the reply, and never hoisted past a later exchange. A turn_exchange
-  // opens at each USER message and runs through its assistant reply(-ies); every
-  // tool group in it — pre-turn chips on the user row and chips on each assistant
-  // step alike — is buffered here and flushed when the next exchange opens (or at
-  // the end, for the last/still-working exchange), so chips are never dropped.
-  // The exchange's footer flushes right after its act-trail, so within one
-  // exchange the paint order is: assistant prose → act-trail → footer.
-  let pending: CollapsedGroupRow[] = [];
+  // A turn_exchange opens at each USER message and runs through its assistant
+  // reply(-ies). Every tool call in it — pre-turn calls on the user row and calls
+  // on each assistant step alike — is buffered here and RIDES ON that exchange's
+  // footer as its aggregated "N tools used" trace (inline, expandable), so the
+  // paint order within one exchange is: assistant prose → footer(with its trace),
+  // never a tool chip hoisted past a later exchange. A still-streaming exchange
+  // has no footer yet; its already-finished calls fall back to a collapsed-group
+  // row so they are never dropped while the reply streams.
+  let pendingTools: ToolSummary[] = [];
   let exchangeLastAssistant: ConversationMessage | null = null;
+
+  // The turn's still-streaming reply is its LAST message; that exchange has
+  // nothing "complete" to timestamp yet, so its footer waits for the turn to
+  // settle.
+  const streamingReply = props.block.working
+    ? props.block.messages[props.block.messages.length - 1]
+    : null;
 
   for (const message of props.block.messages) {
     // Spine renders only through settle0 — drop thread reply rows. The thread
     // panel (fullThread) renders the WHOLE thread, continuations included.
     if (!props.fullThread && message.thread_message) continue;
 
-    // A new user message opens the next exchange: flush the previous exchange's
-    // buffered tool chips beneath its last reply, then that exchange's footer,
+    // A new user message opens the next exchange: close the previous one — its
+    // footer carries that exchange's aggregated tool calls beneath its last reply,
     // before this row.
     if (message.role === 'user') {
-      rows.push(...pending);
-      pending = [];
       if (exchangeLastAssistant) {
-        rows.push({ kind: 'footer', message: exchangeLastAssistant });
+        rows.push({ kind: 'footer', message: exchangeLastAssistant, toolCalls: pendingTools });
         exchangeLastAssistant = null;
+      } else if (pendingTools.length) {
+        // Tool calls with no assistant reply to anchor a footer (rare) — keep
+        // them visible as their own collapsed row rather than drop them.
+        rows.push({ kind: 'collapsed-group', id: `pre-${message.id}`, summaries: pendingTools });
       }
+      pendingTools = [];
     }
 
     rows.push({ kind: 'msg', message });
     if (message.role === 'assistant') exchangeLastAssistant = message;
 
-    if (message.tool_calls?.length) {
-      pending.push({
-        kind: 'collapsed-group',
-        id: message.id,
-        summaries: message.tool_calls,
-      });
-    }
+    if (message.tool_calls?.length) pendingTools.push(...message.tool_calls);
   }
 
-  rows.push(...pending);
-  // The turn's still-streaming reply is its LAST message; that exchange has
-  // nothing "complete" to timestamp yet, so its footer waits for the turn to
-  // settle. But a settled earlier exchange that only reaches this tail push —
-  // on the spine the streaming continuation is dropped, leaving the opener as
-  // the last VISIBLE reply — is already complete and keeps its footer while the
-  // fork streams, so the spine always shows exactly one footer per turn_id.
-  const streamingReply = props.block.working
-    ? props.block.messages[props.block.messages.length - 1]
-    : null;
+  // Tail — the last exchange. A settled one gets its footer (carrying its trace);
+  // a settled earlier exchange that only reaches this tail push — on the spine the
+  // streaming continuation is dropped, leaving the opener as the last VISIBLE
+  // reply — keeps its footer while the fork streams, so the spine always shows
+  // exactly one footer per turn_id. The still-streaming exchange has no footer,
+  // so its finished calls fall back to a collapsed-group row.
   if (exchangeLastAssistant && exchangeLastAssistant !== streamingReply) {
-    rows.push({ kind: 'footer', message: exchangeLastAssistant });
+    rows.push({ kind: 'footer', message: exchangeLastAssistant, toolCalls: pendingTools });
+  } else if (pendingTools.length) {
+    rows.push({ kind: 'collapsed-group', id: 'streaming', summaries: pendingTools });
   }
 
   // Live trails: appended at the tail while the turn is working, but only when
@@ -138,13 +148,13 @@ const displayRows = computed<DisplayRow[]>(() => {
   return rows;
 });
 
-// Avatar-role grouping for the Weave rhythm.
-type AvatarRole = 'user' | 'chalie';
+// Speaker-role grouping for the row rhythm.
+type RowRole = 'user' | 'chalie';
 
-interface AvatarRow {
+interface RowEntry {
   key: string;
-  role: AvatarRole;
-  showAvatar: boolean;
+  role: RowRole;
+  isLead: boolean;
   row: DisplayRow;
 }
 
@@ -155,22 +165,50 @@ function nonMsgKey(row: LiveActRow | CollapsedGroupRow | FooterRow): string {
   return `live-${row.rowId}`;
 }
 
-const avatarRows = computed<AvatarRow[]>(() => {
-  let prevRole: AvatarRole | null = null;
+const rowEntries = computed<RowEntry[]>(() => {
+  let prevRole: RowRole | null = null;
   return displayRows.value.map((row) => {
     // A footer row has no user branch to match, so it falls into 'chalie' —
     // same as the collapsed-group/live-act rows — keeping it grouped under
-    // the exchange's chalie rows with no duplicate avatar.
-    const role: AvatarRole = row.kind === 'msg' && row.message.role === 'user' ? 'user' : 'chalie';
+    // the exchange's chalie rows so speaker-change spacing stays correct.
+    const role: RowRole = row.kind === 'msg' && row.message.role === 'user' ? 'user' : 'chalie';
     const key = row.kind === 'msg' ? `msg-${row.message.id}` : nonMsgKey(row);
-    const ar: AvatarRow = { key, role, showAvatar: role !== prevRole, row };
+    const isLead = role !== prevRole;
     prevRole = role;
-    return ar;
+    return { key, role, isLead, row };
   });
 });
 
+// The thread pill rides on the exchange-closing footer. On the spine there is
+// exactly one footer per turn (thread replies are dropped), but keying off the
+// LAST footer stays correct if an exchange ever renders more than one.
+const lastFooterKey = computed<string | null>(() => {
+  const entries = rowEntries.value;
+  for (let i = entries.length - 1; i >= 0; i--) {
+    if (entries[i].row.kind === 'footer') return entries[i].key;
+  }
+  return null;
+});
+
+// A crashed turn that surfaced no assistant reply text settles to working:false
+// with nothing but (maybe) a tool-trace footer — indistinguishable from a normal
+// empty turn. Show an explicit note in exactly that case. A crash that DID leave
+// a reply keeps it and needs no note. Gated on the VISIBLE rows (thread
+// continuations are spine-dropped), so a fork-reply crash never mislabels a
+// completed opener as failed.
+const showCrashNote = computed<boolean>(() =>
+  (props.block.crashed ?? false)
+  && !displayRows.value.some(
+    (r) => r.kind === 'msg' && r.message.role === 'assistant' && r.message.content.trim().length > 0,
+  ),
+);
+
 function onReply(): void {
   emit('reply', props.block.turn_id);
+}
+
+function onOpenThread(): void {
+  emit('openThread', props.block.turn_id);
 }
 </script>
 
@@ -185,47 +223,47 @@ function onReply(): void {
     :data-last-activity="block.last_activity_at ?? undefined"
   >
     <div
-      v-for="ar in avatarRows"
+      v-for="ar in rowEntries"
       :key="ar.key"
       class="msg-row"
-      :class="[`msg-row--${ar.role}`, ar.showAvatar ? 'msg-row--lead' : 'msg-row--cont']"
+      :class="[`msg-row--${ar.role}`, ar.isLead ? 'msg-row--lead' : 'msg-row--cont']"
     >
-      <div class="msg-row__gutter" aria-hidden="true">
-        <span v-if="ar.showAvatar && ar.role === 'chalie'" class="msg-avatar msg-avatar--chalie">
-          <img src="/icons/icon.png" alt="" />
-        </span>
-        <span v-else-if="ar.showAvatar" class="msg-avatar msg-avatar--user">
-          <User :size="15" />
-        </span>
-      </div>
+      <!-- Collapsed tool-call group -->
+      <ActCycleGroup
+        v-if="ar.row.kind === 'collapsed-group'"
+        :summaries="(ar.row as CollapsedGroupRow).summaries"
+      />
 
-      <div class="msg-row__body">
-        <!-- Collapsed tool-call group -->
-        <ActCycleGroup
-          v-if="ar.row.kind === 'collapsed-group'"
-          :summaries="(ar.row as CollapsedGroupRow).summaries"
+      <!-- Live act-trail anchor -->
+      <ActCycle v-else-if="ar.row.kind === 'live-act'" :pills="(ar.row as LiveActRow).pills" />
+
+      <!-- Completion-time footer — one per turn_exchange, below its act-trail.
+           Its meta line carries the exchange's aggregated tool trace inline, and
+           (on the settle0 footer of a forked turn) the collapsed thread pill. -->
+      <BubbleFooter
+        v-else-if="ar.row.kind === 'footer'"
+        :message="(ar.row as FooterRow).message"
+        :tool-calls="(ar.row as FooterRow).toolCalls"
+        :can-reply="canReply"
+        :thread-pill="ar.key === lastFooterKey ? threadPill : null"
+        @reply="onReply"
+        @open-thread="onOpenThread"
+      />
+
+      <!-- Message rows -->
+      <template v-else>
+        <UserBubble
+          v-if="(ar.row as MsgRow).message.role === 'user'"
+          :message="(ar.row as MsgRow).message"
         />
+        <ChalieBubble v-else :message="(ar.row as MsgRow).message" />
+      </template>
+    </div>
 
-        <!-- Live act-trail anchor -->
-        <ActCycle v-else-if="ar.row.kind === 'live-act'" :pills="(ar.row as LiveActRow).pills" />
-
-        <!-- Completion-time footer — one per turn_exchange, below its act-trail -->
-        <BubbleFooter
-          v-else-if="ar.row.kind === 'footer'"
-          :message="(ar.row as FooterRow).message"
-          :can-reply="canReply"
-          @reply="onReply"
-        />
-
-        <!-- Message rows -->
-        <template v-else>
-          <UserBubble
-            v-if="(ar.row as MsgRow).message.role === 'user'"
-            :message="(ar.row as MsgRow).message"
-          />
-          <ChalieBubble v-else :message="(ar.row as MsgRow).message" />
-        </template>
-      </div>
+    <!-- A crash that produced no reply — name the absence rather than leave a
+         bare tool-trace footer read as an empty answer. -->
+    <div v-if="showCrashNote" class="msg-row msg-row--chalie msg-row--lead">
+      <p class="turn-crashed">This turn ended unexpectedly.</p>
     </div>
   </div>
 </template>
@@ -236,14 +274,17 @@ function onReply(): void {
   flex-direction: column;
 }
 
-/* Weave message row: centred at the dock width, 32px avatar gutter + 18px gap.
+/* Turn row: centred at the dock width, no gutter.
    Speaker-change rhythm — new speaker 30px, same-speaker continuation 6px. */
 .msg-row {
   display: flex;
-  gap: 18px;
   width: 100%;
   max-width: var(--dock-width);
   margin-inline: auto;
+}
+
+.msg-row--user {
+  justify-content: flex-end;
 }
 
 .msg-row--lead {
@@ -253,40 +294,13 @@ function onReply(): void {
   margin-top: 6px;
 }
 
-.msg-row__gutter {
-  width: var(--avatar-size);
-  flex-shrink: 0;
-  display: flex;
-  justify-content: center;
-  padding-top: 1px;
-}
-
-.msg-row__body {
-  flex: 1;
-  min-width: 0;
-}
-
-.msg-avatar {
-  width: var(--avatar-size);
-  height: var(--avatar-size);
-  display: grid;
-  place-items: center;
-  flex-shrink: 0;
-}
-
-// Chalie's mark is the bare gradient logo — no badge, no glow, no clip.
-.msg-avatar--chalie img {
-  width: 100%;
-  height: 100%;
-  object-fit: contain;
-}
-
-// Only the generic person avatar is a clipped circular badge.
-.msg-avatar--user {
-  border-radius: 50%;
-  overflow: hidden;
-  background: var(--bg-surface-2);
-  border: 1px solid var(--border-strong);
+// A settled turn that failed with no reply — a muted, unobtrusive note (not an
+// alarm banner); it explains an otherwise-blank exchange, matching the feed's
+// restrained tone.
+.turn-crashed {
+  margin: 0;
+  font-size: 13px;
+  font-style: italic;
   color: var(--text-secondary);
 }
 </style>

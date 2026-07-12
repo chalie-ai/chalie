@@ -71,6 +71,10 @@ class TurnBlock(DTO):
     duration_ms: int
     messages: list[Message]
     type: str
+    #: True when the turn's most recent execution ended CRASHED (unhandled step
+    #: exception or a swept process death). Drives the FE "ended unexpectedly"
+    #: note so a reply-less crash isn't mistaken for a normal empty turn.
+    crashed: bool = False
 
 
 class ThreadBatch(DTO):

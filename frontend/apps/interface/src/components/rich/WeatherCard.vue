@@ -129,9 +129,11 @@ const hourCells = computed<HourCell[]>(() => {
           'weather-card__hour--peak': cell.isPeak,
         }"
       >
-        <span class="weather-card__hour-label">{{ cell.hour }}</span>
         <b class="weather-card__hour-temp">{{ cell.temp_c }}°</b>
-        <div class="weather-card__hour-bar" :style="{ '--fill': cell.barWidth + '%' }" />
+        <div class="weather-card__hour-track" aria-hidden="true">
+          <div class="weather-card__hour-bar" :style="{ height: cell.barWidth * 0.28 + 'px' }" />
+        </div>
+        <span class="weather-card__hour-label">{{ cell.hour }}</span>
       </div>
     </div>
   </div>
@@ -335,97 +337,122 @@ const hourCells = computed<HourCell[]>(() => {
 }
 
 .weather-card__temp {
-  font-size: 4rem;
-  font-weight: 300;
-  letter-spacing: -0.04em;
-  line-height: 1;
+  font-size: 3.75rem;
+  font-weight: 250;
+  letter-spacing: -0.03em;
+  line-height: 0.9;
+  font-variant-numeric: tabular-nums;
 
   sup {
-    font-size: 1.6rem;
-    font-weight: 400;
-    opacity: 0.85;
+    font-size: 1.625rem;
+    font-weight: 300;
     vertical-align: super;
   }
 }
 
 .weather-card__loc {
   font-family: var(--font-mono, 'JetBrains Mono', ui-monospace, monospace);
-  font-size: 0.72rem;
-  letter-spacing: 0.16em;
+  font-size: 0.75rem;
+  letter-spacing: 0.1em;
   text-transform: uppercase;
-  opacity: 0.92;
+  font-weight: 600;
   text-align: right;
-  margin-top: 6px;
+  margin-top: 4px;
 
   div:last-child {
-    opacity: 0.6;
-    margin-top: 4px;
+    font-size: 0.6875rem;
+    font-weight: 400;
+    letter-spacing: 0.06em;
+    opacity: 0.82;
+    margin-top: 3px;
   }
 }
 
 .weather-card__caption {
   align-self: end;
   max-width: 62%;
-  font-size: 0.92rem;
-  line-height: 1.45;
-  color: rgba(255, 255, 255, 0.92);
-  text-shadow: 0 1px 4px rgba(0, 0, 0, 0.35);
+  font-size: 0.844rem;
+  line-height: 1.55;
+  color: rgba(255, 255, 255, 0.94);
+  text-shadow: 0 1px 8px rgba(0, 0, 0, 0.18);
 }
 
+/* Hourly strip is a neutral DATA surface, not part of the immersive sky — it
+   flips with the theme (was a hard-coded near-black rgba band that read as
+   "black blocks" over a light/day sky). Mirrors the mockup's `.whours`:
+   `--surface` ground, `--border` rules, accent bars. */
 .weather-card__rail {
   display: grid;
   grid-template-columns: repeat(8, 1fr);
-  background: rgba(6, 8, 14, 0.72);
-  border-top: 1px solid color-mix(in oklab, var(--border) 80%, transparent);
+  background: var(--bg-surface-2);
+  border-top: 1px solid var(--border);
 }
 
 .weather-card__hour {
-  padding: 12px 4px 14px;
+  padding: 12px 0 11px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
   text-align: center;
-  font-family: var(--font-mono, 'JetBrains Mono', ui-monospace, monospace);
-  font-size: 0.7rem;
-  color: color-mix(in oklab, white 55%, transparent);
-  letter-spacing: 0.06em;
-  border-right: 1px solid rgba(255, 255, 255, 0.05);
+  border-right: 1px solid var(--border);
 
   &:last-child {
     border-right: none;
   }
 
   &--cur {
-    background: rgba(255, 255, 255, 0.05);
+    background: color-mix(in oklab, var(--accent-primary) 8%, transparent);
 
     .weather-card__hour-temp {
-      color: color-mix(in oklab, var(--violet) 80%, white);
+      color: var(--accent-primary);
     }
   }
 
   &--peak .weather-card__hour-temp {
-    color: var(--amber, #ffb257);
+    color: var(--accent-primary);
   }
 }
 
-.weather-card__hour-label {
-  display: block;
-}
-
 .weather-card__hour-temp {
-  display: block;
-  font-family: var(--font-sans, system-ui, sans-serif);
-  font-size: 0.95rem;
-  font-weight: 500;
-  color: color-mix(in oklab, white 90%, transparent);
-  margin-top: 4px;
+  font-family: var(--font-mono, 'JetBrains Mono', ui-monospace, monospace);
+  font-size: 0.75rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-primary);
   letter-spacing: 0;
 }
 
+/* Vertical mini-bar: a fixed-height track with the bar bottom-aligned so all
+   bars share one baseline; height scales with the hour's temperature (bound
+   inline off barWidth). Peak/current hours brighten for emphasis. */
+.weather-card__hour-track {
+  height: 30px;
+  display: flex;
+  align-items: flex-end;
+}
+
 .weather-card__hour-bar {
-  width: var(--fill, 0);
-  height: 2px;
-  margin: 6px auto 0;
-  border-radius: 1px;
-  background: currentColor;
-  opacity: 0.4;
-  max-width: 80%;
+  width: 5px;
+  min-height: 3px;
+  border-radius: 3px;
+  background: var(--accent-primary);
+  opacity: 0.28;
+  transition: opacity 200ms ease;
+}
+
+.weather-card__hour--cur .weather-card__hour-bar {
+  opacity: 0.55;
+}
+
+.weather-card__hour--peak .weather-card__hour-bar {
+  opacity: 0.9;
+}
+
+.weather-card__hour-label {
+  font-family: var(--font-mono, 'JetBrains Mono', ui-monospace, monospace);
+  font-size: 0.656rem;
+  color: var(--text-tertiary);
+  font-variant-numeric: tabular-nums;
 }
 </style>

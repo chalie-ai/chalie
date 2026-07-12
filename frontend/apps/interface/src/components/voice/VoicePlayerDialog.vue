@@ -5,7 +5,7 @@
       <span class="voice-player__spinner" aria-label="Loading audio…" />
     </div>
 
-    <p
+    <div
       v-if="errorMsg"
       class="voice-player__error"
       role="button"
@@ -13,7 +13,16 @@
       title="Dismiss"
       @click="_close"
       @keydown.enter="_close"
-    >{{ errorMsg }}</p>
+    >
+      <span class="voice-player__error__msg">{{ errorMsg }}</span>
+      <button
+        class="voice-player__btn voice-player__btn--close"
+        aria-label="Close player"
+        @click.stop="_close"
+      >
+        <X :size="16" />
+      </button>
+    </div>
 
     <div v-show="uiState !== 'loading' && !errorMsg" class="voice-player__controls">
       <button
@@ -480,11 +489,20 @@ function _unbindKeyboard(): void {
 }
 
 .voice-player__error {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
   color: var(--error);
   font-size: 0.8125rem;
   margin: 0;
+  width: 100%;
   max-width: 22rem;
   cursor: pointer;
+}
+
+.voice-player__error__msg {
+  flex: 1;
+  min-width: 0;
 }
 
 .voice-player__controls {

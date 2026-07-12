@@ -9,6 +9,7 @@ import { conversation as convoApi } from '../../api/conversation';
 import { useSessionStore } from '../../stores/session';
 import { useAutoscroll } from '../../composables/useAutoscroll';
 import { registerSurface, unregisterSurface, upsertTurnToSurfaces, SPINE_SURFACE_ID } from '../../utils/turnDom';
+import { syncDaymarks } from '../../utils/daymarks';
 import SpineTurn from './SpineTurn.vue';
 
 const PAGE_SIZE = 20;
@@ -84,8 +85,10 @@ async function _onScrollPaginate(): Promise<void> {
 
 // Autoscroll: turnDom dispatches 'turn-upserted' after every DOM render
 // (initial load, WS-driven refetch, live growth mid-turn) — replaces the old
-// deep watch on the buffer's sortedBlocks.
+// deep watch on the buffer's sortedBlocks. Reconcile the day dividers first so
+// their height is already in the layout when autoscroll measures the bottom.
 function onTurnUpserted(): void {
+  if (turnsRef.value) syncDaymarks(turnsRef.value);
   scrollToBottom();
 }
 

@@ -116,6 +116,62 @@ def test_finished_execution_with_settled_reply_is_not_working(db: sqlite3.Connec
     assert "Standup reminder: 9am daily sync." in contents
 
 
+# ── ``crashed`` — the terminal-CRASHED signal (§ same function) ───────────────
+#
+# A turn whose most recent execution ended CRASHED (an unhandled step exception
+# or a swept process death) settles to ``working=False`` with, in the worst
+# case, only a tool-trace and no assistant reply — data-indistinguishable from a
+# normal completed-but-empty turn. ``serialize_turn`` exposes ``crashed`` off the
+# terminal execution's ``state`` so the FE can name the failure ("ended
+# unexpectedly") instead of rendering a bare, blank footer. Keyed on
+# ``TurnExecution.latest`` (most recent row, open or closed), so a later
+# COMPLETED retry of the same turn_id correctly clears the flag.
+
+
+def test_crashed_execution_marks_the_block_crashed(db: sqlite3.Connection) -> None:
+    """A turn that ran a tool then died mid-step — an OPEN execution stamped
+    terminal CRASHED, a tool call, and no assistant reply row. This is the
+    exact reply-less crash that renders as a bare "1 tool used" footer; the
+    serializer must report ``crashed=True`` so the FE can name the failure."""
+    assert db is not None  # fixture is taken for its binding side effect (real DB gateway)
+    turn_id = 9201
+    mp = MessageProcessor(UserConfig(), turn_id, "Do the thing that crashes.")  # inert (I2)
+    uid = mp.transcript_service.append_input(mp.raw_input)
+    mp.uid = uid
+    mp.current_transcript_id = uid
+
+    assert mp.turn_execution_service.open() is not None
+    call_id = mp.tool_call_service.start("web_search", {"query": "boom"})
+    assert call_id is not None  # sanity: real tool-call write
+    mp.tool_call_service.finish(call_id, "partial", ToolCall.DONE)
+    crashed = mp.turn_execution_service.finish(TurnExecution.CRASHED, "step raised")
+    assert crashed is not None and crashed.ended_at is not None  # sanity: real terminal close
+
+    result = serialize_turn(_USER_CHANNEL, turn_id)
+
+    assert result["crashed"] is True
+    assert result["working"] is False
+
+
+def test_completed_execution_is_not_crashed(db: sqlite3.Connection) -> None:
+    """The other direction: a turn that ran to COMPLETED must report
+    ``crashed=False`` so a normal turn never shows the failure note."""
+    assert db is not None  # fixture is taken for its binding side effect (real DB gateway)
+    turn_id = 9202
+    mp = MessageProcessor(UserConfig(), turn_id, "Do the thing that works.")  # inert (I2)
+    uid = mp.transcript_service.append_input(mp.raw_input)
+    mp.uid = uid
+    mp.current_transcript_id = uid
+
+    assert mp.turn_execution_service.open() is not None
+    mp.transcript_service.append_assistant("Done.")
+    assert mp.turn_execution_service.finish(TurnExecution.COMPLETED) is not None
+
+    result = serialize_turn(_USER_CHANNEL, turn_id)
+
+    assert result["crashed"] is False
+
+
 # ── ``thread_message`` boundary (§ same function, different field) ────────────
 #
 # The companion regression: ``thread_message`` used to derive from

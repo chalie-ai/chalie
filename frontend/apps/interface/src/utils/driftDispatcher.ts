@@ -196,6 +196,16 @@ function _dispatchTurnSignal(data: WsPushEvent): boolean {
         console.warn('[driftDispatcher] turn_signal "updated" for turn', turnId, 'has no resolvable type — dropped');
         return true;
       }
+      // An 'updated' signal is equally proof the send's turn is now tracked by
+      // its own signals — so it must release the POST-scoped busy hold too, not
+      // only the `turn_execution` path (see `_dispatchTurnExecution`, the other
+      // caller). A turn can render AND settle from 'updated' frames alone when
+      // its `turn_execution` frame is dropped or arrives before the turn is in
+      // the DOM (unresolvable type). That path is otherwise the SOLE releaser
+      // and `_reconcileWorking` never touches the hold, so without this the
+      // hold — and thus the spine's `isSurfaceBusy` gate — strands forever,
+      // silently queueing every later send. No-op when no hold is registered.
+      hooks().releasePendingSend(turnId, type);
       void _refetchAndUpsert(turnId, type);
       return true;
     }

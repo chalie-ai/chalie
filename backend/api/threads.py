@@ -252,7 +252,7 @@ def _bulk_gists(channel: str, turn_ids: list[int]) -> dict[int, str]:
 
 
 def _drop_trailing_cancelled_orphan(
-    rows: list[dict[str, object]], channel: str, turn_id: int,
+    rows: list[dict[str, object]], latest: TurnExecution | None,
 ) -> list[dict[str, object]]:
     """A cancel observed at :meth:`MessageProcessor._step`'s checkpoint
     discards the in-flight response before any reply row is stored (§2.7),
@@ -266,11 +266,10 @@ def _drop_trailing_cancelled_orphan(
     since a cancel observed mid-turn, after real assistant/tool content was
     already written, leaves that content in place per existing doctrine
     ('every row it already wrote stays'). Rows are dropped only when the
-    turn's own most recent execution actually ended cancelled, never on
-    role alone."""
+    turn's own most recent execution (``latest``, fetched once by the caller)
+    actually ended cancelled, never on role alone."""
     if not rows or rows[-1]["role"] != "user":
         return rows
-    latest = TurnExecution.latest(channel, turn_id)
     if latest is None or latest.state != TurnExecution.CANCELLED:
         return rows
     cutoff = len(rows)
@@ -314,8 +313,9 @@ def serialize_turn(channel: str, turn_id: int, config_type: str = _TYPE) -> dict
     folded in."""
     from services.time_utils import parse_utc
 
+    latest = TurnExecution.latest(channel, turn_id)
     rows = Transcript.by_turn(channel, turn_id)
-    rows = _drop_trailing_cancelled_orphan(rows, channel, turn_id)
+    rows = _drop_trailing_cancelled_orphan(rows, latest)
     messages = _rows_to_messages(rows)
 
     user_ids = [cast("int", r["id"]) for r in rows if r["role"] == "user"]
@@ -338,6 +338,14 @@ def serialize_turn(channel: str, turn_id: int, config_type: str = _TYPE) -> dict
         "duration_ms": duration_ms,
         "messages": messages,
         "type": config_type,
+        # True when the turn's most recent execution ended CRASHED — an unhandled
+        # step exception, or a process death the boot sweep stamped. A crash that
+        # produced no reply row is otherwise indistinguishable from a normal empty
+        # turn on refetch (both settle to working:false), so the FE needs this to
+        # render an "ended unexpectedly" note instead of a bare tool-trace footer.
+        # stop_reason is deliberately NOT exposed: it is raw str(exc)/"process
+        # death", never user-displayable, so the FE renders a fixed message.
+        "crashed": bool(latest and latest.state == TurnExecution.CRASHED),
     }
 
 

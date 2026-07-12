@@ -3,6 +3,7 @@ import type { App, AppContext, Component } from 'vue';
 import TurnView from '../components/conversation/TurnView.vue';
 import type { ConversationTurnBlock } from '../api/conversation';
 import { clearLiveTurnsForToolCallsResolved } from './liveActTrail';
+import { localDayKey } from './time';
 
 let appContext: AppContext | null = null;
 
@@ -73,6 +74,16 @@ function workingKey(turnId: number, type: string): string {
  *  reconnect. */
 export function liveWorkingKeys(): string[] {
   return Array.from(_liveWorking);
+}
+
+/** True if any scheduled turn is currently recorded as done (D16 "settled
+ *  unseen") — used by the nav to surface unseen scheduled content as a
+ *  visual cue. */
+export function hasDoneScheduled(): boolean {
+  for (const key of _liveDone) {
+    if (key.startsWith('scheduled:')) return true;
+  }
+  return false;
 }
 
 /** True if the DOM contract currently considers this turn in flight — a live
@@ -231,6 +242,7 @@ export function upsertTurn(
     const currentVersion = Number.parseInt(host.dataset.version ?? '-1', 10);
     if (!options.force && currentVersion > version) return null;
     host.dataset.version = String(version);
+    stampDay(host, block);
     mount(host, component, block, type, extraProps);
     stampWorking(host, block, type);
     notifyUpserted(block.turn_id, type);
@@ -239,11 +251,22 @@ export function upsertTurn(
 
   const host = document.createElement('div');
   host.dataset.version = String(version);
+  stampDay(host, block);
   insertInOrder(container, host, block.turn_id);
   mount(host, component, block, type, extraProps);
   stampWorking(host, block, type);
   notifyUpserted(block.turn_id, type);
   return host;
+}
+
+/** Stamp the host's local calendar day (block's first-row timestamp, falling
+ *  back to last activity) so the date-divider reconciler (utils/daymarks.ts)
+ *  can group turns by day without re-reading block internals. Left unset when
+ *  no parseable timestamp exists — such a turn simply joins the group above it. */
+function stampDay(host: HTMLElement, block: ConversationTurnBlock): void {
+  const iso = block.messages[0]?.timestamp ?? block.last_activity_at;
+  const d = iso ? new Date(iso) : null;
+  if (d && !Number.isNaN(d.getTime())) host.dataset.day = localDayKey(d);
 }
 
 /** Stamp `data-working` on a just-(re)mounted turn's own root element

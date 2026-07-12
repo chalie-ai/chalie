@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed } from 'vue';
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
 import { Brain, CalendarClock, Clock, Moon, Search, Sun } from '@lucide/vue';
 import { storeToRefs } from 'pinia';
 import { useSessionStore } from '../../stores/session';
@@ -8,7 +8,15 @@ import { ConfigType, platform, useTheme } from '@chalie/shared';
 import { emit } from '../../composables/useEventBus';
 import { useDockBusy } from '../../composables/useDockBusy';
 import { useThreadActivity } from '../../utils/threadActivity';
+import { hasDoneScheduled } from '../../utils/turnDom';
 
+// D16 — scheduler-dock activity cue: aqua icon when any scheduled turn is
+// "done" (settled unseen). Mirrors SchedulerDock.vue's bumpActivity pattern.
+const hasSchedulerActivity = ref(hasDoneScheduled());
+
+function onTurnStateChanged(): void {
+  hasSchedulerActivity.value = hasDoneScheduled();
+}
 const session = useSessionStore();
 
 // D3: replaces the retired `session.isSending` store getter — the logo
@@ -33,6 +41,13 @@ function handleThemeToggle(): void {
 function handleSettings(): void {
   platform.openBrain();
 }
+
+onMounted(() => {
+  document.addEventListener('turn-state-changed', onTurnStateChanged);
+});
+onBeforeUnmount(() => {
+  document.removeEventListener('turn-state-changed', onTurnStateChanged);
+});
 </script>
 
 <template>
@@ -56,6 +71,7 @@ function handleSettings(): void {
       <button
         id="schedulerDockBtn"
         class="btn-icon"
+        :class="{ 'has-activity': hasSchedulerActivity }"
         aria-label="Schedules"
         title="Schedules"
         @click="session.openSchedulerDock()"
@@ -77,16 +93,14 @@ function handleSettings(): void {
         <Brain :size="18" />
       </button>
       <button
-        class="theme-toggle"
-        :aria-label="'Toggle light or dark theme'"
+        id="themeBtn"
+        class="btn-icon"
+        aria-label="Toggle light or dark theme"
         title="Toggle light / dark"
         @click="handleThemeToggle"
       >
-        <span class="theme-toggle__track" aria-hidden="true">
-          <Sun />
-          <Moon />
-        </span>
-        <span class="theme-toggle__thumb" aria-hidden="true"></span>
+        <Moon v-if="theme === 'dark'" :size="18" aria-hidden="true" />
+        <Sun v-else :size="18" aria-hidden="true" />
       </button>
     </div>
   </header>
@@ -142,71 +156,10 @@ function handleSettings(): void {
   }
 }
 
-.theme-toggle {
-  position: relative;
-  width: 56px;
-  height: 30px;
-  border-radius: var(--radius-full);
-  background: var(--bg-input);
-  border: 1px solid var(--border-subtle);
-  cursor: pointer;
-  display: inline-flex;
-  align-items: center;
-  padding: 3px;
-  transition:
-    background 220ms ease,
-    border-color 220ms ease;
-
-  &:hover {
-    border-color: var(--border-strong);
-  }
-
-  &:focus-visible {
-    outline: 1.5px solid color-mix(in oklab, var(--violet) 45%, transparent);
-    outline-offset: 2px;
-  }
-}
-
-.theme-toggle__track {
-  position: relative;
-  width: 100%;
-  height: 100%;
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding: 0 6px;
-  color: var(--text-tertiary);
-
-  svg {
-    width: 12px;
-    height: 12px;
-    stroke-width: 2;
-  }
-}
-
-.theme-toggle__thumb {
-  position: absolute;
-  top: 2px;
-  left: 2px;
-  width: 24px;
-  height: 24px;
-  border-radius: 50%;
-  background: linear-gradient(
-    135deg,
-    var(--violet),
-    color-mix(in oklab, var(--magenta) 60%, var(--violet))
-  );
-  box-shadow:
-    0 2px 8px color-mix(in oklab, var(--violet) 35%, transparent),
-    0 0 0 1px color-mix(in oklab, var(--violet) 20%, transparent);
-  transition: transform 320ms cubic-bezier(0.34, 1.56, 0.64, 1);
-
-  // Plain `[data-theme] &`, NOT `:global([data-theme]) &`: the :global() form
-  // drops the trailing `&` in scoped-CSS compilation, leaking `transform` onto
-  // <html>, which then becomes the containing block for every position:fixed
-  // descendant — so the fixed presence-bar scrolls away with the page.
-  [data-theme='light'] & {
-    transform: translateX(26px);
-  }
+// D16 — aqua cue on the scheduler dock button when any scheduled turn is
+// "done" (settled unseen). The CalendarClock SVG inherits this via
+// currentColor, so setting it on the button cascades to the icon.
+.has-activity {
+  color: var(--cyan);
 }
 </style>

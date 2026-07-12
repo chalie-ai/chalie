@@ -84,6 +84,14 @@ export interface ConversationTurnBlock {
   last_activity_at: string | null;
   /** True while the turn is unsettled/in-flight (no settle0 row yet). */
   working: boolean;
+  /**
+   * True when the turn's most recent execution ended CRASHED (an unhandled step
+   * exception, or a process death the boot sweep stamped). A crash that produced
+   * no reply row settles to working:false with no other trace, so this is the
+   * only signal the render has to show an "ended unexpectedly" note rather than
+   * a bare tool-trace footer. Absent (undefined) on legacy/non-crashed blocks.
+   */
+  crashed?: boolean;
   /** Row-span duration in ms (0 for a single-row turn). */
   duration_ms: number;
   messages: ConversationMessage[];

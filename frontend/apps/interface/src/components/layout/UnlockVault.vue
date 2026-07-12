@@ -83,7 +83,7 @@ onBeforeUnmount(() => {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: var(--bg-base);
+  background: var(--bg);
 }
 .unlock-vault__card {
   display: flex;
@@ -126,7 +126,7 @@ onBeforeUnmount(() => {
   }
 }
 .unlock-vault__error {
-  color: var(--danger);
+  color: var(--error);
   min-height: 1.25rem;
 }
 </style>

@@ -30,6 +30,18 @@ export const useContextUsageStore = defineStore('contextUsage', () => {
     return `${(entry.tokens / 1000).toFixed(1)}/${(entry.window / 1000).toFixed(1)}k`;
   });
 
+  /**
+   * Returns a clamped 0..1 ratio of tokens used vs. context window for a
+   * (type, turnId). Mirrors `usageDisplayFor` but yields a number suitable for
+   * a meter-bar width. Returns 0 when the cache entry is missing or the window
+   * is zero (avoids divide-by-zero).
+   */
+  function usageRatioFor(type: string, turnId: number): number {
+    const entry = byKey.value[keyOf(type, turnId)];
+    if (!entry || entry.window === 0) return 0;
+    return Math.min(1, Math.max(0, entry.tokens / entry.window));
+  }
+
   // Coalescing maps — keyed by keyOf(type, turnId); kept in module closure so
   // two docks refreshing concurrently do not collapse into one in-flight flag.
   const _refreshing: Record<string, boolean> = {};
@@ -73,6 +85,7 @@ export const useContextUsageStore = defineStore('contextUsage', () => {
   return {
     byKey,
     usageDisplayFor,
+    usageRatioFor,
     refresh,
   };
 });

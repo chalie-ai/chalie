@@ -28,7 +28,7 @@ import { lsGet, lsSet } from '../../utils/storage';
 import { system } from '../../api';
 import ImageAttachStrip from '../upload/ImageAttachStrip.vue';
 import QueuedMessages from '../conversation/QueuedMessages.vue';
-import { Plus, Mic, Send, X, AlertTriangle } from '@lucide/vue';
+import { Plus, Mic, Send, X, AlertTriangle, ChevronDown } from '@lucide/vue';
 
 /**
  * `turnId` is the only thing that distinguishes a thread reply from a main-dock
@@ -56,6 +56,11 @@ const contextUsage = useContextUsageStore();
 const ambient = useAmbientSensor();
 const { available: voiceAvailable, recorderState } = storeToRefs(voiceStore);
 const usageDisplay = computed(() => contextUsage.usageDisplayFor(props.type, props.turnId ?? -1));
+const usageRatio = computed(() => contextUsage.usageRatioFor(props.type, props.turnId ?? -1));
+// The meter shows the percentage used ("30%"); the raw "X/Y" token counts move
+// to the hover tooltip (see the container's :title below) so the inline chip
+// stays compact.
+const usagePercent = computed(() => Math.round(usageRatio.value * 100) + '%');
 
 const THINKING_ITEMS = [
   { level: 'auto', label: 'Auto' },
@@ -68,6 +73,7 @@ const ATTACH_ACCEPT =
   'image/jpeg,image/png,image/webp,image/gif,.pdf,.docx,.pptx,.html,.htm,.txt,.md,.csv,.json,.xml';
 
 const textareaRef = ref<HTMLTextAreaElement | null>(null);
+const sendBtnRef = ref<HTMLButtonElement | null>(null);
 const text = ref('');
 
 // Restore draft: persisted on every change so a reload/close/navigate recovers it.
@@ -117,9 +123,21 @@ async function handleSend(): Promise<void> {
   textareaRef.value?.focus();
 }
 
-// Multi-line textarea: Enter inserts a newline and ONLY the send button submits,
-// so there is no keydown handler. Cancelling an in-flight turn is the act-trail's
-// stop/undo button, not the dock.
+// Enter-to-send is a desktop-only affordance. On a device with a real keyboard
+// (fine pointer + hover) Enter sends and Shift+Enter inserts a newline; on touch
+// (mobile/tablet) Enter always inserts a newline and only the button sends. The
+// keystroke routes through THIS dock's own send button — a real click on the
+// element it was captured from — so it lands in the exact lane (main vs thread)
+// it fired in and inherits the button's disabled/guard state for free. IME
+// composition is never interrupted. Cancelling an in-flight turn stays the
+// act-trail's stop/undo button, not the dock.
+function onTextareaKeydown(e: KeyboardEvent): void {
+  if (e.key !== 'Enter' || e.shiftKey || e.isComposing) return;
+  const desktop = globalThis.matchMedia?.('(hover: hover) and (pointer: fine)').matches;
+  if (!desktop) return;
+  e.preventDefault();
+  sendBtnRef.value?.click();
+}
 
 function openFilePicker(): void {
   fileInputRef.value?.click();
@@ -188,6 +206,15 @@ function onEditQueued(e: Event): void {
   });
 }
 
+// The footer dock is fixed to the viewport, so .conversation-spine can't see
+// its height to reserve space beneath the last message. The attachment strip
+// and queued-message chips grow the dock UPWARD, and a static reserve would let
+// that growth overlap the act-trail (the queued-messages defect). Publish the
+// dock's live height as --dock-height on :root so the spine's bottom padding
+// tracks it. Footer dock only — the inline thread reply dock is in-flow (static)
+// and needs no reserve.
+let _dockResizeObserver: ResizeObserver | null = null;
+
 let _unsubVoiceTranscript: (() => void) | null = null;
 
 /** Paste the voice transcript into the compose textarea for review — does NOT auto-send. */
@@ -211,6 +238,16 @@ onMounted(() => {
   document.addEventListener('click', onDocumentClick);
   globalThis.addEventListener('beforeunload', onBeforeUnload);
 
+  // Reserve the spine's bottom space against this dock's LIVE height (footer only).
+  if (props.turnId == null && footerRef.value) {
+    _dockResizeObserver = new ResizeObserver((entries) => {
+      const box = entries[0]?.borderBoxSize?.[0];
+      const h = box ? box.blockSize : (entries[0]?.contentRect.height ?? 0);
+      if (h > 0) document.documentElement.style.setProperty('--dock-height', `${Math.ceil(h)}px`);
+    });
+    _dockResizeObserver.observe(footerRef.value);
+  }
+
   // Behavioral signals: typing cadence feeds the ambient snapshot.
   if (textareaRef.value) ambient.bindTypingInput(textareaRef.value);
 
@@ -227,6 +264,11 @@ onBeforeUnmount(() => {
   _unsubVoiceTranscript?.();
   document.removeEventListener('click', onDocumentClick);
   globalThis.removeEventListener('beforeunload', onBeforeUnload);
+  if (props.turnId == null) {
+    _dockResizeObserver?.disconnect();
+    _dockResizeObserver = null;
+    document.documentElement.style.removeProperty('--dock-height');
+  }
   // Hand focus routing back to the footer when an inline dock collapses.
   if (activeDockKey.value === dockKey) activeDockKey.value = 'main';
   // The recorder is a shared singleton — only the permanent footer dock tears it
@@ -269,15 +311,6 @@ onBeforeUnmount(() => {
     <div class="input-dock__outer">
       <div class="input-dock__inner">
         <button
-          id="attachBtn"
-          class="btn-action btn-action--attach"
-          aria-label="Attach"
-          @click="openFilePicker"
-        >
-          <Plus :size="20" />
-        </button>
-
-        <button
           v-if="voiceAvailable"
           id="voiceRecBtn"
           class="btn-icon voice-rec-btn"
@@ -290,6 +323,15 @@ onBeforeUnmount(() => {
           <span class="voice-rec-btn__spinner" aria-hidden="true"></span>
         </button>
 
+        <button
+          id="attachBtn"
+          class="btn-action btn-action--attach"
+          aria-label="Attach"
+          @click="openFilePicker"
+        >
+          <Plus :size="20" />
+        </button>
+
         <textarea
           id="chatInput"
           ref="textareaRef"
@@ -298,9 +340,11 @@ onBeforeUnmount(() => {
           :aria-label="turnId != null ? 'Reply in thread' : 'Message Chalie'"
           :placeholder="turnId != null ? 'Reply in this thread…' : 'Talk to Chalie…'"
           rows="1"
+          @keydown="onTextareaKeydown"
         ></textarea>
 
         <button
+          ref="sendBtnRef"
           class="btn-action btn-action--send"
           aria-label="Send message"
           :disabled="!canSend"
@@ -321,8 +365,9 @@ onBeforeUnmount(() => {
           :aria-expanded="thinkingMenuOpen"
           @click.stop="thinkingMenuOpen = !thinkingMenuOpen"
         >
-          <span class="thinking-select__caption">Thinking</span>
+          <span class="thinking-select__swirl" aria-hidden="true"></span>
           <span id="thinkingLabel" class="thinking-select__value">{{ levelLabel }}</span>
+          <ChevronDown :size="12" style="opacity: 0.6" />
         </button>
         <div
           id="thinkingMenu"
@@ -344,11 +389,16 @@ onBeforeUnmount(() => {
           </button>
         </div>
       </div>
-      <div id="contextDisplay" class="context-display" :class="{ hidden: !usageDisplay }">
-        <span class="context-display__caption">Context</span>
-        <span class="context-indicator" title="Last request size / context window">{{
-          usageDisplay
-        }}</span>
+      <div
+        id="contextDisplay"
+        class="context-display"
+        :class="{ hidden: !usageDisplay }"
+        :title="`${usageDisplay} context`"
+      >
+        <span class="context-indicator">
+          <b>{{ usagePercent }}</b>
+        </span>
+        <span class="meter"><i :style="{ width: usageRatio * 100 + '%' }"></i></span>
       </div>
     </div>
 

@@ -159,12 +159,12 @@ describe('live act-trail visibility — working turn in the thread panel', () =>
   });
 });
 
-describe('collapsed tool-call trail placement', () => {
+describe('tool-call trace placement', () => {
   const toolCalls: NonNullable<ConversationMessage['tool_calls']> = [
     { tool_name: 'memory_recall', summary: 'recalled a memory', state: 'done', ended_at: null },
   ];
 
-  it('renders a trail anchored on the USER row after the assistant reply, not above it', () => {
+  it('rides a settled exchange\'s pre-turn tool call on the footer trace, not a separate group row', () => {
     const turnId = 201;
     const b = block(turnId, [
       msg('2010', 'user', 'user question with pre-turn tools', turnId, false, toolCalls),
@@ -189,12 +189,16 @@ describe('collapsed tool-call trail placement', () => {
               : 'other',
     );
 
-    // Settled exchange: act-trail flushes below the reply, then the footer
-    // below the act-trail — never above it.
-    expect(kinds).toEqual(['user', 'assistant', 'group', 'footer']);
+    // Settled exchange: the pre-turn tool call is aggregated onto that
+    // exchange's footer as its inline "N tools used" trace — NO separate
+    // collapsed-group row is emitted once there's a footer to carry it.
+    expect(kinds).toEqual(['user', 'assistant', 'footer']);
+    // The call is not dropped — it rides the footer's expandable trace.
+    expect(wrapper.find('.trace-pill').text()).toContain('1 tool used');
+    expect(wrapper.find('.call__fn').text()).toBe('memory_recall');
   });
 
-  it('still renders a trail anchored on the ASSISTANT row after that assistant message', () => {
+  it('rides a settled exchange\'s assistant-step tool call on the footer trace', () => {
     const turnId = 202;
     const b = block(turnId, [
       msg('2020', 'user', 'plain user question', turnId),
@@ -219,7 +223,8 @@ describe('collapsed tool-call trail placement', () => {
               : 'other',
     );
 
-    expect(kinds).toEqual(['user', 'assistant', 'group', 'footer']);
+    expect(kinds).toEqual(['user', 'assistant', 'footer']);
+    expect(wrapper.find('.trace-pill').text()).toContain('1 tool used');
   });
 
   it('flushes a pending trail at the end when the block has no assistant row yet', () => {
@@ -245,10 +250,11 @@ describe('collapsed tool-call trail placement', () => {
     { tool_name: 'web_search', summary: 'searched the web', state: 'done', ended_at: null },
   ];
 
-  it('pools every tool trail at the BOTTOM of a multi-step exchange, below the final reply', () => {
-    // The turn_exchange defect: when one user question yields several assistant
-    // steps that each ran tools, the chips must gather at the exchange's bottom —
-    // never interleaved between an interim step and the final reply.
+  it('aggregates every tool call of a multi-step exchange onto its ONE footer trace', () => {
+    // The turn_exchange contract: when one user question yields several assistant
+    // steps that each ran tools, every call gathers onto that exchange's single
+    // footer trace — never interleaved between an interim step and the reply,
+    // never split across rows.
     const turnId = 204;
     const b = block(turnId, [
       msg('2040', 'user', 'the multi-step question', turnId),
@@ -276,23 +282,23 @@ describe('collapsed tool-call trail placement', () => {
                 : 'other',
     );
 
-    // Both chips pool at the exchange's bottom, and the ONE footer for this
-    // exchange sits below both — never between an interim step and the reply,
-    // and never above the act-trail.
+    // Both steps' calls aggregate onto the single footer for this exchange,
+    // which sits below the final reply — no separate chip rows.
     expect(kinds).toEqual([
       'user',
       'assistant-interim',
       'assistant-final',
-      'group',
-      'group',
       'footer',
     ]);
+    // The footer trace counts BOTH calls (interim + final).
+    expect(wrapper.find('.trace-pill').text()).toContain('2 tools used');
+    expect(wrapper.findAll('.call__fn').map((c) => c.text())).toEqual(['web_search', 'memory_recall']);
   });
 
-  it('keeps each exchange tool trail at its own bottom across a multi-exchange thread', () => {
-    // Two turn_exchanges in one block (thread panel): exchange one's chips sit
-    // below its reply and BEFORE exchange two opens; exchange two's chips sit at
-    // the very bottom. The chips are never all pooled after the last reply.
+  it('gives each exchange its OWN footer trace across a multi-exchange thread', () => {
+    // Two turn_exchanges in one block (thread panel): exchange one's calls ride
+    // its own footer right after its reply and BEFORE exchange two opens;
+    // exchange two's calls ride its own footer at the bottom.
     const turnId = 205;
     const b = block(turnId, [
       msg('2050', 'user', 'first question', turnId),
@@ -323,13 +329,15 @@ describe('collapsed tool-call trail placement', () => {
                   : 'other',
     );
 
-    // Each exchange gets its OWN footer, right after its own act-trail — the
+    // Each exchange gets its OWN footer, right after its own reply — the
     // second exchange's footer never merges into or replaces the first's.
-    expect(kinds).toEqual(['u1', 'a1', 'group', 'footer', 'u2', 'a2', 'group', 'footer']);
+    expect(kinds).toEqual(['u1', 'a1', 'footer', 'u2', 'a2', 'footer']);
     expect(wrapper.findAll('.speech-form__meta')).toHaveLength(2);
+    // Each footer carries exactly its own exchange's single call.
+    expect(wrapper.findAll('.trace-pill').map((p) => p.text().includes('1 tool used'))).toEqual([true, true]);
   });
 
-  it('renders exactly ONE footer for a forked spine turn — the openers, after its act-trail', () => {
+  it('renders exactly ONE footer for a forked spine turn — the openers, carrying its trace', () => {
     // The other half of the cardinality fix: on the spine (fullThread=false)
     // only the opener exchange survives the thread_message drop, so exactly
     // one footer renders — the thread's continuation carries no footer of
@@ -363,7 +371,57 @@ describe('collapsed tool-call trail placement', () => {
               : 'other',
     );
 
-    expect(kinds).toEqual(['user', 'assistant', 'group', 'footer']);
+    expect(kinds).toEqual(['user', 'assistant', 'footer']);
     expect(wrapper.findAll('.speech-form__meta')).toHaveLength(1);
+    // The opener's own pre-turn call rides the single footer trace; the
+    // spine-dropped continuation's tools never leak onto it.
+    expect(wrapper.find('.trace-pill').text()).toContain('1 tool used');
+  });
+});
+
+describe('crashed-turn note', () => {
+  it('renders an "ended unexpectedly" note for a crashed turn that produced no reply', () => {
+    const turnId = 301;
+    const b = block(turnId, [msg('3010', 'user', 'a question that crashed the turn', turnId)]);
+    b.working = false;
+    b.crashed = true;
+
+    const wrapper = mount(TurnView, {
+      props: { block: b, type: ConfigType.USER, fullThread: false },
+    });
+
+    expect(wrapper.find('.turn-crashed').exists()).toBe(true);
+    expect(wrapper.find('.turn-crashed').text()).toContain('ended unexpectedly');
+  });
+
+  it('does NOT render the note when the crashed turn still landed a reply before dying', () => {
+    const turnId = 302;
+    const b = block(turnId, [
+      msg('3020', 'user', 'a question', turnId),
+      msg('3021', 'assistant', 'a real answer landed before the crash', turnId),
+    ]);
+    b.working = false;
+    b.crashed = true;
+
+    const wrapper = mount(TurnView, {
+      props: { block: b, type: ConfigType.USER, fullThread: false },
+    });
+
+    // A crash that left content keeps the content; the note is only for the
+    // "nothing came back" case.
+    expect(wrapper.find('.turn-crashed').exists()).toBe(false);
+  });
+
+  it('does NOT render the note for a normal (non-crashed) settled turn', () => {
+    const turnId = 303;
+    const b = block(turnId, [msg('3030', 'user', 'a question', turnId)]);
+    b.working = false;
+    // crashed omitted (undefined) — a normal settled turn must never show it.
+
+    const wrapper = mount(TurnView, {
+      props: { block: b, type: ConfigType.USER, fullThread: false },
+    });
+
+    expect(wrapper.find('.turn-crashed').exists()).toBe(false);
   });
 });

@@ -188,6 +188,31 @@ describe('dispatchDrift — turn_signal frame', () => {
     expect(upsertTurnToSurfacesMock).toHaveBeenCalledTimes(1);
   });
 
+  // The send's POST-scoped busy hold is released on ANY signal that proves the
+  // turn is now tracked by its own frames — an 'updated' signal is such proof,
+  // exactly like a turn_execution frame. This is the recovery path for a turn
+  // whose `turn_execution` frame is dropped or arrives before the turn is in
+  // the DOM (unresolvable type): the turn renders and settles from 'updated'
+  // frames alone. Without it, the SOLE releaser is the execution path and
+  // `_reconcileWorking` never touches the hold, so the spine's `isSurfaceBusy`
+  // gate strands forever and every later send silently queues.
+  it('status=updated releases the send\'s POST-scoped busy hold', () => {
+    dispatchDrift(frame({ status: 'updated', turn_id: 11, type: 'user' }));
+    expect(releasePendingSendMock).toHaveBeenCalledWith(11, 'user');
+  });
+
+  it('status=updated for an unresolvable-type frame drops WITHOUT releasing the hold — a wrong-channel release could free a different send', () => {
+    // No `type` on the frame, nothing rendered, no matching open panel — the
+    // channel can't be named, so the frame is dropped. Releasing here would
+    // key off a guessed type and could clear a hold for a same-numbered turn
+    // in another channel.
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => { /* silence */ });
+    dispatchDrift(frame({ status: 'updated', turn_id: 12 }));
+    expect(releasePendingSendMock).not.toHaveBeenCalled();
+    expect(threadMock).not.toHaveBeenCalled();
+    warnSpy.mockRestore();
+  });
+
   it('status=provider_retry shows a toast with the frame message', () => {
     dispatchDrift(frame({ status: 'provider_retry', message: 'ollama is slow', type: 'user' }));
     expect(showToastMock).toHaveBeenCalledWith('ollama is slow');

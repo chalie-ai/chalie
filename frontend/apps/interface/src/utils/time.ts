@@ -54,6 +54,16 @@ export function parseDate(s: string | null | undefined): Date | null {
 }
 
 /**
+ * Local calendar-day key "YYYY-MM-DD" for grouping rows by the day they fall on
+ * (browser-local, matching parseDate's local-getter convention — the backend
+ * already localizes the source strings). Stable, sortable, locale-independent.
+ */
+export function localDayKey(d: Date): string {
+  const pad = (n: number): string => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+
+/**
  * Wall-clock time in 24h form: "HH:MM", or "HH:MM:SS" when opts.seconds is set.
  */
 export function formatClock(d: Date, opts?: { seconds?: boolean }): string {
