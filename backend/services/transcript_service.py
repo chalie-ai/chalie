@@ -20,6 +20,7 @@ from typing import TYPE_CHECKING, cast
 
 from configs.enums.channels import Channel
 from models.transcript import Transcript
+from models.transcript_doc import TranscriptDoc
 from models.turn_signal import TurnSignal
 
 if TYPE_CHECKING:
@@ -207,20 +208,21 @@ class TranscriptService:
             row.unsettle()
 
     def link_doc(self, doc_id: str) -> None:
-        """Link an uploaded document to this turn's anchoring transcript row
-        so a page refresh can re-render the attachment from its stored id.
+        """Link an uploaded document to this turn's anchoring transcript row so
+        a page refresh can re-render the attachment from its stored id (read
+        back by ``api.threads._fetch_attachments_for_transcripts``). Idempotent:
+        the composite ``(transcript_id, doc_id)`` PK dedups a repeat link.
 
-        NOT YET PERSISTABLE: the ``transcript_docs`` join table (composite
-        ``(transcript_id, doc_id)`` key, no ``id`` column) has no active-record
-        model on this spine (a gap against the B1 model inventory — this
-        service may not add one; see STOP-LINE) and this file may not issue
-        raw SQL (I6). Logs loudly rather than silently dropping the link so
-        the gap stays visible until a model closes it."""
-        logger.warning(
-            "[TranscriptService] link_doc(doc_id=%s) for transcript %s NOT persisted — "
-            "transcript_docs has no model on this spine yet",
-            doc_id, self.mp.uid,
-        )
+        A no-op (logged) before the anchor row exists (``self.mp.uid`` is None —
+        e.g. a ``skip_input_row`` channel): there is no transcript id to link
+        to, so the FK would have no parent."""
+        if self.mp.uid is None:
+            logger.warning(
+                "[TranscriptService] link_doc(doc_id=%s) skipped — turn has no anchor row",
+                doc_id,
+            )
+            return
+        TranscriptDoc(transcript_id=self.mp.uid, doc_id=doc_id).link()
 
     def gc(self, cited_ids: frozenset[int]) -> int:
         """Delete this turn's rows already folded below the compaction
