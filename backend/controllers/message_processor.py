@@ -57,6 +57,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+from collections import Counter
 from threading import Thread
 from typing import TYPE_CHECKING, Protocol, cast
 
@@ -68,6 +69,7 @@ from exceptions import (
     ProviderRetriesExhaustedError,
     RequestOverCapError,
     ResponseOverLimitError,
+    RunAwayLoop,
 )
 from models.provider_request import ProviderRequest
 from models.turn_execution import TurnExecution
@@ -99,6 +101,13 @@ _MAX_PROVIDER_ATTEMPTS = 3
 _PROACTIVE_SUGGESTION_MIN_CALLS = 4
 #: Pulls the document id out of the upload ability's JSON result for doc-linking.
 _SEED_UPLOAD_ID_RE = re.compile(r'"id":"([0-9a-f]+)"')
+#: Runaway-loop thresholds. A turn has no iteration cap, so a model stuck
+#: re-emitting the same tool call or the same prose would loop until the context
+#: caps out. The same (tool, params) invoked this many times, or the same
+#: non-empty response text emitted this many times, within one turn_execution
+#: trips a loud ``RunAwayLoop`` (a CRASHED turn).
+_RUNAWAY_TOOL_CALL_LIMIT = 5
+_RUNAWAY_TEXT_LIMIT = 3
 
 
 class _TurnCancelled(Exception):
@@ -151,6 +160,13 @@ class MessageProcessor:
         self._trigger_turn_id: int | None = cast("int | None", self.metadata.get("trigger_turn_id"))
         self._thread: Thread | None = None
         self._result_text: str = ""
+
+        # Runaway-loop guard tallies — scoped to this turn_execution (this
+        # instance persists across the whole recursive _step chain). Keyed by
+        # identical tool call ``(name, canonical-params)`` and by identical
+        # (stripped, non-empty) response text; read only in _guard_runaway.
+        self._tool_invocations: Counter[tuple[str, str]] = Counter()
+        self._text_emissions: Counter[str] = Counter()
 
         # Infrastructure handles.
         self.db = Database()
@@ -290,6 +306,7 @@ class MessageProcessor:
         if not tool_calls:
             self._store(response.text)
             return self._end(response.text)
+        self._guard_runaway(response.text, tool_calls)
         if response.text:
             self._store(response.text)
         self._dispatch_tools(tool_calls)
@@ -391,6 +408,39 @@ class MessageProcessor:
             from services.markup import markdown_to_html  # noqa: PLC0415
             return markdown_to_html(text)
         return text or ""
+
+    def _guard_runaway(self, text: str, tool_calls: list[dict[str, object]]) -> None:
+        """Trip a loud ``RunAwayLoop`` when this turn's step chain is repeating
+        itself instead of converging — the hard backstop for the uncapped loop.
+
+        Called on every tool-bearing (recursing) step BEFORE the calls are stored
+        or dispatched, and NEVER on the terminal (no-tool) step, so a clean final
+        answer that echoes earlier prose is not mistaken for a loop. Two
+        independent tallies, both scoped to this turn_execution (this instance
+        persists across the whole recursive ``_step`` chain, including inline
+        post-compaction continuations): the same ``(tool, params)`` invoked
+        ``_RUNAWAY_TOOL_CALL_LIMIT`` times, or the same non-empty response text
+        emitted ``_RUNAWAY_TEXT_LIMIT`` times. ``_drive`` catches the raise and
+        stamps the turn CRASHED (Rule 7)."""
+        stripped = (text or "").strip()
+        if stripped:
+            self._text_emissions[stripped] += 1
+            if self._text_emissions[stripped] >= _RUNAWAY_TEXT_LIMIT:
+                raise RunAwayLoop(
+                    f"turn {self.turn_id}: identical response text emitted "
+                    f"{self._text_emissions[stripped]} times — the model is looping",
+                )
+        for call in tool_calls:
+            key = (
+                cast("str", call["name"]),
+                json.dumps(call.get("input") or {}, sort_keys=True, default=str),
+            )
+            self._tool_invocations[key] += 1
+            if self._tool_invocations[key] >= _RUNAWAY_TOOL_CALL_LIMIT:
+                raise RunAwayLoop(
+                    f"turn {self.turn_id}: tool {key[0]!r} invoked with identical "
+                    f"parameters {self._tool_invocations[key]} times — the model is looping",
+                )
 
     def _dispatch_tools(self, tool_calls: list[dict[str, object]]) -> None:
         """Run each tool call in order, checking for a cancel before every one so

@@ -122,6 +122,22 @@ class ProviderRetriesExhaustedError(ProviderResponseError):
     """
 
 
+# ── Turn-execution layer ──────────────────────────────────────────────────────
+
+
+class RunAwayLoop(ChalieException):
+    """A turn's step chain is repeating itself instead of converging.
+
+    A turn has no iteration cap (``processor_config`` — a runaway is a
+    hard-restart condition, not a silently-capped one), so a model stuck
+    re-emitting the same tool call or the same prose would loop until the context
+    caps out. The MessageProcessor trips this loudly when, within one
+    ``turn_execution``, either the same ``(tool, params)`` is invoked or the same
+    non-empty response text is emitted past its threshold; ``_drive`` catches it
+    and stamps the turn CRASHED.
+    """
+
+
 # ── Search layer ──────────────────────────────────────────────────────────────
 
 
