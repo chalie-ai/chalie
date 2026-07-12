@@ -2,21 +2,20 @@
 """
 Feature tests for :class:`capabilities.mail_capability.caldav_handler.CaldavHandler`.
 
-TKT-1434 ripped the CalDAV-to-``scheduled_items`` mirror out entirely (the
+The CalDAV-to-``scheduled_items`` mirror was ripped out entirely (the
 dumb-cron rewrite made ``scheduled_items`` a prompt-only table with zero
-CalDAV columns). ``upsert_events``, ``_find_overlap_pairs``, and
-``_find_back_to_back_pairs`` — the mirror-sync machinery and its overlap/
-back-to-back conflict-notification helpers — no longer exist; the tests that
-covered them are deleted rather than adapted, per project policy (behavior
-that no longer exists gets no test, however "adapted"). ``find_free_slots``
-and ``get_attendees`` are decommissioned reads that now return one clean,
-deliberate error instead of querying the dropped mirror.
+CalDAV columns). Calendar reads (``list_events`` / ``get_event``) have since
+been re-homed onto direct, live CalDAV queries — their behavioral proof runs
+against a live CalDAV server in the feature-test slice, not here.
+``find_free_slots`` and ``get_attendees`` computed over the removed mirror and
+have no live replacement in scope; they stay registered but return one honest
+"unsupported" error.
 
-Coverage:
+Coverage (parsing + error-shape units; no network):
     1.  ``parse_event`` — timed event fields are populated correctly.
     2.  ``parse_event`` — DURATION used when DTEND absent.
-    3.  ``find_free_slots`` — returns the migrating-away error (mirror gone).
-    4.  ``get_attendees`` — returns the same migrating-away error.
+    3.  ``find_free_slots`` — returns the unsupported-operation error.
+    4.  ``get_attendees`` — returns the same unsupported-operation error.
     5.  ``create_event`` — returns error when summary missing.
     6.  ``open_client`` — raises RuntimeError when caldav unavailable.
 
@@ -139,16 +138,14 @@ class TestParseEvent:
 
 
 # ---------------------------------------------------------------------------
-# find_free_slots / get_attendees — decommissioned reads (TKT-1434)
+# find_free_slots / get_attendees — out-of-scope stubs (no live replacement)
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.unit
-class TestDecommissionedReads:
-    def test_find_free_slots_returns_migrating_away_error(self) -> None:
-        from capabilities.mail_capability.caldav_handler import (
-            _ERR_CALENDAR_READS_MIGRATING,
-        )
+class TestUnsupportedOps:
+    def test_find_free_slots_returns_unsupported_error(self) -> None:
+        from capabilities.mail_capability.caldav_handler import _ERR_OP_UNSUPPORTED
 
         handler = _make_handler()
 
@@ -160,18 +157,16 @@ class TestDecommissionedReads:
             "min_duration_minutes": 30,
         })
 
-        assert result.get("error") == _ERR_CALENDAR_READS_MIGRATING
+        assert result.get("error") == _ERR_OP_UNSUPPORTED
 
-    def test_get_attendees_returns_migrating_away_error(self) -> None:
-        from capabilities.mail_capability.caldav_handler import (
-            _ERR_CALENDAR_READS_MIGRATING,
-        )
+    def test_get_attendees_returns_unsupported_error(self) -> None:
+        from capabilities.mail_capability.caldav_handler import _ERR_OP_UNSUPPORTED
 
         handler = _make_handler()
 
         result = handler.get_attendees({"uid": "some-event-uid"})
 
-        assert result.get("error") == _ERR_CALENDAR_READS_MIGRATING
+        assert result.get("error") == _ERR_OP_UNSUPPORTED
 
 
 # ---------------------------------------------------------------------------
@@ -208,3 +203,112 @@ class TestOpenClient:
         ):
             with pytest.raises(RuntimeError, match="caldav"):
                 handler.open_client("https://example.com", "user", "pass")
+
+
+# ---------------------------------------------------------------------------
+# _resolve_window — list window bounds (whole-day upper bound + inversion guard)
+# ---------------------------------------------------------------------------
+
+_NOW = _dt(2026, 7, 12, 12, 0)
+
+
+def _ev(uid: str, summary: str, dtstart: datetime.datetime) -> dict[str, object]:
+    return {"uid": uid, "summary": summary, "dtstart": dtstart, "dtend": dtstart}
+
+
+@pytest.mark.unit
+class TestResolveWindow:
+    def _window(self, params: dict[str, object]) -> tuple[datetime.datetime, datetime.datetime]:
+        handler = _make_handler()
+        with patch("capabilities.mail_capability.caldav_handler.utc_now", return_value=_NOW):
+            return handler._resolve_window(params)
+
+    def test_date_only_upper_bound_covers_whole_day(self) -> None:
+        # CalendarAbility resolves a bare date / day-name to midnight; the window
+        # must extend through the whole day, else that day's afternoon is missed.
+        _start, end = self._window({"date_to": "2026-08-01T00:00:00+00:00"})
+        assert end == _dt(2026, 8, 2, 0, 0)
+
+    def test_explicit_time_upper_bound_is_preserved(self) -> None:
+        _start, end = self._window({"date_to": "2026-08-01T15:30:00+00:00"})
+        assert end == _dt(2026, 8, 1, 15, 30)
+
+    def test_lone_past_upper_bound_is_swapped_not_inverted(self) -> None:
+        # Only date_to, in the past → start defaults to now; the window would
+        # invert and be handed to date_search. It must be swapped to stay valid.
+        start, end = self._window({"date_to": "2026-06-01T00:00:00+00:00"})
+        assert start < end
+        assert start == _dt(2026, 6, 2, 0, 0)  # whole-day applied before the swap
+        assert end == _NOW
+
+    def test_default_window_is_now_plus_seven_days(self) -> None:
+        start, end = self._window({})
+        assert start == _NOW
+        assert end == _NOW + datetime.timedelta(days=7)
+
+
+# ---------------------------------------------------------------------------
+# _representative_per_uid — recurrence occurrences collapse to one occurrence
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.unit
+class TestRepresentativePerUid:
+    def test_recurring_series_collapses_to_soonest_upcoming(self) -> None:
+        handler = _make_handler()
+        soon = _dt(2026, 7, 13, 9, 0)
+        events = [
+            _ev("series", "Standup", _dt(2026, 7, 2, 9, 0)),   # past occurrence
+            _ev("series", "Standup", soon),                    # soonest upcoming
+            _ev("series", "Standup", _dt(2026, 7, 20, 9, 0)),  # later upcoming
+        ]
+        result = handler._representative_per_uid(events, _NOW)
+        assert len(result) == 1
+        assert result[0]["dtstart"] == soon
+
+    def test_all_past_series_returns_most_recent(self) -> None:
+        handler = _make_handler()
+        recent = _dt(2026, 7, 5, 9, 0)
+        events = [
+            _ev("gone", "Old", _dt(2026, 6, 20, 9, 0)),
+            _ev("gone", "Old", recent),
+        ]
+        result = handler._representative_per_uid(events, _NOW)
+        assert len(result) == 1
+        assert result[0]["dtstart"] == recent
+
+    def test_distinct_uids_are_each_kept(self) -> None:
+        handler = _make_handler()
+        events = [
+            _ev("a", "Lunch", _dt(2026, 7, 13, 12, 0)),
+            _ev("b", "Review", _dt(2026, 7, 14, 15, 0)),
+        ]
+        result = handler._representative_per_uid(events, _NOW)
+        assert {str(e["uid"]) for e in result} == {"a", "b"}
+
+    def test_uidless_events_pass_through(self) -> None:
+        handler = _make_handler()
+        events = [
+            _ev("", "One", _dt(2026, 7, 13, 9, 0)),
+            _ev("", "Two", _dt(2026, 7, 14, 9, 0)),
+        ]
+        result = handler._representative_per_uid(events, _NOW)
+        assert len(result) == 2
+
+
+# ---------------------------------------------------------------------------
+# _ambiguous_title_error — the message carries every candidate uid
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.unit
+class TestAmbiguousTitleError:
+    def test_message_lists_every_candidate_uid(self) -> None:
+        handler = _make_handler()
+        matches = [
+            _ev("uid-1", "Standup", _dt(2026, 7, 13, 9, 0)),
+            _ev("uid-2", "Standup review", _dt(2026, 7, 14, 9, 0)),
+        ]
+        msg = handler._ambiguous_title_error("standup", matches)
+        assert "2 events match" in msg
+        assert "uid-1" in msg and "uid-2" in msg

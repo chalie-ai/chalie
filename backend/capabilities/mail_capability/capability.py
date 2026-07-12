@@ -36,6 +36,11 @@ _ERR_IMAP_NOT_CONNECTED = "Mail (IMAP) not connected."
 _ERR_CALDAV_NOT_CONNECTED = "Mail (CalDAV) not connected."
 _ERR_CALDAV_OPEN_FAILED = "Failed to open CalDAV connection."
 _DESC_CALDAV_UID = "CalDAV event UID"
+_DESC_CALDAV_RRULE = (
+    "Optional RFC-5545 recurrence rule (RRULE) for a repeating event, e.g. "
+    "'FREQ=DAILY', 'FREQ=WEEKLY;BYDAY=MO,WE,FR', 'FREQ=MONTHLY'. Omit for a "
+    "one-off event."
+)
 
 _K_EMAIL = "mail:email"
 _K_PASSWORD = "mail:password"
@@ -432,9 +437,11 @@ class MailCapability(AbstractCapability):
     # ------------------------------------------------------------------
 
     def _monitor_imap(self, email: str, password: str, provider: UnifiedProvider) -> None:
+        # Email is NEVER synced — message bodies are fetched live on demand by the
+        # email tool. The monitor only injects the lightweight unread
+        # inbox hint into the prompt; it no longer ingests bodies, runs
+        # understand() (which indexed senders as people), or advances a watermark.
         try:
-            watermark_raw = self.load_credential(_K_WATERMARK)
-            watermark = int(watermark_raw) if watermark_raw else None
             client = self._imap_handler.open_client(
                 host=cast("ServerSettings", provider.imap).host,
                 port=cast("ServerSettings", provider.imap).port,
@@ -444,11 +451,6 @@ class MailCapability(AbstractCapability):
             )
             if client is not None:
                 try:
-                    new_items, new_wm = self._imap_handler.ingest(client, watermark)
-                    if new_items:
-                        self._imap_handler.understand(new_items)
-                    if new_wm and new_wm != watermark:
-                        self.store_credential(_K_WATERMARK, str(new_wm))
                     self._imap_handler.inject_inbox_hint(client)
                 finally:
                     try:
@@ -749,6 +751,28 @@ class MailCapability(AbstractCapability):
         except Exception as exc:
             return {"error": str(exc)}
 
+    def _th_list_events(self, params: dict[str, object], telemetry: object = None) -> dict[str, object]:
+        if not self._caldav_ok:
+            return {"error": _ERR_CALDAV_NOT_CONNECTED}
+        try:
+            client = self._open_caldav_client()
+            if client is None:
+                return {"error": _ERR_CALDAV_OPEN_FAILED}
+            return self._caldav_handler.list_events(client, params)
+        except Exception as exc:
+            return {"error": str(exc)}
+
+    def _th_get_event(self, params: dict[str, object], telemetry: object = None) -> dict[str, object]:
+        if not self._caldav_ok:
+            return {"error": _ERR_CALDAV_NOT_CONNECTED}
+        try:
+            client = self._open_caldav_client()
+            if client is None:
+                return {"error": _ERR_CALDAV_OPEN_FAILED}
+            return self._caldav_handler.get_event(client, params)
+        except Exception as exc:
+            return {"error": str(exc)}
+
     def _th_find_free_slots(self, params: dict[str, object], telemetry: object = None) -> dict[str, object]:
         if not self._caldav_ok:
             return {"error": _ERR_CALDAV_NOT_CONNECTED}
@@ -920,6 +944,39 @@ class MailCapability(AbstractCapability):
     def _build_caldav_tools(self) -> list[dict[str, object]]:
         return [
             {
+                "name": "list_events",
+                "description": (
+                    "List calendar events from the live CalDAV server in a window "
+                    "(default: now to +7 days), soonest first."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "date_from": {"type": "string", "description": "Window start (ISO date or datetime)"},
+                        "date_to": {"type": "string", "description": "Window end (ISO date or datetime)"},
+                        "limit": {"type": "integer", "description": "Max events to return (1-200, default 50)"},
+                    },
+                },
+                "handler": self._th_list_events,
+                "timeout": 30,
+            },
+            {
+                "name": "get_event",
+                "description": (
+                    "Fetch one calendar event from the live CalDAV server by UID, "
+                    "or by title (unique substring match)."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "uid": {"type": "string", "description": _DESC_CALDAV_UID},
+                        "title": {"type": "string", "description": "Event title to match when uid is unknown"},
+                    },
+                },
+                "handler": self._th_get_event,
+                "timeout": 30,
+            },
+            {
                 "name": "create_event",
                 "description": "Create a new calendar event on the CalDAV server.",
                 "parameters": {
@@ -931,6 +988,7 @@ class MailCapability(AbstractCapability):
                         "location": {"type": "string", "description": "Optional location"},
                         "description": {"type": "string", "description": "Optional description"},
                         "calendar_name": {"type": "string", "description": "Target calendar name"},
+                        "recurrence": {"type": "string", "description": _DESC_CALDAV_RRULE},
                     },
                     "required": ["summary", "dtstart", "dtend"],
                 },
@@ -949,6 +1007,7 @@ class MailCapability(AbstractCapability):
                         "dtend": {"type": "string", "description": "New end (ISO 8601 UTC)"},
                         "location": {"type": "string", "description": "New location"},
                         "description": {"type": "string", "description": "New description"},
+                        "recurrence": {"type": "string", "description": _DESC_CALDAV_RRULE},
                     },
                     "required": ["uid"],
                 },

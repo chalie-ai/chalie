@@ -1,43 +1,38 @@
 """
 CalendarAbility — List, view, create, update, and delete calendar events.
 
-Read operations (``list_events``, ``get_event``) used to query ``scheduled_items``
-via the shared ``query_items`` engine in the schedule ability, over rows the
-CalDAV ingest mirrored there. That mirror has been decommissioned (TKT-1434):
-``scheduled_items`` is now a prompt-only cron table with zero CalDAV columns
-(no ``item_type``/``source``/``external_uid``/``hidden``/``metadata``/``due_at``).
-Both read actions now return a clean, deliberate ``err(...)`` instead of
-querying dropped columns — calendar reads are being re-homed to a live CalDAV
-integration by a separate effort.
+Every action — reads (``list_events``, ``get_event``) and writes
+(``create_event``, ``update_event``, ``delete_event``) — is served LIVE from the
+connected CalDAV server. There is no persisted calendar mirror: the CalDAV →
+``scheduled_items`` mirror was decommissioned and calendar reads are now
+re-homed onto direct CalDAV queries. Recurring events carry an RFC-5545
+``recurrence`` (RRULE) so one-shot and recurring reminders are both stored as
+real calendar events.
 
-Write operations (``create_event``, ``update_event``, ``delete_event``) delegate
-to MailCapability's CalDAV handler via the shared :class:`CapabilityAbility`
-base, which owns capability loading, the not-connected / unknown-action /
-handler-unavailable errors, handler dispatch, and result wrapping. uid-addressed
-writes reach the live CalDAV server directly with zero ``scheduled_items``
-coupling; title-addressed writes used the same decommissioned mirror to
-fuzzy-resolve a uid and now return the same clean error asking for the uid
-directly.
+All five actions delegate to MailCapability's CalDAV handler via the shared
+:class:`CapabilityAbility` base, which owns capability loading, the
+not-connected / unknown-action / handler-unavailable errors, handler dispatch,
+and result wrapping. uid-addressed calls reach the server directly; a
+title-addressed call resolves to a unique uid by a live substring match over the
+CalDAV window (handled server-side), so ``update_event`` / ``delete_event`` /
+``get_event`` accept a ``title`` when the uid is unknown.
 
 Two write-path safeguards live here, ahead of the base's connected gate so they
 fire loudly regardless of CalDAV state:
 
-* **datetime validation (data-corruption fix):** ``dtstart`` / ``dtend`` are
-  resolved through ``_parse_dt`` (natural language in the user's timezone OR ISO
-  8601) into a clean UTC ISO string written back onto ``params``. An unparseable
-  value returns ``code=invalid-time`` with example forms and NOTHING is written —
-  the old path ran the raw string through ``parse_utc``, which returns the
-  ``datetime.min`` (year-0001) sentinel and persisted it to the CalDAV server.
-* **fuzzy addressing:** ``update_event`` / ``delete_event`` / ``get_event`` used to
-  accept a ``title`` resolved to a CalDAV uid by fuzzy match over the (now
-  decommissioned) ``scheduled_items`` mirror. With that mirror gone, a call that
-  supplies ``title`` without a ``uid`` gets the same clean migrating-away error;
-  pass ``uid`` directly for writes in the meantime.
+* **datetime validation (data-corruption fix):** ``dtstart`` / ``dtend`` (writes)
+  and ``date_from`` / ``date_to`` (list window) are resolved through ``_parse_dt``
+  (natural language in the user's timezone OR ISO 8601) into a clean UTC ISO
+  string written back onto ``params``. An unparseable value returns
+  ``code=invalid-time`` with example forms and NOTHING is written — the old path
+  ran the raw string through ``parse_utc``, which returns the ``datetime.min``
+  (year-0001) sentinel and persisted it to the CalDAV server.
+* **target presence:** ``update_event`` / ``delete_event`` require either a
+  ``uid`` or a ``title`` before the request leaves this ability; the CalDAV
+  handler does the live title→uid resolution (and reports ambiguity).
 
-Every action returns a :class:`ToolResult` built only via ``ok`` / ``err``. The
-rich calendar card travels via ``ToolResult(rich=…)``; the dispatcher owns the
-ordinal + the single span instruction and injects the card only when the invoking
-channel broadcasts to the user. This ability never formats a wire envelope.
+Every action returns a :class:`ToolResult` built only via ``ok`` / ``err``. This
+ability never formats a wire envelope.
 """
 
 import logging
@@ -55,21 +50,18 @@ LOG_PREFIX = "[CALENDAR ABILITY]"
 # self-correct without re-reading the schema.
 _DT_EXAMPLES = "'tomorrow 3pm', 'friday 9am', or ISO 8601 like '2026-03-20T15:00:00+02:00'"
 
-# Read actions used to be answered directly from scheduled_items; that mirror is
-# decommissioned (TKT-1434) so both now return a clean error. Write actions still
-# delegate to the CalDAV handler via the CapabilityAbility base.
+# Every action delegates to the live CalDAV handler via the CapabilityAbility
+# base. Reads and writes are split only so run() can pick which pre-flight
+# validation applies (writes normalise dtstart/dtend + require a target; reads
+# normalise the date window).
 _READ_ACTIONS = ("list_events", "get_event")
 _WRITE_ACTIONS = ("create_event", "update_event", "delete_event")
 _ALL_ACTIONS = (*_READ_ACTIONS, *_WRITE_ACTIONS)
 
-# Calendar reads (list_events/get_event) and fuzzy title→uid resolution both read
-# the CalDAV→scheduled_items mirror, decommissioned in TKT-1434 (scheduled_items is
-# now a prompt-only cron table with zero CalDAV columns). Both surfaces return this
-# clean, deliberate error instead of referencing dropped columns.
-_ERR_CALENDAR_READS_MIGRATING = (
-    "Calendar reads are being migrated to the live CalDAV integration and are "
-    "temporarily unavailable."
-)
+# update_event / delete_event address an event by uid OR title; the CalDAV
+# handler resolves a title to a unique uid live. This ability only enforces that
+# a target is present before the request leaves the tool.
+_TARGET_ADDRESSED_WRITES = ("update_event", "delete_event")
 
 
 class CalendarAbility(CapabilityAbility):
@@ -78,19 +70,21 @@ class CalendarAbility(CapabilityAbility):
     NOT_CONNECTED_HINT: ClassVar[str] = (
         "Configure the mail integration in the Brain dashboard."
     )
-    # Maps the model-facing write action onto the CalDAV handler name (identical
-    # here — the base uses it to look up the handler and to build the valid= ladder
-    # for unknown-action errors).
+    # Maps the model-facing action onto the CalDAV handler name (identical here —
+    # the base uses it to look up the handler and to build the valid= ladder for
+    # unknown-action errors). All five are live-CalDAV handlers.
     ACTION_HANDLERS: ClassVar[dict[str, str]] = {
+        "list_events": "list_events",
+        "get_event": "get_event",
         "create_event": "create_event",
         "update_event": "update_event",
         "delete_event": "delete_event",
     }
 
     # Pre-gated by the dispatcher BEFORE run(): create_event requires summary +
-    # both endpoints. list_events / the uid-or-title reads validate their either/or
-    # targets in run() (a constraint the map cannot express). An unknown action →
-    # one unknown-action error whose valid= names all five real actions.
+    # both endpoints. list_events / get_event validate their either/or targets in
+    # the handler. An unknown action → one unknown-action error whose valid= names
+    # all five real actions.
     ACTION_REQUIRED: ClassVar[dict[str, tuple[str, ...]]] = {
         "list_events": (),
         "get_event": (),
@@ -135,48 +129,48 @@ class CalendarAbility(CapabilityAbility):
                 "enum": list(_ALL_ACTIONS),
                 "description": (
                     "The calendar action to perform. "
-                    "list_events / get_event — TEMPORARILY UNAVAILABLE while calendar "
-                    "reads migrate to a live CalDAV integration; both return a clean error. "
-                    "create_event — add a new event (needs summary, dtstart, dtend). "
-                    "update_event — change fields of an event addressed by uid. "
-                    "delete_event — remove an event addressed by uid."
+                    "list_events — list events in a window (defaults to now..+7 days). "
+                    "get_event — fetch one event by uid or title. "
+                    "create_event — add a new event (needs summary, dtstart, dtend; pass "
+                    "recurrence for a repeating event). "
+                    "update_event — change fields of an event addressed by uid or title. "
+                    "delete_event — remove an event addressed by uid or title."
                 ),
             },
             Keys.date_from: {
                 "type": "string",
                 "description": (
-                    "list_events: ISO date lower bound (YYYY-MM-DD). Unused while "
-                    "list_events is temporarily unavailable."
+                    "list_events: window lower bound. Natural language ('today', "
+                    "'monday') or ISO date/datetime. Defaults to now."
                 ),
             },
             Keys.date_to: {
                 "type": "string",
                 "description": (
-                    "list_events: ISO date upper bound (YYYY-MM-DD). Unused while "
-                    "list_events is temporarily unavailable."
+                    "list_events: window upper bound. Natural language ('sunday', "
+                    "'next week') or ISO date/datetime. Defaults to 7 days after the "
+                    "lower bound."
                 ),
             },
             Keys.limit: {
                 "type": "integer",
                 "description": (
-                    "list_events: maximum number of events to return (1–200, default 50). "
-                    "Unused while list_events is temporarily unavailable."
+                    "list_events: maximum number of events to return (1–200, default 50)."
                 ),
             },
             Keys.uid: {
                 "type": "string",
                 "description": (
                     "get_event / update_event / delete_event: the event's CalDAV UID. "
-                    "Required for update_event / delete_event — title-based fuzzy match is "
-                    "temporarily unavailable, so uid must be passed directly."
+                    "Preferred when known; otherwise pass title."
                 ),
             },
             Keys.title_: {
                 "type": "string",
                 "description": (
-                    "get_event / update_event / delete_event: event title for a fuzzy "
-                    "uid match. TEMPORARILY UNAVAILABLE (returns a clean error) while "
-                    "calendar reads migrate to a live CalDAV integration — pass uid instead."
+                    "get_event / update_event / delete_event: event title to match "
+                    "when the uid is unknown. Resolved live to a unique event; an "
+                    "ambiguous match asks for a uid."
                 ),
             },
             Keys.summary: {
@@ -198,27 +192,45 @@ class CalendarAbility(CapabilityAbility):
                     "create_event / update_event: end datetime, same formats as dtstart."
                 ),
             },
+            Keys.recurrence: {
+                "type": "string",
+                "description": (
+                    "create_event / update_event: RFC-5545 recurrence rule (RRULE) for a "
+                    "repeating event, e.g. 'FREQ=DAILY', 'FREQ=WEEKLY;BYDAY=MO,WE,FR', "
+                    "'FREQ=MONTHLY'. Omit for a one-off event."
+                ),
+            },
         },
         "required": [Keys.action],
     }
 
-    # ── Entry point — reads inline, writes through the base ────────────────────
+    # ── Entry point — pre-flight validation, then live dispatch via the base ───
 
     def run(self, params: dict[str, object]) -> ToolResult:
         action = str(params.get(Keys.action, self.DEFAULT_ACTION)).lower()
 
-        if action in _READ_ACTIONS:
-            return _read_events(action, params)
+        # list_events: resolve the natural-language window to clean ISO before it
+        # reaches the handler's parse_utc (which would sentinel an unparseable value).
+        if action == "list_events":
+            err = _normalise_datetimes(params, (Keys.date_from, Keys.date_to))
+            if err is not None:
+                return err
+            return super().run(params)
 
-        # Write actions: validate datetimes + resolve fuzzy title BEFORE the base's
-        # connected gate, so a malformed dtstart errors loudly even when CalDAV is
-        # not wired up — and a clean UTC ISO string is what ever reaches the server.
-        err = _normalise_write_datetimes(params)
+        # get_event validates its uid-or-title either/or in the handler.
+        if action == "get_event":
+            return super().run(params)
+
+        # Write actions: validate datetimes + require an addressable target BEFORE
+        # the base's connected gate, so a malformed dtstart errors loudly even when
+        # CalDAV is not wired up — and a clean UTC ISO string is what reaches the
+        # server. Live title→uid resolution happens in the handler.
+        err = _normalise_datetimes(params, (Keys.dtstart, Keys.dtend))
         if err is not None:
             return err
 
-        if action in ("update_event", "delete_event"):
-            err = _resolve_target_uid(params)
+        if action in _TARGET_ADDRESSED_WRITES:
+            err = _require_target(params)
             if err is not None:
                 return err
 
@@ -252,12 +264,15 @@ def _parse_dt(value: str) -> datetime | None:
     return cast(datetime, parsed).astimezone(timezone.utc)
 
 
-def _normalise_write_datetimes(params: dict[str, object]) -> ToolResult | None:
-    """Resolve any supplied ``dtstart`` / ``dtend`` to clean UTC ISO strings on
-    ``params``. Returns an ``invalid-time`` ToolResult (and leaves params untouched)
-    when a value is present but unparseable — so the CalDAV handler only ever sees
-    a valid ISO string, never the datetime.min sentinel."""
-    for field in (Keys.dtstart, Keys.dtend):
+def _normalise_datetimes(
+    params: dict[str, object], fields: tuple[str, ...]
+) -> ToolResult | None:
+    """Resolve any supplied ``fields`` (write endpoints or a list window) to clean
+    UTC ISO strings on ``params``. Returns an ``invalid-time`` ToolResult (and
+    leaves params untouched) when a value is present but unparseable — so the
+    CalDAV handler only ever sees a valid ISO string, never the datetime.min
+    sentinel."""
+    for field in fields:
         raw = params.get(field)
         if raw is None:
             continue
@@ -276,53 +291,22 @@ def _normalise_write_datetimes(params: dict[str, object]) -> ToolResult | None:
 
 
 # ---------------------------------------------------------------------------
-# Fuzzy addressing — uid OR title, with explicit disambiguation
+# Target addressing — uid OR title (title resolved live by the CalDAV handler)
 # ---------------------------------------------------------------------------
 
-def _resolve_target_uid(params: dict[str, object]) -> ToolResult | None:
-    """For uid-addressed write actions, a supplied ``uid`` passes straight
-    through to the CalDAV handler with zero ``scheduled_items`` coupling.
-    Fuzzy title-to-uid resolution used to read the CalDAV→scheduled_items
-    mirror; that mirror is decommissioned (TKT-1434), so a ``title`` given
-    without a ``uid`` now returns the same clean migrating-away error. Returns
-    ``None`` on success (uid already present)."""
+def _require_target(params: dict[str, object]) -> ToolResult | None:
+    """update_event / delete_event must name an event by ``uid`` or ``title``.
+    Both pass through to the handler, which resolves a title to a unique uid over
+    the live CalDAV window (and reports ambiguity). Returns ``None`` when a target
+    is present."""
     if (cast(str, params.get(Keys.uid)) or "").strip():
         return None
-
-    title = (cast(str, params.get(Keys.title_)) or "").strip()
-    if not title:
-        return ToolResult.err(
-            "uid or title is required to address the event.",
-            code="missing-target",
-            hint="pass the event's uid, or a title to fuzzy-match.",
-        )
-
+    if (cast(str, params.get(Keys.title_)) or "").strip():
+        return None
     return ToolResult.err(
-        _ERR_CALENDAR_READS_MIGRATING,
-        code="calendar-read-unavailable",
-        hint="pass the event's uid directly until fuzzy title lookup returns.",
-    )
-
-
-# ---------------------------------------------------------------------------
-# Read helpers — DECOMMISSIONED (TKT-1434)
-#
-# list_events / get_event used to query scheduled_items via schedule.query_items
-# over rows the CalDAV ingest mirrored there (source='mail', item_type='event',
-# hidden=1, external_uid='caldav:<uid>'). That mirror has been removed outright
-# — scheduled_items is now a prompt-only cron table with zero CalDAV columns.
-# Calendar reads are being re-homed to a live CalDAV integration by a separate
-# effort; until then both actions return a clean, deliberate error instead of
-# referencing dropped columns.
-# ---------------------------------------------------------------------------
-
-
-def _read_events(action: str, params: dict[str, object]) -> ToolResult:  # noqa: ARG001
-    return ToolResult.err(
-        _ERR_CALENDAR_READS_MIGRATING,
-        code="calendar-read-unavailable",
-        hint="calendar writes (create_event/update_event/delete_event by uid) still work.",
-        action=action,
+        "uid or title is required to address the event.",
+        code="missing-target",
+        hint="pass the event's uid, or a title to match.",
     )
 
 
