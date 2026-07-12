@@ -50,53 +50,6 @@ body {
 // Voice-button visibility is driven by a reactive flag on the input dock, not a
 // `body.voice-loading` class, so the legacy body-class CSS rule is not ported.
 
-#ambientCanvas {
-  position: fixed;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-  z-index: 0;
-  pointer-events: none;
-}
-
-#ambientBloom {
-  position: fixed;
-  inset: 0;
-  z-index: 0;
-  pointer-events: none;
-  opacity: 0;
-  transition:
-    opacity 1200ms cubic-bezier(0.4, 0, 0.2, 1),
-    background 1200ms cubic-bezier(0.4, 0, 0.2, 1);
-  background:
-    radial-gradient(ellipse 70% 55% at 12% 35%, rgba(var(--bs-primary-rgb), 0.22), transparent 55%),
-    radial-gradient(ellipse 50% 40% at 88% 75%, rgba(var(--bs-info-rgb), 0.05), transparent 60%);
-}
-
-body.speaker-chalie #ambientBloom { opacity: 1; }
-body.speaker-user #ambientBloom {
-  opacity: 1;
-  background:
-    radial-gradient(ellipse 60% 45% at 18% 30%, rgba(var(--bs-primary-rgb), 0.05), transparent 60%),
-    radial-gradient(ellipse 70% 55% at 88% 65%, rgba(var(--bs-info-rgb), 0.20), transparent 55%);
-}
-
-@media (prefers-reduced-motion: reduce) {
-  #ambientBloom { transition: opacity 200ms linear; }
-}
-
-#grainOverlay {
-  position: fixed;
-  inset: 0;
-  z-index: 1;
-  pointer-events: none;
-  opacity: var(--grain-opacity);
-  mix-blend-mode: var(--grain-blend);
-  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)'/%3E%3C/svg%3E");
-  background-repeat: repeat;
-  background-size: 256px 256px;
-}
-
 .connection-banner {
   position: fixed;
   top: 56px;

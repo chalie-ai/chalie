@@ -5,7 +5,6 @@ import { useSessionStore } from './stores/session';
 import { useVoiceStore } from './stores/voice';
 import { useHeartbeat } from './composables/useHeartbeat';
 import { useAmbientSensor } from './composables/useAmbientSensor';
-import AmbientCanvas from './components/layout/AmbientCanvas.vue';
 import PresenceBar from './components/layout/PresenceBar.vue';
 import ConversationFeed from './components/conversation/ConversationFeed.vue';
 import ThreadPanel from './components/conversation/ThreadPanel.vue';
@@ -80,10 +79,6 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <AmbientCanvas />
-  <div id="ambientBloom"></div>
-  <div id="grainOverlay"></div>
-
   <PresenceBar />
 
   <LoadingOverlay />
