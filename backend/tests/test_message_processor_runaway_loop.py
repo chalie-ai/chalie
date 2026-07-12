@@ -18,16 +18,18 @@ real, fully-migrated SQLite DB, with the real ``DispatchService``,
 only substitution is the LLM network boundary: ``ProviderService`` builds its
 thin transport client via ``services.provider_service.build_client`` (the exact
 seam ``test_message_processor_cancel_mid_provider_call.py`` uses); the fake
-client replays a scripted sequence of provider responses, one per step. The
-tool calls it emits name a tool that does not exist, so the real dispatcher
-records a harmless ``Unknown tool`` row and returns — no side effects — which is
-all these tests need: the guard fires on the call/text tally, independent of
-what any tool does.
+client replays a scripted sequence of provider responses, one per step. No real
+side effects run either: most tool calls name a tool that does not exist (the
+dispatcher records a harmless ``Unknown tool`` row and returns), and the one test
+that uses a real tool (``weather``, for its synonym-healed schema) relies on the
+guard firing BEFORE dispatch — so that tool never executes. The guard fires on
+the call/text tally, independent of what any tool does.
 """
 
 import sqlite3
 import threading
 import time
+from typing import cast
 from unittest.mock import patch
 
 import pytest
@@ -174,6 +176,39 @@ def test_one_below_the_tool_limit_completes(db: sqlite3.Connection) -> None:
     assert execution.state == TurnExecution.COMPLETED
     probe_rows = [c for c in mp.tool_call_service.by_turn() if c.tool_name == "noop_probe"]
     assert len(probe_rows) == under  # all four really dispatched
+
+
+def test_synonym_keyed_calls_canonicalise_to_one_and_crash(db: sqlite3.Connection) -> None:
+    """The guard keys on the params ``DispatchService`` will EXECUTE, not the raw
+    provider args. A model cycling synonym KEYS for one tool — ``location``, ``city``,
+    ``loc``, ``place``, ``region``, all naming the same value — heals to a single
+    identical call, so ``_RUNAWAY_TOOL_CALL_LIMIT`` such calls trip ``RunAwayLoop``
+    exactly as byte-identical calls would. Under a raw-param guard each distinct key
+    would tally separately and never trip. ``weather`` is real (its schema declares
+    ``location`` with those synonyms), but the guard fires BEFORE dispatch, so no
+    forecast lookup — hence no network — ever runs."""
+    assert db is not None
+    synonym_keys = ["location", "city", "loc", "place", "region"]  # all heal to Keys.location
+    batch = [
+        _tool("weather", **{synonym_keys[i % len(synonym_keys)]: "Valletta"})
+        for i in range(_RUNAWAY_TOOL_CALL_LIMIT)
+    ]
+    # These are genuinely DIFFERENT raw keys: a raw-param guard would tally each
+    # separately and never trip — only key-healing collapses them to one.
+    assert len({next(iter(cast("dict[str, object]", c["input"]))) for c in batch}) > 1
+    provider = _ScriptedProvider(ProviderResponse(text="", model="scripted", tool_calls=batch))
+
+    mp = _run(provider, "what's the weather")
+
+    execution = mp.turn_execution_service.latest_for_turn()
+    assert execution is not None
+    assert execution.state == TurnExecution.CRASHED
+    assert execution.stop_reason is not None
+    assert "identical parameters" in execution.stop_reason
+    assert "weather" in execution.stop_reason
+    # Guard trips before dispatch: no weather call executed (no network), no prose.
+    assert [c for c in mp.tool_call_service.by_turn() if c.tool_name == "weather"] == []
+    assert _assistant_rows(mp) == []
 
 
 # ── Measure 2: identical response text ────────────────────────────────────────

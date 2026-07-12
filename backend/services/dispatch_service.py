@@ -89,10 +89,7 @@ class DispatchService:
         not retry a blocked tool forever. No cancel check — the loop guards
         should_stop() one line before calling this.
         """
-        params = cast("dict[str, object]", self.mp.provider_service.sanitize_args(dict(params)))
-        act_summary = cast("str | None", params.pop("act_summary", None))
-
-        ability = self._bind(tool_name)
+        params, act_summary, ability = self._prepare(tool_name, params)
         if ability is None:
             result_text = f"Unknown tool: {tool_name}"
             steer = self._repeat_error_steer(tool_name, result_text)
@@ -102,7 +99,7 @@ class DispatchService:
             )
             return result_text + steer
 
-        result_text, params, call_id, state = self._dispatch_bound(tool_name, ability, params, act_summary)
+        result_text, call_id, state = self._dispatch_bound(tool_name, ability, params, act_summary)
         steer = self._repeat_error_steer(tool_name, result_text)
         if call_id is not None:
             self.mp.tool_call_service.finish(call_id=call_id, result=result_text, state=state)
@@ -113,23 +110,29 @@ class DispatchService:
             )
         return result_text + steer
 
-    def _dispatch_bound(
-        self,
-        tool_name: str,
-        ability: "Ability",
-        params: dict[str, object],
-        act_summary: "str | None",
-    ) -> tuple[str, dict[str, object], int | None, str]:
-        """The ability-found path: heal keys → ACTION_REQUIRED pre-gate → resolve
-        permission → policy-gate ``_execute``. Returns the rendered result, the
-        (possibly healed) params, the tool_calls row id opened on the allow path
-        (``None`` when the call never executed), and the terminal state to write."""
-        # Heal model-mangled argument KEYS against the tool's declared schema
-        # before any gate or run() reads them: a stray-quote/case/alias key is
-        # rewritten to its canonical parameter so the ACTION_REQUIRED pre-gate and
-        # the ability see the real key instead of a corrupt one. Defensive: a
-        # registry/schema fault must never break dispatch — on failure the raw
-        # params flow through unchanged.
+    def _prepare(
+        self, tool_name: str, params: dict[str, object],
+    ) -> "tuple[dict[str, object], str | None, Ability | None]":
+        """Turn a raw provider tool call into its EXECUTED identity, without running
+        or recording anything: strip LLM sentinel tokens from the values, lift out
+        the model's ``act_summary`` narration, bind the ability, and heal the
+        argument KEYS against its declared schema (a stray-quote/case/alias key
+        rewritten to its canonical parameter). Returns
+        ``(healed_params, act_summary, ability)``; ``ability`` is ``None`` for an
+        unknown tool, in which case the params are sanitised + act_summary-stripped
+        but not healed (no schema to heal against).
+
+        The ONE canonicalisation recipe: :meth:`dispatch` runs it to execute the
+        call, and :meth:`canonical_params` runs it to give the runaway guard a key
+        byte-identical to what will actually execute — so the two can never drift.
+        A registry/schema fault must never break dispatch, so a heal failure logs
+        and falls back to the raw (sanitised) params.
+        """
+        params = cast("dict[str, object]", self.mp.provider_service.sanitize_args(dict(params)))
+        act_summary = cast("str | None", params.pop("act_summary", None))
+        ability = self._bind(tool_name)
+        if ability is None:
+            return params, act_summary, None
         try:
             params = KeyHealer().heal(params, ability.get_parameters())
         except Exception:  # noqa: BLE001
@@ -137,12 +140,36 @@ class DispatchService:
                 "[DispatchService] key canonicalisation failed for %s — "
                 "proceeding with raw params", tool_name,
             )
+        return params, act_summary, ability
+
+    def canonical_params(self, tool_name: str, params: dict[str, object]) -> dict[str, object]:
+        """The params ``run()`` will actually receive for *tool_name* — sanitised,
+        ``act_summary``-stripped, and key-healed — computed WITHOUT executing or
+        recording anything. The runaway guard keys its per-tool tally on this, so a
+        model cycling synonym keys (``city``/``loc``/``place``/``region`` →
+        ``location``) that all heal to one identical executed call collapses to a
+        single key and cannot evade the loop backstop."""
+        params, _act_summary, _ability = self._prepare(tool_name, params)
+        return params
+
+    def _dispatch_bound(
+        self,
+        tool_name: str,
+        ability: "Ability",
+        params: dict[str, object],
+        act_summary: "str | None",
+    ) -> tuple[str, int | None, str]:
+        """The ability-found path for ALREADY-canonicalised params (:meth:`_prepare`
+        has sanitised the values, lifted ``act_summary``, and healed the keys):
+        ACTION_REQUIRED pre-gate → resolve permission → policy-gate ``_execute``.
+        Returns the rendered result, the tool_calls row id opened on the allow path
+        (``None`` when the call never executed), and the terminal state to write."""
         if (pre := self._prevalidate(ability, params)) is not None:
             # ACTION_REQUIRED pre-gate fires BEFORE the permission is formed: a
             # hallucinated action would otherwise lazily seed a bogus
             # '<tool>.<action>' ask row and freeze the turn waiting for human
             # approval. Malformed input never reaches the policy gate or run().
-            return self._render(tool_name, pre, None), params, None, ToolCall.ERROR
+            return self._render(tool_name, pre, None), None, ToolCall.ERROR
 
         # The risk class the gate keys on is derived from the inputs via the
         # ability's classify_action hook (default None), NOT trusted from a
@@ -162,7 +189,7 @@ class DispatchService:
             return text
 
         result_text = self._authorize(permission, _run_gated)
-        return result_text, params, call_id, state
+        return result_text, call_id, state
 
     def _repeat_error_steer(self, tool_name: str, result_text: str) -> str:
         """Steering suffix when this exact error already fired for an identical

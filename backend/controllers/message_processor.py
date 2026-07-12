@@ -418,10 +418,12 @@ class MessageProcessor:
         answer that echoes earlier prose is not mistaken for a loop. Two
         independent tallies, both scoped to this turn_execution (this instance
         persists across the whole recursive ``_step`` chain, including inline
-        post-compaction continuations): the same ``(tool, params)`` invoked
-        ``_RUNAWAY_TOOL_CALL_LIMIT`` times, or the same non-empty response text
-        emitted ``_RUNAWAY_TEXT_LIMIT`` times. ``_drive`` catches the raise and
-        stamps the turn CRASHED (Rule 7)."""
+        post-compaction continuations): the same ``(tool, canonical params)``
+        invoked ``_RUNAWAY_TOOL_CALL_LIMIT`` times, or the same non-empty response
+        text emitted ``_RUNAWAY_TEXT_LIMIT`` times. The tool tally keys on the
+        canonical params ``DispatchService`` will execute (sanitised + key-healed),
+        so cycling synonym keys that heal to one identical call cannot evade it.
+        ``_drive`` catches the raise and stamps the turn CRASHED (Rule 7)."""
         stripped = (text or "").strip()
         if stripped:
             self._text_emissions[stripped] += 1
@@ -431,14 +433,19 @@ class MessageProcessor:
                     f"{self._text_emissions[stripped]} times — the model is looping",
                 )
         for call in tool_calls:
-            key = (
-                cast("str", call["name"]),
-                json.dumps(call.get("input") or {}, sort_keys=True, default=str),
+            name = cast("str", call["name"])
+            # Key on the CANONICAL (sanitised + key-healed) params dispatch will
+            # actually execute, not the raw provider args: a model cycling synonym
+            # keys (city/loc/place/region → location) would otherwise mint a fresh
+            # key each step while running byte-identical calls, evading the tally.
+            canonical = self.dispatch_service.canonical_params(
+                name, cast("dict[str, object]", call.get("input") or {}),
             )
+            key = (name, json.dumps(canonical, sort_keys=True, default=str))
             self._tool_invocations[key] += 1
             if self._tool_invocations[key] >= _RUNAWAY_TOOL_CALL_LIMIT:
                 raise RunAwayLoop(
-                    f"turn {self.turn_id}: tool {key[0]!r} invoked with identical "
+                    f"turn {self.turn_id}: tool {name!r} invoked with identical "
                     f"parameters {self._tool_invocations[key]} times — the model is looping",
                 )
 
