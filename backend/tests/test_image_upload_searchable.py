@@ -27,7 +27,6 @@ from typing import TYPE_CHECKING, cast
 import pytest
 
 from abilities.document import DocumentAbility
-from services.database_service import get_shared_db_service
 from services.document_service import DocumentService
 from services.provider_db_service import ProviderDbService
 from services.tmp_storage import new_tmp_path
@@ -61,6 +60,20 @@ def _ocrable_invoice_png_path() -> str:
     return path
 
 
+def _drain_search_index() -> None:
+    """Drive the REAL async search-expander pipeline synchronously against the
+    bound test DB — the exact production code path, no mocks. In prod the
+    search_expander_worker daemon does this continuously; a test must do it
+    explicitly because no worker runs under pytest."""
+    from services.search_expander_service import SearchExpanderService
+    svc = SearchExpanderService()
+    svc._self_heal()
+    item = svc._dequeue()
+    while item is not None:
+        svc._process(item)
+        item = svc._dequeue()
+
+
 def _blank_png_path() -> str:
     """A 1x1 white PNG (no words -> empty OCR), written under the temp prefix."""
     path = new_tmp_path("blank.png")
@@ -75,7 +88,7 @@ def _blank_png_path() -> str:
 def test_uploaded_image_is_findable_via_document_search(db: sqlite3.Connection) -> None:
     """No vision provider -> OCR description -> the existing embed+FTS5 pipeline ->
     document.search finds the image by content (real recall, FTS5 + vector)."""
-    ProviderDbService(get_shared_db_service()).set_vision_provider(None)
+    ProviderDbService().set_vision_provider(None)
 
     ability = DocumentAbility(mp=None)
     up = ability.run({
@@ -88,6 +101,11 @@ def test_uploaded_image_is_findable_via_document_search(db: sqlite3.Connection) 
     assert cast(dict[str, object], up.body)["id"], up.body
     assert cast(dict[str, object], up.body)["hash"], up.body
 
+    # The FTS/vec posting is written by the async search-expander pipeline
+    # (services/search_expander_service.py), never synchronously by save() —
+    # drive it explicitly since no worker daemon runs under pytest.
+    _drain_search_index()
+
     found = ability.run({"action": "search", "query": "invoice"})
     # : search returns a JSON list of document rows; the matched image
     # surfaces via the REAL recall path under its original_name.
@@ -97,7 +115,7 @@ def test_uploaded_image_is_findable_via_document_search(db: sqlite3.Connection) 
 def test_textless_image_is_ready_not_failed(db: sqlite3.Connection) -> None:
     """A textless image with no vision provider (empty OCR) must persist 'ready',
     never 'failed' — directly proves the _run_upload_extraction image-aware branch."""
-    ProviderDbService(get_shared_db_service()).set_vision_provider(None)
+    ProviderDbService().set_vision_provider(None)
 
     ability = DocumentAbility(mp=None)
     up = ability.run({
@@ -108,6 +126,6 @@ def test_textless_image_is_ready_not_failed(db: sqlite3.Connection) -> None:
     assert up.status == "success", up
     doc_id = cast(str, cast(dict[str, object], up.body)["id"])
 
-    doc = DocumentService(get_shared_db_service()).get_document(doc_id)
+    doc = DocumentService().get_document(doc_id)
     assert doc is not None, up
     assert doc["status"] == "ready", doc.get("status")

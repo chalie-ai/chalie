@@ -244,9 +244,9 @@ def _extract_image(path: str) -> str:
     is intentionally NOT indexed (it is index noise)."""
     import mimetypes  # noqa: PLC0415
     from abilities.vision import RICH_INDEX_PROMPT, describe_image  # noqa: PLC0415
-    from services.processor_config import ProcessorConfig  # noqa: PLC0415
+    from configs.enums.policy_channel import PolicyChannel  # noqa: PLC0415
 
     mime_type = mimetypes.guess_type(path)[0] or 'image/png'
     out = describe_image(path, mime_type, RICH_INDEX_PROMPT,
-                         policy_channel=ProcessorConfig.PolicyChannel.CHAT)
+                         policy_channel=PolicyChannel.CHAT)
     return cast(str, out['description']) or ''

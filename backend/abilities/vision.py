@@ -24,14 +24,14 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING, ClassVar, cast
 
-from abilities._ability import Ability
-from abilities._params import Keys
+from abilities._delegate import DelegateAbility
+from configs.enums.param_key import Keys
 from abilities._result import ToolResult
 from configs.channels.vision import VisionConfig
 
 if TYPE_CHECKING:
-    from services.message_processor import MessageProcessor
-    from services.processor_config import ProcessorConfig
+    from configs.enums.policy_channel import PolicyChannel
+    from controllers.message_processor import MessageProcessor
 
 logger = logging.getLogger(__name__)
 
@@ -52,21 +52,20 @@ _NO_VISION_NOTE = (
 )
 
 
-def describe_image(image_path: str, mime_type: str, query: str, *, policy_channel: "ProcessorConfig.PolicyChannel") -> dict[str, object]:
+def describe_image(image_path: str, mime_type: str, query: str, *, policy_channel: "PolicyChannel") -> dict[str, object]:
     """Forks ONCE on vision-provider-configured. Provider path RAISES on provider
     failure (never swallowed); the OCR fallback is ONLY for the not-configured path.
     """
-    from services.database_service import get_shared_db_service  # noqa: PLC0415
     from services.provider_db_service import ProviderDbService  # noqa: PLC0415
 
-    if ProviderDbService(get_shared_db_service()).get_vision_provider():
-        from services.message_processor import MessageProcessor  # noqa: PLC0415
+    if ProviderDbService().get_vision_provider():
+        from controllers.message_processor import MessageProcessor  # noqa: PLC0415
 
         description = MessageProcessor.process(
-            query,
             VisionConfig(policy_channel),
+            raw_input=query,
             metadata={"image_path": image_path, "mime_type": mime_type},
-        )
+        ).result()
         return {"description": description, "vision_used": True, "note": None}
 
     from services import image_context_service  # noqa: PLC0415
@@ -82,7 +81,7 @@ def describe_image(image_path: str, mime_type: str, query: str, *, policy_channe
     }
 
 
-class VisionAbility(Ability):
+class VisionAbility(DelegateAbility):
     def get_name(self) -> str:
         return "vision"
 
@@ -150,11 +149,10 @@ class VisionAbility(Ability):
                 valid=("image", "query"),
             )
 
-        from services.database_service import get_shared_db_service  # noqa: PLC0415
         from services.document_service import DocumentService  # noqa: PLC0415
         from services.file_mapper_service import FileMapperService  # noqa: PLC0415
 
-        doc = DocumentService(get_shared_db_service()).get_document(doc_id)
+        doc = DocumentService().get_document(doc_id)
         if not doc:
             return ToolResult.err(
                 f"No document found for id={doc_id}.",
@@ -172,7 +170,7 @@ class VisionAbility(Ability):
         mime_type = cast(str, doc.get("mime_type")) or "image/png"
         try:
             out = describe_image(
-                abs_path, mime_type, query, policy_channel=cast("ProcessorConfig", cast("MessageProcessor", self.mp).config).policy_channel
+                abs_path, mime_type, query, policy_channel=cast("MessageProcessor", self.mp).config.policy_channel
             )
         except Exception as exc:  # noqa: BLE001 — surfaced, never swallowed
             logger.exception("[VISION] describe failed")

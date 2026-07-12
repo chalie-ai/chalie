@@ -39,7 +39,7 @@ from pathlib import Path
 from typing import ClassVar, cast
 
 from abilities._ability import Ability
-from abilities._params import Keys
+from configs.enums.param_key import Keys
 from abilities._result import ToolResult
 
 _RESULTS_PER_PAGE = 5

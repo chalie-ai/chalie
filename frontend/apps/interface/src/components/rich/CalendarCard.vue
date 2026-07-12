@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed } from 'vue';
-
+import { DAYS, MONTHS, parseDate, formatClock } from '../../utils/time';
 export interface CalendarEvent {
   dtstart?: string;
   dtend?: string;
@@ -19,19 +19,6 @@ export interface CalendarPayload {
 }
 
 const props = defineProps<{ payload: CalendarPayload; synthesis?: string }>();
-
-const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'] as const;
-const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'] as const;
-
-function parseISO(s: string | undefined | null): Date | null {
-  if (!s) return null;
-  const d = new Date(s);
-  return Number.isNaN(d.getTime()) ? null : d;
-}
-
-function formatTime(d: Date): string {
-  return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
-}
 
 function dateKey(d: Date): string {
   return `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
@@ -52,7 +39,7 @@ interface WhenBlock {
 
 const whenBlock = computed<WhenBlock>(() => {
   const ev = singleEvent.value;
-  const d = ev ? parseISO(ev.dtstart) : null;
+  const d = ev ? parseDate(ev.dtstart) : null;
   return {
     day: d ? DAYS[d.getDay()] : '—',
     date: d ? d.getDate() : '—',
@@ -69,11 +56,11 @@ const singleMeta = computed<SingleMeta>(() => {
   const ev = singleEvent.value;
   if (!ev) return { timePart: null, calendarName: null };
 
-  const dtstart = ev.all_day ? null : parseISO(ev.dtstart);
-  const dtend = dtstart && parseISO(ev.dtend);
+  const dtstart = ev.all_day ? null : parseDate(ev.dtstart);
+  const dtend = dtstart && parseDate(ev.dtend);
   let timePart: string | null = ev.all_day ? 'All day' : null;
   if (dtstart) {
-    timePart = dtend ? `${formatTime(dtstart)} – ${formatTime(dtend)}` : formatTime(dtstart);
+    timePart = dtend ? `${formatClock(dtstart)} – ${formatClock(dtend)}` : formatClock(dtstart);
   }
 
   return { timePart, calendarName: ev.calendar_name ?? null };
@@ -98,7 +85,7 @@ const dayGroups = computed<DayGroup[]>(() => {
   const groupMap = new Map<string, { date: Date | null; rows: ListRow[] }>();
 
   for (const ev of evs) {
-    const dt = parseISO(ev.dtstart);
+    const dt = parseDate(ev.dtstart);
     const key = dt ? dateKey(dt) : 'unknown';
 
     if (!groupMap.has(key)) {
@@ -106,7 +93,7 @@ const dayGroups = computed<DayGroup[]>(() => {
     }
 
     groupMap.get(key)!.rows.push({
-      timeText: ev.all_day ? 'All day' : dt ? formatTime(dt) : '',
+      timeText: ev.all_day ? 'All day' : dt ? formatClock(dt) : '',
       title: ev.title ?? '',
       location: ev.location ?? null,
     });
@@ -123,10 +110,7 @@ const dayGroups = computed<DayGroup[]>(() => {
 </script>
 
 <template>
-  <div
-    v-if="singleEvent"
-    class="rich-card calendar-card"
-  >
+  <div v-if="singleEvent" class="rich-card calendar-card">
     <div class="calendar-card__when">
       <div class="calendar-card__when-day">{{ whenBlock.day }}</div>
       <div class="calendar-card__when-date">{{ whenBlock.date }}</div>
@@ -147,33 +131,19 @@ const dayGroups = computed<DayGroup[]>(() => {
         {{ singleEvent.location }}
       </div>
 
-      <div
-        v-if="singleEvent.attendees?.length"
-        class="calendar-card__attendees"
-      >
+      <div v-if="singleEvent.attendees?.length" class="calendar-card__attendees">
         {{ singleEvent.attendees.join(', ') }}
       </div>
     </div>
   </div>
 
-  <div
-    v-else-if="dayGroups.length > 0"
-    class="rich-card calendar-card calendar-card--list"
-  >
-    <div
-      v-for="group in dayGroups"
-      :key="group.key"
-      class="calendar-card__day-group"
-    >
+  <div v-else-if="dayGroups.length > 0" class="rich-card calendar-card calendar-card--list">
+    <div v-for="group in dayGroups" :key="group.key" class="calendar-card__day-group">
       <div v-if="group.label" class="calendar-card__day-label">
         {{ group.label }}
       </div>
 
-      <div
-        v-for="(row, rowIdx) in group.rows"
-        :key="rowIdx"
-        class="calendar-card__row"
-      >
+      <div v-for="(row, rowIdx) in group.rows" :key="rowIdx" class="calendar-card__row">
         <span class="calendar-card__row-time">{{ row.timeText }}</span>
         <span class="calendar-card__row-title">{{ row.title }}</span>
         <span v-if="row.location" class="calendar-card__row-loc">{{ row.location }}</span>

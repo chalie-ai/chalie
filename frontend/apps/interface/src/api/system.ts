@@ -6,7 +6,6 @@ export interface AuthStatus {
   has_providers: boolean;
   has_session: boolean;
   vault_state: 'unlocked' | 'locked' | 'uninitialized';
-  has_vision_provider: boolean;
 }
 
 /** Response from GET /system/context-usage. */
@@ -35,7 +34,7 @@ const NO_REDIRECT = { redirectOnAuthError: false } as const;
 export const system = {
   /** GET /auth/status — readiness probe used by the auth gate in main.ts. */
   authStatus(): Promise<AuthStatus> {
-    return api.get('/auth/status', NO_REDIRECT);
+    return api.get('/api/auth/status', NO_REDIRECT);
   },
 
   /**
@@ -55,26 +54,18 @@ export const system = {
     return api.post('/health', payload, NO_REDIRECT);
   },
 
-  /** GET /system/context-usage — last request token count + context window. */
-  contextUsage(): Promise<ContextUsage> {
-    return api.get('/system/context-usage');
+  /** GET /system/context-usage — last request token count + context window, scoped by (type, turnId). */
+  contextUsage(type = 'user', turnId = -1): Promise<ContextUsage> {
+    return api.get(`/api/system/context-usage?type=${type}&turn_id=${turnId}`);
   },
 
-  /** GET /system/settings/thinking_level_override */
-  thinkingLevel(): Promise<{ key: string; value: string | null }> {
-    return api.get('/system/settings/thinking_level_override');
-  },
-
-  /**
-   * PUT /system/settings/thinking_level_override — empty value string deletes
-   * the row (reverts to auto).
-   */
-  setThinkingLevel(value: string): Promise<Record<string, unknown>> {
-    return api.put('/system/settings/thinking_level_override', { value });
+  /** GET /thread/<turnId>/thinking-level?type= — the sender's last-chosen thinking level for this thread. */
+  thinkingLevel(type: string, turnId: number): Promise<{ level: string }> {
+    return api.get(`/api/thread/${turnId}/thinking-level?type=${type}`);
   },
 
   /** POST /system/update/apply — apply an in-place installer update. */
   updateApply(tag: string): Promise<UpdateApplyResult> {
-    return api.post('/system/update/apply', { tag });
+    return api.post('/api/system/update/apply', { tag });
   },
 };

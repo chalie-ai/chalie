@@ -1,58 +1,130 @@
 /**
- * Session store — WS coordinator, turn state-machine, drift router.
+ * Session store — WS coordinator + turn send/stop orchestration.
  *
- * Single WS owner rule: ONLY this store may touch WebSocketService handlers
- * (send/sendAction/abort/onDrift/onAny/onConnect/onDisconnect/connect/ensureAlive).
- * Everything else goes through this store or the event bus.
+ * Single WS owner rule: ONLY this store may touch WebSocketService's
+ * send/sendAction/abort/onDrift/onAny/ensureAlive handlers, and it is the
+ * only place `connect()` is called for the interface app. `onConnect` /
+ * `onDisconnect` are NOT exclusive to this store — `@chalie/shared`'s
+ * `useWebSocket()` composable also registers them, but only to drive the
+ * connection-status pill (`useConnectionStore`); it never touches `onDrift`
+ * or the send/abort surface. Drift routing itself lives in
+ * `utils/driftDispatcher.ts` (see `init()` below) — this store no longer
+ * inspects WS payload shapes at all.
+ *
+ * D3 — no lane model: busy/working state for every independent conversation
+ * surface (the main spine + each open thread reply) lives as a DOM
+ * attribute (`data-working`, see `utils/turnDom.ts`) rather than a store-held
+ * record. `isSurfaceBusy` derives it via a DOM query for a stable turn_id
+ * (a thread), or a registered surface's own container (the main spine, which
+ * has no stable id until a brand-new send's POST resolves one).
  */
 import { defineStore } from 'pinia';
-import { getWebSocket, useConnectionStore, AuthError } from '@chalie/shared';
-import type { WsInboundEvent, WsPushEvent, WsMessageEvent } from '@chalie/shared';
+import type { WsInboundEvent, WsPushEvent } from '@chalie/shared';
+import { AuthError, ConfigType, getWebSocket, useConnectionStore } from '@chalie/shared';
 import { on } from '../composables/useEventBus';
 import { extractText } from '../composables/useMarkup';
-import { conversation } from '../api/conversation';
-import { moments } from '../api/moments';
 import { getHost } from '../api/index';
-import { showToast } from '../utils/toast';
-import { useConversationStore } from './conversation';
-import type { AttachmentPreview } from './conversation';
-import type { ConversationSegment } from '../api/conversation';
-import { useTasksStore } from './tasks';
+import { conversation as convoApi } from '../api/conversation';
+import { useActionCard } from '../composables/useActionCard';
+import { dispatchDrift, registerSessionHooks } from '../utils/driftDispatcher';
+import { reconcileCancelledTurn } from '../utils/cancelReconcile';
+import { clearLiveTurn } from '../utils/liveActTrail';
+import { blockSpeechText } from '../utils/speech';
+import { clearSendEcho, mountSendEcho } from '../utils/sendEcho';
+import {
+  isSurfaceWorking,
+  isTurnWorking,
+  liveWorkingKeys,
+  setTurnDone,
+  setTurnWorking,
+  SPINE_SURFACE_ID,
+  upsertTurnToSurfaces,
+} from '../utils/turnDom';
+import { laneKey, useQueueStore } from './queue';
 import { useNotificationsStore } from './notifications';
-import type { TipState, UpdateState } from './notifications';
-import { usePermissionsStore } from './permissions';
 import { useContextUsageStore } from './contextUsage';
 import { useAmbientSensor } from '../composables/useAmbientSensor';
 
 /** Guard: init() must be idempotent (HMR / Vue StrictMode). */
 let _initialized = false;
 
-/** Last pin-moment timestamp (ms) — 250ms debounce. */
-let _pinDebounce = 0;
-
 /** Unbind fns for event-bus listeners registered in init() (for future cleanup). */
 const _busUnbinds: Array<() => void> = [];
 
+const FILE_PLACEHOLDER = '[File attached]';
+
 export const useSessionStore = defineStore('session', {
   state: () => ({
-    isSending: false,
-    /** Id of the active ACT form while a turn is in-flight. */
-    _activeActId: null as number | null,
-    /** Id of the last user form (for mid-ACT restore on requestStop). */
-    _lastUserFormId: null as number | null,
-    /** Captured text from the last user turn (for requestStop restore). */
-    _lastUserText: '',
+    /** Synchronous send-in-flight guard, keyed by laneKey(threadId). D3: this
+     *  is NOT a lane record — it holds no turn identity or draft text, only a
+     *  scope key. It bridges the gap between "we decided to send" and the
+     *  DOM's own `data-working` state existing: held from the send decision
+     *  until the turn's FIRST `turn_execution` frame is observed (see
+     *  `_pendingByTurn` below), because the POST resolves as soon as the
+     *  backend allocates the turn_id — execution proceeds in the background,
+     *  so there is no ordering guarantee between the POST 200 and the WS
+     *  'working' frame that stamps the DOM. */
+    _pendingSends: new Set<string>(),
+
+    /** `type:turnId` → laneKey for sends whose POST resolved but whose first
+     *  `turn_execution` frame hasn't been observed yet — the dispatcher
+     *  releases the matching `_pendingSends` hold via `_releasePendingSend`.
+     *  Mirrors HEAD's lane binding ("bind the lane handle the moment the
+     *  server allocates it, release on the finish signal") without a lane
+     *  record. */
+    _pendingByTurn: new Map<string, string>(),
+
+    /** True when the main spine had a working turn at the moment the WS
+     *  dropped — the spine's counterpart to `_offlineWorking` (it has no
+     *  stable turn id for `isSurfaceBusy` to key off). Keeps the spine dock
+     *  queueing rather than dropping drafts while the backend may still be
+     *  mid-turn behind the dead socket; cleared once `_reconcileWorking`
+     *  restores the real state. */
+    _offlineSpineWorking: false,
+
+    /** `type:turnId` keys that were in flight when the WS dropped. The
+     *  disconnect handler clears every visual `data-working` marker — the
+     *  same marker `_reconcileWorking` would otherwise scan — so what was
+     *  working MUST be remembered here or nothing gets reconciled on
+     *  reconnect (spinner restore / offline-settle / queue drain would all
+     *  silently die). */
+    _offlineWorking: new Set<string>(),
 
     /** Turn-level provider/quota error, surfaced as a closable toast above the
      *  input dock. Null when there is nothing to show. */
     errorMessage: null as string | null,
 
-    historyOffset: 0,
     historyLoading: false,
-    historyExhausted: false,
+    /** True while a deep-link thread fetch is in-flight (drives the panel
+     *  spinner on first open of a thread outside the loaded pages). */
+    threadExpanding: false,
+
+    /** turn_id of the thread shown in the slide-over panel, or null when closed.
+     *  The opener button opens the panel; the main feed dims behind it. */
+    panelThreadId: null as number | null,
+
+    /** ConfigType of the thread currently open in the panel (default user). */
+    panelType: ConfigType.USER as string,
+
+    /** True while the thread-search overlay is open (Cmd/Ctrl-K or the top-bar
+     *  search button). The overlay self-fetches; this is pure open/close state. */
+    searchOpen: false,
+
+    /** True while the scheduler dock is open. */
+    schedulerDockOpen: false,
 
     /** Registered auth-failure callback (set by App bootstrap). */
     _onAuthFailure: null as (() => void) | null,
+
+    /**
+     * Registered history-load callback (set by ConversationFeed.vue —
+     * D17: the pagination cursor is UI-local, this store only owns the
+     * shared `historyLoading` flag + the AuthError/initial-load event
+     * semantics around it). Returns whether this call was the very first
+     * load and whether it actually loaded anything, so the initial-load
+     * event fires exactly once, only when there was something to show.
+     */
+    _loadRecentCallback: null as (() => Promise<{ isInitialLoad: boolean; loadedAny: boolean }>) | null,
   }),
 
   actions: {
@@ -65,32 +137,63 @@ export const useSessionStore = defineStore('session', {
       const conn = useConnectionStore();
       const contextUsage = useContextUsageStore();
 
+      registerSessionHooks({
+        releasePendingSend: (turnId, type) => this._releasePendingSend(turnId, type),
+        getPanelThreadId: () => this.panelThreadId,
+        getPanelType: () => this.panelType,
+        setErrorMessage: (message) => { this.errorMessage = message; },
+        finishTurn: (turnId, type) => this._finishTurn(turnId, type),
+        drainQueues: () => this._drainQueues(),
+      });
+
       ws.onConnect(() => {
         conn.setConnected(true);
+        void this._reconcileWorking();
       });
 
       ws.onDisconnect(() => {
         conn.setConnected(false);
-        this.isSending = false;
-        // A mid-turn drop strands the live act group: the turn's done now lands
-        // on the dead socket and is never resent, so collapse it here or the
-        // "thinking…" spinner hangs forever.
-        if (this._activeActId != null) {
-          useConversationStore().resolveAct(this._activeActId);
-          this._activeActId = null;
+        // A mid-turn drop strands spinners: the terminal `turn_execution` frame
+        // lands on the dead socket and is never resent. Snapshot what was in
+        // flight FIRST (liveWorkingKeys covers turns whose 'working' frame
+        // arrived before any element rendered), THEN clear the transient
+        // visual state so nothing hangs — `_reconcileWorking` walks the
+        // snapshot on reconnect and either restores the spinner (backend
+        // still genuinely mid-turn — `working` is a server-derived field,
+        // see ConversationTurnBlock) or settles it via `_finishTurn`.
+        for (const key of liveWorkingKeys()) this._offlineWorking.add(key);
+        for (const el of Array.from(document.querySelectorAll<HTMLElement>('[data-working][data-turn-id]'))) {
+          const turnId = Number(el.getAttribute('data-turn-id'));
+          const type = el.getAttribute('data-type') ?? ConfigType.USER;
+          if (!Number.isNaN(turnId)) this._offlineWorking.add(`${type}:${turnId}`);
+        }
+        // Spine snapshot too (it has no stable id for the key set) — read
+        // BEFORE the clearing loop below strips the very markers it scans.
+        if (isSurfaceWorking(SPINE_SURFACE_ID)) this._offlineSpineWorking = true;
+        for (const key of this._offlineWorking) {
+          const idx = key.indexOf(':');
+          const type = key.slice(0, idx);
+          const turnId = Number(key.slice(idx + 1));
+          setTurnWorking(turnId, type, false);
         }
       });
 
       ws.onDrift((data: WsPushEvent) => {
-        this.routeDrift(data);
+        dispatchDrift(data);
       });
 
-      // onAny feeds the context-usage indicator — must never throw. refresh()
-      // is coalesced inside the store, so a per-frame call is safe.
+      // onAny — route each inbound frame's refresh to its own (type, turnId) key.
       ws.onAny((data: WsInboundEvent) => {
         try {
-          void data;
-          void contextUsage.refresh();
+          const rawType = (data as { type?: unknown }).type;
+          const type =
+            typeof rawType === 'string' && Object.values(ConfigType).includes(rawType as ConfigType)
+              ? rawType
+              : 'user';
+          const rawTurnId = (data as { turn_id?: unknown }).turn_id;
+          if (typeof rawTurnId === 'number') void contextUsage.refresh(type, rawTurnId);
+          // Always keep the main-spine / footer dock (keyed at turnId -1) live.
+          void contextUsage.refresh(type, -1);
         } catch {
           /* never break the WS pipe */
         }
@@ -99,52 +202,24 @@ export const useSessionStore = defineStore('session', {
       // Tab-refocus liveness check.
       globalThis.addEventListener('focus', () => ws.ensureAlive());
 
-      // chalie:action — deterministic skill invocations. Registered inside init()
-      // so the WS single-owner rule holds (only one listener ever bound).
+      // chalie:action — deterministic skill invocations routed through useActionCard.
       _busUnbinds.push(
         on('chalie:action', (payload) => {
-          // Bus emits the full detail; legacy read e.detail.payload — support both.
           const p =
             (payload as { payload?: Record<string, unknown> }).payload ??
             (payload as Record<string, unknown>);
-          void this.sendAction(p);
+          useActionCard().run(p, (msg) => { this.errorMessage = msg; });
         }),
       );
 
-      // chalie:pin-moment — Remember button: 250ms debounce, single POST
-      // /moments, then a "Remembered" toast with an Undo action (POST
-      // /moments/<id>/forget). No confirmation dialog — recall is a separate UI.
-      _busUnbinds.push(
-        on('chalie:pin-moment', (detail) => {
-          const text = (detail as { content?: string }).content ?? '';
-          if (!text) return;
-          const now = Date.now();
-          if (now - _pinDebounce < 250) return;
-          _pinDebounce = now;
-          void moments
-            .pin(text)
-            .then((res) => {
-              const transcriptId = res.item?.transcript_id ?? null;
-              showToast(
-                res.duplicate ? 'Already remembered' : 'Remembered',
-                transcriptId != null ? () => void moments.forget(transcriptId) : null,
-              );
-            })
-            .catch((err: unknown) => {
-              console.warn('[Session] pin moment failed:', err);
-            });
-        }),
-      );
-
-      // chalie:silent-action — rich-card interactions, no chat bubble. Caller
-      // supplies optional onMessage/onError/onDone for optimistic card UI.
+      // chalie:silent-action — rich-card interactions, no chat bubble.
       _busUnbinds.push(
         on('chalie:silent-action', (detail) => {
           const d = detail as {
             payload?: Record<string, unknown>;
-            onMessage?: (data: WsMessageEvent) => void;
+            onMessage?: (data: WsInboundEvent) => void;
             onError?: (data: { message: string; recoverable?: boolean }) => void;
-            onDone?: (data: { duration_ms: number }) => void;
+            onDone?: (data: { duration_ms?: number }) => void;
           };
           if (!d.payload) return;
           getWebSocket().sendAction(d.payload, {
@@ -164,234 +239,250 @@ export const useSessionStore = defineStore('session', {
     },
 
     /**
-     * Main send orchestrator. Mid-ACT path: when a turn is in-flight, append the
-     * new text to the existing user form, drop the partial turn, and restart —
-     * the backend cancels the active turn, concatenates, and starts fresh.
+     * Reconcile every turn that was in flight when the WS dropped against
+     * the backend after reconnect. Walks the `_offlineWorking` snapshot the
+     * disconnect handler recorded — NOT the DOM: the disconnect handler
+     * already cleared every `data-working` marker, so a DOM scan here would
+     * find nothing. Re-fetches each candidate turn straight off the REST API
+     * (the DOM contract's sole data source — no client-side cache to
+     * consult) and either restores its spinner (backend still genuinely
+     * mid-turn — `working` is a server-derived field, see
+     * ConversationTurnBlock) or settles it: marks `data-done` (D16, unless
+     * the panel has it open) and hands off to `_finishTurn` for the
+     * offline-settle bookkeeping the live WS settle path would otherwise
+     * have done.
+     */
+    async _reconcileWorking(): Promise<void> {
+      for (const key of Array.from(this._offlineWorking)) {
+        const idx = key.indexOf(':');
+        const type = key.slice(0, idx);
+        const turnId = Number(key.slice(idx + 1));
+
+        let block;
+        try {
+          block = await convoApi.thread(turnId, type);
+        } catch {
+          continue; // best-effort; key stays snapshotted, retried on the next reconnect
+        }
+        this._offlineWorking.delete(key);
+        if (block.working) {
+          setTurnWorking(turnId, type, true);
+        } else {
+          // Render the settled turn's real content. The outage swallowed this
+          // turn's `updated`/`completed` frames (fire-and-forget, no replay),
+          // so nothing else ever upserts it — without this the user + reply
+          // rows never appear, and any send echo mounted for this scope has no
+          // terminal clear path and ghosts forever (the land hook fired here
+          // clears it).
+          upsertTurnToSurfaces(block, type);
+          // D16 gate is the FULL (turn_id, type) pair — turn_id alone is only
+          // unique per channel, so a same-id turn in a different channel must
+          // not be treated as the one open in the panel.
+          if (turnId !== this.panelThreadId || type !== this.panelType) setTurnDone(turnId, type, true);
+          void this._finishTurn(turnId, type);
+        }
+      }
+      // Real state is restored above (still-working turns have their DOM
+      // markers back), so the blanket offline flag can drop — best-effort
+      // even when a fetch failed and its key stayed snapshotted.
+      this._offlineSpineWorking = false;
+    },
+
+    /**
+     * True when a given surface is currently busy — gates sends and drains.
+     * Main spine shares its surface with ACT cycles (no stable turn id);
+     * threads have a stable id and are checked directly against the DOM.
+     */
+    isSurfaceBusy(threadId: number | null, type: string = ConfigType.USER): boolean {
+      if (this._pendingSends.has(laneKey(threadId))) return true;
+      // Offline snapshots count as busy: the backend may still be mid-turn
+      // behind the dead socket even though the visual markers were cleared —
+      // a send now should queue (drained after `_reconcileWorking`), not
+      // silently drop the draft on the disconnected transport.
+      if (threadId == null) {
+        return this._offlineSpineWorking || isSurfaceWorking(SPINE_SURFACE_ID);
+      }
+      return this._offlineWorking.has(`${type}:${threadId}`) || isTurnWorking(threadId, type);
+    },
+
+    /**
+     * Send a user turn. The REAL user bubble still renders only from the API —
+     * the `turn_execution` working refetch and the `updated` broadcast signal
+     * remain the sole path for actual turn content (no optimistic write to any
+     * store). The immediate-dispatch branch below additionally mounts
+     * a transient, DOM-only echo of the submitted text (`utils/sendEcho.ts`) so
+     * the first paint after submit is never empty — cleared the moment real
+     * content lands, the dispatch fails (`_onSendFailure`), or the turn is
+     * interrupted (`requestStop`). The busy branch already gets a visible chip
+     * from the queue store, so it gets no echo here.
      */
     async sendMessage(
       text: string,
-      source: 'text' | 'voice' = 'text',
       files: File[] = [],
-      previews: AttachmentPreview[] = [],
+      threadId: number | null = null,
+      type: string = ConfigType.USER,
+      thinkingLevel: string | null = null,
     ): Promise<void> {
       if (!text && !files.length) return;
 
-      const convo = useConversationStore();
+      const body = text || FILE_PLACEHOLDER;
 
-      if (this.isSending) {
-        if (this._lastUserFormId != null) {
-          const uidx = convo.forms.findIndex((f) => f.id === this._lastUserFormId);
-          if (uidx !== -1) {
-            const uform = convo.forms[uidx];
-            if (uform.kind === 'user') uform.text += '\n\n' + text;
-            // Drop the partial turn rendering (interim bubbles + tool groups).
-            convo.forms.splice(uidx + 1);
-          }
-        }
-        this._activeActId = null;
-        this._startTurn(text, source, false);
+      if (this.isSurfaceBusy(threadId, type)) {
+        useQueueStore().enqueue(threadId, body, type, files, thinkingLevel);
         return;
       }
 
-      this.isSending = true;
-
-      const userFormId = convo.appendUser(text || '[File attached]', previews, {
-        inWorkingMemory: true,
-      });
-      this._lastUserFormId = userFormId;
-      this._lastUserText = text;
-
-      this._startTurn(text || '[File attached]', source, false, files, previews);
-    },
-
-    /**
-     * Wire and launch a turn. `showUserBubble` is true only for re-entries where
-     * sendMessage hasn't already appended the user form.
-     */
-    _startTurn(
-      text: string,
-      source: 'text' | 'voice',
-      showUserBubble: boolean,
-      files: File[] = [],
-      previews: AttachmentPreview[] = [],
-    ): void {
-      const convo = useConversationStore();
-      const ws = getWebSocket();
-
-      if (showUserBubble) {
-        const uid = convo.appendUser(text || '[File attached]', previews, {
-          inWorkingMemory: true,
-        });
-        this._lastUserFormId = uid;
-        this._lastUserText = text;
-      }
-
-      // Open the ACT group up-front: an empty live group is the "thinking…"
-      // placeholder (logo + stop affordance). The step's first tool_start lands
-      // its pill in place; a tool-free turn evicts the empty group on resolve.
-      this._activeActId = convo.appendAct();
-
-      // Capture the FINAL turn result across onMessage(final) / onDone — interim
-      // steps render immediately and are never cached.
-      let responseContent = '';
-      let responseMeta: {
-        topic?: string;
-        exchange_id?: string;
-        mode?: string;
-        confidence?: number;
-        segments?: ConversationSegment[];
-        timestamp?: string;
-        duration_ms?: number;
-      } = {};
-
-      ws.send(
-        text,
-        source,
-        {
-          // Use d.id (NOT d.call_id) — frame is act_tool_start { type,name,id,summary }.
-          // Lazily open the step's tool group; its prose already landed via the
-          // preceding interim message.
-          onToolStart: (data) => {
-            const d = data as { id?: string; name?: string; summary?: string };
-            if (this._activeActId == null) this._activeActId = convo.appendAct();
-            convo.appendToolPill(this._activeActId, d.id ?? '', d.name ?? '', d.summary);
-          },
-
-          // act_tool_end has no duration field — pass ms=0, resolveToolPill
-          // computes client elapsed.
-          onToolEnd: (data) => {
-            const d = data as { id?: string; ok?: boolean };
-            convo.resolveToolPill(d.id ?? '', 0, !!d.ok);
-          },
-
-          onMessage: (data) => {
-            const d = data as WsMessageEvent & {
-              content?: string;
-              topic?: string;
-              exchange_id?: string;
-              mode?: string;
-              confidence?: number;
-              segments?: ConversationSegment[];
-              timestamp?: string;
-            };
-
-            if (d.interim) {
-              // Interim prose: supersede the previous step (collapse its tool
-              // group), then render this step's bubble; the next onToolStart
-              // opens a fresh group beneath it.
-              if (this._activeActId != null) {
-                convo.resolveAct(this._activeActId);
-                this._activeActId = null;
-              }
-              if (d.content) convo.appendChalie(d.content, { ts: d.timestamp ?? '' });
-              return;
-            }
-
-            // Final result — cached, rendered on done so duration_ms lands on the
-            // bubble (also carries turn-wide rich-media segments).
-            responseContent = d.content ?? '';
-            responseMeta = {
-              topic: d.topic,
-              exchange_id: d.exchange_id,
-              mode: d.mode ?? '',
-              confidence: d.confidence ?? 0,
-              segments: d.segments,
-              timestamp: d.timestamp ?? '',
-            };
-          },
-
-          onError: (data) => {
-            // Turn-level errors (provider failure, quota/429) are NOT auth events:
-            // collapse the in-flight step and surface the error as its own form.
-            // Only data.auth_failed redirects to login.
-            if (this._activeActId != null) {
-              convo.resolveAct(this._activeActId);
-              this._activeActId = null;
-            }
-            this.errorMessage = data.message;
-            const d = data as { auth_failed?: boolean };
-            if (d.auth_failed) this._onAuthFailure?.();
-          },
-
-          onDone: (data) => {
-            responseMeta.duration_ms = data.duration_ms;
-            // Settle the final step before the reply lands beneath it: collapse
-            // its tools, or evict the bare "thinking…" placeholder if none ran.
-            if (this._activeActId != null) {
-              convo.resolveAct(this._activeActId);
-              this._activeActId = null;
-            }
-            if (responseContent || responseMeta.segments?.length) {
-              convo.appendChalie(responseContent, {
-                topic: responseMeta.topic,
-                exchange_id: responseMeta.exchange_id,
-                mode: responseMeta.mode,
-                confidence: responseMeta.confidence,
-                segments: responseMeta.segments,
-                ts: responseMeta.timestamp,
-                duration_ms: responseMeta.duration_ms,
-              });
-            }
-            useAmbientSensor().recordResponse();
-            this.isSending = false;
-            document.dispatchEvent(new CustomEvent('session:turn-done'));
-
-            if (responseContent && !document.hasFocus()) {
-              this._notifyBackground(responseContent);
-            }
-          },
-        },
-        files,
-      );
-    },
-
-    /**
-     * Stop + undo the whole in-flight turn (user message + everything the chain
-     * rendered after it). Emits 'session:turn-interrupted' so InputDock can
-     * restore the textarea value.
-     */
-    async requestStop(): Promise<void> {
-      const convo = useConversationStore();
-      const ws = getWebSocket();
-
-      // Capture the user bubble's LIVE text: a mid-ACT append holds the
-      // concatenated "A\n\nB", not the original "A". _lastUserText is only a
-      // fallback when the form is gone.
-      let restoredText = this._lastUserText;
-      if (this._lastUserFormId != null) {
-        const uidx = convo.forms.findIndex((f) => f.id === this._lastUserFormId);
-        if (uidx !== -1) {
-          const uform = convo.forms[uidx];
-          if (uform.kind === 'user') restoredText = uform.text;
-          convo.forms.splice(uidx);
+      const key = laneKey(threadId);
+      this._pendingSends.add(key);
+      let heldForFrame = false;
+      try {
+        mountSendEcho(body, threadId, type);
+        const result = await getWebSocket().send(
+          body, (m) => this._onSendFailure(m, threadId, type), files, threadId, type, thinkingLevel,
+        );
+        // POST resolved with the allocated turn_id but execution runs in the
+        // background — keep the busy hold until the dispatcher observes the
+        // turn's first `turn_execution` frame (unless one already beat the
+        // POST response here). `null` result = local send failure; nothing
+        // will ever arrive, release now.
+        if (result && !isTurnWorking(result.turn_id, result.type)) {
+          this._pendingByTurn.set(`${result.type}:${result.turn_id}`, key);
+          heldForFrame = true;
         }
-        this._lastUserFormId = null;
+      } finally {
+        if (!heldForFrame) this._pendingSends.delete(key);
       }
-      this._activeActId = null;
-      this._lastUserText = '';
+    },
 
-      // Abort WS callbacks so stale events are ignored.
+    /** Release a send's POST-scoped busy hold once its turn's first
+     *  `turn_execution` frame arrives (called by the dispatcher for EVERY
+     *  execution state — a crash/settle that beat the 'working' frame must
+     *  release too). No-op for turns with no hold registered. */
+    _releasePendingSend(turnId: number, type: string): void {
+      const key = this._pendingByTurn.get(`${type}:${turnId}`);
+      if (key == null) return;
+      this._pendingByTurn.delete(`${type}:${turnId}`);
+      this._pendingSends.delete(key);
+    },
+
+    /** A local send failure (offline / POST rejected) — no signal will ever
+     *  arrive for a turn that never got created; clear its echo
+     *  and surface the message. */
+    _onSendFailure(message: string, threadId: number | null, type: string): void {
+      clearSendEcho(threadId, type);
+      this.errorMessage = message;
+    },
+
+    /** Settle bookkeeping for a completed/crashed/offline-settled turn.
+     *  `data-done` itself is already stamped by the caller (D16, see
+     *  `driftDispatcher`'s turn_execution branch and `_reconcileWorking`
+     *  above) — this only drains queues, records ambient activity, and fires
+     *  an OS notification for the final reply when the tab is unfocused.
+     *  Identical for every type — only the dock the settled thread lives in
+     *  differs. */
+    async _finishTurn(turnId: number, type: string = ConfigType.USER): Promise<void> {
+      this._drainQueues();
+      useAmbientSensor().recordResponse();
+
+      if (!document.hasFocus()) {
+        // Fetched ONCE, here, for the notification — deliberately NOT read
+        // off the DOM: the DOM copy is written by a SEPARATE, unawaited
+        // `updated`-signal refetch and may not exist at all for a turn no
+        // surface renders (a critic HIGH in S4).
+        try {
+          const block = await convoApi.thread(turnId, type);
+          const t = blockSpeechText(block);
+          if (t) this._notifyBackground(t);
+        } catch {
+          // Best-effort — no notification if the fetch fails.
+        }
+      }
+    },
+
+    /** Drain ALL pending scopes independently. */
+    _drainQueues(): void {
+      for (const key of useQueueStore().pendingScopes) this._drainLane(key);
+    },
+
+    _drainLane(key: string): void {
+      const threadId = key === 'main' ? null : Number(key.slice(1));
+      const queue = useQueueStore();
+      const type = queue.typeFor(threadId);
+      if (this.isSurfaceBusy(threadId, type)) return;
+      const { text, files, thinkingLevel } = queue.take(threadId);
+      if (text) void this.sendMessage(text, files, threadId, type, thinkingLevel);
+    },
+
+    /**
+     * Stop + undo the in-flight turn identified by `turnId`. Emits
+     * 'session:turn-interrupted' so InputDock can restore the textarea.
+     * `type` (default user) names the owning thread's ProcessorConfig —
+     * DELETE resolves the channel from it server-side, and turn_id alone is
+     * only unique per channel, so a non-user thread's stop must carry its
+     * own type through. `dockScope` (D6) is the dock's own identity — null
+     * for the main spine, the thread's root turn_id for a thread reply dock
+     * — read by the caller off the DOM's `data-dock-scope` marker (see
+     * ThreadPanel.vue), since there is no lane record any more to derive it
+     * from. `restoreText` is the exact text to hand back to that dock,
+     * likewise read by the caller off the DOM (`data-user-text`, see
+     * UserBubble.vue / turnDom's `lastUserText`) before this call.
+     */
+    async requestStop(
+      turnId: number | null = null,
+      type: string = ConfigType.USER,
+      dockScope: number | null = null,
+      restoreText: string = '',
+    ): Promise<void> {
+      const ws = getWebSocket();
+
+      // D6: confirm turnId is genuinely still in flight (per the DOM's own
+      // data-working marker) before firing the DELETE — a stale/late click
+      // could otherwise target an already-settled turn.
+      const stopId = turnId != null && isTurnWorking(turnId, type) ? turnId : null;
+
+      const text = restoreText === FILE_PLACEHOLDER ? '' : restoreText;
+
+      // Optimistic: hide the spinner/live pill trail immediately rather than
+      // waiting on the DELETE round-trip. The CONTENT refetch, however, must
+      // NOT start yet — the backend only strips a cancelled turn's orphan
+      // user row once cancel() has committed, so a fetch racing ahead of the
+      // DELETE can force-upsert stale pre-cancel content that nothing
+      // corrects if the WS 'cancelled' frame is dropped.
+      if (stopId != null) {
+        setTurnWorking(stopId, type, false);
+        clearLiveTurn(type, stopId);
+      }
+
       ws.abort();
 
-      this.isSending = false;
-
       document.dispatchEvent(
-        new CustomEvent('session:turn-interrupted', { detail: { text: restoredText } }),
+        new CustomEvent('session:turn-interrupted', { detail: { text, turnId: dockScope } }),
       );
+      // A cancelled/failed dispatch must never leave a ghost echo
+      // bubble behind; dockScope is this dock's own scope identity, the same
+      // one `sendMessage` mounted the echo under.
+      clearSendEcho(dockScope, type);
 
-      await this._postInterrupt();
+      await this._postInterrupt(stopId, type);
+
+      if (stopId != null) {
+        // Post-DELETE, the fetch reads authoritative post-cancel state — and
+        // dedupes (same in-flight cache) with whatever reconcile a WS
+        // 'cancelled' frame may have kicked off during the round-trip.
+        await reconcileCancelledTurn(stopId, type);
+        this._drainQueues();
+      }
     },
 
-    /** POST /chat/interrupt — best-effort, never throws. */
-    async _postInterrupt(): Promise<void> {
+    /** DELETE /api/thread/<turn_id>?type=<type> — best-effort interrupt, never throws. */
+    async _postInterrupt(turnId: number | null = null, type: string = ConfigType.USER): Promise<void> {
+      if (turnId == null) return;
       try {
         const host = getHost();
         const base = host ? host.replace(/\/$/, '') : '';
-        await fetch(base + '/chat/interrupt', {
-          method: 'POST',
+        await fetch(base + '/api/thread/' + turnId + '?type=' + encodeURIComponent(type), {
+          method: 'DELETE',
           credentials: 'same-origin',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({}),
         });
       } catch {
         // Best-effort — swallow.
@@ -399,219 +490,76 @@ export const useSessionStore = defineStore('session', {
     },
 
     /**
-     * Create an ACT cycle, block concurrent sends, and call ws.sendAction with
-     * callbacks that resolve the ACT into a Chalie form or error.
-     */
-    async sendAction(payload: Record<string, unknown>): Promise<void> {
-      if (this.isSending) return;
-
-      const convo = useConversationStore();
-      const ws = getWebSocket();
-
-      this.isSending = true;
-      const actId = convo.appendAct();
-      this._activeActId = actId;
-
-      ws.sendAction(payload, {
-        onMessage: (data) => {
-          const d = data as WsMessageEvent & {
-            content?: string;
-            mode?: string;
-            confidence?: number;
-          };
-          convo.replaceActWithResponse(actId, {
-            content: d.content ?? '',
-            mode: d.mode ?? 'ACT',
-            confidence: d.confidence ?? 0.95,
-          });
-        },
-        onError: (data) => {
-          convo.resolveAct(actId);
-          this.errorMessage = data.message;
-        },
-        onDone: () => {
-          this._activeActId = null;
-          this.isSending = false;
-        },
-      });
-    },
-
-    /**
-     * Load (or paginate) conversation history. Guards against concurrent loads
-     * and exhaustion. Initial load (offset=0) appends turns + emits force-scroll;
-     * paginated loads (offset>0) prepend.
+     * D17 — the pagination cursor (offset/hasMore) is UI-local, owned by
+     * ConversationFeed.vue's own `_loadRecent` callback (registered via
+     * `registerHistoryLoader`); this store keeps only what's genuinely
+     * shared: the `historyLoading` flag (also gates scroll-pagination) and
+     * the AuthError / initial-load event semantics around it. Smaller diff
+     * than moving `historyLoading` itself out — every other consumer
+     * (InputDock, PresenceBar) reads it off this store already.
      */
     async loadRecentConversation(): Promise<void> {
-      if (this.historyLoading || this.historyExhausted) return;
+      if (!this._loadRecentCallback || this.historyLoading) return;
       this.historyLoading = true;
 
-      const LIMIT = 12;
-      const MAX_TURNS = 120;
-      const convo = useConversationStore();
-
       try {
-        const data = await conversation.recent(
-          LIMIT,
-          this.historyOffset > 0 ? this.historyOffset : undefined,
-        );
-        const messages = data.messages ?? [];
-
-        if (messages.length === 0 && this.historyOffset === 0) {
-          this.historyExhausted = true;
-          return;
-        }
-
-        const isInitialLoad = this.historyOffset === 0;
-        if (isInitialLoad) {
-          convo.appendTurns(messages);
-        } else {
-          convo.prependTurns(messages);
-        }
-
-        this.historyOffset += data.turns_returned;
-
-        if (!data.has_more || this.historyOffset >= MAX_TURNS) {
-          this.historyExhausted = true;
-        }
-
-        if (isInitialLoad && messages.length > 0) {
+        const { isInitialLoad, loadedAny } = await this._loadRecentCallback();
+        if (isInitialLoad && loadedAny) {
           document.dispatchEvent(new CustomEvent('session:history-initial-loaded'));
         }
       } catch (err) {
         if (err instanceof AuthError) {
           this._onAuthFailure?.();
         } else {
-          console.error('[Session] Failed to load conversation history:', err);
+          console.error('[Session] Failed to load thread list:', err);
         }
       } finally {
         this.historyLoading = false;
       }
     },
 
+    /** Register the feed's history-load callback (called once, on mount). */
+    registerHistoryLoader(cb: () => Promise<{ isInitialLoad: boolean; loadedAny: boolean }>): void {
+      this._loadRecentCallback = cb;
+    },
+
     /**
-     * Route a drift push event. Routing order is load-bearing:
-     *   1. Simple content-free types  2. 'thought' (bypasses send-guard)
-     *   3. 'response' while sending → IGNORED  4. Background notify
-     *   5. 'notification'  6. 'response' / 'escalation' / 'drift' → appendChalie
+     * Open a thread in the slide-over panel. ThreadPanel.vue owns the actual
+     * fetch + surface upsert (it watches panelThreadId/panelType) — this just
+     * sets identity and clears the standing "done" marker (D16). `type` has
+     * no default: turn_id is only unique PER TYPE, so every caller must name
+     * its channel explicitly rather than risk an implicit `user` guess.
      */
-    routeDrift(data: WsPushEvent): void {
-      if (this._routeSimpleEvent(data)) return;
-
-      const content = (data as { content?: string }).content ?? '';
-      if (!content) return;
-
-      // Multi-surface sync — user echo. Own-surface echoes were dropped in
-      // WebSocketService (by echo_id), so this came from a DIFFERENT surface and
-      // has no bubble yet; render it so all surfaces match.
-      if ((data.type as string) === 'user_message') {
-        useConversationStore().appendUser(content, [], { inWorkingMemory: true });
-        return;
-      }
-
-      // Multi-surface sync — assistant reply (rule 2 of the echo+render model).
-      // The sending surface gets this via chat callbacks (never here); every
-      // OTHER surface lands here and renders a plain Chalie bubble.
-      if ((data.type as string) === 'message') {
-        const d = data as {
-          topic?: string;
-          exchange_id?: string;
-          mode?: string;
-          confidence?: number;
-          segments?: ConversationSegment[];
-          timestamp?: string;
-        };
-        this._notifyBackground(content);
-        useConversationStore().appendChalie(content, {
-          topic: d.topic,
-          exchange_id: d.exchange_id,
-          mode: d.mode ?? '',
-          confidence: d.confidence ?? 0,
-          segments: d.segments,
-          ts: d.timestamp || new Date().toISOString(),
-          type: 'message',
-        });
-        return;
-      }
-
-      // Step 2: thought bypasses the send-guard.
-      if ((data.type as string) === 'thought') {
-        useConversationStore().appendChalie(content, {
-          topic: (data as { topic?: string }).topic,
-          type: data.type,
-          ts: new Date().toISOString(),
-          mode: (data as { mode?: string }).mode ?? '',
-          confidence: (data as { confidence?: number }).confidence ?? 0,
-        });
-        return;
-      }
-
-      // Step 3: 'response' while /chat is in-flight → ignore.
-      if ((data.type as string) === 'response' && this.isSending) return;
-
-      // Step 4: background notify.
-      this._notifyBackground(content);
-
-      // Step 5: notification — scheduler fired (reminder/task done): chime
-      // UNCONDITIONALLY (no focus/permission gate, unlike step 4) and refresh
-      // the task strip.
-      if (data.type === 'notification') {
-        useNotificationsStore().chime();
-        void useTasksStore().loadActiveTasks();
-        return;
-      }
-
-      // Step 6: response / escalation / drift.
-      this._renderContentEvent(data, content);
+    openThreadPanel(turnId: number, type: string): void {
+      this.panelThreadId = turnId;
+      this.panelType = type;
+      setTurnDone(turnId, type, false);
     },
 
-    /** Route content-free event types; returns true when handled. */
-    _routeSimpleEvent(data: WsPushEvent): boolean {
-      switch (data.type as string) {
-        case 'app_update':
-          useNotificationsStore().handleUpdate(data as unknown as UpdateState);
-          return true;
-        // task + subagent lifecycle both feed the task drawer.
-        case 'task':
-        case 'subagent_start':
-        case 'subagent_end':
-          useTasksStore().applyDriftEvent(data);
-          return true;
-        case 'capability_alert':
-          // No-op: dormant channel (no UI consumer).
-          return true;
-        case 'permission_request':
-          usePermissionsStore().enqueue(data);
-          return true;
-        case 'quick_tip':
-          useNotificationsStore().handleTip(data as unknown as TipState);
-          return true;
-        case 'provider_retry':
-          showToast((data as { message?: string }).message ?? 'The AI provider had a problem — retrying…');
-          return true;
-        default:
-          return false;
-      }
+    /** Close the slide-over panel. */
+    closeThreadPanel(): void {
+      this.panelThreadId = null;
     },
 
-    /** Escalation gets an `escalation: true` flag (CSS `--escalation` modifier). */
-    _renderContentEvent(data: WsPushEvent, content: string): void {
-      useConversationStore().appendChalie(
-        content,
-        {
-          topic: (data as { topic?: string }).topic,
-          type: data.type,
-          ts: new Date().toISOString(),
-          mode: (data as { mode?: string }).mode ?? '',
-          confidence: (data as { confidence?: number }).confidence ?? 0,
-        },
-        { escalation: (data.type as string) === 'escalation' },
-      );
+    /** Open / close the thread-search overlay. */
+    openSearch(): void {
+      this.searchOpen = true;
+    },
+    closeSearch(): void {
+      this.searchOpen = false;
+    },
+
+    /** Open / close the scheduler dock. */
+    openSchedulerDock(): void {
+      this.schedulerDockOpen = true;
+    },
+    closeSchedulerDock(): void {
+      this.schedulerDockOpen = false;
     },
 
     /** Fire a background notification when the tab is not focused. */
     _notifyBackground(content: string): void {
       if (document.hasFocus()) return;
-      // Plain text for the OS preview — drops <actions> labels, substitutes <img alt>.
       const plain = extractText(content);
       if (plain) useNotificationsStore().pushBackground(plain);
     },

@@ -221,7 +221,7 @@ def _build(db_path: Path, sha_path: Path) -> None:
 
     User skills (``data/skills/user/*.yaml``) are per-user runtime state, never
     baked into the committed artifact. They are indexed individually into the
-    local DB via ``index_skill`` from ``skill_builder``/``api.skills`` on
+    local DB via ``index_skill`` from ``skill_builder``/``api.endpoints.skills`` on
     create/edit. Do NOT re-add ``_load_user_skills`` here — it leaks the
     machine's personal skills into the shipped ``skills.sqlite``.
     """

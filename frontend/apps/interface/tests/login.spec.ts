@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { expect, test } from '@playwright/test';
 
 // Feature test — drives the REAL login page served at /login/ by a real Chalie
 // instance. No mocks: every assertion is a downstream effect of the real

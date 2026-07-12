@@ -13,12 +13,11 @@ PostgreSQL, MemoryStore replaces Redis.
 """
 
 import logging
-import time
 import signal
 import threading
+import time
 from typing import Callable, Dict, List, Tuple, cast
 
-from utils.logger import Logger
 
 def _read_version() -> str:
     try:
@@ -127,53 +126,3 @@ class WorkerManager:
             pass
         finally:
             self.shutdown_all()
-
-
-
-
-if __name__ == "__main__":
-    Logger.start()
-
-    # Deferred imports
-    from workers import rest_api_worker
-    from services.scheduler_service import scheduler_worker
-    from workers.document_worker import document_purge_worker
-
-    # Preload embedding model singleton
-    try:
-        logging.info("[System] Preloading embedding model...")
-        from services.embedding_service import get_embedding_service
-        get_embedding_service()
-        logging.info("[System] Embedding model ready")
-    except Exception as e:
-        logging.warning(f"[System] Embedding model preload failed: {e}")
-
-    # Initialize SQLite database — declarative convergence
-    from services.database_service import get_shared_db_service
-    from services.schema_convergence_service import SchemaConvergenceService
-
-    database_service = get_shared_db_service()
-    convergence = SchemaConvergenceService(database_service)
-    convergence.converge()
-    # Separate deterministic value backfill — convergence applies only static
-    # column DEFAULTs, never derived values (last_relevant_at, valid_from, etc.).
-    convergence.backfill_redesign_columns()
-
-    # Initialize API key
-    try:
-        from services.settings_service import SettingsService
-        settings_service = SettingsService(database_service)
-        api_key = settings_service.get_api_key_or_generate()
-        logging.info(f"[Settings] API key initialized (key: ...{api_key[-8:]})")
-    except Exception as e:
-        logging.warning(f"Settings initialization failed: {e}")
-
-    # Initialize worker manager
-    manager = WorkerManager()
-
-    # Register service workers (all run as daemon threads)
-    manager.register_service("rest-api-worker-1", rest_api_worker)
-    manager.register_service("scheduler-service", scheduler_worker)
-    manager.register_service("document-purge-service", document_purge_worker)
-
-    manager.run()

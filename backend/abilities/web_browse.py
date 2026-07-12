@@ -26,19 +26,15 @@ happens at the outer ``web_browse`` tool.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, ClassVar, cast
+from typing import ClassVar, cast
 
-from abilities._ability import Ability
-from abilities._delegate import delegate_result
-from abilities._params import Keys
+from abilities._delegate import DelegateAbility, delegate_result
+from configs.enums.param_key import Keys
 from abilities._result import ToolResult
 from configs.channels.web_browse import WebBrowseConfig
 
-if TYPE_CHECKING:
-    from services.processor_config import ProcessorConfig
 
-
-class WebBrowseAbility(Ability):
+class WebBrowseAbility(DelegateAbility):
     def get_name(self) -> str:
         return "web_browse"
 
@@ -101,14 +97,25 @@ class WebBrowseAbility(Ability):
         return self._PARAMETERS
 
     def run(self, params: dict[str, object]) -> ToolResult:
-        from services.message_processor import MessageProcessor  # noqa: PLC0415
+        from controllers.message_processor import MessageProcessor  # noqa: PLC0415
+        from tools.browser.session import screenshot_ledger  # noqa: PLC0415
 
-        cfg = WebBrowseConfig(cast("ProcessorConfig", getattr(self.mp, "config", None)).policy_channel)
-        result = MessageProcessor.process(cast(str, self.param(params, Keys.goal, required=True)), cfg)
+        mp = self.mp
+        if mp is None:
+            raise RuntimeError("web_browse.run() dispatched without a bound MessageProcessor")
+
+        cfg = WebBrowseConfig(mp.config.policy_channel)
+        delegate_mp = MessageProcessor.process(
+            cfg, raw_input=cast(str, self.param(params, Keys.goal, required=True)),
+        )
+        result = delegate_mp.result()
         tr = delegate_result(
             result, hint="Restate the goal more concretely or break it into steps, then retry."
         )
-        return self._with_screenshots(tr, cfg.final_screenshots())
+        # Screenshots ride back off the sub-turn's uid-keyed ledger (the frozen
+        # config no longer carries per-run state, §2.5) — the same key
+        # browser._session_key() records under and PromptService reads.
+        return self._with_screenshots(tr, screenshot_ledger(delegate_mp.uid or 0))
 
     @staticmethod
     def _with_screenshots(tr: ToolResult, shots: list[tuple[str, str]]) -> ToolResult:
@@ -120,10 +127,9 @@ class WebBrowseAbility(Ability):
         separate vision call, even when the delegate forgot to mention a shot."""
         if tr.status != "success" or not shots:
             return tr
-        from services.database_service import get_shared_db_service  # noqa: PLC0415
         from services.document_service import DocumentService  # noqa: PLC0415
 
-        doc_svc = DocumentService(get_shared_db_service())
+        doc_svc = DocumentService()
         blocks = []
         for doc_id, url in shots:
             doc = doc_svc.get_document(doc_id)

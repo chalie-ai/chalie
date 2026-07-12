@@ -1,14 +1,15 @@
 /**
- * Documents API — endpoints derived from frontend/brain/documents.js fetch calls.
+ * Documents API — the Endpoint/Action contract under /api/documents.
  *
- * GET    /documents                       → { items: Document[] }
- * GET    /documents?include_deleted=true  → include deleted docs
- * GET    /documents/watched-folders       → { items: WatchedFolder[] }
- * GET    /documents/:id                   → { item: Document }
- * DELETE /documents/:id                   → delete document
- * POST   /documents/upload                → multipart upload
+ * GET    /api/documents/all                    → listing envelope, page-walked → Document[]
+ * GET    /api/documents/all?include_deleted=true → include deleted docs
+ * GET    /api/watched-folders/all              → WatchedFolder[] (listing envelope, page-walked)
+ * GET    /api/documents/:id                    → { success, result: Document } → unwrapped
+ * DELETE /api/documents/:id                    → 204 soft delete
+ * POST   /api/documents/upload                 → multipart upload → { success, result }
  */
 import { api } from '@chalie/shared';
+import { fetchAllPages } from './paginate';
 
 export interface Document {
   id: string | number;
@@ -19,9 +20,9 @@ export interface Document {
   [key: string]: unknown;
 }
 
-// Fields mirror the raw `watched_folders` columns — GET /documents/watched-folders
-// returns `dict(zip(cols, row))` from `FolderWatcherService.get_all_folders()`
-// (no serialization layer), so the keys are the DB column names verbatim.
+// Serialized from the WatchedFolder response DTO of GET /api/watched-folders/all
+// (the Endpoint-contract listing route). `last_scan_at`/`last_scan_files` are not
+// part of that DTO — the panel renders them defensively and they read as empty.
 export interface WatchedFolder {
   id: string | number;
   folder_path: string;
@@ -33,23 +34,26 @@ export interface WatchedFolder {
 }
 
 export const documents = {
-  list(includeDeleted = false): Promise<{ items: Document[] }> {
-    return api.get(includeDeleted ? '/documents?include_deleted=true' : '/documents');
+  list(includeDeleted = false): Promise<Document[]> {
+    return fetchAllPages<Document>(
+      '/api/documents/all',
+      includeDeleted ? { include_deleted: 'true' } : undefined,
+    );
   },
 
-  watchedFolders(): Promise<{ items: WatchedFolder[] }> {
-    return api.get('/documents/watched-folders');
+  watchedFolders(): Promise<WatchedFolder[]> {
+    return fetchAllPages<WatchedFolder>('/api/watched-folders/all');
   },
 
-  get(id: string | number): Promise<{ item: Document }> {
-    return api.get(`/documents/${id}`);
+  get(id: string | number): Promise<Document> {
+    return api.get<{ result: Document }>(`/api/documents/${id}`).then((r) => r.result);
   },
 
   delete(id: string | number): Promise<unknown> {
-    return api.del(`/documents/${id}`);
+    return api.del(`/api/documents/${id}`);
   },
 
   upload(formData: FormData): Promise<unknown> {
-    return api.upload('/documents/upload', formData);
+    return api.upload('/api/documents/upload', formData);
   },
 };

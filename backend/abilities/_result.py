@@ -39,29 +39,6 @@ if TYPE_CHECKING:
 _SCALAR = (str, int, float, bool)
 
 
-class ToolParamError(Exception):
-    """Raised by ``Ability.param`` when an input is missing/invalid/out-of-choice.
-
-    Carries the same self-correction fields as an error ``ToolResult`` so the
-    dispatcher can render it canonically (``code``/``hint``/``valid``) without the
-    ability ever formatting an envelope.
-    """
-
-    def __init__(
-        self,
-        message: str,
-        *,
-        code: str = "invalid-param",
-        hint: str | None = None,
-        valid: tuple[str, ...] = (),
-    ) -> None:
-        super().__init__(message)
-        self.message = message
-        self.code = code
-        self.hint = hint
-        self.valid = tuple(valid)
-
-
 def truncate(text: str, limit: int) -> tuple[str, bool]:
     """The single sanctioned truncation primitive so every tool reports truncation
     the same way (``meta truncated=true``) instead of silently dropping output.

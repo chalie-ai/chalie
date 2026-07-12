@@ -4,10 +4,10 @@ import json
 import logging
 import os
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Optional, cast
+from typing import Optional, cast
 
-if TYPE_CHECKING:
-    from services.database_service import DatabaseService
+from exceptions import VaultLockedError
+from services.database import Database
 
 # FileMapperService owns every repository-layout path (CLAUDE.md rule #9). The
 # vault key-material backup lives under data/secure/ so it persists on the same
@@ -34,16 +34,6 @@ _KDF_ALGORITHM = "pbkdf2_sha256"
 _SECURE_DIR_MODE = 0o700  # owner rwx only — the data/secure/ backup directory
 _SECURE_FILE_MODE = 0o400 # owner read-only — each backup file
 _BACKUP_RETENTION = 6     # keep only the newest N vault_backup_*.json files
-
-
-# ── Custom exception ───────────────────────────────────────────────────────────
-
-class VaultLockedError(Exception):
-    """Raised when an encrypt/decrypt operation is attempted on a sealed vault.
-
-    The vault must be unlocked via :meth:`VaultService.unlock` before any
-    cryptographic operations can be performed.
-    """
 
 
 # ── Module-level DEK cache (singleton) ────────────────────────────────────────
@@ -168,13 +158,9 @@ class VaultService:
         # On logout / shutdown (optional)
         vault.lock()
 
-    Args:
-        database_service: The shared :class:`~services.database_service.DatabaseService`
-            singleton.  Injected to allow deterministic testing.
+    Reaches the DB through the static :class:`~services.database.Database`
+    gateway — no instance state.
     """
-
-    def __init__(self, database_service: "DatabaseService") -> None:
-        self._db = database_service
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -346,7 +332,7 @@ class VaultService:
         and the account is being wiped — the backups have already been tried and
         none matched the verified password, so they protect nothing.
         """
-        with self._db.connection() as conn:
+        with Database.transaction() as conn:
             conn.execute("DELETE FROM vault_config WHERE id = 1")
         _vault_state.dek = None
         for path in FileMapperService.list_vault_backups():
@@ -410,22 +396,17 @@ class VaultService:
         Returns:
             A dict-like row or ``None`` if the table is empty.
         """
-        with self._db.connection() as conn:
-            conn.row_factory = __import__("sqlite3").Row
-            cursor = conn.cursor()
-            cursor.execute(
-                "SELECT kdf_salt, kdf_algorithm, kdf_iterations, "
-                "wrapped_dek, dek_nonce, created_at, updated_at "
-                "FROM vault_config WHERE id = 1"
-            )
-            row = cursor.fetchone()
-            cursor.close()
+        row = Database.conn().execute(
+            "SELECT kdf_salt, kdf_algorithm, kdf_iterations, "
+            "wrapped_dek, dek_nonce, created_at, updated_at "
+            "FROM vault_config WHERE id = 1"
+        ).fetchone()
         return cast("dict[str, object] | None", row)  # sqlite3.Row or None
 
     def _persist_vault_config(self, km: "_VaultKeyMaterial") -> None:
         """Replace the singleton ``vault_config`` row (id=1) with *km*.
         Shared by :meth:`initialize` and backup restoration."""
-        with self._db.connection() as conn:
+        with Database.transaction() as conn:
             conn.execute("DELETE FROM vault_config WHERE id = 1")
             conn.execute(
                 """
@@ -555,12 +536,10 @@ _vault_service_instance: Optional[VaultService] = None
 def get_vault_service() -> VaultService:
     """Return the process-wide :class:`VaultService` singleton.
 
-    Uses deferred import of :func:`~services.database_service.get_shared_db_service`
-    to avoid circular import issues at module load time.  The instance is
-    cached after first creation so every call site shares the same object.
+    The instance is cached after first creation so every call site shares the
+    same object.
     """
     global _vault_service_instance
     if _vault_service_instance is None:
-        from services.database_service import get_shared_db_service
-        _vault_service_instance = VaultService(get_shared_db_service())
+        _vault_service_instance = VaultService()
     return _vault_service_instance

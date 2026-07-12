@@ -13,6 +13,10 @@ from datetime import datetime, timezone
 
 logger = logging.getLogger(__name__)
 
+# parse_utc never raises — it returns this exact sentinel on unparseable input
+# so callers can detect a corrupt timestamp loudly instead of crashing on it.
+PARSE_SENTINEL = datetime.min.replace(tzinfo=timezone.utc)
+
 
 def utc_now() -> datetime:
     return datetime.now(timezone.utc)
@@ -35,4 +39,4 @@ def parse_utc(value: datetime | str) -> datetime:
         except (ValueError, TypeError):
             pass
 
-    return datetime.min.replace(tzinfo=timezone.utc)
+    return PARSE_SENTINEL

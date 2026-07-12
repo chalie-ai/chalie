@@ -29,11 +29,11 @@ import shutil
 import sqlite3
 import tempfile
 from pathlib import Path
+from typing import cast
 
 import pyzipper
 
-from typing import cast
-
+from exceptions import SnapshotError
 from services.file_mapper_service import FileMapperService
 from services.time_utils import utc_now
 
@@ -81,11 +81,6 @@ _TREE_KINDS = (_KIND_SECURE, _KIND_DOCUMENTS, _KIND_SKILLS_USER)
 # skips the unknown artifact with a warning rather than aborting the whole
 # restore — see _swap_in.
 _KNOWN_KINDS = frozenset((*_SINGLE_FILE_DB_KINDS, _KIND_VERSION, *_TREE_KINDS))
-
-
-class SnapshotError(Exception):
-    """Raised when an import is rejected loudly (bad password handled by the
-    zip layer, corrupt zip, checksum mismatch, or a schema-downgrade block)."""
 
 
 class SnapshotService:
@@ -339,10 +334,9 @@ class SnapshotService:
     def _build_column_set(self) -> dict[str, set[str]]:
         """Column set of the running build, derived from schema.sql via the
         shared convergence introspection (so it matches convergence exactly)."""
-        from services.database_service import get_shared_db_service
         from services.schema_convergence_service import SchemaConvergenceService
 
-        convergence = SchemaConvergenceService(get_shared_db_service())
+        convergence = SchemaConvergenceService()
         schema_sql = self._fm.get_schema_path().read_text(encoding="utf-8")
         desired_conn = convergence._load_desired_state(schema_sql)
         try:
@@ -353,10 +347,9 @@ class SnapshotService:
     def _snapshot_column_set(self, chalie_db: Path) -> dict[str, set[str]]:
         """Column set of the snapshot's chalie.db, read-only, via the shared
         convergence introspection."""
-        from services.database_service import DatabaseService
         from services.schema_convergence_service import SchemaConvergenceService
 
-        convergence = SchemaConvergenceService(cast(DatabaseService, None))
+        convergence = SchemaConvergenceService()
         conn = sqlite3.connect(f"file:{chalie_db}?mode=ro", uri=True)
         try:
             return convergence.column_set(conn)

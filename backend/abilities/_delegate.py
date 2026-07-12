@@ -6,19 +6,34 @@
 #
 #     http://www.apache.org/licenses/LICENSE-2.0
 
-"""Shared helpers for delegate tools (subagent-as-tools).
+"""Shared infrastructure for delegate tools (subagent-as-tools).
 
-Spec §5b / §10f.  Each delegate tool is a standalone Ability that builds its
-OWN ProcessorConfig inside run() and calls MessageProcessor.process().  There
-is NO subclass, NO SUBAGENT_TYPES registry, and NO make_subagent_config()
-factory — only these small shared primitives.
+A delegate tool is a standalone Ability that builds its OWN
+``ProcessorConfig`` subclass inside ``run()`` and calls
+``MessageProcessor.process(...).result()`` — there is no MessageProcessor
+subclass, no SUBAGENT_TYPES registry, and no make_subagent_config() factory.
+
+The framework provides one base class — :class:`DelegateAbility` — that every
+delegate tool inherits. Its sole added behaviour is injecting the ``async``
+schema property, gated on ``self.mp.config.SUPPORTS_ASYNC``: only delegate tools
+may be backgrounded, and only on channels that permit it. Plain tools never see
+the flag (the base ``Ability`` injects ``act_summary`` only). The
+``delegate_result`` / ``render_trail`` helpers below stay module-level functions
+each delegate calls to shape its return value.
+
+Per-tool ``run()`` bodies are intentionally NOT templated — each delegate
+builds a different ``*Config``, takes different query params, and applies
+different post-processing (e.g. ``web_browse`` attaches screenshots, ``vision``
+returns ``ok`` directly without going through ``delegate_result``).
 """
 
 from __future__ import annotations
 
 import logging
+from abc import ABC
 from typing import TYPE_CHECKING, cast
 
+from abilities._ability import Ability
 from abilities._result import ToolResult
 
 if TYPE_CHECKING:
@@ -29,6 +44,40 @@ if TYPE_CHECKING:
 
 
 logger = logging.getLogger(__name__)
+
+
+# The delegate-only ``async`` framework field, injected into every delegate tool
+# descriptor by ``DelegateAbility._inject_framework_fields`` and gated on the
+# bound channel's ``SUPPORTS_ASYNC`` — only ``user`` and ``discovery`` set that
+# flag, so only those channels expose backgrounding to the model.
+_ASYNC_PROPERTY: dict[str, object] = {
+    "type": "boolean",
+    "default": False,
+    "description": (
+        "Run in the background instead of blocking this step. You get an "
+        "immediate acknowledgement and the result is delivered on this channel "
+        "when it completes. Use for long-running calls."
+    ),
+}
+
+
+class DelegateAbility(Ability, ABC):
+    """Base class for delegate tools — the ONE sanctioned override of
+    ``_inject_framework_fields``, adding the delegate-only ``async`` property on
+    top of the base ``act_summary``. Abstract (lists ``ABC`` directly, like the
+    other base mix-ins) so ``Ability.__init_subclass__`` skips its metadata probe;
+    concrete delegates fill in the getters. Per-tool ``run()`` bodies are left to
+    the subclass — each builds a different ``*Config`` and query params."""
+
+    def _inject_framework_fields(self, params: dict[str, object]) -> dict[str, object]:
+        """Inject the ``async`` property for delegate tools, gated on
+        ``SUPPORTS_ASYNC``. Plain ``Ability._inject_framework_fields`` does NOT
+        include ``async`` — only delegates get it."""
+        schema = super()._inject_framework_fields(params)
+        if self.mp is not None and self.mp.config.SUPPORTS_ASYNC:
+            properties = cast("dict[str, object]", schema["properties"])
+            properties["async"] = dict(_ASYNC_PROPERTY)
+        return schema
 
 
 def delegate_result(result: str, *, hint: str) -> ToolResult:

@@ -30,10 +30,11 @@ from typing import ClassVar, cast
 import requests
 
 from abilities._ability import Ability
-from abilities._params import Keys
+from configs.enums.param_key import Keys
 from abilities._result import ToolResult, truncate
 from services.text_extractor import extract_html
-from services.web_fetch import API, FetchBlocked, fetch_text
+from services.web_fetch import API, fetch_text
+from exceptions import FetchBlocked
 
 # ── Tunables ──────────────────────────────────────────────────────────────────
 

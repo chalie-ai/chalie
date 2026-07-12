@@ -1,14 +1,15 @@
 <script setup lang="ts">
-import { cognition } from '../../api/cognition';
 import type { Tool } from '../../api/cognition';
+import { cognition } from '../../api/cognition';
 import { formatDate } from '../../utils/format';
 import { useAsyncResource } from '@chalie/shared';
 import EmptyState from '../../ui/EmptyState.vue';
 
-const { data: tools, loading, error: loadFailed } = useAsyncResource(
-  async () => (await cognition.tools()).tools ?? [],
-  { initial: [] as Tool[] },
-);
+const {
+  data: tools,
+  loading,
+  error: loadFailed,
+} = useAsyncResource(async () => (await cognition.tools()).tools ?? [], { initial: [] as Tool[] });
 </script>
 
 <template>

@@ -1,82 +1,70 @@
 /**
- * Context-usage + thinking-level store.
+ * Context-usage store — keyed per (type, turnId).
  *
- * Thinking-level slice: persists the 3-value override (auto / medium / high)
- * with optimistic update and rollback on failure.
- * Context-usage slice: fetches last-request tokens + context window; coalesced
- * refresh prevents request storms when the caller (session ws.onAny) fires on
- * every inbound WS frame.
+ * Each InputDock reads its own thread's token count via the store's
+ * `usageDisplayFor(type, turnId)` getter; the cache is populated by
+ * coalesced `refresh(type, turnId)` calls. Two docks on different threads
+ * never interfere: in-flight and queued state are keyed by `type:turnId`.
  */
-import { ref, computed } from 'vue';
+import { computed, ref } from 'vue';
 import { defineStore } from 'pinia';
 import { system } from '../api';
 
-/** Order is load-bearing: cycleLevel() advances through this verbatim sequence. */
-const LEVELS = ['auto', 'medium', 'high'] as const;
-
-type ThinkingLevel = (typeof LEVELS)[number];
-
 export const useContextUsageStore = defineStore('contextUsage', () => {
-  const level = ref<ThinkingLevel>('auto');
+  const byKey = ref<Record<string, { tokens: number; window: number }>>({});
 
-  const levelLabel = computed<string>(
-    () => level.value.charAt(0).toUpperCase() + level.value.slice(1),
-  );
-
-  /** Load persisted level; empty / absent / unknown collapse to 'auto'. */
-  async function loadLevel(): Promise<void> {
-    try {
-      const data = await system.thinkingLevel();
-      const v = data?.value;
-      level.value = (LEVELS as readonly string[]).includes(v ?? '') ? (v as ThinkingLevel) : 'auto';
-    } catch {
-      level.value = 'auto';
-    }
+  /** `type:turnId` — the cache key used for both the store and the coalescing maps. */
+  function keyOf(type: string, turnId: number): string {
+    return `${type}:${turnId}`;
   }
-
-  /** Persist a level; optimistic, reverts on error. */
-  async function setLevel(next: ThinkingLevel): Promise<void> {
-    const previous = level.value;
-    level.value = next;
-    try {
-      await system.setThinkingLevel(next === 'auto' ? '' : next);
-    } catch {
-      level.value = previous;
-    }
-  }
-
-  /** Advance through LEVELS in order, wrapping around. */
-  async function cycleLevel(): Promise<void> {
-    await setLevel(LEVELS[(LEVELS.indexOf(level.value) + 1) % LEVELS.length]);
-  }
-
-  const lastRequestTokens = ref<number>(0);
-  const contextWindow = ref<number>(0);
-
-  /** Empty string until the first successful fetch (mirrors legacy hidden state). */
-  const usageDisplay = computed<string>(() => {
-    if (lastRequestTokens.value === 0 && contextWindow.value === 0) return '';
-    return `${(lastRequestTokens.value / 1000).toFixed(1)}/${(contextWindow.value / 1000).toFixed(1)}k`;
-  });
-
-  let _refreshing = false;
-  let _refreshQueued = false;
 
   /**
-   * Fetch context usage. Coalesced: a fetch in flight sets _refreshQueued and
-   * returns; on settle, a queued request drains with exactly one trailing call.
-   * Transient/auth errors leave the last painted value in place (no reset).
+   * Returns a function that, given a (type, turnId), yields the display
+   * string for that dock's own thread (or '' until the first real fetch).
    */
-  async function refresh(): Promise<void> {
-    if (_refreshing) {
-      _refreshQueued = true;
+  const usageDisplayFor = computed<
+    (type: string, turnId: number) => string
+  >(() => (type: string, turnId: number): string => {
+    const entry = byKey.value[keyOf(type, turnId)];
+    if (!entry || (entry.tokens === 0 && entry.window === 0)) return '';
+    return `${(entry.tokens / 1000).toFixed(1)}/${(entry.window / 1000).toFixed(1)}k`;
+  });
+
+  /**
+   * Returns a clamped 0..1 ratio of tokens used vs. context window for a
+   * (type, turnId). Mirrors `usageDisplayFor` but yields a number suitable for
+   * a meter-bar width. Returns 0 when the cache entry is missing or the window
+   * is zero (avoids divide-by-zero).
+   */
+  function usageRatioFor(type: string, turnId: number): number {
+    const entry = byKey.value[keyOf(type, turnId)];
+    if (!entry || entry.window === 0) return 0;
+    return Math.min(1, Math.max(0, entry.tokens / entry.window));
+  }
+
+  // Coalescing maps — keyed by keyOf(type, turnId); kept in module closure so
+  // two docks refreshing concurrently do not collapse into one in-flight flag.
+  const _refreshing: Record<string, boolean> = {};
+  const _queued: Record<string, boolean> = {};
+
+  /**
+   * Fetch context usage for a specific (type, turnId). Coalesced per key: a
+   * fetch in flight for that key sets _queued[k] and returns; on settle, a
+   * queued request for the same key drains with exactly one trailing call.
+   * Transient/auth errors leave the last painted value in place (no reset).
+   * Null tokens or window are returned early and do not overwrite the cache.
+   */
+  async function refresh(type = 'user', turnId = -1): Promise<void> {
+    const k = keyOf(type, turnId);
+    if (_refreshing[k]) {
+      _queued[k] = true;
       return;
     }
-    _refreshing = true;
+    _refreshing[k] = true;
     try {
       let data: Awaited<ReturnType<typeof system.contextUsage>>;
       try {
-        data = await system.contextUsage();
+        data = await system.contextUsage(type, turnId);
       } catch {
         // Transient / auth miss — leave last value in place.
         return;
@@ -84,26 +72,20 @@ export const useContextUsageStore = defineStore('contextUsage', () => {
       const tokens = data?.last_request_tokens;
       const window = data?.context_window;
       if (tokens == null || window == null) return;
-      lastRequestTokens.value = tokens;
-      contextWindow.value = window;
+      byKey.value[k] = { tokens, window };
     } finally {
-      _refreshing = false;
-      if (_refreshQueued) {
-        _refreshQueued = false;
-        void refresh();
+      _refreshing[k] = false;
+      if (_queued[k]) {
+        _queued[k] = false;
+        void refresh(type, turnId);
       }
     }
   }
 
   return {
-    level,
-    levelLabel,
-    loadLevel,
-    setLevel,
-    cycleLevel,
-    lastRequestTokens,
-    contextWindow,
-    usageDisplay,
+    byKey,
+    usageDisplayFor,
+    usageRatioFor,
     refresh,
   };
 });

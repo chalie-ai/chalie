@@ -3,14 +3,15 @@ import json
 from typing import ClassVar, cast
 
 from abilities._budget import BudgetCappedAbility
-from abilities._params import Keys
+from configs.enums.param_key import Keys
 from abilities._pattern_provenance import pattern_provenance
 from abilities._result import ToolResult
-from services.act_trail import ActTrail
-from services.data_graph_service import VALID_KINDS, get_data_graph_service
+from contracts.constants.data_graph import VALID_KINDS
+from models.tool_call import ToolCall
 
-# Subset: exclude behavioral_pattern (own tool) and system (internal use).
-ALLOWED_KINDS = sorted(VALID_KINDS - {"behavioral_pattern", "system"})
+# Subset: exclude system (internal-write only). VALID_KINDS already omits
+# document (ingest-only) and behavioral_pattern (save_pattern's tool).
+ALLOWED_KINDS = sorted(VALID_KINDS - {"system"})
 
 # One-line invalid-kind recovery hint carrying a minimal, fully-valid example so
 # a weak model can self-correct without re-reading the schema.
@@ -33,16 +34,22 @@ class SaveGraph(BudgetCappedAbility):
         if channel is None or turn_id is None:
             return set()
         seen: set[tuple[str, str, str]] = set()
-        for row in ActTrail().fetch_by_turn(channel, turn_id):
-            if row.get("tool_name") != "save_graph":
+        for row in ToolCall.by_turn(channel, turn_id):
+            if row.tool_name != "save_graph":
+                continue
+            # The dispatcher opens this very call's trail row (result="") before
+            # run() executes, so it surfaces here too. An empty result means the
+            # row is still in flight (incl. this call) — only committed prior
+            # writes count toward dedup.
+            if not row.result:
                 continue
             try:
-                p = json.loads(cast("str", row.get("params") or "{}"))
+                p = json.loads(row.params or "{}")
             except (ValueError, TypeError):
                 continue
             k = p.get(Keys.kind, "")
             key = p.get(Keys.key, "")
-            val = p.get(Keys.value, "")
+            val = p.get(Keys.value_, "")
             if k and key and val:
                 seen.add((k, key.lower(), val.lower()))
         return seen
@@ -51,7 +58,7 @@ class SaveGraph(BudgetCappedAbility):
     # or empty kind/key/value as code=missing-params before run() is reached
     # (precedent: _delegate.py, file_permissions.py). The pre-gate is
     # truthiness-based, so whitespace-only residue still reaches run().
-    ACTION_REQUIRED: ClassVar[dict[str, tuple[str, ...]]] = {"": (Keys.kind, Keys.key, Keys.value)}
+    ACTION_REQUIRED: ClassVar[dict[str, tuple[str, ...]]] = {"": (Keys.kind, Keys.key, Keys.value_)}
 
     def get_name(self) -> str:
         return "save_graph"
@@ -83,9 +90,9 @@ class SaveGraph(BudgetCappedAbility):
         "properties": {
             Keys.kind: {"type": "string", "enum": ALLOWED_KINDS},
             Keys.key: {"type": "string"},
-            Keys.value: {"type": "string"},
+            Keys.value_: {"type": "string"},
         },
-        "required": [Keys.kind, Keys.key, Keys.value],
+        "required": [Keys.kind, Keys.key, Keys.value_],
     }
 
     def get_parameters(self) -> dict[str, object]:
@@ -110,7 +117,7 @@ class SaveGraph(BudgetCappedAbility):
         # whitespace-only key/value slips past it and must be rejected here
         # (precedent: file_permissions.py).
         key = cast("str", params.get(Keys.key, "")).strip()
-        value = cast("str", params.get(Keys.value, "")).strip()
+        value = cast("str", params.get(Keys.value_, "")).strip()
         if not key or not value:
             missing = ", ".join(
                 name for name, val in (("key", key), ("value", value)) if not val
@@ -127,24 +134,29 @@ class SaveGraph(BudgetCappedAbility):
         if dedup_key in seen:
             return ToolResult.ok({"saved": 0, "deduped": 1, "key": key})
 
-        # DataGraphService.store() never raises — it swallows every failure
-        # internally and returns None (data_graph_service.store: try/except →
-        # logger.error → return None). A None result is therefore the only
-        # store-failure signal; surface it loudly instead of as a phantom save.
-        result = get_data_graph_service().store(
-            kind=kind,
-            key=key,
-            value=value,
-            source=pattern_provenance(proc),
-        )
-        if result is None:
-            return ToolResult.err(
-                f"Could not store {kind} fact {key!r}.",
-                code="store-failed",
-                hint="check the data graph service logs; nothing was persisted",
-            )
+        # Every ALLOWED_KIND routes to its vertical (rich status →
+        # reinforced-dedup; place = supersede).
+        source = pattern_provenance(proc)
+        if kind == "user_specific":
+            from services.fact_service import FactService
+            status = FactService().store(key, value, source=source)["status"]
+        elif kind == "place":
+            from services.place_service import PlaceService
+            status = PlaceService().store(key, value, source=source)["status"]
+        elif kind == "discovery":
+            from services.discovery_service import DiscoveryService
+            status = DiscoveryService().store(key, value, source=source)["status"]
+        elif kind == "misc":
+            from services.misc_service import MiscService
+            status = MiscService().store(key, value, source=source)["status"]
+        elif kind == "contact":
+            from services.contact_service import ContactService
+            ContactService().store(key, value, source=source)  # returns ContactRow, NOT a status envelope
+            status = "created"
+        else:  # unreachable — run() gates kind ∈ ALLOWED_KINDS, all of which branch above
+            raise RuntimeError(f"save_graph: no vertical wired for kind {kind!r}")
 
-        if result.get("status") == "reinforced":
+        if status == "reinforced":
             return ToolResult.ok({"saved": 0, "deduped": 1, "key": key})
 
         return ToolResult.ok({"saved": 1, "kind": kind, "key": key})

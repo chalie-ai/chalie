@@ -15,7 +15,6 @@ from typing import TYPE_CHECKING, cast
 
 import pytest
 
-from services.database_service import get_shared_db_service
 from services.provider_db_service import PROVIDER_IN_USE_MSG, ProviderDbService
 
 if TYPE_CHECKING:
@@ -25,7 +24,7 @@ pytestmark = pytest.mark.unit
 
 
 def _svc() -> ProviderDbService:
-    return ProviderDbService(get_shared_db_service())
+    return ProviderDbService()
 
 
 def _mk(svc: ProviderDbService, name: str, model: str, host: str) -> int:
@@ -34,8 +33,23 @@ def _mk(svc: ProviderDbService, name: str, model: str, host: str) -> int:
     ))["id"])
 
 
+def _unwrap_listing(body: "dict[str, object]") -> "list[dict[str, object]]":
+    """Assert the success listing envelope shape and return the result array."""
+    assert body.get("success") is True
+    assert "error" not in body
+    return cast("list[dict[str, object]]", body["result"])
+
+
+def _unwrap_single(body: "dict[str, object]") -> "dict[str, object]":
+    """Assert the success single-resource envelope shape and return the result dict."""
+    assert body.get("success") is True
+    assert "error" not in body
+    return cast("dict[str, object]", body["result"])
+
+
 def _provider_ids(client: "FlaskClient") -> list[object]:
-    return [p["id"] for p in client.get("/providers").get_json()["providers"]]
+    body = cast("dict[str, object]", client.get("/api/providers/all").get_json())
+    return [p["id"] for p in _unwrap_listing(body)]
 
 
 # ── Through the real HTTP route ───────────────────────────────────────────────
@@ -45,14 +59,14 @@ def test_cannot_delete_main_provider_returns_409(authed_client: "tuple[FlaskClie
     client, _, _ = authed_client
 
     created = client.post(
-        "/providers",
+        "/api/providers/-1",
         json={"name": "Main", "platform": "ollama", "model": "qwen3",
               "host": "http://127.0.0.1:2"},
     )
     assert created.status_code == 201, created.get_data(as_text=True)
-    main_id = created.get_json()["provider"]["id"]
+    main_id = _unwrap_single(cast("dict[str, object]", created.get_json()))["id"]
 
-    resp = client.delete(f"/providers/{main_id}")
+    resp = client.delete(f"/api/providers/{main_id}")
     assert resp.status_code == 409, resp.get_data(as_text=True)
     assert resp.get_json()["error"] == PROVIDER_IN_USE_MSG
 
@@ -64,18 +78,18 @@ def test_cannot_delete_delegate_provider_returns_409(authed_client: "tuple[Flask
     client, _, _ = authed_client
 
     # First provider → auto-selected as main.
-    client.post("/providers", json={"name": "Main", "platform": "ollama",
+    client.post("/api/providers/-1", json={"name": "Main", "platform": "ollama",
                                      "model": "qwen3", "host": "http://127.0.0.1:2"})
-    worker = client.post(
-        "/providers",
+    worker = _unwrap_single(cast("dict[str, object]", client.post(
+        "/api/providers/-1",
         json={"name": "Worker", "platform": "ollama", "model": "llama3",
               "host": "http://127.0.0.1:3"},
-    ).get_json()["provider"]["id"]
+    ).get_json()))["id"]
 
-    pin = client.put("/providers/delegate", json={"provider_id": worker})
+    pin = client.post("/api/providers/delegate", json={"provider_id": worker})
     assert pin.status_code == 200, pin.get_data(as_text=True)
 
-    resp = client.delete(f"/providers/{worker}")
+    resp = client.delete(f"/api/providers/{worker}")
     assert resp.status_code == 409, resp.get_data(as_text=True)
     assert resp.get_json()["error"] == PROVIDER_IN_USE_MSG
     assert worker in _provider_ids(client)
@@ -84,40 +98,40 @@ def test_cannot_delete_delegate_provider_returns_409(authed_client: "tuple[Flask
 def test_provider_deletable_after_delegate_pin_cleared(authed_client: "tuple[FlaskClient, object, object]") -> None:
     client, _, _ = authed_client
 
-    client.post("/providers", json={"name": "Main", "platform": "ollama",
+    client.post("/api/providers/-1", json={"name": "Main", "platform": "ollama",
                                     "model": "qwen3", "host": "http://127.0.0.1:2"})
-    worker = client.post(
-        "/providers",
+    worker = _unwrap_single(cast("dict[str, object]", client.post(
+        "/api/providers/-1",
         json={"name": "Worker", "platform": "ollama", "model": "llama3",
               "host": "http://127.0.0.1:3"},
-    ).get_json()["provider"]["id"]
-    client.put("/providers/delegate", json={"provider_id": worker})
+    ).get_json()))["id"]
+    client.post("/api/providers/delegate", json={"provider_id": worker})
 
     # Blocked while pinned.
-    assert client.delete(f"/providers/{worker}").status_code == 409
+    assert client.delete(f"/api/providers/{worker}").status_code == 409
 
     # Clear the pin (falls back to the main provider), then delete succeeds.
-    cleared = client.put("/providers/delegate", json={"provider_id": None})
+    cleared = client.post("/api/providers/delegate", json={"provider_id": None})
     assert cleared.status_code == 200, cleared.get_data(as_text=True)
 
-    resp = client.delete(f"/providers/{worker}")
-    assert resp.status_code == 200, resp.get_data(as_text=True)
+    resp = client.delete(f"/api/providers/{worker}")
+    assert resp.status_code == 204, resp.get_data(as_text=True)
     assert worker not in _provider_ids(client)
 
 
 def test_can_delete_unassigned_provider(authed_client: "tuple[FlaskClient, object, object]") -> None:
     client, _, _ = authed_client
 
-    client.post("/providers", json={"name": "Main", "platform": "ollama",
+    client.post("/api/providers/-1", json={"name": "Main", "platform": "ollama",
                                     "model": "qwen3", "host": "http://127.0.0.1:2"})
-    spare = client.post(
-        "/providers",
+    spare = _unwrap_single(cast("dict[str, object]", client.post(
+        "/api/providers/-1",
         json={"name": "Spare", "platform": "ollama", "model": "phi3",
               "host": "http://127.0.0.1:5"},
-    ).get_json()["provider"]["id"]
+    ).get_json()))["id"]
 
-    resp = client.delete(f"/providers/{spare}")
-    assert resp.status_code == 200, resp.get_data(as_text=True)
+    resp = client.delete(f"/api/providers/{spare}")
+    assert resp.status_code == 204, resp.get_data(as_text=True)
     assert spare not in _provider_ids(client)
 
 

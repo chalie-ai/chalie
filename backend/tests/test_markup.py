@@ -7,7 +7,6 @@ from services.markup import (
 )
 
 
-
 @pytest.mark.unit
 class TestActionsToXml:
     def test_single_action(self) -> None:

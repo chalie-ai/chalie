@@ -5,14 +5,16 @@ import logging
 import os
 import secrets
 import shutil
-import sqlite3
-from datetime import timedelta
+from datetime import datetime, timedelta
 from typing import Optional, List, Dict, cast
 
-from services.database_service import DatabaseService
-from services.file_mapper_service import FileMapperService
+from models.document import DocumentRow
+from models.document_meta import DocumentMetaData
+from services.database import Database
 from services.embedding_utils import pack_embedding as _pack_embedding
+from services.file_mapper_service import FileMapperService
 from services.log_utils import safe
+from services.time_utils import utc_now
 from services.write_queue_service import get_write_queue
 
 logger = logging.getLogger(__name__)
@@ -29,13 +31,22 @@ PURGE_WINDOW_DAYS = 30
 
 class DocumentService:
 
-    def __init__(self, db_service: DatabaseService) -> None:
-        self.db = db_service
+    def __init__(self) -> None:
         self._write_queue = get_write_queue()
+
+    @staticmethod
+    def resolve_file_path(doc: "dict[str, object]") -> "str | None":
+        """Resolve the on-disk path for a document, validating uploads stay in-root."""
+        if doc.get("watched_folder_id"):
+            full_path = cast(str, doc["file_path"])
+            return full_path if os.path.isfile(os.path.realpath(full_path)) else None
+        full_path = str(FileMapperService.get_documents_path(cast(str, doc["file_path"])))
+        return full_path if FileMapperService.validate_document_path(full_path) else None
 
     # ─────────────────────────────────────────────
     # Document CRUD
     # ─────────────────────────────────────────────
+
 
     def create_document(
         self,
@@ -51,23 +62,18 @@ class DocumentService:
         doc_id = doc_id or secrets.token_hex(4)
 
         try:
-            _params = (
-                doc_id, original_name, mime_type, file_size, file_path,
-                file_hash, source_type, watched_folder_id,
-            )
-
-            def _insert(params: tuple[object, ...] = _params, db: DatabaseService = self.db) -> None:
-                with db.connection() as conn:
-                    cursor = conn.cursor()
-                    cursor.execute(
-                        """INSERT INTO documents
-                               (id, original_name, mime_type, file_size_bytes, file_path,
-                                file_hash, source_type, watched_folder_id,
-                                created_at, updated_at)
-                           VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))""",
-                        params,
-                    )
-                    cursor.close()
+            def _insert(
+                did: str = doc_id,
+                name: str = original_name,
+                mime: str = mime_type,
+                size: int = file_size,
+                path: str = file_path,
+                fhash: str = file_hash,
+                stype: str = source_type,
+                wfid: Optional[str] = watched_folder_id,
+            ) -> None:
+                with Database.transaction():
+                    DocumentMetaData.create(did, name, mime, size, path, fhash, stype, wfid)
 
             # submit_sync so any DB error propagates via raise below
             self._write_queue.submit_sync(_insert)
@@ -81,24 +87,10 @@ class DocumentService:
 
     def get_document(self, doc_id: str) -> Optional[Dict[str, object]]:
         try:
-            with self.db.connection() as conn:
-                cursor = conn.cursor()
-                cursor.execute("""
-                    SELECT id, original_name, mime_type, file_size_bytes, file_path,
-                           file_hash, page_count, status, error_message, chunk_count,
-                           source_type, tags, summary, extracted_metadata, supersedes_id,
-                           clean_text, language, fingerprint,
-                           doc_category, doc_project, doc_date, meta_locked,
-                           watched_folder_id,
-                           created_at, updated_at, deleted_at, purge_after
-                    FROM documents WHERE id = ?
-                """, (doc_id,))
-                row = cursor.fetchone()
-                cursor.close()
-
-            if not row:
+            doc = DocumentMetaData.filter("id", doc_id).first()
+            if doc is None:
                 return None
-            return self._row_to_dict(row)
+            return self._doc_to_dict(doc)
 
         except Exception as e:
             logger.error(f"[DOCS] get_document failed: {e}")
@@ -106,37 +98,9 @@ class DocumentService:
 
     def get_all_documents(self, include_deleted: bool = False) -> List[Dict[str, object]]:
         try:
-            with self.db.connection() as conn:
-                cursor = conn.cursor()
-                if include_deleted:
-                    cursor.execute("""
-                        SELECT id, original_name, mime_type, file_size_bytes, file_path,
-                               file_hash, page_count, status, error_message, chunk_count,
-                               source_type, tags, summary, extracted_metadata, supersedes_id,
-                               clean_text, language, fingerprint,
-                               doc_category, doc_project, doc_date, meta_locked,
-                               watched_folder_id,
-                               created_at, updated_at, deleted_at, purge_after
-                        FROM documents
-                        ORDER BY created_at DESC
-                    """)
-                else:
-                    cursor.execute("""
-                        SELECT id, original_name, mime_type, file_size_bytes, file_path,
-                               file_hash, page_count, status, error_message, chunk_count,
-                               source_type, tags, summary, extracted_metadata, supersedes_id,
-                               clean_text, language, fingerprint,
-                               doc_category, doc_project, doc_date, meta_locked,
-                               watched_folder_id,
-                               created_at, updated_at, deleted_at, purge_after
-                        FROM documents
-                        WHERE deleted_at IS NULL
-                        ORDER BY created_at DESC
-                    """)
-                rows = cursor.fetchall()
-                cursor.close()
-
-            return [self._row_to_dict(row) for row in rows]
+            query = DocumentMetaData.all() if include_deleted else DocumentMetaData.live()
+            docs = query.order_by("created_at DESC").get()
+            return [self._doc_to_dict(doc) for doc in docs]
 
         except Exception as e:
             logger.error(f"[DOCS] get_all_documents failed: {e}")
@@ -144,29 +108,8 @@ class DocumentService:
 
     def search_documents_metadata(self, query: str) -> List[Dict[str, object]]:
         try:
-            with self.db.connection() as conn:
-                cursor = conn.cursor()
-                like_query = f"%{query}%"
-                cursor.execute("""
-                    SELECT id, original_name, mime_type, file_size_bytes, file_path,
-                           file_hash, page_count, status, error_message, chunk_count,
-                           source_type, tags, summary, extracted_metadata, supersedes_id,
-                           clean_text, language, fingerprint,
-                           doc_category, doc_project, doc_date, meta_locked,
-                           watched_folder_id,
-                           created_at, updated_at, deleted_at, purge_after
-                    FROM documents
-                    WHERE deleted_at IS NULL
-                      AND (LOWER(original_name) LIKE LOWER(?)
-                           OR EXISTS (SELECT 1 FROM json_each(tags) WHERE value = ?)
-                           OR LOWER(doc_category) LIKE LOWER(?)
-                           OR LOWER(doc_project) LIKE LOWER(?))
-                    ORDER BY created_at DESC
-                """, (like_query, query, like_query, like_query))
-                rows = cursor.fetchall()
-                cursor.close()
-
-            return [self._row_to_dict(row) for row in rows]
+            docs = DocumentMetaData.search(query)
+            return [self._doc_to_dict(doc) for doc in docs]
 
         except Exception as e:
             logger.error(f"[DOCS] search_documents_metadata failed: {e}")
@@ -202,13 +145,7 @@ class DocumentService:
             doc_id=doc_id,
         )
 
-        def _set_clean(did: str = doc_id, txt: str = text_content, db: DatabaseService = self.db) -> None:
-            with db.connection() as conn:
-                conn.execute(
-                    "UPDATE documents SET clean_text = ? WHERE id = ?",
-                    (txt, did),
-                )
-        self._write_queue.submit_sync(_set_clean)
+        self.update_clean_text(doc_id, text_content)
 
         logger.info(f"[DOCS] Created text document '{original_name}' (id={doc_id})")
         return doc_id
@@ -225,19 +162,16 @@ class DocumentService:
         chunk_count: int = 0,
     ) -> None:
         try:
-            _params = (status, error_message, chunk_count, doc_id)
-
-            def _update(params: tuple[object, ...] = _params, db: DatabaseService = self.db) -> None:
-                with db.connection() as conn:
-                    cursor = conn.cursor()
-                    cursor.execute(
-                        """UPDATE documents
-                           SET status = ?, error_message = ?, chunk_count = ?,
-                               updated_at = datetime('now')
-                           WHERE id = ?""",
-                        params,
+            def _update(
+                did: str = doc_id,
+                s: str = status,
+                err: Optional[str] = error_message,
+                cc: int = chunk_count,
+            ) -> None:
+                with Database.transaction():
+                    DocumentMetaData.update_fields(
+                        did, {"status": s, "error_message": err, "chunk_count": cc}
                     )
-                    cursor.close()
 
             self._write_queue.submit_sync(_update)
             logger.info("[DOCS] Updated status for %s: %s", safe(doc_id), safe(status))
@@ -247,24 +181,18 @@ class DocumentService:
 
     def update_clean_text(self, doc_id: str, clean_text: str) -> None:
         try:
-            def _update(did: str = doc_id, txt: str = clean_text, db: DatabaseService = self.db) -> None:
-                with db.connection() as conn:
-                    conn.execute(
-                        "UPDATE documents SET clean_text = ?, updated_at = datetime('now') WHERE id = ?",
-                        (txt, did),
-                    )
+            def _update(did: str = doc_id, txt: str = clean_text) -> None:
+                with Database.transaction():
+                    DocumentMetaData.update_fields(did, {"clean_text": txt})
             self._write_queue.submit_sync(_update)
         except Exception as e:
             logger.error(f"[DOCS] update_clean_text failed: {e}")
 
     def update_summary(self, doc_id: str, summary: str) -> None:
         try:
-            def _update(did: str = doc_id, s: str = summary, db: DatabaseService = self.db) -> None:
-                with db.connection() as conn:
-                    conn.execute(
-                        "UPDATE documents SET summary = ?, updated_at = datetime('now') WHERE id = ?",
-                        (s, did),
-                    )
+            def _update(did: str = doc_id, s: str = summary) -> None:
+                with Database.transaction():
+                    DocumentMetaData.update_fields(did, {"summary": s})
             self._write_queue.submit_sync(_update)
         except Exception as e:
             logger.error(f"[DOCS] update_summary failed: {e}")
@@ -280,64 +208,38 @@ class DocumentService:
         fingerprint: Optional[str] = None,
         page_count: Optional[int] = None,
     ) -> None:
-        set_parts = ["extracted_metadata = ?", "summary = ?", "updated_at = datetime('now')"]
-        params: list[object] = [json.dumps(metadata), summary]
-
+        fields: dict[str, object] = {
+            "extracted_metadata": json.dumps(metadata),
+            "summary": summary,
+        }
         if clean_text is not None:
-            set_parts.append("clean_text = ?")
-            params.append(clean_text)
+            fields["clean_text"] = clean_text
         if language is not None:
-            set_parts.append("language = ?")
-            params.append(language)
+            fields["language"] = language
         if fingerprint is not None:
-            set_parts.append("fingerprint = ?")
-            params.append(fingerprint)
+            fields["fingerprint"] = fingerprint
         if page_count is not None:
-            set_parts.append("page_count = ?")
-            params.append(page_count)
-
-        params.append(doc_id)
+            fields["page_count"] = page_count
 
         packed_emb = _pack_embedding(summary_embedding) if summary_embedding is not None else None
-        sql = f"UPDATE documents SET {', '.join(set_parts)} WHERE id = ?"
 
         def _update_meta(
-            stmt: str = sql,
-            p: list[object] = params,
             did: str = doc_id,
+            f: dict[str, object] = fields,
             emb: Optional[bytes] = packed_emb,
-            db: DatabaseService = self.db,
         ) -> None:
-            with db.connection() as conn:
-                cursor = conn.cursor()
-                cursor.execute(stmt, p)
-
+            with Database.transaction():
+                DocumentMetaData.update_fields(did, f)
                 if emb is not None:
-                    cursor.execute("SELECT rowid FROM documents WHERE id = ?", (did,))
-                    row = cursor.fetchone()
-                    if row:
-                        rowid = row[0]
-                        cursor.execute("DELETE FROM documents_vec WHERE rowid = ?", (rowid,))
-                        cursor.execute(
-                            "INSERT INTO documents_vec (rowid, embedding) VALUES (?, ?)",
-                            (rowid, emb),
-                        )
-
-                cursor.close()
+                    DocumentMetaData.set_embedding(did, emb)
 
         self._write_queue.submit_sync(_update_meta)
 
     def set_supersedes(self, doc_id: str, supersedes_id: str) -> None:
         try:
-            def _supersede(did: str = doc_id, sid: str = supersedes_id, db: DatabaseService = self.db) -> None:
-                with db.connection() as conn:
-                    cursor = conn.cursor()
-                    cursor.execute(
-                        """UPDATE documents SET supersedes_id = ?,
-                           updated_at = datetime('now') WHERE id = ?""",
-                        (sid, did),
-                    )
-                    cursor.close()
+            def _supersede(did: str = doc_id, sid: str = supersedes_id) -> None:
+                with Database.transaction():
+                    DocumentMetaData.update_fields(did, {"supersedes_id": sid})
 
             self._write_queue.submit_sync(_supersede)
             logger.info("[DOCS] Document %s supersedes %s", safe(doc_id), safe(supersedes_id))
@@ -358,63 +260,43 @@ class DocumentService:
         results = []
 
         try:
-            with self.db.connection() as conn:
-                cursor = conn.cursor()
+            # Layer 1: exact hash match
+            if file_hash:
+                for row in DocumentMetaData.by_file_hash(file_hash, exclude_id):
+                    results.append({
+                        'id': row[0],
+                        'original_name': row[1],
+                        'created_at': row[2],
+                        'match_type': 'exact',
+                        'distance': 0.0,
+                    })
 
-                # Layer 1: exact hash match
-                if file_hash:
-                    cursor.execute("""
-                        SELECT id, original_name, created_at
-                        FROM documents
-                        WHERE file_hash = ? AND deleted_at IS NULL
-                          AND (? IS NULL OR id != ?)
-                    """, (file_hash, exclude_id, exclude_id))
-                    for row in cursor.fetchall():
+            # Layer 2: semantic similarity (skip for short docs)
+            if (summary_embedding
+                    and text_length >= DEDUP_MIN_TEXT_LENGTH
+                    and not results):
+                packed = _pack_embedding(summary_embedding)
+                for row in DocumentMetaData.semantic_matches(cast(bytes, packed), k=5):
+                    dist = float(row[3])
+                    doc_id = row[0]
+                    if exclude_id and doc_id == exclude_id:
+                        continue
+                    if dist < DEDUP_EXACT_THRESHOLD:
                         results.append({
-                            'id': row[0],
+                            'id': doc_id,
                             'original_name': row[1],
                             'created_at': row[2],
-                            'match_type': 'exact',
-                            'distance': 0.0,
+                            'match_type': 'semantic_exact',
+                            'distance': dist,
                         })
-
-                # Layer 2: semantic similarity (skip for short docs)
-                if (summary_embedding
-                        and text_length >= DEDUP_MIN_TEXT_LENGTH
-                        and not results):
-                    packed = _pack_embedding(summary_embedding)
-                    cursor.execute("""
-                        SELECT d.id, d.original_name, d.created_at,
-                               v.distance
-                        FROM documents_vec v
-                        JOIN documents d ON d.rowid = v.rowid
-                        WHERE v.embedding MATCH ? AND k = 5
-                          AND d.deleted_at IS NULL
-                        ORDER BY v.distance
-                    """, (packed,))
-                    for row in cursor.fetchall():
-                        dist = float(row[3])
-                        doc_id = row[0]
-                        if exclude_id and doc_id == exclude_id:
-                            continue
-                        if dist < DEDUP_EXACT_THRESHOLD:
-                            results.append({
-                                'id': doc_id,
-                                'original_name': row[1],
-                                'created_at': row[2],
-                                'match_type': 'semantic_exact',
-                                'distance': dist,
-                            })
-                        elif dist < DEDUP_REVISION_THRESHOLD:
-                            results.append({
-                                'id': doc_id,
-                                'original_name': row[1],
-                                'created_at': row[2],
-                                'match_type': 'semantic_revision',
-                                'distance': dist,
-                            })
-
-                cursor.close()
+                    elif dist < DEDUP_REVISION_THRESHOLD:
+                        results.append({
+                            'id': doc_id,
+                            'original_name': row[1],
+                            'created_at': row[2],
+                            'match_type': 'semantic_revision',
+                            'distance': dist,
+                        })
 
         except Exception as e:
             logger.error(f"[DOCS] find_duplicates failed: {e}")
@@ -427,22 +309,11 @@ class DocumentService:
 
     def soft_delete(self, doc_id: str) -> bool:
         try:
-            from services.time_utils import utc_now
             purge_after = utc_now() + timedelta(days=PURGE_WINDOW_DAYS)
 
-            def _soft_delete(did: str = doc_id, pa: object = purge_after, db: DatabaseService = self.db) -> int:
-                with db.connection() as conn:
-                    cursor = conn.cursor()
-                    cursor.execute(
-                        """UPDATE documents
-                           SET deleted_at = datetime('now'), purge_after = ?,
-                               updated_at = datetime('now')
-                           WHERE id = ? AND deleted_at IS NULL""",
-                        (pa, did),
-                    )
-                    affected = cursor.rowcount
-                    cursor.close()
-                return affected
+            def _soft_delete(did: str = doc_id, pa: datetime = purge_after) -> int:
+                with Database.transaction():
+                    return DocumentMetaData.soft_delete(did, pa)
 
             updated = cast(int, self._write_queue.submit_sync(_soft_delete)) > 0
 
@@ -450,13 +321,7 @@ class DocumentService:
                 logger.info("[DOCS] Soft-deleted document %s", safe(doc_id))
                 # Deactivate data_graph artifacts so they stop surfacing in recall.
                 try:
-                    from services.data_graph_service import get_data_graph_service
-                    dgs = get_data_graph_service()
-                    with dgs.db.connection() as conn:
-                        conn.execute(
-                            "UPDATE data_graph SET active=0 WHERE source LIKE ?",
-                            (f'document:{doc_id}%',),
-                        )
+                    DocumentRow.set_fragments_active(doc_id, 0)
                 except Exception as exc:
                     logger.warning("[DOCS] Failed to deactivate artifacts for %s: %s", safe(doc_id), exc)
             return updated
@@ -467,19 +332,9 @@ class DocumentService:
 
     def restore(self, doc_id: str) -> bool:
         try:
-            def _restore(did: str = doc_id, db: DatabaseService = self.db) -> int:
-                with db.connection() as conn:
-                    cursor = conn.cursor()
-                    cursor.execute(
-                        """UPDATE documents
-                           SET deleted_at = NULL, purge_after = NULL,
-                               updated_at = datetime('now')
-                           WHERE id = ? AND deleted_at IS NOT NULL""",
-                        (did,),
-                    )
-                    affected = cursor.rowcount
-                    cursor.close()
-                return affected
+            def _restore(did: str = doc_id) -> int:
+                with Database.transaction():
+                    return DocumentMetaData.restore(did)
 
             updated = cast(int, self._write_queue.submit_sync(_restore)) > 0
 
@@ -487,13 +342,7 @@ class DocumentService:
                 logger.info("[DOCS] Restored document %s", safe(doc_id))
                 # Reactivate data_graph artifacts so they surface in recall again.
                 try:
-                    from services.data_graph_service import get_data_graph_service
-                    dgs = get_data_graph_service()
-                    with dgs.db.connection() as conn:
-                        conn.execute(
-                            "UPDATE data_graph SET active=1 WHERE source LIKE ?",
-                            (f'document:{doc_id}%',),
-                        )
+                    DocumentRow.set_fragments_active(doc_id, 1)
                 except Exception as exc:
                     logger.warning("[DOCS] Failed to reactivate artifacts for %s: %s", safe(doc_id), exc)
             return updated
@@ -508,29 +357,16 @@ class DocumentService:
             if not doc:
                 return False
 
-            def _hard_delete(did: str = doc_id, db: DatabaseService = self.db) -> int:
-                with db.connection() as conn:
-                    cursor = conn.cursor()
-                    # Clean up virtual tables BEFORE the document delete —
-                    # sqlite-vec virtual tables don't support FK cascades.
-                    cursor.execute(
-                        "DELETE FROM documents_vec WHERE rowid = "
-                        "(SELECT rowid FROM documents WHERE id = ?)",
-                        (did,),
-                    )
-                    # Delete document record.
-                    cursor.execute("DELETE FROM documents WHERE id = ?", (did,))
-                    affected = cursor.rowcount
-                    cursor.close()
-                return affected
+            def _hard_delete(did: str = doc_id) -> int:
+                with Database.transaction():
+                    return DocumentMetaData.hard_delete(did)
 
             deleted = cast(int, self._write_queue.submit_sync(_hard_delete)) > 0
 
             # Cascade-delete data_graph artifacts for this document.
             if deleted:
                 try:
-                    from services.data_graph_service import get_data_graph_service
-                    get_data_graph_service().hard_delete_by_source_prefix(f'document:{doc_id}')
+                    DocumentRow.purge_by_document_id(doc_id)
                 except Exception as exc:
                     logger.warning("[DOCS] Failed to cascade-delete data_graph artifacts for %s: %s", safe(doc_id), exc)
 
@@ -553,15 +389,7 @@ class DocumentService:
 
     def purge_expired(self) -> int:
         try:
-            # Find expired docs first (need file paths for disk cleanup)
-            with self.db.connection() as conn:
-                cursor = conn.cursor()
-                cursor.execute("""
-                    SELECT id FROM documents
-                    WHERE purge_after IS NOT NULL AND purge_after < datetime('now')
-                """)
-                expired_ids = [row[0] for row in cursor.fetchall()]
-                cursor.close()
+            expired_ids = DocumentMetaData.expired_ids()
 
             count = 0
             for doc_id in expired_ids:
@@ -582,37 +410,21 @@ class DocumentService:
 
     def get_documents_by_watched_folder(self, folder_id: str) -> List[Dict[str, object]]:
         try:
-            with self.db.connection() as conn:
-                cursor = conn.cursor()
-                cursor.execute("""
-                    SELECT id, original_name, mime_type, file_size_bytes, file_path,
-                           file_hash, page_count, status, error_message, chunk_count,
-                           source_type, tags, summary, extracted_metadata, supersedes_id,
-                           clean_text, language, fingerprint,
-                           doc_category, doc_project, doc_date, meta_locked,
-                           watched_folder_id,
-                           created_at, updated_at, deleted_at, purge_after
-                    FROM documents
-                    WHERE watched_folder_id = ?
-                    ORDER BY created_at DESC
-                """, (folder_id,))
-                rows = cursor.fetchall()
-                cursor.close()
-            return [self._row_to_dict(row) for row in rows]
+            docs = (
+                DocumentMetaData.filter("watched_folder_id", folder_id)
+                .order_by("created_at DESC")
+                .get()
+            )
+            return [self._doc_to_dict(doc) for doc in docs]
         except Exception as e:
             logger.error(f"[DOCS] get_documents_by_watched_folder failed: {e}")
             return []
 
     def update_tags(self, doc_id: str, tags: list[str]) -> None:
         try:
-            def _update_tags(did: str = doc_id, t: str = json.dumps(tags), db: DatabaseService = self.db) -> None:
-                with db.connection() as conn:
-                    cursor = conn.cursor()
-                    cursor.execute(
-                        "UPDATE documents SET tags = ?, updated_at = datetime('now') WHERE id = ?",
-                        (t, did),
-                    )
-                    cursor.close()
+            def _update_tags(did: str = doc_id, t: str = json.dumps(tags)) -> None:
+                with Database.transaction():
+                    DocumentMetaData.update_fields(did, {"tags": t})
 
             self._write_queue.submit_sync(_update_tags)
         except Exception as e:
@@ -624,30 +436,19 @@ class DocumentService:
         doc_date: Optional[str] = None, lock: bool = False,
     ) -> None:
         try:
-            set_parts = ["updated_at = datetime('now')"]
-            params: list[object] = []
+            fields: dict[str, object] = {}
             if category is not None:
-                set_parts.append("doc_category = ?")
-                params.append(category)
+                fields["doc_category"] = category
             if project is not None:
-                set_parts.append("doc_project = ?")
-                params.append(project)
+                fields["doc_project"] = project
             if doc_date is not None:
-                set_parts.append("doc_date = ?")
-                params.append(doc_date)
+                fields["doc_date"] = doc_date
             if lock:
-                set_parts.append("meta_locked = 1")
-            params.append(doc_id)
+                fields["meta_locked"] = 1
 
-            def _update_class(
-                stmt: str = f"UPDATE documents SET {', '.join(set_parts)} WHERE id = ?",
-                p: list[object] = params,
-                db: DatabaseService = self.db,
-            ) -> None:
-                with db.connection() as conn:
-                    cursor = conn.cursor()
-                    cursor.execute(stmt, p)
-                    cursor.close()
+            def _update_class(did: str = doc_id, f: dict[str, object] = fields) -> None:
+                with Database.transaction():
+                    DocumentMetaData.update_fields(did, f)
 
             self._write_queue.submit_sync(_update_class)
         except Exception as e:
@@ -657,42 +458,17 @@ class DocumentService:
         if field not in ('doc_category', 'doc_project', 'doc_date'):
             return []
         try:
-            with self.db.connection() as conn:
-                cursor = conn.cursor()
-                if field == 'doc_date':
-                    # Group by year
-                    cursor.execute("""
-                        SELECT COALESCE(SUBSTR(doc_date, 1, 4), 'Unknown') as grp,
-                               COUNT(*) as cnt
-                        FROM documents
-                        WHERE deleted_at IS NULL AND status = 'ready'
-                        GROUP BY grp ORDER BY grp DESC
-                    """)
-                else:
-                    cursor.execute(f"""
-                        SELECT COALESCE({field}, 'Uncategorized') as grp,
-                               COUNT(*) as cnt
-                        FROM documents
-                        WHERE deleted_at IS NULL AND status = 'ready'
-                        GROUP BY grp ORDER BY cnt DESC
-                    """)
-                rows = cursor.fetchall()
-                cursor.close()
-            return [{'value': r[0], 'count': r[1]} for r in rows]
+            groups = DocumentMetaData.classification_groups(field)
+            return [{'value': grp, 'count': cnt} for grp, cnt in groups]
         except Exception as e:
             logger.error(f"[DOCS] get_classification_groups failed: {e}")
             return []
 
     def update_file_path(self, doc_id: str, new_path: str) -> None:
         try:
-            def _update_path(did: str = doc_id, path: str = new_path, db: DatabaseService = self.db) -> None:
-                with db.connection() as conn:
-                    cursor = conn.cursor()
-                    cursor.execute(
-                        "UPDATE documents SET file_path = ?, updated_at = datetime('now') WHERE id = ?",
-                        (path, did),
-                    )
-                    cursor.close()
+            def _update_path(did: str = doc_id, path: str = new_path) -> None:
+                with Database.transaction():
+                    DocumentMetaData.update_fields(did, {"file_path": path})
 
             self._write_queue.submit_sync(_update_path)
         except Exception as e:
@@ -702,33 +478,33 @@ class DocumentService:
     # Internal helpers
     # ─────────────────────────────────────────────
 
-    def _row_to_dict(self, row: sqlite3.Row) -> Dict[str, object]:
+    def _doc_to_dict(self, doc: DocumentMetaData) -> Dict[str, object]:
         return {
-            'id': row[0],
-            'original_name': row[1],
-            'mime_type': row[2],
-            'file_size_bytes': row[3],
-            'file_path': row[4],
-            'file_hash': row[5],
-            'page_count': row[6],
-            'status': row[7],
-            'error_message': row[8],
-            'chunk_count': row[9],
-            'source_type': row[10],
-            'tags': row[11] or [],
-            'summary': row[12],
-            'extracted_metadata': row[13] or {},
-            'supersedes_id': row[14],
-            'clean_text': row[15],
-            'language': row[16],
-            'fingerprint': row[17],
-            'doc_category': row[18],
-            'doc_project': row[19],
-            'doc_date': row[20],
-            'meta_locked': bool(row[21]),
-            'watched_folder_id': row[22],
-            'created_at': row[23],
-            'updated_at': row[24],
-            'deleted_at': row[25],
-            'purge_after': row[26],
+            'id': doc.id,
+            'original_name': doc.original_name,
+            'mime_type': doc.mime_type,
+            'file_size_bytes': doc.file_size_bytes,
+            'file_path': doc.file_path,
+            'file_hash': doc.file_hash,
+            'page_count': doc.page_count,
+            'status': doc.status,
+            'error_message': doc.error_message,
+            'chunk_count': doc.chunk_count,
+            'source_type': doc.source_type,
+            'tags': json.loads(doc.tags) if doc.tags else [],
+            'summary': doc.summary,
+            'extracted_metadata': json.loads(doc.extracted_metadata) if doc.extracted_metadata else {},
+            'supersedes_id': doc.supersedes_id,
+            'clean_text': doc.clean_text,
+            'language': doc.language,
+            'fingerprint': doc.fingerprint,
+            'doc_category': doc.doc_category,
+            'doc_project': doc.doc_project,
+            'doc_date': doc.doc_date,
+            'meta_locked': bool(doc.meta_locked),
+            'watched_folder_id': doc.watched_folder_id,
+            'created_at': doc.created_at,
+            'updated_at': doc.updated_at,
+            'deleted_at': doc.deleted_at,
+            'purge_after': doc.purge_after,
         }

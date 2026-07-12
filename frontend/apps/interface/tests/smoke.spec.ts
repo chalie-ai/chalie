@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { expect, test } from '@playwright/test';
 
 // Feature test — drives the REAL interface served at / by a real Chalie
 // instance (authenticated via the global-setup login cookie). No mocks: every

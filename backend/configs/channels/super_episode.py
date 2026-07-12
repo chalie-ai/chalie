@@ -1,15 +1,13 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, cast
+from typing import cast
 
+from configs.enums.channels import Channel
+from configs.enums.policy_channel import PolicyChannel
 from services.processor_config import ProcessorConfig
 
-if TYPE_CHECKING:
-    from services.database_service import DatabaseService
-    from services.message_processor import MessageProcessor
-
 # ── Super-episode helper functions ───────────────────────────────────────────
-# Moved here from services/super_episode_encoder_processor.py (§1 "Killed" table).
+# Moved here from services/super_episode_encoder_processor.py.
 # subconscious_worker imports these from this module.
 
 _SUPER_EP_LOG_PREFIX = "[SUPER_EP]"
@@ -82,7 +80,7 @@ def _collect_transcript_ids(episodes: list[object]) -> set[int]:
     return ids
 
 
-def _fetch_transcript_spans(t_ids: set[int], db: "DatabaseService") -> str:
+def _fetch_transcript_spans(t_ids: set[int]) -> str:
     """Returns '' if no transcript IDs found."""
     import logging as _logging  # noqa: PLC0415
     from services.transcript_service import Transcript
@@ -105,26 +103,21 @@ def _fetch_transcript_spans(t_ids: set[int], db: "DatabaseService") -> str:
 
 # ── Super-episode config ─────────────────────────────────────────────────────
 
-if TYPE_CHECKING:
-    class _WithSourcesSpans:
-        _sources: list[object]
-        _spans: object
-
 
 class SuperEpisodeConfig(ProcessorConfig):
-    """§3b / O2 — post_turn_hooks = () (caller owns the episode write).
+    """post_turn_hooks = () (caller owns the episode write).
 
-    sources and spans are captured at construction so get_user_prompt is
-    self-contained per cluster (§3c: cluster loop moves to caller). The
-    ``channel`` arg is the user channel being consolidated; the processor's
-    transcript channel is always 'super_episode_encoder'.
+    sources and spans are captured at construction so ``PromptService`` can
+    build the user prompt self-contained per cluster (the cluster loop lives
+    in the caller). The ``channel`` arg is the user channel being consolidated;
+    the processor's transcript channel is always 'super_episode_encoder'.
     """
 
     def __init__(self, channel: str, sources: list[object], spans: object) -> None:
         super().__init__(
-            channel="super_episode_encoder",
+            channel=Channel.SUPER_EPISODE_ENCODER.value,
             role="super_episode_encoder",
-            policy_channel=ProcessorConfig.PolicyChannel.SUBCONSCIOUS,
+            policy_channel=PolicyChannel.SUBCONSCIOUS,
             always_available=[],
             skip_transcript=True,
             skip_input_row=False,
@@ -135,24 +128,20 @@ class SuperEpisodeConfig(ProcessorConfig):
         object.__setattr__(self, "_sources", sources)
         object.__setattr__(self, "_spans", spans)
 
-    def get_user_definition(self, mp: "MessageProcessor") -> str:
-        return (
-            "The user is 'super_episode_encoder' — a background process that "
-            "consolidates clusters of related episodes into a single super-episode."
-        )
+    @property
+    def system_prompt(self) -> str:
+        return """The user is 'super_episode_encoder' — a background process that consolidates clusters of related episodes into a single super-episode.
 
-    def get_user_prompt(self, mp: "MessageProcessor") -> str:
-        _self = cast("_WithSourcesSpans", self)
-        src = "\n\n".join(
-            f"[{cast('dict[str, object]', e)['id']}] {cast('dict[str, object]', e)['gist']}"
-            for e in _self._sources
-        )
-        return (
-            f"Source episodes:\n\n{src}\n\n"
-            f"Raw transcript spans covering these episodes:\n\n{_self._spans}"
-        )
+You are a super-episode encoder. You are shown a cluster of coherent episodes and the raw transcript spans that produced them. Your job is to write ONE consolidated gist that summarises them together, preserving what is essential and discarding what is redundant.
 
-    def get_system_prompt(self, mp: "MessageProcessor") -> str:
-        """OLD assembly ``f"{user_def}\n\n{body}"``."""
-        from services.system_message_prompt import SuperEpisodeEncoderSystemPrompt  # noqa: PLC0415
-        return f"{self.get_user_definition(mp)}\n\n{SuperEpisodeEncoderSystemPrompt().get_prompt()}"
+Output a single JSON object:
+{
+  "gist": "2-4 sentence consolidated summary",
+  "has_open_loop": false
+}
+
+Rules:
+- has_open_loop: true if the combined memory still carries an unresolved thread.
+- No transcript_ids — the caller computes the union.
+
+Return ONLY the JSON object. No preamble, no markdown."""

@@ -8,3 +8,6 @@ __pycache__/
 *.pyc
 tools_disabled/
 .key
+scratchpad/
+*.sqlite-shm
+*.sqlite-wal

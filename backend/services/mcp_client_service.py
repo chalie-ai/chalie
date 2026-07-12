@@ -14,12 +14,14 @@ import json
 import logging
 import re
 import sqlite3
-import uuid
 from pathlib import Path
 from typing import cast
 from urllib.parse import urlsplit, urlunsplit
 
-from services.database_service import get_shared_db_service
+from exceptions import McpServerUnreachable, McpToolUnknown
+from models.mcp_client_server import McpClientServer
+from models.mcp_tool import McpTool
+from services.database import Database
 from services.file_mapper_service import FileMapperService
 from services.time_utils import utc_now
 
@@ -34,28 +36,6 @@ _STATUS_OFFLINE = "offline"
 
 # Name-sanitization pattern: keep lowercase alpha, digits, underscore.
 _SANITIZE_RE = re.compile(r"[^a-z0-9_]")
-
-
-class McpToolUnknown(Exception):
-    """An ``_mcp_*`` name resolves to no enabled/registered server.
-
-    Distinct from a reachable-but-failing call: the tool name itself cannot be
-    routed (no matching server, or the matching server is disabled), so retrying
-    is pointless until the server is (re-)added/enabled.
-    """
-
-
-class McpServerUnreachable(Exception):
-    """The remote MCP server could not be reached (transport/connect/timeout).
-
-    Carries the human-facing ``server_name`` so the proxy can NAME the failing
-    endpoint in its error envelope instead of leaking a transport stack trace.
-    """
-
-    def __init__(self, server_name: str, detail: str) -> None:
-        super().__init__(f"MCP server {server_name!r} is unreachable: {detail}")
-        self.server_name = server_name
-        self.detail = detail
 
 
 def _sanitize_name(name: str) -> str:
@@ -174,8 +154,7 @@ def _open_tools_db() -> sqlite3.Connection:
     """
     db_path: Path = FileMapperService.get_mcp_tools_db_path()
     db_path.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(str(db_path))
-    conn.row_factory = sqlite3.Row
+    conn = Database.conn(str(db_path))
     conn.executescript(_TOOLS_SCHEMA)
     try:
         # A pre-trigram FTS table (CREATE IF NOT EXISTS would silently keep it)
@@ -205,7 +184,6 @@ def _open_tools_db() -> sqlite3.Connection:
             "%s sqlite_vec unavailable — vec tables skipped, FTS-only mode: %s",
             _LOG_PREFIX, exc,
         )
-    conn.commit()
     return conn
 
 
@@ -266,20 +244,12 @@ class McpClientService:
     threads never carry a running event loop.
     """
 
-    def __init__(self) -> None:
-        self._db = get_shared_db_service()
-
     # ── CRUD ──────────────────────────────────────────────────────────────────
 
     def list_servers(self) -> list[dict[str, object]]:
         """Return all mcp_client_servers rows as dicts."""
-        with self._db.connection() as conn:
-            rows = conn.execute(
-                "SELECT id, name, host, headers, enabled, status, "
-                "last_pinged_at, created_at, updated_at "
-                "FROM mcp_client_servers ORDER BY created_at ASC"
-            ).fetchall()
-        return [self._row_to_dict(r) for r in rows]
+        servers = McpClientServer.order_by("created_at").get()
+        return [self._server_to_dict(s) for s in servers]
 
     def add_server(self, name: str, host: str, headers: dict[str, str], enabled: bool) -> dict[str, object]:
         """Add a remote server, deduping by normalized host.
@@ -294,20 +264,25 @@ class McpClientService:
         if existing is not None:
             return self._upsert_existing(existing, name, host, headers)
 
-        server_id = str(uuid.uuid4())
-        now = utc_now().isoformat()
-        headers_json = json.dumps(headers or {})
-        with self._db.connection() as conn:
-            conn.execute(
-                "INSERT INTO mcp_client_servers "
-                "(id, name, host, headers, enabled, status, created_at, updated_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                (server_id, name, host, headers_json,
-                 1 if enabled else 0, _STATUS_UNKNOWN, now, now),
-            )
-            conn.commit()
+        server = McpClientServer(
+            name=name,
+            host=host,
+            headers=json.dumps(headers or {}),
+            enabled=1 if enabled else 0,
+            status=_STATUS_UNKNOWN,
+            created_at=utc_now().isoformat(),
+            updated_at=utc_now().isoformat(),
+        )
+        server.save()
+        server_id = cast(str, server.id)
         logger.info("%s Added server %r (id=%s)", _LOG_PREFIX, name, server_id)
-        return self._get_server(server_id)
+        # Re-read the row: columns left unset so their SQL defaults fire
+        # (last_pinged_at) exist only on a hydrated instance, and
+        # _server_to_dict projects every column.
+        saved = McpClientServer.get(server_id)
+        if saved is None:
+            raise RuntimeError(f"mcp server row vanished after insert: {server_id}")
+        return self._server_to_dict(saved)
 
     def _find_by_normalized_host(self, host: str) -> dict[str, object] | None:
         """Return an existing server resolving to the same endpoint, else None."""
@@ -347,10 +322,10 @@ class McpClientService:
 
     def get_server(self, server_id: str) -> dict[str, object] | None:
         """Return a single server dict, or None if not found."""
-        try:
-            return self._get_server(server_id)
-        except LookupError:
+        server = McpClientServer.get(server_id)
+        if server is None:
             return None
+        return self._server_to_dict(server)
 
     def update_server(self, server_id: str, updates: dict[str, object]) -> dict[str, object]:
         """Apply a partial update to a server row.
@@ -359,7 +334,9 @@ class McpClientService:
         Returns the updated server dict.  Raises LookupError if not found.
         """
         allowed = {"name", "host", "headers", "enabled"}
-        cols, vals = [], []
+        server = McpClientServer.get(server_id)
+        if server is None:
+            raise LookupError(f"Server not found: {server_id}")
         for key, val in updates.items():
             if key not in allowed:
                 continue
@@ -367,36 +344,20 @@ class McpClientService:
                 val = json.dumps(val)
             if key == "enabled":
                 val = 1 if val else 0
-            cols.append(f"{key} = ?")
-            vals.append(val)
-        if not cols:
-            return self._get_server(server_id)
-        now = utc_now().isoformat()
-        cols.append("updated_at = ?")
-        vals.extend([now, server_id])
-        with self._db.connection() as conn:
-            cur = conn.execute(
-                f"UPDATE mcp_client_servers SET {', '.join(cols)} WHERE id = ?",
-                vals,
-            )
-            conn.commit()
-            if cur.rowcount == 0:
-                raise LookupError(f"Server not found: {server_id}")
-        return self._get_server(server_id)
+            setattr(server, key, val)
+        server.updated_at = utc_now().isoformat()
+        server.save()
+        return self._server_to_dict(server)
 
     def delete_server(self, server_id: str) -> None:
         """Delete a server row and purge its tools + policy rows."""
-        server = self.get_server(server_id)
+        server = McpClientServer.get(server_id)
         if server is None:
             raise LookupError(f"Server not found: {server_id}")
         self._delete_policy_rows(server_id)
         self._delete_tools_for_server(server_id)
-        with self._db.connection() as conn:
-            conn.execute(
-                "DELETE FROM mcp_client_servers WHERE id = ?", (server_id,)
-            )
-            conn.commit()
-        logger.info("%s Deleted server %r (id=%s)", _LOG_PREFIX, server["name"], server_id)
+        server.delete()
+        logger.info("%s Deleted server %r (id=%s)", _LOG_PREFIX, server.name, server_id)
 
     # ── Ping + sync ───────────────────────────────────────────────────────────
 
@@ -451,23 +412,17 @@ class McpClientService:
 
     def get_server_tools(self, server_id: str) -> list[dict[str, object]]:
         """Return the raw synced tool inventory for a single server."""
-        conn = _open_tools_db()
-        try:
-            rows = conn.execute(
-                "SELECT tool_name, summary, raw_schema FROM mcp_tools "
-                "WHERE server_id = ? ORDER BY tool_name",
-                (server_id,),
-            ).fetchall()
-            return [
-                {
-                    "tool_name": r["tool_name"],
-                    "summary": r["summary"],
-                    "schema": json.loads(r["raw_schema"]) if r["raw_schema"] else {},
-                }
-                for r in rows
-            ]
-        finally:
-            conn.close()
+        rows = McpTool.filter("server_id", server_id).order_by("tool_name").select(
+            "tool_name", "summary", "raw_schema"
+        )
+        return [
+            {
+                "tool_name": r["tool_name"],
+                "summary": r["summary"],
+                "schema": json.loads(r["raw_schema"]) if r["raw_schema"] else {},
+            }
+            for r in rows
+        ]
 
     def get_tool_schema(self, tool_name: str) -> dict[str, object] | None:
         """Return the LLM tool spec for a single _mcp_* tool, or None if unknown.
@@ -477,25 +432,18 @@ class McpClientService:
         expects, so an _mcp_* name appended to mp.active_tools (by find_tools)
         resolves to a full schema for the next ACT iteration's provider call.
         """
-        conn = _open_tools_db()
+        row = McpTool.filter("tool_name", tool_name).first()
+        if row is None:
+            return None
         try:
-            row = conn.execute(
-                "SELECT summary, raw_schema FROM mcp_tools WHERE tool_name = ?",
-                (tool_name,),
-            ).fetchone()
-            if row is None:
-                return None
-            try:
-                input_schema = json.loads(row["raw_schema"]) if row["raw_schema"] else {}
-            except json.JSONDecodeError:
-                input_schema = {}
-            return {
-                "name": tool_name,
-                "description": row["summary"] or "",
-                "input_schema": input_schema,
-            }
-        finally:
-            conn.close()
+            input_schema = json.loads(row.raw_schema) if row.raw_schema else {}
+        except json.JSONDecodeError:
+            input_schema = {}
+        return {
+            "name": tool_name,
+            "description": row.summary or "",
+            "input_schema": input_schema,
+        }
 
     def get_online_mcp_tool_names(self) -> list[str]:
         """Return _mcp_* tool names for servers that are enabled AND online.
@@ -503,23 +451,13 @@ class McpClientService:
         Used by find_tools to gate discoverability and by the /discoverable
         API endpoint.  Disabled or offline servers' tools never appear.
         """
-        with self._db.connection() as conn:
-            rows = conn.execute(
-                "SELECT id FROM mcp_client_servers "
-                "WHERE enabled = 1 AND status = ?",
-                (_STATUS_ONLINE,),
-            ).fetchall()
-        if not rows:
+        online_ids = {
+            s.id  # type: ignore[misc]
+            for s in McpClientServer.filter("enabled", 1).filter("status", _STATUS_ONLINE).get()
+        }
+        if not online_ids:
             return []
-        online_ids = {r[0] for r in rows}
-        conn = _open_tools_db()
-        try:
-            all_rows = conn.execute(
-                "SELECT server_id, tool_name FROM mcp_tools"
-            ).fetchall()
-            return [r["tool_name"] for r in all_rows if r["server_id"] in online_ids]
-        finally:
-            conn.close()
+        return McpTool.filter_in("server_id", online_ids).pluck("tool_name")
 
     def get_online_mcp_tools_index(self) -> list[tuple[str, str]]:
         """Return (call_name, display_name) pairs for enabled+online tools.
@@ -530,28 +468,17 @@ class McpClientService:
         tools in the discoverability hint by their native names without losing
         the prefixed call target.
         """
-        with self._db.connection() as conn:
-            rows = conn.execute(
-                "SELECT id, name FROM mcp_client_servers "
-                "WHERE enabled = 1 AND status = ?",
-                (_STATUS_ONLINE,),
-            ).fetchall()
-        if not rows:
+        server_rows = McpClientServer.filter("enabled", 1).filter("status", _STATUS_ONLINE).get()
+        if not server_rows:
             return []
-        server_name_by_id = {r[0]: r[1] for r in rows}
-        conn = _open_tools_db()
-        try:
-            all_rows = conn.execute(
-                "SELECT server_id, tool_name FROM mcp_tools"
-            ).fetchall()
-        finally:
-            conn.close()
+        server_name_by_id = {s.id: s.name for s in server_rows}  # type: ignore[misc]
+        all_rows = McpTool.all().get()
         index: list[tuple[str, str]] = []
-        for r in all_rows:
-            server_id = r["server_id"]
+        for t in all_rows:
+            server_id = t.server_id
             if server_id not in server_name_by_id:
                 continue
-            call_name = r["tool_name"]
+            call_name = t.tool_name
             prefix = f"_mcp_{_sanitize_name(server_name_by_id[server_id])}_"
             display = call_name[len(prefix):] if call_name.startswith(prefix) else call_name
             index.append((call_name, display))
@@ -625,7 +552,6 @@ class McpClientService:
                 _async_call_tool(host, cast(dict[str, str], headers), remote_tool, params)
             )
         except Exception as exc:
-            logger.warning("%s Tool dispatch failed for %r: %s", _LOG_PREFIX, tool_name, exc)
             raise McpServerUnreachable(cast(str, server["name"]), str(exc)) from exc
 
         logger.info(
@@ -645,11 +571,8 @@ class McpClientService:
         Called by mcp_client_worker on a 15-minute loop.  Errors per server
         are caught and logged; the loop continues to the next server.
         """
-        with self._db.connection() as conn:
-            rows = conn.execute(
-                "SELECT id, name FROM mcp_client_servers WHERE enabled = 1"
-            ).fetchall()
-        server_ids = [(r[0], r[1]) for r in rows]
+        servers = McpClientServer.filter("enabled", 1).get()
+        server_ids = [(s.id, s.name) for s in servers]  # type: ignore[misc]
         logger.info(
             "%s Heartbeat — pinging %d enabled server(s)", _LOG_PREFIX, len(server_ids)
         )
@@ -696,14 +619,7 @@ class McpClientService:
                 logger.warning("%s embed_server_tools: server %r not found", _LOG_PREFIX, server_id)
                 return
 
-            conn = _open_tools_db()
-            try:
-                rows = conn.execute(
-                    "SELECT tool_name, summary FROM mcp_tools WHERE server_id = ?",
-                    (server_id,),
-                ).fetchall()
-            finally:
-                conn.close()
+            rows = McpTool.filter("server_id", server_id).select("tool_name", "summary")
 
             if not rows:
                 logger.debug("%s embed_server_tools: no tools for server %r", _LOG_PREFIX, server_id)
@@ -722,8 +638,7 @@ class McpClientService:
 
             embeddings = EmbeddingService().generate_embeddings_batch(texts)
 
-            conn = _open_tools_db()
-            try:
+            with Database.transaction(str(FileMapperService.get_mcp_tools_db_path())) as conn:
                 # Replace-all-for-server: purge existing vec rows for these tool_names.
                 placeholders = ",".join("?" * len(tool_names))
                 existing = conn.execute(
@@ -754,13 +669,10 @@ class McpClientService:
                         "INSERT INTO mcp_tools_vec (rowid, embedding) VALUES (?, ?)",
                         (rowid, blob),
                     )
-                conn.commit()
                 logger.info(
                     "%s Embedded %d tools for server %r",
                     _LOG_PREFIX, len(tool_names), server_name,
                 )
-            finally:
-                conn.close()
         except Exception as exc:
             logger.warning(
                 "%s embed_server_tools failed for server %r — FTS-only fallback: %s",
@@ -769,71 +681,49 @@ class McpClientService:
 
     # ── Internal helpers ──────────────────────────────────────────────────────
 
-    def _get_server(self, server_id: str) -> dict[str, object]:
-        """Fetch a single server row; raise LookupError if missing."""
-        with self._db.connection() as conn:
-            row = conn.execute(
-                "SELECT id, name, host, headers, enabled, status, "
-                "last_pinged_at, created_at, updated_at "
-                "FROM mcp_client_servers WHERE id = ?",
-                (server_id,),
-            ).fetchone()
-        if row is None:
-            raise LookupError(f"Server not found: {server_id}")
-        return self._row_to_dict(row)
-
-    @staticmethod
-    def _row_to_dict(row: "sqlite3.Row | tuple[object, ...]") -> dict[str, object]:
-        """Convert a DB row (tuple or sqlite3.Row) to a plain dict."""
-        (
-            server_id, name, host, headers_raw, enabled,
-            status, last_pinged_at, created_at, updated_at,
-        ) = row[:9]
+    def _server_to_dict(self, server: McpClientServer) -> dict[str, object]:
+        """Project a McpClientServer instance to the service's dict shape."""
         try:
-            headers = json.loads(cast(str, headers_raw)) if headers_raw else {}
+            headers = json.loads(server.headers) if server.headers else {}
         except json.JSONDecodeError:
             headers = {}
         return {
-            "id": server_id,
-            "name": name,
-            "host": host,
+            "id": server.id,  # type: ignore[misc]
+            "name": server.name,
+            "host": server.host,
             "headers": headers,
-            "enabled": bool(enabled),
-            "status": status,
-            "last_pinged_at": last_pinged_at,
-            "created_at": created_at,
-            "updated_at": updated_at,
+            "enabled": bool(server.enabled),
+            "status": server.status,
+            "last_pinged_at": server.last_pinged_at,
+            "created_at": server.created_at,
+            "updated_at": server.updated_at,
         }
 
     def _update_status(self, server_id: str, status: str) -> None:
         """Write the new status and last_pinged_at timestamp."""
         now = utc_now().isoformat()
-        with self._db.connection() as conn:
-            conn.execute(
-                "UPDATE mcp_client_servers "
-                "SET status = ?, last_pinged_at = ?, updated_at = ? "
-                "WHERE id = ?",
-                (status, now, now, server_id),
-            )
-            conn.commit()
+        McpClientServer.filter("id", server_id).update(
+            status=status,
+            last_pinged_at=now,
+            updated_at=now,
+        )
 
     def _write_tools(self, server_id: str, server_name: str, tools: list[dict[str, object]]) -> None:
         """Replace the tool index for one server in mcp_tools.sqlite."""
-        conn = _open_tools_db()
-        try:
-            conn.execute(
-                "DELETE FROM mcp_tools WHERE server_id = ?", (server_id,)
-            )
+        _open_tools_db()
+        with Database.transaction(str(FileMapperService.get_mcp_tools_db_path())) as conn:
+            McpTool.filter("server_id", server_id).delete()
             for t in tools:
                 name = _tool_name(server_name, cast(str, t["name"]))
                 summary = t.get("description", "") or ""
                 schema_json = json.dumps(t.get("inputSchema") or {})
-                conn.execute(
-                    "INSERT OR REPLACE INTO mcp_tools "
-                    "(server_id, tool_name, summary, raw_schema) "
-                    "VALUES (?, ?, ?, ?)",
-                    (server_id, name, summary, schema_json),
+                tool = McpTool(
+                    server_id=server_id,
+                    tool_name=name,
+                    summary=summary,
+                    raw_schema=schema_json,
                 )
+                tool.save()
             # Rebuild FTS index for this server.
             try:
                 conn.execute(
@@ -841,9 +731,6 @@ class McpClientService:
                 )
             except sqlite3.OperationalError:
                 pass
-            conn.commit()
-        finally:
-            conn.close()
 
     def _delete_tools_for_server(self, server_id: str) -> None:
         """Remove all tool rows (including vector embeddings) for a server.
@@ -853,12 +740,9 @@ class McpClientService:
         chokepoint covers both delete_server and the _upsert_existing name-change
         path — neither needs to repeat the purge logic.
         """
-        conn = _open_tools_db()
-        try:
-            tool_rows = conn.execute(
-                "SELECT tool_name FROM mcp_tools WHERE server_id = ?", (server_id,)
-            ).fetchall()
-            tool_names = [r["tool_name"] for r in tool_rows]
+        _open_tools_db()
+        with Database.transaction(str(FileMapperService.get_mcp_tools_db_path())) as conn:
+            tool_names = McpTool.filter("server_id", server_id).pluck("tool_name")
 
             if tool_names:
                 placeholders = ",".join("?" * len(tool_names))
@@ -887,14 +771,11 @@ class McpClientService:
                         # surface it instead of masking it behind the absent-table case.
                         logger.warning("%s Vec purge failed unexpectedly: %s", _LOG_PREFIX, exc)
 
-            conn.execute("DELETE FROM mcp_tools WHERE server_id = ?", (server_id,))
+            McpTool.filter("server_id", server_id).delete()
             try:
                 conn.execute("INSERT INTO mcp_tools_fts(mcp_tools_fts) VALUES('rebuild')")
             except sqlite3.OperationalError:
                 pass
-            conn.commit()
-        finally:
-            conn.close()
 
     def _delete_policy_rows(self, server_id: str) -> None:
         """Clear one server's lazily-provisioned policy rows — one exact-match
@@ -904,17 +785,10 @@ class McpClientService:
         colliding server's rows.  Reads mcp_tools, so callers MUST invoke this
         before _delete_tools_for_server purges that index.
         """
-        tools_db = _open_tools_db()
-        try:
-            tool_names = [r["tool_name"] for r in tools_db.execute(
-                "SELECT tool_name FROM mcp_tools WHERE server_id = ?", (server_id,)
-            ).fetchall()]
-        finally:
-            tools_db.close()
-        with self._db.connection() as conn:
+        tool_names = McpTool.filter("server_id", server_id).pluck("tool_name")
+        with Database.transaction() as conn:
             for tool_name in tool_names:
                 conn.execute("DELETE FROM policy WHERE permission = ?", (tool_name,))
-            conn.commit()
 
     def _resolve_tool(self, prefixed_name: str) -> tuple[dict[str, object], str]:
         """Map a _mcp_<server>_<tool> name to (server_dict, remote_tool_name).

@@ -5,9 +5,11 @@ SPEC CHANGE: the five ``NAME`` / ``SUMMARY`` / ``EXAMPLES`` /
 ``@abstractmethod`` getters (``get_name`` / ``get_summary`` / ``get_examples`` /
 ``get_search_tooltip`` / ``get_parameters``), and ``get_input_schema()`` became a
 ``@typing.final`` template method — the SINGLE place a tool descriptor is built
-and the SINGLE injection site for the framework fields ``act_summary`` (always,
-required) and ``async`` (iff the bound processor's config sets
-``SUPPORTS_ASYNC``). The MessageProcessor is now constructor-injected
+and the SINGLE injection site for the framework field ``act_summary`` (always,
+required). The ``async`` backgrounding flag is NOT a base-``Ability`` field: it is
+a delegate-only primitive added by ``DelegateAbility._inject_framework_fields``
+(iff the bound processor's config sets ``SUPPORTS_ASYNC``), so plain tools never
+carry it. The MessageProcessor is now constructor-injected
 (``Ability(mp=...)`` → ``self.mp``).
 
 Because the metadata is now carried by ``@abstractmethod`` getters, a subclass
@@ -28,6 +30,7 @@ from typing import cast
 import pytest
 
 from abilities._ability import Ability
+from abilities._delegate import DelegateAbility
 from configs.channels import DmnConfig, UserConfig
 
 pytestmark = pytest.mark.unit
@@ -65,17 +68,24 @@ def _getters(
     }
 
 
-def _make_subclass(clsname: str, drop: "tuple[str, ...]" = (), **overrides: object) -> "type[Ability]":
+def _make_subclass(
+    clsname: str,
+    drop: "tuple[str, ...]" = (),
+    base: "type[Ability]" = Ability,
+    **overrides: object,
+) -> "type[Ability]":
     """Build an Ability subclass dynamically; triggers __init_subclass__.
 
     ``drop`` names getters to OMIT (leaving the abstractmethod unfilled, so the
-    class stays abstract). ``overrides`` replace individual namespace members.
+    class stays abstract). ``base`` picks the parent (``Ability`` by default, or
+    ``DelegateAbility`` to exercise the delegate-only ``async`` injection).
+    ``overrides`` replace individual namespace members.
     """
     namespace = _getters()
     namespace.update(overrides)
     for member in drop:
         namespace.pop(member, None)
-    return type(clsname, (Ability,), namespace)
+    return type(clsname, (base,), namespace)
 
 
 # ---------------------------------------------------------------------------
@@ -212,11 +222,26 @@ def test_act_summary_always_injected_and_required() -> None:
     gc.collect()
 
 
-def test_async_injected_only_under_supports_async_config() -> None:
-    """async appears ONLY when the bound mp's config sets SUPPORTS_ASYNC. It is a
-    per-call deepcopy — never mutates the declared get_parameters()."""
+def test_async_is_delegate_only_never_on_a_plain_tool() -> None:
+    """async is a DELEGATE-ONLY primitive: a plain Ability NEVER exposes it, even
+    on a SUPPORTS_ASYNC channel — that is the structural bound against a plain
+    `read`/`shell` being backgrounded."""
+    cls = _make_subclass("_PlainAsyncProbe")
+
+    # Even on the SUPPORTS_ASYNC user channel, a plain tool has no async flag.
+    user_props = cast("dict[str, object]", cast("dict[str, object]", cls(mp=_Mp(UserConfig({}))).get_input_schema()["input_schema"])["properties"])
+    assert "async" not in user_props
+    assert "act_summary" in user_props  # the base framework field is still injected
+
+    del cls
+    gc.collect()
+
+
+def test_async_injected_only_under_supports_async_config_for_delegates() -> None:
+    """On a DelegateAbility, async appears ONLY when the bound mp's config sets
+    SUPPORTS_ASYNC. It is a per-call deepcopy — never mutates get_parameters()."""
     shared_params: dict[str, object] = {"type": "object", "properties": {}, "required": []}
-    cls = _make_subclass("_AsyncProbe", get_parameters=lambda self: shared_params)
+    cls = _make_subclass("_DelegateAsyncProbe", base=DelegateAbility, get_parameters=lambda self: shared_params)
 
     # SUPPORTS_ASYNC channel (UserConfig) → async exposed.
     user_props = cast("dict[str, object]", cast("dict[str, object]", cls(mp=_Mp(UserConfig({}))).get_input_schema()["input_schema"])["properties"])
@@ -235,23 +260,6 @@ def test_async_injected_only_under_supports_async_config() -> None:
     # The declared params dict was never mutated by any of the above.
     assert "async" not in cast("dict[str, object]", shared_params["properties"])
     assert "act_summary" not in cast("dict[str, object]", shared_params["properties"])
-
-    del cls
-    gc.collect()
-
-
-def test_mp_gated_summary_is_deterministic_at_build_time() -> None:
-    """A getter that enriches on a live mp (e.g. bash's cwd) MUST fall back to
-    deterministic base text at mp=None so the search index stays machine-stable."""
-
-    def _summary(self: Ability) -> str:
-        base = "base summary"
-        return f"{base} — cwd /tmp" if self.mp is not None else base
-
-    cls = _make_subclass("_MpGatedSummary", get_summary=_summary)
-
-    assert cls().get_summary() == "base summary"  # build-time: base text
-    assert cls(mp=_Mp(UserConfig({}))).get_summary() == "base summary — cwd /tmp"
 
     del cls
     gc.collect()

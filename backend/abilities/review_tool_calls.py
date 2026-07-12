@@ -12,9 +12,10 @@ declares only the windowed ``tool_calls`` SELECT and the structured row shape.
 
 from typing import ClassVar
 
-from abilities._params import Keys
+from configs.enums.param_key import Keys
 from abilities._result import ToolResult
 from abilities._review_window import ReviewWindowAbility
+from models.tool_call import ToolCall
 
 # Tool-call params summaries can be large; clip so one row stays a single readable
 # line of structured JSON.
@@ -84,25 +85,13 @@ class ReviewToolCallsAbility(ReviewWindowAbility):
         new narration rows are written. The literal filter stays only to hide any
         such rows left in an existing DB from before that change; it is not a
         live tool name."""
-        from services.database_service import get_shared_db_service
-
-        db = get_shared_db_service()
-        with db.connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute(
-                """
-                SELECT tool_name, params, result, created_at
-                FROM tool_calls
-                WHERE created_at BETWEEN ? AND ?
-                  AND tool_name != 'narration'
-                ORDER BY created_at ASC, id ASC
-                """,
-                (lo, hi),
-            )
-            columns = ("tool_name", "params", "result", "created_at")
-            rows = [dict(zip(columns, r)) for r in cursor.fetchall()]
-            cursor.close()
-        return rows
+        return (
+            ToolCall.filter("created_at", lo, ">=")
+            .filter("created_at", hi, "<=")
+            .filter("tool_name", "narration", "!=")
+            .order_by("created_at ASC, id ASC")
+            .select("tool_name", "params", "result", "created_at")
+        )
 
     def _row(self, rec: dict[str, object], ordinal: int) -> dict[str, object]:
         params_str = str(rec.get("params") or "{}")

@@ -6,17 +6,13 @@ to avoid cross-test contamination from the module singleton.
 
 
 import sqlite3
-import time as _time
-import uuid
-from datetime import timedelta
-from typing import Optional
 
 import pytest
 
-from services.time_utils import utc_now
+from models.telemetry import Telemetry
 from services.world_state import WorldState
 
-_HEADER = "### Background Telemetry,Processes & Signals"
+_HEADER = "### Background Telemetry,Processes"
 
 
 # ---------------------------------------------------------------------------
@@ -27,42 +23,11 @@ def _fresh() -> WorldState:
     return WorldState()
 
 
-def _future_iso(minutes: int) -> str:
-    return (utc_now() + timedelta(minutes=minutes)).strftime("%Y-%m-%d %H:%M:%S")
-
-
-def _past_iso(minutes: int) -> str:
-    return (utc_now() - timedelta(minutes=minutes)).strftime("%Y-%m-%d %H:%M:%S")
-
-
 def _seed_telemetry(db: sqlite3.Connection, ctx: dict[str, object]) -> None:
     from services.heartbeat_service import heartbeat_service
     heartbeat_service._ctx = None
-    flat = heartbeat_service._flatten(ctx)
-    db.execute("DELETE FROM telemetry")
-    db.executemany(
-        "INSERT INTO telemetry (key, value) VALUES (?, ?)",
-        list(flat.items()),
-    )
-    db.commit()
+    Telemetry.replace(ctx)
     heartbeat_service._ctx = None
-
-
-def _seed_pending(db: sqlite3.Connection, message: str, due_minutes_ahead: int, *, recurrence: Optional[str] = None) -> None:
-    db.execute(
-        "INSERT INTO scheduled_items (id, message, due_at, status, hidden, recurrence) "
-        "VALUES (?, ?, ?, 'pending', 0, ?)",
-        (str(uuid.uuid4()), message, _future_iso(due_minutes_ahead), recurrence),
-    )
-
-
-def _seed_fired(db: sqlite3.Connection, message: str, fired_minutes_ago: int) -> None:
-    iso = _past_iso(fired_minutes_ago)
-    db.execute(
-        "INSERT INTO scheduled_items (id, message, due_at, status, hidden, last_fired_at) "
-        "VALUES (?, ?, ?, 'fired', 0, ?)",
-        (str(uuid.uuid4()), message, iso, iso),
-    )
 
 
 # ---------------------------------------------------------------------------
@@ -133,110 +98,3 @@ class TestRenderTelemetry:
         assert "**location**" not in result
         assert "35.8989" not in result
         assert "14.5146" not in result
-
-
-# ---------------------------------------------------------------------------
-# Schedule section
-# ---------------------------------------------------------------------------
-
-@pytest.mark.unit
-class TestRenderSchedule:
-    def test_upcoming_pending_renders_with_due_in_and_repeats(self, db: sqlite3.Connection) -> None:
-        # Single recurring upcoming item — covers the happy path: it appears,
-        # gets a positive due-in, and the recurrence is formatted as repeats:every.
-        _seed_pending(db, "Daily standup", due_minutes_ahead=60, recurrence="86400")
-        db.commit()
-
-        result = _fresh().render()
-        assert "[schedule]" in result
-        bullet = next(ln for ln in result.splitlines() if "Daily standup" in ln)
-        assert bullet.startswith("* Daily standup (due-in:")
-        assert "ago" not in bullet.split("(", 1)[1].split(",")[0]
-        assert "repeats:every 1d 0h" in bullet
-
-    def test_hidden_items_excluded(self, db: sqlite3.Connection) -> None:
-        db.execute(
-            "INSERT INTO scheduled_items (id, message, due_at, status, hidden) "
-            "VALUES (?, ?, ?, 'pending', 1)",
-            (str(uuid.uuid4()), "Secret task", _future_iso(60)),
-        )
-        db.commit()
-
-        assert "Secret task" not in _fresh().render()
-
-    def test_upcoming_pending_supersedes_recent_fire_for_same_message(self, db: sqlite3.Connection) -> None:
-        # Same job has both "just fired" and "due again soon" — show the upcoming one.
-        _seed_fired(db, "Mail sync", fired_minutes_ago=30)
-        _seed_pending(db, "Mail sync", due_minutes_ahead=45)
-        db.commit()
-
-        bullets = [ln for ln in _fresh().render().splitlines() if ln.startswith("* Mail sync")]
-        assert len(bullets) == 1
-        due_in_field = bullets[0].split("(", 1)[1].split(",")[0]
-        assert due_in_field.startswith("due-in:") and "ago" not in due_in_field, (
-            f"Expected upcoming due-in (no 'ago'), got: {due_in_field!r}"
-        )
-
-    def test_repeated_pending_shows_only_next_upcoming(self, db: sqlite3.Connection) -> None:
-        for minutes_ahead in (300, 90, 600):
-            _seed_pending(db, "Sync run", due_minutes_ahead=minutes_ahead)
-        db.commit()
-
-        bullets = [ln for ln in _fresh().render().splitlines() if ln.startswith("* Sync run")]
-        assert len(bullets) == 1
-        # Earliest is 90m → "1h Xm"; the 5h and 10h variants must NOT appear.
-        assert "due-in:1h" in bullets[0], f"Expected earliest (90m → 1h…), got: {bullets[0]!r}"
-        assert "5h" not in bullets[0]
-        assert "10h" not in bullets[0]
-
-
-# ---------------------------------------------------------------------------
-# Signals section
-# ---------------------------------------------------------------------------
-
-@pytest.mark.unit
-class TestRenderSignals:
-    def test_signals_render_sorted_by_source(self, db: sqlite3.Connection) -> None:
-        ws = _fresh()
-        ws.push_signal("zzz", "last")
-        ws.push_signal("aaa", "first")
-        ws.push_signal("mmm", "middle")
-        result = ws.render()
-        # Each appears as `[signal:src] label` (no bullet prefix), in alphabetical order.
-        assert "[signal:aaa] first" in result
-        assert "[signal:mmm] middle" in result
-        assert "[signal:zzz] last" in result
-        assert result.index("[signal:aaa]") < result.index("[signal:mmm]") < result.index("[signal:zzz]")
-
-    def test_expired_signals_pruned_on_render(self, db: sqlite3.Connection) -> None:
-        ws = _fresh()
-        ws.push_signal("stale", "old news", ttl=0)
-        ws.push_signal("fresh", "live news", ttl=3600)
-        _time.sleep(0.01)
-        result = ws.render()
-        assert "[signal:fresh] live news" in result
-        assert "stale" not in result
-        assert "old news" not in result
-
-
-# ---------------------------------------------------------------------------
-# Full mix — section ordering and structural rules
-# ---------------------------------------------------------------------------
-
-@pytest.mark.unit
-class TestRenderFullMix:
-    def test_sections_appear_in_fixed_order(self, db: sqlite3.Connection) -> None:
-        _seed_telemetry(db, {"local_time": "10:00", "location_name": "Malta"})
-        ws = _fresh()
-        ws.push_signal("news", "heatwave")
-        _seed_pending(db, "Team meeting", due_minutes_ahead=60)
-        db.commit()
-
-        result = ws.render()
-        assert result.startswith(_HEADER)
-        idx_telemetry = result.index("[telemetry]")
-        idx_schedule = result.index("[schedule]")
-        idx_signal = result.index("[signal:news]")
-        assert idx_telemetry < idx_schedule < idx_signal
-
-

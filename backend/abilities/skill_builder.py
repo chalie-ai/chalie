@@ -18,18 +18,18 @@ that corrupted such bodies is gone.
 """
 
 import logging
-import sqlite3
 from typing import ClassVar, cast
 
 from abilities._ability import Ability
-from abilities._params import Keys
+from configs.enums.param_key import Keys
 from abilities._result import ToolResult
+from configs.enums.channels import Channel
+from models.skill import Skill
+from services.database import Database
 from services.file_mapper_service import FileMapperService
 from utils.skills_io import (
     DEFAULT_VERSION,
-    SKILLS_DB_PATH,
     ensure_user_skills_dir,
-    open_skills_db,
     remove_search_entries,
     skill_yaml_path,
     write_skill_file,
@@ -63,10 +63,10 @@ class SkillBuilderAbility(Ability):
     # one missing-params error naming ALL of them. edit/delete/read need only a
     # title (the existence/ownership checks live in run()); list needs nothing.
     ACTION_REQUIRED: ClassVar[dict[str, tuple[str, ...]]] = {
-        "create": (Keys.title, Keys.use_for, Keys.content),
-        "edit": (Keys.title,),
-        "delete": (Keys.title,),
-        "read": (Keys.title,),
+        "create": (Keys.title_, Keys.use_for, Keys.content),
+        "edit": (Keys.title_,),
+        "delete": (Keys.title_,),
+        "read": (Keys.title_,),
         "list": (),
     }
 
@@ -112,7 +112,7 @@ class SkillBuilderAbility(Ability):
                     "list: list all skills (both curated and user-created), titles and use_for only."
                 ),
             },
-            Keys.title: {
+            Keys.title_: {
                 "type": "string",
                 "description": (
                     "The skill title — a short noun phrase describing what the skill does "
@@ -164,7 +164,7 @@ class SkillBuilderAbility(Ability):
         # swallow: an unexpected failure bubbles to the dispatcher's _run, which
         # renders it as code=unhandled-exception (errors must surface).
         action = params.get(Keys.action, "list")
-        channel = getattr(getattr(self.mp, "config", None), "channel", None)
+        channel = self.mp.config.channel
         logger.info("%s action=%s channel=%s", _LOG_PREFIX, action, channel)
 
         if action == "create":
@@ -182,32 +182,9 @@ class SkillBuilderAbility(Ability):
         # ONE skill per turn: the instant a create/edit succeeds, halt the recursive
         # ACT loop so the model cannot keep emitting near-duplicate writes. Other
         # channels (a user explicitly building a skill) are unaffected.
-        if channel == "skills_building" and action in ("create", "edit") and result.status == "success":
-            cancel = getattr(self.mp, "cancel_event", None)
-            if cancel is not None:
-                cancel.set()
+        if channel == Channel.SKILLS_BUILDING and action in ("create", "edit") and result.status == "success":
+            self.mp.turn_execution_service.cancel()
         return result
-
-
-# ── Helpers ────────────────────────────────────────────────────────────────────
-
-
-def _find_user_skill_by_title(conn: sqlite3.Connection, title: str) -> dict[str, object] | None:
-    row = conn.execute(
-        "SELECT id, title, use_for, content, tags, version "
-        "FROM skills WHERE source = 'user' AND lower(title) = lower(?)",
-        (title,),
-    ).fetchone()
-    if row is None:
-        return None
-    return {
-        "id": row[0],
-        "title": row[1],
-        "use_for": row[2],
-        "content": row[3],
-        "tags": row[4],
-        "version": row[5],
-    }
 
 
 # ── Action handlers ────────────────────────────────────────────────────────────
@@ -216,229 +193,210 @@ def _find_user_skill_by_title(conn: sqlite3.Connection, title: str) -> dict[str,
 def _handle_create(params: dict[str, object]) -> ToolResult:
     # title / use_for / content presence is guaranteed by the ACTION_REQUIRED
     # pre-gate; here we only normalise.
-    title = (cast("str", params.get(Keys.title)) or "").strip()
+    title = (cast("str", params.get(Keys.title_)) or "").strip()
     use_for = (cast("str", params.get(Keys.use_for)) or "").strip()
     content = (cast("str", params.get(Keys.content)) or "").strip()
 
-    if not SKILLS_DB_PATH.exists():
+    if not FileMapperService.get_skills_db_path().exists():
         return ToolResult.err(
             "The skill store is unavailable.",
             code="skill-db-unavailable",
             action="create",
         )
 
-    conn = open_skills_db()
-    try:
-        existing = _find_user_skill_by_title(conn, title)
-        if existing is not None:
-            return ToolResult.err(
-                f'A skill titled "{title}" already exists.',
-                code="skill-already-exists",
-                hint="Use action=edit to update an existing skill",
-                action="create",
-            )
-
-        tags = (cast("str", params.get(Keys.tags)) or "").strip()
-        meta = {
-            "title": title,
-            "use_for": use_for,
-            "content": content,
-            "tags": tags,
-            "version": DEFAULT_VERSION,
-        }
-
-        conn.execute(
-            "INSERT INTO skills(title, use_for, content, tags, version, source) "
-            "VALUES (?, ?, ?, ?, ?, 'user')",
-            (title, use_for, content, tags, DEFAULT_VERSION),
-        )
-        skill_id: int = cast("int", conn.execute("SELECT last_insert_rowid()").fetchone()[0])
-
-        from services.embedding_service import EmbeddingService
-        from utils.build_skills_db import index_skill
-        emb_service = EmbeddingService()
-        index_skill(conn, emb_service, skill_id, title, use_for, tags)
-
-        conn.commit()
-
-        ensure_user_skills_dir()
-        path = skill_yaml_path(title)
-        write_skill_file(path, cast("dict[str, str | int]", meta))
-
-        logger.info("%s Created skill '%s' (id=%d, file=%s)", _LOG_PREFIX, title, skill_id, path.name)
-        return ToolResult.ok(
-            f'Skill "{title}" created and indexed.',
+    existing = Skill.find_by_title_ci(title, source="user")
+    if existing is not None:
+        return ToolResult.err(
+            f'A skill titled "{title}" already exists.',
+            code="skill-already-exists",
+            hint="Use action=edit to update an existing skill",
             action="create",
-            skill_id=skill_id,
         )
-    finally:
-        conn.close()
+
+    tags = (cast("str", params.get(Keys.tags)) or "").strip()
+    meta = {
+        "title": title,
+        "use_for": use_for,
+        "content": content,
+        "tags": tags,
+        "version": DEFAULT_VERSION,
+    }
+
+    # Column list intentionally matches the DDL default columns (enabled,
+    # based_on) left unset: save() only INSERTs the fields set on the
+    # instance, the same explicit (title, use_for, content, tags, version,
+    # source) list the raw INSERT used, so `enabled`/`based_on` still fall
+    # through to their DDL defaults exactly as before.
+    skill = Skill(
+        title=title,
+        use_for=use_for,
+        content=content,
+        tags=tags,
+        version=DEFAULT_VERSION,
+        source="user",
+    ).save()
+    skill_id: int = cast("int", skill.id)
+
+    conn = Database.conn(str(FileMapperService.get_skills_db_path()))
+    from services.embedding_service import EmbeddingService
+    from utils.build_skills_db import index_skill
+    emb_service = EmbeddingService()
+    index_skill(conn, emb_service, skill_id, title, use_for, tags)
+
+    conn.commit()
+
+    ensure_user_skills_dir()
+    path = skill_yaml_path(title)
+    write_skill_file(path, cast("dict[str, str | int]", meta))
+
+    logger.info("%s Created skill '%s' (id=%d, file=%s)", _LOG_PREFIX, title, skill_id, path.name)
+    return ToolResult.ok(
+        f'Skill "{title}" created and indexed.',
+        action="create",
+        skill_id=skill_id,
+    )
 
 
 def _handle_edit(params: dict[str, object]) -> ToolResult:
-    title = (cast("str", params.get(Keys.title)) or "").strip()  # presence guaranteed by pre-gate
+    title = (cast("str", params.get(Keys.title_)) or "").strip()  # presence guaranteed by pre-gate
 
-    if not SKILLS_DB_PATH.exists():
+    if not FileMapperService.get_skills_db_path().exists():
         return ToolResult.err(
             "The skill store is unavailable.",
             code="skill-db-unavailable",
             action="edit",
         )
 
-    conn = open_skills_db()
-    try:
-        existing = _find_user_skill_by_title(conn, title)
-        if existing is None:
-            return ToolResult.err(
-                f'No user skill titled "{title}" was found.',
-                code="skill-not-found",
-                hint="Only user-created skills can be edited",
-                action="edit",
-            )
-
-        skill_id: int = cast("int", existing["id"])
-        updated_meta: dict[str, object] = {
-            "title": title,
-            "use_for": (cast("str", params.get(Keys.use_for)) or "").strip() or existing["use_for"],
-            "content": (cast("str", params.get(Keys.content)) or "").strip() or existing["content"],
-            "tags": (cast("str", params.get(Keys.tags)) or "").strip() if params.get(Keys.tags) is not None else (existing["tags"] or ""),
-            "version": cast("int", existing["version"]) + 1,
-        }
-
-        conn.execute(
-            "UPDATE skills SET use_for=?, content=?, tags=?, version=? "
-            "WHERE id=?",
-            (
-                updated_meta["use_for"],
-                updated_meta["content"],
-                updated_meta["tags"],
-                updated_meta["version"],
-                skill_id,
-            ),
-        )
-
-        remove_search_entries(conn, skill_id)
-
-        from services.embedding_service import EmbeddingService
-        from utils.build_skills_db import index_skill
-        emb_service = EmbeddingService()
-        index_skill(conn, emb_service, skill_id, title, cast("str", updated_meta["use_for"]), cast("str", updated_meta["tags"]))
-
-        conn.commit()
-
-        ensure_user_skills_dir()
-        write_skill_file(skill_yaml_path(title), cast("dict[str, str | int]", updated_meta))
-
-        logger.info("%s Updated skill '%s' (id=%d, version=%d)", _LOG_PREFIX, title, skill_id, updated_meta["version"])
-        return ToolResult.ok(
-            f'Skill "{title}" updated to version {updated_meta["version"]}.',
+    existing = Skill.find_by_title_ci(title, source="user")
+    if existing is None:
+        return ToolResult.err(
+            f'No user skill titled "{title}" was found.',
+            code="skill-not-found",
+            hint="Only user-created skills can be edited",
             action="edit",
-            skill_id=skill_id,
         )
-    finally:
-        conn.close()
+
+    skill_id: int = cast("int", existing.id)
+    updated_meta: dict[str, object] = {
+        "title": title,
+        "use_for": (cast("str", params.get(Keys.use_for)) or "").strip() or existing.use_for,
+        "content": (cast("str", params.get(Keys.content)) or "").strip() or existing.content,
+        "tags": (cast("str", params.get(Keys.tags)) or "").strip() if params.get(Keys.tags) is not None else (existing.tags or ""),
+        "version": existing.version + 1,
+    }
+
+    Skill.filter("id", skill_id).update(
+        use_for=updated_meta["use_for"],
+        content=updated_meta["content"],
+        tags=updated_meta["tags"],
+        version=updated_meta["version"],
+    )
+
+    conn = Database.conn(str(FileMapperService.get_skills_db_path()))
+    remove_search_entries(conn, skill_id)
+
+    from services.embedding_service import EmbeddingService
+    from utils.build_skills_db import index_skill
+    emb_service = EmbeddingService()
+    index_skill(conn, emb_service, skill_id, title, cast("str", updated_meta["use_for"]), cast("str", updated_meta["tags"]))
+
+    conn.commit()
+
+    ensure_user_skills_dir()
+    write_skill_file(skill_yaml_path(title), cast("dict[str, str | int]", updated_meta))
+
+    logger.info("%s Updated skill '%s' (id=%d, version=%d)", _LOG_PREFIX, title, skill_id, updated_meta["version"])
+    return ToolResult.ok(
+        f'Skill "{title}" updated to version {updated_meta["version"]}.',
+        action="edit",
+        skill_id=skill_id,
+    )
 
 
 def _handle_delete(params: dict[str, object]) -> ToolResult:
-    title = (cast("str", params.get(Keys.title)) or "").strip()  # presence guaranteed by pre-gate
+    title = (cast("str", params.get(Keys.title_)) or "").strip()  # presence guaranteed by pre-gate
 
-    if not SKILLS_DB_PATH.exists():
+    if not FileMapperService.get_skills_db_path().exists():
         return ToolResult.err(
             "The skill store is unavailable.",
             code="skill-db-unavailable",
             action="delete",
         )
 
-    conn = open_skills_db()
-    try:
-        existing = _find_user_skill_by_title(conn, title)
-        if existing is None:
-            return ToolResult.err(
-                f'No user skill titled "{title}" was found.',
-                code="skill-not-found",
-                hint="Only user-created skills can be deleted",
-                action="delete",
-            )
-
-        skill_id: int = cast("int", existing["id"])
-        path = skill_yaml_path(title)
-
-        remove_search_entries(conn, skill_id)
-        conn.execute("DELETE FROM skills WHERE id = ?", (skill_id,))
-        conn.commit()
-
-        if path.exists():
-            path.unlink()
-
-        logger.info("%s Deleted skill '%s' (id=%d, file=%s)", _LOG_PREFIX, title, skill_id, path.name)
-        return ToolResult.ok(
-            f'Skill "{title}" deleted.',
+    existing = Skill.find_by_title_ci(title, source="user")
+    if existing is None:
+        return ToolResult.err(
+            f'No user skill titled "{title}" was found.',
+            code="skill-not-found",
+            hint="Only user-created skills can be deleted",
             action="delete",
         )
-    finally:
-        conn.close()
+
+    skill_id: int = cast("int", existing.id)
+    path = skill_yaml_path(title)
+
+    conn = Database.conn(str(FileMapperService.get_skills_db_path()))
+    remove_search_entries(conn, skill_id)
+    Skill.filter("id", skill_id).delete()
+    conn.commit()
+
+    if path.exists():
+        path.unlink()
+
+    logger.info("%s Deleted skill '%s' (id=%d, file=%s)", _LOG_PREFIX, title, skill_id, path.name)
+    return ToolResult.ok(
+        f'Skill "{title}" deleted.',
+        action="delete",
+    )
 
 
 def _handle_list(params: dict[str, object]) -> ToolResult:  # noqa: ARG001
-    if not SKILLS_DB_PATH.exists():
+    if not FileMapperService.get_skills_db_path().exists():
         return ToolResult.err(
             "The skill store is unavailable.",
             code="skill-db-unavailable",
             action="list",
         )
 
-    conn = sqlite3.connect(str(SKILLS_DB_PATH))
-    try:
-        rows = conn.execute(
-            "SELECT id, title, use_for, tags, version, source, enabled "
-            "FROM skills ORDER BY source, title"
-        ).fetchall()
-    finally:
-        conn.close()
+    rows = Skill.order_by("source, title").select(
+        "id", "title", "use_for", "tags", "version", "source", "enabled"
+    )
 
     # Structured rows (JSON), not prose: a weak model can read each skill's
     # fields directly. count meta mirrors len(body) so the model sees the total
     # without parsing.
     skills = [
         {
-            "id": skill_id,
-            "title": title,
-            "use_for": use_for,
-            "tags": tags or "",
-            "version": version,
-            "source": source,
-            "enabled": bool(enabled),
+            "id": row["id"],
+            "title": row["title"],
+            "use_for": row["use_for"],
+            "tags": row["tags"] or "",
+            "version": row["version"],
+            "source": row["source"],
+            "enabled": bool(row["enabled"]),
         }
-        for skill_id, title, use_for, tags, version, source, enabled in rows
+        for row in rows
     ]
     return ToolResult.ok(skills, action="list", count=len(skills))
 
 
 def _handle_read(params: dict[str, object]) -> ToolResult:
     # title presence is guaranteed by the ACTION_REQUIRED pre-gate.
-    title = (cast("str", params.get(Keys.title)) or "").strip()
+    title = (cast("str", params.get(Keys.title_)) or "").strip()
 
-    if not SKILLS_DB_PATH.exists():
+    if not FileMapperService.get_skills_db_path().exists():
         return ToolResult.err(
             "The skill store is unavailable.",
             code="skill-db-unavailable",
             action="read",
         )
 
-    conn = sqlite3.connect(str(SKILLS_DB_PATH))
-    try:
-        # Match any source; prefer the editable user copy when a title collides
-        # with a curated skill. Unlike list, this returns the full `content` so
-        # the model can read a skill's steps before action=edit merges into them.
-        row = conn.execute(
-            "SELECT id, title, use_for, content, tags, version, source, enabled "
-            "FROM skills WHERE lower(title) = lower(?) ORDER BY (source = 'user') DESC",
-            (title,),
-        ).fetchone()
-    finally:
-        conn.close()
+    # Match any source; prefer the editable user copy when a title collides
+    # with a curated skill. Unlike list, this returns the full `content` so
+    # the model can read a skill's steps before action=edit merges into them.
+    skill = Skill.find_by_title_ci_prefer_user(title)
 
-    if row is None:
+    if skill is None:
         return ToolResult.err(
             f'No skill titled "{title}" was found.',
             code="skill-not-found",
@@ -446,17 +404,16 @@ def _handle_read(params: dict[str, object]) -> ToolResult:
             action="read",
         )
 
-    skill_id, title_, use_for, content, tags, version, source, enabled = row
     return ToolResult.ok(
         {
-            "id": skill_id,
-            "title": title_,
-            "use_for": use_for,
-            "content": content,
-            "tags": tags or "",
-            "version": version,
-            "source": source,
-            "enabled": bool(enabled),
+            "id": skill.id,
+            "title": skill.title,
+            "use_for": skill.use_for,
+            "content": skill.content,
+            "tags": skill.tags or "",
+            "version": skill.version,
+            "source": skill.source,
+            "enabled": bool(skill.enabled),
         },
         action="read",
     )

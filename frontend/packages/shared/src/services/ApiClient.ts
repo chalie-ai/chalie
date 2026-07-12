@@ -10,8 +10,8 @@ export class AuthError extends Error {
 export class HttpError extends Error {
   constructor(
     public readonly status: number,
-    public readonly error?: string,   // server-provided message parsed from a JSON {error} body, if any
-    public readonly body?: unknown,    // the full parsed JSON error body, if any
+    public readonly error?: string, // server-provided message parsed from a JSON {error} body, if any
+    public readonly body?: unknown, // the full parsed JSON error body, if any
   ) {
     super(`HTTP ${status}`);
     this.name = 'HttpError';
@@ -81,8 +81,11 @@ export class ApiClient {
   private async throwHttp(res: Response): Promise<never> {
     const body = await res.json().catch(() => null);
     const msg =
-      body && typeof body === 'object' && 'error' in body && typeof (body as { error?: unknown }).error === 'string'
-        ? (body as { error?: string }).error
+      body &&
+      typeof body === 'object' &&
+      'error' in body &&
+      typeof (body as { error?: unknown }).error === 'string'
+        ? (body as { error: string }).error
         : undefined;
     throw new HttpError(res.status, msg, body ?? undefined);
   }
@@ -95,6 +98,8 @@ export class ApiClient {
     });
     if (res.status === 401) this.fail401(opts);
     if (!res.ok) return this.throwHttp(res);
+    // Mutation routes answer 204 with an empty body — there is nothing to parse.
+    if (res.status === 204) return undefined as T;
     return (await res.json()) as T;
   }
 
@@ -132,6 +137,23 @@ export class ApiClient {
   }
 
   /**
+   * Multipart PUT — same contract as `upload` but with `method:'PUT'`. No
+   * Content-Type header so the browser sets the boundary; 401 → fail401, non-ok
+   * → throwHttp.
+   */
+  async putForm<T>(path: string, formData: FormData, opts?: RequestOpts): Promise<T> {
+    const res = await fetch(this.buildUrl(path), {
+      method: 'PUT',
+      credentials: 'same-origin',
+      headers: { ...this.authHeaders() },
+      body: formData,
+    });
+    if (res.status === 401) this.fail401(opts);
+    if (!res.ok) return this.throwHttp(res);
+    return (await res.json()) as T;
+  }
+
+  /**
    * POST returning the raw Response (binary/blob downloads). Throws AuthError on
    * 401, but does NOT throw on other non-ok statuses — the caller inspects res.ok
    * and reads .blob()/.json() itself.
@@ -148,17 +170,23 @@ export class ApiClient {
   }
 
   health(): Promise<{ status: string } | null> {
-    return fetch(this.buildUrl('/health'), { credentials: 'same-origin', headers: { ...this.authHeaders() } })
+    return fetch(this.buildUrl('/health'), {
+      credentials: 'same-origin',
+      headers: { ...this.authHeaders() },
+    })
       .then((r) => r.json())
       .catch(() => null);
   }
   /** Never rejects. */
   ready(): Promise<{ ready: boolean }> {
-    return fetch(this.buildUrl('/ready'), { credentials: 'same-origin', headers: { ...this.authHeaders() } })
+    return fetch(this.buildUrl('/ready'), {
+      credentials: 'same-origin',
+      headers: { ...this.authHeaders() },
+    })
       .then((r) => (r.ok ? r.json() : { ready: false }))
       .catch(() => ({ ready: false }));
   }
   getSetting(key: string): Promise<{ key: string; value: string | null }> {
-    return this.get(`/system/settings/${encodeURIComponent(key)}`);
+    return this.get(`/api/system/settings/${encodeURIComponent(key)}`);
   }
 }

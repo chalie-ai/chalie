@@ -256,14 +256,11 @@ class ClientContextService:
             return
 
         try:
-            from services.data_graph_service import get_data_graph_service
-            dgs = get_data_graph_service()
-            dgs.store(kind='user_specific', key='culture_region', value=culture,
-                      source='demographic_seeding')
+            from models.fact import FactRow
+            FactRow.store('culture_region', culture, source='demographic_seeding')
 
             if language:
-                dgs.store(kind='user_specific', key='language_preference', value=language,
-                          source='demographic_seeding')
+                FactRow.store('language_preference', language, source='demographic_seeding')
 
             self._store.setex(CULTURE_SEED_KEY, 86400 * 30, "1")  # Don't re-seed for 30 days
             logging.debug(f"[CLIENT CONTEXT] Seeded culture_region={culture} from locale={locale}")

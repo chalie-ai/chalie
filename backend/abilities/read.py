@@ -41,9 +41,10 @@ from urllib.parse import urlparse
 import requests
 
 from abilities._ability import Ability
-from abilities._params import Keys
+from configs.enums.param_key import Keys
 from abilities._result import ToolResult, truncate
-from services.web_fetch import BROWSER, FetchBlocked, fetch_page
+from services.web_fetch import BROWSER, fetch_page
+from exceptions import FetchBlocked
 
 logger = logging.getLogger(__name__)
 
@@ -90,7 +91,7 @@ class ReadAbility(Ability):
 
     #: The keys a model naturally emits for the read target — ``url``, ``path``,
     #: ``link`` … — are healed to the canonical ``source`` upstream at the dispatch
-    #: seam via the shared ``abilities._params.VARIANTS[Keys.source]`` ladder, so a
+    #: seam via the shared ``configs.enums.param_key.VARIANTS[Keys.source]`` ladder, so a
     #: call like ``read({"url": …})`` resolves instead of bouncing on
     #: ``source-required``. No per-tool alias list lives here anymore.
     _URL_FETCH_TIMEOUT: ClassVar[int] = 15

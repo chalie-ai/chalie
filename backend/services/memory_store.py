@@ -13,7 +13,7 @@ Thread safety: one RLock per keyspace.
 TTL management: lazy eviction on read + background reaper every 60s.
 
 Note: pub/sub (publish/subscribe/pubsub/_channels) has been removed.
-WebSocketBroker.broadcast() is the authoritative push path.
+Websocket.broadcast() is the authoritative push path.
 """
 
 import logging

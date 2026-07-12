@@ -17,9 +17,10 @@ structured row shape.
 
 from typing import ClassVar, cast
 
-from abilities._params import Keys
+from configs.enums.param_key import Keys
 from abilities._result import ToolResult
 from abilities._review_window import ReviewWindowAbility
+from configs.enums.channels import Channel
 
 _DEFAULT_BUFFER_MINUTES = 5
 _MIN_BUFFER_MINUTES = 1
@@ -106,7 +107,7 @@ class ReviewTranscriptAbility(ReviewWindowAbility):
         from services.transcript_service import Transcript
 
         include_subagent = bool(params.get(Keys.include_subagent_transcripts, False))
-        channels = ["user", "subagent"] if include_subagent else ["user"]
+        channels = [Channel.USER.value, "subagent"] if include_subagent else [Channel.USER.value]
         return Transcript.by_time(channels, lo, hi)
 
     def _row(self, rec: "dict[str, object]", ordinal: int) -> "dict[str, object]":

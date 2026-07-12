@@ -1,13 +1,15 @@
-"""Test that the message processor's _build_send_messages() correctly
-assembles its ProviderApiRequest DTO with image attachment from config.get_image."""
+"""Test that the message processor's _build_messages() correctly assembles its
+ProviderRequest DTO with image attachment from ``PromptService.image()``
+(``VisionConfig.get_image`` under the old spine)."""
 
 import base64
+import sqlite3
 from pathlib import Path
 from typing import cast
 
 import pytest
 
-from services.message_processor import MessageProcessor
+from controllers.message_processor import MessageProcessor
 
 pytestmark = pytest.mark.unit
 
@@ -18,33 +20,36 @@ def _png_bytes() -> bytes:
     )
 
 
-def test_build_send_messages_attaches_image_from_get_image(tmp_path: Path) -> None:
+def test_build_send_messages_attaches_image_from_get_image(
+    tmp_path: Path, db: sqlite3.Connection
+) -> None:
     from configs.channels.vision import VisionConfig
-    from services.processor_config import ProcessorConfig
+    from configs.enums.policy_channel import PolicyChannel
 
     img = tmp_path / "a.png"
     img.write_bytes(_png_bytes())
 
-    mp = object.__new__(MessageProcessor)
-    MessageProcessor.__init__(mp, "what is this", {"image_path": str(img), "mime_type": "image/png"})
-    mp.config = VisionConfig(ProcessorConfig.PolicyChannel.CHAT)
+    config = VisionConfig(PolicyChannel.CHAT)
+    mp = MessageProcessor(
+        config, raw_input="what is this",
+        metadata={"image_path": str(img), "mime_type": "image/png"},
+    )
 
-    messages = mp._build_send_messages()
+    messages = mp._build_messages()
 
     assert messages[0]["role"] == "user"
     assert cast(dict[str, object], messages[0]["image"])["mime_type"] == "image/png"
     assert cast(dict[str, object], messages[0]["image"])["data"] == base64.b64encode(_png_bytes()).decode()
 
 
-def test_build_send_messages_no_image_when_get_image_returns_none(tmp_path: Path) -> None:
+def test_build_send_messages_no_image_when_get_image_returns_none(db: sqlite3.Connection) -> None:
     from configs.channels.vision import VisionConfig
-    from services.processor_config import ProcessorConfig
+    from configs.enums.policy_channel import PolicyChannel
 
-    mp = object.__new__(MessageProcessor)
-    MessageProcessor.__init__(mp, "what is this", {})
-    mp.config = VisionConfig(ProcessorConfig.PolicyChannel.CHAT)
+    config = VisionConfig(PolicyChannel.CHAT)
+    mp = MessageProcessor(config, raw_input="what is this")
 
-    messages = mp._build_send_messages()
+    messages = mp._build_messages()
 
     assert messages[0]["role"] == "user"
     assert "image" not in messages[0]

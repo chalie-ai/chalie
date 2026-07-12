@@ -39,15 +39,17 @@ if TYPE_CHECKING:
         input: object
         text: str
 
-from services.llm_clients.base import ProviderClient
+from configs.enums.thinking_level import ThinkingLevel
+from contracts.provider_client import ProviderClient
+from exceptions import (
+    ProviderResponseError,
+    ProviderTimeoutError,
+    RateLimitError,
+    ResponseOverLimitError,
+)
 from services.provider_api import (
     ProviderApiRequest,
     ProviderApiResponse,
-    RateLimitError,
-    ResponseOverLimitError,
-    ProviderResponseError,
-    ProviderTimeoutError,
-    ThinkingLevel,
 )
 
 logger = logging.getLogger(__name__)
@@ -151,7 +153,7 @@ class AnthropicClient(ProviderClient):
     def _get_client(self) -> "_anthropic_mod.Anthropic":
         import anthropic
         from services.llm_service import _resolve_api_key, _app_user_agent  # noqa: PLC0415
-        from services.providers import PROVIDER_CALL_TIMEOUT_S  # noqa: PLC0415
+        from services.provider_api import PROVIDER_CALL_TIMEOUT_S  # noqa: PLC0415
         return anthropic.Anthropic(
             api_key=_resolve_api_key(self._config),
             timeout=PROVIDER_CALL_TIMEOUT_S,
@@ -208,7 +210,7 @@ class AnthropicClient(ProviderClient):
 
     def send(self, dto: ProviderApiRequest) -> ProviderApiResponse:
         """Transform DTO → Anthropic Messages API → ProviderApiResponse."""
-        # Compute max_tokens using the window already known to Providers.send().
+        # Compute max_tokens using the window already known to ProviderService.send().
         # The window is not available here; use the DTO's explicit value if set,
         # else fall back to a safe ceiling matching the old _MAX_TOKENS.
         window = self.get_context_limit()

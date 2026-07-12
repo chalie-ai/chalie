@@ -9,11 +9,10 @@ import re
 import sqlite3
 from typing import TYPE_CHECKING, TypeAlias
 
+from services.database import Database
 from services.file_mapper_service import FileMapperService
 
 if TYPE_CHECKING:
-    from services.database_service import DatabaseService
-
     # Column info tuple from PRAGMA table_info: (cid, name, type, notnull, dflt_value, pk)
     _ColInfo: TypeAlias = tuple[int | None, str | None, str | None, int | None, object, object]
     _TableCols: TypeAlias = dict[str, _ColInfo]
@@ -61,8 +60,7 @@ def _load_sqlite_vec(conn: sqlite3.Connection) -> None:
 
 class SchemaConvergenceService:
 
-    def __init__(self, db_service: DatabaseService, embedding_dimensions: int = 768) -> None:
-        self.db_service = db_service
+    def __init__(self, embedding_dimensions: int = 768) -> None:
         self._embedding_dimensions = embedding_dimensions
         self._schema_path = FileMapperService.get_schema_path()
 
@@ -86,7 +84,7 @@ class SchemaConvergenceService:
         finally:
             desired_conn.close()
 
-        with self.db_service.connection() as conn:
+        with Database.transaction() as conn:
             _load_sqlite_vec(conn)
 
             is_fresh = self._is_fresh_db(conn)
@@ -152,11 +150,33 @@ class SchemaConvergenceService:
         )
 
     def backfill_redesign_columns(self) -> None:
-        with self.db_service.connection() as conn:
+        with Database.transaction() as conn:
             self._backfill_episode_columns(conn)
             self._backfill_data_graph_columns(conn)
-            conn.commit()
+            self._backfill_tool_call_columns(conn)
         logger.info("[convergence] Redesign-column backfill complete")
+
+    def _backfill_tool_call_columns(self, conn: sqlite3.Connection) -> None:
+        """Stamp legacy ``tool_calls`` rows terminal.
+
+        The ``state``/``ended_at`` columns are added to existing dbs by
+        ADD COLUMN, which applies only the static DEFAULT — so every pre-existing
+        row lands ``state='started', ended_at=NULL``, the exact fingerprint of a
+        live in-flight call. Once the REST projection renders persisted state,
+        those legacy rows would show as eternal spinners. A row predating the
+        columns is by definition already terminal (its turn is long over), so
+        stamp it ``done`` with ``ended_at`` reconstructed from ``created_at``.
+
+        Backfill runs once at startup before any turn executes, so no genuinely
+        running call is ever mid-flight here; the raw-default fingerprint
+        (``state='started' AND ended_at IS NULL``) uniquely selects settled-in-
+        reality rows. We never parse the result envelope into a state — when a
+        legacy outcome is indistinguishable we stamp ``done`` (a benign chip)
+        rather than guessing ``error``."""
+        conn.execute(
+            "UPDATE tool_calls SET state = 'done', ended_at = COALESCE(ended_at, created_at) "
+            "WHERE state = 'started' AND ended_at IS NULL"
+        )
 
     def _backfill_episode_columns(self, conn: sqlite3.Connection) -> None:
         conn.execute(
@@ -735,7 +755,7 @@ class SchemaConvergenceService:
     def _strip_data_graph_check_constraint(self, live_conn: sqlite3.Connection) -> None:
         """Strip CHECK constraint from data_graph.kind on existing databases.
 
-        Python validates kind via VALID_KINDS in data_graph_service.py.
+        Python validates kind via VALID_KINDS in contracts/constants/data_graph.py.
         To be removed when SchemaConvergence handles constraint changes fully.
 
         The embedded ``data_graph_new`` DDL below must stay in lockstep with the

@@ -5,7 +5,7 @@ Every native AND MCP tool call flows through it (ToolDispatcher.dispatch passes
 ToolDispatcher._execute as the callback).
 
 Settings: internal (always allowed, hidden in Brain) · allow · ask · deny.
-Channels: ProcessorConfig.PolicyChannel values.
+Channels: PolicyChannel values.
 
 A small set of read-only / scratch / infrastructure tools (``INTERNAL``) ALWAYS
 bypass the gate regardless of channel or any seeded row — they are never
@@ -15,7 +15,7 @@ The gate is dead simple: short-circuit INTERNAL tools, else SELECT the setting
 (lazily creating an 'ask' row on a miss), then run | block | prompt. The decision
 carries no execution timeout — an allowed tool runs to completion in the callback
 (Ability.execute). The interactive prompt parks until the user responds OR the
-turn's cancel_event fires, so it never pins the per-channel turn lock.
+turn's should_stop() returns True, so it never pins the per-channel turn lock.
 """
 
 import json
@@ -23,17 +23,17 @@ import logging
 import threading
 import uuid
 from collections.abc import Callable
-from typing import TYPE_CHECKING, cast
+from typing import cast
 
-from services.processor_config import ProcessorConfig
+from configs.enums.policy_channel import PolicyChannel
+from models.policy import Policy
+from models.policy_blocked_log import PolicyBlockedLog
 from services.time_utils import utc_now
-
-if TYPE_CHECKING:
-    from services.database_service import DatabaseService
+from services.websocket import Websocket
 
 logger = logging.getLogger(__name__)
 
-CHANNEL = ProcessorConfig.PolicyChannel
+CHANNEL = PolicyChannel
 VALID_CHANNELS = {c.value for c in CHANNEL}
 VALID_SETTINGS = {"internal", "allow", "ask", "deny"}
 
@@ -56,53 +56,49 @@ _BLOCK = "The {permission} action is not allowed. Do NOT retry."
 # POST /api/policies/respond.
 _permission_gates: dict[str, dict[str, object]] = {}
 
-# How often the interactive ask-gate re-checks the turn's cancel_event while
+# How often the interactive ask-gate re-checks the turn's should_stop() while
 # parked: small enough that a cancelled turn frees the per-channel
 # lock near-instantly, large enough to cost no measurable idle CPU.
 _GATE_POLL_SECONDS = 0.25
 
 
 class PolicyManager:
-    def __init__(self, db: "DatabaseService") -> None:
-        self.db = db
-
     # ── The single entry point dispatch calls ─────────────────────────────────
 
     @staticmethod
     def wrap(
-        channel: ProcessorConfig.PolicyChannel,
+        channel: PolicyChannel,
         permission: str,
         callback: Callable[[], str],
         error: str = _BLOCK,
-        cancel_event: "threading.Event | None" = None,
+        should_stop: "Callable[[], bool] | None" = None,
     ) -> str:
-        """Gate `callback` for (channel, permission). `cancel_event` (the turn's)
+        """Gate `callback` for (channel, permission). `should_stop` (the turn's)
         lets a parked `ask` prompt unwind when the turn is cancelled."""
-        from services.database_service import get_shared_db_service  # noqa: PLC0415
-        return PolicyManager(get_shared_db_service()).authorize(channel, permission, callback, error, cancel_event)
+        return PolicyManager().authorize(channel, permission, callback, error, should_stop)
 
     # ── The gate: run | block | ask (dead simple) ─────────────────────────────
 
     def authorize(
         self,
-        channel: ProcessorConfig.PolicyChannel,
+        channel: PolicyChannel,
         permission: str,
         callback: Callable[[], str],
         error: str = _BLOCK,
-        cancel_event: "threading.Event | None" = None,
+        should_stop: "Callable[[], bool] | None" = None,
     ) -> str:
         if permission.split(".", 1)[0] in INTERNAL:
             return callback()                       # INTERNAL tools always bypass (no channel, no row)
-        setting = self._setting(channel.value, permission)
+        setting = Policy.get_or_create_default(channel.value, permission)
         if setting in ("internal", "allow"):
             return callback()
-        if setting == "ask" and channel not in _NO_HUMAN and self._ask_user(permission, channel.value, cancel_event):
+        if setting == "ask" and channel not in _NO_HUMAN and self._ask_user(permission, channel.value, should_stop):
             return callback()
         # A turn cancelled while parked on the ask gate denies the tool
         # but is NOT a user verdict — skip the audit row so the blocked-log stays
-        # honest. The guard self-no-ops for every non-cancel path (no cancel_event,
-        # or it never fired), which keeps the normal deny/unavailable logging.
-        if cancel_event is None or not cancel_event.is_set():
+        # honest. The guard self-no-ops for every non-cancel path (no should_stop,
+        # or it never returned True), which keeps the normal deny/unavailable logging.
+        if should_stop is None or not should_stop():
             reason = setting if setting == "deny" else ("user_unavailable" if channel in _NO_HUMAN else "user_denied")
             self._log_blocked(channel.value, permission, reason)
         return error.format(permission=permission)   # block STRING (uniform with execute's return)
@@ -110,33 +106,23 @@ class PolicyManager:
     # ── Lookup-or-create: the entire provisioning story ───────────────────────
 
     def _setting(self, channel: str, permission: str) -> str:
-        with self.db.connection() as conn:
-            row = conn.execute(
-                "SELECT setting FROM policy WHERE channel = ? AND permission = ?",
-                (channel, permission),
-            ).fetchone()
-            if row:
-                return cast(str, row[0])
-            conn.execute(
-                "INSERT OR IGNORE INTO policy (channel, permission, setting) VALUES (?, ?, 'ask')",
-                (channel, permission),
-            )
-            conn.commit()
-            return "ask"
+        # Kept as a thin wrapper so the gate's call site stays readable; the
+        # bespoke classmethod on Policy owns the INSERT OR IGNORE default.
+        return Policy.get_or_create_default(channel, permission)
 
     # ── Interactive prompt (CHAT only; fail-open per D6) ──────────────────────
 
-    def _ask_user(self, permission: str, channel: str, cancel_event: "threading.Event | None" = None) -> bool:
+    def _ask_user(self, permission: str, channel: str, should_stop: "Callable[[], bool] | None" = None) -> bool:
         try:
-            from services.websocket_broker import WebSocketBroker  # noqa: PLC0415
+            from models.ws_message import WsMessage  # noqa: PLC0415
             rid = str(uuid.uuid4())
             gate = _permission_gates[rid] = {"event": threading.Event(), "result": None}
-            WebSocketBroker().broadcast({
-                "type": "permission_request",
-                "request_id": rid,
-                "action_id": permission,
-                "context": channel,
-            })
+            Websocket.broadcast(WsMessage(
+                type="permission_request",
+                request_id=rid,
+                action_id=permission,
+                context=channel,
+            ))
             # Park until the user responds (POST /api/policies/respond sets the gate
             # event) OR the turn is cancelled. Polling makes the wait a cooperative
             # cancel checkpoint instead of an unbounded park that would pin the
@@ -145,7 +131,7 @@ class PolicyManager:
             # below would swallow it and WRONGLY approve the gated tool.
             event = cast(threading.Event, gate["event"])
             while not event.wait(_GATE_POLL_SECONDS):
-                if cancel_event is not None and cancel_event.is_set():
+                if should_stop is not None and should_stop():
                     break
             return _permission_gates.pop(rid, {}).get("result") == "approved"
         except Exception as exc:  # noqa: BLE001
@@ -153,52 +139,38 @@ class PolicyManager:
             return True  # fail-open (D6)
 
     def _log_blocked(self, channel: str, permission: str, reason: str) -> None:
-        with self.db.connection() as conn:
-            conn.execute(
-                "INSERT INTO policy_blocked_log (action_id, context, reason, created_at) "
-                "VALUES (?, ?, ?, ?)",
-                (permission, channel, reason, utc_now().isoformat()),
-            )
-            conn.commit()
+        PolicyBlockedLog.log_blocked(
+            action_id=permission,
+            context=channel,
+            reason=reason,
+            created_at=utc_now().isoformat(),
+        )
 
     # ── Brain REST surface (api/policies.py) ──────────────────────────────────
 
     def get_all(self) -> list[dict[str, str]]:
         """All rows EXCLUDING internal (hidden in Brain), as flat triples."""
-        with self.db.connection() as conn:
-            rows = conn.execute(
-                "SELECT channel, permission, setting FROM policy "
-                "WHERE setting != 'internal' ORDER BY channel, permission"
-            ).fetchall()
-        return [{"channel": r[0], "permission": r[1], "setting": r[2]} for r in rows]
+        return (
+            Policy.filter("setting", "internal", "!=")
+            .order_by("channel, permission")
+            .select("channel", "permission", "setting")
+        )
 
     def upsert(self, channel: str, permission: str, setting: str) -> int:
         """Single-cell upsert. Returns rows affected (0 on invalid input)."""
         if channel not in VALID_CHANNELS or setting not in VALID_SETTINGS:
             return 0
-        with self.db.connection() as conn:
-            cur = conn.execute(
-                "INSERT INTO policy (channel, permission, setting) VALUES (?, ?, ?) "
-                "ON CONFLICT(channel, permission) DO UPDATE SET setting = ?",
-                (channel, permission, setting, setting),
-            )
-            conn.commit()
-            return cur.rowcount
+        return Policy.upsert(channel, permission, setting)
 
     def get_blocked_log(self, limit: int = 50) -> list[dict[str, str]]:
-        with self.db.connection() as conn:
-            rows = conn.execute(
-                "SELECT action_id, context, reason, created_at FROM policy_blocked_log "
-                "ORDER BY created_at DESC LIMIT ?",
-                (limit,),
-            ).fetchall()
-        return [{"action_id": r[0], "context": r[1], "reason": r[2], "created_at": r[3]} for r in rows]
+        return (
+            PolicyBlockedLog.order_by("created_at DESC")
+            .limit(limit)
+            .select("action_id", "context", "reason", "created_at")
+        )
 
     def clear_blocked_log(self) -> int:
-        with self.db.connection() as conn:
-            cur = conn.execute("DELETE FROM policy_blocked_log")
-            conn.commit()
-            return cur.rowcount
+        return PolicyBlockedLog.clear_all()
 
     # ── Seed / reset (static policy_defaults.json) ────────────────────────────
 
@@ -208,18 +180,11 @@ class PolicyManager:
         with open(FileMapperService.get_policy_defaults_path()) as f:
             seed = cast(list[dict[str, str]], json.load(f))
         inserted = 0
-        with self.db.connection() as conn:
-            for r in seed:
-                inserted += conn.execute(
-                    "INSERT OR IGNORE INTO policy (channel, permission, setting) VALUES (?, ?, ?)",
-                    (r["channel"], r["permission"], r["setting"]),
-                ).rowcount
-            conn.commit()
+        for r in seed:
+            inserted += Policy.insert_or_ignore(r["channel"], r["permission"], r["setting"])
         return inserted
 
     def reset_to_defaults(self) -> int:
         """Wipe and re-apply the static seed."""
-        with self.db.connection() as conn:
-            conn.execute("DELETE FROM policy")
-            conn.commit()
+        Policy.clear_all()
         return self.apply_seed()

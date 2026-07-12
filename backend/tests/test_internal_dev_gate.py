@@ -28,9 +28,9 @@ def test_disabled_hides_mobile_surfaces(
     monkeypatch.delenv("CHALIE_INTERNAL_DEV", raising=False)
     client = _client()
 
-    assert client.get('/auth/status').get_json()["internal_dev"] is False
+    assert client.get('/api/auth/status').get_json()["internal_dev"] is False
     # 404 — gated before auth even runs, indistinguishable from a missing route.
-    assert client.get('/auth/username').status_code == 404
+    assert client.get('/api/auth/username').status_code == 404
     assert client.get('/pairing/').status_code == 404
 
 
@@ -40,8 +40,8 @@ def test_enabled_opens_mobile_surfaces(
     monkeypatch.setenv("CHALIE_INTERNAL_DEV", "1")
     client = _client()
 
-    assert client.get('/auth/status').get_json()["internal_dev"] is True
+    assert client.get('/api/auth/status').get_json()["internal_dev"] is True
     # Gate open → the route now enforces auth (401 without a cookie session).
-    assert client.get('/auth/username').status_code == 401
+    assert client.get('/api/auth/username').status_code == 401
     # Gate open → the pairing MPA entry is served.
     assert client.get('/pairing/').status_code == 200

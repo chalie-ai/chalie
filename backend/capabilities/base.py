@@ -10,53 +10,27 @@ need to deal with cryptographic details.
 Credential storage
 ------------------
 Credentials are stored in the ``tool_configs`` table via
-:class:`~services.tool_config_service.ToolConfigService`.  Values are encrypted
+:class:`~models.tool_config.ToolConfig`.  Values are encrypted
 with AES-256-GCM via :class:`~services.vault_service.VaultService` before being
 written; the vault must be unlocked (via
 :meth:`~services.vault_service.VaultService.unlock`) before any credential
 operations can succeed.
-
-Lazy imports
-------------
-All service imports are performed *inside* method bodies rather than at module
-level to prevent circular-import issues during early application boot.
 """
 
 import logging
 from abc import ABC, abstractmethod
-from datetime import datetime
-from typing import TYPE_CHECKING
 
-if TYPE_CHECKING:
-    from typing import Protocol
-
-    class _ToolConfigService(Protocol):
-        def set_tool_config(self, tool_name: str, config: dict[str, object]) -> bool: ...
-        def get_tool_config(self, tool_name: str) -> dict[str, str]: ...
-        def delete_tool_config(self, tool_name: str) -> bool: ...
+from models.tool_config import ToolConfig
+from exceptions import VaultLockedError
 
 logger = logging.getLogger(__name__)
-
-def _get_tool_config_service() -> "_ToolConfigService":
-    """Return a :class:`~services.tool_config_service.ToolConfigService` instance via deferred import."""
-    from services.database_service import get_shared_db_service
-    from services.tool_config_service import ToolConfigService
-
-    return ToolConfigService(get_shared_db_service())
 
 
 class AbstractCapability(ABC):
     """Abstract base class that every capability plugin must subclass."""
 
-    MAX_CONSECUTIVE_FAILURES = 5
-
     def __init__(self) -> None:
         self._connected: bool = False
-        self._error_count: int = 0
-        self._last_error: str | None = None
-        self._failure_alerted: bool = False
-        self._backoff_secs: int = 0
-        self._next_retry_at: datetime | None = None
 
     # ------------------------------------------------------------------
     # Abstract interface — must be implemented by every subclass
@@ -107,145 +81,6 @@ class AbstractCapability(ABC):
     def monitor(self) -> None:
         self._do_monitor()
 
-    def health(self) -> bool:
-        """Quick connectivity check.
-
-        Default implementation returns the current ``_connected`` state.
-        Subclasses may override to perform an active probe (e.g. a lightweight
-        server request).
-
-        Returns:
-            bool: ``True`` if the capability's data source is reachable.
-        """
-        return self._connected
-
-    def health_details(self) -> dict[str, object]:
-        """Return detailed health information including error tracking.
-
-        Returns:
-            dict: ``{"connected": bool, "error_count": int,
-            "last_error": str | None}``.
-        """
-        return {
-            "connected": self._connected,
-            "error_count": self._error_count,
-            "last_error": self._last_error,
-        }
-
-    def run_monitor(self) -> None:
-        """Execute :meth:`monitor` with health tracking and circuit breaker.
-
-        Resets error count on success, increments on failure, auto-disconnects
-        after :attr:`MAX_CONSECUTIVE_FAILURES`.  When disconnected, applies
-        exponential backoff so dead servers are not hammered every cycle.
-        Sends a recovery alert when a degraded capability comes back online.
-        """
-        if self._next_retry_at:
-            from services.time_utils import utc_now
-            if utc_now() < self._next_retry_at:
-                return
-
-        try:
-            self.monitor()
-            was_degraded = self._backoff_secs and self._failure_alerted
-            if was_degraded:
-                self._send_recovery_alert()
-            self._error_count = 0
-            self._last_error = None
-            self._failure_alerted = False
-            self._backoff_secs = 0
-            self._next_retry_at = None
-        except Exception as exc:
-            self._error_count += 1
-            self._last_error = str(exc)
-            logger.warning("[%s] monitor() failed (%d/%d): %s",
-                           self.get_id(), self._error_count,
-                           self.MAX_CONSECUTIVE_FAILURES, exc)
-            if self._error_count >= self.MAX_CONSECUTIVE_FAILURES:
-                self._connected = False
-                self._maybe_send_failure_alert()
-                self._activate_backoff()
-        self._persist_health()
-
-    def _persist_health(self) -> None:
-        """Persist current error state to ``tool_configs``."""
-        try:
-            svc = _get_tool_config_service()
-            cap_id = self.get_id()
-            svc.set_tool_config(cap_id, {
-                f"{cap_id}:error_count": str(self._error_count),
-                f"{cap_id}:last_error": self._last_error or "",
-            })
-        except Exception:
-            pass
-
-    def _maybe_send_failure_alert(self) -> None:
-        """Send a WebSocket status-bar alert when a capability disconnects.
-
-        Fires once per disconnection event.  Reset when monitor()
-        succeeds again (``_failure_alerted`` cleared on success path).
-        """
-        if self._failure_alerted:
-            return
-        self._failure_alerted = True
-        cap_id = self.get_id()
-        cap_name = self.get_manifest().get("name", cap_id)
-        err = self._last_error or "unknown error"
-        try:
-            import json
-            from services.memory_client import MemoryClientService
-            from services.websocket_broker import WebSocketBroker
-            store = MemoryClientService.create_connection()
-            payload = {
-                "type": "capability_alert",
-                "cap_id": cap_id,
-                "cap_name": cap_name,
-                "error": err,
-                "recovered": False,
-            }
-            WebSocketBroker().broadcast(payload)
-            store.setex(
-                f"capability:alert:{cap_id}",
-                1800,
-                json.dumps(payload),
-            )
-        except Exception as exc:
-            logger.debug("failure alert push: %s", exc)
-
-    def _send_recovery_alert(self) -> None:
-        """Send a WebSocket status-bar recovery notification."""
-        cap_id = self.get_id()
-        cap_name = self.get_manifest().get("name", cap_id)
-        try:
-            from services.memory_client import MemoryClientService
-            from services.websocket_broker import WebSocketBroker
-            store = MemoryClientService.create_connection()
-            payload = {
-                "type": "capability_alert",
-                "cap_id": cap_id,
-                "cap_name": cap_name,
-                "recovered": True,
-            }
-            WebSocketBroker().broadcast(payload)
-            store.delete(f"capability:alert:{cap_id}")
-        except Exception as exc:
-            logger.debug("recovery alert push: %s", exc)
-
-    INITIAL_BACKOFF_SECS = 60
-    MAX_BACKOFF_SECS = 1800
-
-    def _activate_backoff(self) -> None:
-        """Set or double the exponential backoff timer."""
-        from datetime import timedelta
-        from services.time_utils import utc_now
-
-        self._backoff_secs = min(
-            self._backoff_secs * 2 if self._backoff_secs else self.INITIAL_BACKOFF_SECS,
-            self.MAX_BACKOFF_SECS,
-        )
-        self._next_retry_at = utc_now() + timedelta(seconds=self._backoff_secs)
-        logger.info("[%s] backoff %ds", self.get_id(), self._backoff_secs)
-
     @abstractmethod
     def get_tools(self) -> list[dict[str, object]]:
         """Return tool definitions exposed by this capability.
@@ -292,12 +127,7 @@ class AbstractCapability(ABC):
                 after logging.
         """
         try:
-            import base64
-            from services.vault_service import get_vault_service
-            blob = get_vault_service().encrypt_str(value)
-            encrypted = base64.b64encode(blob).decode()
-            svc = _get_tool_config_service()
-            svc.set_tool_config(self.get_id(), {key: encrypted})
+            ToolConfig.set_encrypted(self.get_id(), key, value)
         except Exception as exc:
             logger.error(
                 "[%s] store_credential(%r) failed: %s",
@@ -309,9 +139,12 @@ class AbstractCapability(ABC):
     def load_credential(self, key: str) -> str | None:
         """Load and AES-256-GCM–decrypt a stored credential via VaultService.
 
-        Returns ``None`` if the key is absent, the vault is locked, or
-        decryption fails (e.g. the vault has been re-initialised and the DEK
-        has rotated).
+        Returns ``None`` if the key is absent or decryption fails (e.g. the
+        vault has been re-initialised and the DEK has rotated). A *locked*
+        vault is different: :exc:`~services.vault_service.VaultLockedError` is
+        re-raised so the caller (e.g. capability setup) can surface a clear
+        "unlock the vault" response rather than treating the credential as
+        merely absent.
 
         The stored value is expected to be a base64-encoded blob as written by
         :meth:`store_credential`.
@@ -320,18 +153,15 @@ class AbstractCapability(ABC):
             key: Config key, e.g. ``"caldav:password"``.
 
         Returns:
-            str | None: Decrypted plaintext value, or ``None`` on any failure.
+            str | None: Decrypted plaintext value, or ``None`` on absent/failed
+            decryption.
+
+        Raises:
+            :exc:`~services.vault_service.VaultLockedError`: If the vault has
+                not yet been unlocked.
         """
         try:
-            svc = _get_tool_config_service()
-            config = svc.get_tool_config(self.get_id())
-            encrypted = config.get(key)
-            if encrypted is None:
-                return None
-            import base64
-            from services.vault_service import get_vault_service, VaultLockedError
-            raw = base64.b64decode(encrypted.encode())
-            return get_vault_service().decrypt_str(raw)
+            return ToolConfig.get_encrypted(self.get_id(), key)
         except VaultLockedError:
             raise
         except Exception as exc:
@@ -345,15 +175,14 @@ class AbstractCapability(ABC):
         """Remove ALL ``tool_configs`` rows associated with this capability.
 
         This is equivalent to calling
-        :meth:`~services.tool_config_service.ToolConfigService.delete_tool_config`
+        :meth:`~models.tool_config.ToolConfig.delete_all`
         with ``self.get_id()`` as the tool name.
 
         Returns:
             None
         """
         try:
-            svc = _get_tool_config_service()
-            svc.delete_tool_config(self.get_id())
+            ToolConfig.delete_all(self.get_id())
         except Exception as exc:
             logger.error(
                 "[%s] delete_credentials() failed: %s",

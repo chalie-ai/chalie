@@ -1,26 +1,22 @@
 import { api } from '@chalie/shared';
 
-/** A single scheduled item from the scheduler API. */
-export interface ScheduledItem {
-  id: string;
-  item_type: string;
-  message: string;
-  due_at: string | null;
-  recurrence: string | null;
-  window_start: string | null;
-  window_end: string | null;
-  status: string;
-  channel: string | null;
-  created_by_session: string | null;
-  created_at: string | null;
-  last_fired_at: string | null;
-  group_id: string | null;
-  is_prompt: boolean;
-  source: string | null;
-  external_uid: string | null;
+/**
+ * One active prompt-schedule thread, collapsed to its turn_id (§13.5).
+ * Mirrors backend SchedulerTurn DTO exactly. `minute`/`hour`/`day`/`month`/
+ * `weekday` are the schedule's crontab field expressions (`*` = every).
+ */
+export interface SchedulerTurn {
+  turn_id: number;
+  gist: string | null;
+  preview: string;
+  minute: string;
+  hour: string;
+  day: string;
+  month: string;
+  weekday: string;
 }
 
-/** An active delegate (backgrounded tool call) from /chat/subagents/active. */
+/** An active delegate (backgrounded tool call) row from GET /api/subagents/all. */
 export interface ActiveSubagent {
   sub_id: string;
   /** The delegate's tool name — the row's subtitle. */
@@ -31,22 +27,49 @@ export interface ActiveSubagent {
   started_at: string;
 }
 
-export const scheduler = {
-  /** GET /scheduler?status=pending — list pending scheduled items. */
-  pending(): Promise<{ items: ScheduledItem[]; total: number; limit: number; offset: number }> {
-    return api.get('/scheduler?status=pending');
-  },
+interface ListingEnvelope<T> {
+  success: true;
+  result: T[];
+  pagination: { page: number; limit: number; total: number };
+}
 
-  /** GET /chat/subagents/active — running async delegates. */
-  subagentsActive(): Promise<{ subagents: ActiveSubagent[] }> {
-    return api.get('/chat/subagents/active');
+interface SingleEnvelope<T> {
+  success: true;
+  result: T;
+}
+
+export const scheduler = {
+  /**
+   * GET /api/subagents/all — running async delegates. Backed by
+   * backend/api/endpoints/subagents.py; envelope is
+   * { success, result: [...], pagination }, fetched at the backend's max
+   * page size (100 — comfortably above any realistic concurrent-delegate count).
+   */
+  async subagentsActive(): Promise<{ subagents: ActiveSubagent[] }> {
+    const body = await api.get<ListingEnvelope<ActiveSubagent>>('/api/subagents/all?limit=100');
+    return { subagents: body.result };
   },
 
   /**
-   * POST /chat/subagent/<subId>/stop — cancel a running delegate. Returns
-   * { ok, cancelled } on success, { ok, reason: 'not_found' } for unknown sub_id.
+   * DELETE /api/subagents/<subId> — cancel a running delegate. Envelope is
+   * { success, result: { cancelled?, reason? } }; `cancelled: true` on
+   * success, `reason: 'not_found'` for an unknown/finished sub_id (still 200
+   * — see backend/api/endpoints/subagents.py).
    */
-  subagentStop(subId: string): Promise<{ ok: boolean; cancelled?: boolean; reason?: string }> {
-    return api.post(`/chat/subagent/${encodeURIComponent(subId)}/stop`, {});
+  async subagentStop(subId: string): Promise<{ cancelled?: boolean; reason?: string }> {
+    const body = await api.del<SingleEnvelope<{ cancelled?: boolean; reason?: string }>>(
+      `/api/subagents/${encodeURIComponent(subId)}`,
+    );
+    return body.result;
+  },
+
+  /**
+   * GET /api/scheduler/turns — active prompt-schedule threads for the dock.
+   * Backed by backend/api/actions/scheduler/turns.py; envelope is
+   * { success, result: [...], pagination }.
+   */
+  async turns(): Promise<SchedulerTurn[]> {
+    const body = await api.get<ListingEnvelope<SchedulerTurn>>('/api/scheduler/turns');
+    return body.result;
   },
 };

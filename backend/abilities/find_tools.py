@@ -2,7 +2,7 @@ import logging
 from pathlib import Path
 from typing import ClassVar, cast
 
-from abilities._params import Keys
+from configs.enums.param_key import Keys
 from abilities._result import ToolResult
 from abilities._search import KNN_DEPTH, SearchableAbility
 from services.file_mapper_service import FileMapperService

@@ -17,7 +17,7 @@ export const auth = {
   /** POST /auth/login — unseal the vault with the stored login username + typed
    *  password. Existing endpoint; called here only from the UnlockVault overlay. */
   login(username: string, password: string): Promise<LoginResult> {
-    return api.post<LoginResult>('/auth/login', { username, password }, NO_REDIRECT);
+    return api.post<LoginResult>('/api/auth/login', { username, password }, NO_REDIRECT);
   },
 
   // register() and setVoiceEnabled() back the onboarding multi-page entry, not
@@ -25,12 +25,12 @@ export const auth = {
 
   /** POST /auth/register — create the master account. */
   register(username: string, password: string): Promise<void> {
-    return api.post<void>('/auth/register', { username, password }, NO_REDIRECT);
+    return api.post<void>('/api/auth/register', { username, password }, NO_REDIRECT);
   },
 
-  /** PUT /api/voice-settings */
+  /** POST /api/voice-settings/-1 */
   setVoiceEnabled(enabled: boolean): Promise<void> {
-    return api.put<void>('/api/voice-settings', { enabled }, NO_REDIRECT);
+    return api.post<void>('/api/voice-settings/-1', { enabled }, NO_REDIRECT);
   },
 };
 

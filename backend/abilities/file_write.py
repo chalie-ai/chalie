@@ -23,7 +23,7 @@ from pathlib import Path
 from typing import ClassVar, cast
 
 from abilities._ability import Ability
-from abilities._params import Keys
+from configs.enums.param_key import Keys
 from abilities._result import ToolResult
 
 logger = logging.getLogger(__name__)
@@ -146,13 +146,13 @@ class FileWriteAbility(Ability):
             logger.warning("file_write read-guard: active processor has no turn — guard bypassed")
             return True
 
-        from services.act_trail import ActTrail
+        from models.tool_call import ToolCall
         target_str = str(target)
-        for row in ActTrail().fetch_by_turn(channel, turn_id):
-            if row.get("tool_name") != "read":
+        for row in ToolCall.by_turn(channel, turn_id):
+            if row.tool_name != "read":
                 continue
             try:
-                p = json.loads(cast(str, row["params"]))
+                p = json.loads(row.params)
             except (json.JSONDecodeError, TypeError):
                 continue
             source = p.get("source") or p.get("path") or p.get("url", "")

@@ -94,15 +94,17 @@ if TYPE_CHECKING:
     class _Content(Protocol):
         parts: "list[_Part] | None"
 
-from services.llm_clients.base import ProviderClient
+from configs.enums.thinking_level import ThinkingLevel
+from contracts.provider_client import ProviderClient
+from exceptions import (
+    ProviderResponseError,
+    ProviderTimeoutError,
+    RateLimitError,
+    ResponseOverLimitError,
+)
 from services.provider_api import (
     ProviderApiRequest,
     ProviderApiResponse,
-    RateLimitError,
-    ResponseOverLimitError,
-    ProviderResponseError,
-    ProviderTimeoutError,
-    ThinkingLevel,
 )
 
 logger = logging.getLogger(__name__)
@@ -211,7 +213,7 @@ class GeminiClient(ProviderClient):
 
     def _get_client(self, genai: "_Genai") -> "_GenaiClient":
         from services.llm_service import _resolve_api_key, _app_user_agent  # noqa: PLC0415
-        from services.providers import PROVIDER_CALL_TIMEOUT_S  # noqa: PLC0415
+        from services.provider_api import PROVIDER_CALL_TIMEOUT_S  # noqa: PLC0415
         return genai.Client(
             api_key=_resolve_api_key(self._config),
             # HttpOptions.timeout is in milliseconds.
@@ -369,7 +371,6 @@ class GeminiClient(ProviderClient):
         text, tool_calls, finish_reason = self._parse_response(cast("_GenResponse", response))
 
         if not text and not tool_calls:
-            logger.warning("[GeminiClient] Empty response, finish_reason=%s", finish_reason)
             raise ProviderResponseError(
                 f"Empty Gemini response (finish_reason={finish_reason})",
                 response_code=200, provider='gemini',

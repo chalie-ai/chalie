@@ -1,21 +1,17 @@
-"""Feature tests for behavioral_pattern support in the memory ability.
+"""Unit tests for behavioral_pattern's place in the memory ability.
 
-Three behaviours under test:
-1. _render_behavioral_pattern() produces a human-readable line from a valid
-   JSON string and degrades gracefully on invalid input.
-2. _recall_payload() projects every hit into a structured row that carries its
-   own kind field (behavioral_pattern, user_specific, …).
-3. _search_data_graph() includes KIND_BEHAVIORAL_PATTERN in the kinds list
-   passed to DataGraphService.recall() so the rows actually surface.
+Two behaviours under test:
+1. _recall_payload() projects every recall hit into a structured row that
+   carries its own kind field.
+2. behavioral_pattern is deliberately NOT a semantic-recall lane — it is
+   surfaced deterministically (PromptService.patterns / top_patterns), so it is
+   excluded from both the memory tool's _DG_RECALL_KINDS and the recall
+   service's _VERTICALS, and from the search-index write pipeline. This guard
+   keeps the recall span and the indexing gate in agreement.
 
-All three are pure-function or real-DataGraph tests — zero mocks except the
-single network-boundary patch already established by the project's conftest db
-fixture (which patches get_shared_db_service to an isolated SQLite instance).
+All are pure-function or constant-wiring assertions: deterministic and
+embedder-free, matching the unit tier.
 """
-
-import json
-import sqlite3
-from typing import cast
 
 import pytest
 
@@ -23,71 +19,7 @@ pytestmark = pytest.mark.unit
 
 
 # ---------------------------------------------------------------------------
-# 1. _render_behavioral_pattern — pure-function, no IO
-# ---------------------------------------------------------------------------
-
-
-class TestRenderBehavioralPattern:
-
-    def test_valid_json_produces_readable_line(self) -> None:
-        """Full JSON with all fields renders as 'name (freq @ anchor): summary [confidence=N]'."""
-        from services.memory_retrieval import _render_behavioral_pattern
-
-        raw = json.dumps({
-            "name": "dawn_meditation_practice",
-            "frequency": "daily",
-            "time_anchor": "06:00",
-            "summary": "Practises 20 minutes of silent meditation before breakfast",
-            "confidence": 8.0,
-        })
-        result = _render_behavioral_pattern(raw)
-
-        assert result.startswith("dawn_meditation_practice"), (
-            f"Expected name at start, got: {result!r}"
-        )
-        assert "daily" in result
-        assert "06:00" in result
-        assert "Practises 20 minutes" in result
-        assert "[confidence=8.0]" in result
-
-    def test_missing_time_anchor_omits_at_segment(self) -> None:
-        """When time_anchor is absent the '@ HH:MM' segment is omitted entirely."""
-        from services.memory_retrieval import _render_behavioral_pattern
-
-        raw = json.dumps({
-            "name": "evening_walk",
-            "frequency": "weekdays",
-            "summary": "30 min walk after dinner",
-            "confidence": 5.5,
-        })
-        result = _render_behavioral_pattern(raw)
-
-        assert "@" not in result, (
-            f"No time_anchor means no '@', got: {result!r}"
-        )
-        assert "evening_walk (weekdays)" in result
-
-    def test_invalid_json_returns_raw_string(self) -> None:
-        """Unparseable JSON is returned verbatim — no crash, no data loss."""
-        from services.memory_retrieval import _render_behavioral_pattern
-
-        raw = "not valid { json"
-        result = _render_behavioral_pattern(raw)
-
-        assert result == raw, (
-            f"Expected raw passthrough for invalid JSON, got: {result!r}"
-        )
-
-    def test_non_string_input_returns_raw(self) -> None:
-        """Non-string input (e.g. already-decoded dict) is handled without crash."""
-        from services.memory_retrieval import _render_behavioral_pattern
-
-        result = _render_behavioral_pattern(cast(str, None))
-        assert result == "", f"None input should produce empty string, got: {result!r}"
-
-
-# ---------------------------------------------------------------------------
-# 2. _recall_payload — pure-function projection, no IO
+# 1. _recall_payload — pure-function projection, no IO
 # ---------------------------------------------------------------------------
 
 
@@ -95,21 +27,6 @@ class TestRecallPayload:
 
     def _make_hit(self, kind: str, key: str = "some_key", text: str = "some text", relevance: str = "high") -> dict[str, object]:
         return {"id": key, "kind": kind, "text": text, "relevance": relevance}
-
-    def test_behavioral_pattern_row_carries_kind_field(self) -> None:
-        """A behavioral_pattern hit projects to a row whose kind field is set."""
-        from services.memory_retrieval import _recall_payload
-
-        hit = self._make_hit(kind="behavioral_pattern", key="dawn_meditation_practice",
-                              text="dawn_meditation_practice (daily @ 06:00): ...")
-        rows = _recall_payload([hit])
-
-        assert len(rows) == 1
-        row = rows[0]
-        assert row["kind"] == "behavioral_pattern"
-        assert row["id"] == "dawn_meditation_practice"
-        assert row["content"] == "dawn_meditation_practice (daily @ 06:00): ..."
-        assert row["score"] == "high"
 
     def test_every_row_carries_its_kind_field(self) -> None:
         """Unlike the old prose format, kind is a first-class field on EVERY row."""
@@ -123,107 +40,72 @@ class TestRecallPayload:
         assert row["kind"] == "user_specific"
         assert row["id"] == "residence"
         assert row["content"] == "Valletta"
+        assert row["score"] == "high"
 
     def test_mixed_results_each_keep_their_own_kind(self) -> None:
         """In a mixed list every row reports its own kind verbatim."""
         from services.memory_retrieval import _recall_payload
 
         hits = [
-            self._make_hit(kind="behavioral_pattern", key="morning_run",
-                           text="morning_run (daily): runs 5km [confidence=7.0]"),
+            self._make_hit(kind="discovery", key="new_cafe",
+                           text="A new café opened near the office"),
             self._make_hit(kind="user_specific", key="food_preference", text="pasta"),
         ]
         rows = _recall_payload(hits)
 
         assert len(rows) == 2
         by_id = {r["id"]: r for r in rows}
-        assert by_id["morning_run"]["kind"] == "behavioral_pattern"
+        assert by_id["new_cafe"]["kind"] == "discovery"
         assert by_id["food_preference"]["kind"] == "user_specific"
 
 
 # ---------------------------------------------------------------------------
-# 3. _search_data_graph — real DataGraph, real SQLite, real recall path
+# 2. behavioral_pattern is surfaced deterministically, never semantically
 # ---------------------------------------------------------------------------
 
 
-class TestSearchDataGraphIncludesBehavioralPattern:
-    """_search_data_graph surfaces behavioral_pattern rows from the real DB."""
+class TestBehavioralPatternNotInRecallSpan:
+    """behavioral_pattern must NOT be a semantic-recall lane. Patterns reach the
+    model deterministically every turn (PromptService.patterns / top_patterns),
+    which carries the full active set — a semantic recall over patterns is
+    redundant, and vec-indexing a value that is rewritten every turn (confidence
+    decays) is pure churn. These assert the recall span and the indexing gate
+    agree, so nobody re-introduces a span entry that the write side starves."""
 
-    def test_behavioral_pattern_row_is_returned_by_search(self, db: sqlite3.Connection) -> None:
-        """A seeded behavioral_pattern row is visible in _search_data_graph results.
+    def test_tool_recall_span_excludes_behavioral_pattern(self) -> None:
+        """The memory tool's cross-kind data-graph recall span omits it."""
+        from models.behavioral_pattern import BehavioralPattern
+        from services.memory_retrieval import _DG_RECALL_KINDS
 
-        This is the regression-protection case: before the fix,
-        KIND_BEHAVIORAL_PATTERN was absent from the kinds filter passed to
-        dgs.recall(), so behavioral_pattern rows were silently dropped.
-        """
-        from services.data_graph_service import get_data_graph_service, KIND_BEHAVIORAL_PATTERN
-
-        dgs = get_data_graph_service()
-        pattern_value = json.dumps({
-            "name": "dawn_meditation_practice",
-            "frequency": "daily",
-            "time_anchor": "06:00",
-            "summary": "Practises 20 minutes of silent meditation before breakfast",
-            "confidence": 8.0,
-        })
-        dgs.store(
-            kind=KIND_BEHAVIORAL_PATTERN,
-            key="dawn_meditation_practice",
-            value=pattern_value,
-            source="test:seed",
+        assert BehavioralPattern.KIND not in _DG_RECALL_KINDS, (
+            f"behavioral_pattern must not be a recall lane: {_DG_RECALL_KINDS}"
         )
 
-        from services.memory_retrieval import _search_data_graph
+    def test_recall_service_does_not_fuse_behavioral_pattern_vertical(self) -> None:
+        """The modelless recall service does not fuse it as a vertical."""
+        from models.behavioral_pattern import BehavioralPattern
+        from services.memory_recall_service import _VERTICALS
 
-        hits, _ = _search_data_graph("meditation morning routine", limit=10)
-
-        if not hits:
-            pytest.skip(
-                "FTS/vec did not surface this hit — embedding service unavailable in this env"
-            )
-
-        kinds_returned = {h.get("kind") for h in hits}
-        assert KIND_BEHAVIORAL_PATTERN in kinds_returned, (
-            f"behavioral_pattern kind not present in hits. Kinds returned: {kinds_returned}"
+        assert BehavioralPattern not in _VERTICALS, (
+            f"behavioral_pattern must not be a recall vertical: {_VERTICALS}"
         )
 
-    def test_behavioral_pattern_hit_text_is_rendered_not_raw_json(self, db: sqlite3.Connection) -> None:
-        """The text field for a behavioral_pattern hit is the rendered line, not raw JSON."""
-        from services.data_graph_service import get_data_graph_service, KIND_BEHAVIORAL_PATTERN
+    def test_indexing_gate_excludes_behavioral_pattern(self) -> None:
+        """The write-side index gate agrees: the kind earns no FTS/vec posting.
 
-        dgs = get_data_graph_service()
-        pattern_value = json.dumps({
-            "name": "evening_run",
-            "frequency": "weekdays",
-            "time_anchor": "18:30",
-            "summary": "Runs 5 km along the seafront",
-            "confidence": 7.2,
-        })
-        dgs.store(
-            kind=KIND_BEHAVIORAL_PATTERN,
-            key="evening_run",
-            value=pattern_value,
-            source="test:seed",
+        Enablement is the ``Searchable`` trait — ``BehavioralPattern`` declares
+        ``__search__ = None`` (imported here so it registers), so both the class
+        declaration and the write-side registry (``is_searchable``) report it
+        non-searchable, keeping the indexing gate and the (empty) recall span in
+        agreement."""
+        from models.behavioral_pattern import BehavioralPattern
+        from contracts.search_config import is_searchable
+
+        assert BehavioralPattern.__search__ is None, (
+            "behavioral_pattern must declare no search config (the Searchable "
+            "trait off) so it earns no FTS/vec posting."
         )
-
-        from services.memory_retrieval import _search_data_graph
-
-        hits, _ = _search_data_graph("evening exercise running", limit=10)
-
-        if not hits:
-            pytest.skip(
-                "FTS/vec did not surface this hit — embedding service unavailable in this env"
-            )
-
-        bp_hits = [h for h in hits if h.get("kind") == KIND_BEHAVIORAL_PATTERN]
-        assert bp_hits, "Expected at least one behavioral_pattern hit"
-
-        for hit in bp_hits:
-            text = cast(str, hit.get("text", ""))
-            # Must be the rendered form, not raw JSON
-            assert not text.strip().startswith("{"), (
-                f"text must be rendered, not raw JSON: {text!r}"
-            )
-            assert "[confidence=" in text, (
-                f"Rendered line must include [confidence=...]: {text!r}"
-            )
+        assert is_searchable(BehavioralPattern.KIND) is False, (
+            "behavioral_pattern must stay out of the search-index pipeline so "
+            "the indexing gate and the (empty) recall span never disagree."
+        )

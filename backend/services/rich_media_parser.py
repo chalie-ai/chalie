@@ -8,55 +8,31 @@ Segment shapes:
     {"type": "text", "content": "<safe HTML>"}
     {"type": "rich", "tag": "weather_1", "synthesis": "<safe HTML>", "payload": {…}}
 
-The parser is called at the WS-send boundary and again on the
-``/conversation/recent`` refresh path — both against persisted surfaces
-(``transcript.content`` + ``tool_calls.result``) so they produce
-byte-identical output.
+The parser is called at the WS-send boundary and again on the thread-block
+refresh path (``serialize_turn`` — the REST reads + WS refetch) — both against
+persisted surfaces (``transcript.content`` + ``tool_calls.result``) so they
+produce byte-identical output.
 """
 from __future__ import annotations
 
 import json
 import logging
 import re
-import sqlite3
 from typing import cast
 
 logger = logging.getLogger(__name__)
 
 
-def resolve_tool_call_transcript_ids(assistant_transcript_id: int, conn: sqlite3.Connection) -> list[int]:
-    """Return every transcript row ID of the turn that owns ``assistant_transcript_id``.
-
-    Under the chain model a turn is many rows (input → step rows that each
-    emitted the tool calls → final synthesis row), all sharing one turn_id. A
-    rich-media span lives on the FINAL row, but the tool that produced the card
-    ran on a STEP row, so pairing needs the WHOLE turn's transcript ids, not just
-    the row's own. Both the live broadcast path and the refresh path call this,
-    so they resolve the same id set. Falls back to ``[assistant_transcript_id]``
-    when the row has no turn (skip_transcript channels) or is unknown.
-    """
-    row = conn.execute(
-        "SELECT channel, turn_id FROM transcript WHERE id = ?",
-        (assistant_transcript_id,),
-    ).fetchone()
-    if row is None or row[1] is None:
-        return [assistant_transcript_id]
-    ids = conn.execute(
-        "SELECT id FROM transcript WHERE channel = ? AND turn_id = ? ORDER BY id",
-        (row[0], row[1]),
-    ).fetchall()
-    return [r[0] for r in ids] or [assistant_transcript_id]
-
-# Matches <span id='tool_name_N'>…</span> or <span id="tool_name_N">…</span>,
-# optionally with a single ``data-image='url'`` attribute that lets the LLM
-# pick a thumbnail from the tool's image_candidates list.
+# Matches <span id='tool_name_N'>…</span> or <span id="tool_name_N">…</span>.
+# Any additional span attributes are tolerated and ignored (``[^>]*``) so that
+# historical persisted content — which this parser re-reads, not just fresh
+# output — still splits cleanly even if it carries an attribute from a retired
+# span variant.
 # Group 1: tool name prefix (e.g. "weather")
 # Group 2: ordinal string (e.g. "1")
-# Group 3: chosen image URL (optional, empty if absent)
-# Group 4: inner synthesis text (may span multiple lines)
+# Group 3: inner synthesis text (may span multiple lines)
 _TAG_RE = re.compile(
-    r"""<span\s+id=['"]([a-z][a-z0-9_]*)_(\d+)['"]"""
-    r"""(?:\s+data-image=['"]([^'"]*)['"])?[ \t]*>(.*?)</span>""",
+    r"""<span\s+id=['"]([a-z][a-z0-9_]*)_(\d+)['"][^>]*>(.*?)</span>""",
     re.DOTALL | re.IGNORECASE,
 )
 
@@ -94,15 +70,13 @@ def _append_leading_prose(content: str, cursor: int, match_start: int, segments:
 def _append_tag_segment(match: re.Match[str], tool_calls: list[dict[str, object]], segments: list[dict[str, object]]) -> None:
     tool_name = match.group(1)
     ordinal = match.group(2)
-    chosen_image = (match.group(3) or "").strip()
     tag = f"{tool_name}_{ordinal}"
-    synthesis = match.group(4).strip()
+    synthesis = match.group(3).strip()
 
     matched = _find_payload(tag, tool_calls)
     if matched is not None:
         payload, row = matched
         payload = _enrich_payload(tool_name, payload, row)
-        payload = _apply_image_choice(payload, chosen_image)
         segments.append({
             "type": "rich",
             "tag": tag,
@@ -113,41 +87,6 @@ def _append_tag_segment(match: re.Match[str], tool_calls: list[dict[str, object]
         logger.warning("rich_media: orphan tag %s — no matching tool_call result found", tag)
         if synthesis:
             segments.append({"type": "text", "content": synthesis})
-
-
-def _apply_image_choice(payload: object, chosen_image: str) -> object:
-    """Validate the LLM's chosen image against the candidate list and finalise.
-
-    The tool surfaces ``image_candidates: [{url, source_title, caption}]`` so
-    the LLM can decide whether to populate the card thumbnail. The choice
-    arrives via the ``data-image`` span attribute; here we:
-
-    * Drop ``image_candidates`` from the payload — it is LLM-facing context,
-      not frontend rendering data.
-    * Set ``image_url`` only when the chosen URL appears in the candidate
-      list. This blocks the LLM from injecting an arbitrary or hallucinated
-      URL into the rendered card.
-    """
-    if not isinstance(payload, dict):
-        return payload
-    candidates = payload.pop("image_candidates", None)
-    if not chosen_image:
-        return payload
-    valid_urls = set()
-    if isinstance(candidates, list):
-        for c in candidates:
-            if isinstance(c, dict):
-                url = c.get("url")
-                if isinstance(url, str):
-                    valid_urls.add(url)
-    if chosen_image in valid_urls:
-        payload["image_url"] = chosen_image
-    else:
-        logger.info(
-            "rich_media: ignoring data-image %r — not in tool's image_candidates",
-            chosen_image,
-        )
-    return payload
 
 
 def _enrich_payload(tool_name: str, payload: object, row: dict[str, object]) -> object:

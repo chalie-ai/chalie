@@ -11,52 +11,49 @@ import { usePermissionsStore } from '../../stores/permissions';
 const permissions = usePermissionsStore();
 
 const ACTION_LABELS: Record<string, string> = {
-  'email.read':            'Read Email',
-  'email.search':          'Search Email',
-  'email.manage':          'Manage Email',
-  'email.draft':           'Draft Email',
-  'email.send':            'Send Email',
-  'email.reply':           'Reply to Email',
-  'email.forward':         'Forward Email',
-  'calendar.list_events':  'List Calendar Events',
-  'calendar.get_event':    'Read Calendar Event',
+  'email.read': 'Read Email',
+  'email.search': 'Search Email',
+  'email.manage': 'Manage Email',
+  'email.draft': 'Draft Email',
+  'email.send': 'Send Email',
+  'email.reply': 'Reply to Email',
+  'email.forward': 'Forward Email',
+  'calendar.list_events': 'List Calendar Events',
+  'calendar.get_event': 'Read Calendar Event',
   'calendar.update_event': 'Update Calendar Event',
   'calendar.create_event': 'Create Calendar Event',
-  'code_eval':             'Execute Code',
-  'browser.render':        'Read Webpage',
-  'browser.interact':      'Interact with Webpage',
-  'browser.screenshot':    'Screenshot Webpage',
-  'browser.monitor':       'Monitor Webpage',
-  'document.search':       'Search Documents',
-  'document.list':         'List Documents',
-  'document.view':         'View Document',
-  'document.create':       'Create Document',
-  'document.delete':       'Delete Document',
-  'document.restore':      'Restore Document',
-  'list.delete':           'Delete List',
-  'memory.store':          'Store Memory',
-  'memory.recall':         'Recall Memory',
-  'memory.forget':         'Forget Memory',
-  'memory.reflect':        'Reflect on Memory',
-  'schedule.create':       'Create Schedule',
-  'schedule.cancel':       'Cancel Schedule',
-  'schedule.list':         'List Schedules',
-  'schedule.search':       'Search Schedules',
-  'contacts':              'Access Contacts',
-  'news':                  'Fetch News',
-  'search':                'Web Search',
-  'weather':               'Check Weather',
-  'timer':                 'Set Timer',
+  code_eval: 'Execute Code',
+  'browser.render': 'Read Webpage',
+  'browser.interact': 'Interact with Webpage',
+  'browser.screenshot': 'Screenshot Webpage',
+  'browser.monitor': 'Monitor Webpage',
+  'document.search': 'Search Documents',
+  'document.list': 'List Documents',
+  'document.view': 'View Document',
+  'document.create': 'Create Document',
+  'document.delete': 'Delete Document',
+  'document.restore': 'Restore Document',
+  'list.delete': 'Delete List',
+  'memory.store': 'Store Memory',
+  'memory.recall': 'Recall Memory',
+  'memory.forget': 'Forget Memory',
+  'memory.reflect': 'Reflect on Memory',
+  'schedule.create': 'Create Schedule',
+  'schedule.cancel': 'Cancel Schedule',
+  'schedule.list': 'List Schedules',
+  'schedule.search': 'Search Schedules',
+  contacts: 'Access Contacts',
+  news: 'Fetch News',
+  search: 'Web Search',
+  weather: 'Check Weather',
+  timer: 'Set Timer',
 };
 
 /** Readable label for an action_id; falls back to formatting the id (dots/underscores → spaces, title case). */
 function actionLabel(actionId: string): string {
   if (ACTION_LABELS[actionId]) return ACTION_LABELS[actionId];
-  return actionId
-    .replace(/[._]/g, ' ')
-    .replace(/\b\w/g, (c) => c.toUpperCase());
+  return actionId.replace(/[._]/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
 }
-
 </script>
 
 <template>
@@ -127,14 +124,14 @@ function actionLabel(actionId: string): string {
   border-radius: var(--radius-md);
   box-shadow:
     0 8px 32px rgba(0, 0, 0, 0.35),
-    0 2px 8px rgba(0, 0, 0, 0.20);
+    0 2px 8px rgba(0, 0, 0, 0.2);
   backdrop-filter: blur(16px);
   -webkit-backdrop-filter: blur(16px);
   overflow: hidden;
 
   // Light theme: soften the lift so it reads as depth, not a dark halo.
   // Plain `[data-theme] &` — :global() drops the `&` and leaks this onto <html>.
-  [data-theme="light"] & {
+  [data-theme='light'] & {
     box-shadow:
       0 2px 8px rgba(0, 0, 0, 0.08),
       0 8px 32px rgba(0, 0, 0, 0.12);

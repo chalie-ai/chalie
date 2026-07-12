@@ -1,47 +1,67 @@
 /**
- * Scheduler API — endpoints derived from frontend/brain/scheduler.js fetch calls.
+ * Scheduler API — thin wrapper over the Endpoint-contract routes in
+ * backend/api/endpoints/scheduler.py + backend/api/actions/scheduler/turns.py.
+ * Envelope: every JSON response is { success, result, pagination?, error? }.
  *
- * GET    /scheduler              → list schedules { schedules: [...] }
- * POST   /scheduler              → create schedule
- * PUT    /scheduler/:id          → update schedule
- * DELETE /scheduler/:id          → delete/cancel schedule
+ *   GET    /api/scheduler/all           paginated listing (fetchAllPages).
+ *   POST   /api/scheduler/-1            create schedule → 201, result DTO.
+ *   POST   /api/scheduler/<id>          update schedule → result DTO (legacy PUT → POST).
+ *   DELETE /api/scheduler/<id>          → 204 empty body.
  */
 import { api } from '@chalie/shared';
+import { fetchAllPages } from './paginate';
 
 export interface ScheduleItem {
-  id: string | number;
+  id: number;
   message?: string | null;
   prompt?: string | null;
-  status: string;
-  due_at?: string | null;
-  due?: string | null;
-  recurrence?: string | null;
-  type?: string | null;
-  item_type?: string | null;
+  enabled: number;
+  start_at?: string | null;
+  /** Crontab field expressions mirroring cron_minute/hour/dom/month/dow (`*` = every). */
+  minute: string;
+  hour: string;
+  day: string;
+  month: string;
+  weekday: string;
+  channel?: string | null;
+  created_by_session?: string | null;
+  created_at?: string;
   [key: string]: unknown;
 }
 
 export interface ScheduleInput {
   message: string;
-  due_at: string;
-  type?: string;
-  recurrence?: string | null;
+  start_at?: string;
+  /** Crontab field expressions — values, ranges, steps and comma-unions; `*` = every. */
+  minute: string;
+  hour: string;
+  day: string;
+  month: string;
+  weekday: string;
+  enabled?: boolean;
+}
+
+interface SingleEnvelope<T> {
+  success: true;
+  result: T;
 }
 
 export const scheduler = {
-  list(): Promise<{ schedules?: ScheduleItem[]; items?: ScheduleItem[] }> {
-    return api.get('/scheduler');
+  list(): Promise<ScheduleItem[]> {
+    return fetchAllPages<ScheduleItem>('/api/scheduler/all');
   },
 
-  create(body: ScheduleInput): Promise<{ schedule?: ScheduleItem }> {
-    return api.post('/scheduler', body);
+  async create(body: ScheduleInput): Promise<ScheduleItem> {
+    const res = await api.post<SingleEnvelope<ScheduleItem>>('/api/scheduler/-1', body);
+    return res.result;
   },
 
-  update(id: string | number, body: Partial<ScheduleInput>): Promise<{ schedule?: ScheduleItem }> {
-    return api.put(`/scheduler/${id}`, body);
+  async update(id: number, body: Partial<ScheduleInput>): Promise<ScheduleItem> {
+    const res = await api.post<SingleEnvelope<ScheduleItem>>(`/api/scheduler/${id}`, body);
+    return res.result;
   },
 
-  delete(id: string | number): Promise<unknown> {
-    return api.del(`/scheduler/${id}`);
+  delete(id: number): Promise<unknown> {
+    return api.del(`/api/scheduler/${id}`);
   },
 };

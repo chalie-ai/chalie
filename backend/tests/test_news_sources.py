@@ -1,8 +1,6 @@
 import pytest
-from services.news_sources import (
-    SOURCES,
-    get_source_by_id,
-)
+
+from services.news_sources import SOURCES
 
 
 @pytest.mark.unit
@@ -11,10 +9,4 @@ class TestNewsSources:
     def test_no_duplicate_ids(self) -> None:
         ids = [s.id for s in SOURCES]
         assert len(ids) == len(set(ids))
-
-    def test_get_source_by_id_found(self) -> None:
-        src = get_source_by_id("bbc_world")
-        assert src is not None
-        assert src.name == "BBC World News"
-        assert src.category == "international"
 

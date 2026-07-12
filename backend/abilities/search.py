@@ -20,15 +20,16 @@ tools/search/ until Phase 4 — this ability imports them from there.
 """
 
 import logging
-import sqlite3
 import time
 from typing import ClassVar, cast
 
 from abilities._ability import Ability
-from abilities._params import Keys
+from configs.enums.param_key import Keys
 from abilities._result import ToolResult
+from services.database import Database
 from services.file_mapper_service import FileMapperService
 from tools.search.fetcher import fetch_ddg_fallback, fetch_providers
+from exceptions import RateLimitException
 
 logger = logging.getLogger(__name__)
 
@@ -105,14 +106,21 @@ class SearchAbility(Ability):
             )
 
         t0 = time.time()
-        results, used, meta = self._search_routed(query)
+        try:
+            results, used, meta = self._search_routed(query)
 
-        fell_back = False
-        if not results and _DDG not in used:
-            ddg = fetch_ddg_fallback(query, _PER_PROVIDER)
-            if ddg:
-                results, fell_back = ddg, True
-                used.append(_DDG)
+            fell_back = False
+            if not results and _DDG not in used:
+                ddg = fetch_ddg_fallback(query, _PER_PROVIDER)
+                if ddg:
+                    results, fell_back = ddg, True
+                    used.append(_DDG)
+        except RateLimitException:
+            return ToolResult.err(
+                "Web search is rate-limited; please retry shortly.",
+                code="rate-limited",
+                hint="try again in a moment",
+            )
 
         logger.info(
             "[SEARCH] query=%r providers=%s fetched=%d latency_ms=%d",
@@ -155,10 +163,8 @@ class SearchAbility(Ability):
             return cls._providers
 
         try:
-            conn = sqlite3.connect(cls._DB)
-            conn.row_factory = sqlite3.Row
+            conn = Database.conn(cls._DB)
             rows = conn.execute("SELECT * FROM providers WHERE enabled = 1").fetchall()
-            conn.close()
             cls._providers = {row["name"]: dict(row) for row in rows}
         except Exception as e:
             logger.error("[SEARCH] Failed to load providers: %s", e)
@@ -190,6 +196,8 @@ class SearchAbility(Ability):
                         )
 
                 return results, used, meta
+        except RateLimitException:
+            raise
         except Exception as e:
             logger.warning("[SEARCH] router error, falling back to DDG: %s", e)
 

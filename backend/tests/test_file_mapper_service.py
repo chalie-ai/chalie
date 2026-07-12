@@ -35,11 +35,6 @@ class TestFileMapperService:
         assert backend.is_dir(), f"backend path does not exist: {backend}"
         assert (backend / "services").is_dir(), f"services/ missing under backend at {backend}"
 
-    def test_get_frontend_path_with_parts_joins_correctly(self) -> None:
-        brain = FileMapperService.get_frontend_path("brain")
-        assert brain.parts[-1] == "brain"
-        assert brain.parts[-2] == "frontend"
-
     def test_all_well_known_paths_are_under_chalie_root(self) -> None:
         """No well-known path may escape the repo root (guards against path traversal)."""
         root = FileMapperService._CHALIE_ROOT

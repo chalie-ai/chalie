@@ -1,45 +1,47 @@
 """
 CalendarAbility — List, view, create, update, and delete calendar events.
 
-Read operations (``list_events``, ``get_event``) query ``scheduled_items`` via the
-shared ``query_items`` engine in the schedule ability — the scheduler owns the
-single SQL path for that table. Calendar events are the rows the CalDAV ingest
-mirrors there (``source='mail'``, ``item_type='event'``, ``hidden=1``,
-``external_uid='caldav:<uid>'``).
+Every action — reads (``list_events``, ``get_event``) and writes
+(``create_event``, ``update_event``, ``delete_event``) — is served LIVE from the
+connected CalDAV server. There is no persisted calendar mirror: the CalDAV →
+``scheduled_items`` mirror was decommissioned and calendar reads are now
+re-homed onto direct CalDAV queries. Recurring events carry an RFC-5545
+``recurrence`` (RRULE) so one-shot and recurring reminders are both stored as
+real calendar events.
 
-Write operations (``create_event``, ``update_event``, ``delete_event``) delegate
-to MailCapability's CalDAV handler via the shared :class:`CapabilityAbility`
-base, which owns capability loading, the not-connected / unknown-action /
-handler-unavailable errors, handler dispatch, and result wrapping.
+All five actions delegate to MailCapability's CalDAV handler via the shared
+:class:`CapabilityAbility` base, which owns capability loading, the
+not-connected / unknown-action / handler-unavailable errors, handler dispatch,
+and result wrapping. uid-addressed calls reach the server directly; a
+title-addressed call resolves to a unique uid by a live substring match over the
+CalDAV window (handled server-side), so ``update_event`` / ``delete_event`` /
+``get_event`` accept a ``title`` when the uid is unknown.
 
 Two write-path safeguards live here, ahead of the base's connected gate so they
 fire loudly regardless of CalDAV state:
 
-* **datetime validation (data-corruption fix):** ``dtstart`` / ``dtend`` are
-  resolved through ``_parse_dt`` (natural language in the user's timezone OR ISO
-  8601) into a clean UTC ISO string written back onto ``params``. An unparseable
-  value returns ``code=invalid-time`` with example forms and NOTHING is written —
-  the old path ran the raw string through ``parse_utc``, which returns the
-  ``datetime.min`` (year-0001) sentinel and persisted it to the CalDAV server.
-* **fuzzy addressing:** ``update_event`` / ``delete_event`` / ``get_event`` accept
-  a ``title`` that is resolved to a CalDAV uid by fuzzy match; >1 match returns
-  ``code=ambiguous-match`` listing the candidate uids — never a silent first-hit.
+* **datetime validation (data-corruption fix):** ``dtstart`` / ``dtend`` (writes)
+  and ``date_from`` / ``date_to`` (list window) are resolved through ``_parse_dt``
+  (natural language in the user's timezone OR ISO 8601) into a clean UTC ISO
+  string written back onto ``params``. An unparseable value returns
+  ``code=invalid-time`` with example forms and NOTHING is written — the old path
+  ran the raw string through ``parse_utc``, which returns the ``datetime.min``
+  (year-0001) sentinel and persisted it to the CalDAV server.
+* **target presence:** ``update_event`` / ``delete_event`` require either a
+  ``uid`` or a ``title`` before the request leaves this ability; the CalDAV
+  handler does the live title→uid resolution (and reports ambiguity).
 
-Every action returns a :class:`ToolResult` built only via ``ok`` / ``err``. The
-rich calendar card travels via ``ToolResult(rich=…)``; the dispatcher owns the
-ordinal + the single span instruction and injects the card only when the invoking
-channel broadcasts to the user. This ability never formats a wire envelope.
+Every action returns a :class:`ToolResult` built only via ``ok`` / ``err``. This
+ability never formats a wire envelope.
 """
 
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from typing import ClassVar, cast
 
 from abilities._capability import CapabilityAbility
-from abilities._params import Keys
+from configs.enums.param_key import Keys
 from abilities._result import ToolResult
-from services.time_utils import utc_now
-from utils.data_utils import parse_json_column
 
 logger = logging.getLogger(__name__)
 LOG_PREFIX = "[CALENDAR ABILITY]"
@@ -48,36 +50,42 @@ LOG_PREFIX = "[CALENDAR ABILITY]"
 # self-correct without re-reading the schema.
 _DT_EXAMPLES = "'tomorrow 3pm', 'friday 9am', or ISO 8601 like '2026-03-20T15:00:00+02:00'"
 
-# Default list window when the model passes no bounds — the schema advertises it,
-# so the code now honours it instead of returning everything.
-_DEFAULT_WINDOW_DAYS = 7
-
-# Read actions answered directly from scheduled_items; write actions delegate to
-# the CalDAV handler via the CapabilityAbility base.
+# Every action delegates to the live CalDAV handler via the CapabilityAbility
+# base. Reads and writes are split only so run() can pick which pre-flight
+# validation applies (writes normalise dtstart/dtend + require a target; reads
+# normalise the date window).
 _READ_ACTIONS = ("list_events", "get_event")
 _WRITE_ACTIONS = ("create_event", "update_event", "delete_event")
 _ALL_ACTIONS = (*_READ_ACTIONS, *_WRITE_ACTIONS)
 
+# update_event / delete_event address an event by uid OR title; the CalDAV
+# handler resolves a title to a unique uid live. This ability only enforces that
+# a target is present before the request leaves the tool.
+_TARGET_ADDRESSED_WRITES = ("update_event", "delete_event")
+
 
 class CalendarAbility(CapabilityAbility):
+    DISCOVERABLE: ClassVar[bool] = False  # pim-delegate-exclusive; pinned on PimConfig only
     CAPABILITY_KEY: ClassVar[str] = "mail"
     DEFAULT_ACTION: ClassVar[str] = "list_events"
     NOT_CONNECTED_HINT: ClassVar[str] = (
         "Configure the mail integration in the Brain dashboard."
     )
-    # Maps the model-facing write action onto the CalDAV handler name (identical
-    # here — the base uses it to look up the handler and to build the valid= ladder
-    # for unknown-action errors).
+    # Maps the model-facing action onto the CalDAV handler name (identical here —
+    # the base uses it to look up the handler and to build the valid= ladder for
+    # unknown-action errors). All five are live-CalDAV handlers.
     ACTION_HANDLERS: ClassVar[dict[str, str]] = {
+        "list_events": "list_events",
+        "get_event": "get_event",
         "create_event": "create_event",
         "update_event": "update_event",
         "delete_event": "delete_event",
     }
 
     # Pre-gated by the dispatcher BEFORE run(): create_event requires summary +
-    # both endpoints. list_events / the uid-or-title reads validate their either/or
-    # targets in run() (a constraint the map cannot express). An unknown action →
-    # one unknown-action error whose valid= names all five real actions.
+    # both endpoints. list_events / get_event validate their either/or targets in
+    # the handler. An unknown action → one unknown-action error whose valid= names
+    # all five real actions.
     ACTION_REQUIRED: ClassVar[dict[str, tuple[str, ...]]] = {
         "list_events": (),
         "get_event": (),
@@ -122,9 +130,10 @@ class CalendarAbility(CapabilityAbility):
                 "enum": list(_ALL_ACTIONS),
                 "description": (
                     "The calendar action to perform. "
-                    "list_events — list events within a date range. "
-                    "get_event — fetch one event by uid or fuzzy title. "
-                    "create_event — add a new event (needs summary, dtstart, dtend). "
+                    "list_events — list events in a window (defaults to now..+7 days). "
+                    "get_event — fetch one event by uid or title. "
+                    "create_event — add a new event (needs summary, dtstart, dtend; pass "
+                    "recurrence for a repeating event). "
                     "update_event — change fields of an event addressed by uid or title. "
                     "delete_event — remove an event addressed by uid or title."
                 ),
@@ -132,34 +141,37 @@ class CalendarAbility(CapabilityAbility):
             Keys.date_from: {
                 "type": "string",
                 "description": (
-                    "list_events: ISO date lower bound (YYYY-MM-DD). "
-                    "Defaults to today when omitted."
+                    "list_events: window lower bound. Natural language ('today', "
+                    "'monday') or ISO date/datetime. Defaults to now."
                 ),
             },
             Keys.date_to: {
                 "type": "string",
                 "description": (
-                    "list_events: ISO date upper bound (YYYY-MM-DD). "
-                    "Defaults to 7 days after date_from when omitted."
+                    "list_events: window upper bound. Natural language ('sunday', "
+                    "'next week') or ISO date/datetime. Defaults to 7 days after the "
+                    "lower bound."
                 ),
             },
             Keys.limit: {
                 "type": "integer",
-                "description": "list_events: maximum number of events to return (1–200, default 50).",
+                "description": (
+                    "list_events: maximum number of events to return (1–200, default 50)."
+                ),
             },
             Keys.uid: {
                 "type": "string",
                 "description": (
                     "get_event / update_event / delete_event: the event's CalDAV UID. "
-                    "Prefer this when known; otherwise pass title for a fuzzy match."
+                    "Preferred when known; otherwise pass title."
                 ),
             },
-            Keys.title: {
+            Keys.title_: {
                 "type": "string",
                 "description": (
-                    "get_event / update_event / delete_event: event title for a fuzzy "
-                    "match when the uid is unknown. If more than one event matches you "
-                    "get the candidate uids back to disambiguate."
+                    "get_event / update_event / delete_event: event title to match "
+                    "when the uid is unknown. Resolved live to a unique event; an "
+                    "ambiguous match asks for a uid."
                 ),
             },
             Keys.summary: {
@@ -181,27 +193,45 @@ class CalendarAbility(CapabilityAbility):
                     "create_event / update_event: end datetime, same formats as dtstart."
                 ),
             },
+            Keys.recurrence: {
+                "type": "string",
+                "description": (
+                    "create_event / update_event: RFC-5545 recurrence rule (RRULE) for a "
+                    "repeating event, e.g. 'FREQ=DAILY', 'FREQ=WEEKLY;BYDAY=MO,WE,FR', "
+                    "'FREQ=MONTHLY'. Omit for a one-off event."
+                ),
+            },
         },
         "required": [Keys.action],
     }
 
-    # ── Entry point — reads inline, writes through the base ────────────────────
+    # ── Entry point — pre-flight validation, then live dispatch via the base ───
 
     def run(self, params: dict[str, object]) -> ToolResult:
         action = str(params.get(Keys.action, self.DEFAULT_ACTION)).lower()
 
-        if action in _READ_ACTIONS:
-            return _read_events(action, params)
+        # list_events: resolve the natural-language window to clean ISO before it
+        # reaches the handler's parse_utc (which would sentinel an unparseable value).
+        if action == "list_events":
+            err = _normalise_datetimes(params, (Keys.date_from, Keys.date_to))
+            if err is not None:
+                return err
+            return super().run(params)
 
-        # Write actions: validate datetimes + resolve fuzzy title BEFORE the base's
-        # connected gate, so a malformed dtstart errors loudly even when CalDAV is
-        # not wired up — and a clean UTC ISO string is what ever reaches the server.
-        err = _normalise_write_datetimes(params)
+        # get_event validates its uid-or-title either/or in the handler.
+        if action == "get_event":
+            return super().run(params)
+
+        # Write actions: validate datetimes + require an addressable target BEFORE
+        # the base's connected gate, so a malformed dtstart errors loudly even when
+        # CalDAV is not wired up — and a clean UTC ISO string is what reaches the
+        # server. Live title→uid resolution happens in the handler.
+        err = _normalise_datetimes(params, (Keys.dtstart, Keys.dtend))
         if err is not None:
             return err
 
-        if action in ("update_event", "delete_event"):
-            err = _resolve_target_uid(params)
+        if action in _TARGET_ADDRESSED_WRITES:
+            err = _require_target(params)
             if err is not None:
                 return err
 
@@ -235,12 +265,15 @@ def _parse_dt(value: str) -> datetime | None:
     return cast(datetime, parsed).astimezone(timezone.utc)
 
 
-def _normalise_write_datetimes(params: dict[str, object]) -> ToolResult | None:
-    """Resolve any supplied ``dtstart`` / ``dtend`` to clean UTC ISO strings on
-    ``params``. Returns an ``invalid-time`` ToolResult (and leaves params untouched)
-    when a value is present but unparseable — so the CalDAV handler only ever sees
-    a valid ISO string, never the datetime.min sentinel."""
-    for field in (Keys.dtstart, Keys.dtend):
+def _normalise_datetimes(
+    params: dict[str, object], fields: tuple[str, ...]
+) -> ToolResult | None:
+    """Resolve any supplied ``fields`` (write endpoints or a list window) to clean
+    UTC ISO strings on ``params``. Returns an ``invalid-time`` ToolResult (and
+    leaves params untouched) when a value is present but unparseable — so the
+    CalDAV handler only ever sees a valid ISO string, never the datetime.min
+    sentinel."""
+    for field in fields:
         raw = params.get(field)
         if raw is None:
             continue
@@ -259,161 +292,22 @@ def _normalise_write_datetimes(params: dict[str, object]) -> ToolResult | None:
 
 
 # ---------------------------------------------------------------------------
-# Fuzzy addressing — uid OR title, with explicit disambiguation
+# Target addressing — uid OR title (title resolved live by the CalDAV handler)
 # ---------------------------------------------------------------------------
 
-def _resolve_target_uid(params: dict[str, object]) -> ToolResult | None:
-    """For uid-addressed write actions, fill ``params['uid']`` from a fuzzy
-    ``title`` match when no uid was given. Returns an error ToolResult on a
-    missing target, no match, or an ambiguous (>1) match; ``None`` on success."""
+def _require_target(params: dict[str, object]) -> ToolResult | None:
+    """update_event / delete_event must name an event by ``uid`` or ``title``.
+    Both pass through to the handler, which resolves a title to a unique uid over
+    the live CalDAV window (and reports ambiguity). Returns ``None`` when a target
+    is present."""
     if (cast(str, params.get(Keys.uid)) or "").strip():
         return None
-
-    title = (cast(str, params.get(Keys.title)) or "").strip()
-    if not title:
-        return ToolResult.err(
-            "uid or title is required to address the event.",
-            code="missing-target",
-            hint="pass the event's uid, or a title to fuzzy-match.",
-        )
-
-    matches = _match_events_by_title(title)
-    if not matches:
-        return ToolResult.err(
-            f"No event matching title {title!r} was found.",
-            code="not-found",
-            hint="call calendar with action=list_events to see what exists.",
-        )
-    if len(matches) > 1:
-        return _ambiguous_match(title, matches, "re-issue the action with the chosen uid.")
-
-    params[Keys.uid] = matches[0]["uid"]
-    return None
-
-
-def _ambiguous_match(title: str, matches: list[dict[str, object]], hint: str) -> ToolResult:
-    """Build the disambiguation error: the candidate uids + titles go in the BODY
-    (never a silent first-hit pick) so the model can re-issue with a chosen uid."""
-    candidates = ", ".join(f"{m['title']!r} (uid:{m['uid']})" for m in matches)
+    if (cast(str, params.get(Keys.title_)) or "").strip():
+        return None
     return ToolResult.err(
-        f"Multiple events match title {title!r}: {candidates}. Pick one by uid.",
-        code="ambiguous-match",
-        hint=hint,
+        "uid or title is required to address the event.",
+        code="missing-target",
+        hint="pass the event's uid, or a title to match.",
     )
 
 
-def _match_events_by_title(title: str) -> list[dict[str, object]]:
-    """Return upcoming events whose title contains *title* (case-insensitive),
-    each as the contract event dict. Reads through the shared scheduler query
-    engine over the next default window so the match set is bounded."""
-    from abilities.schedule import query_items
-
-    rows = query_items(
-        hidden=1, source="mail", item_type="event",
-        date_from=utc_now().isoformat(),
-        columns=_EVENT_COLUMNS,
-    )
-    needle = title.lower()
-    return [ev for ev in (_format_event(r) for r in rows) if needle in cast(str, ev["title"]).lower()]
-
-
-# ---------------------------------------------------------------------------
-# Read helpers — query scheduled_items via schedule.query_items
-# ---------------------------------------------------------------------------
-
-_EVENT_COLUMNS = ("message", "due_at", "metadata", "external_uid")
-
-
-def _read_events(action: str, params: dict[str, object]) -> ToolResult:
-    from abilities.schedule import query_items
-
-    if action == "get_event":
-        uid = (cast(str, params.get(Keys.uid)) or "").strip()
-        title = (cast(str, params.get(Keys.title)) or "").strip()
-        if not uid and not title:
-            return ToolResult.err(
-                "uid or title is required for get_event.",
-                code="missing-target",
-                hint="pass the event's uid, or a title to fuzzy-match.",
-            )
-
-        if uid:
-            rows = query_items(
-                hidden=1, source="mail", item_type="event",
-                external_uid=f"caldav:{uid}",
-                columns=_EVENT_COLUMNS, limit=1,
-            )
-            if not rows:
-                return ToolResult.err(
-                    f"Event not found (uid: {uid}).",
-                    code="not-found",
-                    hint="call calendar with action=list_events to see what exists.",
-                )
-            event = _format_event(rows[0])
-        else:
-            matches = _match_events_by_title(title)
-            if not matches:
-                return ToolResult.err(
-                    f"No event matching title {title!r} was found.",
-                    code="not-found",
-                    hint="call calendar with action=list_events to see what exists.",
-                )
-            if len(matches) > 1:
-                return _ambiguous_match(title, matches, "re-issue get_event with the chosen uid.")
-            event = matches[0]
-
-        body: dict[str, object] = {"action_performed": "get_event", "event": event}
-        return ToolResult.ok(body, rich=dict(body), action="get_event")
-
-    # list_events — honour the advertised default window (today → +7 days).
-    limit = min(int(cast(int, params.get(Keys.limit)) or 50), 200)
-    date_from, date_to = _resolve_window(params)
-
-    rows = query_items(
-        hidden=1, source="mail", item_type="event",
-        date_from=date_from, date_to=date_to,
-        limit=limit, columns=_EVENT_COLUMNS,
-    )
-
-    events = [_format_event(row) for row in rows]
-    body = {"action_performed": "list_events", "events": events, "count": len(events)}
-    return ToolResult.ok(body, rich=dict(body), action="list_events", count=len(events))
-
-
-def _resolve_window(params: dict[str, object]) -> tuple[str, str]:
-    """Return the (date_from, date_to) ISO bounds for list_events, applying the
-    advertised defaults (today → +7 days) when the model omits them. A bare-date
-    upper bound (YYYY-MM-DD, exactly as the schema instructs the model to pass) is
-    widened to an inclusive end-of-day instant: stored ``due_at`` values carry a
-    time-of-day, and the lexical ``due_at <= ?`` compare in ``query_items`` sorts a
-    timestamped value AFTER the bare date, so it would otherwise drop every event
-    on that final day."""
-    date_from = (cast(str, params.get(Keys.date_from)) or "").strip()
-    date_to = (cast(str, params.get(Keys.date_to)) or "").strip()
-
-    if not date_from:
-        start = utc_now().replace(hour=0, minute=0, second=0, microsecond=0)
-        date_from = start.isoformat()
-    if not date_to:
-        base = _parse_dt(date_from) or utc_now()
-        date_to = (base + timedelta(days=_DEFAULT_WINDOW_DAYS)).isoformat()
-    elif "T" not in date_to:
-        date_to = f"{date_to}T23:59:59.999999+00:00"
-
-    return date_from, date_to
-
-
-def _format_event(row: dict[str, object]) -> dict[str, object]:
-    meta = cast("dict[str, object]", parse_json_column(row.get("metadata")))
-    ext_uid = cast(str, row.get("external_uid", ""))
-    uid = ext_uid.removeprefix("caldav:") if ext_uid else cast(str, meta.get("uid", ""))
-    return {
-        "uid": uid,
-        "title": cast(str, row.get("message", "")),
-        "dtstart": row.get("due_at"),
-        "dtend": meta.get("dtend"),
-        "location": meta.get("location"),
-        "attendees": meta.get("attendees", []),
-        "all_day": meta.get("all_day", False),
-        "calendar_name": meta.get("calendar_name"),
-    }

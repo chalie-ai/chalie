@@ -1,11 +1,20 @@
 /**
- * Policies API — endpoints derived from frontend/brain/policies.js.
+ * Policies API — thin wrapper over the new Endpoint-contract routes.
  *
- * GET /api/policies              → { policies: PolicyRow[] }
- * GET /api/policies/blocked      → { entries: BlockedEntry[] }
- * PUT /api/policies              → update one policy { channel, permission, setting }
+ * Envelope: listing responses are { success, result: [...], pagination };
+ * mutations answer 204 with an empty body (the shared client returns
+ * undefined for those).
+ *
+ * Routes consumed here:
+ *   GET    /api/policies/all?page=N&limit=M  paginated listing (fetchAllPages).
+ *   POST   /api/policies/-1                  upsert one { channel, permission,
+ *                                           setting } → 204.
+ *   GET    /api/policies/blocked             blocked-action log (listing;
+ *                                           backend caps at its default of
+ *                                           the 50 most recent entries).
  */
 import { api } from '@chalie/shared';
+import { fetchAllPages, type ListingEnvelope } from './paginate';
 
 export interface PolicyRow {
   channel: string;
@@ -16,9 +25,10 @@ export interface PolicyRow {
 }
 
 export interface BlockedEntry {
-  action_id?: string | null;
-  context?: string | null;
-  created_at?: string | null;
+  action_id: number;
+  context: string;
+  reason: string;
+  created_at: string;
   [key: string]: unknown;
 }
 
@@ -29,15 +39,16 @@ export interface PolicyUpdate {
 }
 
 export const policies = {
-  list(): Promise<{ policies: PolicyRow[] }> {
-    return api.get('/api/policies');
+  list(): Promise<PolicyRow[]> {
+    return fetchAllPages<PolicyRow>('/api/policies/all');
   },
 
-  blocked(): Promise<{ entries: BlockedEntry[] }> {
-    return api.get('/api/policies/blocked');
+  async blocked(): Promise<BlockedEntry[]> {
+    const body = await api.get<ListingEnvelope<BlockedEntry>>('/api/policies/blocked');
+    return body.result;
   },
 
-  update(body: PolicyUpdate): Promise<unknown> {
-    return api.put('/api/policies', body);
+  async update(body: PolicyUpdate): Promise<void> {
+    await api.post('/api/policies/-1', body); // 204 → empty body
   },
 };

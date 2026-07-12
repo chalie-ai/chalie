@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { expect, test } from '@playwright/test';
 
 // Multi-surface sync feature test. A Chalie instance is single-user, but that one
 // user may have the interface open on several surfaces at once (e.g. phone +

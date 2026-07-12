@@ -1,41 +1,60 @@
-<!-- Renders conversation forms, drives history pagination, manages autoscroll. -->
+<!-- Conversation spine shell: history loader, end-of-history pill, scroll
+     pagination, and autoscroll. Rendering itself is delegated entirely to the
+     DOM contract — this component registers the spine as a surface (D14) and
+     upserts fetched turns through it; it no longer holds turn data itself. -->
 <script setup lang="ts">
-import { ref, watch, nextTick, onMounted, onBeforeUnmount } from 'vue';
-import { useConversationStore } from '../../stores/conversation';
-import type { ConversationForm, UserForm, ChalieForm, ActForm } from '../../stores/conversation';
+import { nextTick, onBeforeUnmount, onMounted, ref } from 'vue';
+import { ConfigType } from '@chalie/shared';
+import { conversation as convoApi } from '../../api/conversation';
 import { useSessionStore } from '../../stores/session';
 import { useAutoscroll } from '../../composables/useAutoscroll';
-import UserBubble from './UserBubble.vue';
-import ChalieBubble from './ChalieBubble.vue';
-import ActCycle from './ActCycle.vue';
-import ActCycleGroup from './ActCycleGroup.vue';
+import { registerSurface, unregisterSurface, upsertTurnToSurfaces, SPINE_SURFACE_ID } from '../../utils/turnDom';
+import { syncDaymarks } from '../../utils/daymarks';
+import SpineTurn from './SpineTurn.vue';
 
-const conversationStore = useConversationStore();
+const PAGE_SIZE = 20;
+
 const session = useSessionStore();
 
-// Consecutive superseded ACT cycles fold into one group; everything else
-// (including a live, non-collapsed act) renders on its own.
-type RenderRow =
-  | { type: 'single'; id: number; form: ConversationForm }
-  | { type: 'act-group'; id: number; forms: ActForm[] };
+const feedRef = ref<HTMLElement | null>(null);
+const turnsRef = ref<HTMLElement | null>(null);
+const { scrollToBottom, forceScrollToBottom } = useAutoscroll(feedRef);
 
-function groupRows(forms: ConversationForm[]): RenderRow[] {
-  const rows: RenderRow[] = [];
-  for (const form of forms) {
-    const last = rows[rows.length - 1];
-    if (form.kind === 'act' && form.collapsed) {
-      if (last?.type === 'act-group') last.forms.push(form);
-      else rows.push({ type: 'act-group', id: form.id, forms: [form] });
-    } else {
-      rows.push({ type: 'single', id: form.id, form });
-    }
+// D17 — the pagination cursor (offset/hasMore) is UI-local, owned here.
+const offset = ref(0);
+const hasMoreRef = ref(true);
+
+async function _fetchPage(pageOffset: number): Promise<number> {
+  const { threads, has_more } = await convoApi.threads(PAGE_SIZE, pageOffset, undefined, ConfigType.USER);
+  hasMoreRef.value = has_more;
+  if (!threads.length) return 0;
+
+  const ids = threads.map((t) => t.turn_id).filter((id): id is number => id != null);
+  if (!ids.length) return threads.length;
+
+  const { blocks } = await convoApi.batch(ids, ConfigType.USER);
+  for (const block of blocks) {
+    upsertTurnToSurfaces(block, ConfigType.USER);
   }
-  return rows;
+  return threads.length;
 }
 
-const feedRef = ref<HTMLElement | null>(null);
+/** Registered with the session store (D17) — the store keeps `historyLoading`
+ *  + the AuthError/initial-load event semantics, this owns the cursor. */
+async function _loadRecent(): Promise<{ isInitialLoad: boolean; loadedAny: boolean }> {
+  const isInitialLoad = offset.value === 0;
+  offset.value = 0;
+  hasMoreRef.value = true;
+  const loaded = await _fetchPage(0);
+  offset.value = loaded;
+  return { isInitialLoad, loadedAny: loaded > 0 };
+}
 
-const { scrollToBottom, forceScrollToBottom } = useAutoscroll(feedRef);
+async function _loadMore(): Promise<void> {
+  if (!hasMoreRef.value) return;
+  const loaded = await _fetchPage(offset.value);
+  offset.value += loaded;
+}
 
 // History pagination: on scroll within 150px of the top (and not already
 // loading/exhausted), anchor-preserve then paginate.
@@ -43,7 +62,7 @@ let _paginating = false;
 
 async function _onScrollPaginate(): Promise<void> {
   if (_paginating) return;
-  if (session.historyLoading || session.historyExhausted) return;
+  if (session.historyLoading || !hasMoreRef.value) return;
 
   const scrollable = document.documentElement.scrollHeight > window.innerHeight + 100;
   if (!scrollable) return;
@@ -51,14 +70,9 @@ async function _onScrollPaginate(): Promise<void> {
 
   _paginating = true;
   try {
-    // Anchor-preserve: capture height AND scrollY BEFORE the prepend.
-    // `prevScrollY` MUST be read before the await — Chromium scroll-anchoring
-    // (overflow-anchor, on by default) shifts scrollY once nodes land above the
-    // viewport, so reading it post-prepend would double-count the offset.
-    // Restoring to `prevScrollY + added` keeps the visible content fixed.
     const prevHeight = document.body.scrollHeight;
     const prevScrollY = window.scrollY;
-    await session.loadRecentConversation();
+    await _loadMore();
     await nextTick();
     const added = document.body.scrollHeight - prevHeight;
     if (added > 0) {
@@ -69,29 +83,39 @@ async function _onScrollPaginate(): Promise<void> {
   }
 }
 
-// Deep watch (not count-only): narration/pill growth inside an in-flight ACT
-// form leaves forms.length unchanged, so a shallow watch would stop following
-// the trail mid-cycle. flush:'post' lets scrollToBottom measure settled height;
-// it's the GUARDED smooth variant that self-skips when the user has scrolled up.
-watch(() => conversationStore.forms, scrollToBottom, { deep: true, flush: 'post' });
+// Autoscroll: turnDom dispatches 'turn-upserted' after every DOM render
+// (initial load, WS-driven refetch, live growth mid-turn) — replaces the old
+// deep watch on the buffer's sortedBlocks. Reconcile the day dividers first so
+// their height is already in the layout when autoscroll measures the bottom.
+function onTurnUpserted(): void {
+  if (turnsRef.value) syncDaymarks(turnsRef.value);
+  scrollToBottom();
+}
 
 onMounted(async () => {
-  document.addEventListener('session:turn-done', forceScrollToBottom);
-  document.addEventListener('session:history-initial-loaded', forceScrollToBottom);
+  if (turnsRef.value) {
+    registerSurface({
+      id: SPINE_SURFACE_ID,
+      type: ConfigType.USER,
+      container: turnsRef.value,
+      component: SpineTurn,
+    });
+  }
 
-  // Initial history load — this is the ONLY trigger (App.vue does NOT call it).
+  document.addEventListener('session:history-initial-loaded', forceScrollToBottom);
+  document.addEventListener('turn-upserted', onTurnUpserted);
+
+  session.registerHistoryLoader(_loadRecent);
   await session.loadRecentConversation();
 
-  // Wire the pagination listener ONLY AFTER the initial load: registering it
-  // earlier lets a short conversation (scrollY 0 < 150 during load) fire a
-  // pagination cascade on startup.
   window.addEventListener('scroll', _onScrollPaginate, { passive: true });
 });
 
 onBeforeUnmount(() => {
   window.removeEventListener('scroll', _onScrollPaginate);
-  document.removeEventListener('session:turn-done', forceScrollToBottom);
   document.removeEventListener('session:history-initial-loaded', forceScrollToBottom);
+  document.removeEventListener('turn-upserted', onTurnUpserted);
+  unregisterSurface(SPINE_SURFACE_ID);
 });
 </script>
 
@@ -101,38 +125,15 @@ onBeforeUnmount(() => {
       <output class="history-loader__spinner" aria-label="Loading history" />
     </div>
 
-    <div v-if="session.historyExhausted" class="history-end-pill">
-      <span class="history-end-pill__label">End of working history</span>
+    <div v-if="!hasMoreRef" class="history-end-pill">
+      <span class="history-end-pill__label">End of thread history</span>
     </div>
 
-    <!-- Each turn shares one `.turn` wrapper so intra-turn spacing < inter-turn. -->
-    <div v-for="turn in conversationStore.turns" :key="turn.id" class="turn">
-      <template v-for="row in groupRows(turn.forms)" :key="row.id">
-        <ActCycleGroup
-          v-if="row.type === 'act-group'"
-          :forms="row.forms"
-        />
-        <template v-else>
-          <UserBubble
-            v-if="row.form.kind === 'user'"
-            :form="(row.form as UserForm)"
-          />
-          <ChalieBubble
-            v-else-if="row.form.kind === 'chalie'"
-            :form="(row.form as ChalieForm)"
-          />
-          <ActCycle
-            v-else-if="row.form.kind === 'act'"
-            :form="(row.form as ActForm)"
-          />
-        </template>
-      </template>
-    </div>
+    <div ref="turnsRef" class="conversation-spine__turns" />
   </main>
 </template>
 
 <style scoped lang="scss">
-/* Loader + end-pill only; `.conversation-spine` layout is owned by interface.scss. */
 .history-loader {
   display: flex;
   justify-content: center;
@@ -145,13 +146,7 @@ onBeforeUnmount(() => {
   border: 2px solid color-mix(in oklab, var(--violet) 20%, transparent);
   border-top-color: var(--violet);
   border-radius: 50%;
-  animation: history-spin 0.7s linear infinite;
-}
-
-@keyframes history-spin {
-  to {
-    transform: rotate(360deg);
-  }
+  animation: spin 0.7s linear infinite;
 }
 
 .history-end-pill {

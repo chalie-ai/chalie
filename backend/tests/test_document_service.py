@@ -1,13 +1,16 @@
 # Tests for DocumentService migrated from mock_db to real SQLite via shared `db` fixture.
 
+import re
 import sqlite3
 from collections.abc import Callable
 from typing import TYPE_CHECKING, cast
 
 import pytest
 
+from models.document import DocumentRow
 from services.document_service import DocumentService
-from services.database_service import get_shared_db_service
+from services.embedding_utils import pack_embedding
+from services.memory_recall_service import recall
 from services.write_queue_service import WriteQueueService
 
 if TYPE_CHECKING:
@@ -55,10 +58,34 @@ def _insert_document(db: sqlite3.Connection, doc_id: str = 'abc123', original_na
     return doc_id
 
 
+def _drain_search_index() -> None:
+    """Drive the REAL async search-expander pipeline synchronously against the
+    bound test DB — the exact production code path, no mocks. In prod the
+    search_expander_worker daemon does this continuously; a test must do it
+    explicitly because no worker runs under pytest."""
+    from services.search_expander_service import SearchExpanderService
+    svc = SearchExpanderService()
+    svc._self_heal()
+    item = svc._dequeue()
+    while item is not None:
+        svc._process(item)
+        item = svc._dequeue()
+
+
+def _vec_dim(conn: sqlite3.Connection, table: str) -> int:
+    """Read the real vec0 column dimension straight off the live schema, so a
+    synthetic embedding seeded directly into a shadow table always matches —
+    decoupled from whatever ``embedding_dimensions`` the session-scoped test
+    template happened to be built with."""
+    row = conn.execute("SELECT sql FROM sqlite_master WHERE name = ?", (table,)).fetchone()
+    match = re.search(r"float\[(\d+)\]", row[0]) if row else None
+    return int(match.group(1)) if match else 256
+
+
 @pytest.fixture
 def doc_service(db: sqlite3.Connection) -> DocumentService:
     """DocumentService wired to the test database with inline write queue."""
-    svc = DocumentService(get_shared_db_service())
+    svc = DocumentService()
     svc._write_queue = cast(WriteQueueService, _InlineWriteQueue())
     return svc
 
@@ -131,6 +158,101 @@ class TestRestore:
         ).fetchone()
         assert row['deleted_at'] is None
 
+
+@pytest.mark.unit
+class TestFragmentIntegrity:
+    """The ``data_graph`` fragment side of documents (``models/document.py``),
+    not just the ``documents`` metadata row TestSoftDelete/TestRestore above
+    cover. Drives the real DocumentService soft-delete/restore/hard-delete
+    paths and the real DocumentRow fragment primitives against real SQLite —
+    the pre-rewrite cascade left orphaned fragments + FTS/vec shadow rows on
+    hard-delete and re-ingest; these prove that bug stays fixed."""
+
+    def test_soft_delete_excludes_fragments_from_reads_and_recall_restore_reinstates_them(
+        self, db: sqlite3.Connection, doc_service: DocumentService,
+    ) -> None:
+        _insert_document(db, doc_id='softdoc', original_name='softdoc.txt', status='ready')
+        DocumentRow.create_fragment('softdoc', 0, 'The zyxqplote fox jumped over the lazy dog.')
+        _drain_search_index()
+
+        # Live before soft-delete: direct read and cross-kind recall both surface it.
+        assert len(DocumentRow.for_document_id('softdoc').get()) == 1
+        hits = recall('zyxqplote', kinds=['document'], limit=10)
+        assert any(h['source'] == 'document:softdoc' for h in hits), hits
+
+        assert doc_service.soft_delete('softdoc') is True
+
+        # RECALL-STRICT: an active=0 fragment must not surface anywhere.
+        assert DocumentRow.for_document_id('softdoc').get() == []
+        hits_after_delete = recall('zyxqplote', kinds=['document'], limit=10)
+        assert not any(h['source'] == 'document:softdoc' for h in hits_after_delete), hits_after_delete
+
+        assert doc_service.restore('softdoc') is True
+        assert len(DocumentRow.for_document_id('softdoc').get()) == 1
+
+    def test_purge_by_document_id_removes_fragments_and_shadow_rows_no_orphans(
+        self, db: sqlite3.Connection,
+    ) -> None:
+        f1 = DocumentRow.create_fragment('purgedoc', 0, 'Alpha fragment about zqxvbnwerty giraffes.')
+        f2 = DocumentRow.create_fragment('purgedoc', 1, 'Beta fragment about zqxvbnwerty giraffes too.')
+        ids = [f1.id, f2.id]
+        _drain_search_index()
+
+        # FTS posting is really there before purge (a real MATCH hit, not just a
+        # row count) — the thing that must leave no orphan behind.
+        hits_before = db.execute(
+            "SELECT rowid FROM data_graph_fts WHERE data_graph_fts MATCH ?", ('zqxvbnwerty',)
+        ).fetchall()
+        assert len(hits_before) == 2, hits_before
+
+        # Seed real key/value-vec shadow rows directly at the schema's actual
+        # configured dimension: this test env's fallback embedding generator
+        # (no torch models loaded) produces a dimension the vec0 columns
+        # reject, so _backfill_key_value_vec silently skips the insert here.
+        # Seeding real rows lets purge_by_document_id's own DELETEs against
+        # these tables be proven, independent of that environment gap.
+        blob = pack_embedding([0.1] * _vec_dim(db, 'data_graph_key_vec'))
+        for rowid in ids:
+            db.execute("INSERT OR REPLACE INTO data_graph_key_vec (rowid, embedding) VALUES (?, ?)", (rowid, blob))
+            db.execute("INSERT OR REPLACE INTO data_graph_value_vec (rowid, embedding) VALUES (?, ?)", (rowid, blob))
+        db.commit()
+
+        count = DocumentRow.purge_by_document_id('purgedoc')
+        assert count == 2
+        assert DocumentRow.for_document_id('purgedoc').get() == []
+
+        hits_after = db.execute(
+            "SELECT rowid FROM data_graph_fts WHERE data_graph_fts MATCH ?", ('zqxvbnwerty',)
+        ).fetchall()
+        assert hits_after == []
+        for rowid in ids:
+            assert db.execute(
+                "SELECT 1 FROM data_graph_key_vec WHERE rowid = ?", (rowid,)
+            ).fetchone() is None
+            assert db.execute(
+                "SELECT 1 FROM data_graph_value_vec WHERE rowid = ?", (rowid,)
+            ).fetchone() is None
+
+    def test_hard_delete_removes_fragments_through_the_production_cascade(
+        self, db: sqlite3.Connection, doc_service: DocumentService,
+    ) -> None:
+        _insert_document(db, doc_id='harddoc', original_name='harddoc.txt', status='ready',
+                         file_path='')
+        DocumentRow.create_fragment('harddoc', 0, 'Gamma fragment about qzxdfghjkl elephants.')
+        _drain_search_index()
+
+        assert len(DocumentRow.for_document_id('harddoc').get()) == 1
+
+        # Through DocumentService.hard_delete (services/document_service.py:520-521),
+        # not by calling purge_by_document_id directly — proves the production
+        # cascade wiring, not just the model primitive in isolation.
+        assert doc_service.hard_delete('harddoc') is True
+
+        assert DocumentRow.for_document_id('harddoc').get() == []
+        hits_after = db.execute(
+            "SELECT rowid FROM data_graph_fts WHERE data_graph_fts MATCH ?", ('qzxdfghjkl',)
+        ).fetchall()
+        assert hits_after == []
 
 
 @pytest.mark.unit

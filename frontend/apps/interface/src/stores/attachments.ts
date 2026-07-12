@@ -1,7 +1,7 @@
 /**
  * Attachments store — holds raw File objects (images AND documents) and renders
  * a preview chip for each. Nothing is sent to the server here; raw files ride
- * the multipart POST /chat at send time (backend ingests via `document.upload`
+ * the multipart POST /api/thread at send time (backend ingests via `document.upload`
  * by PATH, never bytes — see session.sendMessage). Image previews come from
  * webPlatformAdapter.readFileAsDataURL (no URL.createObjectURL); docs have no
  * thumbnail (dataUrl null) and render as a 📄 chip.
@@ -12,7 +12,8 @@ import { showToast } from '../utils/toast';
 
 export interface AttachmentPreview {
   filename: string;
-  /** data: URL produced by FileReader — safe as <img src>. Null for docs. */
+  /** data: URL produced by FileReader — safe as <img src>. Null for docs and
+   *  for images whose read failed (chip still renders, just without a thumb). */
   dataUrl: string | null;
   isImage: boolean;
 }
@@ -57,12 +58,18 @@ export const useAttachmentsStore = defineStore('attachments', {
         return;
       }
       const isImage = file.type.startsWith('image/');
+      // Read the data: URL BEFORE pushing so the preview is complete the moment
+      // it enters the reactive array. Pushing a raw object and then mutating it
+      // (preview.dataUrl = …) does NOT re-render — Vue tracks the reactive proxy
+      // the template reads, not the raw ref we'd mutate, so the thumbnail would
+      // land only on the next unrelated re-render. A FileReader read of a
+      // just-picked local file is near-instant, so there is no perceptible gap.
       let dataUrl: string | null = null;
       if (isImage) {
         try {
           dataUrl = await webPlatformAdapter.readFileAsDataURL(file);
         } catch {
-          // Preview fails gracefully — chip still shown without thumbnail.
+          // Preview fails gracefully — chip still shown without a thumbnail.
         }
       }
       const preview: AttachmentPreview = { filename: file.name, dataUrl, isImage };

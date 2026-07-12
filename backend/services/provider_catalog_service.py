@@ -1,9 +1,9 @@
 """Curated provider catalog — presets for the reactive provider-setup wizard.
 
 Each preset maps a popular AI provider onto one of Chalie's five existing
-platforms (``ollama`` / ``openai`` / ``anthropic`` / ``gemini`` /
-``openai_compatible``) plus its base URL, so the wizard can pre-fill the host and
-reuse the live model-fetch path (``POST /providers/list-models``) unchanged.
+platforms (``ollama`` / ``openai`` / ``anthropic`` / ``gemini`` / ``openai_compatible`` /
+``codex_cli``) plus its base URL, so the wizard can pre-fill the host and
+reuse the live model-fetch path (``POST /api/providers/list-models``) unchanged.
 
 A preset is NEVER a runtime platform of its own — ``platform`` is always a real
 Chalie platform, and the provider is created through the ordinary create path
@@ -48,6 +48,8 @@ CURATED_PROVIDERS: list[dict[str, object]] = [
      "host": "https://api.novita.ai/openai", "needs_key": True},
     {"id": "baseten", "name": "Baseten", "platform": "openai_compatible",
      "host": "https://inference.baseten.co/v1", "needs_key": True},
+    {"id": "codex_cli", "name": "Codex CLI (OpenAI)", "platform": "codex_cli",
+     "host": "", "needs_key": False},
 ]
 
 

@@ -24,7 +24,7 @@ explicit profile row — silence is the safe default, never a leak.
 
 Consumers (bidirectional dependency note):
   - services/transcript_service.py          — episode gate + location back-fill
-  - services/subconscious_worker.py         — consolidation set, geo cursor
+  - cron/jobs/consolidate.py, geo_patterns.py — consolidation set, geo cursor
   - services/decay_engine_service.py        — janitor HEAVY-channel protection
   - configs/channels/pattern.py             — pattern-window channel filter
   - configs/channels/geo_pattern.py         — geo-window channel filter
@@ -37,32 +37,29 @@ import cycle.
 from __future__ import annotations
 
 from dataclasses import dataclass
-
 from typing import Callable
+
+from configs.enums.channels import Channel
 
 # ── Channel keys (exact) ──────────────────────────────────────────────────────
 # Named constants so no consumer hard-codes a channel literal.
-CHANNEL_USER = "user"
-CHANNEL_DMN = "dmn"
-CHANNEL_SKILLS_BUILDING = "skills_building"
-CHANNEL_SCHEDULED = "scheduled"
-CHANNEL_DISCOVERY = "discovery"
+CHANNEL_USER = Channel.USER.value
+CHANNEL_DMN = Channel.DMN.value
+CHANNEL_SKILLS_BUILDING = Channel.SKILLS_BUILDING.value
+CHANNEL_SCHEDULE = Channel.SCHEDULE.value
+CHANNEL_DISCOVERY = Channel.DISCOVERY.value
 
 # ── Channel patterns (SQL LIKE prefixes) ──────────────────────────────────────
 # External-agent channels are tagged ``external-agent:<id>`` (HYPHEN + colon);
 # delegate channels are ``delegate:<tool>``.
-LIKE_EXTERNAL_AGENT = "external-agent:%"
+LIKE_EXTERNAL_AGENT = f"{Channel.EXTERNAL_AGENT.value}:%"
 LIKE_DELEGATE = "delegate:%"
 
 # ── Provenance tags ───────────────────────────────────────────────────────────
 # Provenance is derived at write time from the running processor's config
 # channel (see abilities/_pattern_provenance.py) and from the episode channel in
 # fact extraction; this constant is the shared default for the pattern pass.
-PROVENANCE_PATTERN_MATCH = "pattern_match"
-
-# Roles excluded from every user-activity reader: compaction rows are written on
-# a parent's channel but are housekeeping artefacts, never user behaviour.
-ROLE_COMPACTION = "compaction"
+PROVENANCE_PATTERN_MATCH = Channel.PATTERN_MATCH.value
 
 
 @dataclass(frozen=True)
@@ -124,9 +121,17 @@ _EXACT_PROFILES: dict[str, Profile] = {
         pattern_is_user=False,
         location_backfill=False,
     ),
-    # The scheduled work loop is muted; the user-facing return-path turn runs on
-    # CHANNEL_USER and is encoded there as an ordinary user episode.
-    CHANNEL_SCHEDULED: _MUTED,
+    # A schedule thread encodes into episodic memory like a user turn (§13.4):
+    # full episode + fact participation. Excluded from geo/pattern user-activity
+    # and location back-fill — a fired task is not the user moving through the
+    # world (the same exclusions as DMN).
+    CHANNEL_SCHEDULE: Profile(
+        extract_episodes=True,
+        extract_facts=True,
+        geo_is_user=False,
+        pattern_is_user=False,
+        location_backfill=False,
+    ),
     CHANNEL_SKILLS_BUILDING: _MUTED,
     # The proactive-research loop writes transcript rows, so it needs an explicit
     # row (allowlist default is muted, but a write-capable channel states it). Its
@@ -213,10 +218,6 @@ def janitor_protected_sql(column: str = "channel") -> str:
     cutoff; protecting every episode-producing channel keeps that memory.
     """
     return _allowlist_sql(column, lambda p: p.extract_episodes)
-
-
-def non_compaction_sql(column: str = "role") -> str:
-    return f"{column} != '{ROLE_COMPACTION}'"
 
 
 def consolidating_exact_channels() -> list[str]:

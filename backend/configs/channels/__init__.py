@@ -11,15 +11,15 @@
 from __future__ import annotations
 
 from configs.channels._common import DEFAULT_ALWAYS_AVAILABLE
-from configs.channels.skill_association import SkillAssociationConfig
 from configs.channels.discovery import DiscoveryConfig
 from configs.channels.dmn import DmnConfig
 from configs.channels.episode_encoder import EpisodeEncoderConfig
 from configs.channels.external_agent import EAMPConfig
 from configs.channels.fact_extraction import FactExtractionConfig, parse_fact_ops
 from configs.channels.geo_pattern import GeoConfig
-from configs.channels.pattern import PatternConfig, _pattern_existing_patterns_block
+from configs.channels.pattern import PatternConfig
 from configs.channels.scheduled import ScheduledConfig
+from configs.channels.skill_association import SkillAssociationConfig
 from configs.channels.skill_suggestion import SkillSuggestionConfig
 from configs.channels.super_episode import (
     SuperEpisodeConfig,
@@ -27,8 +27,12 @@ from configs.channels.super_episode import (
     _fetch_transcript_spans,
     _safe_json_load_object,
 )
+from configs.channels.thread_gist import ThreadGistConfig
 from configs.channels.user import UserConfig
-from configs.channels.user_summary import UserSummaryConfig, _should_synthesise
+from configs.channels.user_summary import UserSummaryConfig
+from configs.channels.vision import VisionConfig
+from configs.channels.web_browse import WebBrowseConfig
+from configs.channels.web_search import WebSearchConfig
 from services.processor_config import ProcessorConfig
 
 __all__ = [
@@ -45,12 +49,14 @@ __all__ = [
     "ScheduledConfig",
     "SkillSuggestionConfig",
     "SuperEpisodeConfig",
+    "ThreadGistConfig",
     "UserConfig",
     "UserSummaryConfig",
+    "VisionConfig",
+    "WebBrowseConfig",
+    "WebSearchConfig",
     "_collect_transcript_ids",
     "_fetch_transcript_spans",
-    "_pattern_existing_patterns_block",
     "_safe_json_load_object",
-    "_should_synthesise",
     "parse_fact_ops",
 ]

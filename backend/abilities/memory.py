@@ -7,8 +7,7 @@ schema) and the action dispatch in ``run()`` — ``params → service handler �
 ToolResult``. Every retrieval/mutation handler, the episode recall engine,
 data-graph search, reflection layer expansion, response formatting and recall
 telemetry live in ``services.memory_retrieval`` so the same engine is reachable
-from non-ability callers (e.g. the ``/api/updates/memory`` REST endpoint)
-without importing an ability.
+from non-ability callers without importing an ability.
 
 The engine functions live ONLY in the service module — there are no re-exports
 from here: callers and tests import them from ``services.memory_retrieval``
@@ -16,13 +15,10 @@ directly.
 """
 
 import logging
-from typing import TYPE_CHECKING, ClassVar, cast
-
-if TYPE_CHECKING:
-    from services.message_processor import MessageProcessor
+from typing import ClassVar
 
 from abilities._ability import Ability
-from abilities._params import Keys
+from configs.enums.param_key import Keys
 from abilities._result import ToolResult
 from services import memory_retrieval
 
@@ -88,7 +84,7 @@ class MemoryAbility(Ability):
                     "fits one of the 27 concepts."
                 ),
             },
-            Keys.value: {
+            Keys.value_: {
                 "type": "string",
                 "description": (
                     "For store: the fact itself, atomic — a single value. "
@@ -137,7 +133,7 @@ class MemoryAbility(Ability):
     # ``query`` OR ``location`` (an OR the flat map cannot express), and the
     # handler validates that pair itself, returning ``code=no-query-or-location``.
     ACTION_REQUIRED: ClassVar[dict[str, tuple[str, ...]]] = {
-        "store": (Keys.key, Keys.value),
+        "store": (Keys.key, Keys.value_),
         "recall": (),
         "reflect": (Keys.query,),
         "forget": (Keys.key,),
@@ -146,7 +142,9 @@ class MemoryAbility(Ability):
     def run(self, params: dict[str, object]) -> ToolResult:
         action = params.get(Keys.action, "recall")
         mp = self.mp
-        channel = getattr(getattr(mp, "config", None), "channel", "") or ""
+        if mp is None:
+            raise RuntimeError("memory.run() dispatched without a bound MessageProcessor")
+        channel = mp.config.channel
 
         # The dispatcher's ACTION_REQUIRED pre-gate has already rejected unknown
         # actions and missing required params before run() is reached; this maps
@@ -157,9 +155,9 @@ class MemoryAbility(Ability):
             if action == "store":
                 return memory_retrieval.handle_store(channel, params)
             if action == "recall":
-                return memory_retrieval.handle_recall(cast("MessageProcessor | None", mp), channel, params)
+                return memory_retrieval.handle_recall(mp, channel, params)
             if action == "reflect":
-                return memory_retrieval.handle_reflect(cast("MessageProcessor | None", mp), params)
+                return memory_retrieval.handle_reflect(mp, params)
             if action == "forget":
                 return memory_retrieval.handle_forget(params)
             return ToolResult.err(

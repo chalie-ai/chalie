@@ -25,7 +25,9 @@ onBeforeUnmount(() => document.removeEventListener('keydown', onKey));
         type="button"
         aria-label="Close preview"
         @click="emit('close')"
-      >×</button>
+      >
+        ×
+      </button>
       <img class="img-modal__img" :src="src" :alt="alt || 'attached image'" />
     </div>
   </Teleport>

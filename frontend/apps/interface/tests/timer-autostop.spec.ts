@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { expect, test } from '@playwright/test';
 
 // Feature test — TimerCard alarm auto-stop after 30s (post-migration behavior
 // change). Drives the REAL hot path end-to-end against a real Chalie instance,

@@ -18,6 +18,7 @@ const richRegistry: Record<string, RichCardEntry> = {
   timer: { component: defineAsyncComponent(() => import('./TimerCard.vue')) },
   calendar: { component: defineAsyncComponent(() => import('./CalendarCard.vue')) },
   contacts: { component: defineAsyncComponent(() => import('./ContactsCard.vue')) },
+  image: { component: defineAsyncComponent(() => import('./ImageSearchCard.vue')) },
 };
 
 /**

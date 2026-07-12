@@ -41,7 +41,7 @@ Most AI tools forget you the moment you close the tab. Chalie runs on your own m
 | 🌐 **Real web browsing** | Drives a live browser: clicks, fills forms, scrolls, and inspects its own screenshots. |
 | 🔌 **MCP, in and out** | Connects to remote MCP servers and exposes its own tools to other agents. |
 | 📬 **Email, calendar, contacts** | IMAP, CalDAV, CardDAV — the accounts you already have. |
-| 🗓 **Scheduler & places** | Natural-language reminders, recurring jobs, and location-aware nudges. |
+| 🗓 **Scheduler & places** | Natural-language recurring jobs and location-aware nudges. |
 | 🐍 **Files, shell & code** | Searches files, runs guarded shell commands, executes sandboxed Python. |
 | 🎙 **Voice, fully local** | Moonshine STT + Kokoro TTS, both ONNX. No cloud transcription, ever. |
 | 💾 **Backup & restore** | Snapshot the whole instance to one file, optionally AES-256 encrypted. |
@@ -116,7 +116,7 @@ Full documentation lives at [chalie.ai](https://chalie.ai).
 
 ## Contributing
 
-PRs welcome. See [Contributing](https://chalie.ai/contribute) or [open an issue](https://github.com/chalie-ai/chalie/issues). Found a security issue? Read [SECURITY.md](SECURITY.md).
+PRs welcome. Start with the [contributor handbook](docs/index.md) — vision, principles, and mechanics in one index — or [open an issue](https://github.com/chalie-ai/chalie/issues). Found a security issue? Read [SECURITY.md](docs/SECURITY.md).
 
 ## License
 

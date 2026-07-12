@@ -2,22 +2,21 @@
 
 import sqlite3
 from collections.abc import Iterator
+from unittest.mock import patch
 
 import pytest
-from unittest.mock import patch
-from flask import Flask
 from flask.testing import FlaskClient
 
-from api.privacy import privacy_bp
+from api.privacy import privacy_ns
 from services.memory_store import MemoryStore
+from tests.restx_test_app import mount_namespace
 
 
 @pytest.mark.unit
 class TestPrivacyAPI:
     @pytest.fixture
     def client(self, db: sqlite3.Connection) -> FlaskClient:
-        app = Flask(__name__)
-        app.register_blueprint(privacy_bp)
+        app = mount_namespace(privacy_ns)
         app.config['TESTING'] = True
         return app.test_client()
 
@@ -34,7 +33,7 @@ class TestPrivacyAPI:
         store = MemoryStore()
 
         with patch('services.memory_client.MemoryClientService.create_connection', return_value=store):
-            response = client.get('/privacy/data-summary')
+            response = client.get('/api/privacy/data-summary')
 
             assert response.status_code == 200
             data = response.get_json()
@@ -50,10 +49,10 @@ class TestPrivacyAPI:
     # DELETE /privacy/delete-all
     # ------------------------------------------------------------------
 
-    def test_delete_all_without_confirm_header_returns_400(self, client: FlaskClient) -> None:
-        response = client.delete('/privacy/delete-all')
+    def test_delete_all_without_confirm_header_returns_422(self, client: FlaskClient) -> None:
+        response = client.delete('/api/privacy/delete-all')
 
-        assert response.status_code == 400
+        assert response.status_code == 422
         data = response.get_json()
         assert "error" in data
         assert "X-Confirm-Delete" in data["error"]
@@ -75,7 +74,7 @@ class TestPrivacyAPI:
         assert db.execute("SELECT COUNT(*) FROM transcript").fetchone()[0] == 1
 
         response = client.delete(
-            '/privacy/delete-all',
+            '/api/privacy/delete-all',
             headers={"X-Confirm-Delete": "yes"},
         )
 
@@ -104,10 +103,10 @@ class TestPrivacyAPI:
             ("item-1", "list-1", "Milk"),
         )
 
-        # ── Seed scheduled_items ──────────────────────────────────────────────
+        # ── Seed scheduled_items (TKT-1434 prompt-only dumb-cron schema) ──────
         db.execute(
-            "INSERT INTO scheduled_items (id, message, due_at) VALUES (?, ?, ?)",
-            ("sched-1", "Buy groceries", "2026-05-01T10:00:00+00:00"),
+            "INSERT INTO scheduled_items (message, start_at, created_at) VALUES (?, ?, ?)",
+            ("Buy groceries", "2026-05-01T10:00:00+00:00", "2026-05-01T10:00:00+00:00"),
         )
 
         # ── Seed documents ────────────────────────────────────────────────────
@@ -127,7 +126,7 @@ class TestPrivacyAPI:
         assert db.execute("SELECT COUNT(*) FROM documents").fetchone()[0] >= 1
 
         response = client.delete(
-            '/privacy/delete-all',
+            '/api/privacy/delete-all',
             headers={"X-Confirm-Delete": "yes"},
         )
 
@@ -145,7 +144,7 @@ class TestPrivacyAPI:
     def test_delete_all_tables_all_exist_in_schema(self) -> None:
         import re
 
-        from api.privacy import _DELETE_ALL_TABLES
+        from api.privacy import _DELETE_ALL_MODELLESS_TABLES, _DELETE_ALL_MODELS
         from services.file_mapper_service import FileMapperService
 
         schema_path = FileMapperService.get_schema_path()
@@ -160,7 +159,10 @@ class TestPrivacyAPI:
             )
         )
 
-        dead = [t for t in _DELETE_ALL_TABLES if t not in schema_tables]
+        # Every table the nuclear delete touches — resolved through each model's
+        # own get_table() plus the model-less residuals — must exist in schema.
+        wiped_tables = [m.get_table() for m in _DELETE_ALL_MODELS] + list(_DELETE_ALL_MODELLESS_TABLES)
+        dead = [t for t in wiped_tables if t not in schema_tables]
         assert dead == [], (
-            f"_DELETE_ALL_TABLES references tables not in schema.sql: {dead}"
+            f"nuclear-delete references tables not in schema.sql: {dead}"
         )

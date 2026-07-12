@@ -48,11 +48,9 @@ class ProviderCacheService:
         # Cache miss — fetch from DB (cold start or after invalidation)
         logger.debug("[ProviderCache] Cache miss, fetching from DB")
         try:
-            from services.database_service import get_shared_db_service
             from services.provider_db_service import ProviderDbService
 
-            db = get_shared_db_service()
-            service = ProviderDbService(db)
+            service = ProviderDbService()
 
             # Fetch all active providers from DB (decryption happens here)
             db_providers = service.get_all_providers()
@@ -61,8 +59,8 @@ class ProviderCacheService:
             providers_dict: dict[str, dict[str, object]] = {}
             for p in db_providers:
                 # Include 'name' in the entry so downstream consumers
-                # (Providers.get_compact_at, ProviderCacheService.get_job_assignment,
-                # Providers._resolve) can read the provider name from the resolved
+                # (ProviderCacheService.get_job_assignment, ProviderService._resolve)
+                # can read the provider name from the resolved
                 # config dict directly.
                 # Without this, the resolved config has no way to identify
                 # which provider row backs it, breaking DB lookups keyed by
@@ -122,11 +120,9 @@ class ProviderCacheService:
     def get_selected_provider() -> dict[str, object] | None:
 
         try:
-            from services.database_service import get_shared_db_service
             from services.provider_db_service import ProviderDbService
 
-            db = get_shared_db_service()
-            service = ProviderDbService(db)
+            service = ProviderDbService()
             selected = service.get_selected_provider()
             if selected:
                 return {

@@ -1,16 +1,10 @@
 from __future__ import annotations
 
 import json
-from typing import TYPE_CHECKING, cast
 
+from configs.enums.channels import Channel
+from configs.enums.policy_channel import PolicyChannel
 from services.processor_config import ProcessorConfig
-
-if TYPE_CHECKING:
-    from services.message_processor import MessageProcessor
-
-    class _WithFactAttrs:
-        _gist: str
-        _neighbours: list[object]
 
 # ── Fact-extraction config (subconscious worker fact pipeline) ────────
 #
@@ -19,7 +13,7 @@ if TYPE_CHECKING:
 # sees the episode and the top-N data_graph rows that are already most similar
 # to it, then emits EXACTLY ONE JSON object describing the ops to apply.
 #
-# The interface is identical across every model tier (§4.6.5): the same prompt,
+# The interface is identical across every model tier: the same prompt,
 # the same op enum, the same JSON envelope. A stronger model makes better calls;
 # the contract never branches. Unparseable output is the caller's NOOP-safe
 # default — this module never writes; it only produces text for the worker.
@@ -107,9 +101,9 @@ class FactExtractionConfig(ProcessorConfig):
 
     def __init__(self, gist: str, neighbours: list[object]) -> None:
         super().__init__(
-            channel="fact_extraction",
+            channel=Channel.FACT_EXTRACTION.value,
             role="fact_extraction",
-            policy_channel=ProcessorConfig.PolicyChannel.SUBCONSCIOUS,
+            policy_channel=PolicyChannel.SUBCONSCIOUS,
             always_available=[],
             skip_transcript=True,
             skip_input_row=False,
@@ -120,56 +114,23 @@ class FactExtractionConfig(ProcessorConfig):
         object.__setattr__(self, "_gist", gist)
         object.__setattr__(self, "_neighbours", neighbours)
 
-    def get_user_definition(self, mp: "MessageProcessor") -> str:
-        return (
-            "The user is 'fact_extraction' — a background process that routes "
-            "hard, truth-valued facts out of a single episode into the durable "
-            "fact store, reconciling them against what is already known."
-        )
+    @property
+    def system_prompt(self) -> str:
+        return """The user is 'fact_extraction' — a background process that routes hard, truth-valued facts out of a single episode into the durable fact store, reconciling them against what is already known.
 
-    def get_user_prompt(self, mp: "MessageProcessor") -> str:
-        _self = cast("_WithFactAttrs", self)
-        if _self._neighbours:
-            known = "\n".join(
-                f"- key={cast('dict[str, object]', n).get('key')!r} value={cast('dict[str, object]', n).get('value')!r}"
-                for n in _self._neighbours
-            )
-        else:
-            known = "(no similar facts on record)"
-        return (
-            f"Episode:\n{_self._gist}\n\n"
-            f"Most similar known facts:\n{known}"
-        )
+Extract the durable, truth-valued facts stated in the episode (names, dates, ownership, state — anything that can later be contradicted) and reconcile each against the known facts.
 
-    def get_system_prompt(self, mp: "MessageProcessor") -> str:
-        """Constrained-op system prompt — identical for every model tier."""
-        example = json.dumps(
-            {
-                "ops": [
-                    {"op": OP_ADD, "key": "pet", "value": "dog named Rex"},
-                    {"op": OP_DELETE, "key": "pet", "value": "cat named Tom"},
-                ]
-            }
-        )
-        return (
-            f"{self.get_user_definition(mp)}\n\n"
-            "Extract the durable, truth-valued facts stated in the episode "
-            "(names, dates, ownership, state — anything that can later be "
-            "contradicted) and reconcile each against the known facts.\n\n"
-            "For each fact emit exactly one operation:\n"
-            f"- {OP_ADD}: a genuinely new fact not present in the known list.\n"
-            f"- {OP_UPDATE}: the episode changes the value of a known fact "
-            "(reuse that fact's key verbatim; value is the new truth).\n"
-            f"- {OP_DELETE}: the episode says a known fact is no longer true "
-            "(reuse that fact's key; value names the fact being removed).\n"
-            f"- {OP_NOOP}: the fact is already on record unchanged — omit it.\n\n"
-            "Rules:\n"
-            "- Output ONE JSON object and nothing else: "
-            '{"ops": [ ... ]}.\n'
-            "- When the episode contains no durable facts, output "
-            '{"ops": []}.\n'
-            "- Do NOT invent facts, narratives, or feelings. Skip anything "
-            "without a truth value.\n"
-            "- Reuse an existing key EXACTLY when updating or deleting it.\n\n"
-            f"Example:\n{example}"
-        )
+For each fact emit exactly one operation:
+- ADD: a genuinely new fact not present in the known list.
+- UPDATE: the episode changes the value of a known fact (reuse that fact's key verbatim; value is the new truth).
+- DELETE: the episode says a known fact is no longer true (reuse that fact's key; value names the fact being removed).
+- NOOP: the fact is already on record unchanged — omit it.
+
+Rules:
+- Output ONE JSON object and nothing else: {"ops": [ ... ]}.
+- When the episode contains no durable facts, output {"ops": []}.
+- Do NOT invent facts, narratives, or feelings. Skip anything without a truth value.
+- Reuse an existing key EXACTLY when updating or deleting it.
+
+Example:
+{"ops": [{"op": "ADD", "key": "pet", "value": "dog named Rex"}, {"op": "DELETE", "key": "pet", "value": "cat named Tom"}]}"""

@@ -21,6 +21,8 @@ from typing import cast
 
 import pytest
 
+from configs.enums.channels import Channel
+
 pytestmark = pytest.mark.unit
 
 # ---------------------------------------------------------------------------
@@ -140,9 +142,9 @@ def _seed_located_row(db: sqlite3.Connection, *, channel: str, role: str = "user
 class TestGeoPatternWindowChannelFilter:
     """The geo-pattern window feeds the model ONLY rows whose source profile
     marks them as user geo-activity. A located row on a muted/non-user channel
-    (or a compaction row) must never reach the model — the prior behaviour fed
-    every located row regardless of channel, so a delegate's coordinates could
-    masquerade as the user being somewhere.
+    must never reach the model — the prior behaviour fed every located row
+    regardless of channel, so a delegate's coordinates could masquerade as the
+    user being somewhere.
 
     Driven through the real ``_geo_pattern_load_transcript_block`` (the exact
     builder GeoConfig.get_user_prompt calls) over mixed-channel fixtures.
@@ -152,11 +154,10 @@ class TestGeoPatternWindowChannelFilter:
         from configs.channels.geo_pattern import _geo_pattern_load_transcript_block
 
         # One row per representative channel, all located, all in the window.
-        _seed_located_row(db, channel="user", content="USER at the gym")
-        _seed_located_row(db, channel="dmn", content="DMN reflection located")
+        _seed_located_row(db, channel=Channel.USER.value, content="USER at the gym")
+        _seed_located_row(db, channel=Channel.DMN.value, content="DMN reflection located")
         _seed_located_row(db, channel="delegate:research", content="DELEGATE located")
-        _seed_located_row(db, channel="external-agent:bob", content="EXT located")
-        _seed_located_row(db, channel="user", role="compaction", content="COMPACTION located")
+        _seed_located_row(db, channel=Channel.for_external_agent("bob"), content="EXT located")
 
         last_id = db.execute("SELECT MAX(id) FROM transcript").fetchone()[0]
         block = _geo_pattern_load_transcript_block(0, last_id)
@@ -165,20 +166,17 @@ class TestGeoPatternWindowChannelFilter:
         assert "USER at the gym" in block
         # dmn is HEAVY for episodes but NOT user geo-activity (geo_is_user=False).
         assert "DMN reflection located" not in block
-        # Muted / non-user channels and compaction rows are excluded.
+        # Muted / non-user channels are excluded.
         assert "DELEGATE located" not in block
         assert "EXT located" not in block
-        assert "COMPACTION located" not in block
 
-    def test_existing_patterns_block_empty_db_returns_none_yet(self, db: sqlite3.Connection) -> None:
-        from configs.channels import _pattern_existing_patterns_block
+    def test_existing_patterns_block_empty_db_returns_no_patterns(self, db: sqlite3.Connection) -> None:
+        """The behavioural-pattern lane feeding the existing-patterns block is
+        empty on a fresh DB. The '(none yet)' prose now lives in
+        PromptService._pattern_existing_patterns_block; the data-level surface it
+        renders from is BehavioralPatternService.top_patterns(). The read path
+        (top_patterns -> patterns -> BehavioralPattern.recent()) runs over the
+        class-bound connection and never touches ``mp``."""
+        from services.behavioral_pattern_service import BehavioralPatternService
 
-        block = _pattern_existing_patterns_block()
-
-        assert block == "(none yet)", (
-            f"Expected '(none yet)' on empty DB, got: {block!r}"
-        )
-
-
-# ---------------------------------------------------------------------------
-# Test 5: PlaceAbility — schema and metadata
+        assert BehavioralPatternService(None).top_patterns() == {}

@@ -111,32 +111,3 @@ class TestParseUnclosedSpan:
         assert "Hello" in cast(str, segs[0]["content"])
 
 
-
-# ── data-image attribute (LLM-chosen thumbnail) ──────────────────────────────
-
-
-class TestParseImageChoice:
-    """``data-image`` lets the LLM promote one image_candidate to image_url.
-
-    Validation: only URLs that appear in the tool result's ``image_candidates``
-    are honoured — anything else is dropped silently. ``image_candidates`` is
-    always stripped from the payload sent to the frontend.
-    """
-
-    _CANDIDATES = [
-        {"url": "https://example.com/a.jpg", "caption": "Headline A"},
-        {"url": "https://example.com/b.jpg", "caption": "Headline B"},
-    ]
-
-    def _tool_result(self) -> str:
-        import json as _json
-        head = _json.dumps({"results": [{"title": "T"}], "image_candidates": self._CANDIDATES})
-        return f"{head}\n\n<span id='search_1'>"
-
-    def test_chosen_url_in_candidates_promoted_to_image_url(self) -> None:
-        tc = _tc("search", self._tool_result())
-        content = "<span id='search_1' data-image='https://example.com/a.jpg'>Synthesis.</span>"
-        segs = parse(content, [tc])
-        rich = next(s for s in segs if s["type"] == "rich")
-        assert cast(dict[str, object], rich["payload"])["image_url"] == "https://example.com/a.jpg"
-        assert "image_candidates" not in cast(dict[str, object], rich["payload"])

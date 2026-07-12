@@ -5,44 +5,32 @@ All factories return tuples unless noted otherwise. Override any field via keywo
 
 from __future__ import annotations
 
-from datetime import datetime, timezone, timedelta
-from typing import TYPE_CHECKING, Callable
+import sqlite3
+from datetime import datetime, timezone
+from typing import cast
 
+from configs.enums.policy_channel import PolicyChannel
 from services.processor_config import ProcessorConfig
-
-if TYPE_CHECKING:
-    from services.message_processor import MessageProcessor
-    from services.post_turn_hook import PostTurnHook
-
-    class _WithBuilders(ProcessorConfig):
-        _b_up: Callable[["MessageProcessor"], str]
-        _b_ud: Callable[["MessageProcessor"], str]
-        _b_sp: Callable[["MessageProcessor"], str]
 
 
 # ─── ProcessorConfig test stub ───────────────────────────────────────
-# ProcessorConfig's three prompt builders are abstractmethods, so the base
-# cannot be instantiated directly.  This concrete stub takes the builders as
-# callables (signature (mp) -> str — the pre-refactor field API) and delegates
-# to them, letting test helpers inject custom prompt bodies exactly as before.
+# A minimal concrete ProcessorConfig for tests that need a config instance
+# (policy-channel derivation, tool-finder embeddings). Prompt assembly lives in
+# PromptService, so the stub carries no prompt-builder surface.
 
 class StubProcessorConfig(ProcessorConfig):
     def __init__(
         self,
         *,
-        build_user_prompt: Callable[["MessageProcessor"], str] | None = None,
-        build_user_definition: Callable[["MessageProcessor"], str] | None = None,
-        build_system_prompt: Callable[["MessageProcessor"], str] | None = None,
         channel: str,
         role: str,
-        policy_channel: ProcessorConfig.PolicyChannel,
+        policy_channel: PolicyChannel,
         always_available: list[str],
         skip_transcript: bool,
         skip_input_row: bool,
         suppress_history: bool,
         broadcast_to: str | None,
         memory_seed: bool,
-        post_turn_hooks: tuple["PostTurnHook", ...] = (),
     ) -> None:
         super().__init__(
             channel=channel,
@@ -54,23 +42,7 @@ class StubProcessorConfig(ProcessorConfig):
             suppress_history=suppress_history,
             broadcast_to=broadcast_to,
             memory_seed=memory_seed,
-            post_turn_hooks=post_turn_hooks,
         )
-        object.__setattr__(self, "_b_up", build_user_prompt or (lambda _mp: ""))
-        object.__setattr__(self, "_b_ud", build_user_definition or (lambda _mp: ""))
-        object.__setattr__(self, "_b_sp", build_system_prompt or (lambda _mp: ""))
-
-    def get_user_prompt(self, mp: "MessageProcessor") -> str:
-        from typing import cast
-        return cast("_WithBuilders", self)._b_up(mp)
-
-    def get_user_definition(self, mp: "MessageProcessor") -> str:
-        from typing import cast
-        return cast("_WithBuilders", self)._b_ud(mp)
-
-    def get_system_prompt(self, mp: "MessageProcessor") -> str:
-        from typing import cast
-        return cast("_WithBuilders", self)._b_sp(mp)
 
 
 def make_stub_config(
@@ -78,12 +50,12 @@ def make_stub_config(
     always_available: list[str] | None = None,
     channel: str = "user",
     role: str = "user",
-    policy_channel: ProcessorConfig.PolicyChannel | None = None,
+    policy_channel: PolicyChannel | None = None,
 ) -> StubProcessorConfig:
     return StubProcessorConfig(
         channel=channel,
         role=role,
-        policy_channel=policy_channel or ProcessorConfig.PolicyChannel.CHAT,
+        policy_channel=policy_channel or PolicyChannel.CHAT,
         always_available=list(always_available or []),
         skip_transcript=False,
         skip_input_row=False,
@@ -94,59 +66,52 @@ def make_stub_config(
 
 
 # ─── scheduled_items ─────────────────────────────────────────────────
-# Column order matches: SELECT id, item_type, message, due_at, recurrence,
-#   window_start, window_end, topic, created_by_session, group_id, is_prompt
+# Column order matches schema.sql (the real 5-field crontab engine):
+#   message, start_at, cron_minute, cron_hour, cron_dom, cron_month, cron_dow,
+#   enabled, channel, created_by_session, created_at
+# ``id`` is INTEGER PRIMARY KEY AUTOINCREMENT — never supplied on insert, always
+# read back via cursor.lastrowid (it also doubles as the schedule's turn_id on
+# the 'schedule' channel). All five cron_* columns are TEXT NOT NULL DEFAULT '*'
+# crontab expressions (services.cron_schedule.validate_cron / matches); '*' =
+# every. start_at is a UTC activation floor.
+#
+# This is the SINGLE shared seed path for a real scheduled_items row — every
+# test that needs a pre-existing row (rather than driving one through the
+# ability/REST create path) calls this, so the INSERT's column list can never
+# drift out of step with schema.sql in more than one place (the exact bug
+# class a hand-rolled per-file INSERT reintroduces).
 
-def make_scheduled_item(
-    item_id: str = "sched-001",
-    item_type: str = "reminder",
+def insert_scheduled_item(
+    db: sqlite3.Connection,
     message: str = "Test reminder",
-    due_at: str | None = None,
-    recurrence: str | None = None,
-    window_start: str | None = None,
-    window_end: str | None = None,
-    topic: str | None = None,
+    start_at: str | None = None,
+    cron_minute: str = "*",
+    cron_hour: str = "*",
+    cron_dom: str = "*",
+    cron_month: str = "*",
+    cron_dow: str = "*",
+    enabled: int = 1,
+    channel: str | None = "general",
     created_by_session: str | None = None,
-    group_id: str | None = None,
-    is_prompt: bool = False,
-) -> tuple[object, ...]:
-    due_at = due_at or (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat()
-    return (
-        item_id, item_type, message, due_at, recurrence,
-        window_start, window_end, topic, created_by_session, group_id,
-        is_prompt,
+    created_at: str | None = None,
+) -> int:
+    """Insert a real ``scheduled_items`` row and return its auto-assigned id."""
+    start_at = start_at or datetime.now(timezone.utc).isoformat()
+    created_at = created_at or datetime.now(timezone.utc).isoformat()
+    cur = db.execute(
+        """
+        INSERT INTO scheduled_items
+          (message, start_at, cron_minute, cron_hour, cron_dom, cron_month, cron_dow,
+           enabled, channel, created_by_session, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            message, start_at, cron_minute, cron_hour, cron_dom, cron_month, cron_dow,
+            enabled, channel, created_by_session, created_at,
+        ),
     )
-
-
-# ─── episodes ────────────────────────────────────────────────────────
-# Used by episodic_service._hybrid_retrieve() which returns dicts,
-# but the raw query returns tuples.  This factory returns a dict matching
-# the service's output format (since the service converts internally).
-
-_EPISODE_DEFAULTS: dict[str, object] = {
-    "id": "ep-001",
-    "gist": "Weather conversation about Malta",
-    "salience": 5,
-    "channel": "weather",
-    "created_at": None,
-    "last_accessed_at": None,
-    "emotional_valence": None,
-    "emotional_arousal": None,
-    "transcript_ids": "[]",
-    "transcript_id_start": None,
-    "transcript_id_end": None,
-    "consolidated_from": "[]",
-    "consolidated_into": None,
-    "storage_strength": 1.0,
-    "retrieval_weight": 1.0,
-}
-
-
-def make_episode_row(**overrides: object) -> dict[str, object]:
-    row: dict[str, object] = {**_EPISODE_DEFAULTS, **overrides}
-    if row["created_at"] is None:
-        row["created_at"] = datetime.now(timezone.utc)
-    return row
+    db.commit()
+    return cast(int, cur.lastrowid)
 
 
 # ─── providers ───────────────────────────────────────────────────────

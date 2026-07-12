@@ -21,6 +21,7 @@ from typing import ClassVar, cast
 # one schema assembler (get_input_schema → framework-field injection).
 from abilities._ability import Ability
 from abilities._result import ToolResult
+from exceptions import McpServerUnreachable, McpToolUnknown
 
 logger = logging.getLogger(__name__)
 
@@ -47,11 +48,7 @@ def _dispatch_mcp(tool_name: str, params: "dict[str, object]") -> ToolResult:
     other exception propagates to the dispatcher's ``_run`` guard
     (``code=unhandled-exception``) rather than being masked here.
     """
-    from services.mcp_client_service import (  # noqa: PLC0415
-        McpClientService,
-        McpServerUnreachable,
-        McpToolUnknown,
-    )
+    from services.mcp_client_service import McpClientService  # noqa: PLC0415
 
     try:
         result = McpClientService().dispatch_mcp_tool(tool_name, params)

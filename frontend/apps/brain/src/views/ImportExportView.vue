@@ -85,13 +85,14 @@ async function confirmImport(): Promise<void> {
         Downloads a single .zip that is a complete clone of this instance — databases, documents,
         skills, and secrets. Set a password to encrypt it with AES-256.
       </p>
-      <label class="form-label">Password (optional)
+      <label class="form-label"
+        >Password (optional)
         <input
           v-model="exportPass"
           type="password"
           class="form-input"
           autocomplete="new-password"
-        >
+        />
       </label>
       <button class="btn btn-primary" @click="doExport">
         <Download :size="14" /> Export Snapshot
@@ -105,16 +106,18 @@ async function confirmImport(): Promise<void> {
         Importing a snapshot <strong>completely wipes and overrides ALL existing data</strong> in
         this instance. This is a full restore, not a merge. The instance restarts to apply it.
       </p>
-      <label class="form-label">Snapshot file
-        <input type="file" class="form-input" accept=".zip" @change="onFileChosen">
+      <label class="form-label"
+        >Snapshot file
+        <input type="file" class="form-input" accept=".zip" @change="onFileChosen" />
       </label>
-      <label class="form-label">Password (if encrypted)
+      <label class="form-label"
+        >Password (if encrypted)
         <input
           v-model="importPass"
           type="password"
           class="form-input"
           autocomplete="current-password"
-        >
+        />
       </label>
       <button class="btn btn-danger" @click="confirmImport">
         <Upload :size="14" /> Import &amp; Restore

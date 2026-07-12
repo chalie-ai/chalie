@@ -11,6 +11,7 @@ dependencies = [
     "transformers>=4.48.0",
     "flask>=3.0.0",
     "flask-cors>=4.0.0",
+    "flask-restx>=1.3.0",
     # numpy upper bound: numba 0.65.x metadata caps numpy<2.5; exceeding it
     # breaks the UMAP→HDBSCAN clustering stack below at import time.
     "numpy>=1.24,<2.5",
@@ -58,6 +59,9 @@ dependencies = [
     "nltk>=3.8",
     "feedparser>=6.0.0",
     "nh3>=0.2.0",
+    # DTO boundary layer (backend/api/dto/): validates inbound requests and
+    # serializes outbound responses on a single typed contract.
+    "pydantic>=2.6",
     "rapidfuzz>=3.0.0",
     "mcp>=1.24.0",
     "uvicorn>=0.34.0",
@@ -114,6 +118,12 @@ ignore_missing_imports = true
 # closer to a hard-typed language. strict_bytes forbids the implicit
 # str/bytes/bytearray promiscuity mypy otherwise tolerates.
 strict_bytes = true
+# Local type stubs for untyped third-party deps. flask_restx ships no py.typed,
+# so without this mypy treats Resource/Namespace/Api as Any — which then trips
+# `disallow_subclassing_any` and `disallow_untyped_decorators` on every API
+# module. The stubs file is .pyi (not .py), so the no-Any/no-# type: ignore gates
+# (which walk .py only) don't apply to it.
+mypy_path = "stubs"
 
 [tool.setuptools]
 # backend/ is not an importable package — it's run directly via run.py.

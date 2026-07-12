@@ -1,36 +1,23 @@
 # mypy: disable-error-code=no-untyped-call
 """
-Unit tests for :class:`capabilities.mail_capability.caldav_handler.CaldavHandler`.
+Feature tests for :class:`capabilities.mail_capability.caldav_handler.CaldavHandler`.
 
-Coverage:
+The CalDAV-to-``scheduled_items`` mirror was ripped out entirely (the
+dumb-cron rewrite made ``scheduled_items`` a prompt-only table with zero
+CalDAV columns). Calendar reads (``list_events`` / ``get_event``) have since
+been re-homed onto direct, live CalDAV queries — their behavioral proof runs
+against a live CalDAV server in the feature-test slice, not here.
+``find_free_slots`` and ``get_attendees`` computed over the removed mirror and
+have no live replacement in scope; they stay registered but return one honest
+"unsupported" error.
+
+Coverage (parsing + error-shape units; no network):
     1.  ``parse_event`` — timed event fields are populated correctly.
-    2.  ``parse_event`` — all-day event sets ``all_day=True``.
-    3.  ``parse_event`` — DURATION used when DTEND absent.
-    4.  ``parse_event`` — multiple attendees returned as list.
-    5.  ``parse_event`` — returns empty list when VEVENT has no DTSTART.
-    6.  ``parse_event`` — returns empty list when ical instance unavailable.
-    7.  ``_find_overlap_pairs`` — detects overlapping timed events.
-    8.  ``_find_overlap_pairs`` — all-day events excluded.
-    9.  ``_find_overlap_pairs`` — non-overlapping events produce empty list.
-    10. ``_find_back_to_back_pairs`` — detects gap < 5 min.
-    11. ``_find_back_to_back_pairs`` — gap >= 5 min is not flagged.
-    12. ``upsert_events`` — events written to scheduled_items with source='mail'.
-    13. ``upsert_events`` — stale events are cancelled.
-    14. ``upsert_events`` — 15-min alert created for upcoming event.
-    15. ``upsert_events`` — alert NOT created for all-day events.
-    16. ``upsert_events`` — conflict notification created for overlapping events.
-    17. ``upsert_events`` — daily digest inserted exactly once.
-    18. ``upsert_events`` — greeting inserted exactly once.
-    19. ``list_events`` — returns events filtered by date range.
-    20. ``list_events`` — filters by calendar_name (case-insensitive).
-    21. ``get_event`` — returns error when uid missing.
-    22. ``get_event`` — returns event dict when found.
-    23. ``get_event`` — returns error when not found.
-    24. ``find_free_slots`` — gap found between two events.
-    25. ``find_free_slots`` — no slots when fully booked.
-    26. ``create_event`` — returns error when summary missing.
-    27. ``create_event`` — returns error when dtstart missing.
-    28. ``open_client`` — raises RuntimeError when caldav unavailable.
+    2.  ``parse_event`` — DURATION used when DTEND absent.
+    3.  ``find_free_slots`` — returns the unsupported-operation error.
+    4.  ``get_attendees`` — returns the same unsupported-operation error.
+    5.  ``create_event`` — returns error when summary missing.
+    6.  ``open_client`` — raises RuntimeError when caldav unavailable.
 
 All tests are marked ``@pytest.mark.unit``.
 """
@@ -38,7 +25,6 @@ All tests are marked ``@pytest.mark.unit``.
 from __future__ import annotations
 
 import datetime
-import sqlite3
 from typing import TYPE_CHECKING, cast
 from unittest.mock import MagicMock, patch
 
@@ -62,32 +48,6 @@ def _make_handler() -> "CaldavHandler":
 
 def _dt(year: int, month: int, day: int, hour: int = 0, minute: int = 0) -> datetime.datetime:
     return datetime.datetime(year, month, day, hour, minute, tzinfo=_UTC)
-
-
-def _make_event(
-    uid: str = "uid-1",
-    summary: str = "Meeting",
-    dtstart: datetime.datetime | None = None,
-    dtend: datetime.datetime | None = None,
-    all_day: bool = False,
-    cal_name: str = "Work",
-    attendees: list[str] | None = None,
-    recurrence: str | None = None,
-    location: str | None = None,
-) -> dict[str, object]:
-    start = dtstart or _dt(2026, 4, 1, 9)
-    end = dtend or _dt(2026, 4, 1, 10)
-    return {
-        "uid": uid,
-        "summary": summary,
-        "dtstart": start,
-        "dtend": end,
-        "all_day": all_day,
-        "calendar_name": cal_name,
-        "attendees": attendees or [],
-        "recurrence": recurrence,
-        "location": location,
-    }
 
 
 def _build_ical_resource(
@@ -176,195 +136,37 @@ class TestParseEvent:
         assert result[0]["dtend"] == expected_end
 
 
-# ---------------------------------------------------------------------------
-# _find_overlap_pairs tests
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.unit
-class TestFindOverlapPairs:
-    def test_overlapping_events_detected(self) -> None:
-        from capabilities.mail_capability.caldav_handler import _find_overlap_pairs
-
-        now = _dt(2026, 4, 1, 8)
-        ev_a = _make_event("a", dtstart=_dt(2026, 4, 1, 10), dtend=_dt(2026, 4, 1, 11))
-        ev_b = _make_event("b", dtstart=_dt(2026, 4, 1, 10, 30), dtend=_dt(2026, 4, 1, 11, 30))
-
-        pairs = _find_overlap_pairs([ev_a, ev_b], now)
-
-        assert len(pairs) == 1
-        canon = pairs[0][2]
-        assert "a" in canon and "b" in canon
-
 
 # ---------------------------------------------------------------------------
-# _find_back_to_back_pairs tests
+# find_free_slots / get_attendees — out-of-scope stubs (no live replacement)
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.unit
-class TestFindBackToBackPairs:
-    def test_tight_gap_detected(self) -> None:
-        from capabilities.mail_capability.caldav_handler import _find_back_to_back_pairs
+class TestUnsupportedOps:
+    def test_find_free_slots_returns_unsupported_error(self) -> None:
+        from capabilities.mail_capability.caldav_handler import _ERR_OP_UNSUPPORTED
 
-        now = _dt(2026, 4, 1, 8)
-        ev_a = _make_event("a", dtstart=_dt(2026, 4, 1, 9), dtend=_dt(2026, 4, 1, 10))
-        # 3-minute gap — below 5-minute threshold
-        ev_b = _make_event(
-            "b",
-            dtstart=_dt(2026, 4, 1, 10, 3),
-            dtend=_dt(2026, 4, 1, 11),
-        )
-
-        pairs = _find_back_to_back_pairs([ev_a, ev_b], now)
-
-        assert len(pairs) == 1
-        assert pairs[0][2] == 3  # gap_minutes
-
-
-
-
-# ---------------------------------------------------------------------------
-# upsert_events tests (use real in-memory DB via conftest `db` fixture)
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.unit
-class TestUpsertEvents:
-    def test_events_written_with_mail_source(self, db: sqlite3.Connection) -> None:
         handler = _make_handler()
-        now = _dt(2026, 4, 1, 8)
-        events = [_make_event("uid-10", "Sprint Review")]
 
-        handler.upsert_events(events, now)
+        result = handler.find_free_slots({
+            "date_from": "2026-04-01T00:00:00+00:00",
+            "date_to": "2026-04-01T23:59:59+00:00",
+            "working_hours_start": 8,
+            "working_hours_end": 18,
+            "min_duration_minutes": 30,
+        })
 
-        row = db.execute(
-            "SELECT source FROM scheduled_items WHERE external_uid='caldav:uid-10'"
-        ).fetchone()
-        assert row is not None
-        assert row[0] == "mail"
+        assert result.get("error") == _ERR_OP_UNSUPPORTED
 
-    def test_stale_events_cancelled(self, db: sqlite3.Connection) -> None:
+    def test_get_attendees_returns_unsupported_error(self) -> None:
+        from capabilities.mail_capability.caldav_handler import _ERR_OP_UNSUPPORTED
+
         handler = _make_handler()
-        now = _dt(2026, 4, 1, 8)
-        # Insert an event that will not appear in the next sync
-        db.execute(
-            """INSERT INTO scheduled_items
-               (id, item_type, message, due_at, status, source, external_uid, created_at)
-               VALUES ('old1', 'event', 'Old event', '2026-04-01T09:00:00+00:00',
-                       'pending', 'mail', 'caldav:stale-uid', '2026-04-01T08:00:00+00:00')"""
-        )
-        db.commit()
 
-        # Sync with zero events
-        handler.upsert_events([], now)
+        result = handler.get_attendees({"uid": "some-event-uid"})
 
-        row = db.execute(
-            "SELECT status FROM scheduled_items WHERE external_uid='caldav:stale-uid'"
-        ).fetchone()
-        assert row[0] == "cancelled"
-
-    def test_alert_created_for_upcoming_event(self, db: sqlite3.Connection) -> None:
-        handler = _make_handler()
-        now = _dt(2026, 4, 1, 8)
-        # Event starts in 1 hour (within 24h window), not all-day
-        events = [
-            _make_event(
-                "uid-alert",
-                "Dentist",
-                dtstart=_dt(2026, 4, 1, 9),
-                dtend=_dt(2026, 4, 1, 10),
-            )
-        ]
-
-        handler.upsert_events(events, now)
-
-        row = db.execute(
-            "SELECT item_type FROM scheduled_items WHERE external_uid='caldav:uid-alert:alert'"
-        ).fetchone()
-        assert row is not None
-        assert row[0] == "notification"
-
-    def test_alert_not_created_for_all_day(self, db: sqlite3.Connection) -> None:
-        handler = _make_handler()
-        now = _dt(2026, 4, 1, 8)
-        events = [_make_event("uid-allday", "Holiday", all_day=True)]
-
-        handler.upsert_events(events, now)
-
-        row = db.execute(
-            "SELECT id FROM scheduled_items WHERE external_uid='caldav:uid-allday:alert'"
-        ).fetchone()
-        assert row is None
-
-    def test_conflict_notification_created(self, db: sqlite3.Connection) -> None:
-        handler = _make_handler()
-        now = _dt(2026, 4, 1, 8)
-        events = [
-            _make_event("uid-x", dtstart=_dt(2026, 4, 1, 10), dtend=_dt(2026, 4, 1, 11)),
-            _make_event("uid-y", dtstart=_dt(2026, 4, 1, 10, 30), dtend=_dt(2026, 4, 1, 11, 30)),
-        ]
-
-        handler.upsert_events(events, now)
-
-        canon = ":".join(sorted(["uid-x", "uid-y"]))
-        row = db.execute(
-            "SELECT item_type FROM scheduled_items WHERE external_uid=?",
-            (f"caldav:conflict:{canon}",),
-        ).fetchone()
-        assert row is not None
-        assert row[0] == "notification"
-
-    def test_daily_digest_inserted_once(self, db: sqlite3.Connection) -> None:
-        handler = _make_handler()
-        now = _dt(2026, 4, 1, 8)
-
-        handler.upsert_events([], now)
-        handler.upsert_events([], now)  # second call must not duplicate
-
-        count = db.execute(
-            "SELECT COUNT(*) FROM scheduled_items WHERE external_uid='caldav:daily-digest'"
-        ).fetchone()[0]
-        assert count == 1
-
-
-
-
-
-# ---------------------------------------------------------------------------
-# find_free_slots tests
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.unit
-class TestFindFreeSlots:
-    def test_gap_between_two_events(self, db: sqlite3.Connection) -> None:
-        handler = _make_handler()
-        now = _dt(2026, 4, 1, 0)
-        events = [
-            _make_event("uid-s1", dtstart=_dt(2026, 4, 1, 9), dtend=_dt(2026, 4, 1, 10)),
-            _make_event("uid-s2", dtstart=_dt(2026, 4, 1, 11), dtend=_dt(2026, 4, 1, 12)),
-        ]
-        handler.upsert_events(events, now)
-
-        # Patch user tz to UTC for determinism
-        with patch(
-            "capabilities.mail_capability.caldav_handler._get_user_tz",
-            return_value=None,
-        ):
-            result = handler.find_free_slots({
-                "date_from": "2026-04-01T00:00:00+00:00",
-                "date_to": "2026-04-01T23:59:59+00:00",
-                "working_hours_start": 8,
-                "working_hours_end": 18,
-                "min_duration_minutes": 30,
-            })
-
-        assert cast(int, result.get("count", 0)) > 0
-        # The 10:00-11:00 gap should appear
-        starts = [cast(dict[str, object], s)["start"] for s in cast(list[object], result["free_slots"])]
-        assert any("10:00" in cast(str, s) for s in starts)
-
+        assert result.get("error") == _ERR_OP_UNSUPPORTED
 
 
 # ---------------------------------------------------------------------------
@@ -401,3 +203,112 @@ class TestOpenClient:
         ):
             with pytest.raises(RuntimeError, match="caldav"):
                 handler.open_client("https://example.com", "user", "pass")
+
+
+# ---------------------------------------------------------------------------
+# _resolve_window — list window bounds (whole-day upper bound + inversion guard)
+# ---------------------------------------------------------------------------
+
+_NOW = _dt(2026, 7, 12, 12, 0)
+
+
+def _ev(uid: str, summary: str, dtstart: datetime.datetime) -> dict[str, object]:
+    return {"uid": uid, "summary": summary, "dtstart": dtstart, "dtend": dtstart}
+
+
+@pytest.mark.unit
+class TestResolveWindow:
+    def _window(self, params: dict[str, object]) -> tuple[datetime.datetime, datetime.datetime]:
+        handler = _make_handler()
+        with patch("capabilities.mail_capability.caldav_handler.utc_now", return_value=_NOW):
+            return handler._resolve_window(params)
+
+    def test_date_only_upper_bound_covers_whole_day(self) -> None:
+        # CalendarAbility resolves a bare date / day-name to midnight; the window
+        # must extend through the whole day, else that day's afternoon is missed.
+        _start, end = self._window({"date_to": "2026-08-01T00:00:00+00:00"})
+        assert end == _dt(2026, 8, 2, 0, 0)
+
+    def test_explicit_time_upper_bound_is_preserved(self) -> None:
+        _start, end = self._window({"date_to": "2026-08-01T15:30:00+00:00"})
+        assert end == _dt(2026, 8, 1, 15, 30)
+
+    def test_lone_past_upper_bound_is_swapped_not_inverted(self) -> None:
+        # Only date_to, in the past → start defaults to now; the window would
+        # invert and be handed to date_search. It must be swapped to stay valid.
+        start, end = self._window({"date_to": "2026-06-01T00:00:00+00:00"})
+        assert start < end
+        assert start == _dt(2026, 6, 2, 0, 0)  # whole-day applied before the swap
+        assert end == _NOW
+
+    def test_default_window_is_now_plus_seven_days(self) -> None:
+        start, end = self._window({})
+        assert start == _NOW
+        assert end == _NOW + datetime.timedelta(days=7)
+
+
+# ---------------------------------------------------------------------------
+# _representative_per_uid — recurrence occurrences collapse to one occurrence
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.unit
+class TestRepresentativePerUid:
+    def test_recurring_series_collapses_to_soonest_upcoming(self) -> None:
+        handler = _make_handler()
+        soon = _dt(2026, 7, 13, 9, 0)
+        events = [
+            _ev("series", "Standup", _dt(2026, 7, 2, 9, 0)),   # past occurrence
+            _ev("series", "Standup", soon),                    # soonest upcoming
+            _ev("series", "Standup", _dt(2026, 7, 20, 9, 0)),  # later upcoming
+        ]
+        result = handler._representative_per_uid(events, _NOW)
+        assert len(result) == 1
+        assert result[0]["dtstart"] == soon
+
+    def test_all_past_series_returns_most_recent(self) -> None:
+        handler = _make_handler()
+        recent = _dt(2026, 7, 5, 9, 0)
+        events = [
+            _ev("gone", "Old", _dt(2026, 6, 20, 9, 0)),
+            _ev("gone", "Old", recent),
+        ]
+        result = handler._representative_per_uid(events, _NOW)
+        assert len(result) == 1
+        assert result[0]["dtstart"] == recent
+
+    def test_distinct_uids_are_each_kept(self) -> None:
+        handler = _make_handler()
+        events = [
+            _ev("a", "Lunch", _dt(2026, 7, 13, 12, 0)),
+            _ev("b", "Review", _dt(2026, 7, 14, 15, 0)),
+        ]
+        result = handler._representative_per_uid(events, _NOW)
+        assert {str(e["uid"]) for e in result} == {"a", "b"}
+
+    def test_uidless_events_pass_through(self) -> None:
+        handler = _make_handler()
+        events = [
+            _ev("", "One", _dt(2026, 7, 13, 9, 0)),
+            _ev("", "Two", _dt(2026, 7, 14, 9, 0)),
+        ]
+        result = handler._representative_per_uid(events, _NOW)
+        assert len(result) == 2
+
+
+# ---------------------------------------------------------------------------
+# _ambiguous_title_error — the message carries every candidate uid
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.unit
+class TestAmbiguousTitleError:
+    def test_message_lists_every_candidate_uid(self) -> None:
+        handler = _make_handler()
+        matches = [
+            _ev("uid-1", "Standup", _dt(2026, 7, 13, 9, 0)),
+            _ev("uid-2", "Standup review", _dt(2026, 7, 14, 9, 0)),
+        ]
+        msg = handler._ambiguous_title_error("standup", matches)
+        assert "2 events match" in msg
+        assert "uid-1" in msg and "uid-2" in msg

@@ -2,3 +2,7 @@
 .DS_Store
 node_modules/
 *.log
+
+# design-sync build artifacts
+.ds-tokens.css
+.ds-tokens-entry.js
