@@ -21,6 +21,7 @@ const CHIME_GAIN_END = 0.01;
 const NOTIFY_TITLE = 'Chalie';
 const NOTIFY_BODY_MAX = 200;
 const NOTIFY_TAG = 'chalie-message';
+const MAX_NOTIFICATIONS = 50;
 
 const LS_UPDATE_DISMISSED = 'chalie_update_dismissed';
 
@@ -111,6 +112,9 @@ export const useNotificationsStore = defineStore('notifications', {
       showOsNotification(text);
       playChime();
       this.notifications.push({ id: String(Date.now()), text });
+      if (this.notifications.length > MAX_NOTIFICATIONS) {
+        this.notifications.splice(0, this.notifications.length - MAX_NOTIFICATIONS);
+      }
     },
 
     /** Skips display if this version was already dismissed. DORMANT. */
