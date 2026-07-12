@@ -6,14 +6,13 @@ to avoid cross-test contamination from the module singleton.
 
 
 import sqlite3
-import time as _time
 
 import pytest
 
 from models.telemetry import Telemetry
 from services.world_state import WorldState
 
-_HEADER = "### Background Telemetry,Processes & Signals"
+_HEADER = "### Background Telemetry,Processes"
 
 
 # ---------------------------------------------------------------------------
@@ -99,52 +98,3 @@ class TestRenderTelemetry:
         assert "**location**" not in result
         assert "35.8989" not in result
         assert "14.5146" not in result
-
-
-# ---------------------------------------------------------------------------
-# Signals section
-# ---------------------------------------------------------------------------
-
-@pytest.mark.unit
-class TestRenderSignals:
-    def test_signals_render_sorted_by_source(self, db: sqlite3.Connection) -> None:
-        ws = _fresh()
-        ws.push_signal("zzz", "last")
-        ws.push_signal("aaa", "first")
-        ws.push_signal("mmm", "middle")
-        result = ws.render()
-        # Each appears as `[signal:src] label` (no bullet prefix), in alphabetical order.
-        assert "[signal:aaa] first" in result
-        assert "[signal:mmm] middle" in result
-        assert "[signal:zzz] last" in result
-        assert result.index("[signal:aaa]") < result.index("[signal:mmm]") < result.index("[signal:zzz]")
-
-    def test_expired_signals_pruned_on_render(self, db: sqlite3.Connection) -> None:
-        ws = _fresh()
-        ws.push_signal("stale", "old news", ttl=0)
-        ws.push_signal("fresh", "live news", ttl=3600)
-        _time.sleep(0.01)
-        result = ws.render()
-        assert "[signal:fresh] live news" in result
-        assert "stale" not in result
-        assert "old news" not in result
-
-
-# ---------------------------------------------------------------------------
-# Full mix — section ordering and structural rules
-# ---------------------------------------------------------------------------
-
-@pytest.mark.unit
-class TestRenderFullMix:
-    def test_sections_appear_in_fixed_order(self, db: sqlite3.Connection) -> None:
-        _seed_telemetry(db, {"local_time": "10:00", "location_name": "Malta"})
-        ws = _fresh()
-        ws.push_signal("news", "heatwave")
-
-        result = ws.render()
-        assert result.startswith(_HEADER)
-        idx_telemetry = result.index("[telemetry]")
-        idx_signal = result.index("[signal:news]")
-        assert idx_telemetry < idx_signal
-
-

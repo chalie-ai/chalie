@@ -291,10 +291,8 @@ def _register_workers(manager: "_WorkerManager", host: str, port: int) -> None:
     nine idle-gated cognition jobs fold in the subconscious tick).
     """
     from workers.document_worker import document_purge_worker
-    from services.world_awareness_service import world_awareness_worker
 
     manager.register_service("document-purge-service", document_purge_worker)
-    manager.register_service("world-awareness-service", world_awareness_worker)
 
     from workers.folder_watcher_worker import folder_watcher_worker
     manager.register_service("folder-watcher-service", folder_watcher_worker)

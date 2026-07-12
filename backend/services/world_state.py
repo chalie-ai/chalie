@@ -1,7 +1,6 @@
 import json
 import logging
 import threading
-import time as _time
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import cast
@@ -11,7 +10,7 @@ from services.time_utils import utc_now, parse_utc
 
 logger = logging.getLogger(__name__)
 
-_SECTION_HEADER = "### Background Telemetry,Processes & Signals"
+_SECTION_HEADER = "### Background Telemetry,Processes"
 
 # Key for the last user-message timestamp. The in-memory ``_store`` dict and the
 # durable MemoryStore deliberately share this key — both are the fast in-process
@@ -158,25 +157,7 @@ class WorldState:
 
     def get(self, type: str) -> dict[str, object]:
         with self._lock:
-            if type == "signals":
-                self._prune_signals()
             return dict(cast("dict[str, object]", self._store.get(type)) or {})
-
-    def push_signal(self, source: str, label: str, ttl: int = 3600) -> None:
-        """Merge a signal into the signals dict, overwriting the same source.
-
-        Args:
-            source: Identifies the originating system (e.g. ``'news'``, ``'inbox'``).
-            label: Human-readable signal text.
-            ttl: Seconds until this signal expires.  Default 3600 (1 hour).
-        """
-        with self._lock:
-            signals: dict[str, object] = dict(cast("dict[str, object]", self._store.get("signals")) or {})
-            signals[source] = {
-                "label": label,
-                "expires_at": _time.time() + ttl,
-            }
-            self._store["signals"] = signals
 
     def absorb(self, signal: Signal) -> None:
         """Process an incoming typed signal. Updates the snapshot fields atomically.
@@ -264,10 +245,6 @@ class WorldState:
             parts.append("[telemetry]")
             parts.extend(telemetry_lines)
 
-        # ── Signals ────────────────────────────────────────────────────────
-        signal_lines = self._render_signals()
-        parts.extend(signal_lines)
-
         if not parts:
             return ""
 
@@ -298,34 +275,5 @@ class WorldState:
         for group_name, fields in _group_telemetry(ctx):
             lines.append(f"* **{group_name}**;" + ",".join(fields))
         return lines
-
-    def _render_signals(self) -> list[str]:
-        """Produce [signal:{source}] lines from the in-memory signals dict."""
-        with self._lock:
-            self._prune_signals()
-            signals: dict[str, dict[str, object]] = dict(cast("dict[str, dict[str, object]]", self._store.get("signals")) or {})
-        if not signals:
-            return []
-        lines = []
-        for source in sorted(signals.keys()):
-            label = signals[source].get("label", "")
-            lines.append(f"[signal:{source}] {label}")
-        return lines
-
-    def _prune_signals(self) -> None:
-        """Remove expired signals from the store. Must be called under self._lock."""
-        signals: dict[str, dict[str, object]] | None = cast("dict[str, dict[str, object]] | None", self._store.get("signals"))
-        if not signals:
-            return
-        now = _time.time()
-        pruned = {
-            src: entry
-            for src, entry in signals.items()
-            if cast(float, entry.get("expires_at", 0)) > now
-        }
-        self._store["signals"] = pruned
-
-
-# ── Module-level singleton ─────────────────────────────────────────────────
 
 world_state = WorldState()

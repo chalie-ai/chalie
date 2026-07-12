@@ -403,7 +403,6 @@ class ObservabilityWorldStateResource(Resource):
                 "rendered": world_state.render(),
                 "inputs": {
                     "telemetry": heartbeat_service.read(),
-                    "signals": world_state.get("signals"),
                 },
             }
         except Exception:

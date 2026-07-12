@@ -182,52 +182,6 @@ class ImapHandler:
     # WorldState inbox hint
     # ------------------------------------------------------------------
 
-    def inject_inbox_hint(self, client: "_ImapClient", *, owns_client: bool = False) -> None:
-        from capabilities.mail_capability.email_triage import classify_email
-        try:
-            client.select_folder("INBOX", readonly=True)
-            since = (utc_now() - timedelta(days=3)).strftime(_IMAP_DATE_FMT)
-            uids = client.search(["UNSEEN", "SINCE", since])
-            if not uids:
-                return
-            raw = client.fetch(uids, [_IMAP_FETCH_HEADER])
-            counts: dict[str, int] = {}
-            top_actionable = ""
-            for u, d in raw.items():
-                item = parse_headers(u, d[_IMAP_FETCH_HEADER])
-                cat = classify_email(item)
-                counts[cat] = counts.get(cat, 0) + 1
-                if cat == "actionable" and not top_actionable:
-                    top_actionable = cast(str, item.get("from_name") or item.get("from_addr", ""))
-            actionable = counts.get("actionable", 0)
-            informational = counts.get("informational", 0)
-            if actionable == 0 and informational == 0:
-                return
-            parts = []
-            if actionable:
-                part = f"{actionable} actionable"
-                if top_actionable:
-                    part += f" (top: {top_actionable})"
-                parts.append(part)
-            if informational:
-                parts.append(f"{informational} informational")
-            hint = f"Inbox: {', '.join(parts)}."
-            from services.world_state import world_state
-            world_state.push_signal("inbox", hint, ttl=3600)
-            logger.info("[imap_handler] inbox hint: %s", hint)
-        except Exception as exc:
-            logger.error("[imap_handler] inject_inbox_hint: %s", exc)
-        finally:
-            if owns_client:
-                try:
-                    client.logout()
-                except Exception as exc:
-                    logger.debug("[imap_handler] logout: %s", exc)
-
-    # ------------------------------------------------------------------
-    # Search
-    # ------------------------------------------------------------------
-
     def search(self, client: "_ImapClient", params: dict[str, object]) -> dict[str, object]:
         from capabilities.mail_capability.email_triage import classify_email
         try:

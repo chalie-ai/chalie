@@ -12,7 +12,7 @@ from capabilities.base import AbstractCapability
 from capabilities.mail_capability.caldav_handler import CaldavHandler
 from capabilities.mail_capability.carddav_handler import CarddavHandler
 from capabilities.mail_capability.imap_handler import ImapHandler, SmtpCreds
-from capabilities.mail_capability.providers import ServerSettings, UnifiedProvider, build_custom_provider, \
+from capabilities.mail_capability.providers import UnifiedProvider, build_custom_provider, \
     discover_provider
 from services.database import Database
 from services.file_mapper_service import FileMapperService
@@ -436,30 +436,6 @@ class MailCapability(AbstractCapability):
     # Cognitive pipeline — monitor
     # ------------------------------------------------------------------
 
-    def _monitor_imap(self, email: str, password: str, provider: UnifiedProvider) -> None:
-        # Email is NEVER synced — message bodies are fetched live on demand by the
-        # email tool. The monitor only injects the lightweight unread
-        # inbox hint into the prompt; it no longer ingests bodies, runs
-        # understand() (which indexed senders as people), or advances a watermark.
-        try:
-            client = self._imap_handler.open_client(
-                host=cast("ServerSettings", provider.imap).host,
-                port=cast("ServerSettings", provider.imap).port,
-                tls=cast("ServerSettings", provider.imap).tls,
-                email=email,
-                password=password,
-            )
-            if client is not None:
-                try:
-                    self._imap_handler.inject_inbox_hint(client)
-                finally:
-                    try:
-                        client.logout()
-                    except Exception:
-                        pass
-        except Exception as exc:
-            logger.error("[mail] _do_monitor() IMAP: %s", exc)
-
     def _monitor_carddav(self, email: str, password: str, provider: UnifiedProvider) -> None:
         try:
             carddav_url = cast(str, provider.carddav_url).replace(_PLACEHOLDER_USERNAME, email)
@@ -482,9 +458,6 @@ class MailCapability(AbstractCapability):
         provider = self._resolve_provider(email or "")
         if not provider:
             return
-
-        if self._imap_ok and provider.imap:
-            self._monitor_imap(cast(str, email), cast(str, password), provider)
 
         if self._carddav_ok and self._cycle_count % 12 == 0 and provider.carddav_url:
             self._monitor_carddav(cast(str, email), cast(str, password), provider)
