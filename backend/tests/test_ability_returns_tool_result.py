@@ -6,43 +6,31 @@
 #
 #     http://www.apache.org/licenses/LICENSE-2.0
 
-"""Enforce ToolResult as the static return-type boundary for every registered ability.
+"""Run mypy over the real abilities package to prove no path violates the declared
+``Ability.run() -> ToolResult`` return type.
 
-This module handles two concerns: (1) asserting each ``Ability.run()`` carries the
-``-> ToolResult`` annotation at its source, and (2) running mypy over the real abilities
-package to verify no path violates that declared type. The per-ability envelope *shape*
-(status/body/meta/code invariants) is pinned once in :mod:`tests.test_tool_result_contract`.
+That every ``run()`` *carries* the ``-> ToolResult`` annotation is already guaranteed
+statically by the whole-tree ``mypy --strict`` gate's ``disallow_untyped_defs`` (see
+:mod:`tests.test_static_typing_gate`); this module keeps a package-scoped run only so a
+return-type breach is reported with targeted ability context rather than buried in the
+bulk strict output. The per-ability envelope *shape* (status/body/meta/code invariants)
+is pinned once in :mod:`tests.test_tool_result_contract`.
 """
 
 import importlib.util
 import subprocess
 import sys
-import typing
 
 import pytest
 
-from abilities._registry import AbilityRegistry
-from abilities._result import ToolResult
 from services.file_mapper_service import FileMapperService
 
 pytestmark = pytest.mark.unit
-
-_ABILITIES = sorted(AbilityRegistry.all(), key=lambda a: a.get_name())
-_NAMES = [a.get_name() for a in _ABILITIES]
 
 # mypy error codes that mean "a declared return type was violated on some path".
 # This family is never noise — unlike arg-type/attr-defined, a return-type error
 # is always a genuine breach of the contract this module guards.
 _RETURN_CONTRACT_CODES = ("[return-value]", "[return]")
-
-
-@pytest.mark.parametrize("name", _NAMES)
-def test_run_is_annotated_toolresult(name: str) -> None:
-    ability = next(a for a in _ABILITIES if a.get_name() == name)
-    hints = typing.get_type_hints(type(ability).run)
-    assert hints.get("return") is ToolResult, (
-        f"{name}.run() is annotated {hints.get('return')!r}, expected ToolResult"
-    )
 
 
 def test_ability_return_types_are_statically_honoured() -> None:
