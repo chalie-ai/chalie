@@ -29,7 +29,9 @@ pytestmark = pytest.mark.unit
 
 
 def test_email_calendar_contacts_are_registered() -> None:
-    """All three new abilities are discoverable via AbilityRegistry."""
+    """All three abilities are registered in AbilityRegistry (they are
+    DISCOVERABLE=False — pim-delegate-exclusive — but still registered and
+    reachable when pinned on PimConfig)."""
     from abilities._registry import AbilityRegistry
     from abilities._ability import Ability
 

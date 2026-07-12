@@ -191,13 +191,16 @@ _EXPECTED_NON_DISCOVERABLE = frozenset({
     "memory",                  # framework — always_available only
     "chat_history_compactor",  # internal — dispatched programmatically
     "skill_manager",           # system variant — SkillSuggestionConfig only
+    "email",                   # personal info — pim delegate only
+    "calendar",                # personal info — pim delegate only
+    "contacts",                # personal info — pim delegate only
 })
 
 
-def test_non_discoverable_set_is_exactly_the_expected_ten() -> None:
+def test_non_discoverable_set_is_exactly_the_expected_set() -> None:
     """Pin the whole visibility model: the set of registered abilities that are
     NOT in the global discovery roster must equal the expected non-discoverable
-    ten. Flipping any DISCOVERABLE flag (or adding a new non-discoverable
+    set. Flipping any DISCOVERABLE flag (or adding a new non-discoverable
     ability) without updating this guard fails here."""
     all_names = {a.get_name() for a in AbilityRegistry.all()}
     non_discoverable = all_names - AbilityRegistry.discoverable_names()

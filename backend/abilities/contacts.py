@@ -47,6 +47,7 @@ _ACTIONS = ("list", "get")
 
 
 class ContactsAbility(CapabilityAbility):
+    DISCOVERABLE: ClassVar[bool] = False  # pim-delegate-exclusive; pinned on PimConfig only
     CAPABILITY_KEY: ClassVar[str] = "mail"
     DEFAULT_ACTION: ClassVar[str] = "list"
     NOT_CONNECTED_HINT: ClassVar[str] = (

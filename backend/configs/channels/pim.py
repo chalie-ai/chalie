@@ -10,7 +10,7 @@
 
 Mirrors WebSearchConfig field-for-field: a focused delegate loop that fetches
 live data from email, calendar, contacts, and memory. Paired with
-:Pclass:`PimAbility` (abilities/pim.py).
+:class:`PimAbility` (abilities/pim.py).
 """
 
 from __future__ import annotations

@@ -1,5 +1,10 @@
 """
-ScheduleAbility — Native innate skill for reminders and scheduled tasks.
+ScheduleAbility — Native innate skill for recurring scheduled tasks.
+
+A schedule is a crontab-driven prompt that wakes Chalie to *act* on a recurrence
+(produce a briefing, poll something, run a routine); it does NOT notify the user.
+Reminding the user of an appointment or a one-off errand at a time is a calendar
+event, owned by the ``pim`` delegate — not this ability.
 
 Backed by SQLite (scheduled_items table). Provides create, list, search, cancel, and update actions.
 ``update`` is a thin compose: it cancels the target ``item_id`` then creates a fresh item from the
@@ -78,30 +83,32 @@ class ScheduleAbility(Ability):
 
     def get_summary(self) -> str:
         return (
-            "Create, list, cancel, or enable/disable persistent reminders and recurring "
-            "prompts. Supports full crontab-style recurrence — a fixed calendar time, "
-            "every N minutes/hours, specific weekdays, day-of-month, or any combination "
-            "(e.g. 'every 5 minutes', 'every weekday at 9am', 'the 1st of each month'). "
-            "Disable pauses a recurring prompt without deleting it; enable resumes it. "
-            "For a short ephemeral countdown the user wants to watch tick down on screen "
-            "(focus blocks, kitchen timers, breath holds), use the `timer` tool instead "
-            "— not `schedule`."
+            "Create, list, cancel, or enable/disable recurring scheduled tasks — a "
+            "crontab-driven prompt that wakes Chalie to act on a schedule (produce a "
+            "recurring briefing, poll something, run a routine). Supports full crontab-"
+            "style recurrence — a fixed time, every N minutes/hours, specific weekdays, "
+            "day-of-month, or any combination (e.g. 'every 5 minutes', 'every weekday "
+            "at 9am', 'the 1st of each month'). Disable pauses a task without deleting "
+            "it; enable resumes it. To remind the user of an appointment or a one-off "
+            "errand at a time, use the `pim` tool (it creates a real calendar event) — "
+            "not `schedule`. For a short ephemeral countdown the user wants to watch "
+            "tick down on screen (focus blocks, kitchen timers), use the `timer` tool."
         )
 
     def get_examples(self) -> list[str]:
         return [
-            "remind me to call the dentist tomorrow at 3pm",
-            "set a daily reminder at 8am to take my vitamins",
-            "what reminders do I have",
-            "cancel my dentist reminder",
-            "remind me every 5 minutes to check the oven",
-            "ping me every weekday at 9am for standup",
-            "check the mail every 2 hours during the day",
-            "remind me on the 1st and 15th of each month to pay rent",
+            "every weekday at 9am summarise my unread emails",
+            "check the news every 2 hours during the day",
+            "every Monday at 8am brief me on the week ahead",
+            "on the 1st of each month generate a spending summary",
+            "every evening at 9pm ask me how my day went",
+            "run a mailbox check every 30 minutes",
+            "what scheduled tasks do I have",
+            "cancel the daily email summary",
         ]
 
     def get_search_tooltip(self) -> str:
-        return "reminders and scheduled tasks"
+        return "recurring scheduled tasks"
 
     _PARAMETERS: ClassVar[dict[str, object]] = {
         "type": "object",
@@ -110,18 +117,21 @@ class ScheduleAbility(Ability):
                 "type": "string",
                 "enum": ["create", "list", "search", "cancel", "update", "enable", "disable"],
                 "description": (
-                    "The scheduler action to perform. If the user wants a short "
-                    "ephemeral countdown (e.g. 'set a 5 minute timer', 'start a "
-                    "25 minute focus block'), STOP — call the `timer` tool "
-                    "instead of `schedule`. `schedule` is for calendar-anchored "
-                    "reminders that persist across restarts."
+                    "The scheduler action to perform. `schedule` runs a recurring "
+                    "prompt that wakes Chalie to act — it does NOT notify the user. "
+                    "To remind the user of an appointment or errand at a time, STOP "
+                    "— use the `pim` tool (it creates a real calendar event) instead. "
+                    "For a short ephemeral countdown (e.g. 'set a 5 minute timer', "
+                    "'start a 25 minute focus block'), STOP — call the `timer` tool "
+                    "instead of `schedule`."
                 ),
             },
             Keys.message: {
                 "type": "string",
                 "description": (
-                    "Required for create: what to remind or prompt (max 1000 chars). "
-                    "Optional for cancel/enable/disable: fuzzy content match when item_id is unknown."
+                    "Required for create: the prompt to run when the schedule fires "
+                    "(max 1000 chars). Optional for cancel/enable/disable: fuzzy "
+                    "content match when item_id is unknown."
                 ),
             },
             Keys.start_at: {
@@ -152,7 +162,7 @@ class ScheduleAbility(Ability):
                     "Optional for create: WHICH HOUR this fires, as a standard crontab "
                     "field (0-23, 24-hour clock) in the user's LOCAL time. Default '*' "
                     "= every hour. Examples: '9' = 9am, '17' = 5pm, '*/2' = every 2 "
-                    "hours, '9-17' = every hour 9am-5pm. For a once-a-day reminder set "
+                    "hours, '9-17' = every hour 9am-5pm. For a once-a-day task set "
                     "hour and minute (e.g. hour='8', minute='0' = 08:00 daily)."
                 ),
             },
@@ -271,13 +281,13 @@ def _validate_message(params: dict[str, object]) -> tuple[str, ToolResult | None
         return "", ToolResult.err(
             "message is required for create.",
             code="missing-message",
-            hint="pass the reminder text in 'message'.",
+            hint="pass the prompt text in 'message'.",
         )
     if len(message) > 1000:
         return "", ToolResult.err(
             "message exceeds 1000 characters.",
             code="message-too-long",
-            hint="shorten the reminder text to 1000 characters or fewer.",
+            hint="shorten the prompt text to 1000 characters or fewer.",
         )
     return message, None
 
@@ -538,14 +548,14 @@ def _resolve_pending_target(params: dict[str, object], *, verb: str) -> tuple[ob
 
     if not matches:
         return None, ToolResult.err(
-            f"No reminder matching {message_query!r} found.",
+            f"No scheduled task matching {message_query!r} found.",
             code="not-found",
             hint="call schedule with action=list to see what exists.",
         )
     if len(matches) > 1:
         descriptions = ", ".join(f"'{cast(str, m['message'])[:40]}' (id:{m['id']})" for m in matches)
         return None, ToolResult.err(
-            f"Multiple reminders match {message_query!r}: {descriptions}.",
+            f"Multiple scheduled tasks match {message_query!r}: {descriptions}.",
             code="ambiguous-match",
             hint="pass item_id to target the specific one.",
         )

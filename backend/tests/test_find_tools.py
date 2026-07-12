@@ -71,9 +71,11 @@ def test_no_duplicate_injection(db: sqlite3.Connection) -> None:
 
 def test_described_action_surfaces_semantic_match(db: sqlite3.Connection) -> None:
     """A described action with no exact/segment name match escalates to the vector
-    rung: 'add appointment' surfaces the calendar tool."""
+    rung: 'add appointment' surfaces the pim tool. Calendar/email/contacts are
+    delegate-owned (DISCOVERABLE=False) and reachable ONLY through pim, so a
+    calendar-flavoured intent now routes to pim, never to the raw calendar tool."""
     injected, _body, _r = _run(db, ["add appointment"])
-    assert "calendar" in injected, f"'add appointment' must surface calendar. injected={injected!r}"
+    assert "pim" in injected, f"'add appointment' must surface pim. injected={injected!r}"
 
 
 @pytest.mark.parametrize(
@@ -116,7 +118,9 @@ def test_multi_intent_array_routes_each_entry(db: sqlite3.Connection) -> None:
     never silent."""
     injected, body, _r = _run(db, ["weather", "send an email", "pizza"])
     assert "weather" in injected, f"injected={injected!r}"
-    assert "email" in injected, f"injected={injected!r}"
+    # email is delegate-owned; a 'send an email' intent routes to pim, not the raw
+    # email tool (which is DISCOVERABLE=False).
+    assert "pim" in injected, f"'send an email' must surface pim. injected={injected!r}"
     assert "pizza" in cast("list[str]", body["not_found"]), f"junk intent must be surfaced. body={body!r}"
 
 
@@ -147,9 +151,9 @@ def test_no_global_cap_large_array_returns_all_deduped(db: sqlite3.Connection) -
     """The query array exists so the model can fetch every tool it needs in ONE
     pass: a large array of distinct exact names must inject ALL of them (more than
     the old global cap of 6), deduped, never truncated."""
-    names = ["weather", "calendar", "email", "chalie_docs", "web_browse", "web_search", "vision"]
+    names = ["weather", "pim", "timer", "chalie_docs", "web_browse", "web_search", "vision"]
     injected, _body, _r = _run(db, names + ["weather"])  # trailing dup must collapse
-    for n in ("weather", "calendar", "email", "chalie_docs", "web_browse", "web_search", "vision"):
+    for n in ("weather", "pim", "timer", "chalie_docs", "web_browse", "web_search", "vision"):
         assert n in injected, f"{n!r} must be injected (no global cap). injected={injected!r}"
     assert len(injected) > 6, f"a large array must exceed the old cap of 6. injected={injected!r}"
     assert len(injected) == len(set(injected)), f"injected must be deduped. injected={injected!r}"

@@ -49,6 +49,7 @@ _RECIPIENT_ACTIONS = ("send", "draft", "forward")
 
 
 class EmailAbility(CapabilityAbility):
+    DISCOVERABLE: ClassVar[bool] = False  # pim-delegate-exclusive; pinned on PimConfig only
     CAPABILITY_KEY: ClassVar[str] = "mail"
     DEFAULT_ACTION: ClassVar[str] = "search"
     NOT_CONNECTED_HINT: ClassVar[str] = (
