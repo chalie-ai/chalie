@@ -153,9 +153,9 @@ onBeforeUnmount(() => {
 
 <template>
   <SideDrawer :open="isOpen" title="Activity" @close="tasks.close()">
-    <!-- Live forked threads — reply streaming (pink) or settled-unseen (blue).
-         Clicking opens the thread's slide-over. The mockup's floating
-         notifications live here. -->
+    <!-- Forked threads whose reply has settled unseen (done, blue). Clicking
+         opens the thread's slide-over. The mockup's floating notifications
+         live here. -->
     <template v-if="threadActivity.length">
       <button
         v-for="ta in threadActivity"
@@ -205,8 +205,8 @@ onBeforeUnmount(() => {
 
 <style scoped lang="scss">
 // ── Thread-activity row ──────────────────────────────────────────────────────────
-// Live forked threads, folded out of the mockup's floating notifications. A left
-// accent stripe (pink while working, blue once done) tells the two apart.
+// Forked threads whose reply has settled unseen, folded out of the mockup's
+// floating notifications. A cyan left accent stripe marks them done.
 
 .task-drawer__thread {
   display: flex;
@@ -225,9 +225,6 @@ onBeforeUnmount(() => {
   }
 }
 
-.task-drawer__thread--working {
-  border-left-color: var(--status-main);
-}
 .task-drawer__thread--done {
   border-left-color: var(--cyan);
 }

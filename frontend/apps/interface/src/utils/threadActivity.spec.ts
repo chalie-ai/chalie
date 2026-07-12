@@ -40,11 +40,11 @@ describe('deriveThreadActivity', () => {
     turnDom.registerSurface({ id: turnDom.SPINE_SURFACE_ID, type: 'user', container: spine, component: {} });
 
     const spineEl = forkedHost({ turnId: 1, preview: 'in the spine' });
-    spineEl.setAttribute('data-working', 'true');
+    spineEl.setAttribute('data-done', 'true');
     spine.appendChild(spineEl);
 
     const otherEl = forkedHost({ turnId: 2, preview: 'not in the spine' });
-    otherEl.setAttribute('data-working', 'true');
+    otherEl.setAttribute('data-done', 'true');
     other.appendChild(otherEl);
 
     const items = threadActivity.deriveThreadActivity('user');
@@ -69,26 +69,34 @@ describe('deriveThreadActivity', () => {
     spine.remove();
   });
 
-  it('kind is "working" when data-working is present, "done" otherwise; falls back gist → preview for the label', async () => {
+  it('surfaces done turns only (kind "done"), excludes still-working turns; falls back gist → preview for the label', async () => {
     const { turnDom, threadActivity } = await fresh();
     const spine = document.body.appendChild(document.createElement('div'));
     turnDom.registerSurface({ id: turnDom.SPINE_SURFACE_ID, type: 'user', container: spine, component: {} });
 
+    // Still streaming — must NOT surface until the reply settles.
     const working = forkedHost({ turnId: 1, gist: 'a gist', preview: 'a preview', lastActivity: '2026-01-01 00:00:00' });
     working.setAttribute('data-working', 'true');
     spine.appendChild(working);
 
-    const done = forkedHost({ turnId: 2, preview: 'no gist here', lastActivity: '2026-01-01 00:00:01' });
-    done.setAttribute('data-done', 'true');
-    spine.appendChild(done);
+    // Settled unseen, has a gist — surfaces with kind 'done', gist wins the label.
+    const doneWithGist = forkedHost({ turnId: 2, gist: 'has gist', preview: 'a preview', lastActivity: '2026-01-01 00:00:01' });
+    doneWithGist.setAttribute('data-done', 'true');
+    spine.appendChild(doneWithGist);
+
+    // Settled unseen, no gist — label falls back to the preview.
+    const doneNoGist = forkedHost({ turnId: 3, preview: 'no gist here', lastActivity: '2026-01-01 00:00:02' });
+    doneNoGist.setAttribute('data-done', 'true');
+    spine.appendChild(doneNoGist);
 
     const items = threadActivity.deriveThreadActivity('user');
-    const one = items.find((i) => i.turn_id === 1)!;
+    expect(items.map((i) => i.turn_id)).not.toContain(1); // working turn excluded
     const two = items.find((i) => i.turn_id === 2)!;
-    expect(one.kind).toBe('working');
-    expect(one.label).toBe('a gist');
+    const three = items.find((i) => i.turn_id === 3)!;
     expect(two.kind).toBe('done');
-    expect(two.label).toBe('no gist here');
+    expect(two.label).toBe('has gist');
+    expect(three.kind).toBe('done');
+    expect(three.label).toBe('no gist here');
     spine.remove();
   });
 

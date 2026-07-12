@@ -79,15 +79,14 @@ onBeforeUnmount(() => {
         <CalendarClock :size="18" aria-hidden="true" />
       </button>
       <button
-        v-if="totalCount > 0"
         id="taskDrawerBtn"
         class="btn-icon task-drawer-trigger"
+        :class="{ 'has-activity': totalCount > 0 }"
         aria-label="Activity"
         title="Activity"
         @click="tasks.open()"
       >
         <Clock :size="18" aria-hidden="true" />
-        <span class="task-trigger__badge">{{ totalCount }}</span>
       </button>
       <button id="settingsBtn" class="btn-icon" aria-label="Settings" @click="handleSettings">
         <Brain :size="18" />
@@ -112,23 +111,6 @@ onBeforeUnmount(() => {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-}
-
-.task-trigger__badge {
-  position: absolute;
-  top: -4px;
-  right: -6px;
-  min-width: 16px;
-  height: 16px;
-  padding: 0 4px;
-  border-radius: 8px;
-  background: var(--accent-primary);
-  color: #fff;
-  font-size: 10px;
-  font-weight: 600;
-  line-height: 16px;
-  text-align: center;
-  pointer-events: none;
 }
 
 // Chalie logo — the bar's left mark. Static at rest; a slow, slight opacity

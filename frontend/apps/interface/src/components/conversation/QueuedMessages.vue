@@ -4,7 +4,8 @@
      The chips live inside the InputDock, so the scope is the dock's turn_id and
      dispatch is the session store's job. -->
 <script setup lang="ts">
-import { computed, nextTick } from 'vue';
+import { computed, nextTick, reactive, watch } from 'vue';
+import type { ComponentPublicInstance } from 'vue';
 import { X } from '@lucide/vue';
 import { useQueueStore } from '../../stores/queue';
 
@@ -12,6 +13,40 @@ const props = withDefaults(defineProps<{ threadId?: number | null }>(), { thread
 
 const queue = useQueueStore();
 const items = computed(() => queue.queuedFor(props.threadId));
+
+// Per-item expand state and overflow detection for the 3-line clamp — both
+// keyed by the same index used as the v-for key, so both reset whenever the
+// queue's length changes (an item was queued, edited back out, or removed).
+const expanded = reactive(new Set<number>());
+const overflowing = reactive(new Set<number>());
+const textRefs = new Map<number, HTMLElement>();
+
+function setTextRef(i: number, el: Element | ComponentPublicInstance | null): void {
+  if (el instanceof HTMLElement) {
+    textRefs.set(i, el);
+  } else {
+    textRefs.delete(i);
+  }
+}
+
+/** A clamped text node's scrollHeight still reports its full, unclamped
+ *  height, so comparing it against clientHeight tells us whether the 3-line
+ *  clamp is actually cutting the message off — the toggle only shows when it is. */
+function measureOverflow(): void {
+  overflowing.clear();
+  for (const [i, el] of textRefs) {
+    if (el.scrollHeight > el.clientHeight + 1) overflowing.add(i);
+  }
+}
+
+watch(
+  () => items.value.length,
+  () => {
+    expanded.clear();
+    void nextTick(measureOverflow);
+  },
+  { immediate: true },
+);
 
 function remove(i: number): void {
   queue.removeAt(props.threadId, i);
@@ -30,6 +65,12 @@ function edit(i: number): void {
     ),
   );
 }
+
+function toggleExpanded(i: number, event: MouseEvent): void {
+  event.stopPropagation();
+  if (expanded.has(i)) expanded.delete(i);
+  else expanded.add(i);
+}
 </script>
 
 <template>
@@ -43,9 +84,31 @@ function edit(i: number): void {
       >
         <X :size="13" />
       </button>
-      <button type="button" class="pending__chip" title="Click to edit" @click="edit(i)">
-        <span class="pending__text">{{ entry.text }}</span>
-      </button>
+      <div
+        class="pending__chip"
+        role="button"
+        tabindex="0"
+        title="Click to edit"
+        @click="edit(i)"
+        @keydown.enter="edit(i)"
+        @keydown.space.prevent="edit(i)"
+      >
+        <span
+          :ref="(el) => setTextRef(i, el)"
+          class="pending__text"
+          :class="{ 'pending__text--clamped': !expanded.has(i) }"
+        >{{ entry.text }}</span>
+        <button
+          v-if="overflowing.has(i)"
+          type="button"
+          class="pending__toggle"
+          :aria-expanded="expanded.has(i)"
+          @click="toggleExpanded(i, $event)"
+          @keydown="$event.stopPropagation()"
+        >
+          {{ expanded.has(i) ? 'Show less' : 'Read more' }}
+        </button>
+      </div>
     </div>
   </div>
 </template>
@@ -121,7 +184,31 @@ function edit(i: number): void {
   overflow-wrap: break-word;
 }
 
+.pending__text--clamped {
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
 .pending__chip:hover .pending__text {
   color: var(--text-primary);
+}
+
+.pending__toggle {
+  display: inline-block;
+  margin-top: 2px;
+  padding: 0;
+  border: none;
+  background: none;
+  font-size: 0.8125rem;
+  font-weight: 500;
+  color: var(--text-tertiary);
+  cursor: pointer;
+  transition: color var(--duration-fast) ease;
+}
+
+.pending__toggle:hover {
+  color: var(--accent-primary);
 }
 </style>

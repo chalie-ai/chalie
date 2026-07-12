@@ -4,10 +4,13 @@
  *
  * The spine-scoped list (`deriveThreadActivity` / `useThreadActivity`) reads
  * `data-turn-id`/`data-type`/`data-forked`/`data-gist`/`data-preview`/
- * `data-last-activity` stamped by TurnView.vue, plus `data-working`/
- * `data-done` stamped by `utils/turnDom.ts` — scoped to the registered spine
- * surface only (`SPINE_SURFACE_ID`), since that's the one surface that
- * renders every forked opener.
+ * `data-last-activity` stamped by TurnView.vue, plus `data-done` stamped by
+ * `utils/turnDom.ts` — scoped to the registered spine surface only
+ * (`SPINE_SURFACE_ID`), since that's the one surface that renders every
+ * forked opener. Only settled-unseen (`done`) threads surface here — a
+ * thread appears the moment its reply finishes, not the moment it starts;
+ * see `threadPhase` below for the Scheduler dock's primitive, which still
+ * reports the in-flight (`working`) phase too.
  *
  * `threadPhase` is the per-turn primitive the Scheduler dock uses instead —
  * scheduled turns aren't rendered on the spine, so it queries `turnDom`'s
@@ -31,8 +34,8 @@ export function isThreadActive(lastActivityAt: string | null): boolean {
   return Date.now() - ts < 3_600_000;
 }
 
-/** A forked thread surfaced in the Activity drawer: its reply is streaming right
- *  now (`working`, pink) or has settled unseen (`done`, blue). */
+/** A forked thread surfaced in the Activity drawer once its reply has settled
+ *  unseen (`done`, blue) — it does not appear while still streaming. */
 export interface ThreadActivityItem {
   turn_id: number;
   /** The ConfigType identity this item was scoped under — turn_id is only
@@ -41,7 +44,7 @@ export interface ThreadActivityItem {
   type: string;
   label: string;
   snippet: string;
-  kind: 'working' | 'done';
+  kind: 'done';
 }
 
 /** A forked turn's Activity phase: working → done → null (seen / no activity).
@@ -55,7 +58,8 @@ export function threadPhase(turnId: number, type: string = ConfigType.USER): 'wo
 
 /** Read the current forked-thread activity straight off the spine's rendered
  *  DOM. Synchronous, non-reactive — see `useThreadActivity` for a
- *  live-updating wrapper. */
+ *  live-updating wrapper. Done-only: a thread surfaces once its reply has
+ *  settled unseen, not the instant it starts working (see file header). */
 export function deriveThreadActivity(type: string = ConfigType.USER): ThreadActivityItem[] {
   const container = getSurfaceContainer(SPINE_SURFACE_ID);
   if (!container) return [];
@@ -63,9 +67,7 @@ export function deriveThreadActivity(type: string = ConfigType.USER): ThreadActi
   const rows: { item: ThreadActivityItem; lastActivityAt: string }[] = [];
   const selector = `[data-turn-id][data-type="${type}"][data-forked]`;
   for (const el of container.querySelectorAll<HTMLElement>(selector)) {
-    const working = el.hasAttribute('data-working');
-    const done = el.hasAttribute('data-done');
-    if (!working && !done) continue;
+    if (!el.hasAttribute('data-done')) continue;
 
     const turnId = Number(el.getAttribute('data-turn-id'));
     if (Number.isNaN(turnId)) continue;
@@ -78,7 +80,7 @@ export function deriveThreadActivity(type: string = ConfigType.USER): ThreadActi
         type,
         label: gist || preview,
         snippet: preview,
-        kind: working ? 'working' : 'done',
+        kind: 'done',
       },
       lastActivityAt: el.getAttribute('data-last-activity') ?? '',
     });

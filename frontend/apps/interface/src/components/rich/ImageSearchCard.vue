@@ -126,7 +126,9 @@ const track = ref<HTMLElement | null>(null);
 const overflowing = ref(false);
 const atStart = ref(true);
 const atEnd = ref(false);
+const isDragging = ref(false);
 const GAP = 16;
+const SWIPE_THRESHOLD = 45; // px of horizontal travel that reads as a swipe, not a tap
 
 function updateNav(): void {
   const el = track.value;
@@ -143,6 +145,64 @@ function step(dir: 1 | -1): void {
   const cell = el.querySelector<HTMLElement>('.image-card__cell');
   const width = cell ? cell.getBoundingClientRect().width + GAP : el.clientWidth;
   el.scrollBy({ left: dir * width, behavior: 'smooth' });
+}
+
+// ── Swipe gesture ────────────────────────────────────────────────────────────
+// Pointer Events (not touch-only) so a mouse-drag on desktop behaves the same
+// as a touchscreen swipe. Only the release delta decides prev/next — a plain
+// tap never runs the threshold math — and every path (arrows + swipe) funnels
+// through the same step(), so bounds/wrap behaviour has one source of truth.
+let dragging = false;
+let dragPointerId: number | null = null;
+let dragStartX = 0;
+let dragStartY = 0;
+let suppressClick = false;
+
+function onTrackPointerDown(e: PointerEvent): void {
+  if (!overflowing.value || (e.pointerType === 'mouse' && e.button !== 0)) return;
+  dragging = true;
+  isDragging.value = true;
+  dragPointerId = e.pointerId;
+  dragStartX = e.clientX;
+  dragStartY = e.clientY;
+  (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+}
+
+function onTrackPointerMove(e: PointerEvent): void {
+  if (!dragging || e.pointerId !== dragPointerId) return;
+  // Own the gesture outright once dragging — blocks the native image/link
+  // drag-ghost and any incidental text selection a mouse-drag would start.
+  e.preventDefault();
+}
+
+function endDrag(e: PointerEvent, commit: boolean): void {
+  if (!dragging || e.pointerId !== dragPointerId) return;
+  dragging = false;
+  isDragging.value = false;
+  dragPointerId = null;
+  if (!commit) return; // pointercancel (e.g. the browser took over for a vertical scroll)
+  const dx = e.clientX - dragStartX;
+  const dy = e.clientY - dragStartY;
+  if (Math.abs(dx) > SWIPE_THRESHOLD && Math.abs(dx) > Math.abs(dy)) {
+    suppressClick = true; // swallow the trailing click so the swipe doesn't also open a link
+    step(dx < 0 ? 1 : -1); // swipe left → next, swipe right → previous
+  }
+}
+
+function onTrackPointerUp(e: PointerEvent): void {
+  endDrag(e, true);
+}
+
+function onTrackPointerCancel(e: PointerEvent): void {
+  endDrag(e, false);
+}
+
+/** Only acts after a completed swipe (see `suppressClick`); a genuine tap
+ * reaches the anchor untouched and opens the image link as before. */
+function onTrackClick(e: MouseEvent): void {
+  if (!suppressClick) return;
+  suppressClick = false;
+  e.preventDefault();
 }
 
 let ro: ResizeObserver | null = null;
@@ -175,7 +235,17 @@ onBeforeUnmount(() => {
         @click="step(-1)"
       >‹</button>
 
-      <div ref="track" class="image-card__track" @scroll="updateNav">
+      <div
+        ref="track"
+        class="image-card__track"
+        :class="{ 'image-card__track--dragging': isDragging }"
+        @scroll="updateNav"
+        @pointerdown="onTrackPointerDown"
+        @pointermove="onTrackPointerMove"
+        @pointerup="onTrackPointerUp"
+        @pointercancel="onTrackPointerCancel"
+        @click="onTrackClick"
+      >
         <div v-for="(img, idx) in resolved" :key="idx" class="image-card__cell">
           <component
             :is="img.linkHref ? 'a' : 'div'"
@@ -188,6 +258,7 @@ onBeforeUnmount(() => {
               :alt="img.title || 'Image'"
               class="image-card__img"
               loading="lazy"
+              draggable="false"
               @error="failed.add(idx)"
             />
             <div v-else class="image-card__img image-card__img--broken" aria-hidden="true">⊘</div>
@@ -272,9 +343,18 @@ onBeforeUnmount(() => {
   scroll-behavior: smooth;
   scrollbar-width: none; /* Firefox */
   -ms-overflow-style: none; /* legacy Edge */
+  /* Vertical page scroll stays a native browser gesture; horizontal drags are
+     owned by the pointer-swipe handlers instead of native touch panning. */
+  touch-action: pan-y;
+  user-select: none;
+  cursor: grab;
 
   &::-webkit-scrollbar {
     display: none; /* WebKit */
+  }
+
+  &--dragging {
+    cursor: grabbing;
   }
 }
 
