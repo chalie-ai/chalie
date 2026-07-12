@@ -76,7 +76,21 @@ class PimAbility(DelegateAbility):
         return self._PARAMETERS
 
     def run(self, params: dict[str, object]) -> ToolResult:
+        from capabilities import load_capabilities  # noqa: PLC0415
         from controllers.message_processor import MessageProcessor  # noqa: PLC0415
+
+        # No mail provider connected → the delegate can only fail. Short-circuit with
+        # the canonical not-connected contract (the same code + hint the calendar /
+        # email / contacts tools return) instead of spawning an expensive delegate
+        # loop on a goal it cannot satisfy. is_connected() is a cheap in-memory read.
+        cap = load_capabilities().get("mail")
+        if cap is None or not cap.is_connected():
+            return ToolResult.err(
+                "Personal-information tools (email, calendar, contacts) are "
+                "unavailable — no mail provider is connected.",
+                code="not-connected",
+                hint="Configure the mail integration in the Brain dashboard.",
+            )
 
         mp = self.mp
         if mp is None:

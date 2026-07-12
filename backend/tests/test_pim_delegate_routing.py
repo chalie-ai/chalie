@@ -19,17 +19,21 @@ These lock that whole promise, deterministically:
      not. A future re-pin on any other channel trips this guard.
   3. Verbatim disconnected contract — the delegate prompt carries, word for word,
      the message the pim loop must emit when no mail provider is connected.
+  4. Disconnected short-circuit — when no mail provider is connected, ``pim`` returns
+     the canonical not-connected contract immediately instead of spawning its
+     delegate loop. This is a deterministic wiring guarantee, so it is covered here
+     rather than left to QA.
 
 Driven against the REAL ``FindToolsAbility.run()`` over the REAL production
 abilities.sqlite + EmbeddingService, and the REAL production configs. Zero mocks.
-The live CalDAV read and the runtime emission of the verbatim message are proven
-in QA on the live env — they are non-deterministic and do not belong in the
-deterministic unit tier.
+The live CalDAV read is proven in QA on the live env — it is non-deterministic and
+does not belong in the deterministic unit tier.
 """
 
 import importlib
 import pkgutil
 import sqlite3
+from typing import cast
 
 import pytest
 
@@ -211,3 +215,26 @@ def test_pim_delegate_pins_exactly_its_toolset() -> None:
         f"pim delegate must pin exactly email/calendar/contacts/memory. "
         f"always_available={always_available!r}"
     )
+
+
+# ---------------------------------------------------------------------------
+# 4. Disconnected short-circuit — pim never spawns its delegate when no mail
+#    provider is connected; it returns the canonical not-connected contract.
+# ---------------------------------------------------------------------------
+
+
+def test_pim_short_circuits_when_mail_not_connected() -> None:
+    """With no mail provider connected, ``pim`` must NOT spawn its delegate loop —
+    it returns the canonical not-connected contract immediately (the same
+    ``code`` / ``hint`` the calendar/email/contacts tools return). In the unit
+    env no mail credentials are configured, so ``is_connected()`` is False and
+    every pim call hits this gate. That the call returns a clean error WITHOUT a
+    bound MessageProcessor proves the short-circuit fires before any delegate
+    machinery (a bound-mp-less delegate spawn would raise instead)."""
+    from abilities.pim import PimAbility
+
+    result = PimAbility().run({"instructions": "what's on my calendar today"})
+    assert result.status == "error"
+    assert result.code == "not-connected"
+    assert "no mail provider is connected" in cast(str, result.body).lower()
+    assert "mail integration" in (result.hint or "").lower()
