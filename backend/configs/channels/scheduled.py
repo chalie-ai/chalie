@@ -44,7 +44,13 @@ class ScheduledConfig(ProcessorConfig):
         super().__init__(
             channel=Channel.SCHEDULE.value,
             role="user",
-            policy_channel=PolicyChannel.SUBCONSCIOUS,
+            # CHAT, not SUBCONSCIOUS: a fired schedule is work the user queued on
+            # their own behalf, so it runs under the user's own policy rows —
+            # where web_search/web_browse are seeded allow — exactly as the
+            # tool-surface note above and the system prompt already promise.
+            # SUBCONSCIOUS is the silent-housekeeping family that seeds the web
+            # delegates deny; borrowing it here hard-blocked scheduled web work.
+            policy_channel=PolicyChannel.CHAT,
             always_available=list(DEFAULT_ALWAYS_AVAILABLE),
             skip_transcript=False,
             skip_input_row=False,
