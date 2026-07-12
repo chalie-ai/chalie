@@ -1,9 +1,10 @@
 """Response DTOs for the documents endpoint group.
 
-Mirrors the field shape of the legacy ``api.dto.document`` module so the wire
-format stays identical. Documents are not pure CRUD — file I/O, semantic
-search, and lifecycle transitions sit alongside id-addressed reads — so this
-file owns the read shapes and per-operation response bodies.
+Preserves the exact wire format the documents endpoint served before the
+Endpoint/Action migration, so downstream consumers stay unaffected. Documents
+are not pure CRUD — file I/O, semantic search, and lifecycle transitions sit
+alongside id-addressed reads — so this file owns the read shapes and
+per-operation response bodies.
 
 The document store persists ``tags`` and ``extracted_metadata`` as JSON
 strings; field validators lift those into native types so the wire shape is
