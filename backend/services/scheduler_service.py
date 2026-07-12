@@ -175,8 +175,12 @@ def _poll_and_fire() -> None:
 
                     if skip:
                         logger.debug(f"{LOG_PREFIX} Skipping {item['id']} — quiet hours / weekend")
-                    else:
-                        _fire_item(item)
+                    elif not _fire_item(item):
+                        # Deferred (e.g. vault locked on a prompt): leave the row
+                        # 'pending' and do NOT generate its next occurrence, or the
+                        # schedule would duplicate every poll until it fires. It is
+                        # retried in place on the next cycle — see _fire_item.
+                        continue
                     cursor.execute(
                         "UPDATE scheduled_items SET status='fired', last_fired_at=? WHERE id=?",
                         (now_iso, item["id"])
@@ -305,8 +309,14 @@ def _build_departure_advisory(item: dict[str, object]) -> str | None:
     return None
 
 
-def _fire_item(item: dict[str, object]) -> None:
-    """Fire a due item — directly or via LLM pipeline depending on item_type."""
+def _fire_item(item: dict[str, object]) -> bool:
+    """Fire a due item — directly or via LLM pipeline depending on item_type.
+
+    Returns ``True`` if the item ran (or was dispatched), ``False`` if it was
+    deferred and should stay ``pending`` for the next poll cycle. A prompt is
+    deferred when the vault is locked: its daemon thread cannot resolve the
+    provider API key and would crash silently after the item is stamped fired.
+    """
     advisory = _build_departure_advisory(item)
     message = cast(str, item.get("message", ""))
     if advisory:
@@ -326,13 +336,26 @@ def _fire_item(item: dict[str, object]) -> None:
                 logger.error(f"{LOG_PREFIX} System handler '{handler_key}' failed: {exc}")
         else:
             logger.warning(f"{LOG_PREFIX} No system handler for topic '{handler_key}'")
-        return
+        return True
 
     if is_prompt:
-        # Guard: empty/whitespace prompts are not actionable
+        # Guard: empty/whitespace prompts are a permanent data defect (not a
+        # transient condition like a locked vault). Stamp fired and move on —
+        # returning False would retry them every 60s forever.
         if not message or not message.strip():
             logger.warning(f"{LOG_PREFIX} Skipping prompt item '{item.get('id', '?')}' — empty message")
-            return
+            return True
+        # Defer when the vault is locked: the work loop calls build_client(),
+        # which calls _unseal_api_key() → returns None when the DEK is not in
+        # memory → ValueError "provider requires 'api_key'", killing the daemon
+        # thread after the item was already stamped fired. Staying 'pending'
+        # lets the next 60s poll retry once the vault is unlocked.
+        from services.vault_service import get_vault_service
+        if not get_vault_service().is_unlocked():
+            logger.warning(
+                f"{LOG_PREFIX} Vault locked — deferring prompt item '{item.get('id', '?')}'"
+            )
+            return False
         # Fire asynchronously: the two-stage work runs the full LLM ACT loop and
         # must NOT execute on the scheduler poll thread, which is mid-transaction
         # claiming/marking items. A nested write commit on the shared thread-local
@@ -355,6 +378,7 @@ def _fire_item(item: dict[str, object]) -> None:
             'content': sanitize(message),
         })
         logger.info(f"{LOG_PREFIX} Fired {source} (direct) '{item.get('id')}': {message[:80]}")
+    return True
 
 
 def _run_scheduled_work_loop(message: str) -> str:
