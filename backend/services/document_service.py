@@ -34,9 +34,19 @@ class DocumentService:
     def __init__(self) -> None:
         self._write_queue = get_write_queue()
 
+    @staticmethod
+    def resolve_file_path(doc: "dict[str, object]") -> "str | None":
+        """Resolve the on-disk path for a document, validating uploads stay in-root."""
+        if doc.get("watched_folder_id"):
+            full_path = cast(str, doc["file_path"])
+            return full_path if os.path.isfile(os.path.realpath(full_path)) else None
+        full_path = str(FileMapperService.get_documents_path(cast(str, doc["file_path"])))
+        return full_path if FileMapperService.validate_document_path(full_path) else None
+
     # ─────────────────────────────────────────────
     # Document CRUD
     # ─────────────────────────────────────────────
+
 
     def create_document(
         self,

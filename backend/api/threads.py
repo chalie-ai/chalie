@@ -108,7 +108,7 @@ def _fetch_tool_calls_for_transcripts(transcript_ids: list[int]) -> list[dict[st
 def _fetch_attachments_for_transcripts(conn: sqlite3.Connection, transcript_ids: list[int]) -> dict[int, list[dict[str, object]]]:
     """Soft-deleted docs are filtered out, so a removed file silently does not
     render. Each attachment carries the inline-serving
-    ``/api/documents/<id>/preview`` URL.
+    ``/api/documents/preview/<id>`` URL.
     """
     if not transcript_ids:
         return {}
@@ -128,7 +128,7 @@ def _fetch_attachments_for_transcripts(conn: sqlite3.Connection, transcript_ids:
             "filename": name,
             "mime_type": mime,
             "is_image": mime.startswith("image/"),
-            "url": f"/api/documents/{doc_id}/preview",
+            "url": f"/api/documents/preview/{doc_id}",
         })
     return by_id
 

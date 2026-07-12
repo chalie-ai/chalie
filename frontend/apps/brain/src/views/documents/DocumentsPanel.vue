@@ -126,7 +126,7 @@ async function onSearch(event: Event): Promise<void> {
 
 async function viewDoc(d: Document): Promise<void> {
   try {
-    detailDoc.value = (await documents.get(d.id)).item;
+    detailDoc.value = await documents.get(d.id);
     viewMode.value = 'detail';
   } catch (e) {
     showToast(e instanceof HttpError ? 'Failed to load document' : 'Network error', 'error');

@@ -1,12 +1,12 @@
 /**
- * Documents API — endpoints derived from frontend/brain/documents.js fetch calls.
+ * Documents API — the Endpoint/Action contract under /api/documents.
  *
- * GET    /documents                       → { items: Document[] }
- * GET    /documents?include_deleted=true  → include deleted docs
- * GET    /api/watched-folders/all         → WatchedFolder[] (listing envelope, page-walked)
- * GET    /documents/:id                   → { item: Document }
- * DELETE /documents/:id                   → delete document
- * POST   /documents/upload                → multipart upload
+ * GET    /api/documents/all                    → listing envelope, page-walked → Document[]
+ * GET    /api/documents/all?include_deleted=true → include deleted docs
+ * GET    /api/watched-folders/all              → WatchedFolder[] (listing envelope, page-walked)
+ * GET    /api/documents/:id                    → { success, result: Document } → unwrapped
+ * DELETE /api/documents/:id                    → 204 soft delete
+ * POST   /api/documents/upload                 → multipart upload → { success, result }
  */
 import { api } from '@chalie/shared';
 import { fetchAllPages } from './paginate';
@@ -35,15 +35,18 @@ export interface WatchedFolder {
 
 export const documents = {
   list(includeDeleted = false): Promise<Document[]> {
-    return api.get(includeDeleted ? '/api/documents?include_deleted=true' : '/api/documents');
+    return fetchAllPages<Document>(
+      '/api/documents/all',
+      includeDeleted ? { include_deleted: 'true' } : undefined,
+    );
   },
 
   watchedFolders(): Promise<WatchedFolder[]> {
     return fetchAllPages<WatchedFolder>('/api/watched-folders/all');
   },
 
-  get(id: string | number): Promise<{ item: Document }> {
-    return api.get(`/api/documents/${id}`);
+  get(id: string | number): Promise<Document> {
+    return api.get<{ result: Document }>(`/api/documents/${id}`).then((r) => r.result);
   },
 
   delete(id: string | number): Promise<unknown> {

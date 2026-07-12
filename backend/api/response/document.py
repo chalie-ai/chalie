@@ -1,15 +1,13 @@
-"""DTOs for the documents namespace — the upload/search/lifecycle HTTP contract.
+"""Response DTOs for the documents endpoint group.
 
-Documents are not pure CRUD (file I/O, semantic search, and lifecycle
-transitions sit alongside id-addressed reads), so this file owns both the read
-shapes and the per-operation request/response bodies. Validation (non-empty,
-min-length, limit caps) lives on the ``pydantic.Field`` constraints, so handlers
-never hand-validate. Datetimes serialize as ISO-8601 UTC via
-:class:`backend.api.dto.base.DTO`.
+Mirrors the field shape of the legacy ``api.dto.document`` module so the wire
+format stays identical. Documents are not pure CRUD — file I/O, semantic
+search, and lifecycle transitions sit alongside id-addressed reads — so this
+file owns the read shapes and per-operation response bodies.
 
-The document store persists ``tags`` and ``extracted_metadata`` as JSON strings;
-field validators lift those into native types so the wire shape is always a real
-list/dict, never a string.
+The document store persists ``tags`` and ``extracted_metadata`` as JSON
+strings; field validators lift those into native types so the wire shape is
+always a real list/dict, never a string.
 """
 
 from __future__ import annotations
@@ -18,10 +16,9 @@ import json
 from datetime import datetime
 from typing import cast
 
-from pydantic import Field, field_validator
+from pydantic import field_validator
 
-from .base import DTO
-from .boundary import File
+from .response import Response
 
 
 def _as_object(value: object) -> object:
@@ -34,7 +31,7 @@ def _as_object(value: object) -> object:
     return value
 
 
-class Document(DTO):
+class Document(Response):
     """Read shape for a document, exposed in lists and detail.
 
     ``clean_text`` is intentionally absent — it is too large for list/detail
@@ -85,7 +82,7 @@ class Document(DTO):
         return bool(value)
 
 
-class ArtifactPreview(DTO):
+class ArtifactPreview(Response):
     """One ``data_graph`` artifact preview (first 200 chars of its value)."""
 
     key: str
@@ -98,14 +95,14 @@ class DocumentDetail(Document):
     artifacts: list[ArtifactPreview]
 
 
-class ArtifactContent(DTO):
+class ArtifactContent(Response):
     """One ``data_graph`` artifact with its full value."""
 
     key: str
     content: str
 
 
-class DocumentContent(DTO):
+class DocumentContent(Response):
     """Full document text reconstructed from ``data_graph`` artifacts."""
 
     document_id: str
@@ -113,7 +110,7 @@ class DocumentContent(DTO):
     artifacts: list[ArtifactContent]
 
 
-class DuplicateRef(DTO):
+class DuplicateRef(Response):
     """A prior document matched as a duplicate of a fresh upload."""
 
     id: str
@@ -122,7 +119,7 @@ class DuplicateRef(DTO):
     created_at: datetime | None
 
 
-class UploadResponse(DTO):
+class UploadResponse(Response):
     """Response to a successful upload, with optional duplicate matches."""
 
     id: str
@@ -133,51 +130,21 @@ class UploadResponse(DTO):
     duplicates: list[DuplicateRef] | None = None
 
 
-class UploadRequest(DTO):
-    """Multipart upload body: a single file field.
-
-    Extension/size/empty validation stays in the handler (filesystem-dependent),
-    not on a ``Field`` constraint.
-    """
-
-    file: File
-
-
-class ClassifyRequest(DTO):
-    """Partial classification update; every field optional."""
-
-    category: str | None = None
-    project: str | None = None
-    date: str | None = None
-
-
-class AugmentRequest(DTO):
-    """Body for adding user context to a document awaiting confirmation."""
-
-    context: str = Field(..., min_length=1)
-
-
-class SupersedeRequest(DTO):
-    """Body marking the new document as superseding a prior one."""
-
-    old_id: str = Field(..., min_length=1)
-
-
-class SupersedeResponse(DTO):
+class SupersedeResponse(Response):
     """Response confirming the superseded document id."""
 
     ok: bool
     supersedes_id: str
 
 
-class ClassificationGroup(DTO):
+class ClassificationGroup(Response):
     """One bucket of a classification grouping (value + document count)."""
 
     value: str
     count: int
 
 
-class SearchResult(DTO):
+class SearchResult(Response):
     """One ``data_graph`` recall row projected onto a document search hit."""
 
     document_id: str
@@ -186,15 +153,8 @@ class SearchResult(DTO):
     source: str
 
 
-class SearchResponse(DTO):
+class SearchResponse(Response):
     """Ranked recall results for a document search."""
 
     results: list[SearchResult]
     query: str
-
-
-class SearchQuery(DTO):
-    """Inbound query for document search — non-empty ``q``, capped ``limit``."""
-
-    q: str = Field(..., min_length=1)
-    limit: int = Field(default=5, le=20)

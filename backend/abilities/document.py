@@ -438,6 +438,74 @@ def _handle_restore(service: "_DocumentService", params: dict[str, object]) -> T
     )
 
 
+def _read_existing_metadata(svc: "_DocumentService", doc_id: str) -> "dict[str, object]":
+    """Read prior extracted_metadata so concurrent writes are not clobbered."""
+    existing = svc.get_document(doc_id) or {}
+    return cast("dict[str, object]", existing.get("extracted_metadata") or {})
+
+
+def _derive_summary(text: str) -> str:
+    """Extract up to a 500-char summary, truncated at the last sentence boundary after 200 chars."""
+    summary = text[:500]
+    dot_pos = summary.rfind(". ")
+    if dot_pos > 200:
+        return summary[:dot_pos + 1]
+    return summary
+
+
+def _mark_upload_failed(doc_id: str, error: str) -> None:
+    """Best-effort status update to 'failed' — swallow errors since we're already in a failure path."""
+    try:
+        from services.document_service import DocumentService
+        DocumentService().update_status(doc_id, "failed", error[:500])
+    except Exception:
+        logger.exception(f"[DOCUMENT SKILL] Could not mark {doc_id} as failed")
+
+
+def _run_upload_extraction(doc_id: str) -> None:
+    """Extract text + write artifacts + mark ready. Raises on unrecoverable errors."""
+    from services.document_service import DocumentService
+    from services.file_mapper_service import FileMapperService
+    from services.text_extractor import extract_text
+    from services.document_chunking import create_document_artifacts
+
+    svc = DocumentService()
+    doc = svc.get_document(doc_id)
+    if not doc:
+        return
+
+    file_path = cast(str, doc.get("file_path", ""))
+    if not file_path:
+        svc.update_status(doc_id, "failed", "No file path")
+        return
+
+    text = extract_text(str(FileMapperService.get_documents_path(file_path)))
+    is_image = cast(str, doc.get("mime_type") or "").startswith("image/")
+    if not text:
+        if is_image:
+            # A textless image with no vision provider (e.g. a photo with no
+            # words): persist 'ready' so it stays viewable / re-queryable via the
+            # vision tool; there is simply nothing to index. NOT a failure.
+            svc.update_status(doc_id, "ready", chunk_count=0)
+            return
+        svc.update_status(doc_id, "failed", "Text extraction returned empty")
+        return
+
+    artifact_count = create_document_artifacts(doc_id, text)
+
+    # Write clean_text so document(action='view') can return full text.
+    # Merge with prior metadata to avoid clobbering concurrent
+    # synthesis/classification writes.
+    svc.update_extracted_metadata(
+        doc_id,
+        metadata=_read_existing_metadata(svc, doc_id),
+        summary=_derive_summary(text),
+        clean_text=text,
+    )
+    svc.update_status(doc_id, "ready", chunk_count=artifact_count)
+    logger.info(f"[DOCUMENT SKILL] Processed upload {doc_id}: {artifact_count} artifacts")
+
+
 def ingest_file(
     service: "_DocumentService",
     src_path: str,
@@ -449,11 +517,11 @@ def ingest_file(
     """The single mechanical ingest for an uploaded file given by PATH.
 
     Shared by both upload surfaces — chat attachments (via ``_handle_upload`` /
-    ``ToolDispatcher``) and the Documents library (``api.documents.upload_document``).
-    Copies the source file into the document store, creates the DB row, then runs
-    extraction SYNCHRONOUSLY (images route to vision/OCR, text to the extractor —
-    all inside ``_run_upload_extraction`` → ``extract_text``) so the document
-    reaches a terminal state (ready/failed) before returning.
+    ``ToolDispatcher``) and the Documents library. Copies the source file into
+    the document store, creates the DB row, then runs extraction SYNCHRONOUSLY
+    (images route to vision/OCR, text to the extractor — all inside the local
+    ``_run_upload_extraction`` → ``extract_text``) so the document reaches a
+    terminal state (ready/failed) before returning.
 
     Takes a path, never bytes, so the act-trail (which records every dispatch's
     params verbatim) can never carry a file blob and blow the context window.
@@ -520,7 +588,6 @@ def ingest_file(
     # Extraction runs synchronously: callers MUST be able to read the document
     # immediately (the ACT loop's follow-up view in the same turn, or the library
     # endpoint's response) — never "still being processed".
-    from api.documents import _mark_upload_failed, _run_upload_extraction
     try:
         _run_upload_extraction(doc_id)
     except Exception as exc:
