@@ -66,6 +66,23 @@ def _inject_fake_client(send_fn: Callable[[ProviderApiRequest], ProviderApiRespo
         setattr(Providers, '_resolve', original)
 
 
+@contextlib.contextmanager
+def _vault_unlocked() -> Generator[None, None, None]:
+    """Set the vault to the unlocked state for the duration of the block.
+
+    ``_fire_item`` defers prompt items when ``is_unlocked()`` is False (DEK not
+    in memory). Tests that drive the scheduled poll happy path must hold the
+    vault open so the prompt is not deferred to the next cycle.
+    """
+    from services.vault_service import _vault_state
+    held_dek = _vault_state.dek
+    _vault_state.dek = b"test-dek-not-None"
+    try:
+        yield
+    finally:
+        _vault_state.dek = held_dek
+
+
 def _text_response(text: str) -> ProviderApiResponse:
     return ProviderApiResponse(
         text=text, model="test-model", provider="mock", tool_calls=None,
@@ -493,6 +510,18 @@ def _join_threads(prefix: str, timeout: float = 15.0) -> None:
             t.join(timeout)
 
 
+def _assert_no_thread(name: str) -> None:
+    """Assert no live background thread named exactly ``name`` exists.
+
+    The complement of _join_threads: proves a deferred item never spawned its
+    daemon thread in the first place (the deferral happens before start()).
+    """
+    alive = [t.name for t in threading.enumerate() if t.name == name]
+    assert not alive, (
+        f"no thread named {name!r} should exist; found {alive!r}"
+    )
+
+
 def _transcript_rows(db: sqlite3.Connection, channel: str, role: str | None = None) -> list[str]:
     sql = "SELECT content FROM transcript WHERE channel=?"
     params: list[str] = [channel]
@@ -551,7 +580,10 @@ def test_scheduled_poll_claims_item_then_surfaces_two_stage_on_user(db: sqlite3.
         # scheduled result the Stage-2 user turn relays; Stage-2 echoes it back.
         return _text_response(result_text)
 
-    with _inject_fake_client(_send):
+    # This test covers the happy path: the vault is unlocked, so the prompt is
+    # not deferred. _fire_item checks is_unlocked() before spawning the work
+    # thread; without a DEK in memory it would defer (stay 'pending').
+    with _inject_fake_client(_send), _vault_unlocked():
         scheduler_service._poll_and_fire()
         # Stage 1 (work loop + dispatch) runs on scheduled-work-<id>; it spawns
         # the Stage-2 chat-<id> thread synchronously before returning, so join it
@@ -598,4 +630,65 @@ def test_scheduled_poll_claims_item_then_surfaces_two_stage_on_user(db: sqlite3.
         "the return hop must not write a synthetic user input row "
         "(hidden_input=True) — the scheduled result is the model's reply, not a "
         "faked user message"
+    )
+
+
+def test_scheduled_poll_defers_prompt_when_vault_locked(db: sqlite3.Connection, store: object) -> None:
+    """When the vault is locked at fire time, a due prompt must defer, not drop.
+
+    Regression for #1949: _fire_item previously returned None and the caller
+    stamped status='fired' unconditionally, so a prompt whose daemon thread
+    crashed (no API key) was silently lost. Now _fire_item returns False when
+    the vault is locked, the row stays 'pending' for the next poll, and —
+    critically — no next-occurrence row is generated (or a recurring schedule
+    would duplicate every cycle until it fires).
+
+    Drives the real _poll_and_fire() entry point with the vault held locked.
+    The deferral happens before any thread is spawned, so no LLM seam is
+    reached; _assert_no_thread is the guard that proves no work thread ran.
+    """
+    from services import scheduler_service
+    from services.time_utils import utc_now
+
+    item_id = "sched-defer-1"
+    instruction = "morning briefing"
+    due_at = (utc_now() - timedelta(minutes=1)).isoformat()
+    db.execute(
+        "INSERT INTO scheduled_items (id, item_type, message, due_at, status, is_prompt, recurrence) "
+        "VALUES (?, 'prompt', ?, ?, 'pending', 1, 'daily')",
+        (item_id, instruction, due_at),
+    )
+    db.commit()
+
+    def _explode(_dto: ProviderApiRequest) -> ProviderApiResponse:
+        # If the deferral is bypassed, the daemon thread's work loop reaches
+        # this client. Its assertion fires on that daemon thread (logged, not
+        # raised to pytest) — _assert_no_thread below is the real guard. The
+        # client is here so a bypass is noisy in logs, not silent.
+        raise AssertionError("work loop ran despite vault locked — deferral bypassed")
+
+    # Vault held LOCKED: _vault_state.dek is None (the default test state).
+    with _inject_fake_client(_explode):
+        scheduler_service._poll_and_fire()
+        # No daemon thread should have been spawned for this item.
+        _assert_no_thread(f"scheduled-work-{item_id}")
+
+    # The row stays 'pending' — the deferral the bug dropped silently.
+    status = db.execute(
+        "SELECT status FROM scheduled_items WHERE id=?", (item_id,)
+    ).fetchone()[0]
+    assert status == "pending", (
+        f"a deferred prompt must stay 'pending' for the next poll; got {status!r}"
+    )
+
+    # No duplicate next-occurrence row was generated — the schedule does not
+    # fork on every poll while waiting for the vault. The original row is the
+    # only one carrying this instruction.
+    count = db.execute(
+        "SELECT COUNT(*) FROM scheduled_items WHERE message=?",
+        (instruction,),
+    ).fetchone()[0]
+    assert count == 1, (
+        f"deferred item must not generate a next-occurrence row (would duplicate "
+        f"every cycle); found {count} rows with its instruction"
     )
