@@ -23,6 +23,8 @@ Domain-specific terminology used throughout the Chalie system.
 | `image_search` | Built-in ability that finds images on the web for a text query, then vision-verifies each candidate when a vision provider is configured. | `verified=true` per image, or `degraded=true` with no vision provider configured |
 | `skill` | A step-by-step YAML playbook discoverable via `find_skills`. | `a3-problem-analysis.yaml` |
 | `delegate` | A tool call opted into async background execution. | `delegate_id="web_search_a3b2c1d4"` |
+| `delegate ability` | An `Ability` that builds its own `ProcessorConfig` and drives a focused `MessageProcessor` loop instead of acting directly, scoped to a pinned tool set. | `web_search`, `web_browse`, `pim` |
+| `pim` | The delegate ability owning the user's personal information — email, calendar, contacts, and reminders — behind one tool; the sole route to those abilities now that they're non-discoverable elsewhere. | `pim(instructions="what do I have tomorrow")` |
 | `subagent` | User-facing label for a backgrounded delegate. | `GET /api/subagents/all` |
 | `capability` | An external system adapter an ability wraps. | `mail_capability` (IMAP), `home_capability` (Home Assistant) |
 | `MCP` | Model Context Protocol connection to a remote MCP server. | `_mcp_notes_create_document` |
