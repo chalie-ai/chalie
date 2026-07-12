@@ -49,9 +49,8 @@ Domain-specific terminology used throughout the Chalie system.
 | `broadcast_to` | The live WebSocket output target for a channel. | `"user"` (UserConfig only) |
 | `SubconsciousWorker` | Idle-gated 5-minute cognition tick (consolidate, decay, patterns, synthesis…). | runs `_step_consolidate`, `_step_decay` |
 | `SchedulerService` | Background poller that wakes every wall-clock minute and fires any enabled schedule whose day/hour/minute cron fields match — no separate "due" state to track. | `day=None, hour=3, minute=0` → every day at 03:00 |
-| `WorldAwarenessService` | Hourly interest-driven news scan that pushes signals. | interest `{'term':'machine learning'}` |
 | `WorldState` | Singleton holding the agent's "what's going on" cache. | `last_heartbeat_at`, `current_device_class` |
-| `signal` | Typed world-state update absorbed from heartbeats / user messages. | `push_signal('news', 'X released Y')` |
+| `signal` | Typed world-state update absorbed from heartbeats / user messages. | `Signal(source='/health', kind='heartbeat')` |
 | `heartbeat` | FE POST `/health` payload persisted to telemetry. | `{device.name, location.lat, locale.timezone}` |
 | `usage_class` | Per-call LLM categorization. | `'chat'`, `'subagent'`, `'subconscious'` |
 | `snapshot` | Full-instance backup (db, mcp_tools, pre-trained, vault key material). | a `.chalie-snapshot` file |
