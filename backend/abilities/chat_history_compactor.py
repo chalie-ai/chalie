@@ -5,14 +5,14 @@ NEVER discoverable and NEVER in any always_available list: the model never sees
 it programmatically when a compaction limit is reached (``_dispatch_compaction``),
 exactly like the memory.recall turn-0 seed. It fires its own
 MessageProcessor.process() loop with ChatHistoryCompactionConfig, reads the parent
-channel's ``get_previous_messages()`` from the bound ``mp``, and writes the model's
-output VERBATIM into the ``compactions`` table — never a transcript
+channel's history via ``prompt_service.previous_messages()`` from the bound ``mp``,
+and writes the model's output VERBATIM into the ``compactions`` table — never a transcript
 row, so firing never moves a ``turn_id`` and the turn boundary survives.
 
 The checkpoint is scoped to the parent's VIEW: a FORK reply writes ``for_turn_id =
 turn_id`` and its watermark is the max transcript.id of the folded rows; the MAIN
 spine writes ``for_turn_id = NULL`` and its watermark is the max turn_id. Each axis
-is exactly what the matching ``_previous_rows`` read cuts on, so the next read
+is exactly what the matching ``transcript_service.read()`` cuts on, so the next read
 returns nothing through the watermark.
 
 The checkpoint is KEYED on the channel the parent READS cross-turn history from —
@@ -38,19 +38,28 @@ from models.compaction import Compaction
 if TYPE_CHECKING:
     from typing import Protocol
 
+    from models.transcript import Transcript
+
     class _CompactionParent(Protocol):
         _compaction_kept_rows: int
         turn_id: "int | None"
         _forked: bool
 
-        def _previous_rows(self) -> list[dict[str, object]]: ...
-        def get_previous_messages(self, *, drop_oldest: int = ...) -> str: ...
+        class _TranscriptService(Protocol):
+            def read(self) -> list["Transcript"]: ...
 
-        class _Providers(Protocol):
-            def get_context_limit(self) -> int: ...
+        transcript_service: _TranscriptService
+
+        class _PromptService(Protocol):
+            def previous_messages(self, drop_oldest: int = ...) -> str: ...
+
+        prompt_service: _PromptService
+
+        class _ProviderService(Protocol):
+            def context_limit(self) -> int: ...
             def measure(self, dto: object) -> int: ...
 
-        providers: _Providers
+        provider_service: _ProviderService
 
         class _Config(Protocol):
             channel: str
@@ -165,15 +174,16 @@ class ChatHistoryCompactor(Ability):
 
         # The model's output IS the checkpoint — write it verbatim into the
         # compactions table. The watermark covers everything just read (the full
-        # _previous_rows, not the kept subset) so a rare drop-oldest stays covered
-        # and the next read returns nothing through it. Axis follows the view: a
-        # FORK stores the max transcript.id, the MAIN spine the max turn_id.
-        # This advance only holds because _previous_rows returns rows ABOVE the
-        # prior watermark — keep that contract (its flow narrative spells out why).
-        rows = mp._previous_rows()
+        # transcript_service.read(), not the kept subset) so a rare drop-oldest
+        # stays covered and the next read returns nothing through it. Axis follows
+        # the view: a FORK stores the max transcript.id, the MAIN spine the max
+        # turn_id. This advance only holds because transcript_service.read()
+        # returns rows ABOVE the prior watermark — keep that contract (its flow
+        # narrative spells out why).
+        rows = mp.transcript_service.read()
         compacted_up_to = (
-            max(cast(int, r["id"]) for r in rows) if mp._forked
-            else max(cast(int, r["turn_id"]) for r in rows if r["turn_id"] is not None)
+            max(cast(int, r.id) for r in rows) if mp._forked
+            else max(cast(int, tid) for r in rows if (tid := r.to_dict()["turn_id"]) is not None)
         )
         Compaction.write(channel, for_turn_id, compacted_up_to, summary)
         return ToolResult.ok("Chat history compacted.", rows_compacted=rows_compacted)
@@ -183,15 +193,15 @@ class ChatHistoryCompactor(Ability):
         """Build the bare compaction request body and shrink it to fit the cap.
 
         Canonical design step 4.1/4.2: the compaction request includes ONLY the
-        system prompt, the prior checkpoint, and ``get_previous_messages`` — no
-        tools, no act-trail. That bare request almost always fits, so the drop
+        system prompt, the prior checkpoint, and ``prompt_service.previous_messages``
+        — no tools, no act-trail. That bare request almost always fits, so the drop
         loop is the EXTREMELY RARE fallback: while the {system + combined} body
-        exceeds the context cap, drop the OLDEST message from get_previous_messages
+        exceeds the context cap, drop the OLDEST message from previous_messages
         one at a time (typically 1–2) until it fits. A floor of one surviving
         message prevents dropping everything. Returns the combined text to
         summarise, or None when there is nothing left to compact.
 
-        Uses parent.providers.measure(dto) for sizing — no raw provider object.
+        Uses parent.provider_service.measure(dto) for sizing — no raw provider object.
 
         Surfaces the count of transcript rows actually folded — ``total - drop``,
         the kept count after the rare drop-oldest fallback — onto
@@ -202,13 +212,13 @@ class ChatHistoryCompactor(Ability):
         from services.provider_api import ProviderApiRequest  # noqa: PLC0415
 
         system = parent.config.system_prompt
-        window = parent.providers.get_context_limit()
+        window = parent.provider_service.context_limit()
         cap = window - max(int(0.10 * window), 8000) if window else 0
-        total = len(parent._previous_rows())
+        total = len(parent.transcript_service.read())
 
         drop = 0
         while True:
-            prev = parent.get_previous_messages(drop_oldest=drop)
+            prev = parent.prompt_service.previous_messages(drop_oldest=drop)
             if not prev.strip():
                 parent._compaction_kept_rows = 0
                 return None
@@ -223,7 +233,7 @@ class ChatHistoryCompactor(Ability):
                 thinking_mode=ThinkingLevel.LOW,
                 cache_prefix=False,
             )
-            if parent.providers.measure(candidate_dto) <= cap:
+            if parent.provider_service.measure(candidate_dto) <= cap:
                 parent._compaction_kept_rows = max(total - drop, 0)
                 return combined
             drop += 1

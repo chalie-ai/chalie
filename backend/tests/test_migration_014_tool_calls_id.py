@@ -41,7 +41,7 @@ def _db_path() -> str:
     return str(FileMapperService.get_db_path())
 
 
-def _id_column(conn: sqlite3.Connection) -> tuple:
+def _id_column(conn: sqlite3.Connection) -> tuple[object, ...]:
     return next(row for row in conn.execute("PRAGMA table_info(tool_calls)") if row[1] == "id")
 
 
@@ -54,12 +54,13 @@ def _drift(db: sqlite3.Connection, rows: int = 25) -> list[int]:
     db.execute("CREATE INDEX idx_tool_calls_transcript ON tool_calls(transcript_id)")
     db.execute("CREATE INDEX idx_tool_calls_created ON tool_calls(created_at DESC)")
 
-    transcript_ids = []
+    transcript_ids: list[int] = []
     for i in range(3):
         cur = db.execute(
             "INSERT INTO transcript (channel, role, content) VALUES ('user', 'user', ?)",
             (f"msg {i}",),
         )
+        assert cur.lastrowid is not None
         transcript_ids.append(cur.lastrowid)
 
     states = ("started", "done", "error")

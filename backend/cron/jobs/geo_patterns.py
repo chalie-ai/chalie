@@ -25,7 +25,7 @@ class GeoPatternsJob(IdleGatedJob):
         """Single-pass LLM geo-spatial pattern extractor. Ported verbatim from
         ``SubconsciousWorker._step_geo_patterns``."""
         from models.machine_state import MachineStateRow as _MachineStateRow  # noqa: PLC0415
-        from services.transcript_service import Transcript as _Transcript  # noqa: PLC0415
+        from models.transcript import Transcript as _Transcript  # noqa: PLC0415
         from configs.enums.channels import Channel as _Channel  # noqa: PLC0415
         from configs.channels import GeoConfig as _GeoConfig  # noqa: PLC0415
         from controllers.message_processor import MessageProcessor as _MessageProcessor  # noqa: PLC0415

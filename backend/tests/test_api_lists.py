@@ -1,4 +1,5 @@
 import sqlite3
+from typing import cast
 
 import pytest
 from flask.testing import FlaskClient
@@ -27,18 +28,22 @@ def _seed_item(db: sqlite3.Connection, item_id: str, list_id: str, content: str,
     db.commit()
 
 
-def _unwrap_success(body: dict) -> dict:
-    """Assert the success envelope shape and return the bare result payload."""
+def _unwrap_success(body: dict[str, object]) -> object:
+    """Assert the success envelope shape and return the bare result payload.
+
+    The payload shape is endpoint-specific (a ``list`` for the collection reads,
+    a ``dict`` for the single-item writes), so it is returned as ``object``; each
+    caller narrows it with an ``isinstance`` assertion before use."""
     assert body.get("success") is True
     assert "error" not in body
     return body["result"]
 
 
-def _unwrap_error(body: dict) -> str:
+def _unwrap_error(body: dict[str, object]) -> str:
     """Assert the error envelope shape and return the error message."""
     assert body.get("success") is False
     assert body.get("result") == []
-    return body["error"]
+    return cast("str", body["error"])
 
 
 # ─── GET /api/lists/all ───────────────────────────────────────────────────
@@ -69,6 +74,7 @@ class TestCreateList:
         resp = client.post('/api/lists/-1', json={"name": "Chores"})
         assert resp.status_code == 201
         data = _unwrap_success(resp.get_json())
+        assert isinstance(data, dict)
         assert data['name'] == 'Chores'
         assert data['list_type'] == 'checklist'
         assert len(data['id']) == 8
@@ -110,6 +116,7 @@ class TestGetList:
         resp = client.get('/api/lists/abc12345')
         assert resp.status_code == 200
         data = _unwrap_success(resp.get_json())
+        assert isinstance(data, dict)
         assert data['name'] == 'Groceries'
         assert data['item_count'] == 2
         assert data['checked_count'] == 1
@@ -131,7 +138,7 @@ class TestUpdateList:
         _seed_list(db, list_id='abc12345', name='Old')
         resp = client.post('/api/lists/abc12345', json={"name": "New"})
         assert resp.status_code == 200
-        assert _unwrap_success(resp.get_json())['name'] == 'New'
+        assert cast("dict[str, object]", _unwrap_success(resp.get_json()))['name'] == 'New'
         assert db.execute("SELECT name FROM lists WHERE id = 'abc12345'").fetchone()['name'] == 'New'
 
     def test_updates_type(self, authed_client: tuple[FlaskClient, sqlite3.Connection, MemoryStore]) -> None:
@@ -139,7 +146,7 @@ class TestUpdateList:
         _seed_list(db, list_id='abc12345', name='Chores')
         resp = client.post('/api/lists/abc12345', json={"list_type": "todo"})
         assert resp.status_code == 200
-        assert _unwrap_success(resp.get_json())['list_type'] == 'todo'
+        assert cast("dict[str, object]", _unwrap_success(resp.get_json()))['list_type'] == 'todo'
 
     def test_rename_collision_returns_409(self, authed_client: tuple[FlaskClient, sqlite3.Connection, MemoryStore]) -> None:
         client, db, _ = authed_client
@@ -187,6 +194,7 @@ class TestGetItems:
         assert resp.status_code == 200
         body = resp.get_json()
         data = _unwrap_success(body)
+        assert isinstance(data, list)
         assert [i['content'] for i in data] == ['milk', 'eggs']
         assert {'id', 'content', 'checked', 'position', 'added_at', 'updated_at'} <= set(data[0])
         assert "pagination" in body
@@ -207,6 +215,7 @@ class TestAddItem:
         resp = client.post('/api/lists/items/abc12345', json={"content": "Milk"})
         assert resp.status_code == 201
         data = _unwrap_success(resp.get_json())
+        assert isinstance(data, dict)
         assert data['content'] == 'Milk'
         assert data['checked'] is False
         assert len(data['id']) == 8
@@ -240,7 +249,7 @@ class TestUpdateItem:
 
         resp = client.post('/api/lists/items/abc12345:i1', json={"checked": True})
         assert resp.status_code == 200
-        assert _unwrap_success(resp.get_json())['checked'] is True
+        assert cast("dict[str, object]", _unwrap_success(resp.get_json()))['checked'] is True
         assert db.execute("SELECT checked FROM list_items WHERE id = 'i1'").fetchone()['checked'] == 1
 
     def test_unchecks_item(self, authed_client: tuple[FlaskClient, sqlite3.Connection, MemoryStore]) -> None:
@@ -250,7 +259,7 @@ class TestUpdateItem:
 
         resp = client.post('/api/lists/items/abc12345:i1', json={"checked": False})
         assert resp.status_code == 200
-        assert _unwrap_success(resp.get_json())['checked'] is False
+        assert cast("dict[str, object]", _unwrap_success(resp.get_json()))['checked'] is False
         assert db.execute("SELECT checked FROM list_items WHERE id = 'i1'").fetchone()['checked'] == 0
 
     def test_renames_content(self, authed_client: tuple[FlaskClient, sqlite3.Connection, MemoryStore]) -> None:
@@ -260,7 +269,7 @@ class TestUpdateItem:
 
         resp = client.post('/api/lists/items/abc12345:i1', json={"content": "oat milk"})
         assert resp.status_code == 200
-        assert _unwrap_success(resp.get_json())['content'] == 'oat milk'
+        assert cast("dict[str, object]", _unwrap_success(resp.get_json()))['content'] == 'oat milk'
 
     def test_missing_item_returns_404(self, authed_client: tuple[FlaskClient, sqlite3.Connection, MemoryStore]) -> None:
         client, db, _ = authed_client

@@ -77,6 +77,11 @@
   --bg-input:               rgba(255, 255, 255, 0.05);
   --bg-user:                rgba(138, 92, 255, 0.07);
   --bg-chalie:              rgba(255, 255, 255, 0.025);
+  /* Opaque equivalent of --bg-surface-2 composited over --bg (the user bubble's
+     actual rendered colour) — used as a fade endpoint so gradients dissolve
+     into the bubble with no seam instead of a translucent surface layered on
+     the wrong backdrop. rgba(255,255,255,0.06) over #07070b. */
+  --user-bubble-fade:       #16161a;
   --text:                   #eae6f2;
   --text-primary:           #eae6f2;
   --text-secondary:         rgba(234, 230, 242, 0.72);
@@ -175,6 +180,9 @@
   --bg-input:               rgba(255, 255, 255, 0.88);
   --bg-user:                rgba(110, 61, 235, 0.07);
   --bg-chalie:              rgba(255, 255, 255, 0.65);
+  /* Opaque equivalent of --bg-surface-2 composited over --bg for this theme —
+     see the dark-block comment above. rgba(255,255,255,0.92) over #F6F4F1. */
+  --user-bubble-fade:       #fefefe;
   --text:                   #1A1626;
   --text-primary:           #1A1626;
   --text-secondary:         rgba(26, 22, 38, 0.62);

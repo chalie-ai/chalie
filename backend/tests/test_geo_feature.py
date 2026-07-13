@@ -17,11 +17,14 @@ baseline is not broken in environments that haven't installed it yet.
 import sqlite3
 from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
-from typing import cast
+from typing import TYPE_CHECKING, cast
 
 import pytest
 
 from configs.enums.channels import Channel
+
+if TYPE_CHECKING:
+    from controllers.message_processor import MessageProcessor
 
 pytestmark = pytest.mark.unit
 
@@ -140,35 +143,41 @@ def _seed_located_row(db: sqlite3.Connection, *, channel: str, role: str = "user
 
 
 class TestGeoPatternWindowChannelFilter:
-    """The geo-pattern window feeds the model ONLY rows whose source profile
-    marks them as user geo-activity. A located row on a muted/non-user channel
-    must never reach the model — the prior behaviour fed every located row
-    regardless of channel, so a delegate's coordinates could masquerade as the
-    user being somewhere.
+    """The geo-pattern window feeds the model ONLY the user's own location-tagged
+    rows. A located row on any non-user channel — a delegate's coordinates, a
+    reflection, an external agent — must never enter the window, or a delegate's
+    location could masquerade as the user being somewhere.
 
-    Driven through the real ``_geo_pattern_load_transcript_block`` (the exact
-    builder GeoConfig.get_user_prompt calls) over mixed-channel fixtures.
+    Driven through the real ``TranscriptService.location_window()`` (the exact
+    id-bounded read the geo pass runs), scoped by the bound ``GeoConfig``'s
+    ``_window_start``/``_window_end``, over mixed-channel fixtures.
     """
 
     def test_only_user_geoactivity_rows_enter_the_window(self, db: sqlite3.Connection) -> None:
-        from configs.channels.geo_pattern import _geo_pattern_load_transcript_block
+        from configs.channels.geo_pattern import GeoConfig
+        from controllers.message_processor import MessageProcessor
+        from services.transcript_service import TranscriptService
 
-        # One row per representative channel, all located, all in the window.
+        # One located row per representative channel, all inside the window.
         _seed_located_row(db, channel=Channel.USER.value, content="USER at the gym")
         _seed_located_row(db, channel=Channel.DMN.value, content="DMN reflection located")
         _seed_located_row(db, channel="delegate:research", content="DELEGATE located")
         _seed_located_row(db, channel=Channel.for_external_agent("bob"), content="EXT located")
 
-        last_id = db.execute("SELECT MAX(id) FROM transcript").fetchone()[0]
-        block = _geo_pattern_load_transcript_block(0, last_id)
+        last_id = cast(int, db.execute("SELECT MAX(id) FROM transcript").fetchone()[0])
 
-        # Only the user geo-activity row is admitted.
-        assert "USER at the gym" in block
-        # dmn is HEAVY for episodes but NOT user geo-activity (geo_is_user=False).
-        assert "DMN reflection located" not in block
-        # Muted / non-user channels are excluded.
-        assert "DELEGATE located" not in block
-        assert "EXT located" not in block
+        # A GeoConfig whose window spans every seeded row, bound to an inert MP —
+        # the same collaborator the geo pass binds in production (§6.13/I2).
+        mp = MessageProcessor(GeoConfig(window_start=0, window_end=last_id))
+        rows = TranscriptService(mp).location_window()
+        contents = [r.to_dict()["content"] for r in rows]
+
+        # Only the user's own geo-activity row is admitted.
+        assert "USER at the gym" in contents
+        # Every non-user channel is excluded — the window can't be widened past the user.
+        assert "DMN reflection located" not in contents
+        assert "DELEGATE located" not in contents
+        assert "EXT located" not in contents
 
     def test_existing_patterns_block_empty_db_returns_no_patterns(self, db: sqlite3.Connection) -> None:
         """The behavioural-pattern lane feeding the existing-patterns block is
@@ -179,4 +188,4 @@ class TestGeoPatternWindowChannelFilter:
         class-bound connection and never touches ``mp``."""
         from services.behavioral_pattern_service import BehavioralPatternService
 
-        assert BehavioralPatternService(None).top_patterns() == {}
+        assert BehavioralPatternService(cast("MessageProcessor", None)).top_patterns() == {}

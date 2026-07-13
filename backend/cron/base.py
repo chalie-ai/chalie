@@ -125,7 +125,7 @@ class IdleGatedJob(ScheduledJob):
 
     def _is_idle(self) -> bool:
         """True when the user has been idle at least ``idle_window``."""
-        from services.transcript_service import Transcript  # noqa: PLC0415
+        from models.transcript import Transcript  # noqa: PLC0415
 
         last_msg_raw = Transcript.last_user_message_at()
         last_msg = parse_utc(last_msg_raw) if last_msg_raw else None

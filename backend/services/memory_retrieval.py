@@ -467,7 +467,7 @@ def _fetch_episodes_by_ids(episode_ids: list[object]) -> list[Episode]:
 
 
 def _fetch_transcript_entries(transcript_ids: list[object]) -> list[dict[str, object]]:
-    from services.transcript_service import Transcript
+    from models.transcript import Transcript
     if not transcript_ids:
         return []
     try:

@@ -83,7 +83,7 @@ def _collect_transcript_ids(episodes: list[object]) -> set[int]:
 def _fetch_transcript_spans(t_ids: set[int]) -> str:
     """Returns '' if no transcript IDs found."""
     import logging as _logging  # noqa: PLC0415
-    from services.transcript_service import Transcript
+    from models.transcript import Transcript
     _log = _logging.getLogger(__name__)
     if not t_ids:
         return ""

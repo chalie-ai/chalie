@@ -7,8 +7,8 @@ This model is the SOLE home of ``tool_configs`` SQL; all callers reach through
 it (the dissolved ``ToolConfigService`` is gone).
 
 Encrypted values (credentials) ride on top of the plain read/write path:
-:meth:`get_encrypted`/:meth:`set_encrypted` call :meth:`get`/:meth:`set` and add
-only crypto — no SQL of their own. This is the second owner-sanctioned model
+:meth:`get_encrypted`/:meth:`set_encrypted` call :meth:`get_value`/:meth:`set`
+and add only crypto — no SQL of their own. This is the second owner-sanctioned model
 that imports :mod:`services.vault_service` directly (the first being
 :class:`~models.setting.Setting`); a locked vault must fail exactly as loudly
 here as it did through the service: :meth:`get_encrypted`/:meth:`set_encrypted`
@@ -46,7 +46,7 @@ class ToolConfig(Model):
 
     # Real columns (annotation-only; populated by Model.__init__ from kwargs /
     # hydrate, so mypy knows their types on attribute access).
-    id: str  # type: ignore[override]
+    id: str
     tool_name: str
     config_key: str
     config_value: str
@@ -54,7 +54,7 @@ class ToolConfig(Model):
     updated_at: str
 
     @classmethod
-    def get(cls, tool_name: str, key: str) -> str | None:  # type: ignore[override]
+    def get_value(cls, tool_name: str, key: str) -> str | None:
         """Read a tool config value by its ``(tool_name, config_key)`` pair.
 
         Returns ``None`` if the row is absent.
@@ -100,7 +100,7 @@ class ToolConfig(Model):
                 not yet been unlocked via
                 :meth:`~services.vault_service.VaultService.unlock`.
         """
-        encrypted = cls.get(tool_name, key)
+        encrypted = cls.get_value(tool_name, key)
         if encrypted is None:
             return None
         try:

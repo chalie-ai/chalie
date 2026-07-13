@@ -54,7 +54,7 @@ class VoiceSettingsEndpoint(Endpoint):
         """Return the singleton voice settings state as a one-item listing."""
         status = RuntimeDepsService.get_status()["voice"]
         state = VoiceSettingsResponse(
-            enabled=Setting.get("voice_enabled") == "true",
+            enabled=Setting.get_value("voice_enabled") == "true",
             install_status=cast(str, status["status"]),
             error=status["error"],
         )

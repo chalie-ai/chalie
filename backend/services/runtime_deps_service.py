@@ -124,7 +124,7 @@ class RuntimeDepsService:
         """
         try:
             from models.setting import Setting
-            voice_enabled = Setting.get("voice_enabled")
+            voice_enabled = Setting.get_value("voice_enabled")
 
             if voice_enabled is None:
                 stamp = FileMapperService.get_chalie_root() / ".voice-deps-installed"

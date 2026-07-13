@@ -19,6 +19,7 @@ import logging
 import threading
 
 from models.turn_signal import TurnSignal
+from services.llm_service import _strip_think_blocks
 from services.websocket import Websocket
 
 logger = logging.getLogger(__name__)
@@ -73,9 +74,13 @@ def _run_gist_processor(
             from controllers.message_processor import MessageProcessor
 
             # Inert construction only (I2) — no .process(), purely to reach
-            # gist_service for the upsert.
+            # gist_service for the upsert. Think-stripping today only happens in
+            # the OpenAI provider client, so non-OpenAI providers (or an
+            # unclosed think block) would otherwise leak <think>...</think> into
+            # this stored, user-facing label — strip here, at the single point
+            # the gist becomes persisted data.
             inert = MessageProcessor(ThreadGistConfig())
-            inert.gist_service.upsert(trigger_channel, trigger_turn_id, gist)
+            inert.gist_service.upsert(trigger_channel, trigger_turn_id, _strip_think_blocks(gist))
             _broadcast_updated(trigger_turn_id, trigger_type)
     except Exception as exc:
         logger.warning("%s processor failed: %s", _LOG_PREFIX, exc)

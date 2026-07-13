@@ -25,13 +25,16 @@ tests.
 """
 
 import gc
-from typing import cast
+from typing import TYPE_CHECKING, cast
 
 import pytest
 
 from abilities._ability import Ability
 from abilities._delegate import DelegateAbility
 from configs.channels import DmnConfig, UserConfig
+
+if TYPE_CHECKING:
+    from controllers.message_processor import MessageProcessor
 
 pytestmark = pytest.mark.unit
 
@@ -229,7 +232,7 @@ def test_async_is_delegate_only_never_on_a_plain_tool() -> None:
     cls = _make_subclass("_PlainAsyncProbe")
 
     # Even on the SUPPORTS_ASYNC user channel, a plain tool has no async flag.
-    user_props = cast("dict[str, object]", cast("dict[str, object]", cls(mp=_Mp(UserConfig({}))).get_input_schema()["input_schema"])["properties"])
+    user_props = cast("dict[str, object]", cast("dict[str, object]", cls(mp=cast("MessageProcessor", _Mp(UserConfig({})))).get_input_schema()["input_schema"])["properties"])
     assert "async" not in user_props
     assert "act_summary" in user_props  # the base framework field is still injected
 
@@ -241,16 +244,16 @@ def test_async_injected_only_under_supports_async_config_for_delegates() -> None
     """On a DelegateAbility, async appears ONLY when the bound mp's config sets
     SUPPORTS_ASYNC. It is a per-call deepcopy — never mutates get_parameters()."""
     shared_params: dict[str, object] = {"type": "object", "properties": {}, "required": []}
-    cls = _make_subclass("_DelegateAsyncProbe", base=DelegateAbility, get_parameters=lambda self: shared_params)
+    cls = _make_subclass("_DelegateAsyncProbe", base=cast("type[Ability]", DelegateAbility), get_parameters=lambda self: shared_params)
 
     # SUPPORTS_ASYNC channel (UserConfig) → async exposed.
-    user_props = cast("dict[str, object]", cast("dict[str, object]", cls(mp=_Mp(UserConfig({}))).get_input_schema()["input_schema"])["properties"])
+    user_props = cast("dict[str, object]", cast("dict[str, object]", cls(mp=cast("MessageProcessor", _Mp(UserConfig({})))).get_input_schema()["input_schema"])["properties"])
     assert "async" in user_props
     assert cast("dict[str, object]", user_props["async"])["type"] == "boolean"
     assert cast("dict[str, object]", user_props["async"])["default"] is False
 
     # Non-async channel (DmnConfig) → never exposed.
-    dmn_props = cast("dict[str, object]", cast("dict[str, object]", cls(mp=_Mp(DmnConfig())).get_input_schema()["input_schema"])["properties"])
+    dmn_props = cast("dict[str, object]", cast("dict[str, object]", cls(mp=cast("MessageProcessor", _Mp(DmnConfig()))).get_input_schema()["input_schema"])["properties"])
     assert "async" not in dmn_props
 
     # No live processor (mp=None — build/introspection) → never exposed.

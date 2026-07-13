@@ -150,11 +150,12 @@ class PolicyManager:
 
     def get_all(self) -> list[dict[str, str]]:
         """All rows EXCLUDING internal (hidden in Brain), as flat triples."""
-        return (
+        rows = (
             Policy.filter("setting", "internal", "!=")
             .order_by("channel, permission")
             .select("channel", "permission", "setting")
         )
+        return [{k: str(v) for k, v in row.items()} for row in rows]
 
     def upsert(self, channel: str, permission: str, setting: str) -> int:
         """Single-cell upsert. Returns rows affected (0 on invalid input)."""
@@ -163,11 +164,12 @@ class PolicyManager:
         return Policy.upsert(channel, permission, setting)
 
     def get_blocked_log(self, limit: int = 50) -> list[dict[str, str]]:
-        return (
+        rows = (
             PolicyBlockedLog.order_by("created_at DESC")
             .limit(limit)
             .select("action_id", "context", "reason", "created_at")
         )
+        return [{k: str(v) for k, v in row.items()} for row in rows]
 
     def clear_blocked_log(self) -> int:
         return PolicyBlockedLog.clear_all()

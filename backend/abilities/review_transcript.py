@@ -104,11 +104,17 @@ class ReviewTranscriptAbility(ReviewWindowAbility):
         return max(_MIN_BUFFER_MINUTES, min(_MAX_BUFFER_MINUTES, minutes))
 
     def _fetch(self, lo: str, hi: str, params: "dict[str, object]") -> "list[dict[str, object]]":
-        from services.transcript_service import Transcript
+        from models.transcript import Transcript
 
         include_subagent = bool(params.get(Keys.include_subagent_transcripts, False))
         channels = [Channel.USER.value, "subagent"] if include_subagent else [Channel.USER.value]
-        return Transcript.by_time(channels, lo, hi)
+        return (
+            Transcript.filter_in("channel", channels)
+            .filter("created_at", lo, ">=")
+            .filter("created_at", hi, "<=")
+            .order_by("created_at ASC, id ASC")
+            .select("channel", "role", "content", "created_at")
+        )
 
     def _row(self, rec: "dict[str, object]", ordinal: int) -> "dict[str, object]":
         # Content is NOT clipped: this tool exists so the model can re-read EXACT

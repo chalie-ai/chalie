@@ -163,8 +163,12 @@ class SkillBuilderAbility(Ability):
         # five real actions and its required params are present. No try/except
         # swallow: an unexpected failure bubbles to the dispatcher's _run, which
         # renders it as code=unhandled-exception (errors must surface).
+        mp = self.mp
+        if mp is None:
+            raise RuntimeError("skill_builder.run() dispatched without a bound MessageProcessor")
+
         action = params.get(Keys.action, "list")
-        channel = self.mp.config.channel
+        channel = mp.config.channel
         logger.info("%s action=%s channel=%s", _LOG_PREFIX, action, channel)
 
         if action == "create":
@@ -183,7 +187,7 @@ class SkillBuilderAbility(Ability):
         # ACT loop so the model cannot keep emitting near-duplicate writes. Other
         # channels (a user explicitly building a skill) are unaffected.
         if channel == Channel.SKILLS_BUILDING and action in ("create", "edit") and result.status == "success":
-            self.mp.turn_execution_service.cancel()
+            mp.turn_execution_service.cancel()
         return result
 
 

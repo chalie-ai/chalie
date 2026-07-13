@@ -426,9 +426,9 @@ class ObservabilityCompactionResource(Resource):
                 return CompactionView(compaction=None)
             return CompactionView(
                 compaction=CompactionRecord(
-                    summary=cast(str, record.content),
-                    compacted_up_to_id=cast(int, record.compacted_up_to),
-                    compacted_at=format_date(cast(str, record.created_at), for_ui=True) or "",
+                    summary=record.content,
+                    compacted_up_to_id=record.compacted_up_to,
+                    compacted_at=format_date(record.created_at, for_ui=True) or "",
                 ),
             )
         except Exception:
@@ -584,7 +584,7 @@ class SettingsResource(Resource):
         """Read an opaque setting by key."""
         from models.setting import Setting as SettingModel
         try:
-            return Setting(key=key, value=SettingModel.get(key))
+            return Setting(key=key, value=SettingModel.get_value(key))
         except Exception as e:
             logger.error(f"[REST API] get setting error: {e}")
             return error("Failed to get setting", 500)
@@ -601,7 +601,7 @@ class SettingsResource(Resource):
         try:
             value = dto.value
             if not value:
-                SettingModel.delete(key)
+                SettingModel.delete_key(key)
             else:
                 SettingModel.set(key, str(value))
             return Setting(key=key, value=value or None)
@@ -660,7 +660,7 @@ class NetworkResource(Resource):
         from models.setting import Setting as SettingModel
         try:
             return NetworkState(
-                deployment_domain=SettingModel.get(SettingModel.DEPLOYMENT_DOMAIN) or "",
+                deployment_domain=SettingModel.get_value(SettingModel.DEPLOYMENT_DOMAIN) or "",
                 ssl_enabled=SettingModel.get_bool(SettingModel.SSL_ENABLED),
                 ssl_cert_present=FileMapperService.get_ssl_cert_path().is_file(),
             )

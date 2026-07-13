@@ -1,11 +1,14 @@
 import importlib
 import logging
 import threading
-from typing import cast
+from typing import TYPE_CHECKING, cast
 
 from abilities._ability import Ability
 from abilities._mcp_ability import _MCPAbility
 from services.file_mapper_service import FileMapperService
+
+if TYPE_CHECKING:
+    from controllers.message_processor import MessageProcessor
 
 logger = logging.getLogger(__name__)
 
@@ -93,7 +96,7 @@ class AbilityRegistry:
         return {name for name, a in _get_registry().items() if a.DISCOVERABLE}
 
     @staticmethod
-    def build_tools(mp: "object") -> list[dict[str, object]]:
+    def build_tools(mp: "MessageProcessor | None") -> list[dict[str, object]]:
         """Resolve ``mp.active_tools`` to native tool schemas for this ACT turn.
 
         ``active_tools`` is the live list of tool NAMES available this turn:

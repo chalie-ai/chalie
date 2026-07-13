@@ -173,12 +173,12 @@ def run_mcp_server() -> None:
     """Run the MCP server (blocking). Intended as a WorkerManager service."""
     from models.setting import Setting
 
-    enabled = Setting.get("mcp_server_enabled")
+    enabled = Setting.get_value("mcp_server_enabled")
     if enabled is not None and str(enabled).lower() in ("false", "0", "no"):
         logger.info("[MCP] Server disabled via settings (mcp_server_enabled=false)")
         return
 
-    port_setting = Setting.get("mcp_server_port")
+    port_setting = Setting.get_value("mcp_server_port")
     try:
         port = int(port_setting) if port_setting else _DEFAULT_PORT
     except (ValueError, TypeError):
@@ -198,7 +198,7 @@ def _ensure_mcp_token() -> None:
     from services.wrapper_auth_service import WrapperAuthService
     from models.setting import Setting
 
-    existing = Setting.get("mcp_server_token_wrapper_id")
+    existing = Setting.get_value("mcp_server_token_wrapper_id")
     if existing:
         auth_svc = WrapperAuthService()
         wrapper = auth_svc.get_wrapper(existing)

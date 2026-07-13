@@ -263,7 +263,7 @@ class ProviderDbService:
     # ── Selected Provider ──────────────────────────────────────────
 
     def get_selected_provider(self) -> Optional[Dict[str, object]]:
-        value = Setting.get('selected_provider_id')
+        value = Setting.get_value('selected_provider_id')
         if not value:
             return None
         try:
@@ -284,7 +284,7 @@ class ProviderDbService:
     _KEY_REQUIRING = ('anthropic', 'openai', 'gemini', 'openai_compatible')
 
     def _resolve_vision_provider(self) -> tuple[Optional[Dict[str, object]], str]:
-        value = Setting.get('vision_provider_id')
+        value = Setting.get_value('vision_provider_id')
         if value:
             try:
                 pid = int(value)
@@ -311,7 +311,7 @@ class ProviderDbService:
         """Persist the explicit vision provider id, or clear it when None."""
         with Database.transaction():
             if provider_id is None:
-                Setting.delete('vision_provider_id')
+                Setting.delete_key('vision_provider_id')
             else:
                 Setting.set(
                     'vision_provider_id', str(provider_id), 'int',
@@ -327,7 +327,7 @@ class ProviderDbService:
     # also no supports_vision requirement — any active provider can be pinned.
 
     def _resolve_delegate_provider(self) -> tuple[Optional[Dict[str, object]], str]:
-        value = Setting.get('delegate_provider_id')
+        value = Setting.get_value('delegate_provider_id')
         if value:
             try:
                 pid = int(value)
@@ -358,7 +358,7 @@ class ProviderDbService:
         to the selected (main) provider (see _resolve_delegate_provider)."""
         with Database.transaction():
             if provider_id is None:
-                Setting.delete('delegate_provider_id')
+                Setting.delete_key('delegate_provider_id')
             else:
                 Setting.set(
                     'delegate_provider_id', str(provider_id), 'int',
