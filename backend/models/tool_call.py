@@ -158,6 +158,34 @@ class ToolCall(Model):
             .pluck("result")
         ]
 
+    # Off-turn GC: an orphaned tool call (its anchoring transcript row purged by
+    # retention out from under it) is unreachable — every read joins transcript —
+    # and is hard-deleted once it ages past this window. Still-anchored calls and
+    # young orphans are always kept.
+    ORPHAN_GC_AFTER_DAYS: ClassVar[int] = 14
+
+    @classmethod
+    def decay(cls) -> int:
+        """Off-turn Decayable sweep: hard-delete every tool_calls row older than
+        :attr:`ORPHAN_GC_AFTER_DAYS` whose anchoring ``transcript`` row no longer
+        exists. Retention purges transcript rows out from under the calls that
+        referenced them, leaving dangling ``transcript_id``s no live read can
+        reach (they all join ``transcript``); once safely aged out those orphans
+        are removed — the one sweep that keeps ``tool_calls`` from growing without
+        bound. A still-anchored call is untouched however old, and a young orphan
+        waits out the window. The age cutoff is computed in SQL (``julianday``, UTC
+        ``'now'``) so this model keeps its no-service-import invariant; the window
+        constant binds in as the ``?`` modifier. Single autocommitting DELETE on
+        the bound connection (I6 — ``Database`` owns multi-write transactions).
+        Returns rows deleted (``0`` = ran, nothing orphaned past the window)."""
+        cursor = cls._bound_connection().execute(
+            f"DELETE FROM {cls.get_table()} "
+            "WHERE julianday(created_at) < julianday('now', ?) "
+            "  AND NOT EXISTS (SELECT 1 FROM transcript t WHERE t.id = tool_calls.transcript_id)",
+            (f"-{cls.ORPHAN_GC_AFTER_DAYS} days",),
+        )
+        return cursor.rowcount or 0
+
     @classmethod
     def usage_counts(cls, exclude: Sequence[str] = ()) -> list[dict[str, object]]:
         """Per-tool usage aggregate — ``{tool_name, count, last_used_at}`` for
