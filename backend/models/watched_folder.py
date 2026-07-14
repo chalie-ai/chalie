@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import json
 import secrets
-from typing import ClassVar, Self
+from typing import ClassVar, Self, cast
 
 from models.model import Model
 
@@ -85,7 +85,7 @@ class WatchedFolder(Model):
         for field in ('file_patterns', 'ignore_patterns', 'source_config'):
             if field in d and isinstance(d[field], str):
                 try:
-                    d[field] = json.loads(d[field])  # type: ignore[arg-type]
+                    d[field] = json.loads(cast(str, d[field]))
                 except (json.JSONDecodeError, TypeError):
                     pass
         return d

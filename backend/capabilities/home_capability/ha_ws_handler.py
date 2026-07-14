@@ -15,7 +15,7 @@ import json
 import logging
 import threading
 from collections.abc import Callable
-from typing import cast
+from typing import Protocol, cast
 
 logger = logging.getLogger(__name__)
 
@@ -25,6 +25,12 @@ _RECONNECT_MAX = 60
 #: Signature of the callback the owning capability registers: handed the
 #: entity id and the parsed ``new_state`` dict for every subscribed state change.
 OnHaEvent = Callable[[str, "dict[str, object]"], None]
+
+
+class _WsConn(Protocol):
+    """Minimal live-socket surface :meth:`HaWebSocketHandler._send` writes to."""
+
+    def send(self, payload: str) -> object: ...
 
 
 class HaWebSocketHandler:
@@ -77,9 +83,9 @@ class HaWebSocketHandler:
         self._msg_id += 1
         return self._msg_id
 
-    def _send(self, sock: object, payload: dict[str, object]) -> None:
+    def _send(self, sock: _WsConn, payload: dict[str, object]) -> None:
         """Write one HA command frame to the live socket."""
-        cast("type", sock).send(json.dumps(payload))
+        sock.send(json.dumps(payload))
 
     def _run_loop(self) -> None:
         """Reconnect loop -- runs until stop is signalled."""

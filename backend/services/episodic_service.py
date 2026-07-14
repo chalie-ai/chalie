@@ -25,13 +25,6 @@ from typing import TYPE_CHECKING, cast
 
 import numpy as np
 
-# Hierarchy roll-up clustering stack. Bidirectional dependency: declared in
-# pyproject.toml ("scikit-learn"/"umap-learn"/"scipy"/"numba"/"llvmlite") and
-# consumed only by ``find_super_candidates`` below. UMAP is the only reducer that
-# yields usable density clusters at our embedding scale; sklearn ships HDBSCAN.
-import umap
-from sklearn.cluster import HDBSCAN
-
 from models.episode import Episode
 from models.tool_call import ToolCall
 from services.database import Database
@@ -39,12 +32,18 @@ from services.embedding_utils import pack_embedding
 from services.episodic_constants import (
     EXTRACTION_THRESHOLD,
     EXTRACTION_WINDOW,
+    MAX_EPISODE_LEVEL,
     SALIENCE_NOVELTY_WEIGHT,
     SALIENCE_OPEN_LOOP_WEIGHT,
+    SEED_CLUSTER_KNN_OVERFETCH,
+    SEED_CLUSTER_MAX_MATCHES,
+    SEED_CLUSTER_MIN_SIZE,
+    SEED_CLUSTER_RADIUS,
 )
 from services.time_utils import PARSE_SENTINEL, parse_utc, utc_now
 
 if TYPE_CHECKING:
+    from services.embedding_service import EmbeddingService
     from services.processor_config import ProcessorConfig
 
 logger = logging.getLogger(__name__)
@@ -94,6 +93,18 @@ class EpisodicService:
             if embedding is None:
                 embedding = episode_data.get('embedding')
 
+            raw_level = episode_data.get('level', 0)
+            if isinstance(raw_level, int):
+                level = raw_level
+            else:
+                # A non-int level would silently misclassify hierarchy depth and
+                # mis-gate the consolidation cascade; coerce to leaf and say so.
+                logging.warning(
+                    f"store_episode: non-int level {raw_level!r} coerced to 0 "
+                    f"(channel={episode_data.get('channel')!r})"
+                )
+                level = 0
+
             with Database.transaction():
                 # Creation is a write-relevant event: seed the relevance clock
                 # (last_relevant_at) so absolute decay measures Δt from now.
@@ -102,7 +113,7 @@ class EpisodicService:
                     salience=episode_data['salience'],
                     channel=episode_data['channel'],
                     # Hierarchy depth: 0=leaf, 1=super-episode, 2+=era digest.
-                    level=episode_data.get('level', 0),
+                    level=level,
                     transcript_ids=json.dumps(episode_data.get('transcript_ids', [])),
                     transcript_id_start=episode_data.get('transcript_id_start'),
                     transcript_id_end=episode_data.get('transcript_id_end'),
@@ -121,11 +132,15 @@ class EpisodicService:
 
                 logging.info(f"Stored episode {episode_id} for channel '{episode_data['channel']}'")
 
-                return episode_id
-
         except Exception as e:
             logging.error(f"Failed to store episode: {e}")
             raise
+
+        # Fire consolidation off-thread AFTER the transaction commits so the
+        # seed row is durable before the daemon reads it.
+        self._check_and_consolidate(episode_id, cast(str, episode_data['channel']), level, embedding)
+
+        return episode_id
 
     @staticmethod
     def _store_embedding(episode_id: str, embedding: object) -> None:
@@ -157,7 +172,59 @@ class EpisodicService:
             if embedding is not None:
                 self._store_embedding(episode_id, embedding)
 
-    # ── Off-turn decay (Decayable) ────────────────────────────────────
+    def _check_and_consolidate(self, seed_id: str, channel: str, level: int, embedding: object) -> None:
+        """Fire-on-creation gate: when ``embedding`` is present and the new
+        episode would roll up to a level within ``MAX_EPISODE_LEVEL``, spawn a
+        daemon to run seed-cluster search. Gated by the per-source profile
+        (only ``extract_episodes`` channels consolidate); runs off-thread so the
+        turn never blocks. Never raises."""
+        if embedding is None:
+            return
+        if level + 1 > MAX_EPISODE_LEVEL:
+            return
+        try:
+            # profile_for is inside the try so a malformed channel degrades to a
+            # skipped (logged) consolidation instead of raising out of the caller
+            # — which, on the recursive parent-write path, runs after the DB
+            # transaction has already committed.
+            from services.source_profiles import profile_for
+            if not profile_for(channel).extract_episodes:
+                return
+            blob = pack_embedding(embedding)
+            if blob is None:
+                return
+            threading.Thread(
+                target=self._consolidate_seed, args=(seed_id, channel, level, blob),
+                name=f"consolidate-seed-{channel}", daemon=True,
+            ).start()
+        except Exception as exc:  # noqa: BLE001 — consolidation must never break a turn
+            logger.warning("%s _check_and_consolidate failed (channel=%s): %s",
+                           LOG_PREFIX, channel, exc)
+
+    def _consolidate_seed(self, seed_id: str, channel: str, level: int, blob: bytes) -> None:
+        """Daemon body: find a cluster around the seed, then encode a parent
+        super-episode at ``level + 1``. Mirrors the defensive style of
+        ``_extract_window``; never raises."""
+        try:
+            # Serialize consolidation per channel: hold the lock across cluster
+            # discovery AND the parent write so no other daemon can claim the
+            # same children in the gap (the encode window spans seconds). This
+            # restores the single-writer-per-channel invariant the batch path had
+            # — one tick, one thread — which fire-on-creation daemons would
+            # otherwise break, producing duplicate parents and dangling lineage.
+            with _consolidation_lock(channel):
+                cluster = find_seed_cluster(seed_id, channel, level, blob)
+                if not cluster:
+                    return
+                from services.embedding_service import get_embedding_service
+                emb_svc = get_embedding_service()
+                try:
+                    prior_embeddings = Episode.novelty_comparison_blobs(channel)
+                except Exception:
+                    prior_embeddings = []
+                consolidate_cluster(channel, cluster, level + 1, emb_svc, self, prior_embeddings)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("%s _consolidate_seed failed (channel=%s): %s", LOG_PREFIX, channel, exc)
 
     def decay(self) -> int:
         """Off-turn episodic maintenance (the Decayable contract): tombstone
@@ -754,105 +821,6 @@ def _unpack_blob(blob: bytes) -> list[float]:
     return list(struct.unpack(f'{n}f', blob))
 
 
-def cluster_apex_embeddings(ep_ids: list[str], ep_embs: list[bytes]) -> list[list[str]]:
-    """L2-normalise rows → UMAP reduce to a low-dimensional space →
-    sklearn HDBSCAN. Episodes sharing an HDBSCAN label form a group;
-    the noise label (-1) is dropped so genuine outliers stay leaf apexes
-    (never force-assigned). Only groups of at least
-    ``HDBSCAN_MIN_CLUSTER_SIZE`` survive.
-
-    Shared by the leaf round (level-0 → level-1) and the era round
-    (level-1 → level-2) — both feed the same matrix path. The native
-    blob dimension is read as-is (768 prod / 256 test); UMAP reduces
-    either to ``UMAP_N_COMPONENTS``.
-
-    Returns ID-lists, one per surviving cluster, deterministic (sorted
-    IDs within each list; outer list sorted by first ID). Empty when
-    the input is too small to cluster.
-    """
-    from services.episodic_constants import (
-        HDBSCAN_MIN_CLUSTER_SIZE,
-        UMAP_DISCONNECTION_DISTANCE,
-        UMAP_MIN_DIST,
-        UMAP_N_COMPONENTS,
-        UMAP_N_NEIGHBORS,
-        UMAP_RANDOM_SEED,
-    )
-
-    n = len(ep_ids)
-    # UMAP needs n_neighbors < n_samples; below the cluster floor nothing can form.
-    if n < HDBSCAN_MIN_CLUSTER_SIZE or n < 2:
-        return []
-
-    matrix = np.vstack([
-        np.asarray(_unpack_blob(blob), dtype=np.float32) for blob in ep_embs
-    ])
-    # L2-normalise rows so UMAP's cosine metric sees unit vectors; guard the rare
-    # zero-norm row (division would yield NaN and poison the reducer).
-    norms = np.linalg.norm(matrix, axis=1, keepdims=True)
-    norms[norms == 0.0] = 1.0
-    matrix /= norms
-
-    reducer = umap.UMAP(
-        n_components=UMAP_N_COMPONENTS,
-        metric="cosine",
-        n_neighbors=min(UMAP_N_NEIGHBORS, n - 1),
-        min_dist=UMAP_MIN_DIST,
-        random_state=UMAP_RANDOM_SEED,
-        # Detach genuine off-topic isolates instead of force-embedding them into
-        # the nearest dense region; they then surface as HDBSCAN noise and stay
-        # leaf apexes rather than polluting a topically-pure roll-up.
-        disconnection_distance=UMAP_DISCONNECTION_DISTANCE,
-    )
-    reduced = reducer.fit_transform(matrix)
-
-    labels = HDBSCAN(
-        min_cluster_size=HDBSCAN_MIN_CLUSTER_SIZE,
-        metric="euclidean",
-        copy=True,
-    ).fit_predict(reduced)
-
-    groups: dict[int, list[str]] = {}
-    for label, ep_id in zip(labels, ep_ids):
-        # Any negative label is noise: -1 is HDBSCAN's own outlier flag and -3 is
-        # a UMAP-disconnected isolate. Both stay leaf apexes — never force-grouped.
-        if label < 0:
-            continue
-        groups.setdefault(int(label), []).append(ep_id)
-
-    clusters = sorted(
-        (sorted(ids) for ids in groups.values() if len(ids) >= HDBSCAN_MIN_CLUSTER_SIZE),
-        key=lambda c: c[0],
-    )
-    return clusters
-
-
-def find_super_candidates(channel: str) -> list[list[str]]:
-    """Count trigger: NO-OP (return ``[]``) until the channel holds at
-    least ``APEX_COUNT_TRIGGER`` leaf apexes — a count trigger always
-    eventually fires, unlike the old similarity gate that never did.
-    At the trigger the leaves are density-clustered via UMAP→HDBSCAN;
-    HDBSCAN noise is dropped so outliers stay leaf apexes.
-
-    Returns a list of ID-lists (strings), one per surviving cluster.
-    Empty below the count trigger or when no cluster forms.
-    """
-    from services.episodic_constants import APEX_COUNT_TRIGGER
-
-    ep_ids, ep_embs = Episode.apex_embeddings(channel, level=0)
-
-    if len(ep_ids) < APEX_COUNT_TRIGGER:
-        return []
-
-    clusters = cluster_apex_embeddings(ep_ids, ep_embs)
-    if clusters:
-        logging.info(
-            f"[SUPER_CLUSTER] {len(clusters)} cluster(s) found "
-            f"(sizes={[len(c) for c in clusters]}, channel={channel})"
-        )
-    return clusters
-
-
 def compute_novelty(new_embedding: object, prior_embeddings: list[bytes]) -> float:
     """novelty = 1.0 - max(cosine_sim(new, prior) for prior in
     prior_embeddings). Clamped to [0.0, 1.0]. Returns 1.0 (fully
@@ -883,9 +851,184 @@ def compute_novelty(new_embedding: object, prior_embeddings: list[bytes]) -> flo
                     max_sim = sim
             except Exception:
                 continue
-
         return max(0.0, min(1.0, 1.0 - max_sim))
 
     except Exception as exc:
         logging.warning(f"[NOVELTY] compute_novelty failed: {exc}")
         return 1.0
+
+
+# Per-channel consolidation locks. Fire-on-creation consolidation runs in
+# daemon threads; two near-simultaneous same-channel creations would otherwise
+# race — both discovering the same apex neighbours and both claiming them across
+# the multi-second encode window, leaving duplicate parents and children whose
+# back-pointers disagree with their parent's lineage. Serializing per channel
+# keeps each memory stream's roll-up single-writer while letting distinct
+# channels consolidate concurrently. Created lazily under a guard because
+# threads may request the same channel's lock at once.
+_CONSOLIDATION_LOCKS: dict[str, threading.Lock] = {}
+_CONSOLIDATION_LOCKS_GUARD = threading.Lock()
+
+
+def _consolidation_lock(channel: str) -> threading.Lock:
+    """Return the process-wide lock serializing consolidation for ``channel``."""
+    with _CONSOLIDATION_LOCKS_GUARD:
+        lock = _CONSOLIDATION_LOCKS.get(channel)
+        if lock is None:
+            lock = threading.Lock()
+            _CONSOLIDATION_LOCKS[channel] = lock
+        return lock
+
+
+def find_seed_cluster(
+    seed_id: str, channel: str, level: int, embedding: bytes
+) -> list[str] | None:
+    """Seed-on-creation candidate discovery for super-episode consolidation.
+
+    One new episode seeds a local KNN neighbourhood instead of reclustering the
+    whole apex pool (the old batch HDBSCAN path). We pull the nearest raw
+    KNN hits on the same channel, then filter in Python to apex-only
+    (``consolidated_into IS NULL``), same-level, non-self, and within the
+    cosine-distance radius. If the resulting cluster (seed + qualifying
+    neighbours) meets the minimum-size floor, return the sorted id list;
+    otherwise return ``None`` — the seed stays a lone apex.
+
+    ``vector_distance`` is cosine distance (0.0 = identical, larger = less
+    similar). Neighbours beyond :data:`SEED_CLUSTER_RADIUS` are excluded.
+    DB failures log a warning and return ``None`` — never raise.
+    """
+    try:
+        # The seed must still be apex. A concurrent same-channel consolidation
+        # may have rolled it up (as a neighbour of its own cluster) between this
+        # episode's creation and now; a non-apex seed must not anchor a fresh
+        # cluster, or its back-pointer would be overwritten and the first
+        # parent's lineage left dangling. Neighbours are already apex-filtered
+        # below; the seed is the one member added unconditionally, so it is
+        # checked here. Under the per-channel consolidation lock this check and
+        # the eventual write are atomic, so the seed cannot be rolled up between.
+        seed = Episode.by_id(seed_id)
+        if seed is None or seed.consolidated_into is not None:
+            return None
+        hits = Episode.nearest(embedding, channel, SEED_CLUSTER_KNN_OVERFETCH)
+    except Exception as exc:
+        logger.warning(
+            "[SEED_CLUSTER] seed/KNN lookup failed for seed=%s channel=%s: %s",
+            seed_id, channel, exc,
+        )
+        return None
+
+    neighbours: list[str] = []
+    for hit in hits:
+        # Exclude the seed itself (it will always be nearest to itself).
+        if hit.id == seed_id:
+            continue
+        # Must be apex: not yet rolled up into a parent super-episode.
+        if hit.consolidated_into is not None:
+            continue
+        # Must be at the same hierarchy level as the seed.
+        if hit.level != level:
+            continue
+        # Must carry a vector_distance overlay — sqlite-vec always sets it on
+        # a hit, but guard against a missing value (defensive).
+        vd = hit.vector_distance
+        if vd is None:
+            continue
+        # Cosine-distance cutoff: smaller = more similar; keep <= radius.
+        if float(vd) > SEED_CLUSTER_RADIUS:
+            continue
+        neighbours.append(str(hit.id))
+        if len(neighbours) >= SEED_CLUSTER_MAX_MATCHES:
+            break
+
+    cluster = [seed_id] + neighbours
+    if len(cluster) < SEED_CLUSTER_MIN_SIZE:
+        return None
+    return sorted(cluster)
+
+
+def consolidate_cluster(
+    channel: str,
+    cluster_ids: list[str],
+    level: int,
+    emb_svc: "EmbeddingService",
+    episodic_svc: "EpisodicService",
+    prior_embeddings: list[bytes],
+) -> bool:
+    """Encode + store one parent episode for a cluster. Returns True on write."""
+    from configs.channels import (
+        SuperEpisodeConfig,
+        _collect_transcript_ids,
+        _safe_json_load_object,
+    )
+    from services.episodic_constants import SEED_CLUSTER_MIN_SIZE
+    from controllers.message_processor import MessageProcessor
+
+    try:
+        sources = [
+            ep.to_dict() for ep in (
+                Episode.by_id(eid) for eid in cluster_ids
+            )
+            if ep
+        ]
+        if len(sources) < SEED_CLUSTER_MIN_SIZE:
+            return False
+
+        all_t_ids = _collect_transcript_ids(cast(list[object], sources))
+
+        config = SuperEpisodeConfig(channel, cast(list[object], sources))
+        response = MessageProcessor.process(config).result()
+
+        if not response:
+            logger.warning(
+                f"{LOG_PREFIX} SuperEpisodeEncoder returned empty response "
+                f"for cluster {cluster_ids}"
+            )
+            return False
+
+        super_ep = _safe_json_load_object(response)
+        if not super_ep or not super_ep.get("gist"):
+            logger.warning(
+                f"{LOG_PREFIX} SuperEpisodeEncoder returned unparseable/empty "
+                f"gist for cluster {cluster_ids}"
+            )
+            return False
+
+        super_ep["channel"] = channel
+        super_ep["level"] = level
+        unique_t_ids = sorted(all_t_ids)
+        super_ep["transcript_ids"] = unique_t_ids
+        super_ep["transcript_id_start"] = (
+            min(unique_t_ids) if unique_t_ids else None
+        )
+        super_ep["transcript_id_end"] = (
+            max(unique_t_ids) if unique_t_ids else None
+        )
+        super_ep["consolidated_from"] = [ep["id"] for ep in sources]
+
+        gist = cast(str, super_ep["gist"])
+        embedding = emb_svc.generate_embedding(gist)
+        novelty = (
+            compute_novelty(embedding, prior_embeddings) if embedding else 1.0
+        )
+        super_ep["salience"] = compute_salience(
+            has_open_loop=bool(super_ep.get("has_open_loop", False)),
+            novelty=novelty,
+        )
+        super_ep.pop("has_open_loop", None)
+
+        new_id = episodic_svc.store_episode(super_ep, embedding=embedding)
+        for src_id in cluster_ids:
+            Episode.set_consolidated_into(src_id, new_id)
+
+        logger.info(
+            f"{LOG_PREFIX} level-{level} episode {new_id} created from cluster "
+            f"{cluster_ids} (channel={channel})"
+        )
+        return True
+
+    except Exception as exc:
+        logger.warning(
+            f"{LOG_PREFIX} level-{level} consolidation failed for cluster "
+            f"{cluster_ids} (channel={channel}): {exc}"
+        )
+        return False

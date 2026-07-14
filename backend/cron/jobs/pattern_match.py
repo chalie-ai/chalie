@@ -50,7 +50,7 @@ class PatternMatchJob(IdleGatedJob):
         # actually reads — user-behaviour channels, no compaction rows. Counting
         # background-loop rows (dmn writes many) would advance the delta past the
         # _MIN_DELTA trigger and fire spurious pattern passes the load discards.
-        from services.transcript_service import Transcript  # noqa: PLC0415
+        from models.transcript import Transcript  # noqa: PLC0415
         latest = Transcript.latest_id([Channel.USER.value]) or 0
 
         delta = latest - cursor

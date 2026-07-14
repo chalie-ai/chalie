@@ -68,6 +68,12 @@
   border: 1px solid var(--border);
   border-radius: 18px 18px 6px 18px;
   padding: 11px 15px;
+  // The clamped-text fade (.user-text--clamped::after) resolves against
+  // --row-fade-bg. --bg-surface-2 is translucent, so publish the bubble's
+  // actual composited (opaque) appearance here instead of letting the fade
+  // fall back to the page background — otherwise the fade barely occludes
+  // the text and leaves a visible seam against the bubble.
+  --row-fade-bg: var(--user-bubble-fade);
 }
 
 .user-text {
@@ -83,8 +89,10 @@
 
 // Collapsed long message: clamp to 5 lines with a soft fade hinting at more text
 // below. The fade resolves to --row-fade-bg, a custom property the hosting
-// surface publishes (feed vs. panel) so it matches whichever backdrop the row
-// sits on, in both the dark and light themes.
+// surface publishes (bubble / feed / panel) so it matches whichever backdrop
+// the row sits on, in both the dark and light themes. .user-message publishes
+// its own opaque composited colour (see --user-bubble-fade in _tokens.scss)
+// since --bg-surface-2 itself is translucent and would barely occlude the text.
 .user-text--clamped {
   display: -webkit-box;
   -webkit-line-clamp: 5;
@@ -243,6 +251,26 @@
   margin-left: auto;
 }
 
+// Mobile: the trace-pill + thread-pill can't share one row with the timestamp
+// and action buttons without spilling. Let the row wrap, but reorder so the
+// timestamp + acts stay coherent on line 1 (acts keeps its right-aligned
+// margin-left:auto there) instead of natural DOM order stranding the acts
+// alone on a trailing line after the pills. Pills fall to line 2 together.
+@media (max-width: 640px) {
+  .speech-form__meta {
+    flex-wrap: wrap;
+  }
+
+  .speech-form__acts {
+    order: 2;
+  }
+
+  .trace-pill,
+  .thread-pill {
+    order: 3;
+  }
+}
+
 // Footer action buttons (read-aloud, reply, copy). 26×26 ghost buttons that take
 // a per-action accent on hover.
 .speech-form__act-btn {
@@ -292,6 +320,8 @@
   border: 1px solid var(--border);
   border-radius: var(--radius-full);
   cursor: pointer;
+  white-space: nowrap;
+  flex-shrink: 0;
   transition: border-color var(--duration-fast), color var(--duration-fast), background var(--duration-fast);
 }
 

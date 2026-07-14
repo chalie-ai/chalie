@@ -144,12 +144,18 @@ class DispatchService:
 
     def canonical_params(self, tool_name: str, params: dict[str, object]) -> dict[str, object]:
         """The params ``run()`` will actually receive for *tool_name* — sanitised,
-        ``act_summary``-stripped, and key-healed — computed WITHOUT executing or
-        recording anything. The runaway guard keys its per-tool tally on this, so a
-        model cycling synonym keys (``city``/``loc``/``place``/``region`` →
-        ``location``) that all heal to one identical executed call collapses to a
-        single key and cannot evade the loop backstop."""
+        ``act_summary``- and ``async``-stripped, and key-healed — computed WITHOUT
+        executing or recording anything. The runaway guard keys its per-tool tally
+        on this, so neither cycling synonym keys (``city``/``loc``/``place``/
+        ``region`` → ``location``) NOR toggling the framework ``async`` flag around
+        otherwise-identical params — both of which collapse to one executed call —
+        can evade the loop backstop."""
         params, _act_summary, _ability = self._prepare(tool_name, params)
+        # ``async`` is a framework control flag ``_execute`` pops before run() (like
+        # ``act_summary``, already lifted by ``_prepare``): it decides sync-vs-async
+        # dispatch, never what the tool does, so it is not part of the executed
+        # identity the guard tallies on.
+        params.pop("async", None)
         return params
 
     def _dispatch_bound(

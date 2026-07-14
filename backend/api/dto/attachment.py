@@ -8,7 +8,7 @@ from .base import DTO
 class Attachment(DTO):
     """A document linked to a transcript row, with its inline-preview URL."""
 
-    doc_id: int
+    doc_id: str
     filename: str
     mime_type: str
     is_image: bool

@@ -66,7 +66,6 @@ if TYPE_CHECKING:
 
     class _SuperEpisodeConfig(Protocol):
         _sources: list[object]
-        _spans: object
 
 logger = logging.getLogger(__name__)
 
@@ -590,18 +589,17 @@ class PromptService:
 
     def _super_episode_prompt(self) -> str:
         """``SuperEpisodeConfig.get_user_prompt``: the cluster's source-episode
-        gists and the raw transcript spans covering them — both captured on the
-        config at construction (``_sources`` / ``_spans``, per-cluster frozen
-        data, not mp-reachable), same pattern as fact-extraction's payload."""
+        gists alone (``_sources``, per-cluster frozen data captured on the config
+        at construction, not mp-reachable — same pattern as fact-extraction's
+        payload). Every level distils its child gists; raw transcript turns are
+        never re-hydrated into the prompt, so a super-episode always contracts
+        the level beneath it."""
         config = cast("_SuperEpisodeConfig", self.mp.config)
         src = "\n\n".join(
             f"[{cast('dict[str, object]', e)['id']}] {cast('dict[str, object]', e)['gist']}"
             for e in config._sources
         )
-        return (
-            f"Source episodes:\n\n{src}\n\n"
-            f"Raw transcript spans covering these episodes:\n\n{config._spans}"
-        )
+        return f"Source episodes:\n\n{src}"
 
     # ── EpisodeEncoderConfig (channel="episode_encoder") ─────────────────────
 

@@ -30,6 +30,7 @@ from typing import cast
 
 import pytest
 
+from abilities._result import ToolResult
 from abilities.schedule import ScheduleAbility
 from configs.channels.scheduled import ScheduledConfig
 from controllers.message_processor import MessageProcessor
@@ -81,8 +82,8 @@ def _count(db: sqlite3.Connection) -> int:
     return cast(int, db.execute("SELECT COUNT(*) FROM scheduled_items").fetchone()[0])
 
 
-def _record_of(tr: object) -> dict[str, object]:
-    return cast("dict[str, object]", cast("dict[str, object]", tr.body)["record"])  # type: ignore[attr-defined]
+def _record_of(tr: ToolResult) -> dict[str, object]:
+    return cast("dict[str, object]", cast("dict[str, object]", tr.body)["record"])
 
 
 # ── Create persists the local cron fields + UTC start_at verbatim ─────────────

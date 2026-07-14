@@ -24,7 +24,6 @@ from configs.channels.skill_suggestion import SkillSuggestionConfig
 from configs.channels.super_episode import (
     SuperEpisodeConfig,
     _collect_transcript_ids,
-    _fetch_transcript_spans,
     _safe_json_load_object,
 )
 from configs.channels.thread_gist import ThreadGistConfig
@@ -56,7 +55,6 @@ __all__ = [
     "WebBrowseConfig",
     "WebSearchConfig",
     "_collect_transcript_ids",
-    "_fetch_transcript_spans",
     "_safe_json_load_object",
     "parse_fact_ops",
 ]

@@ -419,7 +419,7 @@ class McpClientService:
             {
                 "tool_name": r["tool_name"],
                 "summary": r["summary"],
-                "schema": json.loads(r["raw_schema"]) if r["raw_schema"] else {},
+                "schema": json.loads(cast(str, r["raw_schema"])) if r["raw_schema"] else {},
             }
             for r in rows
         ]
@@ -451,13 +451,17 @@ class McpClientService:
         Used by find_tools to gate discoverability and by the /discoverable
         API endpoint.  Disabled or offline servers' tools never appear.
         """
-        online_ids = {
-            s.id  # type: ignore[misc]
-            for s in McpClientServer.filter("enabled", 1).filter("status", _STATUS_ONLINE).get()
-        }
+        online_ids = cast(
+            "list[str]",
+            [
+                s.id
+                for s in McpClientServer.filter("enabled", 1).filter("status", _STATUS_ONLINE).get()
+                if s.id is not None
+            ],
+        )
         if not online_ids:
             return []
-        return McpTool.filter_in("server_id", online_ids).pluck("tool_name")
+        return cast("list[str]", McpTool.filter_in("server_id", online_ids).pluck("tool_name"))
 
     def get_online_mcp_tools_index(self) -> list[tuple[str, str]]:
         """Return (call_name, display_name) pairs for enabled+online tools.
@@ -471,7 +475,7 @@ class McpClientService:
         server_rows = McpClientServer.filter("enabled", 1).filter("status", _STATUS_ONLINE).get()
         if not server_rows:
             return []
-        server_name_by_id = {s.id: s.name for s in server_rows}  # type: ignore[misc]
+        server_name_by_id = {s.id: s.name for s in server_rows}
         all_rows = McpTool.all().get()
         index: list[tuple[str, str]] = []
         for t in all_rows:
@@ -572,11 +576,13 @@ class McpClientService:
         are caught and logged; the loop continues to the next server.
         """
         servers = McpClientServer.filter("enabled", 1).get()
-        server_ids = [(s.id, s.name) for s in servers]  # type: ignore[misc]
+        server_ids = [(s.id, s.name) for s in servers]
         logger.info(
             "%s Heartbeat — pinging %d enabled server(s)", _LOG_PREFIX, len(server_ids)
         )
         for server_id, name in server_ids:
+            if server_id is None:
+                continue
             try:
                 self.ping_and_sync(server_id)
             except Exception as exc:
@@ -627,10 +633,10 @@ class McpClientService:
 
             server_name = cast(str, server["name"])
             prefix = f"_mcp_{_sanitize_name(server_name)}_"
-            tool_names = [r["tool_name"] for r in rows]
+            tool_names = [cast(str, r["tool_name"]) for r in rows]
             texts = []
             for r in rows:
-                tool_name = r["tool_name"]
+                tool_name = cast(str, r["tool_name"])
                 display = tool_name[len(prefix):] if tool_name.startswith(prefix) else tool_name
                 display_words = display.replace("_", " ")
                 summary = r["summary"] or ""
@@ -688,7 +694,7 @@ class McpClientService:
         except json.JSONDecodeError:
             headers = {}
         return {
-            "id": server.id,  # type: ignore[misc]
+            "id": server.id,
             "name": server.name,
             "host": server.host,
             "headers": headers,

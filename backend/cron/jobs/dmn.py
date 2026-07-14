@@ -62,7 +62,7 @@ class DmnJob(IdleGatedJob):
         message, means we already reflected on this idle session — wait for the
         user to speak again.
         """
-        from services.transcript_service import Transcript  # noqa: PLC0415
+        from models.transcript import Transcript  # noqa: PLC0415
 
         last_fired = self._get_last_fired().load()
         if last_fired is None:

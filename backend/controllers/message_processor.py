@@ -304,8 +304,9 @@ class MessageProcessor:
             raise _TurnCancelled()
         tool_calls = response.tool_calls
         if not tool_calls:
-            self._store(response.text)
-            return self._end(response.text)
+            formatted = self._store(response.text)
+            self._end(response.text)
+            return formatted
         self._guard_runaway(response.text, tool_calls)
         if response.text:
             self._store(response.text)

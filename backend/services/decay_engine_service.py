@@ -16,6 +16,7 @@ from services.discovery_service import DiscoveryService
 from services.episodic_service import EpisodicService
 from services.fact_service import FactService
 from services.misc_service import MiscService
+from services.tool_call_gc_service import ToolCallGcService
 
 logger = logging.getLogger(__name__)
 
@@ -30,10 +31,14 @@ class DecayEngineService:
             .register(FactService())
             .register(DiscoveryService())
             .register(MiscService())
-            # Transcript retention sweep deferred: its model GC was cut in the
-            # spine rewrite and no unlinked-GC method exists on models.transcript
-            # yet, so there is nothing to run — re-register once that lands.
-            # Per-kind data_graph verticals register here as they land too (E1+).
+            # GC the orphaned tool_calls that retention leaves dangling (their
+            # transcript row purged out from under them) once they age out.
+            .register(ToolCallGcService())
+            # Transcript retention sweep itself still deferred: the transcript
+            # model's own GC was cut in the spine rewrite and no unlinked-GC
+            # method exists on models.transcript yet — re-register once that lands
+            # (the sweep above only reaps the tool_calls it orphans, not the
+            # transcript rows). Per-kind data_graph verticals register here too (E1+).
         )
         logger.info("[DECAY ENGINE] Initialized")
 

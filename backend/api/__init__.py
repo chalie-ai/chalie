@@ -118,7 +118,7 @@ def _deployment_origins() -> list[str]:
     persists a domain change and restarts, so the new policy is read on next boot.
     """
     try:
-        domain = (Setting.get(Setting.DEPLOYMENT_DOMAIN) or "").strip()
+        domain = (Setting.get_value(Setting.DEPLOYMENT_DOMAIN) or "").strip()
     except Exception as exc:
         logger.warning("[REST API] deployment_domain unreadable; CORS limited to same-origin: %s", exc)
         return []

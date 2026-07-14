@@ -82,8 +82,9 @@ class Websocket:
         if not targets:
             return
         payload_dict = json.loads(instance.to_json())
-        if getattr(instance, "turn_id", None) is not None:
-            payload_dict.setdefault("turn_id", instance.turn_id)
+        turn_id = getattr(instance, "turn_id", None)
+        if turn_id is not None:
+            payload_dict.setdefault("turn_id", turn_id)
             type_val = getattr(instance, "type", None)
             if type_val is not None:
                 payload_dict.setdefault("type", type_val)

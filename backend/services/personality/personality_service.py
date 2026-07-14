@@ -61,7 +61,7 @@ class PersonalityService:
 
     def _read_tuple(self) -> tuple[int, int, int, int, int]:
         try:
-            raw = Setting.get('personality')
+            raw = Setting.get_value('personality')
             if raw:
                 parsed = json.loads(raw)
                 if isinstance(parsed, list) and len(parsed) == 5:

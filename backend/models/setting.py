@@ -2,11 +2,12 @@
 vault-sealed.
 
 Active-record row-model (Rule 5 / §4.1). ``key`` is the natural identifier
-callers reach through (``get``/``set``/``delete`` take a ``key``, not the
-``id`` PK), so — like :class:`~models.thread_gist.ThreadGist` — the read/write
-verbs are bespoke ``@classmethod``\\ s rather than the base's id-centric
-``get``/``save``/``delete``, ported verbatim from the dissolved
-``SettingsService`` (owner ruling: settings need no service).
+callers reach through (``get_value``/``set``/``delete_key`` take a ``key``, not
+the ``id`` PK), so — like :class:`~models.thread_gist.ThreadGist` and its
+``for_turn`` — the read/write verbs are bespoke, distinctly-named
+``@classmethod``\\ s rather than shadowing the base's id-centric
+``get``/``save``/``delete`` (which would violate LSP), ported verbatim from the
+dissolved ``SettingsService`` (owner ruling: settings need no service).
 
 Sensitive settings (``is_sensitive = 1``) are sealed through the vault
 (AES-256-GCM) as a base64 blob in ``encrypted_value``; non-sensitive settings
@@ -14,7 +15,7 @@ are plain text in ``value``. This is the one owner-sanctioned model that
 imports :mod:`services.vault_service` directly (mirrors the ``Database``/
 ``FileMapperService`` carve-out on :class:`~models.skill.Skill`) — a locked
 vault must fail exactly as loudly here as it did through the service:
-:meth:`get`/:meth:`set` propagate
+:meth:`get_value`/:meth:`set` propagate
 :exc:`~services.vault_service.VaultLockedError` unchanged.
 
 ``set``'s check-then-write (existing row? sensitive?) is a genuine multi-step
@@ -70,7 +71,7 @@ class Setting(Model):
     @classmethod
     def get_bool(cls, key: str) -> bool:
         """Read a boolean setting — True only for the stored literal ``'true'``."""
-        return cls.get(key) == cls._BOOL_TRUE
+        return cls.get_value(key) == cls._BOOL_TRUE
 
     @classmethod
     def set_bool(cls, key: str, value: bool) -> None:
@@ -78,7 +79,7 @@ class Setting(Model):
         cls.set(key, cls._BOOL_TRUE if value else cls._BOOL_FALSE, "boolean")
 
     @classmethod
-    def get(cls, key: str) -> str | None:  # type: ignore[override]
+    def get_value(cls, key: str) -> str | None:
         """Sensitive settings are decrypted via the VaultService (AES-256-GCM).
         The vault must be unlocked before sensitive settings can be read.
 
@@ -142,7 +143,7 @@ class Setting(Model):
         return value
 
     @classmethod
-    def delete(cls, key: str) -> bool:  # type: ignore[override]
+    def delete_key(cls, key: str) -> bool:
         with Database.transaction():
             cls.filter("key", key).delete()
         return True
@@ -151,7 +152,7 @@ class Setting(Model):
     def get_api_key_or_generate(cls) -> str:
         """Generates and stores a new API key in the database if one does not already exist."""
         # Try to get existing key
-        existing = cls.get('api_key')
+        existing = cls.get_value('api_key')
         if existing:
             logger.info("[Setting] Using existing API key from database")
             return existing

@@ -90,7 +90,7 @@ class FolderWatcherService:
         folder_id = folder.id
 
         logger.info(f"[WATCHER] Created watched folder '{real_path}' (id={folder_id})")
-        return cast(Dict[str, object], folder.to_dict())
+        return folder.to_dict()
 
     def get_folder(self, folder_id: str) -> Optional[Dict[str, object]]:
         """Retrieve a single watched folder record by its ID."""

@@ -59,7 +59,7 @@ def _get_auth_service() -> "WrapperAuthService":
 
 
 def _get_stored_token() -> str | None:
-    return Setting.get("mcp_server_token")
+    return Setting.get_value("mcp_server_token")
 
 
 def _short_id() -> str:
@@ -69,9 +69,9 @@ def _short_id() -> str:
 
 def _settings_dto(auth_svc: "WrapperAuthService") -> McpServerSettings:
     """Build the read DTO from the settings keys, preserving the truthiness/port parsing."""
-    enabled = Setting.get("mcp_server_enabled")
-    port = Setting.get("mcp_server_port") or str(_DEFAULT_PORT)
-    wrapper_id = Setting.get("mcp_server_token_wrapper_id")
+    enabled = Setting.get_value("mcp_server_enabled")
+    port = Setting.get_value("mcp_server_port") or str(_DEFAULT_PORT)
+    wrapper_id = Setting.get_value("mcp_server_token_wrapper_id")
 
     token_display = None
     if wrapper_id and auth_svc.get_wrapper(wrapper_id):
@@ -131,7 +131,7 @@ class RegenerateTokenResource(Resource):
         try:
             auth_svc = _get_auth_service()
 
-            old_wrapper_id = Setting.get("mcp_server_token_wrapper_id")
+            old_wrapper_id = Setting.get_value("mcp_server_token_wrapper_id")
             if old_wrapper_id:
                 auth_svc.revoke(old_wrapper_id)
 

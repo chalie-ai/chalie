@@ -12,7 +12,6 @@ fires each independently as its cron matches.
 
 from cron.base import IdleGatedJob, ScheduledJob, ScheduledJobProtocol
 from cron.jobs.capability_sync import CapabilitySyncJob
-from cron.jobs.consolidate import ConsolidateJob
 from cron.jobs.decay import DecayJob
 from cron.jobs.discovery import DiscoveryJob
 from cron.jobs.dmn import DmnJob
@@ -30,7 +29,6 @@ from cron.jobs.synthesis import SynthesisJob
 # independently regardless of position.
 JOBS: tuple[ScheduledJob, ...] = (
     ScheduledItemsDispatcherJob(),
-    ConsolidateJob(),
     FactExtractionJob(),
     DecayJob(),
     PatternMatchJob(),

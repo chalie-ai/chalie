@@ -183,10 +183,8 @@ class TestStoreEpisodeNewColumns:
 #   test_super_episode_has_merged_transcript_range
 #
 # Rationale: the inline >50% overlap → super-episode path inside store_episode()
-# was removed.  Super-episodes are now triggered by SubconsciousWorker step 1,
-# which iterates channels with unconsolidated rows and runs
-# SuperEpisodeEncoderProcessor.send() per channel (driven by
-# find_super_candidates in episodic_service).  Coverage lives in
+# was removed.  Super-episodes are now triggered by seed-on-creation
+# consolidation via find_seed_cluster() in episodic_service. Coverage lives in
 # test_super_episode_pipeline.py.
 
 class TestStoreEpisodeOverlap:

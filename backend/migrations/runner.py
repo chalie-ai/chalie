@@ -55,6 +55,7 @@ _STEPS: tuple[tuple[str, str], ...] = (
     ("compactions-table-migration-v1", "migrations.migration_002_compactions_table"),
     ("tool-calls-drop-invoked-by-v1", "migrations.migration_011_drop_tool_calls_invoked_by"),
     ("tool-calls-drop-ephemeral-v1", "migrations.migration_012_drop_tool_calls_ephemeral"),
+    ("tool-calls-id-primary-key-v1", "migrations.migration_014_tool_calls_id_primary_key"),
     ("transcript-settled-backfill-v1", "migrations.migration_006_transcript_settled"),
     ("episodes-fts-rebuild-v1", "migrations.migration_013_rebuild_episodes_fts"),
     ("scheduled-items-cron-wipe-v1", "migrations.migration_007_scheduler_cron"),
