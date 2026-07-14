@@ -42,10 +42,34 @@ NOVELTY_RECENT_LIMIT = 100
 
 # Number of top-activation apex episodes in the novelty comparison set.
 NOVELTY_ACTIVATION_LIMIT = 100
-
 # Cycle-safe depth guard for apex traversal via consolidated_into back-pointers.
 APEX_TRAVERSAL_MAX_DEPTH = 20
 
+# ── Seed-on-creation clustering ────────────────────────────────────────────
+# One new episode seeds a local KNN neighbourhood instead of reclustering the
+# whole apex pool. See find_seed_cluster() in episodic_service.py for the full
+# candidate-discovery primitive.
+
+# Top-K nearest apex neighbours a seed may pull into its cluster.
+SEED_CLUSTER_MAX_MATCHES = 25
+
+# Minimum members (seed + qualifying neighbours) required to form a cluster;
+# below this the seed stays a lone apex. Same floor role as HDBSCAN_MIN_CLUSTER_SIZE.
+SEED_CLUSTER_MIN_SIZE = 10
+
+# Cosine-distance cutoff (vector_distance <=) for neighbour inclusion. 0.0 ==
+# identical, 1.0 == maximally dissimilar (orthogonal). Start wide/lenient; this
+# is a PROVISIONAL value to be calibrated against live embeddings — do NOT use
+# it as a hard semantic boundary without empirical validation.
+SEED_CLUSTER_RADIUS = 0.45
+
+# Raw KNN hits to request from Episode.nearest before filtering. sqlite-vec
+# applies the `k` limit BEFORE the JOIN/row filters, so requesting exactly 25
+# would return the 25 nearest rows OVERALL (including non-apex rows, other
+# levels, and the seed itself), then filtering to apex+same-level could leave
+# far fewer than 25 — a silent under-count. Over-fetch then filter in Python
+# to guarantee we don't drop below SEED_CLUSTER_MAX_MATCHES qualifying neighbours.
+SEED_CLUSTER_KNN_OVERFETCH = 200
 # ── Window extraction (count-triggered episode encoding) ───────────────────────
 # Turn-end fires episode extraction once a channel accumulates EXTRACTION_THRESHOLD
 # transcript rows past its episode watermark. The encoder then reads the latest

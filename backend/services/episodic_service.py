@@ -41,6 +41,10 @@ from services.episodic_constants import (
     EXTRACTION_WINDOW,
     SALIENCE_NOVELTY_WEIGHT,
     SALIENCE_OPEN_LOOP_WEIGHT,
+    SEED_CLUSTER_KNN_OVERFETCH,
+    SEED_CLUSTER_MAX_MATCHES,
+    SEED_CLUSTER_MIN_SIZE,
+    SEED_CLUSTER_RADIUS,
 )
 from services.time_utils import PARSE_SENTINEL, parse_utc, utc_now
 
@@ -883,9 +887,66 @@ def compute_novelty(new_embedding: object, prior_embeddings: list[bytes]) -> flo
                     max_sim = sim
             except Exception:
                 continue
-
         return max(0.0, min(1.0, 1.0 - max_sim))
 
     except Exception as exc:
         logging.warning(f"[NOVELTY] compute_novelty failed: {exc}")
         return 1.0
+
+
+def find_seed_cluster(
+    seed_id: str, channel: str, level: int, embedding: bytes
+) -> list[str] | None:
+    """Seed-on-creation candidate discovery for super-episode consolidation.
+
+    One new episode seeds a local KNN neighbourhood instead of reclustering the
+    whole apex pool (the old batch HDBSCAN path). We pull the nearest raw
+    KNN hits on the same channel, then filter in Python to apex-only
+    (``consolidated_into IS NULL``), same-level, non-self, and within the
+    cosine-distance radius. If the resulting cluster (seed + qualifying
+    neighbours) meets the minimum-size floor, return the sorted id list;
+    otherwise return ``None`` — the seed stays a lone apex.
+
+    ``vector_distance`` is cosine distance (0.0 = identical, larger = less
+    similar). Neighbours beyond :data:`SEED_CLUSTER_RADIUS` are excluded.
+
+    DB failures log a warning and return ``None`` — never raise. This mirrors
+    the defensive style of :func:`find_super_candidates`.
+    """
+    try:
+        hits = Episode.nearest(embedding, channel, SEED_CLUSTER_KNN_OVERFETCH)
+    except Exception as exc:
+        logger.warning(
+            "[SEED_CLUSTER] KNN query failed for seed=%s channel=%s: %s",
+            seed_id, channel, exc,
+        )
+        return None
+
+    neighbours: list[str] = []
+    for hit in hits:
+        # Exclude the seed itself (it will always be nearest to itself).
+        if hit.id == seed_id:
+            continue
+        # Must be apex: not yet rolled up into a parent super-episode.
+        if hit.consolidated_into is not None:
+            continue
+        # Must be at the same hierarchy level as the seed.
+        if hit.level != level:
+            continue
+        # Must carry a vector_distance overlay — sqlite-vec always sets it on
+        # a hit, but guard against a missing value (defensive).
+        vd = hit.vector_distance
+        if vd is None:
+            continue
+        # Cosine-distance cutoff: smaller = more similar; keep <= radius.
+        if float(vd) > SEED_CLUSTER_RADIUS:
+            continue
+        neighbours.append(str(hit.id))
+        if len(neighbours) >= SEED_CLUSTER_MAX_MATCHES:
+            break
+
+    cluster = [seed_id] + neighbours
+    if len(cluster) < SEED_CLUSTER_MIN_SIZE:
+        return None
+    return sorted(cluster)
+
