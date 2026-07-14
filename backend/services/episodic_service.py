@@ -39,6 +39,7 @@ from services.embedding_utils import pack_embedding
 from services.episodic_constants import (
     EXTRACTION_THRESHOLD,
     EXTRACTION_WINDOW,
+    MAX_EPISODE_LEVEL,
     SALIENCE_NOVELTY_WEIGHT,
     SALIENCE_OPEN_LOOP_WEIGHT,
     SEED_CLUSTER_KNN_OVERFETCH,
@@ -49,6 +50,7 @@ from services.episodic_constants import (
 from services.time_utils import PARSE_SENTINEL, parse_utc, utc_now
 
 if TYPE_CHECKING:
+    from services.embedding_service import EmbeddingService
     from services.processor_config import ProcessorConfig
 
 logger = logging.getLogger(__name__)
@@ -98,6 +100,18 @@ class EpisodicService:
             if embedding is None:
                 embedding = episode_data.get('embedding')
 
+            raw_level = episode_data.get('level', 0)
+            if isinstance(raw_level, int):
+                level = raw_level
+            else:
+                # A non-int level would silently misclassify hierarchy depth and
+                # mis-gate the consolidation cascade; coerce to leaf and say so.
+                logging.warning(
+                    f"store_episode: non-int level {raw_level!r} coerced to 0 "
+                    f"(channel={episode_data.get('channel')!r})"
+                )
+                level = 0
+
             with Database.transaction():
                 # Creation is a write-relevant event: seed the relevance clock
                 # (last_relevant_at) so absolute decay measures Δt from now.
@@ -106,7 +120,7 @@ class EpisodicService:
                     salience=episode_data['salience'],
                     channel=episode_data['channel'],
                     # Hierarchy depth: 0=leaf, 1=super-episode, 2+=era digest.
-                    level=episode_data.get('level', 0),
+                    level=level,
                     transcript_ids=json.dumps(episode_data.get('transcript_ids', [])),
                     transcript_id_start=episode_data.get('transcript_id_start'),
                     transcript_id_end=episode_data.get('transcript_id_end'),
@@ -125,11 +139,15 @@ class EpisodicService:
 
                 logging.info(f"Stored episode {episode_id} for channel '{episode_data['channel']}'")
 
-                return episode_id
-
         except Exception as e:
             logging.error(f"Failed to store episode: {e}")
             raise
+
+        # Fire consolidation off-thread AFTER the transaction commits so the
+        # seed row is durable before the daemon reads it.
+        self._check_and_consolidate(episode_id, cast(str, episode_data['channel']), level, embedding)
+
+        return episode_id
 
     @staticmethod
     def _store_embedding(episode_id: str, embedding: object) -> None:
@@ -161,7 +179,58 @@ class EpisodicService:
             if embedding is not None:
                 self._store_embedding(episode_id, embedding)
 
-    # ── Off-turn decay (Decayable) ────────────────────────────────────
+    def _check_and_consolidate(self, seed_id: str, channel: str, level: int, embedding: object) -> None:
+        """Fire-on-creation gate: when ``embedding`` is present and the new
+        episode would roll up to a level within ``MAX_EPISODE_LEVEL``, spawn a
+        daemon to run seed-cluster search. Gated by the per-source profile
+        (only ``extract_episodes`` channels consolidate); runs off-thread so the
+        turn never blocks. Never raises."""
+        if embedding is None:
+            return
+        if level + 1 > MAX_EPISODE_LEVEL:
+            return
+        try:
+            # profile_for is inside the try so a malformed channel degrades to a
+            # skipped (logged) consolidation instead of raising out of the caller
+            # — which, on the recursive parent-write path, runs after the DB
+            # transaction has already committed.
+            from services.source_profiles import profile_for
+            if not profile_for(channel).extract_episodes:
+                return
+            blob = pack_embedding(embedding)
+            if blob is None:
+                return
+            threading.Thread(
+                target=self._consolidate_seed, args=(seed_id, channel, level, blob), daemon=True
+            ).start()
+        except Exception as exc:  # noqa: BLE001 — consolidation must never break a turn
+            logger.warning("%s _check_and_consolidate failed (channel=%s): %s",
+                           LOG_PREFIX, channel, exc)
+
+    def _consolidate_seed(self, seed_id: str, channel: str, level: int, blob: bytes) -> None:
+        """Daemon body: find a cluster around the seed, then encode a parent
+        super-episode at ``level + 1``. Mirrors the defensive style of
+        ``_extract_window``; never raises."""
+        try:
+            # Serialize consolidation per channel: hold the lock across cluster
+            # discovery AND the parent write so no other daemon can claim the
+            # same children in the gap (the encode window spans seconds). This
+            # restores the single-writer-per-channel invariant the batch path had
+            # — one tick, one thread — which fire-on-creation daemons would
+            # otherwise break, producing duplicate parents and dangling lineage.
+            with _consolidation_lock(channel):
+                cluster = find_seed_cluster(seed_id, channel, level, blob)
+                if not cluster:
+                    return
+                from services.embedding_service import get_embedding_service
+                emb_svc = get_embedding_service()
+                try:
+                    prior_embeddings = Episode.novelty_comparison_blobs(channel)
+                except Exception:
+                    prior_embeddings = []
+                consolidate_cluster(channel, cluster, level + 1, emb_svc, self, prior_embeddings)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("%s _consolidate_seed failed (channel=%s): %s", LOG_PREFIX, channel, exc)
 
     def decay(self) -> int:
         """Off-turn episodic maintenance (the Decayable contract): tombstone
@@ -894,6 +963,28 @@ def compute_novelty(new_embedding: object, prior_embeddings: list[bytes]) -> flo
         return 1.0
 
 
+# Per-channel consolidation locks. Fire-on-creation consolidation runs in
+# daemon threads; two near-simultaneous same-channel creations would otherwise
+# race — both discovering the same apex neighbours and both claiming them across
+# the multi-second encode window, leaving duplicate parents and children whose
+# back-pointers disagree with their parent's lineage. Serializing per channel
+# keeps each memory stream's roll-up single-writer while letting distinct
+# channels consolidate concurrently. Created lazily under a guard because
+# threads may request the same channel's lock at once.
+_CONSOLIDATION_LOCKS: dict[str, threading.Lock] = {}
+_CONSOLIDATION_LOCKS_GUARD = threading.Lock()
+
+
+def _consolidation_lock(channel: str) -> threading.Lock:
+    """Return the process-wide lock serializing consolidation for ``channel``."""
+    with _CONSOLIDATION_LOCKS_GUARD:
+        lock = _CONSOLIDATION_LOCKS.get(channel)
+        if lock is None:
+            lock = threading.Lock()
+            _CONSOLIDATION_LOCKS[channel] = lock
+        return lock
+
+
 def find_seed_cluster(
     seed_id: str, channel: str, level: int, embedding: bytes
 ) -> list[str] | None:
@@ -914,10 +1005,21 @@ def find_seed_cluster(
     the defensive style of :func:`find_super_candidates`.
     """
     try:
+        # The seed must still be apex. A concurrent same-channel consolidation
+        # may have rolled it up (as a neighbour of its own cluster) between this
+        # episode's creation and now; a non-apex seed must not anchor a fresh
+        # cluster, or its back-pointer would be overwritten and the first
+        # parent's lineage left dangling. Neighbours are already apex-filtered
+        # below; the seed is the one member added unconditionally, so it is
+        # checked here. Under the per-channel consolidation lock this check and
+        # the eventual write are atomic, so the seed cannot be rolled up between.
+        seed = Episode.by_id(seed_id)
+        if seed is None or seed.consolidated_into is not None:
+            return None
         hits = Episode.nearest(embedding, channel, SEED_CLUSTER_KNN_OVERFETCH)
     except Exception as exc:
         logger.warning(
-            "[SEED_CLUSTER] KNN query failed for seed=%s channel=%s: %s",
+            "[SEED_CLUSTER] seed/KNN lookup failed for seed=%s channel=%s: %s",
             seed_id, channel, exc,
         )
         return None
@@ -950,3 +1052,90 @@ def find_seed_cluster(
         return None
     return sorted(cluster)
 
+
+def consolidate_cluster(
+    channel: str,
+    cluster_ids: list[str],
+    level: int,
+    emb_svc: "EmbeddingService",
+    episodic_svc: "EpisodicService",
+    prior_embeddings: list[bytes],
+) -> bool:
+    """Encode + store one parent episode for a cluster. Returns True on write."""
+    from configs.channels import (
+        SuperEpisodeConfig,
+        _collect_transcript_ids,
+        _safe_json_load_object,
+    )
+    from services.episodic_constants import HDBSCAN_MIN_CLUSTER_SIZE
+    from controllers.message_processor import MessageProcessor
+
+    try:
+        sources = [
+            ep.to_dict() for ep in (
+                Episode.by_id(eid) for eid in cluster_ids
+            )
+            if ep
+        ]
+        if len(sources) < HDBSCAN_MIN_CLUSTER_SIZE:
+            return False
+
+        all_t_ids = _collect_transcript_ids(cast(list[object], sources))
+
+        config = SuperEpisodeConfig(channel, cast(list[object], sources))
+        response = MessageProcessor.process(config).result()
+
+        if not response:
+            logger.warning(
+                f"{LOG_PREFIX} SuperEpisodeEncoder returned empty response "
+                f"for cluster {cluster_ids}"
+            )
+            return False
+
+        super_ep = _safe_json_load_object(response)
+        if not super_ep or not super_ep.get("gist"):
+            logger.warning(
+                f"{LOG_PREFIX} SuperEpisodeEncoder returned unparseable/empty "
+                f"gist for cluster {cluster_ids}"
+            )
+            return False
+
+        super_ep["channel"] = channel
+        super_ep["level"] = level
+        unique_t_ids = sorted(all_t_ids)
+        super_ep["transcript_ids"] = unique_t_ids
+        super_ep["transcript_id_start"] = (
+            min(unique_t_ids) if unique_t_ids else None
+        )
+        super_ep["transcript_id_end"] = (
+            max(unique_t_ids) if unique_t_ids else None
+        )
+        super_ep["consolidated_from"] = [ep["id"] for ep in sources]
+
+        gist = cast(str, super_ep["gist"])
+        embedding = emb_svc.generate_embedding(gist)
+        novelty = (
+            compute_novelty(embedding, prior_embeddings) if embedding else 1.0
+        )
+        super_ep["salience"] = compute_salience(
+            has_open_loop=bool(super_ep.get("has_open_loop", False)),
+            novelty=novelty,
+        )
+        super_ep.pop("has_open_loop", None)
+
+        new_id = episodic_svc.store_episode(super_ep, embedding=embedding)
+        for src_id in cluster_ids:
+            Episode.set_consolidated_into(src_id, new_id)
+
+        logger.info(
+            f"{LOG_PREFIX} level-{level} episode {new_id} created from cluster "
+            f"{cluster_ids} (channel={channel})"
+        )
+        return True
+
+    except Exception as exc:
+        logger.warning(
+            f"{LOG_PREFIX} level-{level} consolidation failed for cluster "
+            f"{cluster_ids} (channel={channel}): {exc}"
+        )
+        return False

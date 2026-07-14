@@ -106,6 +106,27 @@ def test_non_apex_neighbours_excluded(db: sqlite3.Connection) -> None:
     assert result is None
 
 
+def test_consolidated_seed_returns_none(db: sqlite3.Connection) -> None:
+    """A seed that was itself rolled up by a concurrent consolidation
+    (consolidated_into set) must not anchor a fresh cluster, even when enough
+    apex neighbours would otherwise meet the floor. Without the seed-apex guard
+    the seed + 9 apex neighbours would form a floor-sized cluster including the
+    already-consolidated seed, overwriting its back-pointer."""
+    es = EpisodicService()
+    seed_id = _seed(es, "seed episode about gozo", embedding=_unit(1))
+
+    # 9 apex near-duplicates: seed + neighbours would meet SEED_CLUSTER_MIN_SIZE.
+    for i in range(1, SEED_CLUSTER_MIN_SIZE):
+        _seed(es, f"near-duplicate {i} about gozo", embedding=_unit(1))
+
+    # The seed itself is consolidated (rolled up as another cluster's neighbour).
+    es.update_episode(seed_id, {"consolidated_into": "super_ep_id"})
+
+    result = find_seed_cluster(seed_id, "chat", 0, _query_embedding())
+
+    assert result is None
+
+
 def test_different_level_neighbours_excluded(db: sqlite3.Connection) -> None:
     """Near neighbours at a DIFFERENT level are excluded."""
     es = EpisodicService()

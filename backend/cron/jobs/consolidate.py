@@ -12,7 +12,7 @@ five methods depend on is carried verbatim, so the original
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING
 
 from cron.base import IdleGatedJob
 from models.episode import Episode
@@ -24,6 +24,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 LOG_PREFIX = "[SUBCONSCIOUS]"
+
 
 # Per-tick consolidation summarization cap: at most this many cluster→parent LLM
 # summarization calls run per tick across all channels and both roll-up rounds,
@@ -147,6 +148,8 @@ class ConsolidateJob(IdleGatedJob):
         episodic_svc: "EpisodicService",
     ) -> int:
         """Write one roll-up round's clusters at ``level``. Returns supers written."""
+        from services.episodic_service import consolidate_cluster
+
         if not clusters or self._summarization_budget_remaining <= 0:
             return 0
 
@@ -163,102 +166,9 @@ class ConsolidateJob(IdleGatedJob):
         for cluster_ids in clusters:
             if self._summarization_budget_remaining <= 0:
                 break
-            if self._write_super_episode(
+            if consolidate_cluster(
                 channel, cluster_ids, level, emb_svc, episodic_svc, prior_embeddings
             ):
                 written += 1
                 self._summarization_budget_remaining -= 1
         return written
-
-    @staticmethod
-    def _write_super_episode(
-        channel: str,
-        cluster_ids: list[str],
-        level: int,
-        emb_svc: "EmbeddingService",
-        episodic_svc: "EpisodicService",
-        prior_embeddings: list[bytes],
-    ) -> bool:
-        """Encode + store one parent episode for a cluster. Returns True on write."""
-        from configs.channels import (
-            SuperEpisodeConfig,
-            _collect_transcript_ids,
-            _safe_json_load_object,
-        )
-        from services.episodic_constants import HDBSCAN_MIN_CLUSTER_SIZE
-        from services.episodic_service import compute_novelty, compute_salience
-        from controllers.message_processor import MessageProcessor
-
-        try:
-            sources = [
-                ep.to_dict() for ep in (
-                    Episode.by_id(eid) for eid in cluster_ids
-                )
-                if ep
-            ]
-            if len(sources) < HDBSCAN_MIN_CLUSTER_SIZE:
-                return False
-
-            # all_t_ids is collected at every level for lineage/provenance only
-            # (transcript_id_start/end stamped below). Raw turns are never
-            # re-fetched: every level distils its child gists alone, so a super-
-            # episode is always a contraction of the level beneath it.
-            all_t_ids = _collect_transcript_ids(cast(list[object], sources))
-
-            config = SuperEpisodeConfig(channel, cast(list[object], sources))
-            response = MessageProcessor.process(config).result()
-
-            if not response:
-                logger.warning(
-                    f"{LOG_PREFIX} SuperEpisodeEncoder returned empty response "
-                    f"for cluster {cluster_ids}"
-                )
-                return False
-
-            super_ep = _safe_json_load_object(response)
-            if not super_ep or not super_ep.get("gist"):
-                logger.warning(
-                    f"{LOG_PREFIX} SuperEpisodeEncoder returned unparseable/empty "
-                    f"gist for cluster {cluster_ids}"
-                )
-                return False
-
-            super_ep["channel"] = channel
-            super_ep["level"] = level
-            unique_t_ids = sorted(all_t_ids)
-            super_ep["transcript_ids"] = unique_t_ids
-            super_ep["transcript_id_start"] = (
-                min(unique_t_ids) if unique_t_ids else None
-            )
-            super_ep["transcript_id_end"] = (
-                max(unique_t_ids) if unique_t_ids else None
-            )
-            super_ep["consolidated_from"] = [ep["id"] for ep in sources]
-
-            gist = cast(str, super_ep["gist"])
-            embedding = emb_svc.generate_embedding(gist)
-            novelty = (
-                compute_novelty(embedding, prior_embeddings) if embedding else 1.0
-            )
-            super_ep["salience"] = compute_salience(
-                has_open_loop=bool(super_ep.get("has_open_loop", False)),
-                novelty=novelty,
-            )
-            super_ep.pop("has_open_loop", None)
-
-            new_id = episodic_svc.store_episode(super_ep, embedding=embedding)
-            for src_id in cluster_ids:
-                Episode.set_consolidated_into(src_id, new_id)
-
-            logger.info(
-                f"{LOG_PREFIX} level-{level} episode {new_id} created from cluster "
-                f"{cluster_ids} (channel={channel})"
-            )
-            return True
-
-        except Exception as exc:
-            logger.warning(
-                f"{LOG_PREFIX} level-{level} consolidation failed for cluster "
-                f"{cluster_ids} (channel={channel}): {exc}"
-            )
-            return False

@@ -44,6 +44,11 @@ NOVELTY_RECENT_LIMIT = 100
 NOVELTY_ACTIVATION_LIMIT = 100
 # Cycle-safe depth guard for apex traversal via consolidated_into back-pointers.
 APEX_TRAVERSAL_MAX_DEPTH = 20
+# Maximum hierarchy depth an episode may reach. A seed at level L consolidates
+# into a parent at L+1 only while L+1 <= MAX_EPISODE_LEVEL, so leaves (L0) roll
+# up to L1 and L1s roll up to L2; L2 is terminal. Mirrors the batch path, which
+# only ever wrote levels 1 (leaf round) and 2 (era round).
+MAX_EPISODE_LEVEL = 2
 
 # ── Seed-on-creation clustering ────────────────────────────────────────────
 # One new episode seeds a local KNN neighbourhood instead of reclustering the
