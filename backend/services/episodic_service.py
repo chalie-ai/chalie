@@ -194,7 +194,8 @@ class EpisodicService:
             if blob is None:
                 return
             threading.Thread(
-                target=self._consolidate_seed, args=(seed_id, channel, level, blob), daemon=True
+                target=self._consolidate_seed, args=(seed_id, channel, level, blob),
+                name=f"consolidate-seed-{channel}", daemon=True,
             ).start()
         except Exception as exc:  # noqa: BLE001 — consolidation must never break a turn
             logger.warning("%s _check_and_consolidate failed (channel=%s): %s",
