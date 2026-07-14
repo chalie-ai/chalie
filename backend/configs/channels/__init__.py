@@ -26,6 +26,7 @@ from configs.channels.super_episode import (
     _collect_transcript_ids,
     _fetch_transcript_spans,
     _safe_json_load_object,
+    _spans_for_level,
 )
 from configs.channels.thread_gist import ThreadGistConfig
 from configs.channels.user import UserConfig
@@ -58,5 +59,6 @@ __all__ = [
     "_collect_transcript_ids",
     "_fetch_transcript_spans",
     "_safe_json_load_object",
+    "_spans_for_level",
     "parse_fact_ops",
 ]

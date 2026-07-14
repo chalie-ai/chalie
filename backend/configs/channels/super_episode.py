@@ -101,6 +101,20 @@ def _fetch_transcript_spans(t_ids: set[int]) -> str:
         return ""
 
 
+def _spans_for_level(t_ids: set[int], level: int) -> str:
+    """Raw transcript spans ground the synthesis only at the leaf level.
+
+    Level 1 (leaf -> super) fetches the raw turns the episode gists were lossily
+    summarised from, so the super-gist stays true to what happened. Level >=2
+    distils the child gists alone: re-hydrating raw spans there would re-expand
+    the whole subtree into the encoder prompt (inverting the distillation and
+    blowing the token cap), so we return '' and let each level contract the one
+    below it. This is the single source of truth for the level decision; the
+    consolidation caller passes the result straight to ``SuperEpisodeConfig``.
+    """
+    return _fetch_transcript_spans(t_ids) if level == 1 else ""
+
+
 # ── Super-episode config ─────────────────────────────────────────────────────
 
 
@@ -132,7 +146,7 @@ class SuperEpisodeConfig(ProcessorConfig):
     def system_prompt(self) -> str:
         return """The user is 'super_episode_encoder' — a background process that consolidates clusters of related episodes into a single super-episode.
 
-You are a super-episode encoder. You are shown a cluster of coherent episodes and the raw transcript spans that produced them. Your job is to write ONE consolidated gist that summarises them together, preserving what is essential and discarding what is redundant.
+You are a super-episode encoder. You are shown a cluster of coherent episodes, and sometimes the raw transcript spans that produced them. Your job is to write ONE consolidated gist that summarises them together, preserving what is essential and discarding what is redundant.
 
 Output a single JSON object:
 {

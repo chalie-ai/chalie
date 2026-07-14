@@ -183,8 +183,8 @@ class ConsolidateJob(IdleGatedJob):
         from configs.channels import (
             SuperEpisodeConfig,
             _collect_transcript_ids,
-            _fetch_transcript_spans,
             _safe_json_load_object,
+            _spans_for_level,
         )
         from services.episodic_constants import HDBSCAN_MIN_CLUSTER_SIZE
         from services.episodic_service import compute_novelty, compute_salience
@@ -200,8 +200,12 @@ class ConsolidateJob(IdleGatedJob):
             if len(sources) < HDBSCAN_MIN_CLUSTER_SIZE:
                 return False
 
+            # all_t_ids is collected at every level for lineage/provenance
+            # (transcript_id_start/end stamped below). Raw spans are fetched only
+            # at the leaf level; higher levels distil the child gists alone. See
+            # _spans_for_level for the rationale.
             all_t_ids = _collect_transcript_ids(cast(list[object], sources))
-            transcript_spans = _fetch_transcript_spans(all_t_ids)
+            transcript_spans = _spans_for_level(all_t_ids, level)
 
             config = SuperEpisodeConfig(
                 channel, cast(list[object], sources), transcript_spans

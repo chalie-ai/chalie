@@ -590,18 +590,24 @@ class PromptService:
 
     def _super_episode_prompt(self) -> str:
         """``SuperEpisodeConfig.get_user_prompt``: the cluster's source-episode
-        gists and the raw transcript spans covering them — both captured on the
-        config at construction (``_sources`` / ``_spans``, per-cluster frozen
-        data, not mp-reachable), same pattern as fact-extraction's payload."""
+        gists, plus the raw transcript spans covering them at level 1 only —
+        both captured on the config at construction (``_sources`` / ``_spans``,
+        per-cluster frozen data, not mp-reachable), same pattern as
+        fact-extraction's payload. Above level 1 ``_spans`` is empty (distil the
+        gists, don't re-hydrate the subtree) and the spans section is omitted."""
         config = cast("_SuperEpisodeConfig", self.mp.config)
         src = "\n\n".join(
             f"[{cast('dict[str, object]', e)['id']}] {cast('dict[str, object]', e)['gist']}"
             for e in config._sources
         )
-        return (
-            f"Source episodes:\n\n{src}\n\n"
-            f"Raw transcript spans covering these episodes:\n\n{config._spans}"
-        )
+        prompt = f"Source episodes:\n\n{src}"
+        # Raw spans are present only at level 1 (leaf consolidation); higher
+        # levels distil from the source gists alone, so the section is dropped.
+        if config._spans:
+            prompt += (
+                f"\n\nRaw transcript spans covering these episodes:\n\n{config._spans}"
+            )
+        return prompt
 
     # ── EpisodeEncoderConfig (channel="episode_encoder") ─────────────────────
 
