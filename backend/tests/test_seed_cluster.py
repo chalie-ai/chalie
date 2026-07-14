@@ -14,6 +14,9 @@ DB vec tables). Cover:
   * Neighbours beyond SEED_CLUSTER_RADIUS are excluded.
   * The seed itself is never in the returned cluster twice and the count never
     exceeds SEED_CLUSTER_MAX_MATCHES + 1 (seed).
+  * A crowd of equally-near NON-qualifying rows (rolled-up or other-level) does
+    not starve discovery — qualifying filters run inside the KNN, so those rows
+    never consume result slots.
 """
 
 import sqlite3
@@ -154,6 +157,35 @@ def test_neighbours_beyond_radius_excluded(db: sqlite3.Connection) -> None:
     result = find_seed_cluster(seed_id, "chat", 0, _query_embedding())
 
     assert result is None
+
+
+def test_crowded_non_qualifying_rows_do_not_starve_discovery(db: sqlite3.Connection) -> None:
+    """Non-qualifying rows sitting as near to the seed as its real neighbours
+    must never crowd them out of the KNN. Discovery requests only
+    SEED_CLUSTER_MAX_MATCHES + 1 hits; were the qualifying filters applied
+    AFTER the KNN, the 40 equally-near rolled-up/other-level rows below (stored
+    first, so they win distance ties) would consume every slot and a genuinely
+    floor-sized cluster would silently fail to form."""
+    es = EpisodicService()
+
+    # 20 rolled-up + 20 other-level episodes, all identical to the seed
+    # embedding — every one a nearer-or-equal KNN hit that must not count.
+    for i in range(20):
+        rolled = _seed(es, f"rolled-up decoy {i} about gozo", embedding=_unit(1))
+        es.update_episode(rolled, {"consolidated_into": "super_ep_id"})
+    for i in range(20):
+        _seed(es, f"other-level decoy {i} about gozo", embedding=_unit(1), level=1)
+
+    seed_id = _seed(es, "seed episode about gozo", embedding=_unit(1))
+    neighbour_ids = [
+        _seed(es, f"near-duplicate {i} about gozo", embedding=_unit(1))
+        for i in range(1, SEED_CLUSTER_MIN_SIZE)
+    ]
+
+    result = find_seed_cluster(seed_id, "chat", 0, _query_embedding())
+
+    assert result is not None, "non-qualifying rows starved the KNN slots"
+    assert set(result) == {seed_id, *neighbour_ids}
 
 
 def test_seed_not_duplicated_and_count_within_limit(db: sqlite3.Connection) -> None:

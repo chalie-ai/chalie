@@ -35,7 +35,6 @@ from services.episodic_constants import (
     MAX_EPISODE_LEVEL,
     SALIENCE_NOVELTY_WEIGHT,
     SALIENCE_OPEN_LOOP_WEIGHT,
-    SEED_CLUSTER_KNN_OVERFETCH,
     SEED_CLUSTER_MAX_MATCHES,
     SEED_CLUSTER_MIN_SIZE,
     SEED_CLUSTER_RADIUS,
@@ -886,12 +885,13 @@ def find_seed_cluster(
     """Seed-on-creation candidate discovery for super-episode consolidation.
 
     One new episode seeds a local KNN neighbourhood instead of reclustering the
-    whole apex pool (the old batch HDBSCAN path). We pull the nearest raw
-    KNN hits on the same channel, then filter in Python to apex-only
-    (``consolidated_into IS NULL``), same-level, non-self, and within the
-    cosine-distance radius. If the resulting cluster (seed + qualifying
-    neighbours) meets the minimum-size floor, return the sorted id list;
-    otherwise return ``None`` — the seed stays a lone apex.
+    whole apex pool (the old batch HDBSCAN path). ``Episode.nearest`` applies
+    the qualifying filters (live, same-channel, same-level, apex-only) inside
+    the KNN itself, so the hits are already the nearest qualifying neighbours;
+    here we only drop the seed itself and anything beyond the cosine-distance
+    radius. If the resulting cluster (seed + qualifying neighbours) meets the
+    minimum-size floor, return the sorted id list; otherwise return ``None`` —
+    the seed stays a lone apex.
 
     ``vector_distance`` is cosine distance (0.0 = identical, larger = less
     similar). Neighbours beyond :data:`SEED_CLUSTER_RADIUS` are excluded.
@@ -902,14 +902,19 @@ def find_seed_cluster(
         # may have rolled it up (as a neighbour of its own cluster) between this
         # episode's creation and now; a non-apex seed must not anchor a fresh
         # cluster, or its back-pointer would be overwritten and the first
-        # parent's lineage left dangling. Neighbours are already apex-filtered
-        # below; the seed is the one member added unconditionally, so it is
+        # parent's lineage left dangling. Neighbours are apex-filtered inside
+        # the KNN; the seed is the one member added unconditionally, so it is
         # checked here. Under the per-channel consolidation lock this check and
         # the eventual write are atomic, so the seed cannot be rolled up between.
         seed = Episode.by_id(seed_id)
         if seed is None or seed.consolidated_into is not None:
             return None
-        hits = Episode.nearest(embedding, channel, SEED_CLUSTER_KNN_OVERFETCH)
+        # k = cap + 1: the seed is itself a qualifying row (distance 0) and is
+        # dropped below, leaving at most SEED_CLUSTER_MAX_MATCHES neighbours.
+        hits = Episode.nearest(
+            embedding, channel, SEED_CLUSTER_MAX_MATCHES + 1,
+            level=level, apex_only=True,
+        )
     except Exception as exc:
         logger.warning(
             "[SEED_CLUSTER] seed/KNN lookup failed for seed=%s channel=%s: %s",
@@ -921,12 +926,6 @@ def find_seed_cluster(
     for hit in hits:
         # Exclude the seed itself (it will always be nearest to itself).
         if hit.id == seed_id:
-            continue
-        # Must be apex: not yet rolled up into a parent super-episode.
-        if hit.consolidated_into is not None:
-            continue
-        # Must be at the same hierarchy level as the seed.
-        if hit.level != level:
             continue
         # Must carry a vector_distance overlay — sqlite-vec always sets it on
         # a hit, but guard against a missing value (defensive).

@@ -269,23 +269,41 @@ class Episode(Model):
         return [cls._lane_hit(row) for row in cursor.fetchall()]
 
     @classmethod
-    def nearest(cls, blob: bytes, channel: str | None, k: int) -> list[Self]:
-        """Cosine KNN lane via sqlite-vec. No distance ceiling (the service's
-        relative floor decides survivors); returns the ``k`` nearest hits
-        ordered by distance, each carrying a ``vector_distance`` overlay. Raises
-        on DB failure — the service holds the warn-guard."""
+    def nearest(
+        cls,
+        blob: bytes,
+        channel: str | None,
+        k: int,
+        *,
+        level: int | None = None,
+        apex_only: bool = False,
+    ) -> list[Self]:
+        """Cosine KNN lane via sqlite-vec. Every row filter (live, channel, and
+        the optional level/apex ones) is pushed inside the KNN via a rowid
+        pre-filter, so ``k`` means "k qualifying hits" — deleted, off-channel,
+        or rolled-up rows never consume result slots, no matter how many sit
+        nearer to the query. No distance ceiling (the service's relative floor
+        decides survivors); returns hits ordered by distance, each carrying a
+        ``vector_distance`` overlay. Raises on DB failure — the service holds
+        the warn-guard."""
+        where = ["deleted_at IS NULL"]
+        params: list[object] = [blob, k]
+        if channel is not None:
+            where.append("channel = ?")
+            params.append(channel)
+        if level is not None:
+            where.append("level = ?")
+            params.append(level)
+        if apex_only:
+            where.append("consolidated_into IS NULL")
         sql = (
             "SELECT e.*, v.distance AS vector_distance "
             "FROM episodes e "
             "JOIN episodes_vec v ON v.rowid = e.rowid "
-            "WHERE v.embedding MATCH ? AND k = ? AND e.deleted_at IS NULL"
+            "WHERE v.embedding MATCH ? AND k = ? "
+            f"AND v.rowid IN (SELECT rowid FROM episodes WHERE {' AND '.join(where)}) "
+            "ORDER BY v.distance"
         )
-        params: list[object] = [blob, k]
-        if channel is not None:
-            sql += " AND e.channel = ?"
-            params.append(channel)
-        sql += " ORDER BY v.distance"
-
         cursor = cls._bound_connection().execute(sql, params)
         return [cls._lane_hit(row) for row in cursor.fetchall()]
 

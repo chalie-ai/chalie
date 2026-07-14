@@ -31,18 +31,11 @@ SEED_CLUSTER_MAX_MATCHES = 25
 SEED_CLUSTER_MIN_SIZE = 10
 
 # Cosine-distance cutoff (vector_distance <=) for neighbour inclusion. 0.0 ==
-# identical, 1.0 == maximally dissimilar (orthogonal). Start wide/lenient; this
-# is a PROVISIONAL value to be calibrated against live embeddings — do NOT use
-# it as a hard semantic boundary without empirical validation.
+# identical, 1.0 == maximally dissimilar (orthogonal). In real embedding data
+# related episodes sit well inside this cutoff and unrelated ones well beyond
+# it, so 0.45 has margin on both sides — but it is a similarity heuristic, not
+# a hard semantic boundary.
 SEED_CLUSTER_RADIUS = 0.45
-
-# Raw KNN hits to request from Episode.nearest before filtering. sqlite-vec
-# applies the `k` limit BEFORE the JOIN/row filters, so requesting exactly 25
-# would return the 25 nearest rows OVERALL (including non-apex rows, other
-# levels, and the seed itself), then filtering to apex+same-level could leave
-# far fewer than 25 — a silent under-count. Over-fetch then filter in Python
-# to guarantee we don't drop below SEED_CLUSTER_MAX_MATCHES qualifying neighbours.
-SEED_CLUSTER_KNN_OVERFETCH = 200
 # ── Window extraction (count-triggered episode encoding) ───────────────────────
 # Turn-end fires episode extraction once a channel accumulates EXTRACTION_THRESHOLD
 # transcript rows past its episode watermark. The encoder then reads the latest
