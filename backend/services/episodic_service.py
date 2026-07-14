@@ -25,13 +25,6 @@ from typing import TYPE_CHECKING, cast
 
 import numpy as np
 
-# Hierarchy roll-up clustering stack. Bidirectional dependency: declared in
-# pyproject.toml ("scikit-learn"/"umap-learn"/"scipy"/"numba"/"llvmlite") and
-# consumed only by ``find_super_candidates`` below. UMAP is the only reducer that
-# yields usable density clusters at our embedding scale; sklearn ships HDBSCAN.
-import umap
-from sklearn.cluster import HDBSCAN
-
 from models.episode import Episode
 from models.tool_call import ToolCall
 from services.database import Database
@@ -827,105 +820,6 @@ def _unpack_blob(blob: bytes) -> list[float]:
     return list(struct.unpack(f'{n}f', blob))
 
 
-def cluster_apex_embeddings(ep_ids: list[str], ep_embs: list[bytes]) -> list[list[str]]:
-    """L2-normalise rows → UMAP reduce to a low-dimensional space →
-    sklearn HDBSCAN. Episodes sharing an HDBSCAN label form a group;
-    the noise label (-1) is dropped so genuine outliers stay leaf apexes
-    (never force-assigned). Only groups of at least
-    ``HDBSCAN_MIN_CLUSTER_SIZE`` survive.
-
-    Shared by the leaf round (level-0 → level-1) and the era round
-    (level-1 → level-2) — both feed the same matrix path. The native
-    blob dimension is read as-is (768 prod / 256 test); UMAP reduces
-    either to ``UMAP_N_COMPONENTS``.
-
-    Returns ID-lists, one per surviving cluster, deterministic (sorted
-    IDs within each list; outer list sorted by first ID). Empty when
-    the input is too small to cluster.
-    """
-    from services.episodic_constants import (
-        HDBSCAN_MIN_CLUSTER_SIZE,
-        UMAP_DISCONNECTION_DISTANCE,
-        UMAP_MIN_DIST,
-        UMAP_N_COMPONENTS,
-        UMAP_N_NEIGHBORS,
-        UMAP_RANDOM_SEED,
-    )
-
-    n = len(ep_ids)
-    # UMAP needs n_neighbors < n_samples; below the cluster floor nothing can form.
-    if n < HDBSCAN_MIN_CLUSTER_SIZE or n < 2:
-        return []
-
-    matrix = np.vstack([
-        np.asarray(_unpack_blob(blob), dtype=np.float32) for blob in ep_embs
-    ])
-    # L2-normalise rows so UMAP's cosine metric sees unit vectors; guard the rare
-    # zero-norm row (division would yield NaN and poison the reducer).
-    norms = np.linalg.norm(matrix, axis=1, keepdims=True)
-    norms[norms == 0.0] = 1.0
-    matrix /= norms
-
-    reducer = umap.UMAP(
-        n_components=UMAP_N_COMPONENTS,
-        metric="cosine",
-        n_neighbors=min(UMAP_N_NEIGHBORS, n - 1),
-        min_dist=UMAP_MIN_DIST,
-        random_state=UMAP_RANDOM_SEED,
-        # Detach genuine off-topic isolates instead of force-embedding them into
-        # the nearest dense region; they then surface as HDBSCAN noise and stay
-        # leaf apexes rather than polluting a topically-pure roll-up.
-        disconnection_distance=UMAP_DISCONNECTION_DISTANCE,
-    )
-    reduced = reducer.fit_transform(matrix)
-
-    labels = HDBSCAN(
-        min_cluster_size=HDBSCAN_MIN_CLUSTER_SIZE,
-        metric="euclidean",
-        copy=True,
-    ).fit_predict(reduced)
-
-    groups: dict[int, list[str]] = {}
-    for label, ep_id in zip(labels, ep_ids):
-        # Any negative label is noise: -1 is HDBSCAN's own outlier flag and -3 is
-        # a UMAP-disconnected isolate. Both stay leaf apexes — never force-grouped.
-        if label < 0:
-            continue
-        groups.setdefault(int(label), []).append(ep_id)
-
-    clusters = sorted(
-        (sorted(ids) for ids in groups.values() if len(ids) >= HDBSCAN_MIN_CLUSTER_SIZE),
-        key=lambda c: c[0],
-    )
-    return clusters
-
-
-def find_super_candidates(channel: str) -> list[list[str]]:
-    """Count trigger: NO-OP (return ``[]``) until the channel holds at
-    least ``APEX_COUNT_TRIGGER`` leaf apexes — a count trigger always
-    eventually fires, unlike the old similarity gate that never did.
-    At the trigger the leaves are density-clustered via UMAP→HDBSCAN;
-    HDBSCAN noise is dropped so outliers stay leaf apexes.
-
-    Returns a list of ID-lists (strings), one per surviving cluster.
-    Empty below the count trigger or when no cluster forms.
-    """
-    from services.episodic_constants import APEX_COUNT_TRIGGER
-
-    ep_ids, ep_embs = Episode.apex_embeddings(channel, level=0)
-
-    if len(ep_ids) < APEX_COUNT_TRIGGER:
-        return []
-
-    clusters = cluster_apex_embeddings(ep_ids, ep_embs)
-    if clusters:
-        logging.info(
-            f"[SUPER_CLUSTER] {len(clusters)} cluster(s) found "
-            f"(sizes={[len(c) for c in clusters]}, channel={channel})"
-        )
-    return clusters
-
-
 def compute_novelty(new_embedding: object, prior_embeddings: list[bytes]) -> float:
     """novelty = 1.0 - max(cosine_sim(new, prior) for prior in
     prior_embeddings). Clamped to [0.0, 1.0]. Returns 1.0 (fully
@@ -1000,9 +894,7 @@ def find_seed_cluster(
 
     ``vector_distance`` is cosine distance (0.0 = identical, larger = less
     similar). Neighbours beyond :data:`SEED_CLUSTER_RADIUS` are excluded.
-
-    DB failures log a warning and return ``None`` — never raise. This mirrors
-    the defensive style of :func:`find_super_candidates`.
+    DB failures log a warning and return ``None`` — never raise.
     """
     try:
         # The seed must still be apex. A concurrent same-channel consolidation
@@ -1067,7 +959,7 @@ def consolidate_cluster(
         _collect_transcript_ids,
         _safe_json_load_object,
     )
-    from services.episodic_constants import HDBSCAN_MIN_CLUSTER_SIZE
+    from services.episodic_constants import SEED_CLUSTER_MIN_SIZE
     from controllers.message_processor import MessageProcessor
 
     try:
@@ -1077,7 +969,7 @@ def consolidate_cluster(
             )
             if ep
         ]
-        if len(sources) < HDBSCAN_MIN_CLUSTER_SIZE:
+        if len(sources) < SEED_CLUSTER_MIN_SIZE:
             return False
 
         all_t_ids = _collect_transcript_ids(cast(list[object], sources))

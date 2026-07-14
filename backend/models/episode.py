@@ -218,19 +218,6 @@ class Episode(Model):
         return [cls.hydrate(row) for row in cursor.fetchall()]
 
     @classmethod
-    def apex_channels(cls, like_pattern: str) -> list[str]:
-        """Distinct channels holding at least one live apex episode
-        (``consolidated_into IS NULL``) whose channel matches ``like_pattern``."""
-        rows = cls._bound_connection().execute(
-            "SELECT DISTINCT channel FROM episodes "
-            "WHERE deleted_at IS NULL "
-            "  AND consolidated_into IS NULL "
-            "  AND channel LIKE ?",
-            (like_pattern,),
-        ).fetchall()
-        return [str(row[0]) for row in rows if row[0]]
-
-    @classmethod
     def records_page(cls, q: str, limit: int, offset: int) -> list[dict[str, object]]:
         """One page of live episodes for the observability record browser —
         ``{created_at, last_relevant_at, gist, location_name}`` per row, most
@@ -349,30 +336,6 @@ class Episode(Model):
                 "INSERT OR REPLACE INTO episodes_vec(rowid, embedding) VALUES (?, ?)",
                 (row[0], blob),
             )
-
-    @classmethod
-    def apex_embeddings(cls, channel: str, level: int) -> tuple[list[str], list[bytes]]:
-        """Index-aligned (ids, embedding blobs) for apex episodes of one
-        ``channel`` at one ``level`` — ``consolidated_into IS NULL``, live, with
-        an embedding present, oldest-first. Never raises: two empty lists on any
-        query failure."""
-        try:
-            rows = cls._bound_connection().execute(
-                "SELECT e.id, ev.embedding "
-                "FROM episodes e "
-                "JOIN episodes_vec ev ON ev.rowid = e.rowid "
-                "WHERE e.channel = ? "
-                "  AND e.level = ? "
-                "  AND e.consolidated_into IS NULL "
-                "  AND e.deleted_at IS NULL "
-                "  AND ev.embedding IS NOT NULL "
-                "ORDER BY e.created_at ASC",
-                (channel, level),
-            ).fetchall()
-        except Exception as exc:
-            logging.warning(f"[SUPER_CLUSTER] apex fetch failed (channel={channel}, level={level}): {exc}")
-            return [], []
-        return [str(row[0]) for row in rows], [row[1] for row in rows]
 
     @classmethod
     def novelty_comparison_blobs(cls, channel: str) -> list[bytes]:

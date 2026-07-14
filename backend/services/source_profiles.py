@@ -24,7 +24,7 @@ explicit profile row — silence is the safe default, never a leak.
 
 Consumers (bidirectional dependency note):
   - services/transcript_service.py          — episode gate + location back-fill
-  - cron/jobs/consolidate.py, geo_patterns.py — consolidation set, geo cursor
+  - cron/jobs/geo_patterns.py — geo cursor
   - services/decay_engine_service.py        — janitor HEAVY-channel protection
   - configs/channels/pattern.py             — pattern-window channel filter
   - configs/channels/geo_pattern.py         — geo-window channel filter
@@ -218,14 +218,3 @@ def janitor_protected_sql(column: str = "channel") -> str:
     cutoff; protecting every episode-producing channel keeps that memory.
     """
     return _allowlist_sql(column, lambda p: p.extract_episodes)
-
-
-def consolidating_exact_channels() -> list[str]:
-    """Return the EXACT channels whose episodes are consolidated into
-    super-episodes — every episode-producing exact channel.
-
-    External-agent channels are discovered at runtime from the episodes table
-    (one channel per agent id), so they are not enumerable here; the worker
-    unions these exact channels with the live external-agent set.
-    """
-    return _exact_channels(lambda p: p.extract_episodes)
