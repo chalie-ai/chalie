@@ -476,16 +476,15 @@ class MessageProcessor:
 
     def _post_turn(self, response_text: str) -> None:
         """Dispatch this config's post-turn handler (§4.2), keyed on its stable
-        transcript ``role`` — the identity OLD composed ``post_turn_hooks`` per.
-        The proactive-suggestion handler additionally requires the genuine
-        ``user`` channel: DiscoveryConfig and ScheduledConfig also carry
-        ``role='user'`` but write to their own channels, and neither takes the
-        legacy ``ProactiveSuggestionHook`` path (discovery is a silent loop —
-        ``broadcast_to`` is ``None``, so a suggestion would have nowhere to
-        surface; scheduled self-surfaces in its own thread and the scheduler
-        dock, with no user-channel relay, §13.9). Every handler is isolated — a
-        failure is logged, never propagated, so post-turn work can never fail an
-        otherwise-complete turn."""
+        transcript ``role``. The proactive-suggestion handler additionally
+        requires the genuine ``user`` channel: DiscoveryConfig and
+        ScheduledConfig also carry ``role='user'`` but write to their own
+        channels, and neither takes the proactive-suggestion path (discovery is
+        a silent loop — ``broadcast_to`` is ``None``, so a suggestion would have
+        nowhere to surface; scheduled self-surfaces in its own thread and the
+        scheduler dock, with no user-channel relay, §13.9). Every handler is
+        isolated — a failure is logged, never propagated, so post-turn work can
+        never fail an otherwise-complete turn."""
         role = self.config.role
         try:
             if role == "user" and self.channel == Channel.USER:
@@ -501,8 +500,8 @@ class MessageProcessor:
 
     def _proactive_suggestion(self) -> None:
         """After a ``user`` turn that made enough real tool calls, hand the act
-        trail to the skill-suggestion pass (legacy ``ProactiveSuggestionHook``).
-        Compaction calls do not count toward the threshold."""
+        trail to the skill-suggestion pass. Compaction calls do not count toward
+        the threshold."""
         count = sum(1 for c in self.tool_call_service.by_turn() if c.tool_name != "chat_history_compactor")
         if count < _PROACTIVE_SUGGESTION_MIN_CALLS:
             return
@@ -513,8 +512,10 @@ class MessageProcessor:
 
     def _pattern_skill_sync(self) -> None:
         """Decay untouched patterns, then run the skill-association pass over the
-        patterns written this turn (legacy ``PatternDecayHook`` +
-        ``PatternSkillSyncHook``, both self-guarding on an empty touched set)."""
+        patterns written this turn. An empty touched set is NOT a no-op for the
+        decay half: nothing is exempt, so every live pattern row decays — the
+        intended sweep for a turn that wrote no patterns, not an edge case. The
+        association pass does skip on empty."""
         touched = self._touched_pattern_names()
         self.behavioral_pattern_service.decay_untouched(touched)
         from services.skill_association_service import SkillAssociationService  # noqa: PLC0415
@@ -538,8 +539,8 @@ class MessageProcessor:
 
     def _disclose_to_human(self, response_text: str) -> None:
         """When an external-agent config opts into looping in the human, open a
-        fresh hidden ``user`` turn narrating the exchange (legacy
-        ``DiscloseToHumanHook``). A no-op for agents that do not."""
+        fresh hidden ``user`` turn narrating the exchange. A no-op for agents
+        that do not."""
         config = cast("_ExternalAgentConfig", self.config)
         if not config._loop_in_human:
             return

@@ -104,8 +104,8 @@ class UserSynthesis:
     def persist_user_summary(cls, text: str) -> None:
         """Parse the user-summary channel's ``{"short", "long"}`` JSON response and
         upsert the long then the short row — long FIRST so a crash mid-write leaves
-        the richer fact in place (legacy ``PersistUserSummaryHook``). Every reject
-        is logged, never raised; the two writes ride :meth:`upsert`'s own guard."""
+        the richer fact in place. Every reject is logged, never raised; the two
+        writes ride :meth:`upsert`'s own guard."""
         stripped = (text or "").strip()
         if not stripped:
             logger.warning("persist_user_summary: empty response — skipping")
