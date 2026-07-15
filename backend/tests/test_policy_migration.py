@@ -87,7 +87,7 @@ def test_fresh_install_seeds_api_key_as_sensitive(tmp_path: Path) -> None:
     with patch.object(FileMapperService, "get_db_path", return_value=fresh_path):
         Database.close()  # drop any thread connection bound to another path
         _migrate_legacy_policy_rules()                                 # no-op on fresh
-        SchemaConvergenceService(embedding_dimensions=256).converge()  # creates + seeds
+        SchemaConvergenceService().converge()  # creates + seeds
         PolicyManager().apply_seed()                                   # policy defaults
         api_key = Database.conn().execute(
             "SELECT is_sensitive FROM settings WHERE key='api_key'"

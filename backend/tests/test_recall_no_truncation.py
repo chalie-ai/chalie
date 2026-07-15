@@ -35,12 +35,11 @@ from services.dispatch_service import DispatchService
 pytestmark = pytest.mark.unit
 
 
-#: The conftest builds the vec tables at 256 dims (tests/conftest.py); production
-#: always passes an embedding, so a faithful episode is seeded with one. The
-#: runtime recall query embeds at 768 and the vec lane no-ops on the width
-#: mismatch (logged, non-fatal) — the FTS lane carries the episode. Same
-#: precedent as tests/test_turn0_flashback_continuation_gate.py.
-_VEC_DIM = 256
+#: The vec tables are built at the schema's declared width, so a faithful
+#: episode is seeded with an embedding of that width exactly as production
+#: does. The runtime recall query embeds at the same width, so the vec lane
+#: resolves the episode for real rather than no-opping.
+_VEC_DIM = 768
 
 
 def _unit(index: int, dim: int = _VEC_DIM) -> list[float]:
@@ -69,7 +68,7 @@ def _render_recall(params: dict[str, object]) -> str:
 
 def _store_episode(gist: str, *, emb_index: int = 7, **fields: object) -> str:
     """Seed one episode via the PRODUCTION write path (EpisodicService), with a
-    256-dim embedding exactly as every production caller passes."""
+    768-dim embedding exactly as every production caller passes."""
     from services.episodic_service import EpisodicService
 
     data: dict[str, object] = {"gist": gist, "salience": 8, "channel": "user", **fields}
@@ -138,5 +137,3 @@ def test_location_recall_returns_the_full_untruncated_gist(db: sqlite3.Connectio
     assert "…" not in cast(str, match["content"]), "gist was clipped with an ellipsis"
     assert match.get("location") == "Valletta"
     assert len(cast(str, match["content"])) == len(long_gist)
-
-

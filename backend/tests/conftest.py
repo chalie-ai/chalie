@@ -40,7 +40,7 @@ def _db_template(tmp_path_factory: pytest.TempPathFactory) -> str:
     # the template file for the build so the golden db lands there, not chalie.db.
     with patch.object(FileMapperService, 'get_db_path', return_value=Path(template_path)):
         _newdb.Database.close()  # drop any thread connection bound to another path
-        convergence = SchemaConvergenceService(embedding_dimensions=256)
+        convergence = SchemaConvergenceService()
         convergence.converge()
         # Mirror production boot (run.py / consumer.py): converge() applies only
         # static column DEFAULTs, never value backfills, so the deterministic

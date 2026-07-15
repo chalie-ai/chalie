@@ -55,7 +55,7 @@ def _find_tools_on(mp: MessageProcessor, params: dict[str, object]) -> Mapping[s
 
 def _seeded_policy_db(tmp_path: Path) -> PolicyManager:
     _migrate_legacy_policy_rules()                                    # no-op on fresh
-    SchemaConvergenceService(embedding_dimensions=256).converge()  # creates policy
+    SchemaConvergenceService().converge()  # creates policy
     PolicyManager().apply_seed()                                  # reads the JSON
     return PolicyManager()
 

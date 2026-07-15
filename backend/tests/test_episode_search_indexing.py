@@ -42,11 +42,11 @@ def _drain_search_index() -> None:
 
 
 def _vec_dim(conn: sqlite3.Connection, table: str) -> int:
-    """The live vec0 column dimension, so a synthetic embedding matches whatever
-    ``embedding_dimensions`` the session template was built with."""
+    """The live vec0 column dimension, read off the schema so a synthetic
+    embedding always matches the width the table was declared with."""
     row = conn.execute("SELECT sql FROM sqlite_master WHERE name = ?", (table,)).fetchone()
     match = re.search(r"float\[(\d+)\]", row[0]) if row else None
-    return int(match.group(1)) if match else 256
+    return int(match.group(1)) if match else 768
 
 
 def _store_episode(gist: str = "a lively chat about migrating databases",

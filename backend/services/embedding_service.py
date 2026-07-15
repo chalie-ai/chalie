@@ -303,10 +303,6 @@ def get_embedding_service() -> 'EmbeddingService':
 
 class EmbeddingService:
 
-    def __init__(self, config: Optional[dict[str, object]] = None) -> None:
-        self.config = config or {}
-        self.embedding_dimensions = self.config.get('embedding_dimensions', 768)
-
     def _cache_get(self, text: str) -> Optional[list[float]]:
         try:
             store = _get_store()

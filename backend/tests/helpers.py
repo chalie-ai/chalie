@@ -125,7 +125,7 @@ def make_provider_row(
     model: str = "gemma4:31b",
     host: str = "http://localhost:11434",
     api_key: str | None = None,
-    dimensions: int = 256,
+    dimensions: int = 768,
     timeout: int = 30,
     supports_vision: int = 0,
 ) -> tuple[object, ...]:

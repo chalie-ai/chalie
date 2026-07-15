@@ -12,7 +12,7 @@ What's implemented:
   * leaves, super-episodes and era digests compete in ONE pool — a super and its leaf can
     both surface (no apex-walk that discarded the lower levels).
 
-Test DB vec tables are 256-dim (conftest template), so embeddings are seeded to 256 dimensions.
+Test DB vec tables are 768-dim (matching production), so embeddings are seeded to 768 dimensions.
 """
 
 import sqlite3
@@ -30,7 +30,7 @@ from models.episode import Episode
 
 pytestmark = pytest.mark.unit
 
-_DIM = 256
+_DIM = 768
 
 
 def _unit(index: int, dim: int = _DIM) -> list[float]:

@@ -1,8 +1,8 @@
 """Tests for find_seed_cluster — seed-on-creation candidate discovery.
 
 All tests use the real db fixture with zero mocks. Episodes are seeded via
-EpisodicService.store_episode with real embeddings (256-dim, matching the test
-DB vec tables). Cover:
+EpisodicService.store_episode with real embeddings (768-dim, matching the
+schema's declared vec-table width). Cover:
 
   * A seed plus >= SEED_CLUSTER_MIN_SIZE near-duplicate apex episodes at the
     same level/channel → returns a sorted id list containing the seed and its
@@ -32,7 +32,7 @@ from services.embedding_utils import pack_embedding
 
 pytestmark = pytest.mark.unit
 
-_DIM = 256
+_DIM = 768
 
 
 def _unit(index: int, dim: int = _DIM) -> list[float]:

@@ -21,10 +21,10 @@ boundaries, at exactly the seams the codebase already uses elsewhere:
   * the LLM network transport, patched at ``services.provider_service.build_client``
     with a scripted provider that replays one ``ProviderResponse`` — the same
     seam ``test_message_processor_runaway_loop.py`` drives; and
-  * the embedding model, supplied as a deterministic 256-dim embedder — either
+  * the embedding model, supplied as a deterministic 768-dim embedder — either
     via ``consolidate_cluster``'s injected ``emb_svc`` parameter (pure DI) or,
     for the ``store_episode`` path, patched at ``get_embedding_service`` so the
-    written vector matches the test DB's 256-dim vec table.
+    written vector matches the test DB's 768-dim vec table.
 
 The consolidation encoder, JSON parse, field stamping, transcript-id union,
 salience compute, parent write and lineage wiring all run for real.
@@ -59,7 +59,7 @@ if TYPE_CHECKING:
 
 pytestmark = pytest.mark.unit
 
-_DIM = 256
+_DIM = 768
 
 # ProviderService builds its thin transport client via this factory — the real
 # LLM network boundary (see test_message_processor_runaway_loop.py). Patching it
@@ -86,7 +86,7 @@ def _query_blob() -> bytes:
 
 class _FixedEmbedder:
     """A deterministic stand-in for the embedding model: every gist maps to the
-    same 256-dim unit vector, matching the test DB's vec-table dimension."""
+    same 768-dim unit vector, matching the test DB's vec-table dimension."""
 
     def generate_embedding(self, text: str, mp: object = None) -> list[float]:
         return _unit(0)

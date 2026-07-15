@@ -1,6 +1,5 @@
 # Tests for DocumentService migrated from mock_db to real SQLite via shared `db` fixture.
 
-import re
 import sqlite3
 from collections.abc import Callable
 from typing import TYPE_CHECKING, cast
@@ -9,7 +8,6 @@ import pytest
 
 from models.document import DocumentRow
 from services.document_service import DocumentService
-from services.embedding_utils import pack_embedding
 from services.memory_recall_service import recall
 from services.write_queue_service import WriteQueueService
 
@@ -70,16 +68,6 @@ def _drain_search_index() -> None:
     while item is not None:
         svc._process(item)
         item = svc._dequeue()
-
-
-def _vec_dim(conn: sqlite3.Connection, table: str) -> int:
-    """Read the real vec0 column dimension straight off the live schema, so a
-    synthetic embedding seeded directly into a shadow table always matches —
-    decoupled from whatever ``embedding_dimensions`` the session-scoped test
-    template happened to be built with."""
-    row = conn.execute("SELECT sql FROM sqlite_master WHERE name = ?", (table,)).fetchone()
-    match = re.search(r"float\[(\d+)\]", row[0]) if row else None
-    return int(match.group(1)) if match else 256
 
 
 @pytest.fixture
@@ -205,17 +193,16 @@ class TestFragmentIntegrity:
         ).fetchall()
         assert len(hits_before) == 2, hits_before
 
-        # Seed real key/value-vec shadow rows directly at the schema's actual
-        # configured dimension: this test env's fallback embedding generator
-        # (no torch models loaded) produces a dimension the vec0 columns
-        # reject, so _backfill_key_value_vec silently skips the insert here.
-        # Seeding real rows lets purge_by_document_id's own DELETEs against
-        # these tables be proven, independent of that environment gap.
-        blob = pack_embedding([0.1] * _vec_dim(db, 'data_graph_key_vec'))
+        # The key/value-vec shadow rows are written by the real production
+        # backfill (_backfill_key_value_vec) during the drain above — asserted
+        # here so the purge below is proven to actually delete something.
         for rowid in ids:
-            db.execute("INSERT OR REPLACE INTO data_graph_key_vec (rowid, embedding) VALUES (?, ?)", (rowid, blob))
-            db.execute("INSERT OR REPLACE INTO data_graph_value_vec (rowid, embedding) VALUES (?, ?)", (rowid, blob))
-        db.commit()
+            assert db.execute(
+                "SELECT 1 FROM data_graph_key_vec WHERE rowid = ?", (rowid,)
+            ).fetchone() is not None
+            assert db.execute(
+                "SELECT 1 FROM data_graph_value_vec WHERE rowid = ?", (rowid,)
+            ).fetchone() is not None
 
         count = DocumentRow.purge_by_document_id('purgedoc')
         assert count == 2
