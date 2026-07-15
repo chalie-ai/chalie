@@ -64,23 +64,36 @@ def generate_gist(trigger_channel: str, trigger_turn_id: int) -> str | None:
     return mp.result() or None
 
 
+def _persist_gist(trigger_channel: str, trigger_turn_id: int, raw_gist: str) -> bool:
+    """Strip reasoning noise and upsert the label; return True when stored.
+
+    This is the single point the gist becomes persisted, user-facing data —
+    strip here so no provider path can leak ``<think>`` chain-of-thought into
+    the label. A gist that strips to empty (an unclosed think block swallows
+    everything after its opener) is dropped loudly, never stored."""
+    from configs.channels import ThreadGistConfig
+    from controllers.message_processor import MessageProcessor
+
+    label = _strip_think_blocks(raw_gist)
+    if not label:
+        logger.warning(
+            "%s gist for %s turn=%s dropped — think-stripping emptied it: %r",
+            _LOG_PREFIX, trigger_channel, trigger_turn_id, raw_gist[:120],
+        )
+        return False
+    # Inert construction only (I2) — no .process(), purely to reach
+    # gist_service for the upsert.
+    inert = MessageProcessor(ThreadGistConfig())
+    inert.gist_service.upsert(trigger_channel, trigger_turn_id, label)
+    return True
+
+
 def _run_gist_processor(
     trigger_channel: str, trigger_turn_id: int, trigger_type: str | None
 ) -> None:
     try:
         gist = generate_gist(trigger_channel, trigger_turn_id)
-        if gist:
-            from configs.channels import ThreadGistConfig
-            from controllers.message_processor import MessageProcessor
-
-            # Inert construction only (I2) — no .process(), purely to reach
-            # gist_service for the upsert. Think-stripping today only happens in
-            # the OpenAI provider client, so non-OpenAI providers (or an
-            # unclosed think block) would otherwise leak <think>...</think> into
-            # this stored, user-facing label — strip here, at the single point
-            # the gist becomes persisted data.
-            inert = MessageProcessor(ThreadGistConfig())
-            inert.gist_service.upsert(trigger_channel, trigger_turn_id, _strip_think_blocks(gist))
+        if gist and _persist_gist(trigger_channel, trigger_turn_id, gist):
             _broadcast_updated(trigger_turn_id, trigger_type)
     except Exception as exc:
         logger.warning("%s processor failed: %s", _LOG_PREFIX, exc)

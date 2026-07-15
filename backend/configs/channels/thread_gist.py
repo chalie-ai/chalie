@@ -38,4 +38,4 @@ class ThreadGistConfig(ProcessorConfig):
 
     @property
     def system_prompt(self) -> str:
-        return """Name the subject matter of the two messages below in a very terse 3-5 word topical label. Be direct and expressive but terse. Name the topic itself — do NOT use framing like "the user asked" or "the user wants" (e.g. "Mac Mini Research", "HN Post Feedback"). Return ONLY the label — no preamble, no quotes, no markdown, no trailing punctuation."""
+        return """Name the subject matter of the two messages below in a very terse 3-5 word topical label. Be direct and expressive but terse. Name the topic itself — do NOT use framing like "the user asked" or "the user wants" (e.g. "Mac Mini Research", "HN Post Feedback"). Your entire reply must be the label itself — no reasoning or thinking-out-loud, no preamble, no quotes, no markdown, no trailing punctuation."""

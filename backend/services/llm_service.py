@@ -16,7 +16,7 @@ from typing import cast
 
 logger = logging.getLogger(__name__)
 
-_THINK_BLOCK_RE = re.compile(r"<think>.*?</think>\s*", re.DOTALL | re.IGNORECASE)
+_THINK_BLOCK_RE = re.compile(r"<think>.*?(?:</think>\s*|\Z)", re.DOTALL | re.IGNORECASE)
 
 _APP_URL = "https://chalie.ai"
 _APP_TITLE = "Chalie"
@@ -35,7 +35,13 @@ def _app_user_agent() -> str:
 
 
 def _strip_think_blocks(text: str) -> str:
-    """Remove <think>...</think> chain-of-thought blocks emitted by reasoning models."""
+    """Remove <think> chain-of-thought blocks emitted by reasoning models.
+
+    An unclosed block is stripped to the end of the text: some providers omit
+    the closing tag and glue the answer straight onto the reasoning with no
+    delimiter, so nothing after the opener is mechanically separable. Callers
+    must treat an empty result as "no response", never as an empty answer.
+    """
     if not text or "<think>" not in text.lower():
         return text
     return _THINK_BLOCK_RE.sub("", text).strip()
