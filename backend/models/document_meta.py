@@ -34,6 +34,7 @@ from typing import ClassVar, Self
 from models.document import DocumentRow
 from models.model import Model
 from models.query import Query
+from services._vec_upsert import vec0_upsert
 
 
 class DocumentMetaData(Model):
@@ -228,22 +229,16 @@ class DocumentMetaData(Model):
 
     @classmethod
     def set_embedding(cls, doc_id: str, blob: bytes) -> None:
-        """Replace one document's ``documents_vec`` embedding row (DELETE
-        then INSERT — vec0 virtual tables are looked up by ``rowid``,
-        borrowed from the parent ``documents`` row). A missing document is a
-        silent no-op."""
+        """Replace one document's ``documents_vec`` embedding row, keyed by
+        the ``rowid`` borrowed from the parent ``documents`` row. A missing
+        document is a silent no-op."""
         connection = cls._bound_connection()
         row = connection.execute(
             "SELECT rowid FROM documents WHERE id = ?", (doc_id,)
         ).fetchone()
         if row is None:
             return
-        rowid = row[0]
-        connection.execute("DELETE FROM documents_vec WHERE rowid = ?", (rowid,))
-        connection.execute(
-            "INSERT INTO documents_vec (rowid, embedding) VALUES (?, ?)",
-            (rowid, blob),
-        )
+        vec0_upsert(connection, "documents_vec", row[0], blob)
 
     # ── duplicate detection (exact hash + semantic MATCH join) ─────────────
 

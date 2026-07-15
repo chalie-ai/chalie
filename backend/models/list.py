@@ -18,6 +18,7 @@ from typing import ClassVar, Self
 
 from models.model import Model
 from models.query import Query
+from services._vec_upsert import vec0_upsert
 
 
 class List(Model):
@@ -147,7 +148,4 @@ class List(Model):
             "SELECT rowid FROM lists WHERE id = ?", (list_id,)
         ).fetchone()
         if row:
-            connection.execute(
-                "INSERT OR REPLACE INTO lists_vec(rowid, embedding) VALUES (?, ?)",
-                (row[0], blob),
-            )
+            vec0_upsert(connection, "lists_vec", row[0], blob)

@@ -23,6 +23,7 @@ from typing import ClassVar, cast
 
 from models.model import Model
 from models.thread_gist import ThreadGist
+from services._vec_upsert import vec0_upsert
 from services.database import Database
 
 
@@ -193,10 +194,7 @@ class ScheduledItem(Model):
                 "SELECT 1 FROM scheduled_items WHERE id = ?", (item_id,)
             ).fetchone() is None:
                 return
-            conn.execute(
-                "INSERT OR REPLACE INTO scheduled_items_vec (rowid, embedding) VALUES (?, ?)",
-                (item_id, embedding_blob),
-            )
+            vec0_upsert(conn, "scheduled_items_vec", item_id, embedding_blob)
 
     @classmethod
     def delete_embedding(cls, item_id: int) -> None:

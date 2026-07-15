@@ -9,7 +9,8 @@ exclusively through it.
 
 Rule-3 depth carve-out (precedent: ``data_graph`` imports ``time_utils``): the
 only ``services`` reached are pure utilities — ``time_utils`` for the canonical
-clock, ``_fts_delete`` for the external-content FTS removal idiom, and
+clock, ``_fts_delete`` for the external-content FTS removal idiom,
+``_vec_upsert`` for the vec0 embedding-replace idiom, and
 ``episodic_constants`` for the novelty comparison-set sizes.
 
 The retrieval lanes (:meth:`fts_search`, :meth:`nearest`) attach two transient
@@ -33,6 +34,7 @@ from contracts.search_config import EPISODE_SEARCH, SearchConfig
 from models.model import Model
 from models.query import Query
 from services._fts_delete import fts5_external_delete
+from services._vec_upsert import vec0_upsert
 from services.episodic_constants import NOVELTY_ACTIVATION_LIMIT, NOVELTY_RECENT_LIMIT
 from services.search_expander_service import enqueue
 from services.time_utils import PARSE_SENTINEL, parse_utc, utc_now
@@ -350,10 +352,7 @@ class Episode(Model):
             "SELECT rowid FROM episodes WHERE id = ?", (episode_id,)
         ).fetchone()
         if row:
-            connection.execute(
-                "INSERT OR REPLACE INTO episodes_vec(rowid, embedding) VALUES (?, ?)",
-                (row[0], blob),
-            )
+            vec0_upsert(connection, "episodes_vec", row[0], blob)
 
     @classmethod
     def novelty_comparison_blobs(cls, channel: str) -> list[bytes]:
