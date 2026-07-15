@@ -62,16 +62,54 @@ fi
 _install -e "$SCRIPT_DIR/backend"
 
 # ─── Launch ──────────────────────────────────────────────────────────────────
-# Loop: Python exits with code 42 to request a restart (e.g. after in-place update).
-# Any other exit code passes through normally.
+# Supervised restart loop. Exit codes:
+#   42  → intentional restart (restart_service.py: snapshot import, in-place
+#         update) → re-sync deps and relaunch immediately. Resets the crash
+#         counter — a clean restart is never penalised.
+#   0   → clean shutdown → exit 0, do not loop.
+#   *   → crash / OOM / uncaught exception → relaunch with exponential backoff.
+#         After MAX_CRASHES consecutive crashes without a clean run, give up and
+#         surface the last exit code (a deterministically-fatal startup loops
+#         forever otherwise — log flooding, CPU churn). A run that stays up
+#         longer than RUN_HEALTHY_SECS resets the crash counter.
+MAX_CRASHES=5
+RUN_HEALTHY_SECS=30
+_crashes=0
+_backoff=1
+
 while true; do
   # set -e would kill the script on run.py's non-zero exit before we could
   # read it, defeating the restart loop. Capture via `||` (exempt from errexit).
+  _start=$SECONDS
   _EXIT=0
   "$PYTHON" "$SCRIPT_DIR/backend/run.py" --port="$_PORT" --host="$_HOST" || _EXIT=$?
-  if [[ "$_EXIT" -ne 42 ]]; then
-    exit $_EXIT
+
+  # Intentional restart: re-sync deps, relaunch immediately, reset crash state.
+  if [[ "$_EXIT" -eq 42 ]]; then
+    echo "→ Restart requested (exit 42). Re-syncing deps and relaunching..."
+    _install -e "$SCRIPT_DIR/backend"
+    _crashes=0
+    _backoff=1
+    continue
   fi
-  echo "→ Restart requested (exit 42). Re-syncing deps and relaunching..."
-  _install -e "$SCRIPT_DIR/backend"
+
+  # Clean shutdown: exit without looping.
+  if [[ "$_EXIT" -eq 0 ]]; then
+    exit 0
+  fi
+
+  # Crash: back off and retry, up to the cap. A run that stayed up long enough
+  # to be healthy resets the counter — only rapid repeated crashes escalate.
+  if (( SECONDS - _start >= RUN_HEALTHY_SECS )); then
+    _crashes=0
+    _backoff=1
+  fi
+  _crashes=$((_crashes + 1))
+  if [[ "$_crashes" -gt "$MAX_CRASHES" ]]; then
+    echo "→ Process crashed ($MAX_CRASHES consecutive times). Giving up (exit $_EXIT)." >&2
+    exit "$_EXIT"
+  fi
+  echo "→ Process crashed (exit $_EXIT). Retry $_crashes/$MAX_CRASHES in ${_backoff}s..." >&2
+  sleep "$_backoff"
+  _backoff=$((_backoff * 2))
 done
