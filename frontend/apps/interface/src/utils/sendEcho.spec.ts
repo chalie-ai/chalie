@@ -116,6 +116,71 @@ describe('mountSendEcho — container resolution', () => {
   });
 });
 
+describe('mountSendEcho — attachments render on the echo itself', () => {
+  it('paints the attachment chips at mount, so a sent file is named on the FIRST frame rather than only after the refetch redraws the bubble', async () => {
+    const { turnDom, sendEcho } = await fresh();
+    const container = document.body.appendChild(document.createElement('div'));
+    turnDom.registerSurface({
+      id: turnDom.SPINE_SURFACE_ID,
+      type: 'user',
+      container,
+      component: StubComponent,
+    });
+
+    sendEcho.mountSendEcho('here are the files', null, 'user', [
+      new File(['x'], 'holiday-snap.png', { type: 'image/png' }),
+      new File(['y'], 'invoice.pdf', { type: 'application/pdf' }),
+    ]);
+
+    const host = container.querySelector<HTMLElement>('[data-send-echo]');
+    expect(host!.textContent).toContain('holiday-snap.png');
+    expect(host!.textContent).toContain('invoice.pdf');
+
+    container.remove();
+  });
+
+  it("renders a file-only send as its chips alone — never the raw '[File attached]' placeholder, which UserBubble only suppresses while attachments are present", async () => {
+    const { turnDom, sendEcho } = await fresh();
+    const container = document.body.appendChild(document.createElement('div'));
+    turnDom.registerSurface({
+      id: turnDom.SPINE_SURFACE_ID,
+      type: 'user',
+      container,
+      component: StubComponent,
+    });
+
+    // Mirrors session.sendMessage's `text || FILE_PLACEHOLDER` for a send that
+    // carries files and no typed text.
+    sendEcho.mountSendEcho('[File attached]', null, 'user', [
+      new File(['x'], 'scan.jpg', { type: 'image/jpeg' }),
+    ]);
+
+    const host = container.querySelector<HTMLElement>('[data-send-echo]');
+    expect(host!.textContent).toContain('scan.jpg');
+    expect(host!.textContent).not.toContain('[File attached]');
+
+    container.remove();
+  });
+
+  it('renders no attachment list for a text-only send', async () => {
+    const { turnDom, sendEcho } = await fresh();
+    const container = document.body.appendChild(document.createElement('div'));
+    turnDom.registerSurface({
+      id: turnDom.SPINE_SURFACE_ID,
+      type: 'user',
+      container,
+      component: StubComponent,
+    });
+
+    sendEcho.mountSendEcho('just text', null, 'user');
+
+    const host = container.querySelector<HTMLElement>('[data-send-echo]');
+    expect(host!.querySelector('.user-attachments')).toBeNull();
+
+    container.remove();
+  });
+});
+
 describe('mountSendEcho — remount', () => {
   it('replaces the existing echo on the same scope rather than stacking a second one', async () => {
     const { turnDom, sendEcho } = await fresh();

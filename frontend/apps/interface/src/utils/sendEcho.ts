@@ -22,7 +22,7 @@
  * tokens TurnView itself uses.
  */
 import { createVNode, render } from 'vue';
-import type { ConversationMessage } from '../api/conversation';
+import type { ConversationAttachment, ConversationMessage } from '../api/conversation';
 import UserBubble from '../components/conversation/UserBubble.vue';
 import { onTurnLanded, resolveScopeContainer } from './turnDom';
 
@@ -72,14 +72,44 @@ function _ensureRegistered(): void {
 }
 
 /**
+ * The echoed view of a not-yet-uploaded attachment. `filename`/`mime_type` are
+ * read straight off the File, which is everything UserBubble renders — the chip
+ * label and its image-vs-document icon. `doc_id`/`url` stay empty because the
+ * document does not exist server-side until the multipart POST lands and the
+ * backend ingests it; UserBubble's `open()` no-ops on an empty `url`, so an
+ * in-flight chip is inert rather than a link to nothing. The real attachments,
+ * carrying both, arrive with the REST refetch that replaces this echo.
+ */
+function echoAttachments(files: File[]): ConversationAttachment[] {
+  return files.map((file) => ({
+    doc_id: '',
+    filename: file.name,
+    mime_type: file.type,
+    is_image: file.type.startsWith('image/'),
+    url: '',
+  }));
+}
+
+/**
  * Mount (or replace) the transient echo for a send scope into the surface
  * container that will host the upcoming turn — the spine for `threadId`
  * null, the open thread panel for a reply. No-op when no surface currently
  * claims the scope (e.g. a reply fired while its panel isn't registered).
  * One echo per scope: calling this again for the same scope replaces the
  * previous element rather than stacking.
+ *
+ * `files` are the raw attachments riding the same send. Omitting them doesn't
+ * just cost the chips: a file-only send's text IS the '[File attached]'
+ * placeholder, which UserBubble only hides when attachments are present — so
+ * an attachment-less echo renders that placeholder as literal message text
+ * until the refetch lands.
  */
-export function mountSendEcho(text: string, threadId: number | null, type: string): void {
+export function mountSendEcho(
+  text: string,
+  threadId: number | null,
+  type: string,
+  files: File[] = [],
+): void {
   _ensureRegistered();
   const container = resolveScopeContainer(threadId, type);
   if (!container) return;
@@ -98,6 +128,7 @@ export function mountSendEcho(text: string, threadId: number | null, type: strin
     content: text,
     timestamp: new Date().toISOString(),
     turn_id: null,
+    attachments: echoAttachments(files),
   };
   render(createVNode(UserBubble, { message }), host);
 

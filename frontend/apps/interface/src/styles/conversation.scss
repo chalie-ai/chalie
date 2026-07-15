@@ -251,23 +251,17 @@
   margin-left: auto;
 }
 
-// Mobile: the trace-pill + thread-pill can't share one row with the timestamp
-// and action buttons without spilling. Let the row wrap, but reorder so the
-// timestamp + acts stay coherent on line 1 (acts keeps its right-aligned
-// margin-left:auto there) instead of natural DOM order stranding the acts
-// alone on a trailing line after the pills. Pills fall to line 2 together.
+// Mobile: the trace-pill + thread-pill can't always share one row with the
+// timestamp and action buttons without spilling, so let the row wrap. Source
+// order already reads timestamp → pills → acts, and `margin-left:auto` on the
+// acts holds them at the right edge of whichever line they land on — so the
+// acts stay the rightmost control at every width. Do NOT `order:` the acts
+// ahead of the pills to force a two-line split: when the row DOES fit on one
+// line no wrap happens, and the reorder simply lands the pill to the RIGHT of
+// the actions.
 @media (max-width: 640px) {
   .speech-form__meta {
     flex-wrap: wrap;
-  }
-
-  .speech-form__acts {
-    order: 2;
-  }
-
-  .trace-pill,
-  .thread-pill {
-    order: 3;
   }
 }
 

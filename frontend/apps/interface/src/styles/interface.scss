@@ -337,6 +337,15 @@ body {
 
 .input-dock__inner {
   flex: 1;
+  // This row is itself a flex ITEM of __outer, and its `overflow` is visible —
+  // so its automatic minimum size resolves to min-content, which the textarea's
+  // `field-sizing: content` grows to fit whatever is typed. One long unbroken
+  // token (a pasted URL) then inflates the row past the viewport and carries the
+  // send button off-screen, where `body { overflow-x: hidden }` clips it beyond
+  // reach. `min-width: 0` lets the row shrink and hand the overflow to the
+  // textarea, which scrolls it. The textarea needs no such override — its own
+  // `overflow-y: auto` already zeroes its automatic minimum size.
+  min-width: 0;
   display: flex;
   align-items: center;
   gap: 8px;

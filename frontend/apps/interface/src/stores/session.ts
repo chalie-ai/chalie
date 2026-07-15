@@ -336,7 +336,7 @@ export const useSessionStore = defineStore('session', {
       this._pendingSends.add(key);
       let heldForFrame = false;
       try {
-        mountSendEcho(body, threadId, type);
+        mountSendEcho(body, threadId, type, files);
         const result = await getWebSocket().send(
           body, (m) => this._onSendFailure(m, threadId, type), files, threadId, type, thinkingLevel,
         );
