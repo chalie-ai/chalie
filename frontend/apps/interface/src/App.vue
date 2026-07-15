@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted } from 'vue';
-import { isTauri, platform, useTheme } from '@chalie/shared';
+import { getWebSocket, isTauri, platform, useTheme } from '@chalie/shared';
 import { useSessionStore } from './stores/session';
 import { useVoiceStore } from './stores/voice';
 import { useHeartbeat } from './composables/useHeartbeat';
@@ -35,8 +35,9 @@ function onSearchHotkey(e: KeyboardEvent): void {
   }
 }
 
-// Single auth-failure redirect — wired to BOTH the session store (turn-level
-// auth_failed) and the heartbeat (periodic /auth/status). Mirrors the router gate.
+// Single auth-failure redirect — wired to the session store (turn-level
+// auth_failed), the heartbeat (periodic /auth/status), and the WebSocket send
+// paths (POST /api/thread & /api/action returning 401). Mirrors the router gate.
 let _authRedirected = false;
 function handleAuthFailure(): void {
   if (_authRedirected) return;
@@ -52,6 +53,11 @@ onMounted(() => {
   initTheme();
 
   session.onAuthFailure(handleAuthFailure);
+  // A 401 on the WS send paths (POST /api/thread, /api/action) used to surface
+  // as a generic failure with no auth-expiry signal — messages sent after
+  // session expiry looked accepted while the spinner hung. Route them through
+  // the same redirect as the REST path (ApiClient.fail401).
+  getWebSocket().onAuthError(handleAuthFailure);
   session.init();
   voiceStore.checkAvailability();
 
