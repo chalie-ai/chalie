@@ -125,6 +125,7 @@ export class WebSocketService {
   private anyHandler: ((data: WsInboundEvent) => void) | null = null;
   private disconnectHandler: (() => void) | null = null;
   private connectHandler: (() => void) | null = null;
+  private authErrorHandler: (() => void) | null = null;
   private connected = false;
   private intentionallyClosed = false;
 
@@ -174,6 +175,12 @@ export class WebSocketService {
   }
   onConnect(handler: () => void): void {
     this.connectHandler = handler;
+  }
+  /** Register the auth-expiry handler fired when a send-path fetch returns 401.
+   *  Mirrors ``ApiClient.onAuthError`` — the app owns the redirect decision; the
+   *  service only signals. Deduplication lives in the registered handler. */
+  onAuthError(handler: () => void): void {
+    this.authErrorHandler = handler;
   }
 
   connect(): void {
@@ -367,6 +374,7 @@ export class WebSocketService {
       body: JSON.stringify(payload),
     })
       .then(async (resp) => {
+        if (resp.status === 401) this.authErrorHandler?.();
         const data = (await resp.json().catch(() => ({}))) as Record<string, unknown>;
         const current = this.chatCallbacks === callbacks;
         if (current) {
@@ -415,6 +423,7 @@ export class WebSocketService {
       body: form,
     })
       .then(async (resp) => {
+        if (resp.status === 401) this.authErrorHandler?.();
         if (!resp.ok) {
           onSendFailure('Chat request failed.');
           return null;
