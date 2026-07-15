@@ -23,7 +23,7 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING
 
-from configs.enums.config_type import ConfigTypeEnum
+from configs.channels import config_for
 from models.turn_execution import TurnExecution
 from services.time_utils import utc_now
 from services.websocket import Websocket
@@ -128,7 +128,7 @@ class TurnExecutionService:
         # raise into the caller, so it too falls through to no broadcast.
         if execution.type is not None:
             try:
-                if ConfigTypeEnum.get_by_type(execution.type).BROADCASTS_STATE:
+                if config_for(execution.type).BROADCASTS_STATE:
                     Websocket.broadcast(execution)
             except ValueError as exc:
                 logger.warning(

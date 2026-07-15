@@ -9,6 +9,8 @@ from typing import cast
 
 import pytest
 
+from configs.channels.vision import VisionConfig
+from configs.enums.policy_channel import PolicyChannel
 from controllers.message_processor import MessageProcessor
 
 pytestmark = pytest.mark.unit
@@ -23,8 +25,6 @@ def _png_bytes() -> bytes:
 def test_build_send_messages_attaches_image_from_get_image(
     tmp_path: Path, db: sqlite3.Connection
 ) -> None:
-    from configs.channels.vision import VisionConfig
-    from configs.enums.policy_channel import PolicyChannel
 
     img = tmp_path / "a.png"
     img.write_bytes(_png_bytes())
@@ -43,8 +43,6 @@ def test_build_send_messages_attaches_image_from_get_image(
 
 
 def test_build_send_messages_no_image_when_get_image_returns_none(db: sqlite3.Connection) -> None:
-    from configs.channels.vision import VisionConfig
-    from configs.enums.policy_channel import PolicyChannel
 
     config = VisionConfig(PolicyChannel.CHAT)
     mp = MessageProcessor(config, raw_input="what is this")

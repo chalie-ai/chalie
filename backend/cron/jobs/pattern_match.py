@@ -10,7 +10,10 @@ from __future__ import annotations
 
 import logging
 
+from configs.channels import PatternConfig
+from configs.enums.channels import Channel
 from cron.base import IdleGatedJob
+
 
 logger = logging.getLogger(__name__)
 
@@ -29,7 +32,6 @@ class PatternMatchJob(IdleGatedJob):
 
     def _run(self) -> str:
         """Step 4 — single-pass LLM pattern matcher over a transcript-id window."""
-        from configs.enums.channels import Channel  # noqa: PLC0415
         from models.machine_state import MachineStateRow  # noqa: PLC0415
         _DG_KEY_CURSOR = "pattern_match_cursor"
         _MIN_DELTA = 50
@@ -62,11 +64,10 @@ class PatternMatchJob(IdleGatedJob):
             return f"skip cursor={cursor} latest={latest} delta={delta}"
 
         # 3. Fire the pattern pass via the canonical entry point. The skill-
-        # personalisation sync (PatternSkillSyncHook) runs inside the turn's
-        # post_turn_hooks, keyed off the patterns it touched — both that set and
-        # the confidence-decay sweep are derived from the turn's durable rows, so
-        # nothing needs to be inspected on the processor after it returns.
-        from configs.channels import PatternConfig  # noqa: PLC0415
+        # personalisation sync runs inside the turn's post-turn dispatch, which
+        # keys on role='pattern_match', off the patterns it touched — both that
+        # set and the confidence-decay sweep are derived from the turn's durable
+        # rows, so nothing needs to be inspected on the processor after it returns.
         from controllers.message_processor import MessageProcessor  # noqa: PLC0415
 
         MessageProcessor.process(PatternConfig(cursor, latest))

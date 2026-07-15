@@ -1,14 +1,10 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
-
 from configs.channels._common import DEFAULT_ALWAYS_AVAILABLE
 from configs.enums.channels import Channel
+from configs.enums.config_type import ConfigTypeEnum
 from configs.enums.policy_channel import PolicyChannel
 from services.processor_config import ProcessorConfig
-
-if TYPE_CHECKING:
-    from configs.enums.config_type import ConfigTypeEnum
 
 
 class UserConfig(ProcessorConfig):
@@ -31,8 +27,7 @@ class UserConfig(ProcessorConfig):
             memory_seed=True,
         )
 
-    def type(self) -> "ConfigTypeEnum":
-        from configs.enums.config_type import ConfigTypeEnum  # noqa: PLC0415
+    def type(self) -> ConfigTypeEnum:
         return ConfigTypeEnum.USER
 
     @property

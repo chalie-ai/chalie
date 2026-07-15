@@ -32,7 +32,25 @@ from configs.channels.user_summary import UserSummaryConfig
 from configs.channels.vision import VisionConfig
 from configs.channels.web_browse import WebBrowseConfig
 from configs.channels.web_search import WebSearchConfig
+from configs.enums.config_type import ConfigTypeEnum
 from services.processor_config import ProcessorConfig
+
+
+def config_for(config_type: "ConfigTypeEnum | str") -> ProcessorConfig:
+    """Map a routing type to its ProcessorConfig.
+
+    The single factory used by the thread API and turn-execution services to
+    resolve a ``ConfigTypeEnum`` (or its wire string) into the concrete config
+    subclass that drives that channel.
+    """
+    if config_type == ConfigTypeEnum.USER:
+        return UserConfig()
+    if config_type == ConfigTypeEnum.SCHEDULED:
+        return ScheduledConfig()
+    if config_type == ConfigTypeEnum.DISCOVERY:
+        return DiscoveryConfig()
+    raise ValueError("Invalid type provided")
+
 
 __all__ = [
     "SkillAssociationConfig",
@@ -57,4 +75,5 @@ __all__ = [
     "_collect_transcript_ids",
     "_safe_json_load_object",
     "parse_fact_ops",
+    "config_for",
 ]

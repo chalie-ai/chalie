@@ -12,6 +12,8 @@ import os
 import sys
 from typing import TYPE_CHECKING, cast
 
+from configs.channels import config_for
+from configs.enums.config_type import ConfigTypeEnum
 from services.database import Database
 from utils.logger import Logger
 
@@ -454,9 +456,8 @@ def main() -> None:
     # through an inert MP (§7 G3: crash recovery has no live turn to construct
     # a real one for) so the sweep runs through the same
     # TurnExecutionService.sweep_orphaned() every in-process turn would.
-    from configs.enums.config_type import ConfigTypeEnum
     from controllers.message_processor import MessageProcessor
-    _boot_mp = MessageProcessor(ConfigTypeEnum.get_by_type(ConfigTypeEnum.USER))
+    _boot_mp = MessageProcessor(config_for(ConfigTypeEnum.USER))
     _closed = _boot_mp.turn_execution_service.sweep_orphaned()
     if _closed:
         logger.info("[Startup] Closed %d orphaned turn_executions row(s)", _closed)

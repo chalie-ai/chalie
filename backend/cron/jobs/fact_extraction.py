@@ -11,6 +11,8 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING, Optional, cast
 
+from configs.channels import FactExtractionConfig, parse_fact_ops
+from configs.channels.fact_extraction import OP_DELETE
 from cron.base import IdleGatedJob
 from models.episode import Episode
 
@@ -60,7 +62,6 @@ class FactExtractionJob(IdleGatedJob):
 
     def _run(self) -> str:
         """Step 2 — route hard facts from new episodes into data_graph."""
-        from configs.channels import FactExtractionConfig, parse_fact_ops  # noqa: PLC0415
         from controllers.message_processor import MessageProcessor  # noqa: PLC0415
 
         backlog = Episode.fact_extraction_backlog(_FACT_EXTRACTION_CALL_BUDGET)
@@ -143,7 +144,6 @@ class FactExtractionJob(IdleGatedJob):
         The pipeline writes user_specific only (fact_extraction stamps that kind
         on every op, DELETE included), so both branches route through the FACTS
         vertical: DELETE invalidates the key, ADD/UPDATE upsert it."""
-        from configs.channels.fact_extraction import OP_DELETE  # noqa: PLC0415
         from models.fact import FactRow  # noqa: PLC0415
         from services.fact_service import FactService  # noqa: PLC0415
 

@@ -18,6 +18,7 @@ from __future__ import annotations
 import logging
 import threading
 
+from configs.channels import ThreadGistConfig
 from models.turn_signal import TurnSignal
 from services.llm_service import _strip_think_blocks
 from services.websocket import Websocket
@@ -54,7 +55,6 @@ def generate_gist(trigger_channel: str, trigger_turn_id: int) -> str | None:
     ``trigger_turn_id``) — the controller lifts it onto ``mp._trigger_channel``/
     ``mp._trigger_turn_id`` at construction, which is what ``PromptService``
     reads to assemble this delegate's user prompt from the DB."""
-    from configs.channels import ThreadGistConfig
     from controllers.message_processor import MessageProcessor
 
     mp = MessageProcessor.process(
@@ -71,7 +71,6 @@ def _persist_gist(trigger_channel: str, trigger_turn_id: int, raw_gist: str) -> 
     strip here so no provider path can leak ``<think>`` chain-of-thought into
     the label. A gist that strips to empty (an unclosed think block swallows
     everything after its opener) is dropped loudly, never stored."""
-    from configs.channels import ThreadGistConfig
     from controllers.message_processor import MessageProcessor
 
     label = _strip_think_blocks(raw_gist)

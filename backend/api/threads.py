@@ -33,7 +33,7 @@ from flask import request
 from flask.typing import ResponseReturnValue
 from flask_restx import Namespace, Resource
 
-from configs.enums.config_type import ConfigTypeEnum
+from configs.channels import config_for
 from services.database import Database
 from services.locale_service import CHAT_TIMESTAMP_FMT, format_date
 from services.rich_media_parser import parse as _parse_rich_media
@@ -247,7 +247,7 @@ def _bulk_gists(channel: str, turn_ids: list[int]) -> dict[int, str]:
     config satisfies construction — zero side-effects, I2)."""
     from controllers.message_processor import MessageProcessor  # noqa: PLC0415
 
-    mp = MessageProcessor(ConfigTypeEnum.get_by_type(_TYPE))
+    mp = MessageProcessor(config_for(_TYPE))
     return mp.gist_service.bulk_get(channel, turn_ids)
 
 
@@ -284,7 +284,7 @@ def serialize_turn(channel: str, turn_id: int, config_type: str = _TYPE) -> dict
     with no signal memory.
 
     ``config_type`` is the ConfigType identity string the caller resolved
-    ``channel`` from (the same value passed to :meth:`ConfigTypeEnum.get_by_type`)
+    ``channel`` from (the same value passed to :func:`config_for`)
     and is stamped onto the returned block as ``type`` — the one piece of state
     a refetching client needs to keep addressing the right channel, since
     ``channel`` alone isn't recoverable from a turn_id (a thread refetched
@@ -393,7 +393,7 @@ class ThreadsResource(Resource):
     def get(self, dto: ThreadFeedQuery) -> ThreadFeed:
         """List threads with collapsed metadata (gist, preview, last activity)."""
         limit, offset = (_SEARCH_LIMIT, 0) if dto.q else (dto.limit, dto.offset)
-        channel = ConfigTypeEnum.get_by_type(dto.type).channel
+        channel = config_for(dto.type).channel
         threads, has_more, threads_returned = Transcript.recent_threads(
             channel, exclude_roles=_THREAD_EXCLUDE, limit=limit, offset=offset, query=dto.q,
         )
@@ -415,7 +415,7 @@ class ThreadsBatchResource(Resource):
         """Many turn blocks in one round-trip — a pure concatenation of the
         single-turn getter over the requested ids. Non-numeric ids are ignored."""
         config_type = request.args.get("type", _TYPE)
-        channel = ConfigTypeEnum.get_by_type(config_type).channel
+        channel = config_for(config_type).channel
         ids = [int(t) for t in request.args.getlist("id[]") if t.isdigit()]
         return ThreadBatch(
             blocks=[TurnBlock.model_validate(serialize_turn(channel, t, config_type)) for t in ids]
@@ -436,7 +436,7 @@ class ThreadItemResource(Resource):
         """One turn's full block — the WS-refetch + expand-on-click read. ``type``
         defaults to ``user``."""
         config_type = request.args.get("type", _TYPE)
-        channel = ConfigTypeEnum.get_by_type(config_type).channel
+        channel = config_for(config_type).channel
         return TurnBlock.model_validate(serialize_turn(channel, turn_id, config_type))
 
     @require_session
@@ -470,7 +470,7 @@ class ThreadItemResource(Resource):
         # ``type`` selects the ProcessorConfig directly (user → UserConfig,
         # scheduled → ScheduledConfig, its own growing thread on the schedule channel).
         # forked-ness is derived internally by the MessageProcessor from the turn_id.
-        config = ConfigTypeEnum.get_by_type(dto.type)
+        config = config_for(dto.type)
         mp = MessageProcessor.process(config, text, {"attachments": attachments, "thinking_level": dto.thinking_level}, turn_id)
         if mp.execution is None:
             return error("Failed to open turn execution", 500)
@@ -501,7 +501,7 @@ class ThreadItemResource(Resource):
         from controllers.message_processor import MessageProcessor  # noqa: PLC0415
 
         try:
-            config = ConfigTypeEnum.get_by_type(request.args.get("type", _TYPE))
+            config = config_for(request.args.get("type", _TYPE))
         except ValueError:
             return error("Invalid type", 400)
         mp = MessageProcessor(config, turn_id)  # inert (I2): 0 db, 0 ws at construction
@@ -524,6 +524,6 @@ class ThinkingLevelResource(Resource):
         set. ``turn_id == -1`` (new/spine thread) spans every turn of the
         channel; a real id reads that turn's own row."""
         config_type = request.args.get("type", _TYPE)
-        channel = ConfigTypeEnum.get_by_type(config_type).channel
+        channel = config_for(config_type).channel
         level = Transcript.latest_thinking_level(channel, turn_id if turn_id != -1 else None)
         return {"level": level if level is not None else "auto"}

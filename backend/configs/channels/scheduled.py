@@ -19,16 +19,13 @@ no per-schedule subclass.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, ClassVar
-
-from configs.enums.channels import Channel
-from configs.enums.policy_channel import PolicyChannel
-from services.processor_config import ProcessorConfig
-
-if TYPE_CHECKING:
-    from configs.enums.config_type import ConfigTypeEnum
+from typing import ClassVar
 
 from configs.channels._common import DEFAULT_ALWAYS_AVAILABLE
+from configs.enums.channels import Channel
+from configs.enums.config_type import ConfigTypeEnum
+from configs.enums.policy_channel import PolicyChannel
+from services.processor_config import ProcessorConfig
 
 # The scheduled agent gets the same broad tool surface a user turn has so it can
 # perform arbitrary scheduled work: it carries find_tools, so every DISCOVERABLE
@@ -60,8 +57,7 @@ class ScheduledConfig(ProcessorConfig):
             external_turn_id=True,
         )
 
-    def type(self) -> "ConfigTypeEnum":
-        from configs.enums.config_type import ConfigTypeEnum  # noqa: PLC0415
+    def type(self) -> ConfigTypeEnum:
         return ConfigTypeEnum.SCHEDULED
 
     @property

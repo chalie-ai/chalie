@@ -11,6 +11,7 @@ import json
 import logging
 from typing import cast
 
+from configs.channels import SkillAssociationConfig
 from models.behavioral_pattern import BehavioralPattern
 from models.skill import Skill
 from models.skill_association import SkillAssociation
@@ -88,7 +89,6 @@ class SkillAssociationService:
         )
 
         from controllers.message_processor import MessageProcessor
-        from configs.channels import SkillAssociationConfig
         try:
             text = MessageProcessor.process(SkillAssociationConfig(), raw_input=user_prompt).result()
         except Exception as exc:

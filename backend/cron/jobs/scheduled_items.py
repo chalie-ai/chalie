@@ -22,6 +22,7 @@ import logging
 import threading
 from typing import cast
 
+from configs.channels import ScheduledConfig
 from cron.base import ScheduledJob
 from models.scheduled_item import ScheduledItem
 from services.cron_schedule import matches
@@ -112,7 +113,6 @@ class ScheduledItemsDispatcherJob(ScheduledJob):
         LLM loop; this is fire-and-forget — no result() join, no turn_id
         backfill, no cancellation check.
         """
-        from configs.channels import ScheduledConfig  # noqa: PLC0415
         from controllers.message_processor import MessageProcessor  # noqa: PLC0415
 
         MessageProcessor.process(ScheduledConfig(), raw_input=message, turn_id=item_id)

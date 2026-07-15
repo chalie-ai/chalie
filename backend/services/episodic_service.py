@@ -40,6 +40,12 @@ from services.episodic_constants import (
     SEED_CLUSTER_RADIUS,
 )
 from services.time_utils import PARSE_SENTINEL, parse_utc, utc_now
+from configs.channels import (
+    EpisodeEncoderConfig,
+    SuperEpisodeConfig,
+    _collect_transcript_ids,
+    _safe_json_load_object,
+)
 
 if TYPE_CHECKING:
     from services.embedding_service import EmbeddingService
@@ -335,7 +341,6 @@ class EpisodicService:
         episodes via the episode-encoder channel, then store each snapshot. Runs on
         a daemon thread (see :meth:`check_and_store`); never raises."""
         try:
-            from configs.channels import EpisodeEncoderConfig
             from controllers.message_processor import MessageProcessor
             from models.transcript import Transcript
 
@@ -954,11 +959,6 @@ def consolidate_cluster(
     prior_embeddings: list[bytes],
 ) -> bool:
     """Encode + store one parent episode for a cluster. Returns True on write."""
-    from configs.channels import (
-        SuperEpisodeConfig,
-        _collect_transcript_ids,
-        _safe_json_load_object,
-    )
     from services.episodic_constants import SEED_CLUSTER_MIN_SIZE
     from controllers.message_processor import MessageProcessor
 

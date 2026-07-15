@@ -21,6 +21,7 @@ from typing import TYPE_CHECKING, cast
 
 import pytest
 
+from configs.channels.geo_pattern import GeoConfig
 from configs.enums.channels import Channel
 
 if TYPE_CHECKING:
@@ -154,7 +155,6 @@ class TestGeoPatternWindowChannelFilter:
     """
 
     def test_only_user_geoactivity_rows_enter_the_window(self, db: sqlite3.Connection) -> None:
-        from configs.channels.geo_pattern import GeoConfig
         from controllers.message_processor import MessageProcessor
         from services.transcript_service import TranscriptService
 

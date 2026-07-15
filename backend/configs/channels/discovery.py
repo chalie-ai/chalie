@@ -1,12 +1,8 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
-
 from configs.channels.user import UserConfig
 from configs.enums.channels import Channel
-
-if TYPE_CHECKING:
-    from configs.enums.config_type import ConfigTypeEnum
+from configs.enums.config_type import ConfigTypeEnum
 
 # The task handed to the loop each tick — written as a user asking for a research
 # pass, grounded on the fresh main spine (DiscoveryConfig reads the ``user``
@@ -51,6 +47,5 @@ class DiscoveryConfig(UserConfig):
         object.__setattr__(self, "broadcast_to", None)
         object.__setattr__(self, "prompt_channel", Channel.USER.value)
 
-    def type(self) -> "ConfigTypeEnum":
-        from configs.enums.config_type import ConfigTypeEnum  # noqa: PLC0415
+    def type(self) -> ConfigTypeEnum:
         return ConfigTypeEnum.DISCOVERY

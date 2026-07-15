@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import logging
 
+from configs.channels import GeoConfig as _GeoConfig
+from configs.enums.channels import Channel as _Channel
 from cron.base import IdleGatedJob
+
 
 logger = logging.getLogger(__name__)
 
@@ -26,8 +29,6 @@ class GeoPatternsJob(IdleGatedJob):
         ``SubconsciousWorker._step_geo_patterns``."""
         from models.machine_state import MachineStateRow as _MachineStateRow  # noqa: PLC0415
         from models.transcript import Transcript as _Transcript  # noqa: PLC0415
-        from configs.enums.channels import Channel as _Channel  # noqa: PLC0415
-        from configs.channels import GeoConfig as _GeoConfig  # noqa: PLC0415
         from controllers.message_processor import MessageProcessor as _MessageProcessor  # noqa: PLC0415
 
         _DG_KEY_CURSOR = "geo_pattern_cursor"

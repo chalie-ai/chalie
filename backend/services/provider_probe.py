@@ -26,6 +26,8 @@ from urllib.parse import urlparse
 
 import requests as req
 
+from configs.enums.provider_type import ProviderType
+from configs.enums.thinking_level import ThinkingLevel
 from services.provider_db_service import PROVIDER_IN_USE_MSG
 
 logger = logging.getLogger(__name__)
@@ -410,8 +412,6 @@ def test_api_provider(config: dict[str, object], platform: str, model: str, star
         host = config.get('host')
         if host:
             test_config['host'] = host
-        from configs.enums.provider_type import ProviderType
-        from configs.enums.thinking_level import ThinkingLevel
         from services.llm_clients.factory import build_client
         from services.provider_api import ProviderApiRequest
         client = build_client(test_config)

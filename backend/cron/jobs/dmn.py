@@ -17,6 +17,7 @@ from __future__ import annotations
 import logging
 
 from cron.base import IdleGatedJob
+from configs.channels import DmnConfig
 from services.time_utils import parse_utc
 from services.user_synthesis import UserSynthesis
 
@@ -74,7 +75,6 @@ class DmnJob(IdleGatedJob):
 
     def _run(self) -> str:
         """Step 6 — background DMN reflection via DMNMessageProcessor."""
-        from configs.channels import DmnConfig  # noqa: PLC0415
         from controllers.message_processor import MessageProcessor  # noqa: PLC0415
         MessageProcessor.process(DmnConfig())
         return "ok"

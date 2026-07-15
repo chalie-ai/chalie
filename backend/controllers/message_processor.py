@@ -61,6 +61,7 @@ from collections import Counter
 from threading import Thread
 from typing import TYPE_CHECKING, Protocol, cast
 
+from configs.channels.user import UserConfig
 from configs.enums.channels import Channel
 from configs.enums.provider_type import ProviderType
 from configs.enums.thinking_level import ThinkingLevel
@@ -549,7 +550,6 @@ class MessageProcessor:
             f"You replied:\n\n\"{response_text}\"\n\n"
             "Let the user know about this exchange in your own words."
         )
-        from configs.channels.user import UserConfig  # noqa: PLC0415
         MessageProcessor.process(
             UserConfig({"hidden_input": True}),
             raw_input=disclosure_input,

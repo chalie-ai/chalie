@@ -24,6 +24,7 @@ from typing import cast
 
 import pytest
 
+from configs.channels.user import UserConfig
 from configs.enums.policy_channel import PolicyChannel
 from controllers.message_processor import MessageProcessor
 from services.provider_db_service import ProviderDbService
@@ -38,7 +39,6 @@ def _png_bytes() -> bytes:
 
 
 def _make_user_mp() -> MessageProcessor:
-    from configs.channels.user import UserConfig
 
     return MessageProcessor(UserConfig(), raw_input="x")
 
@@ -149,7 +149,6 @@ def test_vision_run_unknown_doc_id_is_error(db: sqlite3.Connection) -> None:
 
 import hashlib  # noqa: E402 — appended to existing file
 
-from configs.channels import UserConfig  # noqa: E402
 from services.document_service import DocumentService  # noqa: E402
 from services.file_mapper_service import FileMapperService  # noqa: E402
 from tests._tool_result_harness import body, head, seed_transcript  # noqa: E402

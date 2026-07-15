@@ -19,8 +19,8 @@ from flask import request
 from flask.typing import ResponseReturnValue
 from flask_restx import Namespace, Resource
 
+from configs.channels import config_for
 from configs.enums.channels import Channel
-from configs.enums.config_type import ConfigTypeEnum
 from models.compaction import Compaction
 from models.data_graph import DataGraphRow
 from models.episode import Episode
@@ -561,7 +561,7 @@ class ContextUsageResource(Resource):
                     turn_id = None
             else:
                 turn_id = None
-            job_name = ConfigTypeEnum.get_by_type(config_type).job
+            job_name = config_for(config_type).job
             last = LlmLogService.last_request_tokens(job_name, turn_id)
             selected = ProviderCacheService.get_selected_provider() or {}
             return ContextUsage(

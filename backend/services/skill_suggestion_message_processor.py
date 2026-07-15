@@ -1,6 +1,7 @@
 import logging
 import threading
 
+from configs.channels import SkillSuggestionConfig
 from services.file_mapper_service import FileMapperService
 
 logger = logging.getLogger(__name__)
@@ -41,7 +42,6 @@ def _run_suggestion_processor(
     trigger_turn_id: int,
 ) -> None:
     try:
-        from configs.channels import SkillSuggestionConfig
         from controllers.message_processor import MessageProcessor
 
         # Trigger context — the user turn that fired this suggestion pass —

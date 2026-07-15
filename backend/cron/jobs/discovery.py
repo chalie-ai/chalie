@@ -10,6 +10,8 @@ min-interval on top of that.
 from datetime import timedelta
 
 from cron.base import IdleGatedJob
+from configs.channels import DiscoveryConfig
+from configs.channels.discovery import DISCOVERY_PROMPT
 from services.durable_timestamp import DurableTimestamp
 from services.time_utils import utc_now
 
@@ -56,8 +58,6 @@ class DiscoveryJob(IdleGatedJob):
         no metadata is threaded in; the loop records anything worth keeping as
         a discovery memory on its own.
         """
-        from configs.channels import DiscoveryConfig  # noqa: PLC0415
-        from configs.channels.discovery import DISCOVERY_PROMPT  # noqa: PLC0415
         from controllers.message_processor import MessageProcessor  # noqa: PLC0415
 
         MessageProcessor.process(DiscoveryConfig(), DISCOVERY_PROMPT)

@@ -39,6 +39,9 @@ import json
 import logging
 from typing import TYPE_CHECKING, cast
 
+from configs.channels.dmn import DmnConfig
+from configs.channels.external_agent import EAMPConfig
+from configs.channels.user import UserConfig
 from configs.enums.channels import Channel
 from models.behavioral_pattern import BehavioralPattern
 from models.fact import FactRow
@@ -140,9 +143,6 @@ class PromptService:
         ``EAMPConfig`` — wrap that base literal with runtime data (voice line,
         provider content-field, resolved names) here. Branching is on the config
         class, never the channel string, so subclass routing is automatic."""
-        from configs.channels.external_agent import EAMPConfig  # noqa: PLC0415
-        from configs.channels.user import UserConfig  # noqa: PLC0415
-
         config = self.mp.config
         if isinstance(config, UserConfig):
             return self._user_system_prompt()
@@ -689,7 +689,6 @@ class PromptService:
         at prompt-assembly time. Sourced from ``DmnConfig``'s own DB-reaching
         static (marked ``@todo: Refactor`` there): one home for the DMN reads
         until episodic prompt-context is folded onto the spine as a service."""
-        from configs.channels.dmn import DmnConfig  # noqa: PLC0415
         try:
             return DmnConfig.recent_salient_user_episodes()
         except Exception as exc:  # noqa: BLE001 — a reflection-context read must not crash the turn

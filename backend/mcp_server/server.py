@@ -25,6 +25,7 @@ from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoin
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 
+from configs.channels import EAMPConfig
 from exceptions import ProviderRetriesExhaustedError
 from services.database import Database
 
@@ -135,7 +136,6 @@ def create_mcp_server(host: str = "0.0.0.0", port: int = _DEFAULT_PORT) -> FastM
         if errors:
             return "Invalid parameters:\n" + "\n".join(f"- {e}" for e in errors)
 
-        from configs.channels import EAMPConfig  # noqa: PLC0415
         from controllers.message_processor import MessageProcessor  # noqa: PLC0415
 
         wrapper_id = _current_wrapper_id.get()

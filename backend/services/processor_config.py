@@ -169,7 +169,7 @@ class ProcessorConfig(ABC):
     def type(self) -> "ConfigTypeEnum | None":
         """The top-level API routing identifier for this config, or ``None`` for the
         internal channels that the thread API never addresses. Only the two configs
-        reachable via ``ConfigTypeEnum.get_by_type`` override this."""
+        reachable via ``config_for`` override this."""
         return None
 
     def type_value(self) -> "str | None":

@@ -19,6 +19,8 @@ from flask.testing import FlaskClient
 if TYPE_CHECKING:
     from services.provider_api import ProviderApiResponse
 
+from configs.enums.provider_type import ProviderType
+from configs.enums.thinking_level import ThinkingLevel
 import services.vault_service as _vault_mod
 from services.vault_service import _vault_state, get_vault_service
 
@@ -193,8 +195,6 @@ class TestCodexCliProvider:
     # ------------------------------------------------------------------
 
     def _send(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, messages: list[dict[str, object]]) -> "ProviderApiResponse":
-        from configs.enums.provider_type import ProviderType
-        from configs.enums.thinking_level import ThinkingLevel
         from services.llm_clients.codex_cli import CodexCliClient
         from services.provider_api import ProviderApiRequest
 
@@ -242,8 +242,6 @@ class TestCodexCliProvider:
         assert resp.tool_calls is None
 
     def test_estimate_request_tokens_includes_overhead(self) -> None:
-        from configs.enums.provider_type import ProviderType
-        from configs.enums.thinking_level import ThinkingLevel
         from services.llm_clients.codex_cli import CodexCliClient
         from services.provider_api import ProviderApiRequest
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 
+from configs.channels import UserSummaryConfig
 from cron.base import IdleGatedJob
 from services.user_synthesis import UserSynthesis
 
@@ -25,8 +26,7 @@ class SynthesisJob(IdleGatedJob):
     def _run(self) -> str:
         """Run the user synopsis refresh. Ported verbatim from
         ``SubconsciousWorker._step_synthesis``."""
-        from configs.channels import UserSummaryConfig
-        from controllers.message_processor import MessageProcessor
+        from controllers.message_processor import MessageProcessor  # noqa: PLC0415
 
         if not UserSynthesis.needs_refresh():
             logger.info(f"{LOG_PREFIX} No new traits since last synthesis; skipping")
