@@ -478,11 +478,13 @@ class MessageProcessor:
         transcript ``role`` — the identity OLD composed ``post_turn_hooks`` per.
         The proactive-suggestion handler additionally requires the genuine
         ``user`` channel: DiscoveryConfig and ScheduledConfig also carry
-        ``role='user'`` but write to their own channels, and OLD never gave
-        either the ProactiveSuggestionHook (discovery ran PersistDiscoveryRunHook;
-        scheduled hands its result to a separate UserConfig turn that reaches the
-        UI). Every handler is isolated — a failure is logged, never propagated, so
-        post-turn work can never fail an otherwise-complete turn."""
+        ``role='user'`` but write to their own channels, and neither takes the
+        legacy ``ProactiveSuggestionHook`` path (discovery is a silent loop —
+        ``broadcast_to`` is ``None``, so a suggestion would have nowhere to
+        surface; scheduled self-surfaces in its own thread and the scheduler
+        dock, with no user-channel relay, §13.9). Every handler is isolated — a
+        failure is logged, never propagated, so post-turn work can never fail an
+        otherwise-complete turn."""
         role = self.config.role
         try:
             if role == "user" and self.channel == Channel.USER:
