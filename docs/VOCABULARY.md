@@ -39,6 +39,8 @@ Domain-specific terminology used throughout the Chalie system.
 | `flashback` | The curated memory bundle injected before iteration 0 on session start. | "5 facts + 3 dated episode gists" |
 | `compaction` | Off-spine durable checkpoint of past transcript rows. | MAIN watermark `turn_id=15` |
 | `documents` | Uploaded file metadata + chunks. | `mime_type='application/pdf'`, `status='ready'` |
+| `TextReader` | The single place a URL or filesystem path becomes plain text: a URL branch (fetch + HTML extraction, with plain-text suffixes passing through verbatim) or a file branch (mime detect + extract). Returns the full text verbatim — no truncation, no whitespace munging — and raises rather than returning empty on failure. | `TextReader(file_path_or_url).get_value()` |
+| `ImageDescription` | The single place an image becomes text: a two-rung ladder, the configured vision provider first, an OCR fallback second. A description is mandatory — exhausting both rungs raises rather than returning empty. | `ImageDescription(file_path, prompt).get_value()` |
 | `policies` | The Allow / Ask / Deny gate per tool action. | `'allow'`, `'ask'`, `'deny'` |
 | `vault` | Envelope-encrypted credential store (AES-256-GCM, DEK wrapped by password-derived KEK). | `kdf_iterations=600000` |
 | `MessageProcessor` | The single flat orchestrator for every LLM turn (one per turn, per channel). | lifecycle signals: `working`, `done`, `tool_called` |
