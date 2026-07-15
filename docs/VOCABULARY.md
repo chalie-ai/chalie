@@ -46,7 +46,6 @@ Domain-specific terminology used throughout the Chalie system.
 | `should_stop` | Cooperative-stop predicate checked at each turn checkpoint; True once a cancel has been requested. Replaces the old in-memory cancel `Event`. | `if self.should_stop(): raise _TurnCancelled` |
 | `ProcessorConfig` | Frozen dataclass parameterising one channel's `MessageProcessor`. | `UserConfig`, `DmnConfig`, `DiscoveryConfig` |
 | `policy_channel` | Enum picking which policy rows apply. | `CHAT`, `SUBCONSCIOUS`, `EXTERNAL_AGENT` |
-| `post_turn_hooks` | Tuple of independent after-turn work units a config owns. | `ProactiveSuggestionHook`, `PersistUserSummaryHook` |
 | `memory_seed` | Flag that fires a `memory.recall` at turn 0. | `UserConfig.memory_seed=True` |
 | `broadcast_to` | The live WebSocket output target for a channel. | `"user"` (UserConfig only) |
 | `SubconsciousWorker` | Idle-gated 5-minute cognition tick (consolidate, decay, patterns, synthesis…). | runs `_step_consolidate`, `_step_decay` |

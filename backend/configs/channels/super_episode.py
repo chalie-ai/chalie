@@ -82,12 +82,13 @@ def _collect_transcript_ids(episodes: list[object]) -> set[int]:
 
 
 class SuperEpisodeConfig(ProcessorConfig):
-    """post_turn_hooks = () (caller owns the episode write).
+    """No post-turn work runs (the caller owns the episode write).
 
-    sources are captured at construction so ``PromptService`` can build the user
-    prompt self-contained per cluster (the cluster loop lives in the caller). The
-    ``channel`` arg is the user channel being consolidated; the processor's
-    transcript channel is always 'super_episode_encoder'.
+    ``role='super_episode_encoder'`` matches no ``MessageProcessor._post_turn``
+    branch. sources are captured at construction so ``PromptService`` can build
+    the user prompt self-contained per cluster (the cluster loop lives in the
+    caller). The ``channel`` arg is the user channel being consolidated; the
+    processor's transcript channel is always 'super_episode_encoder'.
     """
 
     def __init__(self, channel: str, sources: list[object]) -> None:
