@@ -2,58 +2,43 @@
 
 Proves the regression that even with a fully-resolvable vision provider
 configured in the real DB, analyze() does pure local OCR and never dials the
-provider — it is the no-vision-provider fallback for the new describe_image()
-core. Drives the real analyze() entry point against the real test DB with a
-real provider row created by the production ProviderDbService factory.
+provider — it is the fallback rung of the ImageDescription core, used whenever
+the vision provider is unset OR fails. Drives the real analyze() entry point
+against the real test DB with a real provider row created by the production
+ProviderDbService factory.
 """
 
-import base64
 import sqlite3
-from typing import cast
 
 import pytest
 
 from services import image_context_service
 from services.provider_db_service import ProviderDbService
+from tests.helpers import blank_png_bytes, force_vision_provider, ocrable_png_bytes
 
 pytestmark = pytest.mark.unit
 
 
-def _png_bytes() -> bytes:
-    # 1x1 PNG — real, decodable image bytes.
-    return base64.b64decode(
-        b"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
-    )
-
-
 def test_analyze_is_ocr_only_even_with_vision_provider_configured(db: sqlite3.Connection) -> None:
-    svc = ProviderDbService()
+    # A genuine, RESOLVABLE vision provider IS configured — and unreachable, so
+    # any attempt to dial it would surface as an error rather than pass silently.
+    force_vision_provider(db)
+    assert ProviderDbService().get_vision_provider() is not None
 
-    # Real factory creates the row. Platform 'ollama' is not key-requiring, so
-    # create_provider runs a live vision probe against the unreachable host and
-    # records supports_vision=0. Force the column to 1 directly in the real DB
-    # so a genuine, RESOLVABLE vision provider is configured — exactly the state
-    # a successful probe would have written.
-    provider = svc.create_provider(
-        {
-            "name": "probe-vision",
-            "platform": "ollama",
-            "model": "llava",
-            "host": "http://127.0.0.1:1",
-            "api_key": "",
-        }
-    )
-    pid = cast(int, cast("dict[str, object]", provider)["id"])
-    db.execute("UPDATE providers SET supports_vision = 1 WHERE id = ?", (pid,))
-    db.commit()
-
-    svc.set_vision_provider(pid)
-    # A vision provider IS configured and resolvable.
-    assert svc.get_vision_provider() is not None
-
-    # Yet analyze does pure OCR: it never dials the (unreachable) provider.
-    result = image_context_service.analyze(_png_bytes(), "image/png")
+    # Yet analyze does pure OCR: it never dials the provider, and reads the words.
+    result = image_context_service.analyze(ocrable_png_bytes())
 
     assert result["vision_used"] is False
-    assert "ocr_text" in result
+    assert "INVOICE" in str(result["ocr_text"]).upper()
+    assert result["error"] is None
+
+
+def test_analyze_reads_nothing_from_a_textless_image(db: sqlite3.Connection) -> None:
+    """The empty-OCR pole: a textless image is NOT an analyze() error — it simply
+    yields no text. Deciding that a description is mandatory is ImageDescription's
+    job, not this service's."""
+    result = image_context_service.analyze(blank_png_bytes())
+
+    assert result["ocr_text"] == ""
+    assert result["has_text"] is False
     assert result["error"] is None

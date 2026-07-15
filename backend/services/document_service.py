@@ -188,6 +188,17 @@ class DocumentService:
         except Exception as e:
             logger.error(f"[DOCS] update_clean_text failed: {e}")
 
+    @staticmethod
+    def derive_summary(text: str) -> str:
+        """Up to a 500-char summary, truncated at the last sentence boundary after
+        200 chars. Lives here beside ``update_summary`` because every ingest surface
+        needs it — an ability is not a library for services to import from."""
+        summary = text[:500]
+        dot_pos = summary.rfind(". ")
+        if dot_pos > 200:
+            return summary[:dot_pos + 1]
+        return summary
+
     def update_summary(self, doc_id: str, summary: str) -> None:
         try:
             def _update(did: str = doc_id, s: str = summary) -> None:

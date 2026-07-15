@@ -1,32 +1,30 @@
 """
-ReadAbility — Unified text reader for URLs and local files.
+ReadAbility — Thin wrapper around :class:`services.text_reader.TextReader`.
 
-Fetches and extracts clean text from any source:
-  - Web pages and articles (URL)
-  - PDFs, DOCX, PPTX, HTML files, Markdown, plain text (filesystem path)
+The fetch/extract/guard logic now lives in ``services/text_reader.py``; this
+file maps its raises to stable tool codes and truncates to ``max_chars``.
 
 Security:
   - SSRF guard: a SINGLE gate in ``services.web_fetch`` blocks requests to
     private/internal IP ranges (resolved, not string-matched) before any socket
-    opens. The ability catches :class:`FetchBlocked` and maps it to a stable
-    ``code=private-or-internal-url-blocked``.
-  - File guard: blocks reads from system paths (/etc, /proc, /dev, /sys,
-    /var/run).
+    opens. :class:`FetchBlocked` propagates untouched from the service and is
+    mapped here to ``code=private-or-internal-url-blocked``.
+  - File guard: reads from system paths (/etc, /proc, /dev, /sys, /var/run)
+    raise :class:`SystemPathBlocked` in the service and are mapped to
+    ``code=system-path-blocked`` here.
 
 Result contract: every return is a :class:`abilities._result.ToolResult` built
-only via ``ok()`` / ``err()``; the dispatcher renders the wire envelope. Success
-bodies are the extracted text (prose) with ``content_type`` + truncation in the
-meta; errors carry a stable kebab-case ``code`` (never the ``code="error"``
-placeholder) so a weak model can self-correct without re-reading the schema.
+only via ``ok()`` / ``err()``; the dispatcher renders the wire envelope. Errors
+carry a stable kebab-case ``code`` (never the ``code="error"`` placeholder) so a
+weak model can self-correct without re-reading the schema.
 
 Passthrough: a response whose content type is ``text/*`` (but not ``text/html``),
 or a URL/file whose path ends with a known plain-text extension (``.diff``,
-``.patch``, ``.txt`` …), is normalised WITHOUT HTML extraction — raw patches and
-diffs come back verbatim instead of being stripped to ``no-readable-content``.
+``.patch``, ``.txt`` …), skips HTML extraction — raw patches and diffs come back
+verbatim instead of being stripped to ``no-readable-content``.
 """
 
 import logging
-import os
 from typing import TYPE_CHECKING, ClassVar, cast
 
 if TYPE_CHECKING:
@@ -34,17 +32,15 @@ if TYPE_CHECKING:
 
     class _OkTextMeta(TypedDict, total=False):
         source: str
-        content_type: str
         truncated: bool
-from urllib.parse import urlparse
 
 import requests
 
 from abilities._ability import Ability
-from configs.enums.param_key import Keys
 from abilities._result import ToolResult, truncate
-from services.web_fetch import BROWSER, fetch_page
-from exceptions import FetchBlocked
+from configs.enums.param_key import Keys
+from exceptions import FetchBlocked, NoReadableContent, NoTextContent, NotAFile, SourceIsImage, SystemPathBlocked
+from services.text_reader import TextReader
 
 logger = logging.getLogger(__name__)
 
@@ -94,18 +90,6 @@ class ReadAbility(Ability):
     #: seam via the shared ``configs.enums.param_key.VARIANTS[Keys.source]`` ladder, so a
     #: call like ``read({"url": …})`` resolves instead of bouncing on
     #: ``source-required``. No per-tool alias list lives here anymore.
-    _URL_FETCH_TIMEOUT: ClassVar[int] = 15
-
-    _BLOCKED_PATH_PREFIXES: ClassVar[tuple[str, ...]] = ("/etc", "/proc", "/dev", "/sys", "/var/run")
-
-    #: Path suffixes whose bytes are plain text, not markup. A URL/file ending in
-    #: one of these is normalised WITHOUT HTML extraction so raw diffs/patches/code
-    #: come back verbatim instead of being stripped to ``no-readable-content``.
-    _PLAINTEXT_EXTENSIONS: ClassVar[tuple[str, ...]] = (
-        ".diff", ".patch", ".txt", ".md", ".rst", ".csv", ".tsv", ".log",
-        ".json", ".yaml", ".yml", ".toml", ".ini", ".py", ".js", ".ts", ".sh",
-    )
-
     def run(self, params: dict[str, object]) -> ToolResult:
         source = self.param(params, Keys.source)
         if not isinstance(source, str) or not source.strip():
@@ -125,130 +109,52 @@ class ReadAbility(Ability):
 
         max_chars = self.param(params, Keys.max_chars, default=20000, clamp=(100, 100000))
 
-        if self._is_url(source):
-            return self._read_url(source, cast(int, max_chars))
-        return self._read_file(source, cast(int, max_chars))
-
-    # ── Classification ─────────────────────────────────────────────────────────
-
-    @staticmethod
-    def _is_url(source: str) -> bool:
-        return urlparse(source).scheme in ("http", "https", "ftp")
-
-    @classmethod
-    def _is_plaintext_path(cls, path: str) -> bool:
-        return path.lower().endswith(cls._PLAINTEXT_EXTENSIONS)
-
-    # ── URL branch ───────────────────────────────────────────────────────────────
-
-    def _read_url(self, url: str, max_chars: int) -> ToolResult:
         try:
-            html, content_type = fetch_page(
-                url, profile=BROWSER, timeout=self._URL_FETCH_TIMEOUT
-            )
+            text = TextReader(source).get_value()
         except FetchBlocked:
             # The single SSRF gate in web_fetch refused this host.
             return ToolResult.err(
                 "This URL resolves to a private or internal address and was blocked.",
                 code="private-or-internal-url-blocked",
-                source=url,
+                source=source,
             )
         except requests.RequestException as e:
             return ToolResult.err(
                 f"Could not fetch the URL: {str(e)[:150]}",
                 code="fetch-failed",
                 hint="check the URL is reachable and try again",
-                source=url,
+                source=source,
             )
-
-        from services.text_extractor import extract_html, normalize_text
-
-        # Plain-text responses (text/* but not text/html) and known plain-text URL
-        # paths pass through verbatim — extraction would strip a raw patch/diff to
-        # nothing. Everything else goes through HTML extraction as before.
-        path = urlparse(url).path
-        is_plaintext = (
-            (content_type.startswith("text/") and content_type != "text/html")
-            or self._is_plaintext_path(path)
-        )
-
-        if is_plaintext:
-            content = normalize_text(html)
-        else:
-            content = extract_html(html, url=url)
-
-        if not content or not content.strip():
+        except NoReadableContent as e:
+            return ToolResult.err(str(e), code="no-readable-content", source=source)
+        except SystemPathBlocked as e:
+            return ToolResult.err(str(e), code="system-path-blocked", source=source)
+        except FileNotFoundError as e:
             return ToolResult.err(
-                "The page was fetched but no readable text could be extracted.",
-                code="no-readable-content",
-                source=url,
+                str(e), code="file-not-found", hint="check the path is correct", source=source
             )
-
-        return self._ok_text(content, max_chars, source=url, content_type=content_type or "text/html")
-
-    # ── File branch ────────────────────────────────────────────────────────────
-
-    def _read_file(self, file_path: str, max_chars: int) -> ToolResult:
-        expanded = os.path.expanduser(file_path)
-        resolved = os.path.realpath(expanded)
-
-        if self._is_blocked_path(expanded) or self._is_blocked_path(resolved):
+        except NotAFile as e:
+            return ToolResult.err(str(e), code="not-a-file", source=source)
+        except PermissionError as e:
+            return ToolResult.err(str(e), code="no-read-permission", source=source)
+        except SourceIsImage as e:
             return ToolResult.err(
-                "Reading this system path is not permitted.",
-                code="system-path-blocked",
-                source=file_path,
+                str(e),
+                code="not-text",
+                hint="upload it via the document tool, then use the vision tool to see it",
+                source=source,
             )
+        except NoTextContent as e:
+            return ToolResult.err(str(e), code="no-text-content", source=source)
 
-        if not os.path.exists(resolved):
-            return ToolResult.err(
-                "No file exists at that path.",
-                code="file-not-found",
-                hint="check the path is correct",
-                source=file_path,
-            )
-
-        if not os.path.isfile(resolved):
-            return ToolResult.err(
-                "That path is not a file.",
-                code="not-a-file",
-                source=file_path,
-            )
-
-        if not os.access(resolved, os.R_OK):
-            return ToolResult.err(
-                "That file exists but cannot be read (no permission).",
-                code="no-read-permission",
-                source=file_path,
-            )
-
-        from services.text_extractor import detect_mime_type, extract_text, normalize_text
-
-        mime_type = detect_mime_type(resolved)
-        content = extract_text(resolved, mime_type)
-
-        if not content or not content.strip():
-            return ToolResult.err(
-                "No text content could be extracted from that file.",
-                code="no-text-content",
-                source=file_path,
-            )
-
-        content = normalize_text(content)
-        return self._ok_text(content, max_chars, source=file_path, content_type=mime_type)
+        return self._ok_text(text, cast(int, max_chars), source=source)
 
     # ── Shared success builder ─────────────────────────────────────────────────
 
     @staticmethod
-    def _ok_text(content: str, max_chars: int, *, source: str, content_type: str) -> ToolResult:
+    def _ok_text(content: str, max_chars: int, *, source: str) -> ToolResult:
         clipped, was_clipped = truncate(content, max_chars)
-        meta: "_OkTextMeta" = {"source": source, "content_type": content_type}
+        meta: "_OkTextMeta" = {"source": source}
         if was_clipped:
             meta["truncated"] = True
         return ToolResult.ok(clipped, **meta)
-
-    @classmethod
-    def _is_blocked_path(cls, path: str) -> bool:
-        return any(
-            path == p or path.startswith(p + "/")
-            for p in cls._BLOCKED_PATH_PREFIXES
-        )

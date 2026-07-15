@@ -488,11 +488,21 @@ class FolderWatcherService:
 
         def _run() -> None:
             try:
-                from services.text_extractor import extract_text
+                # An image is described (vision -> OCR), anything else is read as
+                # text — the same fork the upload ingest makes, so a watched image
+                # behaves exactly like an uploaded one and raises identically when
+                # no description can be produced.
                 from services.document_chunking import create_document_artifacts
                 from services.document_service import DocumentService
+                from services.text_extractor import detect_mime_type
 
-                text = extract_text(abs_path)
+                if detect_mime_type(abs_path).startswith("image/"):
+                    from services.image_description import ImageDescription, RICH_INDEX_PROMPT
+                    text = ImageDescription(abs_path, RICH_INDEX_PROMPT).get_value()
+                else:
+                    from services.text_reader import TextReader
+                    text = TextReader(abs_path).get_value()
+
                 if not text:
                     DocumentService().update_status(
                         doc_id, 'failed', 'Text extraction empty'
@@ -501,12 +511,7 @@ class FolderWatcherService:
 
                 artifact_count = create_document_artifacts(doc_id, text)
                 svc = DocumentService()
-
-                summary = text[:500]
-                dot_pos = summary.rfind('. ')
-                if dot_pos > 200:
-                    summary = summary[:dot_pos + 1]
-                svc.update_summary(doc_id, summary)
+                svc.update_summary(doc_id, svc.derive_summary(text))
                 svc.update_status(doc_id, 'ready', chunk_count=artifact_count)
             except Exception as e:
                 logger.error(f"[FOLDER WATCHER] Failed to process {doc_id}: {e}")

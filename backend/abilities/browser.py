@@ -227,10 +227,11 @@ class BrowserAbility(Ability):
             )
 
         record_screenshot(self._session_key(), cast("str", ingested["id"]), cast("str", page["url"]))
-        # The shared ingest already ran the page through vision (images route to
-        # describe_image inside _run_upload_extraction), storing the description as
-        # the document's clean_text — the same content document(action='view')
-        # surfaces. Hand it back inline so the agent sees the page directly.
+        # The shared ingest already ran the page through vision (a screenshot is an
+        # image, so it routes to services.image_description.ImageDescription),
+        # storing the description as the document's clean_text — the same content
+        # document(action='view') surfaces. Hand it back inline so the agent sees
+        # the page directly.
         doc = doc_svc.get_document(cast("str", ingested["id"]))
         if doc is None:
             return ToolResult.err(

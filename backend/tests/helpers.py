@@ -5,6 +5,8 @@ All factories return tuples unless noted otherwise. Override any field via keywo
 
 from __future__ import annotations
 
+import base64
+import io
 import sqlite3
 from datetime import datetime, timezone
 from typing import cast
@@ -112,6 +114,80 @@ def insert_scheduled_item(
     )
     db.commit()
     return cast(int, cur.lastrowid)
+
+
+# ─── images ──────────────────────────────────────────────────────────
+# The two poles of the ImageDescription contract: an image RapidOCR can read
+# and one it cannot. Real, decodable bytes — the OCR fork runs for real.
+
+def blank_png_bytes() -> bytes:
+    """A 1x1 white PNG. RapidOCR returns '' for it (error=None, no text)."""
+    return base64.b64decode(
+        b"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk"
+        b"+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+    )
+
+
+def _ocrable_bytes(word: str, fmt: str) -> bytes:
+    """``word`` in large black type on white, encoded as ``fmt``."""
+    from PIL import Image, ImageDraw, ImageFont
+
+    img = Image.new("RGB", (480, 160), "white")
+    draw = ImageDraw.Draw(img)
+    font: object = None
+    for candidate in ("DejaVuSans-Bold.ttf", "Arial Bold.ttf", "DejaVuSans.ttf"):
+        try:
+            font = ImageFont.truetype(candidate, 72)
+            break
+        except OSError:
+            continue
+    draw.text((20, 40), word, fill="black", font=cast("ImageFont.FreeTypeFont | None", font) or ImageFont.load_default())
+    buf = io.BytesIO()
+    img.save(buf, format=fmt)
+    return buf.getvalue()
+
+
+def ocrable_png_bytes(word: str = "INVOICE") -> bytes:
+    """A PNG bearing ``word``. The default word was empirically confirmed readable
+    by RapidOCR in this environment via ``image_context_service.analyze``
+    (ocr_text == 'INVOICE')."""
+    return _ocrable_bytes(word, "PNG")
+
+
+def ocrable_unmimed_bytes(word: str = "INVOICE") -> bytes:
+    """The same readable image in DDS — a format Pillow DECODES but registers no
+    mime for (``Image.MIME.get('DDS') is None``; 23 such formats exist here).
+
+    Pins the rung-gating contract: no mime means the provider rung cannot be fed,
+    NOT that the image is unreadable. OCR reads these bytes fine, so the ladder
+    must fall through to it instead of failing the whole describe."""
+    return _ocrable_bytes(word, "DDS")
+
+
+def force_vision_provider(db: sqlite3.Connection, host: str = "http://127.0.0.1:1") -> int:
+    """Create a REAL provider row via the production factory and make it the
+    resolvable vision provider. ``host`` defaults to a dead port, so the provider
+    is configured-but-unreachable — the state that exercises the failure fork.
+
+    create_provider runs a live vision probe against ``host``; when that host is
+    unreachable it records supports_vision=0, so the column is forced to 1 —
+    exactly the state a successful probe would have written.
+    """
+    from services.provider_db_service import ProviderDbService
+
+    svc = ProviderDbService()
+    provider = cast("dict[str, object]", svc.create_provider({
+        "name": "probe-vision",
+        "platform": "ollama",
+        "model": "llava",
+        "host": host,
+        "api_key": "",
+    }))
+    pid = cast(int, provider["id"])
+    db.execute("UPDATE providers SET supports_vision = 1 WHERE id = ?", (pid,))
+    db.commit()
+    svc.set_vision_provider(pid)
+    return pid
 
 
 # ─── providers ───────────────────────────────────────────────────────

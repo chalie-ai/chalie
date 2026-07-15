@@ -2,20 +2,21 @@
 Text Extractor — Shared text extraction library for files and HTML strings.
 
 Pure functions — no database, no MemoryStore, no Chalie services.
-Used by DocumentProcessingService (file pipeline) and the `read` innate skill
+Used by the document upload pipeline and the `read` innate skill
 (URL fetch + local file read).
+
+TEXT ONLY. An image carries no text to extract — it is DESCRIBED by
+``services.image_description.ImageDescription`` (the vision tool's describe core),
+and the document pipeline routes it there on mime before ever reaching this module.
+Images are rejected loudly here rather than silently plain-read (see extract_text).
 
 Supported formats (heavy-library imports are lazy):
     PDF(pdfplumber), DOCX(python-docx), PPTX(python-pptx),
-    HTML(trafilatura), images via RapidOCR/vision, plain text/markdown.
+    HTML(trafilatura), plain text/markdown.
 """
 
 import logging
 import mimetypes
-import re
-from typing import cast
-
-from configs.enums.policy_channel import PolicyChannel
 
 logger = logging.getLogger(__name__)
 
@@ -23,9 +24,21 @@ logger = logging.getLogger(__name__)
 # ─── Public API ──────────────────────────────────────────────────────────────
 
 def extract_text(file_path: str, mime_type: str | None = None) -> str:
-    """Dispatches to format-specific extractors by MIME type."""
+    """Dispatches to format-specific extractors by MIME type.
+
+    Raises ValueError for any image/* type: an image has no text to extract, and
+    the plain-read fallback below would otherwise decode its binary as UTF-8
+    mojibake and return that as a 'successful' extraction. Callers that may hold
+    an image must fork on mime first and route it to ImageDescription().
+    """
     if not mime_type:
         mime_type = detect_mime_type(file_path)
+
+    if mime_type.startswith('image/'):
+        raise ValueError(
+            f"extract_text cannot read '{mime_type}': images are described, not extracted. "
+            "Route images to services.image_description.ImageDescription()."
+        )
 
     extractors = {
         'application/pdf': _extract_pdf,
@@ -34,24 +47,14 @@ def extract_text(file_path: str, mime_type: str | None = None) -> str:
         'text/html': _extract_html_file,
         'text/plain': _extract_plain,
         'text/markdown': _extract_plain,
-        'image/png': _extract_image,
-        'image/jpeg': _extract_image,
-        'image/webp': _extract_image,
-        'image/gif': _extract_image,
-        'image/bmp': _extract_image,
-        'image/tiff': _extract_image,
     }
 
     extractor = extractors.get(mime_type)
     if extractor:
         return extractor(file_path)
 
-    # Fallback: any image/* type (e.g. image/heic) via OCR
-    if mime_type and mime_type.startswith('image/'):
-        return _extract_image(file_path)
-
     # Fallback: any text/* type (code files, CSV, etc.)
-    if mime_type and mime_type.startswith('text/'):
+    if mime_type.startswith('text/'):
         return _extract_plain(file_path)
 
     logger.warning(f"[TEXT EXTRACTOR] Unsupported mime type '{mime_type}' — attempting plain read")
@@ -77,21 +80,6 @@ def extract_html(html: str, url: str | None = None) -> str:
 
     return ''
 
-
-def normalize_text(text: str) -> str:
-    """
-    Normalize extracted text: strip control characters and collapse whitespace.
-
-    - Removes control chars (except newlines and tabs)
-    - Collapses multiple spaces/tabs to single space
-    - Collapses 3+ consecutive newlines to 2
-    """
-    if not text:
-        return ''
-    text = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]', '', text)
-    text = re.sub(r'[ \t]+', ' ', text)
-    text = re.sub(r'\n{3,}', '\n\n', text)
-    return text.strip()
 
 
 def detect_mime_type(file_path: str) -> str:
@@ -234,20 +222,3 @@ def _extract_plain(path: str) -> str:
     except Exception as e:
         logger.error(f'[TEXT EXTRACTOR] Plain text read failed: {e}')
         return ''
-
-
-def _extract_image(path: str) -> str:
-    """Image 'text' = a rich vision description (OCR fallback when no vision
-    provider is configured). Routed through the shared describe_image() core so an
-    uploaded image is embedded + FTS5-indexed by the normal document pipeline and
-    becomes searchable by its visual content. A configured-but-failing vision
-    provider raises (never swallowed) — the upload pipeline decides how to surface
-    that. Only the description is returned; the user-facing no-vision note
-    is intentionally NOT indexed (it is index noise)."""
-    import mimetypes  # noqa: PLC0415
-    from abilities.vision import RICH_INDEX_PROMPT, describe_image  # noqa: PLC0415
-
-    mime_type = mimetypes.guess_type(path)[0] or 'image/png'
-    out = describe_image(path, mime_type, RICH_INDEX_PROMPT,
-                         policy_channel=PolicyChannel.CHAT)
-    return cast(str, out['description']) or ''

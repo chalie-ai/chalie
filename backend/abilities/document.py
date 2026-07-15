@@ -444,15 +444,6 @@ def _read_existing_metadata(svc: "_DocumentService", doc_id: str) -> "dict[str, 
     return cast("dict[str, object]", existing.get("extracted_metadata") or {})
 
 
-def _derive_summary(text: str) -> str:
-    """Extract up to a 500-char summary, truncated at the last sentence boundary after 200 chars."""
-    summary = text[:500]
-    dot_pos = summary.rfind(". ")
-    if dot_pos > 200:
-        return summary[:dot_pos + 1]
-    return summary
-
-
 def _mark_upload_failed(doc_id: str, error: str) -> None:
     """Best-effort status update to 'failed' — swallow errors since we're already in a failure path."""
     try:
@@ -460,50 +451,6 @@ def _mark_upload_failed(doc_id: str, error: str) -> None:
         DocumentService().update_status(doc_id, "failed", error[:500])
     except Exception:
         logger.exception(f"[DOCUMENT SKILL] Could not mark {doc_id} as failed")
-
-
-def _run_upload_extraction(doc_id: str) -> None:
-    """Extract text + write artifacts + mark ready. Raises on unrecoverable errors."""
-    from services.document_service import DocumentService
-    from services.file_mapper_service import FileMapperService
-    from services.text_extractor import extract_text
-    from services.document_chunking import create_document_artifacts
-
-    svc = DocumentService()
-    doc = svc.get_document(doc_id)
-    if not doc:
-        return
-
-    file_path = cast(str, doc.get("file_path", ""))
-    if not file_path:
-        svc.update_status(doc_id, "failed", "No file path")
-        return
-
-    text = extract_text(str(FileMapperService.get_documents_path(file_path)))
-    is_image = cast(str, doc.get("mime_type") or "").startswith("image/")
-    if not text:
-        if is_image:
-            # A textless image with no vision provider (e.g. a photo with no
-            # words): persist 'ready' so it stays viewable / re-queryable via the
-            # vision tool; there is simply nothing to index. NOT a failure.
-            svc.update_status(doc_id, "ready", chunk_count=0)
-            return
-        svc.update_status(doc_id, "failed", "Text extraction returned empty")
-        return
-
-    artifact_count = create_document_artifacts(doc_id, text)
-
-    # Write clean_text so document(action='view') can return full text.
-    # Merge with prior metadata to avoid clobbering concurrent
-    # synthesis/classification writes.
-    svc.update_extracted_metadata(
-        doc_id,
-        metadata=_read_existing_metadata(svc, doc_id),
-        summary=_derive_summary(text),
-        clean_text=text,
-    )
-    svc.update_status(doc_id, "ready", chunk_count=artifact_count)
-    logger.info(f"[DOCUMENT SKILL] Processed upload {doc_id}: {artifact_count} artifacts")
 
 
 def ingest_file(
@@ -517,11 +464,17 @@ def ingest_file(
     """The single mechanical ingest for an uploaded file given by PATH.
 
     Shared by both upload surfaces — chat attachments (via ``_handle_upload`` /
-    ``ToolDispatcher``) and the Documents library. Copies the source file into
-    the document store, creates the DB row, then runs extraction SYNCHRONOUSLY
-    (images route to vision/OCR, text to the extractor — all inside the local
-    ``_run_upload_extraction`` → ``extract_text``) so the document reaches a
-    terminal state (ready/failed) before returning.
+    ``ToolDispatcher``) and the Documents library.
+
+    CONTENT FIRST, then store, then row: the mime picks the service that produces
+    the document's text (an image is described by ``ImageDescription`` — vision,
+    degrading to OCR; anything else is read by ``TextReader``) BEFORE the file is
+    copied or the row inserted. A file that
+    yields no content is not a document — the caller gets ``{"error"}`` and
+    neither an orphan row nor an orphan file is left behind. Everything runs
+    SYNCHRONOUSLY so the document reaches a terminal state (ready/failed) before
+    returning: callers must be able to read it in the same turn, never "still
+    being processed".
 
     Takes a path, never bytes, so the act-trail (which records every dispatch's
     params verbatim) can never carry a file blob and blow the context window.
@@ -562,6 +515,23 @@ def ingest_file(
     rel_parts = ([subdir] if subdir else []) + [doc_id, name]
     file_path_rel = "/".join(rel_parts)
 
+    # Content FIRST — before the store copy and before the DB row. A document with
+    # no content is not a document: an image whose description could not be
+    # produced (vision down AND OCR blank) must leave no orphan row and no orphan
+    # file behind. The caller gets the error, the store stays clean.
+    try:
+        if content_type.startswith("image/"):
+            from services.image_description import ImageDescription, RICH_INDEX_PROMPT
+            text = ImageDescription(src_path, RICH_INDEX_PROMPT).get_value()
+        else:
+            from services.text_reader import TextReader
+            text = TextReader(src_path).get_value()
+    except Exception as exc:
+        logger.exception(f"[DOCUMENT SKILL] Could not read {name}: {exc}")
+        return {"error": f"Could not read '{name}': {exc}"}
+    if not text.strip():
+        return {"error": f"No content could be extracted from '{name}'."}
+
     try:
         from services.file_mapper_service import FileMapperService
 
@@ -585,13 +555,23 @@ def ingest_file(
         logger.exception(f"[DOCUMENT SKILL] Upload failed: {e}")
         return {"error": f"Failed to upload document: {e}"}
 
-    # Extraction runs synchronously: callers MUST be able to read the document
+    # Indexing runs synchronously: callers MUST be able to read the document
     # immediately (the ACT loop's follow-up view in the same turn, or the library
-    # endpoint's response) — never "still being processed".
+    # endpoint's response) — never "still being processed". A failure here is a
+    # storage fault on a document that DOES have content, so the row is marked
+    # failed rather than vanishing.
     try:
-        _run_upload_extraction(doc_id)
+        artifact_count = create_document_artifacts(doc_id, text)
+        service.update_extracted_metadata(
+            doc_id,
+            metadata=_read_existing_metadata(service, doc_id),
+            summary=service.derive_summary(text),
+            clean_text=text,
+        )
+        service.update_status(doc_id, "ready", chunk_count=artifact_count)
+        logger.info(f"[DOCUMENT SKILL] Processed upload {doc_id}: {artifact_count} artifacts")
     except Exception as exc:
-        logger.exception(f"[DOCUMENT SKILL] Extraction failed for {doc_id}: {exc}")
+        logger.exception(f"[DOCUMENT SKILL] Indexing failed for {doc_id}: {exc}")
         _mark_upload_failed(doc_id, str(exc))
 
     doc = service.get_document(doc_id)
@@ -651,12 +631,7 @@ def _handle_create(service: "_DocumentService", params: dict[str, object]) -> To
 
     artifact_count = create_document_artifacts(doc_id, content)
     service.update_status(doc_id, "ready", chunk_count=artifact_count)
-
-    summary = content[:500]
-    dot_pos = summary.rfind(". ")
-    if dot_pos > 200:
-        summary = summary[:dot_pos + 1]
-    service.update_summary(doc_id, summary)
+    service.update_summary(doc_id, service.derive_summary(content))
 
     return ToolResult.ok(
         {"id": doc_id, "name": name, "artifacts": artifact_count},

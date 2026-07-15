@@ -12,7 +12,7 @@
 Vision Provider from the DB instead of the global selected provider;
 ``policy_channel`` is inherited from the caller. Paired with
 ``VisionAbility`` in ``abilities/vision.py``: the ability's
-``describe_image()`` instantiates this config and calls
+``ImageDescription`` class instantiates this config and calls
 ``MessageProcessor.process()``.
 """
 

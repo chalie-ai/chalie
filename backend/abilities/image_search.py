@@ -19,16 +19,13 @@ import os
 import re
 import uuid
 from concurrent.futures import ThreadPoolExecutor
-from typing import TYPE_CHECKING, ClassVar, cast
+from typing import ClassVar, cast
 
 from abilities._ability import Ability
 from abilities._result import ToolResult
 from configs.enums.param_key import Keys
 from exceptions import DownloadTooLarge, FetchBlocked
 from tools.image_search import fetcher
-
-if TYPE_CHECKING:
-    from controllers.message_processor import MessageProcessor
 
 logger = logging.getLogger(__name__)
 
@@ -206,10 +203,10 @@ class ImageSearchAbility(Ability):
     def _verify_one(
         self, query: str, result: dict[str, str]
     ) -> tuple[dict[str, object] | None, str | None]:
-        # Local imports to avoid import cycles (precedent: vision.py:62-71).
+        # Local imports to avoid import cycles.
         from services import tmp_storage  # noqa: PLC0415
         from services.web_fetch import stream_to_file  # noqa: PLC0415
-        from abilities.vision import describe_image  # noqa: PLC0415
+        from services.image_description import ImageDescription  # noqa: PLC0415
 
         dest = tmp_storage.new_tmp_path(f"imgsearch_{uuid.uuid4().hex[:8]}")
         try:
@@ -227,15 +224,10 @@ class ImageSearchAbility(Ability):
             if not content_type.startswith("image/"):
                 return None, f"{result['url']}: not an image ({content_type or 'unknown'})"
 
-            # describe_image raises on provider failure — let it propagate (not caught here).
-            out = describe_image(
-                dest,
-                content_type,
-                _VISION_PROMPT.format(query=query),
-                policy_channel=cast("MessageProcessor", self.mp).config.policy_channel,
-            )
+            # ImageDescription raises on provider failure or empty OCR — let it propagate (not caught here).
+            description = ImageDescription(dest, _VISION_PROMPT.format(query=query)).get_value()
 
-            verified: dict[str, object] = {**result, "verified": self._is_match(out.get("description"))}
+            verified: dict[str, object] = {**result, "verified": self._is_match(description)}
             return verified, None
         finally:
             # Never let temp cleanup mask a propagating provider failure: the

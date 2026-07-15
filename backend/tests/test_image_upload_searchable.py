@@ -10,53 +10,34 @@ uses, and ``document(action='search')`` recalls it via the REAL recall path
 (FTS5 + vector). Proves the doc_id guardrail is truthful: an image with words
 becomes a searchable document.
 
-Second test proves the ``_run_upload_extraction`` image-aware branch: a textless
-image (no vision provider -> empty OCR) is persisted ``ready`` (viewable /
-re-queryable via the vision tool), NEVER ``failed``.
+Second test proves a description is MANDATORY: a textless image with no vision
+provider yields no description on either rung (provider, then OCR), so the
+upload FAILS VISIBLY rather than persisting a hollow, contentless document.
 
 The OCR fixture word ('INVOICE') was EMPIRICALLY confirmed readable by RapidOCR
-in this environment via ``image_context_service.analyze`` before this test was
-written — ``ocr_text == 'INVOICE'`` (Task 6 commit notes).
+in this environment via ``image_context_service.analyze`` — ``ocr_text ==
+'INVOICE'``. Both fixtures come from tests.helpers so the bytes are described in
+exactly one place.
 """
 
-import base64
-import io
 import sqlite3
-from typing import TYPE_CHECKING, cast
+from typing import cast
 
 import pytest
 
 from abilities.document import DocumentAbility
-from services.document_service import DocumentService
 from services.provider_db_service import ProviderDbService
 from services.tmp_storage import new_tmp_path
-
-if TYPE_CHECKING:
-    from PIL.ImageFont import FreeTypeFont, ImageFont as PILImageFont
+from tests.helpers import blank_png_bytes, ocrable_png_bytes
 
 pytestmark = pytest.mark.unit
 
 
-def _ocrable_invoice_png_path() -> str:
-    from PIL import Image, ImageDraw, ImageFont
-
-    img = Image.new("RGB", (480, 160), "white")
-    draw = ImageDraw.Draw(img)
-    font: "FreeTypeFont | PILImageFont | None" = None
-    for candidate in ("DejaVuSans-Bold.ttf", "Arial Bold.ttf", "DejaVuSans.ttf"):
-        try:
-            font = ImageFont.truetype(candidate, 72)
-            break
-        except Exception:
-            continue
-    if font is None:
-        font = ImageFont.load_default()
-    draw.text((20, 40), "INVOICE", fill="black", font=font)
-    buf = io.BytesIO()
-    img.save(buf, format="PNG")
-    path = new_tmp_path("inv.png")
+def _png_at_tmp_path(name: str, data: bytes) -> str:
+    """Materialise real bytes under the temp prefix the upload pipeline accepts."""
+    path = new_tmp_path(name)
     with open(path, "wb") as fh:
-        fh.write(buf.getvalue())
+        fh.write(data)
     return path
 
 
@@ -74,17 +55,6 @@ def _drain_search_index() -> None:
         item = svc._dequeue()
 
 
-def _blank_png_path() -> str:
-    """A 1x1 white PNG (no words -> empty OCR), written under the temp prefix."""
-    path = new_tmp_path("blank.png")
-    with open(path, "wb") as fh:
-        fh.write(base64.b64decode(
-            b"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk"
-            b"+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
-        ))
-    return path
-
-
 def test_uploaded_image_is_findable_via_document_search(db: sqlite3.Connection) -> None:
     """No vision provider -> OCR description -> the existing embed+FTS5 pipeline ->
     document.search finds the image by content (real recall, FTS5 + vector)."""
@@ -93,7 +63,7 @@ def test_uploaded_image_is_findable_via_document_search(db: sqlite3.Connection) 
     ability = DocumentAbility(mp=None)
     up = ability.run({
         "action": "upload",
-        "path": _ocrable_invoice_png_path(),
+        "path": _png_at_tmp_path("inv.png", ocrable_png_bytes()),
     })
     # : upload now returns a structured ToolResult body
     # ``{"id","hash","name","status"}`` (Task 6 hash preserved as a body key).
@@ -112,20 +82,17 @@ def test_uploaded_image_is_findable_via_document_search(db: sqlite3.Connection) 
     assert any("inv.png" in cast(str, cast(dict[str, object], row).get("name") or "") for row in cast(list[object], found.body)), found.body
 
 
-def test_textless_image_is_ready_not_failed(db: sqlite3.Connection) -> None:
-    """A textless image with no vision provider (empty OCR) must persist 'ready',
-    never 'failed' — directly proves the _run_upload_extraction image-aware branch."""
+def test_textless_image_upload_fails_visibly(db: sqlite3.Connection) -> None:
+    """A textless image with no vision provider exhausts both describe rungs (no
+    provider, then empty OCR). A description is mandatory, so the upload surfaces
+    an ERROR — never a hollow 'ready' document with nothing indexed in it."""
     ProviderDbService().set_vision_provider(None)
 
     ability = DocumentAbility(mp=None)
     up = ability.run({
         "action": "upload",
-        "path": _blank_png_path(),
+        "path": _png_at_tmp_path("blank.png", blank_png_bytes()),
     })
-    # : doc id comes straight off the structured upload body.
-    assert up.status == "success", up
-    doc_id = cast(str, cast(dict[str, object], up.body)["id"])
 
-    doc = DocumentService().get_document(doc_id)
-    assert doc is not None, up
-    assert doc["status"] == "ready", doc.get("status")
+    assert up.status == "error", up
+    assert up.body, up

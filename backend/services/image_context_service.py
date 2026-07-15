@@ -21,13 +21,15 @@ _MAX_DIMENSION = 2048
 _MIN_TEXT_LENGTH = 10
 
 
-def analyze(image_bytes: bytes, _mime_type: str = 'image/png') -> dict[str, object]:
+def analyze(image_bytes: bytes) -> dict[str, object]:
     """Applies safety preprocessing (EXIF strip, dimension normalisation) then
     runs RapidOCR for text extraction. No external providers needed.
 
-    ``vision_used`` is always False — ``analyze`` is OCR-only; the vision
-    path lives in the vision tool / describe_image() core, for which this
-    is the no-vision-provider fallback.
+    Takes no mime type: PIL sniffs the format from the bytes themselves.
+
+    ``vision_used`` is always False — ``analyze`` is OCR-only; the vision path
+    lives in the vision tool / ``ImageDescription`` core, for which this is the
+    fallback whenever the vision provider is unset OR fails.
     """
     start = time.time()
 

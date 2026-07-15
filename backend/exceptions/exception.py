@@ -248,3 +248,40 @@ class ToolParamError(ChalieException):
         self.code = code
         self.hint = hint
         self.valid = tuple(valid)
+
+# ── Text reader layer ─────────────────────────────────────────────────────────
+
+
+class SystemPathBlocked(ChalieException):
+    """Reading a system path (/etc, /proc, /dev, /sys, /var/run) was refused.
+
+    The ``read`` ability maps this to ``code=system-path-blocked``.
+    """
+
+
+class NotAFile(ChalieException):
+    """The path exists but is not a regular file.
+
+    The ``read`` ability maps this to ``code=not-a-file``.
+    """
+
+
+class SourceIsImage(ChalieException):
+    """The source is an image; ``read`` is a text reader.
+
+    The ``read`` ability maps this to ``code=not-text``.
+    """
+
+
+class NoTextContent(ChalieException):
+    """A file was read but yielded no text.
+
+    The ``read`` ability maps this to ``code=no-text-content``.
+    """
+
+
+class NoReadableContent(ChalieException):
+    """A URL was fetched but yielded no readable text.
+
+    The ``read`` ability maps this to ``code=no-readable-content``.
+    """

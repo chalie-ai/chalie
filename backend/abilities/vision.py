@@ -8,12 +8,9 @@
 
 """VisionAbility — read/see an image via the brain's Vision Provider.
 
-describe_image() is the shared describe core: it forks ONCE on whether a vision
-provider is configured — provider -> a single-shot MessageProcessor on the vision
-provider (image attached via VisionConfig.get_image); none -> RapidOCR
-(image_context_service) + a note. The fork is never switched. Two callers:
-VisionAbility.run() (the user-facing tool) and text_extractor (upload-time
-indexing).
+The describe ladder (vision provider primary, OCR fallback) lives in
+``services/image_description.py`` as ``ImageDescription``; this file is the
+user-facing tool that drives it through ``DocumentService`` + ``FileMapperService``.
 
 The paired channel config (``VisionConfig``) lives in
 ``configs/channels/vision.py`` — delegate configs are ProcessorConfig subclasses
@@ -22,63 +19,14 @@ and belong with the other channels, not in the ability."""
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, ClassVar, cast
+from typing import ClassVar, cast
 
 from abilities._delegate import DelegateAbility
 from configs.enums.param_key import Keys
 from abilities._result import ToolResult
-from configs.channels.vision import VisionConfig
-
-if TYPE_CHECKING:
-    from configs.enums.policy_channel import PolicyChannel
-    from controllers.message_processor import MessageProcessor
 
 logger = logging.getLogger(__name__)
 
-RICH_INDEX_PROMPT = (
-    "Describe this image in great detail. Your description will be embedded and "
-    "used to make the image searchable in a semantic database, so be thorough and "
-    "concrete. Cover at least 20 distinct aspects: the overall layout and "
-    "composition; every subject, person, animal, or object and what they are doing; "
-    "dominant and accent colours; any title, heading, label, or visible text "
-    "(transcribe it verbatim); the setting and background; style, mood, and "
-    "lighting; and anything distinctive someone might later search for."
-)
-
-_NO_VISION_NOTE = (
-    "NOTE: A vision provider is not available. The system can only read text from "
-    "images. If the user wants the system to view the images, ask them to set up a "
-    "vision provider in the brain interface."
-)
-
-
-def describe_image(image_path: str, mime_type: str, query: str, *, policy_channel: "PolicyChannel") -> dict[str, object]:
-    """Forks ONCE on vision-provider-configured. Provider path RAISES on provider
-    failure (never swallowed); the OCR fallback is ONLY for the not-configured path.
-    """
-    from services.provider_db_service import ProviderDbService  # noqa: PLC0415
-
-    if ProviderDbService().get_vision_provider():
-        from controllers.message_processor import MessageProcessor  # noqa: PLC0415
-
-        description = MessageProcessor.process(
-            VisionConfig(policy_channel),
-            raw_input=query,
-            metadata={"image_path": image_path, "mime_type": mime_type},
-        ).result()
-        return {"description": description, "vision_used": True, "note": None}
-
-    from services import image_context_service  # noqa: PLC0415
-
-    with open(image_path, "rb") as fh:
-        ocr = image_context_service.analyze(fh.read(), mime_type)
-    if ocr.get("error"):
-        logger.warning("[VISION] OCR extraction error: %s", ocr["error"])
-    return {
-        "description": (cast(str, ocr.get("ocr_text")) or "").strip(),
-        "vision_used": False,
-        "note": _NO_VISION_NOTE,
-    }
 
 
 class VisionAbility(DelegateAbility):
@@ -167,11 +115,10 @@ class VisionAbility(DelegateAbility):
             )
 
         abs_path = str(FileMapperService.get_documents_path(cast(str, doc["file_path"])))
-        mime_type = cast(str, doc.get("mime_type")) or "image/png"
         try:
-            out = describe_image(
-                abs_path, mime_type, query, policy_channel=cast("MessageProcessor", self.mp).config.policy_channel
-            )
+            from services.image_description import ImageDescription  # noqa: PLC0415
+
+            description = ImageDescription(abs_path, query).get_value()
         except Exception as exc:  # noqa: BLE001 — surfaced, never swallowed
             logger.exception("[VISION] describe failed")
             return ToolResult.err(
@@ -180,12 +127,4 @@ class VisionAbility(DelegateAbility):
                 hint="check the vision provider in the brain interface or try again",
             )
 
-        body = cast(str, out["description"])
-        if out["note"]:
-            body = f"{body}\n\n{cast(str, out['note'])}" if body else cast(str, out["note"])
-        # The OCR fallback (no vision provider configured) is a downgraded read —
-        # mark it degraded so the model can tell it from a real vision read
-        # (loudness precedent: find_skills FTS fallback, programming_docs_search).
-        if not out["vision_used"]:
-            return ToolResult.ok(body, degraded=True)
-        return ToolResult.ok(body)
+        return ToolResult.ok(description)
