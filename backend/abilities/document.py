@@ -438,21 +438,6 @@ def _handle_restore(service: "_DocumentService", params: dict[str, object]) -> T
     )
 
 
-def _read_existing_metadata(svc: "_DocumentService", doc_id: str) -> "dict[str, object]":
-    """Read prior extracted_metadata so concurrent writes are not clobbered."""
-    existing = svc.get_document(doc_id) or {}
-    return cast("dict[str, object]", existing.get("extracted_metadata") or {})
-
-
-def _mark_upload_failed(doc_id: str, error: str) -> None:
-    """Best-effort status update to 'failed' — swallow errors since we're already in a failure path."""
-    try:
-        from services.document_service import DocumentService
-        DocumentService().update_status(doc_id, "failed", error[:500])
-    except Exception:
-        logger.exception(f"[DOCUMENT SKILL] Could not mark {doc_id} as failed")
-
-
 def ingest_file(
     service: "_DocumentService",
     src_path: str,
@@ -561,18 +546,11 @@ def ingest_file(
     # storage fault on a document that DOES have content, so the row is marked
     # failed rather than vanishing.
     try:
-        artifact_count = create_document_artifacts(doc_id, text)
-        service.update_extracted_metadata(
-            doc_id,
-            metadata=_read_existing_metadata(service, doc_id),
-            summary=service.derive_summary(text),
-            clean_text=text,
-        )
-        service.update_status(doc_id, "ready", chunk_count=artifact_count)
+        artifact_count = service.index_document(doc_id, text)
         logger.info(f"[DOCUMENT SKILL] Processed upload {doc_id}: {artifact_count} artifacts")
     except Exception as exc:
         logger.exception(f"[DOCUMENT SKILL] Indexing failed for {doc_id}: {exc}")
-        _mark_upload_failed(doc_id, str(exc))
+        service.mark_failed(doc_id, str(exc))
 
     doc = service.get_document(doc_id)
     return {

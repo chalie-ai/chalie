@@ -487,13 +487,15 @@ class FolderWatcherService:
         import threading
 
         def _run() -> None:
+            # Bound before the try: the failure path below needs it to record the
+            # failure, and an import inside the try would leave it unbound there.
+            from services.document_service import DocumentService
+
             try:
                 # An image is described (vision -> OCR), anything else is read as
                 # text — the same fork the upload ingest makes, so a watched image
                 # behaves exactly like an uploaded one and raises identically when
                 # no description can be produced.
-                from services.document_chunking import create_document_artifacts
-                from services.document_service import DocumentService
                 from services.text_extractor import detect_mime_type
 
                 if detect_mime_type(abs_path).startswith("image/"):
@@ -509,19 +511,11 @@ class FolderWatcherService:
                     )
                     return
 
-                artifact_count = create_document_artifacts(doc_id, text)
-                svc = DocumentService()
-                svc.update_summary(doc_id, svc.derive_summary(text))
-                svc.update_status(doc_id, 'ready', chunk_count=artifact_count)
+                artifact_count = DocumentService().index_document(doc_id, text)
+                logger.info(f"[FOLDER WATCHER] Indexed {doc_id}: {artifact_count} artifacts")
             except Exception as e:
                 logger.error(f"[FOLDER WATCHER] Failed to process {doc_id}: {e}")
-                try:
-                    from services.document_service import DocumentService
-                    DocumentService().update_status(
-                        doc_id, 'failed', str(e)[:500]
-                    )
-                except Exception:
-                    pass
+                DocumentService().mark_failed(doc_id, str(e))
 
         threading.Thread(target=_run, daemon=True, name=f"doc-watch-{doc_id[:8]}").start()
 

@@ -11,6 +11,7 @@ from typing import Optional, List, Dict, cast
 from models.document import DocumentRow
 from models.document_meta import DocumentMetaData
 from services.database import Database
+from services.document_chunking import create_document_artifacts
 from services.embedding_utils import pack_embedding as _pack_embedding
 from services.file_mapper_service import FileMapperService
 from services.log_utils import safe
@@ -198,6 +199,35 @@ class DocumentService:
         if dot_pos > 200:
             return summary[:dot_pos + 1]
         return summary
+
+    def index_document(self, doc_id: str, text: str) -> int:
+        """Create the document's artifacts, store its text/summary/metadata, and
+        mark it ready. Returns the artifact count.
+
+        The single indexing path for every surface that produces a document's
+        text — an upload, a watched folder — so a document reaches ``ready`` with
+        the same fields stored no matter which surface produced it. Raises on
+        failure; the caller decides how to record it.
+        """
+        artifact_count = create_document_artifacts(doc_id, text)
+        # Read prior metadata forward so a concurrent write is not clobbered.
+        existing = self.get_document(doc_id) or {}
+        self.update_extracted_metadata(
+            doc_id,
+            metadata=cast("dict[str, object]", existing.get("extracted_metadata") or {}),
+            summary=self.derive_summary(text),
+            clean_text=text,
+        )
+        self.update_status(doc_id, "ready", chunk_count=artifact_count)
+        return artifact_count
+
+    def mark_failed(self, doc_id: str, error: str) -> None:
+        """Best-effort status update to 'failed' — swallow errors since we're
+        already in a failure path. Truncates error to 500 chars."""
+        try:
+            self.update_status(doc_id, "failed", error[:500])
+        except Exception:
+            logger.exception(f"[DOCUMENT SERVICE] Could not mark {doc_id} as failed")
 
     def update_summary(self, doc_id: str, summary: str) -> None:
         try:

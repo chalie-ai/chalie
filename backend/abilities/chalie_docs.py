@@ -1,10 +1,13 @@
 """ChalieDocsAbility — Chalie's self-reference, fetched server-side.
 
 Resolves a fixed query (``basics`` / ``tools`` / ``releases`` / ``code-base``) to
-its documentation URL(s), fetches each page through the shared SSRF-guarded
-:mod:`services.web_fetch` stack, extracts the readable prose with
-:func:`services.text_extractor.extract_html`, and returns the documentation text
-directly.
+its documentation URL(s), reads each one through :class:`services.text_reader.TextReader`
+— the same path the ``read`` tool takes, SSRF guard and prose extraction included —
+and returns the documentation text directly.
+
+A url that is refused, fails, or holds no readable prose is collected as a failed
+url rather than sinking the call: a PARTIAL outage still returns the pages that
+came back.
 
 Previously, the ability answered with an INSTRUCTION ("use the read tool and
 visit …") — a round-trip a weak model fumbles. It now does the fetch itself and
@@ -38,18 +41,14 @@ from abilities._ability import Ability
 from configs.enums.param_key import Keys
 from abilities._result import ToolResult, truncate
 from services.file_mapper_service import FileMapperService
-from services.text_extractor import extract_html
-from services.web_fetch import BROWSER, fetch_page
-from exceptions import FetchBlocked
+from services.text_reader import TextReader
+from exceptions import FetchBlocked, NoReadableContent
 
 _VERSION_FILE = FileMapperService.get_version_path()
 
 #: Documentation cap — a chalie.ai page (or the joined basics pages) is returned
 #: as prose, clipped here so a multi-MB body never floods the context unbounded.
 _MAX_CHARS = 20000
-
-#: Per-request fetch timeout (seconds) — mirrors ``read``'s URL branch.
-_FETCH_TIMEOUT = 15
 
 _QUERY_URLS: dict[str, list[str]] = {
     "basics": [
@@ -73,18 +72,6 @@ def _read_version() -> str:
         return _VERSION_FILE.read_text().strip()
     except OSError:
         return "unknown"
-
-
-def _fetch_doc(url: str) -> str:
-    """Fetch *url* through the shared SSRF-guarded stack and extract its prose.
-
-    Returns the extracted text (possibly empty when the page has no readable
-    content). Raises :class:`FetchBlocked` / :class:`requests.RequestException`
-    on a refused or failed fetch — the caller decides whether a partial outage is
-    survivable.
-    """
-    html, _content_type = fetch_page(url, profile=BROWSER, timeout=_FETCH_TIMEOUT)
-    return extract_html(html, url=url)
 
 
 class ChalieDocsAbility(Ability):
@@ -158,14 +145,14 @@ class ChalieDocsAbility(Ability):
         failed: list[str] = []
         for url in urls:
             try:
-                text = _fetch_doc(url)
-            except (FetchBlocked, requests.RequestException):
+                text = TextReader(url).get_value()
+            except (FetchBlocked, NoReadableContent, requests.RequestException):
+                # NoReadableContent covers a page that fetched but held no prose —
+                # the same "this url gave us nothing" outcome as an outright
+                # failure, so it lands in the same bucket.
                 failed.append(url)
                 continue
-            if text and text.strip():
-                sections.append(f"=== {url} ===\n\n{text.strip()}")
-            else:
-                failed.append(url)
+            sections.append(f"=== {url} ===\n\n{text.strip()}")
 
         if not sections:
             # Every url was unreachable / yielded no readable content — a loud,
