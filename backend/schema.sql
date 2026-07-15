@@ -773,6 +773,6 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
 
 -- ============================================================================
 -- (The standalone discovery_runs table was removed: the Auto Research loop now
--- writes its output to the transcript on the `discovery` channel, read via the
--- thread API through ConfigType.DISCOVERY. No bespoke run table remains.)
+-- writes its output to the transcript on the `discovery` channel. No bespoke
+-- run table remains.)
 -- ============================================================================

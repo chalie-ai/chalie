@@ -16,7 +16,6 @@ import LinkDeviceView from './views/LinkDeviceView.vue';
 import SystemView from './views/SystemView.vue';
 
 import MemorySub from './views/cognition/MemorySub.vue';
-import AutoResearchSub from './views/cognition/AutoResearchSub.vue';
 import ToolsSub from './views/cognition/ToolsSub.vue';
 import WorldSub from './views/cognition/WorldSub.vue';
 import PersonalitySub from './views/cognition/PersonalitySub.vue';
@@ -47,7 +46,6 @@ export const router = createRouter({
       redirect: '/cognition/memory',
       children: [
         { path: 'memory', name: 'cognition-memory', component: MemorySub },
-        { path: 'auto-research', name: 'cognition-auto-research', component: AutoResearchSub },
         { path: 'tools', name: 'cognition-tools', component: ToolsSub },
         { path: 'world', name: 'cognition-world', component: WorldSub },
         { path: 'personality', name: 'cognition-personality', component: PersonalitySub },
