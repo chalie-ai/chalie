@@ -245,6 +245,69 @@ describe('removeTurn', () => {
   });
 });
 
+describe('evictOldestAbove — bounded DOM window (Ticket B)', () => {
+  // happy-dom performs no layout, so getBoundingClientRect().bottom is 0 for
+  // every node — stub each host's rect to place it above (bottom<0) or inside
+  // (bottom>=0) the viewport.
+  function stubBottom(host: HTMLElement, bottom: number): void {
+    host.getBoundingClientRect = (): DOMRect =>
+      ({ bottom, top: 0, left: 0, right: 0, width: 0, height: 0, x: 0, y: 0, toJSON: () => ({}) }) as DOMRect;
+  }
+
+  it('evicts the oldest hosts scrolled above the viewport, keeping the newest `keep` as a contiguous block', async () => {
+    const { upsertTurn, evictOldestAbove } = await freshTurnDom();
+    const container = document.createElement('div');
+    const hosts = Array.from({ length: 40 }, (_, i) =>
+      upsertTurn(block(i + 1, [(i + 1) * 10]), 'user', container, StubComponent)!,
+    );
+    // Oldest 10 (indices 0-9) sit above the viewport; the rest are visible.
+    hosts.forEach((h, i) => stubBottom(h, i < 10 ? -100 : 500));
+
+    evictOldestAbove(container, 30);
+
+    const remaining = Array.from(container.querySelectorAll<HTMLElement>(':scope > [data-version]'));
+    expect(remaining).toHaveLength(30);
+    // Newest 30, still ordered/contiguous: turn_ids 11..40.
+    expect(remaining.map((h) => h.querySelector('[data-turn-id]')!.getAttribute('data-turn-id'))).toEqual(
+      Array.from({ length: 30 }, (_, i) => String(i + 11)),
+    );
+  });
+
+  it('stops at the first host still in the viewport — never evicts a visible turn', async () => {
+    const { upsertTurn, evictOldestAbove } = await freshTurnDom();
+    const container = document.createElement('div');
+    const hosts = Array.from({ length: 40 }, (_, i) =>
+      upsertTurn(block(i + 1, [(i + 1) * 10]), 'user', container, StubComponent)!,
+    );
+    // Within the oldest-10 candidate slice only the first 4 are above the fold;
+    // the 5th is already in view — eviction must halt there (contiguity).
+    hosts.forEach((h, i) => stubBottom(h, i < 4 ? -100 : 500));
+
+    evictOldestAbove(container, 30);
+
+    expect(container.querySelectorAll(':scope > [data-version]')).toHaveLength(36);
+  });
+
+  it('ignores daymark dividers — only [data-version] turn hosts are counted or evicted', async () => {
+    const { upsertTurn, evictOldestAbove } = await freshTurnDom();
+    const container = document.createElement('div');
+    const hosts = Array.from({ length: 35 }, (_, i) =>
+      upsertTurn(block(i + 1, [(i + 1) * 10]), 'user', container, StubComponent)!,
+    );
+    // A day divider (no data-version) sits at the very top, as syncDaymarks inserts it.
+    const daymark = document.createElement('div');
+    daymark.className = 'daymark';
+    container.insertBefore(daymark, container.firstChild);
+    hosts.forEach((h, i) => stubBottom(h, i < 5 ? -100 : 500));
+
+    evictOldestAbove(container, 30);
+
+    // 5 oldest hosts evicted → 30 hosts; the daymark is untouched.
+    expect(container.querySelectorAll(':scope > [data-version]')).toHaveLength(30);
+    expect(container.querySelector('.daymark')).not.toBeNull();
+  });
+});
+
 describe('setTurnWorking / setTurnDone — attribute flips and events', () => {
   it('setTurnWorking flips data-working on every rendered copy and dispatches turn-state-changed', async () => {
     const { registerSurface, upsertTurnToSurfaces, setTurnWorking } = await freshTurnDom();

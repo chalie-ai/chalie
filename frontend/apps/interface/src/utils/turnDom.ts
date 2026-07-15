@@ -419,6 +419,22 @@ export function removeTurn(turnId: number, type: string): void {
   }
 }
 
+/** Evict the oldest spine hosts beyond the newest `keep`, but only ones
+ *  scrolled fully above the viewport — never anything visible. Turns are
+ *  DOM-sorted oldest→newest, so the evicted set is always a contiguous oldest
+ *  prefix, leaving a contiguous newest block; evicted turns re-materialise from
+ *  the history endpoint on scroll-up (D17), keeping the DOM bounded without
+ *  losing history. Daymark dividers are skipped via the `[data-version]` filter
+ *  (only turn hosts carry it) — the caller reconciles them afterwards. */
+export function evictOldestAbove(container: HTMLElement, keep: number): void {
+  const hosts = Array.from(container.querySelectorAll<HTMLElement>(':scope > [data-version]'));
+  for (const host of hosts.slice(0, Math.max(0, hosts.length - keep))) {
+    if (host.getBoundingClientRect().bottom >= 0) break; // reached the viewport — stop
+    render(null, host);
+    host.remove();
+  }
+}
+
 /** Toggle the `data-working` attribute on every rendered copy and broadcast
  *  the change. */
 export function setTurnWorking(turnId: number, type: string, working: boolean): void {

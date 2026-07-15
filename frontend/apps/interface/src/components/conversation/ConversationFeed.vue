@@ -8,17 +8,20 @@ import { ConfigType } from '@chalie/shared';
 import { conversation as convoApi } from '../../api/conversation';
 import { useSessionStore } from '../../stores/session';
 import { useAutoscroll } from '../../composables/useAutoscroll';
-import { registerSurface, unregisterSurface, upsertTurnToSurfaces, SPINE_SURFACE_ID } from '../../utils/turnDom';
+import { registerSurface, unregisterSurface, upsertTurnToSurfaces, evictOldestAbove, SPINE_SURFACE_ID } from '../../utils/turnDom';
 import { syncDaymarks } from '../../utils/daymarks';
 import SpineTurn from './SpineTurn.vue';
 
 const PAGE_SIZE = 20;
+// Retained-turn window: while pinned near the bottom, older off-screen turns
+// past this many are evicted and lazy-reloaded on scroll-up (bounds the DOM).
+const KEEP_RENDERED = 30;
 
 const session = useSessionStore();
 
 const feedRef = ref<HTMLElement | null>(null);
 const turnsRef = ref<HTMLElement | null>(null);
-const { scrollToBottom, forceScrollToBottom } = useAutoscroll(feedRef);
+const { scrollToBottom, forceScrollToBottom, userScrolledUp } = useAutoscroll(feedRef);
 
 // D17 — the pagination cursor (offset/hasMore) is UI-local, owned here.
 const offset = ref(0);
@@ -88,7 +91,20 @@ async function _onScrollPaginate(): Promise<void> {
 // deep watch on the buffer's sortedBlocks. Reconcile the day dividers first so
 // their height is already in the layout when autoscroll measures the bottom.
 function onTurnUpserted(): void {
-  if (turnsRef.value) syncDaymarks(turnsRef.value);
+  const c = turnsRef.value;
+  // Bound the DOM: while pinned near the bottom, drop the oldest off-screen
+  // turns past the retained window and resync the pagination cursor so scroll-up
+  // re-fetches exactly what was evicted. Gated on !userScrolledUp so reading
+  // history is never trimmed underneath the user.
+  if (c && !userScrolledUp.value) {
+    const before = c.childElementCount;
+    evictOldestAbove(c, KEEP_RENDERED);
+    if (c.childElementCount < before) {
+      offset.value = c.querySelectorAll(':scope > [data-version]').length;
+      hasMoreRef.value = true;
+    }
+  }
+  if (c) syncDaymarks(c);
   scrollToBottom();
 }
 
