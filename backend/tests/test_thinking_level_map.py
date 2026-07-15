@@ -12,8 +12,11 @@ from typing import TYPE_CHECKING, cast
 import google.genai as _genai_mod
 import pytest
 
+from configs.channels.thread_gist import ThreadGistConfig
+from configs.enums.provider_type import ProviderType
+from configs.enums.thinking_level import ThinkingLevel
+
 if TYPE_CHECKING:
-    from configs.enums.thinking_level import ThinkingLevel
     from services.llm_clients.gemini import GeminiClient, _GenaiClient, _GenCfg, _Genai
     from services.provider_api import ProviderApiResponse
 
@@ -158,7 +161,6 @@ class TestAnthropicThinkingNative:
 
     def test_all_five_levels_map_correctly(self) -> None:
         from services.llm_clients.anthropic import AnthropicClient
-        from configs.enums.thinking_level import ThinkingLevel
 
         client = AnthropicClient({"platform": "anthropic", "model": "claude-sonnet-4-20250514"})
 
@@ -187,7 +189,6 @@ class TestOpenAIThinkingNative:
 
     def test_all_five_levels_map_correctly(self) -> None:
         from services.llm_clients.openai import OpenAIClient
-        from configs.enums.thinking_level import ThinkingLevel
 
         client = OpenAIClient({"platform": "openai", "model": "gpt-4o", "api_key": "k"})
 
@@ -218,7 +219,6 @@ class TestOpenAILadderRealHttp:
         level: "ThinkingLevel",
         responses: "deque[tuple[int, dict[str, object]]]",
     ) -> "tuple[list[dict[str, object]], ProviderApiResponse]":
-        from configs.enums.provider_type import ProviderType
         from services.llm_clients.openai import OpenAIClient
         from services.provider_api import ProviderApiRequest
 
@@ -247,8 +247,6 @@ class TestOpenAILadderRealHttp:
             server.server_close()
 
     def test_none_sends_effort_and_extra_body(self) -> None:
-        from configs.enums.thinking_level import ThinkingLevel
-
         responses: "deque[tuple[int, dict[str, object]]]" = deque([(200, _OPENAI_SUCCESS_BODY)])
         recorded, resp = self._send_scripted("openai_compatible", ThinkingLevel.NONE, responses)
 
@@ -259,8 +257,6 @@ class TestOpenAILadderRealHttp:
         assert resp.text == "ok"
 
     def test_full_ladder_none_to_minimal_to_bare(self) -> None:
-        from configs.enums.thinking_level import ThinkingLevel
-
         responses: "deque[tuple[int, dict[str, object]]]" = deque([
             _openai_error("Extra inputs are not permitted: extra_forbidden thinking"),
             _openai_error("unsupported value for reasoning_effort"),
@@ -278,8 +274,6 @@ class TestOpenAILadderRealHttp:
         assert resp.text == "ok"
 
     def test_platform_openai_never_sends_extra_body(self) -> None:
-        from configs.enums.thinking_level import ThinkingLevel
-
         responses: "deque[tuple[int, dict[str, object]]]" = deque([(200, _OPENAI_SUCCESS_BODY)])
         recorded, resp = self._send_scripted("openai", ThinkingLevel.NONE, responses)
 
@@ -289,8 +283,6 @@ class TestOpenAILadderRealHttp:
         assert resp.text == "ok"
 
     def test_low_sends_no_flags(self) -> None:
-        from configs.enums.thinking_level import ThinkingLevel
-
         responses: "deque[tuple[int, dict[str, object]]]" = deque([(200, _OPENAI_SUCCESS_BODY)])
         recorded, resp = self._send_scripted("openai_compatible", ThinkingLevel.LOW, responses)
 
@@ -422,7 +414,6 @@ class TestOllamaThinkPayload:
 
     def test_think_flag_per_level_when_supported(self) -> None:
         from services.llm_clients.ollama import OllamaClient
-        from configs.enums.thinking_level import ThinkingLevel
 
         client = OllamaClient({"host": "http://127.0.0.1:1", "model": "m"})
         client._thinking_supported = True
@@ -439,7 +430,6 @@ class TestOllamaThinkPayload:
 
     def test_think_absent_when_not_supported(self) -> None:
         from services.llm_clients.ollama import OllamaClient
-        from configs.enums.thinking_level import ThinkingLevel
 
         client = OllamaClient({"host": "http://127.0.0.1:1", "model": "m"})
         client._thinking_supported = False
@@ -461,7 +451,6 @@ class TestCodexCliEffortFlag:
               level: "ThinkingLevel") -> "ProviderApiResponse":
         from services.llm_clients.codex_cli import CodexCliClient
         from services.provider_api import ProviderApiRequest
-        from configs.enums.provider_type import ProviderType
 
         monkeypatch.setenv("CODEX_BIN", _install_stub_codex(tmp_path))
         monkeypatch.setenv("CODEX_HOME", str(_install_codex_home(tmp_path)))
@@ -478,27 +467,22 @@ class TestCodexCliEffortFlag:
         return client.send(dto)
 
     def test_none_includes_minimal_effort_flag(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        from configs.enums.thinking_level import ThinkingLevel
         resp = self._send(tmp_path, monkeypatch, ThinkingLevel.NONE)
         assert "-c model_reasoning_effort=minimal" in resp.text
 
     def test_low_omits_effort_flag(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        from configs.enums.thinking_level import ThinkingLevel
         resp = self._send(tmp_path, monkeypatch, ThinkingLevel.LOW)
         assert "model_reasoning_effort" not in resp.text
 
     def test_medium_includes_medium_effort_flag(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        from configs.enums.thinking_level import ThinkingLevel
         resp = self._send(tmp_path, monkeypatch, ThinkingLevel.MEDIUM)
         assert "=medium" in resp.text
 
     def test_high_includes_high_effort_flag(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        from configs.enums.thinking_level import ThinkingLevel
         resp = self._send(tmp_path, monkeypatch, ThinkingLevel.HIGH)
         assert "=high" in resp.text
 
     def test_max_includes_high_effort_flag(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        from configs.enums.thinking_level import ThinkingLevel
         resp = self._send(tmp_path, monkeypatch, ThinkingLevel.MAX)
         assert "=high" in resp.text
 
@@ -511,9 +495,6 @@ class TestCodexCliEffortFlag:
 class TestThreadGistPinsNone:
 
     def test_thread_gist_thinking_mode_is_none(self) -> None:
-        from configs.channels.thread_gist import ThreadGistConfig
-        from configs.enums.thinking_level import ThinkingLevel
-
         assert ThreadGistConfig.thinking_mode == "none"
         assert ThinkingLevel("none") is ThinkingLevel.NONE
 
@@ -565,7 +546,6 @@ class TestIsThinkingRejection:
 class TestMapIntegrity:
 
     def test_low_absent_from_all_maps(self) -> None:
-        from configs.enums.thinking_level import ThinkingLevel
         from services.llm_clients.thinking_map import (
             ANTHROPIC_THINKING_BUDGETS,
             CODEX_REASONING_EFFORTS,
@@ -581,7 +561,6 @@ class TestMapIntegrity:
         assert ThinkingLevel.LOW not in ANTHROPIC_THINKING_BUDGETS
 
     def test_none_present_in_every_map_except_anthropic_budgets(self) -> None:
-        from configs.enums.thinking_level import ThinkingLevel
         from services.llm_clients.thinking_map import (
             ANTHROPIC_NONE_THINKING,
             ANTHROPIC_THINKING_BUDGETS,
