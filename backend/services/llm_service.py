@@ -59,11 +59,31 @@ def estimate_tokens(text: str) -> int:
 
 
 def _is_thinking_rejection(exc: BaseException, create_kwargs: dict[str, object]) -> bool:
-    """Return True when the provider rejected a reasoning_effort parameter."""
-    if 'reasoning_effort' not in create_kwargs:
-        return False
-    err = str(exc).lower()
-    return 'reasoning_effort' in err or 'unsupported' in err
+    """Return True when the provider rejected a thinking-related parameter.
+
+    Two rejection shapes are recognized:
+
+    1. reasoning_effort rejection (OpenAI native):
+       create_kwargs carries 'reasoning_effort' and the error text mentions
+       'reasoning_effort' or 'unsupported'.
+
+    2. extra_body thinking rejection (OpenAI-compatible / vLLM style):
+       create_kwargs carries an 'extra_body' dict containing a 'thinking' key
+       (the vendor-extension disable param) and the error text mentions
+       'thinking', 'extra_forbidden', 'extra inputs', or 'unsupported'.
+       Strict servers reject unknown body fields with 400 'Extra inputs are
+       not permitted'; the field must be dropped and retried.
+    """
+    if 'reasoning_effort' in create_kwargs:
+        err = str(exc).lower()
+        if 'reasoning_effort' in err or 'unsupported' in err:
+            return True
+    extra_body = create_kwargs.get('extra_body')
+    if isinstance(extra_body, dict) and 'thinking' in extra_body:
+        err = str(exc).lower()
+        if any(term in err for term in ('thinking', 'extra_forbidden', 'extra inputs', 'unsupported')):
+            return True
+    return False
 
 
 def _resolve_api_key(config: dict[str, object]) -> str:

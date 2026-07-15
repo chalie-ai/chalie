@@ -28,6 +28,7 @@ import requests
 
 from configs.enums.thinking_level import ThinkingLevel
 from contracts.provider_client import ProviderClient
+from services.llm_clients.thinking_map import OLLAMA_THINK
 from exceptions import (
     ProviderResponseError,
     ProviderTimeoutError,
@@ -196,13 +197,15 @@ class OllamaClient(ProviderClient):
                 for t in tools
             ]
         # Quirk preserved: think flag is binary and gated on model capability,
-        # NOT on the level value. MEDIUM/HIGH/MAX enable the flag if capable.
-        if thinking_mode in (ThinkingLevel.MEDIUM, ThinkingLevel.HIGH, ThinkingLevel.MAX):
+        # NOT graduated by level. NONE sends an explicit False — Ollama enables
+        # thinking by default on capable models, so omission is not "off".
+        think = OLLAMA_THINK.get(thinking_mode)
+        if think is not None:
             if self._model_supports_thinking():
-                payload["think"] = True
+                payload["think"] = think
                 logger.info(
-                    "[THINKING] native flag passed: provider=ollama mode=%s model=%s",
-                    thinking_mode.value, self.model,
+                    "[THINKING] native flag passed: provider=ollama mode=%s model=%s think=%s",
+                    thinking_mode.value, self.model, think,
                 )
             else:
                 logger.info(
@@ -227,7 +230,6 @@ class OllamaClient(ProviderClient):
         url = f"{self.host}/api/chat"
         api_messages = _ollama_convert_messages(dto.messages)
         payload = self._build_payload(dto.system, api_messages, dto.tools, dto.thinking_mode)
-
 
         start = time.time()
         try:

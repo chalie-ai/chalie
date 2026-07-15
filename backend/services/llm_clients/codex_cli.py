@@ -27,6 +27,7 @@ from pathlib import Path
 from typing import ClassVar, Optional, cast
 
 from contracts.provider_client import ProviderClient
+from services.llm_clients.thinking_map import CODEX_REASONING_EFFORTS
 from exceptions import (
     ProviderResponseError,
     ProviderTimeoutError,
@@ -240,6 +241,10 @@ class CodexCliClient(ProviderClient):
         ]
         if self.model:
             argv += ["-m", self.model]
+        # LOW is absent from the map — no override, codex uses its own default.
+        effort = CODEX_REASONING_EFFORTS.get(dto.thinking_mode)
+        if effort:
+            argv += ["-c", f"model_reasoning_effort={effort}"]
         argv.append("-")
 
         # (d) Spawn subprocess with sanitized env.

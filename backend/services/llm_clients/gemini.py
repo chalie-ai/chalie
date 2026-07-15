@@ -102,18 +102,13 @@ from exceptions import (
     RateLimitError,
     ResponseOverLimitError,
 )
+from services.llm_clients.thinking_map import GEMINI_NONE_FALLBACK_BUDGET, GEMINI_THINKING_BUDGETS
 from services.provider_api import (
     ProviderApiRequest,
     ProviderApiResponse,
 )
 
 logger = logging.getLogger(__name__)
-
-
-_THINKING_BUDGETS: dict[str, int] = {
-    ThinkingLevel.MEDIUM.value: 4096,
-    ThinkingLevel.HIGH.value: 16384,
-}
 
 # Message substrings used as a fallback discriminator for Gemini token-limit
 # errors.  All token-limit rejections arrive as HTTP 400 / INVALID_ARGUMENT,
@@ -224,22 +219,15 @@ class GeminiClient(ProviderClient):
         )
 
     def _thinking_native(self, genai: "_Genai", level: ThinkingLevel, cfg: "_GenCfg") -> None:
-        """Inject thinking_config into cfg for MEDIUM/HIGH/MAX."""
-        value = level.value
-        if level == ThinkingLevel.MAX:
-            # Gemini has no explicit model-ceiling budget; use a large fixed value.
-            budget = 32768
+        """Inject thinking_config into cfg for NONE/MEDIUM/HIGH/MAX; LOW falls through."""
+        if level == ThinkingLevel.LOW:
+            return
+        budget = GEMINI_THINKING_BUDGETS.get(level)
+        if budget is not None:
             cfg['thinking_config'] = genai.types.ThinkingConfig(thinking_budget=budget)
             logger.info(
-                "[THINKING] native flag passed: provider=gemini mode=max model=%s budget=%d",
-                self.model, budget,
-            )
-        elif value in _THINKING_BUDGETS:
-            budget = _THINKING_BUDGETS[value]
-            cfg['thinking_config'] = genai.types.ThinkingConfig(thinking_budget=budget)
-            logger.info(
-                "[THINKING] native flag passed: provider=gemini mode=%s model=%s",
-                value, self.model,
+                "[THINKING] native flag passed: provider=gemini mode=%s model=%s budget=%d",
+                level.value, self.model, budget,
             )
 
     def _build_gen_config(self, genai: "_Genai", system: str, tools: Optional[list[dict[str, object]]],
@@ -271,11 +259,13 @@ class GeminiClient(ProviderClient):
         finish_reason = str(candidate.finish_reason) if candidate and candidate.finish_reason else None
         return '\n'.join(text_parts), tool_calls or None, finish_reason
 
-    def _classify_and_raise(self, exc: Exception, gen_cfg: "_GenCfg") -> bool:
+    def _classify_and_raise(self, exc: Exception, gen_cfg: "_GenCfg") -> tuple[bool, Optional[int]]:
         """Map a google-genai exception to a provider error, or signal thinking-fallback.
 
-        Returns ``True`` when the caller should perform the thinking-retry; raises
-        a provider error for every other error class.
+        Returns ``(True, budget)`` when the caller should perform the thinking-retry:
+        ``budget`` is the fallback budget to retry with (``None`` means strip
+        thinking_config). Raises a provider error for every other classified error;
+        unclassified errors return ``(False, None)`` so the caller re-raises.
         """
         exc_code = getattr(exc, 'code', None)
         exc_status = getattr(exc, 'status', None) or ''
@@ -315,16 +305,21 @@ class GeminiClient(ProviderClient):
                 f"Gemini 400 INVALID_ARGUMENT: {exc}", response_code=400, provider='gemini',
             ) from exc
 
-        # Thinking fallback: retry without thinking_config on rejection.
+        # Thinking fallback: ladder based on the budget that was rejected.
         if 'thinking_config' in gen_cfg and (
             'thinking' in exc_str or 'unsupported' in exc_str
         ):
+            # thinking_config holds a genai.types.ThinkingConfig model, not a dict.
+            budget = int(getattr(gen_cfg['thinking_config'], 'thinking_budget', 0) or 0)
             logger.info(
-                "[THINKING] native flag rejected by provider=gemini model=%s — retried without",
-                self.model,
+                "[THINKING] native flag rejected by provider=gemini model=%s budget=%d",
+                self.model, budget,
             )
-            return True
-        raise
+            if budget == 0:
+                # Some Gemini models cannot disable thinking; retry with their floor.
+                return True, GEMINI_NONE_FALLBACK_BUDGET
+            return True, None
+        return False, None
 
     def _generate_with_fallback(self, client: "_GenaiClient", genai: "_Genai", contents: object, gen_cfg: "_GenCfg") -> object:
         """Execute generate_content, handling errors and thinking fallback.
@@ -348,14 +343,36 @@ class GeminiClient(ProviderClient):
             import httpx  # noqa: PLC0415
             if isinstance(exc, httpx.TimeoutException):
                 raise ProviderTimeoutError(f"Gemini request timed out: {exc}", provider='gemini') from exc
-            if self._classify_and_raise(exc, gen_cfg):
-                fallback = {k: v for k, v in gen_cfg.items() if k != 'thinking_config'}
-                return client.models.generate_content(
-                    model=self.model,
-                    contents=contents,
-                    config=genai.types.GenerateContentConfig(**fallback),
+            do_retry, retry_budget = self._classify_and_raise(exc, gen_cfg)
+            if not do_retry:
+                raise
+            if retry_budget is not None:
+                retry_cfg = dict(gen_cfg)
+                retry_cfg['thinking_config'] = genai.types.ThinkingConfig(thinking_budget=retry_budget)
+                logger.info(
+                    "[THINKING] provider=gemini model=%s — retried with budget=%d",
+                    self.model, retry_budget,
                 )
-            raise
+                try:
+                    return client.models.generate_content(
+                        model=self.model,
+                        contents=contents,
+                        config=genai.types.GenerateContentConfig(**retry_cfg),
+                    )
+                except Exception as retry_exc:
+                    retry_str = str(retry_exc).lower()
+                    if 'thinking' not in retry_str and 'unsupported' not in retry_str:
+                        raise
+                    logger.info(
+                        "[THINKING] floor budget rejected by provider=gemini model=%s — retried without",
+                        self.model,
+                    )
+            fallback = {k: v for k, v in gen_cfg.items() if k != 'thinking_config'}
+            return client.models.generate_content(
+                model=self.model,
+                contents=contents,
+                config=genai.types.GenerateContentConfig(**fallback),
+            )
 
     def send(self, dto: ProviderApiRequest) -> ProviderApiResponse:
         """Transform DTO → Gemini generate_content API → ProviderApiResponse."""

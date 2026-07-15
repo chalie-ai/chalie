@@ -6,9 +6,13 @@
 #
 #     http://www.apache.org/licenses/LICENSE-2.0
 
-"""ThinkingLevel — formalises the existing low/medium/high strings; adds MAX (additive)."""
+"""ThinkingLevel — formalises the existing low/medium/high strings; adds MAX (additive) and NONE (floor).
 
-from __future__ import annotations
+NONE is the floor: explicit off where the provider supports it, else that
+provider's lowest setting.  LOW = no flag sent (provider default).
+The Ollama quirk (think flag gated on model capability) is preserved in
+OllamaClient and not represented here.
+"""
 
 from enum import Enum
 
@@ -21,6 +25,7 @@ class ThinkingLevel(Enum):
     preserved in OllamaClient and not represented here.
     """
 
+    NONE = "none"
     LOW = "low"
     MEDIUM = "medium"
     HIGH = "high"

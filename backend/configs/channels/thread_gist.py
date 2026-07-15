@@ -21,7 +21,7 @@ class ThreadGistConfig(ProcessorConfig):
     """Delegate channel for per-thread gist generation."""
 
     uses_delegate_provider: ClassVar[bool] = True
-    thinking_mode: ClassVar[str] = "low"
+    thinking_mode: ClassVar[str] = "none"
 
     def __init__(self) -> None:
         super().__init__(

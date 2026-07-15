@@ -49,6 +49,11 @@ from exceptions import (
     RateLimitError,
     ResponseOverLimitError,
 )
+from services.llm_clients.thinking_map import (
+    OPENAI_COMPATIBLE_NONE_BODY,
+    OPENAI_NONE_FALLBACK_EFFORT,
+    OPENAI_REASONING_EFFORTS,
+)
 from services.provider_api import (
     ProviderApiRequest,
     ProviderApiResponse,
@@ -60,12 +65,6 @@ _APP_URL = "https://chalie.ai"
 _APP_TITLE = "Chalie"
 
 _COMPLETION_USAGE: TypeAlias = "_openai_mod.types.CompletionUsage"
-
-_REASONING_EFFORTS: dict[str, str] = {
-    ThinkingLevel.MEDIUM.value: 'medium',
-    ThinkingLevel.HIGH.value: 'high',
-    ThinkingLevel.MAX.value: 'high',  # OpenAI has no 'max'; map to highest available
-}
 
 
 def _openai_convert_messages(messages: "list[_Msg]") -> "list[_Msg]":
@@ -117,7 +116,7 @@ class OpenAIClient(ProviderClient):
         self._config = config
         self.model: str = cast(str, config.get('model', 'gpt-4o-mini'))
         self._format: str = cast(str, config.get('format', 'text'))
-
+        self.platform: str = cast(str, config.get('platform', 'openai'))
     def _get_client(self) -> "_openai_mod.OpenAI":
         from openai import OpenAI  # noqa: PLC0415
         from services.llm_service import _resolve_api_key, _app_user_agent  # noqa: PLC0415
@@ -138,7 +137,7 @@ class OpenAIClient(ProviderClient):
 
     def _thinking_native(self, level: ThinkingLevel) -> Optional[str]:
         """Return the reasoning_effort string or None when thinking is off."""
-        effort = _REASONING_EFFORTS.get(level.value)
+        effort = OPENAI_REASONING_EFFORTS.get(level)
         if effort:
             logger.info(
                 "[THINKING] native flag passed: provider=openai mode=%s model=%s",
@@ -193,12 +192,36 @@ class OpenAIClient(ProviderClient):
                     response_code=status, provider='openai',
                 ) from exc
             if _is_thinking_rejection(exc, create_kwargs):
-                logger.info(
-                    "[THINKING] native flag rejected by provider=openai model=%s — retried without",
-                    self.model,
-                )
-                fallback = {k: v for k, v in create_kwargs.items() if k != 'reasoning_effort'}
-                return cast("Callable[..., _openai_mod.types.chat.ChatCompletion]", client.chat.completions.create)(**fallback)
+                # Ladder: only when we sent reasoning_effort='none' do we try
+                # fallback steps; otherwise strip and retry once.
+                if create_kwargs.get('reasoning_effort') == 'none':
+                    # Step 1: retry with minimal effort, no extra_body
+                    logger.info(
+                        "[THINKING] native flag rejected by provider=openai model=%s — retried with minimal",
+                        self.model,
+                    )
+                    fallback1 = {k: v for k, v in create_kwargs.items() if k not in ('reasoning_effort', 'extra_body')}
+                    fallback1['reasoning_effort'] = OPENAI_NONE_FALLBACK_EFFORT
+                    try:
+                        return cast("Callable[..., _openai_mod.types.chat.ChatCompletion]", client.chat.completions.create)(**fallback1)
+                    except Exception as retry_exc:
+                        if _is_thinking_rejection(retry_exc, fallback1):
+                            # Step 2: retry bare — no reasoning_effort, no extra_body
+                            logger.info(
+                                "[THINKING] native flag rejected by provider=openai model=%s — retried without",
+                                self.model,
+                            )
+                            fallback2 = {k: v for k, v in create_kwargs.items() if k not in ('reasoning_effort', 'extra_body')}
+                            return cast("Callable[..., _openai_mod.types.chat.ChatCompletion]", client.chat.completions.create)(**fallback2)
+                        raise
+                else:
+                    # Single bare-strip retry for other reasoning_effort values
+                    logger.info(
+                        "[THINKING] native flag rejected by provider=openai model=%s — retried without",
+                        self.model,
+                    )
+                    fallback = {k: v for k, v in create_kwargs.items() if k not in ('reasoning_effort', 'extra_body')}
+                    return cast("Callable[..., _openai_mod.types.chat.ChatCompletion]", client.chat.completions.create)(**fallback)
             status = getattr(exc, 'status_code', 0)
             raise ProviderResponseError(str(exc), response_code=status, provider='openai') from exc
 
@@ -220,6 +243,11 @@ class OpenAIClient(ProviderClient):
         effort = self._thinking_native(dto.thinking_mode)
         if effort:
             create_kwargs['reasoning_effort'] = effort
+            # Vendor-extension disable param for openai_compatible endpoints
+            # whose reasoning toggle is a body field (vLLM/Z.ai style). Sent
+            # only for NONE — other levels use reasoning_effort above.
+            if self.platform == 'openai_compatible' and dto.thinking_mode is ThinkingLevel.NONE:
+                create_kwargs['extra_body'] = OPENAI_COMPATIBLE_NONE_BODY
 
         response = self._invoke_create(client, create_kwargs)
         latency_ms = int((time.time() - start) * 1000)

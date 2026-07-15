@@ -47,17 +47,13 @@ from exceptions import (
     RateLimitError,
     ResponseOverLimitError,
 )
+from services.llm_clients.thinking_map import ANTHROPIC_NONE_THINKING, ANTHROPIC_THINKING_BUDGETS
 from services.provider_api import (
     ProviderApiRequest,
     ProviderApiResponse,
 )
 
 logger = logging.getLogger(__name__)
-
-_THINKING_BUDGETS: dict[str, int] = {
-    ThinkingLevel.MEDIUM.value: 4096,
-    ThinkingLevel.HIGH.value: 16384,
-}
 
 
 def _assistant_tool_block(msg: "_Msg") -> "_Msg":
@@ -161,8 +157,19 @@ class AnthropicClient(ProviderClient):
         )
 
     def _thinking_native(self, level: ThinkingLevel, max_tokens: int) -> dict[str, object]:
-        """Return extra kwargs for the Anthropic thinking flag, or empty dict."""
-        value = level.value
+        """Return extra kwargs for the Anthropic thinking flag, or empty dict.
+
+        NONE → {'type':'disabled'} (explicit off).
+        MEDIUM/HIGH → enabled with budget from ANTHROPIC_THINKING_BUDGETS.
+        MAX → enabled with budget = request max_tokens (special case).
+        LOW → absent (no flag).
+        """
+        if level == ThinkingLevel.NONE:
+            logger.info(
+                "[THINKING] native flag passed: provider=anthropic mode=none model=%s",
+                self.model,
+            )
+            return {'thinking': ANTHROPIC_NONE_THINKING}
         if level == ThinkingLevel.MAX:
             budget = max_tokens
             logger.info(
@@ -170,11 +177,11 @@ class AnthropicClient(ProviderClient):
                 self.model, budget,
             )
             return {'thinking': {'type': 'enabled', 'budget_tokens': budget}}
-        if value in _THINKING_BUDGETS:
-            budget = _THINKING_BUDGETS[value]
+        if level in ANTHROPIC_THINKING_BUDGETS:
+            budget = ANTHROPIC_THINKING_BUDGETS[level]
             logger.info(
                 "[THINKING] native flag passed: provider=anthropic mode=%s model=%s",
-                value, self.model,
+                level.value, self.model,
             )
             return {'thinking': {'type': 'enabled', 'budget_tokens': budget}}
         return {}
