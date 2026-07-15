@@ -131,11 +131,17 @@ router.beforeEach(async (to) => {
     return true;
   }
 
-  const { has_master_account, has_session, has_providers, internal_dev } = status;
+  const { has_master_account, has_session, has_providers, internal_dev, vault_state } = status;
   shell.internalDev = internal_dev;
 
   if (!has_master_account) {
     return hardRedirect('/on-boarding/');
+  }
+  // Vault re-sealed after a backend restart (cookie valid, vault locked): brain
+  // has no unlock UI, so hand off to the interface app whose UnlockVault overlay
+  // unseals in place. Distinct from genuine session expiry below (#1878 part 2).
+  if (has_session && vault_state === 'locked') {
+    return hardRedirect('/');
   }
   if (!has_session) {
     return hardRedirect(
