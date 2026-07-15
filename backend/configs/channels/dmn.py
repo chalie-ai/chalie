@@ -23,6 +23,8 @@ class DmnConfig(ProcessorConfig):
     the delegates, never directly.
     """
 
+    max_iterations = 25  # background conversation analysis — deep deliberation
+
     def __init__(self) -> None:
         super().__init__(
             channel=Channel.DMN.value,

@@ -83,10 +83,17 @@ class ProcessorConfig(ABC):
     ``always_available``. There is no per-channel discoverable/blocked list."""
 
     # ── Loop control ──────────────────────────────────────────────────────────
-    #
-    # There is no iteration cap. The loop runs until the model stops
-    # emitting tool calls or cooperative cancellation fires; a runaway turn is a
-    # hard-restart condition, not a silently-capped one.
+
+    max_iterations: ClassVar[int] = 8
+    """Hard ceiling on ``_step`` recursion per turn. When a turn exceeds this
+    many iterations, ``_step`` stops recursing and ends the turn with whatever
+    the model last produced (graceful degradation — COMPLETED, not CRASHED).
+    A runaway guard (``_guard_runaway``) still crashes turns that repeat
+    identical calls/text; this cap bounds turns that loop on *distinct* calls
+    — re-searching, re-reading, circling — which the runaway guard cannot
+    detect. Per-channel overrides give background channels that need deep
+    deliberation (thinking, DMN, super-episode) more headroom than focused
+    agents (web search/browse)."""
 
     skip_transcript: bool
     """True → no transcript row written at all (background processors)."""

@@ -90,6 +90,8 @@ class SuperEpisodeConfig(ProcessorConfig):
     transcript channel is always 'super_episode_encoder'.
     """
 
+    max_iterations = 25  # episode consolidation over large transcript windows
+
     def __init__(self, channel: str, sources: list[object]) -> None:
         super().__init__(
             channel=Channel.SUPER_EPISODE_ENCODER.value,
