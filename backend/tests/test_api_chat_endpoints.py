@@ -88,20 +88,20 @@ class TestChatEndpoints:
         assert resp.get_json() == {'ok': True, 'interrupted': None, 'reason': 'no_active_turn'}
 
     def test_action_missing_skill_rejected(self, authed_client: tuple[FlaskClient, sqlite3.Connection, object]) -> None:
-        """POST /action without a skill is rejected synchronously with 422."""
+        """POST /api/chat/action without a skill is rejected synchronously with 422."""
         client, _db_conn, _store = authed_client
 
-        resp = client.post('/api/action', json={})
+        resp = client.post('/api/chat/action', json={})
 
         assert resp.status_code == 422
-        assert 'skill' in str(resp.get_json()['details'])
+        assert 'skill' in resp.get_json()['error']
 
     def test_action_unknown_skill_rejected_synchronously(self, authed_client: tuple[FlaskClient, sqlite3.Connection, object]) -> None:
         """An unknown skill resolves synchronously to 400 in the HTTP body — the
         result never crosses the WS bus."""
         client, _db_conn, _store = authed_client
 
-        resp = client.post('/api/action', json={'skill': 'no-such-tool-xyz'})
+        resp = client.post('/api/chat/action', json={'skill': 'no-such-tool-xyz'})
 
         assert resp.status_code == 400
         assert 'Unknown skill' in resp.get_json()['error']
@@ -114,13 +114,13 @@ class TestChatEndpoints:
         client, db_conn, _store = authed_client
         transcripts_before = db_conn.execute("SELECT COUNT(*) FROM transcript").fetchone()[0]
 
-        resp = client.post('/api/action', json={'skill': 'list', 'action': 'create', 'name': 'QA Groceries List'})
+        resp = client.post('/api/chat/action', json={'skill': 'list', 'action': 'create', 'name': 'QA Groceries List'})
 
         assert resp.status_code == 200
-        body = resp.get_json()
-        assert body['content']
-        assert body['mode'] == 'ACT'
-        assert isinstance(body['duration_ms'], int)
+        result = resp.get_json()['result']
+        assert result['content']
+        assert result['mode'] == 'ACT'
+        assert isinstance(result['duration_ms'], int)
 
         # Downstream proof the real skill ran end-to-end against the real DB.
         row = db_conn.execute("SELECT name FROM lists WHERE name = ?", ('QA Groceries List',)).fetchone()

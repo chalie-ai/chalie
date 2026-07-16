@@ -13,18 +13,26 @@ export interface WsPingEvent {
 /** Mid-turn progress signals — the sole WS turn chokepoint (MessageProcessor.broadcast).
  *  Discriminated on `status`; `type` carries the ProcessorConfig identity (`user` →
  *  main spine, `scheduled` → dock + that schedule's thread) the surface routes by.
- *  The surface reacts by refetching the turn block over REST, so these frames carry
- *  only ids — never prose. `provider_retry` is the one status shown directly (a
- *  transient toast): a provider call failed mid-turn and the backend is resending, so
- *  the turn stays in flight (no error bubble). Turn *lifecycle* (working/done) is a
- *  separate frame (`WsTurnExecutionEvent`); a live tool call is another
- *  (`WsToolCallEvent`) — both below. */
-export type WsTurnStatus = 'updated' | 'provider_retry';
+ *  For `updated` the surface reacts by refetching the turn block over REST, so that
+ *  frame carries only ids — never prose. `provider_retry` is the one status shown
+ *  directly (a transient toast): a provider call failed mid-turn and the backend is
+ *  resending, so the turn stays in flight (no error bubble). `context_usage` is the
+ *  one status carrying a *reading* rather than a poke — the token count of the CHAT
+ *  request just sent and the window it was measured against (see
+ *  services/provider_service.py, which owns both halves) — pushed once per provider
+ *  call, which is exactly when the fraction moves. It triggers no refetch. Turn
+ *  *lifecycle* (working/done) is a separate frame (`WsTurnExecutionEvent`); a live
+ *  tool call is another (`WsToolCallEvent`) — both below. */
+export type WsTurnStatus = 'updated' | 'provider_retry' | 'context_usage';
 export interface WsTurnSignal {
   status: WsTurnStatus;
   /** ConfigType — the ProcessorConfig identity the FE routes by. */
   type: string;
   turn_id?: number | null;
+  /** `context_usage` only — tokens the sent request measured, and the window it
+   *  was measured against. Absent on every other status. */
+  tokens_input?: number;
+  context_window?: number;
   [k: string]: unknown;
 }
 
@@ -113,7 +121,7 @@ type Interval = ReturnType<typeof setInterval>;
 /**
  * WebSocket client — receive-only server→client push channel. Client→server
  * requests go over HTTP (POST /api/thread/<turn_id>, DELETE /api/thread/<turn_id>,
- * POST /api/action); the only client→server WS frame is `pong`.
+ * POST /api/chat/action); the only client→server WS frame is `pong`.
  */
 export class WebSocketService {
   private ws: WebSocket | null = null;
@@ -351,16 +359,18 @@ export class WebSocketService {
     return this.postChat(text, files, threadId, onSendFailure, type, thinkingLevel);
   }
 
-  /** Rich-card control dispatch — POST /action and resolve the card's optimistic
-   *  UI from the SYNCHRONOUS HTTP response. No data crosses the WS bus. The
-   *  callbacks bag doubles as an abort token: abort()/notifyDisconnect() null it
-   *  and a newer sendAction supersedes it. When the request settles superseded we
-   *  suppress the stale data callbacks (onMessage/onError) but ALWAYS fire onDone
-   *  so the card releases its loading state instead of hanging. */
+  /** Rich-card control dispatch — POST /api/chat/action and resolve the card's
+   *  optimistic UI from the SYNCHRONOUS HTTP response. No data crosses the WS bus.
+   *  Success is the enveloped `{success, result:{content, mode, duration_ms, …}}`,
+   *  so the card's payload is `data.result`; a failure carries `{error}` at the top
+   *  level. The callbacks bag doubles as an abort token: abort()/notifyDisconnect()
+   *  null it and a newer sendAction supersedes it. When the request settles
+   *  superseded we suppress the stale data callbacks (onMessage/onError) but ALWAYS
+   *  fire onDone so the card releases its loading state instead of hanging. */
   sendAction(payload: unknown, callbacks: ActionCallbacks = {}): void {
     this.chatCallbacks = callbacks;
     const start = Date.now();
-    fetch(this.buildHttpUrl('/api/action'), {
+    fetch(this.buildHttpUrl('/api/chat/action'), {
       method: 'POST',
       credentials: 'same-origin',
       headers: { 'Content-Type': 'application/json', ...this.authHeaders() },
@@ -368,17 +378,18 @@ export class WebSocketService {
     })
       .then(async (resp) => {
         const data = (await resp.json().catch(() => ({}))) as Record<string, unknown>;
+        const result = (data.result ?? {}) as Record<string, unknown>;
         const current = this.chatCallbacks === callbacks;
         if (current) {
           this.chatCallbacks = null;
-          if (resp.ok) callbacks.onMessage?.(data as unknown as WsMessageEvent);
+          if (resp.ok) callbacks.onMessage?.(result as unknown as WsMessageEvent);
           else
             callbacks.onError?.({
               message: typeof data.error === 'string' ? data.error : 'Action failed.',
               recoverable: true,
             });
         }
-        callbacks.onDone?.({ duration_ms: Number(data.duration_ms ?? Date.now() - start) });
+        callbacks.onDone?.({ duration_ms: Number(result.duration_ms ?? Date.now() - start) });
       })
       .catch(() => {
         if (this.chatCallbacks === callbacks) {

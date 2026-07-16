@@ -27,6 +27,8 @@ surface can address other configs (e.g. the scheduler) without knowing channels.
 
 import logging
 import sqlite3
+import uuid
+from collections.abc import Sequence
 from typing import cast
 
 from flask import request
@@ -63,6 +65,25 @@ register_dto(
     Message, Attachment, Chip, Segment, Interrupted, Error,
 )
 _T = threads_ns.models
+
+
+def _stage_chat_uploads(files: Sequence[object]) -> list[object]:
+    """Returns temp paths that _seed_turn_zero feeds to document.upload — which
+    ingests by PATH, never bytes, so no file blob ever reaches the act-trail.
+    """
+    from services.filename_utils import safe_filename  # noqa: PLC0415
+    from services.tmp_storage import new_tmp_path  # noqa: PLC0415
+
+    paths: list[object] = []
+    for f in files:
+        if not f or not getattr(f, 'filename', None):
+            continue
+        name = safe_filename(getattr(f, 'filename')) or "attachment"
+        tmp_path = new_tmp_path(f"{uuid.uuid4().hex[:8]}_{name}")
+        getattr(f, 'save')(tmp_path)
+        paths.append(tmp_path)
+    return paths
+
 
 _TYPE = "user"
 _THREAD_EXCLUDE = ("subagent_return",)
@@ -457,7 +478,6 @@ class ThreadItemResource(Resource):
         the constructor opens it synchronously so the FE holds the handle with no WS
         round-trip, and live output then surfaces via the ``updated`` signal → REST
         pull plus ``turn_execution`` lifecycle frames."""
-        from api.chat import _stage_chat_uploads  # noqa: PLC0415
         from controllers.message_processor import MessageProcessor  # noqa: PLC0415
 
         attachments = _stage_chat_uploads(cast("list[object]", request.files.getlist("files")[:_MAX_FILES]))
