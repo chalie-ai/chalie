@@ -58,7 +58,7 @@ _V = voice_ns.models
 # ── Constants (hardcoded — no env vars) ─────────────────────────────────────
 
 # Models live in resources/voice-models/ — a directory sibling to backend/,
-# intentionally OUTSIDE the data/ volume so the files survive `chalie update` on
+# intentionally OUTSIDE the data/ volume so the files survive an app upgrade on
 # native installs. They are downloaded at runtime by
 # RuntimeDepsService.enable_voice() when the user turns voice on in Settings,
 # not baked in by the installer.
