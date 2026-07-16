@@ -25,7 +25,7 @@ unbound instance by contract, so no fake/mock collaborator is possible.
 
 import json
 import sqlite3
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from typing import cast
 
 import pytest

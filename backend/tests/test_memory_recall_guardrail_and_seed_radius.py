@@ -124,6 +124,20 @@ def test_turn0_seed_recall_is_silent_and_logs_seed_telemetry(db: sqlite3.Connect
     assert cast(int, tel["final_rrf_count"]) >= 0
 
 
+def _drain_search_index() -> None:
+    """Drive the real async search-expander pipeline synchronously against the
+    bound test DB — the exact production code path, no mocks. In prod the
+    search_expander_worker daemon does this continuously; a test must do it
+    explicitly because no worker runs under pytest."""
+    from services.search_expander_service import SearchExpanderService
+    svc = SearchExpanderService()
+    svc._self_heal()
+    item = svc._dequeue()
+    while item is not None:
+        svc._process(item)
+        item = svc._dequeue()
+
+
 def test_invalidated_fact_never_surfaces_in_recall(db: sqlite3.Connection) -> None:
     """A bi-temporally superseded data_graph fact (valid_to set) must never surface in recall."""
     import json
@@ -132,6 +146,7 @@ def test_invalidated_fact_never_surfaces_in_recall(db: sqlite3.Connection) -> No
     from models.fact import FactRow
 
     FactRow.store("residence", "Valletta", source="test:seed")
+    _drain_search_index()
 
     def _recall_residence_rows() -> list[object]:
         out = _build_user_mp("where do I live").dispatch_service.dispatch(

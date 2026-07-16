@@ -54,18 +54,18 @@ def test_resolve_tool_routes_to_longest_prefix_server(db: sqlite3.Connection) ->
     """
     svc = McpClientService()
 
-    # Register two servers: 'task' and 'taskie' — 'task_' is a prefix of 'taskie_'
+    # Register two servers: 'task' and 'tasker' — 'task_' is a prefix of 'tasker_'
     server_a = svc.add_server(name="task", host="http://nowhere:1111", headers={}, enabled=True)
-    server_b = svc.add_server(name="taskie", host="http://nowhere:2222", headers={}, enabled=True)
+    server_b = svc.add_server(name="tasker", host="http://nowhere:2222", headers={}, enabled=True)
 
     # Seed tool rows directly into mcp_tools.sqlite so _resolve_tool has something to match.
     # We do NOT call ping_and_sync (that requires the network); we test _resolve_tool's
     # lookup logic in isolation by seeding the servers table only.
     # _resolve_tool reads from mcp_client_servers via list_servers(), NOT mcp_tools.sqlite.
-    # The tool name encodes the server: _mcp_taskie_create_document → server 'taskie'.
-    server, remote_tool = svc._resolve_tool("_mcp_taskie_create_document")
+    # The tool name encodes the server: _mcp_tasker_create_document → server 'tasker'.
+    server, remote_tool = svc._resolve_tool("_mcp_tasker_create_document")
     assert server["id"] == server_b["id"], (
-        "Expected _mcp_taskie_create_document to resolve to the 'taskie' server, "
+        "Expected _mcp_tasker_create_document to resolve to the 'tasker' server, "
         f"but got server id={server['id']!r} (name={server['name']!r})"
     )
     assert remote_tool == "create_document"
@@ -78,7 +78,7 @@ def test_resolve_tool_routes_to_longest_prefix_server(db: sqlite3.Connection) ->
     # Disabling server_b and then trying to resolve its tool raises ValueError.
     svc.update_server(cast(str, server_b["id"]), {"enabled": False})
     with pytest.raises(ValueError, match="disabled"):
-        svc._resolve_tool("_mcp_taskie_create_document")
+        svc._resolve_tool("_mcp_tasker_create_document")
 
 
 # ---------------------------------------------------------------------------
@@ -216,7 +216,7 @@ def test_get_tool_schema_round_trips_stored_input_schema(db: sqlite3.Connection,
     # mcp_tools has no FK to mcp_client_servers.
     svc._write_tools(
         "srv-1",
-        "taskie",
+        "tasker",
         [
             {
                 "name": "create_document",
@@ -231,10 +231,10 @@ def test_get_tool_schema_round_trips_stored_input_schema(db: sqlite3.Connection,
     )
 
     # Positive path — existing tool.
-    result = svc.get_tool_schema("_mcp_taskie_create_document")
+    result = svc.get_tool_schema("_mcp_tasker_create_document")
 
     assert result is not None, "get_tool_schema must return a dict for a stored tool"
-    assert result["name"] == "_mcp_taskie_create_document"
+    assert result["name"] == "_mcp_tasker_create_document"
     assert result["description"] == "Create a doc"
     assert result["input_schema"] == {
         "type": "object",
@@ -246,7 +246,7 @@ def test_get_tool_schema_round_trips_stored_input_schema(db: sqlite3.Connection,
     )
 
     # Negative path — tool absent from the DB.
-    assert svc.get_tool_schema("_mcp_taskie_does_not_exist") is None, (
+    assert svc.get_tool_schema("_mcp_tasker_does_not_exist") is None, (
         "get_tool_schema must return None for an unknown tool name"
     )
 
@@ -284,9 +284,9 @@ def test_add_server_dedups_same_endpoint_variant(db: sqlite3.Connection) -> None
     """Re-adding the same endpoint (trailing-slash variant) updates the existing
     row instead of creating a duplicate."""
     svc = McpClientService()
-    a = svc.add_server(name="taskie", host="https://mcp.example.com/mcp",
+    a = svc.add_server(name="tasker", host="https://mcp.example.com/mcp",
                        headers={}, enabled=True)
-    b = svc.add_server(name="taskie", host="https://mcp.example.com/mcp/",
+    b = svc.add_server(name="tasker", host="https://mcp.example.com/mcp/",
                        headers={}, enabled=True)
     assert b["id"] == a["id"]
     assert len(svc.list_servers()) == 1
@@ -295,9 +295,9 @@ def test_add_server_dedups_same_endpoint_variant(db: sqlite3.Connection) -> None
 def test_add_server_upsert_updates_fields_and_reenables(db: sqlite3.Connection) -> None:
     """Re-adding a known endpoint refreshes headers and re-enables it."""
     svc = McpClientService()
-    a = svc.add_server(name="taskie", host="https://mcp.example.com/mcp",
+    a = svc.add_server(name="tasker", host="https://mcp.example.com/mcp",
                        headers={}, enabled=False)
-    b = svc.add_server(name="taskie", host="https://mcp.example.com/mcp",
+    b = svc.add_server(name="tasker", host="https://mcp.example.com/mcp",
                        headers={"Authorization": "Bearer x"}, enabled=True)
     assert b["id"] == a["id"]
     assert b["enabled"] is True
@@ -318,9 +318,9 @@ def test_add_server_upsert_name_change_purges_old_prefix_rows(db: sqlite3.Connec
     policy rows are purged so a later re-sync leaves no orphans."""
     monkeypatch.setattr(FileMapperService, "_DATA_DIR", tmp_path)
     svc = McpClientService()
-    s = svc.add_server(name="taskie", host="https://mcp.example.com/mcp",
+    s = svc.add_server(name="tasker", host="https://mcp.example.com/mcp",
                        headers={}, enabled=True)
-    old_tool = _tool_name("taskie", "create_document")
+    old_tool = _tool_name("tasker", "create_document")
 
     conn = _open_tools_db()
     conn.execute(
@@ -337,7 +337,7 @@ def test_add_server_upsert_name_change_purges_old_prefix_rows(db: sqlite3.Connec
     db.commit()
 
     # Re-add the SAME endpoint under a NEW name → old-prefix rows must be purged.
-    svc.add_server(name="taskie2", host="https://mcp.example.com/mcp",
+    svc.add_server(name="tasker2", host="https://mcp.example.com/mcp",
                    headers={}, enabled=True)
 
     tool_count = _open_tools_db().execute(
@@ -351,4 +351,4 @@ def test_add_server_upsert_name_change_purges_old_prefix_rows(db: sqlite3.Connec
     assert policy_count == 0
     servers = svc.list_servers()
     assert len(servers) == 1
-    assert servers[0]["name"] == "taskie2"
+    assert servers[0]["name"] == "tasker2"

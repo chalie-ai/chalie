@@ -47,7 +47,7 @@ def _seed_server_online(svc: McpClientService, name: str, tools: list[dict[str, 
 
 
 # Representative tool definitions from the task tracker MCP — match the kinds of tools this targets.
-_TASKIE_TOOLS: list[dict[str, object]] = [
+_TRACKER_TOOLS: list[dict[str, object]] = [
     {
         "name": "list_tickets",
         "description": "List tickets in a project, optionally filtered by status or assignee.",
@@ -90,12 +90,12 @@ class TestBareDisplayNameResolves:
                             tmp_path / "mcp_tools.sqlite")
 
         svc = McpClientService()
-        _seed_server_online(svc, "taskie", _TASKIE_TOOLS)
+        _seed_server_online(svc, "tasker", _TRACKER_TOOLS)
 
         # Discoverable: the prefixed MCP names (what effective_allow will contain).
         mcp_names = svc.get_online_mcp_tool_names()
-        assert "_mcp_taskie_list_tickets" in mcp_names, (
-            "Seed failed: _mcp_taskie_list_tickets should be in online tool names"
+        assert "_mcp_tasker_list_tickets" in mcp_names, (
+            "Seed failed: _mcp_tasker_list_tickets should be in online tool names"
         )
 
         ability = FindToolsAbility()
@@ -104,8 +104,8 @@ class TestBareDisplayNameResolves:
         proc = _stub_proc()
         result = _run_find_tools(ability, proc, {"query": ["list_tickets"]})
 
-        assert "_mcp_taskie_list_tickets" in proc.active_tools, (
-            f"Expected '_mcp_taskie_list_tickets' in active_tools after query=['list_tickets']. "
+        assert "_mcp_tasker_list_tickets" in proc.active_tools, (
+            f"Expected '_mcp_tasker_list_tickets' in active_tools after query=['list_tickets']. "
             f"Got: {proc.active_tools}. Result: {result!r}."
         )
 
@@ -116,7 +116,7 @@ class TestBareDisplayNameResolves:
 
 class TestSemanticQueryViaEmbeddings:
 
-    def test_query_create_task_or_ticket_returns_taskie_tools(
+    def test_query_create_task_or_ticket_returns_tasker_tools(
         self, db: object, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """embed_server_tools() generates embeddings via EmbeddingService (ONNX).
@@ -129,7 +129,7 @@ class TestSemanticQueryViaEmbeddings:
                             tmp_path / "mcp_tools.sqlite")
 
         svc = McpClientService()
-        server = _seed_server_online(svc, "taskie", _TASKIE_TOOLS)
+        server = _seed_server_online(svc, "tasker", _TRACKER_TOOLS)
 
         # embed_server_tools is the new method — this MUST fail at baseline.
         svc.embed_server_tools(cast(str, server["id"]))
@@ -138,7 +138,7 @@ class TestSemanticQueryViaEmbeddings:
         proc = _stub_proc()
         result = _run_find_tools(ability, proc, {"query": ["create a task or ticket"]})
 
-        ticket_tools = {"_mcp_taskie_list_tickets", "_mcp_taskie_create_ticket"}
+        ticket_tools = {"_mcp_tasker_list_tickets", "_mcp_tasker_create_ticket"}
         found = set(proc.active_tools) & ticket_tools
         assert found, (
             f"Expected at least one ticket tool in active_tools for query "
@@ -165,7 +165,7 @@ class TestLooseMultiWordQuery:
                             tmp_path / "mcp_tools.sqlite")
 
         svc = McpClientService()
-        server = _seed_server_online(svc, "taskie", _TASKIE_TOOLS)
+        server = _seed_server_online(svc, "tasker", _TRACKER_TOOLS)
         svc.embed_server_tools(cast(str, server["id"]))
 
         ability = FindToolsAbility()
@@ -196,10 +196,10 @@ class TestEmbeddingsSurviveHeartbeatSync:
 
         ID-churn strategy:
         SQLite (INTEGER PRIMARY KEY, no AUTOINCREMENT) reuses freed rowids 1..N when a
-        table is otherwise empty.  In a single-server isolated DB, taskie's DELETE+INSERT
+        table is otherwise empty.  In a single-server isolated DB, tasker's DELETE+INSERT
         would get back ids 1..4 — making ids_before == ids_after and the precondition
         unsatisfiable.  Fix: seed a SECOND server FIRST so the mcp_tools rowid
-        high-water mark exceeds taskie's id range.  Its DELETE+INSERT then
+        high-water mark exceeds tasker's id range.  Its DELETE+INSERT then
         reassigns ids above that mark, guaranteeing ids_before != ids_after.
 
         At baseline: embed_server_tools absent → AttributeError.
@@ -213,16 +213,16 @@ class TestEmbeddingsSurviveHeartbeatSync:
 
         svc = McpClientService()
 
-        # Seed taskie FIRST so its tools get the lowest rowids (e.g. 1..4).
-        server = _seed_server_online(svc, "taskie", _TASKIE_TOOLS)
+        # Seed tasker FIRST so its tools get the lowest rowids (e.g. 1..4).
+        server = _seed_server_online(svc, "tasker", _TRACKER_TOOLS)
         svc.embed_server_tools(cast(str, server["id"]))
 
-        # Seed a SECOND server AFTER taskie to advance the mcp_tools rowid high-water
-        # mark past taskie's id range (e.g. id=5).  When taskie's _write_tools then
+        # Seed a SECOND server AFTER tasker to advance the mcp_tools rowid high-water
+        # mark past tasker's id range (e.g. id=5).  When tasker's _write_tools then
         # DELETEs ids 1..4 and re-INSERTs, SQLite picks max(existing)+1 = 6, 7, 8, 9
         # — guaranteeing ids_before != ids_after without AUTOINCREMENT.
         # (SQLite without AUTOINCREMENT reuses freed rowids when they are below the
-        # current max; seeding "other" after taskie keeps max > taskie's range.)
+        # current max; seeding "other" after tasker keeps max > tasker's range.)
         _seed_server_online(svc, "other", [
             {
                 "name": "ping",
@@ -241,9 +241,9 @@ class TestEmbeddingsSurviveHeartbeatSync:
         }
 
         # Simulate a heartbeat re-sync: _write_tools deletes + re-inserts.
-        # With the second server having advanced the high-water mark, taskie's
+        # With the second server having advanced the high-water mark, tasker's
         # re-insert gets fresh ids above the previous range.
-        svc._write_tools(cast(str, server["id"]), "taskie", _TASKIE_TOOLS)
+        svc._write_tools(cast(str, server["id"]), "tasker", _TRACKER_TOOLS)
 
         ids_after = {
             r[0] for r in _open_tools_db().execute(
@@ -295,7 +295,7 @@ class TestAddOnlyEmbeddingTrigger:
                             tmp_path / "mcp_tools.sqlite")
 
         svc = McpClientService()
-        server = _seed_server_online(svc, "taskie", _TASKIE_TOOLS)
+        server = _seed_server_online(svc, "tasker", _TRACKER_TOOLS)
         svc.embed_server_tools(cast(str, server["id"]))
 
         # Snapshot the vector rows (rowid + tool_name pairs) before the sync.
@@ -306,7 +306,7 @@ class TestAddOnlyEmbeddingTrigger:
         assert rows_before, "Precondition: embed_server_tools must have written mcp_tool_vectors rows."
 
         # Simulate a heartbeat: _write_tools is the re-sync path.
-        svc._write_tools(cast(str, server["id"]), "taskie", _TASKIE_TOOLS)
+        svc._write_tools(cast(str, server["id"]), "tasker", _TRACKER_TOOLS)
 
         rows_after = set(_open_tools_db().execute(
             "SELECT rowid, tool_name FROM mcp_tool_vectors ORDER BY rowid"
@@ -332,7 +332,7 @@ class TestAmbiguousBareNameDropped:
         """Alias resolution drops ambiguous bare names and keeps unambiguous ones.
 
         Phase A (unambiguous): one server exposes 'ping'.  Bare name 'ping' must
-        resolve to '_mcp_taskie_ping'.  This FAILS at baseline because _run_select
+        resolve to '_mcp_tasker_ping'.  This FAILS at baseline because _run_select
         has no alias map at all — same failure mode as Test 1.
 
         Phase B (ambiguous): a second server also exposes 'ping'.  Now bare 'ping'
@@ -350,10 +350,10 @@ class TestAmbiguousBareNameDropped:
         svc = McpClientService()
 
         # Phase A: single server — bare name 'ping' is unambiguous.
-        _seed_server_online(svc, "taskie", [
+        _seed_server_online(svc, "tasker", [
             {
                 "name": "ping",
-                "description": "Ping the taskie service.",
+                "description": "Ping the tasker service.",
                 "inputSchema": {},
             }
         ])
@@ -362,8 +362,8 @@ class TestAmbiguousBareNameDropped:
         proc_a = _stub_proc()
         result_a = _run_find_tools(ability_a, proc_a, {"query": ["ping"]})
 
-        assert "_mcp_taskie_ping" in proc_a.active_tools, (
-            f"Unambiguous bare name 'ping' must resolve to '_mcp_taskie_ping' "
+        assert "_mcp_tasker_ping" in proc_a.active_tools, (
+            f"Unambiguous bare name 'ping' must resolve to '_mcp_tasker_ping' "
             f"when only one server exposes it. active_tools={proc_a.active_tools}. "
             f"Result: {result_a!r}."
         )
@@ -378,15 +378,15 @@ class TestAmbiguousBareNameDropped:
         ])
 
         mcp_names = svc.get_online_mcp_tool_names()
-        assert "_mcp_taskie_ping" in mcp_names
+        assert "_mcp_tasker_ping" in mcp_names
         assert "_mcp_other_ping" in mcp_names
 
         ability_b = FindToolsAbility()
         proc_b = _stub_proc()
         result_b = _run_find_tools(ability_b, proc_b, {"query": ["ping"]})
 
-        assert "_mcp_taskie_ping" not in proc_b.active_tools, (
-            f"Ambiguous bare 'ping' must not silently pick _mcp_taskie_ping. "
+        assert "_mcp_tasker_ping" not in proc_b.active_tools, (
+            f"Ambiguous bare 'ping' must not silently pick _mcp_tasker_ping. "
             f"active_tools={proc_b.active_tools}. Result: {result_b!r}"
         )
         assert "_mcp_other_ping" not in proc_b.active_tools, (
@@ -397,8 +397,8 @@ class TestAmbiguousBareNameDropped:
         # The prefixed form must always resolve unambiguously.
         proc_c = _stub_proc()
         ability_c = FindToolsAbility()
-        _run_find_tools(ability_c, proc_c, {"query": ["_mcp_taskie_ping"]})
-        assert "_mcp_taskie_ping" in proc_c.active_tools, (
-            f"Prefixed form '_mcp_taskie_ping' must always resolve. "
+        _run_find_tools(ability_c, proc_c, {"query": ["_mcp_tasker_ping"]})
+        assert "_mcp_tasker_ping" in proc_c.active_tools, (
+            f"Prefixed form '_mcp_tasker_ping' must always resolve. "
             f"active_tools={proc_c.active_tools}"
         )
