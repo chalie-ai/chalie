@@ -36,6 +36,7 @@ class ScheduledConfig(ProcessorConfig):
     """Config for every schedule thread — fires and replies alike."""
 
     BROADCASTS_STATE: ClassVar[bool] = True
+    max_iterations = 12  # scheduled tasks with tool use
 
     def __init__(self) -> None:
         super().__init__(

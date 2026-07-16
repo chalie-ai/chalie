@@ -162,6 +162,11 @@ class MessageProcessor:
         self._thread: Thread | None = None
         self._result_text: str = ""
 
+        # Iteration counter for the recursive _step chain — incremented once
+        # per _step entry. When it exceeds config.max_iterations the turn ends
+        # gracefully (COMPLETED) instead of recursing further.
+        self._iteration: int = 0
+
         # Runaway-loop guard tallies — scoped to this turn_execution (this
         # instance persists across the whole recursive _step chain). Keyed by
         # identical tool call ``(name, canonical-params)`` and by identical
@@ -292,6 +297,7 @@ class MessageProcessor:
         had completed normally."""
         if self.turn_execution_service.should_stop():
             raise _TurnCancelled()
+        self._iteration += 1
         try:
             response = self._send_with_retry(self._build_request())
         except (RequestOverCapError, ResponseOverLimitError):
@@ -312,6 +318,16 @@ class MessageProcessor:
         if response.text:
             self._store(response.text)
         self._dispatch_tools(tool_calls)
+        if self._iteration >= self.config.max_iterations:
+            logger.warning(
+                "[MessageProcessor] turn %s hit the %s-iteration cap on channel '%s' — "
+                "ending gracefully with the model's last output",
+                self.turn_id, self.config.max_iterations, self.channel,
+            )
+            # The model's prose was already stored above; run the terminal
+            # post-turn work and return the formatted text (graceful end).
+            self._end(response.text)
+            return self._format(response.text)
         return self._step()
 
     # ── provider send ──────────────────────────────────────────────────────────

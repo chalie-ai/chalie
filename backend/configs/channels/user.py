@@ -12,6 +12,7 @@ class UserConfig(ProcessorConfig):
 
     SUPPORTS_ASYNC = True
     BROADCASTS_STATE = True
+    max_iterations = 12  # user-facing — headroom for complex multi-step queries
 
     def __init__(self, metadata: dict[str, object] | None = None) -> None:
         _metadata = metadata or {}
