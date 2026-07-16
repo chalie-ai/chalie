@@ -44,7 +44,3 @@ class TestCleanForTts:
     def test_markdown_list_gets_pauses(self) -> None:
         result = _clean_for_tts("Steps:\n- one\n- two\n- three\n")
         assert result == "Steps: one. two. three."
-
-    def test_html_drops_actions_block(self) -> None:
-        result = _clean_for_tts('<p>pick one</p><actions><action label="A" value="a"/></actions>')
-        assert result == "pick one"

@@ -106,29 +106,19 @@ export type WsInboundEvent =
   | WsToolCallEvent
   | WsPushEvent;
 
-/** Action channel (rich-card button → POST /action) is the only per-request
- *  binding left: it sets these callbacks for the optimistic card render. The
- *  user-turn channel is signal-only (see WsPushType) and never binds. */
-export interface ActionCallbacks {
-  onMessage?: (data: WsMessageEvent) => void;
-  onError?: (data: { message: string; recoverable?: boolean }) => void;
-  onDone?: (data: { duration_ms?: number }) => void;
-}
-
 type Timer = ReturnType<typeof setTimeout>;
 type Interval = ReturnType<typeof setInterval>;
 
 /**
  * WebSocket client — receive-only server→client push channel. Client→server
- * requests go over HTTP (POST /api/thread/<turn_id>, DELETE /api/thread/<turn_id>,
- * POST /api/chat/action); the only client→server WS frame is `pong`.
+ * requests go over HTTP (POST /api/thread/<turn_id>, DELETE /api/thread/<turn_id>);
+ * the only client→server WS frame is `pong`.
  */
 export class WebSocketService {
   private ws: WebSocket | null = null;
   private reconnectDelay = 1000;
   private readonly maxReconnectDelay = 30000;
   private reconnectTimer: Timer | null = null;
-  private chatCallbacks: ActionCallbacks | null = null;
   private driftHandler: ((data: WsPushEvent) => void) | null = null;
   private anyHandler: ((data: WsInboundEvent) => void) | null = null;
   private disconnectHandler: (() => void) | null = null;
@@ -268,12 +258,7 @@ export class WebSocketService {
     return this.connected && this.ws?.readyState === WebSocket.OPEN;
   }
 
-  /** Connection lost: drop any in-flight action's callbacks before notifying
-   *  listeners. Its done went to the dead socket and is never resent, so a
-   *  lingering closure would otherwise swallow a later action's done. The turn
-   *  channel is signal-only — surfaces resync by refetching on reconnect. */
   private notifyDisconnect(): void {
-    this.chatCallbacks = null;
     this.disconnectHandler?.();
   }
 
@@ -330,10 +315,6 @@ export class WebSocketService {
     if (Date.now() - this.lastInboundAt > this.staleThresholdMs) this.forceReconnect();
   }
 
-  abort(): void {
-    this.chatCallbacks = null;
-  }
-
   /** Fire a user turn. Signal-only: the turn's render flows entirely through the
    *  `updated` broadcast signal plus the `turn_execution` lifecycle frame
    *  (→ drift handler → REST refetch), so no callbacks are bound. `onSendFailure`
@@ -357,47 +338,6 @@ export class WebSocketService {
       return Promise.resolve(null);
     }
     return this.postChat(text, files, threadId, onSendFailure, type, thinkingLevel);
-  }
-
-  /** Rich-card control dispatch — POST /api/chat/action and resolve the card's
-   *  optimistic UI from the SYNCHRONOUS HTTP response. No data crosses the WS bus.
-   *  Success is the enveloped `{success, result:{content, mode, duration_ms, …}}`,
-   *  so the card's payload is `data.result`; a failure carries `{error}` at the top
-   *  level. The callbacks bag doubles as an abort token: abort()/notifyDisconnect()
-   *  null it and a newer sendAction supersedes it. When the request settles
-   *  superseded we suppress the stale data callbacks (onMessage/onError) but ALWAYS
-   *  fire onDone so the card releases its loading state instead of hanging. */
-  sendAction(payload: unknown, callbacks: ActionCallbacks = {}): void {
-    this.chatCallbacks = callbacks;
-    const start = Date.now();
-    fetch(this.buildHttpUrl('/api/chat/action'), {
-      method: 'POST',
-      credentials: 'same-origin',
-      headers: { 'Content-Type': 'application/json', ...this.authHeaders() },
-      body: JSON.stringify(payload),
-    })
-      .then(async (resp) => {
-        const data = (await resp.json().catch(() => ({}))) as Record<string, unknown>;
-        const result = (data.result ?? {}) as Record<string, unknown>;
-        const current = this.chatCallbacks === callbacks;
-        if (current) {
-          this.chatCallbacks = null;
-          if (resp.ok) callbacks.onMessage?.(result as unknown as WsMessageEvent);
-          else
-            callbacks.onError?.({
-              message: typeof data.error === 'string' ? data.error : 'Action failed.',
-              recoverable: true,
-            });
-        }
-        callbacks.onDone?.({ duration_ms: Number(result.duration_ms ?? Date.now() - start) });
-      })
-      .catch(() => {
-        if (this.chatCallbacks === callbacks) {
-          this.chatCallbacks = null;
-          callbacks.onError?.({ message: 'Action request failed.', recoverable: true });
-        }
-        callbacks.onDone?.({ duration_ms: 0 });
-      });
   }
 
   private postChat(

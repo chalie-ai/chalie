@@ -22,7 +22,7 @@ Rich-media rendering:
   dispatcher (``ToolDispatcher._render``) owns ordinal assignment + the span-tag
   instruction and injects the card ONLY when the invoking channel broadcasts to
   the user. The rich payload keeps the LEGACY frontend shape (``{id, name,
-  items:[{content, checked}]}``) the list card and ``enrich_rich_payload``
+  items:[{content, checked, id}]}``) the list card and ``enrich_rich_payload``
   depend on — distinct from the model-facing rows in the body, by design.
 """
 
@@ -142,15 +142,16 @@ class ListAbility(Ability):
 
     @classmethod
     def enrich_rich_payload(cls, payload: dict[str, object], row: dict[str, object]) -> dict[str, object]:
-        """Re-fetch the live list so checkbox state mutated via the silent-action
-        channel is visible on conversation refresh.
+        """Re-fetch the live list so checkbox state the user toggled out-of-band
+        is visible on conversation refresh.
 
         ``tool_calls.result`` is a frozen snapshot from the LLM-call moment; the
-        FE check-action writes directly to the ``lists`` table via
-        ``ListService.check_items``. Without this hook, refresh would replay the
-        stale snapshot and visually un-tick boxes the user already ticked. Single
-        read path: both the live action handler and the refresh path go through
-        ``ListService.get_list`` (operating on the legacy FE payload shape).
+        FE list card writes each toggle directly to the ``lists`` table via
+        ``POST /api/lists/items/<list_id>:<item_id>`` (``ListService.update_item``).
+        Without this hook, refresh would replay the stale snapshot and visually
+        un-tick boxes the user already ticked. Single read path: both the live
+        handler and the refresh path go through ``ListService.get_list``
+        (operating on the legacy FE payload shape).
         """
         list_id = payload.get("id") if isinstance(payload, dict) else None
         if not list_id:
@@ -311,7 +312,7 @@ def _fe_card(lst: dict[str, object]) -> dict[str, object]:
         "id": lst["id"],
         "name": lst["name"],
         "items": [
-            {"content": item["content"], "checked": bool(item["checked"])}
+            {"content": item["content"], "checked": bool(item["checked"]), "id": item["id"]}
             for item in cast(list[dict[str, object]], lst.get("items", []))
         ],
     }

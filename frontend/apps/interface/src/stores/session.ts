@@ -2,12 +2,12 @@
  * Session store — WS coordinator + turn send/stop orchestration.
  *
  * Single WS owner rule: ONLY this store may touch WebSocketService's
- * send/sendAction/abort/onDrift/ensureAlive handlers, and it is the
+ * send/onDrift/ensureAlive handlers, and it is the
  * only place `connect()` is called for the interface app. `onConnect` /
  * `onDisconnect` / `onAny` are NOT exclusive to this store — `@chalie/shared`'s
  * `useWebSocket()` composable also registers them, but only to drive the
  * connection-status pill (`useConnectionStore`); it never touches `onDrift`
- * or the send/abort surface. Drift routing itself lives in
+ * or the send surface. Drift routing itself lives in
  * `utils/driftDispatcher.ts` (see `init()` below) — this store no longer
  * inspects WS payload shapes at all.
  *
@@ -19,13 +19,11 @@
  * has no stable id until a brand-new send's POST resolves one).
  */
 import { defineStore } from 'pinia';
-import type { WsInboundEvent, WsPushEvent } from '@chalie/shared';
+import type { WsPushEvent } from '@chalie/shared';
 import { AuthError, ConfigType, getWebSocket, useConnectionStore } from '@chalie/shared';
-import { on } from '../composables/useEventBus';
 import { extractText } from '../composables/useMarkup';
 import { getHost } from '../api/index';
 import { conversation as convoApi } from '../api/conversation';
-import { useActionCard } from '../composables/useActionCard';
 import { dispatchDrift, registerSessionHooks } from '../utils/driftDispatcher';
 import { reconcileCancelledTurn } from '../utils/cancelReconcile';
 import { clearLiveTurn } from '../utils/liveActTrail';
@@ -46,9 +44,6 @@ import { useAmbientSensor } from '../composables/useAmbientSensor';
 
 /** Guard: init() must be idempotent (HMR / Vue StrictMode). */
 let _initialized = false;
-
-/** Unbind fns for event-bus listeners registered in init() (for future cleanup). */
-const _busUnbinds: Array<() => void> = [];
 
 const FILE_PLACEHOLDER = '[File attached]';
 
@@ -182,34 +177,6 @@ export const useSessionStore = defineStore('session', {
 
       // Tab-refocus liveness check.
       globalThis.addEventListener('focus', () => ws.ensureAlive());
-
-      // chalie:action — deterministic skill invocations routed through useActionCard.
-      _busUnbinds.push(
-        on('chalie:action', (payload) => {
-          const p =
-            (payload as { payload?: Record<string, unknown> }).payload ??
-            (payload as Record<string, unknown>);
-          useActionCard().run(p, (msg) => { this.errorMessage = msg; });
-        }),
-      );
-
-      // chalie:silent-action — rich-card interactions, no chat bubble.
-      _busUnbinds.push(
-        on('chalie:silent-action', (detail) => {
-          const d = detail as {
-            payload?: Record<string, unknown>;
-            onMessage?: (data: WsInboundEvent) => void;
-            onError?: (data: { message: string; recoverable?: boolean }) => void;
-            onDone?: (data: { duration_ms?: number }) => void;
-          };
-          if (!d.payload) return;
-          getWebSocket().sendAction(d.payload, {
-            onMessage: d.onMessage ?? (() => { /* no-op */ }),
-            onError: d.onError ?? (() => { /* no-op */ }),
-            onDone: d.onDone ?? (() => { /* no-op */ }),
-          });
-        }),
-      );
 
       ws.connect();
     },
@@ -414,8 +381,6 @@ export const useSessionStore = defineStore('session', {
       dockScope: number | null = null,
       restoreText: string = '',
     ): Promise<void> {
-      const ws = getWebSocket();
-
       // D6: confirm turnId is genuinely still in flight (per the DOM's own
       // data-working marker) before firing the DELETE — a stale/late click
       // could otherwise target an already-settled turn.
@@ -433,8 +398,6 @@ export const useSessionStore = defineStore('session', {
         setTurnWorking(stopId, type, false);
         clearLiveTurn(type, stopId);
       }
-
-      ws.abort();
 
       document.dispatchEvent(
         new CustomEvent('session:turn-interrupted', { detail: { text, turnId: dockScope } }),

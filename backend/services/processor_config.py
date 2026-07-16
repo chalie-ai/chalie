@@ -159,7 +159,7 @@ class ProcessorConfig(ABC):
     def system_prompt(self) -> str:
         """The channel's static system-prompt body — the literal prompt text.
 
-        Default ``""`` (channels with no ACT loop, e.g. action_button). Every
+        Default ``""`` (channels with no ACT loop). Every
         channel whose prompt is a frozen literal overrides this to return it;
         the two dynamic channels (``UserConfig`` / ``EAMPConfig``) return their
         base literal and ``PromptService`` wraps it with runtime data (voice

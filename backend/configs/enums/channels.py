@@ -28,7 +28,6 @@ class Channel(str, Enum):
     USER          = "user"
     DISCOVERY     = "discovery"
     SCHEDULE      = "schedule"
-    ACTION_BUTTON = "action_button"
 
     # ── Reflection / subconscious ────────────────────────────────────────────
     DMN               = "dmn"

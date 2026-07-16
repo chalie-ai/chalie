@@ -1,13 +1,13 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue';
 import { Check } from '@lucide/vue';
-import { emit } from '../../composables/useEventBus';
+import { toggleItem } from '../../api/lists';
 
 export interface ListData {
   skill?: 'list';
   id: string | number;
   name: string;
-  items: Array<{ content: string; checked: boolean }>;
+  items: Array<{ id: string | number; content: string; checked: boolean }>;
 }
 
 export interface ListPayload extends ListData {
@@ -16,6 +16,7 @@ export interface ListPayload extends ListData {
 }
 
 interface ListItem {
+  id: string | number;
   content: string;
   checked: boolean;
   /** In-flight guard — blocks re-toggling a row while its action is pending. */
@@ -35,7 +36,7 @@ const progressPercent = computed<number>(() =>
   items.value.length ? (doneCount.value / items.value.length) * 100 : 0,
 );
 
-function onToggle(item: ListItem): void {
+async function onToggle(item: ListItem): Promise<void> {
   if (item.busy) return;
   const newState = !item.checked;
 
@@ -43,28 +44,13 @@ function onToggle(item: ListItem): void {
   item.checked = newState;
   item.busy = true;
 
-  const revert = (): void => {
+  try {
+    await toggleItem(listData.value.id, item.id, newState);
+    item.busy = false;
+  } catch {
     item.checked = !newState;
     item.busy = false;
-  };
-
-  // The session store's chalie:silent-action listener posts payload via
-  // ws.sendAction; onMessage/onError/onDone drive the optimistic UI.
-  emit('chalie:silent-action', {
-    payload: {
-      skill: 'list',
-      action: 'check',
-      id: listData.value.id,
-      items: [{ content: item.content, checked: newState }],
-    },
-    onMessage: () => {
-      item.busy = false;
-    },
-    onError: revert,
-    onDone: () => {
-      item.busy = false;
-    },
-  });
+  }
 }
 </script>
 

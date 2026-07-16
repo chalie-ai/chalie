@@ -39,15 +39,13 @@ LLM_TAGS = frozenset({
     "b", "i", "u", "h1", "code", "p", "ul", "li", "span",
     "table", "thead", "tbody", "tfoot", "tr", "td", "th",
 })
-PROGRAMMATIC_TAGS = frozenset({"img", "actions", "action"})
+PROGRAMMATIC_TAGS = frozenset({"img"})
 ALLOWED_TAGS = LLM_TAGS | PROGRAMMATIC_TAGS
 
-# Programmatic-only attributes. ``<img>`` carries src/alt; ``<action>`` carries
-# the chat-button label/value plus the overlay daemon's data-* hooks.
-# ``<span>`` carries only ``id`` — the rich-media pairing key.
+# Programmatic-only attributes. ``<img>`` carries src/alt; ``<span>`` carries only
+# ``id`` — the rich-media pairing key.
 _ATTRIBUTES = {
     "img": {"src", "alt"},
-    "action": {"label", "value", "execute", "collect", "target", "open-url", "payload", "style"},
     "span": {"id"},
     "td": {"colspan", "rowspan", "headers"},
     "th": {"colspan", "rowspan", "scope", "headers"},
@@ -78,8 +76,7 @@ def _safe_img_src(tag: str, attr: str, value: str) -> str | None:
     the ``url_schemes`` gate — ``urlsplit().scheme`` is empty for those. This
     helper drops the ``src`` attribute entirely for anything that isn't an
     absolute http/https URL, leaving the ``<img>`` inert. All other tags and
-    attributes pass through unchanged (``<action>`` ``value``, ``<span>``
-    ``id``, etc.).
+    attributes pass through unchanged (``<span>`` ``id``, etc.).
     """
     if tag != "img" or attr != "src":
         return value
@@ -99,36 +96,6 @@ def sanitize(html: str | None) -> str:
         url_schemes=_URL_SCHEMES,
         attribute_filter=_safe_img_src,  # drops scheme-less / non-http(s) img src
         link_rel=None,  # we do not allow <a> from the LLM, so no rel injection needed
-    )
-
-
-def actions_to_xml(actions: list[dict[str, object]]) -> str:
-    """Action dicts are built by the harness which bypasses the LLM, so
-    output feeds straight to ``sanitize()`` alongside any LLM body."""
-    if not actions:
-        return ""
-    parts = ["<actions>"]
-    for a in actions:
-        # Defensive: callers (or upstream JSON) may include strings/None in the
-        # list. Skip non-dict entries rather than crashing the whole render.
-        if not isinstance(a, dict):
-            continue
-        label = escape_attr(str(a.get("label", "")))
-        value = escape_attr(str(a.get("value", "")))
-        parts.append(f'<action label="{label}" value="{value}"/>')
-    parts.append("</actions>")
-    return "".join(parts)
-
-
-
-def escape_attr(value: str) -> str:
-    if not value:
-        return ""
-    return (
-        value.replace("&", "&amp;")
-        .replace("<", "&lt;")
-        .replace(">", "&gt;")
-        .replace('"', "&quot;")
     )
 
 
@@ -187,9 +154,9 @@ def markdown_to_html(text: str | None) -> str:
 
 
 def extract_plaintext(html: str) -> str:
-    """Used by the TTS / speak button. ``<actions>`` blocks are dropped via ``clean_content_tags`` because UI affordances don't belong in spoken output."""
+    """Used by the TTS / speak button. Strips all HTML tags and normalises whitespace."""
     if not html:
         return ""
     spaced = _BLOCK_BOUNDARY_RE.sub(" ", html)
-    stripped = nh3.clean(spaced, tags=set(), clean_content_tags={"actions"})
+    stripped = nh3.clean(spaced, tags=set())
     return " ".join(_html.unescape(stripped).split()).strip()

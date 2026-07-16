@@ -17,7 +17,6 @@ import SchedulerDock from './components/overlays/SchedulerDock.vue';
 import UpdatePrompt from './components/overlays/UpdatePrompt.vue';
 import VoicePlayerDialog from './components/voice/VoicePlayerDialog.vue';
 import UnlockVault from './components/layout/UnlockVault.vue';
-import ActionCardHost from './components/rich/ActionCardHost.vue';
 
 const { init: initTheme } = useTheme();
 const session = useSessionStore();
@@ -98,9 +97,6 @@ onBeforeUnmount(() => {
 
   <!-- Thread search overlay — Cmd/Ctrl-K or the top-bar search button. -->
   <SearchOverlay />
-
-  <!-- ACT-cycle rich-card responses, outside the feed so they never pollute the turn buffer. -->
-  <ActionCardHost />
 
   <!-- Teleport targets for dialogs / permission cards -->
   <div id="permStack" class="permission-stack"></div>

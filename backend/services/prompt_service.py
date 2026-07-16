@@ -86,7 +86,6 @@ _CHANNEL_WEB_SEARCH = Channel.DELEGATE_WEB_SEARCH
 _CHANNEL_PIM = Channel.DELEGATE_PIM
 _CHANNEL_EXTERNAL_AGENT = "external_agent"
 _CHANNEL_COMPACTION = Channel.COMPACTION
-_CHANNEL_ACTION_BUTTON = Channel.ACTION_BUTTON
 _CHANNEL_SUPER_EPISODE = Channel.SUPER_EPISODE_ENCODER
 _CHANNEL_GEO_PATTERN = Channel.GEO_PATTERN
 _CHANNEL_DMN = Channel.DMN
@@ -190,11 +189,9 @@ class PromptService:
         if channel == _CHANNEL_EPISODE_ENCODER:
             return self._episode_encoder_prompt()
         # skill_association, vision and compaction pass the raw input straight
-        # through; action_button runs no loop (empty body).
+        # through.
         if channel in (_CHANNEL_SKILL_ASSOCIATION, _CHANNEL_VISION, _CHANNEL_COMPACTION):
             return self.mp.raw_input
-        if channel == _CHANNEL_ACTION_BUTTON:
-            return ""
         logger.warning("[PromptService] user_prompt: unhandled channel=%s", channel)
         return ""
 

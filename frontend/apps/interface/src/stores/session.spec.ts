@@ -27,27 +27,23 @@ import type { Component } from 'vue';
 // captures whatever onConnect/onDisconnect callbacks `session.init()`
 // registers so reconnect tests can fire them directly, the same way the real
 // WebSocketService would invoke them on an actual drop/restore.
-const { fakeWs, sendMock, abortMock, wsCallbacks } = vi.hoisted(() => {
+const { fakeWs, sendMock, wsCallbacks } = vi.hoisted(() => {
   const sendMock = vi.fn();
-  const abortMock = vi.fn();
   const wsCallbacks: { onConnect: () => void; onDisconnect: () => void } = {
     onConnect: () => { /* replaced by session.init() */ },
     onDisconnect: () => { /* replaced by session.init() */ },
   };
   return {
     sendMock,
-    abortMock,
     wsCallbacks,
     fakeWs: {
       send: sendMock,
-      abort: abortMock,
       onConnect: (cb: () => void) => { wsCallbacks.onConnect = cb; },
       onDisconnect: (cb: () => void) => { wsCallbacks.onDisconnect = cb; },
       onDrift: () => { /* not under test */ },
       onAny: () => { /* not under test */ },
       connect: () => { /* not under test */ },
       ensureAlive: () => { /* not under test */ },
-      sendAction: () => { /* not under test */ },
     },
   };
 });
@@ -127,7 +123,6 @@ async function freshSession() {
 
 beforeEach(() => {
   sendMock.mockReset();
-  abortMock.mockReset();
   threadMock.mockReset();
   vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true } as Response));
   document.body.innerHTML = '';

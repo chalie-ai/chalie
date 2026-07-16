@@ -34,8 +34,8 @@ const speakText = computed(() => messagePlaintext(props.message));
 
 <style lang="scss">
 /*
- * Styles targeting v-html'd inner content (chalie-markup, chalie-action-button,
- * chalie-code, auto-linkified <a>) MUST be global — Vue scoped CSS does not
+ * Styles targeting v-html'd inner content (chalie-markup, chalie-code,
+ * auto-linkified <a>) MUST be global — Vue scoped CSS does not
  * reach nodes injected by v-html. Structural bubble layout lives in conversation.scss.
  */
 .chalie-markup {
@@ -149,55 +149,5 @@ const speakText = computed(() => messagePlaintext(props.message));
 
 .chalie-markup tbody tr:nth-child(even) {
   background: color-mix(in oklab, var(--text-primary) 3%, transparent);
-}
-
-/* Action buttons (from <actions>/<action> custom elements wired by useMarkup) */
-.chalie-actions-row {
-  display: flex;
-  gap: var(--space-sm);
-  margin-top: var(--space-md);
-  flex-wrap: wrap;
-}
-
-.chalie-action-button {
-  padding: 6px 16px;
-  border-radius: var(--radius-full);
-  border: 1px solid color-mix(in oklab, var(--violet) 35%, transparent);
-  background: color-mix(in oklab, var(--violet) 8%, transparent);
-  color: var(--accent);
-  font-size: 0.82rem;
-  font-weight: 500;
-  letter-spacing: 0.02em;
-  cursor: pointer;
-  transition: all 220ms ease;
-}
-
-.chalie-action-button:hover:not([disabled]) {
-  background: color-mix(in oklab, var(--violet) 18%, transparent);
-  border-color: color-mix(in oklab, var(--violet) 55%, transparent);
-}
-
-.chalie-action-button--secondary {
-  border-color: var(--border);
-  background: transparent;
-  color: var(--text-secondary);
-}
-
-.chalie-action-button--danger {
-  border-color: color-mix(in oklab, var(--error) 40%, transparent);
-  background: color-mix(in oklab, var(--error) 8%, transparent);
-  color: var(--error);
-}
-
-.chalie-action-button--selected {
-  background: color-mix(in oklab, var(--violet) 22%, transparent);
-  border-color: var(--accent);
-  color: var(--text-primary);
-}
-
-.chalie-action-button[disabled] {
-  opacity: 0.4;
-  cursor: default;
-  pointer-events: none;
 }
 </style>

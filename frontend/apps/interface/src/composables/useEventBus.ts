@@ -7,8 +7,6 @@ export interface ChalieEventMap {
   'chalie:theme-changed': { theme: 'dark' | 'light' };
   'chalie:speak-message': { text: string };
   'chalie:voice-transcript': { text: string };
-  'chalie:action': Record<string, unknown>;
-  'chalie:silent-action': Record<string, unknown>;
   'chalie:attention': Record<string, unknown>;
 }
 
