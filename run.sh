@@ -62,7 +62,8 @@ fi
 _install -e "$SCRIPT_DIR/backend"
 
 # ─── Launch ──────────────────────────────────────────────────────────────────
-# Loop: Python exits with code 42 to request a restart (e.g. after in-place update).
+# Loop: Python exits with code 42 to request a restart (e.g. to apply a staged
+# snapshot restore or new network settings).
 # Any other exit code passes through normally.
 while true; do
   # set -e would kill the script on run.py's non-zero exit before we could

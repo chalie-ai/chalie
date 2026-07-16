@@ -400,7 +400,7 @@ while [[ $# -gt 0 ]]; do
     --host=*) _host="${_arg#--host=}"; shift ;;
     --host)   _host="$2"; shift 2 ;;
     --version|-V) _cmd="version"; shift ;;
-    stop|restart|update|status|logs|help|version) _cmd="$_arg"; shift ;;
+    stop|restart|status|logs|help|version) _cmd="$_arg"; shift ;;
     *) _args+=("$_arg"); shift ;;
   esac
 done
@@ -425,10 +425,6 @@ case "$_cmd" in
     "$0" stop
     sleep 1
     "$0" --port="$_port" --host="$_host"
-    ;;
-  update)
-    _is_running && "$0" stop
-    curl -fsSL https://chalie.ai/install | bash
     ;;
   status)
     _is_running && echo "Running (PID $(cat "$PID_FILE"))" || echo "Not running"
@@ -460,14 +456,13 @@ case "$_cmd" in
     echo "chalie ${_ver:-unknown}"
     ;;
   help|*)
-    echo "Usage: chalie [--port=N] [--host=H] [stop|restart|update|status|logs|version]"
+    echo "Usage: chalie [--port=N] [--host=H] [stop|restart|status|logs|version]"
     echo ""
     echo "  chalie                   Start on port 31025 (default)"
     echo "  chalie --port=9000       Start on a custom port"
     echo "  chalie --host=127.0.0.1  Bind to specific address"
     echo "  chalie stop              Stop Chalie"
     echo "  chalie restart           Restart Chalie"
-    echo "  chalie update            Update to the latest release"
     echo "  chalie status            Check if Chalie is running"
     echo "  chalie logs              Follow the log"
     ;;
@@ -506,7 +501,6 @@ _print_success() {
   printf "${_green}${_bold}  │${_reset}    ${_cyan}chalie${_reset}              Start on port 31025${_green}${_bold}│${_reset}\n"
   printf "${_green}${_bold}  │${_reset}    ${_cyan}chalie --port=9000${_reset}  Custom port           ${_green}${_bold}│${_reset}\n"
   printf "${_green}${_bold}  │${_reset}    ${_cyan}chalie stop${_reset}         Stop                  ${_green}${_bold}│${_reset}\n"
-  printf "${_green}${_bold}  │${_reset}    ${_cyan}chalie update${_reset}       Update to latest      ${_green}${_bold}│${_reset}\n"
   printf "${_green}${_bold}  │${_reset}    ${_cyan}chalie logs${_reset}         Follow logs           ${_green}${_bold}│${_reset}\n"
   printf "${_green}${_bold}  └─────────────────────────────────────────────┘${_reset}\n"
   printf "\n"
