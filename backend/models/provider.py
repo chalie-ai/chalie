@@ -41,7 +41,6 @@ class Provider(Model):
         "dimensions",
         "timeout",
         "supports_vision",
-        "max_tokens",
         "created_at",
         "updated_at",
     )
@@ -54,7 +53,6 @@ class Provider(Model):
     dimensions: int | None
     timeout: int
     supports_vision: int
-    max_tokens: int | None
     created_at: str
     updated_at: str
 

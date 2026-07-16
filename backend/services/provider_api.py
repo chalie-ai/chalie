@@ -44,15 +44,6 @@ class ProviderApiRequest:
     # Output-token ceiling — None means "use formula" (see resolve_max_tokens).
     max_tokens: Optional[int] = field(default=None)
 
-    # Telemetry metadata — set by the caller at construction time so the
-    # ProviderService chokepoint can log without reaching into mp or external state.
-    # Not part of the provider-neutral contract: excluded from __eq__/repr so
-    # they never affect compaction or test assertions.
-    # job_name: empty string means "skip log_call" (probe DTOs leave this empty).
-    _job_name: Optional[str] = field(default=None, compare=False, repr=False)
-    _usage_class: str = field(default='chat', compare=False, repr=False)
-    _caller: str = field(default='', compare=False, repr=False)
-
     def resolve_max_tokens(self, window: int) -> int:
         """Return the output-token ceiling for a given context window.
 

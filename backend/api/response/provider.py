@@ -23,7 +23,6 @@ class Provider(Response):
     dimensions: int | None
     timeout: int | None
     supports_vision: bool
-    max_tokens: int | None
 
     @classmethod
     def from_row(cls, row: dict[str, object]) -> "Provider":
@@ -37,5 +36,4 @@ class Provider(Response):
             dimensions=cast("int | None", row.get("dimensions")),
             timeout=cast("int | None", row.get("timeout")),
             supports_vision=bool(row.get("supports_vision")),
-            max_tokens=cast("int | None", row.get("max_tokens")),
         )

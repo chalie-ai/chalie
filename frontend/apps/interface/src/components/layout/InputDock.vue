@@ -55,8 +55,11 @@ const attachments = useAttachmentsStore();
 const contextUsage = useContextUsageStore();
 const ambient = useAmbientSensor();
 const { available: voiceAvailable, recorderState } = storeToRefs(voiceStore);
-const usageDisplay = computed(() => contextUsage.usageDisplayFor(props.type, props.turnId ?? -1));
-const usageRatio = computed(() => contextUsage.usageRatioFor(props.type, props.turnId ?? -1));
+// A null turnId (the footer dock) reads the channel's latest reading; a thread
+// panel's dock reads its own thread. Both are fed by the same `context_usage`
+// frame — the store resolves which entry that is.
+const usageDisplay = computed(() => contextUsage.usageDisplayFor(props.type, props.turnId));
+const usageRatio = computed(() => contextUsage.usageRatioFor(props.type, props.turnId));
 // The meter shows the percentage used ("30%"); the raw "X/Y" token counts move
 // to the hover tooltip (see the container's :title below) so the inline chip
 // stays compact.
@@ -255,7 +258,6 @@ onMounted(() => {
     const v = r?.level;
     level.value = v === 'medium' || v === 'high' ? v : 'auto';
   }).catch(() => { level.value = 'auto'; });
-  void contextUsage.refresh(props.type, props.turnId ?? -1);
 });
 
 onBeforeUnmount(() => {

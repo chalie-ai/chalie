@@ -35,10 +35,18 @@ class LlmLogService:
         self.mp = mp
 
     def record(self, response: ProviderResponse) -> None:
-        """Persist one ``LlmCallLog`` row for a completed provider call."""
+        """Persist one ``LlmCallLog`` row for a completed provider call.
+
+        Reached only from ``ProviderService.send`` — the single provider
+        chokepoint — so what gets billed is decided by the call path, not by a
+        flag on the request. Probe calls (candidate-provider checks in
+        ``vision_service`` / ``provider_probe``) build their own client and
+        never route through ``send``, which is exactly why they are absent from
+        the ledger: spend the user did not incur is not spend.
+        """
         try:
             LlmCallLog(
-                job_name=self.mp.config.job,
+                type=self.mp.config.USAGE_TYPE,
                 provider=response.provider or '',
                 model=response.model,
                 tokens_input=response.tokens_input or 0,
@@ -47,40 +55,20 @@ class LlmLogService:
                 tokens_cache_create=response.tokens_cache_create or 0,
                 tokens_thinking=response.tokens_thinking or 0,
                 latency_ms=response.latency_ms or 0,
-                usage_class=self.mp.config.usage_class,
-                turn_id=self.mp.turn_id,
             ).save()
         except Exception as e:
             logger.debug(f"[LLM_LOG] Failed to log call: {e}")
 
     @staticmethod
-    def last_request_tokens(job_name: str = 'user:user', turn_id: int | None = None) -> int | None:
-        """``tokens_input`` of the most recent call logged for ``job_name``.
-
-        Keys off ``job_name`` ('channel:role'), not ``usage_class``, so the
-        indicator tracks the real user turn rather than a delegate's tiny
-        sub-request that shares usage_class 'chat'.
-
-        When ``turn_id`` is provided, narrows to only that turn's calls —
-        useful for per-thread context; when ``None`` (default), returns the
-        latest across all turns for the job (the main composer/footer case).
-        """
-        query = LlmCallLog.filter("job_name", job_name)
-        if turn_id is not None:
-            query = query.filter("turn_id", turn_id)
-        values = query.order_by("id DESC").limit(1).pluck("tokens_input")
-        return int(cast("int", values[0])) if values else None
-
-    @staticmethod
-    def token_usage(window: str, usage_class: str | None = None) -> dict[str, object]:
-        """Time-bucketed token usage statistics for ``window``, optionally filtered by class."""
+    def token_usage(window: str, usage_type: str | None = None) -> dict[str, object]:
+        """Time-bucketed token usage statistics for ``window``, optionally filtered by type."""
         bucket_fmt = "%Y-%m-%dT%H:00:00" if window in ('hour', 'day') else "%Y-%m-%d"
-        rows = LlmLogService._usage_buckets(bucket_fmt, _WINDOW_OFFSETS[window], usage_class)
+        rows = LlmLogService._usage_buckets(bucket_fmt, _WINDOW_OFFSETS[window], usage_type)
 
         entries = [
             {
                 'bucket': r['bucket'],
-                'usage_class': r['usage_class'],
+                'type': r['type'],
                 'model': r['model'],
                 'provider': r['provider'],
                 'tokens_input': r['tokens_input'] or 0,
@@ -103,28 +91,28 @@ class LlmLogService:
     def _usage_buckets(
         bucket_fmt: str,
         offset: str | None,
-        usage_class: str | None,
+        usage_type: str | None,
     ) -> list[dict[str, object]]:
-        """Token sums grouped by (bucket, usage_class, model, provider).
+        """Token sums grouped by (bucket, type, model, provider).
 
         ``bucket_fmt`` is the ``strftime`` bucket width (by-hour or by-day),
         ``offset`` an optional ``datetime('now', ?)`` window bound (None =
-        lifetime), ``usage_class`` an optional class filter.
+        lifetime), ``usage_type`` an optional 'chat'/'system' filter.
         """
         where_clauses: list[str] = []
         params: list[object] = []
         if offset is not None:
             where_clauses.append("created_at >= datetime('now', ?)")
             params.append(offset)
-        if usage_class:
-            where_clauses.append("usage_class = ?")
-            params.append(usage_class)
+        if usage_type:
+            where_clauses.append("type = ?")
+            params.append(usage_type)
         where_sql = ("WHERE " + " AND ".join(where_clauses)) if where_clauses else ""
 
         cursor = Database.conn().execute(
             f"""SELECT
                    strftime('{bucket_fmt}', created_at) AS bucket,
-                   usage_class,
+                   type,
                    model,
                    provider,
                    SUM(tokens_input)        AS tokens_input,
@@ -134,7 +122,7 @@ class LlmLogService:
                    SUM(tokens_thinking)     AS tokens_thinking
                FROM llm_call_log
                {where_sql}
-               GROUP BY bucket, usage_class, model, provider
+               GROUP BY bucket, type, model, provider
                ORDER BY bucket DESC""",
             params,
         )
@@ -142,7 +130,7 @@ class LlmLogService:
 
     @staticmethod
     def _tokens_today() -> int:
-        """Total tokens (all classes) logged since the start of the UTC day."""
+        """Total tokens (chat and system alike) logged since the start of the UTC day."""
         row = Database.conn().execute(
             """SELECT COALESCE(SUM(tokens_input + tokens_output +
                                   tokens_cache_read + tokens_cache_create +

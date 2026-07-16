@@ -39,6 +39,13 @@ class DiscoveryConfig(UserConfig):
 
     SUPPORTS_ASYNC = False
     BROADCASTS_STATE = False
+    # Re-declared, NOT inherited. Subclassing UserConfig would otherwise bill this
+    # loop's spend as "chat" — but the user never asked for it and never sees it;
+    # Chalie runs it on its own initiative, so it is system spend. Every override
+    # below follows the same rule: inherit UserConfig's *thinking*, never its
+    # user-facing identity. A future UserConfig subclass must make the same call
+    # deliberately rather than inherit a bill.
+    USAGE_TYPE = "system"
 
     def __init__(self) -> None:
         super().__init__()

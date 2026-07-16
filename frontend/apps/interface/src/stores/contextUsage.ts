@@ -1,91 +1,79 @@
 /**
  * Context-usage store — keyed per (type, turnId).
  *
- * Each InputDock reads its own thread's token count via the store's
- * `usageDisplayFor(type, turnId)` getter; the cache is populated by
- * coalesced `refresh(type, turnId)` calls. Two docks on different threads
- * never interfere: in-flight and queued state are keyed by `type:turnId`.
+ * One writer: `record`, fed by the `context_usage` turn signal the backend
+ * pushes once per CHAT provider call (see services/provider_service.py), routed
+ * here by `utils/driftDispatcher.ts::_dispatchTurnSignal`. A dock reads its own
+ * thread via `usageDisplayFor(type, turnId)`; two docks on different threads
+ * never interfere, since every entry is keyed by `type:turnId`.
+ *
+ * A `turnId` of null means "whatever this channel spent last" — the spine dock,
+ * which is not bound to a thread. That resolves through `latestByType`, written
+ * on every `record`, rather than a synthetic key: frames only ever carry real
+ * turn ids. A key with no entry renders no meter, which is the intended state
+ * for a thread that has spent nothing yet.
  */
 import { computed, ref } from 'vue';
 import { defineStore } from 'pinia';
-import { system } from '../api';
 
 export const useContextUsageStore = defineStore('contextUsage', () => {
   const byKey = ref<Record<string, { tokens: number; window: number }>>({});
+  /** ConfigType → the turn that most recently reported usage on that channel. */
+  const latestByType = ref<Record<string, number>>({});
 
-  /** `type:turnId` — the cache key used for both the store and the coalescing maps. */
+  /** `type:turnId` — the cache key. */
   function keyOf(type: string, turnId: number): string {
     return `${type}:${turnId}`;
   }
 
   /**
-   * Returns a function that, given a (type, turnId), yields the display
-   * string for that dock's own thread (or '' until the first real fetch).
+   * The reading a dock should paint: its own thread's when it has a `turnId`,
+   * otherwise the channel's most recent one (the spine dock's semantic).
+   */
+  function entryFor(type: string, turnId: number | null): { tokens: number; window: number } | undefined {
+    const id = turnId ?? latestByType.value[type];
+    if (id == null) return undefined;
+    return byKey.value[keyOf(type, id)];
+  }
+
+  /**
+   * Returns a function that, given a (type, turnId), yields the display string
+   * for that dock's thread (or '' until the first reading lands).
    */
   const usageDisplayFor = computed<
-    (type: string, turnId: number) => string
-  >(() => (type: string, turnId: number): string => {
-    const entry = byKey.value[keyOf(type, turnId)];
+    (type: string, turnId: number | null) => string
+  >(() => (type: string, turnId: number | null): string => {
+    const entry = entryFor(type, turnId);
     if (!entry || (entry.tokens === 0 && entry.window === 0)) return '';
     return `${(entry.tokens / 1000).toFixed(1)}/${(entry.window / 1000).toFixed(1)}k`;
   });
 
   /**
-   * Returns a clamped 0..1 ratio of tokens used vs. context window for a
-   * (type, turnId). Mirrors `usageDisplayFor` but yields a number suitable for
-   * a meter-bar width. Returns 0 when the cache entry is missing or the window
-   * is zero (avoids divide-by-zero).
+   * Clamped 0..1 ratio of tokens used vs. context window. Mirrors
+   * `usageDisplayFor` but yields a number suitable for a meter-bar width.
+   * Returns 0 when there is no entry or the window is zero (divide-by-zero).
    */
-  function usageRatioFor(type: string, turnId: number): number {
-    const entry = byKey.value[keyOf(type, turnId)];
+  function usageRatioFor(type: string, turnId: number | null): number {
+    const entry = entryFor(type, turnId);
     if (!entry || entry.window === 0) return 0;
     return Math.min(1, Math.max(0, entry.tokens / entry.window));
   }
 
-  // Coalescing maps — keyed by keyOf(type, turnId); kept in module closure so
-  // two docks refreshing concurrently do not collapse into one in-flight flag.
-  const _refreshing: Record<string, boolean> = {};
-  const _queued: Record<string, boolean> = {};
-
   /**
-   * Fetch context usage for a specific (type, turnId). Coalesced per key: a
-   * fetch in flight for that key sets _queued[k] and returns; on settle, a
-   * queued request for the same key drains with exactly one trailing call.
-   * Transient/auth errors leave the last painted value in place (no reset).
-   * Null tokens or window are returned early and do not overwrite the cache.
+   * Write the reading carried by a `context_usage` turn signal. The backend
+   * sends this only for a CHAT call that came back with a real token count, so
+   * an entry appearing here always means something was actually spent.
    */
-  async function refresh(type = 'user', turnId = -1): Promise<void> {
-    const k = keyOf(type, turnId);
-    if (_refreshing[k]) {
-      _queued[k] = true;
-      return;
-    }
-    _refreshing[k] = true;
-    try {
-      let data: Awaited<ReturnType<typeof system.contextUsage>>;
-      try {
-        data = await system.contextUsage(type, turnId);
-      } catch {
-        // Transient / auth miss — leave last value in place.
-        return;
-      }
-      const tokens = data?.last_request_tokens;
-      const window = data?.context_window;
-      if (tokens == null || window == null) return;
-      byKey.value[k] = { tokens, window };
-    } finally {
-      _refreshing[k] = false;
-      if (_queued[k]) {
-        _queued[k] = false;
-        void refresh(type, turnId);
-      }
-    }
+  function record(type: string, turnId: number, tokens: number, window: number): void {
+    byKey.value[keyOf(type, turnId)] = { tokens, window };
+    latestByType.value[type] = turnId;
   }
 
   return {
     byKey,
+    latestByType,
     usageDisplayFor,
     usageRatioFor,
-    refresh,
+    record,
   };
 });

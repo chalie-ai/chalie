@@ -6,9 +6,13 @@ through the pre-flight cap chokepoint, then logs the call. Retry is NOT this
 layer's job (§6.4): a size fault raises ``RequestOverCapError`` /
 ``ResponseOverLimitError`` (the MessageProcessor's cue to compact-then-retry);
 any other provider failure bubbles straight up for the MP's own resend policy
-to catch. The one mid-resend notice this layer DOES own is ``provider_retry``
-— a transient toast, not a turn state — emitted through ``mp.push_websocket`` while
-the MP's retry loop is still in flight.
+to catch. The two transient notices this layer DOES own — neither a turn state,
+both emitted through ``mp.push_websocket``, which is their only broadcast gate —
+are ``provider_retry`` (a toast raised while the MP's retry loop is still in
+flight) and ``context_usage`` (how full each CHAT request was against its
+window). Both belong here because this layer already owns that judgement: it
+computes the window and the measured size to enforce the cap, so the meter is
+the same reading reported instead of enforced.
 
 Owns the thin ``llm_clients/*`` (constructed and held here; transport-only,
 no ``mp``) and the per-turn provider *selection* reads (main/vision/delegate
@@ -42,6 +46,11 @@ _LLM_SENTINEL_PATTERNS = (
 )
 
 
+def _window_of(client: "ProviderClient") -> int:
+    """The one context-window computation: client's declared limit, hard-capped at MAX_CONTEXT_WINDOW."""
+    return min(client.get_context_limit(), MAX_CONTEXT_WINDOW)
+
+
 class ProviderService:
     """Sends provider requests, resolves selection/limits, sanitises tool args."""
 
@@ -49,10 +58,16 @@ class ProviderService:
         self.mp = mp
 
     def send(self, request: ProviderRequest) -> ProviderResponse:
-        """Pre-flight cap check, call, log — the single provider chokepoint."""
+        """Pre-flight cap check, call, log, report usage — the single provider
+        chokepoint. A CHAT call that came back with a token count emits
+        ``context_usage``: this is the one place both halves of the meter's
+        fraction exist together (``window`` above, ``tokens_input`` below), and
+        one call is exactly one move of it. A provider that reports no count is
+        silent rather than zero — the surface hides a meter it has no reading
+        for, and a fabricated 0 would read as a real, empty context."""
         config = self._select(request.type)
         client = build_client(config)
-        window = min(client.get_context_limit(), MAX_CONTEXT_WINDOW)
+        window = _window_of(client)
         cap = window - max(int(0.10 * window), 8000)
         measured = client.estimate_request_tokens(cast("ProviderApiRequest", request))
         if measured >= cap:
@@ -64,6 +79,10 @@ class ProviderService:
             )
         response = cast("ProviderResponse", client.send(cast("ProviderApiRequest", request)))
         self.mp.llm_log_service.record(response)
+        if request.type is ProviderType.CHAT and response.tokens_input is not None:
+            self.mp.push_websocket(
+                TurnSignal.context_usage(self.mp, response.tokens_input, window),
+            )
         return response
 
     def measure(self, request: ProviderRequest) -> int:
@@ -71,12 +90,8 @@ class ProviderService:
         return self._resolve(request.type).estimate_request_tokens(cast("ProviderApiRequest", request))
 
     def context_limit(self, provider_type: ProviderType = ProviderType.CHAT) -> int:
-        """Declared context window for ``provider_type``, hard-capped at MAX_CONTEXT_WINDOW."""
-        if provider_type is ProviderType.CHAT:
-            declared = self._select(ProviderType.CHAT).get("max_tokens")
-            if declared and int(cast("int | str", declared)) > 0:
-                return min(int(cast("int | str", declared)), MAX_CONTEXT_WINDOW)
-        return min(self._resolve(provider_type).get_context_limit(), MAX_CONTEXT_WINDOW)
+        """Context window for ``provider_type``: the client's declared limit, hard-capped at MAX_CONTEXT_WINDOW."""
+        return _window_of(self._resolve(provider_type))
 
     def selected_provider(self) -> ProviderClient:
         """The resolved CHAT provider client (e.g. for prompt-template metadata)."""

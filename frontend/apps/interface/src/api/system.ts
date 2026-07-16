@@ -8,12 +8,6 @@ export interface AuthStatus {
   vault_state: 'unlocked' | 'locked' | 'uninitialized';
 }
 
-/** Response from GET /system/context-usage. */
-export interface ContextUsage {
-  last_request_tokens: number | null;
-  context_window: number | null;
-}
-
 /** Response from POST /system/update/apply. */
 export interface UpdateApplyResult {
   ok: boolean;
@@ -52,11 +46,6 @@ export const system = {
   /** POST /health — heartbeat with client telemetry; no auth required. */
   heartbeat(payload: Record<string, unknown>): Promise<{ status: string; version: string }> {
     return api.post('/health', payload, NO_REDIRECT);
-  },
-
-  /** GET /system/context-usage — last request token count + context window, scoped by (type, turnId). */
-  contextUsage(type = 'user', turnId = -1): Promise<ContextUsage> {
-    return api.get(`/api/system/context-usage?type=${type}&turn_id=${turnId}`);
   },
 
   /** GET /thread/<turnId>/thinking-level?type= — the sender's last-chosen thinking level for this thread. */

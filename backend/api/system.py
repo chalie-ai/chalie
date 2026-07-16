@@ -19,7 +19,6 @@ from flask import request
 from flask.typing import ResponseReturnValue
 from flask_restx import Namespace, Resource
 
-from configs.channels import config_for
 from configs.enums.channels import Channel
 from models.compaction import Compaction
 from models.data_graph import DataGraphRow
@@ -33,7 +32,6 @@ from utils.logger import LOG_FILE_PATH as _LOG_FILE_PATH  # Written exclusively 
 from .auth import require_session
 from .dto import Error, expects, register_dto, responds
 from .dto.boundary import error
-from .dto.context_usage import ContextUsage
 from .dto.health import ClientTelemetry, Health
 from .dto.network import NetworkState, NetworkUpdate, NetworkUpdateResult
 from .dto.observability_compaction import CompactionRecord, CompactionView
@@ -86,7 +84,6 @@ _SYSTEM_DTOS = (
     WriteQueueStats,
     LogError,
     ErrorsList,
-    ContextUsage,
     Setting,
     SettingWrite,
     NetworkState,
@@ -369,19 +366,19 @@ class ObservabilityToolsResource(Resource):
 class ObservabilityTokenUsageResource(Resource):
     @require_session
     @system_ns.param("window", "hour | day | week | month | lifetime (default day)", _in="query")
-    @system_ns.param("usage_class", "chat | subagent | subconscious (optional filter)", _in="query")
+    @system_ns.param("type", "chat | system (optional filter)", _in="query")
     @system_ns.response(200, "Token usage (opaque service-owned body)")
     @system_ns.response(422, "Invalid window", model=_S["Error"])
     @system_ns.response(500, "Failed to retrieve token usage data", model=_S["Error"])
     @responds(code=200)
     def get(self) -> ResponseReturnValue:
-        """Token usage aggregated by time window, model, provider, and usage class (raw passthrough)."""
+        """Token usage aggregated by time window, model, provider, and spend type (raw passthrough)."""
         window = request.args.get("window", "day")
         if window not in VALID_WINDOWS:
             return error(f"Invalid window '{window}'. Use: {', '.join(sorted(VALID_WINDOWS))}", 422)
-        usage_class = request.args.get("usage_class") or None
+        usage_type = request.args.get("type") or None
         try:
-            return LlmLogService.token_usage(window=window, usage_class=usage_class)
+            return LlmLogService.token_usage(window=window, usage_type=usage_type)
         except Exception as e:
             logger.error(f"[REST API] observability/token-usage error: {e}")
             return error("Failed to retrieve token usage data", 500)
@@ -535,43 +532,6 @@ class ObservabilityErrorsResource(Resource):
 # ──────────────────────────────────────────────
 # Settings endpoints
 # ──────────────────────────────────────────────
-
-@system_ns.route("/context-usage")
-class ContextUsageResource(Resource):
-    @require_session
-    @system_ns.response(200, "Context usage", model=_S["ContextUsage"])
-    @system_ns.response(500, "Failed to retrieve context usage", model=_S["Error"])
-    @responds(ContextUsage, code=200)
-    def get(self) -> ContextUsage | ResponseReturnValue:
-        """Last user-turn request size + context window for the composer indicator.
-
-        Optional query params: ``type`` (default ``user``) selects the config
-        type to derive the job name from; ``turn_id`` (int, optional) narrows
-        the lookup to a specific thread — omit or pass -1 for the latest
-        across all turns (the footer/spine case).
-        """
-        try:
-            from services.provider_cache_service import ProviderCacheService
-            config_type = request.args.get("type", "user")
-            turn_id_raw = request.args.get("turn_id")
-            if turn_id_raw is not None and turn_id_raw != "-1":
-                try:
-                    turn_id = int(turn_id_raw)
-                except (ValueError, TypeError):
-                    turn_id = None
-            else:
-                turn_id = None
-            job_name = config_for(config_type).job
-            last = LlmLogService.last_request_tokens(job_name, turn_id)
-            selected = ProviderCacheService.get_selected_provider() or {}
-            return ContextUsage(
-                last_request_tokens=last,
-                context_window=cast("int | None", selected.get("max_tokens")),
-            )
-        except Exception:
-            logger.exception("[REST API] context-usage error")
-            return error("Failed to retrieve context usage", 500)
-
 
 @system_ns.route("/settings/<key>")
 @system_ns.param("key", "Setting key", _in="path")

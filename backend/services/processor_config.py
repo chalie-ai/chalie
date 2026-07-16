@@ -47,6 +47,20 @@ class ProcessorConfig(ABC):
     regression-head gate, or a caller override). ``ProviderService`` reads it
     first in ``resolve_thinking_mode`` (config pin > override > gate result)."""
 
+    USAGE_TYPE: ClassVar[str] = "system"
+    """Which spend bucket this channel's provider calls bill to in
+    ``llm_call_log.type`` — ``"chat"`` (the user's own conversation) or
+    ``"system"`` (everything Chalie runs on its own behalf: delegates,
+    background loops, housekeeping).
+
+    Defaults to ``"system"`` so spend is only ever attributed to the user by an
+    explicit declaration — an unclassified channel under-bills the user rather
+    than silently inflating their conversation's cost. ``LlmLogService.record``
+    reads this class constant directly; there is nothing to thread through a
+    constructor or a delegate. Distinct from ``policy_channel``, which gates
+    tools: a channel can be policy-gated as CHAT while billing as system (see
+    DiscoveryConfig)."""
+
     uses_vision_provider: ClassVar[bool] = False
     """True -> ProviderService._resolve reads the brain's Vision Provider from the DB
     instead of the global selected provider. Only VisionConfig sets it."""
@@ -69,8 +83,7 @@ class ProcessorConfig(ABC):
     'external_agent', 'pattern_match'."""
 
     policy_channel: "PolicyChannel"
-    """Which policy channel this processor's tool calls are gated under.
-    usage_class (the llm_call_log string) is derived from it."""
+    """Which policy channel this processor's tool calls are gated under."""
 
     # ── Tool visibility ───────────────────────────────────────────────────────
 
@@ -141,16 +154,6 @@ class ProcessorConfig(ABC):
     already exists, not the -1 sentinel."""
 
     # ── Derived properties ────────────────────────────────────────────────────
-
-    @property
-    def job(self) -> str:
-        """Telemetry label passed through ``ProviderService.send()`` to the resolved"""
-        return f"{self.channel}:{self.role}"
-
-    @property
-    def usage_class(self) -> str:
-        """LLM usage class written to llm_call_log."""
-        return self.policy_channel.value
 
     @property
     def system_prompt(self) -> str:

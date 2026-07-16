@@ -28,6 +28,7 @@ import { useNotificationsStore } from '../stores/notifications';
 import type { UpdateState } from '../stores/notifications';
 import { useTasksStore } from '../stores/tasks';
 import { usePermissionsStore } from '../stores/permissions';
+import { useContextUsageStore } from '../stores/contextUsage';
 
 /** The session-owned side effects a turn_execution frame still needs — see
  *  module docblock for why this is dependency-injected rather than a static
@@ -179,10 +180,13 @@ function _dispatchToolCall(data: WsPushEvent): boolean {
  * Mid-turn progress signals — stateless and turn-addressed, discriminated on
  * `status`. `updated` re-fetches the turn ONCE and fans it out to every
  * registered surface of its type; `provider_retry` is a transient toast (the
- * turn stays in flight, no error bubble). Returns true when handled.
+ * turn stays in flight, no error bubble); `context_usage` writes the token
+ * reading straight to its store — no refetch, no DOM effect. Returns true when
+ * handled.
  *
- * `updated`'s type is resolved (never coerced to `user`) since turn_id alone
- * doesn't identify a turn across channels — see `resolveFrameType`.
+ * The types of `updated` and `context_usage` are resolved (never coerced to
+ * `user`) since turn_id alone doesn't identify a turn across channels — see
+ * `resolveFrameType`.
  */
 function _dispatchTurnSignal(data: WsPushEvent): boolean {
   if (!isTurnSignal(data)) return false;
@@ -212,6 +216,18 @@ function _dispatchTurnSignal(data: WsPushEvent): boolean {
     case 'provider_retry':
       showToast((data as { message?: string }).message ?? 'The AI provider had a problem — retrying…');
       return true;
+    case 'context_usage': {
+      if (turnId == null) return true;
+      const type = resolveFrameType(turnId, (data as { type?: string | null }).type);
+      if (type == null) {
+        console.warn('[driftDispatcher] turn_signal "context_usage" for turn', turnId, 'has no resolvable type — dropped');
+        return true;
+      }
+      const usage = data as { tokens_input?: number; context_window?: number };
+      if (usage.tokens_input == null || usage.context_window == null) return true;
+      useContextUsageStore().record(type, turnId, usage.tokens_input, usage.context_window);
+      return true;
+    }
     default:
       return false;
   }

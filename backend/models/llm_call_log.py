@@ -17,7 +17,7 @@ class LlmCallLog(Model):
 
     __columns__: ClassVar[tuple[str, ...]] = (
         "id",
-        "job_name",
+        "type",
         "provider",
         "model",
         "tokens_input",
@@ -26,8 +26,6 @@ class LlmCallLog(Model):
         "tokens_cache_create",
         "tokens_thinking",
         "latency_ms",
-        "usage_class",
-        "turn_id",
         "created_at",
     )
 

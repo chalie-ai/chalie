@@ -37,6 +37,7 @@ are re-pointed at ``transcript_service.read()`` / ``prompt_service.previous_mess
 
 import sqlite3
 from typing import TYPE_CHECKING, cast
+from unittest.mock import patch
 
 import pytest
 
@@ -55,18 +56,39 @@ if TYPE_CHECKING:
 
 pytestmark = pytest.mark.unit
 
+# ProviderService builds its thin transport client through this factory — the
+# real network boundary (same seam as test_context_usage_signal.py). Patching it
+# is what keeps these tests off ``http://localhost:11434``.
+_BUILD_CLIENT = "services.provider_service.build_client"
+
+# A window small enough that the compactor's cap formula
+# (``window - max(0.10*window, 8000)``) lands at zero, so ``_fit_compaction_input``
+# never sizes a request against — nor sends one to — a live provider.
+_OFFLINE_WINDOW = 8000
+
+
+class _OfflineClient:
+    """Stub at the ``build_client`` boundary: reports a fixed 8000-token window
+    and a zero size estimate, so the whole compaction-sizing path is hermetic —
+    no ``get_context_limit`` HTTP call, no ``send``."""
+
+    def get_context_limit(self) -> int:
+        return _OFFLINE_WINDOW
+
+    def estimate_request_tokens(self, _dto: object) -> int:
+        return 0
+
 
 def _seed_offline_provider_cap_zero(db: sqlite3.Connection) -> int:
-    """A real, selected ``providers`` row with a declared ``max_tokens`` small
+    """A real, selected ``providers`` row with a declared window small
     enough that the compactor's cap formula (``window - max(0.10*window, 8000)``)
-    lands at/below zero — ``ProviderService.context_limit()`` then short-circuits
-    on the DB-declared value and never reaches the network
-    (``OllamaClient.get_context_limit()``), and the cap<=0 branch means
+    lands at/below zero — ``ProviderService.context_limit()`` then returns
+    8000 (patched via ``build_client`` below), and the cap<=0 branch means
     ``_fit_compaction_input`` never has to call the also-offline-but-unexercised
     ``ProviderService.measure()`` either. Fully hermetic."""
     cur = db.execute(
-        "INSERT INTO providers (name, platform, model, host, max_tokens) "
-        "VALUES ('compactor-test', 'ollama', 'cap-model', 'http://localhost:11434', 8000)",
+        "INSERT INTO providers (name, platform, model, host) "
+        "VALUES ('compactor-test', 'ollama', 'cap-model', 'http://localhost:11434')",
     )
     pid = cast(int, cur.lastrowid)
     db.commit()
@@ -108,7 +130,8 @@ def test_fit_compaction_input_fits_settled_history_under_the_context_cap(db: sql
     _seed_settled_turn("user", "second question", "second answer")
     parent = cast("_CompactionParent", _make_mp())
 
-    combined = ChatHistoryCompactor._fit_compaction_input(parent, "")
+    with patch(_BUILD_CLIENT, return_value=_OfflineClient()):
+        combined = ChatHistoryCompactor._fit_compaction_input(parent, "")
 
     assert combined is not None
     assert "first question" in combined
@@ -123,7 +146,8 @@ def test_fit_compaction_input_returns_none_with_no_backlog(db: sqlite3.Connectio
     _seed_offline_provider_cap_zero(db)
     parent = cast("_CompactionParent", _make_mp())
 
-    combined = ChatHistoryCompactor._fit_compaction_input(parent, "")
+    with patch(_BUILD_CLIENT, return_value=_OfflineClient()):
+        combined = ChatHistoryCompactor._fit_compaction_input(parent, "")
 
     assert combined is None
     assert parent._compaction_kept_rows == 0
@@ -143,7 +167,8 @@ def test_run_completes_and_writes_a_checkpoint_without_crashing(db: sqlite3.Conn
     mp = _make_mp()
     ability = ChatHistoryCompactor(mp)
 
-    result = ability.run({})
+    with patch(_BUILD_CLIENT, return_value=_OfflineClient()):
+        result = ability.run({})
 
     assert result.status == "success"
     checkpoint = Compaction.latest_main("user")

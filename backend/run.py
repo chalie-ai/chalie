@@ -201,7 +201,6 @@ def _run_startup_migrations() -> None:
     and ``migrations.runner`` records outcomes in the ``schema_migrations``
     ledger, so nothing here changes when a migration is added or retired.
     """
-    _backfill_provider_token_limits()
     _run_transcript_rebuild()
     _purge_stale_adaptive_layer_rows()
 
@@ -209,21 +208,6 @@ def _run_startup_migrations() -> None:
     from services.file_mapper_service import FileMapperService
     run_all(str(FileMapperService.get_db_path()))
 
-
-def _backfill_provider_token_limits() -> None:
-    """Refresh providers.max_tokens from each client's context limit. Runs
-    every boot; a provider whose client fails keeps its previous value."""
-    try:
-        from services.provider_token_limits import backfill_all
-        with Database.transaction() as _conn:
-            _stats = backfill_all(_conn)
-            _conn.commit()
-        logger.info(
-            "[Startup] providers token-limit backfill: total=%d succeeded=%d failed=%d",
-            _stats['total'], _stats['succeeded'], _stats['failed'],
-        )
-    except Exception as _bf_err:
-        logger.warning(f"[Startup] providers max_tokens/compact_at backfill skipped: {_bf_err}")
 
 
 def _run_transcript_rebuild() -> None:

@@ -5,7 +5,7 @@ Replaces the create_llm_service / _build_service pair from llm_service.py.
 No FallbackLLMService, no LoggingLLMService — those concerns live in
 ProviderService (telemetry) and have been deleted (fallback is dead code).
 
-Consumed by: services.provider_service (_resolve), services.provider_token_limits.
+Consumed by: services.provider_service (send / _resolve).
 """
 
 from __future__ import annotations

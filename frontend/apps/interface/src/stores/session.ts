@@ -2,9 +2,9 @@
  * Session store — WS coordinator + turn send/stop orchestration.
  *
  * Single WS owner rule: ONLY this store may touch WebSocketService's
- * send/sendAction/abort/onDrift/onAny/ensureAlive handlers, and it is the
+ * send/sendAction/abort/onDrift/ensureAlive handlers, and it is the
  * only place `connect()` is called for the interface app. `onConnect` /
- * `onDisconnect` are NOT exclusive to this store — `@chalie/shared`'s
+ * `onDisconnect` / `onAny` are NOT exclusive to this store — `@chalie/shared`'s
  * `useWebSocket()` composable also registers them, but only to drive the
  * connection-status pill (`useConnectionStore`); it never touches `onDrift`
  * or the send/abort surface. Drift routing itself lives in
@@ -42,7 +42,6 @@ import {
 } from '../utils/turnDom';
 import { laneKey, useQueueStore } from './queue';
 import { useNotificationsStore } from './notifications';
-import { useContextUsageStore } from './contextUsage';
 import { useAmbientSensor } from '../composables/useAmbientSensor';
 
 /** Guard: init() must be idempotent (HMR / Vue StrictMode). */
@@ -135,7 +134,6 @@ export const useSessionStore = defineStore('session', {
 
       const ws = getWebSocket();
       const conn = useConnectionStore();
-      const contextUsage = useContextUsageStore();
 
       registerSessionHooks({
         releasePendingSend: (turnId, type) => this._releasePendingSend(turnId, type),
@@ -180,23 +178,6 @@ export const useSessionStore = defineStore('session', {
 
       ws.onDrift((data: WsPushEvent) => {
         dispatchDrift(data);
-      });
-
-      // onAny — route each inbound frame's refresh to its own (type, turnId) key.
-      ws.onAny((data: WsInboundEvent) => {
-        try {
-          const rawType = (data as { type?: unknown }).type;
-          const type =
-            typeof rawType === 'string' && Object.values(ConfigType).includes(rawType as ConfigType)
-              ? rawType
-              : 'user';
-          const rawTurnId = (data as { turn_id?: unknown }).turn_id;
-          if (typeof rawTurnId === 'number') void contextUsage.refresh(type, rawTurnId);
-          // Always keep the main-spine / footer dock (keyed at turnId -1) live.
-          void contextUsage.refresh(type, -1);
-        } catch {
-          /* never break the WS pipe */
-        }
       });
 
       // Tab-refocus liveness check.

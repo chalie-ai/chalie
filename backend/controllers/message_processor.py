@@ -366,9 +366,6 @@ class MessageProcessor:
             tools=tools or None,
             thinking_mode=level,
             cache_prefix=True,
-            _job_name=self.config.job,
-            _usage_class=self.config.usage_class,
-            _caller=type(self).__name__,
         )
 
     def _provider_type(self) -> ProviderType:

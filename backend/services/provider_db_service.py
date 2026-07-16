@@ -50,7 +50,6 @@ class ProviderDbService:
             "dimensions": provider.dimensions,
             "timeout": provider.timeout,
             "supports_vision": bool(provider.supports_vision),
-            "max_tokens": provider.max_tokens,
         }
         if provider.api_key:
             try:
@@ -144,21 +143,6 @@ class ProviderDbService:
                 supports_vision=vision,
             ).save()
         new_id = provider.id
-
-        # Backfill max_tokens + compact_at for the newly-created provider.
-        # Same code path as the boot-time backfill — single source of truth.
-        # Failure here is non-fatal: the row exists, the values can be
-        # populated by the next boot or a manual retry.
-        try:
-            from services.provider_token_limits import backfill_one
-            with Database.transaction() as conn:
-                backfill_one(conn, cast(int, new_id))
-        except Exception as exc:
-            logger.warning(
-                "[ProviderDBService] post-create token-limit backfill failed for id=%s: %s",
-                new_id, exc,
-            )
-
         # Auto-activate this provider if none is currently selected. Atomic in
         # the service layer so it cannot race with a concurrent UI selection.
         # ``get_selected_provider`` returns ``None`` when the settings row is

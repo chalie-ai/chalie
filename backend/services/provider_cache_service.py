@@ -132,7 +132,6 @@ class ProviderCacheService:
                     'api_key': selected.get('api_key'),
                     'dimensions': selected.get('dimensions'),
                     'timeout': selected.get('timeout'),
-                    'max_tokens': selected.get('max_tokens'),
                 }
         except Exception as e:
             logger.debug(f"[ProviderCache] Failed to get selected provider: {e}")
