@@ -211,10 +211,10 @@ class TestWatchedFoldersBrowse:
         assert resp.status_code == 422
         assert resp.get_json()['success'] is False
 
-    def test_browse_id_addressed_returns_404(self, authed_client: AuthedClient) -> None:
+    def test_browse_id_addressed_returns_404(self, authed_client: AuthedClient, tmp_path: Path) -> None:
         client, _db, _store = authed_client
         # browse is id-less only — an id-addressed call is not a valid target.
-        resp = client.post('/api/watched-folders/browse/some-id', json={'path': '/tmp'})
+        resp = client.post('/api/watched-folders/browse/some-id', json={'path': str(tmp_path)})
 
         assert resp.status_code == 404
         assert resp.get_json()['success'] is False

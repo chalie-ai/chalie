@@ -48,15 +48,15 @@ def _grep_rows(tr: ToolResult) -> list[dict[str, object]]:
 # ── validation ────────────────────────────────────────────────────
 
 
-def test_invalid_action_returns_error() -> None:
-    tr = _run("nope", "*.py", "/tmp")
+def test_invalid_action_returns_error(tmp_path: Path) -> None:
+    tr = _run("nope", "*.py", str(tmp_path))
     assert tr.status == "error"
     assert tr.code == "unknown-action"
     assert tr.valid == ("glob", "grep")
 
 
-def test_missing_query_returns_error() -> None:
-    tr = _run("glob", "", "/tmp")
+def test_missing_query_returns_error(tmp_path: Path) -> None:
+    tr = _run("glob", "", str(tmp_path))
     assert tr.status == "error"
     assert tr.code == "empty-query"
     assert "required" in str(tr.body)

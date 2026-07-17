@@ -26,9 +26,10 @@ def test_extract_text_rejects_every_image_type(tmp_path: Path, name: str) -> Non
     """Every image type formerly in the dispatch table now raises."""
     p = tmp_path / name
     p.write_bytes(blank_png_bytes())
+    path_str = str(p)
 
     with pytest.raises(ValueError, match="images are described, not extracted"):
-        extract_text(str(p))
+        extract_text(path_str)
 
 
 def test_extract_text_rejects_image_by_explicit_mime(tmp_path: Path) -> None:
@@ -36,9 +37,10 @@ def test_extract_text_rejects_image_by_explicit_mime(tmp_path: Path) -> None:
     explicit image/* mime is refused even when the path lies about the type."""
     p = tmp_path / "not_really.txt"
     p.write_bytes(blank_png_bytes())
+    path_str = str(p)
 
     with pytest.raises(ValueError, match="images are described, not extracted"):
-        extract_text(str(p), "image/heic")
+        extract_text(path_str, "image/heic")
 
 
 def test_image_bytes_are_never_returned_as_mojibake(tmp_path: Path) -> None:
@@ -47,9 +49,10 @@ def test_image_bytes_are_never_returned_as_mojibake(tmp_path: Path) -> None:
     returned decoded binary as a 'successful' extraction."""
     p = tmp_path / "invoice.png"
     p.write_bytes(ocrable_png_bytes())
+    path_str = str(p)
 
     with pytest.raises(ValueError):
-        extract_text(str(p), "image/heic")
+        extract_text(path_str, "image/heic")
 
 
 def test_text_extraction_still_works(tmp_path: Path) -> None:

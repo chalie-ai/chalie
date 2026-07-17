@@ -25,7 +25,7 @@ class TestFileMapperService:
         assert schema.parts[-2] == "backend"
         assert schema.is_file(), f"schema.sql not found at {schema}"
 
-    def test_get_version_path_ends_with_VERSION(self) -> None:
+    def test_get_version_path_ends_with_version_file(self) -> None:
         version = FileMapperService.get_version_path()
         assert version.parts[-1] == "VERSION"
         assert version.is_file(), f"VERSION file not found at {version}"

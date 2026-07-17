@@ -66,7 +66,7 @@ class TestDistanceKm:
 
         dist = distance_km(35.8989, 14.5146, 35.8989, 14.5146)
 
-        assert dist == 0.0
+        assert dist == pytest.approx(0.0, abs=1e-9)
 
 
 # ---------------------------------------------------------------------------
@@ -81,7 +81,7 @@ class TestEstimateTravelMinutes:
 
         minutes = estimate_travel_minutes(10.0, speed_kmh=0.0)
 
-        assert minutes == 0.0
+        assert minutes == pytest.approx(0.0, abs=1e-9)
 
 
 # ---------------------------------------------------------------------------

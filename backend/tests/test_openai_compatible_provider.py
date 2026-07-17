@@ -3,6 +3,7 @@
 
 import secrets
 import sqlite3
+from collections.abc import Iterator
 from typing import cast
 
 import pytest
@@ -51,7 +52,7 @@ def _unwrap_error(body: "dict[str, object]") -> str:
 class TestOpenAICompatibleProvider:
 
     @pytest.fixture(autouse=True)
-    def _reset_vault_state(self) -> object:
+    def _reset_vault_state(self) -> Iterator[None]:
         _vault_state.dek = None
         _vault_mod._vault_service_instance = None
         yield

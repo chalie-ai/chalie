@@ -10,6 +10,7 @@
 import json
 import sqlite3
 import stat
+from collections.abc import Iterator
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
@@ -111,7 +112,7 @@ def _install_codex_home(tmp_path: Path, *, logged_in: bool = True) -> Path:
 class TestCodexCliProvider:
 
     @pytest.fixture(autouse=True)
-    def _reset_vault_state(self) -> object:
+    def _reset_vault_state(self) -> Iterator[None]:
         _vault_state.dek = None
         _vault_mod._vault_service_instance = None
         yield

@@ -101,13 +101,10 @@ def test_rank_results_fail_open_returns_original_on_embedding_error() -> None:
         {"title": "B", "url": "https://b.com", "summary": "Beta content.",  "score": None, "date": None},
     ]
     # An empty query must not crash; fail-open means the caller gets something back
-    try:
-        out = rank_results("", results)
-        # Either scored or returned unchanged — both are acceptable; must not raise
-        assert isinstance(out, list)
-        assert len(out) == 2
-    except Exception as exc:
-        pytest.fail(f"rank_results must not raise on bad input, got: {exc}")
+    out = rank_results("", results)
+    # Either scored or returned unchanged — both are acceptable; must not raise
+    assert isinstance(out, list)
+    assert len(out) == 2
 
 
 # ── enrich_missing_summaries: already-has-summary results are untouched ───────

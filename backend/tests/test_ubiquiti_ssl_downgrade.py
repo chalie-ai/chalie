@@ -25,6 +25,7 @@ from __future__ import annotations
 import http.server
 import ssl
 import threading
+from collections.abc import Iterator
 from pathlib import Path
 from typing import cast
 
@@ -62,7 +63,7 @@ def _ensure_cert() -> tuple[Path, Path]:
 
 
 @pytest.fixture(scope="module")
-def untrusted_https_server() -> object:
+def untrusted_https_server() -> Iterator[object]:
     """A real HTTPS server presenting a self-signed cert, threaded in the background."""
     cert, key = _ensure_cert()
 

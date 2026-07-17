@@ -101,9 +101,10 @@ def test_image_description_raises_when_no_provider_and_ocr_reads_nothing(
 
     img = tmp_path / "blank.png"
     img.write_bytes(blank_png_bytes())
+    description = ImageDescription(str(img), "what is this")
 
     with pytest.raises(RuntimeError, match="empty description"):
-        ImageDescription(str(img), "what is this").get_value()
+        description.get_value()
 
 
 def test_image_description_raises_when_provider_fails_and_ocr_reads_nothing(
@@ -115,9 +116,10 @@ def test_image_description_raises_when_provider_fails_and_ocr_reads_nothing(
 
     img = tmp_path / "blank.png"
     img.write_bytes(blank_png_bytes())
+    description = ImageDescription(str(img), "what is this")
 
     with pytest.raises(RuntimeError, match="empty description"):
-        ImageDescription(str(img), "what is this").get_value()
+        description.get_value()
 
 
 def test_vision_run_provider_error_returns_visible_error(db: sqlite3.Connection) -> None:

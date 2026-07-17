@@ -36,7 +36,7 @@ class TestLocaleServiceReads:
         assert get_timezone().key == "Europe/Malta"
         assert get_locale() == "en-MT"
         assert get_currency() == "EUR"
-        assert get_location()["lat"] == 35.899
+        assert get_location()["lat"] == pytest.approx(35.899, abs=1e-9)
 
     def test_defaults_when_empty(self, db: sqlite3.Connection) -> None:
         db.execute("DELETE FROM telemetry")
@@ -88,5 +88,6 @@ class TestCalculateInterval:
 
     def test_invalid_type_raises(self, db: sqlite3.Connection) -> None:
         from services.locale_service import calculate_interval
+        dt = datetime(2026, 1, 1, tzinfo=timezone.utc)
         with pytest.raises(ValueError):
-            calculate_interval(datetime(2026, 1, 1, tzinfo=timezone.utc), "week", 1)
+            calculate_interval(dt, "week", 1)
