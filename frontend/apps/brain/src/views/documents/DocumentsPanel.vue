@@ -178,6 +178,7 @@ async function onUpload(event: Event): Promise<void> {
         type="text"
         class="search-input"
         placeholder="Search documents…"
+        aria-label="Search documents…"
         @keydown.enter="onSearch"
       />
       <button class="btn btn-primary" @click="fileInput?.click()">

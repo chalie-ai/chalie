@@ -218,9 +218,14 @@ onMounted(async () => {
 
     <div v-else class="mcp-settings">
       <div class="mcp-row">
-        <label class="mcp-label">Server Enabled</label>
-        <label class="switch">
-          <input type="checkbox" :checked="inConfig.enabled !== false" @change="onEnabledChange" />
+        <label class="mcp-label" for="mcpInboundEnabled">Server Enabled</label>
+        <label class="switch" aria-label="Server Enabled">
+          <input
+            id="mcpInboundEnabled"
+            type="checkbox"
+            :checked="inConfig.enabled !== false"
+            @change="onEnabledChange"
+          />
           <span class="switch-track"></span>
         </label>
       </div>
@@ -277,9 +282,10 @@ onMounted(async () => {
           <h4 class="mcp-out-add-title">Edit MCP Server</h4>
 
           <div class="mcp-out-form-row">
-            <label class="mcp-label">Enabled</label>
-            <label class="switch">
+            <label class="mcp-label" for="mcpEditEnabled">Enabled</label>
+            <label class="switch" aria-label="Enabled">
               <input
+                id="mcpEditEnabled"
                 type="checkbox"
                 :checked="editEnabled"
                 @change="editEnabled = ($event.target as HTMLInputElement).checked"
@@ -298,14 +304,15 @@ onMounted(async () => {
             <input id="mcpEditHost" v-model="editHost" type="text" class="form-input" />
           </div>
 
-          <div class="form-group">
-            <label>Additional Headers</label>
+          <div class="form-group" role="group" aria-labelledby="mcpEditHeadersLabel">
+            <span id="mcpEditHeadersLabel" class="form-group-label">Additional Headers</span>
             <div class="mcp-headers-list">
               <div v-for="(row, idx) in editHeaders" :key="idx" class="mcp-header-row">
                 <input
                   v-model="row.key"
                   type="text"
                   placeholder="Header name"
+                  aria-label="Header name"
                   class="form-input mcp-header-key"
                 />
                 <span class="mcp-header-sep">:</span>
@@ -313,6 +320,7 @@ onMounted(async () => {
                   v-model="row.value"
                   type="text"
                   placeholder="Value"
+                  aria-label="Value"
                   class="form-input mcp-header-val"
                 />
                 <button
@@ -378,9 +386,10 @@ onMounted(async () => {
         <h4 class="mcp-out-add-title">Add Remote MCP Server</h4>
 
         <div class="mcp-out-form-row">
-          <label class="mcp-label">Enabled</label>
-          <label class="switch">
+          <label class="mcp-label" for="mcpAddEnabled">Enabled</label>
+          <label class="switch" aria-label="Enabled">
             <input
+              id="mcpAddEnabled"
               type="checkbox"
               :checked="addEnabled"
               @change="addEnabled = ($event.target as HTMLInputElement).checked"
@@ -411,14 +420,15 @@ onMounted(async () => {
           />
         </div>
 
-        <div class="form-group">
-          <label>Additional Headers</label>
+        <div class="form-group" role="group" aria-labelledby="mcpAddHeadersLabel">
+          <span id="mcpAddHeadersLabel" class="form-group-label">Additional Headers</span>
           <div class="mcp-headers-list">
             <div v-for="(row, idx) in addHeaders" :key="idx" class="mcp-header-row">
               <input
                 v-model="row.key"
                 type="text"
                 placeholder="Header name"
+                aria-label="Header name"
                 class="form-input mcp-header-key"
               />
               <span class="mcp-header-sep">:</span>
@@ -426,6 +436,7 @@ onMounted(async () => {
                 v-model="row.value"
                 type="text"
                 placeholder="Value"
+                aria-label="Value"
                 class="form-input mcp-header-val"
               />
               <button

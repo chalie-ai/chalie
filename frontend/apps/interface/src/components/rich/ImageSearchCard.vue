@@ -255,7 +255,7 @@ onBeforeUnmount(() => {
             <img
               v-if="!failed.has(idx)"
               :src="img.thumbSrc"
-              :alt="img.title || 'Image'"
+              :alt="img.title || payload.query"
               class="image-card__img"
               loading="lazy"
               draggable="false"
@@ -263,7 +263,13 @@ onBeforeUnmount(() => {
             />
             <div v-else class="image-card__img image-card__img--broken" aria-hidden="true">⊘</div>
           </component>
-          <div v-if="img.verified" class="image-card__badge" role="img" aria-label="Verified">✓</div>
+          <svg
+            v-if="img.verified"
+            class="image-card__badge"
+            role="img"
+            aria-label="Verified"
+            viewBox="0 0 18 18"
+          ><text x="50%" y="50%" dominant-baseline="central" text-anchor="middle" fill="currentColor">✓</text></svg>
         </div>
       </div>
 

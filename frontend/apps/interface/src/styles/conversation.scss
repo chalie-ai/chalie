@@ -164,7 +164,7 @@
 }
 
 .speech-form__text {
-  word-break: break-word;
+  overflow-wrap: anywhere;
   position: relative;
   z-index: 2;
 }

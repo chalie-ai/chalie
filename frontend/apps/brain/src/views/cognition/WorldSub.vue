@@ -58,6 +58,12 @@ function mdToHtml(md: string): string {
       <div class="world-section">
         <h4>Device &amp; Environment</h4>
         <table class="records-table">
+          <thead>
+            <tr>
+              <th scope="col" class="sr-only">Property</th>
+              <th scope="col" class="sr-only">Value</th>
+            </tr>
+          </thead>
           <tbody>
             <tr>
               <td class="key-cell">Location</td>
@@ -108,6 +114,11 @@ function mdToHtml(md: string): string {
       <div class="world-section">
         <h4>Background Processes</h4>
         <table v-if="bgProcs.length > 0" class="records-table">
+          <thead>
+            <tr>
+              <th scope="col" class="sr-only">Process</th>
+            </tr>
+          </thead>
           <tbody>
             <tr v-for="(p, i) in bgProcs" :key="i">
               <td>{{ typeof p === 'string' ? p : JSON.stringify(p) }}</td>

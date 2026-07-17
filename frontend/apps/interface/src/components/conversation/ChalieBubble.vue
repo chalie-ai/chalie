@@ -39,7 +39,7 @@ const speakText = computed(() => messagePlaintext(props.message));
  * reach nodes injected by v-html. Structural bubble layout lives in conversation.scss.
  */
 .chalie-markup {
-  word-break: break-word;
+  overflow-wrap: anywhere;
   position: relative;
   z-index: 2;
 }
