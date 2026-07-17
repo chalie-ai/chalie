@@ -55,12 +55,11 @@ def load_capabilities() -> "dict[str, AbstractCapability]":
             )
 
         except Exception as exc:
-            logger.error(
+            logger.exception(
                 "Failed to load capability '%s' from %s: %s",
                 capability_id,
                 subdir.name,
                 exc,
-                exc_info=True,
             )
 
     logger.info(

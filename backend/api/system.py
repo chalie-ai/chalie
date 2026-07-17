@@ -598,7 +598,9 @@ def _store_tls_material(cert: "FileStorage", key: "FileStorage") -> bool:
     _save_secure(cert, tmp_cert)
     _save_secure(key, tmp_key)
     try:
-        ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER).load_cert_chain(str(tmp_cert), str(tmp_key))
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        context.minimum_version = ssl.TLSVersion.TLSv1_2
+        context.load_cert_chain(str(tmp_cert), str(tmp_key))
     except OSError as exc:
         logger.warning("[SSL] uploaded certificate/key rejected: %s", exc)
         tmp_cert.unlink(missing_ok=True)

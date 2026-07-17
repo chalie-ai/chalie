@@ -72,7 +72,7 @@ def _parse_contact_row(key: str, raw_value: str) -> dict[str, object] | None:
         profile = json.loads(raw_value)
         if isinstance(profile, dict):
             return profile
-    except (json.JSONDecodeError, TypeError, ValueError):
+    except (TypeError, ValueError):
         pass
     suffix = key[len(_CONTACT_KEY_PREFIX):]
     return {"email": suffix, "name": raw_value}

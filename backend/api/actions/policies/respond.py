@@ -38,7 +38,7 @@ class RespondAction(Action):
         gate = _permission_gates.get(dto.request_id)
         if gate is None:
             logger.warning("No gate found for request_id=%s", dto.request_id)
-            return "", 204
-        gate["result"] = "approved" if dto.approved else "denied"
-        cast(threading.Event, gate["event"]).set()
+        else:
+            gate["result"] = "approved" if dto.approved else "denied"
+            cast(threading.Event, gate["event"]).set()
         return "", 204

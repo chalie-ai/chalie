@@ -136,10 +136,7 @@ def _parse_associations(text: str) -> list[dict[str, object]] | None:
         payload = text.strip()
         if '```' in payload:
             parts = payload.split('```')
-            if len(parts) >= 3:
-                payload = parts[1]
-            else:
-                payload = parts[1]
+            payload = parts[1]
             if payload.startswith('json'):
                 payload = payload[4:]
         result = json.loads(payload.strip())

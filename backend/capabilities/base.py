@@ -129,10 +129,9 @@ class AbstractCapability(ABC):
         try:
             ToolConfig.set_encrypted(self.get_id(), key, value)
         except Exception as exc:
-            logger.error(
+            logger.exception(
                 "[%s] store_credential(%r) failed: %s",
                 self.get_id(), key, exc,
-                exc_info=True,
             )
             raise
 
@@ -184,10 +183,9 @@ class AbstractCapability(ABC):
         try:
             ToolConfig.delete_all(self.get_id())
         except Exception as exc:
-            logger.error(
+            logger.exception(
                 "[%s] delete_credentials() failed: %s",
                 self.get_id(), exc,
-                exc_info=True,
             )
 
     def is_connected(self) -> bool:

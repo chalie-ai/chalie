@@ -15,10 +15,12 @@ import json
 import logging
 import re
 import xml.etree.ElementTree as ET
-from typing import cast
+from typing import TypeAlias, cast
 from urllib.parse import quote
 
 logger = logging.getLogger(__name__)
+
+_DICT_STR_OBJECT: TypeAlias = "dict[str, object]"
 
 
 # ── Field mappings per provider ──────────────────────────────────────────────
@@ -121,9 +123,9 @@ def transform(provider_name: str, response_format: str, raw_data: object, limit:
             # requests auto-decompresses gzip, so raw_data is already a dict
             if isinstance(raw_data, bytes):
                 return _transform_json_gzip(provider_name, raw_data, limit)
-            return _transform_json(provider_name, cast("dict[str, object]", raw_data), limit)
+            return _transform_json(provider_name, cast(_DICT_STR_OBJECT, raw_data), limit)
         else:  # json
-            return _transform_json(provider_name, cast("dict[str, object]", raw_data), limit)
+            return _transform_json(provider_name, cast(_DICT_STR_OBJECT, raw_data), limit)
     except Exception as e:
         logger.warning(f'[SEARCH] transform failed for {provider_name}: {e}')
         return []
@@ -149,9 +151,9 @@ def _transform_json(provider_name: str, data: dict[str, object], limit: int) -> 
         unwrap = field_map.get('unwrap_key')
         if unwrap and isinstance(item, dict):
             item = item.get(unwrap, item)
-        item = cast("dict[str, object]", item)
+        item = cast(_DICT_STR_OBJECT, item)
 
-        fm: dict[str, object] = cast("dict[str, object]", field_map)
+        fm: dict[str, object] = cast(_DICT_STR_OBJECT, field_map)
         title = _extract_field(item, field_map.get('title', ''))
         snippet = _extract_snippet(item, fm)
         url = _extract_url(item, fm)
@@ -247,7 +249,7 @@ def _transform_json_gzip(provider_name: str, raw_data: bytes, limit: int) -> lis
     """Decompress gzip, parse JSON, delegate to JSON transform."""
     try:
         decompressed = gzip.decompress(raw_data)
-        data = cast("dict[str, object]", json.loads(decompressed))
+        data = cast(_DICT_STR_OBJECT, json.loads(decompressed))
     except Exception as e:
         logger.warning(f'[SEARCH] gzip decompress failed for {provider_name}: {e}')
         return []
@@ -296,9 +298,9 @@ def _extract_snippet(item: dict[str, object], field_map: dict[str, object]) -> s
 
     # Special: MusicBrainz artist credit
     if snippet_spec == '_artist_credit':
-        credits = item.get('artist-credit', [])
-        if credits:
-            artists = [cast("dict[str, object]", c).get('name', '') for c in cast("list[object]", credits) if isinstance(c, dict)]
+        artist_credits = item.get('artist-credit', [])
+        if artist_credits:
+            artists = [cast(_DICT_STR_OBJECT, c).get('name', '') for c in cast("list[object]", artist_credits) if isinstance(c, dict)]
             return ', '.join(str(a) for a in artists if a)
         return ''
 

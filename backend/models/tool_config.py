@@ -131,10 +131,9 @@ class ToolConfig(Model):
             encrypted = base64.b64encode(blob).decode()
             cls.set(tool_name, key, encrypted)
         except Exception as exc:
-            logger.error(
+            logger.exception(
                 "[ToolConfig] set_encrypted('%s', '%s') failed: %s",
                 tool_name, key, exc,
-                exc_info=True,
             )
             raise
 

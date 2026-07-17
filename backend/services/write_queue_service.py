@@ -197,10 +197,7 @@ class WriteQueueService:
                 # methods — should not happen in normal operation.
                 with self._stats_lock:
                     self._errors += 1
-                logger.error(
-                    "[WriteQueue] Unexpected exception in drain loop",
-                    exc_info=True,
-                )
+                logger.exception("[WriteQueue] Unexpected exception in drain loop")
                 if item.done_event is not None and not item.done_event.is_set():
                     item.done_event.set()
             finally:
@@ -225,10 +222,7 @@ class WriteQueueService:
         try:
             return_value = cast(Callable[..., object], item.fn)(*item.args, **item.kwargs)
         except Exception as exc:
-            logger.error(
-                f"[WriteQueue] Single item failed: {exc}",
-                exc_info=True,
-            )
+            logger.exception(f"[WriteQueue] Single item failed: {exc}")
             exc_caught = exc
         finally:
             if item.result is not None:

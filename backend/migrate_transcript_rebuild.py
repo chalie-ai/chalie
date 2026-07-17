@@ -422,10 +422,7 @@ def run_once_on_boot(db_path: str | None = None, limit: int = 100) -> None:
 
     except Exception as e:
         # Never crash boot — log and carry on
-        logger.error(
-            f"[TranscriptMigration] Failed: {e}",
-            exc_info=True,
-        )
+        logger.exception(f"[TranscriptMigration] Failed: {e}")
 
 
 def _write_flag(flag: Path) -> None:

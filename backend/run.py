@@ -339,6 +339,7 @@ def _resolve_ssl_context() -> "ssl.SSLContext | None":
         if cert.is_file() and key.is_file():
             import ssl
             context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+            context.minimum_version = ssl.TLSVersion.TLSv1_2
             context.load_cert_chain(str(cert), str(key))
             return context
         logger.warning("[SSL] enabled but certificate/key missing — disabling SSL, serving HTTP")

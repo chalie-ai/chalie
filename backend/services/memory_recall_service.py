@@ -234,5 +234,5 @@ def recall(
             results = (results + _episode_candidates(query, query_embedding, limit))[:limit]
         return results
     except Exception:
-        logger.error("[MEMORY RECALL] recall failed for query=%r", query, exc_info=True)
+        logger.exception("[MEMORY RECALL] recall failed for query=%r", query)
         return []

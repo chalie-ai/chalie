@@ -131,7 +131,6 @@ class HomeCapability(AbstractCapability):
         :class:`HaWebSocketHandler`, whose daemon-thread ``_run_loop`` owns the
         live event subscription and reconnects itself with backoff — there is
         nothing for the shared capability sync to nudge."""
-        return
 
     # ── Tools ────────────────────────────────────────────────────────
 

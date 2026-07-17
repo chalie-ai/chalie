@@ -38,6 +38,7 @@ from utils.skills_io import (
 logger = logging.getLogger(__name__)
 
 _LOG_PREFIX = "[SKILL_BUILDER]"
+_ERR_SKILL_STORE_UNAVAILABLE = "The skill store is unavailable."
 
 # Internal/meta tools that should not appear in skill content guidance.
 _META_TOOLS = frozenset({
@@ -203,7 +204,7 @@ def _handle_create(params: dict[str, object]) -> ToolResult:
 
     if not FileMapperService.get_skills_db_path().exists():
         return ToolResult.err(
-            "The skill store is unavailable.",
+            _ERR_SKILL_STORE_UNAVAILABLE,
             code="skill-db-unavailable",
             action="create",
         )
@@ -266,7 +267,7 @@ def _handle_edit(params: dict[str, object]) -> ToolResult:
 
     if not FileMapperService.get_skills_db_path().exists():
         return ToolResult.err(
-            "The skill store is unavailable.",
+            _ERR_SKILL_STORE_UNAVAILABLE,
             code="skill-db-unavailable",
             action="edit",
         )
@@ -322,7 +323,7 @@ def _handle_delete(params: dict[str, object]) -> ToolResult:
 
     if not FileMapperService.get_skills_db_path().exists():
         return ToolResult.err(
-            "The skill store is unavailable.",
+            _ERR_SKILL_STORE_UNAVAILABLE,
             code="skill-db-unavailable",
             action="delete",
         )
@@ -357,7 +358,7 @@ def _handle_delete(params: dict[str, object]) -> ToolResult:
 def _handle_list(params: dict[str, object]) -> ToolResult:  # noqa: ARG001
     if not FileMapperService.get_skills_db_path().exists():
         return ToolResult.err(
-            "The skill store is unavailable.",
+            _ERR_SKILL_STORE_UNAVAILABLE,
             code="skill-db-unavailable",
             action="list",
         )
@@ -390,7 +391,7 @@ def _handle_read(params: dict[str, object]) -> ToolResult:
 
     if not FileMapperService.get_skills_db_path().exists():
         return ToolResult.err(
-            "The skill store is unavailable.",
+            _ERR_SKILL_STORE_UNAVAILABLE,
             code="skill-db-unavailable",
             action="read",
         )

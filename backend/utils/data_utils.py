@@ -13,5 +13,5 @@ def parse_json_column(raw: object, *, default: object = None) -> object:
         return raw
     try:
         return json.loads(raw)
-    except (json.JSONDecodeError, TypeError, ValueError):
+    except (TypeError, ValueError):
         return default
