@@ -28,7 +28,7 @@ import re
 import struct
 import tempfile
 import threading
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, TypeAlias, cast
 
 from flask import Response, jsonify, make_response, request
 from flask.typing import ResponseReturnValue
@@ -36,6 +36,8 @@ from flask_restx import Namespace, Resource
 
 if TYPE_CHECKING:
     from typing import Protocol
+
+    import numpy as np
 
     class _KokoroModel(Protocol):
         def create(self, text: str, voice: str, speed: float, lang: str) -> "tuple[object, int]": ...
@@ -47,6 +49,8 @@ from .auth import require_auth
 from .dto import Error, expects, register_dto, responds
 from .dto.boundary import error
 from .dto.voice import Transcription, TtsRequest, VoiceHealth, VoiceUnavailable
+
+_NDARRAY_F32: TypeAlias = "np.ndarray[tuple[int], np.dtype[np.float32]]"
 
 logger = logging.getLogger(__name__)
 
@@ -438,7 +442,7 @@ def _denoise(audio: object, sr: int) -> object:
 # Filler words produced by speakers (not by Moonshine). Match whole words only
 # — "umbrella", "error", "hermit", "ahead", and "uh-huh" must NOT be stripped.
 _FILLER_RE = re.compile(
-    r"\b(u+h+|u+m+|h+m+|e+r+|a+h+|e+r+m+)\b",
+    r"\b((?:u+|a+)h+|(?:u+|h+)m+|e+r+m*)\b",
     re.IGNORECASE,
 )
 _MULTI_SPACE_RE = re.compile(r" {2,}")
@@ -566,9 +570,8 @@ def _transcribe_sync(data: bytes) -> str:
         # we hand the samples back to transcribe (or slice them).
         audio = mo.load_audio(tmp.name)[0]  # → float32 [N] @ 16 kHz
 
-    import numpy as np
-    audio = cast("np.ndarray[tuple[int], np.dtype[np.float32]]", _extract_speech(audio, MOONSHINE_SAMPLE_RATE))
-    audio = cast("np.ndarray[tuple[int], np.dtype[np.float32]]", _denoise(audio, MOONSHINE_SAMPLE_RATE))
+    audio = cast(_NDARRAY_F32, _extract_speech(audio, MOONSHINE_SAMPLE_RATE))
+    audio = cast(_NDARRAY_F32, _denoise(audio, MOONSHINE_SAMPLE_RATE))
 
     if audio.shape[0] < _MIN_CHUNK_SAMPLES:
         return ""
@@ -700,7 +703,7 @@ class VoiceSynthesizeResource(Resource):
                         all_samples.append(chunk_samples)
                         if i < len(chunks) - 1:
                             pad_len = int(_TTS_SILENCE_PAD_SECONDS * sr)
-                            all_samples.append(np.zeros(pad_len, dtype=cast("np.ndarray[tuple[int], np.dtype[np.float32]]", chunk_samples).dtype))
+                            all_samples.append(np.zeros(pad_len, dtype=cast(_NDARRAY_F32, chunk_samples).dtype))
                 samples = np.concatenate(cast("list[np.ndarray[tuple[int], np.dtype[np.float32]]]", all_samples))
         except Exception as e:
             logger.exception("[Voice] TTS synthesis failed: %s", e)

@@ -56,14 +56,14 @@ _COMPOUND_OPERATORS: tuple[str, ...] = ("&&", "||", ";", "|", "$(", "`")
 _COMPOUND_KEYWORDS: frozenset[str] = frozenset({"eval", "exec", "source", "."})
 
 _DESTRUCTIVE_PATTERNS: tuple[re.Pattern[str], ...] = (
-    re.compile(r"rm\s+(-\w*r\w*\s+.*)?(-\w*f\w*\s+.*)?/(\s|$)"),
-    re.compile(r"rm\s+-\w*rf\w*\s+/(\s|$)"),
-    re.compile(r":\(\)\s*\{.*\|.*&\s*\}\s*;?\s*:"),
+    re.compile(r"rm\s+(?:(?:-(?=\w*r)\w*+|-(?=\w*f)\w*+)\s+.*/(?:\s|$)|/(?:\s|$))"),
+    re.compile(r"rm\s+-(?=\w*rf)\w*+\s+/(\s|$)"),
+    re.compile(r":\(\)\s*\{(?:(?!\|).)*\|(?:(?!&\s*\}\s*;?\s*:).)*&\s*\}\s*;?\s*:"),
     re.compile(r"mkfs\b"),
     re.compile(r"dd\s+if=/dev/zero\s+of=/dev/"),
     re.compile(r"dd\s+if=/dev/random\s+of=/dev/"),
     re.compile(r">\s*/dev/sd[a-z]"),
-    re.compile(r"rm\s+-\w*rf\w*\s+/\*"),
+    re.compile(r"rm\s+-(?=\w*rf)\w*+\s+/\*"),
 )
 
 

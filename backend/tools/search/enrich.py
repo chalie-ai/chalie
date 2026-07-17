@@ -26,29 +26,29 @@ _MAX_WORKERS = 4
 
 # Patterns to extract <meta> content values from raw HTML without a full parser.
 _OG_DESC_RE = re.compile(
-    r'<meta\s[^>]*property=["\']og:description["\'][^>]*content=["\']([^"\']*)["\']',
+    r'<meta\s(?:(?!property=)[^>])*property=["\']og:description["\'](?:(?!content=)[^>])*content=["\']([^"\']*+)["\']',
     re.IGNORECASE | re.DOTALL,
 )
 _META_DESC_RE = re.compile(
-    r'<meta\s[^>]*name=["\']description["\'][^>]*content=["\']([^"\']*)["\']',
+    r'<meta\s(?:(?!name=)[^>])*name=["\']description["\'](?:(?!content=)[^>])*content=["\']([^"\']*+)["\']',
     re.IGNORECASE | re.DOTALL,
 )
 # Alternate attribute order: content= before property=/name=
 _OG_DESC_RE2 = re.compile(
-    r'<meta\s[^>]*content=["\']([^"\']*)["\'][^>]*property=["\']og:description["\']',
+    r'<meta\s(?:(?!content=)[^>])*content=["\']([^"\']*+)["\'](?:(?!property=)[^>])*property=["\']og:description["\']',
     re.IGNORECASE | re.DOTALL,
 )
 _META_DESC_RE2 = re.compile(
-    r'<meta\s[^>]*content=["\']([^"\']*)["\'][^>]*name=["\']description["\']',
+    r'<meta\s(?:(?!content=)[^>])*content=["\']([^"\']*+)["\'](?:(?!name=)[^>])*name=["\']description["\']',
     re.IGNORECASE | re.DOTALL,
 )
 
 _OG_PUB_RE = re.compile(
-    r'<meta\s[^>]*property=["\'](?:article:published_time|og:published_time)["\'][^>]*content=["\']([^"\']*)["\']',
+    r'<meta\s(?:(?!property=)[^>])*property=["\'](?:article:published_time|og:published_time)["\'](?:(?!content=)[^>])*content=["\']([^"\']*+)["\']',
     re.IGNORECASE | re.DOTALL,
 )
 _OG_PUB_RE2 = re.compile(
-    r'<meta\s[^>]*content=["\']([^"\']*)["\'][^>]*property=["\'](?:article:published_time|og:published_time)["\']',
+    r'<meta\s(?:(?!content=)[^>])*content=["\']([^"\']*+)["\'](?:(?!property=)[^>])*property=["\'](?:article:published_time|og:published_time)["\']',
     re.IGNORECASE | re.DOTALL,
 )
 

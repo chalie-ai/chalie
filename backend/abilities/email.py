@@ -42,7 +42,7 @@ LOG_PREFIX = "[EMAIL ABILITY]"
 # non-empty local part and a dotted domain. Not RFC-5322-complete (the SMTP
 # server is the real authority) — just enough to reject obvious garbage before a
 # send is attempted, with a hint the model can self-correct from.
-_RECIPIENT_RE = r"^[^@\s]+@[^@\s]+\.[^@\s]+$"
+_RECIPIENT_RE = r"^[^@\s]+@(?=[^@\s]+\.[^@\s])[^@\s]++$"
 
 # Outward-facing actions whose ``to`` recipient is validated for shape pre-send.
 _RECIPIENT_ACTIONS = ("send", "draft", "forward")
