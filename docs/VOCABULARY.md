@@ -55,7 +55,7 @@ Domain-specific terminology used throughout the Chalie system.
 | `WorldState` | Singleton holding the agent's "what's going on" cache. | `last_heartbeat_at`, `current_device_class` |
 | `signal` | Typed world-state update absorbed from heartbeats / user messages. | `Signal(source='/health', kind='heartbeat')` |
 | `heartbeat` | FE POST `/health` payload persisted to telemetry. | `{device.name, location.lat, locale.timezone}` |
-| `usage_class` | Per-call LLM categorization. | `'chat'`, `'subagent'`, `'subconscious'` |
+| `USAGE_TYPE` | The `ProcessorConfig` class constant naming the spend bucket a channel's provider calls bill to; written verbatim to `llm_call_log.type`. Defaults to `'system'`, so spend reaches the user only by explicit declaration. Distinct from `policy_channel`, which gates tools — `DiscoveryConfig` is policy-gated as `CHAT` but bills as `'system'`. | `'chat'` (the user's own conversation), `'system'` (everything Chalie runs on its own behalf) |
 | `snapshot` | Full-instance backup (db, mcp_tools, pre-trained, vault key material). | a `.chalie-snapshot` file |
 | `lane` | Per-conversation-surface FE state key. | `'main'` (spine), `'t42'` (thread 42) |
 | `chip` | FE rendering of a tool-call under an assistant message. | `{tool_name, summary}` |
