@@ -91,6 +91,9 @@ class AuthStatusResource(Resource):
           ``master_account``.
         * ``has_providers``      — ``True`` if at least one active provider is configured.
         * ``has_session``        — ``True`` if the request carries a valid session token.
+          Independent of ``vault_state``: a valid cookie stays ``True`` even when the
+          vault is locked (e.g. after a backend restart), so the frontend can
+          distinguish "re-enter password to unseal" from "session expired → re-login".
         * ``vault_state``        — ``"unlocked" | "locked" | "uninitialized"``.
         * ``internal_dev``       — ``True`` when in-development features are enabled.
         """
@@ -108,8 +111,6 @@ class AuthStatusResource(Resource):
 
             has_session = validate_session(request)
             vault_state = _get_vault_state()
-            if has_session and vault_state == "locked":
-                has_session = False
 
             try:
                 from services.provider_db_service import ProviderDbService
