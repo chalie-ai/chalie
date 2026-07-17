@@ -81,26 +81,7 @@ class RegistryInvariant:
                 if squeeze(param) in framework_sq:
                     problems.append(f"{name}: parameter {param!r} collides with a framework key")
 
-            seen: "dict[str, str]" = {}
-            for canonical in declared:
-                for variant in self._variants.get(canonical, ()):
-                    sq = squeeze(variant)
-                    if sq in framework_sq:
-                        problems.append(
-                            f"{name}: variant {variant!r} of {canonical!r} collides with a framework key"
-                        )
-                    other = by_squeeze.get(sq)
-                    if other is not None and other != canonical:
-                        problems.append(
-                            f"{name}: variant {variant!r} of {canonical!r} collides with declared "
-                            f"parameter {other!r}"
-                        )
-                    if sq in seen and seen[sq] != canonical:
-                        problems.append(
-                            f"{name}: variant {variant!r} is claimed by both {seen[sq]!r} and "
-                            f"{canonical!r}"
-                        )
-                    seen[sq] = canonical
+            self._variant_problems(name, declared, framework_sq, by_squeeze, problems)
 
         unknown = [k for k in self._variants if k not in all_declared]
         if unknown:
@@ -112,3 +93,34 @@ class RegistryInvariant:
             raise AssertionError(
                 "Parameter-key registry overlap(s):\n  " + "\n  ".join(problems)
             )
+
+    def _variant_problems(
+        self,
+        name: str,
+        declared: "list[str]",
+        framework_sq: "set[str]",
+        by_squeeze: "dict[str, str]",
+        problems: "list[str]",
+    ) -> None:
+        """Append one ability's variant-collision problems into the caller's list."""
+        squeeze = self._normalizer.squeeze
+        seen: "dict[str, str]" = {}
+        for canonical in declared:
+            for variant in self._variants.get(canonical, ()):
+                sq = squeeze(variant)
+                if sq in framework_sq:
+                    problems.append(
+                        f"{name}: variant {variant!r} of {canonical!r} collides with a framework key"
+                    )
+                other = by_squeeze.get(sq)
+                if other is not None and other != canonical:
+                    problems.append(
+                        f"{name}: variant {variant!r} of {canonical!r} collides with declared "
+                        f"parameter {other!r}"
+                    )
+                if sq in seen and seen[sq] != canonical:
+                    problems.append(
+                        f"{name}: variant {variant!r} is claimed by both {seen[sq]!r} and "
+                        f"{canonical!r}"
+                    )
+                seen[sq] = canonical
