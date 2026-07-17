@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { ref, reactive, computed } from 'vue';
-import { capabilities } from '../api/capabilities';
+import { computed, reactive, ref } from 'vue';
 import type { Capability, CapabilityField } from '../api/capabilities';
+import { capabilities } from '../api/capabilities';
 import { apiErrorMessage } from '../api/http';
 import { HttpError } from '@chalie/shared';
 import { useToast } from '../composables/useToast';
@@ -10,10 +10,14 @@ import { ChevronLeft, Settings } from '@lucide/vue';
 
 const { show: showToast } = useToast();
 
-const { data: caps, loading, reload: load } = useBrainResource(
-  async () => (await capabilities.list()).capabilities ?? [],
-  { initial: [] as Capability[], failMsg: 'Failed to load capabilities' },
-);
+const {
+  data: caps,
+  loading,
+  reload: load,
+} = useBrainResource(async () => await capabilities.list(), {
+  initial: [] as Capability[],
+  failMsg: 'Failed to load capabilities',
+});
 
 const viewMode = ref<'list' | 'form'>('list');
 const formCap = ref<Capability | null>(null);
@@ -28,10 +32,7 @@ function isConnected(c: Capability): boolean {
 const formFields = computed<CapabilityField[]>(() => formCap.value?.fields ?? []);
 
 function isVisible(f: CapabilityField): boolean {
-  return (
-    !f.show_when ||
-    Object.entries(f.show_when).every(([k, v]) => textValues[k] === v)
-  );
+  return !f.show_when || Object.entries(f.show_when).every(([k, v]) => textValues[k] === v);
 }
 
 async function openForm(c: Capability): Promise<void> {
@@ -56,8 +57,7 @@ async function openForm(c: Capability): Promise<void> {
 
   for (const f of c.fields ?? []) {
     if (f.type === 'checkbox') {
-      boolValues[f.name] =
-        config[f.name] !== undefined ? !!config[f.name] : !!f.default;
+      boolValues[f.name] = config[f.name] !== undefined ? !!config[f.name] : !!f.default;
     } else if (f.type === 'password') {
       textValues[f.name] = '';
     } else {
@@ -72,8 +72,7 @@ async function submit(): Promise<void> {
   if (!formCap.value) return;
   const body: Record<string, unknown> = {};
   for (const f of formFields.value) {
-    body[f.name] =
-      f.type === 'checkbox' ? !!boolValues[f.name] : (textValues[f.name] ?? '').trim();
+    body[f.name] = f.type === 'checkbox' ? !!boolValues[f.name] : (textValues[f.name] ?? '').trim();
   }
   try {
     await capabilities.setup(formCap.value.id, body);
@@ -94,7 +93,6 @@ async function disconnect(c: Capability): Promise<void> {
     showToast(e instanceof HttpError ? 'Failed to disconnect' : 'Network error', 'error');
   }
 }
-
 </script>
 
 <template>
@@ -117,7 +115,7 @@ async function disconnect(c: Capability): Promise<void> {
           <div v-if="f.type === 'checkbox'" class="form-group">
             <label class="switch-label">
               <label class="switch">
-                <input v-model="boolValues[f.name]" type="checkbox">
+                <input v-model="boolValues[f.name]" type="checkbox" />
                 <span class="switch-track"></span>
               </label>
               <span>{{ f.label }}</span>
@@ -134,7 +132,9 @@ async function disconnect(c: Capability): Promise<void> {
                 class="tab-btn"
                 :class="{ active: textValues[f.name] === o.value }"
                 @click="textValues[f.name] = o.value"
-              >{{ o.label }}</button>
+              >
+                {{ o.label }}
+              </button>
             </div>
           </div>
 
@@ -147,24 +147,22 @@ async function disconnect(c: Capability): Promise<void> {
             ></textarea>
           </div>
 
-          <div
-            v-else
-            v-show="isVisible(f)"
-            class="form-group"
-          >
+          <div v-else v-show="isVisible(f)" class="form-group">
             <label>{{ f.label }}</label>
             <input
               v-model="textValues[f.name]"
               :type="f.type === 'password' ? 'password' : 'text'"
               :placeholder="f.placeholder ?? ''"
               :required="!!(f.required && !formConnected)"
-            >
+            />
           </div>
         </template>
 
         <div class="form-actions">
           <button type="button" class="btn btn-secondary" @click="viewMode = 'list'">Cancel</button>
-          <button type="submit" class="btn btn-primary">{{ formConnected ? 'Save' : 'Connect' }}</button>
+          <button type="submit" class="btn btn-primary">
+            {{ formConnected ? 'Save' : 'Connect' }}
+          </button>
         </div>
       </form>
     </div>
@@ -179,12 +177,7 @@ async function disconnect(c: Capability): Promise<void> {
   </div>
 
   <div v-else class="caps-grid">
-    <div
-      v-for="c in caps"
-      :key="c.id"
-      class="cap-card"
-      :class="{ connected: isConnected(c) }"
-    >
+    <div v-for="c in caps" :key="c.id" class="cap-card" :class="{ connected: isConnected(c) }">
       <div class="cap-header">
         <div class="cap-name">{{ c.name }}</div>
         <span class="status-dot" :class="{ active: isConnected(c) }"></span>

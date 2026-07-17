@@ -1,21 +1,25 @@
 """
-REST API package — Flask app factory with Blueprint registration, WebSocket,
-and static file serving (replaces nginx).
+REST API package — Flask-RESTx app factory with Namespace auto-discovery,
+WebSocket, and static file serving (replaces nginx).
 """
 
 import importlib
+import inspect
+import logging
 import mimetypes
 import pkgutil
-import logging
 from pathlib import Path
+
 from flask import Flask, Blueprint, Response, redirect, send_from_directory
 from flask.typing import ResponseReturnValue
 from flask_cors import CORS
+from flask_restx import Api, Namespace
 
+from models.setting import Setting
 from services.file_mapper_service import FileMapperService
-from .auth import require_session as require_session
 from .auth import internal_only
-
+from .auth import require_session as require_session
+from .response.response import Response as ApiResponse
 
 logger = logging.getLogger(__name__)
 
@@ -43,14 +47,18 @@ mimetypes.add_type('text/css', '.css')
 mimetypes.add_type('text/html', '.html')
 
 
-def _register_blueprints(app: Flask) -> None:
-    """Auto-discover and register every Blueprint defined in this package.
+def _register_namespaces(app: Flask, api: Api) -> None:
+    """Auto-discover and register every Namespace defined in this package.
 
-    Walks `backend/api/*.py`, imports each module, and registers any top-level
-    `Blueprint` instance it exposes. Modules without a Blueprint (e.g. `auth`,
-    `websocket`) are skipped silently. Drop a new `foo.py` exposing `foo_bp`
-    in this folder and it lights up on next boot — no edits here required.
+    Walks ``backend/api/*.py``, imports each module, and registers any top-level
+    ``Namespace`` instance on the given ``Api`` object. Modules without a
+    Namespace (e.g. ``auth``, ``websocket``) are skipped silently.
+
+    Also walks the ``api.endpoints`` and ``api.actions`` subpackages (the
+    migration markers of the API rewrite) and registers every concrete
+    ``Endpoint``/``Action`` subclass defined there via its generated Namespace.
     """
+    from .endpoint import Endpoint
     package = importlib.import_module(__name__)
     seen: set[int] = set()
     for module_info in pkgutil.iter_modules(package.__path__):
@@ -58,22 +66,88 @@ def _register_blueprints(app: Flask) -> None:
             continue
         module = importlib.import_module(f"{__name__}.{module_info.name}")
         for attr_name, attr in vars(module).items():
-            if not isinstance(attr, Blueprint) or id(attr) in seen:
-                continue
-            app.register_blueprint(attr)
-            seen.add(id(attr))
-            logger.info("[REST API] Registered %s.%s", module_info.name, attr_name)
+            if isinstance(attr, Namespace) and id(attr) not in seen:
+                api.add_namespace(attr)
+                seen.add(id(attr))
+                logger.info("[REST API] Registered %s.%s", module_info.name, attr_name)
+        # Also register plain Blueprints (gateway etc.) that are not Namespaces
+        for attr_name, attr in vars(module).items():
+            if isinstance(attr, Blueprint) and not isinstance(attr, Namespace) and id(attr) not in seen:
+                app.register_blueprint(attr)
+                seen.add(id(attr))
+                logger.info("[REST API] Registered blueprint %s.%s", module_info.name, attr_name)
+
+    for subpackage_name in ("endpoints", "actions"):
+        subpackage = importlib.import_module(f"{__name__}.{subpackage_name}")
+        for submodule_info in pkgutil.walk_packages(subpackage.__path__, prefix=f"{subpackage.__name__}."):
+            try:
+                submodule = importlib.import_module(submodule_info.name)
+            except Exception:
+                # Name the offending module before the boot crash — one broken
+                # endpoint file must be findable without a stack-trace dig.
+                logger.error("[REST API] Failed to import endpoint module %s", submodule_info.name)
+                raise
+            for attr in vars(submodule).values():
+                if (
+                    isinstance(attr, type)
+                    and issubclass(attr, Endpoint)
+                    and attr.__module__ == submodule.__name__
+                    and not inspect.isabstract(attr)
+                ):
+                    api.add_namespace(attr().namespace())
+                    logger.info("[REST API] Registered endpoint %s.%s", submodule_info.name, attr.__name__)
+
+    # api.init_app() is deferred to create_app(): RESTx registers its own root
+    # '/' route during init, which would shadow the SPA's '/' handler. Init must
+    # run AFTER the static routes so the SPA wins the '/' match.
+
+
+_SECURITY_HEADERS = {
+    "X-Content-Type-Options": "nosniff",
+    "X-Frame-Options": "SAMEORIGIN",
+    "Referrer-Policy": "strict-origin-when-cross-origin",
+}
+"""Baseline hardening stamped on every response — blocks MIME-sniffing, cross-origin framing, and referrer leakage."""
+
+
+def _deployment_origins() -> list[str]:
+    """Cross-origin allowlist = the configured deployment domain (both schemes).
+
+    Blank/unset → empty list, i.e. same-origin only (browsers do not enforce CORS
+    on same-origin requests). Resolved once at app construction; the System page
+    persists a domain change and restarts, so the new policy is read on next boot.
+    """
+    try:
+        domain = (Setting.get_value(Setting.DEPLOYMENT_DOMAIN) or "").strip()
+    except Exception as exc:
+        logger.warning("[REST API] deployment_domain unreadable; CORS limited to same-origin: %s", exc)
+        return []
+    return [f"https://{domain}", f"http://{domain}"] if domain else []
 
 
 def _configure_app(app: Flask) -> None:
-    """Apply Flask config, proxy middleware, and CORS to a new app instance."""
+    """Apply Flask config, proxy middleware, CORS, and baseline security headers to a new app instance."""
     app.config['MAX_CONTENT_LENGTH'] = 50 * 1024 * 1024
-    app.config['SEND_FILE_MAX_AGE_DEFAULT'] = 0
+    # Emit every registered DTO in the OpenAPI definitions; nested-envelope
+    # shapes (a list of associations inside a result DTO) otherwise dangle.
+    app.config['RESTX_INCLUDE_ALL_MODELS'] = True
 
     from werkzeug.middleware.proxy_fix import ProxyFix
     setattr(app, 'wsgi_app', ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_prefix=1))
 
-    CORS(app)
+    CORS(app, origins=_deployment_origins(), supports_credentials=True)
+
+    @app.after_request
+    def _apply_security_headers(response: Response) -> Response:
+        """Stamp the baseline security headers on every response; JSON payloads
+        also get ``no-store`` so sensitive API data is never cached downstream.
+        ``setdefault`` lets a route's own explicit header (e.g. the SPA index's
+        ``no-cache``) win."""
+        for header, value in _SECURITY_HEADERS.items():
+            response.headers.setdefault(header, value)
+        if response.mimetype == "application/json":
+            response.headers.setdefault("Cache-Control", "no-store")
+        return response
 
 
 def _register_static_routes(app: Flask) -> None:
@@ -85,16 +159,33 @@ def _register_static_routes(app: Flask) -> None:
         dist/on-boarding/index.html, dist/pairing/index.html).
       • brain      →  apps/brain/dist      — admin SPA at '/brain/', auth-gated.
 
-    index.html documents are served no-cache (they point at hashed asset URLs);
-    SEND_FILE_MAX_AGE_DEFAULT=0 keeps hashed assets revalidating, which is correct
-    because a new build produces new filenames.
+    index.html documents are served no-cache (they point at hashed asset URLs).
+    Files under assets/ are content-hashed by Vite (a new build produces new
+    filenames), so they are served immutable with a 1-year max-age — safe to
+    cache forever with no staleness risk. All other paths fall back to the SPA
+    index document.
     """
     interface_dir = FileMapperService.get_frontend_path("apps", "interface", "dist")
     brain_dir = FileMapperService.get_frontend_path("apps", "brain", "dist")
 
+    _IMMUTABLE_CACHE = 'public, max-age=31536000, immutable'
+    _NO_CACHE = 'no-cache, no-store, must-revalidate'
+
     def _send_index(directory: Path, filename: str = 'index.html') -> Response:
         resp = send_from_directory(str(directory), filename)
-        resp.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate'
+        resp.headers['Cache-Control'] = _NO_CACHE
+        return resp
+
+    def _send_asset(directory: Path, filename: str) -> Response:
+        """Serve a file under assets/ with immutable long-term caching.
+
+        Vite content-hashes every asset filename, so the same content always
+        maps to the same URL and a new build produces new filenames — safe to
+        cache forever. Callers must confirm the file exists and resolves under
+        the assets/ subtree of *directory*.
+        """
+        resp = send_from_directory(str(directory), filename)
+        resp.headers['Cache-Control'] = _IMMUTABLE_CACHE
         return resp
 
     # ── Brain admin SPA (auth-gated, matches the legacy /brain/ gate) ─────
@@ -118,6 +209,8 @@ def _register_static_routes(app: Flask) -> None:
             return redirect(f'/login/?next=/brain/{filename}')
         candidate = brain_dir / filename
         if candidate.is_file():
+            if filename.startswith('assets/'):
+                return _send_asset(brain_dir, filename)
             return send_from_directory(str(brain_dir), filename)
         return _send_index(brain_dir)
 
@@ -153,8 +246,15 @@ def _register_static_routes(app: Flask) -> None:
     # ── Interface chat SPA — catch-all (MUST be registered last) ──────────
     @app.route('/<path:filename>', methods=["GET"])
     def interface_static(filename: str) -> ResponseReturnValue:
+        # /api/* is API namespace, never static: an unregistered API path must
+        # fail loud as JSON 404, not silently serve the SPA index as HTML 200
+        # (which masks a missing/renamed route as a success to every client).
+        if filename == 'api' or filename.startswith('api/'):
+            return ApiResponse.failure("Not found"), 404
         candidate = interface_dir / filename
         if candidate.is_file():
+            if filename.startswith('assets/'):
+                return _send_asset(interface_dir, filename)
             return send_from_directory(str(interface_dir), filename)
         return _send_index(interface_dir)
 
@@ -164,11 +264,21 @@ def _register_static_routes(app: Flask) -> None:
 
 
 def create_app() -> Flask:
-    """Create and configure Flask application with all blueprints."""
+    """Create and configure Flask application with all namespaces and routes."""
     app = Flask(__name__)
 
+    # A fresh Api per app keeps create_app() a true factory: the test suite
+    # builds many apps, and a module-level Api would re-register routes onto an
+    # already-served app (Flask forbids add_url_rule after the first request).
+    api = Api(
+        title="Chalie API",
+        version="1.0",
+        description="REST API for the Chalie personal intelligence layer",
+        doc="/swagger/",
+    )
+
     _configure_app(app)
-    _register_blueprints(app)
+    _register_namespaces(app, api)
 
     # WebSocket endpoint (replaces SSE for chat + drift)
     from flask_sock import Sock
@@ -179,5 +289,9 @@ def create_app() -> Flask:
     # ── Static file serving (replaces nginx) ─────────────────────────
     _register_static_routes(app)
 
-    logger.info("[REST API] All blueprints + WebSocket + static serving registered")
+    # Flush RESTx namespaces onto the app LAST so its root '/' route is added
+    # after the SPA '/' handler — the SPA must win the '/' match (see above).
+    api.init_app(app)
+
+    logger.info("[REST API] All namespaces + WebSocket + static serving registered")
     return app

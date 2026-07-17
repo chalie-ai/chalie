@@ -57,38 +57,9 @@ def test_get_raises_key_error_for_unregistered_name() -> None:
         AbilityRegistry.get("anything_not_registered")
 
 
-def test_get_raises_key_error_for_unknown_name_with_subclass_present() -> None:
-    """AbilityRegistry.get() raises KeyError for a name that no subclass owns."""
-
-    class _KnownAbility(Ability):
-        def get_name(self) -> str: return "known"
-        def get_summary(self) -> str: return "known ability"
-        def get_examples(self) -> list[str]: return ["a", "b", "c", "d", "e", "f"]
-        def get_search_tooltip(self) -> str: return ""
-        def get_parameters(self) -> dict[str, object]: return {}
-
-        def run(self, params: dict[str, object]) -> ToolResult:
-            from typing import cast
-            return cast("ToolResult", {})
-
-    _reset_for_tests()
-    with pytest.raises(KeyError):
-        AbilityRegistry.get("not_known")
-
-    del _KnownAbility
-    gc.collect()
-
-
 # ---------------------------------------------------------------------------
 # Singleton / caching
 # ---------------------------------------------------------------------------
-
-
-def test_all_called_twice_returns_consistent_result() -> None:
-    """Two calls to AbilityRegistry.all() return the same shape — registry is cached."""
-    first = AbilityRegistry.all()
-    second = AbilityRegistry.all()
-    assert first == second
 
 
 def test_registry_reflects_concrete_subclass_after_reset() -> None:

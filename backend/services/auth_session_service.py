@@ -5,9 +5,9 @@ MemoryStore is checked first for speed; SQLite is the fallback that
 survives container restarts. Cookie: ``chalie_session`` (HTTP-only,
 SameSite=Lax).
 """
-import os
-import secrets
+import hashlib
 import logging
+import secrets
 
 from flask import Request, Response
 
@@ -20,17 +20,25 @@ SESSION_TTL = 30 * 24 * 60 * 60  # 30 days in seconds
 SESSION_KEY_PREFIX = 'auth_session:'
 
 
+def _hash_session_token(raw_token: str) -> str:
+    """SHA-256 of the raw session token; the SQLite row stores only the hash."""
+    return hashlib.sha256(raw_token.encode('utf-8')).hexdigest()
+
+
 def _persist_session_to_sqlite(token: str) -> None:
-    """Write session to SQLite so it survives MemoryStore wipes (restart)."""
+    """Write session to SQLite so it survives MemoryStore wipes (restart).
+
+    Only the SHA-256 hash of the token is persisted — never the raw token —
+    mirroring the wrapper-auth path so a DB leak cannot yield live tokens.
+    """
     try:
-        from services.database_service import get_shared_db_service
-        db = get_shared_db_service()
-        utc_now().isoformat()
-        db.execute(
-            """INSERT OR REPLACE INTO auth_sessions (token, created_at, expires_at)
-               VALUES (?, ?, datetime('now', '+30 days'))""",
-            (token, utc_now().isoformat())
-        )
+        from services.database import Database
+        with Database.transaction() as conn:
+            conn.execute(
+                """INSERT OR REPLACE INTO auth_sessions (token, created_at, expires_at)
+                   VALUES (?, ?, datetime('now', '+30 days'))""",
+                (_hash_session_token(token), utc_now().isoformat())
+            )
     except Exception as e:
         logger.error(f"[Session] SQLite persist failed: {e}")
 
@@ -38,9 +46,9 @@ def _persist_session_to_sqlite(token: str) -> None:
 def _delete_session_from_sqlite(token: str) -> None:
     """Remove session from SQLite."""
     try:
-        from services.database_service import get_shared_db_service
-        db = get_shared_db_service()
-        db.execute("DELETE FROM auth_sessions WHERE token = ?", (token,))
+        from services.database import Database
+        with Database.transaction() as conn:
+            conn.execute("DELETE FROM auth_sessions WHERE token = ?", (_hash_session_token(token),))
     except Exception as e:
         logger.debug(f"[Session] SQLite delete failed: {e}")
 
@@ -48,14 +56,13 @@ def _delete_session_from_sqlite(token: str) -> None:
 def _validate_session_in_sqlite(token: str) -> bool:
     """Check SQLite for a valid (non-expired) session and rehydrate MemoryStore."""
     try:
-        from services.database_service import get_shared_db_service
-        db = get_shared_db_service()
-        rows = db.fetch_all(
+        from services.database import Database
+        rows = Database.conn().execute(
             """SELECT token FROM auth_sessions
                WHERE token = ? AND expires_at > datetime('now')
                LIMIT 1""",
-            (token,)
-        )
+            (_hash_session_token(token),)
+        ).fetchall()
         if rows:
             # Rehydrate MemoryStore so subsequent requests are fast
             from services.memory_client import MemoryClientService
@@ -67,6 +74,16 @@ def _validate_session_in_sqlite(token: str) -> bool:
     except Exception as e:
         logger.error(f"[Session] SQLite validate failed: {e}")
         return False
+
+
+def _cookie_secure() -> bool:
+    """Mark the session cookie ``Secure`` only when the deployment serves HTTPS.
+
+    Sourced from the ``ssl_enabled`` DB setting (the same flag that drives TLS
+    serving) so cookie scope tracks the wire scheme without any environment var.
+    """
+    from models.setting import Setting
+    return Setting.get_bool(Setting.SSL_ENABLED)
 
 
 def create_session(response: Response) -> str:
@@ -81,14 +98,13 @@ def create_session(response: Response) -> str:
 
     _persist_session_to_sqlite(token)
 
-    secure = os.environ.get('COOKIE_SECURE', 'false').lower() == 'true'
     response.set_cookie(
         SESSION_COOKIE_NAME,
         token,
         max_age=SESSION_TTL,
         httponly=True,
         samesite='Lax',
-        secure=secure,
+        secure=_cookie_secure(),
     )
     logger.info("[Session] Created new session")
     return token
@@ -130,8 +146,8 @@ def destroy_session(request: Request, response: Response) -> None:
 def cleanup_expired_sessions() -> None:
     """Delete expired sessions from SQLite. Called periodically or on startup."""
     try:
-        from services.database_service import get_shared_db_service
-        db = get_shared_db_service()
-        db.execute("DELETE FROM auth_sessions WHERE expires_at <= datetime('now')")
+        from services.database import Database
+        with Database.transaction() as conn:
+            conn.execute("DELETE FROM auth_sessions WHERE expires_at <= datetime('now')")
     except Exception as e:
         logger.debug(f"[Session] Expired session cleanup failed: {e}")

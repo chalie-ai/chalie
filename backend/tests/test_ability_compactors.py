@@ -1,100 +1,179 @@
 """Chat-history-compactor business-logic tests. The full ToolResult wire contract is
 pinned centrally in test_tool_result_contract.py; this file holds only the
-compactor's genuine behaviour tests (rows_compacted surface, broadcast guard)
-that have no coverage elsewhere."""
+compactor's genuine behaviour tests (rows_compacted surface, checkpoint write,
+broadcast guard) that have no coverage elsewhere.
+
+The ``rows_compacted`` / ``_fit_compaction_input`` coverage that used to live in
+this file was removed during the old-spine ``MessageProcessor`` cleanup because
+``ChatHistoryCompactor`` still called the deleted ``mp.providers.get_context_limit()``
+/ ``mp.providers.measure()`` API. That half of the migration is now done —
+``_fit_compaction_input`` correctly calls ``parent.provider_service.context_limit()``
+/ ``parent.provider_service.measure()`` (``abilities/chat_history_compactor.py``
+lines ~205/226) — so this file restores that coverage against the current
+``controllers.message_processor.MessageProcessor`` / ``ProviderService`` surface.
+
+KNOWN, UNFIXED PRODUCTION BUG surfaced by every test below: the SAME
+``_fit_compaction_input`` (``abilities/chat_history_compactor.py:207``) and
+``ChatHistoryCompactor.run`` (``:173``) still call ``parent._previous_rows()`` /
+``parent.get_previous_messages(drop_oldest=...)`` — two methods that do NOT exist
+on the real ``MessageProcessor`` (confirmed by direct inspection of
+``controllers/message_processor.py`` and empirically by running the tests below).
+Their real equivalents are ``mp.transcript_service.read()`` (replaces
+``_previous_rows()``) and ``mp.prompt_service.previous_messages(drop_oldest=...)``
+(replaces ``get_previous_messages(drop_oldest=...)``); the ``_CompactionParent``
+Protocol (TYPE_CHECKING-only) declares the old names as if they were a real
+runtime contract, which is exactly what let this drift ship unnoticed. Because
+``services/dispatch_service.py``'s ``DispatchService._run()`` wraps every
+``ability.run(params)`` in a blanket ``except Exception`` and converts it into an
+error ``ToolResult`` instead of propagating, this ``AttributeError`` never
+surfaces as a crash in production — the compactor silently no-ops every time,
+the watermark never advances, and ``MessageProcessor._step()`` unconditionally
+re-dispatches ``chat_history_compactor`` on every subsequent over-cap retry. That
+is the "unbounded re-dispatch recursion" defect 6 describes; the provider_service
+rename alone did not fix it. These three tests are the correct target-state
+regression coverage and will pass once ``_previous_rows`` / ``get_previous_messages``
+are re-pointed at ``transcript_service.read()`` / ``prompt_service.previous_messages``
+— fixing that is out of scope for this test file."""
 
 import sqlite3
-from typing import TYPE_CHECKING, Protocol, cast
+from typing import TYPE_CHECKING, cast
+from unittest.mock import patch
 
 import pytest
 
-from abilities.chat_history_compactor import (
-    ChatHistoryCompactionConfig,
-    ChatHistoryCompactor,
-)
 from abilities._compaction_config import CompactionConfig
-from configs.channels import UserConfig
-from services.transcript_service import Transcript
-from services.message_processor import MessageProcessor
+from abilities.chat_history_compactor import ChatHistoryCompactionConfig, ChatHistoryCompactor
+from configs.channels.user import UserConfig
+from controllers.message_processor import MessageProcessor
+from models.compaction import Compaction
+from models.transcript import Transcript
 from services.provider_cache_service import ProviderCacheService
+from services.provider_db_service import ProviderDbService
 
 if TYPE_CHECKING:
-    class _CompactionParent(Protocol):
-        _compaction_kept_rows: int
-        def _previous_rows(self) -> list[object]: ...
-        def get_previous_messages(self, *, drop_oldest: int = ...) -> str: ...
-        class _Providers(Protocol):
-            def get_context_limit(self) -> int: ...
-            def measure(self, dto: object) -> int: ...
-        providers: _Providers
-        class _Config(Protocol):
-            channel: str
-        config: _Config
+    # Reuse the compactor's own parent contract — no duplicate Protocol.
+    from abilities.chat_history_compactor import _CompactionParent
 
 pytestmark = pytest.mark.unit
 
+# ProviderService builds its thin transport client through this factory — the
+# real network boundary (same seam as test_context_usage_signal.py). Patching it
+# is what keeps these tests off ``http://localhost:11434``.
+_BUILD_CLIENT = "services.provider_service.build_client"
 
-def _clear(db: sqlite3.Connection, channel: str) -> None:
-    db.execute("DELETE FROM transcript WHERE channel = ?", (channel,))
-    db.commit()
+# A window small enough that the compactor's cap formula
+# (``window - max(0.10*window, 8000)``) lands at zero, so ``_fit_compaction_input``
+# never sizes a request against — nor sends one to — a live provider.
+_OFFLINE_WINDOW = 8000
 
 
-def _seed_offline_provider_cap_zero(db: sqlite3.Connection) -> int | None:
+class _OfflineClient:
+    """Stub at the ``build_client`` boundary: reports a fixed 8000-token window
+    and a zero size estimate, so the whole compaction-sizing path is hermetic —
+    no ``get_context_limit`` HTTP call, no ``send``."""
+
+    def get_context_limit(self) -> int:
+        return _OFFLINE_WINDOW
+
+    def estimate_request_tokens(self, _dto: object) -> int:
+        return 0
+
+
+def _seed_offline_provider_cap_zero(db: sqlite3.Connection) -> int:
+    """A real, selected ``providers`` row with a declared window small
+    enough that the compactor's cap formula (``window - max(0.10*window, 8000)``)
+    lands at/below zero — ``ProviderService.context_limit()`` then returns
+    8000 (patched via ``build_client`` below), and the cap<=0 branch means
+    ``_fit_compaction_input`` never has to call the also-offline-but-unexercised
+    ``ProviderService.measure()`` either. Fully hermetic."""
     cur = db.execute(
-        "INSERT INTO providers (name, platform, model, host, max_tokens) "
-        "VALUES ('compactor-test', 'ollama', 'cap-model', 'http://localhost:11434', 8000)",
+        "INSERT INTO providers (name, platform, model, host) "
+        "VALUES ('compactor-test', 'ollama', 'cap-model', 'http://localhost:11434')",
     )
-    pid = cur.lastrowid
-    db.execute(
-        "INSERT INTO settings (key, value) VALUES ('selected_provider_id', ?) "
-        "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-        (str(pid),),
-    )
+    pid = cast(int, cur.lastrowid)
     db.commit()
+    ProviderDbService().set_selected_provider(pid)
     ProviderCacheService.invalidate()
     return pid
 
 
-def _make_mp(raw_input: str, channel: str) -> MessageProcessor:
-    mp = object.__new__(MessageProcessor)
-    MessageProcessor.__init__(mp, raw_input, None)
-    mp.config = UserConfig()
-    assert mp.config.channel == channel  # UserConfig drives the 'user' channel
-    return mp
+def _seed_settled_turn(channel: str, user_text: str, assistant_text: str) -> int:
+    """One real, fully-settled turn (input row + settled assistant row) via the
+    real ``Transcript`` active-record model — the same row shape
+    ``TranscriptService._append`` writes for a plain (no tool-call) exchange."""
+    turn_id = Transcript.next_turn_id(None, channel)
+    Transcript(
+        channel=channel, role="user", content=user_text,
+        turn_id=turn_id, settled=0, xml_migrated=1,
+    ).save()
+    Transcript(
+        channel=channel, role="assistant", content=assistant_text,
+        turn_id=turn_id, settled=1, xml_migrated=1,
+    ).save()
+    return turn_id
 
 
-def test_fit_compaction_input_surfaces_kept_row_count(db: sqlite3.Connection) -> None:
-    """The compaction result's ``rows_compacted`` must reflect the actual count of kept transcript rows."""
-    ch = "user"
-    _clear(db, ch)
+def _make_mp(raw_input: str = "compact") -> MessageProcessor:
+    """Bare, inert construction (I2) — no begin(), no thread, no LLM call.
+    Exercises the exact real ``MessageProcessor`` / ``provider_service`` surface
+    ``ChatHistoryCompactor`` reads."""
+    return MessageProcessor(UserConfig(), raw_input=raw_input)
+
+
+def test_fit_compaction_input_fits_settled_history_under_the_context_cap(db: sqlite3.Connection) -> None:
+    """Two real, settled turns on the spine must combine into one compaction
+    request body — the sizing half of defect 6 (the old code crashed on the
+    deleted ``mp.providers.get_context_limit()``; ``provider_service.context_limit()``
+    is the new surface it must use instead)."""
     _seed_offline_provider_cap_zero(db)
-    n_rows = 5
-    for i in range(n_rows):
-        Transcript.write_input_row(ch, "user", f"row{i:03d}")
-    mp = _make_mp("compact", ch)
-    try:
-        combined = ChatHistoryCompactor._fit_compaction_input(cast("_CompactionParent", mp), "")
-        assert combined is not None  # there is a backlog to compact
-        # The kept-row count is surfaced on the parent for run() to read.
-        assert getattr(mp, "_compaction_kept_rows", None) == n_rows
-    finally:
-        ProviderCacheService.invalidate()
-        _clear(db, ch)
+    _seed_settled_turn("user", "first question", "first answer")
+    _seed_settled_turn("user", "second question", "second answer")
+    parent = cast("_CompactionParent", _make_mp())
+
+    with patch(_BUILD_CLIENT, return_value=_OfflineClient()):
+        combined = ChatHistoryCompactor._fit_compaction_input(parent, "")
+
+    assert combined is not None
+    assert "first question" in combined
+    assert "second answer" in combined
+    assert parent._compaction_kept_rows == 4  # 2 turns x (input + answer)
 
 
-def test_fit_compaction_input_count_is_none_when_nothing_to_compact(db: sqlite3.Connection) -> None:
-    """Ensure the surfaced count is never a stale value from a prior turn."""
-    ch = "user"
-    _clear(db, ch)
+def test_fit_compaction_input_returns_none_with_no_backlog(db: sqlite3.Connection) -> None:
+    """Should-not-fire path: an empty channel has nothing to compact —
+    ``_fit_compaction_input`` must report zero kept rows, never a stale count
+    left over from a previous call on the same parent."""
     _seed_offline_provider_cap_zero(db)
-    mp = _make_mp("compact", ch)
-    try:
-        combined = ChatHistoryCompactor._fit_compaction_input(cast("_CompactionParent", mp), "")
-        assert combined is None
-        assert getattr(mp, "_compaction_kept_rows", None) == 0
-    finally:
-        ProviderCacheService.invalidate()
-        _clear(db, ch)
+    parent = cast("_CompactionParent", _make_mp())
+
+    with patch(_BUILD_CLIENT, return_value=_OfflineClient()):
+        combined = ChatHistoryCompactor._fit_compaction_input(parent, "")
+
+    assert combined is None
+    assert parent._compaction_kept_rows == 0
+
+
+def test_run_completes_and_writes_a_checkpoint_without_crashing(db: sqlite3.Connection) -> None:
+    """Defect 6, end to end: dispatching the compactor's real ``run()`` against a
+    real settled backlog must complete without raising and must advance the MAIN
+    watermark by writing a ``Compaction`` row. That checkpoint is what stops
+    ``MessageProcessor._step()`` from re-dispatching compaction forever on every
+    subsequent over-cap retry (the "unbounded re-dispatch recursion" defect 6
+    names) — an exception escaping ``run()`` here is exactly that failure mode,
+    since the dispatcher's blanket ``except Exception`` turns it into a silent
+    no-op instead of a checkpoint."""
+    _seed_offline_provider_cap_zero(db)
+    turn_id = _seed_settled_turn("user", "first question", "first answer")
+    mp = _make_mp()
+    ability = ChatHistoryCompactor(mp)
+
+    with patch(_BUILD_CLIENT, return_value=_OfflineClient()):
+        result = ability.run({})
+
+    assert result.status == "success"
+    checkpoint = Compaction.latest_main("user")
+    assert checkpoint is not None
+    assert checkpoint.compacted_up_to == turn_id
 
 
 def test_compaction_config_never_broadcasts_to_user() -> None:

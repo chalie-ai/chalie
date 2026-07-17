@@ -3,14 +3,14 @@ Provider client factory — dispatches a config dict to the correct thin client.
 
 Replaces the create_llm_service / _build_service pair from llm_service.py.
 No FallbackLLMService, no LoggingLLMService — those concerns live in
-Providers (telemetry) and have been deleted (fallback is dead code).
+ProviderService (telemetry) and have been deleted (fallback is dead code).
 
-Consumed by: services.providers (_resolve), services.provider_token_limits.
+Consumed by: services.provider_service (send / _resolve).
 """
 
 from __future__ import annotations
 
-from services.llm_clients.base import ProviderClient
+from contracts.provider_client import ProviderClient
 
 
 def build_client(config: dict[str, object]) -> ProviderClient:
@@ -19,13 +19,13 @@ def build_client(config: dict[str, object]) -> ProviderClient:
     if not platform:
         raise ValueError(
             "LLM config missing 'platform'. No provider configured — "
-            "add one via POST /api/providers"
+            "add one via POST /api/providers/-1"
         )
 
     model = config.get('model')
     if not model:
         raise ValueError(
-            "LLM config missing 'model'. Configure it via POST /api/providers"
+            "LLM config missing 'model'. Configure it via the providers API"
         )
 
     if platform == 'ollama':
@@ -58,5 +58,9 @@ def build_client(config: dict[str, object]) -> ProviderClient:
             raise ValueError("Gemini provider requires 'api_key' field")
         from services.llm_clients.gemini import GeminiClient  # noqa: PLC0415
         return GeminiClient(config)
+
+    if platform == 'codex_cli':
+        from services.llm_clients.codex_cli import CodexCliClient  # noqa: PLC0415
+        return CodexCliClient(config)
 
     raise ValueError(f"Unknown platform: {platform}")

@@ -4,11 +4,11 @@ REST API Worker - Flask server entry point.
 Spawns the Flask app from the api/ package and runs it on the configured host/port.
 """
 
-import sys
 import logging
+import sys
 from typing import cast
-import runtime_config
 
+import runtime_config
 from utils.logger import Logger
 
 Logger.start()

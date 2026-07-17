@@ -30,7 +30,7 @@ import logging
 from typing import ClassVar, NamedTuple, cast
 
 from abilities._capability import CapabilityAbility
-from abilities._params import Keys
+from configs.enums.param_key import Keys
 from abilities._result import ToolResult
 
 logger = logging.getLogger(__name__)
@@ -141,7 +141,11 @@ class UbiquitiAbility(CapabilityAbility):
             "connected clients, check device or site health, block / unblock / "
             "disconnect a client, restart or locate a device, list and update WiFi "
             "networks, port-forward and traffic rules, and authorize a guest device. "
-            "Available when the user asks about their home or office network."
+            "Available when the user asks about their home or office network. "
+            "To control or update a device, client, or rule you need its MAC or id: "
+            "run the matching list action first (list_devices, list_clients, "
+            "list_wifi, list_port_forwards, list_traffic_rules) to get a valid "
+            "identifier."
         )
 
     def get_examples(self) -> list[str]:

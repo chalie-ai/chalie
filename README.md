@@ -5,96 +5,81 @@
 <h1 align="center">Chalie</h1>
 
 <p align="center">
-  <strong>Life, handled.</strong><br>
-  One persistent intelligence that sees your entire digital life, understands what matters, and handles it — so you stop managing and start living.
+  <strong>It thinks while you're not looking.</strong><br>
+  An open-source personal AI that runs on your own machine — it remembers what matters, works while you're away, and asks before it acts.
 </p>
 
 <p align="center">
   <a href="https://github.com/chalie-ai/chalie/tags"><img src="https://img.shields.io/github/v/tag/chalie-ai/chalie?style=for-the-badge&color=7c3aed" alt="Release"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-Apache%202.0-06b6d4?style=for-the-badge" alt="License"></a>
-  <a href="https://github.com/chalie-ai/chalie/issues"><img src="https://img.shields.io/github/issues/chalie-ai/chalie?style=for-the-badge&color=ec4899" alt="Issues"></a>
-  <a href="docs/04-ARCHITECTURE.md"><img src="https://img.shields.io/badge/Docs-architecture-7c3aed?style=for-the-badge" alt="Docs"></a>
+  <a href="https://chalie.ai/blog/2026-06-23-ten-models-one-assistant/"><img src="https://img.shields.io/badge/benchmark-10%20models-ec4899?style=for-the-badge" alt="Benchmark"></a>
+  <a href="https://chalie.ai/docs"><img src="https://img.shields.io/badge/docs-chalie.ai-7c3aed?style=for-the-badge" alt="Docs"></a>
 </p>
+
+<p align="center"><strong>📖 <a href="https://chalie.ai/docs">Full documentation →</a></strong></p>
 
 ```bash
 curl -fsSL https://chalie.ai/install | bash
-chalie
-# → http://localhost:31025
+chalie     # → http://localhost:31025
 ```
 
-> Alpha. Sharp edges. If you hit one, [open an issue](https://github.com/chalie-ai/chalie/issues) — we respond fast.
+> **Beta — on purpose.** It's `v1.0.0-beta` because the bar is software you'd trust with your own life's admin, and it isn't all the way there yet. Hit a sharp edge? [Open an issue](https://github.com/chalie-ai/chalie/issues) — we respond fast.
 
----
+<p align="center"><img src="assets/chalie-hero.png" alt="How Chalie works — it perceives, remembers, reasons, and acts on your behalf, behind an Allow / Ask / Deny gate" width="100%"></p>
 
 ## Why Chalie is different
 
-Every other AI tool is a fresh conversation. Chalie is a **continuous reasoning engine** that keeps running in the background, remembers everything that mattered, forgets what didn't, and acts when it's confident.
-
-<table>
-<tr><td><b>It remembers you — then forgets the noise</b></td><td>A four-stage memory pipeline compresses raw conversation into episodes, concepts, and abstractions. Lossy on purpose — forgetting is what makes recall useful three months later.</td></tr>
-<tr><td><b>It figures out your goals on its own</b></td><td>Mention "I want to learn piano" three times across two weeks. Chalie detects the pattern, forms the goal, and starts helping — no explicit instructions, no reminders you have to set.</td></tr>
-<tr><td><b>It thinks while you're not looking</b></td><td>Background workers run continuously — consolidating memory, pursuing goals, checking on things you asked about. When you come back, progress is already made.</td></tr>
-<tr><td><b>It handles the doing, not just the talking</b></td><td>Email, calendar, contacts, web research, code execution, voice, notes, browser, reminders — all first-class. You say what you want done; Chalie picks the tool.</td></tr>
-<tr><td><b>Your machine, your data</b></td><td>One SQLite file. API keys encrypted with AES-256-GCM. Zero telemetry, zero analytics, zero phoning home. Runs fully local with Ollama, or mix in OpenAI / Anthropic / Gemini if you want.</td></tr>
-<tr><td><b>One process, no infrastructure</b></td><td>No Redis, no Postgres, no message queue, no microservices. A single Python process with threads. Starts in seconds, works behind any reverse proxy, installs with one line.</td></tr>
-<tr><td><b>Model-agnostic by design</b></td><td>Different cognitive functions can use different models. Local classifier + cloud reasoner + local voice — mix and match. No vendor lock-in.</td></tr>
-</table>
-
----
-
-## Install
-
-**Fastest start — pick any provider on first boot:**
-```bash
-curl -fsSL https://chalie.ai/install | bash
-chalie
-```
-Then pick OpenAI, Anthropic, Gemini, or Ollama in the onboarding wizard.
-
-**Fully local, nothing leaves your network:**
-```bash
-ollama pull gemma4:31b
-curl -fsSL https://chalie.ai/install | bash
-chalie                 # choose Ollama → http://localhost:11434
-```
-
-**From source, for tinkerers:**
-```bash
-git clone https://github.com/chalie-ai/chalie.git && cd chalie
-python3 -m venv .venv && source .venv/bin/activate
-pip install -e backend/          # core deps
-pip install -e backend/[voice]   # optional: TTS/STT
-./run.sh  # → http://localhost:31025/on-boarding/
-```
-
----
+Most AI tools forget you the moment you close the tab. Chalie runs on your own machine as a **reasoning engine that keeps working while you step away**: it remembers what matters and lets the rest decay, and acts only behind an **Allow / Ask / Deny** policy spanning you, its own background work, and other agents. One SQLite file, credentials encrypted at rest, zero telemetry, encrypted whole-instance backup — no Redis, no Postgres, no queue, just one Python process.
 
 ## What it can do today
 
 | | |
 |---|---|
-| 🧠 **Persistent memory** | Four-stage pipeline: Topic Context → Episode → Concept → Abstraction. Built-in decay means only what matters sticks. |
-| 🎯 **Autonomous goals** | Detects goals from casual mentions, tracks progress, nudges when progress stalls. |
-| 📬 **Email & calendar** | IMAP, CalDAV, CardDAV — connects to accounts you already have, no vendor lock. |
-| 🔎 **Web search** | DuckDuckGo by default. No tracking, no search history sold. |
-| 🗓 **Scheduler** | Natural-language reminders and recurring jobs. "Remind me every Monday at 9" just works. |
-| 📝 **Notes & lists** | Persistent, searchable, always in context. |
-| 🐍 **Code execution** | Sandboxed Python when you need real computation, not a vibe. |
+| 🧠 **Self-managing memory** | Episodes → concepts → abstractions, weighted by source, with decay and automatic roll-up. |
+| 🎯 **Goals & proactive research** | Spots goals from casual mentions; researches topics in the background before you ask. |
+| 👁 **Vision** | Reads photos, screenshots, and scans — and indexes them so you can find an image by what's in it. |
+| 🌐 **Real web browsing** | Drives a live browser: clicks, fills forms, scrolls, and inspects its own screenshots. |
+| 🔌 **MCP, in and out** | Connects to remote MCP servers and exposes its own tools to other agents. |
+| 📬 **Email, calendar, contacts** | IMAP, CalDAV, CardDAV — the accounts you already have. |
+| 🗓 **Scheduler & places** | Natural-language recurring jobs and location-aware nudges. |
+| 🐍 **Files, shell & code** | Searches files, runs guarded shell commands, executes sandboxed Python. |
 | 🎙 **Voice, fully local** | Moonshine STT + Kokoro TTS, both ONNX. No cloud transcription, ever. |
-| 🌐 **Browser** | Navigates the web when search isn't enough. |
-| 🔌 **Open tool protocol** | External apps can pair in and expose their own capabilities. |
+| 💾 **Backup & restore** | Snapshot the whole instance to one file, optionally AES-256 encrypted. |
 
----
+## Which model drives it best?
+
+We ran ten models — frontier and open-weight — through the same battery of real tasks and scored how well each *drives* Chalie. A 31B open model you can run under your desk landed in the front pack, ahead of a 550B one. Size wasn't the story; the chassis was. → [Read the benchmark](https://chalie.ai/blog/2026-06-23-ten-models-one-assistant/)
+
+<p align="center"><img src="assets/chalie-benchmark.png" alt="Benchmark leaderboard — average score (out of 10) for how well each of ten models drives Chalie: GLM-5.2 9.02, GLM-5.1 8.83, Gemini 3.5 Flash 8.07, Gemma-4 31B 7.35, MiniMax-M3 7.25, DeepSeek-V4 Flash 7.03, GPT-OSS 120B 6.03, Nemotron-3 Nano 3.26, Nemotron-Ultra 550B 2.86, Qwen3-Next 80B 2.00" width="100%"></p>
+
+## Install
+
+**Fastest start** — the wizard picks your provider on first boot:
+```bash
+curl -fsSL https://chalie.ai/install | bash
+chalie     # → http://localhost:31025 · choose OpenAI, Anthropic, Gemini, or Ollama
+```
+
+**Fully local with Ollama** — nothing leaves your network:
+```bash
+ollama pull gemma4:31b   # the open model that placed in the benchmark's front pack
+```
+
+**From source:**
+```bash
+git clone https://github.com/chalie-ai/chalie.git && cd chalie
+uv pip install --system -e backend/          # core deps · Python 3.11+
+uv pip install --system -e backend/[voice]   # optional: TTS/STT
+./run.sh  # → http://localhost:31025/on-boarding/
+```
+
+Full walkthrough → [chalie.ai/guide/installation](https://chalie.ai/guide/installation).
 
 ## How it's built
 
-One Python process. Flask + `flask-sock` WebSocket. SQLite with `sqlite-vec` and FTS5 for semantic + lexical recall. Vanilla ES6 modules on the frontend — no build step, no npm lockfile drama. The entire cognitive runtime — memory, goals, scheduler, voice — runs as daemon threads inside that one process.
+One Python process. Flask + `flask-sock` WebSocket. SQLite with `sqlite-vec` and FTS5 for semantic + lexical recall. Vanilla ES6 modules on the frontend — no build step. The whole cognitive runtime — memory, goals, scheduler, voice — runs as daemon threads inside that one process, and different cognitive functions can use different models.
 
-Works with **Ollama, OpenAI, Anthropic, Gemini** — or any combination. Different models for different cognitive functions, by design.
-
-Curious? → [Architecture](docs/04-ARCHITECTURE.md) · [Schema](backend/schema.sql) · [Message flow](docs/13-MESSAGE-FLOW.md) · [Tools](docs/09-TOOLS.md)
-
----
+Curious? → [Architecture & internals](https://chalie.ai/docs) · [Schema](backend/schema.sql)
 
 ## CLI
 
@@ -106,29 +91,32 @@ chalie update           # update to latest
 chalie logs             # tail the log
 ```
 
----
-
-## Docs
-
-[Quick Start](docs/01-QUICK-START.md) · [Providers](docs/02-PROVIDERS-SETUP.md) · [Architecture](docs/04-ARCHITECTURE.md) · [Web Interface](docs/03-WEB-INTERFACE.md) · [Tools](docs/09-TOOLS.md) · [Interfaces](docs/15-INTERFACES.md) · [Testing](docs/12-TESTING.md) · [FAQ](docs/FAQ.md)
-
----
-
 ## Philosophy
 
 - **Judgment over activity.** Fewer high-confidence actions beat many low-confidence ones.
 - **Restraint builds trust.** Every token, notification, and action earns its place.
 - **Continuity is intelligence.** The persistent runtime — not any single response — is the product.
 - **Constraints are features.** Decay, capacity limits, and token budgets are what make wisdom emerge.
-- **See everything. Show only what matters.**
 
-Full product compass: [docs/00-VISION.md](docs/00-VISION.md).
+Full product compass and design rationale live at [chalie.ai/docs](https://chalie.ai/docs).
 
----
+## Documentation
+
+Full documentation lives at [chalie.ai](https://chalie.ai).
+
+| | |
+|---|---|
+| 📘 **[Guide](https://chalie.ai/guide)** | Setup, providers, and day-to-day usage. |
+| 🏗 **[Docs](https://chalie.ai/docs)** | Technical reference and architecture. |
+| 🤝 **[Contributing](https://chalie.ai/contribute)** | How to get involved and ship a PR. |
+
+## Community
+
+[chalie.ai](https://chalie.ai) · [Releases](https://chalie.ai/releases) · [Blog](https://chalie.ai/blog) · [X](https://x.com/chalieai) · [Reddit](https://www.reddit.com/r/ChalieAi/)
 
 ## Contributing
 
-PRs welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) or [open an issue](https://github.com/chalie-ai/chalie/issues).
+PRs welcome. Start with the [contributor handbook](docs/index.md) — vision, principles, and mechanics in one index — or [open an issue](https://github.com/chalie-ai/chalie/issues). Found a security issue? Read [SECURITY.md](docs/SECURITY.md).
 
 ## License
 

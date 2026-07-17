@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { expect, test } from '@playwright/test';
 
 // Feature tests — drive a REAL Chalie instance (CHALIE_BASE_URL). No mocks:
 // every assertion is a downstream effect of the real auth gate (router.ts),

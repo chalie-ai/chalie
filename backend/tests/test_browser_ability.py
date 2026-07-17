@@ -13,15 +13,15 @@ The canonical-result-code contract (kebab codes + hint + the unknown-action /
 missing-params pre-gate) is locked in tests/test_ability_browser_tool_result.py.
 """
 
+import sqlite3
 from typing import cast
 
 import pytest
 
-from abilities._dispatcher import ToolDispatcher
 from abilities.browser import BrowserAbility
 from configs.channels.web_browse import WebBrowseConfig
-from services.message_processor import MessageProcessor
-from services.processor_config import ProcessorConfig
+from configs.enums.policy_channel import PolicyChannel
+from controllers.message_processor import MessageProcessor
 
 pytestmark = pytest.mark.unit
 
@@ -29,14 +29,13 @@ _VERBS = ["open", "read", "find", "click", "fill", "select", "scroll", "back", "
 
 
 def _browse_mp() -> MessageProcessor:
-    mp = MessageProcessor("drive a web page")
-    mp.config = WebBrowseConfig(ProcessorConfig.PolicyChannel.CHAT)
+    mp = MessageProcessor(WebBrowseConfig(PolicyChannel.CHAT), raw_input="drive a web page")
     mp.active_tools = list(mp.config.always_available or [])
     return mp
 
 
 def _dispatch(params: dict[str, object]) -> str:
-    return ToolDispatcher(_browse_mp()).dispatch("browser", params)
+    return _browse_mp().dispatch_service.dispatch("browser", params)
 
 
 def test_schema_is_ten_flat_verbs() -> None:
@@ -50,13 +49,13 @@ def test_schema_is_ten_flat_verbs() -> None:
     assert cast("list[str]", params["required"]) == ["action", "act_summary"]
 
 
-def test_ssrf_guard_blocks_private_urls_before_any_browser_work() -> None:
+def test_ssrf_guard_blocks_private_urls_before_any_browser_work(db: sqlite3.Connection) -> None:
     rendered = _dispatch({"action": "open", "url": "http://127.0.0.1:9/admin"})
     assert rendered.startswith("[browser(status=error, code=url-blocked"), rendered
     assert "URL blocked" in rendered, rendered
 
 
-def test_verbs_demand_an_open_page_first() -> None:
+def test_verbs_demand_an_open_page_first(db: sqlite3.Connection) -> None:
     """No session for this key → mechanical guidance, no browser launch."""
     rendered = _dispatch({"action": "click", "target": "Sign in"})
     assert "status=error" in rendered.splitlines()[0], rendered

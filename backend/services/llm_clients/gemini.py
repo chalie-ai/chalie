@@ -20,8 +20,8 @@ Native size-rejection signal — VERIFIED (google-genai 1.65.0):
 
   Residual gap: Gemini may produce a token-limit 400 with a message phrasing
   not in _TOKEN_LIMIT_STRINGS.  If the string-match misses, the exception
-  falls through to the bare ``raise``, is retried by _call_with_retry, then
-  propagates as an unhandled exception — the turn dies without compaction.
+  falls through to the bare ``raise`` and propagates to the MessageProcessor,
+  which resends — the turn dies without compaction only after retries exhaust.
   This is an improvement over the old GeminiService which had NO token-limit
   catch at all (confirmed: git show 88421fc0^:backend/services/llm_service.py
   shows no size-rejection handler in GeminiService.send_messages).
@@ -94,23 +94,21 @@ if TYPE_CHECKING:
     class _Content(Protocol):
         parts: "list[_Part] | None"
 
-from services.llm_clients.base import ProviderClient
+from configs.enums.thinking_level import ThinkingLevel
+from contracts.provider_client import ProviderClient
+from exceptions import (
+    ProviderResponseError,
+    ProviderTimeoutError,
+    RateLimitError,
+    ResponseOverLimitError,
+)
+from services.llm_clients.thinking_map import GEMINI_NONE_FALLBACK_BUDGET, GEMINI_THINKING_BUDGETS
 from services.provider_api import (
     ProviderApiRequest,
     ProviderApiResponse,
-    RateLimitError,
-    ResponseOverLimitError,
-    ProviderResponseError,
-    ThinkingLevel,
 )
 
 logger = logging.getLogger(__name__)
-
-
-_THINKING_BUDGETS: dict[str, int] = {
-    ThinkingLevel.MEDIUM.value: 4096,
-    ThinkingLevel.HIGH.value: 16384,
-}
 
 # Message substrings used as a fallback discriminator for Gemini token-limit
 # errors.  All token-limit rejections arrive as HTTP 400 / INVALID_ARGUMENT,
@@ -128,39 +126,51 @@ _TOKEN_LIMIT_STRINGS = frozenset({
 })
 
 
+def _gemini_tool_response(msg: dict[str, object]) -> dict[str, object]:
+    return {
+        "role": "user",
+        "parts": [{
+            "function_response": {
+                "name": msg.get('name', ''),
+                "response": {"content": msg.get('content', '')},
+            }
+        }],
+    }
+
+
+def _gemini_assistant_parts(msg: dict[str, object]) -> dict[str, object]:
+    parts: list[dict[str, object]] = []
+    text = msg.get('content', '')
+    if text:
+        parts.append({"text": text})
+    for tc in cast(list[dict[str, object]], msg['tool_calls']):
+        parts.append({
+            "function_call": {"name": tc['name'], "args": tc['input']},
+        })
+    return {"role": "model", "parts": parts}
+
+
+def _gemini_plain_parts(msg: dict[str, object], role: str) -> dict[str, object]:
+    parts: list[dict[str, object]] = [{"text": msg.get('content', '')}]
+    img = msg.get('image')
+    if img:
+        parts.append({
+            "inline_data": {"mime_type": cast(dict[str, object], img)['mime_type'], "data": cast(dict[str, object], img)['data']},
+        })
+    return {"role": role, "parts": parts}
+
+
 def _gemini_convert_messages(messages: list[dict[str, object]]) -> list[dict[str, object]]:
     """Convert normalised messages to Gemini content format."""
     result: list[dict[str, object]] = []
     for msg in messages:
         role = "model" if msg['role'] == 'assistant' else cast(str, msg['role'])
         if msg['role'] == 'tool':
-            result.append({
-                "role": "user",
-                "parts": [{
-                    "function_response": {
-                        "name": msg.get('name', ''),
-                        "response": {"content": msg.get('content', '')},
-                    }
-                }],
-            })
+            result.append(_gemini_tool_response(msg))
         elif msg['role'] == 'assistant' and msg.get('tool_calls'):
-            parts: list[dict[str, object]] = []
-            text = msg.get('content', '')
-            if text:
-                parts.append({"text": text})
-            for tc in cast(list[dict[str, object]], msg['tool_calls']):
-                parts.append({
-                    "function_call": {"name": tc['name'], "args": tc['input']},
-                })
-            result.append({"role": "model", "parts": parts})
+            result.append(_gemini_assistant_parts(msg))
         else:
-            parts = [{"text": msg.get('content', '')}]
-            img = msg.get('image')
-            if img:
-                parts.append({
-                    "inline_data": {"mime_type": cast(dict[str, object], img)['mime_type'], "data": cast(dict[str, object], img)['data']},
-                })
-            result.append({"role": role, "parts": parts})
+            result.append(_gemini_plain_parts(msg, role))
     return result
 
 
@@ -198,28 +208,26 @@ class GeminiClient(ProviderClient):
 
     def _get_client(self, genai: "_Genai") -> "_GenaiClient":
         from services.llm_service import _resolve_api_key, _app_user_agent  # noqa: PLC0415
+        from services.provider_api import PROVIDER_CALL_TIMEOUT_S  # noqa: PLC0415
         return genai.Client(
             api_key=_resolve_api_key(self._config),
-            http_options={"headers": {"User-Agent": _app_user_agent()}},
+            # HttpOptions.timeout is in milliseconds.
+            http_options={
+                "timeout": PROVIDER_CALL_TIMEOUT_S * 1000,
+                "headers": {"User-Agent": _app_user_agent()},
+            },
         )
 
     def _thinking_native(self, genai: "_Genai", level: ThinkingLevel, cfg: "_GenCfg") -> None:
-        """Inject thinking_config into cfg for MEDIUM/HIGH/MAX."""
-        value = level.value
-        if level == ThinkingLevel.MAX:
-            # Gemini has no explicit model-ceiling budget; use a large fixed value.
-            budget = 32768
+        """Inject thinking_config into cfg for NONE/MEDIUM/HIGH/MAX; LOW falls through."""
+        if level == ThinkingLevel.LOW:
+            return
+        budget = GEMINI_THINKING_BUDGETS.get(level)
+        if budget is not None:
             cfg['thinking_config'] = genai.types.ThinkingConfig(thinking_budget=budget)
             logger.info(
-                "[THINKING] native flag passed: provider=gemini mode=max model=%s budget=%d",
-                self.model, budget,
-            )
-        elif value in _THINKING_BUDGETS:
-            budget = _THINKING_BUDGETS[value]
-            cfg['thinking_config'] = genai.types.ThinkingConfig(thinking_budget=budget)
-            logger.info(
-                "[THINKING] native flag passed: provider=gemini mode=%s model=%s",
-                value, self.model,
+                "[THINKING] native flag passed: provider=gemini mode=%s model=%s budget=%d",
+                level.value, self.model, budget,
             )
 
     def _build_gen_config(self, genai: "_Genai", system: str, tools: Optional[list[dict[str, object]]],
@@ -251,6 +259,68 @@ class GeminiClient(ProviderClient):
         finish_reason = str(candidate.finish_reason) if candidate and candidate.finish_reason else None
         return '\n'.join(text_parts), tool_calls or None, finish_reason
 
+    def _classify_and_raise(self, exc: Exception, gen_cfg: "_GenCfg") -> tuple[bool, Optional[int]]:
+        """Map a google-genai exception to a provider error, or signal thinking-fallback.
+
+        Returns ``(True, budget)`` when the caller should perform the thinking-retry:
+        ``budget`` is the fallback budget to retry with (``None`` means strip
+        thinking_config). Raises a provider error for every other classified error;
+        unclassified errors return ``(False, None)`` so the caller re-raises.
+        """
+        exc_code = getattr(exc, 'code', None)
+        exc_status = getattr(exc, 'status', None) or ''
+        exc_str = str(exc).lower()
+
+        # HTTP 429 — rate limit.
+        # SDK raises ClientError with code=429, status='RESOURCE_EXHAUSTED'.
+        # Kept '429' in str(exc) as belt-and-suspenders for SDK version drift.
+        if exc_code == 429 or exc_status == 'RESOURCE_EXHAUSTED' or '429' in str(exc):
+            raise RateLimitError(str(exc), provider='gemini') from exc
+
+        # HTTP 5xx — transient server error.
+        if exc_code is not None and exc_code >= 500:
+            raise ProviderResponseError(
+                f"Gemini server error: {exc}", response_code=exc_code, provider='gemini',
+            ) from exc
+
+        # HTTP 400 / INVALID_ARGUMENT — may be a token-limit rejection.
+        # Primary: structured code + status confirms this is a 400 INVALID_ARGUMENT.
+        # Secondary: message string narrows to size-related errors; a bare
+        # code==400 check would over-trigger (covers wrong params, regions, etc.).
+        # If the string-match misses, log a WARNING so the set can be extended.
+        if exc_code == 400 and exc_status == 'INVALID_ARGUMENT':
+            exc_msg = (getattr(exc, 'message', None) or '').lower()
+            if any(s in exc_msg for s in _TOKEN_LIMIT_STRINGS):
+                raise ResponseOverLimitError(
+                    f"Gemini rejected payload (token limit): {exc}",
+                    response_code=400, provider='gemini',
+                ) from exc
+            logger.warning(
+                "[GeminiClient] 400 INVALID_ARGUMENT not matched as token-limit "
+                "(msg=%r); propagating. Add matching string to _TOKEN_LIMIT_STRINGS "
+                "if this is a size rejection.",
+                getattr(exc, 'message', str(exc))[:200],
+            )
+            raise ProviderResponseError(
+                f"Gemini 400 INVALID_ARGUMENT: {exc}", response_code=400, provider='gemini',
+            ) from exc
+
+        # Thinking fallback: ladder based on the budget that was rejected.
+        if 'thinking_config' in gen_cfg and (
+            'thinking' in exc_str or 'unsupported' in exc_str
+        ):
+            # thinking_config holds a genai.types.ThinkingConfig model, not a dict.
+            budget = int(getattr(gen_cfg['thinking_config'], 'thinking_budget', 0) or 0)
+            logger.info(
+                "[THINKING] native flag rejected by provider=gemini model=%s budget=%d",
+                self.model, budget,
+            )
+            if budget == 0:
+                # Some Gemini models cannot disable thinking; retry with their floor.
+                return True, GEMINI_NONE_FALLBACK_BUDGET
+            return True, None
+        return False, None
+
     def _generate_with_fallback(self, client: "_GenaiClient", genai: "_Genai", contents: object, gen_cfg: "_GenCfg") -> object:
         """Execute generate_content, handling errors and thinking fallback.
 
@@ -268,63 +338,44 @@ class GeminiClient(ProviderClient):
                 config=genai.types.GenerateContentConfig(**gen_cfg),
             )
         except Exception as exc:
-            exc_code = getattr(exc, 'code', None)
-            exc_status = getattr(exc, 'status', None) or ''
-            exc_str = str(exc).lower()
-
-            # HTTP 429 — rate limit.
-            # SDK raises ClientError with code=429, status='RESOURCE_EXHAUSTED'.
-            # Kept '429' in str(exc) as belt-and-suspenders for SDK version drift.
-            if exc_code == 429 or exc_status == 'RESOURCE_EXHAUSTED' or '429' in str(exc):
-                raise RateLimitError(str(exc), retry_after=None, provider='gemini') from exc
-
-            # HTTP 5xx — transient server error.
-            if exc_code is not None and exc_code >= 500:
-                raise ProviderResponseError(
-                    f"Gemini server error: {exc}", response_code=exc_code, provider='gemini',
-                ) from exc
-
-            # HTTP 400 / INVALID_ARGUMENT — may be a token-limit rejection.
-            # Primary: structured code + status confirms this is a 400 INVALID_ARGUMENT.
-            # Secondary: message string narrows to size-related errors; a bare
-            # code==400 check would over-trigger (covers wrong params, regions, etc.).
-            # If the string-match misses, log a WARNING so the set can be extended.
-            if exc_code == 400 and exc_status == 'INVALID_ARGUMENT':
-                exc_msg = (getattr(exc, 'message', None) or '').lower()
-                if any(s in exc_msg for s in _TOKEN_LIMIT_STRINGS):
-                    raise ResponseOverLimitError(
-                        f"Gemini rejected payload (token limit): {exc}",
-                        response_code=400, provider='gemini',
-                    ) from exc
-                logger.warning(
-                    "[GeminiClient] 400 INVALID_ARGUMENT not matched as token-limit "
-                    "(msg=%r); propagating. Add matching string to _TOKEN_LIMIT_STRINGS "
-                    "if this is a size rejection.",
-                    getattr(exc, 'message', str(exc))[:200],
-                )
-                raise ProviderResponseError(
-                    f"Gemini 400 INVALID_ARGUMENT: {exc}", response_code=400, provider='gemini',
-                ) from exc
-
-            # Thinking fallback: retry without thinking_config on rejection.
-            if 'thinking_config' in gen_cfg and (
-                'thinking' in exc_str or 'unsupported' in exc_str
-            ):
+            # google-genai does not wrap transport errors — an httpx read/connect
+            # timeout propagates raw. Fail fast so the retry helper does not loop.
+            import httpx  # noqa: PLC0415
+            if isinstance(exc, httpx.TimeoutException):
+                raise ProviderTimeoutError(f"Gemini request timed out: {exc}", provider='gemini') from exc
+            do_retry, retry_budget = self._classify_and_raise(exc, gen_cfg)
+            if not do_retry:
+                raise
+            if retry_budget is not None:
+                retry_cfg = dict(gen_cfg)
+                retry_cfg['thinking_config'] = genai.types.ThinkingConfig(thinking_budget=retry_budget)
                 logger.info(
-                    "[THINKING] native flag rejected by provider=gemini model=%s — retried without",
-                    self.model,
+                    "[THINKING] provider=gemini model=%s — retried with budget=%d",
+                    self.model, retry_budget,
                 )
-                fallback = {k: v for k, v in gen_cfg.items() if k != 'thinking_config'}
-                return client.models.generate_content(
-                    model=self.model,
-                    contents=contents,
-                    config=genai.types.GenerateContentConfig(**fallback),
-                )
-            raise
+                try:
+                    return client.models.generate_content(
+                        model=self.model,
+                        contents=contents,
+                        config=genai.types.GenerateContentConfig(**retry_cfg),
+                    )
+                except Exception as retry_exc:
+                    retry_str = str(retry_exc).lower()
+                    if 'thinking' not in retry_str and 'unsupported' not in retry_str:
+                        raise
+                    logger.info(
+                        "[THINKING] floor budget rejected by provider=gemini model=%s — retried without",
+                        self.model,
+                    )
+            fallback = {k: v for k, v in gen_cfg.items() if k != 'thinking_config'}
+            return client.models.generate_content(
+                model=self.model,
+                contents=contents,
+                config=genai.types.GenerateContentConfig(**fallback),
+            )
 
     def send(self, dto: ProviderApiRequest) -> ProviderApiResponse:
         """Transform DTO → Gemini generate_content API → ProviderApiResponse."""
-        from services.llm_service import _call_with_retry  # noqa: PLC0415
         genai = self._get_sdk()
         client = self._get_client(genai)
         start = time.time()
@@ -332,14 +383,11 @@ class GeminiClient(ProviderClient):
         contents = _gemini_convert_messages(dto.messages)
         gen_cfg = self._build_gen_config(genai, dto.system, dto.tools, dto.thinking_mode)
 
-        response = _call_with_retry(
-            lambda: self._generate_with_fallback(client, genai, contents, gen_cfg)
-        )
+        response = self._generate_with_fallback(client, genai, contents, gen_cfg)
         latency_ms = int((time.time() - start) * 1000)
         text, tool_calls, finish_reason = self._parse_response(cast("_GenResponse", response))
 
         if not text and not tool_calls:
-            logger.warning("[GeminiClient] Empty response, finish_reason=%s", finish_reason)
             raise ProviderResponseError(
                 f"Empty Gemini response (finish_reason={finish_reason})",
                 response_code=200, provider='gemini',

@@ -3,8 +3,8 @@ PlaceAbility — Save, list, look up, or delete named places (home, work, gym, e
 
 Stores named locations in the data_graph with kind='place'. Each place record
 carries the GPS coordinates at save time plus a user-supplied label. Duplicate
-saves of the same name reinforce the existing row; conflicting coordinates trigger
-a cosine-supersede replacement, matching the KIND_PLACE policy in data_graph_service.
+saves of the same name reinforce the existing row; a changed value (coordinates
+or label) triggers an exact-key temporal-supersede replacement, not a cosine match.
 
 Location data is read from the telemetry dict injected by act_dispatcher_service
 at dispatch time (lat, lon, location_name keys). When GPS is not available, save
@@ -22,9 +22,10 @@ import logging
 from typing import ClassVar, cast
 
 from abilities._ability import Ability
-from abilities._params import Keys
+from configs.enums.param_key import Keys
 from abilities._result import ToolResult
-from services.data_graph_service import KIND_PLACE, get_data_graph_service
+from models.place import PlaceRow
+from services.place_service import PlaceService
 
 logger = logging.getLogger(__name__)
 
@@ -52,10 +53,10 @@ class PlaceAbility(Ability):
     # whose valid= names these keys; a known action missing 'name' → one
     # missing-params error. The ability's run() never sees a malformed call.
     ACTION_REQUIRED: ClassVar[dict[str, tuple[str, ...]]] = {
-        _ACTION_SAVE: (Keys.name,),
+        _ACTION_SAVE: (Keys.name_,),
         _ACTION_LIST: (),
-        _ACTION_GET: (Keys.name,),
-        _ACTION_DELETE: (Keys.name,),
+        _ACTION_GET: (Keys.name_,),
+        _ACTION_DELETE: (Keys.name_,),
     }
 
     def get_name(self) -> str:
@@ -95,7 +96,7 @@ class PlaceAbility(Ability):
                     "delete — remove a saved place by name."
                 ),
             },
-            Keys.name: {
+            Keys.name_: {
                 "type": "string",
                 "description": (
                     "The label for the place (e.g. 'home', 'work', 'gym'). "
@@ -111,7 +112,7 @@ class PlaceAbility(Ability):
 
     def run(self, params: dict[str, object]) -> ToolResult:
         action = cast(str, params.get(Keys.action) or "").lower()
-        name = cast(str, params.get(Keys.name) or "").strip().lower()
+        name = cast(str, params.get(Keys.name_) or "").strip().lower()
 
         if action == _ACTION_SAVE:
             return self._handle_save(name, self.telemetry)
@@ -145,14 +146,9 @@ class PlaceAbility(Ability):
             "radius_m": _DEFAULT_RADIUS_M,
         })
 
-        result = get_data_graph_service().store(
-            kind=KIND_PLACE,
-            key=name,
-            value=value,
-            source=_SOURCE_LABEL,
-        )
+        result = PlaceService().store(name, value, source=_SOURCE_LABEL)
 
-        status = (result or {}).get("status", "stored")
+        status = result.get("status", "stored")
         logger.info("%s saved place name=%s lat=%s lon=%s status=%s", LOG_PREFIX, name, lat, lon, status)
         return ToolResult.ok(
             {
@@ -167,19 +163,19 @@ class PlaceAbility(Ability):
         )
 
     def _handle_list(self) -> ToolResult:
-        rows = get_data_graph_service().fetch(kinds=[KIND_PLACE])
+        rows = [r.to_dict() for r in PlaceRow.live().get()]
         places = [_row_to_place(r) for r in rows if r]
         return ToolResult.ok(places, count=len(places))
 
     def _handle_get(self, name: str) -> ToolResult:
-        rows = get_data_graph_service().fetch(kinds=[KIND_PLACE])
+        rows = [r.to_dict() for r in PlaceRow.live().get()]
         matched = next((r for r in rows if r and cast(str, r.get("key", "")).lower() == name), None)
         if matched is None:
             return ToolResult.err(_ERR_NOT_FOUND, code="not-found", hint=_HINT_NOT_FOUND, name=name)
         return ToolResult.ok(_row_to_place(matched))
 
     def _handle_delete(self, name: str) -> ToolResult:
-        rows = get_data_graph_service().fetch(kinds=[KIND_PLACE])
+        rows = [r.to_dict() for r in PlaceRow.live().get()]
         matched = next((r for r in rows if r and cast(str, r.get("key", "")).lower() == name), None)
         if matched is None:
             return ToolResult.err(_ERR_NOT_FOUND, code="not-found", hint=_HINT_NOT_FOUND, name=name)
@@ -192,7 +188,7 @@ class PlaceAbility(Ability):
                 name=name,
             )
 
-        deleted = get_data_graph_service().soft_delete_by_id(cast(int, row_id))
+        deleted = PlaceService().delete(cast(int, row_id))
         if not deleted:
             return ToolResult.err(
                 f"Could not delete the place {name!r}.",

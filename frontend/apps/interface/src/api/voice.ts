@@ -1,4 +1,4 @@
-import { getHost, api } from '@chalie/shared';
+import { api, getHost } from '@chalie/shared';
 
 /** Response from GET /voice/health */
 export interface VoiceHealth {
@@ -15,7 +15,7 @@ export const voice = {
    * user to /login/.
    */
   health(): Promise<VoiceHealth> {
-    return api.get('/voice/health', { redirectOnAuthError: false });
+    return api.get('/api/voice/health', { redirectOnAuthError: false });
   },
 
   /**
@@ -25,7 +25,7 @@ export const voice = {
   transcribe(file: File): Promise<Response> {
     const formData = new FormData();
     formData.append('file', file, 'recording.wav');
-    return fetch(`${getHost().replace(/\/$/, '')}/voice/transcribe`, {
+    return fetch(`${getHost().replace(/\/$/, '')}/api/voice/transcribe`, {
       method: 'POST',
       credentials: 'same-origin',
       body: formData,
@@ -38,7 +38,7 @@ export const voice = {
    * runs the Retry-After loop.
    */
   speak(text: string): Promise<Response> {
-    return fetch(`${getHost().replace(/\/$/, '')}/voice/synthesize`, {
+    return fetch(`${getHost().replace(/\/$/, '')}/api/voice/synthesize`, {
       method: 'POST',
       credentials: 'same-origin',
       headers: { 'Content-Type': 'application/json' },

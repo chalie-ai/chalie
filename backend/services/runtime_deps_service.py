@@ -11,15 +11,10 @@ import sys
 import threading
 import time
 from pathlib import Path
-from typing import TYPE_CHECKING
 
 import requests
 
 from services.file_mapper_service import FileMapperService
-
-if TYPE_CHECKING:
-    from services.database_service import DatabaseService
-
 
 logger = logging.getLogger(__name__)
 
@@ -47,7 +42,7 @@ class RuntimeDepsService:
         thread imports onnxruntime, so embeddings, classifiers and voice all import
         a working runtime. The fallback is loud, never silent: the diagnosis and
         remediation hint are logged at ERROR level so they surface in the
-        Cognition → Errors panel (``GET /system/observability/errors`` only shows
+        Cognition → Errors panel (``GET /api/system/observability/errors`` only shows
         ERROR/CRITICAL). A no-op when the import already succeeds.
         """
         if cls._onnxruntime_status != "unknown":
@@ -119,7 +114,7 @@ class RuntimeDepsService:
         return {"status": "installing", "message": "Voice dependencies installing in background"}
 
     @classmethod
-    def init_voice_from_settings(cls, database_service: "DatabaseService") -> None:
+    def init_voice_from_settings(cls) -> None:
         """Check DB settings on boot — if voice is enabled, trigger install.
 
         Migration: if voice_enabled is not yet in the DB but the legacy
@@ -128,15 +123,14 @@ class RuntimeDepsService:
         removing the stale stamp (one-time migration).
         """
         try:
-            from services.settings_service import SettingsService
-            settings = SettingsService(database_service)
-            voice_enabled = settings.get("voice_enabled")
+            from models.setting import Setting
+            voice_enabled = Setting.get_value("voice_enabled")
 
             if voice_enabled is None:
                 stamp = FileMapperService.get_chalie_root() / ".voice-deps-installed"
                 if stamp.exists():
                     voice_enabled = "true"
-                    settings.set("voice_enabled", "true")
+                    Setting.set("voice_enabled", "true")
                     stamp.unlink()
                     logger.info("[RuntimeDeps] Migrated legacy voice stamp → voice_enabled=true")
                 else:

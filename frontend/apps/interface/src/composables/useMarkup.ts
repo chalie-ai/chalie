@@ -4,26 +4,30 @@
  * Security model: the backend nh3 sanitize() is the single chokepoint — every
  * response is stripped of disallowed tags/attrs before reaching the frontend,
  * so this composable does NOT re-sanitize. It parses through a detached DOM
- * node (not raw string concat), then linkifies text, wires <action> buttons,
- * lazy-loads (protocol-gated) <img>, and adds CSS classes. Because parsing
- * goes through the DOM, only nh3-allowed elements plus the safe wrappers added
- * here reach the v-html output. extractText strips all tags for TTS.
+ * node (not raw string concat), then linkifies text, lazy-loads (protocol-gated)
+ * <img>, and adds CSS classes. Because parsing goes through the DOM, only
+ * nh3-allowed elements plus the safe wrappers added here reach the v-html
+ * output. extractText strips all tags for TTS.
+ *
+ * The img/link gate uses a base-less ``new URL()`` parse (not an anchor-probe).
+ * Base-less ``new URL()`` throws on relative, scheme-less, and protocol-relative
+ * input, so those are refused — unlike ``a.href = url; a.protocol`` which
+ * resolves them against the page origin and would wrongly pass them through.
  */
 
 import { find as findLinks } from '../vendor/linkify.es.mjs';
-import { emit } from './useEventBus';
-
-const HTTP_PROTOCOLS = new Set(['http:', 'https:']);
+import { isAbsoluteHttpUrl } from '../utils/url';
 
 function _renderLinkAnchor(href: string, label: string): Node {
   const a = document.createElement('a');
   a.href = href;
+  const isMailto = href.trim().toLowerCase().startsWith('mailto:');
   // Belt-and-braces protocol gate — linkify only matches http(s)/mailto/etc.
-  if (!HTTP_PROTOCOLS.has(a.protocol) && a.protocol !== 'mailto:') {
+  if (!isAbsoluteHttpUrl(href) && !isMailto) {
     return document.createTextNode(label);
   }
   a.textContent = label;
-  if (HTTP_PROTOCOLS.has(a.protocol)) {
+  if (isAbsoluteHttpUrl(href)) {
     a.target = '_blank';
     a.rel = 'noopener noreferrer';
   }
@@ -75,59 +79,15 @@ function _linkifyTextNodesIn(root: Element): void {
 }
 
 function _wireImage(img: HTMLImageElement): void {
-  const probe = document.createElement('a');
-  probe.href = img.getAttribute('src') ?? '';
-  if (!HTTP_PROTOCOLS.has(probe.protocol)) {
+  if (!isAbsoluteHttpUrl(img.getAttribute('src') ?? '')) {
     img.remove();
     return;
   }
   img.loading = 'lazy';
 }
 
-const _ACTION_DATA_ATTRS = ['execute', 'collect', 'target', 'open-url', 'payload'] as const;
-
-function _wireActionsContainer(container: Element): void {
-  container.classList.add('chalie-actions-row');
-}
-
-function _wireActionButton(actionEl: Element): void {
-  actionEl.classList.add('chalie-action-button');
-  const style = actionEl.getAttribute('style');
-  if (style === 'secondary') actionEl.classList.add('chalie-action-button--secondary');
-  if (style === 'danger') actionEl.classList.add('chalie-action-button--danger');
-
-  const label = actionEl.getAttribute('label') ?? '';
-  const value = actionEl.getAttribute('value') ?? '';
-
-  (actionEl as HTMLElement).dataset['value'] = value;
-  for (const name of _ACTION_DATA_ATTRS) {
-    const v = actionEl.getAttribute(name);
-    if (v !== null) actionEl.setAttribute(`data-${name}`, v);
-  }
-  actionEl.textContent = label;
-
-  for (const name of ['label', 'value', ..._ACTION_DATA_ATTRS, 'style'] as const) {
-    actionEl.removeAttribute(name);
-  }
-
-  actionEl.addEventListener('click', () => {
-    const row = actionEl.closest('.chalie-actions-row');
-    if (row) {
-      for (const b of row.querySelectorAll('.chalie-action-button')) {
-        b.setAttribute('disabled', '');
-      }
-    } else {
-      actionEl.setAttribute('disabled', '');
-    }
-    actionEl.classList.add('chalie-action-button--selected');
-    emit('chalie:action', { payload: { value, label } });
-  });
-}
-
 function _wireProgrammatic(root: Element): void {
   for (const img of root.querySelectorAll('img')) _wireImage(img as HTMLImageElement);
-  for (const container of root.querySelectorAll('actions')) _wireActionsContainer(container);
-  for (const button of root.querySelectorAll('action')) _wireActionButton(button);
   for (const c of root.querySelectorAll('code')) c.classList.add('chalie-code');
 }
 
@@ -142,8 +102,6 @@ export function renderMarkup(content: string): string {
   return container.innerHTML;
 }
 
-const _DROP_TAGS = new Set(['actions']);
-
 function _walk(node: Node, out: string[]): void {
   if (node.nodeType === Node.TEXT_NODE) {
     if (node.nodeValue) out.push(node.nodeValue);
@@ -153,7 +111,6 @@ function _walk(node: Node, out: string[]): void {
 
   const el = node as Element;
   const tag = el.tagName.toLowerCase();
-  if (_DROP_TAGS.has(tag)) return;
   if (tag === 'img') {
     const alt = (el.getAttribute('alt') ?? '').trim();
     if (alt) out.push(alt);
@@ -164,22 +121,14 @@ function _walk(node: Node, out: string[]): void {
   }
 }
 
-/** Strip tags to plain text for TTS; drops <actions> so labels don't speak. */
+/** Strip tags to plain text for TTS. */
 export function extractText(content: string): string {
   if (!content) return '';
   const template = document.createElement('template');
   template.innerHTML = content;
-  // Drop <actions> subtrees — querySelectorAll returns static NodeList.
-  for (const node of template.content.querySelectorAll('actions')) {
-    node.remove();
-  }
   const out: string[] = [];
   for (const child of template.content.childNodes) {
     _walk(child, out);
   }
   return out.join(' ').replaceAll(/\s+/g, ' ').trim();
-}
-
-export function useMarkup() {
-  return { renderMarkup, extractText };
 }

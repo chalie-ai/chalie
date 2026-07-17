@@ -1,3 +1,13 @@
+<script lang="ts">
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
+
+// Shared across every mounted dock. The footer dock and an open thread's reply
+// dock both render at once, so the focus-routed handlers (voice transcript,
+// interrupt-restore) and the pending-attachment strip act on the dock the user
+// is composing in — otherwise one voice transcript would paste into both.
+const activeDockKey = ref<string>('main');
+</script>
+
 <script setup lang="ts">
 /**
  * InputDock — compose / send / stop, plus the full peripheral controls.
@@ -5,27 +15,55 @@
  * WS single-owner rule: send/stop go through the session store; this component
  * never touches the WebSocket directly.
  */
-import { ref, computed, onMounted, onBeforeUnmount, nextTick } from 'vue';
 import { storeToRefs } from 'pinia';
+import { ConfigType } from '@chalie/shared';
+import { readDomContext } from '../../utils/domContext';
 import { on } from '../../composables/useEventBus';
 import { useSessionStore } from '../../stores/session';
 import { useVoiceStore } from '../../stores/voice';
 import { useAttachmentsStore } from '../../stores/attachments';
 import { useContextUsageStore } from '../../stores/contextUsage';
 import { useAmbientSensor } from '../../composables/useAmbientSensor';
-import { system } from '../../api/system';
-import type { AttachmentPreview as ConvoAttachmentPreview } from '../../stores/conversation';
+import { lsGet, lsSet } from '../../utils/storage';
+import { system } from '../../api';
 import ImageAttachStrip from '../upload/ImageAttachStrip.vue';
-import { FileText, Image, Plus, Mic, Send } from '@lucide/vue';
+import QueuedMessages from '../conversation/QueuedMessages.vue';
+import { Plus, Mic, Send, X, AlertTriangle, ChevronDown } from '@lucide/vue';
+
+/**
+ * `turnId` is the only thing that distinguishes a thread reply from a main-dock
+ * send: set, it appends to that thread; null (the dock default), the chat API
+ * scaffolds a new thread. The footer dock is fixed; the thread panel's reply
+ * dock sets `turnId` and renders in-flow at the foot of the panel.
+ */
+const props = withDefaults(defineProps<{ dockId: string; turnId?: number | null; type?: string }>(), {
+  turnId: null,
+  type: ConfigType.USER,
+});
+
+// Stable id for this dock so focus routing can tell the footer ('main') from a
+// thread reply apart. Becomes the active dock on any interaction (focus/pointer).
+const dockKey = props.turnId == null ? 'main' : `t${props.turnId}`;
+const isActiveDock = computed(() => activeDockKey.value === dockKey);
+function markActive(): void {
+  activeDockKey.value = dockKey;
+}
 
 const session = useSessionStore();
 const voiceStore = useVoiceStore();
 const attachments = useAttachmentsStore();
 const contextUsage = useContextUsageStore();
 const ambient = useAmbientSensor();
-
-const { available: voiceAvailable, recorderState, recError } = storeToRefs(voiceStore);
-const { level, levelLabel, usageDisplay } = storeToRefs(contextUsage);
+const { available: voiceAvailable, recorderState } = storeToRefs(voiceStore);
+// A null turnId (the footer dock) reads the channel's latest reading; a thread
+// panel's dock reads its own thread. Both are fed by the same `context_usage`
+// frame — the store resolves which entry that is.
+const usageDisplay = computed(() => contextUsage.usageDisplayFor(props.type, props.turnId));
+const usageRatio = computed(() => contextUsage.usageRatioFor(props.type, props.turnId));
+// The meter shows the percentage used ("30%"); the raw "X/Y" token counts move
+// to the hover tooltip (see the container's :title below) so the inline chip
+// stays compact.
+const usagePercent = computed(() => Math.round(usageRatio.value * 100) + '%');
 
 const THINKING_ITEMS = [
   { level: 'auto', label: 'Auto' },
@@ -33,79 +71,82 @@ const THINKING_ITEMS = [
   { level: 'high', label: 'High' },
 ] as const;
 
+/** Union of every attachable kind — one field, images and documents alike. */
+const ATTACH_ACCEPT =
+  'image/jpeg,image/png,image/webp,image/gif,.pdf,.docx,.pptx,.html,.htm,.txt,.md,.csv,.json,.xml';
+
 const textareaRef = ref<HTMLTextAreaElement | null>(null);
+const sendBtnRef = ref<HTMLButtonElement | null>(null);
 const text = ref('');
 
-const attachMenuOpen = ref(false);
-const attachBtnRef = ref<HTMLButtonElement | null>(null);
-const attachMenuRef = ref<HTMLDivElement | null>(null);
-const imageInputRef = ref<HTMLInputElement | null>(null);
-const docInputRef = ref<HTMLInputElement | null>(null);
-/** Hidden when no vision-capable provider is configured. */
-const hasVisionProvider = ref(true);
+// Restore draft: persisted on every change so a reload/close/navigate recovers it.
+// Keyed per thread so a reply draft never bleeds into the main composer.
+const DRAFT_KEY = props.turnId == null ? 'chalie:draft' : `chalie:draft:t${props.turnId}`;
+const stored = lsGet(DRAFT_KEY);
+if (stored) text.value = stored;
+watch(text, (v) => lsSet(DRAFT_KEY, v));
+
+const fileInputRef = ref<HTMLInputElement | null>(null);
 
 const thinkingMenuOpen = ref(false);
 const thinkingWrapRef = ref<HTMLDivElement | null>(null);
+const footerRef = ref<HTMLElement | null>(null);
+
+const level = ref<'auto' | 'medium' | 'high'>('auto');
+const levelLabel = computed(() => level.value.charAt(0).toUpperCase() + level.value.slice(1));
 
 /** True when there is something to send: non-empty text OR ≥1 attachment.
  *  Mirrors the handleSend guard — both gate on getFiles(). */
-const canSend = computed(
-  () => text.value.trim().length > 0 || attachments.getFiles().length > 0,
-);
-
-/** Auto-resize: reset height then cap at 120px. */
-function grow(): void {
-  const el = textareaRef.value;
-  if (!el) return;
-  el.style.height = 'auto';
-  el.style.height = Math.min(el.scrollHeight, 120) + 'px';
-}
+const canSend = computed(() => text.value.trim().length > 0 || attachments.getFiles().length > 0);
 
 async function handleSend(): Promise<void> {
   const trimmed = text.value.trim();
-
-  // Read files + previews BEFORE clear() wipes the strip.
   const files = attachments.getFiles();
-  const previews: ConvoAttachmentPreview[] = attachments.previews.map((p) => ({
-    filename: p.filename,
-    objectUrl: p.dataUrl,
-    isImage: p.isImage,
-  }));
 
-  // Guard here too so we don't clear/re-grow needlessly. Same gate as canSend.
+  // Guard here too so we don't clear needlessly. Same gate as canSend.
   if (!trimmed && files.length === 0) return;
 
-  // Clear the image strip only on a fresh turn, not the mid-ACT append path —
-  // so capture send-mode before the store flips isSending.
-  const wasSending = session.isSending;
+  // Read the dock's DOM contract at click time — the ref can go null if the
+  // dock unmounts across an await, and the send must target the same lane.
+  const { turnId, type } = readDomContext(footerRef.value);
 
   // Clear textarea before awaiting so the UI feels instant.
   text.value = '';
   await nextTick();
-  grow();
 
-  await session.sendMessage(trimmed, 'text', files, previews);
+  await session.sendMessage(trimmed, files, turnId, type, level.value);
 
-  if (!wasSending) attachments.clear();
+  // sendMessage takes ownership of `files` in BOTH branches — a direct dispatch
+  // uploads them; a busy send queues the whole {text, files} (queue.ts stores
+  // and replays them on drain). Either way the strip must clear: leaving files
+  // pending after a queued send re-attaches them to the user's NEXT message,
+  // a duplicate upload.
+  attachments.clear();
 
   textareaRef.value?.focus();
 }
 
-// Multi-line textarea: Enter inserts a newline and ONLY the send button submits,
-// so there is no keydown handler. Cancelling an in-flight turn is the act-trail's
-// stop/undo button, not the dock.
-
-function chooseDocument(): void {
-  attachMenuOpen.value = false;
-  docInputRef.value?.click();
+// Enter-to-send is a desktop-only affordance. On a device with a real keyboard
+// (fine pointer + hover) Enter sends and Shift+Enter inserts a newline; on touch
+// (mobile/tablet) Enter always inserts a newline and only the button sends. The
+// keystroke routes through THIS dock's own send button — a real click on the
+// element it was captured from — so it lands in the exact lane (main vs thread)
+// it fired in and inherits the button's disabled/guard state for free. IME
+// composition is never interrupted. Cancelling an in-flight turn stays the
+// act-trail's stop/undo button, not the dock.
+function onTextareaKeydown(e: KeyboardEvent): void {
+  if (e.key !== 'Enter' || e.shiftKey || e.isComposing) return;
+  const desktop = globalThis.matchMedia?.('(hover: hover) and (pointer: fine)').matches;
+  if (!desktop) return;
+  e.preventDefault();
+  sendBtnRef.value?.click();
 }
 
-function chooseImage(): void {
-  attachMenuOpen.value = false;
-  imageInputRef.value?.click();
+function openFilePicker(): void {
+  fileInputRef.value?.click();
 }
 
-/** Shared by both pickers — addFiles dispatches on type. */
+/** addFiles dispatches on type, so one input covers images and documents alike. */
 function onFileInputChange(e: Event): void {
   const input = e.target as HTMLInputElement;
   if (input.files?.length) void attachments.addFiles(input.files);
@@ -113,33 +154,36 @@ function onFileInputChange(e: Event): void {
 }
 
 function selectLevel(next: (typeof THINKING_ITEMS)[number]['level']): void {
-  void contextUsage.setLevel(next);
+  level.value = next;
   thinkingMenuOpen.value = false;
 }
 
 function onDocumentClick(e: MouseEvent): void {
   const target = e.target as Node;
-  if (
-    attachMenuOpen.value &&
-    !attachMenuRef.value?.contains(target) &&
-    !attachBtnRef.value?.contains(target)
-  ) {
-    attachMenuOpen.value = false;
-  }
   if (thinkingMenuOpen.value && !thinkingWrapRef.value?.contains(target)) {
     thinkingMenuOpen.value = false;
   }
 }
 
-function onWindowScroll(): void {
-  if (attachMenuOpen.value) attachMenuOpen.value = false;
+// Raw File objects are structurally non-persistable, so the only loss the
+// draft-restoration above doesn't cover is a discard of pending attachments.
+// Warn on beforeunload so an accidental reload/close/navigate confirms first.
+function onBeforeUnload(e: BeforeUnloadEvent): void {
+  if (attachments.getFiles().length > 0) {
+    e.preventDefault();
+    e.returnValue = '';
+  }
 }
 
+/** A turn was stopped/undone — restore its draft into the dock that owns its
+ *  scope. Matched by turn_id (like the sibling `chalie:edit-queued` handler),
+ *  not `isActiveDock`: the stop control lives in ActCycle/TurnView, never in
+ *  an InputDock footer, so `activeDockKey` never points at the right dock. */
 function onTurnInterrupted(e: Event): void {
-  const detail = (e as CustomEvent<{ text: string }>).detail;
+  const detail = (e as CustomEvent<{ text: string; turnId: number | null }>).detail;
+  if (detail.turnId !== props.turnId) return;
   text.value = detail.text ?? '';
   nextTick(() => {
-    grow();
     textareaRef.value?.focus();
     // Move cursor to end.
     const el = textareaRef.value;
@@ -149,13 +193,38 @@ function onTurnInterrupted(e: Event): void {
   });
 }
 
+/** A queued message was clicked for editing — route it to the dock that owns its
+ *  scope (footer for the spine, the panel dock for a thread), append it to any
+ *  draft, and focus. Matched by turn_id, not active state, so a spine click lands
+ *  in the footer even while a thread dock is focused. */
+function onEditQueued(e: Event): void {
+  const detail = (e as CustomEvent<{ turnId: number | null; text: string }>).detail;
+  if (detail.turnId !== props.turnId) return;
+  markActive();
+  text.value = text.value ? `${text.value}\n${detail.text}` : detail.text;
+  nextTick(() => {
+    textareaRef.value?.focus();
+    const el = textareaRef.value;
+    if (el) el.selectionStart = el.selectionEnd = el.value.length;
+  });
+}
+
+// The footer dock is fixed to the viewport, so .conversation-spine can't see
+// its height to reserve space beneath the last message. The attachment strip
+// and queued-message chips grow the dock UPWARD, and a static reserve would let
+// that growth overlap the act-trail (the queued-messages defect). Publish the
+// dock's live height as --dock-height on :root so the spine's bottom padding
+// tracks it. Footer dock only — the inline thread reply dock is in-flow (static)
+// and needs no reserve.
+let _dockResizeObserver: ResizeObserver | null = null;
+
 let _unsubVoiceTranscript: (() => void) | null = null;
 
 /** Paste the voice transcript into the compose textarea for review — does NOT auto-send. */
 function onVoiceTranscript({ text: transcript }: { text: string }): void {
+  if (!isActiveDock.value) return;
   text.value = transcript;
   nextTick(() => {
-    grow();
     textareaRef.value?.focus();
     // Move cursor to end.
     const el = textareaRef.value;
@@ -167,77 +236,82 @@ function onVoiceTranscript({ text: transcript }: { text: string }): void {
 
 onMounted(() => {
   document.addEventListener('session:turn-interrupted', onTurnInterrupted);
+  document.addEventListener('chalie:edit-queued', onEditQueued);
   _unsubVoiceTranscript = on('chalie:voice-transcript', onVoiceTranscript);
   document.addEventListener('click', onDocumentClick);
-  globalThis.addEventListener('scroll', onWindowScroll, { passive: true });
+  globalThis.addEventListener('beforeunload', onBeforeUnload);
+
+  // Reserve the spine's bottom space against this dock's LIVE height (footer only).
+  if (props.turnId == null && footerRef.value) {
+    _dockResizeObserver = new ResizeObserver((entries) => {
+      const box = entries[0]?.borderBoxSize?.[0];
+      const h = box ? box.blockSize : (entries[0]?.contentRect.height ?? 0);
+      if (h > 0) document.documentElement.style.setProperty('--dock-height', `${Math.ceil(h)}px`);
+    });
+    _dockResizeObserver.observe(footerRef.value);
+  }
 
   // Behavioral signals: typing cadence feeds the ambient snapshot.
   if (textareaRef.value) ambient.bindTypingInput(textareaRef.value);
 
-  void contextUsage.loadLevel();
-  void contextUsage.refresh();
-
-  // Vision-provider gating for the image attach option.
-  system
-    .authStatus()
-    .then((s) => {
-      hasVisionProvider.value = s.has_vision_provider;
-    })
-    .catch(() => {
-      /* leave the image option visible on error */
-    });
+  void system.thinkingLevel(props.type, props.turnId ?? -1).then((r) => {
+    const v = r?.level;
+    level.value = v === 'medium' || v === 'high' ? v : 'auto';
+  }).catch(() => { level.value = 'auto'; });
 });
 
 onBeforeUnmount(() => {
   document.removeEventListener('session:turn-interrupted', onTurnInterrupted);
+  document.removeEventListener('chalie:edit-queued', onEditQueued);
   _unsubVoiceTranscript?.();
   document.removeEventListener('click', onDocumentClick);
-  globalThis.removeEventListener('scroll', onWindowScroll);
-  voiceStore.destroyRecorder();
+  globalThis.removeEventListener('beforeunload', onBeforeUnload);
+  if (props.turnId == null) {
+    _dockResizeObserver?.disconnect();
+    _dockResizeObserver = null;
+    document.documentElement.style.removeProperty('--dock-height');
+  }
+  // Hand focus routing back to the footer when an inline dock collapses.
+  if (activeDockKey.value === dockKey) activeDockKey.value = 'main';
+  // The recorder is a shared singleton — only the permanent footer dock tears it
+  // down, so collapsing a thread mid-recording can't kill it under the footer.
+  if (props.turnId == null) voiceStore.destroyRecorder();
 });
 </script>
 
 <template>
-  <footer class="input-dock">
-    <ImageAttachStrip />
-
-    <div
-      id="attachMenu"
-      ref="attachMenuRef"
-      class="attach-menu"
-      :class="{ hidden: !attachMenuOpen }"
-    >
-      <div class="attach-menu__inner">
-        <button class="attach-menu__item" type="button" @click="chooseDocument">
-          <FileText :size="16" />
-          <span>Attach Document</span>
-        </button>
-        <button
-          v-if="hasVisionProvider"
-          id="attachImageBtn"
-          class="attach-menu__item"
-          type="button"
-          @click="chooseImage"
-        >
-          <Image :size="16" />
-          <span>Take Photo / Pick Image</span>
-        </button>
-      </div>
+  <footer
+    ref="footerRef"
+    :id="dockId"
+    class="input-dock"
+    :class="{ 'input-dock--inline': turnId != null }"
+    :data-turn-id="turnId"
+    :data-type="type"
+    @focusin="markActive"
+    @pointerdown="markActive"
+  >
+    <div v-if="session.errorMessage" class="dock-error" role="alert">
+      <AlertTriangle class="dock-error__icon" :size="18" aria-hidden="true" />
+      <span class="dock-error__text">{{ session.errorMessage }}</span>
+      <button
+        class="dock-error__close"
+        type="button"
+        aria-label="Dismiss error"
+        @click="session.errorMessage = null"
+      >
+        <X :size="16" />
+      </button>
     </div>
+
+    <!-- Attachments are a shared store; render the pending strip only in the
+         active dock so the footer and an open thread don't show duplicates. -->
+    <ImageAttachStrip v-if="isActiveDock" />
+
+    <!-- Pending (queued) sends for this dock's scope, floating above the composer. -->
+    <QueuedMessages :thread-id="turnId" />
 
     <div class="input-dock__outer">
       <div class="input-dock__inner">
-        <button
-          id="attachBtn"
-          ref="attachBtnRef"
-          class="btn-action btn-action--attach"
-          :class="{ active: attachMenuOpen }"
-          aria-label="Attach"
-          @click.stop="attachMenuOpen = !attachMenuOpen"
-        >
-          <Plus :size="20" />
-        </button>
-
         <button
           v-if="voiceAvailable"
           id="voiceRecBtn"
@@ -251,17 +325,28 @@ onBeforeUnmount(() => {
           <span class="voice-rec-btn__spinner" aria-hidden="true"></span>
         </button>
 
+        <button
+          id="attachBtn"
+          class="btn-action btn-action--attach"
+          aria-label="Attach"
+          @click="openFilePicker"
+        >
+          <Plus :size="20" />
+        </button>
+
         <textarea
           id="chatInput"
           ref="textareaRef"
           v-model="text"
           class="input-dock__textarea"
-          placeholder="Talk to Chalie..."
+          :aria-label="turnId != null ? 'Reply in thread' : 'Message Chalie'"
+          :placeholder="turnId != null ? 'Reply in this thread…' : 'Talk to Chalie…'"
           rows="1"
-          @input="grow"
+          @keydown="onTextareaKeydown"
         ></textarea>
 
         <button
+          ref="sendBtnRef"
           class="btn-action btn-action--send"
           aria-label="Send message"
           :disabled="!canSend"
@@ -282,8 +367,9 @@ onBeforeUnmount(() => {
           :aria-expanded="thinkingMenuOpen"
           @click.stop="thinkingMenuOpen = !thinkingMenuOpen"
         >
-          <span class="thinking-select__caption">Thinking</span>
+          <span class="thinking-select__swirl" aria-hidden="true"></span>
           <span id="thinkingLabel" class="thinking-select__value">{{ levelLabel }}</span>
+          <ChevronDown :size="12" style="opacity: 0.6" />
         </button>
         <div
           id="thinkingMenu"
@@ -305,33 +391,27 @@ onBeforeUnmount(() => {
           </button>
         </div>
       </div>
-      <div id="contextDisplay" class="context-display" :class="{ hidden: !usageDisplay }">
-        <span class="context-display__caption">Context</span>
-        <span class="context-indicator" title="Last request size / context window">{{ usageDisplay }}</span>
+      <div
+        id="contextDisplay"
+        class="context-display"
+        :class="{ hidden: !usageDisplay }"
+        :title="`${usageDisplay} context`"
+      >
+        <span class="context-indicator">
+          <b>{{ usagePercent }}</b>
+        </span>
+        <span class="meter"><i :style="{ width: usageRatio * 100 + '%' }"></i></span>
       </div>
     </div>
-
-    <p v-if="recError" id="voiceRecError" class="voice-rec-error">{{ recError }}</p>
 
     <!-- No capture attr: lets mobile show the standard OS picker (library +
          take-photo), WhatsApp-style. -->
     <input
-      id="imageFileInput"
-      ref="imageInputRef"
+      id="attachFileInput"
+      ref="fileInputRef"
       type="file"
-      accept="image/jpeg,image/png,image/webp,image/gif"
-      aria-label="Attach image"
-      multiple
-      hidden
-      @change="onFileInputChange"
-    />
-
-    <input
-      id="docFileInput"
-      ref="docInputRef"
-      type="file"
-      accept=".pdf,.docx,.pptx,.html,.htm,.txt,.md,.csv,.json,.xml"
-      aria-label="Attach document"
+      :accept="ATTACH_ACCEPT"
+      aria-label="Attach file"
       multiple
       hidden
       @change="onFileInputChange"

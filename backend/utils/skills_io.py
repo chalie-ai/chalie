@@ -11,9 +11,6 @@ from services.file_mapper_service import FileMapperService
 
 logger = logging.getLogger(__name__)
 
-USER_SKILLS_DIR = FileMapperService.get_user_skills_path()
-SKILLS_DB_PATH = FileMapperService.get_skills_db_path()
-
 DEFAULT_VERSION = 1
 SLUG_MAX_LENGTH = 64
 
@@ -28,17 +25,17 @@ def slugify_title(title: str) -> str:
 
 def skill_yaml_path(title: str) -> Path:
     """Return the YAML file path for a user skill."""
-    return USER_SKILLS_DIR / f"{slugify_title(title)}.yaml"
+    return FileMapperService.get_user_skills_path(f"{slugify_title(title)}.yaml")
 
 
 def ensure_user_skills_dir() -> None:
     """Create the user skills directory if it doesn't exist."""
-    USER_SKILLS_DIR.mkdir(parents=True, exist_ok=True)
+    FileMapperService.get_user_skills_path().mkdir(parents=True, exist_ok=True)
 
 
 def write_skill_file(path: Path, meta: dict[str, str | int]) -> None:
     """Write a skill metadata dict to a YAML frontmatter file."""
-    if not path.resolve().is_relative_to(USER_SKILLS_DIR.resolve()):
+    if not path.resolve().is_relative_to(FileMapperService.get_user_skills_path().resolve()):
         raise ValueError("Path outside user skills directory")
     frontmatter = {
         "title": meta["title"],
@@ -73,7 +70,7 @@ def load_sqlite_vec(conn: sqlite3.Connection) -> None:
 
 def open_skills_db(*, row_factory: bool = False) -> sqlite3.Connection:
     """Open a connection to skills.sqlite with vec loaded."""
-    conn = sqlite3.connect(str(SKILLS_DB_PATH))
+    conn = sqlite3.connect(str(FileMapperService.get_skills_db_path()))
     conn.execute("PRAGMA foreign_keys = ON")
     if row_factory:
         conn.row_factory = sqlite3.Row

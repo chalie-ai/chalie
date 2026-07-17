@@ -13,7 +13,7 @@ roster are orthogonal.
 """
 
 import sqlite3
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
 from pathlib import Path
 from typing import cast
 
@@ -23,17 +23,18 @@ from abilities._registry import AbilityRegistry
 from abilities.find_tools import FindToolsAbility
 from abilities.vision import VisionAbility
 from configs.channels import DmnConfig, UserConfig
+from configs.enums.policy_channel import PolicyChannel
 from run import _migrate_legacy_policy_rules
-from services.database_service import DatabaseService
+from services.database import Database
 from services.file_mapper_service import FileMapperService
+from controllers.message_processor import MessageProcessor
 from services.policy_manager import PolicyManager
 from services.processor_config import ProcessorConfig
 from services.schema_convergence_service import SchemaConvergenceService
-from services.message_processor import MessageProcessor
 
 pytestmark = pytest.mark.unit
 
-_CHANNEL = ProcessorConfig.PolicyChannel
+_CHANNEL = PolicyChannel
 
 
 # ---------------------------------------------------------------------------
@@ -41,8 +42,7 @@ _CHANNEL = ProcessorConfig.PolicyChannel
 # ---------------------------------------------------------------------------
 
 def _mp_for(config: ProcessorConfig) -> MessageProcessor:
-    mp = MessageProcessor("find a vision tool for me")
-    mp.config = config
+    mp = MessageProcessor(config, raw_input="find a vision tool for me")
     mp.active_tools = list(config.always_available or [])
     return mp
 
@@ -54,11 +54,10 @@ def _find_tools_on(mp: MessageProcessor, params: dict[str, object]) -> Mapping[s
 
 
 def _seeded_policy_db(tmp_path: Path) -> PolicyManager:
-    db = DatabaseService(str(tmp_path / "vision_policy.db"))
-    _migrate_legacy_policy_rules(db)                                  # no-op on fresh
-    SchemaConvergenceService(db, embedding_dimensions=256).converge()  # creates policy
-    PolicyManager(db).apply_seed()                                    # reads the JSON
-    return PolicyManager(db)
+    _migrate_legacy_policy_rules()                                    # no-op on fresh
+    SchemaConvergenceService().converge()  # creates policy
+    PolicyManager().apply_seed()                                  # reads the JSON
+    return PolicyManager()
 
 
 # ---------------------------------------------------------------------------
@@ -66,6 +65,17 @@ def _seeded_policy_db(tmp_path: Path) -> PolicyManager:
 # ---------------------------------------------------------------------------
 
 class TestVisionPolicyDefaults:
+
+    @pytest.fixture(autouse=True)
+    def _gateway_to_tmp_db(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+        # _migrate_legacy_policy_rules()/converge()/apply_seed()/_setting() all resolve
+        # their path through the Database gateway (FileMapperService.get_db_path).
+        # Redirect the gateway to the same tmp file so the seed writes and the
+        # _setting reads share one database, not the real chalie.db.
+        monkeypatch.setattr(FileMapperService, "get_db_path", lambda *_: tmp_path / "vision_policy.db")
+        Database.close()
+        yield
+        Database.close()
 
     def test_chat_vision_is_allow(self, tmp_path: Path) -> None:
         pm = _seeded_policy_db(tmp_path)
@@ -94,7 +104,7 @@ class TestVisionVisibility:
         roster and trips this guard."""
         assert "vision" in AbilityRegistry.discoverable_names()
 
-    def test_vision_selectable_on_user_channel(self) -> None:
+    def test_vision_selectable_on_user_channel(self, db: object) -> None:
         mp = _mp_for(UserConfig())
 
         result = _find_tools_on(mp, {"query": ["vision"]})
@@ -109,7 +119,7 @@ class TestVisionVisibility:
             f"vision must not be reported unavailable on the user channel. result={result!r}"
         )
 
-    def test_vision_selectable_on_dmn_channel(self) -> None:
+    def test_vision_selectable_on_dmn_channel(self, db: object) -> None:
         """Discovery is global now: the DMN background channel carries find_tools,
         and vision is DISCOVERABLE=True, so the DMN can discover and spawn the
         vision delegate. Containing vision away from the subconscious is the policy

@@ -1,5 +1,5 @@
 import { createRouter, createWebHistory } from 'vue-router';
-import { HttpError, AuthError, getToken, isTauri } from '@chalie/shared';
+import { AuthError, getToken, HttpError, isTauri } from '@chalie/shared';
 import HomeView from './views/HomeView.vue';
 import { system } from './api/system';
 

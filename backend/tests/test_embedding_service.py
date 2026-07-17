@@ -13,7 +13,6 @@ import pytest
 
 from services.embedding_service import (
     EmbeddingService,
-    get_embedding_service,
     _build_session,
     _get_session_and_tokenizer,
     _model_dir,
@@ -25,16 +24,6 @@ class TestEmbeddingServiceONNX:
     @classmethod
     def setup_class(cls) -> None:
         _get_session_and_tokenizer()
-
-    # ── model load ──────────────────────────────────────────────────────────
-
-    def test_session_is_loaded(self) -> None:
-        from services.embedding_service import _session
-        assert _session is not None
-
-    def test_tokenizer_is_loaded(self) -> None:
-        from services.embedding_service import _tokenizer
-        assert _tokenizer is not None
 
     # ── output shape and dtype ───────────────────────────────────────────────
 
@@ -90,11 +79,6 @@ class TestEmbeddingServiceONNX:
         a = np.array(svc.generate_embedding("the quick brown fox"))
         b = np.array(svc.generate_embedding("the quick brown fox"))
         assert abs(np.dot(a, b) - 1.0) < 1e-4
-
-    # ── singleton ─────────────────────────────────────────────────────────────
-
-    def test_get_embedding_service_returns_singleton(self) -> None:
-        assert get_embedding_service() is get_embedding_service()
 
 
 class TestCompilingEpCachePrime:

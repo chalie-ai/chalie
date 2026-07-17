@@ -6,9 +6,11 @@ from typing import cast
 import yaml
 
 from capabilities.base import AbstractCapability
-from services.file_mapper_service import FileMapperService
 from capabilities.home_capability import ha_rest_handler as rest
 from capabilities.home_capability.ha_ws_handler import HaWebSocketHandler
+from models.ws_message import WsMessage
+from services.file_mapper_service import FileMapperService
+from services.websocket import Websocket
 
 logger = logging.getLogger(__name__)
 
@@ -24,10 +26,23 @@ class HomeCapability(AbstractCapability):
     def __init__(self) -> None:
         super().__init__()
         self._manifest_cache: dict[str, object] | None = None
-        self._ws_handler = HaWebSocketHandler()
+        self._ws_handler = HaWebSocketHandler(on_event=self._on_ha_event)
         self._url: str = ""
         self._token: str = ""
         self._verify_ssl: bool = True
+
+    def _on_ha_event(self, entity_id: str, new_state: dict[str, object]) -> None:
+        """Bridge one HA ``state_changed`` event to the Chalie frontend via the
+        normal fire-and-forget WS facade. The HA handler itself never touches
+        the frontend — this capability owns the framing."""
+        attributes = cast("dict[str, object]", new_state.get("attributes", {}))
+        Websocket.broadcast(WsMessage(
+            type="home_state_changed",
+            entity_id=entity_id,
+            state=new_state.get("state"),
+            friendly_name=attributes.get("friendly_name", entity_id),
+            attributes=attributes,
+        ))
 
     # ── Identity ─────────────────────────────────────────────────────
 
@@ -112,9 +127,11 @@ class HomeCapability(AbstractCapability):
         return items
 
     def _do_monitor(self) -> None:
-        if self._ws_handler.is_alive:
-            return
-        rest.probe(self._url, self._token, self._verify_ssl)
+        """No external health poll. Home Assistant monitoring is self-served by
+        :class:`HaWebSocketHandler`, whose daemon-thread ``_run_loop`` owns the
+        live event subscription and reconnects itself with backoff — there is
+        nothing for the shared capability sync to nudge."""
+        return
 
     # ── Tools ────────────────────────────────────────────────────────
 

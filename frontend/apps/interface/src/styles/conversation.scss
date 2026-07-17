@@ -1,6 +1,32 @@
 // Conversation component styles. Colors use CSS-var tokens for dark+light (Rule 7).
 // Depends on @chalie/shared/styles/main.scss + interface.scss loaded first (tokens, keyframes).
 
+// --------------------------------------------------------------------------
+// 0. Date divider — day-group marker in the spine
+// --------------------------------------------------------------------------
+// A centered mono date label flanked by hairline rules, separating turns by the
+// day they occurred on. Inserted imperatively by utils/daymarks.ts (so it must
+// be GLOBAL, not scoped — imperative nodes carry no scoped-style attribute).
+.daymark {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin: 6px 0 26px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-tertiary);
+}
+
+.daymark::before,
+.daymark::after {
+  content: '';
+  height: 1px;
+  flex: 1;
+  background: var(--border);
+}
+
 .speech-form {
   position: relative;
   padding: var(--space-lg);
@@ -27,50 +53,80 @@
 }
 
 // --------------------------------------------------------------------------
-// 2. User bubble
+// 2. User message — right-set bubble in the row body
 // --------------------------------------------------------------------------
-// The wrapper owns the outer spacing (clearing the neighbouring rows) and stacks
-// the attachment list above its bubble. The bubble itself is a full-width flat
-// panel — no border, no accent stripe, no spark glyph; a slightly-elevated
-// surface sets it apart from the page.
+// The user message sits as a right-aligned bubble in its row; Chalie's content
+// remains full-bleed left-aligned open text. The wrapper stacks the text above
+// any attachments; the row (TurnView) owns the outer alignment.
 .user-message {
   display: flex;
   flex-direction: column;
   gap: var(--space-sm);
-  margin: var(--space-xl) 0;
-  width: 90%;
-  align-self: flex-end; // user message hugs the right; width keeps the panel at 90%
-}
-
-.speech-form--user {
+  max-width: 80%;
+  margin-left: auto;
   background: var(--bg-surface-2);
-  border: none;
-  align-self: stretch;
-  width: 100%;
-  max-width: 100%;
+  border: 1px solid var(--border);
+  border-radius: 18px 18px 6px 18px;
+  padding: 11px 15px;
+  // The clamped-text fade (.user-text--clamped::after) resolves against
+  // --row-fade-bg. --bg-surface-2 is translucent, so publish the bubble's
+  // actual composited (opaque) appearance here instead of letting the fade
+  // fall back to the page background — otherwise the fade barely occludes
+  // the text and leaves a visible seam against the bubble.
+  --row-fade-bg: var(--user-bubble-fade);
 }
 
-.speech-form--user .speech-form__text {
+.user-text {
+  // pre-wrap preserves the newlines the composer inserts (Enter adds a newline;
+  // only the send button submits).
   white-space: pre-wrap;
-  font-weight: 600;
+  overflow-wrap: break-word;
+  font-weight: 500;
+  font-size: 0.9375rem;
+  line-height: 1.6;
+  color: var(--text-primary);
 }
 
-// Hover lift (pointer devices only)
-@media (hover: hover) {
-  .speech-form:hover {
-    transform: translateY(-2px);
-    border-color: color-mix(in oklab, var(--text-primary) 16%, transparent);
-    box-shadow: 0 12px 32px color-mix(in oklab, #000 55%, transparent), 0 0 0 1px color-mix(in oklab, var(--violet) 4%, transparent) inset;
-  }
+// Collapsed long message: clamp to 5 lines with a soft fade hinting at more text
+// below. The fade resolves to --row-fade-bg, a custom property the hosting
+// surface publishes (bubble / feed / panel) so it matches whichever backdrop
+// the row sits on, in both the dark and light themes. .user-message publishes
+// its own opaque composited colour (see --user-bubble-fade in _tokens.scss)
+// since --bg-surface-2 itself is translucent and would barely occlude the text.
+.user-text--clamped {
+  display: -webkit-box;
+  -webkit-line-clamp: 5;
+  line-clamp: 5;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  position: relative;
+}
 
-  .speech-form--user:hover {
-    box-shadow: 0 12px 32px color-mix(in oklab, #000 55%, transparent), 0 0 0 1px color-mix(in oklab, var(--cyan) 5%, transparent) inset;
-  }
+.user-text--clamped::after {
+  content: '';
+  position: absolute;
+  inset-inline: 0;
+  bottom: 0;
+  height: 2.4em;
+  background: linear-gradient(to bottom, transparent, var(--row-fade-bg, var(--bg)));
+  pointer-events: none;
+}
 
-  [data-theme="light"] .speech-form:hover,
-  [data-theme="light"] .speech-form--user:hover {
-    box-shadow: none;
-  }
+.user-text__toggle {
+  align-self: flex-start;
+  padding: 0;
+  border: none;
+  background: none;
+  cursor: pointer;
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  letter-spacing: 0.01em;
+  color: var(--text-tertiary);
+  transition: color 150ms ease;
+}
+
+.user-text__toggle:hover {
+  color: var(--accent-primary);
 }
 
 // Hard no-shadow guard inside bubbles
@@ -102,45 +158,6 @@
   display: none;
 }
 
-// Chalie glyph now lives inline in the footer (meta) row; ErrorForm keeps a header
-.speech-form--chalie .speech-form__meta .sender-glyph,
-.speech-form--chalie .speech-form__header .sender-glyph {
-  position: static;
-  width: 16px;
-  height: 16px;
-}
-
-// Sender glyph — SVG asset painted via mask so currentColor themes it
-.sender-glyph {
-  position: absolute;
-  top: -9px;
-  width: 18px;
-  height: 18px;
-  z-index: 3;
-  pointer-events: none;
-  display: inline-block;
-  background-color: currentColor;
-  -webkit-mask: center / contain no-repeat;
-  mask: center / contain no-repeat;
-}
-
-.speech-form--chalie .sender-glyph {
-  left: -9px;
-  color: var(--violet);
-  -webkit-mask-image: url(/icons/sender-glyph-chalie.svg);
-  mask-image: url(/icons/sender-glyph-chalie.svg);
-  animation: glyphTwinkle 3.2s ease-in-out infinite;
-}
-
-@keyframes glyphTwinkle {
-  0%, 100% { opacity: 0.55; }
-  50%      { opacity: 1; }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .speech-form--chalie .sender-glyph { animation: none; opacity: 0.85; }
-}
-
 // Faded messages — outside working memory
 .message--faded {
   opacity: 0.75;
@@ -153,15 +170,15 @@
 }
 
 // --------------------------------------------------------------------------
-// 7. Attachments — condensed right-aligned list, act-trail idiom
+// 7. Attachments — condensed list under the message, act-trail idiom
 // --------------------------------------------------------------------------
 .user-attachments {
   display: flex;
   flex-direction: column;
-  align-items: flex-end; // hug the right edge
+  align-items: flex-start;
   gap: 0; // condensed — line-height carries the row rhythm
   margin: 0;
-  padding: 0 var(--space-lg) 0 0; // line names up under the bubble's right padding
+  padding: 0;
   list-style: none;
 }
 
@@ -174,7 +191,7 @@
   border: none;
   background: none;
   cursor: pointer;
-  font-family: 'JetBrains Mono', 'Fira Code', ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-family: var(--font-mono);
   font-size: 0.82rem;
   line-height: 1.4;
   letter-spacing: -0.005em;
@@ -197,30 +214,28 @@
   white-space: nowrap;
 }
 
+// --------------------------------------------------------------------------
+// 8. Footer meta + actions
+// --------------------------------------------------------------------------
+.speech-form__meta-wrap {
+  position: relative;
+  // Fill the dock-width .msg-row so the meta's `margin-left:auto` acts can push
+  // to the right edge — without this the wrap shrinks to content and the actions
+  // sit mid-row instead of right-aligned with the composer/prose edge.
+  width: 100%;
+}
+
 .speech-form__meta {
   display: flex;
   align-items: center;
-  gap: var(--space-sm);
-  margin-top: var(--space-sm);
-  font-size: var(--font-size-sm);
+  gap: 12px;
+  margin-top: 10px;
+  font-family: var(--font-mono);
+  font-size: 0.66rem;
+  letter-spacing: 0.02em;
   color: var(--text-tertiary);
-  justify-content: flex-start;
   position: relative;
   z-index: 2;
-  font-family: 'JetBrains Mono', 'Fira Code', ui-monospace, 'SF Mono', Menlo, monospace;
-  letter-spacing: 0.04em;
-}
-
-// Action buttons (remember/speak) pushed to the right of the footer row
-.speech-form__actions {
-  display: flex;
-  align-items: center;
-  gap: var(--space-sm);
-  margin-left: auto;
-}
-
-.speech-form--user .speech-form__meta {
-  justify-content: flex-end;
 }
 
 .speech-form__timestamp {
@@ -230,72 +245,215 @@
   letter-spacing: 0.04em;
 }
 
-.speech-form__remember-btn {
-  background: none;
-  border: none;
-  color: var(--text-tertiary);
-  cursor: pointer;
-  padding: var(--space-xs);
-  border-radius: var(--radius-sm);
-  transition: color var(--duration-fast), box-shadow var(--duration-fast);
+.speech-form__acts {
   display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 24px;
-  height: 24px;
+  gap: 2px;
+  margin-left: auto;
 }
 
-.speech-form__remember-btn svg { width: 24px; height: 24px; }
+// Mobile: the trace-pill + thread-pill can't always share one row with the
+// timestamp and action buttons without spilling, so let the row wrap. Source
+// order already reads timestamp → pills → acts, and `margin-left:auto` on the
+// acts holds them at the right edge of whichever line they land on — so the
+// acts stay the rightmost control at every width. Do NOT `order:` the acts
+// ahead of the pills to force a two-line split: when the row DOES fit on one
+// line no wrap happens, and the reorder simply lands the pill to the RIGHT of
+// the actions.
+@media (max-width: 640px) {
+  .speech-form__meta {
+    flex-wrap: wrap;
+  }
+}
 
-.speech-form__remember-btn:hover {
+// Footer action buttons (read-aloud, reply, copy). 26×26 ghost buttons that take
+// a per-action accent on hover.
+.speech-form__act-btn {
+  background: transparent;
+  border: 0;
+  color: var(--text-tertiary);
+  cursor: pointer;
+  padding: 0;
+  border-radius: 7px;
+  transition: background var(--duration-fast), color var(--duration-fast);
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+}
+
+.speech-form__act-btn:hover {
+  background: color-mix(in oklab, var(--text-primary) 8%, transparent);
+  color: var(--text-primary);
+}
+
+.speech-form__act-btn--speak:hover {
+  color: var(--cyan);
+}
+
+.speech-form__act-btn--reply:hover {
+  color: var(--violet);
+}
+
+.speech-form__act-btn--copy:hover {
   color: var(--accent-primary);
 }
 
-.speech-form__remember-btn--active {
-  color: var(--accent-primary);
-  box-shadow: 0 0 8px color-mix(in oklab, var(--violet) 35%, transparent) !important;
-  cursor: default;
-}
-
-.speech-form__remember-btn:disabled:not(.speech-form__remember-btn--active) {
-  opacity: 0.5;
-  cursor: default;
-}
-
-.speech-form__speak-btn {
-  background: none;
-  border: none;
-  color: var(--text-tertiary);
-  cursor: pointer;
-  padding: var(--space-xs);
-  border-radius: var(--radius-sm);
-  transition: color var(--duration-fast);
-  display: flex;
+// --------------------------------------------------------------------------
+// 9. Trace pill + expandable trace body
+// --------------------------------------------------------------------------
+.trace-pill {
+  display: inline-flex;
   align-items: center;
-  justify-content: center;
-  width: 24px;
-  height: 24px;
+  gap: 8px;
+  height: 26px;
+  padding: 0 11px;
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  color: var(--text-secondary);
+  background: var(--bg-surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-full);
+  cursor: pointer;
+  white-space: nowrap;
+  flex-shrink: 0;
+  transition: border-color var(--duration-fast), color var(--duration-fast), background var(--duration-fast);
 }
 
-.speech-form__speak-btn svg { width: 24px; height: 24px; }
-
-.speech-form__speak-btn:hover {
-  color: var(--dusk-blue);
+.trace-pill:hover,
+.trace-pill--open {
+  border-color: var(--border-strong);
+  color: var(--text-primary);
 }
 
-.speech-form--error {
-  background: color-mix(in oklab, var(--error) 8%, transparent);
-  border-color: color-mix(in oklab, var(--error) 20%, transparent);
+// Static marker — the trace pill only ever rides a SETTLED exchange's footer (or
+// a collapsed group of already-finished calls), so the dot signals "has a trace",
+// not live activity. Live work is shown by the separate "thinking…" trail / the
+// thread pill's own pulsing dot.
+.trace-pill__dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent-primary);
 }
 
-.speech-form--error .speech-form__text {
+.trace-body {
+  display: grid;
+  grid-template-rows: 0fr;
+  transition: grid-template-rows 220ms ease;
+}
+
+.trace-body--open {
+  grid-template-rows: 1fr;
+  margin-top: 8px;
+}
+
+.trace-body__inner {
+  overflow: hidden;
+  min-height: 0;
+}
+
+.calls {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--bg-surface-2);
+  padding: 5px;
+  max-width: 100%;
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  line-height: 1.5;
+}
+
+.call {
+  padding: 8px 10px;
+  border-radius: 8px;
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.call + .call {
+  border-top: 1px solid var(--border);
+}
+
+.call__fn {
+  color: var(--accent-primary);
+  font-weight: 600;
+}
+
+.call__summary {
+  color: var(--text-secondary);
+}
+
+.call--error .call__fn {
   color: var(--error);
+}
+
+// --------------------------------------------------------------------------
+// 10. Thread pill (footer variant — global so BubbleFooter can use them)
+// --------------------------------------------------------------------------
+.thread-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  height: 26px;
+  padding: 0 10px 0 11px;
+  border-radius: var(--radius-full);
+  cursor: pointer;
+  background: color-mix(in oklab, var(--violet) 5%, var(--bg-surface-2));
+  border: 1px solid color-mix(in oklab, var(--violet) 16%, var(--border));
+  color: var(--text-primary);
+  font-size: 0.75rem;
+  max-width: min(260px, 40%);
+  transition: border-color var(--duration-fast), background var(--duration-fast);
+}
+
+.thread-pill:hover {
+  border-color: color-mix(in oklab, var(--violet) 30%, var(--border));
+}
+
+.thread-pill__dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.thread-pill__label {
+  font-weight: 550;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.thread-pill__chevron {
+  font-size: 15px;
+  line-height: 1;
+  color: var(--text-tertiary);
+  flex-shrink: 0;
+}
+
+.thread-pill--working .thread-pill__dot {
+  background: var(--status-main);
+  animation: pulseV 1.4s ease-in-out infinite;
+}
+
+.thread-pill--done .thread-pill__dot {
+  background: var(--cyan);
+}
+
+.thread-pill--thread .thread-pill__dot {
+  background: var(--violet);
+}
+
+.thread-pill--idle .thread-pill__dot {
+  background: transparent;
+  border: 1.5px solid color-mix(in oklab, var(--text-primary) 30%, transparent);
 }
 
 // Escalation form (critic)
 .speech-form--escalation {
-  border-color: color-mix(in oklab, #ffb432 25%, transparent);
-  box-shadow: 0 0 16px color-mix(in oklab, #ffb432 6%, transparent);
+  border-color: color-mix(in oklab, var(--warning) 25%, transparent);
+  box-shadow: 0 0 16px color-mix(in oklab, var(--warning) 6%, transparent);
   margin-top: var(--space-lg);
 }
 
@@ -303,11 +461,11 @@
   background: linear-gradient(
     180deg,
     transparent 0%,
-    color-mix(in oklab, #ffb432 85%, transparent) 20%,
-    color-mix(in oklab, #ffb432 85%, transparent) 80%,
+    color-mix(in oklab, var(--warning) 85%, transparent) 20%,
+    color-mix(in oklab, var(--warning) 85%, transparent) 80%,
     transparent 100%
   );
-  box-shadow: 0 0 8px color-mix(in oklab, #ffb432 60%, transparent), 0 0 18px color-mix(in oklab, #ffb432 33%, transparent);
+  box-shadow: 0 0 8px color-mix(in oklab, var(--warning) 60%, transparent), 0 0 18px color-mix(in oklab, var(--warning) 33%, transparent);
 }
 
 .speech-form--escalation::after {
@@ -317,7 +475,7 @@
   left: 0;
   right: 0;
   height: 1px;
-  background: linear-gradient(90deg, transparent, color-mix(in oklab, #ffb432 30%, transparent), transparent);
+  background: linear-gradient(90deg, transparent, color-mix(in oklab, var(--warning) 30%, transparent), transparent);
   pointer-events: none;
 }
 
@@ -392,7 +550,7 @@
   gap: 16px;
   min-width: 220px;
   max-width: 760px;
-  font-family: 'JetBrains Mono', 'Fira Code', ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-family: var(--font-mono);
   font-size: 0.82rem;
   line-height: 1.2;
   font-variant-numeric: tabular-nums;
@@ -469,43 +627,19 @@
   overflow: visible;
   line-height: 1.4;
   font-size: 0.82rem;
-  font-family: 'JetBrains Mono', 'Fira Code', ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-family: var(--font-mono);
 }
 
-// A run of superseded steps folds behind one chevron: a caret-gutter + content
-// grid. Caret top-aligned to the first content line in BOTH states so expanding
-// never inserts an empty caret-only row.
-$act-group-line: calc(0.82rem * 1.4); // first-line box for both preview & summaries
-
+// A run of superseded steps folds behind the same trace-pill the footer uses:
+// the pill sits on its own line (sized to its own content, never stretched) and
+// the expanded step list stacks directly beneath it.
 .act-group {
   align-self: flex-start;
   max-width: 90%;
-  display: grid;
-  grid-template-columns: 14px 1fr;
-  column-gap: 4px;
-  align-items: start;
-}
-
-.act-group__toggle {
-  // Caret-only button sized to the first content line so it centers on it.
-  height: $act-group-line;
   display: flex;
-  align-items: center;
-  justify-content: center;
-  background: transparent;
-  border: none;
-  padding: 0;
-  cursor: pointer;
-  color: var(--text-muted);
-}
-
-.act-group__caret {
-  flex-shrink: 0;
-  transition: transform 180ms var(--ease-out);
-}
-
-.act-group--expanded .act-group__caret {
-  transform: rotate(90deg);
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
 }
 
 .act-group__content {
@@ -514,21 +648,9 @@ $act-group-line: calc(0.82rem * 1.4); // first-line box for both preview & summa
   flex-direction: column;
 }
 
-.act-group__preview {
-  height: $act-group-line;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  cursor: pointer;
-  color: var(--text-secondary);
-  font-family: 'JetBrains Mono', 'Fira Code', ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 0.82rem;
-  line-height: 1.4;
-}
-
 // Inside the folded group there is no live logo to indent under, so drop the
-// 24px summary indent — the expanded trail then lines up exactly with the
-// collapsed preview text (no rightward jump on expand).
+// 24px summary indent — the expanded trail then lines up under the pill (no
+// rightward jump on expand).
 .act-group .act-summaries {
   margin-left: 0;
 }

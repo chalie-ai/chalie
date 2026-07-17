@@ -1,46 +1,45 @@
 """Feature tests: memory recall surfaces the FULL episode gist — NO truncation
 ().
 
-Three production hot-paths hard-clipped a recalled episode gist that the model
+Two production hot-paths hard-clipped a recalled episode gist that the model
 actually reads, violating the NO-TRUNCATION contract:
 
 1. **Semantic recall** — ``services.memory_retrieval.recall_episodes`` projected
    ``gist[:200]`` into the structured recall body.
 2. **Location recall** — ``services.memory_retrieval._search_episodes_by_location``
    projected ``(gist or "")[:200]``.
-3. **Turn-0 flashback** — ``services.turn_zero_flashback._render_episode`` clipped
-   the gist to 160 chars + "…".
 
-Each test drives the REAL entry point production uses — ``MemoryAbility.run`` for
-the two recall lanes (the same call the ACT-loop dispatcher makes) and
-``MessageProcessor._seed_turn_zero`` for the flashback — seeds an episode whose
-gist is LONGER than the old cap via the production ``EpisodicService.store_episode``
-write path, and asserts the model-visible text is the WHOLE, unclipped gist.
+Each test drives the REAL entry point production uses — ``MemoryAbility.run`` (the
+same call the ACT-loop dispatcher makes, and the same path the turn-0 memory seed
+now dispatches through) — seeds an episode whose gist is LONGER than the old cap
+via the production ``EpisodicService.store_episode`` write path, and asserts the
+model-visible text is the WHOLE, unclipped gist.
 
-Zero mocks: real ``EpisodicService`` / ``DatabaseService`` against the ``db``
-fixture, the real ``ToolDispatcher`` envelope renderer, the real ``UserConfig``
-MessageProcessor + embedding model for the flashback gate. RED against HEAD before
-the truncation is removed: each gist exceeds its path's old cap, so the truncated
-content cannot equal the full gist.
+Zero mocks: real ``EpisodicService`` over the ``Database`` gateway against the
+``db`` fixture and the real ``DispatchService`` envelope renderer. RED against HEAD
+before the truncation is removed: each gist exceeds its path's old cap, so the
+truncated content cannot equal the full gist.
 """
 
 import json
 import sqlite3
+from typing import cast
 
 import pytest
 
-from abilities._dispatcher import ToolDispatcher
 from abilities.memory import MemoryAbility
+from configs.channels.user import UserConfig
+from controllers.message_processor import MessageProcessor
+from services.dispatch_service import DispatchService
 
 pytestmark = pytest.mark.unit
 
 
-#: The conftest builds the vec tables at 256 dims (tests/conftest.py); production
-#: always passes an embedding, so a faithful episode is seeded with one. The
-#: runtime recall query embeds at 768 and the vec lane no-ops on the width
-#: mismatch (logged, non-fatal) — the FTS lane carries the episode. Same
-#: precedent as tests/test_turn0_flashback_continuation_gate.py.
-_VEC_DIM = 256
+#: The vec tables are built at the schema's declared width, so a faithful
+#: episode is seeded with an embedding of that width exactly as production
+#: does. The runtime recall query embeds at the same width, so the vec lane
+#: resolves the episode for real rather than no-opping.
+_VEC_DIM = 768
 
 
 def _unit(index: int, dim: int = _VEC_DIM) -> list[float]:
@@ -59,23 +58,21 @@ def _parse_body(rendered: str) -> dict[str, object]:
 
 def _render_recall(params: dict[str, object]) -> str:
     """Run a real recall through the ability entry point and render the
-    dispatcher envelope — the exact string the model reads. Unbound mp mirrors
-    the data-graph/location/REST recall lanes that do not need a processor."""
-    result = MemoryAbility().run(params)
+    dispatcher envelope — the exact string the model reads. The ability is
+    bound to a real inert ``MessageProcessor`` under ``UserConfig``, exactly
+    as the dispatcher binds it on a user turn (``run()`` raises unbound)."""
+    result = MemoryAbility(MessageProcessor(UserConfig())).run(params)
     assert result is not None, "MemoryAbility.run() returned None"
-    return ToolDispatcher._render("memory", result, None)
+    return DispatchService(mp=cast("MessageProcessor", None))._render("memory", result, None)
 
 
 def _store_episode(gist: str, *, emb_index: int = 7, **fields: object) -> str:
     """Seed one episode via the PRODUCTION write path (EpisodicService), with a
-    256-dim embedding exactly as every production caller passes."""
-    from services.database_service import get_shared_db_service
+    768-dim embedding exactly as every production caller passes."""
     from services.episodic_service import EpisodicService
 
     data: dict[str, object] = {"gist": gist, "salience": 8, "channel": "user", **fields}
-    return EpisodicService(get_shared_db_service()).store_episode(
-        data, embedding=_unit(emb_index)
-    )
+    return EpisodicService().store_episode(data, embedding=_unit(emb_index))
 
 
 def test_semantic_recall_returns_the_full_untruncated_gist(db: sqlite3.Connection) -> None:
@@ -140,44 +137,3 @@ def test_location_recall_returns_the_full_untruncated_gist(db: sqlite3.Connectio
     assert "…" not in cast(str, match["content"]), "gist was clipped with an ellipsis"
     assert match.get("location") == "Valletta"
     assert len(cast(str, match["content"])) == len(long_gist)
-
-
-def test_turn_zero_flashback_renders_the_full_untruncated_gist(db: sqlite3.Connection) -> None:
-    """The turn-0 flashback bundle the model reads on session start carries the
-    WHOLE episode gist — not a 160-char one-liner clipped with "…"."""
-    from typing import cast
-    from configs.channels import UserConfig
-    from services.message_processor import MessageProcessor
-    from services.transcript_service import Transcript
-
-    long_gist = (
-        "Remind me about the Gozo ferry booking — the user booked it for the "
-        "family trip on Saturday morning, paid the deposit online through the "
-        "Gozo Channel Line portal, and asked to be reminded the evening before "
-        "so there is time to print the boarding passes and pack the car for "
-        "the early sailing."
-    )
-    assert len(long_gist) > 160, "gist must exceed the old 160-char one-liner cap"
-
-    _store_episode(long_gist)
-
-    # Drive the real session-start flashback exactly where it fires in the ACT
-    # loop: a fresh UserConfig MessageProcessor with an input row written.
-    mp = object.__new__(MessageProcessor)
-    MessageProcessor.__init__(mp, "remind me about the Gozo ferry booking", {})
-    mp.config = UserConfig()
-    mp.uid = Transcript.write_input_row("user", "user", "remind me about the Gozo ferry booking")
-    mp.active_tools = list(mp.config.always_available or [])
-    mp._seed_turn_zero()
-
-    injected = db.execute(
-        "SELECT result FROM tool_calls WHERE tool_name = 'memory' "
-        "ORDER BY id DESC LIMIT 1"
-    ).fetchone()
-    assert injected is not None, "the session-start seed recorded no memory call"
-    block = cast(str, cast(tuple[object, ...], injected)[0])
-
-    assert long_gist in block, (
-        f"turn-0 flashback clipped the gist — full text absent: {block!r}"
-    )
-    assert "…" not in block, "flashback clipped the gist with an ellipsis"

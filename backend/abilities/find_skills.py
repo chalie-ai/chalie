@@ -21,20 +21,22 @@ Returns a sealed :class:`abilities._result.ToolResult` (never a wire envelope):
 * a missing/blank query → ``err(code="missing-params")`` naming ``query``.
 * the index file missing OR a sqlite error while probing it →
   ``err(code="skill-index-error")``. This is the loud guardrail: a corrupt or
-  unreadable index must NEVER masquerade as "no skills found". The shared
-  ``_vec_search`` / ``_fts_search`` helpers swallow sqlite failures to ``[]``, so
-  this ability probes the index FIRST — past a successful probe, an empty result
-  means genuinely-no-matches, not a broken index.
+  unreadable index must NEVER masquerade as "no skills found". ``_bm25_name`` /
+  ``_vector_name`` swallow a search-time failure on :class:`models.skill.Skill`'s
+  ``search_by_title_bm25`` / ``search_by_vector`` to ``[]``, so this ability
+  probes the index FIRST — past a successful probe, an empty result means
+  genuinely-no-matches, not a broken index.
 """
 
 import logging
 import sqlite3
-from pathlib import Path
 from typing import ClassVar, cast
 
-from abilities._params import Keys
+from configs.enums.param_key import Keys
 from abilities._result import ToolResult
 from abilities._search import KNN_DEPTH, SearchableAbility
+from models.skill import Skill
+from models.skill_association import SkillAssociation
 from services.file_mapper_service import FileMapperService
 
 logger = logging.getLogger(__name__)
@@ -82,7 +84,6 @@ class FindSkillsAbility(SearchableAbility):
     def get_parameters(self) -> dict[str, object]:
         return self._PARAMETERS
 
-    _DB_PATH: ClassVar[Path] = FileMapperService.get_skills_db_path()
     _LOG_PREFIX = "[FIND_SKILLS]"
 
     def run(self, params: dict[str, object]) -> ToolResult:
@@ -95,8 +96,9 @@ class FindSkillsAbility(SearchableAbility):
                 valid=("query",),
             )
 
-        if not self._DB_PATH.exists():
-            logger.warning(f"{self._LOG_PREFIX} skills.sqlite not found at {self._DB_PATH}")
+        db_path = FileMapperService.get_skills_db_path()
+        if not db_path.exists():
+            logger.warning(f"{self._LOG_PREFIX} skills.sqlite not found at {db_path}")
             return ToolResult.err(
                 "The skill index is unavailable.",
                 code="skill-index-error",
@@ -120,15 +122,8 @@ class FindSkillsAbility(SearchableAbility):
 
     def _probe_index(self) -> "ToolResult | None":
         try:
-            conn = sqlite3.connect(str(self._DB_PATH))
-            try:
-                conn.execute("SELECT 1 FROM skills LIMIT 1").fetchone()
-                conn.execute(
-                    "SELECT 1 FROM skill_search_fts "
-                    "WHERE skill_search_fts MATCH 'probe' LIMIT 1"
-                ).fetchone()
-            finally:
-                conn.close()
+            Skill.all().limit(1).select("id")
+            Skill.probe_search_fts()
         except sqlite3.Error as exc:
             logger.warning(f"{self._LOG_PREFIX} index probe failed: {exc}")
             return ToolResult.err(
@@ -140,32 +135,22 @@ class FindSkillsAbility(SearchableAbility):
 
     def _title_index(self) -> dict[str, int]:
         """``{normalised title: skill_id}`` for the exact-name rung."""
-        conn = sqlite3.connect(str(self._DB_PATH))
-        try:
-            return {
-                self._norm(cast("str", title)): cast("int", skill_id)
-                for skill_id, title in conn.execute("SELECT id, title FROM skills WHERE enabled = 1")
-            }
-        finally:
-            conn.close()
+        rows = Skill.filter("enabled", 1).select("id", "title")
+        return {
+            self._norm(cast("str", row["title"])): cast("int", row["id"])
+            for row in rows
+        }
 
     def _bm25_name(self, terms: list[str]) -> list[object]:
         """Rung 2: bm25 over the skill TITLE only, gated by title-segment alignment."""
         fts = self._fts_or(terms)
         if not fts:
             return []
-        rows = self._fts_search(
-            fts,
-            """
-                SELECT s.id, s.title, bm25(skill_search_fts) AS score
-                FROM skill_search_fts
-                JOIN skill_search_entries e ON e.id = skill_search_fts.rowid
-                JOIN skills s ON s.id = e.skill_id
-                WHERE skill_search_fts MATCH ? AND e.kind = 'title' AND s.enabled = 1
-                ORDER BY score ASC
-            """,
-            (fts,),
-        )
+        try:
+            rows = Skill.search_by_title_bm25(fts)
+        except Exception as exc:
+            logger.warning(f"{self._LOG_PREFIX} FTS search failed (skipping): {exc}")
+            return []
         return self._gate(rows, terms)
 
     def _vector_name(self, terms: list[str]) -> list[object]:
@@ -174,18 +159,11 @@ class FindSkillsAbility(SearchableAbility):
         blob = self._embed(terms)
         if blob is None:
             return []
-        rows = self._vec_search(
-            blob,
-            """
-                SELECT s.id, s.title, v.distance
-                FROM skill_search_vec v
-                JOIN skill_search_entries e ON e.id = v.rowid
-                JOIN skills s ON s.id = e.skill_id
-                WHERE v.embedding MATCH ? AND k = ? AND s.enabled = 1
-                ORDER BY v.distance ASC
-            """,
-            (blob, KNN_DEPTH),
-        )
+        try:
+            rows = Skill.search_by_vector(blob, KNN_DEPTH)
+        except Exception as exc:
+            logger.warning(f"{self._LOG_PREFIX} vec search failed (skipping): {exc}")
+            return []
         return self._ceiling(rows)
 
     def _result(self, ids: list[int]) -> ToolResult:
@@ -205,18 +183,9 @@ class FindSkillsAbility(SearchableAbility):
         return {"name": title, "content": content, "rules": rules}
 
     def _fetch_detail(self, skill_id: int) -> tuple[str, str, list[dict[str, object]]]:
-        conn = sqlite3.connect(str(self._DB_PATH))
-        try:
-            row = conn.execute(
-                "SELECT title, content FROM skills WHERE id = ?", (skill_id,)
-            ).fetchone()
-            title, content = (row[0], row[1]) if row else ("", "")
+        skill = Skill.get(skill_id)
+        title, content = (skill.title, skill.content) if skill is not None else ("", "")
 
-            rules = conn.execute(
-                "SELECT pattern_name, rule FROM skill_associations WHERE skill_id = ?",
-                (skill_id,),
-            ).fetchall()
-        finally:
-            conn.close()
+        rules = SkillAssociation.filter("skill_id", skill_id).select("pattern_name", "rule")
 
-        return title, content, [{"pattern_name": r[0], "rule": r[1]} for r in rules]
+        return title, content, rules

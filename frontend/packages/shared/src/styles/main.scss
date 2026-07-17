@@ -1,2 +1,34 @@
 @use 'tokens';
 @use 'reset';
+
+/* ── Composable utilities (token-backed, theme-agnostic) ───────────────────
+   Vue templates bind classes; TS adds/removes classes; SCSS is the only home
+   of values. Colours resolve via the per-theme tokens in _tokens.scss. */
+.text-error     { color: var(--error); }
+.text-secondary { color: var(--text-secondary); }
+.text-tertiary  { color: var(--text-tertiary); }
+.text-xs        { font-size: var(--font-size-xs); }
+.clickable      { cursor: pointer; }
+
+/* Spacing utilities — only the steps actually consumed; the full scale lives
+   in the --space-* tokens. Ad-hoc nudges snap to the nearest step. */
+.mt-sm { margin-top:    var(--space-sm); }
+.mt-lg { margin-top:    var(--space-lg); }
+.mb-lg { margin-bottom: var(--space-lg); }
+
+/* Body scroll-lock — toggled as a class from script, never via .style. */
+.no-scroll { overflow: hidden; }
+
+/* ── Layout primitives ─────────────────────────────────────────────────── */
+.page-container {
+  max-width: var(--page-max-width);
+  margin-inline: auto;
+  margin-block: var(--space-lg);
+  padding-inline: var(--space-md);
+}
+
+.action-row {
+  display: flex;
+  gap: var(--space-sm);
+  margin-top: var(--space-md);
+}

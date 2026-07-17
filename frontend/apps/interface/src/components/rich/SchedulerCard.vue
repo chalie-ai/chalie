@@ -1,32 +1,23 @@
 <script setup lang="ts">
 import { computed } from 'vue';
+import { describeCron } from '@chalie/shared';
+import { DAYS, MONTHS, parseDate, formatClock } from '../../utils/time';
 
 export interface SchedulerRecord {
-  id: string | number;
+  id: number;
   message: string;
-  /**
-   * The create record emits `due_at_local` (+`due_at_utc`), NOT a bare `due_at`;
-   * legacy read `record.due_at` so the date block always rendered "—". Reading
-   * this field instead is an intentional bug-fix divergence.
-   */
-  due_at_local: string | null;
-  due_at_utc?: string | null;
-  item_type?: string | null;
-  recurrence?: string | null;
-  /** Present only on the already-existed dedup path (omits item_type/recurrence). */
-  note?: string;
-}
-
-export interface SchedulerSameDayItem {
-  id: string | number;
-  message: string;
-  due_at: string | null;
-  recurrence: string | null;
+  /** Localized (user-timezone) ISO string — the schedule's activation floor. */
+  start_at: string;
+  /** Crontab field expressions (`*` = every) — absent on cards without timing. */
+  minute?: string;
+  hour?: string;
+  day?: string;
+  month?: string;
+  weekday?: string;
 }
 
 export interface SchedulerPayload {
   record: SchedulerRecord;
-  same_day_items?: SchedulerSameDayItem[];
 }
 
 const props = defineProps<{
@@ -34,43 +25,43 @@ const props = defineProps<{
   synthesis?: string;
 }>();
 
-const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'] as const;
-const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'] as const;
-
-function parseDueAt(dueAtStr: string | null | undefined): Date | null {
-  if (!dueAtStr) return null;
-  const d = new Date(dueAtStr);
-  return Number.isNaN(d.getTime()) ? null : d;
-}
-
-function formatTime(d: Date): string {
-  return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
-}
-
 const record = computed(() => props.payload.record);
 
-// due_at_local is the field the create card actually carries (see its doc-comment).
-const dueAt = computed(() => parseDueAt(record.value.due_at_local));
+const startAt = computed(() => parseDate(record.value.start_at));
 
-const whenDay = computed(() => (dueAt.value ? DAYS[dueAt.value.getDay()] : '—'));
-const whenDate = computed(() => (dueAt.value ? String(dueAt.value.getDate()) : '—'));
-const whenMon = computed(() => (dueAt.value ? MONTHS[dueAt.value.getMonth()] : ''));
+const whenDay = computed(() => (startAt.value ? DAYS[startAt.value.getDay()] : '—'));
+const whenDate = computed(() => (startAt.value ? String(startAt.value.getDate()) : '—'));
+const whenMon = computed(() => (startAt.value ? MONTHS[startAt.value.getMonth()] : ''));
 
 const title = computed(() => record.value.message || props.synthesis || '');
 
-const metaTime = computed(() => (dueAt.value ? formatTime(dueAt.value) : null));
+const metaTime = computed(() => (startAt.value ? formatClock(startAt.value) : null));
 
-const metaText = computed((): string => {
-  const textParts: string[] = [];
-  if (record.value.recurrence) textParts.push(record.value.recurrence);
-  if (record.value.item_type === 'prompt') textParts.push('prompt');
-  if (textParts.length === 0) return '';
-  return (dueAt.value ? ' · ' : '') + textParts.join(' · ');
+/** Cadence label, only when the record actually carries cron fields. */
+const cadenceText = computed((): string | null => {
+  const r = record.value;
+  if (
+    r.minute === undefined &&
+    r.hour === undefined &&
+    r.day === undefined &&
+    r.month === undefined &&
+    r.weekday === undefined
+  ) {
+    return null;
+  }
+  return describeCron(
+    r.minute ?? '*',
+    r.hour ?? '*',
+    r.day ?? '*',
+    r.month ?? '*',
+    r.weekday ?? '*',
+  );
 });
 
-const sameDay = computed(() =>
-  Array.isArray(props.payload.same_day_items) ? props.payload.same_day_items : [],
-);
+const metaText = computed((): string => {
+  if (!cadenceText.value) return '';
+  return (metaTime.value ? ' · ' : '') + cadenceText.value;
+});
 </script>
 
 <template>
@@ -86,21 +77,6 @@ const sameDay = computed(() =>
       <div class="scheduler-card__meta">
         <b v-if="metaTime">{{ metaTime }}</b>
         <template v-if="metaText">{{ metaText }}</template>
-      </div>
-    </div>
-
-    <div v-if="sameDay.length > 0" class="scheduler-card__same-day">
-      <div class="scheduler-card__same-day-label">Also on this day · {{ sameDay.length }}</div>
-      <div
-        v-for="item in sameDay"
-        :key="item.id"
-        class="scheduler-card__same-day-item"
-      >
-        <span class="scheduler-card__same-day-text">{{ item.message || '' }}</span>
-        <span
-          v-if="parseDueAt(item.due_at)"
-          class="scheduler-card__same-day-time"
-        >{{ formatTime(parseDueAt(item.due_at)!) }}</span>
       </div>
     </div>
   </div>
@@ -171,52 +147,5 @@ const sameDay = computed(() =>
     color: var(--text-secondary);
     font-weight: 500;
   }
-}
-
-.scheduler-card__same-day {
-  grid-column: 1 / -1;
-  margin-top: 14px;
-  padding-top: 12px;
-  border-top: 1px solid color-mix(in oklab, var(--border) 60%, transparent);
-}
-
-.scheduler-card__same-day-label {
-  font-family: var(--font-mono, 'JetBrains Mono', ui-monospace, monospace);
-  font-size: 0.62rem;
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
-  color: var(--text-tertiary);
-  margin-bottom: 8px;
-}
-
-.scheduler-card__same-day-item {
-  display: flex;
-  justify-content: space-between;
-  align-items: baseline;
-  gap: 12px;
-  padding: 5px 0;
-  font-size: 0.88rem;
-  color: var(--text-secondary);
-  border-bottom: 1px solid color-mix(in oklab, var(--border) 35%, transparent);
-
-  &:last-child {
-    border-bottom: none;
-  }
-}
-
-.scheduler-card__same-day-text {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.scheduler-card__same-day-time {
-  font-family: var(--font-mono, 'JetBrains Mono', ui-monospace, monospace);
-  font-size: 0.72rem;
-  color: var(--text-tertiary);
-  letter-spacing: 0.04em;
-  flex-shrink: 0;
 }
 </style>

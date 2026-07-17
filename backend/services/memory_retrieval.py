@@ -6,8 +6,7 @@ handlers here. This module owns everything non-ability — the
 store/recall/reflect/forget handlers, the episode recall engine, the
 data-graph search, the reflection layer expansion, response formatting,
 and recall telemetry — so the same engine is reachable from non-ability
-callers (e.g. the ``/api/updates/memory`` REST endpoint) without
-importing an ability.
+callers without importing an ability.
 
 Every handler returns an ``abilities._result.ToolResult`` — never a
 string. ``recall`` returns a STRUCTURED body
@@ -30,25 +29,30 @@ scope.
 
 Two recall callers stay distinct only in their side-effects:
 ``caller='seed'`` is the silent turn-0 auto-seed (no fallback hint, no
-fan-out, no user-curated moments lane). ``caller='llm_recall'`` is the
-explicit recall — appends the fallback hint naming ``document`` and
-``schedule`` tools, and adds the labeled moments lane (``kind='moment'``)
-so pinned bookmarks surface alongside facts/episodes.
+fan-out). ``caller='llm_recall'`` is the explicit recall — appends the
+fallback hint naming ``document`` and ``schedule`` tools.
 """
 
 import hashlib
 import json
 import logging
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Literal, cast, overload
 
 from abilities._result import ToolResult
+from models.episode import Episode
+from models.memory_recall_log import MemoryRecallLog
 
 if TYPE_CHECKING:
-    from services.database_service import DatabaseService
-    from services.message_processor import MessageProcessor
+    from controllers.message_processor import MessageProcessor
 
 logger = logging.getLogger(__name__)
 LOG_PREFIX = "[MEMORY]"
+
+# Recall span — the kinds fused into cross-kind data-graph recall. Mirrors
+# services.memory_recall_service._VERTICALS. ``behavioral_pattern`` is absent by
+# design: patterns are surfaced deterministically (PromptService.patterns/
+# top_patterns), never semantically, so they are not a recall lane.
+_DG_RECALL_KINDS = ["user_specific", "system", "misc", "place", "discovery"]
 
 
 # ── Store ────────────────────────────────────────────────────────────
@@ -63,7 +67,7 @@ def handle_store(channel: str, params: dict[str, object]) -> ToolResult:
     # a discovery memory. Routing by channel keeps a weak model from misfiling it.
     from services.source_profiles import CHANNEL_DISCOVERY
     if channel == CHANNEL_DISCOVERY:
-        from services.data_graph_service import KIND_DISCOVERY
+        from contracts.constants.data_graph import KIND_DISCOVERY
         kind = KIND_DISCOVERY
 
     if not key:
@@ -81,19 +85,46 @@ def handle_store(channel: str, params: dict[str, object]) -> ToolResult:
             hint="pass the atomic 'value' to store under the key.",
         )
 
-    from services.data_graph_service import get_data_graph_service
-
-    dgs = get_data_graph_service()
-    result = dgs.store(kind=kind, key=key, value=str(value), source=f"skill:memory:store:{channel}")
-
-    if result is None:
+    # Validate the kind ourselves now (the deleted thin service used to).
+    from contracts.constants.data_graph import VALID_KINDS
+    if kind not in VALID_KINDS:
         return ToolResult.err(
             f"Could not store '{key}': '{kind}' is not a valid memory kind.",
             code="invalid-kind",
             action="store",
             key=key,
-            valid=("user_specific", "system", "misc"),
+            valid=tuple(sorted(VALID_KINDS)),
         )
+
+    source = f"skill:memory:store:{channel}"
+    result: dict[str, object]
+    if kind == "user_specific":
+        from services.fact_service import FactService
+        result = FactService().store(key, str(value), source=source)  # full envelope
+    elif kind == "system":
+        from services.system_service import SystemService
+        result = SystemService().store(key, str(value), source=source)  # full envelope
+    elif kind == "discovery":
+        from services.discovery_service import DiscoveryService
+        result = DiscoveryService().store(key, str(value), source=source)  # full envelope
+    elif kind == "misc":
+        from services.misc_service import MiscService
+        result = MiscService().store(key, str(value), source=source)  # full envelope
+    elif kind == "place":
+        from services.place_service import PlaceService
+        env = PlaceService().store(key, str(value), source=source)  # {status, old_value, row, …}
+        row = env.get("row")
+        result = {
+            "status": env["status"], "provided_key": key, "canonical_key": key,
+            "value": str(value), "old_value": env.get("old_value"),
+            "date": getattr(row, "last_confirmed_at", None),
+        }
+    elif kind == "contact":
+        from services.contact_service import ContactService
+        ContactService().store(key, str(value), source=source)  # returns ContactRow, no envelope
+        result = {"status": "created", "provided_key": key, "canonical_key": key, "value": str(value)}
+    else:  # unreachable — the VALID_KINDS gate above rejects any other kind
+        raise RuntimeError(f"handle_store: no vertical wired for kind {kind!r}")
 
     body = _format_store_response(result)
     return ToolResult.ok(body, action="store", key=key)
@@ -112,9 +143,6 @@ def _format_store_response(result: dict[str, object]) -> str:
         key_display = f"'{canonical}'"
 
     if status == "created":
-        rule = result.get("rule")
-        if rule == "coexist":
-            return f"{key_display} saved as ['{value}']."
         return f"{key_display} saved as '{value}'."
 
     if status == "reinforced":
@@ -139,14 +167,9 @@ def _format_store_response(result: dict[str, object]) -> str:
     if status == "lut_miss_created":
         return f"'{provided}' saved as '{value}'."
 
-    if status == "lut_miss_reinforced":
-        return f"'{provided}' already set to '{value}'. Memory reinforced."
-
-    if status == "lut_miss_appended":
-        all_vals = cast("list[object]", result.get("all_values") or [])
-        vals_str = ", ".join(f"'{v}'" for v in all_vals)
-        return f"'{provided}' updated. Values now: [{vals_str}]."
-
+    # A bare store for the other data_graph kinds yields no status and falls
+    # through to this plain confirmation. The `lut_miss_reinforced`/
+    # `lut_miss_appended` statuses were never emitted and stay unhandled by design.
     return f"'{provided}' stored."
 
 
@@ -166,18 +189,21 @@ def handle_forget(params: dict[str, object]) -> ToolResult:
             hint="pass the canonical 'key' of the fact to forget.",
         )
 
-    from services.data_graph_service import get_data_graph_service
-
-    dgs = get_data_graph_service()
-    result = dgs.forget(kind=kind, key=key, value=value)
-
-    if result is None:
+    if kind == "user_specific":
+        from services.fact_service import FactService
+        result = FactService().forget(key, value)
+    elif kind == "system":
+        from services.system_service import SystemService
+        result = SystemService().forget(key, value)
+    else:
+        # Every other kind's forget has no model method yet; each vertical
+        # restores it as it lands. A loud, stable error beats a crash.
         return ToolResult.err(
-            f"Could not forget '{key}': '{kind}' is not a valid memory kind.",
-            code="invalid-kind",
+            f"Forget for '{kind}' memories isn't available yet.",
+            code="kind-not-migrated",
             action="forget",
             key=key,
-            valid=("user_specific", "system", "misc"),
+            valid=("user_specific", "system"),
         )
 
     body = _format_forget_response(result)
@@ -189,7 +215,6 @@ def _format_forget_response(result: dict[str, object]) -> str:
     canonical = result.get("canonical_key", "")
     provided = result.get("provided_key", "")
     value = result.get("value")
-    date = result.get("date")
 
     if canonical and provided and canonical != provided:
         key_display = f"'{canonical}' (canonical of '{provided}')"
@@ -197,20 +222,11 @@ def _format_forget_response(result: dict[str, object]) -> str:
         key_display = f"'{canonical or provided}'"
 
     if status == "forgotten":
-        rule = result.get("rule")
-        if rule == "coexist":
-            remaining = cast("list[object]", result.get("remaining_values") or [])
-            vals_str = ", ".join(f"'{v}'" for v in remaining)
-            return f"'{value}' removed from {key_display}. Remaining: [{vals_str}]."
+        # Forget-by-exact-key closes N rows with no single set-date, so render
+        # only what we have: the removed value when one was named, else a bare
+        # confirmation. The dated "was X, set …" form returns with E1b's LUT.
         old = result.get("old_value") or value
-        return f"{key_display} forgotten (was '{old}', set {date})."
-
-    if status == "forgotten_all":
-        n = result.get("versions_removed", 0)
-        return f"{key_display} forgotten. All {n} versions removed."
-
-    if status == "forgotten_empty":
-        return f"'{value}' removed from {key_display}. No values remain — key fully forgotten."
+        return f"{key_display} forgotten (was '{old}')." if old else f"{key_display} forgotten."
 
     if status == "value_not_found":
         remaining = cast("list[object]", result.get("remaining_values") or [])
@@ -220,9 +236,8 @@ def _format_forget_response(result: dict[str, object]) -> str:
     if status == "not_found":
         return f"No memory stored under {key_display}. Nothing to forget."
 
-    if status == "error":
-        return f"{LOG_PREFIX} {result.get('message', 'Unknown error')}"
-
+    # coexist (multi-value remaining), forgotten_all/empty and the error status
+    # land in E1b with the LUT/immutable layer; this slice cannot emit them.
     return f"{key_display} forget operation completed."
 
 
@@ -248,16 +263,6 @@ _BACKEND_ERROR_HINT = (
     "failure, NOT a confirmation that nothing is stored. Do not tell the user "
     "you have no record; say you could not reach memory and try again later."
 )
-
-# Label stamped on the user-curated moments lane in an explicit recall, so the
-# model (and the transcript back-reference) can tell a pinned bookmark apart from
-# a generic data_graph fact. Moments are surfaced ONLY on explicit recall, never
-# in the silent turn-0 auto-seed.
-_MOMENT_KIND = "moment"
-# A pinned moment is a deliberate, high-signal user bookmark, so its lane rows
-# carry a "high" relevance label regardless of lexical/semantic distance.
-_MOMENT_RELEVANCE = "high"
-_MOMENT_CONFIDENCE = 0.9
 
 
 def _is_backend_error(status: str) -> bool:
@@ -299,7 +304,7 @@ def handle_recall(mp: "MessageProcessor | None", channel: str, params: dict[str,
         loc_ids = {h["id"] for h in loc_hits}
         loc_by_id = {h["id"]: h for h in loc_hits}
 
-        sem_hits, sem_status = _search_episodes(mp, query, limit * 3, caller=caller)
+        sem_hits, sem_status = recall_episodes(mp, query, caller=caller, limit=limit * 3)
         sem_ids = {h["id"] for h in sem_hits}
         sem_by_id = {h["id"]: h for h in sem_hits}
 
@@ -315,14 +320,6 @@ def handle_recall(mp: "MessageProcessor | None", channel: str, params: dict[str,
         results.extend(dg_hits)
         statuses.extend([loc_status, sem_status, dg_status])
 
-        # The user-curated moments lane is explicit-recall only — never the
-        # silent turn-0 seed (caller='seed'), so pinned bookmarks stay out of the
-        # auto-flashback.
-        if caller == "llm_recall":
-            mom_hits, mom_status = _search_moments(query, limit)
-            results.extend(mom_hits)
-            statuses.append(mom_status)
-
     elif location:
         hits, loc_status = _search_episodes_by_location(location, limit)
         results.extend(hits)
@@ -332,16 +329,9 @@ def handle_recall(mp: "MessageProcessor | None", channel: str, params: dict[str,
         dg_hits, dg_status = _search_data_graph(query, limit)
         results.extend(dg_hits)
 
-        ep_hits, sem_status = _search_episodes(mp, query, limit, caller=caller)
+        ep_hits, sem_status = recall_episodes(mp, query, caller=caller, limit=limit)
         results.extend(ep_hits)
         statuses.extend([dg_status, sem_status])
-
-        # Explicit-recall-only moments lane (see the AND-gate branch above): the
-        # turn-0 auto-seed never surfaces pinned bookmarks.
-        if caller == "llm_recall":
-            mom_hits, mom_status = _search_moments(query, limit)
-            results.extend(mom_hits)
-            statuses.append(mom_status)
 
     errored = [s for s in statuses if _is_backend_error(s)]
     # All lanes failed → the store is down. Surface a loud, stable error so the
@@ -420,13 +410,10 @@ def handle_reflect(mp: "MessageProcessor | None", params: dict[str, object]) -> 
     return ToolResult.ok(body, action="reflect", query=query)
 
 
-def _expand_episode_layers(episode: dict[str, object]) -> list[dict[str, object]]:
-    from services.database_service import get_shared_db_service
-
+def _expand_episode_layers(episode: Episode) -> list[dict[str, object]]:
     try:
-        db = get_shared_db_service()
         results: list[dict[str, object]] = []
-        _expand_recursive(db, episode, results, depth=0, max_depth=3)
+        _expand_recursive(episode, results, depth=0, max_depth=3)
         return results
     except Exception as exc:
         logger.warning(f"{LOG_PREFIX} Reflect layer expansion failed: {exc}")
@@ -434,27 +421,27 @@ def _expand_episode_layers(episode: dict[str, object]) -> list[dict[str, object]
 
 
 def _expand_recursive(
-    db: "DatabaseService", episode: dict[str, object], results: list[dict[str, object]], depth: int, max_depth: int
+    episode: Episode, results: list[dict[str, object]], depth: int, max_depth: int
 ) -> None:
     if depth >= max_depth:
         return
 
-    consolidated_from = _parse_json_list(episode.get("consolidated_from"))
-    transcript_ids = _parse_json_list(episode.get("transcript_ids"))
+    consolidated_from = _parse_json_list(episode.consolidated_from)
+    transcript_ids = _parse_json_list(episode.transcript_ids)
 
     if transcript_ids and not consolidated_from:
         results.extend(_fetch_transcript_entries(transcript_ids))
         return
 
     if consolidated_from:
-        children = _fetch_episodes_by_ids(db, consolidated_from)
+        children = _fetch_episodes_by_ids(consolidated_from)
         for child in children:
             results.append({
                 "type": "episode",
-                "content": child.get("gist", ""),
-                "salience": child.get("salience", 0),
+                "content": child.gist,
+                "salience": child.salience,
             })
-            _expand_recursive(db, child, results, depth + 1, max_depth)
+            _expand_recursive(child, results, depth + 1, max_depth)
 
 
 def _parse_json_list(raw: object) -> list[object]:
@@ -469,26 +456,18 @@ def _parse_json_list(raw: object) -> list[object]:
         return []
 
 
-def _fetch_episodes_by_ids(db_service: "DatabaseService", episode_ids: list[object]) -> list[dict[str, object]]:
+def _fetch_episodes_by_ids(episode_ids: list[object]) -> list[Episode]:
     if not episode_ids:
         return []
     try:
-        with db_service.connection() as conn:
-            placeholders = ",".join("?" for _ in episode_ids)
-            cursor = conn.execute(
-                f"SELECT id, gist, salience, transcript_ids, consolidated_from "
-                f"FROM episodes WHERE id IN ({placeholders}) AND deleted_at IS NULL "
-                f"ORDER BY salience DESC",
-                list(episode_ids),
-            )
-            return [dict(r) for r in cursor.fetchall()]
+        return Episode.by_ids([str(i) for i in episode_ids])
     except Exception as exc:
         logger.warning(f"{LOG_PREFIX} Episode fetch by IDs failed: {exc}")
         return []
 
 
 def _fetch_transcript_entries(transcript_ids: list[object]) -> list[dict[str, object]]:
-    from services.transcript_service import Transcript
+    from models.transcript import Transcript
     if not transcript_ids:
         return []
     try:
@@ -503,7 +482,7 @@ def _fetch_transcript_entries(transcript_ids: list[object]) -> list[dict[str, ob
 
 def _format_reflect(
     query: str,
-    top_episode: dict[str, object] | None,
+    top_episode: Episode | None,
     supporting: list[dict[str, object]],
     dg_hits: list[dict[str, object]],
 ) -> str:
@@ -512,7 +491,7 @@ def _format_reflect(
     lines.append("## Main Memory")
     if top_episode:
         lines.append(f'**The most relevant memory to "{query}"**')
-        lines.append(cast("str", top_episode.get("gist", "")))
+        lines.append(top_episode.gist)
     else:
         lines.append(f'No episode memories found for "{query}"')
 
@@ -550,55 +529,19 @@ def _relevance_label(score: float) -> str:
     return "low"
 
 
-def _render_behavioral_pattern(raw_value: str) -> str:
-    """Parse a behavioral_pattern JSON value into a compact human-readable line."""
-    try:
-        c = json.loads(raw_value) if isinstance(raw_value, str) else raw_value
-        name = c.get("name", "unknown")
-        freq = c.get("frequency", "?")
-        anchor = c.get("time_anchor") or ""
-        summary = c.get("summary", "")
-        confidence = c.get("confidence", 0)
-        anchor_part = f" @ {anchor}" if anchor else ""
-        return f"{name} ({freq}{anchor_part}): {summary} [confidence={confidence}]"
-    except (json.JSONDecodeError, TypeError, AttributeError):
-        return str(raw_value) if raw_value is not None else ""
-
-
 def _search_data_graph(query: str, limit: int) -> tuple[list[dict[str, object]], str]:
     try:
-        from services.data_graph_service import (
-            get_data_graph_service,
-            KIND_BEHAVIORAL_PATTERN,
-            KIND_PLACE,
-            KIND_USER_SPECIFIC,
-            KIND_SYSTEM,
-            KIND_MISC,
-            KIND_DISCOVERY,
-        )
+        from services.memory_recall_service import recall
 
-        # Moments are deliberately absent here: they live in the dedicated
-        # ``moments`` table (services/moments_service.py), surfaced as their own
-        # labeled explicit-recall lane via ``_search_moments`` — not as part of
-        # generic data_graph recall.
-        dgs = get_data_graph_service()
-        rows = dgs.recall(
-            query=query,
-            kinds=[KIND_USER_SPECIFIC, KIND_SYSTEM, KIND_MISC,
-                   KIND_BEHAVIORAL_PATTERN, KIND_PLACE, KIND_DISCOVERY],
-            limit=limit,
-        )
-
+        rows = recall(query, kinds=_DG_RECALL_KINDS, limit=limit)
         if not rows:
             return [], "0 matches"
 
-        hits = []
+        hits: list[dict[str, object]] = []
         for row in rows:
-            cos = cast("float", row.get("cos_score", 0.0))
             kind = cast("str", row.get("kind", ""))
-            text = cast("str", row.get("value", ""))
-            if kind == KIND_BEHAVIORAL_PATTERN:
-                text = _render_behavioral_pattern(text)
+            text = cast("str", row.get("value", "") or "")
+            cos = cast("float", row.get("cos_score") or 0.0)
             hits.append({
                 "id": row.get("key", ""),
                 "kind": kind,
@@ -607,41 +550,9 @@ def _search_data_graph(query: str, limit: int) -> tuple[list[dict[str, object]],
                 "confidence": cos,
                 "created_at": None,
             })
-
         return hits, f"{len(hits)} matches"
-
     except Exception as e:
         logger.warning(f"{LOG_PREFIX} Data graph search failed: {e}")
-        return [], f"error: {e}"
-
-
-def _search_moments(query: str, limit: int) -> tuple[list[dict[str, object]], str]:
-    """Search the user-curated moments lane (FTS + vec) for an explicit recall.
-
-    Moments live in the dedicated ``moments`` table, outside data_graph, so they
-    are a distinct labeled lane: every hit carries ``kind="moment"`` so the model
-    can tell a pinned bookmark apart from a generic fact. The status string is the
-    same ``N matches`` / ``error: …`` discriminator the other lanes use, so a dead
-    moments backend degrades the recall rather than masquerading as "0 results".
-    """
-    try:
-        from services.moments_service import get_moments_service
-
-        rows = cast("list[dict[str, object]]", get_moments_service().search(query, limit=limit))
-        hits = [
-            {
-                "id": f"moment_{row.get('transcript_id')}",
-                "kind": _MOMENT_KIND,
-                "text": row.get("content", ""),
-                "relevance": _MOMENT_RELEVANCE,
-                "confidence": _MOMENT_CONFIDENCE,
-                "created_at": row.get("created_at"),
-            }
-            for row in rows
-        ]
-        return hits, f"{len(hits)} matches"
-    except Exception as e:
-        logger.warning(f"{LOG_PREFIX} Moments search failed: {e}")
         return [], f"error: {e}"
 
 
@@ -658,7 +569,6 @@ def _embedding_hash(embedding: list[float]) -> str:
 
 
 def _write_recall_telemetry(
-    db_service: "DatabaseService",
     *,
     turn_uid: str,
     transcript_id: int | None,
@@ -676,29 +586,18 @@ def _write_recall_telemetry(
     count, and the top vector distances.
     """
     try:
-        with db_service.connection() as conn:
-            conn.execute(
-                """
-                INSERT INTO memory_recall_log (
-                    turn_uid, transcript_id, channel, caller, query,
-                    query_embedding_hash, episode_count, floor_cut_count,
-                    final_rrf_count, top_distances
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    turn_uid,
-                    transcript_id,
-                    channel,
-                    caller,
-                    query,
-                    embedding_hash,
-                    telemetry.get("episode_count", 0),
-                    telemetry.get("floor_cut_count", 0),
-                    telemetry.get("final_rrf_count", 0),
-                    json.dumps(telemetry.get("top_distances", [])),
-                ),
-            )
-            conn.commit()
+        MemoryRecallLog(
+            turn_uid=turn_uid,
+            transcript_id=transcript_id,
+            channel=channel,
+            caller=caller,
+            query=query,
+            query_embedding_hash=embedding_hash,
+            episode_count=telemetry.get("episode_count", 0),
+            floor_cut_count=telemetry.get("floor_cut_count", 0),
+            final_rrf_count=telemetry.get("final_rrf_count", 0),
+            top_distances=json.dumps(telemetry.get("top_distances", [])),
+        ).save()
     except Exception as e:
         logger.warning(f"{LOG_PREFIX} Failed to write memory_recall_log row: {e}")
 
@@ -721,6 +620,28 @@ def _turn_context(proc: object) -> tuple[str, object, str | None]:
     return turn_uid, transcript_id, cast("str | None", _channel)
 
 
+@overload
+def recall_episodes(
+    mp: "MessageProcessor | None",
+    query: str,
+    *,
+    caller: str = ...,
+    limit: int = ...,
+    return_raw: Literal[False] = ...,
+) -> tuple[list[dict[str, object]], str]: ...
+
+
+@overload
+def recall_episodes(
+    mp: "MessageProcessor | None",
+    query: str,
+    *,
+    caller: str = ...,
+    limit: int = ...,
+    return_raw: Literal[True],
+) -> tuple[list[Episode], str]: ...
+
+
 def recall_episodes(
     mp: "MessageProcessor | None",
     query: str,
@@ -728,12 +649,12 @@ def recall_episodes(
     caller: str = "llm_recall",
     limit: int = 10,
     return_raw: bool = False,
-) -> tuple[list[dict[str, object]], str]:
+) -> tuple[list[dict[str, object]] | list[Episode], str]:
     """Public entry point for episode recall.
 
     Used by both the `memory` skill's recall action (``caller='llm_recall'``)
     and the pre-turn seed path (``caller='seed'``). Ranking and the relative
-    score floor live in ``episodic_retrieval_service.retrieve``; this function
+    score floor live in ``EpisodicService.retrieve``; this function
     only embeds the query, routes it, records telemetry, and projects results.
 
     Episode recall is cross-channel by design (, Decision 1): an episode
@@ -744,23 +665,21 @@ def recall_episodes(
     is still recorded in ``memory_recall_log`` for provenance via ``_turn_context``.
     """
     try:
-        from services import episodic_retrieval_service
-        from services.database_service import get_shared_db_service
         from services.embedding_service import get_embedding_service
+        from services.episodic_service import EpisodicService
     except Exception as exc:
         logger.warning(f"{LOG_PREFIX} Episode recall imports failed: {exc}")
         return [], f"error: {exc}"
 
     try:
-        db = get_shared_db_service()
         emb_svc = get_embedding_service()
 
         q_embedding = emb_svc.generate_embedding(query, mp=mp)
         turn_uid, transcript_id, provenance_channel = _turn_context(mp)
 
         episodes, telemetry = cast(
-            "tuple[list[dict[str, object]], dict[str, object]]",
-            episodic_retrieval_service.retrieve(
+            "tuple[list[Episode], dict[str, object]]",
+            EpisodicService().retrieve(
                 query_text=query,
                 query_embedding=q_embedding,
                 channel=None,
@@ -770,7 +689,6 @@ def recall_episodes(
         )
 
         _write_recall_telemetry(
-            db,
             turn_uid=turn_uid,
             transcript_id=cast("int | None", transcript_id),
             channel=provenance_channel,
@@ -781,7 +699,7 @@ def recall_episodes(
         )
 
         if not episodes:
-            candidates = _count_episode_candidates(db)
+            candidates = _count_episode_candidates()
             status = f"0 matches ({candidates} candidates evaluated)"
             return [], status
 
@@ -790,19 +708,19 @@ def recall_episodes(
 
         hits = []
         for ep in episodes[:limit]:
-            gist = ep.get("gist", "")
-            conf = min(1.0, cast("float", ep.get("composite_score", 0)) / 100.0)
+            gist = ep.gist
+            conf = min(1.0, ep.composite_score / 100.0)
             hits.append({
-                "id": str(ep.get("id", "")),
+                "id": str(ep.id),
                 # Full gist verbatim — NO truncation (). The recall block
                 # is bounded by the result limit + the request-level cap, not by
                 # clipping the text the model reads mid-sentence.
                 "text": gist,
                 "relevance": _relevance_label(conf),
                 "confidence": conf,
-                "location": ep.get("location_name"),
+                "location": ep.location_name,
                 "kind": "episode",
-                "created_at": ep.get("created_at"),
+                "created_at": ep.created_at,
             })
 
         return hits, f"{len(hits)} matches"
@@ -812,18 +730,7 @@ def recall_episodes(
         return [], f"error: {e}"
 
 
-def _search_episodes(
-    mp: "MessageProcessor | None", query: str, limit: int, caller: str = "llm_recall"
-) -> tuple[list[dict[str, object]], str]:
-    return recall_episodes(
-        mp,
-        query=query,
-        caller=caller,
-        limit=limit,
-    )
-
-
-def _count_episode_candidates(db_service: "DatabaseService") -> int:
+def _count_episode_candidates() -> int:
     """Count recall-eligible episodes across every channel.
 
     Episode recall is cross-channel (), so the "0 matches (N candidates
@@ -831,15 +738,7 @@ def _count_episode_candidates(db_service: "DatabaseService") -> int:
     slice — to honestly report how many candidates the empty recall searched.
     """
     try:
-        with db_service.connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute(
-                "SELECT COUNT(*) FROM episodes WHERE deleted_at IS NULL",
-            )
-            row = cursor.fetchone()
-            count = cast("int", row[0]) if row else 0
-            cursor.close()
-        return count
+        return Episode.live().count()
     except Exception:
         return 0
 
@@ -852,7 +751,7 @@ def _recall_payload(results: list[dict[str, object]]) -> list[dict[str, object]]
     episode hit carries one). ``score`` is the relevance label (high/medium/low);
     the raw confidence stays internal. The structured shape replaces the old
     ``[id:X,relevance:Y] text`` prose: it is machine-parseable for the model AND
-    is what ``Transcript._fetch_referenced_episodes`` keys its episode
+    is what ``EpisodicService._fetch_referenced_episodes`` keys its episode
     back-reference on (the ``id`` field), so the format is load-bearing.
     """
     rows: list[dict[str, object]] = []
@@ -886,15 +785,13 @@ def _search_episodes_by_location(
     kind='place' to pick up alternate location_name strings stored at save time.
     """
     try:
-        from services.data_graph_service import KIND_PLACE, get_data_graph_service
-        from services.database_service import get_shared_db_service
+        from models.place import PlaceRow
 
         # Build the list of strings to LIKE-match against location_name.
         # Start with the raw input and add any resolved name from saved places.
         location_names = [location]
         try:
-            dgs = get_data_graph_service()
-            places = cast("list[dict[str, object]]", [p for p in dgs.fetch(kinds=[KIND_PLACE]) if p is not None])
+            places = [r.to_dict() for r in PlaceRow.live().get()]
             for place in places:
                 raw_value = cast("str | None", place.get("value") or "{}")
                 val = json.loads(raw_value) if isinstance(raw_value, str) else raw_value
@@ -905,36 +802,22 @@ def _search_episodes_by_location(
         except Exception as _resolve_exc:
             logger.debug("%s Place label resolution failed: %s", LOG_PREFIX, _resolve_exc)
 
-        db = get_shared_db_service()
-        like_clauses = " OR ".join(["e.location_name LIKE ?"] * len(location_names))
-        like_params = [f"%{name}%" for name in location_names]
+        episodes = Episode.located_at(location_names, limit)
 
-        with db.connection() as conn:
-            sql = (
-                "SELECT e.id, e.gist, e.location_name, e.created_at "
-                "FROM episodes e "
-                f"WHERE e.deleted_at IS NULL AND ({like_clauses}) "
-                "AND e.location_name IS NOT NULL "
-                "ORDER BY e.created_at DESC LIMIT ?"
-            )
-            db_params = like_params + [limit]
-            rows = conn.execute(sql, db_params).fetchall()
-
-        if not rows:
+        if not episodes:
             return [], "0 matches"
 
         hits = []
-        for row in rows:
-            ep_id, gist, loc_name, created_at = row
+        for ep in episodes:
             hits.append({
-                "id": str(ep_id),
+                "id": str(ep.id),
                 # Full gist verbatim — NO truncation ().
-                "text": gist or "",
+                "text": ep.gist or "",
                 "relevance": _LOCATION_SEARCH_RELEVANCE,
                 "confidence": _LOCATION_SEARCH_CONFIDENCE,
-                "location": loc_name,
+                "location": ep.location_name,
                 "kind": "episode",
-                "created_at": created_at,
+                "created_at": ep.created_at,
             })
 
         return hits, f"{len(hits)} matches"

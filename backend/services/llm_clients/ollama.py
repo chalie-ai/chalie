@@ -26,14 +26,19 @@ from uuid import uuid4
 
 import requests
 
-from services.llm_clients.base import ProviderClient
-from services.provider_api import (
-    ProviderApiRequest,
-    ProviderApiResponse,
+from configs.enums.thinking_level import ThinkingLevel
+from contracts.provider_client import ProviderClient
+from services.llm_clients.thinking_map import OLLAMA_THINK
+from exceptions import (
+    ProviderResponseError,
+    ProviderTimeoutError,
     RateLimitError,
     ResponseOverLimitError,
-    ProviderResponseError,
-    ThinkingLevel,
+)
+from services.provider_api import (
+    PROVIDER_CALL_TIMEOUT_S,
+    ProviderApiRequest,
+    ProviderApiResponse,
 )
 
 logger = logging.getLogger(__name__)
@@ -136,7 +141,6 @@ class OllamaClient(ProviderClient):
         self.host: str = _validate_host(config.get('host'))
         self.model: str = _validate_model(config.get('model'))
         self._keep_alive: str = cast(str, config.get('keep_alive', '0'))
-        self._max_retries: int = cast(int, config.get('max_retries', 2))
         # Cached result of _model_supports_thinking(). None = not yet checked.
         self._thinking_supported: Optional[bool] = None
 
@@ -193,13 +197,15 @@ class OllamaClient(ProviderClient):
                 for t in tools
             ]
         # Quirk preserved: think flag is binary and gated on model capability,
-        # NOT on the level value. MEDIUM/HIGH/MAX enable the flag if capable.
-        if thinking_mode in (ThinkingLevel.MEDIUM, ThinkingLevel.HIGH, ThinkingLevel.MAX):
+        # NOT graduated by level. NONE sends an explicit False — Ollama enables
+        # thinking by default on capable models, so omission is not "off".
+        think = OLLAMA_THINK.get(thinking_mode)
+        if think is not None:
             if self._model_supports_thinking():
-                payload["think"] = True
+                payload["think"] = think
                 logger.info(
-                    "[THINKING] native flag passed: provider=ollama mode=%s model=%s",
-                    thinking_mode.value, self.model,
+                    "[THINKING] native flag passed: provider=ollama mode=%s model=%s think=%s",
+                    thinking_mode.value, self.model, think,
                 )
             else:
                 logger.info(
@@ -208,35 +214,15 @@ class OllamaClient(ProviderClient):
                 )
         return payload
 
-    def _handle_http_error(self, exc: requests.exceptions.HTTPError, attempt: int) -> None:
+    def _handle_http_error(self, exc: requests.exceptions.HTTPError) -> None:
         status = exc.response.status_code if exc.response is not None else None
         if status == 429:
-            retry_after = None
-            if exc.response is not None:
-                ra = exc.response.headers.get('retry-after')
-                if ra:
-                    try:
-                        retry_after = float(ra)
-                    except (ValueError, TypeError):
-                        pass
-            raise RateLimitError(str(exc), retry_after=retry_after, provider='ollama') from exc
+            raise RateLimitError(str(exc), provider='ollama') from exc
         if status == 413:
-            logger.warning("[OllamaClient] HTTP 413 — raising ResponseOverLimitError")
             raise ResponseOverLimitError(
                 f"Ollama rejected payload with HTTP 413 (model={self.model})",
                 response_code=413, provider='ollama',
             ) from exc
-        if status is not None and status >= 500:
-            if attempt < self._max_retries:
-                backoff = 1.5 * (2 ** attempt)
-                logger.warning("[OllamaClient] retrying after HTTP 5xx")
-                time.sleep(backoff)
-                return
-            logger.error("[OllamaClient] retries exhausted on HTTP 5xx")
-            raise ProviderResponseError(
-                f"Ollama HTTP {status} after retries", response_code=status, provider='ollama',
-            ) from exc
-        logger.error("[OllamaClient] HTTP 4xx error from upstream")
         raise ProviderResponseError(str(exc), response_code=status or 0, provider='ollama') from exc
 
     def send(self, dto: ProviderApiRequest) -> ProviderApiResponse:
@@ -246,34 +232,23 @@ class OllamaClient(ProviderClient):
         payload = self._build_payload(dto.system, api_messages, dto.tools, dto.thinking_mode)
 
         start = time.time()
-        for attempt in range(1 + self._max_retries):
-            try:
-                resp = requests.post(
-                    url, json=payload,
-                    headers=self._user_agent(),
-                )
-                resp.raise_for_status()
-                parsed = _parse_chat_response(resp.json(), self.model)
-                parsed.latency_ms = int((time.time() - start) * 1000)
-                return parsed
-            except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as exc:
-                if attempt < self._max_retries:
-                    backoff = 2 * (2 ** attempt)
-                    logger.warning(
-                        "[OllamaClient] Retry %d/%d after %s — backoff %ds",
-                        attempt + 1, self._max_retries, type(exc).__name__, backoff,
-                    )
-                    time.sleep(backoff)
-                else:
-                    logger.error("[OllamaClient] All %d attempts failed", 1 + self._max_retries)
-                    raise ProviderResponseError(
-                        str(exc), response_code=0, provider='ollama',
-                    ) from exc
-            except requests.exceptions.HTTPError as exc:
-                self._handle_http_error(exc, attempt)
-
-        # Unreachable — all paths above return or raise.
-        raise ProviderResponseError("Ollama send exhausted retries", provider='ollama')  # pragma: no cover
+        try:
+            resp = requests.post(
+                url, json=payload,
+                headers=self._user_agent(),
+                timeout=PROVIDER_CALL_TIMEOUT_S,
+            )
+            resp.raise_for_status()
+            parsed = _parse_chat_response(resp.json(), self.model)
+            parsed.latency_ms = int((time.time() - start) * 1000)
+            return parsed
+        except requests.exceptions.Timeout as exc:
+            raise ProviderTimeoutError(str(exc), provider='ollama') from exc
+        except requests.exceptions.ConnectionError as exc:
+            raise ProviderResponseError(str(exc), response_code=0, provider='ollama') from exc
+        except requests.exceptions.HTTPError as exc:
+            self._handle_http_error(exc)
+            raise  # pragma: no cover — _handle_http_error always raises
 
     def get_context_limit(self) -> int:
         """Query Ollama for model's context window size, cached per-instance."""

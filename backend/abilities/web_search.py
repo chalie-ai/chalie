@@ -8,14 +8,14 @@
 
 """WebSearchAbility — delegate a web-research task to a focused search agent.
 
-The foundational delegate-tool template (spec §5b / §10f).  A delegate
+The foundational delegate-tool template.  A delegate
 tool is a standalone Ability that pairs with a typed ``ProcessorConfig``
 subclass (``WebSearchConfig``, in ``configs/channels/web_search.py`` with the
 other channel configs).  ``run()`` instantiates the subclass and calls
 ``MessageProcessor.process()`` — there is no MessageProcessor subclass, no
 SUBAGENT_TYPES registry, and no make_subagent_config() factory.
 
-Properties (spec §5b "Properties of every delegate tool"):
+Properties of every delegate tool:
   - Clean context — skip_transcript / skip_input_row / suppress_history all True,
     no personality, no history, no world state.
   - Goal-driven system prompt — short, task-specific.
@@ -38,19 +38,15 @@ happens at the outer ``web_search`` tool.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, ClassVar, cast
+from typing import ClassVar, cast
 
-from abilities._ability import Ability
-from abilities._delegate import delegate_result
-from abilities._params import Keys
+from abilities._delegate import DelegateAbility, delegate_result
+from configs.enums.param_key import Keys
 from abilities._result import ToolResult
 from configs.channels.web_search import WebSearchConfig
 
-if TYPE_CHECKING:
-    from services.processor_config import ProcessorConfig
 
-
-class WebSearchAbility(Ability):
+class WebSearchAbility(DelegateAbility):
     def get_name(self) -> str:
         return "web_search"
 
@@ -98,12 +94,16 @@ class WebSearchAbility(Ability):
         return self._PARAMETERS
 
     def run(self, params: dict[str, object]) -> ToolResult:
-        from services.message_processor import MessageProcessor  # noqa: PLC0415
+        from controllers.message_processor import MessageProcessor  # noqa: PLC0415
+
+        mp = self.mp
+        if mp is None:
+            raise RuntimeError("web_search.run() dispatched without a bound MessageProcessor")
 
         result = MessageProcessor.process(
-            cast(str, self.param(params, Keys.query, required=True)),
-            WebSearchConfig(cast("ProcessorConfig", getattr(self.mp, "config", None)).policy_channel),
-        )
+            WebSearchConfig(mp.config.policy_channel),
+            raw_input=cast(str, self.param(params, Keys.query, required=True)),
+        ).result()
         return delegate_result(
             result, hint="Narrow the query or split it into smaller searches, then retry."
         )

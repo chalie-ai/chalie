@@ -10,11 +10,19 @@ frontend), so no arbitrary anchors can be injected into the rendered DOM.
 requires these tags at the WS-send boundary; only the ``id`` attribute is
 permitted — ``class``, ``style``, ``onclick``, and all other span attributes
 are stripped.
+
+``<img src>`` is gate-checked by ``_safe_img_src``: only absolute ``http:``
+and ``https:`` schemes survive — relative paths (``/api/logout``),
+protocol-relative URLs (``//evil.com/track.gif``), ``data:`` URIs, and
+``javascript:`` URIs are all dropped (src attr removed, leaving the img
+inert). The nh3 ``url_schemes`` kwarg alone would not have caught the
+scheme-less cases; ``attribute_filter`` closes that gap.
 """
 from __future__ import annotations
 
 import html as _html
 import re
+from urllib.parse import urlsplit
 
 import nh3
 
@@ -31,20 +39,23 @@ LLM_TAGS = frozenset({
     "b", "i", "u", "h1", "code", "p", "ul", "li", "span",
     "table", "thead", "tbody", "tfoot", "tr", "td", "th",
 })
-PROGRAMMATIC_TAGS = frozenset({"img", "actions", "action"})
+PROGRAMMATIC_TAGS = frozenset({"img"})
 ALLOWED_TAGS = LLM_TAGS | PROGRAMMATIC_TAGS
 
-# Programmatic-only attributes. ``<img>`` carries src/alt; ``<action>`` carries
-# the chat-button label/value plus the overlay daemon's data-* hooks.
-# ``<span>`` carries only ``id`` — the rich-media pairing key.
+# Programmatic-only attributes. ``<img>`` carries src/alt; ``<span>`` carries only
+# ``id`` — the rich-media pairing key.
 _ATTRIBUTES = {
     "img": {"src", "alt"},
-    "action": {"label", "value", "execute", "collect", "target", "open-url", "payload", "style"},
     "span": {"id"},
+    "td": {"colspan", "rowspan", "headers"},
+    "th": {"colspan", "rowspan", "scope", "headers"},
 }
 
-# Image src URLs are restricted to http(s). ``data:`` and ``javascript:`` are
-# blocked by virtue of not matching this allowlist.
+# Image src URLs are restricted to absolute http(s) only. Relative paths,
+# protocol-relative URLs, ``data:`` URIs, and ``javascript:`` URIs are all
+# dropped by ``_safe_img_src`` (nh3 ``attribute_filter``). The nh3
+# ``url_schemes`` kwarg below additionally rejects any *present* scheme that
+# isn't http/https (e.g. ``ftp:``) — the two gates together close both sides.
 _URL_SCHEMES = {"http", "https"}
 
 # Bound input length to keep sanitiser memory + time predictable on hostile
@@ -53,6 +64,24 @@ _MAX_CONTENT_LEN = 5_000_000
 
 
 # ── Public API ──────────────────────────────────────────────────────────────
+
+
+def _safe_img_src(tag: str, attr: str, value: str) -> str | None:
+    """Gate for ``<img src>``: only absolute ``http:``/``https:`` schemes survive.
+
+    Closes the scheme-less bypass that nh3's ``url_schemes`` alone leaves open.
+    nh3 rejects *present* non-allowlisted schemes (e.g. ``ftp:``), but a URL
+    with no scheme at all (relative ``/api/logout``, protocol-relative
+    ``//evil.com/track.gif``, ``data:`` URI, ``javascript:`` URI) slips through
+    the ``url_schemes`` gate — ``urlsplit().scheme`` is empty for those. This
+    helper drops the ``src`` attribute entirely for anything that isn't an
+    absolute http/https URL, leaving the ``<img>`` inert. All other tags and
+    attributes pass through unchanged (``<span>`` ``id``, etc.).
+    """
+    if tag != "img" or attr != "src":
+        return value
+    scheme = urlsplit(value).scheme.lower()
+    return value if scheme in {"http", "https"} else None
 
 
 def sanitize(html: str | None) -> str:
@@ -65,37 +94,8 @@ def sanitize(html: str | None) -> str:
         tags=set(ALLOWED_TAGS),
         attributes=_ATTRIBUTES,
         url_schemes=_URL_SCHEMES,
+        attribute_filter=_safe_img_src,  # drops scheme-less / non-http(s) img src
         link_rel=None,  # we do not allow <a> from the LLM, so no rel injection needed
-    )
-
-
-def actions_to_xml(actions: list[dict[str, object]]) -> str:
-    """Action dicts are built by the harness which bypasses the LLM, so
-    output feeds straight to ``sanitize()`` alongside any LLM body."""
-    if not actions:
-        return ""
-    parts = ["<actions>"]
-    for a in actions:
-        # Defensive: callers (or upstream JSON) may include strings/None in the
-        # list. Skip non-dict entries rather than crashing the whole render.
-        if not isinstance(a, dict):
-            continue
-        label = escape_attr(str(a.get("label", "")))
-        value = escape_attr(str(a.get("value", "")))
-        parts.append(f'<action label="{label}" value="{value}"/>')
-    parts.append("</actions>")
-    return "".join(parts)
-
-
-
-def escape_attr(value: str) -> str:
-    if not value:
-        return ""
-    return (
-        value.replace("&", "&amp;")
-        .replace("<", "&lt;")
-        .replace(">", "&gt;")
-        .replace('"', "&quot;")
     )
 
 
@@ -154,9 +154,9 @@ def markdown_to_html(text: str | None) -> str:
 
 
 def extract_plaintext(html: str) -> str:
-    """Used by the TTS / speak button. ``<actions>`` blocks are dropped via ``clean_content_tags`` because UI affordances don't belong in spoken output."""
+    """Used by the TTS / speak button. Strips all HTML tags and normalises whitespace."""
     if not html:
         return ""
     spaced = _BLOCK_BOUNDARY_RE.sub(" ", html)
-    stripped = nh3.clean(spaced, tags=set(), clean_content_tags={"actions"})
+    stripped = nh3.clean(spaced, tags=set())
     return " ".join(_html.unescape(stripped).split()).strip()

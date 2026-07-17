@@ -6,31 +6,25 @@
 #
 #     http://www.apache.org/licenses/LICENSE-2.0
 
-"""Ubiquiti-ability-specific business-logic tests migrated from the per-ability
-conformance file removed in .
+"""Ubiquiti-ability-specific business-logic tests migrated from the removed
+per-ability conformance file.
 
-Pins 's schema-honesty contract: the prose-DSL params are gone, the
+Pins the schema-honesty contract: the prose-DSL params are gone, the
 action enum exactly matches ACTION_HANDLERS, and the new action ids are
 correctly seeded in policy_defaults.json.
 """
 
 import json
-import sqlite3
 from typing import cast
 
 import pytest
 
-from configs.channels import UserConfig
 from services.file_mapper_service import FileMapperService
-from tests._tool_result_harness import MP, allow_policy, seed_transcript
 
 pytestmark = pytest.mark.unit
 
 # Read actions ship ``allow``; everything that touches the network ships ``ask``
-# on chat. Flipping the ask rows to allow lets the gate pass through to the real
-# run() so the base's not-connected path actually executes (exactly what a user
-# does when they pick "always allow"). No mock — the production policy table
-# driving the production gate.
+# on chat.
 _ASK_ACTIONS = (
     "block_client",
     "unblock_client",
@@ -54,17 +48,6 @@ _ALLOW_ACTIONS = (
     "list_port_forwards",
     "list_traffic_rules",
 )
-
-
-def _allow_ubiquiti_actions(db: sqlite3.Connection, channel: str = "chat") -> None:
-    for action in (*_ALLOW_ACTIONS, *_ASK_ACTIONS):
-        allow_policy(db, f"ubiquiti.{action}", channel=channel)
-
-
-@pytest.fixture
-def chat_mp(db: sqlite3.Connection) -> MP:
-    _allow_ubiquiti_actions(db)
-    return MP(seed_transcript(db, content="is the office AP up?"), UserConfig({}))
 
 
 # ── Schema honesty: prose-DSL is gone, enum == ACTION_HANDLERS ──────────────────

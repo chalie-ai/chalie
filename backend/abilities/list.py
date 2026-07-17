@@ -22,7 +22,7 @@ Rich-media rendering:
   dispatcher (``ToolDispatcher._render``) owns ordinal assignment + the span-tag
   instruction and injects the card ONLY when the invoking channel broadcasts to
   the user. The rich payload keeps the LEGACY frontend shape (``{id, name,
-  items:[{content, checked}]}``) the list card and ``enrich_rich_payload``
+  items:[{content, checked, id}]}``) the list card and ``enrich_rich_payload``
   depend on — distinct from the model-facing rows in the body, by design.
 """
 
@@ -31,7 +31,7 @@ import logging
 from typing import TYPE_CHECKING, ClassVar, Optional, cast
 
 from abilities._ability import Ability
-from abilities._params import Keys
+from configs.enums.param_key import Keys
 from abilities._result import ToolResult
 
 if TYPE_CHECKING:
@@ -54,13 +54,13 @@ class ListAbility(Ability):
     # handlers raise the precise missing-target error.
     ACTION_REQUIRED: ClassVar[dict[str, tuple[str, ...]]] = {
         "list_all": (),
-        "create": (Keys.name,),
+        "create": (Keys.name_,),
         "view": (),
         "add": (Keys.items,),
         "check": (Keys.items,),
         "remove": (Keys.items,),
         "clear": (),
-        "rename": (Keys.name,),
+        "rename": (Keys.name_,),
         "delete": (),
     }
 
@@ -110,7 +110,7 @@ class ListAbility(Ability):
                     "matches more than one list returns the candidates to pick from by id."
                 ),
             },
-            Keys.name: {
+            Keys.name_: {
                 "type": "string",
                 "description": "New list name; used for create and rename only.",
             },
@@ -135,31 +135,30 @@ class ListAbility(Ability):
     def run(self, params: dict[str, object]) -> ToolResult:
         action = cast(str, self.param(params, Keys.action, default="list_all"))
 
-        from services.database_service import get_shared_db_service
         from services.list_service import ListService
 
-        service = ListService(get_shared_db_service())
+        service = ListService()
         return _dispatch(self, service, action, params)
 
     @classmethod
     def enrich_rich_payload(cls, payload: dict[str, object], row: dict[str, object]) -> dict[str, object]:
-        """Re-fetch the live list so checkbox state mutated via the silent-action
-        channel is visible on conversation refresh.
+        """Re-fetch the live list so checkbox state the user toggled out-of-band
+        is visible on conversation refresh.
 
         ``tool_calls.result`` is a frozen snapshot from the LLM-call moment; the
-        FE check-action writes directly to the ``lists`` table via
-        ``ListService.check_items``. Without this hook, refresh would replay the
-        stale snapshot and visually un-tick boxes the user already ticked. Single
-        read path: both the live action handler and the refresh path go through
-        ``ListService.get_list`` (operating on the legacy FE payload shape).
+        FE list card writes each toggle directly to the ``lists`` table via
+        ``POST /api/lists/items/<list_id>:<item_id>`` (``ListService.update_item``).
+        Without this hook, refresh would replay the stale snapshot and visually
+        un-tick boxes the user already ticked. Single read path: both the live
+        handler and the refresh path go through ``ListService.get_list``
+        (operating on the legacy FE payload shape).
         """
         list_id = payload.get("id") if isinstance(payload, dict) else None
         if not list_id:
             return payload
-        from services.database_service import get_shared_db_service
         from services.list_service import ListService
 
-        service = ListService(get_shared_db_service())
+        service = ListService()
         fresh = _fe_payload(service, cast(str, list_id))
         return fresh if fresh else payload
 
@@ -313,7 +312,7 @@ def _fe_card(lst: dict[str, object]) -> dict[str, object]:
         "id": lst["id"],
         "name": lst["name"],
         "items": [
-            {"content": item["content"], "checked": bool(item["checked"])}
+            {"content": item["content"], "checked": bool(item["checked"]), "id": item["id"]}
             for item in cast(list[dict[str, object]], lst.get("items", []))
         ],
     }
@@ -381,7 +380,7 @@ def _handle_list_all(service: "_ListService") -> ToolResult:
 
 
 def _handle_create(ability: "ListAbility", service: "_ListService", params: dict[str, object]) -> ToolResult:
-    name = str(ability.param(params, Keys.name, default="")).strip()
+    name = str(ability.param(params, Keys.name_, default="")).strip()
     if not name:
         return ToolResult.err("'name' is required.", code="missing-name")
 
@@ -500,7 +499,7 @@ def _handle_rename(ability: "ListAbility", service: "_ListService", params: dict
     if isinstance(lst, ToolResult):
         return lst
 
-    new_name = str(ability.param(params, Keys.name, default="")).strip()
+    new_name = str(ability.param(params, Keys.name_, default="")).strip()
     if not new_name:
         return ToolResult.err("'name' is required.", code="missing-name")
 

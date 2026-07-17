@@ -31,9 +31,10 @@ from urllib.parse import urlparse
 import requests
 
 from abilities._ability import Ability
-from abilities._params import Keys
+from configs.enums.param_key import Keys
 from abilities._result import ToolResult
-from services.web_fetch import DOWNLOAD, DownloadTooLarge, FetchBlocked, stream_to_file
+from services.web_fetch import DOWNLOAD, stream_to_file
+from exceptions import DownloadTooLarge, FetchBlocked
 
 logger = logging.getLogger(__name__)
 
@@ -58,7 +59,11 @@ class WebDownloadAbility(Ability):
         return "web_download"
 
     def get_summary(self) -> str:
-        return "Download a file from the internet to a temporary location for later reading or processing."
+        return (
+            "Download a file from the internet to a temporary location for later "
+            "reading or processing. Use in conjunction with the `read` tool to then "
+            "get the file's contents into context."
+        )
 
     def get_examples(self) -> list[str]:
         return [
@@ -72,6 +77,13 @@ class WebDownloadAbility(Ability):
 
     def get_search_tooltip(self) -> str:
         return "File download from URL"
+
+    def get_follow_up(self, tr: ToolResult) -> str:
+        """Read the downloaded file's content straight from its path."""
+        path = tr.body.get("path") if isinstance(tr.body, dict) else None
+        if not path:
+            return ""
+        return f"File downloaded. Use the `read({path})` tool to fetch its content."
 
     _PARAMETERS: ClassVar[dict[str, object]] = {
         "type": "object",

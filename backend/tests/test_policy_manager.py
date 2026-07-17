@@ -1,24 +1,24 @@
-import contextlib
 import sqlite3
-from collections.abc import Generator, Iterator
-from typing import TYPE_CHECKING, cast
+from collections.abc import Iterator
+from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
+import services.database as _db_gateway
+from configs.enums.policy_channel import PolicyChannel
+from services.file_mapper_service import FileMapperService
 from services.policy_manager import PolicyManager
-from services.processor_config import ProcessorConfig
-
-if TYPE_CHECKING:
-    from services.database_service import DatabaseService
 
 pytestmark = pytest.mark.unit
 
-CH = ProcessorConfig.PolicyChannel
+CH = PolicyChannel
 
 
 @pytest.fixture()
 def db() -> Iterator[sqlite3.Connection]:
     conn = sqlite3.connect(":memory:")
+    conn.isolation_level = None  # autocommit — matches the Database gateway's connections
     conn.row_factory = sqlite3.Row
     conn.executescript("""
         CREATE TABLE policy (
@@ -33,21 +33,30 @@ def db() -> Iterator[sqlite3.Connection]:
             created_at TEXT NOT NULL
         );
     """)
-    yield conn
+    # PolicyManager reaches the DB through the Database gateway
+    # (Database.conn()/transaction() → FileMapperService.get_db_path()). An in-memory
+    # db is per-connection, so point the gateway at THIS exact handle — the only way
+    # the manager's writes and the test's seed/asserts share one database.
+    sentinel = Path(":memory:policy-manager-test")
+    with patch.object(FileMapperService, "get_db_path", return_value=sentinel):
+        _db_gateway._local.conns = {str(sentinel): conn}
+        _db_gateway._local.depths = {}
+        # Bind the Model connection getter — same boot step run.py runs once at
+        # startup (``Database().bind()``). Repeated per test because each Database()
+        # captures this test's patched path, so the getter must point at the current
+        # test's in-memory handle.
+        _db_gateway.Database().bind()
+        try:
+            yield conn
+        finally:
+            _db_gateway._local.conns = {}
+            _db_gateway._local.depths = {}
     conn.close()
-
-
-class _FakeDB:
-    def __init__(self, conn: sqlite3.Connection) -> None: self._conn = conn
-    def connection(self) -> contextlib.AbstractContextManager[sqlite3.Connection]:
-        @contextlib.contextmanager
-        def _ctx() -> Generator[sqlite3.Connection, None, None]: yield self._conn
-        return _ctx()
 
 
 @pytest.fixture()
 def mgr(db: sqlite3.Connection) -> PolicyManager:
-    return PolicyManager(cast("DatabaseService", _FakeDB(db)))
+    return PolicyManager()
 
 
 def _ran() -> str:
@@ -72,7 +81,7 @@ def test_allow_and_internal_run_callback(mgr: PolicyManager, db: sqlite3.Connect
 # 1b. INTERNAL tools ALWAYS bypass — every channel, no row, even over a deny row
 @pytest.mark.parametrize("channel", [CH.CHAT, CH.SUBCONSCIOUS, CH.EXTERNAL_AGENT])
 @pytest.mark.parametrize("permission", ["read", "search", "browser.open", "memory.store", "save_graph"])
-def test_internal_tools_always_bypass(mgr: PolicyManager, db: sqlite3.Connection, channel: ProcessorConfig.PolicyChannel, permission: str) -> None:
+def test_internal_tools_always_bypass(mgr: PolicyManager, db: sqlite3.Connection, channel: PolicyChannel, permission: str) -> None:
     # a deny row for the same key must be ignored — INTERNAL wins, no DB lookup
     _seed(db, channel.value, permission, "deny")
     assert mgr.authorize(channel, permission, _ran) == _ran()
@@ -100,7 +109,7 @@ def test_unknown_key_provisions_ask_then_escalates(mgr: PolicyManager, db: sqlit
 # 4. interactive CHAT 'ask': approved runs, denied blocks (gate monkeypatched, never broadcasts off-channel)
 @pytest.mark.parametrize("approved,should_run", [(True, True), (False, False)])
 def test_chat_ask_follows_user_verdict(mgr: PolicyManager, db: sqlite3.Connection, monkeypatch: pytest.MonkeyPatch, approved: bool, should_run: bool) -> None:
-    monkeypatch.setattr(PolicyManager, "_ask_user", lambda self, permission, channel, cancel_event=None: approved)
+    monkeypatch.setattr(PolicyManager, "_ask_user", lambda self, permission, channel, should_stop=None: approved)
     _seed(db, "chat", "email.send", "ask")
     out = mgr.authorize(CH.CHAT, "email.send", _ran)
     if should_run:

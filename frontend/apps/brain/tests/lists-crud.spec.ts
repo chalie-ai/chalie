@@ -1,7 +1,7 @@
-import { test, expect } from '@playwright/test';
+import { expect, test } from '@playwright/test';
 
 // A real CRUD round-trip against the live backend: create a list via the modal
-// (POST /api/lists), assert the new card renders, then delete it via the card's
+// (POST /api/lists/-1), assert the new card renders, then delete it via the card's
 // Delete button + the confirm dialog (DELETE /api/lists/:id) and assert the card
 // is gone. No mocks — the list genuinely persists and is genuinely removed, so a
 // break anywhere in the request → render → delete chain fails loudly. The test

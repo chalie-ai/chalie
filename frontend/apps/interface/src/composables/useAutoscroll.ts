@@ -3,8 +3,8 @@
  * events and position measurements use window/document. `feedRef` is used only
  * for querying <img> elements inside the spine.
  */
-import { ref, onMounted, onBeforeUnmount } from 'vue';
 import type { Ref } from 'vue';
+import { onBeforeUnmount, onMounted, ref } from 'vue';
 
 export function useAutoscroll(feedRef: Ref<HTMLElement | null>) {
   const userScrolledUp = ref(false);

@@ -1,21 +1,27 @@
 <script setup lang="ts">
-import { ref, reactive, computed } from 'vue';
-import { lists as listsApi } from '../api/lists';
+import { computed, reactive, ref } from 'vue';
 import type { List, ListItem } from '../api/lists';
+import { lists as listsApi } from '../api/lists';
 import { useToast } from '../composables/useToast';
+import { useBrainAction } from '../composables/useBrainAction';
 import { useConfirm } from '../composables/useConfirm';
 import { useBrainResource } from '../composables/useBrainResource';
 import BrainModal from '../ui/BrainModal.vue';
-import { Plus, List as ListIcon, ChevronDown, ChevronRight, X } from '@lucide/vue';
+import { ChevronDown, ChevronRight, List as ListIcon, Plus, X } from '@lucide/vue';
 import { HttpError } from '@chalie/shared';
 
 const { show: showToast } = useToast();
+const { run } = useBrainAction();
 const { confirm } = useConfirm();
 
-const { data: listsData, loading, reload: load } = useBrainResource(
-  async () => (await listsApi.list()).items ?? [],
-  { initial: [] as List[], failMsg: 'Failed to load lists' },
-);
+const {
+  data: listsData,
+  loading,
+  reload: load,
+} = useBrainResource(async () => await listsApi.list(), {
+  initial: [] as List[],
+  failMsg: 'Failed to load lists',
+});
 
 const expanded = reactive<Record<string, boolean>>({});
 
@@ -38,8 +44,7 @@ const decoratedLists = computed(() => listsData.value.map((list) => ({ list, c: 
 
 async function fetchListDetail(list: List): Promise<void> {
   try {
-    const d = await listsApi.get(list.id);
-    list.items = d.item.items ?? [];
+    list.items = await listsApi.items(list.id);
   } catch {
     showToast('Failed to load list items', 'error');
   }
@@ -52,13 +57,11 @@ function toggle(list: List): void {
 }
 
 async function toggleItem(list: List, item: ListItem, checked: boolean): Promise<void> {
-  const endpoint = checked ? 'check' : 'uncheck';
-  try {
-    await listsApi.toggleItem(list.id, endpoint, { content: item.content });
-    item.checked = checked;
-  } catch {
-    showToast('Failed to update item', 'error');
-  }
+  const { ok } = await run(() => listsApi.toggleItem(list.id, item.id, checked), {
+    failMsg: 'Failed to update item',
+    networkMsg: 'Failed to update item',
+  });
+  if (ok) item.checked = checked;
 }
 
 function onAddKey(e: KeyboardEvent, list: List): void {
@@ -72,7 +75,7 @@ function onAddKey(e: KeyboardEvent, list: List): void {
 
 async function addItem(list: List, text: string): Promise<void> {
   try {
-    await listsApi.addItems(list.id, [text]);
+    await listsApi.addItem(list.id, text);
     await fetchListDetail(list);
   } catch (e) {
     // silent on non-ok; toast only on network error
@@ -87,25 +90,26 @@ function openRename(list: List): void {
 }
 
 async function createList(): Promise<void> {
-  try {
-    await listsApi.create(newListName.value.trim());
+  const { ok } = await run(() => listsApi.create(newListName.value.trim()), {
+    success: 'List created',
+    failMsg: 'Failed to create list',
+  });
+  if (ok) {
     showNew.value = false;
-    showToast('List created', 'success');
     await load();
-  } catch (e) {
-    showToast(e instanceof HttpError ? 'Failed to create list' : 'Network error', 'error');
   }
 }
 
 async function renameList(): Promise<void> {
-  if (renameId.value == null) return;
-  try {
-    await listsApi.rename(renameId.value, renameName.value.trim());
+  const id = renameId.value;
+  if (id == null) return;
+  const { ok } = await run(() => listsApi.rename(id, renameName.value.trim()), {
+    success: 'List renamed',
+    failMsg: 'Failed to rename',
+  });
+  if (ok) {
     showRename.value = false;
-    showToast('List renamed', 'success');
     await load();
-  } catch (e) {
-    showToast(e instanceof HttpError ? 'Failed to rename' : 'Network error', 'error');
   }
 }
 
@@ -117,21 +121,24 @@ async function deleteList(list: List): Promise<void> {
     confirmClass: 'btn-danger',
   });
   if (!ok) return;
-  try {
-    await listsApi.delete(list.id);
-    showToast('List deleted', 'success');
-    await load();
-  } catch (e) {
-    showToast(e instanceof HttpError ? 'Delete failed' : 'Network error', 'error');
-  }
+  const { ok: done } = await run(() => listsApi.delete(list.id), {
+    success: 'List deleted',
+    failMsg: 'Delete failed',
+  });
+  if (done) await load();
 }
-
 </script>
 
 <template>
   <div class="panel-header">
     <h2>Lists</h2>
-    <button class="btn btn-primary" @click="showNew = true; newListName = ''">
+    <button
+      class="btn btn-primary"
+      @click="
+        showNew = true;
+        newListName = '';
+      "
+    >
       <Plus :size="14" /> New List
     </button>
   </div>
@@ -163,20 +170,16 @@ async function deleteList(list: List): Promise<void> {
       </div>
 
       <div v-if="c.total > 0" class="progress-bar">
-        <div class="progress-fill" :style="{ width: c.pct + '%' }"></div>
+        <div class="progress-fill" :style="{ '--fill': c.pct + '%' }"></div>
       </div>
 
       <div v-if="expanded[String(list.id)]" class="list-items">
-        <label
-          v-for="item in list.items ?? []"
-          :key="item.id"
-          class="list-item"
-        >
+        <label v-for="item in list.items ?? []" :key="item.id" class="list-item">
           <input
             type="checkbox"
             :checked="item.checked"
             @change="toggleItem(list, item, ($event.target as HTMLInputElement).checked)"
-          >
+          />
           <span :class="{ done: item.checked }">{{ item.content }}</span>
         </label>
         <div class="list-add-row">
@@ -186,7 +189,7 @@ async function deleteList(list: List): Promise<void> {
             placeholder="Add item…"
             maxlength="300"
             @keydown.enter="onAddKey($event, list)"
-          >
+          />
         </div>
       </div>
     </div>
@@ -209,7 +212,7 @@ async function deleteList(list: List): Promise<void> {
           maxlength="200"
           placeholder="e.g. Shopping List"
           required
-        >
+        />
       </div>
       <div class="form-actions">
         <button type="button" class="btn btn-secondary" @click="showNew = false">Cancel</button>
@@ -228,13 +231,7 @@ async function deleteList(list: List): Promise<void> {
     <form @submit.prevent="renameList">
       <div class="form-group">
         <label for="renameInput">New Name</label>
-        <input
-          id="renameInput"
-          v-model="renameName"
-          type="text"
-          maxlength="200"
-          required
-        >
+        <input id="renameInput" v-model="renameName" type="text" maxlength="200" required />
       </div>
       <div class="form-actions">
         <button type="button" class="btn btn-secondary" @click="showRename = false">Cancel</button>

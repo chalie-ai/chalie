@@ -9,10 +9,11 @@
  */
 import { defineStore } from 'pinia';
 import { ref } from 'vue';
-import { platform as adapter } from '@chalie/shared';
 import type { WakeLockHandle } from '@chalie/shared';
+import { platform as adapter } from '@chalie/shared';
 import { voice } from '../api/voice';
 import { emit } from '../composables/useEventBus';
+import { useSessionStore } from './session';
 
 const POLL_INTERVAL_MS = 2000;
 const MAX_POLL_MS = 60_000;
@@ -28,8 +29,6 @@ export const useVoiceStore = defineStore('voice', () => {
   const loading = ref(true);
 
   const recorderState = ref<RecorderState>('idle');
-  /** User-facing error from the recorder (permission denial, STT failure, etc.). */
-  const recError = ref<string | null>(null);
 
   // Internal refs — not reactive (raw objects, not observed by Vue).
   let _mediaRecorder: MediaRecorder | null = null;
@@ -99,7 +98,7 @@ export const useVoiceStore = defineStore('voice', () => {
     try {
       await adapter.startSTT();
       _nativeSTT = true;
-      recError.value = null;
+      useSessionStore().errorMessage = null;
       recorderState.value = 'recording';
       return;
     } catch (err) {
@@ -111,25 +110,26 @@ export const useVoiceStore = defineStore('voice', () => {
   }
 
   async function _startRecording(): Promise<void> {
+    const session = useSessionStore();
     let stream: MediaStream;
     try {
       stream = await adapter.getUserMedia({ audio: true });
     } catch (err: unknown) {
       const name = err instanceof DOMException ? err.name : '';
       if (name === 'NotAllowedError' || name === 'PermissionDeniedError') {
-        recError.value = 'Microphone access denied';
+        session.errorMessage = 'Microphone access denied';
       } else if (name === 'NotSupportedError') {
         // webPlatformAdapter maps non-secure context to NotSupportedError
-        recError.value = 'Microphone not available (requires HTTPS)';
+        session.errorMessage = 'Microphone not available (requires HTTPS)';
       } else {
-        recError.value = 'Could not start recording';
+        session.errorMessage = 'Could not start recording';
       }
       // Mic is gated by `available`, but a race can reach here; leave disabled.
       available.value = false;
       return;
     }
 
-    recError.value = null;
+    session.errorMessage = null;
     _audioChunks = [];
 
     // No mimeType constraint — we always convert to WAV before upload, so the
@@ -197,10 +197,9 @@ export const useVoiceStore = defineStore('voice', () => {
     } catch (err: unknown) {
       console.error('[VoiceRecorder] STT error:', err);
       // Prefer server-supplied hint when voice deps are missing.
-      const msg =
+      useSessionStore().errorMessage =
         (err as { userMessage?: string }).userMessage ??
         (err instanceof Error ? err.message : 'Transcription failed');
-      recError.value = msg;
     } finally {
       recorderState.value = 'idle';
     }
@@ -313,7 +312,6 @@ export const useVoiceStore = defineStore('voice', () => {
     loading,
     checkAvailability,
     recorderState,
-    recError,
     toggleRecording,
     destroyRecorder,
     MAX_RECORD_MS,

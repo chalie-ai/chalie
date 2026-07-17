@@ -1,9 +1,12 @@
 """Integration test: rich-media cards in the message processing pipeline."""
 
 import json
-from typing import cast
+from typing import TYPE_CHECKING, cast
 
 import pytest
+
+if TYPE_CHECKING:
+    from controllers.message_processor import MessageProcessor
 
 pytestmark = pytest.mark.unit
 
@@ -41,11 +44,11 @@ _MOCK_WEATHER_DICT = {
 class TestWeatherSerialise:
 
     def test_render_with_ordinal_produces_json_and_trailer(self) -> None:
-        from abilities._dispatcher import ToolDispatcher
+        from services.dispatch_service import DispatchService
         from abilities._result import ToolResult
 
         tr = ToolResult.ok({"temperature_c": 12}, rich={"temperature_c": 12})
-        rendered = ToolDispatcher._render("weather", tr, 1)
+        rendered = DispatchService(mp=cast("MessageProcessor", None))._render("weather", tr, 1)
         inner = rendered.split("\n", 1)[1].rsplit("\n", 1)[0]
 
         payload_str, trailer = inner.split("\n\n", 1)
@@ -53,33 +56,33 @@ class TestWeatherSerialise:
         assert "<span id='weather_1'>" in trailer
 
     def test_render_without_ordinal_has_no_trailer(self) -> None:
-        from abilities._dispatcher import ToolDispatcher
+        from services.dispatch_service import DispatchService
         from abilities._result import ToolResult
 
         tr = ToolResult.ok({"temperature_c": 12}, rich={"temperature_c": 12})
-        rendered = ToolDispatcher._render("weather", tr, None)
+        rendered = DispatchService(mp=cast("MessageProcessor", None))._render("weather", tr, None)
         inner = rendered.split("\n", 1)[1].rsplit("\n", 1)[0]
         # No ordinal → body is the bare payload JSON, no instruction trailer.
         assert json.loads(inner) == {"temperature_c": 12}
         assert "<span" not in rendered
 
     def test_render_error_payload_no_trailer(self) -> None:
-        from abilities._dispatcher import ToolDispatcher
+        from services.dispatch_service import DispatchService
         from abilities._result import ToolResult
 
         tr = ToolResult.err("unavailable", code="provider-unreachable", details="timeout")
-        rendered = ToolDispatcher._render("weather", tr, 1)
+        rendered = DispatchService(mp=cast("MessageProcessor", None))._render("weather", tr, 1)
         # Error envelopes never carry a rich-media instruction trailer.
         assert "status=error" in rendered
         assert "unavailable" in rendered
         assert "<span" not in rendered
 
     def test_render_ordinal_2_uses_correct_tag(self) -> None:
-        from abilities._dispatcher import ToolDispatcher
+        from services.dispatch_service import DispatchService
         from abilities._result import ToolResult
 
         tr = ToolResult.ok({"temperature_c": 20}, rich={"temperature_c": 20})
-        rendered = ToolDispatcher._render("weather", tr, 2)
+        rendered = DispatchService(mp=cast("MessageProcessor", None))._render("weather", tr, 2)
         assert "<span id='weather_2'>" in rendered
 
 

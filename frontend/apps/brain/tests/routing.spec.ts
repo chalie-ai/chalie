@@ -1,4 +1,4 @@
-import { test, expect, type Page } from '@playwright/test';
+import { expect, type Page, test } from '@playwright/test';
 
 // Verifies the SPA history-fallback contract end-to-end: a deep link typed into
 // the address bar (and a hard reload of it) is served index.html by the backend

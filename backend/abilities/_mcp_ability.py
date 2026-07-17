@@ -14,13 +14,17 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import ClassVar, cast
+from typing import TYPE_CHECKING, ClassVar, cast
 
 # Ability is the shared base every dispatchable tool subclasses; _MCPAbility is
 # a synthetic member of that hierarchy so MCP calls reuse the one gate AND the
 # one schema assembler (get_input_schema → framework-field injection).
 from abilities._ability import Ability
 from abilities._result import ToolResult
+from exceptions import McpServerUnreachable, McpToolUnknown
+
+if TYPE_CHECKING:
+    from controllers.message_processor import MessageProcessor
 
 logger = logging.getLogger(__name__)
 
@@ -47,11 +51,7 @@ def _dispatch_mcp(tool_name: str, params: "dict[str, object]") -> ToolResult:
     other exception propagates to the dispatcher's ``_run`` guard
     (``code=unhandled-exception``) rather than being masked here.
     """
-    from services.mcp_client_service import (  # noqa: PLC0415
-        McpClientService,
-        McpServerUnreachable,
-        McpToolUnknown,
-    )
+    from services.mcp_client_service import McpClientService  # noqa: PLC0415
 
     try:
         result = McpClientService().dispatch_mcp_tool(tool_name, params)
@@ -104,7 +104,7 @@ class _MCPAbility(Ability):
 
     _SYNTHETIC: ClassVar[bool] = True
 
-    def __init__(self, tool_name: str, mp: "object | None" = None) -> None:
+    def __init__(self, tool_name: str, mp: "MessageProcessor | None" = None) -> None:
         super().__init__(mp)
         self._tool_name = tool_name
         self._remote: "dict[str, object] | None" = None

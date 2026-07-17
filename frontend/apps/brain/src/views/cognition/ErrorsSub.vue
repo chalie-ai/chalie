@@ -1,14 +1,17 @@
 <script setup lang="ts">
-import { cognition } from '../../api/cognition';
 import type { ErrorEntry } from '../../api/cognition';
+import { cognition } from '../../api/cognition';
 import { formatDate } from '../../utils/format';
 import { useAsyncResource } from '@chalie/shared';
 import EmptyState from '../../ui/EmptyState.vue';
 
-const { data: errors, loading, error: loadFailed } = useAsyncResource(
-  async () => (await cognition.errors()).errors ?? [],
-  { initial: [] as ErrorEntry[] },
-);
+const {
+  data: errors,
+  loading,
+  error: loadFailed,
+} = useAsyncResource(async () => (await cognition.errors()).errors ?? [], {
+  initial: [] as ErrorEntry[],
+});
 </script>
 
 <template>

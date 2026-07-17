@@ -7,12 +7,7 @@ from typing import TYPE_CHECKING, cast
 
 if TYPE_CHECKING:
     from collections.abc import Callable
-    from typing import Optional, Protocol
-
-    class _DgsProtocol(Protocol):
-        def store(self, kind: str, key: str, value: str, *, source: Optional[str] = None) -> object: ...
-        def recall(self, query: str, *, kinds: Optional[list[str]] = None, limit: int = 10) -> list[dict[str, object]]: ...
-        def fetch(self, *, kinds: Optional[list[str]] = None, order_by: str = "", limit: Optional[int] = None) -> list[dict[str, object]]: ...
+    from typing import Protocol
 
     class _CaldavClientProto(Protocol):
         url: object
@@ -40,17 +35,13 @@ if TYPE_CHECKING:
 
     class _HasVcardToString(Protocol):
         def vcard_to_string(self) -> str: ...
-
     class _HasData(Protocol):
         data: object
         def load(self) -> None: ...
 
+from models.contact import ContactRow
+
 logger = logging.getLogger(__name__)
-
-
-def _dgs() -> "_DgsProtocol":
-    from services.data_graph_service import get_data_graph_service
-    return cast("_DgsProtocol", get_data_graph_service())
 
 
 class CarddavHandler:
@@ -105,19 +96,23 @@ class CarddavHandler:
             except Exception as exc:
                 logger.warning("[carddav] could not fetch cards from address book: %s", exc)
                 continue
-
-            for card in cards:
-                try:
-                    raw = _extract_vcard_data(card)
-                    if not raw:
-                        continue
-                    contact = self.parse_vcard(raw)
-                    if contact:
-                        contacts.append(contact)
-                except Exception as exc:
-                    logger.debug("[carddav] skipping malformed card: %s", exc)
+            contacts.extend(self._parse_cards(cards))
 
         logger.info("[carddav] synced %d contacts", len(contacts))
+        return contacts
+
+    def _parse_cards(self, cards: list[object]) -> list[dict[str, object]]:
+        contacts: list[dict[str, object]] = []
+        for card in cards:
+            try:
+                raw = _extract_vcard_data(card)
+                if not raw:
+                    continue
+                contact = self.parse_vcard(raw)
+                if contact:
+                    contacts.append(contact)
+            except Exception as exc:
+                logger.debug("[carddav] skipping malformed card: %s", exc)
         return contacts
 
     # -----------------------------------------------------------------------
@@ -204,7 +199,10 @@ class CarddavHandler:
             return {"contacts": matches, "count": len(matches)}
 
         try:
-            rows = _dgs().fetch(kinds=["user_specific"], order_by="key ASC", limit=limit)
+            rows = [
+                r.to_dict()
+                for r in ContactRow.live().order_by("key ASC").limit(limit).get()
+            ]
             contacts: list[dict[str, object]] = []
             for r in rows:
                 parsed = _parse_contact_row(cast(str, r.get("key", "")), cast(str, r.get("value", "")))

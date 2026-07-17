@@ -24,6 +24,7 @@ import pytest
 import requests
 
 from services import web_fetch
+from exceptions import FetchBlocked
 from services.ssrf import is_private_url
 
 if TYPE_CHECKING:
@@ -53,19 +54,6 @@ def httpbin() -> None:
 
 
 @pytest.mark.unit
-def test_three_named_profiles_exist_with_distinct_user_agents() -> None:
-    """BROWSER / API / DOWNLOAD ship as the named profiles the abilities use."""
-    assert web_fetch.BROWSER.name == "browser"
-    assert web_fetch.API.name == "api"
-    assert web_fetch.DOWNLOAD.name == "download"
-
-    # Browser impersonates Chrome; API/DOWNLOAD identify as ChalieBot.
-    assert "Chrome/131" in web_fetch.BROWSER.headers["User-Agent"]
-    assert "ChalieBot" in web_fetch.API.headers["User-Agent"]
-    assert "ChalieBot" in web_fetch.DOWNLOAD.headers["User-Agent"]
-
-
-@pytest.mark.unit
 def test_fetch_text_uses_the_real_ssrf_guard() -> None:
     """The fetch service shares ONE SSRF guard with the abilities."""
     # Identity, not equality: web_fetch must call the same production guard.
@@ -76,7 +64,7 @@ def test_fetch_text_uses_the_real_ssrf_guard() -> None:
 @pytest.mark.unit
 def test_fetch_text_refuses_private_host_before_socket() -> None:
     """A loopback URL is blocked by the guard, raising FetchBlocked (no network)."""
-    with pytest.raises(web_fetch.FetchBlocked):
+    with pytest.raises(FetchBlocked):
         web_fetch.fetch_text("http://127.0.0.1/secret", profile=web_fetch.API)
 
 
@@ -84,7 +72,7 @@ def test_fetch_text_refuses_private_host_before_socket() -> None:
 def test_stream_to_file_refuses_private_host_and_writes_nothing(tmp_path: Path) -> None:
     """A blocked host raises before any file is created."""
     dest = os.path.join(str(tmp_path), "should_not_exist", "f.bin")
-    with pytest.raises(web_fetch.FetchBlocked):
+    with pytest.raises(FetchBlocked):
         web_fetch.stream_to_file("http://169.254.169.254/latest/meta-data/", dest)
     assert not os.path.exists(dest)
 

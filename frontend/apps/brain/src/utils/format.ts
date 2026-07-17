@@ -47,3 +47,8 @@ export function mdToHtml(md: string | null | undefined): string {
     .replace(/(<li>.*<\/li>\n?)+/g, (m) => `<ul>${m}</ul>`)
     .replace(/\n{2,}/g, '<br>');
 }
+
+/** Capitalize the first character of a string; empty input returns ''. */
+export function capitalize(s: string): string {
+  return s.charAt(0).toUpperCase() + s.slice(1);
+}

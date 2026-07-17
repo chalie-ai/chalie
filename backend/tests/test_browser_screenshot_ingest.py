@@ -15,14 +15,12 @@ from typing import cast
 
 import pytest
 
-from abilities._dispatcher import ToolDispatcher
 from abilities.document import ingest_file
 from configs.channels.web_browse import WebBrowseConfig
-from services.database_service import get_shared_db_service
+from configs.enums.policy_channel import PolicyChannel
+from controllers.message_processor import MessageProcessor
 from services.document_service import DocumentService
 from services.file_mapper_service import FileMapperService
-from services.message_processor import MessageProcessor
-from services.processor_config import ProcessorConfig
 from services.provider_db_service import ProviderDbService
 from services.tmp_storage import new_tmp_path
 
@@ -53,8 +51,8 @@ def _invoice_png_path() -> str:
 
 
 def test_screenshot_ingest_lands_in_screenshots_subdir_and_vision_reads_it(db: sqlite3.Connection) -> None:
-    ProviderDbService(get_shared_db_service()).set_vision_provider(None)
-    service = DocumentService(get_shared_db_service())
+    ProviderDbService().set_vision_provider(None)
+    service = DocumentService()
 
     ingested = ingest_file(
         service,
@@ -79,10 +77,11 @@ def test_screenshot_ingest_lands_in_screenshots_subdir_and_vision_reads_it(db: s
 
     # The delegate reads its own screenshot via the REAL dispatch chokepoint.
     mp = object.__new__(MessageProcessor)
-    MessageProcessor.__init__(mp, "look at the screenshot", {})
-    mp.config = WebBrowseConfig(ProcessorConfig.PolicyChannel.CHAT)
+    MessageProcessor.__init__(
+        mp, WebBrowseConfig(PolicyChannel.CHAT), raw_input="look at the screenshot",
+    )
     mp._setup()
-    out = ToolDispatcher(mp).dispatch(
+    out = mp.dispatch_service.dispatch(
         "vision", {"image": ingested["id"], "query": "what text is in this image"}
     )
     assert "INVOICE" in str(out), out

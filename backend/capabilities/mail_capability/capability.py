@@ -4,19 +4,18 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import datetime
 from typing import TYPE_CHECKING, cast
 
 import yaml
-
-from services.file_mapper_service import FileMapperService
 
 from capabilities.base import AbstractCapability
 from capabilities.mail_capability.caldav_handler import CaldavHandler
 from capabilities.mail_capability.carddav_handler import CarddavHandler
 from capabilities.mail_capability.imap_handler import ImapHandler, SmtpCreds
-from capabilities.mail_capability.providers import ServerSettings, UnifiedProvider, build_custom_provider, discover_provider
-from services.time_utils import utc_now
+from capabilities.mail_capability.providers import UnifiedProvider, build_custom_provider, \
+    discover_provider
+from services.database import Database
+from services.file_mapper_service import FileMapperService
 from utils.data_utils import parse_json_column
 
 if TYPE_CHECKING:
@@ -37,6 +36,11 @@ _ERR_IMAP_NOT_CONNECTED = "Mail (IMAP) not connected."
 _ERR_CALDAV_NOT_CONNECTED = "Mail (CalDAV) not connected."
 _ERR_CALDAV_OPEN_FAILED = "Failed to open CalDAV connection."
 _DESC_CALDAV_UID = "CalDAV event UID"
+_DESC_CALDAV_RRULE = (
+    "Optional RFC-5545 recurrence rule (RRULE) for a repeating event, e.g. "
+    "'FREQ=DAILY', 'FREQ=WEEKLY;BYDAY=MO,WE,FR', 'FREQ=MONTHLY'. Omit for a "
+    "one-off event."
+)
 
 _K_EMAIL = "mail:email"
 _K_PASSWORD = "mail:password"
@@ -338,14 +342,11 @@ class MailCapability(AbstractCapability):
         self._cycle_count = 0
 
         try:
-            from services.database_service import get_shared_db_service
-            db = get_shared_db_service()
-            with db.connection() as conn:
+            with Database.transaction() as conn:
                 conn.execute(
                     "UPDATE scheduled_items SET status='cancelled' "
                     "WHERE source='mail' AND status='pending'"
                 )
-                conn.commit()
             logger.info("[mail] Scheduled items cancelled.")
         except Exception as exc:
             logger.warning("[mail] disconnect cleanup: %s", exc)
@@ -435,45 +436,6 @@ class MailCapability(AbstractCapability):
     # Cognitive pipeline — monitor
     # ------------------------------------------------------------------
 
-    def _monitor_imap(self, email: str, password: str, provider: UnifiedProvider) -> None:
-        try:
-            watermark_raw = self.load_credential(_K_WATERMARK)
-            watermark = int(watermark_raw) if watermark_raw else None
-            client = self._imap_handler.open_client(
-                host=cast("ServerSettings", provider.imap).host,
-                port=cast("ServerSettings", provider.imap).port,
-                tls=cast("ServerSettings", provider.imap).tls,
-                email=email,
-                password=password,
-            )
-            if client is not None:
-                try:
-                    new_items, new_wm = self._imap_handler.ingest(client, watermark)
-                    if new_items:
-                        self._imap_handler.understand(new_items)
-                    if new_wm and new_wm != watermark:
-                        self.store_credential(_K_WATERMARK, str(new_wm))
-                    self._imap_handler.inject_inbox_hint(client)
-                finally:
-                    try:
-                        client.logout()
-                    except Exception:
-                        pass
-        except Exception as exc:
-            logger.error("[mail] _do_monitor() IMAP: %s", exc)
-
-    def _monitor_caldav(self, email: str, password: str, provider: UnifiedProvider, now: datetime) -> None:
-        try:
-            caldav_url = cast(str, provider.caldav_url).replace(_PLACEHOLDER_USERNAME, email)
-            client = self._caldav_handler.open_client(
-                url=caldav_url, username=email, password=password
-            )
-            if client is not None:
-                events = self._caldav_handler.ingest(client)
-                self._caldav_handler.upsert_events(events, now)
-        except Exception as exc:
-            logger.error("[mail] _do_monitor() CalDAV: %s", exc)
-
     def _monitor_carddav(self, email: str, password: str, provider: UnifiedProvider) -> None:
         try:
             carddav_url = cast(str, provider.carddav_url).replace(_PLACEHOLDER_USERNAME, email)
@@ -491,19 +453,11 @@ class MailCapability(AbstractCapability):
         if not self.is_connected():
             return
 
-        now = utc_now()
-
         email = self.load_credential(_K_EMAIL)
         password = self.load_credential(_K_PASSWORD)
         provider = self._resolve_provider(email or "")
         if not provider:
             return
-
-        if self._imap_ok and provider.imap:
-            self._monitor_imap(cast(str, email), cast(str, password), provider)
-
-        if self._caldav_ok and self._cycle_count % 3 == 0 and provider.caldav_url:
-            self._monitor_caldav(cast(str, email), cast(str, password), provider, now)
 
         if self._carddav_ok and self._cycle_count % 12 == 0 and provider.carddav_url:
             self._monitor_carddav(cast(str, email), cast(str, password), provider)
@@ -770,6 +724,28 @@ class MailCapability(AbstractCapability):
         except Exception as exc:
             return {"error": str(exc)}
 
+    def _th_list_events(self, params: dict[str, object], telemetry: object = None) -> dict[str, object]:
+        if not self._caldav_ok:
+            return {"error": _ERR_CALDAV_NOT_CONNECTED}
+        try:
+            client = self._open_caldav_client()
+            if client is None:
+                return {"error": _ERR_CALDAV_OPEN_FAILED}
+            return self._caldav_handler.list_events(client, params)
+        except Exception as exc:
+            return {"error": str(exc)}
+
+    def _th_get_event(self, params: dict[str, object], telemetry: object = None) -> dict[str, object]:
+        if not self._caldav_ok:
+            return {"error": _ERR_CALDAV_NOT_CONNECTED}
+        try:
+            client = self._open_caldav_client()
+            if client is None:
+                return {"error": _ERR_CALDAV_OPEN_FAILED}
+            return self._caldav_handler.get_event(client, params)
+        except Exception as exc:
+            return {"error": str(exc)}
+
     def _th_find_free_slots(self, params: dict[str, object], telemetry: object = None) -> dict[str, object]:
         if not self._caldav_ok:
             return {"error": _ERR_CALDAV_NOT_CONNECTED}
@@ -941,6 +917,39 @@ class MailCapability(AbstractCapability):
     def _build_caldav_tools(self) -> list[dict[str, object]]:
         return [
             {
+                "name": "list_events",
+                "description": (
+                    "List calendar events from the live CalDAV server in a window "
+                    "(default: now to +7 days), soonest first."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "date_from": {"type": "string", "description": "Window start (ISO date or datetime)"},
+                        "date_to": {"type": "string", "description": "Window end (ISO date or datetime)"},
+                        "limit": {"type": "integer", "description": "Max events to return (1-200, default 50)"},
+                    },
+                },
+                "handler": self._th_list_events,
+                "timeout": 30,
+            },
+            {
+                "name": "get_event",
+                "description": (
+                    "Fetch one calendar event from the live CalDAV server by UID, "
+                    "or by title (unique substring match)."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "uid": {"type": "string", "description": _DESC_CALDAV_UID},
+                        "title": {"type": "string", "description": "Event title to match when uid is unknown"},
+                    },
+                },
+                "handler": self._th_get_event,
+                "timeout": 30,
+            },
+            {
                 "name": "create_event",
                 "description": "Create a new calendar event on the CalDAV server.",
                 "parameters": {
@@ -952,6 +961,7 @@ class MailCapability(AbstractCapability):
                         "location": {"type": "string", "description": "Optional location"},
                         "description": {"type": "string", "description": "Optional description"},
                         "calendar_name": {"type": "string", "description": "Target calendar name"},
+                        "recurrence": {"type": "string", "description": _DESC_CALDAV_RRULE},
                     },
                     "required": ["summary", "dtstart", "dtend"],
                 },
@@ -970,6 +980,7 @@ class MailCapability(AbstractCapability):
                         "dtend": {"type": "string", "description": "New end (ISO 8601 UTC)"},
                         "location": {"type": "string", "description": "New location"},
                         "description": {"type": "string", "description": "New description"},
+                        "recurrence": {"type": "string", "description": _DESC_CALDAV_RRULE},
                     },
                     "required": ["uid"],
                 },
@@ -1079,18 +1090,3 @@ class MailCapability(AbstractCapability):
             tools += self._build_carddav_tools()
 
         return tools
-
-
-    # ------------------------------------------------------------------
-    # Health
-    # ------------------------------------------------------------------
-
-    def health_details(self) -> dict[str, object]:
-        return {
-            "connected": self.is_connected(),
-            "protocols": {
-                "imap": self._imap_ok,
-                "caldav": self._caldav_ok,
-                "carddav": self._carddav_ok,
-            },
-        }

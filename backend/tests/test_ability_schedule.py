@@ -6,18 +6,35 @@
 #
 #     http://www.apache.org/licenses/LICENSE-2.0
 
+"""Feature tests for the ``schedule`` ability — the real 5-field crontab
+engine: ``scheduled_items`` is one row per schedule, forever (``id`` INTEGER
+PRIMARY KEY AUTOINCREMENT — also the thread's ``turn_id`` on the ``'schedule'``
+channel), and its five ``cron_minute``/``cron_hour``/``cron_dom``/``cron_month``/
+``cron_dow`` columns are TEXT crontab expressions (``'*'`` = every) validated by
+``services.cron_schedule.validate_cron``. There is no every-prefix invariant any
+more — any combination of fields is legal standard crontab; only a malformed or
+out-of-range expression is rejected. Cancel is a hard ``DELETE`` (no soft-cancel
+state to assert on).
+
+Calls ``run(params)`` directly against a real, fully-migrated SQLite database
+(the ``db`` fixture), on an ability bound to a real inert ``MessageProcessor``
+under ``ScheduledConfig`` — the same collaborator the dispatcher binds in
+production (construction is side-effect-free, §6.13/I2). ``run()`` raises on an
+unbound instance by contract, so no fake/mock collaborator is possible.
+"""
+
 import json
 import sqlite3
-from datetime import timedelta
+from datetime import datetime, timedelta
 from typing import cast
-from zoneinfo import ZoneInfo
 
 import pytest
 
-from abilities._dispatcher import ToolDispatcher
-from configs.channels import UserConfig
+from abilities._result import ToolResult
+from abilities.schedule import ScheduleAbility
+from configs.channels.scheduled import ScheduledConfig
+from controllers.message_processor import MessageProcessor
 from services.time_utils import utc_now
-from tests._tool_result_harness import MP, parse_body, seed_transcript
 
 pytestmark = pytest.mark.unit
 
@@ -25,8 +42,8 @@ _TZ = "Europe/Malta"
 
 
 def _seed_timezone(db: sqlite3.Connection, tz_name: str = _TZ) -> None:
-    """Write a real heartbeat timezone into the telemetry table — the same store
-    the production ``locale_service.get_timezone()`` reads."""
+    """Write a real heartbeat timezone into the telemetry table — the same
+    store the production ``locale_service.get_timezone()`` reads."""
     from services.heartbeat_service import heartbeat_service
 
     heartbeat_service._ctx = None
@@ -39,204 +56,223 @@ def _seed_timezone(db: sqlite3.Connection, tz_name: str = _TZ) -> None:
     heartbeat_service._ctx = None
 
 
-@pytest.fixture
-def chat_mp(db: sqlite3.Connection) -> MP:
-    _seed_timezone(db)
-    return MP(seed_transcript(db, "chat", "remind me to do a thing"), UserConfig({}))
-
-
-def _parse_body(rendered: str, tool: str = "schedule") -> dict[str, object]:
-    return cast("dict[str, object]", parse_body(rendered, tool, rich=True))
-
-
-def _row(db: sqlite3.Connection, item_id: str) -> "dict[str, object] | None":
+def _row(db: sqlite3.Connection, item_id: object) -> "dict[str, object] | None":
     cur = db.execute(
-        "SELECT id, message, due_at, status, recurrence FROM scheduled_items WHERE id = ?",
+        "SELECT id, message, start_at, cron_minute, cron_hour, cron_dom, cron_month, cron_dow, enabled "
+        "FROM scheduled_items WHERE id = ?",
         (item_id,),
     )
     r = cur.fetchone()
     if r is None:
         return None
-    return {"id": r[0], "message": r[1], "due_at": r[2], "status": r[3], "recurrence": r[4]}
+    return {
+        "id": r[0], "message": r[1], "start_at": r[2],
+        "cron_minute": r[3], "cron_hour": r[4], "cron_dom": r[5],
+        "cron_month": r[6], "cron_dow": r[7], "enabled": r[8],
+    }
 
 
-# ── Natural-language due_at: resolved in the user's tz, echoed back ─────────────
+def _ability() -> ScheduleAbility:
+    """A schedule ability bound the way the dispatcher binds it in production:
+    to a real, inert ``MessageProcessor`` on the ``schedule`` channel."""
+    return ScheduleAbility(MessageProcessor(ScheduledConfig()))
 
 
-def test_create_with_natural_language_due_at_resolves_in_user_tz(db: sqlite3.Connection, chat_mp: MP) -> None:
-    out = ToolDispatcher(chat_mp).dispatch(
-        "schedule",
-        {"action": "create", "message": "Call the dentist",
-         "due_at": "tomorrow 9am", "act_summary": "x"},
-    )
+def _count(db: sqlite3.Connection) -> int:
+    return cast(int, db.execute("SELECT COUNT(*) FROM scheduled_items").fetchone()[0])
 
-    assert "[schedule(status=success" in out
-    assert "[end:schedule]" in out
-    card = _parse_body(out)
-    assert card["action_performed"] == "create"
-    record = cast("dict[str, object]", card["record"])
 
-    # Resolved instants are echoed back, both UTC and local.
-    assert "due_at_utc" in record
-    assert "due_at_local" in record
-    # 09:00 in the user's local tz.
-    assert "09:00" in cast(str, record["due_at_local"])
+def _record_of(tr: ToolResult) -> dict[str, object]:
+    return cast("dict[str, object]", cast("dict[str, object]", tr.body)["record"])
 
-    # The persisted row carries a real future UTC instant — NOT datetime.min.
-    persisted = _row(db, cast(str, record["id"]))
+
+# ── Create persists the local cron fields + UTC start_at verbatim ─────────────
+
+
+def test_create_persists_prompt_only_row_with_local_cron_fields_verbatim(db: sqlite3.Connection) -> None:
+    _seed_timezone(db)
+    tr = _ability().run({
+        "action": "create", "message": "Water the plants",
+        "hour": "14", "minute": "30",  # day/month/weekday omitted -> "*" (every)
+    })
+
+    assert tr.status == "success"
+    record = _record_of(tr)
+    item_id = record["id"]
+    assert isinstance(item_id, int)
+
+    persisted = _row(db, item_id)
     assert persisted is not None
-    assert persisted["status"] == "pending"
-    assert not cast(str, persisted["due_at"]).startswith("0001-")
-    from services.time_utils import parse_utc
-    assert parse_utc(cast(str, persisted["due_at"])) > utc_now()
+    assert persisted["message"] == "Water the plants"
+    assert persisted["enabled"] == 1
+    # cron fields land on the row exactly as passed — no timezone conversion
+    # is ever applied to them (they are already local by contract).
+    assert persisted["cron_hour"] == "14"
+    assert persisted["cron_minute"] == "30"
+    assert persisted["cron_dom"] == "*"
+    assert persisted["cron_month"] == "*"
+    assert persisted["cron_dow"] == "*"
+    # start_at is a real, parseable UTC instant, close to "now".
+    start_at = datetime.fromisoformat(cast(str, persisted["start_at"]))
+    assert start_at <= utc_now() + timedelta(seconds=5)
 
 
-def test_create_with_relative_due_at_in_two_hours(db: sqlite3.Connection, chat_mp: MP) -> None:
-    out = ToolDispatcher(chat_mp).dispatch(
-        "schedule",
-        {"action": "create", "message": "Stretch break",
-         "due_at": "in 2 hours", "act_summary": "x"},
-    )
+def test_create_without_start_at_defaults_to_now(db: sqlite3.Connection) -> None:
+    _seed_timezone(db)
+    before = utc_now()
+    tr = _ability().run({
+        "action": "create", "message": "Every-minute ping",
+        # every cron field omitted -> all "*" (every minute); start_at omitted too.
+    })
+    after = utc_now()
 
-    assert "[schedule(status=success" in out
-    record = cast("dict[str, object]", _parse_body(out)["record"])
-    from services.time_utils import parse_utc
-    due = parse_utc(cast(str, cast("dict[str, object]", _row(db, cast(str, record["id"])))["due_at"]))
-    delta = (due - utc_now()).total_seconds()
-    assert 6900 < delta < 7500  # ~2h, allowing a little slack
-
-
-def test_create_with_iso_due_at_still_accepted(db: sqlite3.Connection, chat_mp: MP) -> None:
-    future = (utc_now() + timedelta(days=3)).astimezone(ZoneInfo(_TZ))
-    iso = future.replace(microsecond=0).isoformat()
-    out = ToolDispatcher(chat_mp).dispatch(
-        "schedule",
-        {"action": "create", "message": "Quarterly report",
-         "due_at": iso, "act_summary": "x"},
-    )
-
-    assert "[schedule(status=success" in out
-    record = cast("dict[str, object]", _parse_body(out)["record"])
-    from services.time_utils import parse_utc
-    persisted = parse_utc(cast(str, cast("dict[str, object]", _row(db, cast(str, record["id"])))["due_at"]))
-    assert abs((persisted - future).total_seconds()) < 2
+    assert tr.status == "success"
+    persisted = _row(db, _record_of(tr)["id"])
+    assert persisted is not None
+    assert (
+        persisted["cron_minute"], persisted["cron_hour"], persisted["cron_dom"],
+        persisted["cron_month"], persisted["cron_dow"],
+    ) == ("*", "*", "*", "*", "*")
+    start_at = datetime.fromisoformat(cast(str, persisted["start_at"]))
+    assert before - timedelta(seconds=2) <= start_at <= after + timedelta(seconds=2)
 
 
-def test_unparseable_due_at_errors_invalid_time_and_persists_nothing(db: sqlite3.Connection, chat_mp: MP) -> None:
-    before = cast(int, db.execute("SELECT COUNT(*) FROM scheduled_items").fetchone()[0])
-
-    out = ToolDispatcher(chat_mp).dispatch(
-        "schedule",
-        {"action": "create", "message": "Mystery",
-         "due_at": "blorptdfgh nonsense", "act_summary": "x"},
-    )
-
-    assert "[schedule(status=error, code=invalid-time" in out
-    assert "code=error]" not in out
-    assert "hint:" in out
-    # Never persisted, never a datetime.min sentinel row.
-    after = cast(int, db.execute("SELECT COUNT(*) FROM scheduled_items").fetchone()[0])
-    assert after == before
-    assert db.execute(
-        "SELECT COUNT(*) FROM scheduled_items WHERE due_at LIKE '0001-%'"
-    ).fetchone()[0] == 0
+# ── New capability: any combination is now legal, incl. step/comma/Vixie OR ──
 
 
-def test_past_due_at_errors_due_in_past(db: sqlite3.Connection, chat_mp: MP) -> None:
-    """A clearly-past ``due_at`` (well beyond the grace window) errors with a
-    stable ``code=due-in-past`` rather than silently bumping or persisting."""
-    past = (utc_now() - timedelta(days=2)).astimezone(ZoneInfo(_TZ))
-    out = ToolDispatcher(chat_mp).dispatch(
-        "schedule",
-        {"action": "create", "message": "Yesterday's thing",
-         "due_at": past.replace(microsecond=0).isoformat(), "act_summary": "x"},
-    )
+def test_create_persists_new_crontab_capabilities_verbatim(db: sqlite3.Connection) -> None:
+    """The every-prefix invariant is gone — any combination of crontab shapes
+    is now legal, including ones the old dumb-cron model could never express:
+    a step (``hour``), a comma-union (``minute``), and BOTH day-of-month and
+    day-of-week restricted at once (the Vixie OR quirk, ``day`` + ``weekday``)."""
+    _seed_timezone(db)
+    tr = _ability().run({
+        "action": "create", "message": "Multi-shape schedule",
+        "minute": "0,15,30,45", "hour": "*/2", "day": "13", "month": "*", "weekday": "1-5",
+    })
 
-    assert "[schedule(status=error, code=due-in-past" in out
-    assert "code=error]" not in out
-
-
-# ── Schema honesty: declared, clamped limit on search ──────────────────────────
-
-
-def test_limit_is_declared_in_the_schema() -> None:
-    """The ``limit`` param the code reads is now DECLARED in the tool schema —
-    schema and code agree."""
-    from abilities._registry import AbilityRegistry
-
-    ability = AbilityRegistry.get("schedule")
-    schema = ability.get_parameters()
-    assert "limit" in cast("dict[str, object]", schema["properties"])
-    assert cast("dict[str, object]", cast("dict[str, object]", schema["properties"])["limit"])["type"] == "integer"
+    assert tr.status == "success"
+    persisted = _row(db, _record_of(tr)["id"])
+    assert persisted is not None
+    assert persisted["cron_minute"] == "0,15,30,45"
+    assert persisted["cron_hour"] == "*/2"
+    assert persisted["cron_dom"] == "13"
+    assert persisted["cron_month"] == "*"
+    assert persisted["cron_dow"] == "1-5"
 
 
-# ── list / cancel happy paths render structured, parseable bodies ──────────────
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("minute", "60"),    # out of range: 0-59
+        ("hour", "24"),      # out of range: 0-23
+        ("day", "0"),        # out of range: 1-31 (dom lower bound is 1)
+        ("month", "13"),     # out of range: 1-12
+        ("weekday", "mon"),  # numeric only, no name tokens
+    ],
+)
+def test_create_rejects_out_of_range_or_malformed_cron_expressions(
+    db: sqlite3.Connection, field: str, value: str
+) -> None:
+    _seed_timezone(db)
+    before = _count(db)
+
+    tr = _ability().run({"action": "create", "message": "Bad shape", field: value})
+
+    assert tr.status == "error"
+    assert tr.code == "invalid-cron"
+    assert _count(db) == before, "an invalid cron expression must persist nothing"
 
 
-def test_list_renders_structured_rows(db: sqlite3.Connection, chat_mp: MP) -> None:
-    """``list`` renders a success envelope whose JSON body carries the pending
-    items (id + message + due_at + status)."""
-    ToolDispatcher(chat_mp).dispatch(
-        "schedule",
-        {"action": "create", "message": "Water the plants",
-         "due_at": "tomorrow 8am", "act_summary": "x"},
-    )
-
-    out = ToolDispatcher(chat_mp).dispatch(
-        "schedule", {"action": "list", "act_summary": "x"}
-    )
-
-    assert "[schedule(status=success" in out
-    b = _parse_body(out)
-    records = cast("list[dict[str, object]]", b["records"])
-    assert any(r["message"] == "Water the plants" for r in records)
-    assert all("due_at_utc" in r and "status" in r for r in records)
+# ── cancel = hard DELETE; id never reissued (AUTOINCREMENT) ───────────────────
 
 
-def test_cancel_by_message_removes_row(db: sqlite3.Connection, chat_mp: MP) -> None:
-    """``cancel`` with a fuzzy message match flips the row to cancelled and renders
-    a success confirmation."""
-    create = ToolDispatcher(chat_mp).dispatch(
-        "schedule",
-        {"action": "create", "message": "Dentist appointment",
-         "due_at": "tomorrow 3pm", "act_summary": "x"},
-    )
-    item_id = cast(str, cast("dict[str, object]", _parse_body(create)["record"])["id"])
+def test_cancel_by_message_hard_deletes_the_row(db: sqlite3.Connection) -> None:
+    _seed_timezone(db)
+    create = _ability().run({
+        "action": "create", "message": "Dentist appointment",
+        "hour": "15", "minute": "0",
+    })
+    item_id = _record_of(create)["id"]
 
-    out = ToolDispatcher(chat_mp).dispatch(
-        "schedule",
-        {"action": "cancel", "message": "Dentist", "act_summary": "x"},
-    )
+    tr = _ability().run({"action": "cancel", "message": "Dentist"})
 
-    assert "[schedule(status=success" in out
-    assert cast("dict[str, object]", _row(db, item_id))["status"] == "cancelled"
+    assert tr.status == "success"
+    assert _row(db, item_id) is None, "cancel must hard-delete the row, not soft-cancel it"
 
 
-def test_cancel_without_target_errors_with_cancel_target_required(db: sqlite3.Connection, chat_mp: MP) -> None:
-    """``cancel`` needs ``item_id`` OR ``message`` — an either/or the pre-gate map
-    cannot express (ACTION_REQUIRED["cancel"] == ()), so the guard lives in run()
-    and surfaces the tool-unique ``code=cancel-target-required`` (schedule.py)."""
-    out = ToolDispatcher(chat_mp).dispatch(
-        "schedule", {"action": "cancel", "act_summary": "x"}
-    )
+def test_cancelled_id_is_never_reissued_by_a_later_create(db: sqlite3.Connection) -> None:
+    _seed_timezone(db)
+    first = _ability().run({
+        "action": "create", "message": "First schedule",
+        "hour": "10", "minute": "0",
+    })
+    first_id = cast(int, _record_of(first)["id"])
 
-    assert "[schedule(status=error, code=cancel-target-required" in out
-    assert "hint:" in out
+    cancel = _ability().run({"action": "cancel", "item_id": str(first_id)})
+    assert cancel.status == "success"
+
+    second = _ability().run({
+        "action": "create", "message": "Second schedule",
+        "hour": "11", "minute": "0",
+    })
+    second_id = cast(int, _record_of(second)["id"])
+
+    assert second_id != first_id
+    assert second_id > first_id
+    assert _row(db, first_id) is None
 
 
-# ── Error ladders for malformed input ──────────────────────────────────────────
+def test_cancel_without_target_errors_cancel_target_required(db: sqlite3.Connection) -> None:
+    _seed_timezone(db)
+    tr = _ability().run({"action": "cancel"})
+
+    assert tr.status == "error"
+    assert tr.code == "cancel-target-required"
 
 
-def test_invalid_recurrence_errors_with_valid_ladder(db: sqlite3.Connection, chat_mp: MP) -> None:
-    """A bad ``recurrence`` errors with the tool-unique ``code=invalid-recurrence``
-    and a ``valid:`` ladder naming the real accepted keywords (schedule.py
-    ``_VALID_RECURRENCES`` + ``interval:N``)."""
-    out = ToolDispatcher(chat_mp).dispatch(
-        "schedule",
-        {"action": "create", "message": "Standup",
-         "due_at": "tomorrow 9am", "recurrence": "fortnightly", "act_summary": "x"},
-    )
+# ── update composes cancel + create; the old row is gone, the new one is live ──
 
-    assert "[schedule(status=error, code=invalid-recurrence" in out
-    for keyword in ("daily", "weekly", "monthly", "weekdays", "hourly", "interval:N"):
-        assert keyword in out, keyword
+
+def test_update_hard_deletes_target_and_creates_fresh_row_with_new_values(db: sqlite3.Connection) -> None:
+    _seed_timezone(db)
+    create = _ability().run({
+        "action": "create", "message": "Call the plumber",
+        "hour": "15", "minute": "0",
+    })
+    old_id = cast(int, _record_of(create)["id"])
+
+    tr = _ability().run({
+        "action": "update", "item_id": str(old_id),
+        "message": "Call the electrician", "hour": "17", "minute": "0",
+    })
+
+    assert tr.status == "success"
+    new_id = _record_of(tr)["id"]
+    assert new_id != old_id
+    assert _row(db, old_id) is None
+    new_row = _row(db, new_id)
+    assert new_row is not None
+    assert new_row["message"] == "Call the electrician"
+    assert new_row["cron_hour"] == "17"
+
+
+# ── enable/disable toggle the poller-visible enabled flag ─────────────────────
+
+
+def test_disable_then_enable_toggles_the_enabled_flag(db: sqlite3.Connection) -> None:
+    _seed_timezone(db)
+    create = _ability().run({
+        "action": "create", "message": "Weekly check-in",
+        "hour": "9", "minute": "0",
+    })
+    item_id = cast(int, _record_of(create)["id"])
+    assert cast("dict[str, object]", _row(db, item_id))["enabled"] == 1
+
+    disable = _ability().run({"action": "disable", "item_id": str(item_id)})
+    assert disable.status == "success"
+    assert cast("dict[str, object]", _row(db, item_id))["enabled"] == 0
+
+    enable = _ability().run({"action": "enable", "item_id": str(item_id)})
+    assert enable.status == "success"
+    assert cast("dict[str, object]", _row(db, item_id))["enabled"] == 1

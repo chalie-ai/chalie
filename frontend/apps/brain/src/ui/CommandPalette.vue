@@ -1,12 +1,26 @@
 <!-- Opened by ⌘K/Ctrl-K or the topbar search button; visibility driven by shell.commandPaletteOpen. -->
 <script setup lang="ts">
-import { ref, computed, watch, nextTick, onMounted, onBeforeUnmount } from 'vue';
 import type { FunctionalComponent } from 'vue';
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useRouter } from 'vue-router';
 import {
-  LayoutGrid, History, Wrench, Globe, Sparkles, TriangleAlert, ChartLine,
-  FileText, Calendar, List, Upload, Trash2, Settings, ShieldCheck, BookOpen,
-  Server, DatabaseBackup,
+  BookOpen,
+  Calendar,
+  ChartLine,
+  DatabaseBackup,
+  FileText,
+  Globe,
+  History,
+  LayoutGrid,
+  List,
+  Server,
+  Settings,
+  ShieldCheck,
+  Sparkles,
+  Trash2,
+  TriangleAlert,
+  Upload,
+  Wrench,
 } from '@lucide/vue';
 import { useShellStore } from '../stores/shell';
 
@@ -29,15 +43,21 @@ const ALL_ITEMS: CPItem[] = [
   { kind: 'Jump', label: 'Cognition · Memory', icon: History, path: '/cognition/memory' },
   { kind: 'Jump', label: 'Cognition · Tools', icon: Wrench, path: '/cognition/tools' },
   { kind: 'Jump', label: 'Cognition · World state', icon: Globe, path: '/cognition/world' },
-  { kind: 'Jump', label: 'Cognition · Personality', icon: Sparkles, path: '/cognition/personality' },
+  {
+    kind: 'Jump',
+    label: 'Cognition · Personality',
+    icon: Sparkles,
+    path: '/cognition/personality',
+  },
   { kind: 'Jump', label: 'Cognition · Errors', icon: TriangleAlert, path: '/cognition/errors' },
   { kind: 'Jump', label: 'Cognition · Usage', icon: ChartLine, path: '/cognition/usage' },
-  { kind: 'Jump', label: 'Cognition · Compacted Summary', icon: FileText, path: '/cognition/compaction' },
-  { kind: 'Jump', label: 'Scheduler · All', icon: Calendar, path: '/scheduler/all' },
-  { kind: 'Jump', label: 'Scheduler · Pending', icon: Calendar, path: '/scheduler/pending' },
-  { kind: 'Jump', label: 'Scheduler · Fired', icon: Calendar, path: '/scheduler/fired' },
-  { kind: 'Jump', label: 'Scheduler · Failed', icon: Calendar, path: '/scheduler/failed' },
-  { kind: 'Jump', label: 'Scheduler · Cancelled', icon: Calendar, path: '/scheduler/cancelled' },
+  {
+    kind: 'Jump',
+    label: 'Cognition · Compacted Summary',
+    icon: FileText,
+    path: '/cognition/compaction',
+  },
+  { kind: 'Jump', label: 'Scheduler', icon: Calendar, path: '/scheduler' },
   { kind: 'Jump', label: 'Lists', icon: List, path: '/lists' },
   { kind: 'Jump', label: 'Documents · Active', icon: FileText, path: '/documents/active' },
   { kind: 'Jump', label: 'Documents · Processing', icon: FileText, path: '/documents/processing' },
@@ -46,7 +66,12 @@ const ALL_ITEMS: CPItem[] = [
   { kind: 'Jump', label: 'Capabilities', icon: Settings, path: '/capabilities' },
   { kind: 'Jump', label: 'Policies · Chat', icon: ShieldCheck, path: '/policies/chat' },
   { kind: 'Jump', label: 'Policies · Background', icon: ShieldCheck, path: '/policies/background' },
-  { kind: 'Jump', label: 'Policies · External agent', icon: ShieldCheck, path: '/policies/external' },
+  {
+    kind: 'Jump',
+    label: 'Policies · External agent',
+    icon: ShieldCheck,
+    path: '/policies/external',
+  },
   { kind: 'Jump', label: 'Skills', icon: BookOpen, path: '/skills' },
   { kind: 'Jump', label: 'MCP', icon: Server, path: '/mcp' },
   { kind: 'Jump', label: 'Import / Export', icon: DatabaseBackup, path: '/import-export' },
@@ -57,14 +82,19 @@ const filtered = computed(() => {
   return q ? ALL_ITEMS.filter((i) => i.label.toLowerCase().includes(q)) : ALL_ITEMS;
 });
 
-watch(query, () => { selectedIdx.value = 0; });
-watch(() => shell.commandPaletteOpen, (v) => {
-  if (v) {
-    query.value = '';
-    selectedIdx.value = 0;
-    void nextTick(() => inputRef.value?.focus());
-  }
+watch(query, () => {
+  selectedIdx.value = 0;
 });
+watch(
+  () => shell.commandPaletteOpen,
+  (v) => {
+    if (v) {
+      query.value = '';
+      selectedIdx.value = 0;
+      void nextTick(() => inputRef.value?.focus());
+    }
+  },
+);
 
 function selectItem(item: CPItem): void {
   if (shell.providersOnly && item.path !== '/providers') return;
@@ -102,7 +132,10 @@ onBeforeUnmount(() => document.removeEventListener('keydown', onGlobalKeydown));
 </script>
 
 <template>
-  <div :class="['cp-overlay', { hidden: !shell.commandPaletteOpen }]" @click.self="shell.closeCommandPalette()">
+  <div
+    :class="['cp-overlay', { hidden: !shell.commandPaletteOpen }]"
+    @click.self="shell.closeCommandPalette()"
+  >
     <div v-if="shell.commandPaletteOpen" class="cp">
       <input
         ref="inputRef"

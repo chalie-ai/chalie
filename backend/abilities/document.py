@@ -36,7 +36,7 @@ import shutil as _shutil
 from typing import TYPE_CHECKING, ClassVar, cast
 
 from abilities._ability import Ability
-from abilities._params import Keys
+from configs.enums.param_key import Keys
 from abilities._result import ToolResult
 from services.document_chunking import create_document_artifacts
 
@@ -62,7 +62,7 @@ class DocumentAbility(Ability):
         "view": (),
         "delete": (),
         "restore": (),
-        "create": (Keys.name, Keys.content),
+        "create": (Keys.name_, Keys.content),
         "upload": (),
     }
 
@@ -86,6 +86,10 @@ class DocumentAbility(Ability):
 
     def get_search_tooltip(self) -> str:
         return "document and notes manager"
+
+    def get_follow_up(self, tr: ToolResult) -> str:
+        """Point the model to view a document's full text by id."""
+        return "search and list only return document ids, names and snippets, not full text. If you need the actual content of a result, call document again with action=view and that id."
 
     def get_parameters(self) -> dict[str, object]:
         return self._PARAMETERS
@@ -112,7 +116,7 @@ class DocumentAbility(Ability):
                     "delete only proceeds on an exact id or a single exact-name match."
                 ),
             },
-            Keys.name: {
+            Keys.name_: {
                 "type": "string",
                 "description": (
                     "Required for `create`; use a filename like 'research-notes.md' "
@@ -131,25 +135,10 @@ class DocumentAbility(Ability):
     def run(self, params: dict[str, object]) -> ToolResult:
         action = cast(str, params.get(Keys.action, "search"))
 
-        from services.database_service import get_shared_db_service
         from services.document_service import DocumentService
 
-        db = get_shared_db_service()
-        service = DocumentService(db)
+        service = DocumentService()
         return _dispatch(service, action, params)
-
-
-def _parse_extracted_metadata(raw: object) -> dict[str, object]:
-    if isinstance(raw, dict):
-        return raw
-    if isinstance(raw, str):
-        try:
-            parsed = _json.loads(raw)
-            if isinstance(parsed, dict):
-                return parsed
-        except Exception:
-            pass
-    return {}
 
 
 _VALID_ACTIONS = ("search", "list", "view", "delete", "restore", "create")
@@ -217,7 +206,7 @@ def _resolve_unique(service: "_DocumentService", params: dict[str, object]) -> "
             )
         return doc
 
-    name = cast(str, params.get(Keys.name) or "").strip()
+    name = cast(str, params.get(Keys.name_) or "").strip()
     if not name:
         return ToolResult.err(
             "id or name is required to address the document.",
@@ -265,10 +254,9 @@ def _group_results_by_doc(results: list[dict[str, object]]) -> dict[str, list[di
 def _handle_search(service: "_DocumentService", params: dict[str, object]) -> ToolResult:
     query = cast(str, params.get(Keys.query, "")).strip()
 
-    from services.data_graph_service import KIND_DOCUMENT, get_data_graph_service
+    from services.memory_recall_service import recall
 
-    dgs = get_data_graph_service()
-    results = dgs.recall(query, kinds=[KIND_DOCUMENT], limit=10)
+    results = recall(query, kinds=["document"], limit=10)
 
     rows = []
     for doc_id, artifacts in _group_results_by_doc(results).items():
@@ -290,7 +278,7 @@ def _handle_list(service: "_DocumentService") -> ToolResult:
 
     rows = []
     for doc in docs:
-        meta = _parse_extracted_metadata(doc.get("extracted_metadata"))
+        meta = cast("dict[str, object]", doc.get("extracted_metadata") or {})
         doc_type = meta.get("document_type", {})
         if isinstance(doc_type, dict):
             doc_type = doc_type.get("value", "")
@@ -334,14 +322,8 @@ def _append_meta_summary(lines: list[str], doc: dict[str, object], meta: dict[st
 
 
 def _fetch_doc_fragments(doc_id: str) -> list[str]:
-    from services.data_graph_service import get_data_graph_service
-    dgs = get_data_graph_service()
-    with dgs.db.connection() as conn:
-        cursor = conn.execute(
-            "SELECT value FROM data_graph WHERE source=? AND active=1 ORDER BY key",
-            (f'document:{doc_id}',),
-        )
-        return [row[0] for row in cursor.fetchall() if row[0]]
+    from models.document import DocumentRow
+    return [f.value for f in DocumentRow.for_document_id(doc_id).get() if f.value]
 
 
 def _handle_view(service: "_DocumentService", params: dict[str, object]) -> ToolResult:
@@ -364,7 +346,7 @@ def _handle_view(service: "_DocumentService", params: dict[str, object]) -> Tool
             action="view",
         )
 
-    meta = _parse_extracted_metadata(doc.get("extracted_metadata"))
+    meta = cast("dict[str, object]", doc.get("extracted_metadata") or {})
     lines = [f"[DOCUMENT] {doc['original_name']}:"]
     _append_meta_summary(lines, doc, meta)
 
@@ -394,8 +376,8 @@ def _handle_delete(service: "_DocumentService", params: dict[str, object]) -> To
             action="delete",
         )
 
-    from services.data_graph_service import get_data_graph_service
-    deleted_count = get_data_graph_service().hard_delete_by_source_prefix(f"document:{doc_id}")
+    from models.document import DocumentRow
+    deleted_count = DocumentRow.purge_by_document_id(doc_id)
 
     return ToolResult.ok(
         {"id": doc_id, "name": doc["original_name"], "artifacts_removed": deleted_count},
@@ -405,7 +387,7 @@ def _handle_delete(service: "_DocumentService", params: dict[str, object]) -> To
 
 def _handle_restore(service: "_DocumentService", params: dict[str, object]) -> ToolResult:
     doc_id = cast(str, params.get(Keys.id) or "").strip()
-    name = cast(str, params.get(Keys.name) or "").strip()
+    name = cast(str, params.get(Keys.name_) or "").strip()
 
     if doc_id:
         doc = service.get_document(doc_id)
@@ -467,11 +449,17 @@ def ingest_file(
     """The single mechanical ingest for an uploaded file given by PATH.
 
     Shared by both upload surfaces — chat attachments (via ``_handle_upload`` /
-    ``ToolDispatcher``) and the Documents library (``api.documents.upload_document``).
-    Copies the source file into the document store, creates the DB row, then runs
-    extraction SYNCHRONOUSLY (images route to vision/OCR, text to the extractor —
-    all inside ``_run_upload_extraction`` → ``extract_text``) so the document
-    reaches a terminal state (ready/failed) before returning.
+    ``ToolDispatcher``) and the Documents library.
+
+    CONTENT FIRST, then store, then row: the mime picks the service that produces
+    the document's text (an image is described by ``ImageDescription`` — vision,
+    degrading to OCR; anything else is read by ``TextReader``) BEFORE the file is
+    copied or the row inserted. A file that
+    yields no content is not a document — the caller gets ``{"error"}`` and
+    neither an orphan row nor an orphan file is left behind. Everything runs
+    SYNCHRONOUSLY so the document reaches a terminal state (ready/failed) before
+    returning: callers must be able to read it in the same turn, never "still
+    being processed".
 
     Takes a path, never bytes, so the act-trail (which records every dispatch's
     params verbatim) can never carry a file blob and blow the context window.
@@ -512,6 +500,23 @@ def ingest_file(
     rel_parts = ([subdir] if subdir else []) + [doc_id, name]
     file_path_rel = "/".join(rel_parts)
 
+    # Content FIRST — before the store copy and before the DB row. A document with
+    # no content is not a document: an image whose description could not be
+    # produced (vision down AND OCR blank) must leave no orphan row and no orphan
+    # file behind. The caller gets the error, the store stays clean.
+    try:
+        if content_type.startswith("image/"):
+            from services.image_description import ImageDescription, RICH_INDEX_PROMPT
+            text = ImageDescription(src_path, RICH_INDEX_PROMPT).get_value()
+        else:
+            from services.text_reader import TextReader
+            text = TextReader(src_path).get_value()
+    except Exception as exc:
+        logger.exception(f"[DOCUMENT SKILL] Could not read {name}: {exc}")
+        return {"error": f"Could not read '{name}': {exc}"}
+    if not text.strip():
+        return {"error": f"No content could be extracted from '{name}'."}
+
     try:
         from services.file_mapper_service import FileMapperService
 
@@ -535,15 +540,17 @@ def ingest_file(
         logger.exception(f"[DOCUMENT SKILL] Upload failed: {e}")
         return {"error": f"Failed to upload document: {e}"}
 
-    # Extraction runs synchronously: callers MUST be able to read the document
+    # Indexing runs synchronously: callers MUST be able to read the document
     # immediately (the ACT loop's follow-up view in the same turn, or the library
-    # endpoint's response) — never "still being processed".
-    from api.documents import _mark_upload_failed, _run_upload_extraction
+    # endpoint's response) — never "still being processed". A failure here is a
+    # storage fault on a document that DOES have content, so the row is marked
+    # failed rather than vanishing.
     try:
-        _run_upload_extraction(doc_id)
+        artifact_count = service.index_document(doc_id, text)
+        logger.info(f"[DOCUMENT SKILL] Processed upload {doc_id}: {artifact_count} artifacts")
     except Exception as exc:
-        logger.exception(f"[DOCUMENT SKILL] Extraction failed for {doc_id}: {exc}")
-        _mark_upload_failed(doc_id, str(exc))
+        logger.exception(f"[DOCUMENT SKILL] Indexing failed for {doc_id}: {exc}")
+        service.mark_failed(doc_id, str(exc))
 
     doc = service.get_document(doc_id)
     return {
@@ -565,7 +572,7 @@ def _handle_upload(service: "_DocumentService", params: dict[str, object]) -> To
     result = ingest_file(
         service,
         cast(str, params.get(Keys.path)),
-        name=cast("str | None", params.get(Keys.name)),
+        name=cast("str | None", params.get(Keys.name_)),
     )
     if result.get("error"):
         return ToolResult.err(cast(str, result["error"]), code="upload-failed", action="upload")
@@ -588,7 +595,7 @@ def _handle_upload(service: "_DocumentService", params: dict[str, object]) -> To
 
 
 def _handle_create(service: "_DocumentService", params: dict[str, object]) -> ToolResult:
-    name = cast(str, params.get(Keys.name, "")).strip()
+    name = cast(str, params.get(Keys.name_, "")).strip()
     content = cast(str, params.get(Keys.content, "")).strip()
 
     if "." not in name:
@@ -602,12 +609,7 @@ def _handle_create(service: "_DocumentService", params: dict[str, object]) -> To
 
     artifact_count = create_document_artifacts(doc_id, content)
     service.update_status(doc_id, "ready", chunk_count=artifact_count)
-
-    summary = content[:500]
-    dot_pos = summary.rfind(". ")
-    if dot_pos > 200:
-        summary = summary[:dot_pos + 1]
-    service.update_summary(doc_id, summary)
+    service.update_summary(doc_id, service.derive_summary(content))
 
     return ToolResult.ok(
         {"id": doc_id, "name": name, "artifacts": artifact_count},

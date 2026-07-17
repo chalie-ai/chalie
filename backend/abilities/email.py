@@ -32,7 +32,7 @@ import re
 from typing import ClassVar, cast
 
 from abilities._capability import CapabilityAbility
-from abilities._params import Keys
+from configs.enums.param_key import Keys
 from abilities._result import ToolResult, truncate
 
 logger = logging.getLogger(__name__)
@@ -49,6 +49,7 @@ _RECIPIENT_ACTIONS = ("send", "draft", "forward")
 
 
 class EmailAbility(CapabilityAbility):
+    DISCOVERABLE: ClassVar[bool] = False  # pim-delegate-exclusive; pinned on PimConfig only
     CAPABILITY_KEY: ClassVar[str] = "mail"
     DEFAULT_ACTION: ClassVar[str] = "search"
     NOT_CONNECTED_HINT: ClassVar[str] = (
@@ -106,6 +107,10 @@ class EmailAbility(CapabilityAbility):
 
     def get_search_tooltip(self) -> str:
         return "email inbox and sending"
+
+    def get_follow_up(self, tr: ToolResult) -> str:
+        """Point the model to read an email's full body by uid."""
+        return "search results are snippets only, not the full message. If you need the complete body of an email before acting on it, call email again with action=read and that uid."
 
     def get_parameters(self) -> dict[str, object]:
         return self._PARAMETERS

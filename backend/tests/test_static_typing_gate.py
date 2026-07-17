@@ -64,7 +64,7 @@ _SKIP_DIRS = frozenset(
 # Top-level backend directories that legitimately contain zero .py files
 # (model/data artifacts). The completeness gate asserts this set exactly so a
 # new source package can never appear outside the type-checked roster unnoticed.
-_PY_FREE_DIRS = frozenset({"pre-trained", "vision"})
+_PY_FREE_DIRS = frozenset({"pre-trained", "vision", "stubs"})
 
 # Matches a mypy type-suppression comment in any spacing/error-code variant.
 # The raw pattern text below is not itself a match (a backslash, not
@@ -78,15 +78,22 @@ _PACKAGES = [
     "api",
     "capabilities",
     "configs",
+    "contracts",
+    "controllers",
+    "cron",
+    "exceptions",
     "mcp_server",
+    "migrations",
+    "models",
+    "orchestrators",
     "services",
+    "tests",
     "tools",
     "utils",
     "workers",
-    "migrations",
-    "tests",
 ]
 _TOP_LEVEL_MODULES = [
+    "boot_screen.py",
     "consumer.py",
     "run.py",
     "runtime_config.py",

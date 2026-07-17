@@ -1,117 +1,58 @@
 from __future__ import annotations
 
-import logging
-from typing import TYPE_CHECKING, cast
+from configs.channels.user import UserConfig
+from configs.enums.channels import Channel
+from configs.enums.config_type import ConfigTypeEnum
 
-from configs.channels._common import DEFAULT_ALWAYS_AVAILABLE
-from services.post_turn_hook import PostTurnHook
-from services.processor_config import ProcessorConfig
-
-if TYPE_CHECKING:
-    from services.message_processor import MessageProcessor
-
-logger = logging.getLogger(__name__)
-LOG_PREFIX = "[DISCOVERY_CONFIG]"
-
-# The task handed to the loop each tick. Deliberately open-ended: it states the
-# intent (find something the user would care about, save it for later) and trusts
-# the model to choose how to search and what is worth keeping.
+# The task handed to the loop each tick — written as a user asking for a research
+# pass, grounded on the fresh main spine (DiscoveryConfig reads the ``user``
+# channel's history via ``read_channel="user"``). The system prompt is the
+# inherited UserConfig persona/voice prompt; this is the user-turn input only.
 DISCOVERY_PROMPT = (
-    "Based on what you know about me and what we've discussed recently, search "
-    "the web and read the news — did anything happen that I'd find interesting? "
-    "Recall your earlier discoveries first so you don't repeat yourself. If, and "
-    "only if, you find something genuinely interesting and relevant to me, record "
-    "a memory about it so we can discuss it later. If nothing stands out, that's a "
-    "fine outcome — record nothing and say so."
-)
-
-_DISCOVERY_SYSTEM_BODY = (
-    "You are running as a quiet background research process — not a chat. No one "
-    "is waiting on a reply. Your job is to proactively notice things in the world "
-    "that this specific person would genuinely care about, given what you know "
-    "about them and what they've discussed lately.\n\n"
-    "How you work:\n"
-    "- Reach the web through the discovery tools: use find_tools to bring up the "
-    "web search and browsing delegates, then follow leads worth following.\n"
-    "- Be selective. A generic headline is noise. Something tied to their actual "
-    "interests, work, plans, or people is signal. When in doubt, keep nothing.\n"
-    "- Recall your past discoveries before saving, and don't record the same "
-    "finding twice.\n"
-    "- Save a keeper by storing a memory (the memory tool, action=store): a short "
-    "key and a value that captures the finding and why it matters to them. It is "
-    "filed as a discovery automatically — you don't pick the kind.\n"
-    "- This is transparent: the person can see these runs. Write your findings "
-    "plainly, as if leaving them a note to read later."
+    "Can you run a background research pass for me? Ground it in our recent "
+    "conversation above, then search the web and read the news for anything "
+    "that's happened that I'd actually find interesting.\n\n"
+    "Use find_tools to bring up the web search and browsing delegates, and "
+    "follow whatever leads are worth following. Be selective — a generic "
+    "headline is noise; something tied to my actual interests, work, plans, or "
+    "people is signal. Recall your earlier discoveries first so you don't "
+    "record the same thing twice. If you find something worth keeping, save it "
+    "with the memory tool (action=store): a short key, what it is, and why it "
+    "matters to me — it gets filed automatically, you don't need to pick a "
+    "kind. If nothing stands out, that's a fine outcome — just say so and "
+    "record nothing.\n\n"
+    "Write whatever you find plainly, as if you're leaving me a note to read "
+    "later."
 )
 
 
-class PersistDiscoveryRunHook(PostTurnHook):
-    """Record one discovery run after the loop's final assistant row is persisted.
-
-    The run row anchors the Brain "Auto Research" views: the grounding the loop
-    ran against (captured in metadata at dispatch) plus a preview of what it said.
-    The full output is read live from the transcript by turn, never duplicated.
-    """
-
-    def run(self, mp: "MessageProcessor", result_text: str) -> None:
-        from services.discovery_runs import record_run
-        meta = mp._metadata or {}
-        record_run(
-            turn_id=mp.turn_id,
-            user_summary=cast("str", meta.get("user_summary") or ""),
-            compacted_summary=cast("str", meta.get("compacted_summary") or ""),
-            researched=(result_text or "").strip(),
-        )
-
-
-class DiscoveryConfig(ProcessorConfig):
+class DiscoveryConfig(UserConfig):
     """Proactive autonomous-research channel.
 
-    Fired at most once every few hours by the subconscious worker. Carries the
-    framework discovery tools (DEFAULT_ALWAYS_AVAILABLE pins find_tools + memory),
-    so it reaches the web through the search/browse delegates and records keepers
-    as discovery memories. Grounding (user summary + latest compaction at dispatch
-    time) is threaded in via metadata, not re-derived here.
+    A thin split of UserConfig: it **reads** the ``user`` channel's cross-turn
+    history (so it sees exactly what a user turn sees) but **writes** its rows
+    to the ``discovery`` channel. The system prompt, user definition, world
+    state, memory seed and prompt assembly are all inherited from UserConfig —
+    only the routing identity and the silent-background-loop overrides differ.
+    Fired at most once every few hours by the subconscious worker.
     """
 
+    SUPPORTS_ASYNC = False
+    BROADCASTS_STATE = False
+    # Re-declared, NOT inherited. Subclassing UserConfig would otherwise bill this
+    # loop's spend as "chat" — but the user never asked for it and never sees it;
+    # Chalie runs it on its own initiative, so it is system spend. Every override
+    # below follows the same rule: inherit UserConfig's *thinking*, never its
+    # user-facing identity. A future UserConfig subclass must make the same call
+    # deliberately rather than inherit a bill.
+    USAGE_TYPE = "system"
+
     def __init__(self) -> None:
-        super().__init__(
-            channel="discovery",
-            role="discovery",
-            policy_channel=ProcessorConfig.PolicyChannel.SUBCONSCIOUS,
-            always_available=DEFAULT_ALWAYS_AVAILABLE,
-            skip_transcript=False,
-            skip_input_row=False,
-            suppress_history=True,
-            broadcast_to=None,
-            memory_seed=False,
-            post_turn_hooks=(PersistDiscoveryRunHook(),),
-        )
+        super().__init__()
+        object.__setattr__(self, "channel", Channel.DISCOVERY.value)
+        object.__setattr__(self, "read_channel", Channel.USER.value)
+        object.__setattr__(self, "broadcast_to", None)
+        object.__setattr__(self, "prompt_channel", Channel.USER.value)
 
-    def get_user_definition(self, mp: "MessageProcessor") -> str:
-        return (
-            "The user is 'discovery' — a background research process that "
-            "represents your own initiative to look out for this person."
-        )
-
-    def get_user_prompt(self, mp: "MessageProcessor") -> str:
-        """Grounding (user summary + recent discussion) + the task + ACT trail."""
-        meta = mp._metadata or {}
-        parts: list[str] = []
-        summary = cast("str", meta.get("user_summary") or "")
-        if summary:
-            parts.append(f"## About the user\n{summary}")
-        compacted = cast("str", meta.get("compacted_summary") or "")
-        if compacted:
-            parts.append(f"## Recently discussed\n{compacted}")
-        parts.append(mp._raw_input)
-        try:
-            trail = mp._render_act_trail()
-            if trail:
-                parts.append(trail)
-        except Exception as exc:
-            logger.debug("%s _render_act_trail failed: %s", LOG_PREFIX, exc)
-        return "\n\n".join(parts)
-
-    def get_system_prompt(self, mp: "MessageProcessor") -> str:
-        return f"{self.get_user_definition(mp)}\n\n{_DISCOVERY_SYSTEM_BODY}"
+    def type(self) -> ConfigTypeEnum:
+        return ConfigTypeEnum.DISCOVERY

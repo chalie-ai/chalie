@@ -7,18 +7,22 @@ run in a single process. Voice runs natively when deps are installed.
 """
 
 import argparse
+import logging
 import os
 import sys
-import logging
 from typing import TYPE_CHECKING, cast
 
+from configs.channels import config_for
+from configs.enums.config_type import ConfigTypeEnum
+from services.database import Database
 from utils.logger import Logger
 
 if TYPE_CHECKING:
+    import ssl
+
     from boot_screen import BootScreen as _BootScreen
     from services.embedding_service import EmbeddingService
     from services.onnx_inference_service import OnnxInferenceService
-    from services.database_service import DatabaseService
     from consumer import WorkerManager as _WorkerManager
 
 
@@ -118,13 +122,13 @@ def _start_model_preload() -> None:
     _threading.Thread(target=_preload_models, name="model-preload", daemon=True).start()
 
 
-def _migrate_legacy_policy_rules(database_service: "DatabaseService") -> None:
+def _migrate_legacy_policy_rules() -> None:
     """Upgrade-path only — on a fresh install this is a no-op. Critically does
     NOT create the ``policy`` table early: making the DB look non-empty to
     convergence's freshness check would skip the schema.sql seed pass (incl.
     the row that marks ``api_key`` sensitive, persisting the REST API key in
     cleartext on fresh installs)."""
-    with database_service.connection() as conn:
+    with Database.transaction() as conn:
         has_legacy = conn.execute(
             "SELECT name FROM sqlite_master WHERE type='table' AND name='policy_rules'"
         ).fetchone() is not None
@@ -146,11 +150,8 @@ def _migrate_legacy_policy_rules(database_service: "DatabaseService") -> None:
     logger.info("[Startup] Legacy policy_rules copied into flat policy table")
 
 
-def _init_database() -> "DatabaseService":
-    from services.database_service import get_shared_db_service
+def _init_database() -> None:
     from services.schema_convergence_service import SchemaConvergenceService
-
-    database_service = get_shared_db_service()
 
     # Provider deletion is permanent — there is no longer a soft-delete flag.
     # Any rows still parked at is_active=0 are previously-deleted providers;
@@ -158,7 +159,7 @@ def _init_database() -> "DatabaseService":
     # as active providers (and collide on the UNIQUE name index). Self-disabling:
     # once convergence removes is_active this block is a no-op.
     try:
-        with database_service.connection() as _conn:
+        with Database.transaction() as _conn:
             _cols = [r[1] for r in _conn.execute("PRAGMA table_info(providers)").fetchall()]
             if 'is_active' in _cols:
                 _purged = _conn.execute("DELETE FROM providers WHERE is_active = 0").rowcount
@@ -172,11 +173,11 @@ def _init_database() -> "DatabaseService":
     # drops policy_rules.  No-op on a fresh DB so it stays "fresh" and convergence
     # runs schema.sql's seed pass (incl. the api_key is_sensitive row).
     try:
-        _migrate_legacy_policy_rules(database_service)
+        _migrate_legacy_policy_rules()
     except Exception as _pol_err:
         logger.warning(f"[Startup] legacy policy_rules copy skipped: {_pol_err}")
 
-    convergence = SchemaConvergenceService(database_service)
+    convergence = SchemaConvergenceService()
     convergence.converge()
     # Separate deterministic value backfill — convergence applies only static
     # column DEFAULTs, never derived values (last_relevant_at, valid_from, etc.).
@@ -186,95 +187,47 @@ def _init_database() -> "DatabaseService":
     # the policy table.  INSERT OR IGNORE preserves any copied/user rows.
     try:
         from services.policy_manager import PolicyManager
-        inserted = PolicyManager(database_service).apply_seed()
+        inserted = PolicyManager().apply_seed()
         logger.info("[Startup] Policy seed applied (%d new rows)", inserted)
     except Exception as _seed_err:
         logger.warning(f"[Startup] policy seed skipped: {_seed_err}")
 
-    return database_service
+
+def _run_startup_migrations() -> None:
+    """Every-boot data upkeep, then the one-time migrations.
+
+    One-time migrations live in the ``migrations`` package: each module
+    self-checks via ``needed()`` (no-op on databases already in target shape)
+    and ``migrations.runner`` records outcomes in the ``schema_migrations``
+    ledger, so nothing here changes when a migration is added or retired.
+    """
+    _run_transcript_rebuild()
+    _purge_stale_adaptive_layer_rows()
+
+    from migrations.runner import run_all
+    from services.file_mapper_service import FileMapperService
+    run_all(str(FileMapperService.get_db_path()))
 
 
-def _run_startup_migrations(database_service: "DatabaseService") -> None:
-    """Run all one-time startup migrations and data backfills."""
-    import os as _os
 
-    # Token-limit backfill
-    try:
-        from services.provider_token_limits import backfill_all
-        with database_service.connection() as _conn:
-            _stats = backfill_all(_conn)
-            _conn.commit()
-        logger.info(
-            "[Startup] providers token-limit backfill: total=%d succeeded=%d failed=%d",
-            _stats['total'], _stats['succeeded'], _stats['failed'],
-        )
-    except Exception as _bf_err:
-        logger.warning(f"[Startup] providers max_tokens/compact_at backfill skipped: {_bf_err}")
-
-    # One-time transcript rebuild
+def _run_transcript_rebuild() -> None:
+    """One-time transcript rebuild."""
     try:
         from migrate_transcript_rebuild import run_once_on_boot
-        run_once_on_boot(db_path=database_service.db_path)
+        from services.file_mapper_service import FileMapperService
+        run_once_on_boot(db_path=str(FileMapperService.get_db_path()))
     except Exception as _mig_err:
         logger.warning(f"[Startup] Transcript migration skipped: {_mig_err}")
 
-    # Drop zombie invoked_by column
-    try:
-        _drop_sentinel = _os.path.join(
-            _os.path.dirname(database_service.db_path),
-            '.tool-calls-drop-invoked-by-v1.done',
-        )
-        if not _os.path.exists(_drop_sentinel):
-            with database_service.connection() as _conn:
-                _cols = [r[1] for r in _conn.execute("PRAGMA table_info(tool_calls)").fetchall()]
-                if 'invoked_by' in _cols:
-                    _conn.execute("ALTER TABLE tool_calls DROP COLUMN invoked_by")
-                    _conn.commit()
-                    logger.info("[Startup] Dropped zombie invoked_by column from tool_calls")
-            with open(_drop_sentinel, 'w') as _f:
-                _f.write('done')
-    except Exception as _drop_err:
-        logger.warning(f"[Startup] tool_calls invoked_by drop skipped: {_drop_err}")
 
-    # Drop legacy ephemeral column — every tool call is now durable; rows older
-    # than 7 days are removed by DecayEngineService._purge_tool_calls() instead.
-    try:
-        _ephem_sentinel = _os.path.join(
-            _os.path.dirname(database_service.db_path),
-            '.tool-calls-drop-ephemeral-v1.done',
-        )
-        if not _os.path.exists(_ephem_sentinel):
-            with database_service.connection() as _conn:
-                _cols = [r[1] for r in _conn.execute("PRAGMA table_info(tool_calls)").fetchall()]
-                if 'ephemeral' in _cols:
-                    _conn.execute("ALTER TABLE tool_calls DROP COLUMN ephemeral")
-                    _conn.commit()
-                    logger.info("[Startup] Dropped ephemeral column from tool_calls (durable retention)")
-            with open(_ephem_sentinel, 'w') as _f:
-                _f.write('done')
-    except Exception as _ephem_err:
-        logger.warning(f"[Startup] tool_calls ephemeral drop skipped: {_ephem_err}")
-
-    # One-time episodes FTS rebuild
-    try:
-        _sentinel = _os.path.join(_os.path.dirname(database_service.db_path), '.episodes-fts-rebuild-v1.done')
-        if not _os.path.exists(_sentinel):
-            with database_service.connection() as _conn:
-                _conn.execute("INSERT INTO episodes_fts(episodes_fts) VALUES('rebuild')")
-                _conn.commit()
-            with open(_sentinel, 'w') as _f:
-                _f.write('done')
-            logger.info("[Startup] episodes_fts rebuilt from content table")
-    except Exception as _fts_err:
-        logger.warning(f"[Startup] episodes FTS rebuild skipped: {_fts_err}")
-
-    # Purge stale AdaptiveLayer data_graph rows
+def _purge_stale_adaptive_layer_rows() -> None:
+    """Purge stale AdaptiveLayer data_graph rows."""
     try:
         _adaptive_keys = (
             'prefers_concise', 'prefers_depth', 'enjoys_challenge',
             'prefers_bullet_format', 'challenge_tolerance',
         )
-        with database_service.connection() as _conn:
+        with Database.transaction() as _conn:
             _placeholders = ','.join('?' * len(_adaptive_keys))
             _conn.execute(
                 f"DELETE FROM data_graph WHERE kind='user_specific' AND key IN ({_placeholders})",
@@ -285,7 +238,7 @@ def _run_startup_migrations(database_service: "DatabaseService") -> None:
         logger.warning(f"[Startup] AdaptiveLayer data_graph purge skipped: {_adl_err}")
 
 
-def _init_services(database_service: "DatabaseService") -> None:
+def _init_services() -> None:
     """Initialize singleton services and seed default configuration."""
     # Clean up expired auth sessions
     try:
@@ -299,9 +252,8 @@ def _init_services(database_service: "DatabaseService") -> None:
 
     # Initialize API key
     try:
-        from services.settings_service import SettingsService
-        settings_service = SettingsService(database_service)
-        api_key = settings_service.get_api_key_or_generate()
+        from models.setting import Setting
+        api_key = Setting.get_api_key_or_generate()
         logger.info(f"[Settings] API key initialized (key: ...{api_key[-8:]})")
     except Exception as e:
         logger.warning(f"Settings initialization failed: {e}")
@@ -316,23 +268,26 @@ def _init_services(database_service: "DatabaseService") -> None:
 
 
 def _register_workers(manager: "_WorkerManager", host: str, port: int) -> None:
-    """Register all service workers with the WorkerManager."""
-    from services.scheduler_service import scheduler_worker
-    from workers.document_worker import document_purge_worker
-    from services.world_awareness_service import world_awareness_worker
+    """Register all service workers with the WorkerManager.
 
-    manager.register_service("scheduler-service", scheduler_worker)
+    The user-schedule poller (``scheduler_service``) and the idle-gated
+    cognition loop (``subconscious_worker``) were unified into the ``cron``
+    package: ``cron-runner`` fires every registered ``ScheduledJob`` on its own
+    schedule (``ScheduledItemsDispatcherJob`` folds in the schedule poller; the
+    nine idle-gated cognition jobs fold in the subconscious tick).
+    """
+    from workers.document_worker import document_purge_worker
+
     manager.register_service("document-purge-service", document_purge_worker)
-    manager.register_service("world-awareness-service", world_awareness_worker)
 
     from workers.folder_watcher_worker import folder_watcher_worker
     manager.register_service("folder-watcher-service", folder_watcher_worker)
 
-    from services.subconscious_worker import subconscious_worker
-    manager.register_service("subconscious-worker", subconscious_worker)
-
     from workers.tmp_cleanup_worker import tmp_cleanup_worker
     manager.register_service("tmp-cleanup-service", tmp_cleanup_worker)
+
+    from cron.runner import cron_runner
+    manager.register_service("cron-runner", cron_runner)
 
     _bootstrap_capability_sync()
     _try_register(manager, "search-expander-service",
@@ -346,10 +301,51 @@ def _register_workers(manager: "_WorkerManager", host: str, port: int) -> None:
         app = create_app()
         if _boot_screen is not None:
             _boot_screen.stop()  # release the port for the bind below
-        logger.info(f"[Chalie] Starting on http://{host}:{port}")
-        app.run(host=host, port=port, debug=False, threaded=True)
+        ssl_context = _resolve_ssl_context()
+        scheme = "https" if ssl_context else "http"
+        logger.info(f"[Chalie] Starting on {scheme}://{host}:{port}")
+        app.run(host=host, port=port, debug=False, threaded=True, ssl_context=ssl_context)
 
     manager.register_service("rest-api-worker-1", _flask_worker)
+
+
+def _disable_ssl_setting() -> None:
+    """Clear ``ssl_enabled`` after a TLS fallback so the cookie Secure-scope tracks the real scheme.
+
+    Without this a vanished cert leaves ``ssl_enabled=true`` in the DB while the
+    server runs HTTP — issuing ``Secure`` cookies the browser drops, locking out login.
+    """
+    try:
+        from models.setting import Setting
+        Setting.set_bool(Setting.SSL_ENABLED, False)
+    except Exception:
+        logger.exception("[SSL] could not clear ssl_enabled after TLS fallback")
+
+
+def _resolve_ssl_context() -> "ssl.SSLContext | None":
+    """Build the server TLS context when SSL is enabled and a valid cert/key exist.
+
+    Returns ``None`` (plain HTTP) when SSL is off. If SSL is enabled but the cert/key
+    are missing or fail to load, clears ``ssl_enabled`` and serves HTTP — degrading
+    rather than crash-looping, and keeping the cookie Secure-scope honest.
+    """
+    try:
+        from models.setting import Setting
+        if not Setting.get_bool(Setting.SSL_ENABLED):
+            return None
+        from services.file_mapper_service import FileMapperService
+        cert = FileMapperService.get_ssl_cert_path()
+        key = FileMapperService.get_ssl_key_path()
+        if cert.is_file() and key.is_file():
+            import ssl
+            context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+            context.load_cert_chain(str(cert), str(key))
+            return context
+        logger.warning("[SSL] enabled but certificate/key missing — disabling SSL, serving HTTP")
+    except Exception:
+        logger.exception("[SSL] context load failed — disabling SSL, serving HTTP")
+    _disable_ssl_setting()
+    return None
 
 
 def _check_asset_caches() -> None:
@@ -429,16 +425,36 @@ def main() -> None:
 
     _start_model_preload()
 
-    database_service = _init_database()
-    _run_startup_migrations(database_service)
-    _init_services(database_service)
+    _init_database()
+
+    # Bind the active-record spine's connection getter onto Model once, here,
+    # at boot (services/database.py::Database.bind) — every Model subclass
+    # (Transcript, ToolCall, TurnExecution, ...) re-derives its own thread's
+    # connection through it afterward. Nothing on the MP spine can run a query
+    # before this runs once, for the life of the process.
+    Database().bind()
+
+    # Boot sweep: a turn_executions row still open (ended_at IS NULL) belonged
+    # to a process that no longer exists — closing it as crashed keeps no
+    # surface reading a stale "working" turn after a restart or a kill. Reads
+    # through an inert MP (§7 G3: crash recovery has no live turn to construct
+    # a real one for) so the sweep runs through the same
+    # TurnExecutionService.sweep_orphaned() every in-process turn would.
+    from controllers.message_processor import MessageProcessor
+    _boot_mp = MessageProcessor(config_for(ConfigTypeEnum.USER))
+    _closed = _boot_mp.turn_execution_service.sweep_orphaned()
+    if _closed:
+        logger.info("[Startup] Closed %d orphaned turn_executions row(s)", _closed)
+
+    _run_startup_migrations()
+    _init_services()
 
     _check_asset_caches()
     _warmup_models()
 
     # Background-install optional runtime deps (playwright, voice if enabled)
     RuntimeDepsService.ensure_playwright()
-    RuntimeDepsService.init_voice_from_settings(database_service)
+    RuntimeDepsService.init_voice_from_settings()
 
     from consumer import WorkerManager
     manager = WorkerManager()

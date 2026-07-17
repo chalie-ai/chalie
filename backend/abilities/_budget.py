@@ -25,11 +25,14 @@ class BudgetCappedAbility(Ability, ABC):
         if channel is None or turn_id is None:
             return None
 
-        from services.act_trail import ActTrail  # noqa: PLC0415
+        from models.tool_call import ToolCall  # noqa: PLC0415
         count = sum(
             1
-            for r in ActTrail().fetch_by_turn(channel, turn_id)
-            if r.get("tool_name") == self.get_name()
+            for r in ToolCall.by_turn(channel, turn_id)
+            # An empty result is this call's own in-flight row, opened by the
+            # dispatcher before run() — exclude it so the cap counts only the
+            # completed calls that came before, not the one asking.
+            if r.tool_name == self.get_name() and r.result
         )
         if count >= self.BUDGET_CAP:
             return ToolResult.ok(

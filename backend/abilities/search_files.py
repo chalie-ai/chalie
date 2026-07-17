@@ -39,7 +39,7 @@ from pathlib import Path
 from typing import ClassVar, cast
 
 from abilities._ability import Ability
-from abilities._params import Keys
+from configs.enums.param_key import Keys
 from abilities._result import ToolResult
 
 _RESULTS_PER_PAGE = 5
@@ -80,7 +80,8 @@ class SearchFilesAbility(Ability):
         return (
             "Locate files on disk by filename pattern (glob) or by content (grep). "
             "Use this BEFORE reaching for bash when you need to find a file you "
-            "don't already know the path of."
+            "don't already know the path of. Use in conjunction with the `read` "
+            "tool to then get a located file's contents into context."
         )
 
     def get_examples(self) -> list[str]:

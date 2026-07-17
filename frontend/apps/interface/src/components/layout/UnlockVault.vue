@@ -2,7 +2,7 @@
      it blocks the UI and submits POST /auth/login (stored login username +
      typed password) to unseal. Dismisses itself once vault_state==='unlocked'. -->
 <script setup lang="ts">
-import { ref, onMounted, onBeforeUnmount } from 'vue';
+import { onBeforeUnmount, onMounted, ref } from 'vue';
 import { getUsername } from '@chalie/shared';
 import { system } from '../../api/system';
 import { auth } from '../../api/auth';
@@ -83,7 +83,7 @@ onBeforeUnmount(() => {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: var(--bg-base);
+  background: var(--bg);
 }
 .unlock-vault__card {
   display: flex;
@@ -96,8 +96,15 @@ onBeforeUnmount(() => {
   border: 1px solid var(--border-subtle);
   text-align: center;
 }
-.unlock-vault__title { font-size: 1.35rem; font-weight: 700; color: var(--text-primary); }
-.unlock-vault__hint { color: var(--text-secondary); line-height: 1.5; }
+.unlock-vault__title {
+  font-size: 1.35rem;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+.unlock-vault__hint {
+  color: var(--text-secondary);
+  line-height: 1.5;
+}
 .unlock-vault__input {
   padding: var(--space-sm) var(--space-md);
   border-radius: var(--radius-md);
@@ -113,7 +120,13 @@ onBeforeUnmount(() => {
   color: #fff;
   font-weight: 600;
   cursor: pointer;
-  &:disabled { opacity: 0.6; cursor: default; }
+  &:disabled {
+    opacity: 0.6;
+    cursor: default;
+  }
 }
-.unlock-vault__error { color: var(--danger); min-height: 1.25rem; }
+.unlock-vault__error {
+  color: var(--error);
+  min-height: 1.25rem;
+}
 </style>

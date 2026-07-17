@@ -4,7 +4,7 @@
 <script setup lang="ts">
 import { ref } from 'vue';
 import { setHost, setToken, setUsername, validatePairingPayload } from '@chalie/shared';
-import { scan, Format } from '@tauri-apps/plugin-barcode-scanner';
+import { Format, scan } from '@tauri-apps/plugin-barcode-scanner';
 
 const error = ref<string>('');
 const scanning = ref<boolean>(false);
@@ -54,8 +54,15 @@ async function startScan(): Promise<void> {
   color: var(--text-primary);
   text-align: center;
 }
-.link-device__title { font-size: 1.5rem; font-weight: 700; }
-.link-device__hint { max-width: 28rem; color: var(--text-secondary); line-height: 1.5; }
+.link-device__title {
+  font-size: 1.5rem;
+  font-weight: 600;
+}
+.link-device__hint {
+  max-width: 28rem;
+  color: var(--text-secondary);
+  line-height: 1.5;
+}
 .link-device__scan {
   padding: var(--space-sm) var(--space-xl);
   border-radius: var(--radius-full);
@@ -64,7 +71,13 @@ async function startScan(): Promise<void> {
   color: #fff;
   font-weight: 600;
   cursor: pointer;
-  &:disabled { opacity: 0.6; cursor: default; }
+  &:disabled {
+    opacity: 0.6;
+    cursor: default;
+  }
 }
-.link-device__error { color: var(--danger); min-height: 1.25rem; }
+.link-device__error {
+  color: var(--danger);
+  min-height: 1.25rem;
+}
 </style>

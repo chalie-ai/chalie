@@ -10,7 +10,7 @@
  * Voice availability is a SEPARATE concern (voiceStore) and must NOT gate this
  * overlay — a slow/unavailable voice service can never block first paint.
  */
-import { ref, onMounted, onBeforeUnmount } from 'vue';
+import { onBeforeUnmount, onMounted, ref } from 'vue';
 import { system } from '../../api/system';
 
 const POLL_INTERVAL_MS = 2000;

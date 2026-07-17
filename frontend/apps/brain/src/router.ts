@@ -13,22 +13,15 @@ import SkillsView from './views/SkillsView.vue';
 import McpView from './views/McpView.vue';
 import ImportExportView from './views/ImportExportView.vue';
 import LinkDeviceView from './views/LinkDeviceView.vue';
+import SystemView from './views/SystemView.vue';
 
 import MemorySub from './views/cognition/MemorySub.vue';
-import AutoResearchSub from './views/cognition/AutoResearchSub.vue';
 import ToolsSub from './views/cognition/ToolsSub.vue';
 import WorldSub from './views/cognition/WorldSub.vue';
 import PersonalitySub from './views/cognition/PersonalitySub.vue';
 import ErrorsSub from './views/cognition/ErrorsSub.vue';
 import UsageSub from './views/cognition/UsageSub.vue';
 import CompactionSub from './views/cognition/CompactionSub.vue';
-
-// Scheduler filter tabs are routed for deep-link / breadcrumb support.
-import SchedulerAllSub from './views/scheduler/AllSub.vue';
-import SchedulerPendingSub from './views/scheduler/PendingSub.vue';
-import SchedulerFiredSub from './views/scheduler/FiredSub.vue';
-import SchedulerFailedSub from './views/scheduler/FailedSub.vue';
-import SchedulerCancelledSub from './views/scheduler/CancelledSub.vue';
 
 import DocumentsActiveSub from './views/documents/ActiveSub.vue';
 import DocumentsProcessingSub from './views/documents/ProcessingSub.vue';
@@ -53,7 +46,6 @@ export const router = createRouter({
       redirect: '/cognition/memory',
       children: [
         { path: 'memory', name: 'cognition-memory', component: MemorySub },
-        { path: 'auto-research', name: 'cognition-auto-research', component: AutoResearchSub },
         { path: 'tools', name: 'cognition-tools', component: ToolsSub },
         { path: 'world', name: 'cognition-world', component: WorldSub },
         { path: 'personality', name: 'cognition-personality', component: PersonalitySub },
@@ -64,19 +56,7 @@ export const router = createRouter({
       ],
     },
 
-    {
-      path: '/scheduler',
-      name: 'scheduler',
-      component: SchedulerView,
-      redirect: '/scheduler/all',
-      children: [
-        { path: 'all', name: 'scheduler-all', component: SchedulerAllSub },
-        { path: 'pending', name: 'scheduler-pending', component: SchedulerPendingSub },
-        { path: 'fired', name: 'scheduler-fired', component: SchedulerFiredSub },
-        { path: 'failed', name: 'scheduler-failed', component: SchedulerFailedSub },
-        { path: 'cancelled', name: 'scheduler-cancelled', component: SchedulerCancelledSub },
-      ],
-    },
+    { path: '/scheduler', name: 'scheduler', component: SchedulerView },
 
     { path: '/lists', name: 'lists', component: ListsView },
 
@@ -111,6 +91,7 @@ export const router = createRouter({
     { path: '/mcp', name: 'mcp', component: McpView },
     { path: '/import-export', name: 'import-export', component: ImportExportView },
     { path: '/link-device', name: 'link-device', component: LinkDeviceView },
+    { path: '/system', name: 'system', component: SystemView },
 
     // Catch-all → providers.
     { path: '/:pathMatch(.*)*', redirect: '/providers' },

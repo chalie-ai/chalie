@@ -11,7 +11,7 @@ Real production path, zero mocks (same shape as test_voice_auth.py):
   * real create_app() Flask app + the real require_auth cookie→bearer guard;
   * the real db SQLite fixture (patches the DB singleton);
   * a real wrapper token minted by the real WrapperAuthService.create_token —
-    the exact call POST /api/wrappers makes.
+    the exact call POST /api/wrappers/-1 makes.
 
 Against the pre-impl tree there is no /auth/username route, so Flask answers
 404 and every assertion fails RED. All pass GREEN once the endpoint lands.
@@ -57,7 +57,7 @@ class TestAuthUsername:
         )
         db_conn.commit()
 
-        resp = client.get('/auth/username')
+        resp = client.get('/api/auth/username')
         assert resp.status_code == 200
         assert resp.get_json() == {"username": "alice"}
 
@@ -67,14 +67,14 @@ class TestAuthUsername:
         # readable by a wrapper token. (No master_account row needed: the guard
         # rejects before the handler's SELECT.)
         raw_token, _wrapper_id = WrapperAuthService().create_token(
-            name="auth-username-test", permissions={},
+            name="auth-username-test",
         )
         resp = _make_client().get(
-            '/auth/username', headers={"Authorization": f"Bearer {raw_token}"},
+            '/api/auth/username', headers={"Authorization": f"Bearer {raw_token}"},
         )
         assert resp.status_code == 403
 
     def test_unauthenticated_is_rejected(self, db: sqlite3.Connection) -> None:
-        resp = _make_client().get('/auth/username')
+        resp = _make_client().get('/api/auth/username')
         assert resp.status_code == 401
         assert resp.get_json() == {"error": "Authentication required"}

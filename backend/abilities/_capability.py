@@ -88,4 +88,12 @@ class CapabilityAbility(Ability, ABC):
             k: v for k, v in params.items() if not k.startswith("_") and k != "action"
         }
         result = cast("Callable[..., dict[str, object]]", handler)(action_params, self.telemetry)
+        # A handler signals failure with a truthy ``error`` key. Wrapping that in
+        # ``ok`` would tag a genuine failure ``status=success`` — the model never
+        # sees an error envelope, and the dispatcher's repeat-error steer (which
+        # only fires on ``status=error``) can't break a retry loop. Route it to
+        # ``err`` so the failure is loud and self-correctable.
+        error = result.get("error") if isinstance(result, dict) else None
+        if error:
+            return ToolResult.err(str(error), code="capability-error", action=action)
         return ToolResult.ok(result, action=action)

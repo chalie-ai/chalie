@@ -1,9 +1,8 @@
 """LLM service utilities — shared helpers used by the thin provider clients.
 
-This module retains shared utilities (estimate_tokens, _call_with_retry,
-_app_user_agent, _resolve_api_key, _strip_think_blocks,
-_parse_retry_after, _is_thinking_rejection) after the main client
-classes — and the message converters — were moved to
+This module retains shared utilities (estimate_tokens, _app_user_agent,
+_resolve_api_key, _strip_think_blocks, _is_thinking_rejection) after the
+main client classes — and the message converters — were moved to
 ``services/llm_clients/*``.
 
 The main client classes and their callers were migrated to the new
@@ -11,14 +10,13 @@ homes in ``services/llm_clients/*`` and ``services.provider_api``;
 no backward-compat re-export shims remain.
 """
 
-import re
-import time
 import logging
-from typing import TYPE_CHECKING, Callable, Optional, cast
+import re
+from typing import cast
 
 logger = logging.getLogger(__name__)
 
-_THINK_BLOCK_RE = re.compile(r"<think>.*?</think>\s*", re.DOTALL | re.IGNORECASE)
+_THINK_BLOCK_RE = re.compile(r"<think>.*?(?:</think>\s*|\Z)", re.DOTALL | re.IGNORECASE)
 
 _APP_URL = "https://chalie.ai"
 _APP_TITLE = "Chalie"
@@ -37,7 +35,13 @@ def _app_user_agent() -> str:
 
 
 def _strip_think_blocks(text: str) -> str:
-    """Remove <think>...</think> chain-of-thought blocks emitted by reasoning models."""
+    """Remove <think> chain-of-thought blocks emitted by reasoning models.
+
+    An unclosed block is stripped to the end of the text: some providers omit
+    the closing tag and glue the answer straight onto the reasoning with no
+    delimiter, so nothing after the opener is mechanically separable. Callers
+    must treat an empty result as "no response", never as an empty answer.
+    """
     if not text or "<think>" not in text.lower():
         return text
     return _THINK_BLOCK_RE.sub("", text).strip()
@@ -54,53 +58,32 @@ def estimate_tokens(text: str) -> int:
     return int(len(text.split()) * 1.3)
 
 
-def _call_with_retry(fn: Callable[[], object], max_retries: int = 2, backoff: float = 1.0) -> object:
-    """Rate limits (RateLimitError) are retried once with a short wait if
-    the provider includes a Retry-After header (capped at 10s). If no
-    header is present, the error propagates immediately."""
-    from services.provider_api import RateLimitError  # noqa: PLC0415
-    attempt = 0
-    while attempt <= max_retries:
-        try:
-            return fn()
-        except RateLimitError as e:
-            if e.retry_after and e.retry_after <= 10.0:
-                logger.warning(
-                    "Rate limited by %s (Retry-After %.0fs). Retrying once...",
-                    e.provider or 'provider', e.retry_after,
-                )
-                time.sleep(e.retry_after)
-                return fn()
-            raise
-        except Exception as e:
-            if attempt == max_retries:
-                raise
-            wait = backoff * (2 ** attempt)
-            logger.warning("LLM call failed (attempt %d): %s. Retrying in %ss...", attempt + 1, e, wait)
-            time.sleep(wait)
-            attempt += 1
-    if TYPE_CHECKING:  # mypy: loop always returns or raises; end is unreachable
-        raise RuntimeError("_call_with_retry: unreachable")
-
-
-def _parse_retry_after(exc: BaseException) -> Optional[float]:
-    """Extract the Retry-After header value from an HTTP exception, or return None."""
-    if hasattr(exc, 'response') and exc.response is not None:
-        ra = exc.response.headers.get('retry-after')
-        if ra:
-            try:
-                return float(ra)
-            except (ValueError, TypeError) as parse_err:
-                logger.debug("[LLM] Could not parse Retry-After header value %r: %s", ra, parse_err)
-    return None
-
-
 def _is_thinking_rejection(exc: BaseException, create_kwargs: dict[str, object]) -> bool:
-    """Return True when the provider rejected a reasoning_effort parameter."""
-    if 'reasoning_effort' not in create_kwargs:
-        return False
-    err = str(exc).lower()
-    return 'reasoning_effort' in err or 'unsupported' in err
+    """Return True when the provider rejected a thinking-related parameter.
+
+    Two rejection shapes are recognized:
+
+    1. reasoning_effort rejection (OpenAI native):
+       create_kwargs carries 'reasoning_effort' and the error text mentions
+       'reasoning_effort' or 'unsupported'.
+
+    2. extra_body thinking rejection (OpenAI-compatible / vLLM style):
+       create_kwargs carries an 'extra_body' dict containing a 'thinking' key
+       (the vendor-extension disable param) and the error text mentions
+       'thinking', 'extra_forbidden', 'extra inputs', or 'unsupported'.
+       Strict servers reject unknown body fields with 400 'Extra inputs are
+       not permitted'; the field must be dropped and retried.
+    """
+    if 'reasoning_effort' in create_kwargs:
+        err = str(exc).lower()
+        if 'reasoning_effort' in err or 'unsupported' in err:
+            return True
+    extra_body = create_kwargs.get('extra_body')
+    if isinstance(extra_body, dict) and 'thinking' in extra_body:
+        err = str(exc).lower()
+        if any(term in err for term in ('thinking', 'extra_forbidden', 'extra inputs', 'unsupported')):
+            return True
+    return False
 
 
 def _resolve_api_key(config: dict[str, object]) -> str:
@@ -109,6 +92,7 @@ def _resolve_api_key(config: dict[str, object]) -> str:
     if not api_key:
         raise ValueError(
             "API key not found in provider configuration. "
-            "Store the API key in the database via POST /providers or update via PUT /providers/<id>"
+            "Store the API key in the database via the providers API "
+            "(create: POST /api/providers/-1, update: POST /api/providers/<id>)"
         )
     return cast(str, api_key)

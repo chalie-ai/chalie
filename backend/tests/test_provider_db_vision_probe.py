@@ -11,10 +11,8 @@ pytestmark = pytest.mark.unit
 
 
 def _svc(db: sqlite3.Connection) -> "ProviderDbService":
-    import services.database_service as _db_mod
-    from services.database_service import DatabaseService
     from services.provider_db_service import ProviderDbService
-    return ProviderDbService(cast(DatabaseService, _db_mod._shared_db_service))
+    return ProviderDbService()
 
 
 def test_create_sets_supports_vision_when_probe_passes(db: sqlite3.Connection) -> None:
@@ -34,11 +32,6 @@ def test_create_clears_supports_vision_when_probe_fails(db: sqlite3.Connection) 
             {"name": "n", "platform": "ollama", "model": "plain"}
         )
     assert cast("dict[str, object]", p)["supports_vision"] is False
-
-
-def test_infer_vision_support_is_gone() -> None:
-    import services.provider_db_service as mod
-    assert not hasattr(mod, "_infer_vision_support")
 
 
 def test_create_keyless_key_requiring_provider_skips_probe(db: sqlite3.Connection) -> None:

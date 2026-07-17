@@ -2,6 +2,8 @@
 
 import logging
 
+from models.tool_call import ToolCall
+
 logger = logging.getLogger(__name__)
 
 
@@ -27,25 +29,14 @@ class SegmentService:
         if not transcript_ids:
             return []
         try:
-            from services.database_service import get_shared_db_service
-            db = get_shared_db_service()
-            placeholders = ','.join('?' * len(transcript_ids))
-            with db.connection() as conn:
-                tc_rows = conn.execute(
-                    f"SELECT tool_name, params, result, created_at "
-                    f"FROM tool_calls "
-                    f"WHERE transcript_id IN ({placeholders}) "
-                    f"ORDER BY created_at, id",
-                    transcript_ids,
-                ).fetchall()
             return [
                 {
-                    "tool_name": r[0],
-                    "params": r[1],
-                    "result": r[2] or "",
-                    "created_at": r[3],
+                    "tool_name": tc.tool_name,
+                    "params": tc.params,
+                    "result": tc.result or "",
+                    "created_at": tc.created_at,
                 }
-                for r in tc_rows
+                for tc in ToolCall.by_transcripts(transcript_ids)
             ]
         except Exception as exc:
             logger.debug("[SEGMENT] _fetch_tool_calls failed: %s", exc)

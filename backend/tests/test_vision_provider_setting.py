@@ -3,15 +3,13 @@ from typing import cast
 
 import pytest
 
-from services.database_service import DatabaseService
 from services.provider_db_service import ProviderDbService
 
 pytestmark = pytest.mark.unit
 
 
 def _svc(db: sqlite3.Connection) -> ProviderDbService:
-    import services.database_service as _db_mod
-    return ProviderDbService(cast(DatabaseService, _db_mod._shared_db_service))
+    return ProviderDbService()
 
 
 def _make_provider(db: sqlite3.Connection, name: str, vision: int) -> int:

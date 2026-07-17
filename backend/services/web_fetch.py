@@ -28,6 +28,7 @@ from dataclasses import dataclass
 
 import requests
 
+from exceptions import DownloadTooLarge, FetchBlocked
 from services.ssrf import is_private_url
 
 # Default chunk size for streamed downloads (bytes).
@@ -35,21 +36,6 @@ DEFAULT_CHUNK_SIZE = 8192
 
 # Default request timeout (seconds) when a caller does not specify one.
 DEFAULT_TIMEOUT = 15
-
-
-class FetchBlocked(Exception):
-    """Raised when the SSRF guard refuses a destination (private/internal host)."""
-
-
-class DownloadTooLarge(Exception):
-    """Raised by :func:`stream_to_file` when a download exceeds its byte cap.
-
-    The partial file is removed before this is raised — never a silent truncation.
-    """
-
-    def __init__(self, max_bytes: int) -> None:
-        super().__init__(f"download exceeds the {max_bytes}-byte cap")
-        self.max_bytes = max_bytes
 
 
 @dataclass(frozen=True)

@@ -1,13 +1,15 @@
 import sqlite3
 from collections.abc import Iterator
-
-import pytest
 from unittest.mock import patch, MagicMock
 
-from flask import Flask
+import pytest
 from flask.testing import FlaskClient
-from api.system import system_bp
+
+from api.system import health_ns, system_ns
+from configs.enums.channels import Channel
+from models.compaction import Compaction
 from services.memory_store import MemoryStore
+from tests.restx_test_app import mount_namespace
 
 
 @pytest.mark.unit
@@ -15,8 +17,7 @@ class TestSystemAPI:
 
     @pytest.fixture
     def client(self) -> FlaskClient:
-        app = Flask(__name__)
-        app.register_blueprint(system_bp)
+        app = mount_namespace(health_ns, system_ns)
         app.config['TESTING'] = True
         return app.test_client()
 
@@ -49,7 +50,7 @@ class TestSystemAPI:
         store.zadd('dmn:deliveries', {'test-delivery': 1711500000.0})
 
         with patch('services.memory_client.MemoryClientService.create_connection', return_value=store):
-            resp = client.get('/system/status')
+            resp = client.get('/api/system/status')
 
         assert resp.status_code == 200
         data = resp.get_json()
@@ -70,7 +71,7 @@ class TestSystemAPI:
         broken_store.get.return_value = None
 
         with patch('services.memory_client.MemoryClientService.create_connection', return_value=broken_store):
-            resp = client.get('/system/status')
+            resp = client.get('/api/system/status')
 
         assert resp.status_code == 200
         data = resp.get_json()
@@ -105,7 +106,7 @@ class TestSystemAPI:
         )
         db.commit()
 
-        resp = client.get('/system/observability/records?source=episodes')
+        resp = client.get('/api/system/observability/records?source=episodes')
 
         assert resp.status_code == 200
         data = resp.get_json()
@@ -140,7 +141,7 @@ class TestSystemAPI:
         )
         db.commit()
 
-        resp = client.get('/system/observability/records?source=user&q=blue')
+        resp = client.get('/api/system/observability/records?source=user&q=blue')
 
         assert resp.status_code == 200
         data = resp.get_json()
@@ -158,13 +159,13 @@ class TestSystemAPI:
             )
         db.commit()
 
-        resp1 = client.get('/system/observability/records?source=episodes')
+        resp1 = client.get('/api/system/observability/records?source=episodes')
         assert resp1.status_code == 200
         data1 = resp1.get_json()
         assert data1['returned'] == 250
         assert data1['has_more'] is True
 
-        resp2 = client.get('/system/observability/records?source=episodes&offset=250')
+        resp2 = client.get('/api/system/observability/records?source=episodes&offset=250')
         assert resp2.status_code == 200
         data2 = resp2.get_json()
         assert data2['returned'] == 10
@@ -172,7 +173,7 @@ class TestSystemAPI:
 
     def test_records_invalid_source_400(self, client: FlaskClient, db: sqlite3.Connection) -> None:
         """Unknown source returns 400 with error payload."""
-        resp = client.get('/system/observability/records?source=bogus')
+        resp = client.get('/api/system/observability/records?source=bogus')
         assert resp.status_code == 400
         assert resp.get_json()['error'] == 'invalid source'
 
@@ -221,7 +222,7 @@ class TestSystemAPI:
         )
         db.commit()
 
-        resp = client.get('/system/observability/tools')
+        resp = client.get('/api/system/observability/tools')
 
         assert resp.status_code == 200
         data = resp.get_json()
@@ -260,25 +261,26 @@ class TestSystemAPI:
     # GET /system/observability/compaction
 
     @staticmethod
-    def _seed_compaction(db: sqlite3.Connection, *, channel: str, summary: str, created_at: str) -> object:
-        """Seed a compaction summary the way production does (design §3.6): a
-        transcript row with role='compaction' whose OWN id is the watermark.
-
-        Replaces the retired tool_calls audit-row model — compaction state now
-        lives in the transcript table and get_compaction() reads the newest
-        role='compaction' row, taking its id as compacted_up_to_id. Returns that
-        row id (the watermark)."""
-        cur = db.execute(
-            "INSERT INTO transcript (role, content, channel, created_at) "
-            "VALUES ('compaction', ?, ?, ?)",
-            (summary, channel, created_at),
+    def _seed_compaction(db: sqlite3.Connection, *, channel: str, summary: str,
+                         created_at: str, compacted_up_to: int = 42) -> int:
+        """Seed a compaction the way production does: the real
+        ``Compaction.write`` writer appends a row to the dedicated ``compactions``
+        table on the MAIN axis (``for_turn_id`` NULL). The table default fills
+        ``created_at``; we then pin the known timestamp under test so the API's
+        date-formatting asserts against a fixed value. Returns ``compacted_up_to``
+        — the turn_id watermark the endpoint surfaces as ``compacted_up_to_id``."""
+        Compaction.write(channel, None, compacted_up_to, summary)
+        db.execute(
+            "UPDATE compactions SET created_at = ? WHERE id = "
+            "(SELECT MAX(id) FROM compactions WHERE channel = ? AND for_turn_id IS NULL)",
+            (created_at, channel),
         )
         db.commit()
-        return cur.lastrowid
+        return compacted_up_to
 
     def test_observability_compaction_returns_null_when_none(self, client: FlaskClient, db: sqlite3.Connection) -> None:
         """No compaction rows → 200 with {"compaction": null} (drives the empty-state card)."""
-        resp = client.get('/system/observability/compaction')
+        resp = client.get('/api/system/observability/compaction')
         assert resp.status_code == 200
         assert resp.get_json() == {'compaction': None}
 
@@ -286,16 +288,16 @@ class TestSystemAPI:
         """A success compaction on the 'user' channel surfaces its summary, watermark, and a
         backend-formatted timestamp (locale_service, for_ui — UTC fallback with no telemetry)."""
         watermark = self._seed_compaction(
-            db, channel='user',
+            db, channel=Channel.USER.value,
             summary='Earlier turns condensed here.',
             created_at='2026-01-01 00:00:01',
         )
-        resp = client.get('/system/observability/compaction')
+        resp = client.get('/api/system/observability/compaction')
         assert resp.status_code == 200
         comp = resp.get_json()['compaction']
         assert comp is not None
         assert comp['summary'] == 'Earlier turns condensed here.'
-        # The watermark IS the compaction row's own id (design §3.6).
+        # compacted_up_to_id surfaces the stored turn_id watermark.
         assert comp['compacted_up_to_id'] == watermark
         # Timestamp is pre-formatted server-side; tests have no telemetry → UTC.
         assert comp['compacted_at'] == '2026-01-01 00:00'
@@ -306,11 +308,11 @@ class TestSystemAPI:
         clean human-readable string with NO 'T', NO offset, and NO 'Z' (the exact
         regression the UI scenario guards)."""
         self._seed_compaction(
-            db, channel='user',
+            db, channel=Channel.USER.value,
             summary='Condensed.',
             created_at='2026-05-30T22:45:01.123456+00:00',
         )
-        resp = client.get('/system/observability/compaction')
+        resp = client.get('/api/system/observability/compaction')
         assert resp.status_code == 200
         compacted_at = resp.get_json()['compaction']['compacted_at']
         assert compacted_at == '2026-05-30 22:45'
@@ -324,24 +326,24 @@ class TestSystemAPI:
             summary='subagent only',
             created_at='2026-01-01 00:00:01',
         )
-        resp = client.get('/system/observability/compaction')
+        resp = client.get('/api/system/observability/compaction')
         assert resp.status_code == 200
         assert resp.get_json()['compaction'] is None
 
     def test_observability_compaction_latest_wins(self, client: FlaskClient, db: sqlite3.Connection) -> None:
-        """When several compactions exist, the newest (highest-id) role='compaction'
-        row is returned. Under the redesign _compact() only writes a row when the
-        summary extraction succeeds, so there is no failure-row state to filter —
-        the latest row is always the canonical one."""
+        """When several compactions exist on a scope, the newest (highest-id) row
+        in the compactions table wins (Compaction.latest_main orders by id DESC). The
+        compactor only writes a row when summary extraction succeeds, so there is
+        no failure-row state to filter — the latest row is always canonical."""
         self._seed_compaction(
-            db, channel='user',
-            summary='old summary', created_at='2026-01-01 00:00:01',
+            db, channel=Channel.USER.value,
+            summary='old summary', created_at='2026-01-01 00:00:01', compacted_up_to=10,
         )
         new_watermark = self._seed_compaction(
-            db, channel='user',
-            summary='new summary', created_at='2026-01-02 00:00:01',
+            db, channel=Channel.USER.value,
+            summary='new summary', created_at='2026-01-02 00:00:01', compacted_up_to=20,
         )
-        resp = client.get('/system/observability/compaction')
+        resp = client.get('/api/system/observability/compaction')
         assert resp.status_code == 200
         comp = resp.get_json()['compaction']
         assert comp['summary'] == 'new summary'
@@ -354,7 +356,7 @@ class TestSystemAPI:
         """Build patch context for /ready — database and store can be individually broken.
 
         Args:
-            db_ok (bool): When False, patches get_shared_db_service() to raise.
+            db_ok (bool): When False, patches Database.conn() to raise so the /ready DB check fails.
             store_ok (bool): When True, uses a real MemoryStore (Category A). When False,
                 uses a broken_store MagicMock whose ping() raises (Category C).
 
@@ -386,14 +388,15 @@ class TestSystemAPI:
         }
 
         if db_ok:
-            # When db_ok, the real db fixture is active and get_shared_db_service()
-            # returns the test DatabaseService — no patching needed.
+            # When db_ok, the real db fixture is active — it points the Database
+            # gateway at this test's SQLite file — so the preflight DB check
+            # (Database.conn().execute('SELECT 1')) passes with no patching.
             pass
         else:
-            # Force the database check to fail by patching get_shared_db_service
-            mock_db = MagicMock()
-            mock_db.connection.side_effect = Exception('db down')
-            patches['services.database_service.get_shared_db_service'] = MagicMock(return_value=mock_db)
+            # Force the database check to fail: run_preflight opens the DB via
+            # Database.conn(), so make that raise. Patched on the class attribute
+            # the preflight module references.
+            patches['services.preflight_service.Database.conn'] = MagicMock(side_effect=Exception('db down'))
 
         return patches
 

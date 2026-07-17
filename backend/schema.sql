@@ -25,11 +25,8 @@ CREATE TABLE IF NOT EXISTS episodes (
     transcript_ids TEXT DEFAULT '[]',         -- JSONB: list of transcript.id values this episode covers
     transcript_id_start INTEGER,              -- lowest transcript.id in this episode's range
     transcript_id_end INTEGER,                -- highest transcript.id in this episode's range
-    emotional_valence REAL,                   -- -1.0 (negative) to 1.0 (positive)
-    emotional_arousal REAL,                   -- 0.0 (calm) to 1.0 (intense) — drives consolidation strength
     consolidated_from TEXT DEFAULT '[]',      -- JSONB: episode IDs this was consolidated from
     consolidated_into TEXT,                   -- back-pointer to super-episode id (UUID, FK-ish to episodes.id)
-    storage_strength REAL DEFAULT 1.0,        -- encoding strength at storage time
     retrieval_weight REAL DEFAULT 1.0,        -- current retrieval priority weight
     location_lat  REAL,
     location_lon  REAL,
@@ -37,7 +34,8 @@ CREATE TABLE IF NOT EXISTS episodes (
     level INTEGER DEFAULT 0,                   -- hierarchy depth: 0=leaf, 1=super-episode, 2+=era digest
     last_relevant_at TEXT,                     -- timestamp of the last write-relevant event; drives absolute decay (backfilled on boot)
     tombstoned_at TEXT,                        -- set when an episode is tombstoned ahead of hard deletion (NULL = live)
-    facts_extracted_at TEXT                    -- fact-extraction backlog cursor; NULL = not yet processed by the worker
+    facts_extracted_at TEXT,                   -- fact-extraction backlog cursor; NULL = not yet processed by the worker
+    search_queries    TEXT DEFAULT NULL        -- doc2query keyword variants (JSON); NULL = not yet indexed by SearchExpanderService
 );
 
 CREATE INDEX IF NOT EXISTS idx_episodes_channel ON episodes(channel) WHERE deleted_at IS NULL;
@@ -52,7 +50,7 @@ CREATE INDEX IF NOT EXISTS idx_episodes_apex ON episodes(retrieval_weight DESC, 
 -- all fts5 tables — each table binds to its own source table by name. Not a
 -- copy-paste error; SQLite FTS5 requires these per-table parameters.
 CREATE VIRTUAL TABLE IF NOT EXISTS episodes_fts USING fts5(
-    gist, content='episodes', content_rowid='rowid'
+    gist, search_queries, content='episodes', content_rowid='rowid'
 );
 
 -- cortex_iterations removed — CortexIterationService not wired into runtime.
@@ -142,7 +140,6 @@ CREATE TABLE IF NOT EXISTS providers (
     dimensions INTEGER,
     timeout INTEGER DEFAULT 120,
     supports_vision INTEGER DEFAULT 0,       -- BOOLEAN
-    max_tokens INTEGER,
     created_at TEXT DEFAULT (datetime('now')),
     updated_at TEXT DEFAULT (datetime('now'))
 );
@@ -173,6 +170,12 @@ VALUES ('api_key', 'string', 'REST API authentication key (auto-generated on fir
 INSERT OR IGNORE INTO settings (key, value_type, description, is_sensitive)
 VALUES ('selected_provider_id', 'int', 'ID of the active LLM provider used for all cognitive jobs', 0);
 
+INSERT OR IGNORE INTO settings (key, value, value_type, description, is_sensitive)
+VALUES ('deployment_domain', '', 'string', 'Public domain this deployment is served from; drives CORS (blank = same-origin only)', 0);
+
+INSERT OR IGNORE INTO settings (key, value, value_type, description, is_sensitive)
+VALUES ('ssl_enabled', 'false', 'boolean', 'Serve HTTPS using the uploaded certificate in the secure dir; also drives Secure session cookies', 0);
+
 -- ────────────────────────────────────────────────────────────────
 -- MASTER ACCOUNT
 -- ────────────────────────────────────────────────────────────────
@@ -187,29 +190,20 @@ CREATE TABLE IF NOT EXISTS master_account (
 -- SCHEDULED ITEMS
 -- ────────────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS scheduled_items (
-    id TEXT PRIMARY KEY,
-    item_type TEXT NOT NULL DEFAULT 'notification',
+    id INTEGER PRIMARY KEY AUTOINCREMENT,          -- also the thread's turn_id on the 'schedule' channel (§13.1). AUTOINCREMENT: a cancelled schedule's id is never reissued, so a dead thread can never be re-entered.
     message TEXT NOT NULL,
-    due_at TEXT NOT NULL,
-    recurrence TEXT,
-    window_start TEXT,
-    window_end TEXT,
-    status TEXT NOT NULL DEFAULT 'pending',   -- 'pending' is the initial lifecycle state; intentionally repeated in documents.status
-    channel TEXT,
+    start_at TEXT NOT NULL,                         -- UTC activation floor; the cron never fires before this instant
+    cron_minute TEXT NOT NULL DEFAULT '*',          -- crontab minute expr, 0-59 USER-LOCAL; '*' = every (also N, N-M, */S, N-M/S, comma-union)
+    cron_hour   TEXT NOT NULL DEFAULT '*',          -- crontab hour expr, 0-23 USER-LOCAL; '*' = every
+    cron_dom    TEXT NOT NULL DEFAULT '*',          -- crontab day-of-month expr, 1-31 USER-LOCAL; '*' = every
+    cron_month  TEXT NOT NULL DEFAULT '*',          -- crontab month expr, 1-12 USER-LOCAL; '*' = every
+    cron_dow    TEXT NOT NULL DEFAULT '*',          -- crontab day-of-week expr, 0-7 USER-LOCAL (0 or 7 = Sun); '*' = every. Vixie: dom & dow OR only when BOTH restricted
+    enabled INTEGER NOT NULL DEFAULT 1,             -- 0 = disabled: the poller skips it (series paused)
+    channel TEXT,                                   -- creating context's channel (audit only; the fire always runs on 'schedule')
     created_by_session TEXT,
-    created_at TEXT NOT NULL DEFAULT (datetime('now')),
-    last_fired_at TEXT,
-    group_id TEXT,
-    is_prompt INTEGER DEFAULT 0,             -- BOOLEAN
-    source TEXT,                              -- origin: 'caldav', 'imap', 'system', NULL = user-created
-    external_uid TEXT,                        -- dedup key for external sources
-    metadata TEXT DEFAULT '{}',               -- JSON blob (location, attendees, etc.)
-    hidden INTEGER DEFAULT 0                  -- hide from user-facing list/API
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
-
-CREATE INDEX IF NOT EXISTS idx_scheduled_items_pending ON scheduled_items(due_at) WHERE status = 'pending';
-CREATE INDEX IF NOT EXISTS idx_scheduled_items_group_id ON scheduled_items(group_id, due_at DESC);
-CREATE UNIQUE INDEX IF NOT EXISTS idx_scheduled_items_external_uid ON scheduled_items(external_uid);
+CREATE INDEX IF NOT EXISTS idx_scheduled_items_enabled ON scheduled_items(enabled, start_at);
 
 
 -- ────────────────────────────────────────────────────────────────
@@ -251,56 +245,6 @@ CREATE INDEX IF NOT EXISTS idx_list_items_active ON list_items(list_id) WHERE re
 -- tool_capability_profiles + idx_tcp_tool_name removed — profiles replaced
 -- by abilities.sqlite (ability registry). SchemaConvergenceService auto-DROPs
 -- both the table and its index on next boot.
-
--- ────────────────────────────────────────────────────────────────
--- USER TOOL PREFERENCES
--- ────────────────────────────────────────────────────────────────
-CREATE TABLE IF NOT EXISTS user_tool_preferences (
-    id TEXT PRIMARY KEY,
-    tool_name TEXT NOT NULL UNIQUE,
-    usage_count INTEGER DEFAULT 0,
-    success_count INTEGER DEFAULT 0,
-    explicit_preference REAL DEFAULT 0,
-    implicit_preference REAL DEFAULT 0,
-    last_used_at TEXT,
-    updated_at TEXT DEFAULT (datetime('now'))
-);
-
-
--- ────────────────────────────────────────────────────────────────
--- MOMENTS — user-curated bookmarks of assistant replies
--- ────────────────────────────────────────────────────────────────
--- A moment is an explicit "remember this" pin on one assistant turn. Unlike
--- data_graph facts it carries no retrieval_weight, no decay and no janitor on
--- this table — a bookmark lives until the user deletes it. Persisted +
--- FTS/vec-synced by MomentsService (services/moments_service.py); served by
--- api/moments.py; surfaced in explicit recall only (never the turn-0 flashback).
--- rowid == id binds moments_fts and moments_vec to each moment row.
-CREATE TABLE IF NOT EXISTS moments (
-    id            INTEGER PRIMARY KEY AUTOINCREMENT,
-    transcript_id INTEGER NOT NULL UNIQUE,   -- pinned assistant turn; one pin per turn
-    content       TEXT NOT NULL,             -- the assistant reply, verbatim
-    note          TEXT,                      -- optional user annotation (reserved)
-    created_at    TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
-);
-
--- transcript_id is UNIQUE (declared above), so SQLite maintains its own index on
--- it — a separate idx_moments_transcript would be redundant. The UNIQUE is the
--- dedup backstop: find-then-insert in MomentsService.store() cannot by itself
--- block a concurrent double-pin, so the DB enforces one moment per turn.
-CREATE INDEX IF NOT EXISTS idx_moments_created     ON moments(created_at DESC);
-
--- FTS5 over the moment content. content='moments' + content_rowid='id' make this
--- an external-content index (postings removed via the FTS5 'delete' command —
--- services/_fts_delete.py). tokenize='porter unicode61' matches data_graph_fts.
-CREATE VIRTUAL TABLE IF NOT EXISTS moments_fts USING fts5(
-    content, content='moments', content_rowid='id',
-    tokenize='porter unicode61'
-);
-
--- One vec0 row per moment; rowid matches moments.id. The 768-dim embedding of
--- the content is written synchronously on pin (MomentsService).
-CREATE VIRTUAL TABLE IF NOT EXISTS moments_vec USING vec0(embedding float[768]);
 
 -- Note: tables that disappear from this schema are dropped automatically by
 -- SchemaConvergenceService on the next boot.  No explicit DROP statements
@@ -344,7 +288,7 @@ CREATE TABLE IF NOT EXISTS documents (
     file_path TEXT NOT NULL,
     file_hash TEXT,
     page_count INTEGER,
-    status TEXT DEFAULT 'pending',            -- 'pending' initial state mirrors scheduled_items.status; same literal, different table
+    status TEXT DEFAULT 'pending',            -- 'pending' is the initial lifecycle state
     error_message TEXT,
     chunk_count INTEGER DEFAULT 0,
     source_type TEXT DEFAULT 'upload',
@@ -390,10 +334,10 @@ CREATE TABLE IF NOT EXISTS schema_version (
 
 INSERT OR IGNORE INTO schema_version (version) VALUES (1);
 
--- schema_migrations table removed — SchemaConvergenceService is now the
--- single source of truth.  schema.sql declares the desired shape and the
--- service converges the live DB to match.  Numbered migration files are
--- gone; legacy schema_migrations rows are auto-dropped on the next boot.
+-- Schema SHAPE carries no version ledger — SchemaConvergenceService converges
+-- the live DB to the shape this file declares.  One-time DATA migrations are
+-- tracked separately: migrations/runner.py records each step in the
+-- schema_migrations table declared at the end of this file.
 
 -- ────────────────────────────────────────────────────────────────
 -- CONCEPT LUT MISSES — keys that didn't match the concept LUT
@@ -422,6 +366,20 @@ CREATE VIRTUAL TABLE IF NOT EXISTS scheduled_items_vec USING vec0(embedding floa
 CREATE VIRTUAL TABLE IF NOT EXISTS lists_vec USING vec0(embedding float[768]);
 
 -- ────────────────────────────────────────────────────────────────
+-- THREAD GIST — one terse 3-5 word topical label per conversation thread (a
+-- turn grown past its settle0). Written once, on the first reply past settle0.
+-- Logical FK (channel, turn_id) → transcript; pure FE affordance, no embedding,
+-- no search index.
+-- ────────────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS thread_gist (
+    channel     TEXT NOT NULL,
+    turn_id     INTEGER NOT NULL,
+    gist        TEXT,
+    created_at  TEXT NOT NULL,
+    PRIMARY KEY (channel, turn_id)
+);
+
+-- ────────────────────────────────────────────────────────────────
 -- WRAPPER TOKENS — bearer auth for external programmatic access
 -- ────────────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS wrapper_tokens (
@@ -429,8 +387,6 @@ CREATE TABLE IF NOT EXISTS wrapper_tokens (
     name TEXT NOT NULL,
     token_hash TEXT NOT NULL UNIQUE,
     wrapper_id TEXT NOT NULL UNIQUE,
-    capabilities TEXT NOT NULL DEFAULT '{}',
-    permissions TEXT NOT NULL DEFAULT '{}',
     metadata TEXT NOT NULL DEFAULT '{}',
     last_seen_at TEXT,
     created_at TEXT NOT NULL,
@@ -445,8 +401,8 @@ CREATE INDEX IF NOT EXISTS idx_wrapper_tokens_hash
 -- LLM_CALL_LOG — per-call token usage and latency tracking
 -- ────────────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS llm_call_log (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    job_name TEXT NOT NULL,
+    id INTEGER PRIMARY KEY,
+    type TEXT NOT NULL DEFAULT 'system',
     provider TEXT NOT NULL,
     model TEXT NOT NULL,
     tokens_input INTEGER NOT NULL DEFAULT 0,
@@ -455,14 +411,15 @@ CREATE TABLE IF NOT EXISTS llm_call_log (
     tokens_cache_create INTEGER NOT NULL DEFAULT 0,
     tokens_thinking INTEGER NOT NULL DEFAULT 0,
     latency_ms INTEGER NOT NULL DEFAULT 0,
-    usage_class TEXT NOT NULL DEFAULT 'chat',
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
-CREATE INDEX IF NOT EXISTS idx_llm_call_log_job_created
-    ON llm_call_log (job_name, created_at);
-CREATE INDEX IF NOT EXISTS idx_llm_call_log_usage_class
-    ON llm_call_log (usage_class, created_at);
+-- Every read of this table is a created_at range scan (the usage window, and
+-- tokens-today); the `type` filter is optional, so a (type, created_at) index
+-- could not serve the unfiltered case — its leading column would be
+-- unconstrained. One index on the always-present predicate covers both.
+CREATE INDEX IF NOT EXISTS idx_llm_call_log_created
+    ON llm_call_log (created_at);
 
 -- ────────────────────────────────────────────────────────────────
 -- MEMORY RECALL LOG — telemetry for the per-lane retrieval pipeline
@@ -537,7 +494,16 @@ CREATE TABLE IF NOT EXISTS transcript (
     -- turn_id) rather than a transcript row id. Nullable + no DEFAULT keeps it
     -- convergence-safe (ADD COLUMN) on existing databases; the value is computed
     -- at insert time by transcript_service.
-    turn_id     INTEGER
+    turn_id     INTEGER,
+    -- Positive settle flag: 1 on assistant rows that carry no model-driven tool
+    -- (the turn's settle0). Written as 1 by write_assistant_row / append;
+    -- ActTrail.start() demotes to 0 when a settling tool is recorded against the
+    -- row. Internal passes (chat_history_compactor, thinking) never demote.
+    settled     INTEGER NOT NULL DEFAULT 0,
+    -- Per-turn thinking level chosen by the sender (auto|medium|high); NULL =
+    -- legacy row or not-yet-set, lets a later query distinguish "chose auto"
+    -- from "never set".
+    thinking_level TEXT
 );
 
 CREATE INDEX IF NOT EXISTS idx_transcript_channel ON transcript(channel, created_at);
@@ -553,11 +519,19 @@ CREATE TABLE IF NOT EXISTS tool_calls (
     tool_name     TEXT NOT NULL,
     params        TEXT DEFAULT '{}',
     result        TEXT DEFAULT '',
-    -- The ability's act_summary — the one-line "what I'm doing" the dispatcher
-    -- already streams live (act_tool_start). Persisting it lets the chat refresh
+    -- The ability's act_summary — the one-line "what I'm doing" the single WS
+    -- tool frame carries on its live pill. Persisting it lets the turn refetch
     -- re-render each tool chip's blue summary box instead of dropping it on reload.
     summary       TEXT DEFAULT '',
     created_at    TEXT NOT NULL DEFAULT (datetime('now')),
+    -- When the call left execution (result written). NULL while state='started'.
+    ended_at      TEXT,
+    -- The call's lifecycle, STORED (never re-derived by parsing the result
+    -- envelope): 'started' the instant the row opens (before invocation),
+    -- 'done' on a successful/placeholder return, 'error' on a failure, denial,
+    -- or pre-validation bounce. The single WS tool frame carries this verbatim.
+    state         TEXT NOT NULL DEFAULT 'started'
+                  CHECK (state IN ('started', 'done', 'error')),
     -- A tool call anchors ONLY to the transcript input row that drove it
     -- (transcript_id); its turn is derived by joining transcript on
     -- (channel, turn_id). An async / delegate re-entry writes its
@@ -570,12 +544,37 @@ CREATE INDEX IF NOT EXISTS idx_tool_calls_transcript ON tool_calls(transcript_id
 CREATE INDEX IF NOT EXISTS idx_tool_calls_created ON tool_calls(created_at DESC);
 
 -- ────────────────────────────────────────────────────────────────
+-- COMPACTIONS — the living checkpoint per conversation view, off the
+-- transcript spine. A compaction is NOT a transcript row: keeping it
+-- in its own table means firing one never moves a turn_id, so the
+-- turn boundary stays stable across a mid-turn collapse.
+--
+-- Two-axis watermark — one table, two scopes told apart by for_turn_id.
+-- A MAIN-view checkpoint leaves for_turn_id empty and stores a turn id in
+-- compacted_up_to, so the spine read drops every turn at or before that id.
+-- A FORK-view checkpoint sets for_turn_id to its thread and stores a
+-- transcript row id, so the thread read drops that thread's rows at or
+-- before it. The two scopes sit on different axes and never collide, so a
+-- MAIN checkpoint can't hide a fork reply and a FORK checkpoint can't hide
+-- the spine.
+-- ────────────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS compactions (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    channel         TEXT NOT NULL,
+    for_turn_id     INTEGER,
+    compacted_up_to INTEGER NOT NULL,
+    content         TEXT NOT NULL,
+    created_at      TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS ix_compactions_scope ON compactions(channel, for_turn_id, id);
+
+-- ────────────────────────────────────────────────────────────────
 -- TRANSCRIPT DOCS — many-to-many link of a transcript turn to the
 -- document(s) attached to it.  Lets the chat re-render uploaded
 -- images/files on page refresh (the live preview is a browser-only
 -- blob: URL that dies on reload).  Written at the upload-seed point
--- (message_processor._seed_upload_attachment), read by
--- api.conversation.get_recent_history.  Composite PK dedups links and
+-- (message_processor._seed_upload_attachment), read by the thread
+-- serializer (api.conversation.serialize_turn).  Composite PK dedups links and
 -- serves the WHERE transcript_id IN (...) lookup (no separate index).
 -- ────────────────────────────────────────────────────────────────
 -- foreign_keys=ON is enforced (database_service.py), so both sides CASCADE:
@@ -588,6 +587,37 @@ CREATE TABLE IF NOT EXISTS transcript_docs (
     doc_id        TEXT    NOT NULL REFERENCES documents(id)  ON DELETE CASCADE,
     PRIMARY KEY (transcript_id, doc_id)
 );
+
+-- ────────────────────────────────────────────────────────────────
+-- TURN EXECUTIONS — DB-backed lifecycle of one MessageProcessor turn.
+-- Opened (state='working') the instant a turn's constructor resolves its
+-- turn_id, before any LLM call, so DELETE /api/thread/<turn_id> can flip
+-- cancel_requested on a row that outlives the in-memory MessageProcessor —
+-- no process-local registry to lose on a worker restart or miss across a
+-- request boundary. cancel_requested (the ask) and state (the outcome) are
+-- separate facts: a cancel that arrives after the turn already crashed
+-- leaves state='crashed' with cancel_requested=1 — the two never collide.
+-- ────────────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS turn_executions (
+    id                INTEGER PRIMARY KEY AUTOINCREMENT,
+    channel           TEXT NOT NULL,
+    type              TEXT,
+    turn_id           INTEGER NOT NULL,
+    started_at        TEXT NOT NULL DEFAULT (datetime('now')),
+    ended_at          TEXT,
+    cancel_requested  INTEGER NOT NULL DEFAULT 0,
+    state             TEXT NOT NULL DEFAULT 'working'
+                      CHECK (state IN ('working', 'completed', 'cancelled', 'crashed')),
+    stop_reason       TEXT
+);
+
+-- Serves both DELETE /api/thread/<turn_id>'s point lookup (this channel's
+-- turn_id, open rows only — turn_id is a per-channel monotonic counter, not
+-- globally unique, so channel leads the key) and the boot sweep's full scan
+-- of rows a killed process left open — the same "still working" shape either
+-- caller needs.
+CREATE INDEX IF NOT EXISTS idx_turn_executions_open
+    ON turn_executions(channel, turn_id) WHERE ended_at IS NULL;
 
 -- ────────────────────────────────────────────────────────────────
 -- DATA GRAPH — research-informed knowledge graph (replaces knowledge)
@@ -713,25 +743,33 @@ CREATE INDEX IF NOT EXISTS idx_policy_blocked_log_created ON policy_blocked_log(
 -- truth for which keys are collected; the backend persists whatever is sent.
 -- Nested payload keys are flattened with dots, e.g.
 --   {"device": {"name": "iPhone"}}  →  key='device.name', value='iPhone'
--- One row per key; UPSERT on every push. WorldState renders by reading the
--- whole table and grouping by the top-level prefix.
+-- One row per flattened key. Each push is a whole-snapshot SWAP (DELETE-all +
+-- re-INSERT in one txn, owned by the Telemetry model), NOT a per-key upsert:
+-- a key absent from the new payload disappears. WorldState renders by reading
+-- the whole table and grouping by the top-level prefix.
 CREATE TABLE IF NOT EXISTS telemetry (
     key   TEXT PRIMARY KEY,
     value TEXT
 );
 
 -- ============================================================================
--- DISCOVERY_RUNS — one row per proactive-research loop execution.
+-- SCHEMA MIGRATIONS — run-once ledger for the startup migration runner.
 -- ============================================================================
--- The grounding the loop ran against (user + compacted summary at execution
--- time) and a preview of what it surfaced. The loop's full output is NOT stored
--- here — it lives in the transcript under the discovery channel/turn and is
--- joined live by turn_id, keeping a single source of truth for the output.
-CREATE TABLE IF NOT EXISTS discovery_runs (
-    id                INTEGER PRIMARY KEY AUTOINCREMENT,
-    ran_at            TEXT NOT NULL DEFAULT (datetime('now')),
-    turn_id           INTEGER,
-    user_summary      TEXT,
-    compacted_summary TEXT,
-    researched        TEXT
+-- One row per migration step (migrations/runner.py), written the first boot
+-- that resolves it. outcome: 'applied' (the migration executed), 'noop' (its
+-- needed() check found the database already in target shape — e.g. a fresh
+-- install), 'sentinel' (imported from a pre-ledger `.<key>.done` boot sentinel
+-- file). Living inside the database, the ledger travels with it through
+-- snapshot export/restore. Deleting a row re-arms that step for the next boot;
+-- destructive steps still re-check needed() before running.
+CREATE TABLE IF NOT EXISTS schema_migrations (
+    key        TEXT PRIMARY KEY,
+    outcome    TEXT NOT NULL CHECK (outcome IN ('applied', 'noop', 'sentinel')),
+    applied_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
+
+-- ============================================================================
+-- (The standalone discovery_runs table was removed: the Auto Research loop now
+-- writes its output to the transcript on the `discovery` channel. No bespoke
+-- run table remains.)
+-- ============================================================================

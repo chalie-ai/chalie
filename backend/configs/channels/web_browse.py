@@ -12,49 +12,21 @@ Writes a real per-turn transcript row on its own ``delegate:web_browse``
 channel so the turn uid is assigned and the delegate renders its own
 act-trail across ACT iterations (do NOT set the two skip flags True). The
 uid keys the per-run browser PageSession and the screenshot ledger; the
-post-turn hook closes both when the run ends. Paired with
-``WebBrowseAbility`` (abilities/web_browse.py).
+delegate runner reads the browser session directly to close it when the run
+ends. Paired with ``WebBrowseAbility`` (abilities/web_browse.py).
 """
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, ClassVar, cast
+from typing import TYPE_CHECKING, ClassVar
 
-from abilities._delegate import render_trail
-from services.post_turn_hook import PostTurnHook
+from configs.enums.channels import Channel
 from services.processor_config import ProcessorConfig
-from tools.browser.session import close_session, screenshot_ledger
 
 if TYPE_CHECKING:
-    from services.message_processor import MessageProcessor
-
-_WEB_BROWSE_SYSTEM_PROMPT = (
-    "You are driving a real browser with Playwright to accomplish one goal, "
-    "given below. You can open pages, read and search them, click and fill by "
-    "visible text, and take a screenshot — every screenshot comes back already "
-    "described, so it is how you see the page.\n\n"
-    "Accomplish the goal in the fewest steps possible. Do not linger, do not "
-    "retry, do not waste cycles — the moment you can answer, stop and respond.\n\n"
-    "If you hit a problem or cannot accomplish the goal quickly, return an error "
-    "instead of grinding at it; you will be invoked again with a clearer goal."
-)
+    from configs.enums.policy_channel import PolicyChannel
 
 _WEB_BROWSE_TOOLS: tuple[str, ...] = ("browser", "read", "vision")
-
-
-class _CloseBrowserSession(PostTurnHook):
-    """Stashes the ledger on itself first — ``close_session`` pops it, but
-    the outer ``WebBrowseAbility`` still needs the doc_ids after
-    ``process()`` returns."""
-
-    def __init__(self) -> None:
-        self.final_ledger: list[tuple[str, str]] = []
-
-    def run(self, mp: "MessageProcessor", result_text: str) -> None:  # noqa: ARG002 — hook signature
-        uid = getattr(mp, "uid", None)
-        if uid:
-            self.final_ledger = screenshot_ledger(uid)
-            close_session(uid)
 
 
 class WebBrowseConfig(ProcessorConfig):
@@ -63,9 +35,9 @@ class WebBrowseConfig(ProcessorConfig):
 
     uses_delegate_provider: ClassVar[bool] = True
 
-    def __init__(self, policy_channel: "ProcessorConfig.PolicyChannel") -> None:
+    def __init__(self, policy_channel: "PolicyChannel") -> None:
         super().__init__(
-            channel="delegate:web_browse",
+            channel=Channel.DELEGATE_WEB_BROWSE.value,
             role="web_browse",
             policy_channel=policy_channel,
             always_available=[*_WEB_BROWSE_TOOLS, "memory"],
@@ -74,33 +46,12 @@ class WebBrowseConfig(ProcessorConfig):
             suppress_history=True,
             broadcast_to=None,
             memory_seed=False,
-            post_turn_hooks=(_CloseBrowserSession(),),
         )
 
-    def final_screenshots(self) -> list[tuple[str, str]]:
-        """The ``(doc_id, url)`` pairs captured by the finished run.
+    @property
+    def system_prompt(self) -> str:
+        return """You are driving a real browser with Playwright to accomplish one goal, given below. You can open pages, read and search them, click and fill by visible text, and take a screenshot — every screenshot comes back already described, so it is how you see the page.
 
-        Populated by the post-turn hook just before it closes the session;
-        empty until the run ends (or when no screenshots were taken)."""
-        return cast("_CloseBrowserSession", self.post_turn_hooks[0]).final_ledger
+Accomplish the goal in the fewest steps possible. Do not linger, do not retry, do not waste cycles — the moment you can answer, stop and respond.
 
-    def get_user_definition(self, mp: "MessageProcessor") -> str:
-        return ""
-
-    def get_user_prompt(self, mp: "MessageProcessor") -> str:
-        """Ledger is rebuilt from session state on every iteration so it can never
-        lose a screenshot doc_id — it is derived deterministically from what was
-        captured this run, not from anything the model carries forward in its own
-        text."""
-        parts = [f"Browsing goal:\n{mp._raw_input}"]
-        shots = screenshot_ledger(getattr(mp, "uid", None) or 0)
-        if shots:
-            lines = "\n".join(f"- doc_id={doc_id} ({url})" for doc_id, url in shots)
-            parts.append(f"Screenshots captured this run:\n{lines}")
-        trail = render_trail(mp)
-        if trail:
-            parts.append(trail)
-        return "\n\n".join(parts)
-
-    def get_system_prompt(self, mp: "MessageProcessor") -> str:
-        return _WEB_BROWSE_SYSTEM_PROMPT
+If you hit a problem or cannot accomplish the goal quickly, return an error instead of grinding at it; you will be invoked again with a clearer goal."""

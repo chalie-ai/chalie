@@ -44,7 +44,7 @@ from abilities._ability import Ability
 
 if TYPE_CHECKING:
     from services.mcp_client_service import McpClientService as _McpClientService
-from abilities._params import Keys
+from configs.enums.param_key import Keys
 from abilities._result import ToolResult
 
 logger = logging.getLogger(__name__)
@@ -91,6 +91,17 @@ class McpManagerAbility(Ability):
     def get_search_tooltip(self) -> str:
         return "connect to a remote MCP server"
 
+    def get_follow_up(self, tr: ToolResult) -> str:
+        """Steer a just-connected server's remote tools into context via find_tools."""
+        body = tr.body if isinstance(tr.body, dict) else {}
+        if body.get("status") != "online":
+            return ""
+        name = body.get("name")
+        return (
+            f"`{name}` is now available. Call `find_tools` with `{name}` and the "
+            "action you want to perform to get its tools in context."
+        )
+
     _PARAMETERS: ClassVar[dict[str, object]] = {
         "type": "object",
         "properties": {
@@ -106,7 +117,7 @@ class McpManagerAbility(Ability):
                     "its tools from discovery; by name or server_id)."
                 ),
             },
-            Keys.name: {
+            Keys.name_: {
                 "type": "string",
                 "description": (
                     "For add: required human-readable server label "
@@ -157,7 +168,7 @@ class McpManagerAbility(Ability):
     # under the same missing-params code.
     ACTION_REQUIRED: ClassVar[dict[str, tuple[str, ...]]] = {
         "list": (),
-        "add": (Keys.name, Keys.host),
+        "add": (Keys.name_, Keys.host),
         "enable": (),
         "disable": (),
     }
@@ -194,7 +205,7 @@ class McpManagerAbility(Ability):
         """The row is registered BEFORE the connect test — an unreachable host still
         persists the connection, but a failed ping is surfaced as an ERROR."""
         from services.mcp_client_service import McpClientService  # noqa: PLC0415
-        name = (cast("str", params.get(Keys.name) or "")).strip()
+        name = (cast("str", params.get(Keys.name_) or "")).strip()
         host = (cast("str", params.get(Keys.host) or "")).strip()
         if not name or not host:
             return ToolResult.err(
@@ -297,7 +308,7 @@ class McpManagerAbility(Ability):
         (``missing-params``) or the target does not exist (``not-found``), so the
         caller only proceeds on a real server."""
         server_id = (cast("str", params.get(Keys.server_id) or "")).strip()
-        name = (cast("str", params.get(Keys.name) or "")).strip()
+        name = (cast("str", params.get(Keys.name_) or "")).strip()
         if not server_id and not name:
             return ToolResult.err(
                 "Provide a server to act on.",

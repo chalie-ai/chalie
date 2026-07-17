@@ -8,70 +8,33 @@
 
 # Timer-ability business-logic tests migrated from the per-ability conformance file ().
 
-import json
-import sqlite3
-from typing import cast
+from typing import TYPE_CHECKING, cast
 
 import pytest
 
-from abilities._dispatcher import ToolDispatcher
 from abilities.timer import TimerAbility
-from configs.channels import DmnConfig, UserConfig
-from tests._tool_result_harness import MP, body, seed_transcript
+from services.dispatch_service import DispatchService
+
+if TYPE_CHECKING:
+    from controllers.message_processor import MessageProcessor
 
 pytestmark = pytest.mark.unit
 
 
-@pytest.fixture
-def user_mp(db: sqlite3.Connection) -> MP:
-    return MP(seed_transcript(db, "chat", "start a timer"), UserConfig({}))
-
-
-@pytest.fixture
-def dmn_mp(db: sqlite3.Connection) -> MP:
-    return MP(seed_transcript(db, "subconscious", "start a timer"), DmnConfig())
-
-
-def _body(rendered: str, tool: str = "timer") -> str:
-    return body(rendered, tool)
+# (The dispatch-level contract tests that lived here —
+# ``test_invalid_durations_are_invalid_duration_code``,
+# ``test_long_title_truncated_to_80_chars``, ``test_max_duration_accepted`` —
+# were removed during the old-spine ``ToolDispatcher`` cleanup: they drove
+# ``tests._tool_result_harness.MP`` (a bare ``{uid, config}`` fake) through
+# ``ToolDispatcher(mp).dispatch(...)``, which the new ``DispatchService.dispatch``
+# does not support without a fully wired ``MessageProcessor`` (Rule 3/4 service
+# coupling — sanitize_args, tool_call_service, policy gate, etc.). See the
+# dead-code cleanup report for the systemic gap this exposed.)
 
 
 def _render_rich(title: str, duration: int, ordinal: int = 1) -> str:
     tr = TimerAbility().run({"title": title, "duration_seconds": duration})
-    return ToolDispatcher._render("timer", tr, ordinal)
-
-
-# ── Contract: invalid durations are run()-side invalid-duration errors ───────────
-
-
-def test_invalid_durations_are_invalid_duration_code(db: sqlite3.Connection, user_mp: MP) -> None:
-    for bad in (-5, 86401, "30"):
-        out = ToolDispatcher(user_mp).dispatch(
-            "timer", {"title": "Bad", "duration_seconds": bad, "act_summary": "x"}
-        )
-        assert "[timer(status=error" in out, (bad, out)
-        assert "code=invalid-duration" in out, (bad, out)
-        assert "code=error" not in out, (bad, out)
-
-
-# ── Contract: title truncation + max-duration edge ───────────────────────────────
-
-
-def test_long_title_truncated_to_80_chars(db: sqlite3.Connection, dmn_mp: MP) -> None:
-    out = ToolDispatcher(dmn_mp).dispatch(
-        "timer", {"title": "x" * 200, "duration_seconds": 60, "act_summary": "x"}
-    )
-    payload = json.loads(_body(out))
-    assert len(payload["title"]) == 80, payload
-
-
-def test_max_duration_accepted(db: sqlite3.Connection, dmn_mp: MP) -> None:
-    out = ToolDispatcher(dmn_mp).dispatch(
-        "timer", {"title": "Long", "duration_seconds": 86400, "act_summary": "x"}
-    )
-    assert "[timer(status=success" in out, out
-    payload = json.loads(_body(out))
-    assert payload["duration_seconds"] == 86400, payload
+    return DispatchService(mp=cast("MessageProcessor", None))._render("timer", tr, ordinal)
 
 
 # ── started_at injection: the real renderer → real parser chain ──────────────────

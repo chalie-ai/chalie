@@ -20,13 +20,13 @@ from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
-from flask import Flask
 from flask.testing import FlaskClient
 
 import api.system as system_module
-from api.system import system_bp
+from api.system import health_ns, system_ns
 from services import embedding_service
 from services.runtime_deps_service import RuntimeDepsService
+from tests.restx_test_app import mount_namespace
 from utils.logger import _ChalieJsonFormatter
 
 _LIBCUDART_ERR = ImportError("libcudart.so.13: cannot open shared object file: No such file or directory")
@@ -73,8 +73,7 @@ def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[tuple[Fl
         "services.auth_session_service.validate_session",
         lambda *_a, **_k: True,
     )
-    app = Flask(__name__)
-    app.register_blueprint(system_bp)
+    app = mount_namespace(health_ns, system_ns)
     app.config["TESTING"] = True
     with app.test_client() as tc:
         yield tc, log_file
@@ -86,7 +85,7 @@ class TestOnnxRuntimeHint:
 
     def test_libcudart_failure_yields_cuda_hint(self) -> None:
         hint = RuntimeDepsService._onnxruntime_hint_for(_LIBCUDART_ERR)
-        # The parsed CUDA major (spec §D) pinpoints the wheel↔host mismatch for the operator.
+        # The parsed CUDA major pinpoints the wheel↔host mismatch for the operator.
         assert "libcudart.so.13" in hint
         assert "CUDA 13" in hint
         assert "CPU" in hint  # tells the operator the automatic fallback runs on CPU
@@ -217,7 +216,7 @@ class TestEnsureOnnxRuntimeHealsAndLogs:
         assert all(r["level"] == "ERROR" for r in runtime_lines)
 
         # …and the hint actually surfaces in the real Cognition → Errors endpoint.
-        panel = [e["message"] for e in tc.get("/system/observability/errors").get_json()["errors"]]
+        panel = [e["message"] for e in tc.get("/api/system/observability/errors").get_json()["errors"]]
         assert any("libcudart" in m and "CPU" in m for m in panel)
 
 

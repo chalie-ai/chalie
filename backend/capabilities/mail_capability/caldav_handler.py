@@ -3,15 +3,12 @@
 from __future__ import annotations
 
 import datetime as _dt_module
-import json as _json
 import logging
 import uuid
 from datetime import timedelta
-from itertools import combinations
 from typing import TYPE_CHECKING, cast
 
 from services.time_utils import utc_now, parse_utc
-from utils.data_utils import parse_json_column
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterable
@@ -51,10 +48,15 @@ if TYPE_CHECKING:
         def __call__(self) -> "_ICalObj": ...
         def from_ical(self, ical_string: str) -> "_ICalObj": ...
 
+    class _IVRecur(Protocol):
+        """The icalendar ``vRecur`` value type — parses an RFC-5545 RRULE string."""
+        def from_ical(self, ical_string: str) -> object: ...
+
     class _ICalLib(Protocol):
         """Structural type for the icalendar module."""
         Calendar: "_ICalFactory"
         Event: "_ICalFactory"
+        vRecur: "_IVRecur"
 
     class _ICalEventMutable(Protocol):
         icalendar_instance: object
@@ -100,16 +102,25 @@ except ImportError:  # pragma: no cover
 # ---------------------------------------------------------------------------
 
 _CONNECT_TIMEOUT = 10
-_BACK_TO_BACK_GAP = timedelta(minutes=5)
 _DEFAULT_PAST_DAYS = 30
 _DEFAULT_FUTURE_DAYS = 30
 
+# list_events window/limit defaults when the caller omits them.
+_LIST_DEFAULT_FUTURE_DAYS = 7
+_LIST_DEFAULT_LIMIT = 50
+_LIST_MAX_LIMIT = 200
+
+# Title→uid resolution scans a live window (no persisted mirror to query) so it
+# reaches both recently-past and comfortably-future events by their summary.
+_TITLE_MATCH_PAST_DAYS = 30
+_TITLE_MATCH_FUTURE_DAYS = 365
+
 _ERR_CALDAV_NOT_INSTALLED = "'caldav' package is not installed."
-_SQL_INSERT_NOTIFICATION = """INSERT OR IGNORE INTO scheduled_items
-                           (id, item_type, message, due_at, status, channel,
-                            source, external_uid, hidden, created_at)
-                         VALUES (?, 'notification', ?, ?, 'pending', 'calendar',
-                                 'mail', ?, 1, ?)"""
+_ERR_ICAL_NOT_INSTALLED = "'icalendar' package is not installed."
+# find_free_slots / get_attendees computed over the removed scheduled_items
+# mirror and have no live-CalDAV replacement in scope — they return this honest,
+# deliberate error rather than a stale free/busy result.
+_ERR_OP_UNSUPPORTED = "This calendar operation is not currently supported."
 
 # ---------------------------------------------------------------------------
 # Module-level helpers
@@ -124,62 +135,6 @@ def _make_date_utc(d: object) -> _dt_module.datetime:
     if isinstance(d, _dt_module.date):
         return parse_utc(_dt_module.datetime(d.year, d.month, d.day, 0, 0, 0))
     return parse_utc(cast("_dt_module.datetime | str", d))
-
-
-def _events_overlap(a: dict[str, object], b: dict[str, object]) -> bool:
-    return max(cast(_dt_module.datetime, a["dtstart"]), cast(_dt_module.datetime, b["dtstart"])) < min(cast(_dt_module.datetime, a["dtend"]), cast(_dt_module.datetime, b["dtend"]))
-
-
-def _find_overlap_pairs(
-    events: list[dict[str, object]], now: _dt_module.datetime
-) -> list[tuple[dict[str, object], dict[str, object], str]]:
-    upcoming = [
-        e for e in events
-        if e.get("dtstart") and e.get("uid")
-        and cast(_dt_module.datetime, e["dtstart"]) >= now
-        and not e.get("all_day")
-    ]
-    return [
-        (a, b, ":".join(sorted([cast(str, a["uid"]), cast(str, b["uid"])])))
-        for a, b in combinations(upcoming, 2)
-        if a["uid"] != b["uid"] and _events_overlap(a, b)
-    ]
-
-
-def _find_back_to_back_pairs(
-    events: list[dict[str, object]], now: _dt_module.datetime
-) -> list[tuple[dict[str, object], dict[str, object], int, str]]:
-    threshold = _BACK_TO_BACK_GAP.total_seconds() / 60
-    upcoming = sorted(
-        [e for e in events
-         if e.get("dtstart") and e.get("dtend") and e.get("uid")
-         and cast(_dt_module.datetime, e["dtstart"]) >= now and not e.get("all_day")],
-        key=lambda e: cast(_dt_module.datetime, e["dtstart"]),
-    )
-    pairs: list[tuple[dict[str, object], dict[str, object], int, str]] = []
-    for i in range(len(upcoming) - 1):
-        a, b = upcoming[i], upcoming[i + 1]
-        gap = (cast(_dt_module.datetime, b["dtstart"]) - cast(_dt_module.datetime, a["dtend"])).total_seconds() / 60
-        if a["uid"] != b["uid"] and 0 <= gap < threshold:
-            pairs.append((a, b, round(gap), ":".join(sorted([cast(str, a["uid"]), cast(str, b["uid"])]))))
-    return pairs
-
-
-def _get_user_tz() -> object:
-    from services.locale_service import get_timezone
-    tz = get_timezone()
-    if tz.key == "UTC":
-        return None
-    return tz
-
-
-def _next_morning_8am() -> _dt_module.datetime:
-    from services.locale_service import local_now, to_utc
-    now = local_now()
-    local_8am = now.replace(hour=8, minute=0, second=0, microsecond=0)
-    if local_8am <= now:
-        local_8am += timedelta(days=1)
-    return to_utc(local_8am)
 
 
 # ---------------------------------------------------------------------------
@@ -343,161 +298,6 @@ class CaldavHandler:
         return results
 
     # ------------------------------------------------------------------
-    # Upsert (mark-sweep delta sync)
-    # ------------------------------------------------------------------
-
-    def upsert_events(self, events: list[dict[str, object]], now: _dt_module.datetime) -> None:
-        try:
-            from services.database_service import get_shared_db_service
-            db = get_shared_db_service()
-
-            with db.connection() as conn:
-                c = conn.cursor()
-
-                # Mark existing mail events for stale check
-                c.execute(
-                    "UPDATE scheduled_items SET status='stale_check' "
-                    "WHERE source='mail' AND item_type='event' AND status='pending'"
-                )
-
-                # Upsert each event
-                for ev in events:
-                    uid = cast(str, ev.get("uid"))
-                    if not uid:
-                        continue
-                    external_uid = f"caldav:{uid}"
-                    summary = cast(str, ev.get("summary", "Event"))
-                    cal_name = cast(str, ev.get("calendar_name", ""))
-                    location = cast(str, ev.get("location") or "")
-                    dtstart = cast("_dt_module.datetime | None", ev.get("dtstart"))
-                    dtend = cast("_dt_module.datetime | None", ev.get("dtend"))
-
-                    parts: list[str] = [summary]
-                    if cal_name:
-                        parts.append(f"[{cal_name}]")
-                    if location:
-                        parts.append(f"@ {location}")
-                    message = " ".join(parts)
-
-                    metadata = _json.dumps({
-                        "uid": uid,
-                        "dtstart": dtstart.isoformat() if dtstart else None,
-                        "dtend": dtend.isoformat() if dtend else None,
-                        "location": location,
-                        "attendees": ev.get("attendees", []),
-                        "recurrence": ev.get("recurrence"),
-                        "all_day": ev.get("all_day", False),
-                        "calendar_name": cal_name,
-                    })
-                    due_at = dtstart.isoformat() if dtstart else now.isoformat()
-
-                    c.execute(
-                        """INSERT INTO scheduled_items
-                           (id, item_type, message, due_at, status, channel,
-                            source, external_uid, metadata, hidden, created_at)
-                         VALUES (?, 'event', ?, ?, 'pending', 'calendar',
-                                 'mail', ?, ?, 1, ?)
-                         ON CONFLICT(external_uid) DO UPDATE SET
-                            message=excluded.message,
-                            due_at=excluded.due_at,
-                            metadata=excluded.metadata,
-                            hidden=1,
-                            status='pending'""",
-                        (uuid.uuid4().hex[:8], message, due_at,
-                         external_uid, metadata, now.isoformat()),
-                    )
-
-                # Cancel stale events not seen in this sync
-                c.execute(
-                    "UPDATE scheduled_items SET status='cancelled' "
-                    "WHERE source='mail' AND item_type='event' AND status='stale_check'"
-                )
-
-                # 15-min alerts for upcoming non-all-day events within 24h
-                upcoming_cutoff = now + timedelta(hours=24)
-                for ev in events:
-                    dtstart = cast("_dt_module.datetime | None", ev.get("dtstart"))
-                    uid = cast(str, ev.get("uid"))
-                    if (not dtstart or not uid or dtstart < now
-                            or dtstart > upcoming_cutoff or ev.get("all_day")):
-                        continue
-                    alert_msg = f"In 15 min: {ev.get('summary', 'Event')}"
-                    if ev.get("location"):
-                        alert_msg += f" @ {ev['location']}"
-                    c.execute(
-                        _SQL_INSERT_NOTIFICATION,
-                        (uuid.uuid4().hex[:8], alert_msg,
-                         (dtstart - timedelta(minutes=15)).isoformat(),
-                         f"caldav:{uid}:alert", now.isoformat()),
-                    )
-
-                # Conflict detection
-                for ev_a, ev_b, canon_key in _find_overlap_pairs(events, now):
-                    conflict_msg = (
-                        f"Schedule conflict: \"{ev_a.get('summary', 'Event')}\" and "
-                        f"\"{ev_b.get('summary', 'Event')}\" overlap"
-                    )
-                    c.execute(
-                        _SQL_INSERT_NOTIFICATION,
-                        (uuid.uuid4().hex[:8], conflict_msg, now.isoformat(),
-                         f"caldav:conflict:{canon_key}", now.isoformat()),
-                    )
-                # Back-to-back warnings (< 5 min gap)
-                for ev_a, ev_b, gap_min, canon_key in _find_back_to_back_pairs(events, now):
-                    b2b_msg = (
-                        f"Tight transition ({gap_min}min gap): "
-                        f"\"{ev_a.get('summary', 'Event')}\" \u2192 "
-                        f"\"{ev_b.get('summary', 'Event')}\""
-                    )
-                    c.execute(
-                        _SQL_INSERT_NOTIFICATION,
-                        (uuid.uuid4().hex[:8], b2b_msg,
-                         cast(_dt_module.datetime, ev_a.get("dtend", now)).isoformat(),
-                         f"caldav:b2b:{canon_key}", now.isoformat()),
-                    )
-
-                # Daily digest (one-time insert, recurring)
-                if not c.execute(
-                    "SELECT id FROM scheduled_items WHERE external_uid='caldav:daily-digest'"
-                ).fetchone():
-                    c.execute(
-                        """INSERT INTO scheduled_items
-                           (id, item_type, message, due_at, recurrence, status, channel,
-                            source, external_uid, hidden, created_at, is_prompt)
-                         VALUES (?, 'prompt',
-                                 'Summarize today''s calendar: highlight key meetings, conflicts, and free blocks. Keep it brief — 3-4 sentences.',
-                                 ?, 'daily', 'pending', 'calendar',
-                                 'mail', 'caldav:daily-digest', 1, ?, 1)""",
-                        (uuid.uuid4().hex[:8], _next_morning_8am().isoformat(), now.isoformat()),
-                    )
-
-                # First-connect greeting (one-time)
-                if not c.execute(
-                    "SELECT id FROM scheduled_items WHERE external_uid='caldav:greeting'"
-                ).fetchone():
-                    n = len(events)
-                    greeting_msg = (
-                        f"Calendar connected! Found {n} event{'s' if n != 1 else ''} "
-                        f"across your calendars."
-                    )
-                    c.execute(
-                        """INSERT INTO scheduled_items
-                           (id, item_type, message, due_at, status, channel,
-                            source, external_uid, hidden, created_at)
-                         VALUES (?, 'notification', ?, ?, 'pending', 'calendar',
-                                 'mail', 'caldav:greeting', 1, ?)""",
-                        (uuid.uuid4().hex[:8], greeting_msg,
-                         now.isoformat(), now.isoformat()),
-                    )
-
-                conn.commit()
-                logger.info(
-                    "[caldav_handler] upserted %d events + derivative items", len(events)
-                )
-        except Exception as exc:
-            logger.error("[caldav_handler] upsert_events failed: %s", exc)
-
-    # ------------------------------------------------------------------
     # Tool handlers — server mutations (client passed in)
     # ------------------------------------------------------------------
 
@@ -505,7 +305,7 @@ class CaldavHandler:
         if not _CALDAV_AVAILABLE:
             return {"error": _ERR_CALDAV_NOT_INSTALLED}
         if not _ICALENDAR_AVAILABLE:
-            return {"error": "'icalendar' package is not installed."}
+            return {"error": _ERR_ICAL_NOT_INSTALLED}
 
         summary = (cast(str, params.get("summary")) or "").strip()
         dtstart_raw = (cast(str, params.get("dtstart")) or "").strip()
@@ -524,6 +324,7 @@ class CaldavHandler:
             location = cast(str, params.get("location")) or ""
             description = cast(str, params.get("description")) or ""
             cal_pref = cast(str, params.get("calendar_name")) or ""
+            recurrence = (cast(str, params.get("recurrence")) or "").strip()
 
             principal = client.principal()
             calendars = principal.calendars()
@@ -550,6 +351,14 @@ class CaldavHandler:
                 vevent.add("location", location)
             if description:
                 vevent.add("description", description)
+            if recurrence:
+                try:
+                    vevent.add(
+                        "rrule",
+                        cast("_ICalLib", _icalendar_lib).vRecur.from_ical(recurrence),
+                    )
+                except Exception as exc:
+                    return {"error": f"Invalid recurrence rule {recurrence!r}: {exc}"}
 
             ical.add_component(vevent)
             target_cal.save_event(ical.to_ical().decode("utf-8"))
@@ -564,6 +373,7 @@ class CaldavHandler:
                 "summary": summary,
                 "dtstart": dtstart.isoformat(),
                 "dtend": dtend.isoformat(),
+                "recurrence": recurrence or None,
                 "calendar_name": cal_label,
             }
         except Exception as exc:
@@ -615,17 +425,26 @@ class CaldavHandler:
                 component.pop("DESCRIPTION", None)
                 if params["description"]:
                     component.add("description", str(params["description"]))
+            if "recurrence" in params:
+                component.pop("RRULE", None)
+                if params["recurrence"]:
+                    component.add(
+                        "rrule",
+                        cast("_ICalLib", _icalendar_lib).vRecur.from_ical(
+                            str(params["recurrence"])
+                        ),
+                    )
             break
 
     def update_event(self, client: "_CalDAVClient", params: dict[str, object]) -> dict[str, object]:
         if not _CALDAV_AVAILABLE:
             return {"error": _ERR_CALDAV_NOT_INSTALLED}
         if not _ICALENDAR_AVAILABLE:
-            return {"error": "'icalendar' package is not installed."}
+            return {"error": _ERR_ICAL_NOT_INSTALLED}
 
-        uid = (cast(str, params.get("uid")) or "").strip()
-        if not uid:
-            return {"error": "Parameter 'uid' is required."}
+        uid, err = self._resolve_write_uid(client, params)
+        if err is not None:
+            return err
 
         try:
             found_event = self._find_event_by_uid(client, uid)
@@ -647,9 +466,9 @@ class CaldavHandler:
         if not _CALDAV_AVAILABLE:
             return {"error": _ERR_CALDAV_NOT_INSTALLED}
 
-        uid = (cast(str, params.get("uid")) or "").strip()
-        if not uid:
-            return {"error": "Parameter 'uid' is required."}
+        uid, err = self._resolve_write_uid(client, params)
+        if err is not None:
+            return err
 
         try:
             principal = client.principal()
@@ -668,112 +487,234 @@ class CaldavHandler:
             return {"error": str(exc)}
 
     # ------------------------------------------------------------------
-    # Tool handlers — DB queries continued
+    # Tool handlers — live reads (query the CalDAV server directly)
     # ------------------------------------------------------------------
 
-    def find_free_slots(self, params: dict[str, object]) -> dict[str, object]:
+    def list_events(self, client: "_CalDAVClient", params: dict[str, object]) -> dict[str, object]:
+        """List events in a window (default: now .. +7d), soonest first, capped by
+        ``limit`` (default 50, max 200). Datetimes are serialized to ISO strings."""
+        if not _CALDAV_AVAILABLE:
+            return {"error": _ERR_CALDAV_NOT_INSTALLED}
+        if not _ICALENDAR_AVAILABLE:
+            return {"error": _ERR_ICAL_NOT_INSTALLED}
         try:
-            from datetime import timezone as _tz
-            from services.database_service import get_shared_db_service
-            db = get_shared_db_service()
-
-            date_from = cast(str, params.get("date_from", utc_now().isoformat()))
-            date_to = cast(str, params.get("date_to", (utc_now() + timedelta(days=7)).isoformat()))
-            min_minutes = int(cast(int, params.get("min_duration_minutes", 30)))
-            wh_start = int(cast(int, params.get("working_hours_start", 8)))
-            wh_end = int(cast(int, params.get("working_hours_end", 18)))
-
-            with db.connection() as conn:
-                rows = conn.execute(
-                    "SELECT due_at, metadata FROM scheduled_items "
-                    "WHERE source='mail' AND item_type='event' AND status='pending' "
-                    "AND due_at >= ? AND due_at <= ? ORDER BY due_at ASC",
-                    (date_from, date_to),
-                ).fetchall()
-
-            busy: list[tuple[_dt_module.datetime, _dt_module.datetime]] = []
-            for due_at_str, meta_raw in rows:
-                meta = cast("dict[str, object]", parse_json_column(meta_raw))
-                start = parse_utc(due_at_str)
-                end_str = cast("str | None", meta.get("dtend"))
-                end = parse_utc(end_str) if end_str else start + timedelta(hours=1)
-                if not meta.get("all_day", False):
-                    busy.append((start, end))
-            busy.sort(key=lambda x: x[0])
-
-            tz = cast("_dt_module.tzinfo", _get_user_tz() or _tz.utc)
-            window_start = parse_utc(date_from)
-            window_end = parse_utc(date_to)
-            work_windows: list[tuple[_dt_module.datetime, _dt_module.datetime]] = []
-            day = window_start.astimezone(tz).replace(hour=0, minute=0, second=0, microsecond=0)
-            last_day = window_end.astimezone(tz).replace(hour=0, minute=0, second=0, microsecond=0)
-            while day <= last_day:
-                ws = max(day.replace(hour=wh_start).astimezone(_tz.utc), window_start)
-                we = min(day.replace(hour=wh_end).astimezone(_tz.utc), window_end)
-                if ws < we:
-                    work_windows.append((ws, we))
-                day += timedelta(days=1)
-
-            slots = []
-            for ww_start, ww_end in work_windows:
-                cursor_time = ww_start
-                for bstart, bend in busy:
-                    if bend <= ww_start:
-                        continue
-                    if bstart >= ww_end:
-                        break
-                    clamped_start = max(bstart, ww_start)
-                    if clamped_start > cursor_time:
-                        gap = (clamped_start - cursor_time).total_seconds() / 60
-                        if gap >= min_minutes:
-                            slots.append({
-                                "start": cursor_time.isoformat(),
-                                "end": clamped_start.isoformat(),
-                                "duration_minutes": int(gap),
-                            })
-                    cursor_time = max(cursor_time, min(bend, ww_end))
-                if cursor_time < ww_end:
-                    gap = (ww_end - cursor_time).total_seconds() / 60
-                    if gap >= min_minutes:
-                        slots.append({
-                            "start": cursor_time.isoformat(),
-                            "end": ww_end.isoformat(),
-                            "duration_minutes": int(gap),
-                        })
-
-            return {"free_slots": slots, "count": len(slots)}
+            start, end = self._resolve_window(params)
+            events = self._collect_events(client, start, end)
+            events.sort(key=lambda e: cast(_dt_module.datetime, e["dtstart"]))
+            events = events[: self._resolve_limit(params)]
+            return {
+                "events": [self._serialize_event(e) for e in events],
+                "count": len(events),
+                "window": {"start": start.isoformat(), "end": end.isoformat()},
+            }
         except Exception as exc:
-            return {"error": f"Failed to find free slots: {exc}"}
+            logger.error("[caldav_handler] list_events failed: %s", exc)
+            return {"error": str(exc)}
 
-    def get_attendees(self, params: dict[str, object]) -> dict[str, object]:
-        uid = cast(str, params.get("uid") or params.get("event_uid"))
-        if not uid:
-            return {"error": "uid is required"}
+    def get_event(self, client: "_CalDAVClient", params: dict[str, object]) -> dict[str, object]:
+        """Fetch one event by ``uid``, or by ``title`` (unique live substring match)."""
+        if not _CALDAV_AVAILABLE:
+            return {"error": _ERR_CALDAV_NOT_INSTALLED}
+        if not _ICALENDAR_AVAILABLE:
+            return {"error": _ERR_ICAL_NOT_INSTALLED}
+
+        uid = (cast(str, params.get("uid")) or "").strip()
+        title = (cast(str, params.get("title")) or "").strip()
+        if not uid and not title:
+            return {"error": "Parameter 'uid' or 'title' is required."}
         try:
-            from services.database_service import get_shared_db_service
-            from capabilities.contact_resolver import resolve
-            db = get_shared_db_service()
+            if uid:
+                event = self._find_parsed_by_uid(client, uid)
+                if event is None:
+                    return {"error": f"Event not found (UID: {uid})"}
+                return {"event": self._serialize_event(event)}
 
-            with db.connection() as conn:
-                row = conn.execute(
-                    "SELECT message, metadata FROM scheduled_items "
-                    "WHERE external_uid = ? AND item_type='event'",
-                    (f"caldav:{uid}",),
-                ).fetchone()
-
-            if not row:
-                return {"error": f"Event '{uid}' not found"}
-
-            title, meta_raw = row
-            meta = cast("dict[str, object]", parse_json_column(meta_raw))
-            resolved: list[dict[str, object]] = []
-            for email in cast("list[str]", meta.get("attendees", [])):
-                matches = resolve(email, limit=1)
-                resolved.append({
-                    "email": email,
-                    "name": cast(str, matches[0].get("name", "")) if matches else "",
-                })
-
-            return {"event_title": title, "attendees": resolved, "count": len(resolved)}
+            matches = self._events_matching_title(client, title)
+            if not matches:
+                return {"error": f"No event found matching title {title!r}."}
+            if len(matches) > 1:
+                return {"error": self._ambiguous_title_error(title, matches)}
+            return {"event": self._serialize_event(matches[0])}
         except Exception as exc:
-            return {"error": f"Failed to get attendees: {exc}"}
+            logger.error("[caldav_handler] get_event failed: %s", exc)
+            return {"error": str(exc)}
+
+    # ------------------------------------------------------------------
+    # Read helpers
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _resolve_window(
+        params: dict[str, object],
+    ) -> tuple[_dt_module.datetime, _dt_module.datetime]:
+        now = utc_now()
+        raw_from = (cast(str, params.get("date_from")) or "").strip()
+        raw_to = (cast(str, params.get("date_to")) or "").strip()
+        start = parse_utc(raw_from) if raw_from else now
+        if raw_to:
+            end = parse_utc(raw_to)
+            # A date-only upper bound should cover the WHOLE day, else events later
+            # that day are missed. CalendarAbility resolves both bare dates and day
+            # names ('sunday') to midnight before dispatch, so a midnight end with no
+            # time-of-day is the date-only signal; an explicit time is preserved.
+            if end.hour == 0 and end.minute == 0 and end.second == 0:
+                end = end + timedelta(days=1)
+        elif raw_from:
+            end = start + timedelta(days=_LIST_DEFAULT_FUTURE_DAYS)
+        else:
+            end = now + timedelta(days=_LIST_DEFAULT_FUTURE_DAYS)
+        # A lone past upper bound (start defaults to now) would invert the window and
+        # be handed straight to date_search — swap so the query is always valid.
+        if start > end:
+            start, end = end, start
+        return start, end
+
+    @staticmethod
+    def _resolve_limit(params: dict[str, object]) -> int:
+        raw = params.get("limit")
+        try:
+            limit = int(cast("int | str", raw))
+        except (TypeError, ValueError):
+            limit = _LIST_DEFAULT_LIMIT
+        return max(1, min(limit, _LIST_MAX_LIMIT))
+
+    def _collect_events(
+        self, client: "_CalDAVClient", start: _dt_module.datetime, end: _dt_module.datetime
+    ) -> list[dict[str, object]]:
+        principal = client.principal()
+        out: list[dict[str, object]] = []
+        for calendar in principal.calendars():
+            cal_name = getattr(calendar, "name", None) or "Unknown"
+            try:
+                for raw_event in calendar.date_search(start=start, end=end, expand=True):
+                    try:
+                        out.extend(self.parse_event(raw_event, cal_name))
+                    except Exception as exc:
+                        logger.warning(
+                            "[caldav_handler] parse failed in '%s': %s", cal_name, exc
+                        )
+            except Exception as exc:
+                logger.error("[caldav_handler] fetch failed for '%s': %s", cal_name, exc)
+        return out
+
+    def _find_parsed_by_uid(
+        self, client: "_CalDAVClient", uid: str
+    ) -> dict[str, object] | None:
+        principal = client.principal()
+        for calendar in principal.calendars():
+            cal_name = getattr(calendar, "name", None) or "Unknown"
+            try:
+                results = calendar.search(uid=uid)
+            except Exception:
+                continue
+            if results:
+                parsed = self.parse_event(results[0], cal_name)
+                if parsed:
+                    return parsed[0]
+        return None
+
+    def _events_matching_title(
+        self, client: "_CalDAVClient", title: str
+    ) -> list[dict[str, object]]:
+        """Client-side substring match over a live window — there is no persisted
+        mirror to query. Recurrence occurrences sharing a uid collapse to a single
+        representative (the soonest upcoming occurrence)."""
+        now = utc_now()
+        start = now - timedelta(days=_TITLE_MATCH_PAST_DAYS)
+        end = now + timedelta(days=_TITLE_MATCH_FUTURE_DAYS)
+        needle = title.lower()
+        matched = [
+            e
+            for e in self._collect_events(client, start, end)
+            if needle in str(e.get("summary", "")).lower()
+        ]
+        return self._representative_per_uid(matched, now)
+
+    def _resolve_write_uid(
+        self, client: "_CalDAVClient", params: dict[str, object]
+    ) -> tuple[str, dict[str, object] | None]:
+        """Return ``(uid, error)``. An explicit ``uid`` passes straight through;
+        otherwise resolve a UNIQUE ``title`` substring match over the live window.
+        Absent target or an ambiguous match returns an error dict (with
+        candidates) and an empty uid."""
+        uid = (cast(str, params.get("uid")) or "").strip()
+        if uid:
+            return uid, None
+        title = (cast(str, params.get("title")) or "").strip()
+        if not title:
+            return "", {"error": "Parameter 'uid' or 'title' is required."}
+        matches = self._events_matching_title(client, title)
+        if not matches:
+            return "", {"error": f"No event found matching title {title!r}."}
+        if len(matches) > 1:
+            return "", {"error": self._ambiguous_title_error(title, matches)}
+        return str(matches[0].get("uid", "")), None
+
+    @staticmethod
+    def _representative_per_uid(
+        events: list[dict[str, object]], now: _dt_module.datetime
+    ) -> list[dict[str, object]]:
+        """Collapse recurrence occurrences (one uid, many expanded VEVENTs) to ONE
+        representative each — the soonest upcoming occurrence, or the most recent
+        past one when the whole series is behind us — so a title match surfaces the
+        occurrence a user means, not a stale month-old expansion. Uid-less events
+        pass through untouched."""
+        groups: dict[str, list[dict[str, object]]] = {}
+        order: list[str] = []
+        out: list[dict[str, object]] = []
+        for event in events:
+            uid = str(event.get("uid", ""))
+            if not uid:
+                out.append(event)
+                continue
+            if uid not in groups:
+                groups[uid] = []
+                order.append(uid)
+            groups[uid].append(event)
+
+        def _dtstart(event: dict[str, object]) -> _dt_module.datetime:
+            return cast(_dt_module.datetime, event["dtstart"])
+
+        for uid in order:
+            occurrences = groups[uid]
+            upcoming = [e for e in occurrences if _dtstart(e) >= now]
+            best = min(upcoming, key=_dtstart) if upcoming else max(occurrences, key=_dtstart)
+            out.append(best)
+        return out
+
+    @staticmethod
+    def _ambiguous_title_error(title: str, matches: list[dict[str, object]]) -> str:
+        """One self-contained error string naming each candidate's uid — the model
+        disambiguates from this alone (``ToolResult.err`` carries only a message, no
+        structured candidate list)."""
+        listed = "; ".join(
+            f"{str(e.get('summary', 'No title'))!r} (uid {e.get('uid', '')})"
+            for e in matches[:10]
+        )
+        return (
+            f"{len(matches)} events match title {title!r}; pass a uid to "
+            f"disambiguate: {listed}."
+        )
+
+    @staticmethod
+    def _serialize_event(event: dict[str, object]) -> dict[str, object]:
+        out = dict(event)
+        for key in ("dtstart", "dtend"):
+            value = out.get(key)
+            if isinstance(value, _dt_module.datetime):
+                out[key] = value.isoformat()
+        return out
+
+    # ------------------------------------------------------------------
+    # Tool handlers — free/busy + attendee resolution (out of scope)
+    #
+    # Both computed over the removed scheduled_items mirror and have no
+    # live-CalDAV replacement in scope. They stay registered but return an
+    # honest "unsupported" error rather than a stale result.
+    # ------------------------------------------------------------------
+
+    def find_free_slots(self, params: dict[str, object]) -> dict[str, object]:  # noqa: ARG002
+        return {"error": _ERR_OP_UNSUPPORTED}
+
+    def get_attendees(self, params: dict[str, object]) -> dict[str, object]:  # noqa: ARG002
+        return {"error": _ERR_OP_UNSUPPORTED}

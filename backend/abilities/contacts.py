@@ -13,10 +13,10 @@ This ability stays a :class:`CapabilityAbility` subclass (CAPABILITY_KEY="mail")
 purely to reuse that not-connected remediation shape; it overrides ``run()`` and
 never reaches the base's handler-dispatch flow for a known action.
 
-``get`` carries a precision contract — ``resolve()`` is fuzzy (RRF over vec +
-FTS5 with no score threshold), so taking ``matches[0]`` could hand back the wrong
-person. A relevance predicate splits the fuzzy candidates into three fixed
-outcomes (calendar / document precedent):
+``get`` carries a precision contract — ``resolve()`` is fuzzy (FTS5 prefix-match
+over the contact kind, no score threshold), so taking ``matches[0]`` could hand
+back the wrong person. A relevance predicate splits the fuzzy candidates into
+three fixed outcomes (calendar / document precedent):
 
 * exactly 1 relevant → that contact.
 * ≥2 relevant → ``code=ambiguous-match`` with the candidate rows in the body —
@@ -36,11 +36,10 @@ from typing import TYPE_CHECKING, ClassVar, cast
 if TYPE_CHECKING:
     from typing import SupportsInt
 
-    from services.data_graph_service import DataGraphService
-
 from abilities._capability import CapabilityAbility
-from abilities._params import Keys
+from configs.enums.param_key import Keys
 from abilities._result import ToolResult
+from models.contact import ContactRow
 
 # Read actions answered inline against the local index. An unknown action is
 # reported with this ladder in valid=.
@@ -48,6 +47,7 @@ _ACTIONS = ("list", "get")
 
 
 class ContactsAbility(CapabilityAbility):
+    DISCOVERABLE: ClassVar[bool] = False  # pim-delegate-exclusive; pinned on PimConfig only
     CAPABILITY_KEY: ClassVar[str] = "mail"
     DEFAULT_ACTION: ClassVar[str] = "list"
     NOT_CONNECTED_HINT: ClassVar[str] = (
@@ -144,13 +144,14 @@ class ContactsAbility(CapabilityAbility):
         if query:
             contacts = resolve(query, limit=limit)
         else:
-            rows = self._dgs().fetch(
-                kinds=["user_specific"], order_by="key ASC", limit=limit
-            )
+            rows = [
+                r.to_dict()
+                for r in ContactRow.live().order_by("key ASC").limit(limit).get()
+            ]
             contacts = [
                 c
                 for c in (
-                    _parse_contact_row(cast(str, cast("dict[str, object]", r).get("key", "")), cast(str, cast("dict[str, object]", r).get("value", "")))
+                    _parse_contact_row(cast(str, r.get("key", "")), cast(str, r.get("value", "")))
                     for r in rows
                 )
                 if c is not None
@@ -235,12 +236,6 @@ class ContactsAbility(CapabilityAbility):
             )
         return None
 
-    @staticmethod
-    def _dgs() -> "DataGraphService":
-        from services.data_graph_service import get_data_graph_service
-
-        return get_data_graph_service()
-
 
 # ---------------------------------------------------------------------------
 # Relevance predicate + contact field accessors
@@ -253,7 +248,7 @@ def _is_relevant(identifier: str, contact: dict[str, object]) -> bool:
     word of the identifier appears as a ci word-prefix in the contact's fn (so
     "Mike" matches "Mike Borg" but "Smith Family" does not match "John Smith").
 
-    This is the precision filter that turns the unthresholded RRF candidate set
+    This is the precision filter that turns the unthresholded FTS candidate set
     into the three fixed get outcomes — without it ``resolve()`` would hand back a
     near-arbitrary first hit for almost any query on a non-empty index."""
     needle = identifier.strip().lower()

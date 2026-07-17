@@ -1,14 +1,17 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, watch, onUnmounted } from 'vue';
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
+import type { CatalogEntry, Provider } from '../api/providers';
 import { providers } from '../api/providers';
-import type { Provider, CatalogEntry } from '../api/providers';
+import { system } from '../api';
 import { apiErrorMessage } from '../api/http';
 import { useToast } from '../composables/useToast';
+import { useBrainAction } from '../composables/useBrainAction';
 import { useConfirm } from '../composables/useConfirm';
 import { useShellStore } from '../stores/shell';
-import { Plus, LayoutGrid, ChevronLeft } from '@lucide/vue';
+import { ChevronLeft, LayoutGrid, Plus } from '@lucide/vue';
 
 const { show: showToast } = useToast();
+const { run } = useBrainAction();
 const { confirm } = useConfirm();
 const shell = useShellStore();
 
@@ -59,8 +62,8 @@ let suppressNextCredsWatch = false;
 
 const testing = ref(false);
 
-const needsHost = computed(() =>
-  preset.value?.platform === 'ollama' || preset.value?.platform === 'openai_compatible',
+const needsHost = computed(
+  () => preset.value?.platform === 'ollama' || preset.value?.platform === 'openai_compatible',
 );
 
 const needsKey = computed(() => !!preset.value?.needs_key);
@@ -86,6 +89,12 @@ function avatar(name: string): string {
   return s ? s[0].toUpperCase() : '?';
 }
 
+function platformLabel(platform: string): string {
+  if (platform === 'openai_compatible') return 'OpenAI-compatible';
+  if (platform === 'codex_cli') return 'Codex CLI';
+  return platform;
+}
+
 onMounted(async () => {
   await load();
 });
@@ -107,7 +116,7 @@ async function load(): Promise<void> {
       providers.getVision(),
       providers.getDelegate(),
     ]);
-    providerList.value = provRes.providers ?? [];
+    providerList.value = provRes;
     selectedId.value = selRes.provider ? selRes.provider.id : null;
     visionId.value = visRes.provider ? visRes.provider.id : null;
     visionSource.value = visRes.source || 'none';
@@ -138,35 +147,38 @@ const delegateSelectValue = computed(() =>
 // value '' clears the explicit pin → fall back to the main provider.
 async function setVision(value: string): Promise<void> {
   const pid = value === '' ? null : Number(value);
-  try {
-    const res = await providers.setVision(pid);
+  const { ok, data: res } = await run(() => providers.setVision(pid), {
+    success: 'Vision provider updated',
+    failMsg: 'Failed',
+    networkMsg: 'Failed to set vision provider',
+  });
+  if (ok && res) {
     visionId.value = res.provider ? res.provider.id : null;
     visionSource.value = res.source || (pid == null ? 'auto' : 'explicit');
-    showToast('Vision provider updated', 'success');
-  } catch (e: unknown) {
-    showToast(apiErrorMessage(e, 'Failed', 'Failed to set vision provider'), 'error');
   }
 }
 
 async function setDelegate(value: string): Promise<void> {
   const pid = value === '' ? null : Number(value);
-  try {
-    const res = await providers.setDelegate(pid);
+  const { ok, data: res } = await run(() => providers.setDelegate(pid), {
+    success: 'Delegate provider updated',
+    failMsg: 'Failed',
+    networkMsg: 'Failed to set delegate provider',
+  });
+  if (ok && res) {
     delegateId.value = res.provider ? res.provider.id : null;
     delegateSource.value = res.source || (pid == null ? 'auto' : 'explicit');
-    showToast('Delegate provider updated', 'success');
-  } catch (e: unknown) {
-    showToast(apiErrorMessage(e, 'Failed', 'Failed to set delegate provider'), 'error');
   }
 }
 
 async function selectProvider(id: number): Promise<void> {
-  try {
-    await providers.setSelected(id);
+  const { ok } = await run(() => providers.setSelected(id), {
+    success: 'Provider selected',
+    failMsg: 'Failed',
+    networkMsg: 'Failed to select provider',
+  });
+  if (ok) {
     selectedId.value = id;
-    showToast('Provider selected', 'success');
-  } catch (e: unknown) {
-    showToast(apiErrorMessage(e, 'Failed', 'Failed to select provider'), 'error');
   }
 }
 
@@ -190,12 +202,12 @@ async function confirmDelete(id: number): Promise<void> {
     confirmClass: 'btn-danger',
   });
   if (!confirmed) return;
-  try {
-    await providers.delete(id);
-    showToast('Provider deleted', 'success');
+  const { ok } = await run(() => providers.delete(id), {
+    success: 'Provider deleted',
+    failMsg: 'Delete failed',
+  });
+  if (ok) {
     await load();
-  } catch (e: unknown) {
-    showToast(apiErrorMessage(e, 'Delete failed'), 'error');
   }
 }
 
@@ -252,7 +264,7 @@ function presetFor(provider: Provider): CatalogEntry {
     name: provider.name,
     platform: provider.platform,
     host: provider.host || '',
-    needs_key: provider.platform !== 'ollama',
+    needs_key: provider.platform !== 'ollama' && provider.platform !== 'codex_cli',
   };
 }
 
@@ -260,8 +272,8 @@ async function ensureCatalog(): Promise<void> {
   if (catalogLoaded.value) return;
   try {
     const res = await providers.getCatalog();
-    catalog.value = Array.isArray(res.catalog) ? res.catalog : [];
-    catalogLoaded.value = true;  // only on success, so a failed load retries next open
+    catalog.value = Array.isArray(res) ? res : [];
+    catalogLoaded.value = true; // only on success, so a failed load retries next open
   } catch {
     catalog.value = [];
     showToast('Could not load provider catalog', 'error');
@@ -366,34 +378,33 @@ async function fetchModels(): Promise<void> {
 async function testConnection(): Promise<void> {
   if (!preset.value) return;
   testing.value = true;
-  try {
-    const body: {
-      platform: string;
-      name: string;
-      model: string;
-      host?: string;
-      api_key?: string;
-      provider_id?: number;
-    } = {
-      platform: preset.value.platform,
-      name: formName.value.trim(),
-      model: formModel.value,
-    };
-    if (needsHost.value) body.host = formHost.value.trim();
-    if (needsKey.value) body.api_key = formKey.value.trim();
-    if (editingId.value !== null) body.provider_id = editingId.value;
+  const body: {
+    platform: string;
+    name: string;
+    model: string;
+    host?: string;
+    api_key?: string;
+    provider_id?: number;
+  } = {
+    platform: preset.value.platform,
+    name: formName.value.trim(),
+    model: formModel.value,
+  };
+  if (needsHost.value) body.host = formHost.value.trim();
+  if (needsKey.value) body.api_key = formKey.value.trim();
+  if (editingId.value !== null) body.provider_id = editingId.value;
 
-    const data = await providers.test(body);
+  const { ok, data } = await run(() => providers.test(body), {
+    failMsg: 'Test failed',
+  });
+  if (ok && data) {
     if (data.success) {
       showToast(data.message || 'Connection successful', 'success');
     } else {
       showToast(data.error || 'Test failed', 'error');
     }
-  } catch (e: unknown) {
-    showToast(apiErrorMessage(e, 'Test failed'), 'error');
-  } finally {
-    testing.value = false;
   }
+  testing.value = false;
 }
 
 async function saveProvider(): Promise<void> {
@@ -419,30 +430,25 @@ async function saveProvider(): Promise<void> {
     if (k) body.api_key = k;
   }
 
-  try {
-    if (editingId.value !== null) {
-      await providers.update(editingId.value, body);
-    } else {
-      await providers.create(body);
-    }
-    showToast(editingId.value !== null ? 'Provider updated' : 'Provider added', 'success');
+  const id = editingId.value;
+  const { ok } = await run(
+    () => (id !== null ? providers.update(id, body) : providers.create(body)),
+    {
+      success: id !== null ? 'Provider updated' : 'Provider added',
+      failMsg: 'Save failed',
+    },
+  );
+  if (ok) {
     await load();
     mode.value = 'list';
-
-    // Providers-only lift check
     if (shell.providersOnly) {
       try {
-        const res = await fetch('/auth/status', { credentials: 'same-origin' });
-        if (res.ok) {
-          const sd = (await res.json()) as { has_providers?: boolean };
-          if (sd.has_providers) shell.liftProvidersOnly();
-        }
+        const sd = await system.authStatus();
+        if (sd.has_providers) shell.liftProvidersOnly();
       } catch {
         // keep locked
       }
     }
-  } catch (e: unknown) {
-    showToast(apiErrorMessage(e, 'Save failed'), 'error');
   }
 }
 </script>
@@ -495,7 +501,8 @@ async function saveProvider(): Promise<void> {
                 v-if="p.decrypt_failed"
                 class="provider-warn"
                 title="Misconfigured — re-enter credentials"
-              >⚠</span>
+                >⚠</span
+              >
             </div>
             <div class="provider-meta">
               <span :class="`badge badge-${p.platform}`">{{ p.platform }}</span>
@@ -503,7 +510,8 @@ async function saveProvider(): Promise<void> {
                 v-if="p.supports_vision"
                 class="badge badge-success"
                 title="Verified image understanding"
-              >Vision</span>
+                >Vision</span
+              >
               <span>{{ p.model || 'no model' }}</span>
               <span v-if="p.host">· {{ p.host }}</span>
             </div>
@@ -513,10 +521,16 @@ async function saveProvider(): Promise<void> {
             <button
               class="btn btn-sm btn-danger"
               :disabled="providerRoles(p.id).length > 0"
-              :title="providerRoles(p.id).length > 0 ? `In use as the ${providerRoles(p.id).join(', ')} provider — clear or reassign this role before deleting` : ''"
+              :title="
+                providerRoles(p.id).length > 0
+                  ? `In use as the ${providerRoles(p.id).join(', ')} provider — clear or reassign this role before deleting`
+                  : ''
+              "
               :aria-disabled="providerRoles(p.id).length > 0"
               @click="confirmDelete(p.id)"
-            >Delete</button>
+            >
+              Delete
+            </button>
           </div>
         </div>
       </template>
@@ -581,9 +595,7 @@ async function saveProvider(): Promise<void> {
         >
           <span class="provider-tile-avatar">{{ avatar(t.name) }}</span>
           <span class="provider-tile-name">{{ t.name }}</span>
-          <span class="provider-tile-platform">{{
-            t.platform === 'openai_compatible' ? 'OpenAI-compatible' : t.platform
-          }}</span>
+          <span class="provider-tile-platform">{{ platformLabel(t.platform) }}</span>
         </button>
       </div>
     </div>
@@ -602,33 +614,15 @@ async function saveProvider(): Promise<void> {
       <form class="wizard-form" autocomplete="off" @submit.prevent="saveProvider">
         <div class="form-group">
           <label for="pName">Name</label>
-          <input
-            id="pName"
-            v-model="formName"
-            type="text"
-            required
-          />
+          <input id="pName" v-model="formName" type="text" required />
         </div>
 
-        <div
-          id="hostGroup"
-          class="form-group wizard-step"
-          :hidden="!needsHost"
-        >
+        <div id="hostGroup" class="form-group wizard-step" :hidden="!needsHost">
           <label for="pHost">Host / Base URL</label>
-          <input
-            id="pHost"
-            v-model="formHost"
-            type="text"
-            placeholder="https://…"
-          />
+          <input id="pHost" v-model="formHost" type="text" placeholder="https://…" />
         </div>
 
-        <div
-          id="keyGroup"
-          class="form-group wizard-step"
-          :hidden="!showKeyGroup"
-        >
+        <div id="keyGroup" class="form-group wizard-step" :hidden="!showKeyGroup">
           <label for="pKey">API Key</label>
           <input
             id="pKey"
@@ -639,11 +633,7 @@ async function saveProvider(): Promise<void> {
           />
         </div>
 
-        <div
-          id="modelGroup"
-          class="form-group wizard-step"
-          :hidden="!showModelGroup"
-        >
+        <div id="modelGroup" class="form-group wizard-step" :hidden="!showModelGroup">
           <label for="pModel">Model</label>
           <select id="pModel" v-model="formModel">
             <option value="">Select model…</option>

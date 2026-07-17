@@ -31,7 +31,6 @@ class FileMapperService:
     _CONFIGS_DIR: Path = _BACKEND_DIR / "configs"
     _PRETRAINED_DIR: Path = _BACKEND_DIR / "pre-trained"
     _CAPABILITIES_DIR: Path = _BACKEND_DIR / "capabilities"
-    _LOGS_DIR: Path = _CHALIE_ROOT / "logs"
     _MODELS_DIR: Path = _DATA_DIR / "models"
     _DOCUMENTS_DIR: Path = _DATA_DIR / "documents"
     _USER_SKILLS_DIR: Path = _DATA_DIR / "skills" / "user"
@@ -61,6 +60,16 @@ class FileMapperService:
         if not cls._SECURE_DIR.is_dir():
             return []
         return sorted(cls._SECURE_DIR.glob("vault_backup_*.json"), reverse=True)
+
+    @classmethod
+    def get_ssl_cert_path(cls) -> Path:
+        """TLS certificate (PEM) uploaded via the System page; stored 0600 in the secure dir."""
+        return cls._SECURE_DIR / "ssl_cert.pem"
+
+    @classmethod
+    def get_ssl_key_path(cls) -> Path:
+        """TLS private key (PEM) uploaded via the System page; stored 0600 in the secure dir."""
+        return cls._SECURE_DIR / "ssl_key.pem"
 
     @classmethod
     def get_schema_path(cls) -> Path:
@@ -183,11 +192,6 @@ class FileMapperService:
     def get_documents_path(cls, *parts: str) -> Path:
         """Return data/documents/ joined with any additional path parts."""
         return cls._DOCUMENTS_DIR.joinpath(*parts) if parts else cls._DOCUMENTS_DIR
-
-    @classmethod
-    def get_logs_path(cls, *parts: str) -> Path:
-        """Return logs/ joined with any additional path parts."""
-        return cls._LOGS_DIR.joinpath(*parts) if parts else cls._LOGS_DIR
 
     @classmethod
     def get_user_skills_path(cls, *parts: str) -> Path:

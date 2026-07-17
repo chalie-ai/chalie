@@ -1,85 +1,19 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
-
+from models.episode import Episode
 from services.processor_config import ProcessorConfig
 
-if TYPE_CHECKING:
-    from services.message_processor import MessageProcessor
-
 from configs.channels._common import DEFAULT_ALWAYS_AVAILABLE
-
-# ── DMN prompt builders ───────────────────────────────────────────────────────
+from configs.enums.channels import Channel
+from configs.enums.policy_channel import PolicyChannel
 
 _EPISODE_RETRIEVAL_WEIGHT_FLOOR = 0.3
 _DMN_EPISODE_LOOKBACK_DAYS = 30
 _DMN_EPISODE_LIMIT = 50
 
 
-def _dmn_fetch_user_synthesis() -> str:
-    """Read user synthesis from data_graph.
-
-    Prefers user_summary_long for richer DMN reflection context.
-    Falls back to user_summary. Returns '' when neither row exists.
-    """
-    import logging  # noqa: PLC0415
-    _log = logging.getLogger(__name__)
-    try:
-        from services.database_service import get_shared_db_service  # noqa: PLC0415
-        db = get_shared_db_service()
-        with db.connection() as conn:
-            rows = conn.execute(
-                "SELECT key, value FROM data_graph "
-                "WHERE kind = 'system' "
-                "  AND key IN ('user_summary', 'user_summary_long') "
-                "  AND active = 1 AND deleted_at IS NULL",
-            ).fetchall()
-        by_key = {row[0]: row[1] for row in rows if row[1]}
-        return by_key.get("user_summary_long") or by_key.get("user_summary") or ""
-    except Exception as exc:
-        _log.warning("[DMN_CONFIG] _dmn_fetch_user_synthesis failed: %s", exc)
-        return ""
-
-
-def _dmn_fetch_recent_episodes() -> str:
-    """Retrieve recent, non-decayed user-channel episodes as a numbered list."""
-    import logging  # noqa: PLC0415
-    _log = logging.getLogger(__name__)
-    try:
-        from services.database_service import get_shared_db_service  # noqa: PLC0415
-        db = get_shared_db_service()
-        with db.connection() as conn:
-            rows = conn.execute(
-                "SELECT id, gist, salience, created_at "
-                "FROM episodes "
-                "WHERE deleted_at IS NULL "
-                "  AND channel = 'user' "
-                "  AND retrieval_weight >= ? "
-                "  AND ( "
-                "      last_accessed_at >= datetime('now', ?) "
-                "      OR created_at >= datetime('now', ?) "
-                "  ) "
-                "ORDER BY retrieval_weight DESC, created_at DESC "
-                "LIMIT ?",
-                (
-                    _EPISODE_RETRIEVAL_WEIGHT_FLOOR,
-                    f"-{_DMN_EPISODE_LOOKBACK_DAYS} days",
-                    f"-{_DMN_EPISODE_LOOKBACK_DAYS} days",
-                    _DMN_EPISODE_LIMIT,
-                ),
-            ).fetchall()
-        lines = []
-        for i, (ep_id, gist, salience, created_at) in enumerate(rows, 1):
-            ts = (created_at or "")[:16].replace("T", " ")
-            lines.append(f"{i}. [{ts}] (salience={salience}) {gist or ''}")
-        return "\n".join(lines)
-    except Exception as exc:
-        _log.warning("[DMN_CONFIG] _dmn_fetch_recent_episodes failed: %s", exc)
-        return ""
-
-
 class DmnConfig(ProcessorConfig):
-    """DMN background channel.  §3a / §8b.  No after-turn hooks (metrics moved to gateway §4e).
+    """DMN background channel.  No after-turn hooks (metrics are emitted by the gateway).
 
     DMN carries the framework discovery tools (DEFAULT_ALWAYS_AVAILABLE includes
     find_tools), so it can discover and spawn any DISCOVERABLE tool — including
@@ -91,9 +25,9 @@ class DmnConfig(ProcessorConfig):
 
     def __init__(self) -> None:
         super().__init__(
-            channel="dmn",
+            channel=Channel.DMN.value,
             role="proactive_thought",
-            policy_channel=ProcessorConfig.PolicyChannel.SUBCONSCIOUS,
+            policy_channel=PolicyChannel.SUBCONSCIOUS,
             always_available=DEFAULT_ALWAYS_AVAILABLE,
             skip_transcript=False,
             skip_input_row=False,
@@ -102,34 +36,48 @@ class DmnConfig(ProcessorConfig):
             memory_seed=False,
         )
 
-    def get_user_definition(self, mp: "MessageProcessor") -> str:
-        """DMN runs as a background process — no human user definition needed."""
-        return (
-            "The user is 'proactive_thought' — a special background process "
-            "that represents your own reflections on recent activity."
-        )
+    @staticmethod
+    def recent_salient_user_episodes() -> str:
+        """Recent, non-decayed ``user``-channel episodes as a numbered list —
+        ``N. [ts] (salience=…) gist`` — or ``''`` when none / on error (the read
+        must never crash the DMN turn).
 
-    def get_user_prompt(self, mp: "MessageProcessor") -> str:
-        """DMN user-message: user synthesis + filtered recent episodes + ACT trail."""
-        parts: list[str] = []
-        synthesis = _dmn_fetch_user_synthesis()
-        if synthesis:
-            parts.append(f"## About the User\n{synthesis}")
-        episodes_text = _dmn_fetch_recent_episodes()
-        if episodes_text:
-            parts.append(f"## Episodes\n{episodes_text}")
-        try:
-            trail = mp._render_act_trail()
-            if trail and isinstance(trail, str):
-                parts.append(trail)
-        except Exception:
-            pass
-        return "\n\n".join(parts)
-
-    def get_system_prompt(self, mp: "MessageProcessor") -> str:
-        """DMN system prompt: user_definition prefix + DMNSystemMessagePrompt body.
-
-        Restores OLD base get_system_prompt assembly (``f"{user_def}\\n\\n{body}"``).
+        @todo: Refactor — a config must not read the DB (§2.4). The read now
+        routes through the Episode model, but it still doesn't belong in a config:
+        this static is a deliberate stop-gap until episodic prompt-context is folded
+        onto the spine as a proper service; it stays here (not a loose module
+        function) so there is exactly one home for the DMN reads.
         """
-        from services.system_message_prompt import DMNSystemMessagePrompt  # noqa: PLC0415
-        return f"{self.get_user_definition(mp)}\n\n{DMNSystemMessagePrompt().get_prompt()}"
+        import logging  # noqa: PLC0415
+        _log = logging.getLogger(__name__)
+        try:
+            episodes = Episode.recent_salient(
+                "user",
+                weight_floor=_EPISODE_RETRIEVAL_WEIGHT_FLOOR,
+                lookback_days=_DMN_EPISODE_LOOKBACK_DAYS,
+                limit=_DMN_EPISODE_LIMIT,
+            )
+            lines = []
+            for i, ep in enumerate(episodes, 1):
+                ts = (ep.created_at or "")[:16].replace("T", " ")
+                lines.append(f"{i}. [{ts}] (salience={ep.salience}) {ep.gist or ''}")
+            return "\n".join(lines)
+        except Exception as exc:
+            _log.warning("[DMN_CONFIG] recent_salient_user_episodes failed: %s", exc)
+            return ""
+
+    @property
+    def system_prompt(self) -> str:
+        return """The user is 'proactive_thought' — a special background process that represents your own reflections on recent activity.
+
+## Scope
+The user has provided with a synthesis about themselves under `About the User` and relevant episodic memories regarding conversations it had with you `Chalie`. Your goal is find open threads, recurring concerns, goals and aspirations the user has and ACT upon them.
+
+## How to ACT
+
+* Use the supplied tools to learn more topics the user discusses so that the next time they discuss such a topic you are aware of latest news, research, etc... You can use the `web_search` and `web_browse` tools for this. Save your findings using the `memory` tool so that you can reference them later.
+* Analyse patterns where the user seemed genuinely satisfied or dissatisfied with your responses or approach and store feedback to not repeat the same mistakes or reinforce good behaviour. Use the `memory` tool for this.
+
+## When to stop
+
+Aim for 2–3 substantive findings per tick — quality over quantity. Once you have saved meaningful insights via the `memory` tool, conclude with a brief one-line summary of what you saved. Do not pad with redundant tool calls or speculative topics."""

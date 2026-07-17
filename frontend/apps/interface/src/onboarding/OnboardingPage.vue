@@ -87,8 +87,14 @@ function skipVoice(): void {
 
       <div class="warning-box">
         <h3>⚠ Critical — Read Before Continuing</h3>
-        <p>This is your Master Account. It is the only credential that controls access to the Chalie dashboard and system configuration.</p>
-        <p>There is no password recovery. If you forget your username or password, you will be permanently locked out. All cognitive memory and configuration will be inaccessible.</p>
+        <p>
+          This is your Master Account. It is the only credential that controls access to the Chalie
+          dashboard and system configuration.
+        </p>
+        <p>
+          There is no password recovery. If you forget your username or password, you will be
+          permanently locked out. All cognitive memory and configuration will be inaccessible.
+        </p>
         <p>Write your credentials down and store them somewhere safe before continuing.</p>
       </div>
 
@@ -139,7 +145,10 @@ function skipVoice(): void {
       </div>
 
       <div class="info-box">
-        <p>Enabling voice will download additional dependencies (~500 MB) in the background. Your GPU will be detected automatically for optimal performance.</p>
+        <p>
+          Enabling voice will download additional dependencies (~500 MB) in the background. Your GPU
+          will be detected automatically for optimal performance.
+        </p>
         <p>You can change this later in the Brain dashboard settings.</p>
       </div>
 
@@ -151,12 +160,9 @@ function skipVoice(): void {
   </div>
 
   <TransitionGroup tag="div" name="toast" class="toast-container">
-    <div
-      v-for="toast in toasts"
-      :key="toast.id"
-      class="toast"
-      :class="`toast-${toast.type}`"
-    >{{ toast.message }}</div>
+    <div v-for="toast in toasts" :key="toast.id" class="toast" :class="`toast-${toast.type}`">
+      {{ toast.message }}
+    </div>
   </TransitionGroup>
 </template>
 
@@ -168,14 +174,29 @@ function skipVoice(): void {
   z-index: -1;
   pointer-events: none;
   background:
-    radial-gradient(600px circle at 30% 20%, color-mix(in srgb, var(--accent-primary) 6%, transparent), transparent 60%),
-    radial-gradient(500px circle at 70% 75%, color-mix(in srgb, var(--accent-tertiary) 4%, transparent), transparent 60%);
+    radial-gradient(
+      600px circle at 30% 20%,
+      color-mix(in srgb, var(--accent-primary) 6%, transparent),
+      transparent 60%
+    ),
+    radial-gradient(
+      500px circle at 70% 75%,
+      color-mix(in srgb, var(--accent-tertiary) 4%, transparent),
+      transparent 60%
+    );
   animation: ambient-breathe 20s ease-in-out infinite;
 }
 
 @keyframes ambient-breathe {
-  0%, 100% { transform: scale(1); opacity: 0.8; }
-  50%       { transform: scale(1.06); opacity: 1; }
+  0%,
+  100% {
+    transform: scale(1);
+    opacity: 0.8;
+  }
+  50% {
+    transform: scale(1.06);
+    opacity: 1;
+  }
 }
 
 .ob-container {
@@ -223,7 +244,9 @@ function skipVoice(): void {
     line-height: 1.6;
     margin-bottom: 6px;
 
-    &:last-child { margin-bottom: 0; }
+    &:last-child {
+      margin-bottom: 0;
+    }
   }
 }
 
@@ -302,7 +325,9 @@ function skipVoice(): void {
   background: var(--accent-primary);
   border: none;
 
-  &:hover:not(:disabled) { opacity: 0.85; }
+  &:hover:not(:disabled) {
+    opacity: 0.85;
+  }
 
   &:disabled {
     opacity: 0.5;
@@ -315,7 +340,9 @@ function skipVoice(): void {
   background: transparent;
   border: 1px solid var(--border);
 
-  &:hover { opacity: 0.75; }
+  &:hover {
+    opacity: 0.75;
+  }
 }
 
 .toast-container {
@@ -340,14 +367,26 @@ function skipVoice(): void {
   pointer-events: auto;
   animation: slideIn 0.3s ease;
 
-  &.toast-success { border-left: 3px solid var(--success); }
-  &.toast-error   { border-left: 3px solid var(--error); }
-  &.toast-info    { border-left: 3px solid var(--accent-primary); }
+  &.toast-success {
+    border-left: 3px solid var(--success);
+  }
+  &.toast-error {
+    border-left: 3px solid var(--error);
+  }
+  &.toast-info {
+    border-left: 3px solid var(--accent-primary);
+  }
 }
 
 @keyframes slideIn {
-  from { transform: translateX(400px); opacity: 0; }
-  to   { transform: translateX(0);     opacity: 1; }
+  from {
+    transform: translateX(400px);
+    opacity: 0;
+  }
+  to {
+    transform: translateX(0);
+    opacity: 1;
+  }
 }
 
 .toast-leave-active {
@@ -358,9 +397,17 @@ function skipVoice(): void {
 }
 
 @media (max-width: 600px) {
-  .ob-card { padding: 24px; }
+  .ob-card {
+    padding: 24px;
+  }
 
-  .toast-container { left: 10px; right: 10px; bottom: 10px; }
-  .toast { font-size: 12px; }
+  .toast-container {
+    left: 10px;
+    right: 10px;
+    bottom: 10px;
+  }
+  .toast {
+    font-size: 12px;
+  }
 }
 </style>

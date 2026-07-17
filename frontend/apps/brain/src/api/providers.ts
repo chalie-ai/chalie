@@ -1,21 +1,27 @@
 /**
- * Providers API — endpoints derived from frontend/brain/providers.js fetch calls.
+ * Providers API — thin wrapper over the Endpoint-contract routes in
+ * backend/api/endpoints/providers.py + backend/api/actions/providers/*.
+ * Envelope: every JSON response is { success, result, pagination?, error? }.
  *
- * GET  /providers               → list all providers
- * GET  /providers/selected      → get the selected provider
- * PUT  /providers/selected      → select a provider { provider_id }
- * GET  /providers/catalog       → get the provider catalog
- * GET  /providers/vision        → get the vision provider
- * PUT  /providers/vision        → set vision provider { provider_id }
- * GET  /providers/delegate      → get the delegate provider
- * PUT  /providers/delegate      → set delegate provider { provider_id } (null = use main)
- * POST /providers               → create provider
- * PUT  /providers/:id           → update provider
- * DELETE /providers/:id         → delete provider
- * POST /providers/list-models   → list models for credentials
- * POST /providers/test          → test connection
+ *   GET    /api/providers/all           paginated listing (fetchAllPages).
+ *   POST   /api/providers/-1            create provider → 201, result DTO.
+ *   POST   /api/providers/<id>          update provider → result DTO.
+ *   DELETE /api/providers/<id>          → 204 empty body.
+ *   GET    /api/providers/catalog       curated presets (fetchAllPages).
+ *   POST   /api/providers/list-models   list models for credentials → result DTO.
+ *   POST   /api/providers/test          test connection → result DTO.
+ *   GET    /api/providers/selected      selected (main) provider role → result DTO.
+ *   POST   /api/providers/selected      pin the main provider → result DTO.
+ *   GET    /api/providers/vision        vision provider role → result DTO.
+ *   POST   /api/providers/vision        pin/clear the vision provider → result DTO.
+ *   GET    /api/providers/delegate      delegate provider role → result DTO.
+ *   POST   /api/providers/delegate      pin/clear the delegate provider → result DTO.
+ *
+ * ``selected`` is reshaped to the { provider, source } role envelope shared
+ * with vision/delegate (the legacy route returned a bare Provider|null).
  */
 import { api } from '@chalie/shared';
+import { fetchAllPages } from './paginate';
 
 export interface Provider {
   id: number;
@@ -36,6 +42,16 @@ export interface CatalogEntry {
   needs_key: boolean;
 }
 
+export interface ProviderRole {
+  provider: Provider | null;
+  source: string;
+}
+
+export interface ModelInfo {
+  id: string;
+  display_name: string | null;
+}
+
 export interface ProviderInput {
   name: string;
   platform: string;
@@ -48,60 +64,92 @@ export interface TestInput extends ProviderInput {
   provider_id?: number;
 }
 
+interface SingleEnvelope<T> {
+  success: true;
+  result: T;
+}
+
 export const providers = {
-  list(): Promise<{ providers: Provider[] }> {
-    return api.get('/providers');
+  list(): Promise<Provider[]> {
+    return fetchAllPages<Provider>('/api/providers/all');
   },
 
-  getSelected(): Promise<{ provider: Provider | null }> {
-    return api.get('/providers/selected');
+  async getSelected(): Promise<ProviderRole> {
+    const res = await api.get<SingleEnvelope<ProviderRole>>('/api/providers/selected');
+    return res.result;
   },
 
-  setSelected(providerId: number): Promise<unknown> {
-    return api.put('/providers/selected', { provider_id: providerId });
+  async setSelected(providerId: number): Promise<ProviderRole> {
+    const res = await api.post<SingleEnvelope<ProviderRole>>('/api/providers/selected', {
+      provider_id: providerId,
+    });
+    return res.result;
   },
 
-  getCatalog(): Promise<{ catalog: CatalogEntry[] }> {
-    return api.get('/providers/catalog');
+  getCatalog(): Promise<CatalogEntry[]> {
+    return fetchAllPages<CatalogEntry>('/api/providers/catalog');
   },
 
-  getVision(): Promise<{ provider: Provider | null; source: string }> {
-    return api.get('/providers/vision');
+  async getVision(): Promise<ProviderRole> {
+    const res = await api.get<SingleEnvelope<ProviderRole>>('/api/providers/vision');
+    return res.result;
   },
 
   // provider_id null clears the explicit pin → vision falls back to the main
   // provider when it can see. Backend returns the resolved status.
-  setVision(providerId: number | null): Promise<{ provider: Provider | null; source: string }> {
-    return api.put('/providers/vision', { provider_id: providerId });
+  async setVision(providerId: number | null): Promise<ProviderRole> {
+    const res = await api.post<SingleEnvelope<ProviderRole>>('/api/providers/vision', {
+      provider_id: providerId,
+    });
+    return res.result;
   },
 
-  getDelegate(): Promise<{ provider: Provider | null; source: string }> {
-    return api.get('/providers/delegate');
+  async getDelegate(): Promise<ProviderRole> {
+    const res = await api.get<SingleEnvelope<ProviderRole>>('/api/providers/delegate');
+    return res.result;
   },
 
   // provider_id null clears the explicit pin → subagent work falls back to the
   // main provider (no "disabled" state). Backend returns the resolved status.
-  setDelegate(providerId: number | null): Promise<{ provider: Provider | null; source: string }> {
-    return api.put('/providers/delegate', { provider_id: providerId });
+  async setDelegate(providerId: number | null): Promise<ProviderRole> {
+    const res = await api.post<SingleEnvelope<ProviderRole>>('/api/providers/delegate', {
+      provider_id: providerId,
+    });
+    return res.result;
   },
 
-  create(input: ProviderInput): Promise<{ provider: Provider }> {
-    return api.post('/providers', input);
+  async create(input: ProviderInput): Promise<Provider> {
+    const res = await api.post<SingleEnvelope<Provider>>('/api/providers/-1', input);
+    return res.result;
   },
 
-  update(id: number, input: Partial<ProviderInput>): Promise<{ provider: Provider }> {
-    return api.put(`/providers/${id}`, input);
+  async update(id: number, input: Partial<ProviderInput>): Promise<Provider> {
+    const res = await api.post<SingleEnvelope<Provider>>(`/api/providers/${id}`, input);
+    return res.result;
   },
 
   delete(id: number): Promise<unknown> {
-    return api.del(`/providers/${id}`);
+    return api.del(`/api/providers/${id}`);
   },
 
-  listModels(body: { platform: string; host?: string; api_key?: string }): Promise<{ models: (string | { id: string })[] }> {
-    return api.post('/providers/list-models', body);
+  async listModels(body: {
+    platform: string;
+    host?: string;
+    api_key?: string;
+  }): Promise<{ models: ModelInfo[]; error?: string | null }> {
+    const res = await api.post<SingleEnvelope<{ models: ModelInfo[]; error?: string | null }>>(
+      '/api/providers/list-models',
+      body,
+    );
+    return res.result;
   },
 
-  test(body: TestInput): Promise<{ success: boolean; message?: string; error?: string }> {
-    return api.post('/providers/test', body);
+  async test(
+    body: TestInput,
+  ): Promise<{ success: boolean; message?: string; error?: string; hint?: string }> {
+    const res = await api.post<
+      SingleEnvelope<{ success: boolean; message?: string; error?: string; hint?: string }>
+    >('/api/providers/test', body);
+    return res.result;
   },
 };

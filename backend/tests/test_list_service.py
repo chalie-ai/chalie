@@ -2,17 +2,16 @@ import sqlite3
 from typing import Optional, cast
 
 import pytest
+
 from services.list_service import ListService
 from services.time_utils import utc_now
-
 
 pytestmark = pytest.mark.unit
 
 
 @pytest.fixture
 def service(db: sqlite3.Connection) -> ListService:
-    from services.database_service import get_shared_db_service
-    return ListService(get_shared_db_service())
+    return ListService()
 
 
 def _seed_list(db: sqlite3.Connection, list_id: str = 'abc12345', name: str = 'Shopping List',

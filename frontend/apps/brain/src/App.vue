@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, onBeforeUnmount, ref } from 'vue';
+import { onBeforeUnmount, onMounted, ref } from 'vue';
 import { RouterView } from 'vue-router';
 import { useTheme } from '@chalie/shared';
 import { useShellStore } from './stores/shell';

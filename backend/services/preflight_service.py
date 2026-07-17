@@ -8,6 +8,8 @@ broken runtime is logged once at boot by
 :meth:`services.runtime_deps_service.RuntimeDepsService.ensure_onnxruntime`.
 """
 
+from services.database import Database
+
 
 def run_preflight() -> dict[str, dict[str, object]]:
     """Return ``{component: {status, ...}}`` for database, memory_store, embeddings, onnx."""
@@ -15,9 +17,8 @@ def run_preflight() -> dict[str, dict[str, object]]:
 
     # SQLite
     try:
-        from services.database_service import get_shared_db_service
-        with get_shared_db_service().connection() as conn:
-            conn.execute('SELECT 1')
+        conn = Database.conn()
+        conn.execute('SELECT 1')
         components['database'] = {'status': 'ok', 'connected': True}
     except Exception as e:
         components['database'] = {'status': 'error', 'connected': False, 'message': str(e)}

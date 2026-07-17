@@ -11,8 +11,8 @@ user's local wall-clock time, never raw UTC.
 import logging
 from datetime import datetime
 
-from services.time_utils import utc_now, parse_utc
 from services.locale_service import format_date
+from services.time_utils import utc_now, parse_utc
 
 logger = logging.getLogger(__name__)
 

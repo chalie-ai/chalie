@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { RouterView } from 'vue-router';
+import SchedulerPanel from './scheduler/SchedulerPanel.vue';
 </script>
 
 <template>
-  <RouterView />
+  <SchedulerPanel />
 </template>

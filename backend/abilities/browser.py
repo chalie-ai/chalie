@@ -25,7 +25,7 @@ from typing import ClassVar, cast
 from urllib.parse import urlparse
 
 from abilities._ability import Ability
-from abilities._params import Keys
+from configs.enums.param_key import Keys
 from abilities._result import ToolResult
 from tools.browser.session import record_screenshot, run_verb
 
@@ -89,7 +89,7 @@ class BrowserAbility(Ability):
                     "'Email'). Used by click/fill/select/style."
                 ),
             },
-            Keys.value: {
+            Keys.value_: {
                 "type": "string",
                 "description": "Text to type ('fill') or option to choose ('select').",
             },
@@ -123,8 +123,8 @@ class BrowserAbility(Ability):
         "read": (),
         "find": (Keys.query,),
         "click": (Keys.target,),
-        "fill": (Keys.target, Keys.value),
-        "select": (Keys.target, Keys.value),
+        "fill": (Keys.target, Keys.value_),
+        "select": (Keys.target, Keys.value_),
         "scroll": (Keys.direction,),
         "back": (),
         "screenshot": (),
@@ -138,8 +138,8 @@ class BrowserAbility(Ability):
         "read": (Keys.section,),
         "find": (Keys.query,),
         "click": (Keys.target,),
-        "fill": (Keys.target, Keys.value),
-        "select": (Keys.target, Keys.value),
+        "fill": (Keys.target, Keys.value_),
+        "select": (Keys.target, Keys.value_),
         "scroll": (Keys.direction,),
         "back": (),
         "screenshot": (),
@@ -197,13 +197,12 @@ class BrowserAbility(Ability):
             return self._reply(grabbed)
 
         from abilities.document import ingest_file  # noqa: PLC0415
-        from services.database_service import get_shared_db_service  # noqa: PLC0415
         from services.document_service import DocumentService  # noqa: PLC0415
         from services.tmp_storage import new_tmp_path  # noqa: PLC0415
 
         page: dict[str, object] = cast("dict[str, object]", grabbed["page"])
         host = urlparse(cast("str", page["url"])).hostname or "page"
-        doc_svc = DocumentService(get_shared_db_service())
+        doc_svc = DocumentService()
         tmp = new_tmp_path(f"{token_hex(4)}.png")
         try:
             with open(tmp, "wb") as fh:
@@ -228,10 +227,11 @@ class BrowserAbility(Ability):
             )
 
         record_screenshot(self._session_key(), cast("str", ingested["id"]), cast("str", page["url"]))
-        # The shared ingest already ran the page through vision (images route to
-        # describe_image inside _run_upload_extraction), storing the description as
-        # the document's clean_text — the same content document(action='view')
-        # surfaces. Hand it back inline so the agent sees the page directly.
+        # The shared ingest already ran the page through vision (a screenshot is an
+        # image, so it routes to services.image_description.ImageDescription),
+        # storing the description as the document's clean_text — the same content
+        # document(action='view') surfaces. Hand it back inline so the agent sees
+        # the page directly.
         doc = doc_svc.get_document(cast("str", ingested["id"]))
         if doc is None:
             return ToolResult.err(
@@ -254,7 +254,9 @@ class BrowserAbility(Ability):
         })
 
     def _session_key(self) -> int:
-        return getattr(self.mp, "uid", None) or 0
+        if self.mp is None:
+            raise RuntimeError("browser._session_key() requires a bound MessageProcessor")
+        return self.mp.uid or 0
 
     @staticmethod
     def _reply(envelope: dict[str, object]) -> ToolResult:

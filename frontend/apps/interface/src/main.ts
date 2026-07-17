@@ -1,7 +1,4 @@
-import '@fontsource/inter/300.css';
-import '@fontsource/inter/400.css';
-import '@fontsource/inter/500.css';
-import '@fontsource/inter/600.css';
+import './styles/fonts.css';
 import '@chalie/shared/styles/main.scss';
 import './styles/interface.scss';
 import './styles/conversation.scss';
@@ -9,9 +6,11 @@ import './styles/rich-card-base.scss';
 import { createApp } from 'vue';
 import { createPinia } from 'pinia';
 import App from './App.vue';
-import { router, authGateRedirected } from './router';
+import { authGateRedirected, router } from './router';
+import { registerAppContext } from './utils/turnDom';
 
 const app = createApp(App).use(createPinia()).use(router);
+registerAppContext(app);
 
 // Gate the mount behind the auth gate. `router.isReady()` resolves after the async
 // `beforeEach` gate settles, so we know whether it issued a hard redirect. Mounting

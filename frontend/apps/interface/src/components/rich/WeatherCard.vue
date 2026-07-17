@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue';
 import { renderMarkup } from '../../composables/useMarkup';
+import { DAYS, parseDate, formatClock } from '../../utils/time';
 
 export interface WeatherPayload {
   location?: string;
@@ -17,14 +18,7 @@ export interface WeatherPayload {
 
 const props = defineProps<{ payload: WeatherPayload; synthesis?: string }>();
 
-const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'] as const;
-
-/** Parse an Open-Meteo local ISO ("YYYY-MM-DDTHH:MM") into a Date. */
-function parseLocalISO(s: string | undefined): Date | null {
-  if (!s) return null;
-  const d = new Date(s);
-  return Number.isNaN(d.getTime()) ? null : d;
-}
+const now = new Date();
 
 /** Sky phase from local hour + sunrise/sunset; coarse day/night when astro times missing. */
 function pickPhase(
@@ -32,8 +26,8 @@ function pickPhase(
   sunrise: string | undefined,
   sunset: string | undefined,
 ): 'dawn' | 'day' | 'sunset' | 'night' {
-  const sr = parseLocalISO(sunrise);
-  const ss = parseLocalISO(sunset);
+  const sr = parseDate(sunrise);
+  const ss = parseDate(sunset);
   if (!sr || !ss) {
     return now.getHours() >= 6 && now.getHours() < 20 ? 'day' : 'night';
   }
@@ -46,12 +40,6 @@ function pickPhase(
   return 'night';
 }
 
-function formatHM(d: Date): string {
-  return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
-}
-
-const now = new Date();
-
 const phase = computed<'dawn' | 'day' | 'sunset' | 'night'>(() =>
   pickPhase(now, props.payload.sunrise, props.payload.sunset),
 );
@@ -60,7 +48,7 @@ const roundedTemp = computed<number>(() => Math.round(props.payload.temperature_
 
 const dayLabel = computed<string>(() => DAYS[now.getDay()]);
 
-const timeLabel = computed<string>(() => formatHM(now));
+const timeLabel = computed<string>(() => formatClock(now));
 
 const captionHtml = computed<string>(() => (props.synthesis ? renderMarkup(props.synthesis) : ''));
 
@@ -117,9 +105,7 @@ const hourCells = computed<HourCell[]>(() => {
 
       <div class="weather-card__overlay">
         <div class="weather-card__readout">
-          <div class="weather-card__temp">
-            {{ roundedTemp }}<sup>°</sup>
-          </div>
+          <div class="weather-card__temp">{{ roundedTemp }}<sup>°</sup></div>
 
           <div class="weather-card__loc">
             <div>{{ payload.location || '—' }}</div>
@@ -128,15 +114,8 @@ const hourCells = computed<HourCell[]>(() => {
         </div>
 
         <!-- Caption: synthesis (HTML) or fallback plain text -->
-        <div
-          v-if="synthesis"
-          class="weather-card__caption"
-          v-html="captionHtml"
-        />
-        <div
-          v-else
-          class="weather-card__caption"
-        >{{ fallbackCaption }}</div>
+        <div v-if="synthesis" class="weather-card__caption" v-html="captionHtml" />
+        <div v-else class="weather-card__caption">{{ fallbackCaption }}</div>
       </div>
     </div>
 
@@ -150,9 +129,11 @@ const hourCells = computed<HourCell[]>(() => {
           'weather-card__hour--peak': cell.isPeak,
         }"
       >
-        <span class="weather-card__hour-label">{{ cell.hour }}</span>
         <b class="weather-card__hour-temp">{{ cell.temp_c }}°</b>
-        <div class="weather-card__hour-bar" :style="{ width: cell.barWidth + '%' }" />
+        <div class="weather-card__hour-track" aria-hidden="true">
+          <div class="weather-card__hour-bar" :style="{ height: cell.barWidth * 0.28 + 'px' }" />
+        </div>
+        <span class="weather-card__hour-label">{{ cell.hour }}</span>
       </div>
     </div>
   </div>
@@ -173,22 +154,22 @@ const hourCells = computed<HourCell[]>(() => {
 
 .weather-card__sky {
   position: relative;
-  height: 220px;
+  min-height: 220px;
   overflow: hidden;
   isolation: isolate;
 }
 
 /* Phase-driven gradients. Fallback (no phase) is night. */
-.weather-card[data-phase="day"] .weather-card__sky {
+.weather-card[data-phase='day'] .weather-card__sky {
   background: linear-gradient(180deg, #4a8cd6 0%, #6ea7e0 40%, #a9c8eb 80%, #f0d59f 100%);
 }
-.weather-card[data-phase="dawn"] .weather-card__sky {
+.weather-card[data-phase='dawn'] .weather-card__sky {
   background: linear-gradient(180deg, #1a2240 0%, #4a4070 35%, #c87a5a 75%, #ffc97a 100%);
 }
-.weather-card[data-phase="sunset"] .weather-card__sky {
+.weather-card[data-phase='sunset'] .weather-card__sky {
   background: linear-gradient(180deg, #1a2240 0%, #2a3560 35%, #c75a3f 75%, #ffb070 100%);
 }
-.weather-card[data-phase="night"] .weather-card__sky {
+.weather-card[data-phase='night'] .weather-card__sky {
   background: linear-gradient(180deg, #06080e 0%, #121a30 50%, #1f2a4a 100%);
 }
 
@@ -197,8 +178,8 @@ const hourCells = computed<HourCell[]>(() => {
   position: absolute;
   inset: 0;
   background:
-    radial-gradient(ellipse 60% 40% at 70% 30%, rgba(255, 200, 140, 0.30), transparent 60%),
-    radial-gradient(ellipse 80% 50% at 20% 85%, rgba(138, 92, 255, 0.20), transparent 60%);
+    radial-gradient(ellipse 60% 40% at 70% 30%, rgba(255, 200, 140, 0.3), transparent 60%),
+    radial-gradient(ellipse 80% 50% at 20% 85%, rgba(138, 92, 255, 0.2), transparent 60%);
   pointer-events: none;
 }
 
@@ -214,16 +195,16 @@ const hourCells = computed<HourCell[]>(() => {
   animation: weather-sun-bob 12s ease-in-out infinite alternate;
   pointer-events: none;
 
-  .weather-card[data-phase="day"] & {
+  .weather-card[data-phase='day'] & {
     background: radial-gradient(circle, #fff4cc 0%, #ffd972 60%, transparent 80%);
   }
 
-  .weather-card[data-phase="dawn"] &,
-  .weather-card[data-phase="sunset"] & {
+  .weather-card[data-phase='dawn'] &,
+  .weather-card[data-phase='sunset'] & {
     background: radial-gradient(circle, #ffd28c 0%, #ff9b50 60%, transparent 80%);
   }
 
-  .weather-card[data-phase="night"] & {
+  .weather-card[data-phase='night'] & {
     width: 70px;
     height: 70px;
     background: radial-gradient(circle, #f4f1ff 0%, #b8b3d6 55%, transparent 80%);
@@ -233,8 +214,12 @@ const hourCells = computed<HourCell[]>(() => {
 }
 
 @keyframes weather-sun-bob {
-  from { transform: translateY(0); }
-  to   { transform: translateY(8px); }
+  from {
+    transform: translateY(0);
+  }
+  to {
+    transform: translateY(8px);
+  }
 }
 
 .weather-card__cloud {
@@ -265,8 +250,12 @@ const hourCells = computed<HourCell[]>(() => {
 }
 
 @keyframes weather-cloud-drift {
-  from { transform: translateX(0); }
-  to   { transform: translateX(160vw); }
+  from {
+    transform: translateX(0);
+  }
+  to {
+    transform: translateX(160vw);
+  }
 }
 
 .weather-card__skyline {
@@ -285,15 +274,41 @@ const hourCells = computed<HourCell[]>(() => {
     right: 0;
     bottom: 0;
     height: 28px;
-    background-image: linear-gradient(to right,
-      transparent 5%, #0a0d18 5%, #0a0d18 8%, transparent 8%,
-      transparent 14%, #0a0d18 14%, #0a0d18 18%, transparent 18%,
-      transparent 24%, #0a0d18 24%, #0a0d18 30%, transparent 30%,
-      transparent 38%, #0a0d18 38%, #0a0d18 41%, transparent 41%,
-      transparent 50%, #0a0d18 50%, #0a0d18 56%, transparent 56%,
-      transparent 64%, #0a0d18 64%, #0a0d18 68%, transparent 68%,
-      transparent 76%, #0a0d18 76%, #0a0d18 82%, transparent 82%,
-      transparent 90%, #0a0d18 90%, #0a0d18 95%, transparent 95%);
+    background-image: linear-gradient(
+      to right,
+      transparent 5%,
+      #0a0d18 5%,
+      #0a0d18 8%,
+      transparent 8%,
+      transparent 14%,
+      #0a0d18 14%,
+      #0a0d18 18%,
+      transparent 18%,
+      transparent 24%,
+      #0a0d18 24%,
+      #0a0d18 30%,
+      transparent 30%,
+      transparent 38%,
+      #0a0d18 38%,
+      #0a0d18 41%,
+      transparent 41%,
+      transparent 50%,
+      #0a0d18 50%,
+      #0a0d18 56%,
+      transparent 56%,
+      transparent 64%,
+      #0a0d18 64%,
+      #0a0d18 68%,
+      transparent 68%,
+      transparent 76%,
+      #0a0d18 76%,
+      #0a0d18 82%,
+      transparent 82%,
+      transparent 90%,
+      #0a0d18 90%,
+      #0a0d18 95%,
+      transparent 95%
+    );
     background-size: 100% 100%;
     background-position: bottom;
     background-repeat: no-repeat;
@@ -302,9 +317,11 @@ const hourCells = computed<HourCell[]>(() => {
   }
 }
 
+/* In normal flow (not absolute) so the sky grows to fit a long caption instead
+   of clipping it. min-height keeps the art visible when the caption is short. */
 .weather-card__overlay {
-  position: absolute;
-  inset: 0;
+  position: relative;
+  min-height: 220px;
   display: grid;
   grid-template-rows: 1fr auto;
   padding: 18px 22px;
@@ -320,96 +337,122 @@ const hourCells = computed<HourCell[]>(() => {
 }
 
 .weather-card__temp {
-  font-size: 4rem;
-  font-weight: 300;
-  letter-spacing: -0.04em;
-  line-height: 1;
+  font-size: 3.75rem;
+  font-weight: 250;
+  letter-spacing: -0.03em;
+  line-height: 0.9;
+  font-variant-numeric: tabular-nums;
 
   sup {
-    font-size: 1.6rem;
-    font-weight: 400;
-    opacity: 0.85;
+    font-size: 1.625rem;
+    font-weight: 300;
     vertical-align: super;
   }
 }
 
 .weather-card__loc {
   font-family: var(--font-mono, 'JetBrains Mono', ui-monospace, monospace);
-  font-size: 0.72rem;
-  letter-spacing: 0.16em;
+  font-size: 0.75rem;
+  letter-spacing: 0.1em;
   text-transform: uppercase;
-  opacity: 0.92;
+  font-weight: 600;
   text-align: right;
-  margin-top: 6px;
+  margin-top: 4px;
 
   div:last-child {
-    opacity: 0.6;
-    margin-top: 4px;
+    font-size: 0.6875rem;
+    font-weight: 400;
+    letter-spacing: 0.06em;
+    opacity: 0.82;
+    margin-top: 3px;
   }
 }
 
 .weather-card__caption {
   align-self: end;
   max-width: 62%;
-  font-size: 0.92rem;
-  line-height: 1.45;
-  color: rgba(255, 255, 255, 0.92);
-  text-shadow: 0 1px 4px rgba(0, 0, 0, 0.35);
+  font-size: 0.844rem;
+  line-height: 1.55;
+  color: rgba(255, 255, 255, 0.94);
+  text-shadow: 0 1px 8px rgba(0, 0, 0, 0.18);
 }
 
+/* Hourly strip is a neutral DATA surface, not part of the immersive sky — it
+   flips with the theme (was a hard-coded near-black rgba band that read as
+   "black blocks" over a light/day sky). Mirrors the mockup's `.whours`:
+   `--surface` ground, `--border` rules, accent bars. */
 .weather-card__rail {
   display: grid;
   grid-template-columns: repeat(8, 1fr);
-  background: rgba(6, 8, 14, 0.72);
-  border-top: 1px solid color-mix(in oklab, var(--border) 80%, transparent);
+  background: var(--bg-surface-2);
+  border-top: 1px solid var(--border);
 }
 
 .weather-card__hour {
-  padding: 12px 4px 14px;
+  padding: 12px 0 11px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
   text-align: center;
-  font-family: var(--font-mono, 'JetBrains Mono', ui-monospace, monospace);
-  font-size: 0.7rem;
-  color: color-mix(in oklab, white 55%, transparent);
-  letter-spacing: 0.06em;
-  border-right: 1px solid rgba(255, 255, 255, 0.05);
+  border-right: 1px solid var(--border);
 
   &:last-child {
     border-right: none;
   }
 
   &--cur {
-    background: rgba(255, 255, 255, 0.05);
+    background: color-mix(in oklab, var(--accent-primary) 8%, transparent);
 
     .weather-card__hour-temp {
-      color: color-mix(in oklab, var(--violet) 80%, white);
+      color: var(--accent-primary);
     }
   }
 
   &--peak .weather-card__hour-temp {
-    color: var(--amber, #ffb257);
+    color: var(--accent-primary);
   }
 }
 
-.weather-card__hour-label {
-  display: block;
-}
-
 .weather-card__hour-temp {
-  display: block;
-  font-family: var(--font-sans, system-ui, sans-serif);
-  font-size: 0.95rem;
-  font-weight: 500;
-  color: color-mix(in oklab, white 90%, transparent);
-  margin-top: 4px;
+  font-family: var(--font-mono, 'JetBrains Mono', ui-monospace, monospace);
+  font-size: 0.75rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-primary);
   letter-spacing: 0;
 }
 
+/* Vertical mini-bar: a fixed-height track with the bar bottom-aligned so all
+   bars share one baseline; height scales with the hour's temperature (bound
+   inline off barWidth). Peak/current hours brighten for emphasis. */
+.weather-card__hour-track {
+  height: 30px;
+  display: flex;
+  align-items: flex-end;
+}
+
 .weather-card__hour-bar {
-  height: 2px;
-  margin: 6px auto 0;
-  border-radius: 1px;
-  background: currentColor;
-  opacity: 0.4;
-  max-width: 80%;
+  width: 5px;
+  min-height: 3px;
+  border-radius: 3px;
+  background: var(--accent-primary);
+  opacity: 0.28;
+  transition: opacity 200ms ease;
+}
+
+.weather-card__hour--cur .weather-card__hour-bar {
+  opacity: 0.55;
+}
+
+.weather-card__hour--peak .weather-card__hour-bar {
+  opacity: 0.9;
+}
+
+.weather-card__hour-label {
+  font-family: var(--font-mono, 'JetBrains Mono', ui-monospace, monospace);
+  font-size: 0.656rem;
+  color: var(--text-tertiary);
+  font-variant-numeric: tabular-nums;
 }
 </style>

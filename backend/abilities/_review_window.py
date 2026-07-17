@@ -15,7 +15,7 @@ declares only what differs:
 
 * :meth:`_buffer` — the half-window in minutes (``review_tool_calls`` keeps a
   frozen ±5; ``review_transcript`` parses a clamped ``buffer_minutes`` param).
-* :meth:`_fetch` — the ONE windowed SELECT over ``get_shared_db_service()`` that
+* :meth:`_fetch` — the ONE windowed SELECT over ``Database.conn()`` that
   returns the rows for this tool (wrapped here in a NARROW ``sqlite3.Error`` so a
   corrupt read is a LOUD ``query-failed``, never a silent empty window).
 * :meth:`_row` — turn one fetched record into the structured row dict the model
@@ -37,7 +37,6 @@ import sqlite3
 from abc import ABC, abstractmethod
 from datetime import datetime, timedelta, timezone
 from typing import ClassVar
-
 from typing import cast
 
 from abilities._ability import Ability
@@ -144,7 +143,7 @@ class ReviewWindowAbility(Ability, ABC):
 
     @abstractmethod
     def _fetch(self, lo: str, hi: str, params: "dict[str, object]") -> "list[dict[str, object]]":
-        """Run the ONE windowed SELECT over ``get_shared_db_service()`` and return
+        """Run the ONE windowed SELECT over ``Database.conn()`` and return
         the rows whose ``created_at`` falls in ``[lo, hi]``. Raise only
         ``sqlite3.Error`` (the base catches it loudly); no other exception."""
         ...

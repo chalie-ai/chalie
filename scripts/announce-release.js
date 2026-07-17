@@ -1,4 +1,4 @@
-import { execSync } from 'node:child_process';
+import {execSync} from 'node:child_process';
 import https from 'node:https';
 import http from 'node:http';
 

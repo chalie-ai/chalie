@@ -15,7 +15,7 @@
   --bs-danger-rgb:          251, 113, 133;
   --bs-warning:             #fbbf24;
   --bs-warning-rgb:         251, 191, 36;
-  --bs-body-bg:             #06080e;
+  --bs-body-bg:             #07070b;
   --bs-body-color:          #eae6f2;
   --bs-body-font-family:    'Inter', system-ui, sans-serif;
   --bs-body-font-size:      0.9375rem;
@@ -36,24 +36,57 @@
   /* Radiant tokens: backward-compat + Chalie-specific aliases */
   --violet:                 #8A5CFF;
   --violet-hover:           #9B6FFF;
+  --violet-light:           #bda4ff;   /* fork glyph, thinking badge, "scheduled" pill */
   --magenta:                #FF2FD1;
   --cyan:                   #00F0FF;
+
+  /* Thread status palette: speaker / fork-state / activity signals. The first
+     two alias the brand colours so they re-resolve per theme; --status-main is
+     the muted-magenta main-conversation dot, overridden for light below. */
+  --status-new:             var(--magenta);
+  --status-thinking:        var(--violet);
+  --status-main:            #c46aa6;
+
+  /* Message-row geometry + the mono stack. --font-mono is the name ~15 rich-card
+     rules already reference via fallback but nothing defined; declaring it here
+     resolves them and replaces the stack hardcoded on the conversation surface.
+     Theme-agnostic, so it lives only here and cascades to light. */
+  --avatar-size:            32px;
+  --font-mono:              'JetBrains Mono', 'Fira Code', ui-monospace, SFMono-Regular, Menlo, monospace;
+
+  /* Measurement scale — the single source for spacing + sizing. Promoted from
+     interface.scss so both apps + the shared utilities consume one scale.
+     Ad-hoc px/rem nudges snap onto these steps (minor shifts accepted). */
+  --space-xs:               4px;
+  --space-sm:               8px;
+  --space-md:               16px;
+  --space-lg:               24px;
+  --space-xl:               40px;
+  --space-2xl:              64px;
+  --font-size-xs:           0.75rem;      /* 12px — meta / tertiary text */
+  --textarea-max-h:         120px;        /* compose auto-grow cap */
+  --page-max-width:         640px;        /* centered page primitive */
 
   --accent-primary:         var(--violet);
   --accent-secondary:       var(--magenta);
   --accent-tertiary:        var(--cyan);
-  --bg:                     #06080e;
+  --bg:                     #07070b;
   --bg-2:                   #0d0f18;
   --bg-surface:             rgba(255, 255, 255, 0.03);
-  --bg-surface-2:           rgba(255, 255, 255, 0.05);
+  --bg-surface-2:           rgba(255, 255, 255, 0.06);
   --bg-input:               rgba(255, 255, 255, 0.05);
   --bg-user:                rgba(138, 92, 255, 0.07);
   --bg-chalie:              rgba(255, 255, 255, 0.025);
+  /* Opaque equivalent of --bg-surface-2 composited over --bg (the user bubble's
+     actual rendered colour) — used as a fade endpoint so gradients dissolve
+     into the bubble with no seam instead of a translucent surface layered on
+     the wrong backdrop. rgba(255,255,255,0.06) over #07070b. */
+  --user-bubble-fade:       #16161a;
   --text:                   #eae6f2;
   --text-primary:           #eae6f2;
-  --text-secondary:         rgba(234, 230, 242, 0.58);
-  --text-muted:             rgba(234, 230, 242, 0.50);
-  --text-tertiary:          rgba(234, 230, 242, 0.30);
+  --text-secondary:         rgba(234, 230, 242, 0.72);
+  --text-muted:             rgba(234, 230, 242, 0.38);
+  --text-tertiary:          rgba(234, 230, 242, 0.50);
   --border:                 rgba(255, 255, 255, 0.07);
   --border-subtle:          rgba(255, 255, 255, 0.07);
   --border-strong:          rgba(255, 255, 255, 0.12);
@@ -63,7 +96,7 @@
   --warning-banner-text:    #e89c50;
   --ease-out:               cubic-bezier(0.16, 1, 0.3, 1);
 
-  --shadow-card:            0 1px 0 rgba(255,255,255,0.03) inset, 0 12px 40px rgba(0,0,0,0.35);
+  --shadow-card:            0 12px 40px rgba(0,0,0,0.35);
   --grain-opacity:          0.04;
   --grain-blend:            overlay;
 
@@ -76,6 +109,23 @@
   --scrim-top:              rgba(6, 8, 14, 0.92);
   --scrim-dock:             rgba(6, 8, 14, 0.92);
   --scrim-fallback:         rgba(6, 8, 14, 0.98);
+  /* Full-screen modal scrim — the search overlay dims the whole app behind it. */
+  --scrim-overlay:          rgba(3, 4, 8, 0.66);
+
+  /* Extended accent ramps — thread-system design tokens */
+  --violet-bright:          #B07CFF;
+  --success-soft:           #56d39b;
+  --info-blue:              #5b7cf5;
+  --info-blue-2:            #4f93cc;
+  --info-blue-3:            #74acd8;
+  --info-blue-4:            #a7c9e6;
+  --rose-2:                 #d98cc0;
+  --rose-3:                 #e3a9cf;
+  --gold:                   #ffd76e;
+  --gold-soft:              #ffe9a8;
+
+  /* Panel scrims — near-opaque backdrop for sliding panels */
+  --scrim-panel-main:       rgba(15, 14, 24, 0.95);
 
   /* Legacy aliases kept for backward compat */
   --accent:                 var(--violet);
@@ -112,8 +162,13 @@
 
   --violet:                 #6E3DEB;
   --violet-hover:           #5B2DD8;
+  --violet-light:           #7C58D8;   /* paper-readable violet for fork glyph / pills */
   --magenta:                #DB1FAF;
   --cyan:                   #0098A8;
+
+  /* --status-new/-thinking re-resolve via --magenta/--violet above; only the
+     bespoke main-dot needs a paper-readable muted magenta. */
+  --status-main:            #A8508E;
 
   --accent-primary:         var(--violet);
   --accent-secondary:       var(--magenta);
@@ -125,6 +180,9 @@
   --bg-input:               rgba(255, 255, 255, 0.88);
   --bg-user:                rgba(110, 61, 235, 0.07);
   --bg-chalie:              rgba(255, 255, 255, 0.65);
+  /* Opaque equivalent of --bg-surface-2 composited over --bg for this theme —
+     see the dark-block comment above. rgba(255,255,255,0.92) over #F6F4F1. */
+  --user-bubble-fade:       #fefefe;
   --text:                   #1A1626;
   --text-primary:           #1A1626;
   --text-secondary:         rgba(26, 22, 38, 0.62);
@@ -149,6 +207,22 @@
   --scrim-top:              rgba(246, 244, 241, 0.88);
   --scrim-dock:             rgba(246, 244, 241, 0.92);
   --scrim-fallback:         rgba(246, 244, 241, 0.98);
+  --scrim-overlay:          rgba(26, 22, 38, 0.38);
+
+  /* Extended accent ramps — same hues read well on light paper */
+  --violet-bright:          #9B6FFF;
+  --success-soft:           #2fb87a;
+  --info-blue:              #4060e0;
+  --info-blue-2:            #3a7ab5;
+  --info-blue-3:            #5590c4;
+  --info-blue-4:            #7aabcf;
+  --rose-2:                 #c47aaa;
+  --rose-3:                 #d498be;
+  --gold:                   #c89800;
+  --gold-soft:              #e8b820;
+
+  /* Panel scrims — near-opaque light panels */
+  --scrim-panel-main:       rgba(250, 249, 252, 0.95);
 
   --bg-card:                var(--bg-surface);
 }

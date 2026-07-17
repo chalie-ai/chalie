@@ -4,7 +4,7 @@ Drives the real Flask app (``create_app`` via ``authed_client``) against a real
 SQLite database and the real curated catalog. No mocks.
 
 The wizard's design: a curated preset maps a popular provider to one of Chalie's
-five existing platforms plus a base URL, so the host is pre-filled and the live
+existing platforms plus a base URL, so the host is pre-filled and the live
 model-fetch path (``POST /providers/list-models``) is reused unchanged. A preset
 is NEVER a runtime platform of its own — the old catalog-id-as-platform branch is
 gone, and these tests pin both the new catalog shape and the removal of that branch.
@@ -12,17 +12,18 @@ gone, and these tests pin both the new catalog shape and the removal of that bra
 
 import sqlite3
 from collections.abc import Iterator
+from typing import cast
 
 import pytest
+from flask.testing import FlaskClient
 
 import services.vault_service as _vault_mod
-from flask.testing import FlaskClient
 from services.vault_service import _vault_state, get_vault_service
 
 # The seven providers the product owner named explicitly. The curated list is
 # allowed to carry more, but never fewer than these, and never the 111-entry dump.
 _NAMED_IDS = {"ollama", "anthropic", "gemini", "openai", "deepseek", "minimax", "nvidia"}
-_CHALIE_PLATFORMS = {"ollama", "openai", "anthropic", "gemini", "openai_compatible"}
+_CHALIE_PLATFORMS = {"ollama", "openai", "anthropic", "gemini", "openai_compatible", "codex_cli"}
 
 
 def _unlock_vault(password: str = "test-password") -> None:
@@ -30,6 +31,20 @@ def _unlock_vault(password: str = "test-password") -> None:
     vault = get_vault_service()
     vault.initialize(password)
     vault.unlock(password)
+
+
+def _unwrap_listing(body: "dict[str, object]") -> "list[dict[str, object]]":
+    """Assert the success listing envelope shape and return the result array."""
+    assert body.get("success") is True
+    assert "error" not in body
+    return cast("list[dict[str, object]]", body["result"])
+
+
+def _unwrap_error(body: "dict[str, object]") -> str:
+    """Assert the error envelope shape and return the error message."""
+    assert body.get("success") is False
+    assert body.get("result") == []
+    return cast(str, body["error"])
 
 
 @pytest.mark.unit
@@ -46,11 +61,12 @@ class TestProviderCatalog:
     def test_catalog_is_a_curated_preset_list_not_the_full_dump(self, authed_client: tuple[FlaskClient, sqlite3.Connection, object]) -> None:
         client, _db, _store = authed_client
 
-        resp = client.get('/providers/catalog')
+        resp = client.get('/api/providers/catalog')
 
         assert resp.status_code == 200
-        body = resp.get_json()
-        catalog = body['catalog']
+        body = cast("dict[str, object]", resp.get_json())
+        catalog = _unwrap_listing(body)
+        assert "pagination" in body
         assert isinstance(catalog, list), "catalog must be an ordered list of presets"
         assert 10 <= len(catalog) <= 25, f"curated list expected, got {len(catalog)}"
 
@@ -62,15 +78,16 @@ class TestProviderCatalog:
             assert isinstance(preset['needs_key'], bool)
             assert isinstance(preset['host'], str)
 
-        ids = {p['id'] for p in catalog}
+        ids = {cast(str, p['id']) for p in catalog}
         assert len(ids) == len(catalog), "preset ids must be unique"
         assert _NAMED_IDS <= ids, f"missing named providers: {_NAMED_IDS - ids}"
 
     def test_named_presets_prefill_the_right_platform_and_host(self, authed_client: tuple[FlaskClient, sqlite3.Connection, object]) -> None:
         client, _db, _store = authed_client
 
-        catalog = client.get('/providers/catalog').get_json()['catalog']
-        by_id = {p['id']: p for p in catalog}
+        body = cast("dict[str, object]", client.get('/api/providers/catalog').get_json())
+        catalog = _unwrap_listing(body)
+        by_id = {cast(str, p['id']): p for p in catalog}
 
         # MiniMax is the spec's worked example: OpenAI-compatible, host pre-filled.
         assert by_id['minimax']['platform'] == 'openai_compatible'
@@ -79,9 +96,9 @@ class TestProviderCatalog:
 
         # NVIDIA + DeepSeek are also OpenAI-compatible with a pre-filled base URL.
         assert by_id['nvidia']['platform'] == 'openai_compatible'
-        assert by_id['nvidia']['host'].startswith('https://')
+        assert cast(str, by_id['nvidia']['host']).startswith('https://')
         assert by_id['deepseek']['platform'] == 'openai_compatible'
-        assert by_id['deepseek']['host'].startswith('https://')
+        assert cast(str, by_id['deepseek']['host']).startswith('https://')
 
         # Native API providers need a key but NO host field (host stays empty so
         # the wizard skips straight to the key step).
@@ -102,23 +119,22 @@ class TestProviderCatalog:
         to a static model list."""
         client, _db, _store = authed_client
 
-        resp = client.post('/providers/list-models', json={'platform': 'deepseek'})
+        resp = client.post('/api/providers/list-models', json={'platform': 'deepseek'})
 
         assert resp.status_code == 400
-        body = resp.get_json()
-        assert body['models'] == []
-        assert "Unsupported platform" in body['error']
+        body = cast("dict[str, object]", resp.get_json())
+        error = _unwrap_error(body)
+        assert "Unsupported platform" in error
 
     def test_preset_save_roundtrips_through_the_existing_create_path(self, authed_client: tuple[FlaskClient, sqlite3.Connection, object]) -> None:
         client, _db, _store = authed_client
         _unlock_vault()
 
-        preset = next(
-            p for p in client.get('/providers/catalog').get_json()['catalog']
-            if p['id'] == 'minimax'
-        )
+        body = cast("dict[str, object]", client.get('/api/providers/catalog').get_json())
+        catalog = _unwrap_listing(body)
+        preset = next(p for p in catalog if p['id'] == 'minimax')
 
-        create = client.post('/providers', json={
+        create = client.post('/api/providers/-1', json={
             'name': 'My MiniMax',
             'platform': preset['platform'],   # 'openai_compatible'
             'host': preset['host'],           # pre-filled base URL
@@ -128,10 +144,11 @@ class TestProviderCatalog:
         assert create.status_code == 201, create.get_json()
 
         # Cross-step proof: the host the preset pre-filled survived to the DB and
-        # is read back on the listing (api_key is redacted, never echoed raw).
-        listed = client.get('/providers').get_json()['providers']
+        # is read back on the listing (api_key is write-only, never on the read shape).
+        listed_body = cast("dict[str, object]", client.get('/api/providers/all').get_json())
+        listed = _unwrap_listing(listed_body)
         row = next(p for p in listed if p['name'] == 'My MiniMax')
         assert row['platform'] == 'openai_compatible'
         assert row['host'] == 'https://api.minimax.io/v1'
         assert row['model'] == 'MiniMax-M2'
-        assert row['api_key'] in (None, '***')
+        assert 'api_key' not in row
