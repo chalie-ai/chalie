@@ -586,7 +586,7 @@ class McpClientService:
             try:
                 self.ping_and_sync(server_id)
             except Exception as exc:
-                logger.error(
+                logger.exception(
                     "%s Heartbeat error for %r (id=%s): %s",
                     _LOG_PREFIX, name, server_id, exc,
                 )

@@ -129,7 +129,7 @@ class AuthStatusResource(Resource):
                 internal_dev=internal_dev_enabled(),
             )
         except Exception as e:
-            logger.error(f"[REST API] Auth status error: {e}")
+            logger.exception(f"[REST API] Auth status error: {e}")
             return {"error": "Failed to check auth status"}, 500
 
 
@@ -211,7 +211,7 @@ class RegisterResource(Resource):
                 vault.initialize(password)
                 vault.unlock(password)
             except Exception as vault_exc:
-                logger.error(
+                logger.exception(
                     "[Auth] Vault initialisation failed after registration: %s", vault_exc
                 )
                 return {
@@ -223,7 +223,7 @@ class RegisterResource(Resource):
             create_session(resp)
             return resp
         except Exception as e:
-            logger.error(f"[REST API] Register error: {e}")
+            logger.exception(f"[REST API] Register error: {e}")
             return {"error": "Failed to create account"}, 500
 
 
@@ -287,7 +287,7 @@ class LoginResource(Resource):
             try:
                 outcome = vault.unlock_or_restore(password)
             except Exception as exc:
-                logger.error("[Auth] Vault open failed unexpectedly during login: %s", exc)
+                logger.exception("[Auth] Vault open failed unexpectedly during login: %s", exc)
                 resp = make_response(
                     jsonify({"ok": True, "vault_state": "locked"}),
                     200,
@@ -319,7 +319,7 @@ class LoginResource(Resource):
             create_session(resp)
             return resp
         except Exception as e:
-            logger.error(f"[REST API] Login error: {e}")
+            logger.exception(f"[REST API] Login error: {e}")
             return {"error": "Failed to authenticate"}, 500
 
 
@@ -349,5 +349,5 @@ class LogoutResource(Resource):
             destroy_session(request, resp)
             return resp
         except Exception as e:
-            logger.error(f"[REST API] Logout error: {e}")
+            logger.exception(f"[REST API] Logout error: {e}")
             return {"error": "Failed to logout"}, 500

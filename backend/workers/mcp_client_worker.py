@@ -37,5 +37,5 @@ def mcp_client_worker() -> None:
         try:
             svc.run_heartbeat()
         except Exception as exc:
-            logger.error("[MCP CLIENT WORKER] Heartbeat cycle error: %s", exc)
+            logger.exception("[MCP CLIENT WORKER] Heartbeat cycle error: %s", exc)
         time.sleep(_HEARTBEAT_INTERVAL_SECS)

@@ -514,7 +514,7 @@ class FolderWatcherService:
                 artifact_count = DocumentService().index_document(doc_id, text)
                 logger.info(f"[FOLDER WATCHER] Indexed {doc_id}: {artifact_count} artifacts")
             except Exception as e:
-                logger.error(f"[FOLDER WATCHER] Failed to process {doc_id}: {e}")
+                logger.exception(f"[FOLDER WATCHER] Failed to process {doc_id}: {e}")
                 DocumentService().mark_failed(doc_id, str(e))
 
         threading.Thread(target=_run, daemon=True, name=f"doc-watch-{doc_id[:8]}").start()

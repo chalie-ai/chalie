@@ -50,7 +50,7 @@ def _index_new_skill(conn: sqlite3.Connection, skill_id: int, title: str, use_fo
         emb_service = EmbeddingService()
         index_skill(conn, emb_service, skill_id, title, use_for, tags)
     except Exception as exc:
-        logger.error("[SKILLS API] Failed to index skill %d: %s", skill_id, exc)
+        logger.exception("[SKILLS API] Failed to index skill %d: %s", skill_id, exc)
         raise
 
 

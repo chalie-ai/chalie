@@ -42,7 +42,7 @@ def _run_scan_cycle() -> None:
         try:
             _scan_folder_if_due(service, folder)
         except Exception as e:
-            logger.error(
+            logger.exception(
                 "[FOLDER WATCHER] Scan failed for %s: %s",
                 folder.get('id', '?'), e,
             )
@@ -57,6 +57,6 @@ def folder_watcher_worker() -> None:
         try:
             _run_scan_cycle()
         except Exception as e:
-            logger.error("[FOLDER WATCHER] Cycle error: %s", e)
+            logger.exception("[FOLDER WATCHER] Cycle error: %s", e)
 
         time.sleep(CHECK_INTERVAL)

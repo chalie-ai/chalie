@@ -214,7 +214,7 @@ def _ensure_models() -> bool:
         return True
 
     except Exception as e:
-        logger.error("[Voice] Model loading failed: %s", e)
+        logger.exception("[Voice] Model loading failed: %s", e)
         with _load_lock:
             _models_loading = False
         return False
@@ -703,7 +703,7 @@ class VoiceSynthesizeResource(Resource):
                             all_samples.append(np.zeros(pad_len, dtype=cast("np.ndarray[tuple[int], np.dtype[np.float32]]", chunk_samples).dtype))
                 samples = np.concatenate(cast("list[np.ndarray[tuple[int], np.dtype[np.float32]]]", all_samples))
         except Exception as e:
-            logger.error("[Voice] TTS synthesis failed: %s", e)
+            logger.exception("[Voice] TTS synthesis failed: %s", e)
             return error("TTS synthesis failed", 500)
 
         wav_bytes = _audio_to_wav_bytes(samples, cast(int, sr))
@@ -753,5 +753,5 @@ class VoiceTranscribeResource(Resource):
             try:
                 return Transcription(text=_transcribe_sync(data))
             except Exception as e:
-                logger.error("[Voice] STT error: %s", e)
+                logger.exception("[Voice] STT error: %s", e)
                 return error("Transcription failed", 500)

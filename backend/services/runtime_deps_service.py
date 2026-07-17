@@ -53,7 +53,7 @@ class RuntimeDepsService:
             return
         except Exception as exc:
             cls._onnxruntime_hint = cls._onnxruntime_hint_for(exc)
-            logger.error(
+            logger.exception(
                 "[RuntimeDeps] onnxruntime import failed (%s) — falling back to the CPU wheel. %s",
                 exc, cls._onnxruntime_hint,
             )
@@ -68,7 +68,7 @@ class RuntimeDepsService:
             )
         except Exception as exc:
             cls._onnxruntime_status = "failed"
-            logger.error(
+            logger.exception(
                 "[RuntimeDeps] onnxruntime CPU fallback failed (%s) — embeddings, "
                 "classifiers and voice will be unavailable. %s",
                 exc, cls._onnxruntime_hint,
@@ -316,7 +316,7 @@ class RuntimeDepsService:
             with cls._lock:
                 cls._voice_status = "error"
                 cls._voice_error = str(e)
-            logger.error("[RuntimeDeps] Voice installation failed: %s", e)
+            logger.exception("[RuntimeDeps] Voice installation failed: %s", e)
 
     @classmethod
     def _install_voice_deps(cls) -> None:

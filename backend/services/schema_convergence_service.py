@@ -327,7 +327,7 @@ class SchemaConvergenceService:
                         logger.info(f"[convergence] Created table: {table_name}")
                         tables_created += 1
                     except Exception as exc:
-                        logger.error(f"[convergence] Failed to create table {table_name}: {exc}")
+                        logger.exception(f"[convergence] Failed to create table {table_name}: {exc}")
                 else:
                     logger.warning(f"[convergence] No DDL found for missing table: {table_name}")
                 continue
@@ -355,7 +355,7 @@ class SchemaConvergenceService:
                         logger.info(f"[convergence] Added column: {table_name}.{col_name}")
                         columns_added += 1
                     except Exception as exc:
-                        logger.error(
+                        logger.exception(
                             f"[convergence] Failed to add column {table_name}.{col_name}: {exc}"
                         )
 
@@ -400,7 +400,7 @@ class SchemaConvergenceService:
                 logger.warning(f"[convergence] DROPPED table: {table_name}")
                 dropped += 1
             except Exception as exc:
-                logger.error(f"[convergence] Failed to drop stale table {table_name}: {exc}")
+                logger.exception(f"[convergence] Failed to drop stale table {table_name}: {exc}")
         return dropped
 
     def _drop_stale_columns(
@@ -422,7 +422,7 @@ class SchemaConvergenceService:
                     logger.warning(f"[convergence] DROPPED column: {table_name}.{col_name}")
                     dropped += 1
                 except Exception as exc:
-                    logger.error(
+                    logger.exception(
                         f"[convergence] Failed to drop stale column {table_name}.{col_name}: {exc}"
                     )
         return dropped
@@ -442,7 +442,7 @@ class SchemaConvergenceService:
                 logger.warning(f"[convergence] DROPPED index: {idx_name}")
                 dropped += 1
             except Exception as exc:
-                logger.error(f"[convergence] Failed to drop stale index {idx_name}: {exc}")
+                logger.exception(f"[convergence] Failed to drop stale index {idx_name}: {exc}")
         return dropped
 
     def _drop_stale_virtual_tables(
@@ -460,7 +460,7 @@ class SchemaConvergenceService:
                 logger.warning(f"[convergence] DROPPED virtual table: {table_name}")
                 dropped += 1
             except Exception as exc:
-                logger.error(
+                logger.exception(
                     f"[convergence] Failed to drop stale virtual table {table_name}: {exc}"
                 )
         return dropped
@@ -538,7 +538,7 @@ class SchemaConvergenceService:
                     logger.info(f"[convergence] Created index: {idx_name}")
                     synced += 1
                 except Exception as exc:
-                    logger.error(f"[convergence] Failed to create index {idx_name}: {exc}")
+                    logger.exception(f"[convergence] Failed to create index {idx_name}: {exc}")
             elif actual[idx_name] != desired_ddl:
                 # DDL changed — drop and recreate
                 try:
@@ -548,7 +548,7 @@ class SchemaConvergenceService:
                     logger.info(f"[convergence] Recreated index (DDL changed): {idx_name}")
                     synced += 1
                 except Exception as exc:
-                    logger.error(f"[convergence] Failed to recreate index {idx_name}: {exc}")
+                    logger.exception(f"[convergence] Failed to recreate index {idx_name}: {exc}")
 
         return synced
 
@@ -625,7 +625,7 @@ class SchemaConvergenceService:
                                 logger.info(f"[convergence] Rebuilt FTS5 table (column change): {table_name}")
                                 created += 1
                             except Exception as exc:
-                                logger.error(
+                                logger.exception(
                                     f"[convergence] Failed to rebuild FTS5 table {table_name}: {exc}"
                                 )
                         continue
@@ -663,7 +663,7 @@ class SchemaConvergenceService:
                     logger.info(f"[convergence] Created trigger: {trigger_name}")
                     synced += 1
                 except Exception as exc:
-                    logger.error(f"[convergence] Failed to create trigger {trigger_name}: {exc}")
+                    logger.exception(f"[convergence] Failed to create trigger {trigger_name}: {exc}")
             elif actual[trigger_name] != desired_ddl:
                 raw_ddl = self._extract_trigger_ddl(schema_sql, trigger_name)
                 if not raw_ddl:
@@ -677,7 +677,7 @@ class SchemaConvergenceService:
                     logger.info(f"[convergence] Recreated trigger (DDL changed): {trigger_name}")
                     synced += 1
                 except Exception as exc:
-                    logger.error(f"[convergence] Failed to recreate trigger {trigger_name}: {exc}")
+                    logger.exception(f"[convergence] Failed to recreate trigger {trigger_name}: {exc}")
 
         return synced
 
@@ -696,7 +696,7 @@ class SchemaConvergenceService:
                 logger.warning(f"[convergence] DROPPED trigger: {trigger_name}")
                 dropped += 1
             except Exception as exc:
-                logger.error(f"[convergence] Failed to drop stale trigger {trigger_name}: {exc}")
+                logger.exception(f"[convergence] Failed to drop stale trigger {trigger_name}: {exc}")
         return dropped
 
     def _create_virtual_table(self, conn: sqlite3.Connection, table_name: str, ddl: str) -> bool:
@@ -732,13 +732,13 @@ class SchemaConvergenceService:
                     )
                     return True
                 except Exception as retry_exc:
-                    logger.error(
+                    logger.exception(
                         f"[convergence] Failed to create virtual table {table_name} "
                         f"after cleanup: {retry_exc}"
                     )
                     return False
             else:
-                logger.error(
+                logger.exception(
                     f"[convergence] Failed to create virtual table {table_name}: {exc}"
                 )
                 return False
@@ -812,7 +812,7 @@ class SchemaConvergenceService:
                 live_conn.execute(idx_sql)
             logger.info("[convergence] Stripped CHECK constraint from data_graph.kind")
         except Exception as exc:
-            logger.error(f"[convergence] Failed to strip data_graph CHECK constraint: {exc}")
+            logger.exception(f"[convergence] Failed to strip data_graph CHECK constraint: {exc}")
             raise
         finally:
             live_conn.execute("PRAGMA foreign_keys=ON")

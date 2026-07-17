@@ -26,6 +26,6 @@ def document_purge_worker() -> None:
                 logger.info(f"[DOC PURGE] Purged {count} expired documents")
 
         except Exception as e:
-            logger.error(f"[DOC PURGE] Purge cycle failed: {e}")
+            logger.exception(f"[DOC PURGE] Purge cycle failed: {e}")
 
         time.sleep(CYCLE_SECONDS)

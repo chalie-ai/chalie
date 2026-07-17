@@ -80,7 +80,7 @@ class UserSynthesis:
             try:
                 return parse_utc(newest) > parse_utc(summary_row.last_confirmed_at)
             except Exception as exc:  # noqa: BLE001 — a bad timestamp must not crash the tick
-                logger.error(
+                logger.exception(
                     "user_synthesis.needs_refresh: parse_utc failed trait_ts=%r summary_ts=%r: %s",
                     newest, summary_row.last_confirmed_at, exc,
                 )

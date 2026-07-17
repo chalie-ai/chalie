@@ -123,7 +123,7 @@ def _extract_pdf(path: str) -> str:
         return '\n\n'.join(pages)
 
     except Exception as e:
-        logger.error(f'[TEXT EXTRACTOR] PDF extraction failed: {e}')
+        logger.exception(f'[TEXT EXTRACTOR] PDF extraction failed: {e}')
         return ''
 
 
@@ -169,7 +169,7 @@ def _extract_docx(path: str) -> str:
         return '\n\n'.join(parts)
 
     except Exception as e:
-        logger.error(f'[TEXT EXTRACTOR] DOCX extraction failed: {e}')
+        logger.exception(f'[TEXT EXTRACTOR] DOCX extraction failed: {e}')
         return ''
 
 
@@ -199,7 +199,7 @@ def _extract_pptx(path: str) -> str:
         return '\n\n'.join(slides)
 
     except Exception as e:
-        logger.error(f'[TEXT EXTRACTOR] PPTX extraction failed: {e}')
+        logger.exception(f'[TEXT EXTRACTOR] PPTX extraction failed: {e}')
         return ''
 
 
@@ -210,7 +210,7 @@ def _extract_html_file(path: str) -> str:
             raw = f.read()
         return extract_html(raw)
     except Exception as e:
-        logger.error(f'[TEXT EXTRACTOR] HTML file extraction failed: {e}')
+        logger.exception(f'[TEXT EXTRACTOR] HTML file extraction failed: {e}')
         return ''
 
 
@@ -220,5 +220,5 @@ def _extract_plain(path: str) -> str:
         with open(path, 'r', encoding='utf-8', errors='replace') as f:
             return f.read()
     except Exception as e:
-        logger.error(f'[TEXT EXTRACTOR] Plain text read failed: {e}')
+        logger.exception(f'[TEXT EXTRACTOR] Plain text read failed: {e}')
         return ''

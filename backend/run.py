@@ -96,7 +96,7 @@ def _start_model_preload() -> None:
                 try:
                     svc._get_head(_task)
                 except RuntimeError as _reg_err:
-                    logger.error(
+                    logger.exception(
                         f"[System] CLASSIFIER REGISTRATION FAILED — task={_task} "
                         f"reason={_reg_err}"
                     )

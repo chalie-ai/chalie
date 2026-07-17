@@ -40,7 +40,7 @@ def _persist_session_to_sqlite(token: str) -> None:
                 (_hash_session_token(token), utc_now().isoformat())
             )
     except Exception as e:
-        logger.error(f"[Session] SQLite persist failed: {e}")
+        logger.exception(f"[Session] SQLite persist failed: {e}")
 
 
 def _delete_session_from_sqlite(token: str) -> None:
@@ -72,7 +72,7 @@ def _validate_session_in_sqlite(token: str) -> bool:
             return True
         return False
     except Exception as e:
-        logger.error(f"[Session] SQLite validate failed: {e}")
+        logger.exception(f"[Session] SQLite validate failed: {e}")
         return False
 
 

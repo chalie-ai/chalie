@@ -83,7 +83,7 @@ class DocumentService:
             return doc_id
 
         except Exception as e:
-            logger.error(f"[DOCS] create_document failed: {e}")
+            logger.exception(f"[DOCS] create_document failed: {e}")
             raise
 
     def get_document(self, doc_id: str) -> Optional[Dict[str, object]]:
@@ -94,7 +94,7 @@ class DocumentService:
             return self._doc_to_dict(doc)
 
         except Exception as e:
-            logger.error(f"[DOCS] get_document failed: {e}")
+            logger.exception(f"[DOCS] get_document failed: {e}")
             return None
 
     def get_all_documents(self, include_deleted: bool = False) -> List[Dict[str, object]]:
@@ -104,7 +104,7 @@ class DocumentService:
             return [self._doc_to_dict(doc) for doc in docs]
 
         except Exception as e:
-            logger.error(f"[DOCS] get_all_documents failed: {e}")
+            logger.exception(f"[DOCS] get_all_documents failed: {e}")
             return []
 
     def search_documents_metadata(self, query: str) -> List[Dict[str, object]]:
@@ -113,7 +113,7 @@ class DocumentService:
             return [self._doc_to_dict(doc) for doc in docs]
 
         except Exception as e:
-            logger.error(f"[DOCS] search_documents_metadata failed: {e}")
+            logger.exception(f"[DOCS] search_documents_metadata failed: {e}")
             return []
 
     def create_document_from_text(
@@ -177,7 +177,7 @@ class DocumentService:
             self._write_queue.submit_sync(_update)
             logger.info("[DOCS] Updated status for %s: %s", safe(doc_id), safe(status))
         except Exception as e:
-            logger.error("[DOCS] update_status failed for %s: %s", safe(doc_id), e)
+            logger.exception("[DOCS] update_status failed for %s: %s", safe(doc_id), e)
             raise
 
     def update_clean_text(self, doc_id: str, clean_text: str) -> None:
@@ -187,7 +187,7 @@ class DocumentService:
                     DocumentMetaData.update_fields(did, {"clean_text": txt})
             self._write_queue.submit_sync(_update)
         except Exception as e:
-            logger.error(f"[DOCS] update_clean_text failed: {e}")
+            logger.exception(f"[DOCS] update_clean_text failed: {e}")
 
     @staticmethod
     def derive_summary(text: str) -> str:
@@ -236,7 +236,7 @@ class DocumentService:
                     DocumentMetaData.update_fields(did, {"summary": s})
             self._write_queue.submit_sync(_update)
         except Exception as e:
-            logger.error(f"[DOCS] update_summary failed: {e}")
+            logger.exception(f"[DOCS] update_summary failed: {e}")
 
     def update_extracted_metadata(
         self,
@@ -285,7 +285,7 @@ class DocumentService:
             self._write_queue.submit_sync(_supersede)
             logger.info("[DOCS] Document %s supersedes %s", safe(doc_id), safe(supersedes_id))
         except Exception as e:
-            logger.error(f"[DOCS] set_supersedes failed: {e}")
+            logger.exception(f"[DOCS] set_supersedes failed: {e}")
 
     # ─────────────────────────────────────────────
     # Duplicate detection
@@ -340,7 +340,7 @@ class DocumentService:
                         })
 
         except Exception as e:
-            logger.error(f"[DOCS] find_duplicates failed: {e}")
+            logger.exception(f"[DOCS] find_duplicates failed: {e}")
 
         return results
 
@@ -368,7 +368,7 @@ class DocumentService:
             return updated
 
         except Exception as e:
-            logger.error(f"[DOCS] soft_delete failed: {e}")
+            logger.exception(f"[DOCS] soft_delete failed: {e}")
             return False
 
     def restore(self, doc_id: str) -> bool:
@@ -389,7 +389,7 @@ class DocumentService:
             return updated
 
         except Exception as e:
-            logger.error(f"[DOCS] restore failed: {e}")
+            logger.exception(f"[DOCS] restore failed: {e}")
             return False
 
     def hard_delete(self, doc_id: str) -> bool:
@@ -425,7 +425,7 @@ class DocumentService:
             return deleted
 
         except Exception as e:
-            logger.error(f"[DOCS] hard_delete failed: {e}")
+            logger.exception(f"[DOCS] hard_delete failed: {e}")
             return False
 
     def purge_expired(self) -> int:
@@ -442,7 +442,7 @@ class DocumentService:
             return count
 
         except Exception as e:
-            logger.error(f"[DOCS] purge_expired failed: {e}")
+            logger.exception(f"[DOCS] purge_expired failed: {e}")
             return 0
 
     # ─────────────────────────────────────────────
@@ -458,7 +458,7 @@ class DocumentService:
             )
             return [self._doc_to_dict(doc) for doc in docs]
         except Exception as e:
-            logger.error(f"[DOCS] get_documents_by_watched_folder failed: {e}")
+            logger.exception(f"[DOCS] get_documents_by_watched_folder failed: {e}")
             return []
 
     def update_tags(self, doc_id: str, tags: list[str]) -> None:
@@ -469,7 +469,7 @@ class DocumentService:
 
             self._write_queue.submit_sync(_update_tags)
         except Exception as e:
-            logger.error(f"[DOCS] update_tags failed: {e}")
+            logger.exception(f"[DOCS] update_tags failed: {e}")
 
     def update_classification(
         self, doc_id: str,
@@ -493,7 +493,7 @@ class DocumentService:
 
             self._write_queue.submit_sync(_update_class)
         except Exception as e:
-            logger.error(f"[DOCS] update_classification failed: {e}")
+            logger.exception(f"[DOCS] update_classification failed: {e}")
 
     def get_classification_groups(self, field: str) -> List[Dict[str, object]]:
         if field not in ('doc_category', 'doc_project', 'doc_date'):
@@ -502,7 +502,7 @@ class DocumentService:
             groups = DocumentMetaData.classification_groups(field)
             return [{'value': grp, 'count': cnt} for grp, cnt in groups]
         except Exception as e:
-            logger.error(f"[DOCS] get_classification_groups failed: {e}")
+            logger.exception(f"[DOCS] get_classification_groups failed: {e}")
             return []
 
     def update_file_path(self, doc_id: str, new_path: str) -> None:
@@ -513,7 +513,7 @@ class DocumentService:
 
             self._write_queue.submit_sync(_update_path)
         except Exception as e:
-            logger.error(f"[DOCS] update_file_path failed: {e}")
+            logger.exception(f"[DOCS] update_file_path failed: {e}")
 
     # ─────────────────────────────────────────────
     # Internal helpers

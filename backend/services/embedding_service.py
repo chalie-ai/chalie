@@ -88,7 +88,7 @@ def _build_session(providers: Optional[List[str]] = None) -> tuple[object, Path]
             hf_hub_download(repo_id=_MODEL_ID, filename=_ONNX_FILENAME, local_dir=str(model_dir))
             logger.info(f"[EMBEDDING] Model saved to {onnx_path}")
         except Exception as e:
-            logger.error(f"[EMBEDDING] Failed to download model: {e}")
+            logger.exception(f"[EMBEDDING] Failed to download model: {e}")
             raise
 
     chosen = list(providers) if providers is not None else choose_providers(onnx_path)
@@ -331,7 +331,7 @@ class EmbeddingService:
             self._cache_put(text, embedding)
             return embedding
         except Exception as e:
-            logger.error(f"[EMBEDDING] Generation failed: {e}")
+            logger.exception(f"[EMBEDDING] Generation failed: {e}")
             raise
 
     def generate_embedding_np(self, text: str, mp: object = None) -> np.ndarray:
@@ -345,7 +345,7 @@ class EmbeddingService:
             self._cache_put(text, embedding.tolist())
             return embedding
         except Exception as e:
-            logger.error(f"[EMBEDDING] Generation failed: {e}")
+            logger.exception(f"[EMBEDDING] Generation failed: {e}")
             raise
 
     def generate_embeddings_batch(self, texts: List[str], mp: object = None) -> List[np.ndarray]:
@@ -362,5 +362,5 @@ class EmbeddingService:
                 results.extend(embeddings)
             return results
         except Exception as e:
-            logger.error(f"[EMBEDDING] Batch generation failed: {e}")
+            logger.exception(f"[EMBEDDING] Batch generation failed: {e}")
             raise
