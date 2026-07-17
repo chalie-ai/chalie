@@ -14,7 +14,6 @@ import LoadingOverlay from './components/layout/LoadingOverlay.vue';
 import PermissionStack from './components/overlays/PermissionStack.vue';
 import TaskDrawer from './components/overlays/TaskDrawer.vue';
 import SchedulerDock from './components/overlays/SchedulerDock.vue';
-import UpdatePrompt from './components/overlays/UpdatePrompt.vue';
 import VoicePlayerDialog from './components/voice/VoicePlayerDialog.vue';
 import UnlockVault from './components/layout/UnlockVault.vue';
 
@@ -107,7 +106,6 @@ onBeforeUnmount(() => {
   <PermissionStack />
   <TaskDrawer />
   <SchedulerDock />
-  <UpdatePrompt />
   <VoicePlayerDialog />
   <UnlockVault />
 </template>

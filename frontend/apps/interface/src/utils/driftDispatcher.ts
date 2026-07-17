@@ -24,8 +24,6 @@ import { showToast } from './toast';
 import { clearLiveTurn, finishLiveTool, startLiveTool } from './liveActTrail';
 import { reconcileCancelledTurn } from './cancelReconcile';
 import { findTurnType, setTurnDone, setTurnWorking, upsertTurnToSurfaces } from './turnDom';
-import { useNotificationsStore } from '../stores/notifications';
-import type { UpdateState } from '../stores/notifications';
 import { useTasksStore } from '../stores/tasks';
 import { usePermissionsStore } from '../stores/permissions';
 import { useContextUsageStore } from '../stores/contextUsage';
@@ -327,9 +325,6 @@ function _dispatchCancelled(turnId: number, type: string): void {
  *  handled. Verbatim relocation of session.ts's former `_routeSimpleEvent`. */
 function _dispatchSimpleEvent(data: WsPushEvent): boolean {
   switch (data.type as string) {
-    case 'app_update':
-      useNotificationsStore().handleUpdate(data as unknown as UpdateState);
-      return true;
     case 'subagent_start':
     case 'subagent_end':
       useTasksStore().applyDriftEvent(data);

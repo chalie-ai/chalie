@@ -90,7 +90,6 @@ export type WsPushType =
   | 'permission_request'
   | 'intent'
   | 'capability_alert'
-  | 'app_update'
   | 'subagent_start'
   | 'subagent_end';
 export interface WsPushEvent {

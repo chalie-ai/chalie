@@ -8,12 +8,6 @@ export interface AuthStatus {
   vault_state: 'unlocked' | 'locked' | 'uninitialized';
 }
 
-/** Response from POST /system/update/apply. */
-export interface UpdateApplyResult {
-  ok: boolean;
-  message: string;
-}
-
 /** Response from GET /ready — backend readiness probe. */
 export interface ReadyStatus {
   ready: boolean;
@@ -51,10 +45,5 @@ export const system = {
   /** GET /thread/<turnId>/thinking-level?type= — the sender's last-chosen thinking level for this thread. */
   thinkingLevel(type: string, turnId: number): Promise<{ level: string }> {
     return api.get(`/api/thread/${turnId}/thinking-level?type=${type}`);
-  },
-
-  /** POST /system/update/apply — apply an in-place installer update. */
-  updateApply(tag: string): Promise<UpdateApplyResult> {
-    return api.post('/api/system/update/apply', { tag });
   },
 };

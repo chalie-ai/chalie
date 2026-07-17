@@ -1,17 +1,12 @@
 /**
- * Notifications store — audio chime, OS notifications, update prompt.
+ * Notifications store — audio chime and OS notifications.
  *
  * Browser-API access goes exclusively through the runtime platform adapter (no raw
  * window.Notification / localStorage / new AudioContext()); HTTP through api
  * wrappers only.
- *
- * UpdatePrompt is DORMANT — the backend does not currently emit `app_update`
- * WS events — but the state is kept so it activates automatically when the
- * backend ships.
  */
 import { defineStore } from 'pinia';
 import { platform as adapter } from '@chalie/shared';
-import { system } from '../api/system';
 
 const CHIME_FREQ_HZ = 880;        // A5
 const CHIME_DURATION_S = 0.5;
@@ -23,21 +18,9 @@ const NOTIFY_BODY_MAX = 200;
 const NOTIFY_TAG = 'chalie-message';
 const MAX_NOTIFICATIONS = 50;
 
-const LS_UPDATE_DISMISSED = 'chalie_update_dismissed';
-
 export interface NotificationItem {
   id?: string;
   [key: string]: unknown;
-}
-
-/** Shape of an app_update WS payload (dormant — backend does not yet emit this). */
-export interface UpdateState {
-  latest_tag: string;
-  latest_version: string;
-  current_version: string;
-  release_notes?: string;
-  /** 'docker' | 'dev' | 'installer' | string */
-  deployment_mode?: string;
 }
 
 // Singleton AudioContext — created lazily, shared across chimes.
@@ -82,10 +65,6 @@ function showOsNotification(text: string): void {
 export const useNotificationsStore = defineStore('notifications', {
   state: () => ({
     notifications: [] as NotificationItem[],
-    /** Currently available update. null when none or dismissed. */
-    currentUpdate: null as UpdateState | null,
-    updateApplyMessage: null as string | null,
-    applyingUpdate: false,
   }),
 
   actions: {
@@ -114,46 +93,6 @@ export const useNotificationsStore = defineStore('notifications', {
       this.notifications.push({ id: String(Date.now()), text });
       if (this.notifications.length > MAX_NOTIFICATIONS) {
         this.notifications.splice(0, this.notifications.length - MAX_NOTIFICATIONS);
-      }
-    },
-
-    /** Skips display if this version was already dismissed. DORMANT. */
-    handleUpdate(payload: UpdateState): void {
-      if (!payload || !payload.latest_tag) return;
-      const dismissed = adapter.getItem(LS_UPDATE_DISMISSED);
-      if (dismissed === payload.latest_tag) return;
-      this.currentUpdate = payload;
-      this.updateApplyMessage = null;
-      this.applyingUpdate = false;
-    },
-
-    /** Persists the dismissed version tag so it won't reappear. */
-    dismissUpdate(): void {
-      if (!this.currentUpdate) return;
-      adapter.setItem(LS_UPDATE_DISMISSED, this.currentUpdate.latest_tag);
-      this.currentUpdate = null;
-      this.updateApplyMessage = null;
-    },
-
-    async applyUpdate(): Promise<void> {
-      if (!this.currentUpdate || this.applyingUpdate) return;
-      this.applyingUpdate = true;
-      this.updateApplyMessage = null;
-      try {
-        const result = await system.updateApply(this.currentUpdate.latest_tag);
-        if (result.ok) {
-          this.updateApplyMessage = result.message ?? 'Restarting Chalie...';
-        } else {
-          this.updateApplyMessage = result.message || 'Update failed.';
-          // Restore actions after 3 s on failure.
-          setTimeout(() => {
-            this.applyingUpdate = false;
-            this.updateApplyMessage = null;
-          }, 3000);
-        }
-      } catch {
-        this.updateApplyMessage = 'Update request failed.';
-        this.applyingUpdate = false;
       }
     },
   },
