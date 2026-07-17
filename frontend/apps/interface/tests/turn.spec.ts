@@ -19,7 +19,7 @@ test('sending a message drives a real turn and renders Chalie’s reply', async 
   //  - the user's text renders as a user bubble, and
   //  - the presence logo leaves its idle state for the breathing "active" class
   //    (PresenceBar.vue's `isSending`, driven by the main spine's dock-busy state).
-  await expect(page.locator('.speech-form--user').last()).toContainText('pong');
+  await expect(page.locator('.user-message').last()).toContainText('pong');
   await expect(page.locator('.presence-logo')).toHaveClass(/presence-logo--active/, { timeout: 10_000 });
 
   // Real backend completion: the turn runs over the WS and Chalie's reply lands

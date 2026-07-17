@@ -38,7 +38,7 @@ test('a message sent on one surface renders on every open surface, and so does C
   // exactly this turn's message and reply, never anything already in history.
   const token = `sync${Date.now().toString(36)}`;
   const prompt = `Reply with exactly this word and nothing else: ${token}`;
-  const userWithToken = (p = surfaceA) => p.locator('.speech-form--user').filter({ hasText: token });
+  const userWithToken = (p = surfaceA) => p.locator('.user-message').filter({ hasText: token });
   const chalieWithToken = (p = surfaceA) =>
     p.locator('.speech-form--chalie').filter({ hasText: token });
 
