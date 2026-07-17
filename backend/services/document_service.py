@@ -291,6 +291,58 @@ class DocumentService:
     # Duplicate detection
     # ─────────────────────────────────────────────
 
+    @staticmethod
+    def _exact_hash_matches(
+        file_hash: str, exclude_id: Optional[str], results: List[Dict[str, object]]
+    ) -> None:
+        """Layer 1 of find_duplicates: append rows whose file_hash matches exactly.
+
+        Appends into the caller's list so matches collected before a
+        mid-iteration failure survive find_duplicates' except handler."""
+        if not file_hash:
+            return
+        for row in DocumentMetaData.by_file_hash(file_hash, exclude_id):
+            results.append({
+                'id': row[0],
+                'original_name': row[1],
+                'created_at': row[2],
+                'match_type': 'exact',
+                'distance': 0.0,
+            })
+
+    @staticmethod
+    def _semantic_similarity_matches(
+        summary_embedding: Optional[list[float]], exclude_id: Optional[str],
+        results: List[Dict[str, object]],
+    ) -> None:
+        """Layer 2 of find_duplicates: append near-duplicate/revision matches via
+        embedding similarity. Caller only invokes this when summary_embedding
+        is present and layer 1 found nothing. Appends into the caller's list so
+        matches collected before a mid-iteration failure survive
+        find_duplicates' except handler."""
+        packed = _pack_embedding(summary_embedding)
+        for row in DocumentMetaData.semantic_matches(cast(bytes, packed), k=5):
+            dist = float(row[3])
+            doc_id = row[0]
+            if exclude_id and doc_id == exclude_id:
+                continue
+            if dist < DEDUP_EXACT_THRESHOLD:
+                results.append({
+                    'id': doc_id,
+                    'original_name': row[1],
+                    'created_at': row[2],
+                    'match_type': 'semantic_exact',
+                    'distance': dist,
+                })
+            elif dist < DEDUP_REVISION_THRESHOLD:
+                results.append({
+                    'id': doc_id,
+                    'original_name': row[1],
+                    'created_at': row[2],
+                    'match_type': 'semantic_revision',
+                    'distance': dist,
+                })
+
     def find_duplicates(
         self,
         file_hash: str,
@@ -298,46 +350,17 @@ class DocumentService:
         text_length: int = 0,
         exclude_id: Optional[str] = None,
     ) -> List[Dict[str, object]]:
-        results = []
+        results: List[Dict[str, object]] = []
 
         try:
             # Layer 1: exact hash match
-            if file_hash:
-                for row in DocumentMetaData.by_file_hash(file_hash, exclude_id):
-                    results.append({
-                        'id': row[0],
-                        'original_name': row[1],
-                        'created_at': row[2],
-                        'match_type': 'exact',
-                        'distance': 0.0,
-                    })
+            self._exact_hash_matches(file_hash, exclude_id, results)
 
             # Layer 2: semantic similarity (skip for short docs)
             if (summary_embedding
                     and text_length >= DEDUP_MIN_TEXT_LENGTH
                     and not results):
-                packed = _pack_embedding(summary_embedding)
-                for row in DocumentMetaData.semantic_matches(cast(bytes, packed), k=5):
-                    dist = float(row[3])
-                    doc_id = row[0]
-                    if exclude_id and doc_id == exclude_id:
-                        continue
-                    if dist < DEDUP_EXACT_THRESHOLD:
-                        results.append({
-                            'id': doc_id,
-                            'original_name': row[1],
-                            'created_at': row[2],
-                            'match_type': 'semantic_exact',
-                            'distance': dist,
-                        })
-                    elif dist < DEDUP_REVISION_THRESHOLD:
-                        results.append({
-                            'id': doc_id,
-                            'original_name': row[1],
-                            'created_at': row[2],
-                            'match_type': 'semantic_revision',
-                            'distance': dist,
-                        })
+                self._semantic_similarity_matches(summary_embedding, exclude_id, results)
 
         except Exception as e:
             logger.exception(f"[DOCS] find_duplicates failed: {e}")

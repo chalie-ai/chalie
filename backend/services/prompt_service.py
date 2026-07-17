@@ -154,10 +154,10 @@ class PromptService:
         :class:`UserSynthesis`, or the peer-to-peer fallback."""
         return UserSynthesis.get(shorthand=True) or _USER_DEFINITION_FALLBACK
 
-    def user_prompt(self) -> str:
-        """The turn's user-message body, ported from each config's
-        ``get_user_prompt``."""
-        channel = self._channel()
+    def _user_prompt_group_a(self, channel: str) -> str | None:
+        """First user_prompt dispatch group: user / user-summary / pattern-match /
+        schedule / fact-extraction / skills-building / thread-gist channels.
+        Returns None when ``channel`` doesn't match any of these."""
         if channel == _CHANNEL_USER:
             return self._user_prompt()
         if channel == _CHANNEL_USER_SUMMARY:
@@ -172,6 +172,12 @@ class PromptService:
             return self._skill_suggestion_prompt()
         if channel == _CHANNEL_THREAD_GIST:
             return self._thread_gist_prompt()
+        return None
+
+    def _user_prompt_group_b(self, channel: str) -> str | None:
+        """Second user_prompt dispatch group: web-browse / web-search / pim /
+        external-agent / super-episode / geo-pattern / dmn / episode-encoder
+        channels. Returns None when ``channel`` doesn't match any of these."""
         if channel == _CHANNEL_WEB_BROWSE:
             return self._web_browse_prompt()
         if channel == _CHANNEL_WEB_SEARCH:
@@ -188,6 +194,21 @@ class PromptService:
             return self._dmn_prompt()
         if channel == _CHANNEL_EPISODE_ENCODER:
             return self._episode_encoder_prompt()
+        return None
+
+    def user_prompt(self) -> str:
+        """The turn's user-message body, ported from each config's
+        ``get_user_prompt``."""
+        channel = self._channel()
+
+        result = self._user_prompt_group_a(channel)
+        if result is not None:
+            return result
+
+        result = self._user_prompt_group_b(channel)
+        if result is not None:
+            return result
+
         # skill_association, vision and compaction pass the raw input straight
         # through.
         if channel in (_CHANNEL_SKILL_ASSOCIATION, _CHANNEL_VISION, _CHANNEL_COMPACTION):

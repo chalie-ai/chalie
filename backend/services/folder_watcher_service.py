@@ -326,31 +326,11 @@ class FolderWatcherService:
             result['skipped'] = cast(int, result['skipped']) + 1
         return enqueued
 
-    def _do_scan(self, folder: Dict[str, object], store: "MemoryStore") -> Dict[str, object]:
-        """Execute the folder scan against the database."""
-        from services.document_service import DocumentService
-
-        folder_path = cast(str, folder['folder_path'])
-        folder_id = cast(str, folder['id'])
-        result: Dict[str, object] = {'new': 0, 'updated': 0, 'deleted': 0, 'renamed': 0, 'skipped': 0, 'errors': []}
-
-        if not os.path.isdir(folder_path):
-            msg = f"Folder no longer accessible: {folder_path}"
-            logger.warning(f"[WATCHER] {msg}")
-            self._update_scan_error(folder_id, msg)
-            return result
-
-        file_patterns = self._parse_json_list(folder.get('file_patterns', '["*"]'))
-        ignore_patterns = self._parse_json_list(folder.get('ignore_patterns', '[]'))
-        recursive = bool(folder.get('recursive', 1))
-
-        discovered: Dict[str, float] = {}
-        for abs_path, mtime in self._walk_folder(folder_path, recursive, file_patterns, ignore_patterns):
-            discovered[abs_path] = mtime
-
-        doc_svc = DocumentService()
-        existing_docs = doc_svc.get_documents_by_watched_folder(folder_id)
-
+    @staticmethod
+    def _index_existing_docs(
+        existing_docs: List[Dict[str, object]],
+    ) -> "tuple[Dict[str, Dict[str, object]], Dict[str, Dict[str, object]]]":
+        """Index non-deleted existing documents by file_path and by file_hash."""
         existing_by_path: Dict[str, Dict[str, object]] = {}
         existing_by_hash: Dict[str, Dict[str, object]] = {}
         for doc in existing_docs:
@@ -359,10 +339,17 @@ class FolderWatcherService:
             existing_by_path[cast(str, doc['file_path'])] = doc
             if doc.get('file_hash'):
                 existing_by_hash[cast(str, doc['file_hash'])] = doc
+        return existing_by_path, existing_by_hash
 
-        scan_cache = self._load_scan_cache(store, folder_id)
+    def _categorize_discovered_files(
+        self, doc_svc: "DocumentService", folder: Dict[str, object],
+        discovered: Dict[str, float], existing_by_path: Dict[str, Dict[str, object]],
+        existing_by_hash: Dict[str, Dict[str, object]],
+        scan_cache: Dict[str, Dict[str, object]], result: Dict[str, object],
+    ) -> None:
+        """Categorize each discovered file as existing/renamed/new, enqueuing
+        up to MAX_ENQUEUE_PER_SCAN new document creations."""
         enqueued = 0
-
         for abs_path, mtime in discovered.items():
             try:
                 cached = scan_cache.get(abs_path, {})
@@ -382,7 +369,14 @@ class FolderWatcherService:
                 logger.warning(f"[WATCHER] Error processing {abs_path}: {e}")
                 cast(list[str], result['errors']).append(f"{os.path.basename(abs_path)}: {e}")
 
-        # Check for deleted files
+    @staticmethod
+    def _detect_missing_files(
+        doc_svc: "DocumentService", existing_by_path: Dict[str, Dict[str, object]],
+        discovered: Dict[str, float], scan_cache: Dict[str, Dict[str, object]],
+        result: Dict[str, object],
+    ) -> None:
+        """Soft-delete files missing for MISSING_THRESHOLD consecutive scans;
+        otherwise bump their miss count."""
         for abs_path, doc in existing_by_path.items():
             if abs_path not in discovered:
                 cached = scan_cache.get(abs_path, {})
@@ -396,6 +390,42 @@ class FolderWatcherService:
                     cached['missing_count'] = missing_count
                     scan_cache[abs_path] = cached
 
+    def _do_scan(self, folder: Dict[str, object], store: "MemoryStore") -> Dict[str, object]:
+        """Execute the folder scan against the database."""
+        from services.document_service import DocumentService
+
+        folder_path = cast(str, folder['folder_path'])
+        folder_id = cast(str, folder['id'])
+        result: Dict[str, object] = {'new': 0, 'updated': 0, 'deleted': 0, 'renamed': 0, 'skipped': 0, 'errors': []}
+
+        if not os.path.isdir(folder_path):
+            msg = f"Folder no longer accessible: {folder_path}"
+            logger.warning(f"[WATCHER] {msg}")
+            self._update_scan_error(folder_id, msg)
+            return result
+
+        file_patterns = self._parse_json_list(folder.get('file_patterns', '["*"]'))
+        ignore_patterns = self._parse_json_list(folder.get('ignore_patterns', '[]'))
+        recursive = bool(folder.get('recursive', 1))
+
+        discovered: Dict[str, float] = dict(
+            self._walk_folder(folder_path, recursive, file_patterns, ignore_patterns)
+        )
+
+        doc_svc = DocumentService()
+        existing_docs = doc_svc.get_documents_by_watched_folder(folder_id)
+
+        existing_by_path, existing_by_hash = self._index_existing_docs(existing_docs)
+
+        scan_cache = self._load_scan_cache(store, folder_id)
+
+        self._categorize_discovered_files(
+            doc_svc, folder, discovered, existing_by_path, existing_by_hash, scan_cache, result
+        )
+
+        # Check for deleted files
+        self._detect_missing_files(doc_svc, existing_by_path, discovered, scan_cache, result)
+
         self._save_scan_cache(store, folder_id, scan_cache)
         self._update_scan_stats(folder_id, len(discovered))
 
@@ -404,6 +434,44 @@ class FolderWatcherService:
     # ─────────────────────────────────────────────
     # Scan helpers
     # ─────────────────────────────────────────────
+
+    @staticmethod
+    def _prune_ignored_dirs(dirnames: list[str], ignore_patterns: list[str]) -> list[str]:
+        """Subdirectories to descend into: not ignore-matched, not dotfiles."""
+        return [
+            d for d in dirnames
+            if not any(fnmatch.fnmatch(d, pat) for pat in ignore_patterns)
+            and not d.startswith('.')
+        ]
+
+    @staticmethod
+    def _accepted_file_path(
+        dirpath: str, filename: str, real_root: str,
+        file_patterns: list[str], ignore_patterns: list[str],
+    ) -> Optional[str]:
+        """The file's absolute path if it passes the ignore/pattern/extension/
+        symlink checks, else None."""
+        # Check ignore patterns
+        if any(fnmatch.fnmatch(filename, pat) for pat in ignore_patterns):
+            return None
+
+        # Check file patterns
+        if not any(fnmatch.fnmatch(filename, pat) for pat in file_patterns):
+            return None
+
+        # Check extension
+        ext = os.path.splitext(filename)[1].lower()
+        if ext and ext not in ALLOWED_EXTENSIONS:
+            return None
+
+        abs_path = os.path.join(dirpath, filename)
+
+        # Symlink safety: skip if target is outside watched folder
+        real_file = os.path.realpath(abs_path)
+        if not real_file.startswith(real_root + os.sep):
+            return None
+
+        return abs_path
 
     def _walk_folder(self, folder_path: str, recursive: bool, file_patterns: list[str], ignore_patterns: list[str]) -> Iterator[tuple[str, float]]:
         """Yield matching files from a folder tree as (abs_path, mtime) tuples."""
@@ -418,31 +486,11 @@ class FolderWatcherService:
 
         for dirpath, dirnames, filenames in walker:
             # Filter out ignored directories (in-place for os.walk pruning)
-            dirnames[:] = [
-                d for d in dirnames
-                if not any(fnmatch.fnmatch(d, pat) for pat in ignore_patterns)
-                and not d.startswith('.')
-            ]
+            dirnames[:] = self._prune_ignored_dirs(dirnames, ignore_patterns)
 
             for filename in filenames:
-                # Check ignore patterns
-                if any(fnmatch.fnmatch(filename, pat) for pat in ignore_patterns):
-                    continue
-
-                # Check file patterns
-                if not any(fnmatch.fnmatch(filename, pat) for pat in file_patterns):
-                    continue
-
-                # Check extension
-                ext = os.path.splitext(filename)[1].lower()
-                if ext and ext not in ALLOWED_EXTENSIONS:
-                    continue
-
-                abs_path = os.path.join(dirpath, filename)
-
-                # Symlink safety: skip if target is outside watched folder
-                real_file = os.path.realpath(abs_path)
-                if not real_file.startswith(real_root + os.sep):
+                abs_path = self._accepted_file_path(dirpath, filename, real_root, file_patterns, ignore_patterns)
+                if abs_path is None:
                     continue
 
                 try:

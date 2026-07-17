@@ -45,16 +45,11 @@ def estimate_travel_minutes(dist_km: float, speed_kmh: float = DEFAULT_SPEED_KMH
     return (dist_km / speed_kmh) * 60.0
 
 
-def estimate_speed_from_history(history_entries: list[object]) -> float | None:
-    """Derive average speed in km/h from timestamped location snapshots.
-
-    Each entry is a dict with nested 'location' (lat/lon) and 'saved_at'
-    (ISO timestamp string). Returns the median speed across consecutive
-    pairs in km/h, or None when fewer than two valid pairs can be derived.
-    """
+def _collect_valid_points(history_entries: list[object]) -> list[tuple[datetime, float, float]]:
+    """Filter and coerce raw history entries into valid (timestamp, lat, lon) points."""
     from services.time_utils import parse_utc
 
-    valid = []
+    valid: list[tuple[datetime, float, float]] = []
     for entry in history_entries:
         loc = cast(dict[str, object], cast(dict[str, object], entry).get("location") or {})
         lat = loc.get("lat")
@@ -71,10 +66,11 @@ def estimate_speed_from_history(history_entries: list[object]) -> float | None:
         if ts == _PARSE_UTC_SENTINEL:
             continue
         valid.append((ts, lat_f, lon_f))
+    return valid
 
-    if len(valid) < 2:
-        return None
 
+def _compute_speeds(valid: list[tuple[datetime, float, float]]) -> list[float]:
+    """Pairwise km/h speeds between consecutive (time-sorted) points, filtered to a plausible range."""
     valid.sort(key=lambda t: t[0])
     speeds = []
     for i in range(1, len(valid)):
@@ -87,6 +83,22 @@ def estimate_speed_from_history(history_entries: list[object]) -> float | None:
         spd = dist / elapsed_hours
         if _MIN_SPEED_KMH <= spd <= _MAX_SPEED_KMH:
             speeds.append(spd)
+    return speeds
+
+
+def estimate_speed_from_history(history_entries: list[object]) -> float | None:
+    """Derive average speed in km/h from timestamped location snapshots.
+
+    Each entry is a dict with nested 'location' (lat/lon) and 'saved_at'
+    (ISO timestamp string). Returns the median speed across consecutive
+    pairs in km/h, or None when fewer than two valid pairs can be derived.
+    """
+    valid = _collect_valid_points(history_entries)
+
+    if len(valid) < 2:
+        return None
+
+    speeds = _compute_speeds(valid)
 
     if not speeds:
         return None

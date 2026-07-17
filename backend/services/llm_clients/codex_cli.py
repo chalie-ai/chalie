@@ -147,6 +147,56 @@ def _flatten_prompt(system: str, messages: list[dict[str, object]]) -> str:
 # ── JSONL parser ─────────────────────────────────────────────────────────────
 
 
+def _parse_event_line(line: str) -> Optional[dict[str, object]]:
+    """Parse one JSONL line into a dict event; None if blank/malformed/non-dict."""
+    line = line.strip()
+    if not line:
+        return None
+    try:
+        obj = json.loads(line)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(obj, dict):
+        return None
+    return obj
+
+
+def _extract_agent_message_text(obj: dict[str, object]) -> str:
+    """Extract agent_message text from an item.completed event, or "" if absent."""
+    item = obj.get("item")
+    if isinstance(item, dict) and item.get("type") == "agent_message":
+        text = item.get("text", "")
+        if isinstance(text, str) and text:
+            return text
+    return ""
+
+
+def _apply_turn_usage(obj: dict[str, object], usage: dict[str, Optional[int]]) -> None:
+    """Populate usage from a turn.completed event's top-level 'usage' field."""
+    usage_data = obj.get("usage", {})
+    if isinstance(usage_data, dict):
+        usage["tokens_input"] = usage_data.get("input_tokens")
+        usage["tokens_output"] = usage_data.get("output_tokens")
+        usage["tokens_thinking"] = usage_data.get("reasoning_output_tokens")
+        usage["tokens_cache_read"] = usage_data.get("cached_input_tokens")
+
+
+def _collect_error_message(obj: dict[str, object], errors: list[str]) -> None:
+    """Append an error event's message, if present."""
+    msg = obj.get("message", "")
+    if isinstance(msg, str) and msg:
+        errors.append(msg)
+
+
+def _collect_turn_failed_error(obj: dict[str, object], errors: list[str]) -> None:
+    """Append a turn.failed event's nested error message, if present."""
+    err = obj.get("error", {})
+    if isinstance(err, dict):
+        msg = err.get("message", "")
+        if isinstance(msg, str) and msg:
+            errors.append(msg)
+
+
 def _parse_jsonl(stdout: str) -> tuple[str, dict[str, Optional[int]], list[str]]:
     """Parse codex JSONL stdout.
 
@@ -166,47 +216,25 @@ def _parse_jsonl(stdout: str) -> tuple[str, dict[str, Optional[int]], list[str]]
     errors: list[str] = []
 
     for line in stdout.splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            obj = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-
-        if not isinstance(obj, dict):
+        obj = _parse_event_line(line)
+        if obj is None:
             continue
 
         obj_type = obj.get("type")
 
         # Agent message text
         if obj_type == "item.completed":
-            item = obj.get("item")
-            if isinstance(item, dict) and item.get("type") == "agent_message":
-                text = item.get("text", "")
-                if isinstance(text, str) and text:
-                    agent_text += text
+            agent_text += _extract_agent_message_text(obj)
 
         # Turn completion → token usage (usage sits at the top level of the event)
         elif obj_type == "turn.completed":
-            usage_data = obj.get("usage", {})
-            if isinstance(usage_data, dict):
-                usage["tokens_input"] = usage_data.get("input_tokens")
-                usage["tokens_output"] = usage_data.get("output_tokens")
-                usage["tokens_thinking"] = usage_data.get("reasoning_output_tokens")
-                usage["tokens_cache_read"] = usage_data.get("cached_input_tokens")
+            _apply_turn_usage(obj, usage)
 
         # Upstream errors
         elif obj_type == "error":
-            msg = obj.get("message", "")
-            if isinstance(msg, str) and msg:
-                errors.append(msg)
+            _collect_error_message(obj, errors)
         elif obj_type == "turn.failed":
-            err = obj.get("error", {})
-            if isinstance(err, dict):
-                msg = err.get("message", "")
-                if isinstance(msg, str) and msg:
-                    errors.append(msg)
+            _collect_turn_failed_error(obj, errors)
 
     return agent_text, usage, errors
 
@@ -221,18 +249,8 @@ class CodexCliClient(ProviderClient):
         self._config = config
         self.model: Optional[str] = cast(Optional[str], config.get('model'))
 
-    def send(self, dto: ProviderApiRequest) -> ProviderApiResponse:
-        """Transform DTO → ``codex exec`` subprocess → ProviderApiResponse."""
-        start = time.time()
-
-        # (a) Flatten system + messages into a single prompt.
-        prompt = _flatten_prompt(dto.system, dto.messages)
-
-        # (b) Create an isolated working directory and output file.
-        tmpdir = tempfile.mkdtemp(prefix="chalie-codex-")
-        outfile = Path(tmpdir) / "out.txt"
-
-        # (c) Build argv — NO shell=True.
+    def _build_argv(self, dto: ProviderApiRequest, tmpdir: str, outfile: Path) -> list[str]:
+        """Build the `codex exec` argv for this request — NO shell=True."""
         codex_bin = os.environ.get("CODEX_BIN", "codex")
         argv: list[str] = [
             codex_bin, "exec", "--json", "--skip-git-repo-check",
@@ -246,12 +264,10 @@ class CodexCliClient(ProviderClient):
         if effort:
             argv += ["-c", f"model_reasoning_effort={effort}"]
         argv.append("-")
+        return argv
 
-        # (d) Spawn subprocess with sanitized env.
-        env = os.environ.copy()
-        env.pop("OPENAI_API_KEY", None)
-        env.pop("OPENAI_BASE_URL", None)
-
+    def _run_codex(self, argv: list[str], env: dict[str, str], prompt: str) -> tuple[str, str, int]:
+        """Spawn the codex exec subprocess and return (stdout, stderr, returncode)."""
         proc: Optional[subprocess.Popen[str]] = None
         try:
             proc = subprocess.Popen(
@@ -277,12 +293,45 @@ class CodexCliClient(ProviderClient):
                 f"codex exec exceeded {PROVIDER_CALL_TIMEOUT_S}s timeout",
                 provider='codex_cli',
             ) from exc
+        return stdout, stderr, cast(int, proc.returncode)
+
+    @staticmethod
+    def _read_output_file(outfile: Path) -> str:
+        """Read the -o output file's trimmed contents, or "" if absent/unreadable/empty."""
+        agent_text = ""
+        try:
+            if outfile.is_file() and outfile.stat().st_size > 0:
+                agent_text = outfile.read_text().strip()
+        except OSError:
+            pass
+        return agent_text
+
+    def send(self, dto: ProviderApiRequest) -> ProviderApiResponse:
+        """Transform DTO → ``codex exec`` subprocess → ProviderApiResponse."""
+        start = time.time()
+
+        # (a) Flatten system + messages into a single prompt.
+        prompt = _flatten_prompt(dto.system, dto.messages)
+
+        # (b) Create an isolated working directory and output file.
+        tmpdir = tempfile.mkdtemp(prefix="chalie-codex-")
+        outfile = Path(tmpdir) / "out.txt"
+
+        # (c) Build argv — NO shell=True.
+        argv = self._build_argv(dto, tmpdir, outfile)
+
+        # (d) Spawn subprocess with sanitized env.
+        env = os.environ.copy()
+        env.pop("OPENAI_API_KEY", None)
+        env.pop("OPENAI_BASE_URL", None)
+
+        stdout, stderr, returncode = self._run_codex(argv, env, prompt)
 
         latency_ms = int((time.time() - start) * 1000)
 
         # (g) Non-zero return code.
-        if proc is not None and proc.returncode != 0:
-            err_text = (stderr or "").strip() or (stdout or "").strip() or f"codex exited {proc.returncode}"
+        if returncode != 0:
+            err_text = (stderr or "").strip() or (stdout or "").strip() or f"codex exited {returncode}"
             raise ProviderResponseError(
                 err_text,
                 response_code=0,
@@ -293,14 +342,7 @@ class CodexCliClient(ProviderClient):
         jsonl_text, usage, errors = _parse_jsonl(stdout or "")
 
         # (h) Prefer the -o output file for the agent text; fall back to JSONL.
-        agent_text = ""
-        try:
-            if outfile.is_file() and outfile.stat().st_size > 0:
-                agent_text = outfile.read_text().strip()
-        except OSError:
-            pass
-        if not agent_text:
-            agent_text = jsonl_text
+        agent_text = self._read_output_file(outfile) or jsonl_text
 
         # (i) Surface an upstream error only when no assistant text was produced.
         if errors and not agent_text:

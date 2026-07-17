@@ -417,6 +417,23 @@ class MemoryStore:
     def pipeline(self, _transaction: bool = True) -> 'PipelineProxy':
         return PipelineProxy(self)
 
+    @staticmethod
+    def _export_matching_keyspace(
+        keyspace: _KEYSPACE_DICT,
+        lock: threading.RLock,
+        kind: str,
+        now: float,
+        matches: Callable[[str], bool],
+        value_fn: Callable[[object], object],
+    ) -> Dict[str, Dict[str, object]]:
+        """Snapshot one keyspace's live, pattern-matching keys into export entries."""
+        result: Dict[str, Dict[str, object]] = {}
+        with lock:
+            for k, (v, expiry) in keyspace.items():
+                if (expiry is None or now <= expiry) and matches(k):
+                    result[k] = {"type": kind, "value": value_fn(v)}
+        return result
+
     def export_matching(self, patterns: List[str]) -> Dict[str, Dict[str, object]]:
         """
         Instead of keys() × type() × get() per key (O(n×m×5) lock acquisitions),
@@ -429,28 +446,25 @@ class MemoryStore:
         def _matches(k: str) -> bool:
             return any(rx.fullmatch(k) for rx in regexes)
 
-        result: Dict[str, Dict[str, object]] = {}
         now = time.time()
+        result: Dict[str, Dict[str, object]] = {}
 
-        with self._str_lock:
-            for k, (v, expiry) in cast(_KEYSPACE_DICT, self._strings).items():
-                if (expiry is None or now <= expiry) and _matches(k):
-                    result[k] = {"type": "string", "value": v}
-
-        with self._list_lock:
-            for k, (v, expiry) in cast(_KEYSPACE_DICT, self._lists).items():
-                if (expiry is None or now <= expiry) and _matches(k):
-                    result[k] = {"type": "list", "value": list(cast("List[str]", v))}
-
-        with self._zset_lock:
-            for k, (v, expiry) in cast(_KEYSPACE_DICT, self._sorted_sets).items():
-                if (expiry is None or now <= expiry) and _matches(k):
-                    result[k] = {"type": "zset", "value": [m for m, _ in cast("List[Tuple[float, str]]", v)]}
-
-        with self._set_lock:
-            for k, (v, expiry) in cast(_KEYSPACE_DICT, self._sets).items():
-                if (expiry is None or now <= expiry) and _matches(k):
-                    result[k] = {"type": "set", "value": list(cast("Set[str]", v))}
+        result.update(self._export_matching_keyspace(
+            cast(_KEYSPACE_DICT, self._strings), self._str_lock, "string", now, _matches,
+            lambda v: v,
+        ))
+        result.update(self._export_matching_keyspace(
+            cast(_KEYSPACE_DICT, self._lists), self._list_lock, "list", now, _matches,
+            lambda v: list(cast("List[str]", v)),
+        ))
+        result.update(self._export_matching_keyspace(
+            cast(_KEYSPACE_DICT, self._sorted_sets), self._zset_lock, "zset", now, _matches,
+            lambda v: [m for m, _ in cast("List[Tuple[float, str]]", v)],
+        ))
+        result.update(self._export_matching_keyspace(
+            cast(_KEYSPACE_DICT, self._sets), self._set_lock, "set", now, _matches,
+            lambda v: list(cast("Set[str]", v)),
+        ))
 
         return result
 

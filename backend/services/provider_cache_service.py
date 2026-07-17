@@ -21,18 +21,57 @@ class ProviderCacheService:
 
 
     @staticmethod
-    def get_providers() -> dict[str, dict[str, object]]:
-
-        # Check if MemoryStore version has changed (cross-process invalidation)
-        current_version: int
+    def _get_current_cache_version() -> int:
+        """MemoryStore-backed cache-version lookup, falling back to the local
+        version when the store is unreachable."""
         try:
             from services.memory_client import MemoryClientService
             store = MemoryClientService.create_connection()
             current_version = cast(int, store.get("providers:cache_version"))
-            current_version = int(current_version) if current_version else 0
+            return int(current_version) if current_version else 0
         except Exception as e:
             logger.warning(f"[ProviderCache] MemoryStore version check failed: {e}, using local cache")
-            current_version = ProviderCacheService._version or 0
+            return ProviderCacheService._version or 0
+
+    @staticmethod
+    def _build_provider_entry(p: dict[str, object]) -> dict[str, object]:
+        """One DB provider row → its cache entry, carrying the optional fields
+        only when present. Includes 'name' in the entry so downstream consumers
+        (ProviderCacheService.get_job_assignment, ProviderService._resolve)
+        can read the provider name from the resolved config dict directly.
+        Without this, the resolved config has no way to identify
+        which provider row backs it, breaking DB lookups keyed by
+        provider name (e.g. compact_at threshold queries)."""
+        entry: dict[str, object] = {
+            'name': p['name'],
+            'platform': p['platform'],
+            'model': p['model'],
+        }
+        if p.get('host'):
+            entry['host'] = p['host']
+        if p.get('api_key'):
+            entry['api_key'] = p['api_key']
+        if p.get('dimensions'):
+            entry['dimensions'] = p['dimensions']
+        if p.get('timeout'):
+            entry['timeout'] = p['timeout']
+        return entry
+
+    @staticmethod
+    def _is_vault_locked() -> bool:
+        """api_keys decrypt to None when the vault is locked — checked before
+        caching so a vault-locked result never persists null api_keys."""
+        try:
+            from services.vault_service import get_vault_service
+            return not get_vault_service().is_unlocked()
+        except Exception:
+            return False
+
+    @staticmethod
+    def get_providers() -> dict[str, dict[str, object]]:
+
+        # Check if MemoryStore version has changed (cross-process invalidation)
+        current_version = ProviderCacheService._get_current_cache_version()
 
         # If version changed, invalidate local cache
         if current_version != ProviderCacheService._version:
@@ -58,37 +97,12 @@ class ProviderCacheService:
             # Convert to providers dict keyed by name
             providers_dict: dict[str, dict[str, object]] = {}
             for p in db_providers:
-                # Include 'name' in the entry so downstream consumers
-                # (ProviderCacheService.get_job_assignment, ProviderService._resolve)
-                # can read the provider name from the resolved
-                # config dict directly.
-                # Without this, the resolved config has no way to identify
-                # which provider row backs it, breaking DB lookups keyed by
-                # provider name (e.g. compact_at threshold queries).
-                entry: dict[str, object] = {
-                    'name': p['name'],
-                    'platform': p['platform'],
-                    'model': p['model'],
-                }
-                if p.get('host'):
-                    entry['host'] = p['host']
-                if p.get('api_key'):
-                    entry['api_key'] = p['api_key']
-                if p.get('dimensions'):
-                    entry['dimensions'] = p['dimensions']
-                if p.get('timeout'):
-                    entry['timeout'] = p['timeout']
-                providers_dict[cast(str, p['name'])] = entry
+                providers_dict[cast(str, p['name'])] = ProviderCacheService._build_provider_entry(p)
 
             # Check vault state — api_keys decrypt to None when vault is locked.
             # Caching a vault-locked result would persist null api_keys until
             # the next provider DB change, causing "requires api_key" errors.
-            vault_locked = False
-            try:
-                from services.vault_service import get_vault_service
-                vault_locked = not get_vault_service().is_unlocked()
-            except Exception:
-                pass
+            vault_locked = ProviderCacheService._is_vault_locked()
 
             # Store in local cache — but only if we got results AND the vault
             # is unlocked (so api_keys were actually decrypted).

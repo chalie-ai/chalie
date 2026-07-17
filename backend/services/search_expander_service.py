@@ -5,16 +5,20 @@ import json
 import logging
 import sqlite3
 import threading
-from typing import Optional, cast
+from typing import TYPE_CHECKING, Optional, cast
 
 from contracts.search_config import (
     SearchConfig,
+    VecLane,
     config_for_table,
     is_searchable,
     searchable_tables,
 )
 from services.database import Database
 from services.embedding_utils import pack_embedding
+
+if TYPE_CHECKING:
+    from services.embedding_service import EmbeddingService
 
 logger = logging.getLogger(__name__)
 
@@ -271,6 +275,29 @@ class SearchExpanderService:
             except Exception as e:
                 logger.warning("[SES] Failed to write variant '%s': %s", variant_text[:60], e)
 
+    @staticmethod
+    def _lane_vec_exists(conn: sqlite3.Connection, lane: VecLane, rowid: int) -> bool:
+        """True when ``lane``'s vec table already has a row for ``rowid``."""
+        return bool(conn.execute(
+            f"SELECT 1 FROM {lane.table} WHERE rowid = ?", (rowid,)
+        ).fetchone())
+
+    @staticmethod
+    def _write_lane_embedding(
+        conn: sqlite3.Connection, lane: VecLane, rowid: int,
+        emb_svc: "EmbeddingService", text: str,
+    ) -> None:
+        """Generate and persist one lane's embedding for ``rowid``, if it packs to a blob."""
+        emb = emb_svc.generate_embedding(text)
+        if emb:
+            blob = pack_embedding(emb)
+            if blob:
+                conn.execute(
+                    f"INSERT OR REPLACE INTO {lane.table} (rowid, embedding) "
+                    "VALUES (?, ?)",
+                    (rowid, blob)
+                )
+
     def _backfill_vec(
         self, conn: sqlite3.Connection, rowid: int, vals: dict[str, object],
         config: SearchConfig,
@@ -288,10 +315,7 @@ class SearchExpanderService:
         try:
             emb_svc = None
             for lane in config.vec_lanes:
-                exists = conn.execute(
-                    f"SELECT 1 FROM {lane.table} WHERE rowid = ?", (rowid,)
-                ).fetchone()
-                if exists:
+                if self._lane_vec_exists(conn, lane, rowid):
                     continue
                 text = str(vals.get(lane.source) or "") or fallback
                 if not text:
@@ -299,15 +323,7 @@ class SearchExpanderService:
                 if emb_svc is None:
                     from services.embedding_service import get_embedding_service
                     emb_svc = get_embedding_service()
-                emb = emb_svc.generate_embedding(text)
-                if emb:
-                    blob = pack_embedding(emb)
-                    if blob:
-                        conn.execute(
-                            f"INSERT OR REPLACE INTO {lane.table} (rowid, embedding) "
-                            "VALUES (?, ?)",
-                            (rowid, blob)
-                        )
+                self._write_lane_embedding(conn, lane, rowid, emb_svc, text)
         except Exception as e:
             logger.warning("[SES] backfill_key_value_vec failed for rowid=%s: %s", rowid, e)
 

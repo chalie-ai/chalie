@@ -141,6 +141,16 @@ class Doc2QueryService:
             logger.warning(f"{LOG_PREFIX} Generation failed: %s", e)
             return []
 
+    @staticmethod
+    def _collect_present_outputs(output_names: list[str], outputs: list[np.ndarray]) -> dict[str, np.ndarray]:
+        """Map ONNX 'present.*' output names/values to their 'past_key_values.*' cache keys."""
+        present: dict[str, np.ndarray] = {}
+        for i, name in enumerate(output_names):
+            if name.startswith(_ONNX_PRESENT_PREFIX):
+                past_name = name.replace(_ONNX_PRESENT_PREFIX, "past_key_values.", 1)
+                present[past_name] = outputs[i]
+        return present
+
     def _generate_one(self, encoder_hidden: np.ndarray, attention_mask: np.ndarray, max_length: int = 64) -> list[int]:
         import numpy as np
         from onnxruntime import InferenceSession
@@ -159,11 +169,7 @@ class Doc2QueryService:
                 outputs = cast(InferenceSession, self._decoder).run(None, feeds)
                 logits = outputs[0]
                 output_names = [o.name for o in cast(InferenceSession, self._decoder).get_outputs()]
-                past_kv = {}
-                for i, name in enumerate(output_names):
-                    if name.startswith(_ONNX_PRESENT_PREFIX):
-                        past_name = name.replace(_ONNX_PRESENT_PREFIX, "past_key_values.", 1)
-                        past_kv[past_name] = outputs[i]
+                past_kv = self._collect_present_outputs(output_names, outputs)
             else:
                 feeds = {
                     "input_ids": decoder_ids,
@@ -173,10 +179,9 @@ class Doc2QueryService:
                 outputs = cast(InferenceSession, self._decoder_past).run(None, feeds)
                 logits = outputs[0]
                 output_names = [o.name for o in cast(InferenceSession, self._decoder_past).get_outputs()]
-                for i, name in enumerate(output_names):
-                    if name.startswith(_ONNX_PRESENT_PREFIX):
-                        past_name = name.replace(_ONNX_PRESENT_PREFIX, "past_key_values.", 1)
-                        cast("dict[str, np.ndarray]", past_kv)[past_name] = outputs[i]
+                cast("dict[str, np.ndarray]", past_kv).update(
+                    self._collect_present_outputs(output_names, outputs)
+                )
 
             next_token = self._sample_top_p(logits[0, -1, :], top_p=0.95)
 

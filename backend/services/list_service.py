@@ -232,6 +232,33 @@ class ListService:
 
     # Item operations (batch)
 
+    @staticmethod
+    def _add_one_item(
+        list_id: str, item_content: str, dedupe: bool,
+        existing_normalized: set[str], max_pos: int,
+    ) -> tuple[int, bool]:
+        """Add one item (revive if soft-removed, else create). Mutates
+        existing_normalized in place; returns the updated max_pos and whether
+        the item was added."""
+        if not item_content or not item_content.strip():
+            return max_pos, False
+
+        normalized = item_content.strip().lower()
+
+        if dedupe and normalized in existing_normalized:
+            return max_pos, False
+
+        removed_id = ListItem.find_removed_by_content(list_id, normalized)
+        if removed_id is not None:
+            max_pos += 1
+            ListItem.revive(removed_id, max_pos)
+        else:
+            max_pos += 1
+            ListItem(list_id=list_id, content=item_content.strip(), position=max_pos).save()
+
+        existing_normalized.add(normalized)
+        return max_pos, True
+
     def add_items(
         self,
         list_id: str,
@@ -257,24 +284,11 @@ class ListService:
 
                     added = 0
                     for item_content in _items:
-                        if not item_content or not item_content.strip():
-                            continue
-
-                        normalized = item_content.strip().lower()
-
-                        if _dedupe and normalized in existing_normalized:
-                            continue
-
-                        removed_id = ListItem.find_removed_by_content(_id, normalized)
-                        if removed_id is not None:
-                            max_pos += 1
-                            ListItem.revive(removed_id, max_pos)
-                        else:
-                            max_pos += 1
-                            ListItem(list_id=_id, content=item_content.strip(), position=max_pos).save()
-
-                        existing_normalized.add(normalized)
-                        added += 1
+                        max_pos, was_added = ListService._add_one_item(
+                            _id, item_content, _dedupe, existing_normalized, max_pos
+                        )
+                        if was_added:
+                            added += 1
 
                     return added
 

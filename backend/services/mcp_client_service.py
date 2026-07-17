@@ -830,6 +830,33 @@ class McpClientService:
         return server, remote_tool
 
     @staticmethod
+    def _join_content_blocks(content: list[object]) -> str:
+        """Join a list of MCP content blocks into a single newline-joined text string."""
+        parts = []
+        for block in content:
+            if hasattr(block, "text"):
+                parts.append(block.text)
+            elif isinstance(block, dict):
+                parts.append(block.get("text", json.dumps(block)))
+            else:
+                parts.append(str(block))
+        return "\n".join(parts)
+
+    @staticmethod
+    def _maybe_parse_json(text: str) -> str | dict[str, object] | list[object]:
+        """Parse ``text`` as a JSON object/array when it looks like one; otherwise
+        return it verbatim as prose."""
+        stripped = text.strip()
+        if stripped[:1] in ("{", "["):
+            try:
+                parsed = json.loads(stripped)
+            except ValueError:
+                return text
+            if isinstance(parsed, (dict, list)):
+                return parsed
+        return text
+
+    @staticmethod
     def _shape_tool_result(result: object) -> str | dict[str, object] | list[object]:
         """Shape an MCP ``CallToolResult`` into a ``str`` (prose) or ``dict``/``list``
         (structured) body for the ToolResult contract.
@@ -852,24 +879,8 @@ class McpClientService:
         if isinstance(content, str):
             text = content
         elif isinstance(content, list):
-            parts = []
-            for block in content:
-                if hasattr(block, "text"):
-                    parts.append(block.text)
-                elif isinstance(block, dict):
-                    parts.append(block.get("text", json.dumps(block)))
-                else:
-                    parts.append(str(block))
-            text = "\n".join(parts)
+            text = McpClientService._join_content_blocks(content)
         else:
             return str(content)
 
-        stripped = text.strip()
-        if stripped[:1] in ("{", "["):
-            try:
-                parsed = json.loads(stripped)
-            except ValueError:
-                return text
-            if isinstance(parsed, (dict, list)):
-                return parsed
-        return text
+        return McpClientService._maybe_parse_json(text)

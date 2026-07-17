@@ -87,22 +87,20 @@ class NewsService:
 
     # ── Feed fetching ─────────────────────────────────────────
 
-    def fetch_feeds(self, source_ids: list[str], timeout_per_feed: float = PER_FEED_TIMEOUT,
-                    total_budget: float = TOTAL_BUDGET) -> list[NewsArticle]:
-        if not source_ids:
-            return []
-
+    @staticmethod
+    def _resolve_sources(source_ids: list[str]) -> list[news_sources.Source]:
         sources: list[news_sources.Source] = []
         for sid in source_ids:
             src = news_sources.get_source_by_id(sid)
             if src:
                 sources.append(src)
+        return sources
 
-        if not sources:
-            return []
-
-        # Check cache first, collect misses
-        store = self._get_store()
+    @staticmethod
+    def _partition_cached(
+        sources: list[news_sources.Source], store: MemoryStore
+    ) -> tuple[list[NewsArticle], list[news_sources.Source]]:
+        """Split sources into cache-hit articles and the sources still needing a fetch."""
         all_articles: list[NewsArticle] = []
         to_fetch: list[news_sources.Source] = []
 
@@ -118,11 +116,15 @@ class NewsService:
                     pass
             to_fetch.append(src)
 
-        if not to_fetch:
-            return all_articles
+        return all_articles, to_fetch
 
-        # Parallel fetch with budget
+    def _fetch_missing(
+        self, to_fetch: list[news_sources.Source], store: MemoryStore,
+        timeout_per_feed: float, total_budget: float,
+    ) -> list[NewsArticle]:
+        """Parallel-fetch the given sources within the time budget, caching each result."""
         deadline = time.monotonic() + total_budget
+        fetched: list[NewsArticle] = []
 
         def _fetch_one(src: news_sources.Source) -> tuple[news_sources.Source, list[NewsArticle]]:
             remaining = max(0.5, deadline - time.monotonic())
@@ -141,9 +143,31 @@ class NewsService:
                             FEED_CACHE_TTL,
                             json.dumps([a.to_dict() for a in articles]),
                         )
-                        all_articles.extend(articles)
+                        fetched.extend(articles)
                 except Exception as e:
                     logger.debug(f"{LOG_PREFIX} Feed future failed: {e}")
+
+        return fetched
+
+    def fetch_feeds(self, source_ids: list[str], timeout_per_feed: float = PER_FEED_TIMEOUT,
+                    total_budget: float = TOTAL_BUDGET) -> list[NewsArticle]:
+        if not source_ids:
+            return []
+
+        sources = self._resolve_sources(source_ids)
+
+        if not sources:
+            return []
+
+        # Check cache first, collect misses
+        store = self._get_store()
+        all_articles, to_fetch = self._partition_cached(sources, store)
+
+        if not to_fetch:
+            return all_articles
+
+        # Parallel fetch with budget
+        all_articles.extend(self._fetch_missing(to_fetch, store, timeout_per_feed, total_budget))
 
         return all_articles
 
@@ -292,19 +316,19 @@ def _feedparser_date_to_utc_str(parsed: object) -> str:
     return datetime.fromtimestamp(ts, tz=timezone.utc).isoformat()
 
 
-def _feedparser_image(entry: dict[str, object], feed_image_url: str = "") -> str:
-    """Extract a thumbnail URL from a feedparser entry (RSS or Atom unified).
-
-    Priority: media:thumbnail → media:content (image/* or medium=image)
-    → enclosures (image/*, feedparser key is 'href' not 'url')
-    → feed-level channel image fallback.
-    """
+def _thumbnail_url(entry: dict[str, object]) -> Optional[str]:
+    """media:thumbnail strategy. Returns the (possibly empty) stripped URL when
+    a thumbnail entry is present, or None to fall through to the next strategy."""
     thumbs = cast(list[dict[str, object]], entry.get("media_thumbnail") or [])
     if thumbs:
         url = cast(str, thumbs[0].get("url", ""))
         if url:
             return url.strip()
+    return None
 
+
+def _media_content_image_url(entry: dict[str, object]) -> Optional[str]:
+    """media:content (image/* or medium=image) strategy."""
     for media in cast(list[dict[str, object]], entry.get("media_content") or []):
         t = cast(str, (media.get("type") or "")).lower()
         m = cast(str, (media.get("medium") or "")).lower()
@@ -312,13 +336,38 @@ def _feedparser_image(entry: dict[str, object], feed_image_url: str = "") -> str
             url = cast(str, media.get("url", ""))
             if url:
                 return url.strip()
+    return None
 
+
+def _enclosure_image_url(entry: dict[str, object]) -> Optional[str]:
+    """enclosures (image/*, feedparser key is 'href' not 'url') strategy."""
     for enc in cast(list[dict[str, object]], entry.get("enclosures") or []):
         t = cast(str, (enc.get("type") or "")).lower()
         if t.startswith("image/"):
             href = cast(str, enc.get("href", ""))
             if href:
                 return href.strip()
+    return None
+
+
+def _feedparser_image(entry: dict[str, object], feed_image_url: str = "") -> str:
+    """Extract a thumbnail URL from a feedparser entry (RSS or Atom unified).
+
+    Priority: media:thumbnail → media:content (image/* or medium=image)
+    → enclosures (image/*, feedparser key is 'href' not 'url')
+    → feed-level channel image fallback.
+    """
+    url = _thumbnail_url(entry)
+    if url is not None:
+        return url
+
+    url = _media_content_image_url(entry)
+    if url is not None:
+        return url
+
+    url = _enclosure_image_url(entry)
+    if url is not None:
+        return url
 
     return feed_image_url.strip() if feed_image_url else ""
 

@@ -259,35 +259,33 @@ class GeminiClient(ProviderClient):
         finish_reason = str(candidate.finish_reason) if candidate and candidate.finish_reason else None
         return '\n'.join(text_parts), tool_calls or None, finish_reason
 
-    def _classify_and_raise(self, exc: Exception, gen_cfg: "_GenCfg") -> tuple[bool, Optional[int]]:
-        """Map a google-genai exception to a provider error, or signal thinking-fallback.
+    @staticmethod
+    def _raise_for_rate_limit(exc: Exception, exc_code: Optional[int], exc_status: str) -> None:
+        """HTTP 429 — rate limit.
 
-        Returns ``(True, budget)`` when the caller should perform the thinking-retry:
-        ``budget`` is the fallback budget to retry with (``None`` means strip
-        thinking_config). Raises a provider error for every other classified error;
-        unclassified errors return ``(False, None)`` so the caller re-raises.
+        SDK raises ClientError with code=429, status='RESOURCE_EXHAUSTED'.
+        Kept '429' in str(exc) as belt-and-suspenders for SDK version drift.
         """
-        exc_code = getattr(exc, 'code', None)
-        exc_status = getattr(exc, 'status', None) or ''
-        exc_str = str(exc).lower()
-
-        # HTTP 429 — rate limit.
-        # SDK raises ClientError with code=429, status='RESOURCE_EXHAUSTED'.
-        # Kept '429' in str(exc) as belt-and-suspenders for SDK version drift.
         if exc_code == 429 or exc_status == 'RESOURCE_EXHAUSTED' or '429' in str(exc):
             raise RateLimitError(str(exc), provider='gemini') from exc
 
-        # HTTP 5xx — transient server error.
+    @staticmethod
+    def _raise_for_server_error(exc: Exception, exc_code: Optional[int]) -> None:
+        """HTTP 5xx — transient server error."""
         if exc_code is not None and exc_code >= 500:
             raise ProviderResponseError(
                 f"Gemini server error: {exc}", response_code=exc_code, provider='gemini',
             ) from exc
 
-        # HTTP 400 / INVALID_ARGUMENT — may be a token-limit rejection.
-        # Primary: structured code + status confirms this is a 400 INVALID_ARGUMENT.
-        # Secondary: message string narrows to size-related errors; a bare
-        # code==400 check would over-trigger (covers wrong params, regions, etc.).
-        # If the string-match misses, log a WARNING so the set can be extended.
+    @staticmethod
+    def _raise_for_token_limit(exc: Exception, exc_code: Optional[int], exc_status: str) -> None:
+        """HTTP 400 / INVALID_ARGUMENT — may be a token-limit rejection.
+
+        Primary: structured code + status confirms this is a 400 INVALID_ARGUMENT.
+        Secondary: message string narrows to size-related errors; a bare
+        code==400 check would over-trigger (covers wrong params, regions, etc.).
+        If the string-match misses, log a WARNING so the set can be extended.
+        """
         if exc_code == 400 and exc_status == 'INVALID_ARGUMENT':
             exc_msg = (getattr(exc, 'message', None) or '').lower()
             if any(s in exc_msg for s in _TOKEN_LIMIT_STRINGS):
@@ -305,7 +303,8 @@ class GeminiClient(ProviderClient):
                 f"Gemini 400 INVALID_ARGUMENT: {exc}", response_code=400, provider='gemini',
             ) from exc
 
-        # Thinking fallback: ladder based on the budget that was rejected.
+    def _thinking_fallback(self, exc_str: str, gen_cfg: "_GenCfg") -> tuple[bool, Optional[int]]:
+        """Thinking fallback: ladder based on the budget that was rejected."""
         if 'thinking_config' in gen_cfg and (
             'thinking' in exc_str or 'unsupported' in exc_str
         ):
@@ -320,6 +319,24 @@ class GeminiClient(ProviderClient):
                 return True, GEMINI_NONE_FALLBACK_BUDGET
             return True, None
         return False, None
+
+    def _classify_and_raise(self, exc: Exception, gen_cfg: "_GenCfg") -> tuple[bool, Optional[int]]:
+        """Map a google-genai exception to a provider error, or signal thinking-fallback.
+
+        Returns ``(True, budget)`` when the caller should perform the thinking-retry:
+        ``budget`` is the fallback budget to retry with (``None`` means strip
+        thinking_config). Raises a provider error for every other classified error;
+        unclassified errors return ``(False, None)`` so the caller re-raises.
+        """
+        exc_code = getattr(exc, 'code', None)
+        exc_status = getattr(exc, 'status', None) or ''
+        exc_str = str(exc).lower()
+
+        self._raise_for_rate_limit(exc, exc_code, exc_status)
+        self._raise_for_server_error(exc, exc_code)
+        self._raise_for_token_limit(exc, exc_code, exc_status)
+
+        return self._thinking_fallback(exc_str, gen_cfg)
 
     def _generate_with_fallback(self, client: "_GenaiClient", genai: "_Genai", contents: object, gen_cfg: "_GenCfg") -> object:
         """Execute generate_content, handling errors and thinking fallback.

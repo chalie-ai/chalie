@@ -172,10 +172,58 @@ class OpenAIClient(ProviderClient):
             calls.append({'id': tc.id, 'name': tc.function.name, 'input': parsed})
         return calls
 
+    def _retry_thinking_rejection(self, client: "_openai_mod.OpenAI", create_kwargs: dict[str, object]) -> "_openai_mod.types.chat.ChatCompletion":
+        """Ladder: only when we sent reasoning_effort='none' do we try
+        fallback steps; otherwise strip and retry once."""
+        from services.llm_service import _is_thinking_rejection  # noqa: PLC0415
+        if create_kwargs.get('reasoning_effort') == 'none':
+            # Step 1: retry with minimal effort, no extra_body
+            logger.info(
+                "[THINKING] native flag rejected by provider=openai model=%s — retried with minimal",
+                self.model,
+            )
+            fallback1 = {k: v for k, v in create_kwargs.items() if k not in ('reasoning_effort', 'extra_body')}
+            fallback1['reasoning_effort'] = OPENAI_NONE_FALLBACK_EFFORT
+            try:
+                return cast(_CHAT_COMPLETIONS_CREATE, client.chat.completions.create)(**fallback1)
+            except Exception as retry_exc:
+                if _is_thinking_rejection(retry_exc, fallback1):
+                    # Step 2: retry bare — no reasoning_effort, no extra_body
+                    logger.info(
+                        "[THINKING] native flag rejected by provider=openai model=%s — retried without",
+                        self.model,
+                    )
+                    fallback2 = {k: v for k, v in create_kwargs.items() if k not in ('reasoning_effort', 'extra_body')}
+                    return cast(_CHAT_COMPLETIONS_CREATE, client.chat.completions.create)(**fallback2)
+                raise
+        # Single bare-strip retry for other reasoning_effort values
+        logger.info(
+            "[THINKING] native flag rejected by provider=openai model=%s — retried without",
+            self.model,
+        )
+        fallback = {k: v for k, v in create_kwargs.items() if k not in ('reasoning_effort', 'extra_body')}
+        return cast(_CHAT_COMPLETIONS_CREATE, client.chat.completions.create)(**fallback)
+
+    def _handle_bad_request(self, client: "_openai_mod.OpenAI", create_kwargs: dict[str, object], exc: Exception) -> "_openai_mod.types.chat.ChatCompletion":
+        """Map a BadRequestError/APIError: context-length rejection, thinking-retry ladder, or generic error."""
+        from services.llm_service import _is_thinking_rejection  # noqa: PLC0415
+        # Confirmed: OpenAI sends HTTP 400 with error.code == 'context_length_exceeded'
+        err_body = getattr(exc, 'body', None) or {}
+        err_code = (err_body.get('error') or {}).get('code', '') if isinstance(err_body, dict) else ''
+        if err_code == 'context_length_exceeded' or 'context_length_exceeded' in str(exc).lower():
+            status = getattr(exc, 'status_code', 400)
+            raise ResponseOverLimitError(
+                f"OpenAI rejected payload (context_length_exceeded): {exc}",
+                response_code=status, provider='openai',
+            ) from exc
+        if _is_thinking_rejection(exc, create_kwargs):
+            return self._retry_thinking_rejection(client, create_kwargs)
+        status = getattr(exc, 'status_code', 0)
+        raise ProviderResponseError(str(exc), response_code=status, provider='openai') from exc
+
     def _invoke_create(self, client: "_openai_mod.OpenAI", create_kwargs: dict[str, object]) -> "_openai_mod.types.chat.ChatCompletion":
         """Call chat.completions.create, mapping SDK errors with a thinking-retry fallback."""
         import openai as openai_mod  # noqa: PLC0415
-        from services.llm_service import _is_thinking_rejection  # noqa: PLC0415
         try:
             return cast(_CHAT_COMPLETIONS_CREATE, client.chat.completions.create)(**create_kwargs)
         except openai_mod.RateLimitError as exc:
@@ -183,48 +231,7 @@ class OpenAIClient(ProviderClient):
         except openai_mod.APITimeoutError as exc:
             raise ProviderTimeoutError(str(exc), provider='openai') from exc
         except (openai_mod.BadRequestError, openai_mod.APIError) as exc:
-            # Confirmed: OpenAI sends HTTP 400 with error.code == 'context_length_exceeded'
-            err_body = getattr(exc, 'body', None) or {}
-            err_code = (err_body.get('error') or {}).get('code', '') if isinstance(err_body, dict) else ''
-            if err_code == 'context_length_exceeded' or 'context_length_exceeded' in str(exc).lower():
-                status = getattr(exc, 'status_code', 400)
-                raise ResponseOverLimitError(
-                    f"OpenAI rejected payload (context_length_exceeded): {exc}",
-                    response_code=status, provider='openai',
-                ) from exc
-            if _is_thinking_rejection(exc, create_kwargs):
-                # Ladder: only when we sent reasoning_effort='none' do we try
-                # fallback steps; otherwise strip and retry once.
-                if create_kwargs.get('reasoning_effort') == 'none':
-                    # Step 1: retry with minimal effort, no extra_body
-                    logger.info(
-                        "[THINKING] native flag rejected by provider=openai model=%s — retried with minimal",
-                        self.model,
-                    )
-                    fallback1 = {k: v for k, v in create_kwargs.items() if k not in ('reasoning_effort', 'extra_body')}
-                    fallback1['reasoning_effort'] = OPENAI_NONE_FALLBACK_EFFORT
-                    try:
-                        return cast(_CHAT_COMPLETIONS_CREATE, client.chat.completions.create)(**fallback1)
-                    except Exception as retry_exc:
-                        if _is_thinking_rejection(retry_exc, fallback1):
-                            # Step 2: retry bare — no reasoning_effort, no extra_body
-                            logger.info(
-                                "[THINKING] native flag rejected by provider=openai model=%s — retried without",
-                                self.model,
-                            )
-                            fallback2 = {k: v for k, v in create_kwargs.items() if k not in ('reasoning_effort', 'extra_body')}
-                            return cast(_CHAT_COMPLETIONS_CREATE, client.chat.completions.create)(**fallback2)
-                        raise
-                else:
-                    # Single bare-strip retry for other reasoning_effort values
-                    logger.info(
-                        "[THINKING] native flag rejected by provider=openai model=%s — retried without",
-                        self.model,
-                    )
-                    fallback = {k: v for k, v in create_kwargs.items() if k not in ('reasoning_effort', 'extra_body')}
-                    return cast(_CHAT_COMPLETIONS_CREATE, client.chat.completions.create)(**fallback)
-            status = getattr(exc, 'status_code', 0)
-            raise ProviderResponseError(str(exc), response_code=status, provider='openai') from exc
+            return self._handle_bad_request(client, create_kwargs, exc)
 
     def send(self, dto: ProviderApiRequest) -> ProviderApiResponse:
         """Transform DTO → OpenAI Chat Completions API → ProviderApiResponse."""

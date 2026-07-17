@@ -74,42 +74,49 @@ def parse_field(expr: str, lo: int, hi: int) -> frozenset[int]:
     return frozenset(values)
 
 
-def _parse_token(token: str, lo: int, hi: int) -> set[int]:
-    step = None
-    if "/" in token:
-        token, s = token.split("/", 1)
-        try:
-            step = int(s)
-        except ValueError:
-            raise ValueError(f"Invalid step in token {token!r}.")
-        if step <= 0:
-            raise ValueError(f"Step must be >= 1, got {step}.")
+def _parse_step(token: str) -> tuple[str, int | None]:
+    """Split ``token`` on ``/`` and parse the step. Returns the token with any
+    ``/S`` suffix removed, and the parsed step (``None`` when absent)."""
+    if "/" not in token:
+        return token, None
+    token, s = token.split("/", 1)
+    try:
+        step = int(s)
+    except ValueError:
+        raise ValueError(f"Invalid step in token {token!r}.")
+    if step <= 0:
+        raise ValueError(f"Step must be >= 1, got {step}.")
+    return token, step
 
-    if token == "*":
-        if step is not None:
-            return set(range(lo, hi + 1, step))
-        return set(range(lo, hi + 1))
 
-    if "-" in token:
-        parts = token.split("-", 1)
-        try:
-            start = int(parts[0])
-            end = int(parts[1])
-        except ValueError:
-            raise ValueError(f"Invalid range in token {token!r}.")
-        if start > end:
-            raise ValueError(
-                f"Range start {start} is greater than end {end} in token {token!r}."
-            )
-        if start < lo or end > hi:
-            raise ValueError(
-                f"Range {start}-{end} is outside allowed bounds [{lo}, {hi}] "
-                f"in token {token!r}."
-            )
-        if step is not None:
-            return set(range(start, end + 1, step))
-        return set(range(start, end + 1))
+def _expand_wildcard(step: int | None, lo: int, hi: int) -> set[int]:
+    if step is not None:
+        return set(range(lo, hi + 1, step))
+    return set(range(lo, hi + 1))
 
+
+def _expand_range(token: str, lo: int, hi: int, step: int | None) -> set[int]:
+    parts = token.split("-", 1)
+    try:
+        start = int(parts[0])
+        end = int(parts[1])
+    except ValueError:
+        raise ValueError(f"Invalid range in token {token!r}.")
+    if start > end:
+        raise ValueError(
+            f"Range start {start} is greater than end {end} in token {token!r}."
+        )
+    if start < lo or end > hi:
+        raise ValueError(
+            f"Range {start}-{end} is outside allowed bounds [{lo}, {hi}] "
+            f"in token {token!r}."
+        )
+    if step is not None:
+        return set(range(start, end + 1, step))
+    return set(range(start, end + 1))
+
+
+def _expand_single(token: str, lo: int, hi: int, step: int | None) -> set[int]:
     # Plain integer (with optional step)
     try:
         n = int(token)
@@ -123,6 +130,18 @@ def _parse_token(token: str, lo: int, hi: int) -> set[int]:
         # ``N/S`` means N, N+S, N+2S, … up to hi
         return set(range(n, hi + 1, step))
     return {n}
+
+
+def _parse_token(token: str, lo: int, hi: int) -> set[int]:
+    token, step = _parse_step(token)
+
+    if token == "*":
+        return _expand_wildcard(step, lo, hi)
+
+    if "-" in token:
+        return _expand_range(token, lo, hi, step)
+
+    return _expand_single(token, lo, hi, step)
 
 
 def validate_cron(

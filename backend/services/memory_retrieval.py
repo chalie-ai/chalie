@@ -777,6 +777,50 @@ _LOCATION_SEARCH_CONFIDENCE = 0.9
 _LOCATION_SEARCH_RELEVANCE = "high"
 
 
+def _resolve_location_aliases(location: str) -> list[str]:
+    """Build the list of strings to LIKE-match against location_name: the raw
+    input plus any resolved name from saved places (data_graph kind='place').
+
+    The ``from models.place import PlaceRow`` import is intentionally OUTSIDE
+    the inner try/except below — an ImportError here must propagate uncaught
+    to the caller's outer ``except Exception`` handler, exactly as in the
+    original inline code.
+    """
+    from models.place import PlaceRow
+
+    location_names = [location]
+    try:
+        places = [r.to_dict() for r in PlaceRow.live().get()]
+        for place in places:
+            raw_value = cast(_STR_OR_NONE, place.get("value") or "{}")
+            val = json.loads(raw_value) if isinstance(raw_value, str) else raw_value
+            if isinstance(val, dict) and cast("str", place.get("key", "")).lower() == location.lower():
+                place_name = cast(_STR_OR_NONE, cast("dict[str, object]", val).get("name"))
+                if place_name and place_name.lower() != location.lower():
+                    location_names.append(place_name)
+    except Exception as _resolve_exc:
+        logger.debug("%s Place label resolution failed: %s", LOG_PREFIX, _resolve_exc)
+
+    return location_names
+
+
+def _location_hits_from_episodes(episodes: "list[Episode]") -> list[dict[str, object]]:
+    """Map located Episode rows to location-search hit dicts."""
+    hits = []
+    for ep in episodes:
+        hits.append({
+            "id": str(ep.id),
+            # Full gist verbatim — NO truncation ().
+            "text": ep.gist or "",
+            "relevance": _LOCATION_SEARCH_RELEVANCE,
+            "confidence": _LOCATION_SEARCH_CONFIDENCE,
+            "location": ep.location_name,
+            "kind": "episode",
+            "created_at": ep.created_at,
+        })
+    return hits
+
+
 def _search_episodes_by_location(
     location: str, limit: int
 ) -> tuple[list[dict[str, object]], str]:
@@ -788,40 +832,14 @@ def _search_episodes_by_location(
     kind='place' to pick up alternate location_name strings stored at save time.
     """
     try:
-        from models.place import PlaceRow
-
-        # Build the list of strings to LIKE-match against location_name.
-        # Start with the raw input and add any resolved name from saved places.
-        location_names = [location]
-        try:
-            places = [r.to_dict() for r in PlaceRow.live().get()]
-            for place in places:
-                raw_value = cast(_STR_OR_NONE, place.get("value") or "{}")
-                val = json.loads(raw_value) if isinstance(raw_value, str) else raw_value
-                if isinstance(val, dict) and cast("str", place.get("key", "")).lower() == location.lower():
-                    place_name = cast(_STR_OR_NONE, cast("dict[str, object]", val).get("name"))
-                    if place_name and place_name.lower() != location.lower():
-                        location_names.append(place_name)
-        except Exception as _resolve_exc:
-            logger.debug("%s Place label resolution failed: %s", LOG_PREFIX, _resolve_exc)
+        location_names = _resolve_location_aliases(location)
 
         episodes = Episode.located_at(location_names, limit)
 
         if not episodes:
             return [], "0 matches"
 
-        hits = []
-        for ep in episodes:
-            hits.append({
-                "id": str(ep.id),
-                # Full gist verbatim — NO truncation ().
-                "text": ep.gist or "",
-                "relevance": _LOCATION_SEARCH_RELEVANCE,
-                "confidence": _LOCATION_SEARCH_CONFIDENCE,
-                "location": ep.location_name,
-                "kind": "episode",
-                "created_at": ep.created_at,
-            })
+        hits = _location_hits_from_episodes(episodes)
 
         return hits, f"{len(hits)} matches"
 
