@@ -438,6 +438,94 @@ def _handle_restore(service: "_DocumentService", params: dict[str, object]) -> T
     )
 
 
+def _hash_source_file(src_path: str) -> "tuple[int, str] | dict[str, object]":
+    """Stream-hash *src_path*, returning ``(size, sha256_hex)``.
+
+    Returns ``{"error": ...}`` instead if the file cannot be read.
+    """
+    try:
+        file_size = _os.path.getsize(src_path)
+        hasher = _hashlib.sha256()
+        with open(src_path, "rb") as fh:
+            for block in iter(lambda: fh.read(1024 * 1024), b""):
+                hasher.update(block)
+        file_hash = hasher.hexdigest()
+    except OSError as e:
+        return {"error": f"Failed to read file {src_path}: {e}"}
+    return file_size, file_hash
+
+
+def _extract_document_text(src_path: str, content_type: str, name: str) -> "str | dict[str, object]":
+    """Extract the document's text content BEFORE any store/row is created.
+
+    Returns ``{"error": ...}`` if extraction fails or yields empty text.
+    """
+    try:
+        if content_type.startswith("image/"):
+            from services.image_description import ImageDescription, RICH_INDEX_PROMPT
+            text = ImageDescription(src_path, RICH_INDEX_PROMPT).get_value()
+        else:
+            from services.text_reader import TextReader
+            text = TextReader(src_path).get_value()
+    except Exception as exc:
+        logger.exception(f"[DOCUMENT SKILL] Could not read {name}: {exc}")
+        return {"error": f"Could not read '{name}': {exc}"}
+    if not text.strip():
+        return {"error": f"No content could be extracted from '{name}'."}
+    return text
+
+
+def _store_document_file(
+    service: "_DocumentService",
+    src_path: str,
+    rel_parts: list[str],
+    name: str,
+    content_type: str,
+    file_size: int,
+    file_hash: str,
+    file_path_rel: str,
+    source_type: str,
+    doc_id: str,
+) -> "dict[str, object] | None":
+    """Copy *src_path* into the documents store and create its DB row.
+
+    Returns ``{"error": ...}`` on failure, ``None`` on success.
+    """
+    try:
+        from services.file_mapper_service import FileMapperService
+
+        dir_path = FileMapperService.get_documents_path(*rel_parts[:-1])
+        _os.makedirs(dir_path, exist_ok=True)
+        full_path = str(FileMapperService.get_documents_path(*rel_parts))
+        if not FileMapperService.validate_document_path(full_path):
+            return {"error": f"Invalid file path for '{name}'."}
+        _shutil.copyfile(src_path, full_path)
+
+        service.create_document(
+            original_name=name,
+            mime_type=content_type,
+            file_size=file_size,
+            file_path=file_path_rel,
+            file_hash=file_hash,
+            source_type=source_type,
+            doc_id=doc_id,
+        )
+    except Exception as e:
+        logger.exception(f"[DOCUMENT SKILL] Upload failed: {e}")
+        return {"error": f"Failed to upload document: {e}"}
+    return None
+
+
+def _index_ingested_document(service: "_DocumentService", doc_id: str, text: str) -> None:
+    """Synchronously index the freshly-stored document; mark it failed on error."""
+    try:
+        artifact_count = service.index_document(doc_id, text)
+        logger.info(f"[DOCUMENT SKILL] Processed upload {doc_id}: {artifact_count} artifacts")
+    except Exception as exc:
+        logger.exception(f"[DOCUMENT SKILL] Indexing failed for {doc_id}: {exc}")
+        service.mark_failed(doc_id, str(exc))
+
+
 def ingest_file(
     service: "_DocumentService",
     src_path: str,
@@ -486,15 +574,10 @@ def ingest_file(
         return {"error": f"Invalid subdir: {subdir!r}"}
     content_type = _mimetypes.guess_type(name)[0] or "application/octet-stream"
 
-    try:
-        file_size = _os.path.getsize(src_path)
-        hasher = _hashlib.sha256()
-        with open(src_path, "rb") as fh:
-            for block in iter(lambda: fh.read(1024 * 1024), b""):
-                hasher.update(block)
-        file_hash = hasher.hexdigest()
-    except OSError as e:
-        return {"error": f"Failed to read file {src_path}: {e}"}
+    hashed = _hash_source_file(src_path)
+    if isinstance(hashed, dict):
+        return hashed
+    file_size, file_hash = hashed
 
     doc_id = _secrets.token_hex(4)
     rel_parts = ([subdir] if subdir else []) + [doc_id, name]
@@ -504,53 +587,23 @@ def ingest_file(
     # no content is not a document: an image whose description could not be
     # produced (vision down AND OCR blank) must leave no orphan row and no orphan
     # file behind. The caller gets the error, the store stays clean.
-    try:
-        if content_type.startswith("image/"):
-            from services.image_description import ImageDescription, RICH_INDEX_PROMPT
-            text = ImageDescription(src_path, RICH_INDEX_PROMPT).get_value()
-        else:
-            from services.text_reader import TextReader
-            text = TextReader(src_path).get_value()
-    except Exception as exc:
-        logger.exception(f"[DOCUMENT SKILL] Could not read {name}: {exc}")
-        return {"error": f"Could not read '{name}': {exc}"}
-    if not text.strip():
-        return {"error": f"No content could be extracted from '{name}'."}
+    text = _extract_document_text(src_path, content_type, name)
+    if isinstance(text, dict):
+        return text
 
-    try:
-        from services.file_mapper_service import FileMapperService
-
-        dir_path = FileMapperService.get_documents_path(*rel_parts[:-1])
-        _os.makedirs(dir_path, exist_ok=True)
-        full_path = str(FileMapperService.get_documents_path(*rel_parts))
-        if not FileMapperService.validate_document_path(full_path):
-            return {"error": f"Invalid file path for '{name}'."}
-        _shutil.copyfile(src_path, full_path)
-
-        service.create_document(
-            original_name=name,
-            mime_type=content_type,
-            file_size=file_size,
-            file_path=file_path_rel,
-            file_hash=file_hash,
-            source_type=source_type,
-            doc_id=doc_id,
-        )
-    except Exception as e:
-        logger.exception(f"[DOCUMENT SKILL] Upload failed: {e}")
-        return {"error": f"Failed to upload document: {e}"}
+    store_error = _store_document_file(
+        service, src_path, rel_parts, name, content_type,
+        file_size, file_hash, file_path_rel, source_type, doc_id,
+    )
+    if store_error is not None:
+        return store_error
 
     # Indexing runs synchronously: callers MUST be able to read the document
     # immediately (the ACT loop's follow-up view in the same turn, or the library
     # endpoint's response) — never "still being processed". A failure here is a
     # storage fault on a document that DOES have content, so the row is marked
     # failed rather than vanishing.
-    try:
-        artifact_count = service.index_document(doc_id, text)
-        logger.info(f"[DOCUMENT SKILL] Processed upload {doc_id}: {artifact_count} artifacts")
-    except Exception as exc:
-        logger.exception(f"[DOCUMENT SKILL] Indexing failed for {doc_id}: {exc}")
-        service.mark_failed(doc_id, str(exc))
+    _index_ingested_document(service, doc_id, text)
 
     doc = service.get_document(doc_id)
     return {

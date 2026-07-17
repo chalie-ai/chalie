@@ -394,6 +394,47 @@ def _do_grep(
     return [row for _m, rows in files_with_hits for row in rows], truncated
 
 
+def _advance_open_rows(
+    open_rows: list[dict[str, object]], text: str, context_lines: int
+) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
+    """Append *text* as after-context to each open row; finalize any that are full.
+
+    Returns ``(finalized_rows, still_open_rows)``.
+    """
+    finalized: list[dict[str, object]] = []
+    still_open: list[dict[str, object]] = []
+    for m in open_rows:
+        cast(_LIST_STR, m["_after"]).append(text)
+        if len(cast(_LIST_STR, m["_after"])) >= context_lines:
+            finalized.append(_finalize(m, context_lines))
+        else:
+            still_open.append(m)
+    return finalized, still_open
+
+
+def _handle_match(
+    fp: str,
+    i: int,
+    text: str,
+    before: "deque[str]",
+    open_rows: list[dict[str, object]],
+    rows: list[object],
+    context_lines: int,
+    budget: int,
+) -> bool:
+    """Record a matched *text* line, then report whether *budget* was reached.
+
+    Appends into ``open_rows`` (context_lines>0) or directly into ``rows``
+    otherwise; returns ``True`` when the caller's read loop should stop.
+    """
+    m = {"file": fp, "line": i + 1, "text": text, "_before": list(before), "_after": []}
+    if context_lines > 0:
+        open_rows.append(m)
+    else:
+        rows.append(_finalize(m, context_lines))
+    return len(rows) + len(open_rows) >= budget
+
+
 def _grep_file(
     fp: str, pattern: "re.Pattern[str]", context_lines: int, budget: int
 ) -> list[object]:
@@ -411,21 +452,10 @@ def _grep_file(
         with open(fp, encoding="utf-8", errors="ignore") as fh:
             for i, raw in enumerate(fh):
                 text = raw.rstrip()
-                still_open: list[dict[str, object]] = []
-                for m in open_rows:
-                    cast(_LIST_STR, m["_after"]).append(text)
-                    if len(cast(_LIST_STR, m["_after"])) >= context_lines:
-                        rows.append(_finalize(m, context_lines))
-                    else:
-                        still_open.append(m)
-                open_rows = still_open
+                finalized, open_rows = _advance_open_rows(open_rows, text, context_lines)
+                rows.extend(finalized)
                 if pattern.search(raw):
-                    m = {"file": fp, "line": i + 1, "text": text, "_before": list(before), "_after": []}
-                    if context_lines > 0:
-                        open_rows.append(m)
-                    else:
-                        rows.append(_finalize(m, context_lines))
-                    if len(rows) + len(open_rows) >= budget:
+                    if _handle_match(fp, i, text, before, open_rows, rows, context_lines, budget):
                         break
                 before.append(text)  # no-op when context_lines=0 (maxlen=0 deque)
             for m in open_rows:

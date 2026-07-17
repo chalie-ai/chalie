@@ -67,6 +67,54 @@ class DocumentedResponse:
     not_found: bool = True
 
 
+def _document_conditional_errors(
+    func: Callable[..., ResponseReturnValue],
+    ns: Namespace,
+    handler_name: str,
+    doc: "DocumentedResponse | None",
+    request_dto: "type[Request] | None",
+    error_model: object,
+) -> Callable[..., ResponseReturnValue]:
+    """Attach the 404/422 swagger response docs applicable to *handler_name*."""
+    if handler_name in ("get", "delete") and (doc is None or doc.not_found):
+        func = ns.response(404, "Not found", model=error_model)(func)
+    if handler_name == "post" and request_dto is not None:
+        func = ns.expect(ns.models[request_dto.__name__])(func)
+        func = ns.response(422, "Invalid request body", model=error_model)(func)
+    return func
+
+
+def _document_success_response(
+    func: Callable[..., ResponseReturnValue],
+    ns: Namespace,
+    handler_name: str,
+    doc: "DocumentedResponse | None",
+    post_may_create: bool,
+) -> Callable[..., ResponseReturnValue]:
+    """Attach the success-shape swagger response doc (204 / 200 (+201)) for *handler_name*."""
+    if doc is None or doc.dto is None:
+        func = ns.response(204, "No Content")(func)
+    else:
+        envelope_model = ns.models[register_envelope(ns, doc.dto, listing=doc.listing)]
+        func = ns.response(200, "OK", model=envelope_model)(func)
+        if handler_name == "post" and post_may_create:
+            func = ns.response(201, "Created", model=envelope_model)(func)
+    return func
+
+
+def _document_extras(
+    func: Callable[..., ResponseReturnValue],
+    ns: Namespace,
+    doc: "DocumentedResponse | None",
+    error_model: object,
+) -> Callable[..., ResponseReturnValue]:
+    """Attach any handler-declared extra swagger responses (:attr:`DocumentedResponse.extras`)."""
+    if doc is not None:
+        for status, description in doc.extras:
+            func = ns.response(status, description, model=error_model)(func)
+    return func
+
+
 class Endpoint(ABC):
     """Base for every CRUD endpoint group; subclasses hold controller logic only.
 
@@ -274,23 +322,9 @@ class Endpoint(ABC):
         func = ns.response(403, "Forbidden", model=error_model)(func)
 
         doc = self.response_dto.get(handler_name)
-        if handler_name in ("get", "delete") and (doc is None or doc.not_found):
-            func = ns.response(404, "Not found", model=error_model)(func)
-        if handler_name == "post" and self.request_dto is not None:
-            func = ns.expect(ns.models[self.request_dto.__name__])(func)
-            func = ns.response(422, "Invalid request body", model=error_model)(func)
-
-        if doc is None or doc.dto is None:
-            func = ns.response(204, "No Content")(func)
-        else:
-            envelope_model = ns.models[register_envelope(ns, doc.dto, listing=doc.listing)]
-            func = ns.response(200, "OK", model=envelope_model)(func)
-            if handler_name == "post" and self._post_may_create:
-                func = ns.response(201, "Created", model=envelope_model)(func)
-
-        if doc is not None:
-            for status, description in doc.extras:
-                func = ns.response(status, description, model=error_model)(func)
+        func = _document_conditional_errors(func, ns, handler_name, doc, self.request_dto, error_model)
+        func = _document_success_response(func, ns, handler_name, doc, self._post_may_create)
+        func = _document_extras(func, ns, doc, error_model)
 
         setattr(resource, http_verb, func)
 

@@ -33,6 +33,66 @@ _K_SITE = "ubiquiti:site"
 _K_VERIFY_SSL = "ubiquiti:verify_ssl"
 
 
+def _parse_ubiquiti_credentials(
+    credentials: dict[str, object]
+) -> tuple[str, str, str | None, str | None, str | None, str, bool]:
+    """Normalize the raw credential fields.
+
+    Returns ``(url, auth_method, api_key, username, password, site, verify_ssl)``.
+    """
+    url = (cast(str, credentials.get("url")) or "").strip().rstrip("/")
+    auth_method = (cast(str, credentials.get("auth_method")) or "api_key").strip()
+    api_key = (cast(str, credentials.get("api_key")) or "").strip() or None
+    username = (cast(str, credentials.get("username")) or "").strip() or None
+    password = (cast(str, credentials.get("password")) or "").strip() or None
+    site = (cast(str, credentials.get("site")) or "default").strip() or "default"
+
+    verify_ssl = credentials.get("verify_ssl", False)
+    if isinstance(verify_ssl, str):
+        verify_ssl = verify_ssl.lower() not in ("0", "false", "no")
+
+    return url, auth_method, api_key, username, password, site, cast(bool, verify_ssl)
+
+
+def _validate_auth_requirements(
+    url: str,
+    auth_method: str,
+    api_key: str | None,
+    username: str | None,
+    password: str | None,
+) -> None:
+    """Raise ``ValueError`` if the parsed credentials don't satisfy the chosen auth method."""
+    if not url:
+        raise ValueError("UniFi Controller URL is required")
+    if auth_method == "api_key" and not api_key:
+        raise ValueError("API Key is required when authentication method is 'api_key'")
+    if auth_method == "credentials" and (not username or not password):
+        raise ValueError(
+            "Username and Password are required when authentication method is 'credentials'"
+        )
+    if auth_method not in ("api_key", "credentials"):
+        raise ValueError(f"Unknown authentication method: {auth_method!r}")
+
+
+def _probe_ubiquiti_controller(
+    url: str,
+    site: str,
+    api_key: str | None,
+    username: str | None,
+    password: str | None,
+    verify_ssl: bool,
+) -> None:
+    """Probe the controller; re-raise as ``ValueError`` with response detail logged on failure."""
+    try:
+        rest.probe(url, site, api_key=api_key, username=username,
+                   password=password, verify_ssl=verify_ssl)
+    except Exception as exc:
+        logger.warning("[ubiquiti] probe error detail: %s %s", type(exc).__name__, exc)
+        if hasattr(exc, "response") and exc.response is not None:
+            logger.warning("[ubiquiti] response body: %s", exc.response.text[:500])
+        raise ValueError(f"[ubiquiti] Connection probe failed: {exc}") from exc
+
+
 class UbiquitiCapability(AbstractCapability):
 
     def __init__(self) -> None:
@@ -78,40 +138,17 @@ class UbiquitiCapability(AbstractCapability):
     # ── Lifecycle ────────────────────────────────────────────────────
 
     def configure(self, credentials: dict[str, object]) -> None:
-        url = (cast(str, credentials.get("url")) or "").strip().rstrip("/")
-        auth_method = (cast(str, credentials.get("auth_method")) or "api_key").strip()
-        api_key = (cast(str, credentials.get("api_key")) or "").strip() or None
-        username = (cast(str, credentials.get("username")) or "").strip() or None
-        password = (cast(str, credentials.get("password")) or "").strip() or None
-        site = (cast(str, credentials.get("site")) or "default").strip() or "default"
+        url, auth_method, api_key, username, password, site, verify_ssl = (
+            _parse_ubiquiti_credentials(credentials)
+        )
 
-        verify_ssl = credentials.get("verify_ssl", False)
-        if isinstance(verify_ssl, str):
-            verify_ssl = verify_ssl.lower() not in ("0", "false", "no")
-
-        if not url:
-            raise ValueError("UniFi Controller URL is required")
-        if auth_method == "api_key" and not api_key:
-            raise ValueError("API Key is required when authentication method is 'api_key'")
-        if auth_method == "credentials" and (not username or not password):
-            raise ValueError(
-                "Username and Password are required when authentication method is 'credentials'"
-            )
-        if auth_method not in ("api_key", "credentials"):
-            raise ValueError(f"Unknown authentication method: {auth_method!r}")
+        _validate_auth_requirements(url, auth_method, api_key, username, password)
 
         logger.info(
             "[ubiquiti] configure: url=%s auth=%s site=%s verify_ssl=%r (raw=%r)",
             url, auth_method, site, verify_ssl, credentials.get("verify_ssl"),
         )
-        try:
-            rest.probe(url, site, api_key=api_key, username=username,
-                       password=password, verify_ssl=cast(bool, verify_ssl))
-        except Exception as exc:
-            logger.warning("[ubiquiti] probe error detail: %s %s", type(exc).__name__, exc)
-            if hasattr(exc, "response") and exc.response is not None:
-                logger.warning("[ubiquiti] response body: %s", exc.response.text[:500])
-            raise ValueError(f"[ubiquiti] Connection probe failed: {exc}") from exc
+        _probe_ubiquiti_controller(url, site, api_key, username, password, verify_ssl)
 
         self.store_credential(_K_URL, url)
         self.store_credential(_K_AUTH_METHOD, auth_method)
@@ -127,7 +164,7 @@ class UbiquitiCapability(AbstractCapability):
         self._username = username
         self._password = password
         self._site = site
-        self._verify_ssl = cast(bool, verify_ssl)
+        self._verify_ssl = verify_ssl
         self._connected = True
 
     def connect(self) -> bool:

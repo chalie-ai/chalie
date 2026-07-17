@@ -20,13 +20,38 @@ Returns a sealed :class:`abilities._result.ToolResult` (never a wire envelope):
 import json
 import logging
 from pathlib import Path
-from typing import ClassVar, cast
+from typing import TYPE_CHECKING, ClassVar, cast
 
 from abilities._ability import Ability
 from configs.enums.param_key import Keys
 from abilities._result import ToolResult
 
+if TYPE_CHECKING:
+    from models.tool_call import ToolCall
+
 logger = logging.getLogger(__name__)
+
+
+def _row_matches_target(row: "ToolCall", target: Path, target_str: str) -> bool:
+    """True if *row* is a ``read`` call on *target* (raw arg or resolved path)."""
+    if row.tool_name != "read":
+        return False
+    try:
+        p = json.loads(row.params)
+    except (json.JSONDecodeError, TypeError):
+        return False
+    source = p.get("source") or p.get("path") or p.get("url", "")
+    if not source:
+        return False
+    # `read` expands ``~`` before reading, but records the raw arg — so the
+    # guard must expanduser too, or a tilde-path read would never match.
+    try:
+        if Path(source).expanduser().resolve() == target:
+            return True
+    except (ValueError, OSError):
+        if source == target_str:
+            return True
+    return False
 
 
 class FileWriteAbility(Ability):
@@ -149,22 +174,7 @@ class FileWriteAbility(Ability):
         from models.tool_call import ToolCall
         target_str = str(target)
         for row in ToolCall.by_turn(channel, turn_id):
-            if row.tool_name != "read":
-                continue
-            try:
-                p = json.loads(row.params)
-            except (json.JSONDecodeError, TypeError):
-                continue
-            source = p.get("source") or p.get("path") or p.get("url", "")
-            if not source:
-                continue
-            # `read` expands ``~`` before reading, but records the raw arg — so the
-            # guard must expanduser too, or a tilde-path read would never match.
-            try:
-                if Path(source).expanduser().resolve() == target:
-                    return True
-            except (ValueError, OSError):
-                if source == target_str:
-                    return True
+            if _row_matches_target(row, target, target_str):
+                return True
 
         return False

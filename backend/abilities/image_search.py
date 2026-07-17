@@ -166,28 +166,12 @@ class ImageSearchAbility(Ability):
             return unverified, True, []
 
         # Provider is present — verify each candidate.
-        kept: list[dict[str, object]] = []
-        skipped: list[str] = []
-
         if len(results) == 1:
             # Single-candidate fast-path: no executor overhead.
-            result, reason = self._verify_one(query, results[0])
-            if result is not None:
-                kept.append(result)
-            if reason is not None:
-                skipped.append(reason)
+            kept, skipped = self._verify_single_candidate(query, results[0])
         else:
             # Multi-candidate path: verify concurrently with a bounded pool.
-            with ThreadPoolExecutor(
-                max_workers=min(_MAX_VERIFY_WORKERS, len(results))
-            ) as pool:
-                futures = [pool.submit(self._verify_one, query, r) for r in results]
-                for future in futures:
-                    result, reason = future.result()
-                    if result is not None:
-                        kept.append(result)
-                    if reason is not None:
-                        skipped.append(reason)
+            kept, skipped = self._verify_concurrent(query, results)
 
         # Skips are expected/handled (SSRF block, size cap, non-image); surface
         # them server-side so a systemic issue (e.g. the guard blocking a legit
@@ -199,6 +183,37 @@ class ImageSearchAbility(Ability):
                 skipped,
             )
         return kept, False, skipped
+
+    def _verify_single_candidate(
+        self, query: str, result: dict[str, str]
+    ) -> tuple[list[dict[str, object]], list[str]]:
+        """Verify the sole candidate directly — no executor overhead for N=1."""
+        kept: list[dict[str, object]] = []
+        skipped: list[str] = []
+        verified_result, reason = self._verify_one(query, result)
+        if verified_result is not None:
+            kept.append(verified_result)
+        if reason is not None:
+            skipped.append(reason)
+        return kept, skipped
+
+    def _verify_concurrent(
+        self, query: str, results: list[dict[str, str]]
+    ) -> tuple[list[dict[str, object]], list[str]]:
+        """Verify multiple candidates concurrently with a bounded worker pool."""
+        kept: list[dict[str, object]] = []
+        skipped: list[str] = []
+        with ThreadPoolExecutor(
+            max_workers=min(_MAX_VERIFY_WORKERS, len(results))
+        ) as pool:
+            futures = [pool.submit(self._verify_one, query, r) for r in results]
+            for future in futures:
+                result, reason = future.result()
+                if result is not None:
+                    kept.append(result)
+                if reason is not None:
+                    skipped.append(reason)
+        return kept, skipped
 
     def _verify_one(
         self, query: str, result: dict[str, str]

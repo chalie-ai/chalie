@@ -179,11 +179,29 @@ def _fetch_with_fallback(location_param: str, lat: float | None, lon: float | No
     paths, when we have a clean Nominatim location_name AND the query refers
     to that same place, we override wttr's mojibake-prone location field.
     """
+    have_coords = lat is not None and lon is not None
+    use_telemetry_coords = have_coords and (not location_param or _matches_telemetry(location_param, location_name))
+
+    result, open_meteo_err, wttr_err = _primary_fetch(location_param, lat, lon, location_name, use_telemetry_coords)
+
+    if result is None:
+        logger.warning(f"[WEATHER] Both sources failed, retrying with 5s timeout for '{cache_key}'")
+        result = _retry_fetch(location_param, lat, lon, location_name, use_telemetry_coords)
+
+    return result, open_meteo_err, wttr_err
+
+
+def _primary_fetch(
+    location_param: str,
+    lat: float | None,
+    lon: float | None,
+    location_name: str | None,
+    use_telemetry_coords: bool,
+) -> tuple[dict[str, object] | None, str, str]:
+    """First-pass fetch: Open-Meteo (telemetry coords) then wttr.in (location_param), 15s timeout."""
     result = None
     open_meteo_err = ""
     wttr_err = ""
-    have_coords = lat is not None and lon is not None
-    use_telemetry_coords = have_coords and (not location_param or _matches_telemetry(location_param, location_name))
 
     if use_telemetry_coords:
         result, open_meteo_err = _fetch_open_meteo(cast(float, lat), cast(float, lon), location_name or f"{cast(float, lat):.4f}, {cast(float, lon):.4f}")
@@ -193,16 +211,25 @@ def _fetch_with_fallback(location_param: str, lat: float | None, lon: float | No
         if result is not None and use_telemetry_coords and location_name:
             result["location"] = location_name
 
-    if result is None:
-        logger.warning(f"[WEATHER] Both sources failed, retrying with 5s timeout for '{cache_key}'")
-        if use_telemetry_coords:
-            result, _ = _fetch_open_meteo(cast(float, lat), cast(float, lon), location_name or f"{cast(float, lat):.4f}, {cast(float, lon):.4f}", timeout=5)
-        if result is None and location_param:
-            result, _ = _fetch_wttr(location_param, timeout=5)
-            if result is not None and use_telemetry_coords and location_name:
-                result["location"] = location_name
-
     return result, open_meteo_err, wttr_err
+
+
+def _retry_fetch(
+    location_param: str,
+    lat: float | None,
+    lon: float | None,
+    location_name: str | None,
+    use_telemetry_coords: bool,
+) -> dict[str, object] | None:
+    """Second-pass retry with a 5s timeout, same routing as :func:`_primary_fetch`."""
+    result = None
+    if use_telemetry_coords:
+        result, _ = _fetch_open_meteo(cast(float, lat), cast(float, lon), location_name or f"{cast(float, lat):.4f}, {cast(float, lon):.4f}", timeout=5)
+    if result is None and location_param:
+        result, _ = _fetch_wttr(location_param, timeout=5)
+        if result is not None and use_telemetry_coords and location_name:
+            result["location"] = location_name
+    return result
 
 
 def _matches_telemetry(location_param: str, location_name: str | None) -> bool:
@@ -325,6 +352,47 @@ def _fetch_open_meteo(lat: float, lon: float, location_name: str, timeout: int =
         return None, str(e)
 
 
+def _resolve_wttr_location(data: dict[str, object], location: str) -> object:
+    """Resolve a clean 'Area, Country' label from wttr.in's ``nearest_area``, else *location*."""
+    nearest = data.get("nearest_area", [])
+    if nearest and isinstance(nearest, list):
+        area = nearest[0]
+        area_name = (area.get("areaName") or [{}])[0].get("value", location)
+        country = (area.get("country") or [{}])[0].get("value", "")
+        return f"{area_name}, {country}" if country else area_name
+    return location
+
+
+def _extract_tomorrow_forecast_wttr(weather_days: "list[dict[str, object]]") -> dict[str, object]:
+    """Pull tomorrow's forecast fields (index 1) out of wttr.in's ``weather`` array.
+
+    All fields are ``None`` when *weather_days* doesn't have a second (tomorrow) entry.
+    """
+    tomorrow_condition = None
+    tomorrow_precip_chance = None
+    tomorrow_precip_mm = None
+    tomorrow_max_c = None
+    tomorrow_min_c = None
+    if len(weather_days) > 1:
+        tmrw = weather_days[1]
+        tmrw_hourly = cast("list[dict[str, object]]", tmrw.get("hourly", []))
+        if tmrw_hourly:
+            tomorrow_precip_chance = max(int(cast("int | str", h.get("chanceofrain", 0))) for h in tmrw_hourly)
+            tomorrow_precip_mm = round(sum(float(cast("float | str", h.get("precipMM", 0))) for h in tmrw_hourly), 1)
+            # Use midday slot (index 4 = noon) for condition description
+            noon = tmrw_hourly[4] if len(tmrw_hourly) > 4 else tmrw_hourly[-1]
+            tomorrow_condition = cast("list[dict[str, object]]", noon.get("weatherDesc") or [{}])[0].get("value", "") or None
+        tomorrow_max_c = float(cast("float | str", tmrw.get("maxTempC", 0))) if tmrw.get("maxTempC") is not None else None
+        tomorrow_min_c = float(cast("float | str", tmrw.get("minTempC", 0))) if tmrw.get("minTempC") is not None else None
+    return {
+        "tomorrow_condition": tomorrow_condition,
+        "tomorrow_precip_chance": tomorrow_precip_chance,
+        "tomorrow_precip_mm": tomorrow_precip_mm,
+        "tomorrow_max_c": tomorrow_max_c,
+        "tomorrow_min_c": tomorrow_min_c,
+    }
+
+
 def _fetch_wttr(location: str, timeout: int = 15) -> tuple[dict[str, object] | None, str]:
     try:
         url = f"{_WTTR_BASE}/{location}?format=j1"
@@ -343,14 +411,7 @@ def _fetch_wttr(location: str, timeout: int = 15) -> tuple[dict[str, object] | N
             return None, "Invalid current_condition format"
 
         # Resolve location name from nearest_area
-        nearest = data.get("nearest_area", [])
-        if nearest and isinstance(nearest, list):
-            area = nearest[0]
-            area_name = (area.get("areaName") or [{}])[0].get("value", location)
-            country = (area.get("country") or [{}])[0].get("value", "")
-            location_name = f"{area_name}, {country}" if country else area_name
-        else:
-            location_name = location
+        location_name = _resolve_wttr_location(data, location)
 
         condition = (cc.get("weatherDesc") or [{}])[0].get("value", "")
         condition_lower = condition.lower()
@@ -360,22 +421,7 @@ def _fetch_wttr(location: str, timeout: int = 15) -> tuple[dict[str, object] | N
 
         # Extract tomorrow's forecast from weather array (index 1 = tomorrow)
         weather_days = data.get("weather", [])
-        tomorrow_condition = None
-        tomorrow_precip_chance = None
-        tomorrow_precip_mm = None
-        tomorrow_max_c = None
-        tomorrow_min_c = None
-        if len(weather_days) > 1:
-            tmrw = weather_days[1]
-            tmrw_hourly = tmrw.get("hourly", [])
-            if tmrw_hourly:
-                tomorrow_precip_chance = max(int(h.get("chanceofrain", 0)) for h in tmrw_hourly)
-                tomorrow_precip_mm = round(sum(float(h.get("precipMM", 0)) for h in tmrw_hourly), 1)
-                # Use midday slot (index 4 = noon) for condition description
-                noon = tmrw_hourly[4] if len(tmrw_hourly) > 4 else tmrw_hourly[-1]
-                tomorrow_condition = (noon.get("weatherDesc") or [{}])[0].get("value", "") or None
-            tomorrow_max_c = float(tmrw.get("maxTempC", 0)) if tmrw.get("maxTempC") is not None else None
-            tomorrow_min_c = float(tmrw.get("minTempC", 0)) if tmrw.get("minTempC") is not None else None
+        tomorrow = _extract_tomorrow_forecast_wttr(weather_days)
 
         return {
             "location": location_name,
@@ -396,11 +442,11 @@ def _fetch_wttr(location: str, timeout: int = 15) -> tuple[dict[str, object] | N
             "is_cold": feels_like_c <= 10,
             "is_windy": float(cc.get("windspeedKmph", 0)) >= 30,
             "is_clear": any(w in condition_lower for w in _CLEAR_WORDS),
-            "forecast_tomorrow_condition": tomorrow_condition,
-            "forecast_tomorrow_max_c": tomorrow_max_c,
-            "forecast_tomorrow_min_c": tomorrow_min_c,
-            "forecast_tomorrow_precip_chance_pct": tomorrow_precip_chance,
-            "forecast_tomorrow_precip_mm": tomorrow_precip_mm,
+            "forecast_tomorrow_condition": tomorrow["tomorrow_condition"],
+            "forecast_tomorrow_max_c": tomorrow["tomorrow_max_c"],
+            "forecast_tomorrow_min_c": tomorrow["tomorrow_min_c"],
+            "forecast_tomorrow_precip_chance_pct": tomorrow["tomorrow_precip_chance"],
+            "forecast_tomorrow_precip_mm": tomorrow["tomorrow_precip_mm"],
             "sunrise": None,
             "sunset": None,
             "hourly": [],
@@ -429,34 +475,47 @@ def _extract_hourly_strip(hourly: dict[str, object], current_iso: str) -> list[d
     if not times or not temps:
         return []
 
-    start_idx = 0
-    if current_iso:
-        prefix = current_iso[:13]  # "YYYY-MM-DDTHH"
-        for i, t in enumerate(times):
-            if cast(str, t).startswith(prefix):
-                start_idx = i
-                break
+    start_idx = _find_start_index(times, current_iso)
 
     out: list[dict[str, object]] = []
     end_idx = min(start_idx + 8, len(times))
     for i in range(start_idx, end_idx):
-        try:
-            hour: int | None = int(cast(str, times[i])[11:13])
-        except (ValueError, IndexError):
-            hour = None
-        try:
-            temp: int | None = round(float(cast(float, temps[i])))
-        except (TypeError, ValueError, IndexError):
-            temp = None
-        code: int | None = None
-        if i < len(codes):
-            try:
-                code = int(cast(int, codes[i]))
-            except (TypeError, ValueError):
-                code = None
+        hour, temp, code = _parse_hourly_slot(times, temps, codes, i)
         if hour is not None and temp is not None:
             out.append({"hour": hour, "temp_c": temp, "code": code})
     return out
+
+
+def _find_start_index(times: list[object], current_iso: str) -> int:
+    """Locate the first hourly slot matching *current_iso*'s ``YYYY-MM-DDTHH`` prefix; 0 if none/absent."""
+    if not current_iso:
+        return 0
+    prefix = current_iso[:13]  # "YYYY-MM-DDTHH"
+    for i, t in enumerate(times):
+        if cast(str, t).startswith(prefix):
+            return i
+    return 0
+
+
+def _parse_hourly_slot(
+    times: list[object], temps: list[object], codes: list[object], i: int
+) -> tuple[int | None, int | None, int | None]:
+    """Parse the hour/temp/code for slot *i*; each field is ``None`` on a parse failure."""
+    try:
+        hour: int | None = int(cast(str, times[i])[11:13])
+    except (ValueError, IndexError):
+        hour = None
+    try:
+        temp: int | None = round(float(cast(float, temps[i])))
+    except (TypeError, ValueError, IndexError):
+        temp = None
+    code: int | None = None
+    if i < len(codes):
+        try:
+            code = int(cast(int, codes[i]))
+        except (TypeError, ValueError):
+            code = None
+    return hour, temp, code
 
 
 def _degrees_to_compass(degrees: float) -> str:

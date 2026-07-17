@@ -47,6 +47,48 @@ mimetypes.add_type('text/css', '.css')
 mimetypes.add_type('text/html', '.html')
 
 
+def _register_module_members(
+    module: object, module_name: str, app: Flask, api: Api, seen: set[int]
+) -> None:
+    """Register every top-level Namespace and plain Blueprint defined on *module*."""
+    for attr_name, attr in vars(module).items():
+        if isinstance(attr, Namespace) and id(attr) not in seen:
+            api.add_namespace(attr)
+            seen.add(id(attr))
+            logger.info("[REST API] Registered %s.%s", module_name, attr_name)
+    # Also register plain Blueprints (gateway etc.) that are not Namespaces
+    for attr_name, attr in vars(module).items():
+        if isinstance(attr, Blueprint) and not isinstance(attr, Namespace) and id(attr) not in seen:
+            app.register_blueprint(attr)
+            seen.add(id(attr))
+            logger.info("[REST API] Registered blueprint %s.%s", module_name, attr_name)
+
+
+def _register_endpoint_subclasses(subpackage_name: str, api: Api) -> None:
+    """Walk ``api.<subpackage_name>`` and register every concrete ``Endpoint``
+    subclass defined there via its generated Namespace.
+    """
+    from .endpoint import Endpoint
+    subpackage = importlib.import_module(f"{__name__}.{subpackage_name}")
+    for submodule_info in pkgutil.walk_packages(subpackage.__path__, prefix=f"{subpackage.__name__}."):
+        try:
+            submodule = importlib.import_module(submodule_info.name)
+        except Exception:
+            # Name the offending module before the boot crash — one broken
+            # endpoint file must be findable without a stack-trace dig.
+            logger.error("[REST API] Failed to import endpoint module %s", submodule_info.name)
+            raise
+        for attr in vars(submodule).values():
+            if (
+                isinstance(attr, type)
+                and issubclass(attr, Endpoint)
+                and attr.__module__ == submodule.__name__
+                and not inspect.isabstract(attr)
+            ):
+                api.add_namespace(attr().namespace())
+                logger.info("[REST API] Registered endpoint %s.%s", submodule_info.name, attr.__name__)
+
+
 def _register_namespaces(app: Flask, api: Api) -> None:
     """Auto-discover and register every Namespace defined in this package.
 
@@ -58,44 +100,16 @@ def _register_namespaces(app: Flask, api: Api) -> None:
     migration markers of the API rewrite) and registers every concrete
     ``Endpoint``/``Action`` subclass defined there via its generated Namespace.
     """
-    from .endpoint import Endpoint
     package = importlib.import_module(__name__)
     seen: set[int] = set()
     for module_info in pkgutil.iter_modules(package.__path__):
         if module_info.name.startswith('_'):
             continue
         module = importlib.import_module(f"{__name__}.{module_info.name}")
-        for attr_name, attr in vars(module).items():
-            if isinstance(attr, Namespace) and id(attr) not in seen:
-                api.add_namespace(attr)
-                seen.add(id(attr))
-                logger.info("[REST API] Registered %s.%s", module_info.name, attr_name)
-        # Also register plain Blueprints (gateway etc.) that are not Namespaces
-        for attr_name, attr in vars(module).items():
-            if isinstance(attr, Blueprint) and not isinstance(attr, Namespace) and id(attr) not in seen:
-                app.register_blueprint(attr)
-                seen.add(id(attr))
-                logger.info("[REST API] Registered blueprint %s.%s", module_info.name, attr_name)
+        _register_module_members(module, module_info.name, app, api, seen)
 
     for subpackage_name in ("endpoints", "actions"):
-        subpackage = importlib.import_module(f"{__name__}.{subpackage_name}")
-        for submodule_info in pkgutil.walk_packages(subpackage.__path__, prefix=f"{subpackage.__name__}."):
-            try:
-                submodule = importlib.import_module(submodule_info.name)
-            except Exception:
-                # Name the offending module before the boot crash — one broken
-                # endpoint file must be findable without a stack-trace dig.
-                logger.error("[REST API] Failed to import endpoint module %s", submodule_info.name)
-                raise
-            for attr in vars(submodule).values():
-                if (
-                    isinstance(attr, type)
-                    and issubclass(attr, Endpoint)
-                    and attr.__module__ == submodule.__name__
-                    and not inspect.isabstract(attr)
-                ):
-                    api.add_namespace(attr().namespace())
-                    logger.info("[REST API] Registered endpoint %s.%s", submodule_info.name, attr.__name__)
+        _register_endpoint_subclasses(subpackage_name, api)
 
     # api.init_app() is deferred to create_app(): RESTx registers its own root
     # '/' route during init, which would shadow the SPA's '/' handler. Init must
@@ -150,6 +164,41 @@ def _configure_app(app: Flask) -> None:
         return response
 
 
+_IMMUTABLE_CACHE = 'public, max-age=31536000, immutable'
+_NO_CACHE = 'no-cache, no-store, must-revalidate'
+
+
+def _send_index(directory: Path, filename: str = 'index.html') -> Response:
+    resp = send_from_directory(str(directory), filename)
+    resp.headers['Cache-Control'] = _NO_CACHE
+    return resp
+
+
+def _send_asset(directory: Path, filename: str) -> Response:
+    """Serve a file under assets/ with immutable long-term caching.
+
+    Vite content-hashes every asset filename, so the same content always
+    maps to the same URL and a new build produces new filenames — safe to
+    cache forever. Callers must confirm the file exists and resolves under
+    the assets/ subtree of *directory*.
+    """
+    resp = send_from_directory(str(directory), filename)
+    resp.headers['Cache-Control'] = _IMMUTABLE_CACHE
+    return resp
+
+
+def _serve_static_or_index(directory: Path, filename: str) -> Response:
+    """Serve *filename* under *directory* if it exists (assets/ files get
+    immutable long-term caching), else fall back to the SPA index document.
+    """
+    candidate = directory / filename
+    if candidate.is_file():
+        if filename.startswith('assets/'):
+            return _send_asset(directory, filename)
+        return send_from_directory(str(directory), filename)
+    return _send_index(directory)
+
+
 def _register_static_routes(app: Flask) -> None:
     """Register static-file and SPA routes serving the Vue 3 builds.
 
@@ -167,26 +216,6 @@ def _register_static_routes(app: Flask) -> None:
     """
     interface_dir = FileMapperService.get_frontend_path("apps", "interface", "dist")
     brain_dir = FileMapperService.get_frontend_path("apps", "brain", "dist")
-
-    _IMMUTABLE_CACHE = 'public, max-age=31536000, immutable'
-    _NO_CACHE = 'no-cache, no-store, must-revalidate'
-
-    def _send_index(directory: Path, filename: str = 'index.html') -> Response:
-        resp = send_from_directory(str(directory), filename)
-        resp.headers['Cache-Control'] = _NO_CACHE
-        return resp
-
-    def _send_asset(directory: Path, filename: str) -> Response:
-        """Serve a file under assets/ with immutable long-term caching.
-
-        Vite content-hashes every asset filename, so the same content always
-        maps to the same URL and a new build produces new filenames — safe to
-        cache forever. Callers must confirm the file exists and resolves under
-        the assets/ subtree of *directory*.
-        """
-        resp = send_from_directory(str(directory), filename)
-        resp.headers['Cache-Control'] = _IMMUTABLE_CACHE
-        return resp
 
     # ── Brain admin SPA (auth-gated, matches the legacy /brain/ gate) ─────
     @app.route('/brain', methods=["GET"])
@@ -207,12 +236,7 @@ def _register_static_routes(app: Flask) -> None:
         from flask import request
         if not validate_session(request):
             return redirect(f'/login/?next=/brain/{filename}')
-        candidate = brain_dir / filename
-        if candidate.is_file():
-            if filename.startswith('assets/'):
-                return _send_asset(brain_dir, filename)
-            return send_from_directory(str(brain_dir), filename)
-        return _send_index(brain_dir)
+        return _serve_static_or_index(brain_dir, filename)
 
     # ── Login + on-boarding (interface multi-page entries, pre-auth) ──────
     @app.route('/login', methods=["GET"])
@@ -251,12 +275,7 @@ def _register_static_routes(app: Flask) -> None:
         # (which masks a missing/renamed route as a success to every client).
         if filename == 'api' or filename.startswith('api/'):
             return ApiResponse.failure("Not found"), 404
-        candidate = interface_dir / filename
-        if candidate.is_file():
-            if filename.startswith('assets/'):
-                return _send_asset(interface_dir, filename)
-            return send_from_directory(str(interface_dir), filename)
-        return _send_index(interface_dir)
+        return _serve_static_or_index(interface_dir, filename)
 
     @app.route('/', methods=["GET"])
     def interface_index() -> ResponseReturnValue:

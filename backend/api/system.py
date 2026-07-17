@@ -267,6 +267,52 @@ class SystemStatusResource(Resource):
 # Observability — cognitive legibility endpoints
 # ─────────────────────────────────────────────
 
+def _parse_records_offset(raw_offset: str) -> int | None:
+    """Parse the ``offset`` query param; ``None`` signals invalid input."""
+    try:
+        offset = int(raw_offset)
+    except (ValueError, TypeError):
+        return None
+    if offset < 0:
+        return None
+    return offset
+
+
+def _fetch_records_rows(source: str, q: str, offset: int) -> list[dict[str, object]]:
+    """Fetch the raw records page for the given source."""
+    if source == "episodes":
+        rows = [
+            {
+                "created": r["created_at"],
+                "last_accessed": r["last_relevant_at"] or r["created_at"],
+                "value": r["gist"],
+                "location_name": r["location_name"],
+            }
+            for r in Episode.records_page(q, _RECORDS_LIMIT, offset)
+        ]
+    else:
+        kind = "user_specific" if source == "user" else "system"
+        rows = DataGraphRow.records_page(kind, q, _RECORDS_LIMIT, offset)
+    return rows
+
+
+def _serialize_records_rows(source: str, rows: list[dict[str, object]]) -> list[dict[str, object]]:
+    """Project raw source rows into the uniform RecordsPage row shape."""
+    serialised: list[dict[str, object]] = []
+    for r in rows:
+        row: dict[str, object] = {
+            "created": r["created"],
+            "last_accessed": r["last_accessed"],
+            "value": r["value"],
+        }
+        if source == "episodes":
+            row["location"] = r.get("location_name") or ""
+        else:
+            row["key"] = r["key"]
+        serialised.append(row)
+    return serialised
+
+
 @system_ns.route("/observability/records")
 class ObservabilityRecordsResource(Resource):
     @require_session
@@ -285,42 +331,16 @@ class ObservabilityRecordsResource(Resource):
                 return error("invalid source", 400)
 
             raw_offset = request.args.get("offset", "0")
-            try:
-                offset = int(raw_offset)
-            except (ValueError, TypeError):
-                return error("invalid offset", 400)
-            if offset < 0:
+            offset = _parse_records_offset(raw_offset)
+            if offset is None:
                 return error("invalid offset", 400)
 
             q = (request.args.get("q", "") or "")[:200]
 
-            if source == "episodes":
-                rows = [
-                    {
-                        "created": r["created_at"],
-                        "last_accessed": r["last_relevant_at"] or r["created_at"],
-                        "value": r["gist"],
-                        "location_name": r["location_name"],
-                    }
-                    for r in Episode.records_page(q, _RECORDS_LIMIT, offset)
-                ]
-            else:
-                kind = "user_specific" if source == "user" else "system"
-                rows = DataGraphRow.records_page(kind, q, _RECORDS_LIMIT, offset)
+            rows = _fetch_records_rows(source, q, offset)
 
             rows = rows or []
-            serialised: list[dict[str, object]] = []
-            for r in rows:
-                row: dict[str, object] = {
-                    "created": r["created"],
-                    "last_accessed": r["last_accessed"],
-                    "value": r["value"],
-                }
-                if source == "episodes":
-                    row["location"] = r.get("location_name") or ""
-                else:
-                    row["key"] = r["key"]
-                serialised.append(row)
+            serialised = _serialize_records_rows(source, rows)
 
             return RecordsPage(
                 generated_at=utc_now(),

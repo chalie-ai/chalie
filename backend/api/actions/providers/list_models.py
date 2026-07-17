@@ -31,6 +31,29 @@ from services.provider_probe import (
 )
 
 
+def _fetch_models_for_platform(
+    dto: ListModelsRequest, platform: str
+) -> tuple[list[dict[str, str | None]] | None, str | None]:
+    """Dispatch to the platform-specific model-list fetcher; raises for an unsupported platform."""
+    models: list[dict[str, str | None]] | None
+    err: str | None
+    if platform == 'ollama':
+        models, err = fetch_ollama_models(dto.host or '')
+    elif platform == 'openai':
+        models, err = fetch_openai_models((dto.api_key or '').strip())
+    elif platform == 'anthropic':
+        models, err = fetch_anthropic_models((dto.api_key or '').strip())
+    elif platform == 'gemini':
+        models, err = fetch_gemini_models((dto.api_key or '').strip())
+    elif platform == 'openai_compatible':
+        models, err = fetch_openai_compatible_models(dto.host or '', (dto.api_key or '').strip())
+    elif platform == 'codex_cli':
+        models, err = fetch_codex_models()
+    else:
+        raise EndpointError(f"Unsupported platform '{platform}'")
+    return models, err
+
+
 class ProviderListModels(Action):
     """Action fetching the live model list for a platform+credentials pair."""
 
@@ -50,22 +73,7 @@ class ProviderListModels(Action):
         dto = cast(ListModelsRequest, data)
         platform = dto.platform.strip().lower()
 
-        models: list[dict[str, str | None]] | None
-        err: str | None
-        if platform == 'ollama':
-            models, err = fetch_ollama_models(dto.host or '')
-        elif platform == 'openai':
-            models, err = fetch_openai_models((dto.api_key or '').strip())
-        elif platform == 'anthropic':
-            models, err = fetch_anthropic_models((dto.api_key or '').strip())
-        elif platform == 'gemini':
-            models, err = fetch_gemini_models((dto.api_key or '').strip())
-        elif platform == 'openai_compatible':
-            models, err = fetch_openai_compatible_models(dto.host or '', (dto.api_key or '').strip())
-        elif platform == 'codex_cli':
-            models, err = fetch_codex_models()
-        else:
-            raise EndpointError(f"Unsupported platform '{platform}'")
+        models, err = _fetch_models_for_platform(dto, platform)
 
         if err is not None:
             return ListModelsResult(models=[], error=err).single()

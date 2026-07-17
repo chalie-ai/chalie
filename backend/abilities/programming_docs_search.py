@@ -417,6 +417,40 @@ def resolve_source(language: str) -> "Source | None":
     return _ALIAS_MAP.get(language.strip().lower())
 
 
+def _fetch_candidate_excerpt(candidate: dict[str, object]) -> str | None:
+    """Fetch+extract *candidate*'s page text, truncated; ``None`` if unreachable or empty."""
+    try:
+        html = _fetch(cast(str, candidate["url"]))
+    except (requests.RequestException, FetchBlocked):
+        return None
+    excerpt = extract_html(html, url=cast(str, candidate["url"]))
+    if not excerpt:
+        return None
+    excerpt, _ = truncate(excerpt, _MAX_CHARS)
+    return excerpt
+
+
+def _append_remaining_candidates(
+    rows: list[dict[str, object]],
+    ordered: list[dict[str, object]],
+    index: int,
+    candidate: dict[str, object],
+    source_name: str,
+) -> None:
+    """Append the still-unfetched candidates (url/title only) onto *rows* in place."""
+    for other in ordered[index + 1:]:
+        if other["url"] == candidate["url"]:
+            continue
+        rows.append({
+            "source": source_name,
+            "title": other["title"],
+            "url": other["url"],
+            "excerpt": "",
+        })
+        if len(rows) >= _MAX_RESULTS:
+            break
+
+
 # ── The single generic lookup engine ────────────────────────────────────────────
 
 def lookup(language: str, query: str) -> ToolResult:
@@ -454,14 +488,9 @@ def lookup(language: str, query: str) -> ToolResult:
         ordered.append(base_row)
 
     for index, candidate in enumerate(ordered):
-        try:
-            html = _fetch(cast(str, candidate["url"]))
-        except (requests.RequestException, FetchBlocked):
+        excerpt = _fetch_candidate_excerpt(candidate)
+        if excerpt is None:
             continue
-        excerpt = extract_html(html, url=cast(str, candidate["url"]))
-        if not excerpt:
-            continue
-        excerpt, _ = truncate(excerpt, _MAX_CHARS)
         # We landed on the base/landing page rather than a symbol candidate, or
         # the only thing that resolved was the base row → real, but imprecise.
         degraded = candidate is base_row or (not candidates)
@@ -472,17 +501,7 @@ def lookup(language: str, query: str) -> ToolResult:
             "excerpt": excerpt,
         }]
         # Surface remaining candidates (url/title only) so the model can read on.
-        for other in ordered[index + 1:]:
-            if other["url"] == candidate["url"]:
-                continue
-            rows.append({
-                "source": source.name,
-                "title": other["title"],
-                "url": other["url"],
-                "excerpt": "",
-            })
-            if len(rows) >= _MAX_RESULTS:
-                break
+        _append_remaining_candidates(rows, ordered, index, candidate, source.name)
         meta: dict[str, object] = {"source": source.id, "count": len(rows)}
         if degraded:
             meta["degraded"] = True

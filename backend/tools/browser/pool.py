@@ -150,38 +150,49 @@ class BrowserPool:
             if item is None:
                 break
 
-            fn, args, kwargs, future = cast(
-                "tuple[Callable[..., object], tuple[object, ...], dict[str, object], Future[object]]",
-                item,
-            )
-
-            try:
-                # Lazy-launch Playwright + Chromium
-                if pw is None:
-                    from playwright.sync_api import sync_playwright
-                    pw = sync_playwright().start()
-
-                if browser is None or not cast("_BrowserLike", browser).is_connected():
-                    browser = cast("_PlaywrightLike", pw).chromium.launch(headless=True, args=_LAUNCH_ARGS)
-                    self._browser_launches += 1
-                    logger.info("[BROWSER POOL] Chromium launched")
-
-                last_used = time.time()
-                self._ops_total += 1
-                result = fn(browser, *args, **kwargs)
-                future.set_result(result)
-
-            except Exception as e:
-                self._ops_failed += 1
-                # If browser crashed, discard the reference so next op re-launches
-                if browser and not cast("_BrowserLike", browser).is_connected():
-                    logger.warning("[BROWSER POOL] Browser disconnected — will re-launch")
-                    browser = None
-                future.set_exception(e)
+            browser, pw, last_used = self._run_queued_item(item, browser, pw, last_used)
 
         # Loop exiting — clean shutdown
         self._close(browser, pw)
         logger.info("[BROWSER POOL] Thread stopped")
+
+    def _run_queued_item(
+        self, item: object, browser: object, pw: object, last_used: float
+    ) -> tuple[object, object, float]:
+        """Execute one queued work item; lazy-launches Playwright/Chromium as needed.
+
+        Returns the (possibly updated) ``(browser, pw, last_used)`` triple.
+        """
+        fn, args, kwargs, future = cast(
+            "tuple[Callable[..., object], tuple[object, ...], dict[str, object], Future[object]]",
+            item,
+        )
+
+        try:
+            # Lazy-launch Playwright + Chromium
+            if pw is None:
+                from playwright.sync_api import sync_playwright
+                pw = sync_playwright().start()
+
+            if browser is None or not cast("_BrowserLike", browser).is_connected():
+                browser = cast("_PlaywrightLike", pw).chromium.launch(headless=True, args=_LAUNCH_ARGS)
+                self._browser_launches += 1
+                logger.info("[BROWSER POOL] Chromium launched")
+
+            last_used = time.time()
+            self._ops_total += 1
+            result = fn(browser, *args, **kwargs)
+            future.set_result(result)
+
+        except Exception as e:
+            self._ops_failed += 1
+            # If browser crashed, discard the reference so next op re-launches
+            if browser and not cast("_BrowserLike", browser).is_connected():
+                logger.warning("[BROWSER POOL] Browser disconnected — will re-launch")
+                browser = None
+            future.set_exception(e)
+
+        return browser, pw, last_used
 
     @staticmethod
     def _close(browser: object, pw: object) -> tuple[None, None]:

@@ -197,6 +197,31 @@ def _resolve_mode(text: str, current: int) -> int | None:
     return _apply_symbolic(spec, current)
 
 
+def _perm_value_for(perms: str) -> int:
+    """OR together the bit for each of ``perms`` (each of ``r``/``w``/``x``)."""
+    perm_value = 0
+    for p in perms:
+        perm_value |= _PERM_BITS[p]
+    return perm_value
+
+
+def _add_mask_for(who_letters: str, perm_value: int) -> int:
+    """Combine each who-class's bit-triplet with *perm_value* into one mask."""
+    mask = 0
+    for w in who_letters:
+        who_mask = _WHO_BITS[w]
+        mask |= who_mask & (perm_value * 0o111)
+    return mask
+
+
+def _clear_mask_for(who_letters: str) -> int:
+    """OR together the full bit-triplet for each who-class in *who_letters*."""
+    clear = 0
+    for w in who_letters:
+        clear |= _WHO_BITS[w]
+    return clear
+
+
 def _apply_symbolic(spec: str, current: int) -> int | None:
     """Apply comma-separated chmod clauses to *current*, returning the new mode.
 
@@ -216,23 +241,15 @@ def _apply_symbolic(spec: str, current: int) -> int | None:
         who, op, perms = m.groups()
         who_letters = who or "a"
 
-        perm_value = 0
-        for p in perms:
-            perm_value |= _PERM_BITS[p]
-
-        mask = 0
-        for w in who_letters:
-            who_mask = _WHO_BITS[w]
-            mask |= who_mask & (perm_value * 0o111)
+        perm_value = _perm_value_for(perms)
+        mask = _add_mask_for(who_letters, perm_value)
 
         if op == "+":
             mode |= mask
         elif op == "-":
             mode &= ~mask
         else:  # "="
-            clear = 0
-            for w in who_letters:
-                clear |= _WHO_BITS[w]
+            clear = _clear_mask_for(who_letters)
             mode = (mode & ~clear) | mask
     return mode
 
