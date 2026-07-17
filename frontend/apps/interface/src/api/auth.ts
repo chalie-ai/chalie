@@ -1,4 +1,4 @@
-import { api, AuthError, HttpError } from '@chalie/shared';
+import { api } from '@chalie/shared';
 
 /** POST /auth/login response (existing backend contract — do not rename keys). */
 export interface LoginResult {
@@ -34,4 +34,4 @@ export const auth = {
   },
 };
 
-export { AuthError, HttpError };
+export { AuthError, HttpError } from '@chalie/shared';

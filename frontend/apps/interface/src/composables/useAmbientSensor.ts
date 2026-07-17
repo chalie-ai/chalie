@@ -68,7 +68,7 @@ function _getTypingCps(): number | null {
   if (recent.length < 2) return null;
 
   const totalChars = recent.reduce((sum, e) => sum + e.chars, 0);
-  const span = (recent[recent.length - 1].ts - recent[0].ts) / 1000;
+  const span = (recent.at(-1)!.ts - recent[0].ts) / 1000;
   if (span <= 0) return null;
   return Math.round((totalChars / span) * 10) / 10;
 }

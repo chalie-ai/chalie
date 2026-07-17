@@ -67,13 +67,13 @@ export function deriveThreadActivity(type: string = ConfigType.USER): ThreadActi
   const rows: { item: ThreadActivityItem; lastActivityAt: string }[] = [];
   const selector = `[data-turn-id][data-type="${type}"][data-forked]`;
   for (const el of container.querySelectorAll<HTMLElement>(selector)) {
-    if (!el.hasAttribute('data-done')) continue;
+    if (el.dataset.done === undefined) continue;
 
-    const turnId = Number(el.getAttribute('data-turn-id'));
+    const turnId = Number(el.dataset.turnId);
     if (Number.isNaN(turnId)) continue;
 
-    const gist = el.getAttribute('data-gist');
-    const preview = el.getAttribute('data-preview') ?? '';
+    const gist = el.dataset.gist ?? null;
+    const preview = el.dataset.preview ?? '';
     rows.push({
       item: {
         turn_id: turnId,
@@ -82,13 +82,12 @@ export function deriveThreadActivity(type: string = ConfigType.USER): ThreadActi
         snippet: preview,
         kind: 'done',
       },
-      lastActivityAt: el.getAttribute('data-last-activity') ?? '',
+      lastActivityAt: el.dataset.lastActivity ?? '',
     });
   }
 
-  return rows
-    .sort((a, b) => b.lastActivityAt.localeCompare(a.lastActivityAt))
-    .map((r) => r.item);
+  rows.sort((a, b) => b.lastActivityAt.localeCompare(a.lastActivityAt));
+  return rows.map((r) => r.item);
 }
 
 /**

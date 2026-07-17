@@ -22,6 +22,72 @@ export const MAX_RECORD_MS = 10 * 60 * 1000; // 10 minutes
 
 export type RecorderState = 'idle' | 'recording' | 'uploading';
 
+/** Encode an AudioBuffer as a 16-bit PCM WAV File (44-byte RIFF/WAVE header). */
+function _audioBufferToWav(audioBuffer: AudioBuffer): File {
+  const numChannels = audioBuffer.numberOfChannels;
+  const sampleRate = audioBuffer.sampleRate;
+  const numSamples = audioBuffer.length;
+  const dataLength = numSamples * numChannels * 2; // 16-bit = 2 bytes/sample
+  const buffer = new ArrayBuffer(44 + dataLength);
+  const view = new DataView(buffer);
+
+  const writeStr = (offset: number, str: string): void => {
+    for (let i = 0; i < str.length; i++) view.setUint8(offset + i, str.codePointAt(i) ?? 0);
+  };
+
+  writeStr(0, 'RIFF');
+  view.setUint32(4, 36 + dataLength, true);
+  writeStr(8, 'WAVE');
+  writeStr(12, 'fmt ');
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true);                            // PCM
+  view.setUint16(22, numChannels, true);
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, sampleRate * numChannels * 2, true); // byte rate
+  view.setUint16(32, numChannels * 2, true);              // block align
+  view.setUint16(34, 16, true);                           // bits per sample
+  writeStr(36, 'data');
+  view.setUint32(40, dataLength, true);
+
+  const channels = Array.from<number, Float32Array>(
+    { length: numChannels },
+    (_, i) => audioBuffer.getChannelData(i),
+  );
+  let offset = 44;
+  for (let i = 0; i < numSamples; i++) {
+    for (let c = 0; c < numChannels; c++) {
+      const s = Math.max(-1, Math.min(1, channels[c][i] ?? 0));
+      view.setInt16(offset, s < 0 ? s * 0x8000 : s * 0x7fff, true);
+      offset += 2;
+    }
+  }
+
+  return new File([buffer], 'recording.wav', { type: 'audio/wav' });
+}
+
+/** Upload wav to /voice/transcribe; return the transcript text or null. */
+async function _transcribe(file: File): Promise<string | null> {
+  const resp = await voice.transcribe(file);
+
+  if (!resp.ok) {
+    const body = await resp.json().catch(() => ({})) as {
+      error?: string;
+      reason?: string;
+      hint?: string;
+    };
+    const err: Error & { userMessage?: string } = new Error(
+      body.error ?? `STT error: ${resp.status}`,
+    );
+    if (body.reason === 'deps_missing') {
+      err.userMessage = body.hint ?? body.error ?? 'Voice dependencies not installed';
+    }
+    throw err;
+  }
+
+  const data = await resp.json() as { text?: string };
+  return data.text ?? null;
+}
+
 export const useVoiceStore = defineStore('voice', () => {
   /** True once /voice/health returns status==='ok'. */
   const available = ref(false);
@@ -151,6 +217,27 @@ export const useVoiceStore = defineStore('voice', () => {
     }, MAX_RECORD_MS);
   }
 
+  /** Wire `recorder`'s onstop handler to flush tracks and resolve with the
+   *  buffered chunks, then kick off the stop sequence. Split out of
+   *  `_stopAndUpload` so its nested callbacks stay within the nesting-depth
+   *  limit. */
+  function _finalizeRecording(recorder: MediaRecorder, resolve: (chunks: Blob[]) => void): void {
+    recorder.onstop = () => {
+      recorder.stream.getTracks().forEach((t) => t.stop());
+      // iOS Safari fires onstop before the last ondataavailable chunk;
+      // a small defer lets the event queue flush first.
+      setTimeout(() => resolve([..._audioChunks]), 100);
+    };
+    try {
+      recorder.requestData();
+    } catch (err) {
+      // requestData() not supported on some browsers — recorder.stop()
+      // still flushes the last chunk.
+      console.debug('[voice] requestData unsupported:', err);
+    }
+    recorder.stop();
+  }
+
   async function _stopAndUpload(): Promise<void> {
     if (recorderState.value !== 'recording' || !_mediaRecorder) return;
 
@@ -163,22 +250,7 @@ export const useVoiceStore = defineStore('voice', () => {
     recorderState.value = 'uploading';
     void _wakeLock?.release();
 
-    const chunks = await new Promise<Blob[]>((resolve) => {
-      recorder.onstop = () => {
-        recorder.stream.getTracks().forEach((t) => t.stop());
-        // iOS Safari fires onstop before the last ondataavailable chunk;
-        // a small defer lets the event queue flush first.
-        setTimeout(() => resolve([..._audioChunks]), 100);
-      };
-      try {
-        recorder.requestData();
-      } catch (err) {
-        // requestData() not supported on some browsers — recorder.stop()
-        // still flushes the last chunk.
-        console.debug('[voice] requestData unsupported:', err);
-      }
-      recorder.stop();
-    });
+    const chunks = await new Promise<Blob[]>((resolve) => _finalizeRecording(recorder, resolve));
 
     _mediaRecorder = null;
 
@@ -218,72 +290,6 @@ export const useVoiceStore = defineStore('voice', () => {
     });
     void audioCtx.close();
     return _audioBufferToWav(audioBuffer);
-  }
-
-  /** Encode an AudioBuffer as a 16-bit PCM WAV File (44-byte RIFF/WAVE header). */
-  function _audioBufferToWav(audioBuffer: AudioBuffer): File {
-    const numChannels = audioBuffer.numberOfChannels;
-    const sampleRate = audioBuffer.sampleRate;
-    const numSamples = audioBuffer.length;
-    const dataLength = numSamples * numChannels * 2; // 16-bit = 2 bytes/sample
-    const buffer = new ArrayBuffer(44 + dataLength);
-    const view = new DataView(buffer);
-
-    const writeStr = (offset: number, str: string): void => {
-      for (let i = 0; i < str.length; i++) view.setUint8(offset + i, str.codePointAt(i) ?? 0);
-    };
-
-    writeStr(0, 'RIFF');
-    view.setUint32(4, 36 + dataLength, true);
-    writeStr(8, 'WAVE');
-    writeStr(12, 'fmt ');
-    view.setUint32(16, 16, true);
-    view.setUint16(20, 1, true);                            // PCM
-    view.setUint16(22, numChannels, true);
-    view.setUint32(24, sampleRate, true);
-    view.setUint32(28, sampleRate * numChannels * 2, true); // byte rate
-    view.setUint16(32, numChannels * 2, true);              // block align
-    view.setUint16(34, 16, true);                           // bits per sample
-    writeStr(36, 'data');
-    view.setUint32(40, dataLength, true);
-
-    const channels = Array.from<number, Float32Array>(
-      { length: numChannels },
-      (_, i) => audioBuffer.getChannelData(i),
-    );
-    let offset = 44;
-    for (let i = 0; i < numSamples; i++) {
-      for (let c = 0; c < numChannels; c++) {
-        const s = Math.max(-1, Math.min(1, channels[c][i] ?? 0));
-        view.setInt16(offset, s < 0 ? s * 0x8000 : s * 0x7fff, true);
-        offset += 2;
-      }
-    }
-
-    return new File([buffer], 'recording.wav', { type: 'audio/wav' });
-  }
-
-  /** Upload wav to /voice/transcribe; return the transcript text or null. */
-  async function _transcribe(file: File): Promise<string | null> {
-    const resp = await voice.transcribe(file);
-
-    if (!resp.ok) {
-      const body = await resp.json().catch(() => ({})) as {
-        error?: string;
-        reason?: string;
-        hint?: string;
-      };
-      const err: Error & { userMessage?: string } = new Error(
-        body.error ?? `STT error: ${resp.status}`,
-      );
-      if (body.reason === 'deps_missing') {
-        err.userMessage = body.hint ?? body.error ?? 'Voice dependencies not installed';
-      }
-      throw err;
-    }
-
-    const data = await resp.json() as { text?: string };
-    return data.text ?? null;
   }
 
   /** Release the mic track and reset state — call on unload / teardown. */

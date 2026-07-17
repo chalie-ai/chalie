@@ -32,7 +32,7 @@ const REGION_CURRENCY_MAP: Record<string, string> = {
 /** Derive ISO 4217 currency code from the user's locale. */
 function _detectCurrency(locale: string): string {
   try {
-    const region = locale.match(/[-_]([A-Z]{2})$/i)?.[1].toUpperCase();
+    const region = /[-_]([A-Z]{2})$/i.exec(locale)?.[1].toUpperCase();
     if (region) return REGION_CURRENCY_MAP[region] ?? 'USD';
   } catch { /* fall through */ }
   return 'USD';

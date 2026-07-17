@@ -98,7 +98,7 @@ watch(
 
 function selectItem(item: CPItem): void {
   if (shell.providersOnly && item.path !== '/providers') return;
-  void router.push(item.path);
+  router.push(item.path);
   shell.closeCommandPalette();
 }
 
@@ -141,6 +141,7 @@ onBeforeUnmount(() => document.removeEventListener('keydown', onGlobalKeydown));
         ref="inputRef"
         v-model="query"
         class="cp-input"
+        aria-label="Search the brain"
         placeholder="Search the brain… (try 'memory', 'policy')"
         @keydown="onKeydown"
       />

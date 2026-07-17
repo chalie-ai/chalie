@@ -50,9 +50,14 @@ watch(
 onUnmounted(stopClock);
 
 function pillSeconds(pill: LiveToolPill): string {
-  const ms = pill.resolved
-    ? Math.max(0, pill.ms ?? 0)
-    : Math.max(0, pill.startedAt ? now.value - pill.startedAt : 0);
+  let ms: number;
+  if (pill.resolved) {
+    ms = Math.max(0, pill.ms ?? 0);
+  } else if (pill.startedAt) {
+    ms = Math.max(0, now.value - pill.startedAt);
+  } else {
+    ms = 0;
+  }
   return (ms / 1000).toFixed(1);
 }
 </script>

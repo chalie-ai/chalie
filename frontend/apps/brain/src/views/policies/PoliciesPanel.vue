@@ -28,7 +28,8 @@ const categories = computed<PolicyCategory[]>(() => {
   for (const r of rows.value) {
     if (r.channel !== props.channel) continue;
     const cat = r.group || r.permission.split('.')[0];
-    (byCat[cat] ??= { cat, isMcp: !!r.group, rows: [] }).rows.push({
+    const category = (byCat[cat] ??= { cat, isMcp: !!r.group, rows: [] });
+    category.rows.push({
       r,
       label: r.label || r.permission,
     });

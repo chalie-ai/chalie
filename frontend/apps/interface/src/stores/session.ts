@@ -156,8 +156,8 @@ export const useSessionStore = defineStore('session', {
         // see ConversationTurnBlock) or settles it via `_finishTurn`.
         for (const key of liveWorkingKeys()) this._offlineWorking.add(key);
         for (const el of Array.from(document.querySelectorAll<HTMLElement>('[data-working][data-turn-id]'))) {
-          const turnId = Number(el.getAttribute('data-turn-id'));
-          const type = el.getAttribute('data-type') ?? ConfigType.USER;
+          const turnId = Number(el.dataset.turnId);
+          const type = el.dataset.type ?? ConfigType.USER;
           if (!Number.isNaN(turnId)) this._offlineWorking.add(`${type}:${turnId}`);
         }
         // Spine snapshot too (it has no stable id for the key set) — read

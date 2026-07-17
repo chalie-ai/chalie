@@ -8,7 +8,7 @@ export function formatDate(raw: string | null | undefined): string {
     const d = new Date(
       raw.includes('T') || raw.includes('+') || raw.includes('Z') ? raw : raw.replace(' ', 'T') + 'Z',
     );
-    if (isNaN(d.getTime())) return raw;
+    if (Number.isNaN(d.getTime())) return raw;
     const pad = (n: number): string => String(n).padStart(2, '0');
     return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
   } catch {
@@ -22,7 +22,7 @@ export function formatDate(raw: string | null | undefined): string {
  */
 export function escapeHtml(s: string | null | undefined): string {
   if (!s) return '';
-  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  return s.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;');
 }
 
 /**

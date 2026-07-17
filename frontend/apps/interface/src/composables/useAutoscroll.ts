@@ -34,6 +34,20 @@ export function useAutoscroll(feedRef: Ref<HTMLElement | null>) {
     });
   }
 
+  /** Re-scroll once each late-loading <img> inside `spine` lands, unless the
+   *  user scrolled away since — split out of `forceScrollToBottom` so its
+   *  nested callbacks stay within the nesting-depth limit. */
+  function _retryImageScroll(spine: HTMLElement, scroll: () => void): void {
+    for (const img of spine.querySelectorAll<HTMLImageElement>('img')) {
+      if (img.complete) continue;
+      const retry = (): void => {
+        if (!userScrolledUp.value) scroll();
+      };
+      img.addEventListener('load', retry, { once: true });
+      img.addEventListener('error', retry, { once: true });
+    }
+  }
+
   /**
    * Unconditionally scroll to the very bottom. Two nested rAFs straddle layout
    * + paint of just-appended nodes; then re-scroll once each late-loading <img>
@@ -53,15 +67,7 @@ export function useAutoscroll(feedRef: Ref<HTMLElement | null>) {
         const spine = feedRef.value;
         if (!spine) return;
 
-        for (const img of spine.querySelectorAll<HTMLImageElement>('img')) {
-          if (img.complete) continue;
-          // Re-scroll once the image lands, unless the user scrolled away since.
-          const retry = (): void => {
-            if (!userScrolledUp.value) scroll();
-          };
-          img.addEventListener('load', retry, { once: true });
-          img.addEventListener('error', retry, { once: true });
-        }
+        _retryImageScroll(spine, scroll);
       });
     });
   }

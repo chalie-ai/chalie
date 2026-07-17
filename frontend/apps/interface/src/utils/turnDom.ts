@@ -92,7 +92,7 @@ export function hasDoneScheduled(): boolean {
 export function isTurnWorking(turnId: number, type: string): boolean {
   return (
     _liveWorking.has(workingKey(turnId, type)) ||
-    getAllTurnEls(turnId, type).some((el) => el.hasAttribute('data-working'))
+    getAllTurnEls(turnId, type).some((el) => el.dataset.working !== undefined)
   );
 }
 
@@ -122,7 +122,7 @@ const _liveDone = new Set<string>();
 export function isTurnDone(turnId: number, type: string): boolean {
   return (
     _liveDone.has(workingKey(turnId, type)) ||
-    getAllTurnEls(turnId, type).some((el) => el.hasAttribute('data-done'))
+    getAllTurnEls(turnId, type).some((el) => el.dataset.done !== undefined)
   );
 }
 
@@ -192,7 +192,7 @@ export function clearSurfaceContainer(container: HTMLElement): void {
 export function resolveScopeContainer(threadId: number | null, type: string): HTMLElement | null {
   if (threadId == null) {
     const spine = _surfaces.get(SPINE_SURFACE_ID);
-    return spine && spine.type === type ? spine.container : null;
+    return spine?.type === type ? spine.container : null;
   }
   for (const surface of _surfaces.values()) {
     if (surface.id === SPINE_SURFACE_ID) continue;
@@ -281,14 +281,14 @@ function stampWorking(host: HTMLElement, block: ConversationTurnBlock, type: str
   if (!el) return;
   const working = block.working || _liveWorking.has(workingKey(block.turn_id, type));
   if (working) {
-    el.setAttribute('data-working', 'true');
+    el.dataset.working = 'true';
   } else {
-    el.removeAttribute('data-working');
+    delete el.dataset.working;
   }
   // Same catch-up for done (D16): a settle recorded while nothing rendered
   // this turn must surface on its first mount.
   if (_liveDone.has(workingKey(block.turn_id, type))) {
-    el.setAttribute('data-done', 'true');
+    el.dataset.done = 'true';
   }
 }
 
@@ -337,7 +337,7 @@ export function upsertTurnToSurfaces(
   // turn — see onTurnLanded's doc comment above).
   const spine = _surfaces.get(SPINE_SURFACE_ID);
   const isNewTopLevelTurn =
-    spine != null && spine.type === type && !getTurnEl(block.turn_id, type, spine.container);
+    spine?.type === type && !getTurnEl(block.turn_id, type, spine.container);
 
   let applied = false;
   for (const surface of _surfaces.values()) {
@@ -388,8 +388,8 @@ function insertInOrder(container: HTMLElement, host: HTMLElement, turnId: number
 /** Read `data-turn-id` from an element or its first descendant that carries it. */
 function readTurnId(el: Element): number | null {
   const attr =
-    el.getAttribute('data-turn-id') ??
-    el.querySelector('[data-turn-id]')?.getAttribute('data-turn-id') ??
+    (el as HTMLElement).dataset.turnId ??
+    el.querySelector<HTMLElement>('[data-turn-id]')?.dataset.turnId ??
     null;
   if (attr === null) return null;
   const num = Number(attr);
@@ -450,9 +450,9 @@ export function setTurnWorking(turnId: number, type: string, working: boolean): 
   // told the answer changed regardless of whether a DOM copy exists.
   for (const el of getAllTurnEls(turnId, type)) {
     if (working) {
-      el.setAttribute('data-working', 'true');
+      el.dataset.working = 'true';
     } else {
-      el.removeAttribute('data-working');
+      delete el.dataset.working;
     }
   }
   document.dispatchEvent(
@@ -477,9 +477,9 @@ export function setTurnDone(turnId: number, type: string, done: boolean): void {
   const els = getAllTurnEls(turnId, type);
   for (const el of els) {
     if (done) {
-      el.setAttribute('data-done', 'true');
+      el.dataset.done = 'true';
     } else {
-      el.removeAttribute('data-done');
+      delete el.dataset.done;
     }
   }
   document.dispatchEvent(

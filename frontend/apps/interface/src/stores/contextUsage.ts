@@ -16,15 +16,15 @@
 import { computed, ref } from 'vue';
 import { defineStore } from 'pinia';
 
+/** `type:turnId` — the cache key. */
+function keyOf(type: string, turnId: number): string {
+  return `${type}:${turnId}`;
+}
+
 export const useContextUsageStore = defineStore('contextUsage', () => {
   const byKey = ref<Record<string, { tokens: number; window: number }>>({});
   /** ConfigType → the turn that most recently reported usage on that channel. */
   const latestByType = ref<Record<string, number>>({});
-
-  /** `type:turnId` — the cache key. */
-  function keyOf(type: string, turnId: number): string {
-    return `${type}:${turnId}`;
-  }
 
   /**
    * The reading a dock should paint: its own thread's when it has a `turnId`,

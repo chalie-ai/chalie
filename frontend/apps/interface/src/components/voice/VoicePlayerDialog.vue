@@ -140,7 +140,7 @@ async function _open(text: string): Promise<void> {
     _audioCtx = webPlatformAdapter.createAudioContext();
   }
   if (_audioCtx.state === 'suspended') {
-    void _audioCtx.resume();
+    _audioCtx.resume();
   }
 
   _showDialog();
@@ -277,7 +277,7 @@ function _resetPlayback(): void {
   duration.value = 0;
   progressValue.value = 0;
   timeLabel.value = '0:00 / 0:00';
-  void _wakeLock?.release();
+  _wakeLock?.release();
 }
 
 function _playBufferFrom(buffer: AudioBuffer, offset: number): void {
@@ -285,7 +285,7 @@ function _playBufferFrom(buffer: AudioBuffer, offset: number): void {
 
   // Browsers may auto-suspend the AudioContext after a period of inactivity.
   if (_audioCtx.state === 'suspended') {
-    void _audioCtx.resume();
+    _audioCtx.resume();
   }
 
   const source = _audioCtx.createBufferSource();
@@ -301,7 +301,7 @@ function _playBufferFrom(buffer: AudioBuffer, offset: number): void {
     isPlaying.value = false;
     _stopProgressTimer();
     progressValue.value = buffer.duration || 0;
-    void _wakeLock?.release();
+    _wakeLock?.release();
   };
 
   try {
@@ -320,7 +320,7 @@ function _playBufferFrom(buffer: AudioBuffer, offset: number): void {
   _startProgressTimer();
 
   if (!_wakeLock) _wakeLock = webPlatformAdapter.createWakeLock();
-  void _wakeLock.acquire();
+  _wakeLock.acquire();
 }
 
 function _stopCurrentSource(): void {
@@ -361,7 +361,7 @@ function _togglePlayPause(): void {
   _paused = true;
   isPlaying.value = false;
   _stopProgressTimer();
-  void _wakeLock?.release();
+  _wakeLock?.release();
 }
 
 function _onScrub(e: Event): void {

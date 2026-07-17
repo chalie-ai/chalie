@@ -26,21 +26,21 @@ export function readDomContext(el: HTMLElement | null): {
     return { turnId: null, type: ConfigType.USER, transcriptRowId: null, dockScope: null };
   }
 
-  const turnIdEl = el.closest('[data-turn-id]');
-  const typeEl = el.closest('[data-type]');
-  const transcriptRowEl = el.closest('[data-transcript-row-id]');
-  const dockScopeEl = el.closest('[data-dock-scope]');
+  const turnIdEl = el.closest<HTMLElement>('[data-turn-id]');
+  const typeEl = el.closest<HTMLElement>('[data-type]');
+  const transcriptRowEl = el.closest<HTMLElement>('[data-transcript-row-id]');
+  const dockScopeEl = el.closest<HTMLElement>('[data-dock-scope]');
 
-  const parseTurnId = (attr: string | null): number | null => {
+  const parseTurnId = (attr: string | undefined): number | null => {
     if (!attr) return null;
     const num = Number(attr);
     return Number.isNaN(num) ? null : num;
   };
 
-  const turnId = parseTurnId(turnIdEl?.getAttribute('data-turn-id') ?? null);
-  const type = typeEl?.getAttribute('data-type') ?? ConfigType.USER;
-  const transcriptRowId = parseTurnId(transcriptRowEl?.getAttribute('data-transcript-row-id') ?? null);
-  const dockScope = parseTurnId(dockScopeEl?.getAttribute('data-dock-scope') ?? null);
+  const turnId = parseTurnId(turnIdEl?.dataset.turnId);
+  const type = typeEl?.dataset.type ?? ConfigType.USER;
+  const transcriptRowId = parseTurnId(transcriptRowEl?.dataset.transcriptRowId);
+  const dockScope = parseTurnId(dockScopeEl?.dataset.dockScope);
 
   return { turnId, type, transcriptRowId, dockScope };
 }

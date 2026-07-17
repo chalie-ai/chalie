@@ -92,8 +92,17 @@ const dayGroups = computed<DayGroup[]>(() => {
       groupMap.set(key, { date: dt, rows: [] });
     }
 
+    let timeText: string;
+    if (ev.all_day) {
+      timeText = 'All day';
+    } else if (dt) {
+      timeText = formatClock(dt);
+    } else {
+      timeText = '';
+    }
+
     groupMap.get(key)!.rows.push({
-      timeText: ev.all_day ? 'All day' : dt ? formatClock(dt) : '',
+      timeText,
       title: ev.title ?? '',
       location: ev.location ?? null,
     });

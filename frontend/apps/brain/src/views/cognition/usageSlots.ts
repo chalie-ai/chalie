@@ -88,7 +88,9 @@ function buildMonthSlots(bm: Record<string, BucketValue>, now: Date): SlotRow[] 
 }
 
 function buildLifetimeSlots(bm: Record<string, BucketValue>, now: Date): SlotRow[] {
-  const keys = Object.keys(bm).sort();
+  // YYYY-MM-DD keys: explicit codepoint compare — same ordering the default
+  // comparator produces for these strings, chronological by construction.
+  const keys = Object.keys(bm).sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
   if (keys.length === 0) return [];
   const monthAgg: Record<string, BucketValue> = {};
   for (const [k, v] of Object.entries(bm)) {

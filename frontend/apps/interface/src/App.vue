@@ -56,7 +56,7 @@ onMounted(() => {
   // Native shell only: request OS notification permission once so background
   // message notifications can fire. On web the browser drives its own prompt.
   if (isTauri) {
-    void platform.requestNotificationPermission();
+    platform.requestNotificationPermission();
   }
 
   // Heartbeat also surfaces auth expiry via /auth/status.
@@ -64,7 +64,7 @@ onMounted(() => {
   heartbeat.onAuthFailure(handleAuthFailure);
   heartbeat.start();
   // Prime geolocation permission once after start.
-  void heartbeat.requestLocationPermission();
+  heartbeat.requestLocationPermission();
 
   globalThis.addEventListener('keydown', onSearchHotkey);
 });

@@ -136,7 +136,7 @@ async function stopSubagent(subId: string): Promise<void> {
 // ── Lifecycle ─────────────────────────────────────────────────────────────────
 
 onMounted(() => {
-  void tasks.loadActiveTasks();
+  tasks.loadActiveTasks();
   pollTimer = setInterval(async () => {
     await tasks.loadActiveTasks();
   }, POLL_INTERVAL_MS);

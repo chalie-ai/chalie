@@ -41,7 +41,7 @@ function onDrop(ev: DragEvent): void {
   dragging.value = false;
   const files = ev.dataTransfer?.files;
   if (!files?.length) return;
-  void attachments.addFiles(files);
+  attachments.addFiles(files);
 }
 
 function onPaste(ev: ClipboardEvent): void {
@@ -53,7 +53,7 @@ function onPaste(ev: ClipboardEvent): void {
       const file = item.getAsFile();
       if (!file) continue;
       ev.preventDefault();
-      void attachments.addFiles([file]);
+      attachments.addFiles([file]);
       return;
     }
   }

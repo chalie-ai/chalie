@@ -81,7 +81,6 @@ export const useTasksStore = defineStore('tasks', {
         if (sub_id) {
           this.subagents.delete(sub_id);
         }
-        return;
       }
     },
   },

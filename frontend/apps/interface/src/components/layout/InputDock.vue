@@ -149,7 +149,7 @@ function openFilePicker(): void {
 /** addFiles dispatches on type, so one input covers images and documents alike. */
 function onFileInputChange(e: Event): void {
   const input = e.target as HTMLInputElement;
-  if (input.files?.length) void attachments.addFiles(input.files);
+  if (input.files?.length) attachments.addFiles(input.files);
   input.value = ''; // allow re-selecting the same file
 }
 
@@ -254,7 +254,7 @@ onMounted(() => {
   // Behavioral signals: typing cadence feeds the ambient snapshot.
   if (textareaRef.value) ambient.bindTypingInput(textareaRef.value);
 
-  void system.thinkingLevel(props.type, props.turnId ?? -1).then((r) => {
+  system.thinkingLevel(props.type, props.turnId ?? -1).then((r) => {
     const v = r?.level;
     level.value = v === 'medium' || v === 'high' ? v : 'auto';
   }).catch(() => { level.value = 'auto'; });

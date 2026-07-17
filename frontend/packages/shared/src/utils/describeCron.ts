@@ -129,7 +129,7 @@ function describeDom(dom: string): Days | null {
 function joinDayList(nums: number[]): string {
   if (nums.length === 1) return `day ${nums[0]}`;
   if (nums.length === 2) return `day ${nums[0]} and ${nums[1]}`;
-  return `days ${nums.slice(0, -1).join(', ')} and ${nums[nums.length - 1]}`;
+  return `days ${nums.slice(0, -1).join(', ')} and ${nums.at(-1)}`;
 }
 
 function describeMonth(month: string): string | null {
