@@ -320,60 +320,89 @@ class SchemaConvergenceService:
 
         for table_name, desired_cols in desired.items():
             if table_name not in actual:
-                ddl = self._extract_table_ddl(schema_sql, table_name)
-                if ddl:
-                    try:
-                        live_conn.execute(ddl)
-                        logger.info(f"[convergence] Created table: {table_name}")
-                        tables_created += 1
-                    except Exception as exc:
-                        logger.exception(f"[convergence] Failed to create table {table_name}: {exc}")
-                else:
-                    logger.warning(f"[convergence] No DDL found for missing table: {table_name}")
+                tables_created += self._create_missing_table(table_name, live_conn, schema_sql)
                 continue
 
             # Table exists — add any missing columns.
             live_cols = actual[table_name]
-            for col_name, col_info in desired_cols.items():
-                if col_name not in live_cols:
-                    # col_info tuple: (cid, name, type, notnull, dflt_value, pk)
-                    col_type = col_info[2] if col_info[2] else "TEXT"
-                    dflt_value = col_info[4]
-                    notnull = col_info[3]
-
-                    col_def = col_type
-                    if dflt_value is not None:
-                        col_def += f" DEFAULT {dflt_value}"
-                        if notnull:
-                            col_def += " NOT NULL"
-                    # Don't add NOT NULL without a default — SQLite rejects it for ADD COLUMN
-
-                    try:
-                        live_conn.execute(
-                            f"ALTER TABLE {table_name} ADD COLUMN {col_name} {col_def}"
-                        )
-                        logger.info(f"[convergence] Added column: {table_name}.{col_name}")
-                        columns_added += 1
-                    except Exception as exc:
-                        logger.exception(
-                            f"[convergence] Failed to add column {table_name}.{col_name}: {exc}"
-                        )
-
-            # Log type/constraint mismatches — SQLite cannot ALTER column types
-            # in place; rebuilding the table is destructive enough that we
-            # require an explicit migration helper rather than auto-fix.
-            for col_name, desired_info in desired_cols.items():
-                if col_name in live_cols:
-                    live_info = live_cols[col_name]
-                    desired_type = (desired_info[2] or "").lower()
-                    live_type = (live_info[2] or "").lower()
-                    if desired_type != live_type:
-                        logger.debug(
-                            f"[convergence] Type mismatch {table_name}.{col_name}: "
-                            f"desired={desired_type!r}, live={live_type!r} (not auto-fixed)"
-                        )
+            columns_added += self._add_missing_columns(
+                table_name, desired_cols, live_cols, live_conn
+            )
+            self._log_type_mismatches(table_name, desired_cols, live_cols)
 
         return tables_created, columns_added
+
+    def _create_missing_table(
+        self, table_name: str, live_conn: sqlite3.Connection, schema_sql: str
+    ) -> int:
+        """Create one missing table from schema.sql; returns 1 if created, else 0."""
+        ddl = self._extract_table_ddl(schema_sql, table_name)
+        if not ddl:
+            logger.warning(f"[convergence] No DDL found for missing table: {table_name}")
+            return 0
+        try:
+            live_conn.execute(ddl)
+            logger.info(f"[convergence] Created table: {table_name}")
+            return 1
+        except Exception as exc:
+            logger.exception(f"[convergence] Failed to create table {table_name}: {exc}")
+            return 0
+
+    def _add_missing_columns(
+        self,
+        table_name: str,
+        desired_cols: _TableCols,
+        live_cols: _TableCols,
+        live_conn: sqlite3.Connection,
+    ) -> int:
+        """ADD COLUMN for every desired column absent from the live table; returns the count added."""
+        added = 0
+        for col_name, col_info in desired_cols.items():
+            if col_name not in live_cols:
+                col_def = self._column_add_definition(col_info)
+                try:
+                    live_conn.execute(
+                        f"ALTER TABLE {table_name} ADD COLUMN {col_name} {col_def}"
+                    )
+                    logger.info(f"[convergence] Added column: {table_name}.{col_name}")
+                    added += 1
+                except Exception as exc:
+                    logger.exception(
+                        f"[convergence] Failed to add column {table_name}.{col_name}: {exc}"
+                    )
+        return added
+
+    def _column_add_definition(self, col_info: _ColInfo) -> str:
+        """Render the type/DEFAULT/NOT NULL clause for an ALTER TABLE ADD COLUMN."""
+        # col_info tuple: (cid, name, type, notnull, dflt_value, pk)
+        col_type = col_info[2] if col_info[2] else "TEXT"
+        dflt_value = col_info[4]
+        notnull = col_info[3]
+
+        col_def = col_type
+        if dflt_value is not None:
+            col_def += f" DEFAULT {dflt_value}"
+            if notnull:
+                col_def += " NOT NULL"
+        # Don't add NOT NULL without a default — SQLite rejects it for ADD COLUMN
+        return col_def
+
+    def _log_type_mismatches(
+        self, table_name: str, desired_cols: _TableCols, live_cols: _TableCols
+    ) -> None:
+        # Log type/constraint mismatches — SQLite cannot ALTER column types
+        # in place; rebuilding the table is destructive enough that we
+        # require an explicit migration helper rather than auto-fix.
+        for col_name, desired_info in desired_cols.items():
+            if col_name in live_cols:
+                live_info = live_cols[col_name]
+                desired_type = (desired_info[2] or "").lower()
+                live_type = (live_info[2] or "").lower()
+                if desired_type != live_type:
+                    logger.debug(
+                        f"[convergence] Type mismatch {table_name}.{col_name}: "
+                        f"desired={desired_type!r}, live={live_type!r} (not auto-fixed)"
+                    )
 
     # ──────────────────────────────────────────────────────────────────────────
     # Destructive convergence — drop what is no longer declared in schema.sql
@@ -581,60 +610,89 @@ class SchemaConvergenceService:
 
         for table_name, desired_ddl in desired.items():
             if table_name not in actual:
-                raw_ddl = self._extract_virtual_table_ddl(schema_sql, table_name)
-                if not raw_ddl:
-                    logger.warning(
-                        f"[convergence] No DDL found for missing virtual table: {table_name}"
-                    )
-                    continue
-
-                ok = self._create_virtual_table(live_conn, table_name, raw_ddl)
-                if ok:
-                    created += 1
-                    # For FTS5 content tables: rebuild to populate from the content table
-                    if "fts5" in desired_ddl and "content=" in desired_ddl:
-                        try:
-                            live_conn.execute(
-                                f"INSERT INTO {table_name}({table_name}) VALUES('rebuild')"
-                            )
-                            logger.info(f"[convergence] Rebuilt FTS5 index: {table_name}")
-                        except Exception as exc:
-                            logger.warning(
-                                f"[convergence] FTS5 rebuild failed for {table_name}: {exc}"
-                            )
+                created += self._create_missing_virtual_table(
+                    table_name, desired_ddl, live_conn, schema_sql
+                )
             elif actual[table_name] != desired_ddl:
-                # For FTS5 content tables, check if only the column list changed.
-                # If so, rebuild automatically (DROP + CREATE + rebuild).
-                live_ddl = actual[table_name]
-                if "fts5" in desired_ddl and "content=" in desired_ddl:
-                    desired_cols = self._extract_fts5_columns(desired_ddl)
-                    live_cols = self._extract_fts5_columns(live_ddl)
-                    if desired_cols != live_cols:
-                        logger.warning(
-                            f"[convergence] FTS5 column list changed for {table_name}: "
-                            f"{live_cols} -> {desired_cols}. Rebuilding."
-                        )
-                        raw_ddl = self._extract_virtual_table_ddl(schema_sql, table_name)
-                        if raw_ddl:
-                            try:
-                                live_conn.execute(f"DROP TABLE IF EXISTS {table_name}")
-                                live_conn.execute(raw_ddl)
-                                live_conn.execute(
-                                    f"INSERT INTO {table_name}({table_name}) VALUES('rebuild')"
-                                )
-                                logger.info(f"[convergence] Rebuilt FTS5 table (column change): {table_name}")
-                                created += 1
-                            except Exception as exc:
-                                logger.exception(
-                                    f"[convergence] Failed to rebuild FTS5 table {table_name}: {exc}"
-                                )
-                        continue
-                # Non-FTS5 or non-column-list change — log only
-                logger.warning(
-                    f"[convergence] Virtual table DDL mismatch (not auto-fixed): {table_name}"
+                created += self._reconcile_changed_virtual_table(
+                    table_name, desired_ddl, actual[table_name], live_conn, schema_sql
                 )
 
         return created
+
+    def _create_missing_virtual_table(
+        self,
+        table_name: str,
+        desired_ddl: str,
+        live_conn: sqlite3.Connection,
+        schema_sql: str,
+    ) -> int:
+        """Create one missing virtual table from schema.sql; returns 1 if created, else 0."""
+        raw_ddl = self._extract_virtual_table_ddl(schema_sql, table_name)
+        if not raw_ddl:
+            logger.warning(
+                f"[convergence] No DDL found for missing virtual table: {table_name}"
+            )
+            return 0
+
+        ok = self._create_virtual_table(live_conn, table_name, raw_ddl)
+        if not ok:
+            return 0
+        # For FTS5 content tables: rebuild to populate from the content table
+        if "fts5" in desired_ddl and "content=" in desired_ddl:
+            try:
+                live_conn.execute(
+                    f"INSERT INTO {table_name}({table_name}) VALUES('rebuild')"
+                )
+                logger.info(f"[convergence] Rebuilt FTS5 index: {table_name}")
+            except Exception as exc:
+                logger.warning(
+                    f"[convergence] FTS5 rebuild failed for {table_name}: {exc}"
+                )
+        return 1
+
+    def _reconcile_changed_virtual_table(
+        self,
+        table_name: str,
+        desired_ddl: str,
+        live_ddl: str,
+        live_conn: sqlite3.Connection,
+        schema_sql: str,
+    ) -> int:
+        """Handle a live virtual table whose DDL differs from schema.sql.
+
+        Returns 1 if the table was rebuilt, else 0.
+        """
+        # For FTS5 content tables, check if only the column list changed.
+        # If so, rebuild automatically (DROP + CREATE + rebuild).
+        if "fts5" in desired_ddl and "content=" in desired_ddl:
+            desired_cols = self._extract_fts5_columns(desired_ddl)
+            live_cols = self._extract_fts5_columns(live_ddl)
+            if desired_cols != live_cols:
+                logger.warning(
+                    f"[convergence] FTS5 column list changed for {table_name}: "
+                    f"{live_cols} -> {desired_cols}. Rebuilding."
+                )
+                raw_ddl = self._extract_virtual_table_ddl(schema_sql, table_name)
+                if raw_ddl:
+                    try:
+                        live_conn.execute(f"DROP TABLE IF EXISTS {table_name}")
+                        live_conn.execute(raw_ddl)
+                        live_conn.execute(
+                            f"INSERT INTO {table_name}({table_name}) VALUES('rebuild')"
+                        )
+                        logger.info(f"[convergence] Rebuilt FTS5 table (column change): {table_name}")
+                        return 1
+                    except Exception as exc:
+                        logger.exception(
+                            f"[convergence] Failed to rebuild FTS5 table {table_name}: {exc}"
+                        )
+                return 0
+        # Non-FTS5 or non-column-list change — log only
+        logger.warning(
+            f"[convergence] Virtual table DDL mismatch (not auto-fixed): {table_name}"
+        )
+        return 0
 
     def _converge_triggers(
         self,
@@ -652,34 +710,48 @@ class SchemaConvergenceService:
 
         for trigger_name, desired_ddl in desired.items():
             if trigger_name not in actual:
-                raw_ddl = self._extract_trigger_ddl(schema_sql, trigger_name)
-                if not raw_ddl:
-                    logger.warning(
-                        f"[convergence] No DDL found for missing trigger: {trigger_name}"
-                    )
-                    continue
-                try:
-                    live_conn.execute(raw_ddl)
-                    logger.info(f"[convergence] Created trigger: {trigger_name}")
-                    synced += 1
-                except Exception as exc:
-                    logger.exception(f"[convergence] Failed to create trigger {trigger_name}: {exc}")
+                synced += self._create_missing_trigger(trigger_name, live_conn, schema_sql)
             elif actual[trigger_name] != desired_ddl:
-                raw_ddl = self._extract_trigger_ddl(schema_sql, trigger_name)
-                if not raw_ddl:
-                    logger.warning(
-                        f"[convergence] No DDL found for changed trigger: {trigger_name}"
-                    )
-                    continue
-                try:
-                    live_conn.execute(f"DROP TRIGGER IF EXISTS {trigger_name}")
-                    live_conn.execute(raw_ddl)
-                    logger.info(f"[convergence] Recreated trigger (DDL changed): {trigger_name}")
-                    synced += 1
-                except Exception as exc:
-                    logger.exception(f"[convergence] Failed to recreate trigger {trigger_name}: {exc}")
+                synced += self._recreate_changed_trigger(trigger_name, live_conn, schema_sql)
 
         return synced
+
+    def _create_missing_trigger(
+        self, trigger_name: str, live_conn: sqlite3.Connection, schema_sql: str
+    ) -> int:
+        """Create one missing trigger from schema.sql; returns 1 if created, else 0."""
+        raw_ddl = self._extract_trigger_ddl(schema_sql, trigger_name)
+        if not raw_ddl:
+            logger.warning(
+                f"[convergence] No DDL found for missing trigger: {trigger_name}"
+            )
+            return 0
+        try:
+            live_conn.execute(raw_ddl)
+            logger.info(f"[convergence] Created trigger: {trigger_name}")
+            return 1
+        except Exception as exc:
+            logger.exception(f"[convergence] Failed to create trigger {trigger_name}: {exc}")
+            return 0
+
+    def _recreate_changed_trigger(
+        self, trigger_name: str, live_conn: sqlite3.Connection, schema_sql: str
+    ) -> int:
+        """DROP+CREATE one trigger whose DDL changed; returns 1 if recreated, else 0."""
+        raw_ddl = self._extract_trigger_ddl(schema_sql, trigger_name)
+        if not raw_ddl:
+            logger.warning(
+                f"[convergence] No DDL found for changed trigger: {trigger_name}"
+            )
+            return 0
+        try:
+            live_conn.execute(f"DROP TRIGGER IF EXISTS {trigger_name}")
+            live_conn.execute(raw_ddl)
+            logger.info(f"[convergence] Recreated trigger (DDL changed): {trigger_name}")
+            return 1
+        except Exception as exc:
+            logger.exception(f"[convergence] Failed to recreate trigger {trigger_name}: {exc}")
+            return 0
 
     def _drop_stale_triggers(
         self,

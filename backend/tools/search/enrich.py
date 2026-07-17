@@ -104,6 +104,26 @@ def _enrich_one(result: dict[str, object]) -> dict[str, object]:
     return result
 
 
+def _enrich_concurrently(
+    need_enrich: list[tuple[int, dict[str, object]]],
+) -> dict[int, dict[str, object]]:
+    """Enrich the blank-summary subset concurrently, keyed by original index."""
+    enriched_by_index: dict[int, dict[str, object]] = {}
+    with ThreadPoolExecutor(max_workers=_MAX_WORKERS) as executor:
+        future_to_idx = {
+            executor.submit(_enrich_one, r): idx
+            for idx, r in need_enrich
+        }
+        for future in as_completed(future_to_idx):
+            idx = future_to_idx[future]
+            try:
+                enriched_by_index[idx] = future.result()
+            except Exception as exc:  # noqa: BLE001 — belt-and-suspenders
+                logger.debug("[SEARCH] enrich future error at index %d: %s", idx, exc)
+                enriched_by_index[idx] = dict(need_enrich)[idx]
+    return enriched_by_index
+
+
 def enrich_missing_summaries(results: list[dict[str, object]]) -> list[dict[str, object]]:
     """Fill ``summary`` (and optionally ``date``) for results with blank summaries.
 
@@ -143,18 +163,7 @@ def enrich_missing_summaries(results: list[dict[str, object]]) -> list[dict[str,
         idx, r = need_enrich[0]
         enriched_by_index[idx] = _enrich_one(r)
     else:
-        with ThreadPoolExecutor(max_workers=_MAX_WORKERS) as executor:
-            future_to_idx = {
-                executor.submit(_enrich_one, r): idx
-                for idx, r in need_enrich
-            }
-            for future in as_completed(future_to_idx):
-                idx = future_to_idx[future]
-                try:
-                    enriched_by_index[idx] = future.result()
-                except Exception as exc:  # noqa: BLE001 — belt-and-suspenders
-                    logger.debug("[SEARCH] enrich future error at index %d: %s", idx, exc)
-                    enriched_by_index[idx] = dict(need_enrich)[idx]
+        enriched_by_index = _enrich_concurrently(need_enrich)
 
     # Reassemble in original order.
     out: list[dict[str, object]] = []

@@ -296,6 +296,30 @@ _TTS_SILENCE_PAD_SECONDS = 0.15
 _TTS_SPLIT_RE = re.compile(r"(?<=[.!?,;:—])\s+")
 
 
+def _hard_split_fragment(chunks: list[str], current: str, fragment: str, limit: int) -> str:
+    """Whitespace-split an over-limit fragment into chunks; returns the new current."""
+    for word in fragment.split():
+        word = word[:limit]
+        wc = f"{current} {word}".strip() if current else word
+        if len(wc) <= limit:
+            current = wc
+        else:
+            if current:
+                chunks.append(current)
+            current = word
+    return current
+
+
+def _flush_chunk(chunks: list[str], current: str, fragment: str, limit: int) -> str:
+    """Close out ``current`` and open a new chunk from ``fragment``; returns the new current."""
+    if current:
+        chunks.append(current)
+    # Fragment itself over limit — hard-split on whitespace.
+    if len(fragment) > limit:
+        return _hard_split_fragment(chunks, current, fragment, limit)
+    return fragment
+
+
 def _segment_for_tts(text: str) -> list[str]:
     if not text:
         return []
@@ -310,24 +334,34 @@ def _segment_for_tts(text: str) -> list[str]:
         if len(candidate) <= limit:
             current = candidate
         else:
-            if current:
-                chunks.append(current)
-            # Fragment itself over limit — hard-split on whitespace.
-            if len(fragment) > limit:
-                for word in fragment.split():
-                    word = word[:limit]
-                    wc = f"{current} {word}".strip() if current else word
-                    if len(wc) <= limit:
-                        current = wc
-                    else:
-                        if current:
-                            chunks.append(current)
-                        current = word
-            else:
-                current = fragment
+            current = _flush_chunk(chunks, current, fragment, limit)
     if current:
         chunks.append(current)
     return chunks or [text]
+
+
+def _collapse_ngram_runs(words: list[str], n: int) -> list[str]:
+    """Collapse consecutive runs of one n-gram length down to the repeat cap."""
+    lower = [w.lower() for w in words]
+    out: list[str] = []
+    i = 0
+    while i < len(words):
+        if i + n > len(words):
+            out.extend(words[i:])
+            break
+        phrase = tuple(lower[i:i + n])
+        j, run = i + n, 1
+        while j + n <= len(words) and tuple(lower[j:j + n]) == phrase:
+            run += 1
+            j += n
+        if run > _MAX_CONSECUTIVE_PHRASE_REPEATS:
+            for _ in range(_MAX_CONSECUTIVE_PHRASE_REPEATS):
+                out.extend(words[i:i + n])
+            i = j
+        else:
+            out.append(words[i])
+            i += 1
+    return out
 
 
 def _dedup_repetitions(text: str) -> str:
@@ -339,26 +373,7 @@ def _dedup_repetitions(text: str) -> str:
         for n in range(_MAX_NGRAM_WORDS, 1, -1):
             if len(words) < n * 3:
                 continue
-            lower = [w.lower() for w in words]
-            out: list[str] = []
-            i = 0
-            while i < len(words):
-                if i + n > len(words):
-                    out.extend(words[i:])
-                    break
-                phrase = tuple(lower[i:i + n])
-                j, run = i + n, 1
-                while j + n <= len(words) and tuple(lower[j:j + n]) == phrase:
-                    run += 1
-                    j += n
-                if run > _MAX_CONSECUTIVE_PHRASE_REPEATS:
-                    for _ in range(_MAX_CONSECUTIVE_PHRASE_REPEATS):
-                        out.extend(words[i:i + n])
-                    i = j
-                else:
-                    out.append(words[i])
-                    i += 1
-            words = out
+            words = _collapse_ngram_runs(words, n)
         return " ".join(words)
     except Exception:
         logger.exception("[Voice] _dedup_repetitions failed on len=%d", len(text))

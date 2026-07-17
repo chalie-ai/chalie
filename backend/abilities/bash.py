@@ -78,13 +78,8 @@ def _has_recursive_flag(tokens: list[str]) -> bool:
     return False
 
 
-def _is_rm_rf(command: str) -> bool:
-    try:
-        tokens = shlex.split(command)
-    except ValueError:
-        return False
-    if not tokens or tokens[0] != "rm":
-        return False
+def _rm_flags(tokens: list[str]) -> tuple[bool, bool]:
+    """Scan rm's leading flags; returns (has_recursive, has_force)."""
     has_r = False
     has_f = False
     for t in tokens[1:]:
@@ -99,6 +94,17 @@ def _is_rm_rf(command: str) -> bool:
                 has_f = True
         elif not t.startswith("-"):
             break
+    return has_r, has_f
+
+
+def _is_rm_rf(command: str) -> bool:
+    try:
+        tokens = shlex.split(command)
+    except ValueError:
+        return False
+    if not tokens or tokens[0] != "rm":
+        return False
+    has_r, has_f = _rm_flags(tokens)
     return has_r and has_f
 
 
