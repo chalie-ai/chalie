@@ -86,12 +86,10 @@ class ProviderDbService:
             return None
         return self._provider_to_dict(provider)
 
-    def create_provider(self, data: Dict[str, object]) -> Optional[Dict[str, object]]:
-        default_model = data.get("model")
-        if not default_model:
-            raise ValueError("'model' is required")
-
-        platform = data.get("platform", "")
+    @staticmethod
+    def _validate_openai_compatible_fields(platform: object, data: Dict[str, object]) -> None:
+        """Raise ValueError if an openai_compatible provider is missing its
+        required 'host'/'api_key' fields. Extracted from create_provider."""
         if platform == "openai_compatible":
             if not data.get("host"):
                 raise ValueError(
@@ -103,15 +101,19 @@ class ProviderDbService:
                     "openai_compatible provider requires 'api_key' field"
                 )
 
-        api_key_val = cast(Optional[str], data.get("api_key"))
-        encrypted_key = self._seal_api_key(api_key_val) if api_key_val else None
+    def _probe_vision_on_create(
+        self, platform: object, default_model: object, api_key_val: Optional[str], data: Dict[str, object],
+    ) -> int:
+        """Verify vision support with a live probe (content-verifying).
 
-        # Verify vision support with a live probe (content-verifying).
-        # Uses the plaintext api_key from `data` (pre-seal). Any failure → 0.
-        # A key-requiring platform with no key cannot be probed — skip the
-        # (guaranteed-to-fail) network call and default to 0; a later key edit
-        # re-probes. Mirrors the update-path guard for create/update symmetry.
-        # codex_cli is chat-only and has no api_key — never probe it.
+        Uses the plaintext api_key from `data` (pre-seal). Any failure → 0.
+        A key-requiring platform with no key cannot be probed — skip the
+        (guaranteed-to-fail) network call and default to 0; a later key edit
+        re-probes. Mirrors the update-path guard for create/update symmetry.
+        codex_cli is chat-only and has no api_key — never probe it.
+
+        Extracted from create_provider.
+        """
         if platform == 'codex_cli' or (platform in self._KEY_REQUIRING and not api_key_val):
             logger.warning(
                 "[Provider] Skipping vision probe on create for '%s' — "
@@ -119,17 +121,30 @@ class ProviderDbService:
                 safe(data.get('name')),
                 "codex_cli is chat-only" if platform == 'codex_cli' else "no api_key available",
             )
-            vision = 0
-        else:
-            from services.vision_probe import probe_provider
-            probe_config = {
-                'platform': data.get('platform', ''),
-                'model': default_model,
-                'api_key': api_key_val,
-                'host': data.get('host'),
-                'name': data.get('name'),
-            }
-            vision = 1 if probe_provider(probe_config) else 0
+            return 0
+
+        from services.vision_probe import probe_provider
+        probe_config = {
+            'platform': data.get('platform', ''),
+            'model': default_model,
+            'api_key': api_key_val,
+            'host': data.get('host'),
+            'name': data.get('name'),
+        }
+        return 1 if probe_provider(probe_config) else 0
+
+    def create_provider(self, data: Dict[str, object]) -> Optional[Dict[str, object]]:
+        default_model = data.get("model")
+        if not default_model:
+            raise ValueError("'model' is required")
+
+        platform = data.get("platform", "")
+        self._validate_openai_compatible_fields(platform, data)
+
+        api_key_val = cast(Optional[str], data.get("api_key"))
+        encrypted_key = self._seal_api_key(api_key_val) if api_key_val else None
+
+        vision = self._probe_vision_on_create(platform, default_model, api_key_val, data)
 
         with Database.transaction():
             provider = ProviderModel(
@@ -154,6 +169,40 @@ class ProviderDbService:
         # Fetch the newly created row and return it
         return self.get_provider_by_id(cast(int, new_id))
 
+    def _reprobe_vision_on_update(
+        self, provider_id: int, data: Dict[str, object], updates: Dict[str, object],
+    ) -> None:
+        """Re-probe vision support only when a probe-relevant field changes
+        (platform/model/host/api_key). Name-only edits never re-probe.
+        Mutates ``updates`` in place. Extracted from update_provider."""
+        _probe_fields = {'platform', 'model', 'host', 'api_key'}
+        if not (_probe_fields & set(data.keys())):
+            return
+
+        current = self.get_provider_by_id(provider_id) or {}
+        eff_platform = data.get('platform', current.get('platform', ''))
+        eff_model = data.get('model', current.get('model', ''))
+        eff_host = data.get('host', current.get('host'))
+        # explicit new api_key wins; else reuse current (decrypted) value
+        eff_api_key = data['api_key'] if 'api_key' in data else current.get('api_key')
+        if eff_platform == 'codex_cli':
+            # codex_cli is chat-only — no vision probe, no api_key needed
+            updates["supports_vision"] = 0
+        elif eff_platform in self._KEY_REQUIRING and not eff_api_key:
+            # vault locked / no credential — cannot probe, leave column as-is
+            logger.warning(
+                "[Provider] Skipping vision re-probe for id=%s — no api_key available",
+                provider_id,
+            )
+        else:
+            from services.vision_probe import probe_provider
+            probe_config = {
+                'platform': eff_platform, 'model': eff_model,
+                'api_key': eff_api_key, 'host': eff_host,
+                'name': current.get('name'),
+            }
+            updates["supports_vision"] = 1 if probe_provider(probe_config) else 0
+
     def update_provider(self, provider_id: int, data: Dict[str, object]) -> Optional[Dict[str, object]]:
         updates: Dict[str, object] = {}
 
@@ -161,33 +210,7 @@ class ProviderDbService:
             if key in data:
                 updates[key] = data[key]
 
-        # Re-probe vision support only when a probe-relevant field changes
-        # (platform/model/host/api_key). Name-only edits never re-probe.
-        _probe_fields = {'platform', 'model', 'host', 'api_key'}
-        if _probe_fields & set(data.keys()):
-            current = self.get_provider_by_id(provider_id) or {}
-            eff_platform = data.get('platform', current.get('platform', ''))
-            eff_model = data.get('model', current.get('model', ''))
-            eff_host = data.get('host', current.get('host'))
-            # explicit new api_key wins; else reuse current (decrypted) value
-            eff_api_key = data['api_key'] if 'api_key' in data else current.get('api_key')
-            if eff_platform == 'codex_cli':
-                # codex_cli is chat-only — no vision probe, no api_key needed
-                updates["supports_vision"] = 0
-            elif eff_platform in self._KEY_REQUIRING and not eff_api_key:
-                # vault locked / no credential — cannot probe, leave column as-is
-                logger.warning(
-                    "[Provider] Skipping vision re-probe for id=%s — no api_key available",
-                    provider_id,
-                )
-            else:
-                from services.vision_probe import probe_provider
-                probe_config = {
-                    'platform': eff_platform, 'model': eff_model,
-                    'api_key': eff_api_key, 'host': eff_host,
-                    'name': current.get('name'),
-                }
-                updates["supports_vision"] = 1 if probe_provider(probe_config) else 0
+        self._reprobe_vision_on_update(provider_id, data, updates)
 
         # Handle api_key separately for encryption
         if "api_key" in data:

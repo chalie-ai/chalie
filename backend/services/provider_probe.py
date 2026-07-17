@@ -21,7 +21,7 @@ import ipaddress
 import logging
 import socket
 from dataclasses import dataclass
-from typing import cast
+from typing import Any, cast
 from urllib.parse import urlparse
 
 import requests as req
@@ -84,6 +84,24 @@ def normalise_ollama_host(host: str) -> str:
     return host or 'http://localhost:11434'
 
 
+def _check_dns_resolved_ips(hostname: str) -> str | None:
+    """Resolve ``hostname`` via DNS and return an error message if any
+    resolved address is blocked/link-local/multicast/unspecified, else
+    ``None``. Extracted from validate_ollama_host."""
+    try:
+        resolved = socket.getaddrinfo(hostname, None, proto=socket.IPPROTO_TCP)
+        for _, _, _, _, sockaddr in resolved:
+            ip_str = sockaddr[0]
+            if ip_str in _SSRF_BLOCKED_HOSTS:
+                return _HOST_NOT_ALLOWED_MSG
+            ip = ipaddress.ip_address(ip_str)
+            if ip.is_link_local or ip.is_multicast or ip.is_unspecified:
+                return _HOST_NOT_ALLOWED_MSG
+    except socket.gaierror:
+        return "Cannot resolve hostname"
+    return None
+
+
 def validate_ollama_host(host: str) -> tuple[str | None, str | None]:
     safe = normalise_ollama_host(host)
     parsed = urlparse(safe)
@@ -99,17 +117,9 @@ def validate_ollama_host(host: str) -> tuple[str | None, str | None]:
         if addr.is_link_local or addr.is_multicast or addr.is_reserved or addr.is_unspecified:
             return None, _HOST_NOT_ALLOWED_MSG
     except ValueError:
-        try:
-            resolved = socket.getaddrinfo(hostname, None, proto=socket.IPPROTO_TCP)
-            for _, _, _, _, sockaddr in resolved:
-                ip_str = sockaddr[0]
-                if ip_str in _SSRF_BLOCKED_HOSTS:
-                    return None, _HOST_NOT_ALLOWED_MSG
-                ip = ipaddress.ip_address(ip_str)
-                if ip.is_link_local or ip.is_multicast or ip.is_unspecified:
-                    return None, _HOST_NOT_ALLOWED_MSG
-        except socket.gaierror:
-            return None, "Cannot resolve hostname"
+        err = _check_dns_resolved_ips(hostname)
+        if err is not None:
+            return None, err
     return safe, None
 
 
@@ -234,6 +244,48 @@ _GEMINI_MODELS_URL = 'https://generativelanguage.googleapis.com/v1beta/models'
 _GEMINI_MAX_PAGES = 10
 
 
+def _extract_gemini_models_from_page(data: Any) -> list[dict[str, str | None]]:
+    """Filter one Gemini list-models page to generateContent-capable models,
+    stripping the ``models/`` prefix from each id. Extracted from
+    fetch_gemini_models."""
+    models: list[dict[str, str | None]] = []
+    for m in (data.get('models') or []):
+        methods = m.get('supportedGenerationMethods') or []
+        if 'generateContent' not in methods:
+            continue
+        name = m.get('name') or ''
+        mid = name[len('models/'):] if name.startswith('models/') else name
+        if not mid:
+            continue
+        models.append({"id": mid, "display_name": m.get('displayName')})
+    return models
+
+
+def _fetch_gemini_page(
+    api_key: str, page_token: str | None,
+) -> tuple[list[dict[str, str | None]], str | None, str | None]:
+    """Fetch and filter one page of Gemini models. Returns
+    ``(models, next_page_token, error)``; ``models`` is empty and
+    ``next_page_token`` is ``None`` when ``error`` is set. Extracted from
+    fetch_gemini_models."""
+    params: dict[str, str | int] = {'pageSize': 1000}
+    if page_token:
+        params['pageToken'] = page_token
+    r = req.get(
+        _GEMINI_MODELS_URL,
+        params=params,
+        headers={'x-goog-api-key': api_key},
+        timeout=_LIST_MODELS_TIMEOUT,
+    )
+    if r.status_code in (400, 401, 403):
+        return [], None, _INVALID_API_KEY_MSG
+    if not r.ok:
+        return [], None, f"Gemini API returned {r.status_code}"
+    data = r.json()
+    models = _extract_gemini_models_from_page(data)
+    return models, data.get('nextPageToken'), None
+
+
 def fetch_gemini_models(api_key: str) -> tuple[list[dict[str, str | None]] | None, str | None]:
     """Cap pagination at 10 pages. Only ``generateContent`` models; strips ``models/`` prefix."""
     if not api_key:
@@ -242,30 +294,10 @@ def fetch_gemini_models(api_key: str) -> tuple[list[dict[str, str | None]] | Non
         models = []
         page_token = None
         for _ in range(_GEMINI_MAX_PAGES):
-            params: dict[str, str | int] = {'pageSize': 1000}
-            if page_token:
-                params['pageToken'] = page_token
-            r = req.get(
-                _GEMINI_MODELS_URL,
-                params=params,
-                headers={'x-goog-api-key': api_key},
-                timeout=_LIST_MODELS_TIMEOUT,
-            )
-            if r.status_code in (400, 401, 403):
-                return None, _INVALID_API_KEY_MSG
-            if not r.ok:
-                return None, f"Gemini API returned {r.status_code}"
-            data = r.json()
-            for m in (data.get('models') or []):
-                methods = m.get('supportedGenerationMethods') or []
-                if 'generateContent' not in methods:
-                    continue
-                name = m.get('name') or ''
-                mid = name[len('models/'):] if name.startswith('models/') else name
-                if not mid:
-                    continue
-                models.append({"id": mid, "display_name": m.get('displayName')})
-            page_token = data.get('nextPageToken')
+            page_models, page_token, err = _fetch_gemini_page(api_key, page_token)
+            if err is not None:
+                return None, err
+            models.extend(page_models)
             if not page_token:
                 break
         return models, None
@@ -276,6 +308,26 @@ def fetch_gemini_models(api_key: str) -> tuple[list[dict[str, str | None]] | Non
     except Exception as e:
         logger.warning(f"[Provider probe] Gemini model list failed: {type(e).__name__}: {e}")
         return None, "Gemini API request failed"
+
+
+def _parse_openai_compatible_models(data: Any) -> list[dict[str, str | None]]:
+    """Normalise an OpenAI-compatible /models response (dict-wrapped, or a
+    bare list; string or object entries) into the common model-dict shape.
+    Extracted from fetch_openai_compatible_models."""
+    items = data.get('data') or []
+    if isinstance(data, list):
+        items = data
+    models: list[dict[str, str | None]] = []
+    for m in items:
+        if isinstance(m, str):
+            models.append({"id": m, "display_name": None})
+            continue
+        mid = m.get('id') or m.get('name') or ''
+        if not mid:
+            continue
+        models.append({"id": mid, "display_name": m.get('display_name')})
+    models.sort(key=lambda m: cast(str, m['id']))
+    return models
 
 
 def fetch_openai_compatible_models(
@@ -300,19 +352,7 @@ def fetch_openai_compatible_models(
         if not r.ok:
             return None, f"API returned {r.status_code}"
         data = r.json()
-        items = data.get('data') or []
-        if isinstance(data, list):
-            items = data
-        models = []
-        for m in items:
-            if isinstance(m, str):
-                models.append({"id": m, "display_name": None})
-                continue
-            mid = m.get('id') or m.get('name') or ''
-            if not mid:
-                continue
-            models.append({"id": mid, "display_name": m.get('display_name')})
-        models.sort(key=lambda m: cast(str, m['id']))
+        models = _parse_openai_compatible_models(data)
         return models, None
     except req.exceptions.ConnectionError:
         return None, f"Cannot connect to {safe_host}"

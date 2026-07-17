@@ -104,6 +104,25 @@ LOCALE_REGION_OVERRIDES = {
 }
 
 
+def _resolve_culture_region(locale: str, language: str) -> str | None:
+    """Map locale/language to a culture region: region-specific overrides
+    first (e.g., pt-BR → latin_american), then language-only fallback.
+    Returns ``None`` if no mapping applies. Extracted from
+    ``ClientContextService._seed_demographic_traits``."""
+    # Try region-specific overrides first (e.g., pt-BR → latin_american)
+    for locale_key in [locale, language]:
+        if locale_key in LOCALE_REGION_OVERRIDES:
+            return LOCALE_REGION_OVERRIDES[locale_key]
+
+    # Fall back to language-only mapping
+    for locale_key in [locale, language]:
+        lang_code = locale_key.split("-")[0].lower() if locale_key else ""
+        if lang_code in LOCALE_CULTURE_MAP:
+            return LOCALE_CULTURE_MAP[lang_code]
+
+    return None
+
+
 class ClientContextService:
     """Manages client context (timezone, location, device, behavioral signals).
 
@@ -140,6 +159,38 @@ class ClientContextService:
             logging.warning(f"[CLIENT CONTEXT] Unexpected error resolving location: {e}")
         return None
 
+    def _apply_location_resolution(
+        self, ctx: dict[str, object], cached_ctx: dict[str, object], location: dict[str, object],
+    ) -> None:
+        """Resolve and stamp ``location_name`` onto ``ctx`` when the location
+        changed significantly (or the cached name is missing/stale). Mutates
+        ``ctx`` in place — extracted from ``save()``."""
+        # ``cached_ctx.get("X", {})`` returns ``None`` when the key exists
+        # with value ``None`` — which it will, because ``_flatten`` JSON-
+        # encodes ``None`` as ``"null"`` and ``_unflatten`` decodes it back
+        # to ``None``. Coerce explicitly so ``.get()`` chaining is safe.
+        cached_location = cast(dict[str, object], cached_ctx.get("location") or {})
+        lat_changed = abs(cast(float, location.get("lat", 0)) - cast(float, cached_location.get("lat", 0))) > 0.05
+        lon_changed = abs(cast(float, location.get("lon", 0)) - cast(float, cached_location.get("lon", 0))) > 0.05
+
+        no_cached_name = "location_name" not in cached_ctx
+        cached_stale = cached_ctx.get("_location_name_stale", False)
+
+        if lat_changed or lon_changed or no_cached_name or cached_stale:
+            location_name = self._resolve_location_name(cast(float, location["lat"]), cast(float, location["lon"]))
+            if location_name:
+                ctx["location_name"] = location_name
+                ctx.pop("_location_name_stale", None)
+                logging.debug(f"[CLIENT CONTEXT] Resolved location: {location_name}")
+            else:
+                if "location_name" in cached_ctx:
+                    ctx["location_name"] = cached_ctx["location_name"]
+                ctx["_location_name_stale"] = True
+                logging.debug("[CLIENT CONTEXT] Location resolve failed, marked stale for retry")
+        else:
+            if "location_name" in cached_ctx:
+                ctx["location_name"] = cached_ctx["location_name"]
+
     def save(self, ctx: dict[str, object]) -> None:
         """Handles location resolution, behavioral-data merging, location
         history, session re-entry, and demographic seeding."""
@@ -151,32 +202,7 @@ class ClientContextService:
 
         # Resolve location name if location changed significantly
         if location := cast(dict[str, object], ctx.get("location")):
-            # ``cached_ctx.get("X", {})`` returns ``None`` when the key exists
-            # with value ``None`` — which it will, because ``_flatten`` JSON-
-            # encodes ``None`` as ``"null"`` and ``_unflatten`` decodes it back
-            # to ``None``. Coerce explicitly so ``.get()`` chaining is safe.
-            cached_location = cast(dict[str, object], cached_ctx.get("location") or {})
-            lat_changed = abs(cast(float, location.get("lat", 0)) - cast(float, cached_location.get("lat", 0))) > 0.05
-            lon_changed = abs(cast(float, location.get("lon", 0)) - cast(float, cached_location.get("lon", 0))) > 0.05
-
-            no_cached_name = "location_name" not in cached_ctx
-            cached_stale = cached_ctx.get("_location_name_stale", False)
-
-            if lat_changed or lon_changed or no_cached_name or cached_stale:
-                location_name = self._resolve_location_name(cast(float, location["lat"]), cast(float, location["lon"]))
-                if location_name:
-                    ctx["location_name"] = location_name
-                    ctx.pop("_location_name_stale", None)
-                    logging.debug(f"[CLIENT CONTEXT] Resolved location: {location_name}")
-                else:
-                    if "location_name" in cached_ctx:
-                        ctx["location_name"] = cached_ctx["location_name"]
-                    ctx["_location_name_stale"] = True
-                    logging.debug("[CLIENT CONTEXT] Location resolve failed, marked stale for retry")
-            else:
-                if "location_name" in cached_ctx:
-                    ctx["location_name"] = cached_ctx["location_name"]
-
+            self._apply_location_resolution(ctx, cached_ctx, location)
 
         from services.heartbeat_service import heartbeat_service
         heartbeat_service.write(ctx)
@@ -237,21 +263,7 @@ class ClientContextService:
         locale = cast(str, ctx.get("locale", ""))
         language = cast(str, ctx.get("language", ""))
 
-        # Try region-specific overrides first (e.g., pt-BR → latin_american)
-        culture = None
-        for locale_key in [locale, language]:
-            if locale_key in LOCALE_REGION_OVERRIDES:
-                culture = LOCALE_REGION_OVERRIDES[locale_key]
-                break
-
-        # Fall back to language-only mapping
-        if not culture:
-            for locale_key in [locale, language]:
-                lang_code = locale_key.split("-")[0].lower() if locale_key else ""
-                if lang_code in LOCALE_CULTURE_MAP:
-                    culture = LOCALE_CULTURE_MAP[lang_code]
-                    break
-
+        culture = _resolve_culture_region(locale, language)
         if not culture:
             return
 

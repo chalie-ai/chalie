@@ -17,6 +17,7 @@ Supported formats (heavy-library imports are lazy):
 
 import logging
 import mimetypes
+from typing import Any, cast
 
 logger = logging.getLogger(__name__)
 
@@ -94,6 +95,23 @@ def detect_mime_type(file_path: str) -> str:
 
 # ─── Format-specific extractors (internal) ───────────────────────────────────
 
+def _pdf_page_text(page: Any) -> str:
+    """Extract one PDF page's text, appending any detected tables as
+    pipe-joined rows. Extracted from _extract_pdf."""
+    page_text = page.extract_text() or ''
+
+    tables = page.extract_tables()
+    if tables:
+        for table in tables:
+            rows = []
+            for row in table:
+                cells = [str(cell or '').strip() for cell in row]
+                rows.append(' | '.join(cells))
+            page_text += '\n' + '\n'.join(rows)
+
+    return page_text
+
+
 def _extract_pdf(path: str) -> str:
     """Extract text from PDF using pdfplumber with table detection."""
     try:
@@ -106,16 +124,7 @@ def _extract_pdf(path: str) -> str:
         pages = []
         with pdfplumber.open(path) as pdf:
             for i, page in enumerate(pdf.pages):
-                page_text = page.extract_text() or ''
-
-                tables = page.extract_tables()
-                if tables:
-                    for table in tables:
-                        rows = []
-                        for row in table:
-                            cells = [str(cell or '').strip() for cell in row]
-                            rows.append(' | '.join(cells))
-                        page_text += '\n' + '\n'.join(rows)
+                page_text = _pdf_page_text(page)
 
                 if page_text.strip():
                     pages.append(f"[Page {i + 1}]\n{page_text.strip()}")
@@ -125,6 +134,41 @@ def _extract_pdf(path: str) -> str:
     except Exception as e:
         logger.exception(f'[TEXT EXTRACTOR] PDF extraction failed: {e}')
         return ''
+
+
+def _docx_paragraph_text(doc: Any, element: Any) -> str | None:
+    """Return the formatted text for the paragraph matching ``element``
+    (heading-prefixed with markdown '#'s if the paragraph uses a Heading
+    style), or ``None`` if empty or no matching paragraph is found.
+    Extracted from _extract_docx."""
+    for para in doc.paragraphs:
+        if para._element == element:
+            text = para.text.strip()
+            if not text:
+                return None
+            if para.style and para.style.name.startswith('Heading'):
+                level = para.style.name.replace('Heading ', '').replace('Heading', '1')
+                try:
+                    level = int(level)
+                except ValueError:
+                    level = 1
+                return f"{'#' * level} {text}"
+            return cast(str, text)
+    return None
+
+
+def _docx_table_text(doc: Any, element: Any) -> str | None:
+    """Return the pipe-joined row text for the table matching ``element``,
+    or ``None`` if no matching table is found. Extracted from
+    _extract_docx."""
+    for table in doc.tables:
+        if table._element == element:
+            rows = []
+            for row in table.rows:
+                cells = [cell.text.strip() for cell in row.cells]
+                rows.append(' | '.join(cells))
+            return '\n'.join(rows)
+    return None
 
 
 def _extract_docx(path: str) -> str:
@@ -142,35 +186,32 @@ def _extract_docx(path: str) -> str:
         for element in doc.element.body:
             tag = element.tag.split('}')[-1] if '}' in element.tag else element.tag
             if tag == 'p':
-                for para in doc.paragraphs:
-                    if para._element == element:
-                        text = para.text.strip()
-                        if text:
-                            if para.style and para.style.name.startswith('Heading'):
-                                level = para.style.name.replace('Heading ', '').replace('Heading', '1')
-                                try:
-                                    level = int(level)
-                                except ValueError:
-                                    level = 1
-                                parts.append(f"{'#' * level} {text}")
-                            else:
-                                parts.append(text)
-                        break
+                text = _docx_paragraph_text(doc, element)
+                if text is not None:
+                    parts.append(text)
             elif tag == 'tbl':
-                for table in doc.tables:
-                    if table._element == element:
-                        rows = []
-                        for row in table.rows:
-                            cells = [cell.text.strip() for cell in row.cells]
-                            rows.append(' | '.join(cells))
-                        parts.append('\n'.join(rows))
-                        break
+                table_text = _docx_table_text(doc, element)
+                if table_text is not None:
+                    parts.append(table_text)
 
         return '\n\n'.join(parts)
 
     except Exception as e:
         logger.exception(f'[TEXT EXTRACTOR] DOCX extraction failed: {e}')
         return ''
+
+
+def _pptx_slide_texts(slide: Any) -> list[str]:
+    """Collect all non-empty paragraph texts across a slide's text-frame
+    shapes. Extracted from _extract_pptx."""
+    texts = []
+    for shape in slide.shapes:
+        if shape.has_text_frame:
+            for para in shape.text_frame.paragraphs:
+                text = para.text.strip()
+                if text:
+                    texts.append(text)
+    return texts
 
 
 def _extract_pptx(path: str) -> str:
@@ -186,13 +227,7 @@ def _extract_pptx(path: str) -> str:
         slides = []
 
         for i, slide in enumerate(prs.slides):
-            texts = []
-            for shape in slide.shapes:
-                if shape.has_text_frame:
-                    for para in shape.text_frame.paragraphs:
-                        text = para.text.strip()
-                        if text:
-                            texts.append(text)
+            texts = _pptx_slide_texts(slide)
             if texts:
                 slides.append(f"[Slide {i + 1}]\n" + '\n'.join(texts))
 
