@@ -152,11 +152,13 @@ class LlmLogService:
 
         has_cache_data = (total_cache_read + total_cache_create) > 0
         prompt_total = total_input + total_cache_read
-        cache_hit_pct = (
-            round(total_cache_read / prompt_total * 100, 1)
-            if has_cache_data and prompt_total > 0
-            else None if not has_cache_data else 0.0
-        )
+        cache_hit_pct: float | None
+        if not has_cache_data:
+            cache_hit_pct = None
+        elif prompt_total > 0:
+            cache_hit_pct = round(total_cache_read / prompt_total * 100, 1)
+        else:
+            cache_hit_pct = 0.0
 
         model_totals: dict[str, int] = {}
         for e in entries:

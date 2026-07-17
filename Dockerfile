@@ -24,11 +24,10 @@ RUN installer_ref="${TAG:-${BRANCH:-main}}" \
  && rm -rf /var/lib/apt/lists/* \
  && curl -fsSL "https://raw.githubusercontent.com/chalie-ai/chalie/${installer_ref}/installer/install.sh" -o /tmp/install.sh \
  && bash /tmp/install.sh ${BRANCH:+--branch="$BRANCH"} ${TAG:+--tag="$TAG"} \
- && rm /tmp/install.sh
-
-# Persistent runtime state. The application code lives at /root/.chalie/app/,
-# so data/ is alongside backend/ and resolves the same way as a local checkout.
-RUN mkdir -p /root/.chalie/app/data
+ && rm /tmp/install.sh \
+ # Persistent runtime state. The application code lives at /root/.chalie/app/,
+ # so data/ is alongside backend/ and resolves the same way as a local checkout.
+ && mkdir -p /root/.chalie/app/data
 VOLUME ["/root/.chalie/app/data"]
 EXPOSE 31025
 

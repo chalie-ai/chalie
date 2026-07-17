@@ -484,11 +484,9 @@ CHALIE_CLI
 
   if [[ ":$PATH:" != *":$HOME/.local/bin:"* ]]; then
     for rc in "$HOME/.bashrc" "$HOME/.zshrc"; do
-      if [[ -f "$rc" ]]; then
-        if ! grep -qF '.local/bin' "$rc" 2>/dev/null; then
-          printf '\n# Added by Chalie installer\n%s\n' "$path_line" >> "$rc"
-          added_path=true
-        fi
+      if [[ -f "$rc" ]] && ! grep -qF '.local/bin' "$rc" 2>/dev/null; then
+        printf '\n# Added by Chalie installer\n%s\n' "$path_line" >> "$rc"
+        added_path=true
       fi
     done
     if [[ "$added_path" == "true" ]]; then

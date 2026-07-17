@@ -99,7 +99,12 @@ class PolicyManager:
         # honest. The guard self-no-ops for every non-cancel path (no should_stop,
         # or it never returned True), which keeps the normal deny/unavailable logging.
         if should_stop is None or not should_stop():
-            reason = setting if setting == "deny" else ("user_unavailable" if channel in _NO_HUMAN else "user_denied")
+            if setting == "deny":
+                reason = setting
+            elif channel in _NO_HUMAN:
+                reason = "user_unavailable"
+            else:
+                reason = "user_denied"
             self._log_blocked(channel.value, permission, reason)
         return error.format(permission=permission)   # block STRING (uniform with execute's return)
 
