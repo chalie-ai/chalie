@@ -22,6 +22,7 @@ if TYPE_CHECKING:
     from capabilities.mail_capability.caldav_handler import _CalDAVClient  # noqa: PLC2701
     from capabilities.mail_capability.imap_handler import _ImapClient  # noqa: PLC2701
     from capabilities.mail_capability.carddav_handler import _CaldavClientProto  # noqa: PLC2701
+    from capabilities.mail_capability.providers import ServerSettings
 
 logger = logging.getLogger(__name__)
 
@@ -170,57 +171,66 @@ class MailCapability(AbstractCapability):
                 provider.carddav_url.replace(_PLACEHOLDER_USERNAME, email),
             )
 
+    def _probe_imap(self, email: str, password: str, imap: "ServerSettings") -> bool:
+        try:
+            client = self._imap_handler.open_client(
+                host=imap.host,
+                port=imap.port,
+                tls=imap.tls,
+                email=email,
+                password=password,
+            )
+            if client is not None:
+                try:
+                    client.logout()
+                except Exception:
+                    pass
+                logger.info("[mail] IMAP probe: OK")
+                return True
+            logger.warning("[mail] IMAP probe: failed (open_client returned None)")
+        except Exception as exc:
+            logger.warning("[mail] IMAP probe: failed — %s", exc)
+        return False
+
+    def _probe_caldav(self, email: str, password: str, caldav_url: str) -> bool:
+        url = caldav_url.replace(_PLACEHOLDER_USERNAME, email)
+        try:
+            client = cast(_IMAP_CLIENT_OR_NONE, self._caldav_handler.open_client(
+                url=url, username=email, password=password
+            ))
+            if client is not None:
+                logger.info("[mail] CalDAV probe: OK")
+                return True
+            logger.warning("[mail] CalDAV probe: failed (open_client returned None)")
+        except Exception as exc:
+            logger.warning("[mail] CalDAV probe: failed — %s", exc)
+        return False
+
+    def _probe_carddav(self, email: str, password: str, carddav_url: str) -> bool:
+        url = carddav_url.replace(_PLACEHOLDER_USERNAME, email)
+        try:
+            client = cast(_IMAP_CLIENT_OR_NONE, self._carddav_handler.open_client(
+                url=url, username=email, password=password
+            ))
+            if client is not None:
+                logger.info("[mail] CardDAV probe: OK")
+                return True
+            logger.warning("[mail] CardDAV probe: failed (open_client returned None)")
+        except Exception as exc:
+            logger.warning("[mail] CardDAV probe: failed — %s", exc)
+        return False
+
     def _probe_protocols(self, email: str, password: str, provider: UnifiedProvider) -> list[str]:
         active: list[str] = []
 
-        if provider.imap:
-            try:
-                client = self._imap_handler.open_client(
-                    host=provider.imap.host,
-                    port=provider.imap.port,
-                    tls=provider.imap.tls,
-                    email=email,
-                    password=password,
-                )
-                if client is not None:
-                    try:
-                        client.logout()
-                    except Exception:
-                        pass
-                    active.append("imap")
-                    logger.info("[mail] IMAP probe: OK")
-                else:
-                    logger.warning("[mail] IMAP probe: failed (open_client returned None)")
-            except Exception as exc:
-                logger.warning("[mail] IMAP probe: failed — %s", exc)
+        if provider.imap and self._probe_imap(email, password, provider.imap):
+            active.append("imap")
 
-        if provider.caldav_url:
-            caldav_url = provider.caldav_url.replace(_PLACEHOLDER_USERNAME, email)
-            try:
-                client = cast(_IMAP_CLIENT_OR_NONE, self._caldav_handler.open_client(
-                    url=caldav_url, username=email, password=password
-                ))
-                if client is not None:
-                    active.append("caldav")
-                    logger.info("[mail] CalDAV probe: OK")
-                else:
-                    logger.warning("[mail] CalDAV probe: failed (open_client returned None)")
-            except Exception as exc:
-                logger.warning("[mail] CalDAV probe: failed — %s", exc)
+        if provider.caldav_url and self._probe_caldav(email, password, provider.caldav_url):
+            active.append("caldav")
 
-        if provider.carddav_url:
-            carddav_url = provider.carddav_url.replace(_PLACEHOLDER_USERNAME, email)
-            try:
-                client = cast(_IMAP_CLIENT_OR_NONE, self._carddav_handler.open_client(
-                    url=carddav_url, username=email, password=password
-                ))
-                if client is not None:
-                    active.append("carddav")
-                    logger.info("[mail] CardDAV probe: OK")
-                else:
-                    logger.warning("[mail] CardDAV probe: failed (open_client returned None)")
-            except Exception as exc:
-                logger.warning("[mail] CardDAV probe: failed — %s", exc)
+        if provider.carddav_url and self._probe_carddav(email, password, provider.carddav_url):
+            active.append("carddav")
 
         return active
 
@@ -260,6 +270,52 @@ class MailCapability(AbstractCapability):
     # Lifecycle — connect
     # ------------------------------------------------------------------
 
+    def _connect_imap(self, email: str, password: str, imap: "ServerSettings") -> bool:
+        try:
+            client = self._imap_handler.open_client(
+                host=imap.host,
+                port=imap.port,
+                tls=imap.tls,
+                email=email,
+                password=password,
+            )
+            if client is not None:
+                try:
+                    client.logout()
+                except Exception:
+                    pass
+                logger.info("[mail] IMAP connected.")
+                return True
+        except Exception as exc:
+            logger.warning("[mail] IMAP connect failed: %s", exc)
+        return False
+
+    def _connect_caldav(self, email: str, password: str, caldav_url: str) -> bool:
+        url = caldav_url.replace(_PLACEHOLDER_USERNAME, email)
+        try:
+            client = cast(_IMAP_CLIENT_OR_NONE, self._caldav_handler.open_client(
+                url=url, username=email, password=password
+            ))
+            if client is not None:
+                logger.info("[mail] CalDAV connected.")
+                return True
+        except Exception as exc:
+            logger.warning("[mail] CalDAV connect failed: %s", exc)
+        return False
+
+    def _connect_carddav(self, email: str, password: str, carddav_url: str) -> bool:
+        url = carddav_url.replace(_PLACEHOLDER_USERNAME, email)
+        try:
+            client = cast(_IMAP_CLIENT_OR_NONE, self._carddav_handler.open_client(
+                url=url, username=email, password=password
+            ))
+            if client is not None:
+                logger.info("[mail] CardDAV connected.")
+                return True
+        except Exception as exc:
+            logger.warning("[mail] CardDAV connect failed: %s", exc)
+        return False
+
     def connect(self) -> bool:
         email = self.load_credential(_K_EMAIL)
         password = self.load_credential(_K_PASSWORD)
@@ -286,49 +342,15 @@ class MailCapability(AbstractCapability):
 
         # --- IMAP ---
         if "imap" in protocols and provider.imap:
-            try:
-                client = self._imap_handler.open_client(
-                    host=provider.imap.host,
-                    port=provider.imap.port,
-                    tls=provider.imap.tls,
-                    email=email,
-                    password=password,
-                )
-                if client is not None:
-                    try:
-                        client.logout()
-                    except Exception:
-                        pass
-                    self._imap_ok = True
-                    logger.info("[mail] IMAP connected.")
-            except Exception as exc:
-                logger.warning("[mail] IMAP connect failed: %s", exc)
+            self._imap_ok = self._connect_imap(email, password, provider.imap)
 
         # --- CalDAV ---
         if "caldav" in protocols and provider.caldav_url:
-            caldav_url = provider.caldav_url.replace(_PLACEHOLDER_USERNAME, email)
-            try:
-                client = cast(_IMAP_CLIENT_OR_NONE, self._caldav_handler.open_client(
-                    url=caldav_url, username=email, password=password
-                ))
-                if client is not None:
-                    self._caldav_ok = True
-                    logger.info("[mail] CalDAV connected.")
-            except Exception as exc:
-                logger.warning("[mail] CalDAV connect failed: %s", exc)
+            self._caldav_ok = self._connect_caldav(email, password, provider.caldav_url)
 
         # --- CardDAV ---
         if "carddav" in protocols and provider.carddav_url:
-            carddav_url = provider.carddav_url.replace(_PLACEHOLDER_USERNAME, email)
-            try:
-                client = cast(_IMAP_CLIENT_OR_NONE, self._carddav_handler.open_client(
-                    url=carddav_url, username=email, password=password
-                ))
-                if client is not None:
-                    self._carddav_ok = True
-                    logger.info("[mail] CardDAV connected.")
-            except Exception as exc:
-                logger.warning("[mail] CardDAV connect failed: %s", exc)
+            self._carddav_ok = self._connect_carddav(email, password, provider.carddav_url)
 
         any_ok = self._imap_ok or self._caldav_ok or self._carddav_ok
         self._connected = any_ok
@@ -363,6 +385,61 @@ class MailCapability(AbstractCapability):
     # Cognitive pipeline — ingest
     # ------------------------------------------------------------------
 
+    def _ingest_imap(self, email: str, password: str, imap: "ServerSettings") -> list[object]:
+        items: list[object] = []
+        try:
+            watermark_raw = self.load_credential(_K_WATERMARK)
+            watermark = int(watermark_raw) if watermark_raw else None
+            client = self._imap_handler.open_client(
+                host=imap.host,
+                port=imap.port,
+                tls=imap.tls,
+                email=email,
+                password=password,
+            )
+            if client is not None:
+                try:
+                    new_items, new_wm = self._imap_handler.ingest(client, watermark)
+                    items.extend(new_items)
+                    if new_wm and new_wm != watermark:
+                        self.store_credential(_K_WATERMARK, str(new_wm))
+                finally:
+                    try:
+                        client.logout()
+                    except Exception:
+                        pass
+        except Exception as exc:
+            logger.exception("[mail] ingest() IMAP: %s", exc)
+        return items
+
+    def _ingest_caldav(self, email: str, password: str, caldav_url: str) -> list[object]:
+        items: list[object] = []
+        try:
+            url = caldav_url.replace(_PLACEHOLDER_USERNAME, email)
+            client = cast(_IMAP_CLIENT_OR_NONE, self._caldav_handler.open_client(
+                url=url, username=email, password=password
+            ))
+            if client is not None:
+                events = self._caldav_handler.ingest(cast("_CalDAVClient", client))
+                items.extend(events)
+        except Exception as exc:
+            logger.exception("[mail] ingest() CalDAV: %s", exc)
+        return items
+
+    def _ingest_carddav(self, email: str, password: str, carddav_url: str) -> list[object]:
+        items: list[object] = []
+        try:
+            url = carddav_url.replace(_PLACEHOLDER_USERNAME, email)
+            client = cast(_IMAP_CLIENT_OR_NONE, self._carddav_handler.open_client(
+                url=url, username=email, password=password
+            ))
+            if client is not None:
+                contacts = self._carddav_handler.sync_contacts(cast("_CaldavClientProto", client))
+                items.extend(contacts)
+        except Exception as exc:
+            logger.exception("[mail] ingest() CardDAV: %s", exc)
+        return items
+
     def ingest(self) -> list[object]:
         if not self.is_connected():
             return []
@@ -375,53 +452,13 @@ class MailCapability(AbstractCapability):
             return []
 
         if self._imap_ok and provider.imap:
-            try:
-                watermark_raw = self.load_credential(_K_WATERMARK)
-                watermark = int(watermark_raw) if watermark_raw else None
-                client = self._imap_handler.open_client(
-                    host=provider.imap.host,
-                    port=provider.imap.port,
-                    tls=provider.imap.tls,
-                    email=cast(str, email),
-                    password=cast(str, password),
-                )
-                if client is not None:
-                    try:
-                        new_items, new_wm = self._imap_handler.ingest(client, watermark)
-                        items.extend(new_items)
-                        if new_wm and new_wm != watermark:
-                            self.store_credential(_K_WATERMARK, str(new_wm))
-                    finally:
-                        try:
-                            client.logout()
-                        except Exception:
-                            pass
-            except Exception as exc:
-                logger.exception("[mail] ingest() IMAP: %s", exc)
+            items.extend(self._ingest_imap(cast(str, email), cast(str, password), provider.imap))
 
         if self._caldav_ok and provider.caldav_url:
-            try:
-                caldav_url = provider.caldav_url.replace(_PLACEHOLDER_USERNAME, cast(str, email))
-                client = cast(_IMAP_CLIENT_OR_NONE, self._caldav_handler.open_client(
-                    url=caldav_url, username=cast(str, email), password=cast(str, password)
-                ))
-                if client is not None:
-                    events = self._caldav_handler.ingest(cast("_CalDAVClient", client))
-                    items.extend(events)
-            except Exception as exc:
-                logger.exception("[mail] ingest() CalDAV: %s", exc)
+            items.extend(self._ingest_caldav(cast(str, email), cast(str, password), provider.caldav_url))
 
         if self._carddav_ok and provider.carddav_url:
-            try:
-                carddav_url = provider.carddav_url.replace(_PLACEHOLDER_USERNAME, cast(str, email))
-                client = cast(_IMAP_CLIENT_OR_NONE, self._carddav_handler.open_client(
-                    url=carddav_url, username=cast(str, email), password=cast(str, password)
-                ))
-                if client is not None:
-                    contacts = self._carddav_handler.sync_contacts(cast("_CaldavClientProto", client))
-                    items.extend(contacts)
-            except Exception as exc:
-                logger.exception("[mail] ingest() CardDAV: %s", exc)
+            items.extend(self._ingest_carddav(cast(str, email), cast(str, password), provider.carddav_url))
 
         return items
 

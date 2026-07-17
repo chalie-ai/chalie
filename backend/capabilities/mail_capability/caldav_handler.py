@@ -183,6 +183,18 @@ class CaldavHandler:
             logger.exception("[caldav_handler] ingest: failed to list calendars: %s", exc)
             return []
 
+        all_events = self._fetch_events_for_calendars(calendars, range_start, range_end)
+        self._index_attendees(all_events)
+
+        logger.info("[caldav_handler] ingest complete — %d events", len(all_events))
+        return all_events
+
+    def _fetch_events_for_calendars(
+        self,
+        calendars: "Iterable[_CalendarObj]",
+        range_start: _dt_module.datetime,
+        range_end: _dt_module.datetime,
+    ) -> list[dict[str, object]]:
         all_events: list[dict[str, object]] = []
         for calendar in calendars:
             cal_name = "Unknown"
@@ -201,7 +213,10 @@ class CaldavHandler:
                 logger.exception(
                     "[caldav_handler] fetch failed for '%s': %s", cal_name, exc
                 )
+        return all_events
 
+    @staticmethod
+    def _index_attendees(all_events: list[dict[str, object]]) -> None:
         try:
             from capabilities.contact_resolver import index_person
             for event in all_events:
@@ -210,9 +225,6 @@ class CaldavHandler:
         except Exception as exc:
             logger.debug("[caldav_handler] contact indexing skipped: %s", exc)
 
-        logger.info("[caldav_handler] ingest complete — %d events", len(all_events))
-        return all_events
-
     # ------------------------------------------------------------------
     # Event parsing
     # ------------------------------------------------------------------
@@ -220,93 +232,113 @@ class CaldavHandler:
     def parse_event(self, raw_event: object, calendar_name: str) -> list[dict[str, object]]:
         results: list[dict[str, object]] = []
 
+        ical_instance = self._resolve_ical_instance(raw_event)
+        if ical_instance is None:
+            return results
+
+        for component in ical_instance.walk():
+            if component.name != "VEVENT":
+                continue
+            parsed = self._parse_vevent(component, calendar_name)
+            if parsed is not None:
+                results.append(parsed)
+
+        return results
+
+    @staticmethod
+    def _resolve_ical_instance(raw_event: object) -> "_ICalObj | None":
         try:
-            ical_instance = cast("_ICalEvent", raw_event).icalendar_instance
+            return cast("_ICalObj", cast("_ICalEvent", raw_event).icalendar_instance)
         except AttributeError:
             try:
                 component = cast("_ICalEvent", raw_event).icalendar_component
                 ical_instance = cast("_ICalLib", _icalendar_lib).Calendar()
                 ical_instance.add_component(cast("_ICalObj", component))
+                return ical_instance
             except Exception as exc:
                 logger.warning("[caldav_handler] ical instance unavailable: %s", exc)
-                return results
+                return None
 
-        for component in cast("_ICalObj", ical_instance).walk():
-            if component.name != "VEVENT":
-                continue
-            dtstart_prop = component.get("DTSTART")
-            if dtstart_prop is None:
-                continue
+    @staticmethod
+    def _resolve_dtend(
+        dtstart: _dt_module.datetime, component: "_ICalComponent"
+    ) -> _dt_module.datetime:
+        dtend_prop = component.get("DTEND")
+        if dtend_prop is not None:
+            return _make_date_utc(cast("_ICalProp", dtend_prop).dt)
+        dur_prop = component.get("DURATION")
+        if dur_prop is not None:
+            try:
+                return dtstart + cast(_dt_module.timedelta, cast("_ICalProp", dur_prop).dt)
+            except Exception:
+                return dtstart
+        return dtstart
 
-            dt_raw = cast("_ICalProp", dtstart_prop).dt
-            all_day: bool = (
-                isinstance(dt_raw, _dt_module.date)
-                and not isinstance(dt_raw, _dt_module.datetime)
-            )
-            dtstart = _make_date_utc(dt_raw)
+    @staticmethod
+    def _parse_attendees(attendees_raw: object) -> list[str]:
+        if attendees_raw is None:
+            return []
+        if isinstance(attendees_raw, list):
+            return [str(a).removeprefix("mailto:") for a in attendees_raw]
+        return [str(attendees_raw).removeprefix("mailto:")]
 
-            dtend_prop = component.get("DTEND")
-            if dtend_prop is not None:
-                dtend = _make_date_utc(cast("_ICalProp", dtend_prop).dt)
-            else:
-                dur_prop = component.get("DURATION")
-                if dur_prop is not None:
-                    try:
-                        dtend = dtstart + cast(_dt_module.timedelta, cast("_ICalProp", dur_prop).dt)
-                    except Exception:
-                        dtend = dtstart
-                else:
-                    dtend = dtstart
+    @staticmethod
+    def _parse_recurrence(rrule_prop: object) -> str | None:
+        if rrule_prop is None:
+            return None
+        try:
+            return cast("_ICalProp", rrule_prop).to_ical().decode("utf-8")
+        except Exception:
+            return None
 
-            uid_prop = component.get("UID")
-            uid: str = str(uid_prop) if uid_prop is not None else ""
+    @classmethod
+    def _parse_vevent(
+        cls, component: "_ICalComponent", calendar_name: str
+    ) -> dict[str, object] | None:
+        dtstart_prop = component.get("DTSTART")
+        if dtstart_prop is None:
+            return None
 
-            summary_prop = component.get("SUMMARY")
-            summary: str = str(summary_prop) if summary_prop is not None else "No title"
+        dt_raw = cast("_ICalProp", dtstart_prop).dt
+        all_day: bool = (
+            isinstance(dt_raw, _dt_module.date)
+            and not isinstance(dt_raw, _dt_module.datetime)
+        )
+        dtstart = _make_date_utc(dt_raw)
+        dtend = cls._resolve_dtend(dtstart, component)
 
-            location_prop = component.get("LOCATION")
-            location: str | None = str(location_prop) if location_prop is not None else None
+        uid_prop = component.get("UID")
+        uid: str = str(uid_prop) if uid_prop is not None else ""
 
-            attendees_raw = component.get("ATTENDEE")
-            if attendees_raw is None:
-                attendees: list[str] = []
-            elif isinstance(attendees_raw, list):
-                attendees = [str(a).removeprefix("mailto:") for a in attendees_raw]
-            else:
-                attendees = [str(attendees_raw).removeprefix("mailto:")]
+        summary_prop = component.get("SUMMARY")
+        summary: str = str(summary_prop) if summary_prop is not None else "No title"
 
-            rrule_prop = component.get("RRULE")
-            recurrence: str | None = None
-            if rrule_prop is not None:
-                try:
-                    recurrence = cast("_ICalProp", rrule_prop).to_ical().decode("utf-8")
-                except Exception:
-                    pass
+        location_prop = component.get("LOCATION")
+        location: str | None = str(location_prop) if location_prop is not None else None
 
-            results.append({
-                "uid": uid,
-                "summary": summary,
-                "dtstart": dtstart,
-                "dtend": dtend,
-                "location": location,
-                "attendees": attendees,
-                "recurrence": recurrence,
-                "all_day": all_day,
-                "calendar_name": calendar_name,
-            })
+        attendees = cls._parse_attendees(component.get("ATTENDEE"))
+        recurrence = cls._parse_recurrence(component.get("RRULE"))
 
-        return results
+        return {
+            "uid": uid,
+            "summary": summary,
+            "dtstart": dtstart,
+            "dtend": dtend,
+            "location": location,
+            "attendees": attendees,
+            "recurrence": recurrence,
+            "all_day": all_day,
+            "calendar_name": calendar_name,
+        }
 
     # ------------------------------------------------------------------
     # Tool handlers — server mutations (client passed in)
     # ------------------------------------------------------------------
 
-    def create_event(self, client: "_CalDAVClient", params: dict[str, object]) -> dict[str, object]:
-        if not _CALDAV_AVAILABLE:
-            return {"error": _ERR_CALDAV_NOT_INSTALLED}
-        if not _ICALENDAR_AVAILABLE:
-            return {"error": _ERR_ICAL_NOT_INSTALLED}
-
+    @staticmethod
+    def _extract_required_event_fields(
+        params: dict[str, object],
+    ) -> "tuple[str, str, str] | dict[str, object]":
         summary = (cast(str, params.get("summary")) or "").strip()
         dtstart_raw = (cast(str, params.get("dtstart")) or "").strip()
         dtend_raw = (cast(str, params.get("dtend")) or "").strip()
@@ -317,6 +349,48 @@ class CaldavHandler:
             return {"error": "Parameter 'dtstart' is required (ISO 8601 UTC)."}
         if not dtend_raw:
             return {"error": "Parameter 'dtend' is required (ISO 8601 UTC)."}
+        return summary, dtstart_raw, dtend_raw
+
+    @staticmethod
+    def _build_vevent_component(
+        event_uid: str,
+        summary: str,
+        dtstart: _dt_module.datetime,
+        dtend: _dt_module.datetime,
+        location: str,
+        description: str,
+        recurrence: str,
+    ) -> "_ICalObj | dict[str, object]":
+        vevent = cast("_ICalLib", _icalendar_lib).Event()
+        vevent.add("uid", event_uid)
+        vevent.add("summary", summary)
+        vevent.add("dtstart", dtstart)
+        vevent.add("dtend", dtend)
+        vevent.add("dtstamp", utc_now())
+        if location:
+            vevent.add("location", location)
+        if description:
+            vevent.add("description", description)
+        if recurrence:
+            try:
+                vevent.add(
+                    "rrule",
+                    cast("_ICalLib", _icalendar_lib).vRecur.from_ical(recurrence),
+                )
+            except Exception as exc:
+                return {"error": f"Invalid recurrence rule {recurrence!r}: {exc}"}
+        return vevent
+
+    def create_event(self, client: "_CalDAVClient", params: dict[str, object]) -> dict[str, object]:
+        if not _CALDAV_AVAILABLE:
+            return {"error": _ERR_CALDAV_NOT_INSTALLED}
+        if not _ICALENDAR_AVAILABLE:
+            return {"error": _ERR_ICAL_NOT_INSTALLED}
+
+        parsed_fields = self._extract_required_event_fields(params)
+        if isinstance(parsed_fields, dict):
+            return parsed_fields
+        summary, dtstart_raw, dtend_raw = parsed_fields
 
         try:
             dtstart = parse_utc(dtstart_raw)
@@ -341,26 +415,13 @@ class CaldavHandler:
             ical.add("prodid", "-//CaldavHandler//EN")
             ical.add("version", "2.0")
 
-            vevent = cast("_ICalLib", _icalendar_lib).Event()
-            vevent.add("uid", event_uid)
-            vevent.add("summary", summary)
-            vevent.add("dtstart", dtstart)
-            vevent.add("dtend", dtend)
-            vevent.add("dtstamp", utc_now())
-            if location:
-                vevent.add("location", location)
-            if description:
-                vevent.add("description", description)
-            if recurrence:
-                try:
-                    vevent.add(
-                        "rrule",
-                        cast("_ICalLib", _icalendar_lib).vRecur.from_ical(recurrence),
-                    )
-                except Exception as exc:
-                    return {"error": f"Invalid recurrence rule {recurrence!r}: {exc}"}
+            vevent_or_error = self._build_vevent_component(
+                event_uid, summary, dtstart, dtend, location, description, recurrence
+            )
+            if isinstance(vevent_or_error, dict):
+                return vevent_or_error
 
-            ical.add_component(vevent)
+            ical.add_component(vevent_or_error)
             target_cal.save_event(ical.to_ical().decode("utf-8"))
 
             cal_label = getattr(target_cal, "name", None) or "Unknown"
@@ -404,36 +465,60 @@ class CaldavHandler:
             return cast("_ICalObj", found_event.icalendar_instance)
 
     @staticmethod
-    def _apply_event_updates(ical: "_ICalObj", params: dict[str, object]) -> None:
+    def _update_summary(component: "_ICalComponent", params: dict[str, object]) -> None:
+        if "summary" in params and params["summary"] is not None:
+            component.pop("SUMMARY", None)
+            component.add("summary", str(params["summary"]))
+
+    @staticmethod
+    def _update_dtstart(component: "_ICalComponent", params: dict[str, object]) -> None:
+        if "dtstart" in params and params["dtstart"] is not None:
+            component.pop("DTSTART", None)
+            component.add("dtstart", parse_utc(cast("str", params["dtstart"])))
+
+    @staticmethod
+    def _update_dtend(component: "_ICalComponent", params: dict[str, object]) -> None:
+        if "dtend" in params and params["dtend"] is not None:
+            component.pop("DTEND", None)
+            component.add("dtend", parse_utc(cast("str", params["dtend"])))
+
+    @staticmethod
+    def _update_location(component: "_ICalComponent", params: dict[str, object]) -> None:
+        if "location" in params:
+            component.pop("LOCATION", None)
+            if params["location"]:
+                component.add("location", str(params["location"]))
+
+    @staticmethod
+    def _update_description(component: "_ICalComponent", params: dict[str, object]) -> None:
+        if "description" in params:
+            component.pop("DESCRIPTION", None)
+            if params["description"]:
+                component.add("description", str(params["description"]))
+
+    @staticmethod
+    def _update_recurrence(component: "_ICalComponent", params: dict[str, object]) -> None:
+        if "recurrence" in params:
+            component.pop("RRULE", None)
+            if params["recurrence"]:
+                component.add(
+                    "rrule",
+                    cast("_ICalLib", _icalendar_lib).vRecur.from_ical(
+                        str(params["recurrence"])
+                    ),
+                )
+
+    @classmethod
+    def _apply_event_updates(cls, ical: "_ICalObj", params: dict[str, object]) -> None:
         for component in ical.walk():
             if component.name != "VEVENT":
                 continue
-            if "summary" in params and params["summary"] is not None:
-                component.pop("SUMMARY", None)
-                component.add("summary", str(params["summary"]))
-            if "dtstart" in params and params["dtstart"] is not None:
-                component.pop("DTSTART", None)
-                component.add("dtstart", parse_utc(cast("str", params["dtstart"])))
-            if "dtend" in params and params["dtend"] is not None:
-                component.pop("DTEND", None)
-                component.add("dtend", parse_utc(cast("str", params["dtend"])))
-            if "location" in params:
-                component.pop("LOCATION", None)
-                if params["location"]:
-                    component.add("location", str(params["location"]))
-            if "description" in params:
-                component.pop("DESCRIPTION", None)
-                if params["description"]:
-                    component.add("description", str(params["description"]))
-            if "recurrence" in params:
-                component.pop("RRULE", None)
-                if params["recurrence"]:
-                    component.add(
-                        "rrule",
-                        cast("_ICalLib", _icalendar_lib).vRecur.from_ical(
-                            str(params["recurrence"])
-                        ),
-                    )
+            cls._update_summary(component, params)
+            cls._update_dtstart(component, params)
+            cls._update_dtend(component, params)
+            cls._update_location(component, params)
+            cls._update_description(component, params)
+            cls._update_recurrence(component, params)
             break
 
     def update_event(self, client: "_CalDAVClient", params: dict[str, object]) -> dict[str, object]:

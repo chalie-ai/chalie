@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, cast
 from services.time_utils import utc_now
 
 if TYPE_CHECKING:
+    from email.mime.text import MIMEText
     from typing import Protocol
 
     class _ImapClient(Protocol):
@@ -182,31 +183,36 @@ class ImapHandler:
     # WorldState inbox hint
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _build_search_criteria(params: dict[str, object]) -> list[object]:
+        criteria: list[object] = []
+        sender  = (cast(str, params.get("sender"))    or "").strip()
+        subject = (cast(str, params.get("subject"))   or "").strip()
+        keyword = (cast(str, params.get("keyword"))   or "").strip()
+        date_from = (cast(str, params.get("date_from")) or "").strip()
+        date_to   = (cast(str, params.get("date_to"))   or "").strip()
+        if sender:
+            criteria.extend(["FROM", sender])
+        if subject:
+            criteria.extend(["SUBJECT", subject])
+        if keyword:
+            criteria.extend(["TEXT", keyword])
+        if date_from:
+            criteria.extend(["SINCE", _imap_date(date_from)])
+        if date_to:
+            criteria.extend(["BEFORE", _imap_date(date_to)])
+        if params.get("unanswered"):
+            criteria.append("UNANSWERED")
+        if not criteria:
+            since = (utc_now() - timedelta(days=7)).strftime(_IMAP_DATE_FMT)
+            criteria.extend(["SINCE", since])
+        return criteria
+
     def search(self, client: "_ImapClient", params: dict[str, object]) -> dict[str, object]:
         from capabilities.mail_capability.email_triage import classify_email
         try:
             client.select_folder("INBOX", readonly=True)
-            criteria: list[object] = []
-            sender  = (cast(str, params.get("sender"))    or "").strip()
-            subject = (cast(str, params.get("subject"))   or "").strip()
-            keyword = (cast(str, params.get("keyword"))   or "").strip()
-            date_from = (cast(str, params.get("date_from")) or "").strip()
-            date_to   = (cast(str, params.get("date_to"))   or "").strip()
-            if sender:
-                criteria.extend(["FROM", sender])
-            if subject:
-                criteria.extend(["SUBJECT", subject])
-            if keyword:
-                criteria.extend(["TEXT", keyword])
-            if date_from:
-                criteria.extend(["SINCE", _imap_date(date_from)])
-            if date_to:
-                criteria.extend(["BEFORE", _imap_date(date_to)])
-            if params.get("unanswered"):
-                criteria.append("UNANSWERED")
-            if not criteria:
-                since = (utc_now() - timedelta(days=7)).strftime(_IMAP_DATE_FMT)
-                criteria.extend(["SINCE", since])
+            criteria = self._build_search_criteria(params)
             uids = client.search(criteria)
             limit = int(cast(int, params.get("limit", 20)))
             uids = uids[-limit:] if len(uids) > limit else uids
@@ -301,8 +307,29 @@ class ImapHandler:
     # Send via SMTP
     # ------------------------------------------------------------------
 
-    def send_email(self, *, creds: SmtpCreds, params: dict[str, object]) -> dict[str, object]:
+    @staticmethod
+    def _deliver_via_smtp(creds: SmtpCreds, msg: "MIMEText") -> None:
         import smtplib
+
+        if creds.tls:
+            with smtplib.SMTP_SSL(creds.host, creds.port, timeout=_SMTP_TIMEOUT) as server:
+                server.login(creds.from_addr, creds.password)
+                server.send_message(msg)
+        else:
+            with smtplib.SMTP(creds.host, creds.port, timeout=_SMTP_TIMEOUT) as server:
+                server.ehlo()
+                try:
+                    server.starttls()
+                    server.ehlo()
+                except smtplib.SMTPNotSupportedError:
+                    logger.warning("[imap_handler] STARTTLS not supported by %s:%s", creds.host, creds.port)
+                try:
+                    server.login(creds.from_addr, creds.password)
+                except smtplib.SMTPNotSupportedError:
+                    logger.warning("[imap_handler] AUTH not supported by %s:%s — sending unauthenticated", creds.host, creds.port)
+                server.send_message(msg)
+
+    def send_email(self, *, creds: SmtpCreds, params: dict[str, object]) -> dict[str, object]:
         from email.mime.text import MIMEText
 
         to = (cast(str, params.get("to")) or "").strip()
@@ -325,23 +352,7 @@ class ImapHandler:
             msg["References"] = in_reply_to
 
         try:
-            if creds.tls:
-                with smtplib.SMTP_SSL(creds.host, creds.port, timeout=_SMTP_TIMEOUT) as server:
-                    server.login(creds.from_addr, creds.password)
-                    server.send_message(msg)
-            else:
-                with smtplib.SMTP(creds.host, creds.port, timeout=_SMTP_TIMEOUT) as server:
-                    server.ehlo()
-                    try:
-                        server.starttls()
-                        server.ehlo()
-                    except smtplib.SMTPNotSupportedError:
-                        logger.warning("[imap_handler] STARTTLS not supported by %s:%s", creds.host, creds.port)
-                    try:
-                        server.login(creds.from_addr, creds.password)
-                    except smtplib.SMTPNotSupportedError:
-                        logger.warning("[imap_handler] AUTH not supported by %s:%s — sending unauthenticated", creds.host, creds.port)
-                    server.send_message(msg)
+            self._deliver_via_smtp(creds, msg)
             return {"success": True, "to": to, "subject": subject}
         except Exception as exc:
             logger.exception("[imap_handler] send_email: %s", exc)
