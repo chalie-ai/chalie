@@ -17,6 +17,7 @@ every execute() call on these abilities exercises the not-connected error
 path without requiring real IMAP/CalDAV/CardDAV credentials.
 """
 
+import sqlite3
 from typing import cast
 
 import pytest
@@ -92,7 +93,7 @@ def test_calendar_write_not_connected_returns_tool_result_error() -> None:
     assert "mail integration" in (result.hint or "").lower()
 
 
-def test_contacts_not_connected_returns_structured_error() -> None:
+def test_contacts_not_connected_returns_structured_error(db: sqlite3.Connection) -> None:
     """ContactsAbility returns a structured ToolResult error when mail is not connected.
 
     contacts is the  exemplar migrated onto CapabilityAbility, so its
@@ -100,6 +101,12 @@ def test_contacts_not_connected_returns_structured_error() -> None:
     code=not-connected, hint naming the integration) rather than a JSON body —
     the canonical contract form. calendar followed in  and email in
     ; all three capability abilities now share the base's surface.
+
+    ``list`` is answered inline against ``ContactRow`` (the local index) before
+    falling back to the not-connected gate, so this test needs a real bound
+    Database connection — the ``db`` fixture (see conftest.py) is requested
+    purely for its ``Database.bind()`` side effect; the contact index itself
+    stays empty, which is what drives the not-connected fallback.
     """
     from abilities.contacts import ContactsAbility
 
