@@ -17,7 +17,7 @@ the legacy module had no ``POST /api/documents/<id>``.
 from __future__ import annotations
 
 from datetime import datetime
-from typing import ClassVar, cast
+from typing import ClassVar, TypeAlias, cast
 
 from flask import request
 from flask.typing import ResponseReturnValue
@@ -26,6 +26,8 @@ from api.endpoint import DocumentedResponse, Endpoint
 from api.response.document import ArtifactPreview, Document, DocumentDetail
 from exceptions import NotFoundError
 from services.document_service import DocumentService
+
+_STR_OR_NONE: TypeAlias = "str | None"
 
 
 class Documents(Endpoint):
@@ -93,20 +95,20 @@ class Documents(Endpoint):
             file_hash=cast(str, row["file_hash"]),
             page_count=cast("int | None", row.get("page_count")),
             status=cast(str, row["status"]),
-            error_message=cast("str | None", row.get("error_message")),
+            error_message=cast(_STR_OR_NONE, row.get("error_message")),
             chunk_count=cast("int | None", row.get("chunk_count")),
             source_type=cast(str, row["source_type"]),
             tags=cast("list[str]", row.get("tags")),
-            summary=cast("str | None", row.get("summary")),
+            summary=cast(_STR_OR_NONE, row.get("summary")),
             extracted_metadata=cast("dict[str, object]", row.get("extracted_metadata")),
-            supersedes_id=cast("str | None", row.get("supersedes_id")),
-            language=cast("str | None", row.get("language")),
-            fingerprint=cast("str | None", row.get("fingerprint")),
-            doc_category=cast("str | None", row.get("doc_category")),
-            doc_project=cast("str | None", row.get("doc_project")),
-            doc_date=cast("str | None", row.get("doc_date")),
+            supersedes_id=cast(_STR_OR_NONE, row.get("supersedes_id")),
+            language=cast(_STR_OR_NONE, row.get("language")),
+            fingerprint=cast(_STR_OR_NONE, row.get("fingerprint")),
+            doc_category=cast(_STR_OR_NONE, row.get("doc_category")),
+            doc_project=cast(_STR_OR_NONE, row.get("doc_project")),
+            doc_date=cast(_STR_OR_NONE, row.get("doc_date")),
             meta_locked=cast("bool", row.get("meta_locked")),
-            watched_folder_id=cast("str | None", row.get("watched_folder_id")),
+            watched_folder_id=cast(_STR_OR_NONE, row.get("watched_folder_id")),
             created_at=cast(datetime, row["created_at"]),
             updated_at=cast(datetime, row["updated_at"]),
             deleted_at=cast("datetime | None", row.get("deleted_at")),

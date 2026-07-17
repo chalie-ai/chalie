@@ -20,6 +20,8 @@ from api.request.document import AugmentRequest
 from exceptions import EndpointError, NotFoundError
 from services.document_service import DocumentService
 
+_NOT_FOUND = "Not found"
+
 
 class DocumentsAugment(Action):
     """Action to add user context to a document awaiting confirmation."""
@@ -28,7 +30,7 @@ class DocumentsAugment(Action):
     request_dto = AugmentRequest
     response_dto = {
         "post": DocumentedResponse(
-            extras=((404, "Not found"), (400, "Invalid state")),
+            extras=((404, _NOT_FOUND), (400, "Invalid state")),
         )
     }
 
@@ -40,12 +42,12 @@ class DocumentsAugment(Action):
 
     def post(self, id: int | str, data: Request | None) -> ResponseReturnValue:
         if self.is_create(id):
-            raise NotFoundError("Not found")
+            raise NotFoundError(_NOT_FOUND)
         dto = cast(AugmentRequest, data)
         svc = DocumentService()
         doc = svc.get_document(cast(str, id))
         if not doc:
-            raise NotFoundError("Not found")
+            raise NotFoundError(_NOT_FOUND)
         if doc["status"] not in ("awaiting_confirmation", "ready"):
             raise EndpointError("Document cannot be augmented in its current state")
 

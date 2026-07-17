@@ -33,6 +33,9 @@ logger = logging.getLogger(__name__)
 #: "No upper bound" sentinel for the FORK view's id ceiling (SQLite's max INTEGER).
 _NO_CEILING = 9223372036854775807
 
+_ORDER_BY_ID_ASC = "id ASC"
+_OP_IS_NOT = "IS NOT"
+
 
 class TranscriptService:
     """Transcript access for one turn — every method reads its channel/turn/
@@ -68,14 +71,14 @@ class TranscriptService:
                 .filter("turn_id", self.mp.turn_id)
                 .filter("id", watermark, ">")
                 .filter("id", ceiling, "<")
-                .order_by("id ASC")
+                .order_by(_ORDER_BY_ID_ASC)
                 .get()
             )
         by_turn: dict[int, list[Transcript]] = {}
         for row in (
             Transcript.filter("channel", channel)
             .filter("turn_id", watermark, ">")
-            .order_by("id ASC")
+            .order_by(_ORDER_BY_ID_ASC)
             .get()
         ):
             by_turn.setdefault(cast("int", row.to_dict()["turn_id"]), []).append(row)
@@ -92,7 +95,7 @@ class TranscriptService:
         return (
             Transcript.filter("channel", self.mp.channel)
             .filter("turn_id", self.mp.turn_id)
-            .order_by("id ASC")
+            .order_by(_ORDER_BY_ID_ASC)
             .get()
         )
 
@@ -109,9 +112,9 @@ class TranscriptService:
             Transcript.filter("channel", Channel.USER.value)
             .filter("id", config._window_start, ">")
             .filter("id", config._window_end, "<=")
-            .filter("content", None, "IS NOT")
+            .filter("content", None, _OP_IS_NOT)
             .filter("content", "", "!=")
-            .order_by("id ASC")
+            .order_by(_ORDER_BY_ID_ASC)
             .get()
         )
 
@@ -128,11 +131,11 @@ class TranscriptService:
             Transcript.filter("channel", Channel.USER.value)
             .filter("id", config._window_start, ">")
             .filter("id", config._window_end, "<=")
-            .filter("location_lat", None, "IS NOT")
-            .filter("location_lon", None, "IS NOT")
-            .filter("content", None, "IS NOT")
+            .filter("location_lat", None, _OP_IS_NOT)
+            .filter("location_lon", None, _OP_IS_NOT)
+            .filter("content", None, _OP_IS_NOT)
             .filter("content", "", "!=")
-            .order_by("id ASC")
+            .order_by(_ORDER_BY_ID_ASC)
             .get()
         )
 

@@ -29,7 +29,7 @@ from __future__ import annotations
 
 import logging
 import re
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, TypeAlias, cast
 
 from tools.browser.security import DnsCache, setup_page_security
 
@@ -105,6 +105,8 @@ _LEDGERS: dict[int, list[tuple[str, str]]] = {}
 
 _WHITESPACE_RE = re.compile(r"\n{3,}")
 
+_DICT_STR_OBJECT: TypeAlias = "dict[str, object]"
+
 
 # ── Cross-thread entry points ────────────────────────────────────────────────
 
@@ -113,7 +115,7 @@ def run_verb(key: int, verb: str, kwargs: dict[str, object]) -> dict[str, object
     if verb != "open" and key not in _SESSIONS:
         return error_envelope("No page is open. Use action='open' with a url first.")
     from tools.browser.pool import get_pool  # noqa: PLC0415
-    return cast("dict[str, object]", get_pool().execute(_dispatch, key, verb, kwargs, timeout=90))
+    return cast(_DICT_STR_OBJECT, get_pool().execute(_dispatch, key, verb, kwargs, timeout=90))
 
 
 def close_session(key: int) -> None:
@@ -158,7 +160,7 @@ def _dispatch(browser: object, key: int, verb: str, kwargs: dict[str, object]) -
         return session.open(**cast("dict[str, str]", kwargs))
     if session is None:
         return error_envelope("No page is open. Use action='open' with a url first.")
-    return cast("dict[str, object]", getattr(session, verb)(**kwargs))
+    return cast(_DICT_STR_OBJECT, getattr(session, verb)(**kwargs))
 
 
 def _close_on_thread(browser: object, key: int) -> None:  # noqa: ARG001 — pool always passes browser
@@ -226,7 +228,7 @@ class PageSession:
         return self._envelope(data=self._read_view(section))
 
     def find(self, query: str) -> dict[str, object]:
-        found = cast("dict[str, object]", self.page.evaluate(_FIND_JS, {"q": query, "limit": _FIND_LIMIT, "ctx": _CONTEXT_CHARS}))
+        found = cast(_DICT_STR_OBJECT, self.page.evaluate(_FIND_JS, {"q": query, "limit": _FIND_LIMIT, "ctx": _CONTEXT_CHARS}))
         if not found["matches"] and not found["interactive"]:
             found["note"] = f"No matches for {query!r} on this page."
         return self._envelope(data=found)
@@ -264,7 +266,7 @@ class PageSession:
 
     def scroll(self, direction: str) -> dict[str, object]:
         sign = -1 if direction == "up" else 1
-        position = cast("dict[str, object]", self.page.evaluate(
+        position = cast(_DICT_STR_OBJECT, self.page.evaluate(
             "(s) => { window.scrollBy(0, s * window.innerHeight * 0.8);"
             " return {y: Math.round(window.scrollY),"
             " max: Math.round(document.body.scrollHeight - window.innerHeight)}; }",
@@ -425,7 +427,7 @@ class PageSession:
             page: object = {"url": self.page.url, "title": self.page.title(), "status": status}
         except Exception:
             page = {}
-        return cast("dict[str, object]", _trim({
+        return cast(_DICT_STR_OBJECT, _trim({
             "page": page,
             "data": data,
             "changed": changed or _no_change(),

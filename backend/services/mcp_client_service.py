@@ -37,6 +37,8 @@ _STATUS_OFFLINE = "offline"
 # Name-sanitization pattern: keep lowercase alpha, digits, underscore.
 _SANITIZE_RE = re.compile(r"[^a-z0-9_]")
 
+_FTS_REBUILD_SQL = "INSERT INTO mcp_tools_fts(mcp_tools_fts) VALUES('rebuild')"
+
 
 def _sanitize_name(name: str) -> str:
     """Convert a server name to a safe [a-z0-9_] identifier fragment."""
@@ -167,7 +169,7 @@ def _open_tools_db() -> sqlite3.Connection:
             row = None
         conn.executescript(_TOOLS_FTS_SCHEMA)
         if row is None:
-            conn.execute("INSERT INTO mcp_tools_fts(mcp_tools_fts) VALUES('rebuild')")
+            conn.execute(_FTS_REBUILD_SQL)
     except sqlite3.OperationalError:
         pass  # FTS5 may not be available in all environments
     try:
@@ -732,9 +734,7 @@ class McpClientService:
                 tool.save()
             # Rebuild FTS index for this server.
             try:
-                conn.execute(
-                    "INSERT INTO mcp_tools_fts(mcp_tools_fts) VALUES('rebuild')"
-                )
+                conn.execute(_FTS_REBUILD_SQL)
             except sqlite3.OperationalError:
                 pass
 
@@ -779,7 +779,7 @@ class McpClientService:
 
             McpTool.filter("server_id", server_id).delete()
             try:
-                conn.execute("INSERT INTO mcp_tools_fts(mcp_tools_fts) VALUES('rebuild')")
+                conn.execute(_FTS_REBUILD_SQL)
             except sqlite3.OperationalError:
                 pass
 

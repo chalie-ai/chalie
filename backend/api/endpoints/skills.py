@@ -42,6 +42,8 @@ from utils.skills_io import (
 
 logger = logging.getLogger(__name__)
 
+_SKILLS_DB_UNAVAILABLE = "skills database unavailable"
+
 
 def _index_new_skill(conn: sqlite3.Connection, skill_id: int, title: str, use_for: str, tags: str) -> None:
     try:
@@ -92,7 +94,7 @@ class Skills(Endpoint):
 
     def delete(self, id: int | str) -> ResponseReturnValue:
         if not FileMapperService.get_skills_db_path().exists():
-            return SkillResponse.failure("skills database unavailable"), 503
+            return SkillResponse.failure(_SKILLS_DB_UNAVAILABLE), 503
 
         skill_id = cast(int, id)
         skill = SkillModel.filter("id", skill_id).first()
@@ -123,7 +125,7 @@ class Skills(Endpoint):
             raise EndpointError("content is required")
 
         if not FileMapperService.get_skills_db_path().exists():
-            return SkillResponse.failure("skills database unavailable"), 503
+            return SkillResponse.failure(_SKILLS_DB_UNAVAILABLE), 503
 
         if SkillModel.find_by_title_ci(dto.title) is not None:
             return SkillResponse.failure(f"A user skill named '{dto.title}' already exists"), 409
@@ -163,7 +165,7 @@ class Skills(Endpoint):
 
     def _update(self, skill_id: int, dto: SkillRequest) -> ResponseReturnValue:
         if not FileMapperService.get_skills_db_path().exists():
-            return SkillResponse.failure("skills database unavailable"), 503
+            return SkillResponse.failure(_SKILLS_DB_UNAVAILABLE), 503
 
         skill = SkillModel.filter("id", skill_id).first()
         if skill is None:

@@ -20,13 +20,15 @@ from api.request.document import ClassifyRequest
 from exceptions import NotFoundError
 from services.document_service import DocumentService
 
+_NOT_FOUND = "Not found"
+
 
 class DocumentsClassify(Action):
     """Action for partial classification update of a document."""
 
     id_type: ClassVar[type[int] | type[str]] = str
     request_dto = ClassifyRequest
-    response_dto = {"post": DocumentedResponse(extras=((404, "Not found"),))}
+    response_dto = {"post": DocumentedResponse(extras=((404, _NOT_FOUND),))}
 
     def slug(self) -> str:
         return "documents"
@@ -36,11 +38,11 @@ class DocumentsClassify(Action):
 
     def post(self, id: int | str, data: Request | None) -> ResponseReturnValue:
         if self.is_create(id):
-            raise NotFoundError("Not found")
+            raise NotFoundError(_NOT_FOUND)
         dto = cast(ClassifyRequest, data)
         svc = DocumentService()
         if not svc.get_document(cast(str, id)):
-            raise NotFoundError("Not found")
+            raise NotFoundError(_NOT_FOUND)
         svc.update_classification(
             cast(str, id),
             category=dto.category,

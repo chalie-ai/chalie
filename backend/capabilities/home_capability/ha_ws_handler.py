@@ -15,16 +15,18 @@ import json
 import logging
 import threading
 from collections.abc import Callable
-from typing import Protocol, cast
+from typing import Protocol, TypeAlias, cast
 
 logger = logging.getLogger(__name__)
 
 _RECONNECT_BASE = 5
 _RECONNECT_MAX = 60
 
+_DICT_STR_OBJECT: TypeAlias = "dict[str, object]"
+
 #: Signature of the callback the owning capability registers: handed the
 #: entity id and the parsed ``new_state`` dict for every subscribed state change.
-OnHaEvent = Callable[[str, "dict[str, object]"], None]
+OnHaEvent = Callable[[str, _DICT_STR_OBJECT], None]
 
 
 class _WsConn(Protocol):
@@ -152,15 +154,15 @@ class HaWebSocketHandler:
         subscribed."""
         if self._on_event is None:
             return
-        event = cast("dict[str, object]", msg.get("event", {}))
-        data = cast("dict[str, object]", event.get("data", {}))
+        event = cast(_DICT_STR_OBJECT, msg.get("event", {}))
+        data = cast(_DICT_STR_OBJECT, event.get("data", {}))
         entity_id = cast(str, data.get("entity_id", ""))
 
         with self._lock:
             if entity_id not in self._subscriptions:
                 return
 
-        new_state = cast("dict[str, object]", data.get("new_state", {}))
+        new_state = cast(_DICT_STR_OBJECT, data.get("new_state", {}))
         try:
             self._on_event(entity_id, new_state)
         except Exception as exc:

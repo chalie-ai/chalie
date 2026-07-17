@@ -33,6 +33,9 @@ from services.provider_db_service import PROVIDER_IN_USE_MSG
 logger = logging.getLogger(__name__)
 
 DUPLICATE_NAME_MSG = "A provider with that name already exists"
+_HOST_NOT_ALLOWED_MSG = "Host is not allowed"
+_API_KEY_REQUIRED_MSG = "API key is required"
+_INVALID_API_KEY_MSG = "Invalid API key"
 
 SAFE_VALIDATION_MESSAGES = {
     "'model' is required",
@@ -90,21 +93,21 @@ def validate_ollama_host(host: str) -> tuple[str | None, str | None]:
     if not hostname:
         return None, "Host is required"
     if hostname in _SSRF_BLOCKED_HOSTS:
-        return None, "Host is not allowed"
+        return None, _HOST_NOT_ALLOWED_MSG
     try:
         addr = ipaddress.ip_address(hostname)
         if addr.is_link_local or addr.is_multicast or addr.is_reserved or addr.is_unspecified:
-            return None, "Host is not allowed"
+            return None, _HOST_NOT_ALLOWED_MSG
     except ValueError:
         try:
             resolved = socket.getaddrinfo(hostname, None, proto=socket.IPPROTO_TCP)
             for _, _, _, _, sockaddr in resolved:
                 ip_str = sockaddr[0]
                 if ip_str in _SSRF_BLOCKED_HOSTS:
-                    return None, "Host is not allowed"
+                    return None, _HOST_NOT_ALLOWED_MSG
                 ip = ipaddress.ip_address(ip_str)
                 if ip.is_link_local or ip.is_multicast or ip.is_unspecified:
-                    return None, "Host is not allowed"
+                    return None, _HOST_NOT_ALLOWED_MSG
         except socket.gaierror:
             return None, "Cannot resolve hostname"
     return safe, None
@@ -152,7 +155,7 @@ def fetch_ollama_models(host: str) -> tuple[list[dict[str, str | None]] | None, 
 def fetch_openai_models(api_key: str) -> tuple[list[dict[str, str | None]] | None, str | None]:
     """Filter to chat-capable text models only."""
     if not api_key:
-        return None, "API key is required"
+        return None, _API_KEY_REQUIRED_MSG
     try:
         r = req.get(
             'https://api.openai.com/v1/models',
@@ -160,7 +163,7 @@ def fetch_openai_models(api_key: str) -> tuple[list[dict[str, str | None]] | Non
             timeout=_LIST_MODELS_TIMEOUT,
         )
         if r.status_code in (401, 403):
-            return None, "Invalid API key"
+            return None, _INVALID_API_KEY_MSG
         if not r.ok:
             return None, f"OpenAI API returned {r.status_code}"
         data = r.json()
@@ -188,7 +191,7 @@ def fetch_openai_models(api_key: str) -> tuple[list[dict[str, str | None]] | Non
 
 def fetch_anthropic_models(api_key: str) -> tuple[list[dict[str, str | None]] | None, str | None]:
     if not api_key:
-        return None, "API key is required"
+        return None, _API_KEY_REQUIRED_MSG
     try:
         r = req.get(
             'https://api.anthropic.com/v1/models',
@@ -200,7 +203,7 @@ def fetch_anthropic_models(api_key: str) -> tuple[list[dict[str, str | None]] | 
             timeout=_LIST_MODELS_TIMEOUT,
         )
         if r.status_code in (401, 403):
-            return None, "Invalid API key"
+            return None, _INVALID_API_KEY_MSG
         if not r.ok:
             return None, f"Anthropic API returned {r.status_code}"
         data = r.json()
@@ -234,7 +237,7 @@ _GEMINI_MAX_PAGES = 10
 def fetch_gemini_models(api_key: str) -> tuple[list[dict[str, str | None]] | None, str | None]:
     """Cap pagination at 10 pages. Only ``generateContent`` models; strips ``models/`` prefix."""
     if not api_key:
-        return None, "API key is required"
+        return None, _API_KEY_REQUIRED_MSG
     try:
         models = []
         page_token = None
@@ -249,7 +252,7 @@ def fetch_gemini_models(api_key: str) -> tuple[list[dict[str, str | None]] | Non
                 timeout=_LIST_MODELS_TIMEOUT,
             )
             if r.status_code in (400, 401, 403):
-                return None, "Invalid API key"
+                return None, _INVALID_API_KEY_MSG
             if not r.ok:
                 return None, f"Gemini API returned {r.status_code}"
             data = r.json()
@@ -281,7 +284,7 @@ def fetch_openai_compatible_models(
     if not host:
         return None, "Host URL is required"
     if not api_key:
-        return None, "API key is required"
+        return None, _API_KEY_REQUIRED_MSG
     safe_host, err = validate_ollama_host(host)
     if err is not None:
         return None, err
@@ -293,7 +296,7 @@ def fetch_openai_compatible_models(
             timeout=_LIST_MODELS_TIMEOUT,
         )
         if r.status_code in (401, 403):
-            return None, "Invalid API key"
+            return None, _INVALID_API_KEY_MSG
         if not r.ok:
             return None, f"API returned {r.status_code}"
         data = r.json()
@@ -331,7 +334,7 @@ def fetch_codex_models() -> tuple[list[dict[str, str | None]] | None, str | None
 def map_api_error(error_str: str, platform: str, model: str) -> str:
     el = error_str.lower()
     if any(k in el for k in ('authentication', 'auth_token', 'api_key', 'invalid_api', '401', 'unauthorized', 'invalid x-api-key')):
-        return "Invalid API key"
+        return _INVALID_API_KEY_MSG
     if any(k in el for k in ('model_not_found', 'not found', 'does not exist', 'no such model', '404')):
         return f"Model '{model}' not found — check the model name"
     if any(k in el for k in ('quota', 'rate_limit', 'rate limit', '429', 'too many')):

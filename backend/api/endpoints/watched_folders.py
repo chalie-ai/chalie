@@ -36,6 +36,8 @@ from api.response.response import Response
 from api.response.watched_folder import WatchedFolder
 from services.folder_watcher_service import FolderWatcherService
 
+_NOT_FOUND = "Not found"
+
 
 class WatchedFolders(Endpoint):
     """CRUD endpoint for watched filesystem folders."""
@@ -48,7 +50,7 @@ class WatchedFolders(Endpoint):
             WatchedFolder,
             extras=(
                 (403, "Permission denied"),
-                (404, "Not found"),
+                (404, _NOT_FOUND),
                 (409, "This folder is already being watched"),
             ),
         ),
@@ -99,7 +101,7 @@ class WatchedFolders(Endpoint):
         """
         delete_documents = request.args.get("delete_documents", "false").lower() == "true"
         if not self._service().delete_folder(cast(str, id), delete_documents=delete_documents):
-            raise NotFoundError("Not found")
+            raise NotFoundError(_NOT_FOUND)
         return "", 204
 
     def _create(self, dto: WatchedFolderRequest) -> ResponseReturnValue:
@@ -126,7 +128,7 @@ class WatchedFolders(Endpoint):
     def _update(self, folder_id: str, dto: WatchedFolderRequest) -> ResponseReturnValue:
         svc = self._service()
         if not svc.get_folder(folder_id):
-            raise NotFoundError("Not found")
+            raise NotFoundError(_NOT_FOUND)
 
         updates = {
             k: v
@@ -142,7 +144,7 @@ class WatchedFolders(Endpoint):
         }
         updated = svc.update_folder(folder_id, **updates)
         if updated is None:
-            raise NotFoundError("Not found")
+            raise NotFoundError(_NOT_FOUND)
         return self._to_response(updated).single()
 
     def _to_response(self, row: dict[str, object]) -> WatchedFolder:

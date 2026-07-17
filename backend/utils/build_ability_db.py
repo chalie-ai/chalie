@@ -18,6 +18,7 @@ from services.file_mapper_service import FileMapperService  # noqa: E402
 
 _DB_PATH = FileMapperService.get_abilities_db_path()
 _SHA_PATH = FileMapperService.get_abilities_sha_path()
+_SELECT_LAST_INSERT_ROWID = "SELECT last_insert_rowid()"
 
 
 def _load_sqlite_vec(conn: sqlite3.Connection) -> None:
@@ -90,7 +91,7 @@ def _insert_ability(conn: sqlite3.Connection, emb_service: EmbeddingService, abi
         "INSERT INTO abilities(name, summary) VALUES (?, ?)",
         (ability.get_name(), summary),
     )
-    ability_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+    ability_id = conn.execute(_SELECT_LAST_INSERT_ROWID).fetchone()[0]
 
     raw_entries: list[tuple[str, str]] = [
         (summary, "summary"),
@@ -106,7 +107,7 @@ def _insert_ability(conn: sqlite3.Connection, emb_service: EmbeddingService, abi
             "INSERT INTO ability_search_entries(ability_id, text, kind) VALUES (?, ?, ?)",
             (ability_id, text, kind),
         )
-        entry_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+        entry_id = conn.execute(_SELECT_LAST_INSERT_ROWID).fetchone()[0]
         conn.execute(
             "INSERT INTO ability_search_vec(rowid, embedding) VALUES (?, ?)",
             (entry_id, pack_embedding(emb)),
@@ -120,7 +121,7 @@ def _insert_ability(conn: sqlite3.Connection, emb_service: EmbeddingService, abi
         "INSERT INTO ability_search_entries(ability_id, text, kind) VALUES (?, ?, 'name')",
         (ability_id, name),
     )
-    name_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+    name_id = conn.execute(_SELECT_LAST_INSERT_ROWID).fetchone()[0]
     conn.execute("INSERT INTO ability_search_fts(rowid, text) VALUES (?, ?)", (name_id, name))
 
     conn.commit()

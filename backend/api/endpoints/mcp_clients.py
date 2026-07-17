@@ -36,6 +36,8 @@ from services.mcp_client_service import McpClientService
 
 logger = logging.getLogger(__name__)
 
+_SERVER_NOT_FOUND = "Server not found"
+
 
 class McpClients(Endpoint):
     """CRUD endpoint for outbound MCP server connections."""
@@ -45,7 +47,7 @@ class McpClients(Endpoint):
     request_dto: ClassVar[type[Request] | None] = McpServerRequest
     response_dto = {
         "get_all": DocumentedResponse(McpServer, listing=True),
-        "post": DocumentedResponse(McpServer, extras=((404, "Server not found"),)),
+        "post": DocumentedResponse(McpServer, extras=((404, _SERVER_NOT_FOUND),)),
     }
 
     def slug(self) -> str:
@@ -93,7 +95,7 @@ class McpClients(Endpoint):
         try:
             self._service().delete_server(cast(str, id))
         except LookupError:
-            raise NotFoundError("Server not found") from None
+            raise NotFoundError(_SERVER_NOT_FOUND) from None
         return "", 204
 
     def _create(self, dto: McpServerRequest) -> ResponseReturnValue:
@@ -126,7 +128,7 @@ class McpClients(Endpoint):
         try:
             server = self._service().update_server(server_id, updates)
         except LookupError:
-            raise NotFoundError("Server not found") from None
+            raise NotFoundError(_SERVER_NOT_FOUND) from None
         return self._to_response(server).single()
 
     def _to_response(self, row: dict[str, object]) -> McpServer:

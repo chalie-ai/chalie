@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, TypeAlias, cast
 
 import yaml
 
@@ -35,12 +35,17 @@ _PLACEHOLDER_USERNAME = "{username}"
 _ERR_IMAP_NOT_CONNECTED = "Mail (IMAP) not connected."
 _ERR_CALDAV_NOT_CONNECTED = "Mail (CalDAV) not connected."
 _ERR_CALDAV_OPEN_FAILED = "Failed to open CalDAV connection."
+_ERR_IMAP_OPEN_FAILED = "Failed to open IMAP connection."
 _DESC_CALDAV_UID = "CalDAV event UID"
 _DESC_CALDAV_RRULE = (
     "Optional RFC-5545 recurrence rule (RRULE) for a repeating event, e.g. "
     "'FREQ=DAILY', 'FREQ=WEEKLY;BYDAY=MO,WE,FR', 'FREQ=MONTHLY'. Omit for a "
     "one-off event."
 )
+_DESC_RECIPIENT_EMAIL = "Recipient email address"
+
+_IMAP_CLIENT_OR_NONE: TypeAlias = "_ImapClient | None"
+_DICT_STR_OBJECT: TypeAlias = "dict[str, object]"
 
 _K_EMAIL = "mail:email"
 _K_PASSWORD = "mail:password"
@@ -192,7 +197,7 @@ class MailCapability(AbstractCapability):
         if provider.caldav_url:
             caldav_url = provider.caldav_url.replace(_PLACEHOLDER_USERNAME, email)
             try:
-                client = cast("_ImapClient | None", self._caldav_handler.open_client(
+                client = cast(_IMAP_CLIENT_OR_NONE, self._caldav_handler.open_client(
                     url=caldav_url, username=email, password=password
                 ))
                 if client is not None:
@@ -206,7 +211,7 @@ class MailCapability(AbstractCapability):
         if provider.carddav_url:
             carddav_url = provider.carddav_url.replace(_PLACEHOLDER_USERNAME, email)
             try:
-                client = cast("_ImapClient | None", self._carddav_handler.open_client(
+                client = cast(_IMAP_CLIENT_OR_NONE, self._carddav_handler.open_client(
                     url=carddav_url, username=email, password=password
                 ))
                 if client is not None:
@@ -303,7 +308,7 @@ class MailCapability(AbstractCapability):
         if "caldav" in protocols and provider.caldav_url:
             caldav_url = provider.caldav_url.replace(_PLACEHOLDER_USERNAME, email)
             try:
-                client = cast("_ImapClient | None", self._caldav_handler.open_client(
+                client = cast(_IMAP_CLIENT_OR_NONE, self._caldav_handler.open_client(
                     url=caldav_url, username=email, password=password
                 ))
                 if client is not None:
@@ -316,7 +321,7 @@ class MailCapability(AbstractCapability):
         if "carddav" in protocols and provider.carddav_url:
             carddav_url = provider.carddav_url.replace(_PLACEHOLDER_USERNAME, email)
             try:
-                client = cast("_ImapClient | None", self._carddav_handler.open_client(
+                client = cast(_IMAP_CLIENT_OR_NONE, self._carddav_handler.open_client(
                     url=carddav_url, username=email, password=password
                 ))
                 if client is not None:
@@ -397,7 +402,7 @@ class MailCapability(AbstractCapability):
         if self._caldav_ok and provider.caldav_url:
             try:
                 caldav_url = provider.caldav_url.replace(_PLACEHOLDER_USERNAME, cast(str, email))
-                client = cast("_ImapClient | None", self._caldav_handler.open_client(
+                client = cast(_IMAP_CLIENT_OR_NONE, self._caldav_handler.open_client(
                     url=caldav_url, username=cast(str, email), password=cast(str, password)
                 ))
                 if client is not None:
@@ -409,7 +414,7 @@ class MailCapability(AbstractCapability):
         if self._carddav_ok and provider.carddav_url:
             try:
                 carddav_url = provider.carddav_url.replace(_PLACEHOLDER_USERNAME, cast(str, email))
-                client = cast("_ImapClient | None", self._carddav_handler.open_client(
+                client = cast(_IMAP_CLIENT_OR_NONE, self._carddav_handler.open_client(
                     url=carddav_url, username=cast(str, email), password=cast(str, password)
                 ))
                 if client is not None:
@@ -427,7 +432,7 @@ class MailCapability(AbstractCapability):
     def understand(self, items: list[object]) -> list[object]:
         if not items:
             return items
-        imap_items = [cast("dict[str, object]", it) for it in items if "subject" in cast("dict[str, object]", it) and "uid" in cast("dict[str, object]", it)]
+        imap_items = [cast(_DICT_STR_OBJECT, it) for it in items if "subject" in cast(_DICT_STR_OBJECT, it) and "uid" in cast(_DICT_STR_OBJECT, it)]
         if imap_items:
             self._imap_handler.understand(imap_items)
         return items
@@ -484,7 +489,7 @@ class MailCapability(AbstractCapability):
     # Tools — connection helpers
     # ------------------------------------------------------------------
 
-    def _open_imap_client(self) -> "_ImapClient | None":
+    def _open_imap_client(self) -> _IMAP_CLIENT_OR_NONE:
         _email = self.load_credential(_K_EMAIL)
         _password = self.load_credential(_K_PASSWORD)
         _provider = self._resolve_provider(_email or "")
@@ -519,7 +524,7 @@ class MailCapability(AbstractCapability):
         try:
             client = self._open_imap_client()
             if client is None:
-                return {"error": "Failed to open IMAP connection."}
+                return {"error": _ERR_IMAP_OPEN_FAILED}
             try:
                 return self._imap_handler.search(client, params)
             finally:
@@ -536,7 +541,7 @@ class MailCapability(AbstractCapability):
         try:
             client = self._open_imap_client()
             if client is None:
-                return {"error": "Failed to open IMAP connection."}
+                return {"error": _ERR_IMAP_OPEN_FAILED}
             try:
                 return self._imap_handler.read_email(client, params)
             finally:
@@ -554,7 +559,7 @@ class MailCapability(AbstractCapability):
             _email = self.load_credential(_K_EMAIL)
             client = self._open_imap_client()
             if client is None:
-                return {"error": "Failed to open IMAP connection."}
+                return {"error": _ERR_IMAP_OPEN_FAILED}
             try:
                 return self._imap_handler.draft_email(
                     client, from_addr=cast(str, _email), params=params,
@@ -573,7 +578,7 @@ class MailCapability(AbstractCapability):
         try:
             client = self._open_imap_client()
             if client is None:
-                return {"error": "Failed to open IMAP connection."}
+                return {"error": _ERR_IMAP_OPEN_FAILED}
             try:
                 return self._imap_handler.manage_email(client, params)
             finally:
@@ -607,7 +612,7 @@ class MailCapability(AbstractCapability):
             creds = self._load_smtp_creds()
             client = self._open_imap_client()
             if client is None:
-                return {"error": "Failed to open IMAP connection."}
+                return {"error": _ERR_IMAP_OPEN_FAILED}
             try:
                 original = self._imap_handler.read_email(client, {"uid": uid})
             finally:
@@ -650,7 +655,7 @@ class MailCapability(AbstractCapability):
             creds = self._load_smtp_creds()
             client = self._open_imap_client()
             if client is None:
-                return {"error": "Failed to open IMAP connection."}
+                return {"error": _ERR_IMAP_OPEN_FAILED}
             try:
                 original = self._imap_handler.read_email(client, {"uid": uid})
             finally:
@@ -785,7 +790,7 @@ class MailCapability(AbstractCapability):
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "to": {"type": "string", "description": "Recipient email address"},
+                        "to": {"type": "string", "description": _DESC_RECIPIENT_EMAIL},
                         "subject": {"type": "string", "description": "Email subject line"},
                         "body": {"type": "string", "description": "Plain-text email body"},
                         "cc": {"type": "string", "description": "CC recipient email address"},
@@ -826,7 +831,7 @@ class MailCapability(AbstractCapability):
                     "type": "object",
                     "properties": {
                         "uid": {"type": "integer", "description": "IMAP UID of the email to forward"},
-                        "to": {"type": "string", "description": "Recipient email address"},
+                        "to": {"type": "string", "description": _DESC_RECIPIENT_EMAIL},
                     },
                     "required": ["uid", "to"],
                 },
@@ -881,7 +886,7 @@ class MailCapability(AbstractCapability):
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "to": {"type": "string", "description": "Recipient email address"},
+                        "to": {"type": "string", "description": _DESC_RECIPIENT_EMAIL},
                         "subject": {"type": "string", "description": "Email subject line"},
                         "body": {"type": "string", "description": "Plain-text email body"},
                         "in_reply_to": {

@@ -36,7 +36,7 @@ fallback hint naming ``document`` and ``schedule`` tools.
 import hashlib
 import json
 import logging
-from typing import TYPE_CHECKING, Literal, cast, overload
+from typing import TYPE_CHECKING, Literal, TypeAlias, cast, overload
 
 from abilities._result import ToolResult
 from models.episode import Episode
@@ -54,12 +54,15 @@ LOG_PREFIX = "[MEMORY]"
 # top_patterns), never semantically, so they are not a recall lane.
 _DG_RECALL_KINDS = ["user_specific", "system", "misc", "place", "discovery"]
 
+_STR_OR_NONE: TypeAlias = "str | None"
+_LIST_OBJECT: TypeAlias = "list[object]"
+
 
 # ── Store ────────────────────────────────────────────────────────────
 
 
 def handle_store(channel: str, params: dict[str, object]) -> ToolResult:
-    key = cast("str | None", params.get("key"))
+    key = cast(_STR_OR_NONE, params.get("key"))
     value = params.get("value")
     kind = cast("str", params.get("kind", "user_specific"))
 
@@ -160,7 +163,7 @@ def _format_store_response(result: dict[str, object]) -> str:
         )
 
     if status == "appended":
-        all_vals = cast("list[object]", result.get("all_values") or [])
+        all_vals = cast(_LIST_OBJECT, result.get("all_values") or [])
         vals_str = ", ".join(f"'{v}'" for v in all_vals)
         return f"{key_display} updated. Values now: [{vals_str}] (previously updated on {date})."
 
@@ -177,8 +180,8 @@ def _format_store_response(result: dict[str, object]) -> str:
 
 
 def handle_forget(params: dict[str, object]) -> ToolResult:
-    key = cast("str | None", params.get("key"))
-    value = cast("str | None", params.get("value"))
+    key = cast(_STR_OR_NONE, params.get("key"))
+    value = cast(_STR_OR_NONE, params.get("value"))
     kind = cast("str", params.get("kind", "user_specific"))
 
     if not key:
@@ -229,7 +232,7 @@ def _format_forget_response(result: dict[str, object]) -> str:
         return f"{key_display} forgotten (was '{old}')." if old else f"{key_display} forgotten."
 
     if status == "value_not_found":
-        remaining = cast("list[object]", result.get("remaining_values") or [])
+        remaining = cast(_LIST_OBJECT, result.get("remaining_values") or [])
         vals_str = ", ".join(f"'{v}'" for v in remaining)
         return f"'{value}' not found in {key_display}. Currently stored: [{vals_str}]."
 
@@ -451,7 +454,7 @@ def _parse_json_list(raw: object) -> list[object]:
         return []
     try:
         parsed = json.loads(cast("str", raw))
-        return cast("list[object]", parsed) if isinstance(parsed, list) else []
+        return cast(_LIST_OBJECT, parsed) if isinstance(parsed, list) else []
     except (json.JSONDecodeError, TypeError):
         return []
 
@@ -560,7 +563,7 @@ def _embedding_hash(embedding: list[float]) -> str:
     if not embedding:
         return "empty"
     try:
-        h = hashlib.md5()
+        h = hashlib.md5(usedforsecurity=False)
         for x in embedding[:16]:
             h.update(f"{x:.6f}".encode())
         return h.hexdigest()[:16]
@@ -617,7 +620,7 @@ def _turn_context(proc: object) -> tuple[str, object, str | None]:
     _channel = getattr(_cfg, "channel", None)
     turn_uid = str(getattr(proc, "_uid", None) or _channel or "unbound")
     transcript_id = getattr(proc, "_uid", None)
-    return turn_uid, transcript_id, cast("str | None", _channel)
+    return turn_uid, transcript_id, cast(_STR_OR_NONE, _channel)
 
 
 @overload
@@ -793,10 +796,10 @@ def _search_episodes_by_location(
         try:
             places = [r.to_dict() for r in PlaceRow.live().get()]
             for place in places:
-                raw_value = cast("str | None", place.get("value") or "{}")
+                raw_value = cast(_STR_OR_NONE, place.get("value") or "{}")
                 val = json.loads(raw_value) if isinstance(raw_value, str) else raw_value
                 if isinstance(val, dict) and cast("str", place.get("key", "")).lower() == location.lower():
-                    place_name = cast("str | None", cast("dict[str, object]", val).get("name"))
+                    place_name = cast(_STR_OR_NONE, cast("dict[str, object]", val).get("name"))
                     if place_name and place_name.lower() != location.lower():
                         location_names.append(place_name)
         except Exception as _resolve_exc:

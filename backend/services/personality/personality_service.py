@@ -16,6 +16,7 @@ logger = logging.getLogger(__name__)
 NEUTRAL: tuple[int, int, int, int, int] = (0, 0, 0, 0, 0)
 SLIDER_ORDER = ('warmth', 'mood', 'expressiveness', 'curiosity', 'humor')
 _VOICES_PATH = str(FileMapperService.get_backend_path("services", "personality", "voices.jsonl"))
+_DEFAULT_VOICE = "Engage naturally as a peer."
 
 
 class PersonalityService:
@@ -30,7 +31,7 @@ class PersonalityService:
             return self._voice
         self._tuple = self._read_tuple()
         self._voice = self._index.get(self._tuple) or self._index.get(
-            NEUTRAL, "Engage naturally as a peer.",
+            NEUTRAL, _DEFAULT_VOICE,
         )
         return self._voice
 
@@ -46,7 +47,7 @@ class PersonalityService:
         Setting.set('personality', json.dumps(list(tup)))
         self._tuple = tup
         self._voice = self._index.get(tup) or self._index.get(
-            NEUTRAL, "Engage naturally as a peer.",
+            NEUTRAL, _DEFAULT_VOICE,
         )
         return self._voice
 
@@ -56,7 +57,7 @@ class PersonalityService:
 
     def voice_for(self, tup: tuple[int, int, int, int, int]) -> str:
         return self._index.get(tup) or self._index.get(
-            NEUTRAL, "Engage naturally as a peer.",
+            NEUTRAL, _DEFAULT_VOICE,
         )
 
     def _read_tuple(self) -> tuple[int, int, int, int, int]:

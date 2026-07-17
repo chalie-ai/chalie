@@ -20,10 +20,12 @@ import logging
 import re
 import threading
 import time
-from typing import Callable, Dict, List, Optional, Set, Tuple, cast
+from typing import Callable, Dict, List, Optional, Set, Tuple, TypeAlias, cast
 
 
 logger = logging.getLogger(__name__)
+
+_KEYSPACE_DICT: TypeAlias = "Dict[str, Tuple[object, Optional[float]]]"
 
 
 class MemoryStore:
@@ -355,10 +357,10 @@ class MemoryStore:
     def expire(self, key: str, seconds: int) -> bool:
         new_expiry = self._expiry_from_seconds(seconds)
         for store, lock in [
-            (cast("Dict[str, Tuple[object, Optional[float]]]", self._strings), self._str_lock),
-            (cast("Dict[str, Tuple[object, Optional[float]]]", self._lists), self._list_lock),
-            (cast("Dict[str, Tuple[object, Optional[float]]]", self._sorted_sets), self._zset_lock),
-            (cast("Dict[str, Tuple[object, Optional[float]]]", self._sets), self._set_lock),
+            (cast(_KEYSPACE_DICT, self._strings), self._str_lock),
+            (cast(_KEYSPACE_DICT, self._lists), self._list_lock),
+            (cast(_KEYSPACE_DICT, self._sorted_sets), self._zset_lock),
+            (cast(_KEYSPACE_DICT, self._sets), self._set_lock),
         ]:
             with lock:
                 if key in store:
@@ -370,10 +372,10 @@ class MemoryStore:
     def ttl(self, key: str) -> int:
         """Return TTL in seconds. -1 = no expiry, -2 = key doesn't exist."""
         for store, lock in [
-            (cast("Dict[str, Tuple[object, Optional[float]]]", self._strings), self._str_lock),
-            (cast("Dict[str, Tuple[object, Optional[float]]]", self._lists), self._list_lock),
-            (cast("Dict[str, Tuple[object, Optional[float]]]", self._sorted_sets), self._zset_lock),
-            (cast("Dict[str, Tuple[object, Optional[float]]]", self._sets), self._set_lock),
+            (cast(_KEYSPACE_DICT, self._strings), self._str_lock),
+            (cast(_KEYSPACE_DICT, self._lists), self._list_lock),
+            (cast(_KEYSPACE_DICT, self._sorted_sets), self._zset_lock),
+            (cast(_KEYSPACE_DICT, self._sets), self._set_lock),
         ]:
             with lock:
                 entry: Optional[Tuple[object, Optional[float]]] = store.get(key)
@@ -394,10 +396,10 @@ class MemoryStore:
         result: Set[str] = set()
         now = time.time()
         for store, lock in [
-            (cast("Dict[str, Tuple[object, Optional[float]]]", self._strings), self._str_lock),
-            (cast("Dict[str, Tuple[object, Optional[float]]]", self._lists), self._list_lock),
-            (cast("Dict[str, Tuple[object, Optional[float]]]", self._sorted_sets), self._zset_lock),
-            (cast("Dict[str, Tuple[object, Optional[float]]]", self._sets), self._set_lock),
+            (cast(_KEYSPACE_DICT, self._strings), self._str_lock),
+            (cast(_KEYSPACE_DICT, self._lists), self._list_lock),
+            (cast(_KEYSPACE_DICT, self._sorted_sets), self._zset_lock),
+            (cast(_KEYSPACE_DICT, self._sets), self._set_lock),
         ]:
             with lock:
                 for k, (_, expiry) in store.items():
@@ -431,22 +433,22 @@ class MemoryStore:
         now = time.time()
 
         with self._str_lock:
-            for k, (v, expiry) in cast("Dict[str, Tuple[object, Optional[float]]]", self._strings).items():
+            for k, (v, expiry) in cast(_KEYSPACE_DICT, self._strings).items():
                 if (expiry is None or now <= expiry) and _matches(k):
                     result[k] = {"type": "string", "value": v}
 
         with self._list_lock:
-            for k, (v, expiry) in cast("Dict[str, Tuple[object, Optional[float]]]", self._lists).items():
+            for k, (v, expiry) in cast(_KEYSPACE_DICT, self._lists).items():
                 if (expiry is None or now <= expiry) and _matches(k):
                     result[k] = {"type": "list", "value": list(cast("List[str]", v))}
 
         with self._zset_lock:
-            for k, (v, expiry) in cast("Dict[str, Tuple[object, Optional[float]]]", self._sorted_sets).items():
+            for k, (v, expiry) in cast(_KEYSPACE_DICT, self._sorted_sets).items():
                 if (expiry is None or now <= expiry) and _matches(k):
                     result[k] = {"type": "zset", "value": [m for m, _ in cast("List[Tuple[float, str]]", v)]}
 
         with self._set_lock:
-            for k, (v, expiry) in cast("Dict[str, Tuple[object, Optional[float]]]", self._sets).items():
+            for k, (v, expiry) in cast(_KEYSPACE_DICT, self._sets).items():
                 if (expiry is None or now <= expiry) and _matches(k):
                     result[k] = {"type": "set", "value": list(cast("Set[str]", v))}
 

@@ -19,12 +19,14 @@ from exceptions import NotFoundError
 from api.request import Request
 from services.folder_watcher_service import FolderWatcherService
 
+_NOT_FOUND = "Not found"
+
 
 class WatchedFoldersScan(Action):
     """Action requesting an out-of-schedule immediate scan for a watched folder."""
 
     id_type: ClassVar[type[int] | type[str]] = str
-    response_dto = {"post": DocumentedResponse(extras=((404, "Not found"),))}
+    response_dto = {"post": DocumentedResponse(extras=((404, _NOT_FOUND),))}
 
     def slug(self) -> str:
         return "watched-folders"
@@ -34,10 +36,10 @@ class WatchedFoldersScan(Action):
 
     def post(self, id: int | str, data: Request | None) -> ResponseReturnValue:
         if self.is_create(id):
-            raise NotFoundError("Not found")
+            raise NotFoundError(_NOT_FOUND)
         svc = FolderWatcherService()
         folder_id = cast(str, id)
         if not svc.get_folder(folder_id):
-            raise NotFoundError("Not found")
+            raise NotFoundError(_NOT_FOUND)
         svc.trigger_scan(folder_id)
         return "", 204

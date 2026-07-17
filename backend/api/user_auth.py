@@ -1,7 +1,7 @@
 """User authentication namespace — /api/auth endpoints for master account."""
 
 import logging
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, TypeAlias, cast
 
 from flask import request, jsonify
 from flask.typing import ResponseReturnValue
@@ -26,6 +26,8 @@ _m = user_auth_ns.models
 
 _LOGIN_RATE_LIMIT = 10   # attempts
 _LOGIN_RATE_WINDOW = 60  # seconds
+
+_COUNT_ROW: TypeAlias = "tuple[int, ...]"
 
 
 def _get_login_rate_limiter() -> "WrapperRateLimiter":
@@ -99,10 +101,10 @@ class AuthStatusResource(Resource):
             from services.auth_session_service import validate_session
 
             conn = Database.conn()
-            account_count = cast("tuple[int, ...]", conn.execute(
+            account_count = cast(_COUNT_ROW, conn.execute(
                 "SELECT COUNT(*) FROM master_account"
             ).fetchone())[0]
-            provider_count = cast("tuple[int, ...]", conn.execute(
+            provider_count = cast(_COUNT_ROW, conn.execute(
                 "SELECT COUNT(*) FROM providers"
             ).fetchone())[0]
 
@@ -191,7 +193,7 @@ class RegisterResource(Resource):
             password = dto.password
 
             with Database.transaction() as conn:
-                existing = cast("tuple[int, ...]", conn.execute(
+                existing = cast(_COUNT_ROW, conn.execute(
                     "SELECT COUNT(*) FROM master_account"
                 ).fetchone())[0]
 

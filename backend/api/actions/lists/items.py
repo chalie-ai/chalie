@@ -27,6 +27,8 @@ from api.request.lists import ItemRequest
 from api.response.lists import ListItemResponse
 from services.list_service import ListService
 
+_NOT_FOUND = "Not found"
+
 
 class ListItems(Action):
     """Action for list-item operations.
@@ -53,7 +55,7 @@ class ListItems(Action):
     def get(self, id: int | str) -> ResponseReturnValue:
         items = ListService().get_items(cast(str, id))
         if items is None:
-            raise NotFoundError("Not found")
+            raise NotFoundError(_NOT_FOUND)
         response_items = [self._to_response(it) for it in items]
         return ListItemResponse.listing(
             response_items, 1, max(len(response_items), 1), len(response_items)
@@ -67,7 +69,7 @@ class ListItems(Action):
             raise EndpointError("content is required")
         item = ListService().add_item(cast(str, id), dto.content)
         if item is None:
-            raise NotFoundError("Not found")
+            raise NotFoundError(_NOT_FOUND)
         return self._to_response(item).single(), 201
 
     def delete(self, id: int | str) -> ResponseReturnValue:
@@ -76,7 +78,7 @@ class ListItems(Action):
             raise EndpointError("Composite id must be <list_id>:<item_id>")
         list_id, item_id = id_str.split(":", 1)
         if not ListService().delete_item(list_id, item_id):
-            raise NotFoundError("Not found")
+            raise NotFoundError(_NOT_FOUND)
         return "", 204
 
     def _update(self, composite_id: str, dto: ItemRequest) -> ResponseReturnValue:
@@ -90,7 +92,7 @@ class ListItems(Action):
             position=dto.position,
         )
         if item is None:
-            raise NotFoundError("Not found")
+            raise NotFoundError(_NOT_FOUND)
         return self._to_response(item).single()
 
     def _to_response(self, item: dict[str, object]) -> ListItemResponse:

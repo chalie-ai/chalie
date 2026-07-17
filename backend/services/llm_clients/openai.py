@@ -65,6 +65,7 @@ _APP_URL = "https://chalie.ai"
 _APP_TITLE = "Chalie"
 
 _COMPLETION_USAGE: TypeAlias = "_openai_mod.types.CompletionUsage"
+_CHAT_COMPLETIONS_CREATE: TypeAlias = "Callable[..., _openai_mod.types.chat.ChatCompletion]"
 
 
 def _openai_convert_messages(messages: "list[_Msg]") -> "list[_Msg]":
@@ -176,7 +177,7 @@ class OpenAIClient(ProviderClient):
         import openai as openai_mod  # noqa: PLC0415
         from services.llm_service import _is_thinking_rejection  # noqa: PLC0415
         try:
-            return cast("Callable[..., _openai_mod.types.chat.ChatCompletion]", client.chat.completions.create)(**create_kwargs)
+            return cast(_CHAT_COMPLETIONS_CREATE, client.chat.completions.create)(**create_kwargs)
         except openai_mod.RateLimitError as exc:
             raise RateLimitError(str(exc), provider='openai') from exc
         except openai_mod.APITimeoutError as exc:
@@ -203,7 +204,7 @@ class OpenAIClient(ProviderClient):
                     fallback1 = {k: v for k, v in create_kwargs.items() if k not in ('reasoning_effort', 'extra_body')}
                     fallback1['reasoning_effort'] = OPENAI_NONE_FALLBACK_EFFORT
                     try:
-                        return cast("Callable[..., _openai_mod.types.chat.ChatCompletion]", client.chat.completions.create)(**fallback1)
+                        return cast(_CHAT_COMPLETIONS_CREATE, client.chat.completions.create)(**fallback1)
                     except Exception as retry_exc:
                         if _is_thinking_rejection(retry_exc, fallback1):
                             # Step 2: retry bare — no reasoning_effort, no extra_body
@@ -212,7 +213,7 @@ class OpenAIClient(ProviderClient):
                                 self.model,
                             )
                             fallback2 = {k: v for k, v in create_kwargs.items() if k not in ('reasoning_effort', 'extra_body')}
-                            return cast("Callable[..., _openai_mod.types.chat.ChatCompletion]", client.chat.completions.create)(**fallback2)
+                            return cast(_CHAT_COMPLETIONS_CREATE, client.chat.completions.create)(**fallback2)
                         raise
                 else:
                     # Single bare-strip retry for other reasoning_effort values
@@ -221,7 +222,7 @@ class OpenAIClient(ProviderClient):
                         self.model,
                     )
                     fallback = {k: v for k, v in create_kwargs.items() if k not in ('reasoning_effort', 'extra_body')}
-                    return cast("Callable[..., _openai_mod.types.chat.ChatCompletion]", client.chat.completions.create)(**fallback)
+                    return cast(_CHAT_COMPLETIONS_CREATE, client.chat.completions.create)(**fallback)
             status = getattr(exc, 'status_code', 0)
             raise ProviderResponseError(str(exc), response_code=status, provider='openai') from exc
 

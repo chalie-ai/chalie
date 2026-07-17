@@ -36,12 +36,13 @@ from collections import deque
 from collections.abc import Generator
 from fnmatch import fnmatch
 from pathlib import Path
-from typing import ClassVar, cast
+from typing import ClassVar, TypeAlias, cast
 
 from abilities._ability import Ability
 from configs.enums.param_key import Keys
 from abilities._result import ToolResult
 
+_LIST_STR: TypeAlias = "list[str]"
 _RESULTS_PER_PAGE = 5
 # Safety ceiling on total results gathered for one query, so a pathological
 # match-dense tree (e.g. a 100MB file with a million matching lines) can never
@@ -412,8 +413,8 @@ def _grep_file(
                 text = raw.rstrip()
                 still_open: list[dict[str, object]] = []
                 for m in open_rows:
-                    cast("list[str]", m["_after"]).append(text)
-                    if len(cast("list[str]", m["_after"])) >= context_lines:
+                    cast(_LIST_STR, m["_after"]).append(text)
+                    if len(cast(_LIST_STR, m["_after"])) >= context_lines:
                         rows.append(_finalize(m, context_lines))
                     else:
                         still_open.append(m)
@@ -438,6 +439,6 @@ def _finalize(m: dict[str, object], context_lines: int) -> dict[str, object]:
     row: dict[str, object] = {"file": m["file"], "line": m["line"], "text": m["text"]}
     if context_lines > 0:
         row["context"] = "\n".join(
-            cast("list[str]", m["_before"]) + [cast(str, m["text"])] + cast("list[str]", m["_after"])
+            cast(_LIST_STR, m["_before"]) + [cast(str, m["text"])] + cast(_LIST_STR, m["_after"])
         )
     return row

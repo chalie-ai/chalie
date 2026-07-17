@@ -19,6 +19,8 @@ from api.request import Request
 from exceptions import EndpointError, NotFoundError
 from services.document_service import DocumentService
 
+_NOT_FOUND = "Not found"
+
 
 class DocumentsConfirm(Action):
     """Action to confirm a document after synthesis review."""
@@ -26,7 +28,7 @@ class DocumentsConfirm(Action):
     id_type: ClassVar[type[int] | type[str]] = str
     response_dto = {
         "post": DocumentedResponse(
-            extras=((404, "Not found"), (400, "Not awaiting confirmation")),
+            extras=((404, _NOT_FOUND), (400, "Not awaiting confirmation")),
         )
     }
 
@@ -38,11 +40,11 @@ class DocumentsConfirm(Action):
 
     def post(self, id: int | str, data: Request | None) -> ResponseReturnValue:
         if self.is_create(id):
-            raise NotFoundError("Not found")
+            raise NotFoundError(_NOT_FOUND)
         svc = DocumentService()
         doc = svc.get_document(cast(str, id))
         if not doc:
-            raise NotFoundError("Not found")
+            raise NotFoundError(_NOT_FOUND)
         if doc["status"] != "awaiting_confirmation":
             raise EndpointError("Document is not awaiting confirmation")
         svc.update_status(

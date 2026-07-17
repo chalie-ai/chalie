@@ -23,6 +23,8 @@ from api.request.lists import ListRequest
 from api.response.lists import ListResponse
 from services.list_service import ListService
 
+_NOT_FOUND = "Not found"
+
 
 class Lists(Endpoint):
     """CRUD endpoint for lists."""
@@ -49,7 +51,7 @@ class Lists(Endpoint):
     def get(self, id: int | str) -> ResponseReturnValue:
         row = ListService().get_list(cast(str, id))
         if row is None:
-            raise NotFoundError("Not found")
+            raise NotFoundError(_NOT_FOUND)
         return self._to_response(row).single()
 
     def post(self, id: int | str, data: Request | None) -> ResponseReturnValue:
@@ -64,19 +66,19 @@ class Lists(Endpoint):
                 return ListResponse.failure("A list with this name already exists."), 409
             row = svc.get_list(list_id)
             if row is None:
-                raise NotFoundError("Not found")
+                raise NotFoundError(_NOT_FOUND)
             return self._to_response(row).single(), 201
         try:
             row = svc.update_list(cast(str, id), name=dto.name, list_type=dto.list_type)
         except ValueError:
             return ListResponse.failure("A list with this name already exists."), 409
         if row is None:
-            raise NotFoundError("Not found")
+            raise NotFoundError(_NOT_FOUND)
         return self._to_response(row).single()
 
     def delete(self, id: int | str) -> ResponseReturnValue:
         if not ListService().delete_list(cast(str, id)):
-            raise NotFoundError("Not found")
+            raise NotFoundError(_NOT_FOUND)
         return "", 204
 
     def _to_response(self, row: dict[str, object]) -> ListResponse:

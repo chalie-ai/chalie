@@ -16,13 +16,15 @@ from __future__ import annotations
 
 import json
 import math
-from typing import ClassVar, Self, cast
+from typing import ClassVar, Self, TypeAlias, cast
 
 from contracts.search_config import SearchConfig
 from models.data_graph import DataGraphRow
 from models.query import Query
 from services.time_utils import utc_now
 from utils.data_utils import parse_json_column
+
+_LIST_OBJECT: TypeAlias = "list[object]"
 
 
 class BehavioralPattern(DataGraphRow):
@@ -90,7 +92,7 @@ class BehavioralPattern(DataGraphRow):
             kind=cls.KIND,
             key=validated["name"],
             value=json.dumps(cls._build_value(
-                validated, now, cls._NEW_CONFIDENCE, list(cast("list[object]", validated["evidence"])),
+                validated, now, cls._NEW_CONFIDENCE, list(cast(_LIST_OBJECT, validated["evidence"])),
             )),
             first_seen_at=now,
             last_confirmed_at=now,
@@ -108,8 +110,8 @@ class BehavioralPattern(DataGraphRow):
         prev_conf = float(cast("float", prev.get("confidence") or 0.0))
         new_conf = min(self._MAX_CONFIDENCE, prev_conf + self._REINFORCE_STEP)
         merged_evidence = list(dict.fromkeys([
-            *cast("list[object]", prev.get("evidence_transcript_ids") or []),
-            *cast("list[object]", validated["evidence"]),
+            *cast(_LIST_OBJECT, prev.get("evidence_transcript_ids") or []),
+            *cast(_LIST_OBJECT, validated["evidence"]),
         ]))
         old_strength = float(self.storage_strength) if self.storage_strength is not None else self._DEFAULT_STRENGTH
         new_evidence = (int(self.evidence_count) if self.evidence_count is not None else self._DEFAULT_EVIDENCE) + 1
