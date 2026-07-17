@@ -17,7 +17,29 @@ Supported formats (heavy-library imports are lazy):
 
 import logging
 import mimetypes
-from typing import Any, cast
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
+    from typing import Protocol
+
+    from docx.document import Document as _DocxDocument
+    from pdfplumber.page import Page as _PdfPage
+
+    # python-pptx is Any under mypy (no py.typed), so a minimal structural
+    # type stands in for the slide object the helper actually uses.
+    class _PptxParagraph(Protocol):
+        text: str
+
+    class _PptxTextFrame(Protocol):
+        paragraphs: "Sequence[_PptxParagraph]"
+
+    class _PptxShape(Protocol):
+        has_text_frame: bool
+        text_frame: "_PptxTextFrame"
+
+    class _PptxSlide(Protocol):
+        shapes: "Sequence[_PptxShape]"
 
 logger = logging.getLogger(__name__)
 
@@ -95,7 +117,7 @@ def detect_mime_type(file_path: str) -> str:
 
 # ─── Format-specific extractors (internal) ───────────────────────────────────
 
-def _pdf_page_text(page: Any) -> str:
+def _pdf_page_text(page: "_PdfPage") -> str:
     """Extract one PDF page's text, appending any detected tables as
     pipe-joined rows. Extracted from _extract_pdf."""
     page_text = page.extract_text() or ''
@@ -136,7 +158,7 @@ def _extract_pdf(path: str) -> str:
         return ''
 
 
-def _docx_paragraph_text(doc: Any, element: Any) -> str | None:
+def _docx_paragraph_text(doc: "_DocxDocument", element: object) -> str | None:
     """Return the formatted text for the paragraph matching ``element``
     (heading-prefixed with markdown '#'s if the paragraph uses a Heading
     style), or ``None`` if empty or no matching paragraph is found.
@@ -147,17 +169,17 @@ def _docx_paragraph_text(doc: Any, element: Any) -> str | None:
             if not text:
                 return None
             if para.style and para.style.name.startswith('Heading'):
-                level = para.style.name.replace('Heading ', '').replace('Heading', '1')
+                level_str = para.style.name.replace('Heading ', '').replace('Heading', '1')
                 try:
-                    level = int(level)
+                    level = int(level_str)
                 except ValueError:
                     level = 1
                 return f"{'#' * level} {text}"
-            return cast(str, text)
+            return text
     return None
 
 
-def _docx_table_text(doc: Any, element: Any) -> str | None:
+def _docx_table_text(doc: "_DocxDocument", element: object) -> str | None:
     """Return the pipe-joined row text for the table matching ``element``,
     or ``None`` if no matching table is found. Extracted from
     _extract_docx."""
@@ -201,7 +223,7 @@ def _extract_docx(path: str) -> str:
         return ''
 
 
-def _pptx_slide_texts(slide: Any) -> list[str]:
+def _pptx_slide_texts(slide: "_PptxSlide") -> list[str]:
     """Collect all non-empty paragraph texts across a slide's text-frame
     shapes. Extracted from _extract_pptx."""
     texts = []

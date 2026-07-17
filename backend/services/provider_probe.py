@@ -21,7 +21,7 @@ import ipaddress
 import logging
 import socket
 from dataclasses import dataclass
-from typing import Any, cast
+from typing import cast
 from urllib.parse import urlparse
 
 import requests as req
@@ -244,20 +244,20 @@ _GEMINI_MODELS_URL = 'https://generativelanguage.googleapis.com/v1beta/models'
 _GEMINI_MAX_PAGES = 10
 
 
-def _extract_gemini_models_from_page(data: Any) -> list[dict[str, str | None]]:
+def _extract_gemini_models_from_page(data: dict[str, object]) -> list[dict[str, str | None]]:
     """Filter one Gemini list-models page to generateContent-capable models,
     stripping the ``models/`` prefix from each id. Extracted from
     fetch_gemini_models."""
     models: list[dict[str, str | None]] = []
-    for m in (data.get('models') or []):
-        methods = m.get('supportedGenerationMethods') or []
+    for m in cast("list[dict[str, object]]", data.get('models') or []):
+        methods = cast("list[str]", m.get('supportedGenerationMethods') or [])
         if 'generateContent' not in methods:
             continue
-        name = m.get('name') or ''
+        name = cast(str, m.get('name') or '')
         mid = name[len('models/'):] if name.startswith('models/') else name
         if not mid:
             continue
-        models.append({"id": mid, "display_name": m.get('displayName')})
+        models.append({"id": mid, "display_name": cast("str | None", m.get('displayName'))})
     return models
 
 
@@ -310,11 +310,11 @@ def fetch_gemini_models(api_key: str) -> tuple[list[dict[str, str | None]] | Non
         return None, "Gemini API request failed"
 
 
-def _parse_openai_compatible_models(data: Any) -> list[dict[str, str | None]]:
+def _parse_openai_compatible_models(data: object) -> list[dict[str, str | None]]:
     """Normalise an OpenAI-compatible /models response (dict-wrapped, or a
     bare list; string or object entries) into the common model-dict shape.
     Extracted from fetch_openai_compatible_models."""
-    items = data.get('data') or []
+    items = cast("list[object]", cast("dict[str, object]", data).get('data') or [])
     if isinstance(data, list):
         items = data
     models: list[dict[str, str | None]] = []
@@ -322,10 +322,11 @@ def _parse_openai_compatible_models(data: Any) -> list[dict[str, str | None]]:
         if isinstance(m, str):
             models.append({"id": m, "display_name": None})
             continue
-        mid = m.get('id') or m.get('name') or ''
+        md = cast("dict[str, object]", m)
+        mid = cast(str, md.get('id') or md.get('name') or '')
         if not mid:
             continue
-        models.append({"id": mid, "display_name": m.get('display_name')})
+        models.append({"id": mid, "display_name": cast("str | None", md.get('display_name'))})
     models.sort(key=lambda m: cast(str, m['id']))
     return models
 
