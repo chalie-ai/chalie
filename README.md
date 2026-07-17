@@ -87,6 +87,7 @@ Curious? → [Architecture & internals](https://chalie.ai/docs) · [Schema](back
 chalie                  # start
 chalie --port=9000      # custom port
 chalie stop             # stop the daemon
+chalie update           # update to latest
 chalie logs             # tail the log
 ```
 
