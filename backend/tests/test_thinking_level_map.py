@@ -508,23 +508,23 @@ class TestIsThinkingRejection:
 
     def test_reasoning_effort_rejection_with_kwarg(self) -> None:
         from services.llm_service import _is_thinking_rejection
-        exc = Exception("unsupported value for reasoning_effort")
+        exc = RuntimeError("unsupported value for reasoning_effort")
         assert _is_thinking_rejection(exc, {"reasoning_effort": "none"}) is True
 
     def test_reasoning_effort_error_without_kwarg(self) -> None:
         from services.llm_service import _is_thinking_rejection
-        exc = Exception("unsupported value for reasoning_effort")
+        exc = RuntimeError("unsupported value for reasoning_effort")
         assert _is_thinking_rejection(exc, {}) is False
 
     def test_extra_body_thinking_rejection(self) -> None:
         from services.llm_service import _is_thinking_rejection
-        exc = Exception("Extra inputs are not permitted extra_forbidden")
+        exc = RuntimeError("Extra inputs are not permitted extra_forbidden")
         kwargs: dict[str, object] = {"extra_body": {"thinking": {"type": "disabled"}}}
         assert _is_thinking_rejection(exc, kwargs) is True
 
     def test_unrelated_error_with_both_kwargs(self) -> None:
         from services.llm_service import _is_thinking_rejection
-        exc = Exception("boom")
+        exc = RuntimeError("boom")
         kwargs: dict[str, object] = {
             "reasoning_effort": "none",
             "extra_body": {"thinking": {"type": "disabled"}},
@@ -533,7 +533,7 @@ class TestIsThinkingRejection:
 
     def test_extra_body_without_thinking_key(self) -> None:
         from services.llm_service import _is_thinking_rejection
-        exc = Exception("Extra inputs are not permitted extra_forbidden")
+        exc = RuntimeError("Extra inputs are not permitted extra_forbidden")
         kwargs: dict[str, object] = {"extra_body": {"something_else": "value"}}
         assert _is_thinking_rejection(exc, kwargs) is False
 

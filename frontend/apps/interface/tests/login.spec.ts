@@ -62,6 +62,7 @@ test('valid credentials redirect to / and the session is established', async ({ 
 });
 
 test('?next=/brain/ is honoured — valid login redirects to /brain/', async ({ page }) => {
+  // Needs a real account password to submit the login form; skipped where that isn't configured.
   test.skip(!process.env.CHALIE_TEST_PASSWORD, 'needs CHALIE_TEST_PASSWORD');
 
   await page.goto('/login/?next=/brain/');

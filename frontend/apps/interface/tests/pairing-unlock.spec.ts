@@ -31,6 +31,7 @@ test.describe('Tauri pairing gate', () => {
 });
 
 test.describe('UnlockVault overlay', () => {
+  // Needs a real account password to submit the unlock form; skipped where that isn't configured.
   test.skip(!process.env.CHALIE_TEST_PASSWORD, 'needs CHALIE_TEST_PASSWORD');
 
   test('wrong password keeps the overlay and shows an error when the vault is locked', async ({ page }) => {
@@ -41,6 +42,7 @@ test.describe('UnlockVault overlay', () => {
 
     const status = await page.request.get('/auth/status');
     const locked = (await status.json()).vault_state === 'locked';
+    // This case only applies while the vault is locked; skip if this environment's vault is already open.
     test.skip(!locked, 'vault already unlocked in this env');
 
     await expect(page.locator('.unlock-vault')).toBeVisible({ timeout: 15_000 });

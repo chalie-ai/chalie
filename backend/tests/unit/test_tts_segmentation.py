@@ -81,7 +81,7 @@ class TestSegmentForTts:
     def test_sentences_that_exceed_limit_when_combined_split_across_chunks(self) -> None:
         # Each sentence individually fits, but concatenating them overflows.
         s1 = _word(200) + "."
-        s2 = _word(200) + "."   # s1 + " " + s2 = 401 > 320
+        s2 = _word(200) + "."   # s1 and s2 together total 401 chars, over the 320-char limit
         text = f"{s1} {s2}"
         result = _segment_for_tts(text)
         assert len(result) == 2

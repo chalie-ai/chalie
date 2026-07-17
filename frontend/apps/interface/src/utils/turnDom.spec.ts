@@ -211,13 +211,13 @@ describe('removeTurn', () => {
     registerSurface({ id: 'a', type: 'user', container: containerA, component: StubComponent });
     registerSurface({ id: 'b', type: 'user', container: containerB, component: StubComponent });
     upsertTurnToSurfaces(block(1, [10]), 'user');
-    expect(containerA.children.length).toBe(1);
-    expect(containerB.children.length).toBe(1);
+    expect(containerA.children).toHaveLength(1);
+    expect(containerB.children).toHaveLength(1);
 
     removeTurn(1, 'user');
 
-    expect(containerA.children.length).toBe(0);
-    expect(containerB.children.length).toBe(0);
+    expect(containerA.children).toHaveLength(0);
+    expect(containerB.children).toHaveLength(0);
     containerA.remove();
     containerB.remove();
   });

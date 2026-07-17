@@ -2,7 +2,7 @@
 
 import sqlite3
 from collections.abc import Callable
-from typing import TYPE_CHECKING, cast
+from typing import cast
 
 import pytest
 
@@ -10,9 +10,6 @@ from models.document import DocumentRow
 from services.document_service import DocumentService
 from services.memory_recall_service import recall
 from services.write_queue_service import WriteQueueService
-
-if TYPE_CHECKING:
-    pass
 
 
 class _InlineWriteQueue:
@@ -35,16 +32,16 @@ def _insert_document(db: sqlite3.Connection, doc_id: str = 'abc123', original_na
                      file_path: str = 'abc123/test.pdf', file_hash: str = 'sha256hash',
                      source_type: str = 'upload', status: str = 'pending', **extra: object) -> str:
     """Seed a document row directly for read-path tests."""
-    cols: dict[str, object] = dict(
-        id=doc_id,
-        original_name=original_name,
-        mime_type=mime_type,
-        file_size_bytes=file_size,
-        file_path=file_path,
-        file_hash=file_hash,
-        source_type=source_type,
-        status=status,
-    )
+    cols: dict[str, object] = {
+        "id": doc_id,
+        "original_name": original_name,
+        "mime_type": mime_type,
+        "file_size_bytes": file_size,
+        "file_path": file_path,
+        "file_hash": file_hash,
+        "source_type": source_type,
+        "status": status,
+    }
     cols.update(extra)
     col_names = ', '.join(cols.keys())
     placeholders = ', '.join(['?'] * len(cols))

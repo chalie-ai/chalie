@@ -196,7 +196,7 @@ describe('mountSendEcho — remount', () => {
     sendEcho.mountSendEcho('second draft', null, 'user');
 
     const hosts = container.querySelectorAll('[data-send-echo]');
-    expect(hosts.length).toBe(1);
+    expect(hosts).toHaveLength(1);
     expect(hosts[0].textContent).toContain('second draft');
     expect(hosts[0].textContent).not.toContain('first draft');
 
@@ -305,11 +305,11 @@ describe('clearSendEcho', () => {
     });
 
     sendEcho.mountSendEcho('interrupted send', null, 'user');
-    expect(container.children.length).toBe(1);
+    expect(container.children).toHaveLength(1);
 
     sendEcho.clearSendEcho(null, 'user');
 
-    expect(container.children.length).toBe(0);
+    expect(container.children).toHaveLength(0);
     expect(container.querySelector('[data-send-echo]')).toBeNull();
 
     container.remove();
