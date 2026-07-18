@@ -39,7 +39,7 @@ class DiscoveryJob(IdleGatedJob):
     class still applies its 30-min idle window and 5-min min-interval on top.
     A fresh install has no CHAT provider yet — ``llm_provider_configured``
     gates the whole job in ``should_run`` so the discovery cron never drives
-    an LLM turn before any provider is set up (see TKT-1542).
+    an LLM turn before any provider is set up.
     """
 
     name = "discovery"

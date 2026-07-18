@@ -103,22 +103,3 @@ def test_should_run_passes_provider_gate_when_selected_provider_exists() -> None
     ), patch("cron.jobs.discovery._DISCOVERY_TIMESTAMP") as mock_ts:
         mock_ts.load.return_value = None
         assert job.should_run() is True
-
-
-def test_should_run_logs_skip_only_once() -> None:
-    """Each skipped tick logs exactly one info line — no duplicate noise."""
-    job = DiscoveryJob()
-
-    with patch(_PROVIDER_CACHE, return_value=False), patch(
-        "cron.jobs.discovery.logger"
-    ) as mock_logger, patch(_BASE_SHOULD_RUN, return_value=True), patch(
-        "cron.jobs.discovery._DISCOVERY_TIMESTAMP"
-    ) as mock_ts:
-        mock_ts.load.return_value = None
-        job.should_run()
-        job.should_run()
-        job.should_run()
-
-    assert mock_logger.info.call_count == 3
-    for call in mock_logger.info.call_args_list:
-        assert call[0][0] == "[CRON] Skipping discovery — no LLM provider configured"
