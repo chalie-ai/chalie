@@ -165,7 +165,10 @@ class MessageProcessor:
         # Runaway-loop guard tallies — scoped to this turn_execution (this
         # instance persists across the whole recursive _step chain). Keyed by
         # identical tool call ``(name, canonical-params)`` and by identical
-        # (stripped, non-empty) response text; read only in _guard_runaway.
+        # (stripped, non-empty) response text. ``_invocation_key`` is the shared
+        # key constructor; ``repeat_call_count`` is the read path used by
+        # DispatchService to steer from the second identical call;
+        # ``_guard_runaway`` is the only writer.
         self._tool_invocations: Counter[tuple[str, str]] = Counter()
         self._text_emissions: Counter[str] = Counter()
 
@@ -408,6 +411,32 @@ class MessageProcessor:
             return markdown_to_html(text)
         return text or ""
 
+    @staticmethod
+    def _invocation_key(name: str, canonical: dict[str, object]) -> tuple[str, str]:
+        """The guard's per-tool tally key: ``(name, canonical-params-json)``.
+
+        Keyed on the CANONICAL (sanitised + key-healed) params dispatch will
+        actually execute, not the raw provider args: a model cycling synonym
+        keys (city/loc/place/region → location) would otherwise mint a fresh
+        key each step while running byte-identical calls, evading the tally.
+        ``canonical`` must therefore be the output of
+        ``DispatchService.canonical_params`` — this is the sole key constructor,
+        shared by the writer (``_guard_runaway``) and the reader
+        (``DispatchService._repeat_call_steer`` via ``repeat_call_count``)."""
+        return (name, json.dumps(canonical, sort_keys=True, default=str))
+
+    def repeat_call_count(self, tool_name: str, canonical_params: dict[str, object]) -> int:
+        """How many times this tool has been invoked with these exact canonical
+        params this turn.
+
+        Read by :meth:`~services.dispatch_service.DispatchService._repeat_call_steer`
+        to steer the model from the second identical call. The count was tallied
+        by :meth:`_guard_runaway` BEFORE dispatch, so a call that has not yet
+        dispatched has not yet been counted. Dispatches bypassing ``_step``
+        (compactor, document upload, async delegate's dedicated mp) have zero
+        tally and never steer here."""
+        return self._tool_invocations[self._invocation_key(tool_name, canonical_params)]
+
     def _guard_runaway(self, text: str, tool_calls: list[dict[str, object]]) -> None:
         """Trip a loud ``RunAwayLoop`` when this turn's step chain is repeating
         itself instead of converging — the hard backstop for the uncapped loop.
@@ -433,14 +462,10 @@ class MessageProcessor:
                 )
         for call in tool_calls:
             name = cast("str", call["name"])
-            # Key on the CANONICAL (sanitised + key-healed) params dispatch will
-            # actually execute, not the raw provider args: a model cycling synonym
-            # keys (city/loc/place/region → location) would otherwise mint a fresh
-            # key each step while running byte-identical calls, evading the tally.
             canonical = self.dispatch_service.canonical_params(
                 name, cast("dict[str, object]", call.get("input") or {}),
             )
-            key = (name, json.dumps(canonical, sort_keys=True, default=str))
+            key = self._invocation_key(name, canonical)
             self._tool_invocations[key] += 1
             if self._tool_invocations[key] >= _RUNAWAY_TOOL_CALL_LIMIT:
                 raise RunAwayLoop(
