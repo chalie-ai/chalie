@@ -66,6 +66,7 @@ from configs.enums.channels import Channel
 from configs.enums.provider_type import ProviderType
 from configs.enums.thinking_level import ThinkingLevel
 from exceptions import (
+    EmptyCompletionLoop,
     ProviderResponseError,
     ProviderRetriesExhaustedError,
     RequestOverCapError,
@@ -109,6 +110,17 @@ _SEED_UPLOAD_ID_RE = re.compile(r'"id":"([0-9a-f]+)"')
 #: trips a loud ``RunAwayLoop`` (a CRASHED turn).
 _RUNAWAY_TOOL_CALL_LIMIT = 5
 _RUNAWAY_TEXT_LIMIT = 3
+
+#: Empty-completion steers granted before the turn trips ``EmptyCompletionLoop``
+#: (a CRASHED turn): a completion with no tool calls and no text, on a turn with
+#: no tool activity at all, is steered into a retry — the steer text enters the
+#: next request body, since without it the re-send would be byte-identical.
+_EMPTY_COMPLETION_STEER_LIMIT = 2
+_EMPTY_COMPLETION_STEER = (
+    "Your previous reply was empty — no message and no tool calls. An empty "
+    "reply is never a valid answer. Address the user's request now: call the "
+    "tools you need, or write your reply."
+)
 
 
 class _TurnCancelled(Exception):
@@ -168,6 +180,13 @@ class MessageProcessor:
         # (stripped, non-empty) response text; read only in _guard_runaway.
         self._tool_invocations: Counter[tuple[str, str]] = Counter()
         self._text_emissions: Counter[str] = Counter()
+
+        # Empty-completion guard — scoped to this turn_execution like the tallies
+        # above: counts completions with no tool calls and no text on a turn with
+        # no tool activity at all; the flag arms a one-shot steer for the next
+        # _build_messages.
+        self._empty_completions: int = 0
+        self._empty_completion_steer: bool = False
 
         # Infrastructure handles.
         self.db = Database()
@@ -305,6 +324,26 @@ class MessageProcessor:
             raise _TurnCancelled()
         tool_calls = response.tool_calls
         if not tool_calls:
+            if not (response.text or "").strip() and not self._tool_invocations:
+                # The model did NOTHING this turn: no text, no tool calls now,
+                # and no tool activity on any earlier step (the tally is
+                # populated by every tool-bearing step). Settling would render
+                # silence as an answered turn (run 1011: empty assistant row
+                # stored, turn COMPLETED). A turn that DID run tools may still
+                # finish silently — background channels end that way by design.
+                self._empty_completions += 1
+                if self._empty_completions > _EMPTY_COMPLETION_STEER_LIMIT:
+                    raise EmptyCompletionLoop(
+                        f"turn {self.turn_id}: model returned "
+                        f"{self._empty_completions} empty completions (no text, "
+                        f"no tool calls) — refusing to settle an unanswered turn",
+                    )
+                logger.warning(
+                    "[MessageProcessor] turn %s: empty completion %s/%s — steering a retry",
+                    self.turn_id, self._empty_completions, _EMPTY_COMPLETION_STEER_LIMIT,
+                )
+                self._empty_completion_steer = True
+                return self._step()
             formatted = self._store(response.text)
             self._end(response.text)
             return formatted
@@ -382,6 +421,9 @@ class MessageProcessor:
         (history + tool-result re-feed live inside ``prompt_service``) wrapped by
         the compaction checkpoint, plus this turn's image when one is attached."""
         body = self.compaction_service.checkpoint(self.prompt_service.user_prompt())
+        if self._empty_completion_steer:
+            self._empty_completion_steer = False
+            body += "\n\n" + _EMPTY_COMPLETION_STEER
         message: dict[str, object] = {"role": "user", "content": body}
         image = self.prompt_service.image()
         if image is not None:

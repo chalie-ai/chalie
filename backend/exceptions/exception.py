@@ -138,6 +138,17 @@ class RunAwayLoop(ChalieException):
     """
 
 
+class EmptyCompletionLoop(ChalieException):
+    """The model keeps returning completely empty completions.
+
+    A completion with no tool calls and no text, on a turn that has run no
+    tools at all, means the model did nothing whatsoever — settling it
+    would render silence as an answered turn. The MessageProcessor steers
+    a bounded retry first; when the model stays empty past the limit it
+    trips this loudly and ``_drive`` stamps the turn CRASHED.
+    """
+
+
 # ── Search layer ──────────────────────────────────────────────────────────────
 
 
