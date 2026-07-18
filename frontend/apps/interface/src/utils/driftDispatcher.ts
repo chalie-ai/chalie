@@ -207,8 +207,14 @@ function _dispatchTurnSignal(data: WsPushEvent): boolean {
       // and `_reconcileWorking` never touches the hold, so without this the
       // hold — and thus the spine's `isSurfaceBusy` gate — strands forever,
       // silently queueing every later send. No-op when no hold is registered.
-      hooks().releasePendingSend(turnId, type);
-      void _refetchAndUpsert(turnId, type);
+      //
+      // The release must wait for the refetch to SETTLE, not fire alongside
+      // it — releasing synchronously reopens the spine's busy gate while this
+      // refetch is still in flight, letting a second queued send slip through
+      // against stale (pre-refetch) state (TKT-1516). `.finally` (not `.then`)
+      // so a REJECTED refetch still releases the hold rather than stranding
+      // the gate closed forever.
+      void _refetchAndUpsert(turnId, type).finally(() => hooks().releasePendingSend(turnId, type));
       return true;
     }
     case 'provider_retry':
@@ -259,16 +265,25 @@ function _dispatchTurnExecution(data: WsPushEvent): boolean {
   }
   const h = hooks();
 
-  // ANY execution frame proves the send's turn is now tracked by its own
-  // working/settle signals — release the POST-scoped busy hold (see
-  // session.sendMessage's `_pendingByTurn` comment).
-  h.releasePendingSend(exec.turn_id, type);
-
   if (exec.state === 'working') {
     setTurnWorking(exec.turn_id, type, true);
-    void _refetchAndUpsert(exec.turn_id, type);
+    // ANY execution frame proves the send's turn is now tracked by its own
+    // working/settle signals — release the POST-scoped busy hold (see
+    // session.sendMessage's `_pendingByTurn` comment). For 'working' the
+    // release must wait for the refetch to SETTLE rather than fire alongside
+    // it — releasing synchronously reopens the spine's busy gate while this
+    // refetch is still in flight, letting a second queued send slip through
+    // against stale (pre-refetch) state (TKT-1516). `.finally` (not `.then`)
+    // so a REJECTED refetch still releases the hold rather than stranding the
+    // gate closed forever.
+    void _refetchAndUpsert(exec.turn_id, type).finally(() => h.releasePendingSend(exec.turn_id, type));
     return true;
   }
+
+  // Every other state is already terminal/settled by the time this frame
+  // arrives — no in-flight refetch for a second send to race against — so the
+  // release stays synchronous here, same as before.
+  h.releasePendingSend(exec.turn_id, type);
 
   if (exec.state === 'cancelled') {
     _dispatchCancelled(exec.turn_id, type);
