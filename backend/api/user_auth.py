@@ -1,5 +1,6 @@
 """User authentication namespace — /api/auth endpoints for master account."""
 
+import json
 import logging
 from typing import TYPE_CHECKING, cast
 
@@ -9,6 +10,7 @@ from flask_restx import Namespace, Resource
 from werkzeug.security import generate_password_hash, check_password_hash
 
 from services.feature_flags import internal_dev_enabled
+from services.file_mapper_service import FileMapperService
 from .auth import require_auth, _cookie_only, internal_only
 from .dto import Error, expects, responds, register_dto
 from .dto.auth import AuthStatus, LoginRequest, RegisterRequest, Username, VaultResult
@@ -76,6 +78,76 @@ def _get_vault_state() -> str:
         return "uninitialized"
 
 
+# ── Dev-only auto-login ──────────────────────────────────────────────────────
+# If a credentials.json file exists at the install root, its username/password
+# are tried first to unlock the vault and start a session, bypassing the
+# interactive login page. Dev convenience only. Cached across requests so the
+# expensive PBKDF2 vault derivation and password-hash check never repeat once
+# an outcome is known — /api/auth/status is polled continuously by the
+# frontend heartbeat.
+_DEV_LOGIN_NOT_TRIED = "not_tried"
+_DEV_LOGIN_VALID = "valid"
+_DEV_LOGIN_INVALID = "invalid"
+
+_dev_login_state = _DEV_LOGIN_NOT_TRIED
+_dev_login_username: str | None = None
+
+
+def _attempt_dev_login() -> str | None:
+    """Try the dev credentials file once and cache the outcome.
+
+    Returns the verified username on success, ``None`` otherwise. The caller
+    is responsible for confirming a master account exists before calling this
+    — a missing file and a not-yet-existing account both leave the cache
+    untouched, so either one starts working the moment its precondition is
+    met, without waiting for a server restart.
+    """
+    global _dev_login_state, _dev_login_username
+
+    if _dev_login_state == _DEV_LOGIN_INVALID:
+        return None
+
+    if _dev_login_state == _DEV_LOGIN_VALID:
+        from services.vault_service import get_vault_service
+        if get_vault_service().is_unlocked():
+            return _dev_login_username
+        # Vault got locked again after a prior success (e.g. explicit logout)
+        # — retry the full attempt once, through the same not-tried path below.
+        _dev_login_state = _DEV_LOGIN_NOT_TRIED
+        _dev_login_username = None
+
+    path = FileMapperService.get_dev_credentials_path()
+    if not path.is_file():
+        return None
+
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        username = data["username"]
+        password = data["password"]
+        if not isinstance(username, str) or not isinstance(password, str):
+            raise TypeError("username and password must both be strings")
+
+        from services.database import Database
+        row = Database.conn().execute(
+            "SELECT password_hash FROM master_account WHERE username = :username",
+            {"username": username}
+        ).fetchone()
+        if not row or not check_password_hash(row[0], password):
+            raise ValueError("credentials did not match the master account")
+
+        from services.vault_service import get_vault_service
+        if not get_vault_service().unlock(password):
+            raise ValueError("credentials matched the account but not the vault")
+    except Exception as exc:
+        logger.warning("[Auth] Dev auto-login failed, falling back to normal login: %s", exc)
+        _dev_login_state = _DEV_LOGIN_INVALID
+        return None
+
+    _dev_login_state = _DEV_LOGIN_VALID
+    _dev_login_username = username
+    return username
+
+
 @user_auth_ns.route('/status')
 class AuthStatusResource(Resource):
     @user_auth_ns.response(200, "Auth status", _m["AuthStatus"])
@@ -93,6 +165,10 @@ class AuthStatusResource(Resource):
         * ``has_session``        — ``True`` if the request carries a valid session token.
         * ``vault_state``        — ``"unlocked" | "locked" | "uninitialized"``.
         * ``internal_dev``       — ``True`` when in-development features are enabled.
+
+        When there is no session and a master account exists, a dev-only
+        auto-login is attempted (see :func:`_attempt_dev_login`). On success
+        the response carries the same ``Set-Cookie`` a real login would.
         """
         try:
             from services.database import Database
@@ -111,6 +187,13 @@ class AuthStatusResource(Resource):
             if has_session and vault_state == "locked":
                 has_session = False
 
+            dev_login_username = None
+            if not has_session and account_count > 0:
+                dev_login_username = _attempt_dev_login()
+                if dev_login_username is not None:
+                    has_session = True
+                    vault_state = _get_vault_state()
+
             try:
                 from services.provider_db_service import ProviderDbService
                 has_vision = (
@@ -120,7 +203,7 @@ class AuthStatusResource(Resource):
             except Exception:
                 has_vision = False
 
-            return AuthStatus(
+            status = AuthStatus(
                 has_master_account=account_count > 0,
                 has_providers=provider_count > 0,
                 has_session=has_session,
@@ -128,6 +211,15 @@ class AuthStatusResource(Resource):
                 has_vision_provider=has_vision,
                 internal_dev=internal_dev_enabled(),
             )
+
+            if dev_login_username is not None:
+                from services.auth_session_service import create_session
+                from flask import make_response
+                resp = make_response(jsonify(status.model_dump(mode="json")), 200)
+                create_session(resp)
+                return resp
+
+            return status
         except Exception as e:
             logger.error(f"[REST API] Auth status error: {e}")
             return {"error": "Failed to check auth status"}, 500

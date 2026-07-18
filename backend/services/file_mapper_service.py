@@ -82,6 +82,16 @@ class FileMapperService:
         return cls._CHALIE_ROOT / "VERSION"
 
     @classmethod
+    def get_dev_credentials_path(cls) -> Path:
+        """Return path to the optional dev-only auto-login credentials file.
+
+        Local convenience only: if present at the install root, its username/
+        password are tried first to unlock the vault, bypassing the login
+        page. Gitignored — never bundled into a release or committed.
+        """
+        return cls._CHALIE_ROOT / "credentials.json"
+
+    @classmethod
     def get_abilities_db_path(cls) -> Path:
         """Return path to the abilities vector+FTS5 search index."""
         return cls._ABILITIES_DIR / "assets" / "abilities.sqlite"
