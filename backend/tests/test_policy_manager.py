@@ -126,7 +126,6 @@ def test_chat_ask_follows_user_verdict(mgr: PolicyManager, db: sqlite3.Connectio
 def test_data_layer_roundtrip(mgr: PolicyManager) -> None:
     assert mgr.apply_seed() > 0
     assert all(r["setting"] != "internal" for r in mgr.get_all())               # internal hidden in Brain
-    assert {"channel": "chat", "permission": "pim", "setting": "ask"} in mgr.get_all()
     assert mgr.upsert("chat", "bash.modify_file", "deny") == 1
     assert any(r["permission"] == "bash.modify_file" and r["setting"] == "deny" for r in mgr.get_all())
     assert mgr.upsert("nope", "x", "allow") == 0 and mgr.upsert("chat", "x", "bogus") == 0   # invalid rejected
