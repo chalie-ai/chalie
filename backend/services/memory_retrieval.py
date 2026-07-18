@@ -100,7 +100,8 @@ def handle_store(channel: str, params: dict[str, object]) -> ToolResult:
     result: dict[str, object]
     if kind == "user_specific":
         from services.fact_service import FactService
-        result = FactService().store(key, str(value), source=source)  # full envelope
+        replaces_val = params.get("replaces")
+        result = FactService().store(key, str(value), source=source, replaces=replaces_val)  # full envelope
     elif kind == "system":
         from services.system_service import SystemService
         result = SystemService().store(key, str(value), source=source)  # full envelope
@@ -136,6 +137,7 @@ def _format_store_response(result: dict[str, object]) -> str:
     provided = result.get("provided_key", "")
     value = result.get("value", "")
     date = result.get("date")
+    replaces_missed = result.get("replaces_missed")
 
     if canonical != provided:
         key_display = f"'{canonical}' (canonical of '{provided}')"
@@ -143,34 +145,38 @@ def _format_store_response(result: dict[str, object]) -> str:
         key_display = f"'{canonical}'"
 
     if status == "created":
-        return f"{key_display} saved as '{value}'."
-
-    if status == "reinforced":
-        return f"{key_display} was already set on {date}. Memory reinforced."
-
-    if status == "superseded":
+        body = f"{key_display} saved as '{value}'."
+    elif status == "reinforced":
+        body = f"{key_display} was already set on {date}. Memory reinforced."
+    elif status == "superseded":
         old = result.get("old_value", "")
-        return f"{key_display} updated to '{value}'. Supersedes '{old}' (previously set on {date})."
-
-    if status == "conflict":
+        body = f"{key_display} updated to '{value}'. Supersedes '{old}' (previously set on {date})."
+    elif status == "conflict":
         old = result.get("old_value", "")
-        return (
+        body = (
             f"{key_display} is immutable. Existing value '{old}' (set {date}) kept. "
             f"New value '{value}' rejected. Use 'forget' first if you're sure."
         )
-
-    if status == "appended":
+    elif status == "appended":
         all_vals = cast("list[object]", result.get("all_values") or [])
         vals_str = ", ".join(f"'{v}'" for v in all_vals)
-        return f"{key_display} updated. Values now: [{vals_str}] (previously updated on {date})."
+        body = f"{key_display} updated. Values now: [{vals_str}] (previously updated on {date})."
+    elif status == "lut_miss_created":
+        body = f"'{provided}' saved as '{value}'."
+    else:
+        # A bare store for the other data_graph kinds yields no status and falls
+        # through to this plain confirmation. The `lut_miss_reinforced`/
+        # `lut_miss_appended` statuses were never emitted and stay unhandled by design.
+        body = f"'{provided}' stored."
 
-    if status == "lut_miss_created":
-        return f"'{provided}' saved as '{value}'."
+    if replaces_missed:
+        body += (
+            f" Could not find old value '{replaces_missed}' under this key — "
+            f"it was NOT removed and may still be stored. Use 'forget' with "
+            f"the exact old value to remove it."
+        )
 
-    # A bare store for the other data_graph kinds yields no status and falls
-    # through to this plain confirmation. The `lut_miss_reinforced`/
-    # `lut_miss_appended` statuses were never emitted and stay unhandled by design.
-    return f"'{provided}' stored."
+    return body
 
 
 # ── Forget ───────────────────────────────────────────────────────────

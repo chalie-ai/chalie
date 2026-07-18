@@ -78,10 +78,9 @@ class MemoryAbility(Ability):
             Keys.key: {
                 "type": "string",
                 "description": (
-                    "For store/forget: the canonical key from the list in the "
-                    "tool description (e.g. 'residence', 'food_and_drink', "
-                    "'employment'). Use the exact canonical key when the fact "
-                    "fits one of the 27 concepts."
+                    "For store/forget: the canonical key naming the fact "
+                    "(e.g. 'residence', 'food_and_drink', 'employment'). "
+                    "Use the exact canonical key when the fact fits one of the canonical concepts."
                 ),
             },
             Keys.value_: {
@@ -92,6 +91,15 @@ class MemoryAbility(Ability):
                     "'loves pasta and pizza'). "
                     "For forget: required when removing one value from a "
                     "multi-value key."
+                ),
+            },
+            Keys.replaces: {
+                "type": "string",
+                "description": (
+                    "For store: when correcting a fact already stored under "
+                    "this key, the OLD value being replaced. The old value is "
+                    "demoted and the new value takes its place. Omit when "
+                    "adding a genuinely new fact."
                 ),
             },
             Keys.query: {
