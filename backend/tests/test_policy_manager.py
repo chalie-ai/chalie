@@ -74,13 +74,16 @@ def _seed(db: sqlite3.Connection, channel: str, permission: str, setting: str) -
 # 1. allow + internal both run the callback (internal == allow at the gate)
 @pytest.mark.parametrize("setting", ["allow", "internal"])
 def test_allow_and_internal_run_callback(mgr: PolicyManager, db: sqlite3.Connection, setting: str) -> None:
-    _seed(db, "chat", "email.search", setting)
-    assert mgr.authorize(CH.CHAT, "email.search", _ran) == _ran()
+    _seed(db, "chat", "web_search", setting)
+    assert mgr.authorize(CH.CHAT, "web_search", _ran) == _ran()
 
 
-# 1b. INTERNAL tools ALWAYS bypass — every channel, no row, even over a deny row
+# 1b. INTERNAL tools ALWAYS bypass — every channel, no row, even over a deny row.
+# email/calendar/contacts are the pim delegate's inner surface: the user-facing
+# permission is the outer `pim` tool, so the inner calls must never gate.
 @pytest.mark.parametrize("channel", [CH.CHAT, CH.SUBCONSCIOUS, CH.EXTERNAL_AGENT])
-@pytest.mark.parametrize("permission", ["read", "search", "browser.open", "memory.store", "save_graph"])
+@pytest.mark.parametrize("permission", ["read", "search", "browser.open", "memory.store", "save_graph",
+                                        "email.send", "calendar.create_event", "contacts.get"])
 def test_internal_tools_always_bypass(mgr: PolicyManager, db: sqlite3.Connection, channel: PolicyChannel, permission: str) -> None:
     # a deny row for the same key must be ignored — INTERNAL wins, no DB lookup
     _seed(db, channel.value, permission, "deny")
@@ -110,12 +113,12 @@ def test_unknown_key_provisions_ask_then_escalates(mgr: PolicyManager, db: sqlit
 @pytest.mark.parametrize("approved,should_run", [(True, True), (False, False)])
 def test_chat_ask_follows_user_verdict(mgr: PolicyManager, db: sqlite3.Connection, monkeypatch: pytest.MonkeyPatch, approved: bool, should_run: bool) -> None:
     monkeypatch.setattr(PolicyManager, "_ask_user", lambda self, permission, channel, should_stop=None: approved)
-    _seed(db, "chat", "email.send", "ask")
-    out = mgr.authorize(CH.CHAT, "email.send", _ran)
+    _seed(db, "chat", "pim", "ask")
+    out = mgr.authorize(CH.CHAT, "pim", _ran)
     if should_run:
         assert out == _ran()
     else:
-        assert out == "The email.send action is not allowed. Do NOT retry."   # block STRING
+        assert out == "The pim action is not allowed. Do NOT retry."   # block STRING
         assert db.execute("SELECT reason FROM policy_blocked_log").fetchone()["reason"] == "user_denied"
 
 
@@ -123,12 +126,26 @@ def test_chat_ask_follows_user_verdict(mgr: PolicyManager, db: sqlite3.Connectio
 def test_data_layer_roundtrip(mgr: PolicyManager) -> None:
     assert mgr.apply_seed() > 0
     assert all(r["setting"] != "internal" for r in mgr.get_all())               # internal hidden in Brain
-    assert {"channel": "chat", "permission": "email.search", "setting": "allow"} in mgr.get_all()
-    assert mgr.upsert("chat", "email.manage", "deny") == 1
-    assert any(r["permission"] == "email.manage" and r["setting"] == "deny" for r in mgr.get_all())
+    assert mgr.upsert("chat", "bash.modify_file", "deny") == 1
+    assert any(r["permission"] == "bash.modify_file" and r["setting"] == "deny" for r in mgr.get_all())
     assert mgr.upsert("nope", "x", "allow") == 0 and mgr.upsert("chat", "x", "bogus") == 0   # invalid rejected
+    assert mgr.upsert("chat", "email.send", "deny") == 0                        # INTERNAL tool: never user-gated
+    assert not any(r["permission"] == "email.send" for r in mgr.get_all())
     mgr.reset_to_defaults()
-    assert any(r["permission"] == "email.manage" and r["setting"] == "ask" for r in mgr.get_all())
-    mgr._log_blocked("subconscious", "email.manage", "user_unavailable")
-    assert mgr.get_blocked_log()[0]["action_id"] == "email.manage"
+    assert any(r["permission"] == "bash.modify_file" and r["setting"] == "ask" for r in mgr.get_all())
+    mgr._log_blocked("subconscious", "bash.modify_file", "user_unavailable")
+    assert mgr.get_blocked_log()[0]["action_id"] == "bash.modify_file"
     assert mgr.clear_blocked_log() == 1 and mgr.get_blocked_log() == []
+
+
+# 6. apply_seed purges stale INTERNAL-tool rows (older seeds carried email.*/calendar.*/
+#    contacts.* rows; every boot must converge them out) while leaving custom rows alone
+def test_apply_seed_purges_internal_tool_rows(mgr: PolicyManager, db: sqlite3.Connection) -> None:
+    _seed(db, "chat", "email.send", "ask")                 # stale rows from an older seed
+    _seed(db, "chat", "calendar.create_event", "ask")
+    _seed(db, "subconscious", "search", "deny")            # bare tool name, not tool.action
+    _seed(db, "chat", "bash.execute", "deny")              # user's own row — must survive
+    mgr.apply_seed()
+    perms = {r["permission"] for r in mgr.get_all()}
+    assert not perms & {"email.send", "calendar.create_event", "search"}
+    assert any(r["permission"] == "bash.execute" and r["setting"] == "deny" for r in mgr.get_all())
