@@ -447,10 +447,12 @@ class MessageProcessor:
 
     def _format(self, text: str) -> str:
         """Render markdown to HTML for surface-broadcasting channels; pass raw
-        text through for background/silent channels (``broadcast_to`` is None)."""
+        text through for background/silent channels (``broadcast_to`` is None).
+        HTML branch is sanitized at the persist-time boundary so both the live
+        WS send and the GET/refresh read paths inherit it."""
         if self.config.broadcast_to is not None:
-            from services.markup import markdown_to_html  # noqa: PLC0415
-            return markdown_to_html(text)
+            from services.markup import markdown_to_html, sanitize  # noqa: PLC0415
+            return sanitize(markdown_to_html(text))
         return text or ""
 
     @staticmethod

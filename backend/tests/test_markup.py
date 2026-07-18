@@ -68,3 +68,31 @@ class TestExtractPlaintext:
             extract_plaintext("<table><tr><td>Alice</td><td>30</td></tr></table>")
             == "Alice 30"
         )
+
+
+@pytest.mark.unit
+class TestFormatSanitizesXss:
+    """TKT-1492: _format must sanitize HTML at the persist-time boundary so that
+    any dangerous markup the LLM emits (or that was in raw text) is stripped
+    before it reaches the frontend's v-html renderer."""
+
+    def test_format_strips_onerror_handler(self) -> None:
+        from configs.channels.user import UserConfig
+        from controllers.message_processor import MessageProcessor
+
+        mp = MessageProcessor(UserConfig())
+        payload = '<img src=x onerror=alert(1)>'
+        out = mp._format(payload)
+        assert "onerror" not in out
+        assert "alert" not in out
+        # bare <img> tag is fine — only attrs are stripped
+
+    def test_format_strips_script_tags(self) -> None:
+        from configs.channels.user import UserConfig
+        from controllers.message_processor import MessageProcessor
+
+        mp = MessageProcessor(UserConfig())
+        payload = '<script>alert(1)</script>'
+        out = mp._format(payload)
+        assert "<script" not in out
+        assert "alert" not in out
