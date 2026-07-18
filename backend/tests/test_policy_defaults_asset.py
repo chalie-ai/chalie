@@ -28,8 +28,10 @@ def test_seed_is_valid_and_carries_known_rows() -> None:
     # visible defaults ported from the old matrix
     assert by_key[("chat", "bash.read")] == "allow"
     assert by_key[("chat", "bash.modify_file")] == "ask"
-    # delegate tools gate at the OUTER permission only (inner surface is INTERNAL)
-    assert by_key[("chat", "pim")] == "allow"
+    # delegate tools gate at the OUTER permission only (inner surface is INTERNAL);
+    # pim defaults to ask on chat and deny on every no-human channel
+    assert by_key[("chat", "pim")] == "ask"
+    assert by_key[("external_agent", "pim")] == "deny"
     assert by_key[("subconscious", "pim")] == "deny"
     # Infrastructure actions still seeded internal in every channel
     for ch in _CHANNELS:

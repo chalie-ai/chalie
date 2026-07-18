@@ -75,7 +75,7 @@
   {"channel": "chat", "permission": "weather", "setting": "allow"},
   {"channel": "chat", "permission": "web_browse", "setting": "allow"},
   {"channel": "chat", "permission": "web_search", "setting": "allow"},
-  {"channel": "chat", "permission": "pim", "setting": "allow"},
+  {"channel": "chat", "permission": "pim", "setting": "ask"},
   {"channel": "external_agent", "permission": "bash.compound", "setting": "deny"},
   {"channel": "external_agent", "permission": "bash.installation", "setting": "deny"},
   {"channel": "external_agent", "permission": "bash.modify_file", "setting": "deny"},
