@@ -23,6 +23,24 @@ from services.time_utils import parse_utc, utc_now
 logger = logging.getLogger(__name__)
 
 
+def llm_provider_configured() -> bool:
+    """True when at least one LLM provider is available for CHAT turns.
+
+    Mirrors the selection fallback chain the CHAT path uses in
+    :meth:`provider_service.ProviderService._select`: ``get_selected_provider``
+    first, then ``get_providers``. A fresh install has neither set for the
+    first seconds/minutes of life, so this is the shared precondition for any
+    cron job that drives an LLM turn — gate on this in ``should_run`` before
+    the job's own work starts, so a skipped tick never stamps ``last_fired``.
+    """
+    from services.provider_cache_service import ProviderCacheService  # noqa: PLC0415
+
+    return (
+        bool(ProviderCacheService.get_selected_provider())
+        or bool(ProviderCacheService.get_providers())
+    )
+
+
 @runtime_checkable
 class ScheduledJobProtocol(Protocol):
     """The duck-type the runner uses to iterate the job registry.

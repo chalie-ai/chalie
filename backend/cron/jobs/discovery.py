@@ -7,13 +7,18 @@ durable clock gate is preserved inline inside ``_run``; the base
 min-interval on top of that.
 """
 
+from __future__ import annotations
+
+import logging
 from datetime import timedelta
 
-from cron.base import IdleGatedJob
+from cron.base import IdleGatedJob, llm_provider_configured
 from configs.channels import DiscoveryConfig
 from configs.channels.discovery import DISCOVERY_PROMPT
 from services.durable_timestamp import DurableTimestamp
 from services.time_utils import utc_now
+
+logger = logging.getLogger(__name__)
 
 # ── Durable clock gate (ported from subconscious_worker) ──────────────────────
 # Self-throttling on a dedicated dual-write timestamp so the discovery loop
@@ -32,6 +37,9 @@ class DiscoveryJob(IdleGatedJob):
     The 6-hour interval is enforced inside ``_run`` by the durable
     ``_DISCOVERY_TIMESTAMP`` gate copied from the source step; the base
     class still applies its 30-min idle window and 5-min min-interval on top.
+    A fresh install has no CHAT provider yet — ``llm_provider_configured``
+    gates the whole job in ``should_run`` so the discovery cron never drives
+    an LLM turn before any provider is set up (see TKT-1542).
     """
 
     name = "discovery"
@@ -43,8 +51,20 @@ class DiscoveryJob(IdleGatedJob):
         not inside ``_run``. On top of the base ``IdleGatedJob`` gates (cron
         match, 30-min idle window, 5-min min-interval) this only lets the job
         fire once its own durable 6-hour clock has elapsed.
+
+        Additionally, the job requires a CHAT LLM provider to be configured
+        (see ``cron.base.llm_provider_configured``). On a fresh install the
+        discovery cron can fire ~1s before the provider-setup flow completes;
+        in that window every tick would burn three provider attempts on
+        "LLM config missing 'platform'" and log "[MessageProcessor] turn 1
+        crashed" as the install's first act. The provider gate lives in
+        ``should_run`` (never ``_run``) so a skipped tick does not stamp
+        ``last_fired`` and block the next legitimate discovery after setup.
         """
         if not super().should_run():
+            return False
+        if not llm_provider_configured():
+            logger.info("[CRON] Skipping discovery — no LLM provider configured")
             return False
         last = _DISCOVERY_TIMESTAMP.load()
         return last is None or utc_now() - last >= _DISCOVERY_INTERVAL
