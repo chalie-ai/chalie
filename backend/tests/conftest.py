@@ -50,7 +50,7 @@ def _db_template(tmp_path_factory: pytest.TempPathFactory) -> str:
         convergence.backfill_redesign_columns()
 
         # Mirror boot: seed the flat policy table so gated tool calls on non-chat
-        # channels (e.g. subconscious email.* / timer) resolve to their real defaults
+        # channels (e.g. subconscious bash.* / timer) resolve to their real defaults
         # instead of an empty-table lazy 'ask'→deny. (PolicyManager.INTERNAL tools
         # bypass the gate entirely and carry no seed rows.)
         PolicyManager().apply_seed()

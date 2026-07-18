@@ -35,7 +35,7 @@ def legacy_db_path(tmp_path: Path) -> Path:
             UNIQUE(action_id, context)
         );
         INSERT INTO policy_rules (action_id, context, state, updated_at)
-        VALUES ('email.manage', 'chat', 'allow', '2026-01-01T00:00:00+00:00');
+        VALUES ('bash.modify_file', 'chat', 'allow', '2026-01-01T00:00:00+00:00');
     """)
     conn.commit()
     conn.close()
@@ -55,7 +55,7 @@ def test_upgrade_copies_legacy_rules_one_to_one(legacy_db_path: Path) -> None:
             "SELECT count(*) FROM sqlite_master WHERE name='policy'").fetchone()[0] == 1
         # custom row copied 1:1 (context→channel, action_id→permission, state→setting)
         assert conn.execute(
-            "SELECT setting FROM policy WHERE channel='chat' AND permission='email.manage'"
+            "SELECT setting FROM policy WHERE channel='chat' AND permission='bash.modify_file'"
         ).fetchone()[0] == "allow"
         Database.close()
 

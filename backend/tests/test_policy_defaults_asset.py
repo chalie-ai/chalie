@@ -26,9 +26,11 @@ def test_seed_is_valid_and_carries_known_rows() -> None:
 
     by_key = {(r["channel"], r["permission"]): r["setting"] for r in rows}
     # visible defaults ported from the old matrix
-    assert by_key[("chat", "email.search")] == "allow"
-    assert by_key[("chat", "email.manage")] == "ask"
-    assert by_key[("subconscious", "email.manage")] == "deny"
+    assert by_key[("chat", "bash.read")] == "allow"
+    assert by_key[("chat", "bash.modify_file")] == "ask"
+    # delegate tools gate at the OUTER permission only (inner surface is INTERNAL)
+    assert by_key[("chat", "pim")] == "allow"
+    assert by_key[("subconscious", "pim")] == "deny"
     # Infrastructure actions still seeded internal in every channel
     for ch in _CHANNELS:
         assert by_key[(ch, "timer")] == "internal"

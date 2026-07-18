@@ -7,9 +7,11 @@ ToolDispatcher._execute as the callback).
 Settings: internal (always allowed, hidden in Brain) · allow · ask · deny.
 Channels: PolicyChannel values.
 
-A small set of read-only / scratch / infrastructure tools (``INTERNAL``) ALWAYS
-bypass the gate regardless of channel or any seeded row — they are never
-user-gated and carry no seed rows. ANY action on these tools runs unconditionally.
+A small set of tools (``INTERNAL``) ALWAYS bypass the gate regardless of channel
+or any seeded row — read-only / scratch / infrastructure tools, plus
+delegate-exclusive inner tools whose user-facing permission is the OUTER delegate
+tool (``pim`` covers email/calendar/contacts exactly as ``web_search`` covers
+search). They are never user-gated and carry no seed rows.
 
 The gate is dead simple: short-circuit INTERNAL tools, else SELECT the setting
 (lazily creating an 'ask' row on a miss), then run | block | prompt. The decision
@@ -37,14 +39,21 @@ CHANNEL = PolicyChannel
 VALID_CHANNELS = {c.value for c in CHANNEL}
 VALID_SETTINGS = {"internal", "allow", "ask", "deny"}
 
-# Read-only / scratch / infrastructure tools that ALWAYS bypass the gate, on
-# every channel, with no seed row. ANY action on these runs unconditionally —
-# they are never user-gated and never appear in the Brain policy surface.
+# Tools that ALWAYS bypass the gate, on every channel, with no seed row. Two
+# admission grounds: (1) read-only / scratch / infrastructure tools — never
+# user-gated; (2) delegate-exclusive inner tools (DISCOVERABLE=False, pinned on
+# one delegate config) — the user-facing permission is the OUTER delegate tool
+# (``web_search`` covers search/news/web_download, ``web_browse`` covers browser,
+# ``pim`` covers email/calendar/contacts), so an inner gate would double-gate
+# work the outer gate already authorised. ANY action on these runs
+# unconditionally; they never appear in the Brain policy surface, and
+# ``apply_seed`` purges any pre-existing rows so this frozenset stays the single
+# source of truth.
 INTERNAL = frozenset({
-    "browser", "chalie_docs", "chat_history_compactor", "find_skills",
-    "find_tools", "memory", "news", "read", "review_tool_calls",
-    "review_transcript", "save_graph", "save_pattern", "search",
-    "skill_manager", "web_download",
+    "browser", "calendar", "chalie_docs", "chat_history_compactor", "contacts",
+    "email", "find_skills", "find_tools", "memory", "news", "read",
+    "review_tool_calls", "review_transcript", "save_graph", "save_pattern",
+    "search", "skill_manager", "web_download",
 })
 
 # Channels with no human at a prompt: an `ask` becomes a `deny` (D2).
@@ -158,8 +167,11 @@ class PolicyManager:
         return [{k: str(v) for k, v in row.items()} for row in rows]
 
     def upsert(self, channel: str, permission: str, setting: str) -> int:
-        """Single-cell upsert. Returns rows affected (0 on invalid input)."""
+        """Single-cell upsert. Returns rows affected (0 on invalid input —
+        including INTERNAL tools, which are never user-gated so no row may exist)."""
         if channel not in VALID_CHANNELS or setting not in VALID_SETTINGS:
+            return 0
+        if permission.split(".", 1)[0] in INTERNAL:
             return 0
         return Policy.upsert(channel, permission, setting)
 
@@ -177,8 +189,16 @@ class PolicyManager:
     # ── Seed / reset (static policy_defaults.json) ────────────────────────────
 
     def apply_seed(self) -> int:
-        """Load policy_defaults.json via INSERT OR IGNORE. Returns rows inserted."""
+        """Load policy_defaults.json via INSERT OR IGNORE. Returns rows inserted.
+
+        Purges any existing rows for ``INTERNAL`` tools first — this runs every
+        boot (run.py), so rows left behind by an older seed or by a tool later
+        admitted to INTERNAL converge out instead of lingering in the Brain
+        surface as dead controls."""
         from services.file_mapper_service import FileMapperService  # noqa: PLC0415
+        purged = Policy.delete_for_tools(INTERNAL)
+        if purged:
+            logger.info("[PolicyManager] purged %d stale INTERNAL-tool rows", purged)
         with open(FileMapperService.get_policy_defaults_path()) as f:
             seed = cast(list[dict[str, str]], json.load(f))
         inserted = 0

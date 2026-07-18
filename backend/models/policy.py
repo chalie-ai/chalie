@@ -21,6 +21,7 @@ block the dissolved service used."""
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from typing import TYPE_CHECKING, ClassVar
 
 from models.model import Model
@@ -99,6 +100,23 @@ class Policy(Model):
         """Wipe every row. Returns the rowcount."""
         with Database.transaction() as conn:
             return conn.execute("DELETE FROM policy").rowcount
+
+    @classmethod
+    def delete_for_tools(cls, tools: Iterable[str]) -> int:
+        """Delete every row belonging to one of ``tools`` — the bare tool name
+        or any ``tool.action`` permission under it. The substr predicate is the
+        SQL twin of the gate's ``permission.split(".", 1)[0]`` (LIKE would treat
+        the ``_`` in names like ``web_download`` as a wildcard). Returns rows
+        deleted. Used by the seed loader to purge rows for gate-bypassing
+        (INTERNAL) tools."""
+        with Database.transaction() as conn:
+            deleted = 0
+            for tool in tools:
+                deleted += conn.execute(
+                    "DELETE FROM policy WHERE permission = ? OR substr(permission, 1, ?) = ?",
+                    (tool, len(tool) + 1, f"{tool}."),
+                ).rowcount
+            return deleted
 
     # ── Relationship ─────────────────────────────────────────────────────────
 
