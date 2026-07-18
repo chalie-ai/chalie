@@ -19,9 +19,10 @@ live schedule until it is hard-deleted, and a poller elsewhere matches
 from __future__ import annotations
 
 import sqlite3
-from typing import ClassVar
+from typing import ClassVar, cast
 
 from models.model import Model
+from models.thread_gist import ThreadGist
 from services._vec_upsert import vec0_upsert
 from services.database import Database
 
@@ -29,17 +30,19 @@ from services.database import Database
 class ScheduledItem(Model):
     """One ``scheduled_items`` row: field storage + CRUD, the ordered/limited
     list read, the fuzzy message lookup, the vec0 nearest-neighbour search,
-    and the paired vec0 embedding delete a hard cancel must ride with."""
+    the paired vec0 embedding delete a hard cancel must ride with, and the read
+    of the 1-1 thread gist generated on the schedule's first fire."""
 
     __columns__: ClassVar[tuple[str, ...]] = (
-        "id", "message", "gist", "start_at",
+        "id", "message", "start_at",
         "cron_minute", "cron_hour", "cron_dom", "cron_month", "cron_dow",
         "enabled", "channel", "created_by_session", "created_at",
     )
 
     # The channel a schedule's thread lives on: its integer ``id`` IS the
-    # ``turn_id`` on this channel (§13.1). Distinct from the ``channel``
-    # column, which records the channel a schedule was *created from*.
+    # ``turn_id`` on this channel (§13.1), so its :class:`ThreadGist` is keyed
+    # ``(SCHEDULE_CHANNEL, id)``. Distinct from the ``channel`` column, which
+    # records the channel a schedule was *created from*.
     SCHEDULE_CHANNEL: ClassVar[str] = "schedule"
 
     @classmethod
@@ -52,7 +55,6 @@ class ScheduledItem(Model):
     # ``*/S``, ``N-M/S`` and comma-unions; ``*`` = every. Parsed and matched by
     # :mod:`services.cron_schedule` against the current USER-LOCAL minute.
     message: str
-    gist: str | None
     start_at: str
     cron_minute: str
     cron_hour: str
@@ -144,17 +146,22 @@ class ScheduledItem(Model):
         )
         return cursor.fetchall()
 
+    def get_gist(self) -> ThreadGist | None:
+        """This schedule's thread label — the :class:`ThreadGist` keyed by
+        ``(SCHEDULE_CHANNEL, id)``, generated on the first fire by
+        ``MessageProcessor._maybe_fire_gist``. ``None`` until then, so readers
+        fall back to the prompt; no join, a single-row read on ThreadGist's own
+        table (``turn_id == id`` on the schedule channel)."""
+        return ThreadGist.for_turn(self.SCHEDULE_CHANNEL, cast(int, self.id))
+
     # ── Writes ──────────────────────────────────────────────────────────────
 
     @classmethod
     def create(cls, **fields: object) -> ScheduledItem:
         """Insert a new schedule — the sole birth path (both the REST create and
-        the ability's ``create``/``update`` route through here).
-
-        ``gist`` is NOT written here: a schedule is born labelless and the
-        listing read generates one from the prompt on first sight, so creation
-        never blocks on the LLM (Rule-3 depth also bars this model from reaching
-        a service). Until it lands the dock falls back to the prompt."""
+        the ability's ``create``/``update`` route through here). The thread gist
+        is not written here: it is generated from the fired thread on the first
+        fire, keyed to this row's ``id``."""
         item = cls(**fields)
         item.save()  # INSERT; id autoincrements, captured onto item.id
         return item

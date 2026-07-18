@@ -704,15 +704,17 @@ class MessageProcessor:
             self.transcript_service.link_doc(match.group(1))
 
     def _maybe_fire_gist(self) -> None:
-        """On a fork whose parent turn has no stored gist yet, ingest it so the
-        reply prompt carries the thread's condensed context. MAIN turns skip
-        this; any ingest hiccup is swallowed (best-effort context).
+        """Ingest this thread's gist when it has none stored yet, so the reply
+        prompt carries the thread's condensed context.
 
-        SCHEDULE is excluded: a schedule labels itself from its own prompt into
-        its own ``gist`` column, so nothing reads a ThreadGist keyed to it — an
-        ingest here would spend an LLM call per fire writing a row with no
-        reader."""
-        if not self._forked or self.channel == Channel.SCHEDULE:
+        Two threads qualify. A fork, whose parent turn is the thread being
+        replied into. And a schedule fire, which is always a MAIN turn — its
+        ``turn_id`` IS the schedule's id (§13.1), so the gist generated here is
+        the label the scheduler surfaces; without this the schedule channel
+        would never produce one. Other MAIN turns skip this. The ``bulk_get``
+        emptiness check keeps it once-only per thread on both paths; any ingest
+        hiccup is swallowed (best-effort context)."""
+        if not self._forked and self.channel != Channel.SCHEDULE:
             return
         try:
             if not self.gist_service.bulk_get(self.channel, [self.turn_id]):

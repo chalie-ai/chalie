@@ -468,14 +468,9 @@ class PromptService:
     # ── ThreadGistConfig (channel="delegate:thread_gist") ────────────────────
 
     def _thread_gist_prompt(self) -> str:
-        """``ThreadGistConfig.get_user_prompt``: the text to label. A caller that
-        already holds it (a schedule's prompt — a schedule has no transcript to
-        read) passes it as ``raw_input`` and it IS the prompt; otherwise it is
-        read from the trigger thread — its opener and the first
-        row beyond its settle0, non-assistant only, each rendered
+        """``ThreadGistConfig.get_user_prompt``: the trigger thread's opener and
+        the first row beyond its settle0, non-assistant only, each rendered
         ``[local-ts] content``. Empty when no trigger turn or no rows."""
-        if self.mp.raw_input:
-            return f"# User Message Prompt\n## User Messages\n{self.mp.raw_input}"
         trigger_channel = self.mp._trigger_channel
         trigger_turn_id = self.mp._trigger_turn_id
         if trigger_channel is None or trigger_turn_id is None:

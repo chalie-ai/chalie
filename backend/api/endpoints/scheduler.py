@@ -139,7 +139,7 @@ class Scheduler(Endpoint):
             enabled=1 if dto.enabled else 0,
             channel=dto.channel,
             created_by_session=None,
-        )  # INSERT; id autoincrements, created_at defaults in SQL
+        )  # INSERT + 1-1 gist seed, atomic; id autoincrements, created_at defaults in SQL
         item_id = cast(int, item.id)
         # Re-read so created_at (SQL default) is populated for the response.
         saved = ScheduledItem.get(item_id)
@@ -158,12 +158,6 @@ class Scheduler(Endpoint):
         # existing one (a plain enabled-toggle omits it) — a future-dated
         # start_at is never re-floored to now.
         item.start_at = parse_local(dto.start_at).isoformat() if dto.start_at else item.start_at
-        # A rewritten prompt invalidates the label describing the old one. Clear
-        # it rather than refresh it: absence is what the listing read regenerates
-        # from, so one assignment is the whole mechanism. An enabled-toggle (same
-        # message) leaves the label standing.
-        if item.message != dto.message:
-            item.gist = None
         item.message = dto.message
         item.cron_minute = dto.minute
         item.cron_hour = dto.hour

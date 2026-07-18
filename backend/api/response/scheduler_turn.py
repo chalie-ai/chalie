@@ -15,9 +15,8 @@ class SchedulerTurn(Response):
 
     ``turn_id`` is the schedule's own ``id`` (no separate stored turn key).
     ``preview`` is the prompt; ``gist`` its generated one-line label (``None``
-    until the generation this listing kicks off lands, so the caller falls back
-    to ``preview``); ``minute``/``hour``/``day``/``month``/``weekday`` are the
-    schedule's crontab field expressions (``*`` = every).
+    until the first fire generates it); ``minute``/``hour``/``day``/``month``/
+    ``weekday`` are the schedule's crontab field expressions (``*`` = every).
     """
 
     turn_id: int

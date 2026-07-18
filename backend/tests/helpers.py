@@ -8,12 +8,10 @@ from __future__ import annotations
 import base64
 import io
 import sqlite3
-import threading
 from datetime import datetime, timezone
 from typing import cast
 
 from configs.enums.policy_channel import PolicyChannel
-from models.provider_response import ProviderResponse
 from services.processor_config import ProcessorConfig
 
 
@@ -190,62 +188,6 @@ def force_vision_provider(db: sqlite3.Connection, host: str = "http://127.0.0.1:
     db.commit()
     svc.set_vision_provider(pid)
     return pid
-
-
-# ─── thread-gist generation ──────────────────────────────────────────
-# Shared by every test that drives a real gist: the LLM transport is the one
-# boundary swapped out (a network call to a process Chalie does not own) — the
-# DB, MessageProcessor, PromptService and the gist delegate are all the real
-# production stack.
-
-class LabelProvider:
-    """Returns one fixed label and records every prompt it is handed — a real
-    hand-built stand-in for the LLM transport client, not a ``Mock``. The
-    recorded prompts are also the call count, which is how a test proves a
-    generation did NOT happen."""
-
-    CONTENT_FIELD_LABEL = "message.content"
-
-    def __init__(self, label: str) -> None:
-        self._label = label
-        self.prompts: list[str] = []
-
-    def get_context_limit(self) -> int:
-        return 200000
-
-    def estimate_request_tokens(self, dto: object) -> int:
-        return 1
-
-    def send(self, dto: object) -> "ProviderResponse":
-        self.prompts.append(
-            "\n".join(str(m) for m in cast("list[object]", getattr(dto, "messages", [])))
-        )
-        return ProviderResponse(text=self._label, model="recorder", tool_calls=None)
-
-
-def seed_selected_provider(db: sqlite3.Connection) -> None:
-    """A real selected provider row — delegate turns resolve to it (there is no
-    explicit delegate provider), so a gist delegate has a config to send with."""
-    from services.provider_cache_service import ProviderCacheService
-    from services.provider_db_service import ProviderDbService
-
-    cur = db.execute(
-        "INSERT INTO providers (name, platform, model, host) "
-        "VALUES ('gist-test', 'ollama', 'gist-model', 'http://localhost:11434')",
-    )
-    db.commit()
-    ProviderDbService().set_selected_provider(cast(int, cur.lastrowid))
-    ProviderCacheService.invalidate()
-
-
-def join_named_threads(name: str, timeout: float = 10.0) -> int:
-    """Join every live fire-and-forget daemon thread with this exact name — the
-    real synchronization primitive (never a ``time.sleep`` wait-and-see).
-    Returns how many were live to join."""
-    threads = [t for t in threading.enumerate() if t.name == name]
-    for t in threads:
-        t.join(timeout)
-    return len(threads)
 
 
 # ─── providers ───────────────────────────────────────────────────────
