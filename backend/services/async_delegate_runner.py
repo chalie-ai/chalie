@@ -179,10 +179,10 @@ class AsyncDelegateRunner:
         **Crash guard:** if the originating turn was already stamped ``CRASHED``
         (the RunAwayLoop guard killed a looping tool) before this background
         result arrived, the delivery is suppressed — respawning it would resume
-        the exact doomed work the guard just killed, which nightly run 1006
-        evidence showed as a cascade of six [MessageProcessor] turn-crashed
-        cycles at 20-40s spacing after the scenario ended, keeping the channel
-        busy for minutes while no user message could get through. A probe
+        the exact doomed work the guard just killed, observed live as a cascade
+        of [MessageProcessor] turn-crashed cycles at 20-40s spacing after the
+        originating turn died, keeping the channel busy for minutes while no
+        user message could get through. A probe
         ``MessageProcessor`` (inert, I2) reads ``latest_for_turn()`` on the
         originating (channel, turn_id); only when no row exists, or the row is
         not ``CRASHED`` (``WORKING``, ``COMPLETED``, ``CANCELLED``) does the
@@ -203,7 +203,7 @@ class AsyncDelegateRunner:
         # Crash guard: suppress delivery when the originating turn was already
         # killed by the RunAwayLoop guard (state == CRASHED). A crashed origin
         # means looping work was stopped; feeding the late result back would
-        # respawn the identical loop — nightly run 1006 evidence.
+        # respawn the identical loop.
         if turn_id is not None and turn_id >= 0:
             probe = MessageProcessor(config, turn_id)  # inert (I2)
             latest = probe.turn_execution_service.latest_for_turn()
