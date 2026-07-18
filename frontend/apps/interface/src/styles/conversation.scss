@@ -108,7 +108,7 @@
   inset-inline: 0;
   bottom: 0;
   height: 2.4em;
-  background: linear-gradient(to bottom, transparent, var(--row-fade-bg, var(--bg)));
+  background: linear-gradient(to bottom, transparent, var(--row-fade-bg));
   pointer-events: none;
 }
 

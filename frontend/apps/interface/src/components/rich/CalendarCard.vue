@@ -175,7 +175,7 @@ const dayGroups = computed<DayGroup[]>(() => {
 }
 
 .calendar-card__when-day {
-  font-family: var(--font-mono, 'JetBrains Mono', ui-monospace, monospace);
+  font-family: var(--font-mono);
   font-size: 0.58rem;
   letter-spacing: 0.16em;
   text-transform: uppercase;
@@ -192,7 +192,7 @@ const dayGroups = computed<DayGroup[]>(() => {
 }
 
 .calendar-card__when-mon {
-  font-family: var(--font-mono, 'JetBrains Mono', ui-monospace, monospace);
+  font-family: var(--font-mono);
   font-size: 0.58rem;
   letter-spacing: 0.14em;
   text-transform: uppercase;
@@ -208,7 +208,7 @@ const dayGroups = computed<DayGroup[]>(() => {
 }
 
 .calendar-card__meta {
-  font-family: var(--font-mono, 'JetBrains Mono', ui-monospace, monospace);
+  font-family: var(--font-mono);
   font-size: 0.74rem;
   color: var(--text-tertiary);
   letter-spacing: 0.04em;
@@ -249,7 +249,7 @@ const dayGroups = computed<DayGroup[]>(() => {
 }
 
 .calendar-card__day-label {
-  font-family: var(--font-mono, 'JetBrains Mono', ui-monospace, monospace);
+  font-family: var(--font-mono);
   font-size: 0.62rem;
   letter-spacing: 0.14em;
   text-transform: uppercase;
@@ -271,7 +271,7 @@ const dayGroups = computed<DayGroup[]>(() => {
 }
 
 .calendar-card__row-time {
-  font-family: var(--font-mono, 'JetBrains Mono', ui-monospace, monospace);
+  font-family: var(--font-mono);
   font-size: 0.74rem;
   color: var(--text-secondary);
   font-weight: 500;

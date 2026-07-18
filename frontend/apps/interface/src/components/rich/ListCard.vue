@@ -101,7 +101,7 @@ async function onToggle(item: ListItem): Promise<void> {
 }
 
 .list-card__progress {
-  font-family: var(--font-mono, 'JetBrains Mono', ui-monospace, monospace);
+  font-family: var(--font-mono);
   font-size: 0.72rem;
   color: var(--text-tertiary);
   letter-spacing: 0.06em;
@@ -123,7 +123,7 @@ async function onToggle(item: ListItem): Promise<void> {
 .list-card__bar-fill {
   width: var(--fill, 0);
   height: 100%;
-  background: linear-gradient(90deg, var(--violet), var(--violet-hover, #b07cff));
+  background: linear-gradient(90deg, var(--violet), var(--violet-hover));
   box-shadow: 0 0 6px color-mix(in oklab, var(--violet) 50%, transparent);
   border-radius: 1px;
   transition: width 300ms ease;

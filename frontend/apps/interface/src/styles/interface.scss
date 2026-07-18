@@ -401,12 +401,12 @@ body {
   width: 18px;
   height: 18px;
   border-radius: 50%;
-  background: var(--violet, #8a5cff);
+  background: var(--violet);
   animation: loadingGlow 2s ease-in-out infinite;
 }
 
 .loading-overlay__text {
-  color: var(--text-secondary, #888);
+  color: var(--text-secondary);
   font-size: 15px;
   font-weight: 400;
   letter-spacing: 0.02em;
@@ -495,8 +495,8 @@ body {
 }
 
 @keyframes loadingGlow {
-  0%, 100% { box-shadow: 0 0 12px var(--violet, #8a5cff), 0 0 24px rgba(var(--bs-primary-rgb), 0.3); }
-  50%       { box-shadow: 0 0 24px var(--violet, #8a5cff), 0 0 48px rgba(var(--bs-primary-rgb), 0.45); }
+  0%, 100% { box-shadow: 0 0 12px var(--violet), 0 0 24px rgba(var(--bs-primary-rgb), 0.3); }
+  50%       { box-shadow: 0 0 24px var(--violet), 0 0 48px rgba(var(--bs-primary-rgb), 0.45); }
 }
 
 @keyframes loadingTextFadeIn {

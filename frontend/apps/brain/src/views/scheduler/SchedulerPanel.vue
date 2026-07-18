@@ -282,7 +282,7 @@ async function cancelSchedule(s: ScheduleItem): Promise<void> {
   letter-spacing: 0.04em;
 }
 .cron-field input {
-  font-family: var(--font-mono, ui-monospace, monospace);
+  font-family: var(--font-mono);
   text-align: center;
 }
 .cron-preview {

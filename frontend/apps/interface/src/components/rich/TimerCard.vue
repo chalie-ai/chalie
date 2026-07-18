@@ -354,20 +354,20 @@ onBeforeUnmount((): void => {
 
 .timer-card__ring-track {
   fill: none;
-  stroke: var(--border, color-mix(in oklab, var(--violet) 18%, transparent));
+  stroke: var(--border);
   stroke-width: 3;
 }
 
 .timer-card__ring-fill {
   fill: none;
-  stroke: var(--violet, #8a5cff);
+  stroke: var(--violet);
   stroke-width: 3;
   stroke-linecap: round;
   transition: stroke-dashoffset 0.4s linear;
 }
 
 .timer-card--done .timer-card__ring-fill {
-  stroke: var(--amber, #ffb257);
+  stroke: var(--amber);
   animation: timer-ring-pulse 1s ease-in-out infinite;
 }
 
@@ -406,7 +406,7 @@ onBeforeUnmount((): void => {
 }
 
 .timer-card__time {
-  font-family: var(--font-mono, 'JetBrains Mono', ui-monospace, monospace);
+  font-family: var(--font-mono);
   font-size: 0.78rem;
   color: var(--text-tertiary);
   letter-spacing: 0.04em;
@@ -426,7 +426,7 @@ onBeforeUnmount((): void => {
   width: 32px;
   height: 32px;
   border-radius: 50%;
-  border: 1px solid var(--border, color-mix(in oklab, var(--violet) 22%, transparent));
+  border: 1px solid var(--border);
   background: transparent;
   color: var(--text-secondary);
   display: inline-flex;
