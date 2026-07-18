@@ -246,6 +246,28 @@ class TestResolveWindow:
         assert start == _NOW
         assert end == _NOW + datetime.timedelta(days=7)
 
+    def test_non_utc_user_same_day_window_extended(self) -> None:
+        # Non-UTC user: bare date '2026-07-19' in Europe/Malta (+02:00) parses to
+        # 2026-07-18T22:00:00Z. Local-midnight must still trigger the extension so
+        # the window covers the whole local day.
+        with patch(
+            "services.locale_service.get_timezone_name", return_value="Europe/Malta"
+        ):
+            _start, end = self._window(
+                {"date_from": "2026-07-18T22:00:00+00:00", "date_to": "2026-07-18T22:00:00+00:00"},
+            )
+        # '2026-07-18T22:00:00Z' is 2026-07-19 00:00 in Europe/Malta → extended by 1 day
+        expected_end = _dt(2026, 7, 19, 22, 0)
+        assert end == expected_end
+
+    def test_non_utc_non_midnight_not_extended(self) -> None:
+        # Non-midnight explicit time (08:30 UTC) must NOT be extended, even for a
+        # non-UTC user — the user explicitly set a time of day.
+        with patch(
+            "services.locale_service.get_timezone_name", return_value="Europe/Malta"
+        ):
+            _start, end = self._window({"date_to": "2026-07-19T08:30:00+00:00"})
+        assert end == _dt(2026, 7, 19, 8, 30)
 
 # ---------------------------------------------------------------------------
 # _representative_per_uid — recurrence occurrences collapse to one occurrence

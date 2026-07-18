@@ -554,10 +554,35 @@ class CaldavHandler:
         if raw_to:
             end = parse_utc(raw_to)
             # A date-only upper bound should cover the WHOLE day, else events later
-            # that day are missed. CalendarAbility resolves both bare dates and day
-            # names ('sunday') to midnight before dispatch, so a midnight end with no
-            # time-of-day is the date-only signal; an explicit time is preserved.
+            # that day are missed. CalendarAbility resolves bare dates (e.g. '2026-07-19')
+            # to LOCAL midnight in the user's timezone and converts to UTC — so for a
+            # +02:00 user '2026-07-19' becomes 2026-07-18T22:00:00Z, which is NOT
+            # midnight UTC but IS midnight locally. Detect the date-only signal by
+            # checking both UTC midnight AND local-midnight (the latter being the
+            # canonical "bare date" signal). An explicit local time (e.g. 08:30) must
+            # stay as-is.
+            _extended = False
             if end.hour == 0 and end.minute == 0 and end.second == 0:
+                _extended = True
+            else:
+                # Try the local-timezone check; fall back silently on any failure so
+                # locale lookups can never break window resolution.
+                try:
+                    from zoneinfo import ZoneInfo  # stdlib
+
+                    from services.locale_service import get_timezone_name
+
+                    tz = ZoneInfo(get_timezone_name())
+                    local_end = end.astimezone(tz)
+                    if (
+                        local_end.hour == 0
+                        and local_end.minute == 0
+                        and local_end.second == 0
+                    ):
+                        _extended = True
+                except Exception:
+                    pass
+            if _extended:
                 end = end + timedelta(days=1)
         elif raw_from:
             end = start + timedelta(days=_LIST_DEFAULT_FUTURE_DAYS)

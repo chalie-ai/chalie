@@ -14,7 +14,6 @@ from capabilities.mail_capability.carddav_handler import CarddavHandler
 from capabilities.mail_capability.imap_handler import ImapHandler, SmtpCreds
 from capabilities.mail_capability.providers import UnifiedProvider, build_custom_provider, \
     discover_provider
-from services.database import Database
 from services.file_mapper_service import FileMapperService
 from utils.data_utils import parse_json_column
 
@@ -340,16 +339,6 @@ class MailCapability(AbstractCapability):
         self._carddav_ok = False
         self._connected = False
         self._cycle_count = 0
-
-        try:
-            with Database.transaction() as conn:
-                conn.execute(
-                    "UPDATE scheduled_items SET status='cancelled' "
-                    "WHERE source='mail' AND status='pending'"
-                )
-            logger.info("[mail] Scheduled items cancelled.")
-        except Exception as exc:
-            logger.warning("[mail] disconnect cleanup: %s", exc)
 
         self.delete_credentials()
         logger.info("[mail] Disconnected and credentials removed.")
