@@ -6,12 +6,12 @@
 #
 #     http://www.apache.org/licenses/LICENSE-2.0
 
-"""Feature test: the empty-completion guard (TKT-1538).
+"""Feature test: the empty-completion guard.
 
 A completion with no tool calls and no text, on a turn that has run no tools at
 all, means the model did nothing whatsoever. Settling it renders silence as an
-answered turn (nightly run 1011: empty assistant row stored, turn COMPLETED, the
-only tool row the pre-turn auto recall seed). The guard steers a bounded retry —
+answered turn (an empty assistant row stored, turn COMPLETED, the only tool row
+the pre-turn auto recall seed). The guard steers a bounded retry —
 the steer text enters the NEXT request body, since without it the re-send would
 be byte-identical — and past ``_EMPTY_COMPLETION_STEER_LIMIT`` steers trips a
 loud ``EmptyCompletionLoop`` (CRASHED turn, same path as ``RunAwayLoop``). A
@@ -120,7 +120,7 @@ def _tool(name: str, **params: object) -> dict[str, object]:
 
 
 def test_empty_completion_is_steered_then_settles(db: sqlite3.Connection) -> None:
-    """The run-1011 shape, recovered: the first completion is completely empty
+    """The observed defect shape, recovered: the first completion is completely empty
     (no tool calls, no text), the guard steers instead of settling, and the
     model's second response answers. The turn COMPLETES with the real answer;
     the steer text entered exactly the second request body."""

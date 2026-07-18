@@ -327,10 +327,10 @@ class MessageProcessor:
             if not (response.text or "").strip() and not self._tool_invocations:
                 # The model did NOTHING this turn: no text, no tool calls now,
                 # and no tool activity on any earlier step (the tally is
-                # populated by every tool-bearing step). Settling would render
-                # silence as an answered turn (run 1011: empty assistant row
-                # stored, turn COMPLETED). A turn that DID run tools may still
-                # finish silently — background channels end that way by design.
+                # populated by every tool-bearing step). Settling would store
+                # an empty assistant row and render silence as an answered
+                # turn. A turn that DID run tools may still finish silently —
+                # background channels end that way by design.
                 self._empty_completions += 1
                 if self._empty_completions > _EMPTY_COMPLETION_STEER_LIMIT:
                     raise EmptyCompletionLoop(
