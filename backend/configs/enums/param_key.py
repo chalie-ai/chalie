@@ -113,6 +113,7 @@ class Keys(StrEnum):
     query = "query"
     quota_mb = "quota_mb"
     recurrence = "recurrence"
+    replaces = "replaces"
     rule = "rule"
     rule_id = "rule_id"
     section = "section"
@@ -261,6 +262,7 @@ VARIANTS: "dict[str, frozenset[str]]" = {
     Keys.permissions: frozenset({"chmod", "perms"}),
     Keys.port_idx: frozenset({"port_id", "port_number"}),
     Keys.recurrence: frozenset({"frequency", "repeat", "rrule", "schedule"}),
+    Keys.replaces: frozenset({"old_value", "previous_value"}),
     Keys.sender: frozenset({"author", "from", "from_address", "from_email"}),
     Keys.to: frozenset({"dest", "recipient", "recipients"}),
     Keys.triage: frozenset({"category", "label"}),

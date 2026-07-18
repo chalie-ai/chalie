@@ -86,6 +86,55 @@ class FactRow(DataGraphRow):
         return row, ("appended" if live_rows else "created"), cls.active_values(key)
 
     @classmethod
+    def supersede_value(cls, key: str, old_value: str, value: str,
+                        source: str | None = None) -> tuple[Self, str, str] | None:
+        """Value-addressed demote+insert on the live rows of ``key``.
+
+        Finds a target row among the live set (``active = 1 AND deleted_at IS
+        NULL``) of the given key via a three-rung ladder: (a) exact case-folded
+        equality of the row's value with ``old_value``; (b) exactly one live row
+        whose case-folded value contains the case-folded ``old_value`` as a
+        substring — unique-substring; (c) absent or ambiguous → ``None`` so the
+        caller may fall back.
+
+        If the matched row's value is an exact (case-folded) match for the *new*
+        ``value`` the row is reinforced (the same path :meth:`store_coexist` takes
+        on an exact duplicate) and ``(row, "reinforced", matched_old_value)`` is
+        returned. Otherwise the matched row is demoted via :meth:`demote` (no
+        side-effect reimplementation) and the new value is inserted through
+        :meth:`store_coexist` so dedup+insert stay single-sourced;
+        ``(new_row, "superseded", matched_old_value)`` is returned."""
+        norm_old = (old_value or "").lower().strip()
+        norm_new = (value or "").lower().strip()
+        live_rows = cls.live().filter("key", key).get()
+        # (a) exact case-folded equality
+        target: Self | None = None
+        matched_old: str | None = None
+        for row in live_rows:
+            if (row.value or "").lower().strip() == norm_old:
+                target = row
+                matched_old = row.value
+                break
+        # (b) unique-substring
+        if target is None:
+            matches: list[Self] = []
+            for row in live_rows:
+                if norm_old and norm_old in (row.value or "").lower().strip():
+                    matches.append(row)
+            if len(matches) == 1:
+                target = matches[0]
+                matched_old = target.value
+        if target is None:
+            return None
+        # new value equals matched row → reinforce
+        if norm_new == (target.value or "").lower().strip():
+            return target.reinforce(), "reinforced", matched_old
+        # demote the old row, then insert new via store_coexist
+        target.demote()
+        new_row, _status, _ = cls.store_coexist(key, value, source=source)
+        return new_row, "superseded", matched_old
+
+    @classmethod
     def store_immutable(cls, key: str, value: str,
                         source: str | None = None) -> tuple[Self, str, str | None]:
         """Immutable single-value upsert at the canonical ``key``. No live row →
