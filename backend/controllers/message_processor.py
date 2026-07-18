@@ -317,16 +317,30 @@ class MessageProcessor:
     # ── provider send ──────────────────────────────────────────────────────────
 
     def _send_with_retry(self, request: ProviderRequest) -> ProviderResponse:
-        """Send with the turn's resend budget. Over-cap/over-limit errors are
-        re-raised untouched (``run`` compacts and continues); every other
-        provider failure is retried up to ``_MAX_PROVIDER_ATTEMPTS``, emitting a
-        user-facing retry notice between attempts, and a cancel observed
-        mid-retry aborts the turn. Exhausting the budget raises a clean,
-        surfaceable ``ProviderRetriesExhaustedError``."""
+        """Send with the turn's resend budget. An empty stripped completion
+        without tool calls is treated as "no response" — a failed attempt that
+        re-enters the retry budget (``_strip_think_blocks`` strips unclosed
+        ``<think>`` blocks to ``""``, and its contract is: "Callers must treat
+        an empty result as 'no response', never as an empty answer.").
+        Over-cap/over-limit errors are re-raised untouched (``run`` compacts and
+        continues); every other provider failure is retried up to
+        ``_MAX_PROVIDER_ATTEMPTS``, emitting a user-facing retry notice between
+        attempts, and a cancel observed mid-retry aborts the turn. Exhausting
+        the budget raises a clean, surfaceable
+        ``ProviderRetriesExhaustedError``."""
         last_exc: Exception | None = None
         for attempt in range(1, _MAX_PROVIDER_ATTEMPTS + 1):
             try:
-                return self.provider_service.send(request)
+                response = self.provider_service.send(request)
+                # Empty stripped text with no tool calls is "no response" per
+                # the _strip_think_blocks contract — never an empty answer.
+                if not response.text.strip() and not response.tool_calls:
+                    raise ProviderResponseError(
+                        "Provider returned an empty completion (no text after "
+                        "reasoning-strip, no tool calls)",
+                        provider=response.provider or "",
+                    )
+                return response
             except (RequestOverCapError, ResponseOverLimitError):
                 raise
             except Exception as exc:  # noqa: BLE001 — resend policy lives here, not in the provider
