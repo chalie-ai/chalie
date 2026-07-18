@@ -44,6 +44,7 @@ from typing import TYPE_CHECKING, cast
 from uuid import uuid4
 
 from controllers.message_processor import MessageProcessor
+from models.turn_execution import TurnExecution
 from models.ws_message import WsMessage
 from services.time_utils import utc_now
 from services.websocket import Websocket
@@ -174,6 +175,19 @@ class AsyncDelegateRunner:
         switches itself to FORK view internally (no external flag). The input row
         is suppressed (``with_hidden_input``) and attachments dropped — both were
         already ingested on the originating turn and must not repeat here.
+
+        **Crash guard:** if the originating turn was already stamped ``CRASHED``
+        (the RunAwayLoop guard killed a looping tool) before this background
+        result arrived, the delivery is suppressed — respawning it would resume
+        the exact doomed work the guard just killed, which nightly run 1006
+        evidence showed as a cascade of six [MessageProcessor] turn-crashed
+        cycles at 20-40s spacing after the scenario ended, keeping the channel
+        busy for minutes while no user message could get through. A probe
+        ``MessageProcessor`` (inert, I2) reads ``latest_for_turn()`` on the
+        originating (channel, turn_id); only when no row exists, or the row is
+        not ``CRASHED`` (``WORKING``, ``COMPLETED``, ``CANCELLED``) does the
+        delivery proceed unchanged — the cancelled-DELEGATE notice path in
+        ``_run``'s ``cancel_event`` branch is untouched and must keep delivering.
         """
         config = getattr(origin_mp, "config", None)
         if config is None:
@@ -185,6 +199,21 @@ class AsyncDelegateRunner:
         metadata["hidden_input"] = True
         metadata["attachments"] = []
         turn_id = getattr(origin_mp, "turn_id", None)
+
+        # Crash guard: suppress delivery when the originating turn was already
+        # killed by the RunAwayLoop guard (state == CRASHED). A crashed origin
+        # means looping work was stopped; feeding the late result back would
+        # respawn the identical loop — nightly run 1006 evidence.
+        if turn_id is not None and turn_id >= 0:
+            probe = MessageProcessor(config, turn_id)  # inert (I2)
+            latest = probe.turn_execution_service.latest_for_turn()
+            if latest is not None and latest.state == TurnExecution.CRASHED:
+                logger.warning(
+                    "[AsyncDelegateRunner] async delivery suppressed: originating turn %s crashed (%s) — not respawning its work",
+                    turn_id, latest.stop_reason,
+                )
+                return
+
         # Full UserConfig turn: its lifecycle signals come from MessageProcessor
         # itself. Fire-and-forget — nothing consumes the final text, so the drive
         # thread is never joined.
