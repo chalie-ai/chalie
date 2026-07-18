@@ -272,7 +272,7 @@ class PromptService:
         try:
             return self.act_trail()
         except Exception as exc:  # noqa: BLE001 — a trail-render hiccup must not crash the turn
-            logger.debug("[PromptService] act_trail failed: %s", exc)
+            logger.warning("[PromptService] act_trail failed: %s", exc, exc_info=True)
             return ""
 
     # ── UserConfig (channel="user") ──────────────────────────────────────────
