@@ -44,16 +44,18 @@ VALID_SETTINGS = {"internal", "allow", "ask", "deny"}
 # user-gated; (2) delegate-exclusive inner tools (DISCOVERABLE=False, pinned on
 # one delegate config) — the user-facing permission is the OUTER delegate tool
 # (``web_search`` covers search/news/web_download, ``web_browse`` covers browser,
-# ``pim`` covers email/calendar/contacts), so an inner gate would double-gate
-# work the outer gate already authorised. ANY action on these runs
-# unconditionally; they never appear in the Brain policy surface, and
-# ``apply_seed`` purges any pre-existing rows so this frozenset stays the single
-# source of truth.
+# ``pim`` covers email/calendar/contacts, ``code_agent`` covers its 12 file/script
+# inner tools), so an inner gate would double-gate work the outer gate already
+# authorised. ANY action on these runs unconditionally; they never appear in the
+# Brain policy surface, and ``apply_seed`` purges any pre-existing rows so this
+# frozenset stays the single source of truth.
 INTERNAL = frozenset({
     "browser", "calendar", "chalie_docs", "chat_history_compactor", "contacts",
-    "email", "find_skills", "find_tools", "memory", "news", "read",
-    "review_tool_calls", "review_transcript", "save_graph", "save_pattern",
-    "search", "skill_manager", "web_download",
+    "create_file", "create_folder", "delete_file", "email", "find", "find_files",
+    "find_skills", "find_tools", "list_files", "memory", "move_file", "news",
+    "read", "read_file", "replace_all", "replace_one", "review_tool_calls",
+    "review_transcript", "run_script", "save_graph", "save_pattern", "search",
+    "skill_manager", "update_file", "web_download",
 })
 
 # Channels with no human at a prompt: an `ask` becomes a `deny` (D2).

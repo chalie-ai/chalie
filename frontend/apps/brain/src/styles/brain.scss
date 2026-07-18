@@ -900,8 +900,8 @@ input[type='checkbox'] {
 
 .chart-wrap { margin: 12px 0; overflow-x: auto; }
 .usage-chart { width: 100%; height: auto; }
-.bar-local { fill: var(--violet); opacity: 0.7; }
-.bar-cloud { fill: var(--magenta); opacity: 0.5; }
+.bar-input { fill: var(--violet); opacity: 0.7; }
+.bar-output { fill: var(--magenta); opacity: 0.5; }
 .bar-label { fill: var(--text-tertiary); font-size: 10px; text-anchor: middle; }
 
 .chart-legend {
@@ -912,27 +912,18 @@ input[type='checkbox'] {
   margin-top: 8px;
 }
 
-.legend-local::before {
+.chart-legend span::before {
   content: '';
   display: inline-block;
   width: 10px;
   height: 10px;
   border-radius: 2px;
-  background: var(--violet);
   margin-right: 4px;
   vertical-align: middle;
 }
 
-.legend-cloud::before {
-  content: '';
-  display: inline-block;
-  width: 10px;
-  height: 10px;
-  border-radius: 2px;
-  background: var(--magenta);
-  margin-right: 4px;
-  vertical-align: middle;
-}
+.legend-input::before { background: var(--violet); }
+.legend-output::before { background: var(--magenta); }
 
 .usage-table {
   width: 100%;

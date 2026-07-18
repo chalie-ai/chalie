@@ -36,6 +36,7 @@ class FileMapperService:
     _USER_SKILLS_DIR: Path = _DATA_DIR / "skills" / "user"
     _VOICE_MODELS_DIR: Path = _RESOURCES_DIR / "voice-models"
     _ABILITIES_SKILLS_DIR: Path = _ABILITIES_DIR / "skills"
+    _CODE_AGENT_WORKSPACE_DIR: Path = _DATA_DIR / "code_agent_workspace"
 
     # ── Well-known file paths ────────────────────────────────────────────────
 
@@ -222,6 +223,16 @@ class FileMapperService:
     def get_capabilities_path(cls, *parts: str) -> Path:
         """Return backend/capabilities/ joined with any additional path parts."""
         return cls._CAPABILITIES_DIR.joinpath(*parts) if parts else cls._CAPABILITIES_DIR
+
+    @classmethod
+    def get_code_agent_workspace_path(cls, *parts: str) -> Path:
+        """Return data/code_agent_workspace/ joined with any additional path parts.
+
+        The single sandboxed root every code_agent inner tool resolves paths
+        under (:func:`abilities._workspace.resolve_in_root`); created lazily on
+        first use, not at import time.
+        """
+        return cls._CODE_AGENT_WORKSPACE_DIR.joinpath(*parts) if parts else cls._CODE_AGENT_WORKSPACE_DIR
 
     @classmethod
     def validate_document_path(cls, full_path: str) -> bool:

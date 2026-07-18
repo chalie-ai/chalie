@@ -323,7 +323,7 @@ _setup_venv() {
   _info "Note: The embedding model (~400 MB) downloads on first 'chalie start', not now"
 }
 
-# ─── Deno (code_eval sandbox runtime) ───────────────────────────────────────
+# ─── Deno (code_agent sandbox runtime) ──────────────────────────────────────
 _install_deno() {
   _section "Deno Sandbox Runtime"
   local deno_bin="$CHALIE_BIN/deno"
@@ -342,7 +342,7 @@ _install_deno() {
     linux/amd64)   archive="deno-x86_64-unknown-linux-gnu.zip" ;;
     linux/arm64)   archive="deno-aarch64-unknown-linux-gnu.zip" ;;
     *)
-      _warn "No Deno build for $os/$arch — the code_eval sandbox will be unavailable"
+      _warn "No Deno build for $os/$arch — the code_agent sandbox will be unavailable"
       return 0
       ;;
   esac
@@ -352,14 +352,14 @@ _install_deno() {
   tmpdir="$(mktemp -d)"
   _info "Downloading Deno ($os/$arch)…"
   if ! curl -fsSL "$url" -o "$tmpdir/deno.zip"; then
-    _warn "Deno download failed — the code_eval sandbox will be unavailable"
+    _warn "Deno download failed — the code_agent sandbox will be unavailable"
     rm -rf "$tmpdir"
     return 0
   fi
   if command -v unzip >/dev/null 2>&1; then
     unzip -o -q "$tmpdir/deno.zip" -d "$tmpdir"
   else
-    _warn "unzip not found — cannot extract Deno; the code_eval sandbox will be unavailable"
+    _warn "unzip not found — cannot extract Deno; the code_agent sandbox will be unavailable"
     rm -rf "$tmpdir"
     return 0
   fi

@@ -64,7 +64,7 @@ class ReviewWindowAbility(Ability, ABC):
     """
 
     # Both review tools take a single required ``date_time`` and no action; the
-    # action-less map key ``""`` (vision / code_eval precedent) makes the
+    # action-less map key ``""`` (vision / code_agent precedent) makes the
     # dispatcher pre-gate reject a missing/whitespace anchor as ``missing-params``
     # BEFORE the policy gate. Inherited unchanged by both subclasses.
     ACTION_REQUIRED: ClassVar[dict[str, tuple[str, ...]]] = {"": ("date_time",)}

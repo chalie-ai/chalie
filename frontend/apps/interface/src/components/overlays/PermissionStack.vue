@@ -14,7 +14,7 @@ const ACTION_LABELS: Record<string, string> = {
   // email/calendar/contacts gate at the OUTER `pim` permission only — the inner
   // tools are INTERNAL on the backend and can never raise a permission_request.
   pim: 'Access Email, Calendar & Contacts',
-  code_eval: 'Execute Code',
+  code_agent: 'Coding Agent',
   'browser.render': 'Read Webpage',
   'browser.interact': 'Interact with Webpage',
   'browser.screenshot': 'Screenshot Webpage',

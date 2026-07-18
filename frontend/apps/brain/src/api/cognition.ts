@@ -7,7 +7,7 @@
  * GET  /settings/personality                                     → personality tuple + voice (Action contract)
  * POST /settings/personality                                     → update personality (legacy PUT → POST)
  * GET  /system/observability/errors                              → recent errors
- * GET  /system/observability/token-usage?window=                 → token usage
+ * GET  /system/observability/token-usage?window=&type=           → token usage
  * GET  /system/observability/compaction                          → compaction summary
  */
 import { api } from '@chalie/shared';
@@ -85,6 +85,7 @@ export interface UsageSummary {
 
 export interface UsageEntry {
   bucket: string;
+  type?: string;
   tokens_input?: number;
   tokens_cache_read?: number;
   tokens_output?: number;
@@ -142,8 +143,10 @@ export const cognition = {
     return api.get('/api/system/observability/errors');
   },
 
-  tokenUsage(window: string = 'day'): Promise<UsageResponse> {
-    return api.get(`/api/system/observability/token-usage?window=${encodeURIComponent(window)}`);
+  tokenUsage(window: string = 'day', type?: string): Promise<UsageResponse> {
+    const p = new URLSearchParams({ window });
+    if (type) p.set('type', type);
+    return api.get(`/api/system/observability/token-usage?${p.toString()}`);
   },
 
   compaction(): Promise<{ compaction: CompactionEntry | null }> {

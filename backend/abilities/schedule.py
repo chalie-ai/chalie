@@ -428,7 +428,7 @@ def _create(channel: str, params: dict[str, object]) -> ToolResult:
             enabled=1,
             channel=channel,
             created_by_session=None,
-        )  # INSERT + 1-1 gist seed, atomic
+        )  # INSERT; id autoincrements
         item_id = cast(int, item.id)
 
         try:

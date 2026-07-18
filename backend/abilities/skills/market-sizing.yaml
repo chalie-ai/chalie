@@ -10,6 +10,6 @@ version: 1
 3. Use `search` to find industry reports, analyst estimates, and government data for the broad category (top-down inputs: total market value, growth rate, key segments).
 4. Use `read` to extract relevant figures from the most authoritative sources found — note the source, publication date, and methodology caveats.
 5. Use `search` to find bottom-up inputs: number of potential buyers, average deal size or spend per unit, and purchase frequency — triangulate from multiple sources.
-6. Use `code_eval` to run the TAM/SAM/SOM calculations for both top-down and bottom-up approaches, showing the formula and every assumption explicitly.
+6. Use `code_agent` to run the TAM/SAM/SOM calculations for both top-down and bottom-up approaches, showing the formula and every assumption explicitly.
 7. Use `document` to produce a market sizing summary: TAM / SAM / SOM figures with confidence ranges, key assumptions, source references, and the most important variable to validate first.
 8. Use `document` to save the full sizing model with all inputs and sources.

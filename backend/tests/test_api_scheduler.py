@@ -1,10 +1,26 @@
 import sqlite3
 from typing import cast
+from unittest.mock import patch
 
 import pytest
 from flask.testing import FlaskClient
 
-from tests.helpers import insert_scheduled_item
+from api.actions.scheduler.turns import _GISTS_PER_READ
+from models.provider_response import ProviderResponse
+from tests.helpers import (
+    LabelProvider,
+    insert_scheduled_item,
+    join_named_threads,
+    seed_selected_provider,
+)
+
+_BUILD_CLIENT = "services.provider_service.build_client"
+
+# A completion the delegate genuinely settles on but that reduces to nothing: the
+# think block is never closed, so stripping swallows the lot. Whitespace alone
+# cannot stand in — MessageProcessor refuses to settle an empty completion and
+# crashes the turn instead, which is a provider failure, not an unusable answer.
+_UNUSABLE = "<think>let me consider the wording"
 
 
 def _unwrap_listing(body: "dict[str, object]") -> "list[dict[str, object]]":
@@ -144,34 +160,258 @@ class TestSchedulerAPI:
         after = db.execute("SELECT COUNT(*) FROM scheduled_items").fetchone()[0]
         assert after == before, "an invalid cron expression must persist nothing"
 
-    # ----- Eager 1-1 gist: a schedule is born with its prompt as its label -----
+    # ----- Read-time 1-1 gist: the listing generates what it finds missing -----
 
-    def test_create_seeds_thread_gist_from_prompt(
-        self, authed_client: tuple[FlaskClient, sqlite3.Connection, object]
-    ) -> None:
-        client, db, _store = authed_client
-
+    def _post(self, client: FlaskClient, message: str, hour: str = "9") -> int:
         resp = client.post(
             "/api/scheduler/-1",
-            json={"message": "Water the plants", "day": "*", "hour": "9", "minute": "0"},
+            json={"message": message, "day": "*", "hour": hour, "minute": "0"},
         )
         assert resp.status_code == 201, resp.get_json()
-        item_id = _unwrap_single(cast("dict[str, object]", resp.get_json()))["id"]
+        return cast(int, _unwrap_single(cast("dict[str, object]", resp.get_json()))["id"])
 
-        # The gist is written synchronously at create time (no fork-time LLM
-        # wait): keyed (channel='schedule', turn_id=id), content == the prompt.
+    def _turns(self, client: FlaskClient) -> "list[dict[str, object]]":
+        body = cast("dict[str, object]", client.get("/api/scheduler/turns").get_json())
+        return _unwrap_listing(body)
+
+    def _turn(self, client: FlaskClient, item_id: int) -> "dict[str, object]":
+        return next(t for t in self._turns(client) if t["turn_id"] == item_id)
+
+    def _gist_of(self, db: sqlite3.Connection, item_id: int) -> str | None:
         row = db.execute(
-            "SELECT gist FROM thread_gist WHERE channel = ? AND turn_id = ?",
-            ("schedule", item_id),
+            "SELECT gist FROM scheduled_items WHERE id = ?", (item_id,)
         ).fetchone()
-        assert row is not None, "create must seed a thread_gist row"
-        assert row["gist"] == "Water the plants"
+        return cast("str | None", row["gist"])
 
-        # …and it surfaces on /turns as that schedule's label.
-        turns_body = cast("dict[str, object]", client.get("/api/scheduler/turns").get_json())
-        turns = _unwrap_listing(turns_body)
+    def _read_and_generate(
+        self, client: FlaskClient, label: str
+    ) -> tuple["list[dict[str, object]]", LabelProvider, int]:
+        """One listing read with the LLM transport stubbed, waited out to
+        completion — the read fires generation, the join makes it observable."""
+        provider = LabelProvider(label)
+        with patch(_BUILD_CLIENT, return_value=provider):
+            turns = self._turns(client)
+            fired = join_named_threads("schedule-gist")
+        return turns, provider, fired
+
+    def test_the_listing_generates_the_label_a_schedule_lacks(
+        self, authed_client: tuple[FlaskClient, sqlite3.Connection, object]
+    ) -> None:
+        """Absence at the read is the whole trigger: creating stores no label,
+        and the first listing that finds none generates one from the prompt.
+        That read still answers labelless — the caller falls back to the
+        prompt — and the next one carries the real label."""
+        client, db, _store = authed_client
+        seed_selected_provider(db)
+        message = "Water the plants on the balcony before it gets too hot"
+        item_id = self._post(client, message)
+
+        assert self._gist_of(db, item_id) is None, "create must not write a label"
+
+        turns, provider, fired = self._read_and_generate(client, "Balcony Plant Watering")
+        assert fired == 1, "a labelless schedule must have its generation fired by the read"
+
         mine = next(t for t in turns if t["turn_id"] == item_id)
-        assert mine["gist"] == "Water the plants"
+        assert mine["gist"] is None, "the read that kicks generation off answers labelless"
+        assert mine["preview"] == message, "the prompt is the caller's fallback"
+
+        assert message in provider.prompts[0], (
+            "the delegate must be fed the schedule's own prompt — a schedule has no "
+            "transcript to read one from"
+        )
+        assert self._gist_of(db, item_id) == "Balcony Plant Watering"
+        assert self._turn(client, item_id)["gist"] == "Balcony Plant Watering"
+
+    def test_a_schedule_that_already_has_a_label_is_never_regenerated(
+        self, authed_client: tuple[FlaskClient, sqlite3.Connection, object]
+    ) -> None:
+        """The guard is absence, not a timer: once a label exists no later read
+        may spend another LLM call on it, however many times the dock polls."""
+        client, db, _store = authed_client
+        seed_selected_provider(db)
+        item_id = self._post(client, "Water the plants")
+        self._read_and_generate(client, "Plant Watering")
+        assert self._gist_of(db, item_id) == "Plant Watering"
+
+        turns, untouched, fired = self._read_and_generate(client, "SHOULD NEVER BE STORED")
+        assert fired == 0, "a labelled schedule must fire no generation"
+        assert untouched.prompts == [], "the delegate must not run for a labelled schedule"
+        assert self._gist_of(db, item_id) == "Plant Watering"
+        assert next(t for t in turns if t["turn_id"] == item_id)["gist"] == "Plant Watering"
+
+    def test_rewriting_the_message_drops_the_label_and_the_next_read_regenerates_it(
+        self, authed_client: tuple[FlaskClient, sqlite3.Connection, object]
+    ) -> None:
+        """A rewritten prompt must not keep a label describing the old one. The
+        edit deletes it; absence then feeds the same one read-time rule. An edit
+        that leaves the message alone keeps its label untouched."""
+        client, db, _store = authed_client
+        seed_selected_provider(db)
+        item_id = self._post(client, "Water the plants")
+        self._read_and_generate(client, "Plant Watering")
+
+        resp = client.post(
+            f"/api/scheduler/{item_id}",
+            json={
+                "message": "Call the dentist to book a check-up",
+                "day": "*", "hour": "9", "minute": "0",
+            },
+        )
+        assert resp.status_code == 200, resp.get_json()
+        assert self._gist_of(db, item_id) is None, "a rewritten prompt must clear the stale label"
+
+        self._read_and_generate(client, "Dentist Appointment")
+        assert self._gist_of(db, item_id) == "Dentist Appointment"
+
+        # A cron-only edit leaves the message untouched — the label stands, so
+        # the next read has nothing to regenerate.
+        resp = client.post(
+            f"/api/scheduler/{item_id}",
+            json={
+                "message": "Call the dentist to book a check-up",
+                "day": "*", "hour": "18", "minute": "30",
+            },
+        )
+        assert resp.status_code == 200, resp.get_json()
+        assert self._gist_of(db, item_id) == "Dentist Appointment"
+        _turns, untouched, fired = self._read_and_generate(client, "SHOULD NEVER BE STORED")
+        assert fired == 0 and untouched.prompts == []
+
+    def test_one_read_generates_no_more_than_the_per_read_cap(
+        self, authed_client: tuple[FlaskClient, sqlite3.Connection, object]
+    ) -> None:
+        """The first read after an upgrade finds EVERY schedule labelless at
+        once. Uncapped that is one concurrent LLM call per schedule against a
+        single local model, so a read generates a bounded few and the next poll
+        takes the rest — every schedule labelled, none of them at once."""
+        client, db, _store = authed_client
+        seed_selected_provider(db)
+        total = _GISTS_PER_READ + 2
+        for n in range(total):
+            self._post(client, f"Errand number {n}", hour=str(n + 1))
+
+        _turns, provider, fired = self._read_and_generate(client, "An Errand")
+        assert fired == _GISTS_PER_READ, "one read must fire exactly the cap, not one per schedule"
+        assert len(provider.prompts) == _GISTS_PER_READ
+
+        labelled = db.execute(
+            "SELECT COUNT(*) FROM scheduled_items WHERE gist IS NOT NULL"
+        ).fetchone()[0]
+        assert labelled == _GISTS_PER_READ
+
+        # The backlog drains on later reads rather than being abandoned.
+        _turns, _p, fired = self._read_and_generate(client, "An Errand")
+        assert fired == total - _GISTS_PER_READ, "the remainder must be picked up by the next read"
+
+    def test_a_generation_failure_still_lists_the_schedule_with_its_prompt(
+        self, authed_client: tuple[FlaskClient, sqlite3.Connection, object]
+    ) -> None:
+        """The label is a decoration, never a precondition: with the provider
+        down the schedule is still listed, labelless, prompt intact — and no
+        placeholder is written to stand in for the label that failed."""
+        client, db, _store = authed_client
+        seed_selected_provider(db)
+        message = "Take the bins out"
+        item_id = self._post(client, message)
+
+        with patch(_BUILD_CLIENT, side_effect=ConnectionError("provider unreachable")):
+            assert self._turns(client), "the listing must answer even when generation cannot"
+            join_named_threads("schedule-gist")
+
+        assert self._gist_of(db, item_id) is None, (
+            "a failed generation must store nothing, not a placeholder"
+        )
+        mine = self._turn(client, item_id)
+        assert mine["gist"] is None, "no label generated means no label reported"
+        assert mine["preview"] == message, "the prompt stays as the caller's fallback"
+
+    def test_an_unusable_generation_falls_back_to_the_prompt_and_is_never_retried(
+        self, authed_client: tuple[FlaskClient, sqlite3.Connection, object]
+    ) -> None:
+        """A model that answers, but with nothing that survives think-stripping
+        (an unclosed block swallows everything after its opener), must still
+        settle the row. The prompt itself is stored — exactly what the caller
+        would have fallen back to — so absence stays a fresh signal: the
+        schedule leaves the labelless set and no later poll can spend another
+        LLM call on it. No websocket frame either; a schedule label is polled
+        for, never pushed."""
+        client, db, _store = authed_client
+        seed_selected_provider(db)
+        message = "Renew the passport"
+        item_id = self._post(client, message)
+        frames: list[object] = []
+
+        with (
+            patch(_BUILD_CLIENT, return_value=LabelProvider(_UNUSABLE)),
+            patch("services.websocket.Websocket.broadcast", side_effect=frames.append),
+        ):
+            self._turns(client)
+            assert join_named_threads("schedule-gist") == 1
+
+        assert self._gist_of(db, item_id) == message, (
+            "an unusable generation must settle on the prompt, not stay labelless forever"
+        )
+        assert frames == [], "a schedule label is polled for, never broadcast"
+
+        _turns, untouched, fired = self._read_and_generate(client, "SHOULD NEVER BE STORED")
+        assert fired == 0, "a schedule that could not be labelled must never be re-fired"
+        assert untouched.prompts == []
+
+    def test_an_unlabellable_schedule_does_not_starve_the_ones_behind_it(
+        self, authed_client: tuple[FlaskClient, sqlite3.Connection, object]
+    ) -> None:
+        """Candidates come off one per-read cap, so schedules that cannot be
+        labelled must not hold those slots read after read and block the backlog
+        behind them. Settling them on their first attempt is what frees the
+        queue: the next read reaches the rest instead of re-firing them."""
+        client, db, _store = authed_client
+        seed_selected_provider(db)
+        total = _GISTS_PER_READ + 2
+        for n in range(total):
+            self._post(client, f"Errand number {n}", hour=str(n + 1))
+
+        with patch(_BUILD_CLIENT, return_value=LabelProvider(_UNUSABLE)):
+            self._turns(client)
+            assert join_named_threads("schedule-gist") == _GISTS_PER_READ
+
+        _turns, _p, fired = self._read_and_generate(client, "An Errand")
+        assert fired == total - _GISTS_PER_READ, (
+            "the unlabellable ones must not consume the cap a second time"
+        )
+        labelless = db.execute(
+            "SELECT COUNT(*) FROM scheduled_items WHERE gist IS NULL"
+        ).fetchone()[0]
+        assert labelless == 0, "no schedule may be left behind an unlabellable one"
+
+    def test_an_edit_landing_mid_generation_is_not_overwritten_with_the_old_label(
+        self, authed_client: tuple[FlaskClient, sqlite3.Connection, object]
+    ) -> None:
+        """Generation reads the prompt at listing time and finishes seconds to
+        minutes later. An edit landing in that window clears the label to ask
+        for a fresh one — the in-flight label describes text that no longer
+        exists, so it must be discarded, not stored where absence can never
+        correct it."""
+        client, db, _store = authed_client
+        seed_selected_provider(db)
+        item_id = self._post(client, "Water the plants")
+
+        class EditsMidFlight(LabelProvider):
+            def send(self, dto: object) -> "ProviderResponse":
+                from models.scheduled_item import ScheduledItem
+                ScheduledItem.filter("id", item_id).update(
+                    message="Call the dentist", gist=None
+                )
+                return super().send(dto)
+
+        with patch(_BUILD_CLIENT, return_value=EditsMidFlight("Plant Watering")):
+            self._turns(client)
+            assert join_named_threads("schedule-gist") == 1
+
+        assert self._gist_of(db, item_id) is None, (
+            "a label for the replaced prompt must not be stored"
+        )
+        self._read_and_generate(client, "Dentist Appointment")
+        assert self._gist_of(db, item_id) == "Dentist Appointment"
 
     # ----- GET /scheduler/<id> -----
 

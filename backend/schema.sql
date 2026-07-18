@@ -192,6 +192,7 @@ CREATE TABLE IF NOT EXISTS master_account (
 CREATE TABLE IF NOT EXISTS scheduled_items (
     id INTEGER PRIMARY KEY AUTOINCREMENT,          -- also the thread's turn_id on the 'schedule' channel (§13.1). AUTOINCREMENT: a cancelled schedule's id is never reissued, so a dead thread can never be re-entered.
     message TEXT NOT NULL,
+    gist TEXT,                                      -- generated one-line label for message; NULL until a listing read generates it, and readers fall back to message meanwhile
     start_at TEXT NOT NULL,                         -- UTC activation floor; the cron never fires before this instant
     cron_minute TEXT NOT NULL DEFAULT '*',          -- crontab minute expr, 0-59 USER-LOCAL; '*' = every (also N, N-M, */S, N-M/S, comma-union)
     cron_hour   TEXT NOT NULL DEFAULT '*',          -- crontab hour expr, 0-23 USER-LOCAL; '*' = every

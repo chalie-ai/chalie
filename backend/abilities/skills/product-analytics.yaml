@@ -9,7 +9,7 @@ version: 1
 2. Use `memory` to check for any previously stored metric framework preferences, then select the appropriate framework: AARRR for growth funnel visibility, North Star for cross-team alignment, or HEART for UX quality measurement.
 3. Use `document` to define stage-appropriate KPIs: pre-PMF (activation rate, week-1 retention, time-to-first-value), growth (funnel conversion, monthly retained users, feature adoption), or mature (retention depth, revenue quality, operational efficiency).
 4. Use `document` to design a three-layer dashboard: executive layer (5 to 7 directional metrics), product health layer (acquisition, activation, retention, engagement), and feature layer (adoption rate, depth, repeat usage).
-5. Use `code_eval` to run cohort and retention analysis — segment by signup cohort or feature exposure cohort, compare retention curves, and identify inflection points around onboarding and first value moment.
+5. Use `code_agent` to run cohort and retention analysis — segment by signup cohort or feature exposure cohort, compare retention curves, and identify inflection points around onboarding and first value moment.
 6. Use `memory` to correlate metric movements with stored product changes and release history to distinguish signal from noise.
 7. Use `document` to propose one clear product action per major metric risk or opportunity found.
 8. Use `document` to save the metric framework, dashboard design, and analysis findings.

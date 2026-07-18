@@ -60,7 +60,6 @@ class Keys(StrEnum):
     buffer_minutes = "buffer_minutes"
     category = "category"
     cc = "cc"
-    code = "code"
     command = "command"
     content = "content"
     contents = "contents"
@@ -69,6 +68,7 @@ class Keys(StrEnum):
     date_time = "date_time"
     date_to = "date_to"
     day = "day"
+    destination = "destination"
     destination_location = "destination_location"
     direction = "direction"
     directory = "directory"
@@ -77,9 +77,12 @@ class Keys(StrEnum):
     dtend = "dtend"
     dtstart = "dtstart"
     duration_seconds = "duration_seconds"
+    end_line = "end_line"
     entity_id = "entity_id"
     evidence_transcript_ids = "evidence_transcript_ids"
     frequency = "frequency"
+    fuzzy = "fuzzy"
+    glob = "glob"
     goal = "goal"
     headers = "headers"
     host = "host"
@@ -107,15 +110,18 @@ class Keys(StrEnum):
     operation = "operation"
     page = "page"
     path = "path"
+    pattern = "pattern"
     permissions = "permissions"
     port_idx = "port_idx"
     provider = "provider"
     query = "query"
     quota_mb = "quota_mb"
     recurrence = "recurrence"
+    replace_ = "replace"  # trailing underscore: bare `replace` is a str method (StrEnum base)
     replaces = "replaces"
     rule = "rule"
     rule_id = "rule_id"
+    search = "search"
     section = "section"
     select = "select"
     sender = "sender"
@@ -124,6 +130,7 @@ class Keys(StrEnum):
     service_data = "service_data"
     source = "source"
     start_at = "start_at"
+    start_line = "start_line"
     subject = "subject"
     summary = "summary"
     tags = "tags"
@@ -233,7 +240,6 @@ VARIANTS: "dict[str, frozenset[str]]" = {
     Keys.body: frozenset({"message", "msg", "text"}),
     Keys.buffer_minutes: frozenset({"window"}),
     Keys.category: frozenset({"tag", "topic"}),
-    Keys.code: frozenset({"python", "script", Keys.source}),
     Keys.command: frozenset({"bash", "cmd", "script", "shell"}),
     Keys.context_lines: frozenset({"surrounding_lines"}),
     Keys.destination_location: frozenset({"dest", "end_location"}),

@@ -9,7 +9,7 @@ version: 1
 2. Use `search` to find the company's investor relations page and any recent financial filings or earnings reports.
 3. Use `read` to extract financial data from the investor relations page, SEC filings, or reputable financial data sites.
 4. Use `search` to find current analyst consensus estimates and ratings from reputable financial sources.
-5. Use `code_eval` to calculate any derived metrics requested: P/E, EV/EBITDA, free cash flow yield, revenue growth rates, or basic DCF if inputs are available.
-6. Use `code_eval` to validate data consistency: check that market cap aligns with price × shares outstanding, and flag any fields that could not be confirmed from a primary source.
+5. Use `code_agent` to calculate any derived metrics requested: P/E, EV/EBITDA, free cash flow yield, revenue growth rates, or basic DCF if inputs are available.
+6. Use `code_agent` to validate data consistency: check that market cap aligns with price × shares outstanding, and flag any fields that could not be confirmed from a primary source.
 7. Use `document` to present a structured data card: market data (price, market cap, beta), income statement highlights, cash flow summary, and analyst consensus — with source attribution and retrieval date for every figure.
 8. Use `document` to save the data card if the user intends to use it in further analysis.
