@@ -224,38 +224,6 @@ class TranscriptService:
             return
         TranscriptDoc(transcript_id=self.mp.uid, doc_id=doc_id).link()
 
-    def gc(self, cited_ids: frozenset[int]) -> int:
-        """Delete this turn's rows already folded below the compaction
-        watermark, on the turn's own axis (§6.1) — the same ``mp._forked``
-        flag ``read()``/``CompactionService`` key on: MAIN measures the
-        watermark against ``turn_id`` (the whole turn folds at once, only
-        once absorbed); FORK measures it against transcript ``id`` (rows
-        fold one at a time as the thread scrolls past it). ``cited_ids``
-        (episode citations — not ``mp``-reachable, §3.11) and settle0 itself
-        are never collected. Deletes run in one atomic block; returns the
-        count deleted. A no-op on a turn that hasn't settled yet (its
-        boundary is undefined). Tool-call rows anchored to a deleted row are
-        NOT cascaded here — ``ToolCallService`` exposes no bulk-delete entry
-        yet; orphaned ``tool_calls`` rows are swept by the separate retention
-        pass."""
-        settle_id = self.settle()
-        if settle_id is None:
-            return 0
-        watermark = self.mp.compaction_service.watermark()
-        ids = [cast("int", r.id) for r in self.turn_rows()]
-        if self.mp._forked:
-            dead = [rid for rid in ids if rid not in cited_ids and rid != settle_id and rid <= watermark]
-        elif self.mp.turn_id > watermark:
-            return 0
-        else:
-            dead = [rid for rid in ids if rid not in cited_ids and rid != settle_id and rid > settle_id]
-        if not dead:
-            return 0
-        with self.mp.db.transaction():
-            for rid in dead:
-                Transcript(id=rid).delete()
-        return len(dead)
-
     # ── private helpers ──────────────────────────────────────────────────────
 
     def _anchor_row(self) -> Transcript | None:

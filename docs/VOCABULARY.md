@@ -66,3 +66,4 @@ Domain-specific terminology used throughout the Chalie system.
 | `envelope` | The uniform response shape built only by the `Response` DTO base. | `{success, result}`, error: `{success: false, result: [], error}` |
 | `find_tools` | Discovery ability that surfaces tools the model can use. | `find_tools(query=['weather','valletta'])` |
 | `internal_dev` | Env-var flag gating in-development features. | `CHALIE_INTERNAL_DEV='1'` |
+| `garbage collector` | Hourly sweep that hard-deletes `transcript` rows once they are at least 90 days old and cited by no live episode, then the `tool_calls` rows left orphaned by that (or by any earlier) deletion. One owner, one age window for both tables. | `GarbageCollectionJob` fires at the top of every hour |
