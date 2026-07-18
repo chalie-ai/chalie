@@ -137,10 +137,10 @@ class FindAbility(Ability):
             )
 
         lines = [line for line in proc.stdout.splitlines() if line][:_MAX_RESULTS]
-        formatted = [self._format_rg_line(line, scope) for line in lines]
+        formatted = [self._format_rg_line(line) for line in lines]
         return self._respond(formatted)
 
-    def _format_rg_line(self, rg_line: str, scope: Path) -> str:
+    def _format_rg_line(self, rg_line: str) -> str:
         try:
             abs_path, lineno, content = rg_line.split(":", 2)
         except ValueError:

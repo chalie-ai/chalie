@@ -24,6 +24,7 @@ interactive prompt.
 from __future__ import annotations
 
 import logging
+import os
 import shutil
 import subprocess
 import time
@@ -44,13 +45,15 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# Clip each stream to the same budget code_eval used, reporting clipping
-# uniformly via `meta truncated=true` instead of silently dropping output.
+# Clip each stream so a single run's output stays cheap to feed back into
+# model context, reporting clipping uniformly via `meta truncated=true`
+# instead of silently dropping output.
 _MAX_OUTPUT_CHARS = 100 * 1024
 
 _DENO_BIN = "deno"
 
-# Hard wall-clock cap on a single execution — same budget code_eval used.
+# Hard wall-clock cap on a single execution, so a runaway script can never
+# pin the delegate loop indefinitely.
 _EXEC_TIMEOUT_S = 600
 
 
@@ -114,6 +117,9 @@ class RunScriptAbility(Ability):
     )
     _ERR_NO_DENO = "The TypeScript sandbox runtime (Deno) is not installed, so the script could not be run."
     _ERR_CRASHED = "The script could not be run: the sandbox process exited unexpectedly without returning a result."
+    _ERR_SYMLINK_ESCAPE = "The workspace contains a symlink that points outside it: {path}."
+    _ERR_SYMLINK_UNRESOLVABLE = "The workspace contains a symlink that cannot be resolved: {path}."
+    _ERR_WORKSPACE_UNREADABLE = "Containment could not be verified because {path} is unreadable, so the script was not run."
 
     def run(self, params: dict[str, object]) -> ToolResult:
         raw_path = cast(str, self.param(params, Keys.path, required=True))
@@ -147,6 +153,10 @@ class RunScriptAbility(Ability):
             )
 
         workspace = get_workspace_root()
+
+        symlink_error = _find_symlink_escape(workspace)
+        if symlink_error is not None:
+            return symlink_error
 
         started = time.monotonic()
         try:
@@ -203,3 +213,73 @@ class RunScriptAbility(Ability):
             },
             **meta,
         )
+
+
+def _find_symlink_escape(root: Path) -> ToolResult | None:
+    """Return the refusal to run the script with, or ``None`` when *root*'s
+    tree is clean.
+
+    Deno's scoped ``--allow-read``/``--allow-write`` flags follow a symlink
+    that already exists on disk without re-validating where it resolves, so a
+    symlink planted inside the workspace before this call could hand the
+    sandboxed script read or write access anywhere on the filesystem. Every
+    other tool in the toolkit is already safe because ``resolve_in_root``
+    resolves symlinks before its containment check; this walk gives the one
+    tool that hands the workspace to an external process the same
+    containment guarantee immediately before it does so.
+
+    Two things can stop the walk from reaching a verdict, and each is a
+    refusal in its own right rather than a silent pass:
+
+    - A directory the walk cannot read at all. ``os.walk``'s default
+      ``onerror`` swallows the ``OSError`` and just skips that subtree, which
+      would let a symlink planted behind a locked-down directory escape
+      unseen. The ``onerror`` callback below records the failure instead, so
+      any unscannable directory fails the whole check closed.
+    - A symlink whose target cannot be resolved at all — typically a
+      self- or mutually-referential loop, which makes ``Path.resolve()``
+      raise instead of returning a path. With nothing to test for
+      containment, an unresolvable link is refused the same as an escaping
+      one. The refusal states only that the link could not be resolved and
+      never asserts a specific cause, because the ``except`` clause catches
+      any resolution failure (an ``OSError`` as well as a loop's
+      ``RuntimeError``), not loops alone — the likely fixes stay in the hint.
+    """
+    root_resolved = root.resolve()
+    unreadable: list[str] = []
+
+    def _record_unreadable(exc: OSError) -> None:
+        unreadable.append(exc.filename or str(root))
+
+    for dirpath, dirnames, filenames in os.walk(root, onerror=_record_unreadable, followlinks=False):
+        for name in (*dirnames, *filenames):
+            candidate = Path(dirpath) / name
+            if not candidate.is_symlink():
+                continue
+            try:
+                target = candidate.resolve()
+            except (OSError, RuntimeError):
+                return ToolResult.err(
+                    RunScriptAbility._ERR_SYMLINK_UNRESOLVABLE.format(path=candidate.relative_to(root)),
+                    code="symlink-escape",
+                    hint="remove the broken or looping symlink so the workspace can be scanned safely.",
+                )
+            if target != root_resolved and not target.is_relative_to(root_resolved):
+                return ToolResult.err(
+                    RunScriptAbility._ERR_SYMLINK_ESCAPE.format(path=candidate.relative_to(root)),
+                    code="symlink-escape",
+                    hint="remove the symlink or repoint it so it resolves inside the workspace.",
+                )
+
+    if unreadable:
+        try:
+            unreadable_path = Path(unreadable[0]).relative_to(root)
+        except ValueError:
+            unreadable_path = Path(unreadable[0])
+        return ToolResult.err(
+            RunScriptAbility._ERR_WORKSPACE_UNREADABLE.format(path=unreadable_path),
+            code="workspace-unreadable",
+            hint="fix the directory's permissions so the workspace can be scanned before the script runs.",
+        )
+
+    return None

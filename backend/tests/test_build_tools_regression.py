@@ -48,16 +48,16 @@ def test_act_summary_injected_as_required_on_every_tool() -> None:
 
 def test_find_tools_appended_names_are_resolved_and_deduped() -> None:
     """find_tools-appended names join the surface; dupes keep first-seen."""
-    names = [cast(str, t["name"]) for t in AbilityRegistry.build_tools(_make_mp(["memory", "code_eval", "memory"]))]
-    assert "code_eval" in names
+    names = [cast(str, t["name"]) for t in AbilityRegistry.build_tools(_make_mp(["memory", "weather", "memory"]))]
+    assert "weather" in names
     assert names.count("memory") == 1
 
 
 def test_build_tools_does_not_mutate_ability_classvar() -> None:
     """act_summary injection must deep-copy — never pollute the declared params."""
-    code_eval = AbilityRegistry.get("code_eval")
-    AbilityRegistry.build_tools(_make_mp(["code_eval"]))
-    assert "act_summary" not in cast(dict[str, object], code_eval.get_parameters().get("properties", {}))
+    weather = AbilityRegistry.get("weather")
+    AbilityRegistry.build_tools(_make_mp(["weather"]))
+    assert "act_summary" not in cast(dict[str, object], weather.get_parameters().get("properties", {}))
 
 
 def test_unknown_name_is_skipped_not_fatal() -> None:

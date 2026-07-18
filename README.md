@@ -42,7 +42,7 @@ Most AI tools forget you the moment you close the tab. Chalie runs on your own m
 | 🔌 **MCP, in and out** | Connects to remote MCP servers and exposes its own tools to other agents. |
 | 📬 **Email, calendar, contacts** | IMAP, CalDAV, CardDAV — the accounts you already have. |
 | 🗓 **Scheduler & places** | Natural-language recurring jobs and location-aware nudges. |
-| 🐍 **Files, shell & code** | Searches files, runs guarded shell commands, executes sandboxed Python. |
+| 🧰 **Files, shell & code** | Searches files, runs guarded shell commands, and delegates coding tasks to an agent that writes and runs TypeScript in its own persistent, sandboxed workspace. |
 | 🎙 **Voice, fully local** | Moonshine STT + Kokoro TTS, both ONNX. No cloud transcription, ever. |
 | 💾 **Backup & restore** | Snapshot the whole instance to one file, optionally AES-256 encrypted. |
 
