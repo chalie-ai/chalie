@@ -4,6 +4,8 @@
 *.session_secret
 backend/.env
 backend/.key
+# Dev-only auto-login credentials (see FileMapperService.get_dev_credentials_path)
+/credentials.json
 # Runtime state — entire /data tree is local-only, never committed.
 # Includes data/mcp_tools.sqlite — the dynamic MCP client tool index
 # managed by McpClientService (rebuilt from remote servers at runtime).

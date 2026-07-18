@@ -165,7 +165,7 @@ class FactService:
         self.mp = mp
 
     def store(self, key: str, value: str, source: str | None = None,
-              canonicalize: bool = True) -> dict[str, object]:
+              canonicalize: bool = True, replaces: str | None = None) -> dict[str, object]:
         """Upsert one fact; return the typed status envelope.
 
         ``canonicalize=True`` (default — the LLM memory tool and ``save_graph``)
@@ -181,7 +181,15 @@ class FactService:
         ``canonicalize=False`` (the fact-extraction worker, which already shows
         the extraction model the real neighbour keys) short-circuits to the
         exact-key temporal store with NO LUT — re-canonicalizing there would
-        fight the model's choice and break exact-key supersession targeting."""
+        fight the model's choice and break exact-key supersession targeting.
+
+        ``replaces`` (optional) is consumed only by the coexist branch: when
+        truthy it is forwarded to :meth:`FactRow.supersede_value` so the caller
+        can name a stale value to demote before inserting the new one. A hit
+        returns ``superseded``/``reinforced`` with ``old_value`` set to the
+        matched row's value; a miss falls back to ``store_coexist`` and the
+        envelope carries ``replaces_missed`` so the caller knows the hint was
+        ignored."""
         if not canonicalize:
             row, status, old_value = FactRow.store(key, value, source=source)
             return self._store_envelope(status, key, key, value, old_value, None, None, row)
@@ -199,8 +207,20 @@ class FactService:
         canonical_key = cast(str, hit["canonical_key"])
         rule = cast(str, hit["rule"])
         if rule == "coexist":
+            if replaces:
+                supersede_result = FactRow.supersede_value(canonical_key, replaces, value, source=source)
+                if supersede_result is not None:
+                    new_row, supersede_status, matched_old = supersede_result
+                    return self._store_envelope(supersede_status, key, canonical_key, value, matched_old, rule, None, new_row)
             row, status, all_values = FactRow.store_coexist(canonical_key, value, source=source)
-            return self._store_envelope(status, key, canonical_key, value, None, rule, all_values, row)
+            result = self._store_envelope(status, key, canonical_key, value, None, rule, all_values, row)
+            if replaces:
+                # The hint failed on EVERY fallback outcome — reinforced included:
+                # the new value already being live says nothing about the stale
+                # one the caller asked to demote. Silence here would read as a
+                # clean store while the stale value stays live.
+                result["replaces_missed"] = replaces
+            return result
         if rule == "immutable":
             row, status, old_value = FactRow.store_immutable(canonical_key, value, source=source)
             return self._store_envelope(status, key, canonical_key, value, old_value, rule, None, row)
