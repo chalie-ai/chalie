@@ -6,12 +6,12 @@
 #
 #     http://www.apache.org/licenses/LICENSE-2.0
 
-"""Feature test: value-addressed coexist supersede (TKT-1540).
+"""Feature test: value-addressed coexist supersede.
 
 Coexist-rule concept keys (``relationships``, ``family``, ``name``) append
 values with no revision path: a corrected fact stored under the same canonical
-key kept the stale value live forever (run 1015: "Married to Tom" stayed live
-next to "Married to Thomas (goes by Tom)"). :meth:`FactRow.supersede_value`
+key kept the stale value live forever ("Married to Tom" observed live next to
+"Married to Thomas (goes by Tom)"). :meth:`FactRow.supersede_value`
 plus the memory tool's optional ``replaces`` store param give the model a
 deterministic demote+insert — no thresholds, no similarity heuristics.
 
@@ -19,7 +19,7 @@ Part 1 exercises the FactRow matching ladder pure-DB: the canonical key is
 given directly, so no LUT or key-embedding sits in the loop. Part 2 drives the
 real production path via ``DispatchService.dispatch("memory")`` with zero
 mocks — real concept LUT, real embeddings — on the canonical coexist key
-``relationships``, the exact key of the run-1015 failure (precedent:
+``relationships``, the exact key of the observed failure (precedent:
 ``test_memory_recall_guardrail_and_seed_radius.py``)."""
 
 import sqlite3
@@ -149,7 +149,7 @@ def test_same_value_reinforces_instead_of_churning(db: sqlite3.Connection) -> No
 
 
 def test_store_with_replaces_supersedes_on_canonical_coexist_key(db: sqlite3.Connection) -> None:
-    """The run-1015 shape, fixed: a correction stored under the canonical
+    """The observed defect shape, fixed: a correction stored under the canonical
     coexist key ``relationships`` with ``replaces`` demotes the stale value
     instead of accumulating next to it."""
     mp = _build_user_mp("actually he goes by Tom, his name is Thomas")
