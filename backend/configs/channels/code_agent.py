@@ -24,27 +24,25 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from configs.enums.channels import Channel
+from services.file_mapper_service import FileMapperService
 from services.processor_config import ProcessorConfig
 
 if TYPE_CHECKING:
     from configs.enums.policy_channel import PolicyChannel
 
-# The 12 code_agent-exclusive inner tools (abilities/{name}.py), each
-# DISCOVERABLE=False and reachable ONLY through this always_available list —
-# see abilities/_workspace.py for the shared sandbox they all resolve paths
-# under.
-_INNER_TOOLS: tuple[str, ...] = (
-    "read_file",
-    "create_file",
-    "create_folder",
-    "delete_file",
-    "move_file",
-    "update_file",
+# The eight tools pinned in every LLM call for this channel. Five are shared
+# main-loop tools (read, search_files, file_write, manage_files, move) that the
+# code_agent delegate reuses from the main loop's toolset; three remain
+# delegate-exclusive (replace_one, replace_all, run_script) — DISCOVERABLE=False
+# and reachable ONLY through this always_available list.
+_PINNED_TOOLS: tuple[str, ...] = (
+    "read",
+    "search_files",
+    "file_write",
+    "manage_files",
+    "move",
     "replace_one",
     "replace_all",
-    "list_files",
-    "find",
-    "find_files",
     "run_script",
 )
 
@@ -58,7 +56,7 @@ class CodeAgentConfig(ProcessorConfig):
             channel=Channel.DELEGATE_CODE_AGENT.value,
             role="code_agent",
             policy_channel=policy_channel,
-            always_available=[*_INNER_TOOLS, "memory", "web_search", "programming_docs_search"],
+            always_available=[*_PINNED_TOOLS, "memory", "web_search", "programming_docs_search"],
             skip_transcript=False,  # write a delegate-channel transcript row so
             skip_input_row=False,   # _setup assigns the uid the act-trail needs
             suppress_history=True,
@@ -68,8 +66,11 @@ class CodeAgentConfig(ProcessorConfig):
 
     @property
     def system_prompt(self) -> str:
-        return """You are Chalie's coding agent. You receive one coding task and carry it out using a sandboxed file workspace and a TypeScript runtime — read_file, create_file, create_folder, delete_file, move_file, update_file, replace_one, replace_all, list_files, find, find_files, run_script. You also have memory, web_search, and programming_docs_search for research.
+        workspace = FileMapperService.get_code_agent_workspace_path()
+        return f"""You are Chalie's coding agent. You receive one coding task; tools: read, search_files, file_write (full-content writes; you must read an existing file before overwriting it), manage_files (create empty file/folder, delete, update_permission), move (rename/relocate via current_path/new_path), replace_one/replace_all (targeted edits), run_script (executes a .ts file with Deno, full permissions). memory, web_search, programming_docs_search for research.
 
-Work directly in the workspace: create or edit the files the task needs, then use run_script to execute a .ts file and check its output. Prefer replace_one/replace_all for targeted edits and update_file only for a full rewrite — overwriting a large file with a small snippet is refused as destructive. Verify your own work by running it before declaring it done; do not guess at output you have not actually observed.
+All file paths passed to tools must be absolute.
 
-Return a concise summary of what you did (files created/edited, what the code does, what running it produced) and the concrete answer or result the task asked for. You have no conversation history and no user personality — work only from the task."""
+Files SHOULD be created and modified inside {workspace} unless the task says otherwise — it is a convention, not an enforced boundary.
+
+Prefer replace_one/replace_all for targeted edits and file_write for full rewrites; verify your own work by running it before declaring done; return a concise summary of files touched, what the code does, what running produced; no conversation history, work only from the task."""

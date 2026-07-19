@@ -118,7 +118,7 @@ class BashAbility(Ability):
         "DO NOT USE bash for: downloading files (use web_download), "
         "file operations within your workspace (use document), "
         "file operations outside your workspace (use read, file_write, "
-        "file_permissions, search_files). "
+        "manage_files, search_files). "
         "Prefer document over direct file tools when the file is within your workspace."
     )
 
@@ -160,7 +160,7 @@ class BashAbility(Ability):
                     "Shell command to run via bash -c. "
                     "MUST NOT be used when other tools apply: "
                     "use read for file/URL reading, search_files for finding files, "
-                    "file_write for writing files, file_permissions for chmod, "
+                    "file_write for writing files, manage_files for chmod, "
                     "web_download for downloads, document for saving notes."
                 ),
             },

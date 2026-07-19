@@ -228,9 +228,8 @@ class FileMapperService:
     def get_code_agent_workspace_path(cls, *parts: str) -> Path:
         """Return data/code_agent_workspace/ joined with any additional path parts.
 
-        The single sandboxed root every code_agent inner tool resolves paths
-        under (:func:`abilities._workspace.resolve_in_root`); created lazily on
-        first use, not at import time.
+        The default scratch location for code_agent work — a convention, not
+        an enforced boundary; created lazily on first use, not at import time.
         """
         return cls._CODE_AGENT_WORKSPACE_DIR.joinpath(*parts) if parts else cls._CODE_AGENT_WORKSPACE_DIR
 

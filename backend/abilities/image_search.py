@@ -60,7 +60,7 @@ class ImageSearchAbility(Ability):
 
     # Action-less single-purpose tool: the dispatcher pre-gate pre-rejects a MISSING
     # or empty query as code=missing-params before run() is reached
-    # (precedent: save_graph.py, save_pattern.py, file_permissions.py). The
+    # (precedent: save_graph.py, save_pattern.py). The
     # pre-gate is truthiness-based, so whitespace-only residue still reaches run().
     ACTION_REQUIRED: ClassVar[dict[str, tuple[str, ...]]] = {"": (Keys.query,)}
 
@@ -81,7 +81,7 @@ class ImageSearchAbility(Ability):
     def run(self, params: dict[str, object]) -> ToolResult:
         # The dispatcher pre-gate is truthiness-based, so a non-empty but
         # whitespace-only query slips past it and must be rejected here
-        # (precedent: save_graph.py, file_permissions.py).
+        # (precedent: save_graph.py).
         query = (cast(str, params.get(Keys.query)) or "").strip()
         if not query:
             return ToolResult.err(

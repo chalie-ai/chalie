@@ -8,7 +8,7 @@
 
 """ReplaceOneAbility — replace one unique occurrence of a literal string in a file.
 
-One of the 12 inner tools of the ``code_agent`` toolkit
+One of the inner tools of the ``code_agent`` toolkit
 (``abilities/code_agent.py``). code-agent-delegate-exclusive; pinned on
 CodeAgentConfig only — never reaches any other channel.
 """
@@ -17,13 +17,12 @@ from __future__ import annotations
 
 from typing import ClassVar, cast
 
-from abilities._ability import Ability
 from abilities._result import ToolResult
-from abilities._workspace import looks_line_numbered, resolve_existing_file
+from abilities._replace import ReplaceAbilityBase
 from configs.enums.param_key import Keys
 
 
-class ReplaceOneAbility(Ability):
+class ReplaceOneAbility(ReplaceAbilityBase):
     DISCOVERABLE: ClassVar[bool] = False  # code-agent-delegate-exclusive; pinned on CodeAgentConfig only
 
     ACTION_REQUIRED: ClassVar[dict[str, tuple[str, ...]]] = {"": (Keys.path, Keys.search, Keys.replace_)}
@@ -33,11 +32,11 @@ class ReplaceOneAbility(Ability):
 
     def get_summary(self) -> str:
         return (
-            "Replace exactly one occurrence of a literal string in a single file "
-            "inside the code_agent workspace. Refuses when the match is not unique "
-            "in the file — include more surrounding context in the search string. "
-            "The search string must be the raw file text, not read_file's "
-            "display-only line-number prefixes."
+            "Replace exactly one occurrence of a literal string in a single file. "
+            "Files conventionally live in the code_agent workspace but any absolute "
+            "path is accepted. Refuses when the match is not unique in the file — "
+            "include more surrounding context in the search string. The search "
+            "string must match the raw file text exactly."
         )
 
     def get_examples(self) -> list[str]:
@@ -60,7 +59,7 @@ class ReplaceOneAbility(Ability):
         "properties": {
             Keys.path: {
                 "type": "string",
-                "description": "Path relative to the workspace root of the file to edit.",
+                "description": "Absolute path to the file to edit.",
             },
             Keys.search: {
                 "type": "string",
@@ -82,7 +81,7 @@ class ReplaceOneAbility(Ability):
         search = cast(str, self.param(params, Keys.search, required=True))
         replace = cast(str, self.param(params, Keys.replace_, required=True))
 
-        resolved, error = resolve_existing_file(raw_path)
+        resolved, error = self._validate_file_path(raw_path)
         if error is not None:
             return error
         assert resolved is not None
@@ -91,17 +90,10 @@ class ReplaceOneAbility(Ability):
         count = content.count(search)
 
         if count == 0:
-            hint = "Check the exact text with read_file."
-            if looks_line_numbered(search):
-                hint = (
-                    "Your search text includes read_file's line-number prefixes "
-                    "— those are display-only. Strip them so the search matches "
-                    "the real file content."
-                )
             return ToolResult.err(
                 f"The search string was not found in {raw_path}.",
                 code="no-match",
-                hint=hint,
+                hint="Check the exact text with the read tool.",
             )
 
         if count > 1:

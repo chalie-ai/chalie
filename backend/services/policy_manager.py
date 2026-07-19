@@ -52,18 +52,20 @@ VALID_SETTINGS = {"internal", "allow", "ask", "deny"}
 # user-gated; (2) delegate-exclusive inner tools (DISCOVERABLE=False, pinned on
 # one delegate config) — the user-facing permission is the OUTER delegate tool
 # (``web_search`` covers search/news/web_download, ``web_browse`` covers browser,
-# ``pim`` covers email/calendar/contacts, ``code_agent`` covers its 12 file/script
-# inner tools), so an inner gate would double-gate work the outer gate already
-# authorised. ANY action on these runs unconditionally; they never appear in the
+# ``pim`` covers email/calendar/contacts, ``code_agent`` covers its delegated
+# file/script tools); and (3) general file-management tools (``manage_files``,
+# ``move``, ``file_write``) admitted by explicit design ruling: they bypass the
+# policy gate on every channel, are reachable on main channels only through
+# ``find_tools`` discovery, and are pinned always-available for the code_agent
+# delegate. ANY action on these runs unconditionally; they never appear in the
 # Brain policy surface, and the reap pass removes any stale rows for them so
 # this frozenset stays the single source of truth.
 INTERNAL = frozenset({
     "browser", "calendar", "chalie_docs", "chat_history_compactor", "contacts",
-    "create_file", "create_folder", "delete_file", "email", "find", "find_files",
-    "find_skills", "find_tools", "list_files", "memory", "move_file", "news",
-    "read", "read_file", "replace_all", "replace_one", "review_tool_calls",
-    "review_transcript", "run_script", "save_graph", "save_pattern", "search",
-    "skill_manager", "update_file", "web_download",
+    "email", "find_skills", "find_tools", "file_write", "manage_files",
+    "memory", "move", "news", "read", "replace_all", "replace_one",
+    "review_tool_calls", "review_transcript", "run_script", "save_graph",
+    "save_pattern", "search", "skill_manager", "web_download",
 })
 
 # Channels with no human at a prompt: an `ask` becomes a `deny` (D2).

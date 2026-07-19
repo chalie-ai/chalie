@@ -56,7 +56,7 @@ class VisionAbility(DelegateAbility):
 
     # Action-less single-purpose tool: the dispatcher pre-gate rejects a MISSING
     # or empty image/query as code=missing-params before run() is reached
-    # (precedent: save_graph.py, save_pattern.py, file_permissions.py). The
+    # (precedent: save_graph.py, save_pattern.py). The
     # pre-gate is truthiness-based, so whitespace-only residue still reaches run().
     ACTION_REQUIRED: ClassVar[dict[str, tuple[str, ...]]] = {"": (Keys.image, Keys.query)}
 
@@ -84,7 +84,7 @@ class VisionAbility(DelegateAbility):
     def run(self, params: dict[str, object]) -> ToolResult:
         # The dispatcher pre-gate is truthiness-based, so a non-empty but
         # whitespace-only image/query slips past it and must be rejected here
-        # (precedent: save_graph.py, file_permissions.py).
+        # (precedent: save_graph.py).
         doc_id = (cast(str, params.get(Keys.image)) or "").strip()
         query = (cast(str, params.get(Keys.query)) or "").strip()
         if not doc_id or not query:

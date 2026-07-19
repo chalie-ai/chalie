@@ -28,8 +28,8 @@ class SavePattern(BudgetCappedAbility):
 
     # Action-less single-purpose tool: the dispatcher pre-gate rejects a MISSING
     # or empty name/frequency/summary/evidence_transcript_ids as
-    # code=missing-params before run() is reached (precedent: save_graph.py,
-    # file_permissions.py). The pre-gate is truthiness-based, so an empty
+    # code=missing-params before run() is reached (precedent: save_graph.py).
+    # The pre-gate is truthiness-based, so an empty
     # evidence list is rejected there too, while whitespace-only name/summary
     # residue still reaches run().
     ACTION_REQUIRED: ClassVar[dict[str, tuple[str, ...]]] = {
@@ -101,7 +101,7 @@ class SavePattern(BudgetCappedAbility):
         name = (cast("str", params.get(Keys.name_) or "")).strip()
         # The dispatcher pre-gate is truthiness-based, so a whitespace-only name
         # slips past it as a non-empty string and must be rejected here
-        # (precedent: save_graph.py, file_permissions.py).
+        # (precedent: save_graph.py).
         if not name:
             return ToolResult.err(
                 "Missing required parameter(s): name.",

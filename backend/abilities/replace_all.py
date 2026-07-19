@@ -6,9 +6,9 @@
 #
 #     http://www.apache.org/licenses/LICENSE-2.0
 
-"""ReplaceAllAbility — replace every occurrence of a literal string across the workspace.
+"""ReplaceAllAbility — replace every occurrence of a literal string across a directory.
 
-One of the 12 inner tools of the ``code_agent`` toolkit
+One of the inner tools of the ``code_agent`` toolkit
 (``abilities/code_agent.py``). code-agent-delegate-exclusive; pinned on
 CodeAgentConfig only — never reaches any other channel.
 """
@@ -20,13 +20,13 @@ from fnmatch import fnmatch
 from pathlib import Path
 from typing import ClassVar, cast
 
-from abilities._ability import Ability
 from abilities._result import ToolResult
-from abilities._workspace import IGNORED_DIRS, get_workspace_root, looks_line_numbered
+from abilities._replace import ReplaceAbilityBase
 from configs.enums.param_key import Keys
+from services.file_mapper_service import FileMapperService
 
 
-class ReplaceAllAbility(Ability):
+class ReplaceAllAbility(ReplaceAbilityBase):
     DISCOVERABLE: ClassVar[bool] = False  # code-agent-delegate-exclusive; pinned on CodeAgentConfig only
 
     ACTION_REQUIRED: ClassVar[dict[str, tuple[str, ...]]] = {"": (Keys.search, Keys.replace_)}
@@ -36,11 +36,12 @@ class ReplaceAllAbility(Ability):
 
     def get_summary(self) -> str:
         return (
-            "Replace every occurrence of a literal string across the code_agent "
-            "workspace and report per-file replacement counts. When a glob pattern "
-            "is provided, only file names matching it are touched; otherwise every "
-            "text file in the tree is a candidate. The search string must be the "
-            "raw file text, not read_file's display-only line-number prefixes."
+            "Replace every occurrence of a literal string across a directory and "
+            "report per-file replacement counts. Files conventionally live in the "
+            "code_agent workspace but any absolute directory path is accepted. "
+            "When a glob pattern is provided, only file names matching it are "
+            "touched; otherwise every text file in the tree is a candidate. "
+            "The search string must match the raw file text exactly."
         )
 
     def get_examples(self) -> list[str]:
@@ -56,7 +57,7 @@ class ReplaceAllAbility(Ability):
         ]
 
     def get_search_tooltip(self) -> str:
-        return "replace text across every file in the workspace"
+        return "replace text across every file in a directory"
 
     _PARAMETERS: ClassVar[dict[str, object]] = {
         "type": "object",
@@ -76,6 +77,13 @@ class ReplaceAllAbility(Ability):
                     "Matched against each file name; when omitted all text files are candidates."
                 ),
             },
+            Keys.directory: {
+                "type": "string",
+                "description": (
+                    "Absolute path to the directory to scan. Defaults to the "
+                    "code_agent workspace directory when omitted."
+                ),
+            },
         },
         "required": [Keys.search, Keys.replace_],
     }
@@ -87,14 +95,24 @@ class ReplaceAllAbility(Ability):
         search = cast(str, self.param(params, Keys.search, required=True))
         replace = cast(str, self.param(params, Keys.replace_, required=True))
         glob_pattern = cast("str | None", self.param(params, Keys.glob))
+        directory = cast("str | None", self.param(params, Keys.directory))
 
-        root = get_workspace_root()
+        if directory is not None:
+            root = Path(directory)
+            if not root.is_absolute():
+                return ToolResult.err(
+                    f"directory must be an absolute path, got {directory!r}.",
+                    code="invalid-path",
+                )
+        else:
+            root = FileMapperService.get_code_agent_workspace_path()
+
         real_root = root.resolve()
 
         changed_files: list[tuple[str, int]] = []
 
         for dirpath, dirnames, filenames in os.walk(root):
-            dirnames[:] = [d for d in dirnames if d not in IGNORED_DIRS]
+            dirnames[:] = [d for d in dirnames if d not in self.IGNORED_DIRS]
 
             for filename in filenames:
                 if glob_pattern is not None and not fnmatch(filename, glob_pattern):
@@ -120,14 +138,9 @@ class ReplaceAllAbility(Ability):
                 changed_files.append((rel_path, count))
 
         if not changed_files:
-            body = "No occurrences were found."
-            if looks_line_numbered(search):
-                body += (
-                    " Your search text includes read_file's line-number prefixes "
-                    "— those are display-only. Strip them so the search matches "
-                    "the real file content."
-                )
-            return ToolResult.ok(body, files_changed=0, total_replacements=0)
+            return ToolResult.ok(
+                "No occurrences were found.", files_changed=0, total_replacements=0
+            )
 
         total = sum(c for _, c in changed_files)
         body_lines = [f"{path}: {cnt}" for path, cnt in changed_files]

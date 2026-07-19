@@ -56,7 +56,7 @@ class SaveGraph(BudgetCappedAbility):
 
     # Action-less single-purpose tool: the dispatcher pre-gate rejects a MISSING
     # or empty kind/key/value as code=missing-params before run() is reached
-    # (precedent: _delegate.py, file_permissions.py). The pre-gate is
+    # (precedent: _delegate.py). The pre-gate is
     # truthiness-based, so whitespace-only residue still reaches run().
     ACTION_REQUIRED: ClassVar[dict[str, tuple[str, ...]]] = {"": (Keys.kind, Keys.key, Keys.value_)}
 
@@ -114,8 +114,7 @@ class SaveGraph(BudgetCappedAbility):
             )
 
         # The dispatcher pre-gate is truthiness-based, so a non-empty but
-        # whitespace-only key/value slips past it and must be rejected here
-        # (precedent: file_permissions.py).
+        # whitespace-only key/value slips past it and must be rejected here.
         key = cast("str", params.get(Keys.key, "")).strip()
         value = cast("str", params.get(Keys.value_, "")).strip()
         if not key or not value:
