@@ -56,10 +56,6 @@ let modelFetchTimer: ReturnType<typeof setTimeout> | null = null;
 
 const MODEL_FETCH_DEBOUNCE_MS = 600;
 
-// Suppresses the debounced creds-watch when openWizard()/selectTile() pre-populate
-// host/key and call fetchModels() directly, avoiding a redundant second in-flight fetch.
-let suppressNextCredsWatch = false;
-
 const testing = ref(false);
 
 const needsHost = computed(
@@ -235,8 +231,6 @@ async function openWizard(id: number | null): Promise<void> {
     models.value = editModel.value ? [editModel.value] : [];
     preset.value = presetFor(p);
     formName.value = p.name;
-    // We mutate formHost/formKey then call fetchModels() directly, so skip the watch's duplicate.
-    suppressNextCredsWatch = true;
     formHost.value = p.host || '';
     formKey.value = '';
     formModel.value = editModel.value;
@@ -288,8 +282,6 @@ function selectTile(p: CatalogEntry): void {
   modelStatus.value = '';
   modelStatusClass.value = '';
   formName.value = p.name;
-  // Mutates formHost/formKey then may call fetchModels() directly, so skip the watch's duplicate.
-  suppressNextCredsWatch = true;
   formHost.value = p.host || '';
   formKey.value = '';
   formModel.value = '';
@@ -313,11 +305,8 @@ function cancelForm(): void {
 
 watch([() => formHost.value, () => formKey.value], () => {
   if (mode.value !== 'form') return;
-  // Skip the debounced duplicate when openWizard()/selectTile() pre-populated these and already fetched.
-  if (suppressNextCredsWatch) {
-    suppressNextCredsWatch = false;
-    return;
-  }
+  // Any change to host/key refetches; redundant fetches are deduped downstream by
+  // modelsFetchInFlight + lastFetchKey, so no suppression flag is needed here.
   debouncedFetchModels();
 });
 
