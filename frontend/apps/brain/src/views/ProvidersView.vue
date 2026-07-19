@@ -380,14 +380,12 @@ async function testConnection(): Promise<void> {
   testing.value = true;
   const body: {
     platform: string;
-    name: string;
     model: string;
     host?: string;
     api_key?: string;
     provider_id?: number;
   } = {
     platform: preset.value.platform,
-    name: formName.value.trim(),
     model: formModel.value,
   };
   if (needsHost.value) body.host = formHost.value.trim();
