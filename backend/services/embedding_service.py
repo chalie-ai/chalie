@@ -292,12 +292,15 @@ def _submit_for_inference(texts: List[str], mp: object = None) -> np.ndarray:
 
 # Singleton EmbeddingService instance
 _embedding_service_instance = None
+_embedding_service_lock = threading.Lock()
 
 
 def get_embedding_service() -> 'EmbeddingService':
     global _embedding_service_instance
     if _embedding_service_instance is None:
-        _embedding_service_instance = EmbeddingService()
+        with _embedding_service_lock:
+            if _embedding_service_instance is None:
+                _embedding_service_instance = EmbeddingService()
     return _embedding_service_instance
 
 
