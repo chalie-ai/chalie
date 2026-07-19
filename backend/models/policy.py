@@ -21,7 +21,6 @@ block the dissolved service used."""
 
 from __future__ import annotations
 
-from collections.abc import Iterable
 from typing import TYPE_CHECKING, ClassVar
 
 from models.model import Model
@@ -102,21 +101,23 @@ class Policy(Model):
             return conn.execute("DELETE FROM policy").rowcount
 
     @classmethod
-    def delete_for_tools(cls, tools: Iterable[str]) -> int:
-        """Delete every row belonging to one of ``tools`` — the bare tool name
-        or any ``tool.action`` permission under it. The substr predicate is the
-        SQL twin of the gate's ``permission.split(".", 1)[0]`` (LIKE would treat
-        the ``_`` in names like ``web_download`` as a wildcard). Returns rows
-        deleted. Used by the seed loader to purge rows for gate-bypassing
-        (INTERNAL) tools."""
+    def delete_unseeded(cls, permissions: set[str]) -> int:
+        """Delete every row whose ``permission`` is not in ``permissions`` and
+        is not an MCP tool permission (which are created lazily and legitimately
+        absent from the seed). Returns rows deleted.
+
+        Uses ``substr(permission, 1, 5)`` to spare MCP rows — SQLite ``LIKE``
+        treats ``_`` as a wildcard, so ``permission LIKE '_mcp_%'`` would also
+        match ``xmcpy...``. The substr predicate is the safe twin."""
+        if not permissions:
+            return 0
+        placeholders = ", ".join("?" for _ in permissions)
         with Database.transaction() as conn:
-            deleted = 0
-            for tool in tools:
-                deleted += conn.execute(
-                    "DELETE FROM policy WHERE permission = ? OR substr(permission, 1, ?) = ?",
-                    (tool, len(tool) + 1, f"{tool}."),
-                ).rowcount
-            return deleted
+            return conn.execute(
+                f"DELETE FROM policy WHERE permission NOT IN ({placeholders}) "
+                "AND substr(permission, 1, 5) != '_mcp_'",
+                tuple(permissions),
+            ).rowcount
 
     # ── Relationship ─────────────────────────────────────────────────────────
 

@@ -24,7 +24,6 @@ from abilities.find_tools import FindToolsAbility
 from abilities.vision import VisionAbility
 from configs.channels import DmnConfig, UserConfig
 from configs.enums.policy_channel import PolicyChannel
-from run import _migrate_legacy_policy_rules
 from services.database import Database
 from services.file_mapper_service import FileMapperService
 from controllers.message_processor import MessageProcessor
@@ -54,7 +53,6 @@ def _find_tools_on(mp: MessageProcessor, params: dict[str, object]) -> Mapping[s
 
 
 def _seeded_policy_db(tmp_path: Path) -> PolicyManager:
-    _migrate_legacy_policy_rules()                                    # no-op on fresh
     SchemaConvergenceService().converge()  # creates policy
     PolicyManager().apply_seed()                                  # reads the JSON
     return PolicyManager()
@@ -68,7 +66,7 @@ class TestVisionPolicyDefaults:
 
     @pytest.fixture(autouse=True)
     def _gateway_to_tmp_db(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
-        # _migrate_legacy_policy_rules()/converge()/apply_seed()/_setting() all resolve
+        # converge()/apply_seed()/_setting() all resolve
         # their path through the Database gateway (FileMapperService.get_db_path).
         # Redirect the gateway to the same tmp file so the seed writes and the
         # _setting reads share one database, not the real chalie.db.

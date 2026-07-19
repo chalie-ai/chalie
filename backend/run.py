@@ -122,34 +122,6 @@ def _start_model_preload() -> None:
     _threading.Thread(target=_preload_models, name="model-preload", daemon=True).start()
 
 
-def _migrate_legacy_policy_rules() -> None:
-    """Upgrade-path only — on a fresh install this is a no-op. Critically does
-    NOT create the ``policy`` table early: making the DB look non-empty to
-    convergence's freshness check would skip the schema.sql seed pass (incl.
-    the row that marks ``api_key`` sensitive, persisting the REST API key in
-    cleartext on fresh installs)."""
-    with Database.transaction() as conn:
-        has_legacy = conn.execute(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name='policy_rules'"
-        ).fetchone() is not None
-        if not has_legacy:
-            return
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS policy (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                channel TEXT NOT NULL, permission TEXT NOT NULL,
-                setting TEXT NOT NULL CHECK (setting IN ('internal','allow','ask','deny')),
-                UNIQUE (channel, permission)
-            )
-        """)
-        conn.execute(
-            "INSERT OR IGNORE INTO policy (channel, permission, setting) "
-            "SELECT context, action_id, state FROM policy_rules"
-        )
-        conn.commit()
-    logger.info("[Startup] Legacy policy_rules copied into flat policy table")
-
-
 def _init_database() -> None:
     from services.schema_convergence_service import SchemaConvergenceService
 
@@ -168,14 +140,6 @@ def _init_database() -> None:
                     logger.info("[Startup] Purged %d soft-deleted provider row(s)", _purged)
     except Exception as _prov_err:
         logger.warning(f"[Startup] soft-deleted provider purge skipped: {_prov_err}")
-
-    # Policy (upgrade path): copy legacy policy_rules → policy BEFORE convergence
-    # drops policy_rules.  No-op on a fresh DB so it stays "fresh" and convergence
-    # runs schema.sql's seed pass (incl. the api_key is_sensitive row).
-    try:
-        _migrate_legacy_policy_rules()
-    except Exception as _pol_err:
-        logger.warning(f"[Startup] legacy policy_rules copy skipped: {_pol_err}")
 
     convergence = SchemaConvergenceService()
     convergence.converge()

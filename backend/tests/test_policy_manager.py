@@ -138,14 +138,17 @@ def test_data_layer_roundtrip(mgr: PolicyManager) -> None:
     assert mgr.clear_blocked_log() == 1 and mgr.get_blocked_log() == []
 
 
-# 6. apply_seed purges stale INTERNAL-tool rows (older seeds carried email.*/calendar.*/
-#    contacts.* rows; every boot must converge them out) while leaving custom rows alone
-def test_apply_seed_purges_internal_tool_rows(mgr: PolicyManager, db: sqlite3.Connection) -> None:
+# 6. apply_seed reaps every row the seed file no longer lists (older seeds carried
+#    email.*/calendar.*/contacts.* rows; every boot must converge them out) while a
+#    user's setting on a still-seeded permission survives untouched.
+def test_apply_seed_reaps_unseeded_rows(mgr: PolicyManager, db: sqlite3.Connection) -> None:
     _seed(db, "chat", "email.send", "ask")                 # stale rows from an older seed
     _seed(db, "chat", "calendar.create_event", "ask")
     _seed(db, "subconscious", "search", "deny")            # bare tool name, not tool.action
-    _seed(db, "chat", "bash.execute", "deny")              # user's own row — must survive
+    _seed(db, "chat", "bash.read", "deny")                 # user's own setting — must survive
     mgr.apply_seed()
     perms = {r["permission"] for r in mgr.get_all()}
     assert not perms & {"email.send", "calendar.create_event", "search"}
-    assert any(r["permission"] == "bash.execute" and r["setting"] == "deny" for r in mgr.get_all())
+    # bash.read IS in the seed, so the reap keys on membership and leaves the
+    # user's 'deny' in place (INSERT OR IGNORE never overwrites an existing row).
+    assert any(r["permission"] == "bash.read" and r["setting"] == "deny" for r in mgr.get_all())
