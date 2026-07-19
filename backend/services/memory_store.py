@@ -39,6 +39,10 @@ class MemoryStore:
         # Locks per keyspace
         self._str_lock = threading.RLock()
         self._list_lock = threading.RLock()
+        # Condition over the list lock so brpop can block without busy-polling;
+        # rpush/lpush notify_all after appending. The underlying RLock is still
+        # usable directly by every other list operation.
+        self._list_cond = threading.Condition(self._list_lock)
         self._zset_lock = threading.RLock()
         self._set_lock = threading.RLock()
 
@@ -145,25 +149,29 @@ class MemoryStore:
         return lst
 
     def rpush(self, key: str, *values: object) -> int:
-        with self._list_lock:
+        with self._list_cond:
             lst = self._get_list(key)
             if lst is None:
                 lst = []
                 self._lists[key] = (lst, None)
             for v in values:
                 lst.append(str(v))
-            return len(lst)
+            length = len(lst)
+            self._list_cond.notify_all()
+            return length
 
     def lpush(self, key: str, *values: object) -> int:
         """Values are inserted one at a time in argument order, so the last argument ends up at index 0."""
-        with self._list_lock:
+        with self._list_cond:
             lst = self._get_list(key)
             if lst is None:
                 lst = []
                 self._lists[key] = (lst, None)
             for v in values:
                 lst.insert(0, str(v))
-            return len(lst)
+            length = len(lst)
+            self._list_cond.notify_all()
+            return length
 
     def ltrim(self, key: str, start: int, stop: int) -> bool:
         """Supports negative indices (Redis-compatible semantics). Returns ``False`` if the key does not exist."""
@@ -204,17 +212,25 @@ class MemoryStore:
             return lst.pop(0)
 
     def brpop(self, key: str, timeout: int = 0) -> Optional[Tuple[str, str]]:
-        """Blocking right-pop. Polls with sleep for simplicity."""
-        deadline = time.time() + timeout if timeout > 0 else None
-        while True:
-            with self._list_lock:
+        """Blocking right-pop. Waits on a condition variable (no busy-poll).
+
+        ``timeout=0`` blocks indefinitely (Redis semantics); any positive value
+        caps the wait in seconds. Returns ``(key, value)`` on success or
+        ``None`` on timeout.
+        """
+        with self._list_cond:
+            deadline = time.monotonic() + timeout if timeout > 0 else None
+            while True:
                 lst = self._get_list(key)
                 if lst:
-                    val = lst.pop()
-                    return (key, val)
-            if deadline and time.time() >= deadline:
-                return None
-            time.sleep(0.1)
+                    return (key, lst.pop())
+                if deadline is None:
+                    self._list_cond.wait()
+                else:
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        return None
+                    self._list_cond.wait(timeout=remaining)
 
     # ── SORTED SET operations ──────────────────────────────────
 
