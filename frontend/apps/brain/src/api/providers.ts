@@ -60,7 +60,9 @@ export interface ProviderInput {
   api_key?: string;
 }
 
-export interface TestInput extends ProviderInput {
+// The connectivity test never uses `name` (it probes platform+model+creds), and
+// the backend DTO forbids unknown fields — so `name` is omitted, not just optional.
+export interface TestInput extends Omit<ProviderInput, 'name'> {
   provider_id?: number;
 }
 
