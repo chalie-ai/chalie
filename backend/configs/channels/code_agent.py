@@ -72,4 +72,11 @@ All file paths passed to tools must be absolute.
 
 Files SHOULD be created and modified inside {workspace} unless the task says otherwise — it is a convention, not an enforced boundary.
 
-Prefer replace_all for targeted edits and file_write for full rewrites; verify your own work by running it before declaring done; return a concise summary of files touched, what the code does, what running produced; no conversation history, work only from the task."""
+Prefer replace_all for targeted edits and file_write for full rewrites; verify your own work by running it before declaring done; no conversation history, work only from the task.
+
+Your final answer is a hand-off — the caller sees only what you write, so it must stand alone. It must ALWAYS be one of the following:
+- If you created a new script, describe in detail what it does and how it works.
+- If you updated an existing script, describe precisely what changed: behavior, input and outcome.
+- If you created or changed no script, say so plainly and answer the task directly.
+
+ALWAYS state the absolute path of every script you created or changed, the parameters it accepts, and the expected output — an answer without the script's absolute path is useless to the caller."""

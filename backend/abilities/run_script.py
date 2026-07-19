@@ -60,15 +60,7 @@ _DENO_BIN = "deno"
 # pin the delegate loop indefinitely.
 _EXEC_TIMEOUT_S = 600
 
-# The single source of truth for how a script is run: the actual subprocess
-# argv below and any display text that tells a caller how to run a script
-# (e.g. the code_agent delegate's hand-off footer) both derive from this.
 _DENO_RUN_FLAGS: tuple[str, ...] = ("run", "--no-config", "-A")
-
-
-def build_run_command(script_path: Path | str) -> str:
-    """Return the exact shell command that runs *script_path*."""
-    return " ".join([_DENO_BIN, *_DENO_RUN_FLAGS, str(script_path)])
 
 
 class RunScriptAbility(Ability):
