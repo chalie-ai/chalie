@@ -63,7 +63,7 @@ VALID_SETTINGS = {"internal", "allow", "ask", "deny"}
 INTERNAL = frozenset({
     "browser", "calendar", "chalie_docs", "chat_history_compactor", "contacts",
     "email", "find_skills", "find_tools", "file_write", "manage_files",
-    "memory", "move", "news", "read", "replace_all", "replace_one",
+    "memory", "move", "news", "read", "replace_all",
     "review_tool_calls", "review_transcript", "run_script", "save_graph",
     "save_pattern", "search", "skill_manager", "web_download",
 })

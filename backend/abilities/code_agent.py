@@ -16,8 +16,8 @@ boundary) and can execute a written ``.ts`` file through ``run_script`` with
 full permissions — replacing the deleted ``code_eval`` one-shot stdin sandbox
 with a real, persistent, multi-step coding loop.
 
-Toolset: read, search_files, file_write, manage_files, move, replace_one,
-replace_all, run_script.
+Toolset: read, search_files, file_write, manage_files, move, replace_all,
+run_script.
 
 After the sub-loop finishes, ``run()`` deterministically appends a hand-off
 footer naming every ``.ts`` file the run mutated and the exact command to run
@@ -47,11 +47,11 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# The 5 code_agent inner tools that mutate the workspace (mirrors
+# The 4 code_agent inner tools that mutate the workspace (mirrors
 # CodeAgentConfig._INNER_TOOLS's file-mutating subset) and the hand-off
 # statuses their successful calls can produce.
 _MUTATION_TOOLS = frozenset(
-    {"manage_files", "file_write", "move", "replace_one", "replace_all"}
+    {"manage_files", "file_write", "move", "replace_all"}
 )
 
 _STATUS_CREATED = "created"
@@ -190,8 +190,6 @@ def _collect_mutations(agent_mp: "MessageProcessor") -> dict[str, str]:
             _handle_file_write(mutations, call_params, call.result)
         elif tool == "move":
             _handle_move(mutations, call_params)
-        elif tool == "replace_one":
-            _mark(mutations, call_params.get(Keys.path), _STATUS_MODIFIED)
         elif tool == "replace_all":
             for abs_path in _replace_all_paths(call.result, call_params):
                 _mark(mutations, abs_path, _STATUS_MODIFIED)
@@ -269,15 +267,16 @@ def _apply_move(mutations: dict[str, str], raw_source: object, raw_destination: 
 def _replace_all_paths(rendered_result: str, call_params: dict[str, object]) -> list[str]:
     """Recover the per-file paths a successful ``replace_all`` call touched.
 
-    ``replace_all`` has no ``path`` param — it operates across the whole tree
-    by search/glob — so its mutated paths exist only in its rendered body
-    (``'{path}: {count}'`` per line), not in ``call.params``. Those paths are
-    RELATIVE to the directory ``replace_all`` walked; absolute-ize each by
-    joining with the call's ``directory`` param when present, else with the
-    code_agent workspace path.
+    ``replace_all`` takes an optional ``path`` param (a FILE or DIRECTORY);
+    when a directory is scanned, body paths are RELATIVE to that root, so
+    absolute-ize each by joining with the call's ``path`` param when present,
+    else with the code_agent workspace path. When the call targeted a single
+    file, body paths are absolute as-passed — the existing
+    ``Path(directory) / path`` join handles both cases (joining an absolute
+    path onto a base yields the absolute path unchanged).
     """
     body = _envelope_body(rendered_result, "replace_all")
-    directory = call_params.get(Keys.directory)
+    directory = call_params.get(Keys.path)
     if not isinstance(directory, str):
         directory = str(FileMapperService.get_code_agent_workspace_path())
     paths: list[str] = []

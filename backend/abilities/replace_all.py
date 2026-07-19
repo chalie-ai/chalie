@@ -6,11 +6,23 @@
 #
 #     http://www.apache.org/licenses/LICENSE-2.0
 
-"""ReplaceAllAbility — replace every occurrence of a literal string across a directory.
+"""ReplaceAllAbility — replace every occurrence of a literal string in a file or across a directory tree.
 
 One of the inner tools of the ``code_agent`` toolkit
 (``abilities/code_agent.py``). code-agent-delegate-exclusive; pinned on
 CodeAgentConfig only — never reaches any other channel.
+
+Two modes in one tool:
+
+* Point ``path`` at a single file (absolute) and every occurrence in that file
+  is replaced in one shot — no try/except, no silent skip: a binary or
+  unreadable target raises loudly.
+* Point ``path`` at a directory (or omit it, defaulting to the code_agent
+  workspace) and ``os.walk`` sweeps the tree — same glob filter, same
+  ``IGNORED_DIRS`` prune, same symlink-escape and unreadable-file guards as
+  before. Per-file counts are always reported.
+
+The search string must match the raw file text exactly.
 """
 
 from __future__ import annotations
@@ -20,27 +32,36 @@ from fnmatch import fnmatch
 from pathlib import Path
 from typing import ClassVar, cast
 
+from abilities._ability import Ability
 from abilities._result import ToolResult
-from abilities._replace import ReplaceAbilityBase
 from configs.enums.param_key import Keys
 from services.file_mapper_service import FileMapperService
 
 
-class ReplaceAllAbility(ReplaceAbilityBase):
+class ReplaceAllAbility(Ability):
     DISCOVERABLE: ClassVar[bool] = False  # code-agent-delegate-exclusive; pinned on CodeAgentConfig only
 
     ACTION_REQUIRED: ClassVar[dict[str, tuple[str, ...]]] = {"": (Keys.search, Keys.replace_)}
+
+    #: Directory names never worth walking when a tool sweeps a tree:
+    #: version-control internals, Python bytecode caches, and vendored or
+    #: virtual-env trees.
+    IGNORED_DIRS: ClassVar[frozenset[str]] = frozenset(
+        {".git", "__pycache__", "node_modules", ".venv", "venv"}
+    )
 
     def get_name(self) -> str:
         return "replace_all"
 
     def get_summary(self) -> str:
         return (
-            "Replace every occurrence of a literal string across a directory and "
-            "report per-file replacement counts. Files conventionally live in the "
-            "code_agent workspace but any absolute directory path is accepted. "
-            "When a glob pattern is provided, only file names matching it are "
-            "touched; otherwise every text file in the tree is a candidate. "
+            "Replace every occurrence of a literal string in a single file or "
+            "across a directory tree, reporting per-file replacement counts. "
+            "Point ``path`` at an absolute file to edit that file in one shot "
+            "(binary or unreadable targets raise loudly, never silently skip); "
+            "or at an absolute directory (or omit it to sweep the code_agent "
+            "workspace) to touch every matching file in the tree. When a glob "
+            "pattern is provided, only file names matching it are touched. "
             "The search string must match the raw file text exactly."
         )
 
@@ -57,14 +78,14 @@ class ReplaceAllAbility(ReplaceAbilityBase):
         ]
 
     def get_search_tooltip(self) -> str:
-        return "replace text across every file in a directory"
+        return "replace text in a file or across a directory tree"
 
     _PARAMETERS: ClassVar[dict[str, object]] = {
         "type": "object",
         "properties": {
             Keys.search: {
                 "type": "string",
-                "description": "The exact literal text to find in every file.",
+                "description": "The exact literal text to find.",
             },
             Keys.replace_: {
                 "type": "string",
@@ -77,11 +98,11 @@ class ReplaceAllAbility(ReplaceAbilityBase):
                     "Matched against each file name; when omitted all text files are candidates."
                 ),
             },
-            Keys.directory: {
+            Keys.path: {
                 "type": "string",
                 "description": (
-                    "Absolute path to the directory to scan. Defaults to the "
-                    "code_agent workspace directory when omitted."
+                    "Absolute path to a single file or to a directory to scan. "
+                    "Defaults to the code_agent workspace directory when omitted."
                 ),
             },
         },
@@ -95,18 +116,90 @@ class ReplaceAllAbility(ReplaceAbilityBase):
         search = cast(str, self.param(params, Keys.search, required=True))
         replace = cast(str, self.param(params, Keys.replace_, required=True))
         glob_pattern = cast("str | None", self.param(params, Keys.glob))
-        directory = cast("str | None", self.param(params, Keys.directory))
+        path_raw = cast("str | None", self.param(params, Keys.path))
 
-        if directory is not None:
-            root = Path(directory)
-            if not root.is_absolute():
-                return ToolResult.err(
-                    f"directory must be an absolute path, got {directory!r}.",
-                    code="invalid-path",
-                )
-        else:
-            root = FileMapperService.get_code_agent_workspace_path()
+        if path_raw is not None:
+            return self._run_explicit(search, replace, glob_pattern, path_raw)
+        return self._run_workspace(search, replace, glob_pattern)
 
+    def _run_explicit(
+        self,
+        search: str,
+        replace: str,
+        glob_pattern: str | None,
+        raw_path: str,
+    ) -> ToolResult:
+        # Absolute-path guard — must come before resolve (which would succeed on
+        # a relative path).
+        if not Path(raw_path).is_absolute():
+            return ToolResult.err(
+                f"path must be an absolute path, got {raw_path!r}.",
+                code="invalid-path",
+            )
+
+        target = Path(raw_path)
+        if not target.exists():
+            return ToolResult.err(
+                f"{raw_path} does not exist.",
+                code="not-found",
+                hint="check the path with the read tool.",
+            )
+
+        if target.is_file():
+            return self._replace_in_file(search, replace, glob_pattern, target, raw_path)
+        # Directory (or symlink to a directory): walk it.
+        return self._walk(target, search, replace, glob_pattern)
+
+    def _replace_in_file(
+        self,
+        search: str,
+        replace: str,
+        glob_pattern: str | None,
+        target: Path,
+        raw_path: str,
+    ) -> ToolResult:
+        # Glob filter applies to the file name; a non-matching file is zero
+        # candidates, not an error.
+        if glob_pattern is not None and not fnmatch(target.name, glob_pattern):
+            return ToolResult.ok(
+                "No occurrences were found.", files_changed=0, total_replacements=0
+            )
+
+        # Read WITHOUT a try/except — a binary or unreadable direct target must
+        # raise loudly, never silently skip.
+        content = target.read_text(encoding="utf-8")
+
+        count = content.count(search)
+        if count == 0:
+            return ToolResult.ok(
+                "No occurrences were found.", files_changed=0, total_replacements=0
+            )
+
+        new_content = content.replace(search, replace, count)
+        target.write_text(new_content, encoding="utf-8")
+
+        return ToolResult.ok(
+            f"{raw_path}: {count}",
+            files_changed=1,
+            total_replacements=count,
+        )
+
+    def _run_workspace(
+        self,
+        search: str,
+        replace: str,
+        glob_pattern: str | None,
+    ) -> ToolResult:
+        root = FileMapperService.get_code_agent_workspace_path()
+        return self._walk(root, search, replace, glob_pattern)
+
+    def _walk(
+        self,
+        root: Path,
+        search: str,
+        replace: str,
+        glob_pattern: str | None,
+    ) -> ToolResult:
         real_root = root.resolve()
 
         changed_files: list[tuple[str, int]] = []

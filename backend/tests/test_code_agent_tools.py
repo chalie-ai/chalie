@@ -6,7 +6,7 @@
 #
 #     http://www.apache.org/licenses/LICENSE-2.0
 
-"""Feature tests — code_agent's file toolset (replace_one, replace_all,
+"""Feature tests — code_agent's file toolset (replace_all,
 manage_files, move, run_script).
 
 These run the REAL ``Ability.run()`` implementations against a real
@@ -29,7 +29,6 @@ import pytest
 from abilities.manage_files import ManageFilesAbility
 from abilities.move import MoveAbility
 from abilities.replace_all import ReplaceAllAbility
-from abilities.replace_one import ReplaceOneAbility
 from abilities.run_script import RunScriptAbility
 from configs.enums.param_key import Keys
 
@@ -38,72 +37,10 @@ pytestmark = pytest.mark.unit
 _HAS_DENO = shutil.which("deno") is not None
 
 
-# ── replace_one ──────────────────────────────────────────────────────────────
-
-def test_replace_one_errors(tmp_path: Path) -> None:
-    """replace_one refuses a relative path, a missing file, a zero-match
-    search, and an ambiguous (multi-occurrence) search — leaving the file
-    untouched in both the missing/ambiguous cases."""
-    target = tmp_path / "main.ts"
-    target.write_text("let x = 1;\nlet x = 1;\n", encoding="utf-8")
-    original = target.read_text(encoding="utf-8")
-
-    rel = ReplaceOneAbility().run({
-        Keys.path: "main.ts",
-        Keys.search: "x",
-        Keys.replace_: "y",
-    })
-    assert rel.status == "error"
-    assert rel.code == "invalid-path"
-
-    missing = ReplaceOneAbility().run({
-        Keys.path: str(tmp_path / "nope.ts"),
-        Keys.search: "x",
-        Keys.replace_: "y",
-    })
-    assert missing.status == "error"
-    assert missing.code == "not-found"
-
-    no_match = ReplaceOneAbility().run({
-        Keys.path: str(target),
-        Keys.search: "zzz",
-        Keys.replace_: "y",
-    })
-    assert no_match.status == "error"
-    assert no_match.code == "no-match"
-    assert target.read_text(encoding="utf-8") == original
-
-    ambiguous = ReplaceOneAbility().run({
-        Keys.path: str(target),
-        Keys.search: "let x = 1;",
-        Keys.replace_: "let x = 2;",
-    })
-    assert ambiguous.status == "error"
-    assert ambiguous.code == "ambiguous-match"
-    assert target.read_text(encoding="utf-8") == original
-
-
-def test_replace_one_success(tmp_path: Path) -> None:
-    """A unique match is replaced exactly once, and the new content is
-    actually persisted to the real file on disk."""
-    target = tmp_path / "main.ts"
-    target.write_text("const port = 3000;\nconsole.log(port);\n", encoding="utf-8")
-
-    result = ReplaceOneAbility().run({
-        Keys.path: str(target),
-        Keys.search: "const port = 3000;",
-        Keys.replace_: "const port = 8080;",
-    })
-
-    assert result.status == "success"
-    assert result.body == "Replaced 1 occurrence in " + str(target) + "."
-    assert target.read_text(encoding="utf-8") == "const port = 8080;\nconsole.log(port);\n"
-
-
 # ── replace_all ──────────────────────────────────────────────────────────────
 
 def test_replace_all_directory(tmp_path: Path) -> None:
-    """replace_all with directory= scans the tree, skips .git, rewrites
+    """replace_all with path= scans the tree, skips .git, rewrites
     matching files, and reports per-file counts in the body."""
     root = tmp_path
     (root / "a.ts").write_text("old_api\nold_api\n", encoding="utf-8")
@@ -115,7 +52,7 @@ def test_replace_all_directory(tmp_path: Path) -> None:
     result = ReplaceAllAbility().run({
         Keys.search: "old_api",
         Keys.replace_: "new_api",
-        Keys.directory: str(root),
+        Keys.path: str(root),
     })
 
     assert result.status == "success"
@@ -140,7 +77,7 @@ def test_replace_all_glob(tmp_path: Path) -> None:
         Keys.search: "old_api",
         Keys.replace_: "new_api",
         Keys.glob: "*.ts",
-        Keys.directory: str(root),
+        Keys.path: str(root),
     })
 
     assert result.status == "success"
@@ -151,6 +88,53 @@ def test_replace_all_glob(tmp_path: Path) -> None:
 
     assert (root / "a.ts").read_text(encoding="utf-8") == "new_api\nnew_api\n"
     assert (root / "b.txt").read_text(encoding="utf-8") == "old_api\n"
+
+
+def test_replace_all_errors(tmp_path: Path) -> None:
+    """replace_all rejects a relative path and a nonexistent absolute path."""
+    rel = ReplaceAllAbility().run({
+        Keys.search: "x",
+        Keys.replace_: "y",
+        Keys.path: "main.ts",
+    })
+    assert rel.status == "error"
+    assert rel.code == "invalid-path"
+
+    missing = ReplaceAllAbility().run({
+        Keys.search: "x",
+        Keys.replace_: "y",
+        Keys.path: str(tmp_path / "nope"),
+    })
+    assert missing.status == "error"
+    assert missing.code == "not-found"
+
+
+def test_replace_all_single_file(tmp_path: Path) -> None:
+    """replace_all with path=FILE replaces every occurrence in that file;
+    a non-matching search returns a no-occurrences message and leaves the
+    file untouched."""
+    target = tmp_path / "main.ts"
+    target.write_text("old_api\nold_api\n", encoding="utf-8")
+
+    result = ReplaceAllAbility().run({
+        Keys.search: "old_api",
+        Keys.replace_: "new_api",
+        Keys.path: str(target),
+    })
+
+    assert result.status == "success"
+    assert result.body == f"{target}: 2"
+    assert target.read_text(encoding="utf-8") == "new_api\nnew_api\n"
+
+    result2 = ReplaceAllAbility().run({
+        Keys.search: "zzz",
+        Keys.replace_: "y",
+        Keys.path: str(target),
+    })
+
+    assert result2.status == "success"
+    assert result2.body == "No occurrences were found."
+    assert target.read_text(encoding="utf-8") == "new_api\nnew_api\n"
 
 
 # ── manage_files ─────────────────────────────────────────────────────────────

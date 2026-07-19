@@ -194,7 +194,6 @@ _EXPECTED_NON_DISCOVERABLE = frozenset({
     "email",                   # personal info — pim delegate only
     "calendar",                # personal info — pim delegate only
     "contacts",                # personal info — pim delegate only
-    "replace_one",              # code-agent-delegate-exclusive — CodeAgentConfig only
     "replace_all",              # code-agent-delegate-exclusive — CodeAgentConfig only
     "run_script",               # code-agent-delegate-exclusive — CodeAgentConfig only
 })
