@@ -55,6 +55,7 @@ class Keys(StrEnum):
     action = "action"
     active_only = "active_only"
     area = "area"
+    args = "args"
     automation_id = "automation_id"
     body = "body"
     buffer_minutes = "buffer_minutes"

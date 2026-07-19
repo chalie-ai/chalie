@@ -211,23 +211,28 @@ def test_move_file(tmp_path: Path) -> None:
 
 @pytest.mark.skipif(not _HAS_DENO, reason="deno is not installed on this machine")
 def test_run_script_success(tmp_path: Path) -> None:
-    """run_script executes a real .ts file with Deno and captures stdout
-    and exit_code=0."""
+    """run_script executes a real .ts file with Deno, forwards args as
+    Deno.args, and captures stdout and exit_code=0."""
     script = tmp_path / "hello.ts"
-    script.write_text('console.log("chalie-test-marker-42");\n', encoding="utf-8")
+    script.write_text(
+        'console.log("chalie-test-marker-42", Deno.args.join("|"));\n', encoding="utf-8"
+    )
 
-    result = RunScriptAbility().run({Keys.path: str(script)})
+    result = RunScriptAbility().run({
+        Keys.path: str(script),
+        Keys.args: ["alpha", "--beta=2"],
+    })
 
     assert result.status == "success"
     body = result.body
     assert isinstance(body, dict)
     assert body["exit_code"] == 0
-    assert "chalie-test-marker-42" in body["stdout"]
+    assert "chalie-test-marker-42 alpha|--beta=2" in body["stdout"]
 
 
 def test_run_script_errors(tmp_path: Path) -> None:
-    """run_script refuses a non-.ts file and a relative path before any
-    subprocess is spawned."""
+    """run_script refuses a non-.ts file, a relative path, and non-list
+    args before any subprocess is spawned."""
     (tmp_path / "notes.txt").write_text("not a script", encoding="utf-8")
 
     not_ts = RunScriptAbility().run({Keys.path: str(tmp_path / "notes.txt")})
@@ -237,3 +242,9 @@ def test_run_script_errors(tmp_path: Path) -> None:
     relative = RunScriptAbility().run({Keys.path: "hello.ts"})
     assert relative.status == "error"
     assert relative.code == "invalid-path"
+
+    script = tmp_path / "ok.ts"
+    script.write_text("console.log(1);\n", encoding="utf-8")
+    bad_args = RunScriptAbility().run({Keys.path: str(script), Keys.args: "alpha"})
+    assert bad_args.status == "error"
+    assert bad_args.code == "invalid-args"

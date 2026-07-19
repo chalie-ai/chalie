@@ -22,7 +22,9 @@ else is on disk — it is not a permission boundary.
 
 The script path is taken as an absolute path, so any ``.ts`` file on the
 system can be executed — the code_agent workspace is just the conventional
-home for scripts the coding agent produces.
+home for scripts the coding agent produces. Optional command-line arguments
+are appended to the invocation and reach the script as ``Deno.args``, so one
+script can serve many inputs without being rewritten per run.
 """
 
 from __future__ import annotations
@@ -84,7 +86,8 @@ class RunScriptAbility(Ability):
             "Scripts conventionally live in the code_agent workspace (the "
             "default place the coding agent writes them), but any absolute "
             ".ts path can be executed. Write the script with file_write "
-            "first, then run it here."
+            "first, then run it here. Optional args are passed to the "
+            "script and readable inside it as Deno.args."
         )
 
     def get_examples(self) -> list[str]:
@@ -110,6 +113,14 @@ class RunScriptAbility(Ability):
                 "description": (
                     "Absolute path to the .ts file to run. The file must "
                     "already exist — create it first with file_write."
+                ),
+            },
+            Keys.args: {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": (
+                    "Optional command-line arguments passed to the script, "
+                    "readable inside it as Deno.args."
                 ),
             },
         },
@@ -157,9 +168,20 @@ class RunScriptAbility(Ability):
                 hint="only TypeScript (.ts) files can be run.",
             )
 
-        return self._execute_with_cap(script_path)
+        raw_args = self.param(params, Keys.args)
+        script_args: list[str] = []
+        if raw_args is not None:
+            if not isinstance(raw_args, list) or any(not isinstance(a, str) for a in raw_args):
+                return ToolResult.err(
+                    "args must be a list of strings.",
+                    code="invalid-args",
+                    hint='pass arguments like ["--flag", "value"].',
+                )
+            script_args = cast("list[str]", raw_args)
 
-    def _execute_with_cap(self, script_path: Path) -> ToolResult:
+        return self._execute_with_cap(script_path, script_args)
+
+    def _execute_with_cap(self, script_path: Path, script_args: list[str]) -> ToolResult:
         """Run *script_path* in a fresh Deno process with full permissions and
         a hard wall-clock cap. ``subprocess.run`` blocks until the process
         exits, so the process is gone the moment the script finishes, whether
@@ -176,7 +198,7 @@ class RunScriptAbility(Ability):
         started = time.monotonic()
         try:
             completed = subprocess.run(  # noqa: S603 -- fixed argv, no shell
-                [_DENO_BIN, *_DENO_RUN_FLAGS, str(script_path)],
+                [_DENO_BIN, *_DENO_RUN_FLAGS, str(script_path), *script_args],
                 capture_output=True,
                 text=True,
                 timeout=_EXEC_TIMEOUT_S,
