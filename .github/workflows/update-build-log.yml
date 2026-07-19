@@ -5,6 +5,9 @@ on:
     branches: ['**']
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 concurrency:
   group: build-log
   cancel-in-progress: true
@@ -12,6 +15,8 @@ concurrency:
 jobs:
   check-permission:
     runs-on: ubuntu-latest
+    permissions:
+      administration: read
     outputs:
       is_maintainer: ${{ steps.check.outputs.is_maintainer }}
     steps:
