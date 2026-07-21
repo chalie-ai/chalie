@@ -10,7 +10,7 @@ import mimetypes
 import pkgutil
 from pathlib import Path
 
-from flask import Flask, Blueprint, Response, redirect, send_from_directory
+from flask import Flask, Blueprint, Response, g, redirect, send_from_directory
 from flask.typing import ResponseReturnValue
 from flask_cors import CORS
 from flask_restx import Api, Namespace
@@ -150,6 +150,46 @@ def _configure_app(app: Flask) -> None:
         return response
 
 
+def _register_preflight_login(app: Flask) -> None:
+    """Log the request in from ``credentials.json`` before the route runs.
+
+    Order, per request: an unlocked vault is checked first — with a live
+    session on top of it there is nothing to do, and that pair is the whole
+    cost of the hook on every authenticated request. Only when the vault is
+    locked or the request carries no user does
+    :meth:`~services.auth_service.AuthService.try_login` run: read
+    ``credentials.json``, attempt the login, and on any miss — no file, wrong
+    credentials, vault that will not open — the request simply proceeds
+    unauthenticated and route auth sends the client to the login page.
+
+    Two hooks because a session cookie needs a response to attach to: the
+    pre-flight decides and flags ``g``, the after-hook mints the cookie. The
+    flag is also what authenticates the request it ran on — the cookie only
+    reaches the client on the way out, so ``validate_session`` reads the flag
+    to avoid answering 401 to the very request that just logged in. A client
+    that already holds a live session is never handed a second cookie.
+    """
+    @app.before_request
+    def _preflight_login() -> None:
+        from flask import request
+        from services.auth_service import AuthService
+        from services.auth_session_service import validate_session
+        from services.vault_service import get_vault_service
+
+        g.preflight_login = False
+        if get_vault_service().is_unlocked() and validate_session(request):
+            return
+        if AuthService().try_login():
+            g.preflight_login = not validate_session(request)
+
+    @app.after_request
+    def _attach_preflight_session(response: Response) -> Response:
+        if getattr(g, "preflight_login", False):
+            from services.auth_session_service import create_session
+            create_session(response)
+        return response
+
+
 def _register_static_routes(app: Flask) -> None:
     """Register static-file and SPA routes serving the Vue 3 builds.
 
@@ -278,6 +318,7 @@ def create_app() -> Flask:
     )
 
     _configure_app(app)
+    _register_preflight_login(app)
     _register_namespaces(app, api)
 
     # WebSocket endpoint (replaces SSE for chat + drift)

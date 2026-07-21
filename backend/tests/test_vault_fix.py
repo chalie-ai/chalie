@@ -1,5 +1,5 @@
 """
-Feature tests for the vault DEK backup and password-verified restore/wipe
+Feature tests for the vault DEK backup and password-verified restore
 behaviors.
 
 Backup model (append-forever): every DEK generation writes a fresh, uniquely
@@ -230,12 +230,12 @@ class TestVaultRestore:
         assert len(after) == 2, "restore must not write a new backup file"
 
 
-# ── Unrecoverable: account wiped, re-onboarding required ─────────────────────
+# ── Unrecoverable: the account survives ──────────────────────────────────────
 
 @pytest.mark.unit
 class TestVaultUnrecoverable:
 
-    def test_login_wipes_master_account_and_returns_401_with_onboarding_required(
+    def test_login_with_unrecoverable_vault_keeps_the_master_account(
         self, auth_client: tuple[FlaskClient, sqlite3.Connection], secure_dir: Path
     ) -> None:
         client, raw_conn = auth_client
@@ -267,22 +267,29 @@ class TestVaultUnrecoverable:
             content_type="application/json",
         )
 
-        assert resp.status_code == 401
+        # The password was correct, so this is a successful login against a
+        # vault that would not open — not a rejected credential.
+        assert resp.status_code == 200
         data = resp.get_json()
-        assert data.get("onboarding_required") is True, (
-            "Unrecoverable vault must return onboarding_required=True"
+        assert data.get("vault_state") == "locked", (
+            "An unrecoverable vault must report itself locked, not unlocked"
+        )
+        assert "onboarding_required" not in data, (
+            "An unrecoverable vault must never demand re-onboarding"
         )
 
-        # master_account row must be wiped
-        count = raw_conn.execute(
-            "SELECT COUNT(*) FROM master_account"
-        ).fetchone()[0]
-        assert count == 0, (
-            "master_account must be wiped so re-onboarding produces a clean account"
+        # The account is the user's identity — it survives an unopenable vault.
+        row = raw_conn.execute(
+            "SELECT username FROM master_account"
+        ).fetchall()
+        assert [r[0] for r in row] == ["admin"], (
+            "master_account must NEVER be deleted, under any circumstance"
         )
 
-        # vault.reset() must have deleted all backup files
-        assert _backups(secure_dir) == [], "vault.reset() must remove all backups"
+        # Nothing was reset either — no backup file may be destroyed.
+        assert _backups(secure_dir) == [], (
+            "this test deleted the backups itself; login must not create any"
+        )
 
 
 # ── Append-forever retention ──────────────────────────────────────────────────

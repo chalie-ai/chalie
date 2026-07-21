@@ -1,22 +1,20 @@
 """User authentication namespace — /api/auth endpoints for master account."""
 
-import json
 import logging
-from typing import TYPE_CHECKING, cast
+from typing import cast
 
 from flask import request, jsonify
 from flask.typing import ResponseReturnValue
 from flask_restx import Namespace, Resource
-from werkzeug.security import generate_password_hash, check_password_hash
+from werkzeug.security import generate_password_hash
 
+from services.auth_service import AuthService
 from services.feature_flags import internal_dev_enabled
-from services.file_mapper_service import FileMapperService
+from contracts.constants.auth import LOGIN_RATE_LIMIT, LOGIN_RATE_WINDOW_SECONDS
 from .auth import require_auth, _cookie_only, internal_only
 from .dto import Error, expects, responds, register_dto
 from .dto.auth import AuthStatus, LoginRequest, RegisterRequest, Username, VaultResult
 
-if TYPE_CHECKING:
-    from services.wrapper_rate_limiter import WrapperRateLimiter
 
 logger = logging.getLogger(__name__)
 
@@ -25,127 +23,6 @@ user_auth_ns = Namespace('user_auth', description='Master account authentication
 register_dto(user_auth_ns, AuthStatus, Username, RegisterRequest, LoginRequest, VaultResult, Error)
 
 _m = user_auth_ns.models
-
-_LOGIN_RATE_LIMIT = 10   # attempts
-_LOGIN_RATE_WINDOW = 60  # seconds
-
-
-def _get_login_rate_limiter() -> "WrapperRateLimiter":
-    from services.wrapper_rate_limiter import WrapperRateLimiter
-    return WrapperRateLimiter(
-        limit=_LOGIN_RATE_LIMIT, window_seconds=_LOGIN_RATE_WINDOW
-    )
-
-
-def _reconnect_capabilities() -> None:
-    """Load capability plugins and reconnect any that have stored credentials.
-
-    Post-unlock hook: runs after vault unlock so capabilities can decrypt their
-    stored credentials.  Capability init is deferred from boot (``run.py``) to
-    here because the vault requires the master password to unseal.
-
-    Any error is caught and logged as a warning so a capability failure never
-    prevents a successful login response from being returned to the client.
-    """
-    try:
-        from capabilities import load_capabilities
-
-        capabilities = load_capabilities()
-        reconnected = 0
-        for cap in capabilities.values():
-            if cap.connect():
-                reconnected += 1
-        logger.info(
-            "[Auth] Post-unlock capability reconnect: %d/%d capabilities active",
-            reconnected,
-            len(capabilities),
-        )
-    except Exception as exc:
-        logger.warning("[Auth] Post-unlock capability reconnect failed: %s", exc)
-
-
-def _get_vault_state() -> str:
-    """Return the current vault state via VaultService.get_state().
-
-    All errors are swallowed so that a database problem never crashes
-    the ``/api/auth/status`` endpoint.
-    """
-    try:
-        from services.vault_service import get_vault_service
-        return get_vault_service().get_state()
-    except Exception as exc:
-        logger.warning("[Auth] vault state check failed: %s", exc)
-        return "uninitialized"
-
-
-# ── Dev-only auto-login ──────────────────────────────────────────────────────
-# If a credentials.json file exists at the install root, its username/password
-# are tried first to unlock the vault and start a session, bypassing the
-# interactive login page. Dev convenience only. Cached across requests so the
-# expensive PBKDF2 vault derivation and password-hash check never repeat once
-# an outcome is known — /api/auth/status is polled continuously by the
-# frontend heartbeat.
-_DEV_LOGIN_NOT_TRIED = "not_tried"
-_DEV_LOGIN_VALID = "valid"
-_DEV_LOGIN_INVALID = "invalid"
-
-_dev_login_state = _DEV_LOGIN_NOT_TRIED
-_dev_login_username: str | None = None
-
-
-def _attempt_dev_login() -> str | None:
-    """Try the dev credentials file once and cache the outcome.
-
-    Returns the verified username on success, ``None`` otherwise. The caller
-    is responsible for confirming a master account exists before calling this
-    — a missing file and a not-yet-existing account both leave the cache
-    untouched, so either one starts working the moment its precondition is
-    met, without waiting for a server restart.
-    """
-    global _dev_login_state, _dev_login_username
-
-    if _dev_login_state == _DEV_LOGIN_INVALID:
-        return None
-
-    if _dev_login_state == _DEV_LOGIN_VALID:
-        from services.vault_service import get_vault_service
-        if get_vault_service().is_unlocked():
-            return _dev_login_username
-        # Vault got locked again after a prior success (e.g. explicit logout)
-        # — retry the full attempt once, through the same not-tried path below.
-        _dev_login_state = _DEV_LOGIN_NOT_TRIED
-        _dev_login_username = None
-
-    path = FileMapperService.get_dev_credentials_path()
-    if not path.is_file():
-        return None
-
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-        username = data["username"]
-        password = data["password"]
-        if not isinstance(username, str) or not isinstance(password, str):
-            raise TypeError("username and password must both be strings")
-
-        from services.database import Database
-        row = Database.conn().execute(
-            "SELECT password_hash FROM master_account WHERE username = :username",
-            {"username": username}
-        ).fetchone()
-        if not row or not check_password_hash(row[0], password):
-            raise ValueError("credentials did not match the master account")
-
-        from services.vault_service import get_vault_service
-        if not get_vault_service().unlock(password):
-            raise ValueError("credentials matched the account but not the vault")
-    except Exception as exc:
-        logger.warning("[Auth] Dev auto-login failed, falling back to normal login: %s", exc)
-        _dev_login_state = _DEV_LOGIN_INVALID
-        return None
-
-    _dev_login_state = _DEV_LOGIN_VALID
-    _dev_login_username = username
-    return username
 
 
 @user_auth_ns.route('/status')
@@ -165,10 +42,6 @@ class AuthStatusResource(Resource):
         * ``has_session``        — ``True`` if the request carries a valid session token.
         * ``vault_state``        — ``"unlocked" | "locked" | "uninitialized"``.
         * ``internal_dev``       — ``True`` when in-development features are enabled.
-
-        When there is no session and a master account exists, a dev-only
-        auto-login is attempted (see :func:`_attempt_dev_login`). On success
-        the response carries the same ``Set-Cookie`` a real login would.
         """
         try:
             from services.database import Database
@@ -183,16 +56,9 @@ class AuthStatusResource(Resource):
             ).fetchone())[0]
 
             has_session = validate_session(request)
-            vault_state = _get_vault_state()
+            vault_state = AuthService().vault_state()
             if has_session and vault_state == "locked":
                 has_session = False
-
-            dev_login_username = None
-            if not has_session and account_count > 0:
-                dev_login_username = _attempt_dev_login()
-                if dev_login_username is not None:
-                    has_session = True
-                    vault_state = _get_vault_state()
 
             try:
                 from services.provider_db_service import ProviderDbService
@@ -203,7 +69,7 @@ class AuthStatusResource(Resource):
             except Exception:
                 has_vision = False
 
-            status = AuthStatus(
+            return AuthStatus(
                 has_master_account=account_count > 0,
                 has_providers=provider_count > 0,
                 has_session=has_session,
@@ -211,15 +77,6 @@ class AuthStatusResource(Resource):
                 has_vision_provider=has_vision,
                 internal_dev=internal_dev_enabled(),
             )
-
-            if dev_login_username is not None:
-                from services.auth_session_service import create_session
-                from flask import make_response
-                resp = make_response(jsonify(status.model_dump(mode="json")), 200)
-                create_session(resp)
-                return resp
-
-            return status
         except Exception as e:
             logger.error(f"[REST API] Auth status error: {e}")
             return {"error": "Failed to check auth status"}, 500
@@ -331,78 +188,26 @@ class LoginResource(Resource):
     def post(self, dto: LoginRequest) -> ResponseReturnValue:
         """Verify credentials and set session cookie. Returns 401 on invalid credentials.
 
-        After the password is verified against the account hash, the vault is opened
-        with :meth:`~services.vault_service.VaultService.unlock_or_restore`, which:
-
-        * ``"unlocked"``      — the live ``vault_config`` row opened normally.
-        * ``"restored"``      — the live row was missing/corrupt but a filesystem
-                                backup key matched; the vault was rebuilt and opened
-                                with no data loss.
-        * ``"unrecoverable"`` — neither the live row nor any backup opened. The DEK is
-                                permanently lost, so the master account is wiped and a
-                                401 with ``onboarding_required: True`` is returned to
-                                force clean re-onboarding rather than logging the user
-                                into an unusable vault.
-
-        A transient error (DB locked, I/O) is caught and does NOT wipe the account —
-        the login still succeeds with ``vault_state: "locked"``.
-
-        On a successful open the post-unlock capability reconnection hook
-        (:func:`_reconnect_capabilities`) is called so that capabilities that store
-        encrypted credentials are re-connected immediately.
+        The master password is verified against the account hash, the vault is opened
+        with the supplied password, and a session cookie is issued on success. The
+        resulting vault state is returned in the response body.
         """
         try:
-            from services.database import Database
             from services.auth_session_service import create_session
-            from services.vault_service import (
-                get_vault_service, OUTCOME_UNRECOVERABLE,
-            )
+            from services.wrapper_rate_limiter import WrapperRateLimiter
             from flask import make_response
 
             username = dto.username.strip()
             password = dto.password
 
-            if not _get_login_rate_limiter().is_allowed(request.remote_addr or "unknown"):
+            if not WrapperRateLimiter(
+                limit=LOGIN_RATE_LIMIT, window_seconds=LOGIN_RATE_WINDOW_SECONDS
+            ).is_allowed(request.remote_addr or "unknown"):
                 return {"error": "Too many login attempts. Try again later."}, 429
 
-            row = Database.conn().execute(
-                "SELECT password_hash FROM master_account "
-                "WHERE username = :username",
-                {"username": username}
-            ).fetchone()
-
-            if not row or not check_password_hash(row[0], password):
+            vault_state = AuthService().login(username, password)
+            if vault_state is None:
                 return {"error": "Invalid credentials"}, 401
-
-            vault = get_vault_service()
-            vault_state = "locked"
-            try:
-                outcome = vault.unlock_or_restore(password)
-            except Exception as exc:
-                logger.error("[Auth] Vault open failed unexpectedly during login: %s", exc)
-                resp = make_response(
-                    jsonify({"ok": True, "vault_state": "locked"}),
-                    200,
-                )
-                create_session(resp)
-                return resp
-
-            if outcome == OUTCOME_UNRECOVERABLE:
-                logger.error(
-                    "[Auth] Vault key corrupted with no valid backup — wiping the "
-                    "master account to force re-onboarding."
-                )
-                with Database.transaction() as conn:
-                    conn.execute("DELETE FROM master_account")
-                vault.reset()
-                return {
-                    "error": "Your encryption key could not be recovered. "
-                    "Please set up your account again.",
-                    "onboarding_required": True,
-                }, 401
-
-            vault_state = "unlocked"
-            _reconnect_capabilities()
 
             resp = make_response(
                 jsonify({"ok": True, "vault_state": vault_state}),

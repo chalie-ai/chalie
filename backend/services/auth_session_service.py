@@ -11,13 +11,10 @@ import secrets
 
 from flask import Request, Response
 
+from contracts.constants.auth import SESSION_COOKIE_NAME, SESSION_KEY_PREFIX, SESSION_TTL
 from services.time_utils import utc_now
 
 logger = logging.getLogger(__name__)
-
-SESSION_COOKIE_NAME = 'chalie_session'
-SESSION_TTL = 30 * 24 * 60 * 60  # 30 days in seconds
-SESSION_KEY_PREFIX = 'auth_session:'
 
 
 def _hash_session_token(raw_token: str) -> str:
@@ -112,8 +109,17 @@ def create_session(response: Response) -> str:
 
 def validate_session(request: Request) -> bool:
     """Checks MemoryStore first (fast path). If MemoryStore misses (e.g.
-    after restart), falls back to SQLite and rehydrates MemoryStore on hit."""
+    after restart), falls back to SQLite and rehydrates MemoryStore on hit.
+
+    A pre-flight auto-login (``AuthService.try_login``) authenticates the very
+    request it ran on: its cookie is only minted on the way out, so the flag it
+    leaves on ``g`` stands in until the client has the cookie. Without it the
+    request that just logged in would still be answered 401."""
+    from flask import g
     from services.memory_client import MemoryClientService
+
+    if getattr(g, "preflight_login", False):
+        return True
 
     token = request.cookies.get(SESSION_COOKIE_NAME)
     if not token:

@@ -76,7 +76,8 @@ def test_brain_unauth_redirects_to_login(brain_dist: pathlib.Path) -> None:
 def test_brain_authed_serves_index(db: sqlite3.Connection, brain_dist: pathlib.Path) -> None:
     """/brain/ with a valid real session → 200 + SPA index.html."""
     from api import create_app
-    from services.auth_session_service import create_session, SESSION_COOKIE_NAME
+    from contracts.constants.auth import SESSION_COOKIE_NAME
+    from services.auth_session_service import create_session
     from flask import Response as FlaskResponse
 
     app = create_app()
@@ -93,7 +94,8 @@ def test_brain_authed_serves_index(db: sqlite3.Connection, brain_dist: pathlib.P
 def test_brain_authed_deep_path_spa_fallback(db: sqlite3.Connection, brain_dist: pathlib.Path) -> None:
     """/brain/providers/some-deep-link → 200 SPA fallback (history mode reload)."""
     from api import create_app
-    from services.auth_session_service import create_session, SESSION_COOKIE_NAME
+    from contracts.constants.auth import SESSION_COOKIE_NAME
+    from services.auth_session_service import create_session
     from flask import Response as FlaskResponse
 
     app = create_app()
