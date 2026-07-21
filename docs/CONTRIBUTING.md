@@ -11,12 +11,13 @@
 
 ```bash
 python3 -m venv .venv && source .venv/bin/activate
-pip install -e backend/                 # core dependencies
-pip install -e 'backend/[voice-cpu]'    # optional TTS/STT (GPU/ROCm variants in backend/pyproject.toml)
+pip install -e backend/                 # all dependencies, voice (TTS/STT/VAD) included
 python backend/run.py                   # SQLite auto-initializes; no external services required
 ```
 
 There is no `.env` and no environment-variable configuration: code-level config is Python constants, runtime settings live in the Brain interface, and secrets auto-generate on first run.
+
+This manual flow syncs Python dependencies only. The Playwright browser and the on-device voice models are fetched once by `installer/install.sh` (or the Docker build), not by `pip install -e backend/` or `python backend/run.py` — abilities that need them fail loudly with a reinstall hint until you've run the installer at least once.
 
 Frontend:
 

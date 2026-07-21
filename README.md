@@ -68,8 +68,7 @@ ollama pull gemma4:31b   # the open model that placed in the benchmark's front p
 **From source:**
 ```bash
 git clone https://github.com/chalie-ai/chalie.git && cd chalie
-uv pip install --system -e backend/          # core deps · Python 3.11+
-uv pip install --system -e backend/[voice]   # optional: TTS/STT
+uv pip install --system -e backend/          # all dependencies, voice (TTS/STT/VAD) included · Python 3.11+
 ./run.sh  # → http://localhost:31025/on-boarding/
 ```
 
