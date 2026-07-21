@@ -67,7 +67,7 @@ _detect_os() {
     linux*)   echo "linux" ;;
     *)
       _error "Unsupported OS: $OSTYPE"
-      _error "Chalie supports macOS (Intel/Apple Silicon) and Linux (amd64/arm64)."
+      _error "Chalie supports macOS (Apple Silicon) and Linux (amd64/arm64)."
       exit 1
       ;;
   esac
@@ -323,6 +323,45 @@ _setup_venv() {
   _info "Note: The embedding model (~400 MB) downloads on first 'chalie start', not now"
 }
 
+# ─── Playwright Browser ─────────────────────────────────────────────────────
+_install_playwright() {
+  _section "Playwright Browser"
+  local pw="$CHALIE_HOME/venv/bin/playwright"
+  if [[ "$(_detect_os)" == "linux" ]]; then
+    _run_privileged "$pw" install --with-deps chromium
+  else
+    "$pw" install chromium
+  fi
+  _ok "Playwright Chromium ready"
+}
+
+# ─── Voice Models (Kokoro TTS, Moonshine STT, Silero VAD) ──────────────────
+_download_voice_models() {
+  _section "Voice Models"
+  local k="https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0"
+  local m="https://huggingface.co/UsefulSensors/moonshine/resolve/main/onnx/merged/base/float"
+  local s="https://raw.githubusercontent.com/snakers4/silero-vad/v6.2.1/src/silero_vad/data"
+  local d="$CHALIE_HOME/app/resources/voice-models"
+  mkdir -p "$d/kokoro" "$d/moonshine/base"
+  # "|" (not ":") separates url/dest — every url here contains "://", which
+  # would collide with a ":" separator.
+  local pairs=(
+    "$k/kokoro-v1.0.onnx|$d/kokoro/kokoro-v1.0.onnx"
+    "$k/voices-v1.0.bin|$d/kokoro/voices-v1.0.bin"
+    "$m/encoder_model.onnx|$d/moonshine/base/encoder_model.onnx"
+    "$m/decoder_model_merged.onnx|$d/moonshine/base/decoder_model_merged.onnx"
+    "$s/silero_vad.onnx|$d/silero_vad.onnx"
+  )
+  for p in "${pairs[@]}"; do
+    local dest="${p#*|}"
+    if [[ ! -f "$dest" ]]; then
+      curl -fL -o "$dest.tmp" "${p%%|*}"
+      mv "$dest.tmp" "$dest"
+    fi
+  done
+  _ok "Voice models ready"
+}
+
 # ─── Deno (code_agent sandbox runtime) ──────────────────────────────────────
 _install_deno() {
   _section "Deno Sandbox Runtime"
@@ -523,6 +562,13 @@ main() {
   os="$(_detect_os)"
   arch="$(_detect_arch)"
 
+  if [[ "$os/$arch" == "darwin/amd64" ]]; then
+    _error "Intel Macs are no longer supported."
+    _error "onnxruntime no longer publishes wheels for Intel Macs."
+    _error "An Apple Silicon Mac or Linux is required."
+    exit 1
+  fi
+
   _banner
   printf "  Platform: %s / %s\n\n" "$os" "$arch"
 
@@ -531,6 +577,8 @@ main() {
   _ensure_uv
   _download_release
   _setup_venv
+  _install_playwright
+  _download_voice_models
   _install_deno
   _install_cli
   _print_success

@@ -164,9 +164,8 @@ class ReadinessResource(Resource):
         """Readiness probe — 200 only when SQLite, MemoryStore, embeddings, and ONNX are ready.
 
         Delegates to the read-only :func:`services.preflight_service.run_preflight`.
-        The onnxruntime CPU self-heal and its actionable ERROR hint run once at boot
-        (``RuntimeDepsService.ensure_onnxruntime``); this probe only reports state, so
-        a broken runtime surfaces as ``embeddings: {status: error, message: <hint>}``
+        onnxruntime is a base install-time dependency (no boot-time self-heal); a
+        broken runtime surfaces as ``embeddings: {status: error, message: <exception>}``
         rather than the eternal ``loading`` it reported before.
         """
         from services.preflight_service import run_preflight

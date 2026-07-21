@@ -4,12 +4,12 @@ Voice namespace — STT + TTS via two single-purpose ONNX libraries.
 * TTS → ``kokoro_onnx.Kokoro`` (Kokoro v1.0 + espeak-ng phonemizer)
 * STT → ``moonshine_onnx.MoonshineOnnxModel`` (Moonshine base, ONNX)
 
-The ONNX model files are downloaded on demand, not bundled with the install.
-Turning voice on in Settings (``POST /api/voice-settings/-1``) calls
-``RuntimeDepsService.enable_voice()``, which background-installs the voice deps
-and downloads the models into ``resources/voice-models/``. Until the deps or
-model files are present every route returns ``{"status":"unavailable"}`` or 503
-with a precise hint pointing the user back to that setting.
+Voice deps and model files are installed unconditionally at install time
+(``installer/install.sh`` / the Docker image build) into
+``resources/voice-models/`` — nothing installs or downloads anything at boot
+or runtime. If a dep or model file is somehow still missing (a broken/partial
+install), every route returns ``{"status":"unavailable"}`` or 503 with a hint
+to reinstall.
 
 Kokoro uses phonemizer-fork + espeakng-loader under the hood, which preserves
 punctuation as IPA pause tokens and handles numbers, abbreviations, and 2-3
@@ -59,9 +59,8 @@ _V = voice_ns.models
 
 # Models live in resources/voice-models/ — a directory sibling to backend/,
 # intentionally OUTSIDE the data/ volume so the files survive an app upgrade on
-# native installs. They are downloaded at runtime by
-# RuntimeDepsService.enable_voice() when the user turns voice on in Settings,
-# not baked in by the installer.
+# native installs. They are downloaded once at install time (installer/install.sh
+# / the Docker build), never at boot or runtime.
 _KOKORO_MODEL = FileMapperService.get_voice_models_path("kokoro", "kokoro-v1.0.onnx")
 _KOKORO_VOICES = FileMapperService.get_voice_models_path("kokoro", "voices-v1.0.bin")
 _MOONSHINE_DIR = FileMapperService.get_voice_models_path("moonshine", "base")
@@ -95,8 +94,7 @@ _VAD_PAD_SAMPLES = 1024  # 64 ms at 16 kHz
 # ── Dependency detection ────────────────────────────────────────────────────
 
 _VOICE_REQUIRED_MODULES = (
-    "kokoro_onnx", "moonshine_onnx", "soundfile", "numpy",
-    "silero_vad_lite", "noisereduce",
+    "kokoro_onnx", "moonshine_onnx", "soundfile", "numpy", "noisereduce",
 )
 _VOICE_MISSING_MODULES: tuple[str, ...] = ()
 
@@ -113,7 +111,7 @@ _VOICE_MISSING_MODULES = _detect_voice_modules()
 _VOICE_AVAILABLE = not _VOICE_MISSING_MODULES
 
 _VOICE_INSTALL_HINT = (
-    "Voice dependencies are not installed. Enable voice in Settings to install them."
+    "Voice dependencies are missing from this install. Reinstall Chalie to restore them."
 )
 
 
@@ -135,7 +133,7 @@ def _loading_or_missing_response() -> "Response":
             "error": "Voice models not installed",
             "reason": "models_missing",
             "missing": missing,
-            "hint": "Enable voice in Settings to download voice models.",
+            "hint": "Voice models are missing from this install. Reinstall Chalie to restore them.",
         }), 503)
     resp = make_response(jsonify({
         "error": "Models still loading",
@@ -374,9 +372,9 @@ def _extract_speech(audio: object, sr: int) -> object:
     """
     try:
         import numpy as np
-        from silero_vad_lite import SileroVAD
+        from services.silero_vad_service import SileroVad
 
-        vad = SileroVAD(sr)
+        vad = SileroVad(sr)
         window = 512
         # SileroVAD.process() requires a *writable* float32 array.
         audio_rw = np.array(audio, dtype=np.float32)
@@ -644,7 +642,7 @@ class VoiceHealthResource(Resource):
                 "unavailable",
                 reason="models_missing",
                 missing=missing_files,
-                hint="Enable voice in Settings to download voice models.",
+                hint="Voice models are missing from this install. Reinstall Chalie to restore them.",
             )
 
         threading.Thread(target=_ensure_models, daemon=True).start()

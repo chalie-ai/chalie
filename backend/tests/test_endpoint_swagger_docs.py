@@ -56,7 +56,6 @@ _MIGRATED_PREFIXES = (
     "/api/mcp-clients",
     "/api/providers",
     "/api/scheduler",
-    "/api/voice-settings",
     "/api/memory",
     "/api/settings",
     "/api/capabilities",

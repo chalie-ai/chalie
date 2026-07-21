@@ -47,9 +47,6 @@ _CACHE_PREFIX = 'emb:'
 # the optimized cache must be written via a CPU-only prime pass instead.
 _COMPILING_EPS = frozenset({
     "CoreMLExecutionProvider",
-    "CUDAExecutionProvider",
-    "TensorrtExecutionProvider",
-    "ROCMExecutionProvider",
 })
 
 
@@ -93,7 +90,7 @@ def _build_session(providers: Optional[List[str]] = None) -> tuple[object, Path]
 
     chosen = list(providers) if providers is not None else choose_providers(onnx_path)
 
-    # ORT refuses to serialize a graph once a compiling EP (CoreML/CUDA/TRT/ROCm)
+    # ORT refuses to serialize a graph once a compiling EP (e.g. CoreML)
     # has claimed nodes — session construction crashes mid-way when
     # ``optimized_model_filepath`` is set. Prime the cache with a throwaway
     # CPU-only session first, then open the real session from the written graph.
@@ -210,7 +207,7 @@ def _encode_batch(texts: List[str]) -> np.ndarray:
     try:
         outputs = cast(_IS, session).run(None, feed)
     except Exception as e:
-        # Accelerated providers (CoreML, CUDA, etc.) can init cleanly but fail
+        # Accelerated providers (CoreML, etc.) can init cleanly but fail
         # on specific runtime shapes/tokens. Rebuild once as CPU-only and retry.
         if cast(_IS, session).get_providers() != ["CPUExecutionProvider"]:
             logger.warning(

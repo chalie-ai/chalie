@@ -77,10 +77,11 @@ test.describe.serial('onboarding flow', () => {
     ).toBeVisible({ timeout: 5_000 });
   });
 
-  test('register reveals the voice phase, then Skip lands on /brain/', async ({ page }) => {
-    // The voice phase exists only in the SAME page session immediately after a
-    // successful registration: once the account exists, /on-boarding/ redirects
-    // to /login/. So registration and Skip must be one continuous flow.
+  test('register redirects straight to /brain/', async ({ page }) => {
+    // The onboarding page is account-phase-only now — no voice step exists.
+    // handleAccountSubmit() calls window.location.replace('/brain/') directly
+    // on a successful POST /auth/register (src/onboarding/OnboardingPage.vue),
+    // which also sets the session cookie.
     await page.goto('/on-boarding/');
 
     await page.locator('#accountUsername').fill(REG_USERNAME);
@@ -88,16 +89,10 @@ test.describe.serial('onboarding flow', () => {
     await page.locator('#accountConfirmPassword').fill(REG_PASSWORD);
     await page.locator('button[type="submit"]').click();
 
-    // POST /auth/register → 201 (sets the session cookie); the SFC sets
-    // phase='voice' (src/onboarding/OnboardingPage.vue:58), which v-if swaps in
-    // the voice-phase card. The heading is the real downstream signal.
-    await expect(page.locator('h1')).toHaveText('Voice Support', { timeout: 15_000 });
-
-    // skipVoice() → window.location.replace('/brain/') (src/onboarding/OnboardingPage.vue:85).
-    // The session cookie from register lets the /brain/ serve-gate pass; a bare
-    // env has no LLM provider, so the brain router forces /brain/providers under
-    // its providersOnly lock — matching /brain/ as a substring is robust to that.
-    await page.locator('button', { hasText: 'Skip' }).click();
+    // POST /auth/register → 201 (sets the session cookie) → immediate redirect.
+    // A bare env has no LLM provider, so the brain router forces
+    // /brain/providers under its providersOnly lock — matching /brain/ as a
+    // substring is robust to that.
     await expect(page).toHaveURL(/\/brain\//, { timeout: 15_000 });
   });
 

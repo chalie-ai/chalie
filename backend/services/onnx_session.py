@@ -8,10 +8,11 @@
 
 """Shared ONNX Runtime session factory with automatic provider fallback.
 
-One chokepoint so every ONNX-using service picks the same provider for the
-installed wheel (CPU, CUDA, or ROCm) without hardcoding provider lists. The
-installer decides which wheel lands on disk; this module decides which
-execution provider actually runs each session and degrades to CPU on failure.
+One chokepoint so every ONNX-using service picks the same execution provider
+without hardcoding provider lists. Every install ships the same CPU
+``onnxruntime`` wheel; this module decides which provider actually runs each
+session (CoreML on capable macOS hosts, CPU everywhere else) and degrades to
+CPU on failure.
 
 Policy:
     1. Default providers = ``ort.get_available_providers()`` — the wheel

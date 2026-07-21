@@ -82,8 +82,8 @@ def _start_model_preload() -> None:
             logger.info("[System] Embedding model ready (inference warm)")
         except Exception as e:
             import traceback
-            logger.warning(f"[System] Embedding model preload failed: {e}")
-            logger.warning(f"[System] Preload traceback:\n{traceback.format_exc()}")
+            logger.error(f"[System] Embedding model preload failed: {e}")
+            logger.error(f"[System] Preload traceback:\n{traceback.format_exc()}")
 
         svc = None
         try:
@@ -380,13 +380,6 @@ def main() -> None:
     from services.snapshot_service import SnapshotService
     SnapshotService.apply_pending()
 
-    # Guarantee a usable onnxruntime BEFORE any warmup thread imports it. On a
-    # host whose GPU/ROCm wheel can't load its native libs (e.g. libcudart
-    # missing), this swaps to the CPU wheel and logs an actionable ERROR hint
-    # (visible in the Cognition → Errors panel); a no-op when import already works.
-    from services.runtime_deps_service import RuntimeDepsService
-    RuntimeDepsService.ensure_onnxruntime()
-
     _start_model_preload()
 
     _init_database()
@@ -415,10 +408,6 @@ def main() -> None:
 
     _check_asset_caches()
     _warmup_models()
-
-    # Background-install optional runtime deps (playwright, voice if enabled)
-    RuntimeDepsService.ensure_playwright()
-    RuntimeDepsService.init_voice_from_settings()
 
     from consumer import WorkerManager
     manager = WorkerManager()

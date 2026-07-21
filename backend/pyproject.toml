@@ -22,16 +22,22 @@ dependencies = [
     "python-docx>=1.1.0",
     "python-pptx>=1.0.0",
     # onnx (the format library) and the onnxruntime CPU runtime are both direct
-    # base deps. embeddings, the classifier heads and rapidocr all need a working
-    # runtime, so the CPU wheel is pinned explicitly rather than leaned on as a
-    # transitive pull — that left it absent on some images, which pinned the boot
-    # self-heal to "failed" and hung /ready on the 'Waking up Chalie' splash.
-    # The GPU/ROCm variants come from the voice-* optional groups below;
-    # RuntimeDepsService.ensure_onnxruntime() reconciles a GPU/ROCm wheel that
-    # can't load its native libs back to this CPU wheel at boot.
+    # base deps — CPU-only, no GPU/ROCm variant. embeddings, the classifier
+    # heads, rapidocr, and voice (TTS/STT/VAD, below) all run through this one
+    # wheel via the shared session factory (services/onnx_session.py), pinned
+    # explicitly rather than leaned on as a transitive pull — that left it
+    # absent on some images, which hung /ready on the 'Waking up Chalie' splash.
     "onnx>=1.17.0",
     "onnxruntime>=1.20.0",
     "rapidocr_onnxruntime>=1.4.0",
+    # Voice (TTS/STT): downloaded models live in resources/voice-models/,
+    # fetched once at install time (installer/install.sh / the Docker build).
+    # VAD runs the bundled silero_vad.onnx through the onnxruntime wheel above
+    # (services/silero_vad_service.py) rather than a separate pip package.
+    "kokoro-onnx>=0.5.0",
+    "useful-moonshine-onnx>=20251121",
+    "soundfile>=0.13.0",
+    "noisereduce>=3.0.3",
     "ddgs>=0.1.0",
     "cryptography>=43.0.0",
     # Snapshot Time-Machine zips: pyzipper writes/reads WZ-AES-256 archives and
@@ -61,35 +67,6 @@ dependencies = [
     # (see tests/test_ability_returns_tool_result.py) — it runs inside the unit
     # suite, so it must be present wherever the gate runs.
     "mypy>=1.8.0",
-]
-
-[project.optional-dependencies]
-voice-cpu = [
-    "kokoro-onnx>=0.5.0",
-    "useful-moonshine-onnx>=20251121",
-    "soundfile>=0.13.0",
-    "numpy>=1.24.0",
-    "silero-vad-lite>=0.2.1",
-    "noisereduce>=3.0.3",
-    "onnxruntime>=1.20.0",
-]
-voice-cuda = [
-    "kokoro-onnx>=0.5.0",
-    "useful-moonshine-onnx>=20251121",
-    "soundfile>=0.13.0",
-    "numpy>=1.24.0",
-    "silero-vad-lite>=0.2.1",
-    "noisereduce>=3.0.3",
-    "onnxruntime-gpu>=1.20.0",
-]
-voice-rocm = [
-    "kokoro-onnx>=0.5.0",
-    "useful-moonshine-onnx>=20251121",
-    "soundfile>=0.13.0",
-    "numpy>=1.24.0",
-    "silero-vad-lite>=0.2.1",
-    "noisereduce>=3.0.3",
-    "onnxruntime-rocm>=1.20.0",
 ]
 
 [tool.mypy]

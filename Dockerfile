@@ -32,7 +32,8 @@ RUN mkdir -p /root/.chalie/app/data
 VOLUME ["/root/.chalie/app/data"]
 EXPOSE 31025
 
-# Voice and playwright are installed at runtime by RuntimeDepsService
-# based on user settings — not baked into the image.
+# Voice deps/models and the Playwright browser are installed above as part of
+# install.sh's own run (no separate step here) — baked into the image, not
+# installed at runtime.
 ENTRYPOINT ["bash", "/root/.chalie/app/run.sh"]
 CMD ["--port=31025", "--host=0.0.0.0"]
