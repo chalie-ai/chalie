@@ -39,6 +39,12 @@ class ForbiddenError(EndpointError):
     status: ClassVar[int] = 403
 
 
+class ConflictError(EndpointError):
+    """Raised when a request conflicts with the current state of the resource."""
+
+    status: ClassVar[int] = 409
+
+
 # ── Provider layer ────────────────────────────────────────────────────────────
 
 

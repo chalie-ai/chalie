@@ -376,7 +376,7 @@ def main() -> None:
     # artifact swap must complete here or convergence would run against the old
     # DB. SnapshotService.apply_pending owns its own try/except (boot safety):
     # a failed restore is rolled back + logged and never aborts startup.
-    # Paired with services/snapshot_service.py (Phase B) and api/snapshot.py.
+    # Paired with services/snapshot_service.py (Phase B) and api/actions/snapshot/.
     from services.snapshot_service import SnapshotService
     SnapshotService.apply_pending()
 

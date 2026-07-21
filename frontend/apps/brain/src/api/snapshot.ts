@@ -1,6 +1,8 @@
 /**
  * Snapshot API — whole-instance Import/Export Time-Machine.
- * Paired with backend/api/snapshot.py.
+ * Paired with the Action-contract routes in backend/api/actions/snapshot/*.
+ * JSON responses use the { success, result, error? } envelope; export's
+ * success body stays a raw binary stream.
  *
  *   POST /api/snapshot/export → streams a single .zip clone of the instance
  *                               (databases, documents, skills, secrets).
@@ -12,10 +14,12 @@
 import { api } from '@chalie/shared';
 
 export interface SnapshotImportResult {
-  ok?: boolean;
-  restarting?: boolean;
-  error?: string;
-  [key: string]: unknown;
+  restarting: boolean;
+}
+
+interface SingleEnvelope<T> {
+  success: true;
+  result: T;
 }
 
 export const snapshot = {
@@ -27,7 +31,11 @@ export const snapshot = {
     return api.download('/api/snapshot/export', { password });
   },
 
-  import(formData: FormData): Promise<SnapshotImportResult> {
-    return api.upload('/api/snapshot/import', formData);
+  async import(formData: FormData): Promise<SnapshotImportResult> {
+    const res = await api.upload<SingleEnvelope<SnapshotImportResult>>(
+      '/api/snapshot/import',
+      formData,
+    );
+    return res.result;
   },
 };

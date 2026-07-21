@@ -10,6 +10,7 @@ only re-exports so callers never depend on the internal file layout.
 
 from exceptions.chalie_exception import ChalieException
 from exceptions.exception import (
+    ConflictError,
     DownloadTooLarge,
     EmptyCompletionLoop,
     EndpointError,
@@ -40,6 +41,7 @@ from exceptions.exception import (
 
 __all__ = [
     "ChalieException",
+    "ConflictError",
     "DownloadTooLarge",
     "EmptyCompletionLoop",
     "EndpointError",
