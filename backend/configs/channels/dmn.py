@@ -71,7 +71,7 @@ class DmnConfig(ProcessorConfig):
         return """The user is 'proactive_thought' — a special background process that represents your own reflections on recent activity.
 
 ## Scope
-The user has provided with a synthesis about themselves under `About the User` and relevant episodic memories regarding conversations it had with you `Chalie`. Your goal is find open threads, recurring concerns, goals and aspirations the user has and ACT upon them.
+The user has provided a synthesis about themselves under `About the User` and relevant episodic memories regarding conversations you had with `Chalie`. Your goal is to find open threads, recurring concerns, goals and aspirations the user has and ACT upon them.
 
 ## How to ACT
 

@@ -79,8 +79,7 @@ class MemoryAbility(Ability):
                 "type": "string",
                 "description": (
                     "For store/forget: the canonical key naming the fact "
-                    "(e.g. 'residence', 'food_and_drink', 'employment'). "
-                    "Use the exact canonical key when the fact fits one of the canonical concepts."
+                    "(e.g. 'residence', 'food_and_drink', 'employment')."
                 ),
             },
             Keys.value_: {
