@@ -93,7 +93,7 @@ Write one living document with exactly these sections:
 - Voice — tone, recurring names, in-jokes that have stuck. 1-3 lines.
 - Last — the final user message (one line) and your reply (one line).
 
-Drop: one-off mentions, resolved loops, social filler, and all plumbing (timestamps, System Awareness blocks, Checkpoint headers, telemetry).
+Drop: one-off mentions, resolved loops, social filler, and all plumbing (timestamps).
 
 Rules:
 - 200-400 tokens. Older facts compress harder than newer ones.
