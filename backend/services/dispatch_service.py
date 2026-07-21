@@ -464,7 +464,7 @@ class DispatchService:
         ``[end:<tool>]``."""
         if tr.status == "error":
             head_parts = ["status=error", f"code={tr.code}"]
-            head_parts.extend(f"{k}={_meta_val(v)}" for k, v in tr.meta.items())
+            head_parts.extend(f"{k}={self._meta_val(v)}" for k, v in tr.meta.items())
             lines = [f"[{tool_name}({', '.join(head_parts)})]", str(tr.body)]
             if tr.hint:
                 lines.append(f"hint: {tr.hint}")
@@ -474,7 +474,7 @@ class DispatchService:
             return "\n".join(lines)
 
         head_parts = ["status=success"]
-        head_parts.extend(f"{k}={_meta_val(v)}" for k, v in tr.meta.items())
+        head_parts.extend(f"{k}={self._meta_val(v)}" for k, v in tr.meta.items())
         if isinstance(tr.body, (dict, list)):
             body_str = json.dumps(tr.body, ensure_ascii=False, separators=(",", ":"))
         else:
@@ -500,6 +500,13 @@ class DispatchService:
         payload_json = json.dumps(tr.rich, ensure_ascii=False, separators=(",", ":"))
         instruction = _RICH_INSTRUCTION.format(tag=tag)
         return f"{payload_json}\n\n{instruction}"
+
+    def _meta_val(self, v: object) -> str:
+        """Render a scalar meta value: booleans lower-cased (``true``/``false``),
+        everything else via ``str``."""
+        if isinstance(v, bool):
+            return "true" if v else "false"
+        return str(v)
 
 
 # Body shown to the model when a card is paired: the structured tool body is the
@@ -539,11 +546,3 @@ _REPEAT_CALL_STEER = (
     "calling tools and answer with what you already have. Repeating the identical "
     "call again will abort this turn."
 )
-
-
-def _meta_val(v: object) -> str:
-    """Render a scalar meta value: booleans lower-cased (``true``/``false``),
-    everything else via ``str``."""
-    if isinstance(v, bool):
-        return "true" if v else "false"
-    return str(v)
