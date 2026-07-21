@@ -1,4 +1,5 @@
-# Tests for backend/api/privacy.py -- privacy blueprint.
+# Tests for api.actions.privacy.data_summary.PrivacyDataSummaryAction and
+# api.actions.privacy.delete_all.PrivacyDeleteAllAction.
 
 import sqlite3
 from collections.abc import Iterator
@@ -7,8 +8,8 @@ from unittest.mock import patch
 import pytest
 from flask.testing import FlaskClient
 
-from api.privacy import privacy_ns
-from services.memory_store import MemoryStore
+from api.actions.privacy.data_summary import PrivacyDataSummaryAction
+from api.actions.privacy.delete_all import PrivacyDeleteAllAction
 from tests.restx_test_app import mount_namespace
 
 
@@ -16,7 +17,10 @@ from tests.restx_test_app import mount_namespace
 class TestPrivacyAPI:
     @pytest.fixture
     def client(self, db: sqlite3.Connection) -> FlaskClient:
-        app = mount_namespace(privacy_ns)
+        app = mount_namespace(
+            PrivacyDataSummaryAction().namespace(),
+            PrivacyDeleteAllAction().namespace(),
+        )
         app.config['TESTING'] = True
         return app.test_client()
 
@@ -26,35 +30,33 @@ class TestPrivacyAPI:
             yield
 
     # ------------------------------------------------------------------
-    # GET /privacy/data-summary
+    # GET /api/privacy/data-summary
     # ------------------------------------------------------------------
 
     def test_data_summary_returns_counts(self, client: FlaskClient, db: sqlite3.Connection) -> None:
-        store = MemoryStore()
+        response = client.get('/api/privacy/data-summary')
 
-        with patch('services.memory_client.MemoryClientService.create_connection', return_value=store):
-            response = client.get('/api/privacy/data-summary')
+        assert response.status_code == 200
+        data = response.get_json()
+        assert data["success"] is True
+        # Table counts should be present (all 0 from empty test DB)
+        assert "episodes" in data["result"]
+        assert "transcript" in data["result"]
+        assert "scheduled_items" in data["result"]
 
-            assert response.status_code == 200
-            data = response.get_json()
-            # Table counts should be present (all 0 from empty test DB)
-            assert "episodes" in data
-            assert "transcript" in data
-            assert "scheduled_items" in data
-
-            # Verify counts are 0 for an empty database
-            assert data["episodes"] == 0
+        # Verify counts are 0 for an empty database
+        assert data["result"]["episodes"] == 0
 
     # ------------------------------------------------------------------
-    # DELETE /privacy/delete-all
+    # DELETE /api/privacy/delete-all
     # ------------------------------------------------------------------
 
-    def test_delete_all_without_confirm_header_returns_422(self, client: FlaskClient) -> None:
+    def test_delete_all_without_confirm_header_returns_400(self, client: FlaskClient) -> None:
         response = client.delete('/api/privacy/delete-all')
 
-        assert response.status_code == 422
+        assert response.status_code == 400
         data = response.get_json()
-        assert "error" in data
+        assert data["success"] is False
         assert "X-Confirm-Delete" in data["error"]
 
     def test_delete_all_with_header_clears_data(self, client: FlaskClient, db: sqlite3.Connection) -> None:
@@ -80,8 +82,9 @@ class TestPrivacyAPI:
 
         assert response.status_code == 200
         data = response.get_json()
-        assert data["deleted"] is True
-        assert "timestamp" in data
+        assert data["success"] is True
+        assert data["result"]["deleted"] is True
+        assert "timestamp" in data["result"]
 
         assert db.execute("SELECT COUNT(*) FROM episodes").fetchone()[0] == 0
         assert db.execute("SELECT COUNT(*) FROM transcript").fetchone()[0] == 0
@@ -132,7 +135,8 @@ class TestPrivacyAPI:
 
         assert response.status_code == 200
         data = response.get_json()
-        assert data["deleted"] is True
+        assert data["success"] is True
+        assert data["result"]["deleted"] is True
 
         # Post-conditions: every seeded table must be empty
         assert db.execute("SELECT COUNT(*) FROM data_graph").fetchone()[0] == 0
@@ -144,7 +148,7 @@ class TestPrivacyAPI:
     def test_delete_all_tables_all_exist_in_schema(self) -> None:
         import re
 
-        from api.privacy import _DELETE_ALL_MODELLESS_TABLES, _DELETE_ALL_MODELS
+        from api.actions.privacy.delete_all import _DELETE_ALL_MODELLESS_TABLES, _DELETE_ALL_MODELS
         from services.file_mapper_service import FileMapperService
 
         schema_path = FileMapperService.get_schema_path()
