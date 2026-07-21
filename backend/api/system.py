@@ -165,7 +165,8 @@ class ReadinessResource(Resource):
 
         Delegates to the read-only :func:`services.preflight_service.run_preflight`.
         onnxruntime is a base install-time dependency (no boot-time self-heal); a
-        broken runtime surfaces as ``embeddings: {status: error, message: <exception>}``
+        broken runtime surfaces as ``embeddings: {status: error}`` with a generic
+        reinstall hint (never raw exception text — this probe is unauthenticated)
         rather than the eternal ``loading`` it reported before.
         """
         from services.preflight_service import run_preflight

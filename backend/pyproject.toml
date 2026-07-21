@@ -22,7 +22,7 @@ dependencies = [
     "python-docx>=1.1.0",
     "python-pptx>=1.0.0",
     # onnx (the format library) and the onnxruntime CPU runtime are both direct
-    # base deps — CPU-only, no GPU/ROCm variant. embeddings, the classifier
+    # base deps — CPU-only, one runtime wheel for every consumer. embeddings, the classifier
     # heads, rapidocr, and voice (TTS/STT/VAD, below) all run through this one
     # wheel via the shared session factory (services/onnx_session.py), pinned
     # explicitly rather than leaned on as a transitive pull — that left it
