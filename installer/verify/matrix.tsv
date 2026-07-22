@@ -1,0 +1,25 @@
+# Install-verification matrix. Tab-separated. Columns:
+#   name        unique row label (also the results/<name>.log basename)
+#   image       Docker base image (a pristine, official distro — nothing pre-baked)
+#   platform    linux/arm64 (native here) or linux/amd64 (emulated)
+#   expect      pass | refuse-old-python | gap
+#   do_boot     1 = boot Chalie + wait for /ready 200; 0 = stop after the dependency audit
+#
+# expect semantics:
+#   pass              installer succeeds, deps resolve, (and /ready 200 if do_boot=1)
+#   refuse-old-python default python3 is < 3.11 → installer MUST refuse (correct behaviour)
+#   gap               unhandled distro (installer has no apt/dnf branch) → failure is the
+#                     documented expectation; UNEXPECTED-PASS means prebuilt wheels covered it
+#
+# apt path = Debian/Ubuntu · dnf path = Fedora/RHEL-family · everything else = gap.
+debian12	debian:12	linux/arm64	pass	1
+debian12-amd64	debian:12	linux/amd64	pass	0
+ubuntu2404	ubuntu:24.04	linux/arm64	pass	1
+ubuntu2404-amd64	ubuntu:24.04	linux/amd64	pass	0
+ubuntu2204	ubuntu:22.04	linux/arm64	refuse-old-python	0
+fedora41	fedora:41	linux/arm64	pass	1
+fedora40	fedora:40	linux/arm64	pass	0
+alma9	almalinux:9	linux/arm64	refuse-old-python	0
+arch	archlinux:latest	linux/amd64	gap	0
+opensuse-tw	opensuse/tumbleweed	linux/arm64	gap	0
+alpine320	alpine:3.20	linux/arm64	gap	0
