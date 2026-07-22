@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# Runs INSIDE one clean distro container and exercises the real install
-# experience end to end for that distro:
+# Runs INSIDE one clean distro container — or directly on a bare host (the macOS
+# CI runner, via INSTALLER_PATH) — and exercises the real install experience end
+# to end for that system:
 #   1. run the branch installer exactly as a user would (curl | bash equivalent),
 #   2. audit that every dependency actually resolved (onnxruntime import +
 #      execution providers, core modules, installer-managed artifacts on disk),
@@ -16,14 +17,18 @@
 #   ROW_NAME       label for this matrix row (for the log)
 #   ROW_EXPECT     pass | refuse-old-python | gap
 #   DO_BOOT        1 to boot + poll /ready after the audit, 0 to stop at audit
-# Mounted read-only at /verify/install.sh: the branch's installer/install.sh.
+#   INSTALLER_PATH path to the installer (defaults to the container mount at
+#                  /verify/install.sh; set it to the checked-out installer on a
+#                  bare host where nothing is mounted).
 set -uo pipefail   # deliberately NOT -e: observe failures, don't abort on them.
 
 BRANCH="${CHALIE_BRANCH:?CHALIE_BRANCH required}"
 EXPECT="${ROW_EXPECT:-pass}"
 DO_BOOT="${DO_BOOT:-0}"
 NAME="${ROW_NAME:-unknown}"
-INSTALLER="/verify/install.sh"
+# In a container the installer is mounted at /verify/install.sh; on a bare host
+# (the macOS CI runner) point INSTALLER_PATH at the checked-out installer instead.
+INSTALLER="${INSTALLER_PATH:-/verify/install.sh}"
 PORT="31025"
 
 say()    { printf '\n=== %s ===\n' "$*"; }
@@ -118,6 +123,19 @@ for m in ("onnx", "numpy", "transformers", "soundfile", "playwright"):
         __import__(m); print("import-ok", m)
     except Exception as e:
         print("import-FAIL", m, repr(e)); hard_ok = False
+# Prove Chromium actually launches — i.e. its system libraries resolved. This is
+# the real test of the installer's per-distro browser-deps step: a missing shared
+# object shows up here as a launch failure instead of silently at first web_browse
+# use. --no-sandbox/--disable-dev-shm-usage because the audit runs as root in a
+# container (Chromium refuses to run as root with the sandbox on).
+try:
+    from playwright.sync_api import sync_playwright
+    with sync_playwright() as p:
+        b = p.chromium.launch(args=["--no-sandbox", "--disable-dev-shm-usage"])
+        b.close()
+    print("chromium-launch-ok")
+except Exception as e:
+    print("chromium-launch-FAIL:", repr(e)); hard_ok = False
 # Voice packages: reported, not fatal to the verdict (upstream module names vary);
 # the /ready boot check is the real proof the voice stack imports at runtime.
 for m in ("kokoro_onnx", "moonshine_onnx"):

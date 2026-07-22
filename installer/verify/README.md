@@ -41,10 +41,11 @@ around those real code paths:
   prebuilt wheels happened to cover it.
 
 macOS (Apple Silicon) cannot run as a container — Docker cannot host macOS — so
-the repeatable mechanism for it is a real Apple-Silicon runner (GitHub's
-`macos-14`) or running the installer directly on a Mac; the container matrix here
-covers Linux only. macOS on Intel and any non-Linux/macOS OS are refused by the
-installer by design.
+the CI workflow covers it with a dedicated `macos-14` job that runs the same
+`verify-inside.sh` directly on a real Apple-Silicon runner (`INSTALLER_PATH`
+points the script at the checked-out installer instead of a container mount). The
+container matrix here covers Linux; the same script runs unchanged on any Mac.
+macOS on Intel and any non-Linux/macOS OS are refused by the installer by design.
 
 ## Running it
 

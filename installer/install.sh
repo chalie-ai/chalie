@@ -324,11 +324,37 @@ _setup_venv() {
 }
 
 # ─── Playwright Browser ─────────────────────────────────────────────────────
+# Chromium needs a set of system libraries to launch (nss, cups, gbm, X libs,
+# …). Playwright's `--with-deps` installs them, but it only knows apt package
+# names: on any non-apt distro it falls back to apt-get, which is absent, and
+# aborts the whole install. So install those libraries with the distro's own
+# package manager, then fetch the browser without `--with-deps`.
 _install_playwright() {
   _section "Playwright Browser"
   local pw="$CHALIE_HOME/venv/bin/playwright"
   if [[ "$(_detect_os)" == "linux" ]]; then
-    _run_privileged "$pw" install --with-deps chromium
+    local distro
+    distro="$(_detect_linux_distro)"
+    case "$distro" in
+      *debian*|*ubuntu*)
+        # apt path works — and `--with-deps` tracks apt package renames (e.g.
+        # Ubuntu 24.04's t64 transition) that a hand-listed set would miss.
+        _run_privileged "$pw" install --with-deps chromium
+        ;;
+      *fedora*|*rhel*|*centos*)
+        _run_privileged dnf install -y \
+          nss nspr atk at-spi2-atk at-spi2-core cups-libs libdrm libxkbcommon \
+          libXcomposite libXdamage libXrandr libXext libXfixes libX11 libxcb \
+          mesa-libgbm pango cairo alsa-lib
+        "$pw" install chromium
+        ;;
+      *)
+        # Unhandled distro: fetch the browser; its system libraries are the
+        # user's responsibility (same class as the build-deps unknown-distro case).
+        _warn "Unknown distro '$distro' — installing Chromium without system libraries"
+        "$pw" install chromium
+        ;;
+    esac
   else
     "$pw" install chromium
   fi
