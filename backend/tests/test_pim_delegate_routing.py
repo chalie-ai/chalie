@@ -40,6 +40,7 @@ import pytest
 import configs.channels as channels_pkg
 from abilities.find_tools import FindToolsAbility
 from configs.channels import UserConfig
+from contracts.params.find_tools_params_bag import FindToolsParamsBag
 from configs.channels._common import DEFAULT_ALWAYS_AVAILABLE
 from configs.channels.pim import PimConfig
 from configs.enums.policy_channel import PolicyChannel
@@ -69,7 +70,7 @@ def _injected(query: object) -> list[str]:
     base = set(mp.active_tools)
     ability = FindToolsAbility()
     ability.mp = mp
-    ability.run({"query": query})
+    ability.run(FindToolsParamsBag.from_params({"query": query}))
     return [t for t in mp.active_tools if t not in base]
 
 

@@ -25,7 +25,7 @@ import logging
 import re
 import sqlite3
 from abc import ABC
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import ClassVar, cast
 
@@ -125,7 +125,7 @@ class SearchableAbility(Ability, ABC):
 
     def _discover(
         self,
-        rows: "list[object]",
+        rows: "Sequence[str]",
         exact_fn: Callable[[str], "tuple[object | None, bool]"],
         bm25_fn: Callable[[list[str]], "list[object]"],
         vector_fn: Callable[[list[str]], "list[object]"],
@@ -141,7 +141,7 @@ class SearchableAbility(Ability, ABC):
         discovered: list[object] = []
         not_found: list[str] = []
         for raw in rows:
-            terms = search_terms(str(raw))
+            terms = search_terms(raw)
             if not terms:
                 continue
             key, ambiguous = exact_fn(self._norm(" ".join(terms)))

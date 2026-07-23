@@ -20,14 +20,18 @@ Rich-media rendering:
 
 import logging
 import time
-from typing import ClassVar, cast
+from typing import TYPE_CHECKING, ClassVar, cast
 
 import requests
 
 from abilities._ability import Ability
-from configs.enums.param_key import Keys
 from abilities._result import ToolResult
+from configs.enums.param_key import Keys
+from contracts.params.weather_params_bag import WeatherParamsBag
 from services.time_utils import utc_now
+
+if TYPE_CHECKING:
+    from contracts.params.param_bag import ParamBag
 
 logger = logging.getLogger(__name__)
 
@@ -56,7 +60,9 @@ _OPEN_METEO_BASE = "https://api.open-meteo.com"
 _WTTR_BASE = "https://wttr.in"
 
 
-class WeatherAbility(Ability):
+class WeatherAbility(Ability[WeatherParamsBag]):
+    PARAMS: ClassVar["type[ParamBag] | None"] = WeatherParamsBag
+
     def get_name(self) -> str:
         return "weather"
 
@@ -97,8 +103,8 @@ class WeatherAbility(Ability):
     _cache: ClassVar[dict[str, tuple[dict[str, object], float]]] = {}
     _CACHE_TTL: ClassVar[int] = 600  # 10 minutes
 
-    def run(self, params: dict[str, object]) -> ToolResult:
-        location_param = cast(str, params.get(Keys.location, "")).strip()
+    def run(self, params: WeatherParamsBag) -> ToolResult:
+        location_param = params.location
         lat, lon, location_name = _extract_location(self.telemetry)
 
         # Guardrail: with no device coordinates AND no location param there is no

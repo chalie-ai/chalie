@@ -5,6 +5,7 @@ import pytest
 
 from abilities._result import ToolResult
 from abilities.find_tools import FindToolsAbility
+from contracts.params.find_tools_params_bag import FindToolsParamsBag
 from services.database import Database
 from services.file_mapper_service import FileMapperService
 from services.mcp_client_service import McpClientService, _open_tools_db
@@ -30,7 +31,7 @@ def _stub_proc() -> MessageProcessor:
 
 def _run_find_tools(ability: FindToolsAbility, proc: MessageProcessor, params: dict[str, object]) -> ToolResult:
     ability.mp = proc
-    return ability.run(params)
+    return ability.run(FindToolsParamsBag.from_params(params))
 
 
 def _seed_server_online(svc: McpClientService, name: str, tools: list[dict[str, object]]) -> dict[str, object]:

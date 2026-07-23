@@ -23,6 +23,7 @@ from abilities._registry import AbilityRegistry
 from abilities.find_tools import FindToolsAbility
 from abilities.vision import VisionAbility
 from configs.channels import DmnConfig, UserConfig
+from contracts.params.find_tools_params_bag import FindToolsParamsBag
 from configs.enums.policy_channel import PolicyChannel
 from services.database import Database
 from services.file_mapper_service import FileMapperService
@@ -49,7 +50,7 @@ def _mp_for(config: ProcessorConfig) -> MessageProcessor:
 def _find_tools_on(mp: MessageProcessor, params: dict[str, object]) -> Mapping[str, object]:
     ability = FindToolsAbility()
     ability.mp = mp
-    return cast(Mapping[str, object], ability.run(params).body)
+    return cast(Mapping[str, object], ability.run(FindToolsParamsBag.from_params(params)).body)
 
 
 def _seeded_policy_db(tmp_path: Path) -> PolicyManager:

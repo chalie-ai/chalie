@@ -32,6 +32,7 @@ import pytest
 
 from abilities._registry import AbilityRegistry
 from abilities.find_tools import FindToolsAbility
+from contracts.params.find_tools_params_bag import FindToolsParamsBag
 from configs.channels import DmnConfig, UserConfig
 from configs.channels.web_browse import WebBrowseConfig
 from configs.enums.policy_channel import PolicyChannel
@@ -55,7 +56,7 @@ def _find_tools_on(mp: MessageProcessor, params: dict[str, object]) -> str | Map
     string on failure (the dispatcher adds the ``[find_tools(...)]`` envelope)."""
     ability = FindToolsAbility()
     ability.mp = mp
-    return ability.run(params).body
+    return ability.run(FindToolsParamsBag.from_params(params)).body
 
 
 # ---------------------------------------------------------------------------

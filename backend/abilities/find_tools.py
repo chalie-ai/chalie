@@ -1,11 +1,15 @@
 import logging
 from pathlib import Path
-from typing import ClassVar, cast
+from typing import TYPE_CHECKING, ClassVar, cast
 
 from configs.enums.param_key import Keys
 from abilities._result import ToolResult
 from abilities._search import KNN_DEPTH, SearchableAbility
+from contracts.params.find_tools_params_bag import FindToolsParamsBag
 from services.file_mapper_service import FileMapperService
+
+if TYPE_CHECKING:
+    from contracts.params.param_bag import ParamBag
 
 logger = logging.getLogger(__name__)
 
@@ -19,6 +23,8 @@ class FindToolsAbility(SearchableAbility):
     (segment-gated) → vector on the full prose (``VEC_CEILING``). find_tools adds
     the MCP surface and the bare-name ambiguity guard; everything else is shared.
     """
+
+    PARAMS: ClassVar["type[ParamBag] | None"] = FindToolsParamsBag
 
     DISCOVERABLE: ClassVar[bool] = False  # the discovery entry point itself; pinned, never discovered
 
@@ -134,7 +140,7 @@ class FindToolsAbility(SearchableAbility):
             logger.debug("[FIND_TOOLS] Could not fetch MCP tool index: %s", exc)
             return []
 
-    def run(self, params: dict[str, object]) -> ToolResult:
+    def run(self, params: FindToolsParamsBag) -> ToolResult:
         """Run each query entry through the shared cascade and inject what wins.
 
         The success body is ``{"injected": [{"name", "summary"}, …], "not_found":
@@ -142,14 +148,7 @@ class FindToolsAbility(SearchableAbility):
         can always tell what it actually got. ``not_found`` lists entries the
         cascade could not satisfy plus any bare MCP name that was ambiguous
         (refused, with the prefixed-name guidance, rather than silently resolved)."""
-        rows = params.get(Keys.query)
-        if not isinstance(rows, list) or not rows:
-            return ToolResult.err(
-                "find_tools requires 'query': a non-empty array of tool names or "
-                "described actions to discover.",
-                code="missing-params",
-                valid=("query",),
-            )
+        rows = params.query
 
         # The discovery roster is global: every DISCOVERABLE ability plus the
         # online MCP tools. A non-discoverable tool is simply absent from this set.

@@ -6,24 +6,25 @@ import re
 import shlex
 import subprocess
 from pathlib import Path
-from typing import TYPE_CHECKING, ClassVar, cast
+from typing import TYPE_CHECKING, ClassVar
 
 if TYPE_CHECKING:
     from typing import TypedDict
+
+    from contracts.params.param_bag import ParamBag
 
     class _TruncMeta(TypedDict, total=False):
         truncated: bool
 
 from abilities._ability import Ability
-from configs.enums.param_key import Keys
 from abilities._result import ToolResult, truncate
+from configs.enums.param_key import Keys
+from contracts.params.bash_params_bag import BashParamsBag
 
 logger = logging.getLogger(__name__)
 
 _MAX_OUTPUT_CHARS = 100 * 1024
 _TRUNCATION_NOTICE = "... (output truncated at 100KB)"
-_DEFAULT_TIMEOUT_S = 30
-_MAX_TIMEOUT_S = 300
 _NONPRINTABLE_THRESHOLD = 0.10
 _EMPTY_SUCCESS_MSG = "(no output — command succeeded silently)"
 # Single source of truth for where bash runs — the same value the model is told
@@ -108,8 +109,10 @@ _SECRET_SUFFIXES: tuple[str, ...] = (
 _SECRET_PREFIXES: tuple[str, ...] = ("ANTHROPIC_", "OPENAI_")
 
 
-class BashAbility(Ability):
+class BashAbility(Ability[BashParamsBag]):
     """Execute shell commands via ``bash -c`` with policy-gated classification."""
+
+    PARAMS: ClassVar["type[ParamBag] | None"] = BashParamsBag
 
     _SUMMARY: ClassVar[str] = (
         "Run a shell command via bash. "
@@ -187,20 +190,13 @@ class BashAbility(Ability):
         no model-supplied action to trust. Returns ``read`` (the benign
         inspection floor) when no heavier pattern matches.
         """
-        command = (cast(str, params.get(Keys.command)) or "").strip()
+        command = str(params.get(Keys.command) or "").strip()
         if not command:
             return _DEFAULT_ACTION
         return _classify_heuristic(command) or _DEFAULT_ACTION
 
-    def run(self, params: dict[str, object]) -> ToolResult:
-        command = (cast(str, params.get(Keys.command)) or "").strip()
-        if not command:
-            return ToolResult.err(
-                "command is required.",
-                code="missing-command",
-                hint="pass the shell command to run in 'command'.",
-            )
-
+    def run(self, params: BashParamsBag) -> ToolResult:
+        command = params.command
         destructive_error = _check_destructive(command)
         if destructive_error:
             return ToolResult.err(
@@ -209,10 +205,8 @@ class BashAbility(Ability):
                 hint="this command is blocked outright; it cannot be run.",
             )
 
-        timeout_s = _resolve_timeout(cast("int | None", params.get(Keys.timeout_s)))
         safe_env = _build_safe_env()
-
-        return _run_command(command, timeout_s, safe_env)
+        return _run_command(command, params.timeout_s, safe_env)
 
 
 # ── Classification ─────────────────────────────────────────────────────────
@@ -291,19 +285,6 @@ def _check_destructive(command: str) -> str | None:
                 "This command cannot be executed."
             )
     return None
-
-
-# ── Parameter resolution ──────────────────────────────────────────────────
-
-
-def _resolve_timeout(timeout_param: int | None) -> int:
-    if timeout_param is None:
-        return _DEFAULT_TIMEOUT_S
-    try:
-        value = int(timeout_param)
-    except (TypeError, ValueError):
-        return _DEFAULT_TIMEOUT_S
-    return max(1, min(value, _MAX_TIMEOUT_S))
 
 
 # ── Subprocess execution ──────────────────────────────────────────────────

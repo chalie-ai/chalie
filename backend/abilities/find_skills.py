@@ -30,14 +30,18 @@ Returns a sealed :class:`abilities._result.ToolResult` (never a wire envelope):
 
 import logging
 import sqlite3
-from typing import ClassVar, cast
+from typing import TYPE_CHECKING, ClassVar, cast
 
 from configs.enums.param_key import Keys
 from abilities._result import ToolResult
 from abilities._search import KNN_DEPTH, SearchableAbility
+from contracts.params.find_skills_params_bag import FindSkillsParamsBag
 from models.skill import Skill
 from models.skill_association import SkillAssociation
 from services.file_mapper_service import FileMapperService
+
+if TYPE_CHECKING:
+    from contracts.params.param_bag import ParamBag
 
 logger = logging.getLogger(__name__)
 
@@ -45,6 +49,8 @@ _BROADEN_HINT = "Try broadening the query or describing the task differently."
 
 
 class FindSkillsAbility(SearchableAbility):
+    PARAMS: ClassVar["type[ParamBag] | None"] = FindSkillsParamsBag
+
     DISCOVERABLE: ClassVar[bool] = False  # framework discovery tool; always pinned, never discovered
 
     def get_name(self) -> str:
@@ -86,15 +92,8 @@ class FindSkillsAbility(SearchableAbility):
 
     _LOG_PREFIX = "[FIND_SKILLS]"
 
-    def run(self, params: dict[str, object]) -> ToolResult:
-        rows = params.get(Keys.query)
-        if not isinstance(rows, list) or not rows:
-            return ToolResult.err(
-                "find_skills requires 'query': a non-empty array of skill names or "
-                "described tasks to find a playbook for.",
-                code="missing-params",
-                valid=("query",),
-            )
+    def run(self, params: FindSkillsParamsBag) -> ToolResult:
+        rows = params.query
 
         db_path = FileMapperService.get_skills_db_path()
         if not db_path.exists():

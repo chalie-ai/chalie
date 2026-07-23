@@ -80,6 +80,31 @@ class ParamBag(ABC):
         return value.strip()
 
     @staticmethod
+    def require_str_list(params: dict[str, object], key: str) -> list[str]:
+        """Mandatory non-empty list of strings → a fresh list, ``missing-params``
+        when absent, empty, or not a list; ``invalid-param`` on a non-string
+        element. The copy keeps the frozen bag from aliasing the caller's dict."""
+        value = params.get(key)
+        if not isinstance(value, list) or not value:
+            received = "|".join(params.keys()) or "none"
+            raise ToolParamError(
+                f"Required parameter '{key}' must be a non-empty list.",
+                code="missing-params",
+                hint=f"pass '{key}' as a list of strings (received: {received})",
+                valid=(key,),
+            )
+        items: list[str] = []
+        for i, item in enumerate(value):
+            if not isinstance(item, str):
+                raise ToolParamError(
+                    f"'{key}' item at index {i} must be a string.",
+                    code="invalid-param",
+                    hint=f"pass '{key}' as a list of strings.",
+                )
+            items.append(item)
+        return items
+
+    @staticmethod
     def opt_str(params: dict[str, object], key: str) -> str | None:
         """Optional string → the value, ``None`` when absent, ``invalid-param``
         on any other type. The typed replacement for the ``cast("str | None",
