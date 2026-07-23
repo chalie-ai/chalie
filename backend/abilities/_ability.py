@@ -26,12 +26,12 @@ from typing import TYPE_CHECKING, Any, Callable, ClassVar, Generic, cast
 from typing_extensions import TypeVar
 
 from abilities._result import ToolResult
+from contracts.params.param_bag import ParamBag
 from exceptions import ToolParamError
 
 if TYPE_CHECKING:
     from datetime import datetime
 
-    from contracts.params.param_bag import ParamBag
     from controllers.message_processor import MessageProcessor
 
 # Sentinel distinguishing "no default supplied" from an explicit default of None

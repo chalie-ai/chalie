@@ -30,8 +30,6 @@ from typing import TYPE_CHECKING, ClassVar
 if TYPE_CHECKING:
     from typing import TypedDict
 
-    from contracts.params.param_bag import ParamBag
-
     class _OkTextMeta(TypedDict, total=False):
         source: str
         truncated: bool
@@ -41,6 +39,7 @@ import requests
 from abilities._ability import Ability
 from abilities._result import ToolResult, truncate
 from configs.enums.param_key import Keys
+from contracts.params.param_bag import ParamBag
 from contracts.params.read_params_bag import ReadParamsBag
 from exceptions import FetchBlocked, NoReadableContent, NoTextContent, NotAFile, SourceIsImage, SystemPathBlocked
 from services.text_reader import TextReader
@@ -49,7 +48,7 @@ logger = logging.getLogger(__name__)
 
 
 class ReadAbility(Ability[ReadParamsBag]):
-    PARAMS: ClassVar["type[ParamBag] | None"] = ReadParamsBag
+    PARAMS: ClassVar[type[ParamBag] | None] = ReadParamsBag
 
     def get_name(self) -> str:
         return "read"

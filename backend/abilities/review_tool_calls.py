@@ -10,16 +10,14 @@ All retrieval/formatting/error logic lives in ``ReviewWindowAbility``; this clas
 declares only the windowed ``tool_calls`` SELECT and the structured row shape.
 """
 
-from typing import TYPE_CHECKING, ClassVar
+from typing import ClassVar
 
 from configs.enums.param_key import Keys
 from abilities._result import ToolResult
 from abilities._review_window import ReviewWindowAbility
+from contracts.params.param_bag import ParamBag
 from contracts.params.review_window_params_bag import ReviewWindowParamsBag
 from models.tool_call import ToolCall
-
-if TYPE_CHECKING:
-    from contracts.params.param_bag import ParamBag
 
 # Tool-call params summaries can be large; clip so one row stays a single readable
 # line of structured JSON.
@@ -27,7 +25,7 @@ _PARAMS_SUMMARY_CHARS = 120
 
 
 class ReviewToolCallsAbility(ReviewWindowAbility[ReviewWindowParamsBag]):
-    PARAMS: ClassVar["type[ParamBag] | None"] = ReviewWindowParamsBag
+    PARAMS: ClassVar[type[ParamBag] | None] = ReviewWindowParamsBag
     SYSTEM = True
 
     def get_name(self) -> str:

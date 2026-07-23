@@ -15,23 +15,21 @@ declares only the clamped buffer, the windowed ``transcript`` SELECT, and the
 structured row shape.
 """
 
-from typing import TYPE_CHECKING, ClassVar, cast
+from typing import ClassVar, cast
 
 from configs.enums.param_key import Keys
 from abilities._review_window import ReviewWindowAbility
 from configs.enums.channels import Channel
+from contracts.params.param_bag import ParamBag
 from contracts.params.review_transcript_params_bag import (
     DEFAULT_BUFFER_MINUTES,
     MAX_BUFFER_MINUTES,
     ReviewTranscriptParamsBag,
 )
 
-if TYPE_CHECKING:
-    from contracts.params.param_bag import ParamBag
-
 
 class ReviewTranscriptAbility(ReviewWindowAbility[ReviewTranscriptParamsBag]):
-    PARAMS: ClassVar["type[ParamBag] | None"] = ReviewTranscriptParamsBag
+    PARAMS: ClassVar[type[ParamBag] | None] = ReviewTranscriptParamsBag
     SYSTEM = True
 
     def get_name(self) -> str:

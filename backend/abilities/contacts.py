@@ -33,10 +33,7 @@ envelope.
 from __future__ import annotations
 
 import json
-from typing import TYPE_CHECKING, ClassVar, cast
-
-if TYPE_CHECKING:
-    from contracts.params.param_bag import ParamBag
+from typing import ClassVar, cast
 
 from abilities._ability import Ability
 from abilities._result import ToolResult
@@ -46,6 +43,7 @@ from contracts.params.contacts_params_bag import (
     ContactsListParams,
     ContactsParamsBag,
 )
+from contracts.params.param_bag import ParamBag
 from models.contact import ContactRow
 
 
@@ -58,7 +56,7 @@ class ContactsAbility(Ability[ContactsParamsBag]):
 
     # The typed input contract: the dispatch seam builds the bag via
     # ContactsParamsBag.from_params before run() is called.
-    PARAMS: ClassVar["type[ParamBag] | None"] = ContactsParamsBag
+    PARAMS: ClassVar[type[ParamBag] | None] = ContactsParamsBag
 
     # Pre-gated by the dispatcher BEFORE run(): get requires an identifier; list
     # requires nothing (an empty query lists the whole book). An unknown action

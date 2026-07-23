@@ -25,20 +25,18 @@ import re
 import urllib.parse
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, ClassVar, cast
+from typing import ClassVar, cast
 
 import requests
 
 from abilities._ability import Ability
 from abilities._result import ToolResult, truncate
 from configs.enums.param_key import Keys
+from contracts.params.param_bag import ParamBag
 from contracts.params.programming_docs_search_params_bag import ProgrammingDocsSearchParamsBag
 from services.text_extractor import extract_html
 from services.web_fetch import API, fetch_text
 from exceptions import FetchBlocked
-
-if TYPE_CHECKING:
-    from contracts.params.param_bag import ParamBag
 
 # ── Tunables ──────────────────────────────────────────────────────────────────
 
@@ -503,7 +501,7 @@ def lookup(language: str, query: str) -> ToolResult:
 # ── Ability class ────────────────────────────────────────────────────────────────
 
 class ProgrammingDocsSearchAbility(Ability[ProgrammingDocsSearchParamsBag]):
-    PARAMS: ClassVar["type[ParamBag] | None"] = ProgrammingDocsSearchParamsBag
+    PARAMS: ClassVar[type[ParamBag] | None] = ProgrammingDocsSearchParamsBag
 
     def get_name(self) -> str:
         return "programming_docs_search"

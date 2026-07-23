@@ -36,20 +36,18 @@ from collections import deque
 from collections.abc import Generator
 from fnmatch import fnmatch
 from pathlib import Path
-from typing import TYPE_CHECKING, ClassVar, cast
+from typing import ClassVar, cast
 
 from abilities._ability import Ability
 from abilities._result import ToolResult
 from configs.enums.param_key import Keys
+from contracts.params.param_bag import ParamBag
 from contracts.params.search_files_params_bag import (
     DEFAULT_CONTEXT_LINES,
     SearchFilesGlobParams,
     SearchFilesGrepParams,
     SearchFilesParamsBag,
 )
-
-if TYPE_CHECKING:
-    from contracts.params.param_bag import ParamBag
 
 _RESULTS_PER_PAGE = 5
 # Safety ceiling on total results gathered for one query, so a pathological
@@ -83,7 +81,7 @@ class SearchFilesAbility(Ability[SearchFilesParamsBag]):
 
     # The typed input contract: the dispatch seam builds the bag via
     # SearchFilesParamsBag.from_params before run() is called.
-    PARAMS: ClassVar["type[ParamBag] | None"] = SearchFilesParamsBag
+    PARAMS: ClassVar[type[ParamBag] | None] = SearchFilesParamsBag
 
     def get_name(self) -> str:
         return "search_files"

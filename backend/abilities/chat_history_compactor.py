@@ -34,12 +34,11 @@ from abilities._compaction_config import CompactionConfig
 from abilities._result import ToolResult
 from configs.enums.thinking_level import ThinkingLevel
 from contracts.params.chat_history_compactor_params_bag import ChatHistoryCompactorParamsBag
+from contracts.params.param_bag import ParamBag
 from models.compaction import Compaction
 
 if TYPE_CHECKING:
     from typing import Protocol
-
-    from contracts.params.param_bag import ParamBag
 
     from models.transcript import Transcript
 
@@ -108,7 +107,7 @@ Rules:
 class ChatHistoryCompactor(Ability[ChatHistoryCompactorParamsBag]):
     DISCOVERABLE: ClassVar[bool] = False  # internal-only compaction tool; pinned, never discovered
     counts_as_settle: ClassVar[bool] = False  # never demotes a settle0
-    PARAMS: ClassVar["type[ParamBag] | None"] = ChatHistoryCompactorParamsBag
+    PARAMS: ClassVar[type[ParamBag] | None] = ChatHistoryCompactorParamsBag
 
     def get_name(self) -> str:
         return "chat_history_compactor"

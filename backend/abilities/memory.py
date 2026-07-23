@@ -12,7 +12,7 @@ with the bound MessageProcessor.
 """
 
 import logging
-from typing import TYPE_CHECKING, ClassVar
+from typing import ClassVar
 
 from abilities._ability import Ability
 from configs.enums.param_key import Keys
@@ -24,10 +24,8 @@ from contracts.params.memory_params_bag import (
     MemoryReflectParams,
     MemoryStoreParams,
 )
+from contracts.params.param_bag import ParamBag
 from services.memory_service import MemoryService
-
-if TYPE_CHECKING:
-    from contracts.params.param_bag import ParamBag
 
 logger = logging.getLogger(__name__)
 LOG_PREFIX = "[MEMORY]"
@@ -38,7 +36,7 @@ class MemoryAbility(Ability[MemoryParamsBag]):
 
     # The typed input contract: the dispatch seam builds the bag via
     # MemoryParamsBag.from_params before run() is called.
-    PARAMS: ClassVar["type[ParamBag] | None"] = MemoryParamsBag
+    PARAMS: ClassVar[type[ParamBag] | None] = MemoryParamsBag
 
     def get_name(self) -> str:
         return "memory"

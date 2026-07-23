@@ -11,8 +11,6 @@ from typing import TYPE_CHECKING, ClassVar
 if TYPE_CHECKING:
     from typing import TypedDict
 
-    from contracts.params.param_bag import ParamBag
-
     class _TruncMeta(TypedDict, total=False):
         truncated: bool
 
@@ -20,6 +18,7 @@ from abilities._ability import Ability
 from abilities._result import ToolResult, truncate
 from configs.enums.param_key import Keys
 from contracts.params.bash_params_bag import BashParamsBag
+from contracts.params.param_bag import ParamBag
 
 logger = logging.getLogger(__name__)
 
@@ -112,7 +111,7 @@ _SECRET_PREFIXES: tuple[str, ...] = ("ANTHROPIC_", "OPENAI_")
 class BashAbility(Ability[BashParamsBag]):
     """Execute shell commands via ``bash -c`` with policy-gated classification."""
 
-    PARAMS: ClassVar["type[ParamBag] | None"] = BashParamsBag
+    PARAMS: ClassVar[type[ParamBag] | None] = BashParamsBag
 
     _SUMMARY: ClassVar[str] = (
         "Run a shell command via bash. "

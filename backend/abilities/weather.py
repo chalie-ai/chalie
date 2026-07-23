@@ -20,18 +20,16 @@ Rich-media rendering:
 
 import logging
 import time
-from typing import TYPE_CHECKING, ClassVar, cast
+from typing import ClassVar, cast
 
 import requests
 
 from abilities._ability import Ability
 from abilities._result import ToolResult
 from configs.enums.param_key import Keys
+from contracts.params.param_bag import ParamBag
 from contracts.params.weather_params_bag import WeatherParamsBag
 from services.time_utils import utc_now
-
-if TYPE_CHECKING:
-    from contracts.params.param_bag import ParamBag
 
 logger = logging.getLogger(__name__)
 
@@ -61,7 +59,7 @@ _WTTR_BASE = "https://wttr.in"
 
 
 class WeatherAbility(Ability[WeatherParamsBag]):
-    PARAMS: ClassVar["type[ParamBag] | None"] = WeatherParamsBag
+    PARAMS: ClassVar[type[ParamBag] | None] = WeatherParamsBag
 
     def get_name(self) -> str:
         return "weather"

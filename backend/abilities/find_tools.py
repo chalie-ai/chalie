@@ -1,15 +1,13 @@
 import logging
 from pathlib import Path
-from typing import TYPE_CHECKING, ClassVar, cast
+from typing import ClassVar, cast
 
 from configs.enums.param_key import Keys
 from abilities._result import ToolResult
 from abilities._search import KNN_DEPTH, SearchableAbility
 from contracts.params.find_tools_params_bag import FindToolsParamsBag
+from contracts.params.param_bag import ParamBag
 from services.file_mapper_service import FileMapperService
-
-if TYPE_CHECKING:
-    from contracts.params.param_bag import ParamBag
 
 logger = logging.getLogger(__name__)
 
@@ -24,7 +22,7 @@ class FindToolsAbility(SearchableAbility):
     the MCP surface and the bare-name ambiguity guard; everything else is shared.
     """
 
-    PARAMS: ClassVar["type[ParamBag] | None"] = FindToolsParamsBag
+    PARAMS: ClassVar[type[ParamBag] | None] = FindToolsParamsBag
 
     DISCOVERABLE: ClassVar[bool] = False  # the discovery entry point itself; pinned, never discovered
 

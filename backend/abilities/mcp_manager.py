@@ -46,7 +46,6 @@ from configs.enums.param_key import Keys
 
 if TYPE_CHECKING:
     from services.mcp_client_service import McpClientService as _McpClientService
-    from contracts.params.param_bag import ParamBag
 from contracts.params.mcp_manager_params_bag import (
     McpManagerAddParams,
     McpManagerDisableParams,
@@ -54,6 +53,7 @@ from contracts.params.mcp_manager_params_bag import (
     McpManagerListParams,
     McpManagerParamsBag,
 )
+from contracts.params.param_bag import ParamBag
 
 logger = logging.getLogger(__name__)
 
@@ -76,7 +76,7 @@ def _classify_sync_error(error: str) -> str:
 class McpManagerAbility(Ability[McpManagerParamsBag]):
     # The typed input contract: the dispatch seam builds the bag via
     # McpManagerParamsBag.from_params before run() is called.
-    PARAMS: ClassVar["type[ParamBag] | None"] = McpManagerParamsBag
+    PARAMS: ClassVar[type[ParamBag] | None] = McpManagerParamsBag
 
     def get_name(self) -> str:
         return "mcp_manager"

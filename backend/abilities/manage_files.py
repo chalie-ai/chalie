@@ -21,7 +21,7 @@ from __future__ import annotations
 import os
 import shutil
 from pathlib import Path
-from typing import TYPE_CHECKING, ClassVar
+from typing import ClassVar
 
 from abilities._ability import Ability
 from abilities._result import ToolResult
@@ -32,9 +32,7 @@ from contracts.params.manage_files_params_bag import (
     ManageFilesParamsBag,
     ManageFilesUpdatePermissionParams,
 )
-
-if TYPE_CHECKING:
-    from contracts.params.param_bag import ParamBag
+from contracts.params.param_bag import ParamBag
 
 
 class ManageFilesAbility(Ability[ManageFilesParamsBag]):
@@ -46,7 +44,7 @@ class ManageFilesAbility(Ability[ManageFilesParamsBag]):
 
     # The typed input contract: the dispatch seam builds the bag via
     # ManageFilesParamsBag.from_params before run() is called.
-    PARAMS: ClassVar["type[ParamBag] | None"] = ManageFilesParamsBag
+    PARAMS: ClassVar[type[ParamBag] | None] = ManageFilesParamsBag
 
     def get_name(self) -> str:
         return "manage_files"
