@@ -20,22 +20,29 @@ Returns a sealed :class:`abilities._result.ToolResult` (never a wire envelope):
 import json
 import logging
 from pathlib import Path
-from typing import ClassVar, cast
+from typing import ClassVar
 
 from abilities._ability import Ability
-from configs.enums.param_key import Keys
 from abilities._result import ToolResult
+from configs.enums.param_key import Keys
+from contracts.params.file_write_params_bag import FileWriteParamsBag
+from contracts.params.param_bag import ParamBag
 
 logger = logging.getLogger(__name__)
 
 
-class FileWriteAbility(Ability):
+class FileWriteAbility(Ability[FileWriteParamsBag]):
     #: Action-less tool — the ``""`` key drives the dispatcher's ACTION_REQUIRED
     #: pre-gate to reject a missing/blank ``path`` with ``code=missing-params``
     #: BEFORE run(). ``contents`` is deliberately NOT listed: the pre-gate check
     #: is truthiness-based, so an empty-string ``contents`` (valid user data)
-    #: would be falsely rejected there. run() guards a MISSING contents key.
+    #: would be falsely rejected there. The bag's from_params guards a MISSING
+    #: contents key by presence.
     ACTION_REQUIRED: ClassVar[dict[str, tuple[str, ...]]] = {"": (Keys.path,)}
+
+    # The typed input contract: the dispatch seam builds the bag via
+    # FileWriteParamsBag.from_params before run() is called.
+    PARAMS: ClassVar[type[ParamBag] | None] = FileWriteParamsBag
 
     def get_name(self) -> str:
         return "file_write"
@@ -77,24 +84,9 @@ class FileWriteAbility(Ability):
     def get_parameters(self) -> dict[str, object]:
         return self._PARAMETERS
 
-    def run(self, params: dict[str, object]) -> ToolResult:
-        path_str = cast(str, params.get(Keys.path, ""))
-
-        # 'contents' is NOT pre-gated (an empty string is valid), so a MISSING
-        # key is guarded here; a present "" proceeds to write a 0-byte file.
-        if Keys.contents not in params:
-            return ToolResult.err(
-                "contents is required.",
-                code="missing-params",
-                hint="pass a 'contents' string (an empty string writes a 0-byte file).",
-            )
-        contents = params[Keys.contents]
-        if not isinstance(contents, str):
-            return ToolResult.err(
-                f"contents must be a string, got {type(contents).__name__}.",
-                code="invalid-param",
-                hint="pass the file body as a string; serialise structured data yourself first.",
-            )
+    def run(self, params: FileWriteParamsBag) -> ToolResult:
+        path_str = params.path
+        contents = params.contents
 
         if not Path(path_str).is_absolute():
             return ToolResult.err(

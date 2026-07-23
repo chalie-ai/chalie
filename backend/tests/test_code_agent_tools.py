@@ -32,6 +32,10 @@ from abilities.replace_all import ReplaceAllAbility
 from abilities.run_script import RunScriptAbility
 from configs.enums.param_key import Keys
 from contracts.params.manage_files_params_bag import ManageFilesParamsBag
+from contracts.params.move_params_bag import MoveParamsBag
+from contracts.params.replace_all_params_bag import ReplaceAllParamsBag
+from contracts.params.run_script_params_bag import RunScriptParamsBag
+from exceptions import ToolParamError
 
 pytestmark = pytest.mark.unit
 
@@ -50,11 +54,11 @@ def test_replace_all_directory(tmp_path: Path) -> None:
     (root / ".git").mkdir()
     (root / ".git" / "c.ts").write_text("old_api\n", encoding="utf-8")
 
-    result = ReplaceAllAbility().run({
+    result = ReplaceAllAbility().run(ReplaceAllParamsBag.from_params({
         Keys.search: "old_api",
         Keys.replace_: "new_api",
         Keys.path: str(root),
-    })
+    }))
 
     assert result.status == "success"
     body = result.body
@@ -74,12 +78,12 @@ def test_replace_all_glob(tmp_path: Path) -> None:
     (root / "a.ts").write_text("old_api\nnew_api\n", encoding="utf-8")
     (root / "b.txt").write_text("old_api\n", encoding="utf-8")
 
-    result = ReplaceAllAbility().run({
+    result = ReplaceAllAbility().run(ReplaceAllParamsBag.from_params({
         Keys.search: "old_api",
         Keys.replace_: "new_api",
         Keys.glob: "*.ts",
         Keys.path: str(root),
-    })
+    }))
 
     assert result.status == "success"
     body = result.body
@@ -93,19 +97,19 @@ def test_replace_all_glob(tmp_path: Path) -> None:
 
 def test_replace_all_errors(tmp_path: Path) -> None:
     """replace_all rejects a relative path and a nonexistent absolute path."""
-    rel = ReplaceAllAbility().run({
+    rel = ReplaceAllAbility().run(ReplaceAllParamsBag.from_params({
         Keys.search: "x",
         Keys.replace_: "y",
         Keys.path: "main.ts",
-    })
+    }))
     assert rel.status == "error"
     assert rel.code == "invalid-path"
 
-    missing = ReplaceAllAbility().run({
+    missing = ReplaceAllAbility().run(ReplaceAllParamsBag.from_params({
         Keys.search: "x",
         Keys.replace_: "y",
         Keys.path: str(tmp_path / "nope"),
-    })
+    }))
     assert missing.status == "error"
     assert missing.code == "not-found"
 
@@ -117,21 +121,21 @@ def test_replace_all_single_file(tmp_path: Path) -> None:
     target = tmp_path / "main.ts"
     target.write_text("old_api\nold_api\n", encoding="utf-8")
 
-    result = ReplaceAllAbility().run({
+    result = ReplaceAllAbility().run(ReplaceAllParamsBag.from_params({
         Keys.search: "old_api",
         Keys.replace_: "new_api",
         Keys.path: str(target),
-    })
+    }))
 
     assert result.status == "success"
     assert result.body == f"{target}: 2"
     assert target.read_text(encoding="utf-8") == "new_api\nnew_api\n"
 
-    result2 = ReplaceAllAbility().run({
+    result2 = ReplaceAllAbility().run(ReplaceAllParamsBag.from_params({
         Keys.search: "zzz",
         Keys.replace_: "y",
         Keys.path: str(target),
-    })
+    }))
 
     assert result2.status == "success"
     assert result2.body == "No occurrences were found."
@@ -197,10 +201,10 @@ def test_move_file(tmp_path: Path) -> None:
     dst = tmp_path / "dest.txt"
     src.write_text("hello world", encoding="utf-8")
 
-    result = MoveAbility().run({
+    result = MoveAbility().run(MoveParamsBag.from_params({
         Keys.current_path: str(src),
         Keys.new_path: str(dst),
-    })
+    }))
 
     assert result.status == "success"
     assert not src.exists()
@@ -219,10 +223,10 @@ def test_run_script_success(tmp_path: Path) -> None:
         'console.log("chalie-test-marker-42", Deno.args.join("|"));\n', encoding="utf-8"
     )
 
-    result = RunScriptAbility().run({
+    result = RunScriptAbility().run(RunScriptParamsBag.from_params({
         Keys.path: str(script),
         Keys.args: ["alpha", "--beta=2"],
-    })
+    }))
 
     assert result.status == "success"
     body = result.body
@@ -232,20 +236,22 @@ def test_run_script_success(tmp_path: Path) -> None:
 
 
 def test_run_script_errors(tmp_path: Path) -> None:
-    """run_script refuses a non-.ts file, a relative path, and non-list
-    args before any subprocess is spawned."""
+    """run_script refuses a non-.ts file and a relative path before any
+    subprocess is spawned; non-list args are rejected by the params bag."""
     (tmp_path / "notes.txt").write_text("not a script", encoding="utf-8")
 
-    not_ts = RunScriptAbility().run({Keys.path: str(tmp_path / "notes.txt")})
+    not_ts = RunScriptAbility().run(
+        RunScriptParamsBag.from_params({Keys.path: str(tmp_path / "notes.txt")})
+    )
     assert not_ts.status == "error"
     assert not_ts.code == "unsupported-file-type"
 
-    relative = RunScriptAbility().run({Keys.path: "hello.ts"})
+    relative = RunScriptAbility().run(RunScriptParamsBag.from_params({Keys.path: "hello.ts"}))
     assert relative.status == "error"
     assert relative.code == "invalid-path"
 
     script = tmp_path / "ok.ts"
     script.write_text("console.log(1);\n", encoding="utf-8")
-    bad_args = RunScriptAbility().run({Keys.path: str(script), Keys.args: "alpha"})
-    assert bad_args.status == "error"
-    assert bad_args.code == "invalid-args"
+    with pytest.raises(ToolParamError) as excinfo:
+        RunScriptParamsBag.from_params({Keys.path: str(script), Keys.args: "alpha"})
+    assert excinfo.value.code == "invalid-args"

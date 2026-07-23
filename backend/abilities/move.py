@@ -10,18 +10,24 @@ Returns a sealed :class:`abilities._result.ToolResult` (never a wire envelope):
 
 import shutil
 from pathlib import Path
-from typing import ClassVar, cast
+from typing import ClassVar
 
 from abilities._ability import Ability
-from configs.enums.param_key import Keys
 from abilities._result import ToolResult
+from configs.enums.param_key import Keys
+from contracts.params.move_params_bag import MoveParamsBag
+from contracts.params.param_bag import ParamBag
 
 
-class MoveAbility(Ability):
+class MoveAbility(Ability[MoveParamsBag]):
     #: Action-less tool — the ``""`` key drives the dispatcher's ACTION_REQUIRED
     #: pre-gate to reject a missing/blank ``current_path`` with
     #: ``code=missing-params`` BEFORE run().
     ACTION_REQUIRED: ClassVar[dict[str, tuple[str, ...]]] = {"": (Keys.current_path, Keys.new_path)}
+
+    # The typed input contract: the dispatch seam builds the bag via
+    # MoveParamsBag.from_params before run() is called.
+    PARAMS: ClassVar[type[ParamBag] | None] = MoveParamsBag
 
     def get_name(self) -> str:
         return "move"
@@ -60,9 +66,9 @@ class MoveAbility(Ability):
     def get_parameters(self) -> dict[str, object]:
         return self._PARAMETERS
 
-    def run(self, params: dict[str, object]) -> ToolResult:
-        current_path_str = cast(str, params.get(Keys.current_path, ""))
-        new_path_str = cast(str, params.get(Keys.new_path, ""))
+    def run(self, params: MoveParamsBag) -> ToolResult:
+        current_path_str = params.current_path
+        new_path_str = params.new_path
 
         if not Path(current_path_str).is_absolute():
             return ToolResult.err(

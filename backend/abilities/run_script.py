@@ -34,11 +34,13 @@ import shutil
 import subprocess
 import time
 from pathlib import Path
-from typing import TYPE_CHECKING, ClassVar, cast
+from typing import TYPE_CHECKING, ClassVar
 
 from abilities._ability import Ability
 from abilities._result import ToolResult, truncate
 from configs.enums.param_key import Keys
+from contracts.params.param_bag import ParamBag
+from contracts.params.run_script_params_bag import RunScriptParamsBag
 
 if TYPE_CHECKING:
     from typing import TypedDict
@@ -63,10 +65,14 @@ _EXEC_TIMEOUT_S = 600
 _DENO_RUN_FLAGS: tuple[str, ...] = ("run", "--no-config", "-A")
 
 
-class RunScriptAbility(Ability):
+class RunScriptAbility(Ability[RunScriptParamsBag]):
     DISCOVERABLE: ClassVar[bool] = False  # code-agent-delegate-exclusive; pinned on CodeAgentConfig only
 
     ACTION_REQUIRED: ClassVar[dict[str, tuple[str, ...]]] = {"": (Keys.path,)}
+
+    # The typed input contract: the dispatch seam builds the bag via
+    # RunScriptParamsBag.from_params before run() is called.
+    PARAMS: ClassVar[type[ParamBag] | None] = RunScriptParamsBag
 
     def get_name(self) -> str:
         return "run_script"
@@ -134,21 +140,19 @@ class RunScriptAbility(Ability):
     _ERR_NO_DENO = "The TypeScript runtime (Deno) is not installed, so the script could not be run."
     _ERR_CRASHED = "The script could not be run: the Deno process exited unexpectedly without returning a result."
 
-    def run(self, params: dict[str, object]) -> ToolResult:
-        raw_path = cast(str, self.param(params, Keys.path, required=True))
+    def run(self, params: RunScriptParamsBag) -> ToolResult:
+        script_path = Path(params.path)
 
-        if not Path(raw_path).is_absolute():
+        if not script_path.is_absolute():
             return ToolResult.err(
                 "The script path must be an absolute path.",
                 code="invalid-path",
                 hint="Pass an absolute path like /path/to/script.ts.",
             )
 
-        script_path = Path(raw_path)
-
         if not script_path.exists():
             return ToolResult.err(
-                f"{raw_path} does not exist.",
+                f"{params.path} does not exist.",
                 code="not-found",
                 hint="use file_write to create the script first.",
             )
@@ -160,18 +164,7 @@ class RunScriptAbility(Ability):
                 hint="only TypeScript (.ts) files can be run.",
             )
 
-        raw_args = self.param(params, Keys.args)
-        script_args: list[str] = []
-        if raw_args is not None:
-            if not isinstance(raw_args, list) or any(not isinstance(a, str) for a in raw_args):
-                return ToolResult.err(
-                    "args must be a list of strings.",
-                    code="invalid-args",
-                    hint='pass arguments like ["--flag", "value"].',
-                )
-            script_args = cast("list[str]", raw_args)
-
-        return self._execute_with_cap(script_path, script_args)
+        return self._execute_with_cap(script_path, params.args)
 
     def _execute_with_cap(self, script_path: Path, script_args: list[str]) -> ToolResult:
         """Run *script_path* in a fresh Deno process with full permissions and

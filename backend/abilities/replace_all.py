@@ -30,18 +30,24 @@ from __future__ import annotations
 import os
 from fnmatch import fnmatch
 from pathlib import Path
-from typing import ClassVar, cast
+from typing import ClassVar
 
 from abilities._ability import Ability
 from abilities._result import ToolResult
 from configs.enums.param_key import Keys
+from contracts.params.param_bag import ParamBag
+from contracts.params.replace_all_params_bag import ReplaceAllParamsBag
 from services.file_mapper_service import FileMapperService
 
 
-class ReplaceAllAbility(Ability):
+class ReplaceAllAbility(Ability[ReplaceAllParamsBag]):
     DISCOVERABLE: ClassVar[bool] = False  # code-agent-delegate-exclusive; pinned on CodeAgentConfig only
 
     ACTION_REQUIRED: ClassVar[dict[str, tuple[str, ...]]] = {"": (Keys.search, Keys.replace_)}
+
+    # The typed input contract: the dispatch seam builds the bag via
+    # ReplaceAllParamsBag.from_params before run() is called.
+    PARAMS: ClassVar[type[ParamBag] | None] = ReplaceAllParamsBag
 
     #: Directory names never worth walking when a tool sweeps a tree:
     #: version-control internals, Python bytecode caches, and vendored or
@@ -112,15 +118,10 @@ class ReplaceAllAbility(Ability):
     def get_parameters(self) -> dict[str, object]:
         return self._PARAMETERS
 
-    def run(self, params: dict[str, object]) -> ToolResult:
-        search = cast(str, self.param(params, Keys.search, required=True))
-        replace = cast(str, self.param(params, Keys.replace_, required=True))
-        glob_pattern = cast("str | None", self.param(params, Keys.glob))
-        path_raw = cast("str | None", self.param(params, Keys.path))
-
-        if path_raw is not None:
-            return self._run_explicit(search, replace, glob_pattern, path_raw)
-        return self._run_workspace(search, replace, glob_pattern)
+    def run(self, params: ReplaceAllParamsBag) -> ToolResult:
+        if params.path is not None:
+            return self._run_explicit(params.search, params.replace_, params.glob, params.path)
+        return self._run_workspace(params.search, params.replace_, params.glob)
 
     def _run_explicit(
         self,
