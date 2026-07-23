@@ -186,8 +186,8 @@ class BehavioralPattern(DataGraphRow):
         """Render one parsed pattern as ``name (freq @ anchor): summary
         [confidence=N]``, optionally suffixed ``, last <YYYY-MM-DD>`` when
         ``include_last_seen`` — the single implementation replacing the near-
-        duplicate ``PromptService._format_pattern_line`` and
-        ``memory_retrieval._render_behavioral_pattern`` formatters."""
+        duplicate formatters ``PromptService`` and the memory engine each
+        carried."""
         anchor = cast("str", content.get("time_anchor") or "")
         anchor_part = f" @ {anchor}" if anchor else ""
         base = (

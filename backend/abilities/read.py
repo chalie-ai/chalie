@@ -25,10 +25,12 @@ verbatim instead of being stripped to ``no-readable-content``.
 """
 
 import logging
-from typing import TYPE_CHECKING, ClassVar, cast
+from typing import TYPE_CHECKING, ClassVar
 
 if TYPE_CHECKING:
     from typing import TypedDict
+
+    from contracts.params.param_bag import ParamBag
 
     class _OkTextMeta(TypedDict, total=False):
         source: str
@@ -39,13 +41,16 @@ import requests
 from abilities._ability import Ability
 from abilities._result import ToolResult, truncate
 from configs.enums.param_key import Keys
+from contracts.params.read_params_bag import ReadParamsBag
 from exceptions import FetchBlocked, NoReadableContent, NoTextContent, NotAFile, SourceIsImage, SystemPathBlocked
 from services.text_reader import TextReader
 
 logger = logging.getLogger(__name__)
 
 
-class ReadAbility(Ability):
+class ReadAbility(Ability[ReadParamsBag]):
+    PARAMS: ClassVar["type[ParamBag] | None"] = ReadParamsBag
+
     def get_name(self) -> str:
         return "read"
 
@@ -85,29 +90,13 @@ class ReadAbility(Ability):
     def get_parameters(self) -> dict[str, object]:
         return self._PARAMETERS
 
-    #: The keys a model naturally emits for the read target — ``url``, ``path``,
-    #: ``link`` … — are healed to the canonical ``source`` upstream at the dispatch
-    #: seam via the shared ``configs.enums.param_key.VARIANTS[Keys.source]`` ladder, so a
-    #: call like ``read({"url": …})`` resolves instead of bouncing on
-    #: ``source-required``. No per-tool alias list lives here anymore.
-    def run(self, params: dict[str, object]) -> ToolResult:
-        source = self.param(params, Keys.source)
-        if not isinstance(source, str) or not source.strip():
-            # No usable target under any accepted key. Echo what the model DID send
-            # so it self-corrects instead of looping on the same opaque error
-            # (models pass url=/path= and never learn why). Keep code=source-required
-            # so other surfaces still match on it — param(required=True) would lose
-            # the received-keys diagnostic.
-            received = "|".join(params.keys()) or "none"
-            return ToolResult.err(
-                "No URL or file path was provided.",
-                code="source-required",
-                hint=f"pass the URL or file path as 'source' (received: {received})",
-                received_keys=received,
-            )
-        source = source.strip()
-
-        max_chars = self.param(params, Keys.max_chars, default=20000, clamp=(100, 100000))
+    #: Input validation lives in :class:`ReadParamsBag`, constructed by the
+    #: dispatcher before this runs — a missing ``source`` never reaches here.
+    #: (The ``url`` / ``path`` / ``link`` … aliases a model naturally emits are
+    #: healed to ``source`` even earlier, at the dispatch seam, via the shared
+    #: ``configs.enums.param_key.VARIANTS[Keys.source]`` ladder.)
+    def run(self, params: ReadParamsBag) -> ToolResult:
+        source = params.source
 
         try:
             text = TextReader(source).get_value()
@@ -147,7 +136,7 @@ class ReadAbility(Ability):
         except NoTextContent as e:
             return ToolResult.err(str(e), code="no-text-content", source=source)
 
-        return self._ok_text(text, cast(int, max_chars), source=source)
+        return self._ok_text(text, params.max_chars, source=source)
 
     # ── Shared success builder ─────────────────────────────────────────────────
 

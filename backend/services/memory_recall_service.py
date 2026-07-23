@@ -17,7 +17,7 @@ deterministically, never semantically — see the note below). ``document`` is i
 ``_VERTICALS`` so an explicit ``kinds=["document"]`` call (document search,
 ``abilities/document.py`` / ``api/documents.py``) reaches it through this
 service; it is deliberately absent from every default span
-(``memory_retrieval._DG_RECALL_KINDS``, ``api/memory.py._RECALL_KINDS``),
+(``memory_service._DG_RECALL_KINDS``, ``api/memory.py._RECALL_KINDS``),
 which pass their own explicit ``kinds=`` lists that omit it — so it never
 enters generic cross-kind recall uninvited.
 
@@ -127,7 +127,7 @@ def _cos_score(key_cos: float, value_cos: float) -> float:
 
 def _project(row: DataGraphRow, composite: float, signals: RecallSignals) -> dict[str, object]:
     """The data-graph recall hit shape (mirrors the deleted ``recall()``'s
-    return dict) — the one contract both ``memory_retrieval._search_data_graph``
+    return dict) — the one contract both ``MemoryService._search_data_graph``
     and ``api/memory.py`` adapt from independently."""
     return {
         "id": row.id,
@@ -208,7 +208,7 @@ def recall(
     swallow-and-log, since a recall miss must never break the caller's turn).
 
     ``include_episodes`` defaults False: both current callers
-    (``memory_retrieval._search_data_graph``, ``api/memory.py``) already run
+    (``MemoryService._search_data_graph``, ``api/memory.py``) already run
     their own separate episode lane at the call site — merging episodes here
     too would double-count them. Pass ``include_episodes=True`` only from a
     caller that wants ONE unified data-graph-plus-episode list."""

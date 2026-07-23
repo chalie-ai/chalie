@@ -64,11 +64,12 @@ def test_read_ability_routes_images_to_vision(db: sqlite3.Connection, tmp_path: 
     """read is a text reader: handed an image it returns an actionable error with a
     route to the vision tool — never a stack trace, never mojibake."""
     from abilities.read import ReadAbility
+    from contracts.params.read_params_bag import ReadParamsBag
 
     p = tmp_path / "photo.png"
     p.write_bytes(blank_png_bytes())
 
-    result = ReadAbility(mp=None).run({"source": str(p)})
+    result = ReadAbility(mp=None).run(ReadParamsBag.from_params({"source": str(p)}))
 
     assert result.status == "error"
     assert result.code == "not-text"

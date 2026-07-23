@@ -10,10 +10,10 @@ backgrounding flag is NOT injected here: it is a delegate-only primitive added b
 ``DelegateAbility`` (``abilities/_delegate.py``), so plain tools never carry it.
 
 Dispatch — matching, binding, policy gating, execution, recording — lives in
-``ToolDispatcher`` (``abilities/_dispatcher.py``), the single chokepoint every
-ACT-loop tool call takes. This module imports nothing from the registry / policy
-/ dispatcher, so ``_registry`` can import ``Ability`` here with no circular-import
-dance.
+``DispatchService`` (``services/dispatch_service.py``), the single chokepoint
+every ACT-loop tool call takes. This module imports nothing from the registry /
+policy / dispatcher, so ``_registry`` can import ``Ability`` here with no
+circular-import dance.
 """
 
 from __future__ import annotations
@@ -21,7 +21,9 @@ from __future__ import annotations
 import copy
 import typing
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, Callable, ClassVar, cast
+from typing import TYPE_CHECKING, Any, Callable, ClassVar, Generic, cast
+
+from typing_extensions import TypeVar
 
 from abilities._result import ToolResult
 from exceptions import ToolParamError
@@ -29,6 +31,7 @@ from exceptions import ToolParamError
 if TYPE_CHECKING:
     from datetime import datetime
 
+    from contracts.params.param_bag import ParamBag
     from controllers.message_processor import MessageProcessor
 
 # Sentinel distinguishing "no default supplied" from an explicit default of None
@@ -49,8 +52,15 @@ _ACT_SUMMARY_PROPERTY: dict[str, object] = {
     ),
 }
 
+# What run() receives: the ability's typed ParamBag once migrated, the raw params
+# dict until then. The PEP 696 default keeps every bare ``Ability`` annotation
+# (registry, dispatcher, unmigrated subclasses) valid while the migration is in
+# flight; a migrated ability declares ``Ability[ItsParamsBag]`` and mypy then
+# enforces that its run() accepts exactly that bag.
+B = TypeVar("B", default=Any)
 
-class Ability(ABC):
+
+class Ability(ABC, Generic[B]):
     """The getters read ``self.mp`` (the invoking MessageProcessor,
     constructor-injected) when a value depends on the live request; at
     ``self.mp is None`` — introspection / search-index build — they MUST return
@@ -97,9 +107,17 @@ class Ability(ABC):
     # "no pre-validation" so unmigrated tools are untouched by the contract.
     ACTION_REQUIRED: ClassVar[dict[str, tuple[str, ...]]] = {}
 
+    # The ability's typed input contract: a migrated ability sets its ParamBag
+    # class here and run() receives an instance the dispatcher builds via the
+    # bag's from_params factory — validation happens there (ToolParamError →
+    # canonical dispatcher rendering). None (the default) = unmigrated: run()
+    # receives the raw params dict and ACTION_REQUIRED / self.param() keep
+    # gating it.
+    PARAMS: ClassVar["type[ParamBag] | None"] = None
+
     def __init__(self, mp: "MessageProcessor | None" = None) -> None:
         self.mp = mp
-        # Set by ToolDispatcher._run() immediately before run(): the flattened
+        # Set by DispatchService._run() immediately before run(): the flattened
         # client telemetry dict (location / locale / time / currency …) or None
         # when no client context is stored yet (fresh boot, no heartbeat).
         self.telemetry: "dict[str, object] | None" = None
@@ -217,12 +235,14 @@ class Ability(ABC):
     # ── Instance method — the actual tool logic ───────────────────────────────
 
     @abstractmethod
-    def run(self, params: dict[str, object]) -> "ToolResult":
+    def run(self, params: B) -> "ToolResult":
         """MUST return a :class:`abilities._result.ToolResult` — anything else
-        HARD-FAILS as ``code=non-canonical-result``. Raise ``ToolParamError``
-        (via ``self.param``) for bad inputs; the dispatcher renders it
-        canonically. The ability NEVER formats the ``[tool(...)]`` wire envelope
-        — the dispatcher owns it."""
+        HARD-FAILS as ``code=non-canonical-result``. ``params`` is this ability's
+        declared ``PARAMS`` bag — constructed (= validated) by the dispatcher —
+        once migrated, or the raw params dict until then. Raise ``ToolParamError``
+        (via a bag validator / ``self.param``) for bad inputs; the dispatcher
+        renders it canonically. The ability NEVER formats the ``[tool(...)]`` wire
+        envelope — the dispatcher owns it."""
         ...
 
     # ── The single, final tool-descriptor assembler ───────────────────────────

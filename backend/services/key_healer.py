@@ -17,7 +17,7 @@ the ACTION_REQUIRED pre-gate, the policy gate, or ``run()`` ever sees the params
    e.g. ``source"`` → ``source`` and ``MAX_CHARS`` → ``max_chars`` — with zero
    per-tool knowledge. (This heals a common model defect: a model stores
    ``{"source\"": "https://…"}`` and ``read`` bounces on
-   ``source-required`` because the corrupt KEY never matched.) This layer is
+   ``missing-params`` because the corrupt KEY never matched.) This layer is
    :class:`~services.key_normalizer.KeyNormalizer`.
 
 2. **Variant resolution (registry-driven, per-tool).** A sanitised key that is

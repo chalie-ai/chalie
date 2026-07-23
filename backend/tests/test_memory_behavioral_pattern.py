@@ -30,10 +30,10 @@ class TestRecallPayload:
 
     def test_every_row_carries_its_kind_field(self) -> None:
         """Unlike the old prose format, kind is a first-class field on EVERY row."""
-        from services.memory_retrieval import _recall_payload
+        from services.memory_service import MemoryService
 
         hit = self._make_hit(kind="user_specific", key="residence", text="Valletta")
-        rows = _recall_payload([hit])
+        rows = MemoryService._recall_payload([hit])
 
         assert len(rows) == 1
         row = rows[0]
@@ -44,14 +44,14 @@ class TestRecallPayload:
 
     def test_mixed_results_each_keep_their_own_kind(self) -> None:
         """In a mixed list every row reports its own kind verbatim."""
-        from services.memory_retrieval import _recall_payload
+        from services.memory_service import MemoryService
 
         hits = [
             self._make_hit(kind="discovery", key="new_cafe",
                            text="A new café opened near the office"),
             self._make_hit(kind="user_specific", key="food_preference", text="pasta"),
         ]
-        rows = _recall_payload(hits)
+        rows = MemoryService._recall_payload(hits)
 
         assert len(rows) == 2
         by_id = {r["id"]: r for r in rows}
@@ -75,7 +75,7 @@ class TestBehavioralPatternNotInRecallSpan:
     def test_tool_recall_span_excludes_behavioral_pattern(self) -> None:
         """The memory tool's cross-kind data-graph recall span omits it."""
         from models.behavioral_pattern import BehavioralPattern
-        from services.memory_retrieval import _DG_RECALL_KINDS
+        from services.memory_service import _DG_RECALL_KINDS
 
         assert BehavioralPattern.KIND not in _DG_RECALL_KINDS, (
             f"behavioral_pattern must not be a recall lane: {_DG_RECALL_KINDS}"

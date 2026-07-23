@@ -3,31 +3,42 @@ MemoryAbility — Store, recall, and forget first-party facts about the user.
 
 Covers all actions: store, recall, reflect, forget. This module is a **thin
 adapter**: it owns only the tool's metadata (name, summary, examples, parameter
-schema) and the action dispatch in ``run()`` — ``params → service handler →
-ToolResult``. Every retrieval/mutation handler, the episode recall engine,
-data-graph search, reflection layer expansion, response formatting and recall
-telemetry live in ``services.memory_retrieval`` so the same engine is reachable
-from non-ability callers without importing an ability.
-
-The engine functions live ONLY in the service module — there are no re-exports
-from here: callers and tests import them from ``services.memory_retrieval``
-directly.
+schema) and the action dispatch in ``run()`` — narrow the params bag to its
+action leaf, hand it to the matching :class:`~services.memory_service.MemoryService`
+method, return its ``ToolResult``. The engine itself — the action handlers,
+episode recall, data-graph search, reflection layer expansion, response
+formatting and recall telemetry — is ``MemoryService``, constructed per run
+with the bound MessageProcessor.
 """
 
 import logging
-from typing import ClassVar
+from typing import TYPE_CHECKING, ClassVar
 
 from abilities._ability import Ability
 from configs.enums.param_key import Keys
 from abilities._result import ToolResult
-from services import memory_retrieval
+from contracts.params.memory_params_bag import (
+    MemoryForgetParams,
+    MemoryParamsBag,
+    MemoryRecallParams,
+    MemoryReflectParams,
+    MemoryStoreParams,
+)
+from services.memory_service import MemoryService
+
+if TYPE_CHECKING:
+    from contracts.params.param_bag import ParamBag
 
 logger = logging.getLogger(__name__)
 LOG_PREFIX = "[MEMORY]"
 
 
-class MemoryAbility(Ability):
+class MemoryAbility(Ability[MemoryParamsBag]):
     DISCOVERABLE: ClassVar[bool] = False  # framework tool; always pinned (DEFAULT_ALWAYS_AVAILABLE), never discovered
+
+    # The typed input contract: the dispatch seam builds the bag via
+    # MemoryParamsBag.from_params before run() is called.
+    PARAMS: ClassVar["type[ParamBag] | None"] = MemoryParamsBag
 
     def get_name(self) -> str:
         return "memory"
@@ -146,36 +157,33 @@ class MemoryAbility(Ability):
         "forget": (Keys.key,),
     }
 
-    def run(self, params: dict[str, object]) -> ToolResult:
-        action = params.get(Keys.action, "recall")
+    def run(self, params: MemoryParamsBag) -> ToolResult:
         mp = self.mp
         if mp is None:
             raise RuntimeError("memory.run() dispatched without a bound MessageProcessor")
-        channel = mp.config.channel
+        service = MemoryService(mp)
 
-        # The dispatcher's ACTION_REQUIRED pre-gate has already rejected unknown
-        # actions and missing required params before run() is reached; this maps
-        # the validated action to its service handler. The unknown-action branch
-        # below is defensive belt-and-braces for direct callers that bypass the
-        # gate (the engine is also reachable outside the ACT loop).
+        # The router factory only ever yields the four leaves; the isinstance
+        # chain is the narrowing that hands each handler its exact leaf type.
+        # The trailing branch catches only a hand-built foreign subclass (or
+        # the bare router) — loudly.
         try:
-            if action == "store":
-                return memory_retrieval.handle_store(channel, params)
-            if action == "recall":
-                return memory_retrieval.handle_recall(mp, channel, params)
-            if action == "reflect":
-                return memory_retrieval.handle_reflect(mp, params)
-            if action == "forget":
-                return memory_retrieval.handle_forget(params)
+            if isinstance(params, MemoryStoreParams):
+                return service.store(params)
+            if isinstance(params, MemoryRecallParams):
+                return service.recall(params)
+            if isinstance(params, MemoryReflectParams):
+                return service.reflect(params)
+            if isinstance(params, MemoryForgetParams):
+                return service.forget(params)
             return ToolResult.err(
-                f"Unknown memory action: {action!r}.",
+                f"Unknown memory params bag: {type(params).__name__}.",
                 code="unknown-action",
                 valid=("store", "recall", "reflect", "forget"),
             )
         except Exception as e:
-            logger.exception(f"{LOG_PREFIX} Error in {action}: {e}")
+            logger.exception(f"{LOG_PREFIX} {type(params).__name__} failed: {e}")
             return ToolResult.err(
-                f"Memory {action} failed: {str(e)[:200]}",
+                f"Memory action failed: {str(e)[:200]}",
                 code="unhandled-exception",
-                action=action,
             )

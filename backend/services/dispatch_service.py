@@ -399,7 +399,12 @@ class DispatchService:
             ability.telemetry = None
 
         try:
-            raw = ability.run(params)
+            # ParamBag migration seam: a migrated ability (PARAMS set) receives its
+            # typed bag, built HERE via the from_params factory so a bad param
+            # raises ToolParamError into the canonical rendering below; an
+            # unmigrated ability gets the raw dict. The ternary dies once every
+            # ability declares PARAMS.
+            raw = ability.run(params if ability.PARAMS is None else ability.PARAMS.from_params(params))
         except ToolParamError as exc:
             return ToolResult.err(exc.message, code=exc.code, hint=exc.hint, valid=exc.valid)
         except Exception as exc:  # noqa: BLE001

@@ -18,16 +18,29 @@ enforcement — Python Protocols are static-only).
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Protocol
+from typing import TYPE_CHECKING, Any, ClassVar, Protocol
+
+from typing_extensions import TypeVar
 
 if TYPE_CHECKING:
     from datetime import datetime
 
     from abilities._result import ToolResult
+    from contracts.params.param_bag import ParamBag
+
+# Mirrors abilities._ability.B: what run() receives — the ability's typed
+# ParamBag once migrated, the raw params dict until then. The PEP 696 default
+# keeps every bare ``AbilityContract`` annotation valid during the migration.
+# Contravariant because it only ever appears as run()'s input.
+B_contra = TypeVar("B_contra", contravariant=True, default=Any)
 
 
-class AbilityContract(Protocol):
+class AbilityContract(Protocol[B_contra]):
     """Anything that describes and runs one tool."""
+
+    # The ability's typed input contract; None = unmigrated (run() takes the raw
+    # params dict). See abilities._ability.Ability.PARAMS.
+    PARAMS: ClassVar[type[ParamBag] | None]
 
     def get_name(self) -> str: ...
 
@@ -39,7 +52,7 @@ class AbilityContract(Protocol):
 
     def get_parameters(self) -> dict[str, object]: ...
 
-    def run(self, params: dict[str, object]) -> ToolResult: ...
+    def run(self, params: B_contra) -> ToolResult: ...
 
     def get_follow_up(self, tr: ToolResult) -> str: ...
 

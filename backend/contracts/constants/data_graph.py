@@ -3,7 +3,7 @@ vocabulary and the memory-tool storable set.
 
 Each per-kind vertical model still declares its own ``KIND`` (its identity);
 this module is the shared vocabulary the memory-tool layer
-(``abilities/save_graph.py``, ``services/memory_retrieval.py``) and the one-off
+(``abilities/save_graph.py``, ``services/memory_service.py``) and the one-off
 key-canonicalisation migration import. Model-free by design: ``contracts`` is a
 low-level package that never imports from ``models`` (avoids an import cycle),
 so the pattern kind is the plain literal, not ``BehavioralPattern.KIND``."""
