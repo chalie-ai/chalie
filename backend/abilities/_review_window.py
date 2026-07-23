@@ -13,8 +13,10 @@ and prose bodies without a ``count`` meta).
 This base owns the WHOLE flow. A concrete review tool is a thin subclass that
 declares only what differs:
 
+* its ``TBag`` — the :class:`ReviewWindowParamsBag` (or subclass) the dispatch
+  seam builds for it; validation and clamping live in the bag's ``from_params``.
 * :meth:`_buffer` — the half-window in minutes (``review_tool_calls`` keeps a
-  frozen ±5; ``review_transcript`` parses a clamped ``buffer_minutes`` param).
+  frozen ±5; ``review_transcript`` reads its bag's clamped ``buffer_minutes``).
 * :meth:`_fetch` — the ONE windowed SELECT over ``Database.conn()`` that
   returns the rows for this tool (wrapped here in a NARROW ``sqlite3.Error`` so a
   corrupt read is a LOUD ``query-failed``, never a silent empty window).
@@ -36,15 +38,18 @@ import logging
 import sqlite3
 from abc import ABC, abstractmethod
 from datetime import datetime, timedelta, timezone
-from typing import ClassVar
+from typing import ClassVar, TypeVar
 from typing import cast
 
 from abilities._ability import Ability
 from abilities._result import ToolResult
+from contracts.params.review_window_params_bag import ReviewWindowParamsBag
 from services.time_formatter_service import TimeFormatterService
 from services.time_utils import parse_utc
 
 logger = logging.getLogger(__name__)
+
+TBag = TypeVar("TBag", bound=ReviewWindowParamsBag)
 
 # ``parse_utc`` never raises — it returns this ``datetime.min`` sentinel for an
 # unparseable / missing value (timer + calendar precedent). The base treats the
@@ -56,7 +61,7 @@ _PARSE_UTC_SENTINEL = datetime.min.replace(tzinfo=timezone.utc)
 _ISO_HINT = "use an ISO timestamp, e.g. 2026-04-07T14:30:00+00:00"
 
 
-class ReviewWindowAbility(Ability, ABC):
+class ReviewWindowAbility(Ability[TBag], ABC):
     """Base for a review tool that returns DB rows within ±N minutes of an anchor.
 
     Owns the entire ``run()`` flow; subclasses fill in only :meth:`_buffer`,
@@ -69,11 +74,11 @@ class ReviewWindowAbility(Ability, ABC):
     # BEFORE the policy gate. Inherited unchanged by both subclasses.
     ACTION_REQUIRED: ClassVar[dict[str, tuple[str, ...]]] = {"": ("date_time",)}
 
-    def run(self, params: "dict[str, object]") -> ToolResult:
-        # 1. Residue guard — defends the direct-caller path. The dispatch path is
-        #    already caught by the ACTION_REQUIRED pre-gate, but a direct call
-        #    (or a non-dispatch caller) must not reach parse_utc with nothing.
-        date_time = cast(str, params.get("date_time") or "").strip()
+    def run(self, params: TBag) -> ToolResult:
+        # 1. Residue guard — defends the direct-caller path. The dispatch path
+        #    cannot get here blank (the bag's require_str rejects it), but a
+        #    directly constructed bag must not reach parse_utc with nothing.
+        date_time = params.date_time.strip()
         if not date_time:
             return ToolResult.err(
                 "A date_time anchor is required.",
@@ -81,12 +86,10 @@ class ReviewWindowAbility(Ability, ABC):
                 hint=_ISO_HINT,
             )
 
-        # 2. Resolve the half-window — a subclass hook (review_transcript parses a
-        #    clamped buffer_minutes; review_tool_calls returns a frozen 5). A
-        #    buffer error (bad buffer_minutes) is returned as-is.
+        # 2. Resolve the half-window — a subclass hook (review_transcript reads
+        #    its bag's clamped buffer_minutes; review_tool_calls returns a
+        #    frozen 5). Validation lives in the bag, so this is always an int.
         buffer = self._buffer(params)
-        if isinstance(buffer, ToolResult):
-            return buffer
 
         # 3. Parse the anchor. parse_utc returns the datetime.min sentinel on
         #    garbage rather than raising, so we check the sentinel (no broad
@@ -136,13 +139,13 @@ class ReviewWindowAbility(Ability, ABC):
 
     # ── Subclass hooks ────────────────────────────────────────────────────────
 
-    def _buffer(self, params: "dict[str, object]") -> "int | ToolResult":
-        """Return an int, or an error ``ToolResult`` when the supplied buffer is
-        invalid (``review_transcript`` overrides to parse a clamped param)."""
+    def _buffer(self, params: TBag) -> int:
+        """The half-window in minutes. ``review_transcript`` overrides to read
+        its bag's clamped ``buffer_minutes``; validation happened in the bag."""
         return 5
 
     @abstractmethod
-    def _fetch(self, lo: str, hi: str, params: "dict[str, object]") -> "list[dict[str, object]]":
+    def _fetch(self, lo: str, hi: str, params: TBag) -> "list[dict[str, object]]":
         """Run the ONE windowed SELECT over ``Database.conn()`` and return
         the rows whose ``created_at`` falls in ``[lo, hi]``. Raise only
         ``sqlite3.Error`` (the base catches it loudly); no other exception."""

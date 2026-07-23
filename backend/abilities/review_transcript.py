@@ -15,19 +15,23 @@ declares only the clamped buffer, the windowed ``transcript`` SELECT, and the
 structured row shape.
 """
 
-from typing import ClassVar, cast
+from typing import TYPE_CHECKING, ClassVar, cast
 
 from configs.enums.param_key import Keys
-from abilities._result import ToolResult
 from abilities._review_window import ReviewWindowAbility
 from configs.enums.channels import Channel
+from contracts.params.review_transcript_params_bag import (
+    DEFAULT_BUFFER_MINUTES,
+    MAX_BUFFER_MINUTES,
+    ReviewTranscriptParamsBag,
+)
 
-_DEFAULT_BUFFER_MINUTES = 5
-_MIN_BUFFER_MINUTES = 1
-_MAX_BUFFER_MINUTES = 30
+if TYPE_CHECKING:
+    from contracts.params.param_bag import ParamBag
 
 
-class ReviewTranscriptAbility(ReviewWindowAbility):
+class ReviewTranscriptAbility(ReviewWindowAbility[ReviewTranscriptParamsBag]):
+    PARAMS: ClassVar["type[ParamBag] | None"] = ReviewTranscriptParamsBag
     SYSTEM = True
 
     def get_name(self) -> str:
@@ -67,8 +71,8 @@ class ReviewTranscriptAbility(ReviewWindowAbility):
             Keys.buffer_minutes: {
                 "type": "integer",
                 "description": (
-                    f"Half-window size in minutes (default {_DEFAULT_BUFFER_MINUTES}, "
-                    f"max {_MAX_BUFFER_MINUTES}). Increase to widen the search."
+                    f"Half-window size in minutes (default {DEFAULT_BUFFER_MINUTES}, "
+                    f"max {MAX_BUFFER_MINUTES}). Increase to widen the search."
                 ),
             },
             Keys.include_subagent_transcripts: {
@@ -88,26 +92,17 @@ class ReviewTranscriptAbility(ReviewWindowAbility):
 
     # ── ReviewWindowAbility hooks ──────────────────────────────────────────────
 
-    def _buffer(self, params: "dict[str, object]") -> "int | ToolResult":
-        raw = params.get(Keys.buffer_minutes, _DEFAULT_BUFFER_MINUTES)
-        try:
-            minutes = int(cast(float, raw))
-        except (TypeError, ValueError):
-            return ToolResult.err(
-                f"buffer_minutes must be a whole number of minutes, got {raw!r}.",
-                code="invalid-param",
-                hint=(
-                    f"pass an integer between {_MIN_BUFFER_MINUTES} and "
-                    f"{_MAX_BUFFER_MINUTES} (default {_DEFAULT_BUFFER_MINUTES})."
-                ),
-            )
-        return max(_MIN_BUFFER_MINUTES, min(_MAX_BUFFER_MINUTES, minutes))
+    def _buffer(self, params: ReviewTranscriptParamsBag) -> int:
+        return params.buffer_minutes
 
-    def _fetch(self, lo: str, hi: str, params: "dict[str, object]") -> "list[dict[str, object]]":
+    def _fetch(self, lo: str, hi: str, params: ReviewTranscriptParamsBag) -> "list[dict[str, object]]":
         from models.transcript import Transcript
 
-        include_subagent = bool(params.get(Keys.include_subagent_transcripts, False))
-        channels = [Channel.USER.value, "subagent"] if include_subagent else [Channel.USER.value]
+        channels = (
+            [Channel.USER.value, "subagent"]
+            if params.include_subagent_transcripts
+            else [Channel.USER.value]
+        )
         return (
             Transcript.filter_in("channel", channels)
             .filter("created_at", lo, ">=")

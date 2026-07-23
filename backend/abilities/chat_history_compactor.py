@@ -33,10 +33,13 @@ from abilities._ability import Ability
 from abilities._compaction_config import CompactionConfig
 from abilities._result import ToolResult
 from configs.enums.thinking_level import ThinkingLevel
+from contracts.params.chat_history_compactor_params_bag import ChatHistoryCompactorParamsBag
 from models.compaction import Compaction
 
 if TYPE_CHECKING:
     from typing import Protocol
+
+    from contracts.params.param_bag import ParamBag
 
     from models.transcript import Transcript
 
@@ -102,9 +105,10 @@ Rules:
 - Output ONLY the document."""
 
 
-class ChatHistoryCompactor(Ability):
+class ChatHistoryCompactor(Ability[ChatHistoryCompactorParamsBag]):
     DISCOVERABLE: ClassVar[bool] = False  # internal-only compaction tool; pinned, never discovered
     counts_as_settle: ClassVar[bool] = False  # never demotes a settle0
+    PARAMS: ClassVar["type[ParamBag] | None"] = ChatHistoryCompactorParamsBag
 
     def get_name(self) -> str:
         return "chat_history_compactor"
@@ -130,7 +134,7 @@ class ChatHistoryCompactor(Ability):
     def get_parameters(self) -> dict[str, object]:
         return self._PARAMETERS
 
-    def run(self, params: dict[str, object]) -> ToolResult:
+    def run(self, params: ChatHistoryCompactorParamsBag) -> ToolResult:
         from controllers.message_processor import MessageProcessor  # noqa: PLC0415
 
         mp = cast("_CompactionParent", self.mp)

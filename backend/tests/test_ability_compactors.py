@@ -44,6 +44,7 @@ import pytest
 from abilities._compaction_config import CompactionConfig
 from abilities.chat_history_compactor import ChatHistoryCompactionConfig, ChatHistoryCompactor
 from configs.channels.user import UserConfig
+from contracts.params.chat_history_compactor_params_bag import ChatHistoryCompactorParamsBag
 from controllers.message_processor import MessageProcessor
 from models.compaction import Compaction
 from models.transcript import Transcript
@@ -168,7 +169,7 @@ def test_run_completes_and_writes_a_checkpoint_without_crashing(db: sqlite3.Conn
     ability = ChatHistoryCompactor(mp)
 
     with patch(_BUILD_CLIENT, return_value=_OfflineClient()):
-        result = ability.run({})
+        result = ability.run(ChatHistoryCompactorParamsBag.from_params({}))
 
     assert result.status == "success"
     checkpoint = Compaction.latest_main("user")

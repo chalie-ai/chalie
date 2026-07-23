@@ -16,6 +16,7 @@ import sqlite3
 import pytest
 
 from abilities.review_transcript import ReviewTranscriptAbility
+from contracts.params.review_transcript_params_bag import ReviewTranscriptParamsBag
 from models.transcript import Transcript
 
 pytestmark = pytest.mark.unit
@@ -43,7 +44,9 @@ def test_returns_only_user_rows_in_window_by_default(db: sqlite3.Connection) -> 
     rows are excluded."""
     _seed_window_rows(db)
 
-    result = ReviewTranscriptAbility().run({"date_time": _ANCHOR})
+    result = ReviewTranscriptAbility().run(
+        ReviewTranscriptParamsBag.from_params({"date_time": _ANCHOR}),
+    )
 
     assert result.status == "success"
     assert result.meta["count"] == 1
@@ -59,7 +62,9 @@ def test_include_subagent_transcripts_adds_subagent_channel_rows(db: sqlite3.Con
     _seed_window_rows(db)
 
     result = ReviewTranscriptAbility().run(
-        {"date_time": _ANCHOR, "include_subagent_transcripts": True},
+        ReviewTranscriptParamsBag.from_params(
+            {"date_time": _ANCHOR, "include_subagent_transcripts": True},
+        ),
     )
 
     assert result.status == "success"

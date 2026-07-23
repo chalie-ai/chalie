@@ -25,16 +25,20 @@ import re
 import urllib.parse
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import ClassVar, cast
+from typing import TYPE_CHECKING, ClassVar, cast
 
 import requests
 
 from abilities._ability import Ability
-from configs.enums.param_key import Keys
 from abilities._result import ToolResult, truncate
+from configs.enums.param_key import Keys
+from contracts.params.programming_docs_search_params_bag import ProgrammingDocsSearchParamsBag
 from services.text_extractor import extract_html
 from services.web_fetch import API, fetch_text
 from exceptions import FetchBlocked
+
+if TYPE_CHECKING:
+    from contracts.params.param_bag import ParamBag
 
 # ── Tunables ──────────────────────────────────────────────────────────────────
 
@@ -498,7 +502,9 @@ def lookup(language: str, query: str) -> ToolResult:
 
 # ── Ability class ────────────────────────────────────────────────────────────────
 
-class ProgrammingDocsSearchAbility(Ability):
+class ProgrammingDocsSearchAbility(Ability[ProgrammingDocsSearchParamsBag]):
+    PARAMS: ClassVar["type[ParamBag] | None"] = ProgrammingDocsSearchParamsBag
+
     def get_name(self) -> str:
         return "programming_docs_search"
 
@@ -558,19 +564,5 @@ class ProgrammingDocsSearchAbility(Ability):
     def get_parameters(self) -> dict[str, object]:
         return self._PARAMETERS
 
-    def run(self, params: dict[str, object]) -> ToolResult:
-        language = self.param(params, Keys.language, required=True)
-        query = self.param(params, Keys.query, required=True)
-        language = str(language).strip()
-        query = str(query).strip()
-        if not language:
-            return ToolResult.err(
-                "Required parameter 'language' is missing.",
-                code="invalid-param", hint="pass language and query.",
-            )
-        if not query:
-            return ToolResult.err(
-                "Required parameter 'query' is missing.",
-                code="invalid-param", hint="pass language and query.",
-            )
-        return lookup(language, query)
+    def run(self, params: ProgrammingDocsSearchParamsBag) -> ToolResult:
+        return lookup(params.language, params.query)
