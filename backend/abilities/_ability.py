@@ -27,6 +27,8 @@ from abilities._result import ToolResult
 from exceptions import ToolParamError
 
 if TYPE_CHECKING:
+    from datetime import datetime
+
     from controllers.message_processor import MessageProcessor
 
 # Sentinel distinguishing "no default supplied" from an explicit default of None
@@ -318,7 +320,7 @@ class Ability(ABC):
         return None
 
     @classmethod
-    def enrich_rich_payload(cls, payload: dict[str, object], row: dict[str, object]) -> dict[str, object]:
+    def enrich_rich_payload(cls, payload: dict[str, object], created_at: "datetime | str | None") -> dict[str, object]:
         """Resolve a rich-media payload's runtime state at parse time.
 
         The default implementation returns the payload unchanged. Override on

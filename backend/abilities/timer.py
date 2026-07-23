@@ -111,7 +111,7 @@ class TimerAbility(Ability):
         return ToolResult.ok(payload, rich=payload)
 
     @classmethod
-    def enrich_rich_payload(cls, payload: dict[str, object], row: dict[str, object]) -> dict[str, object]:
+    def enrich_rich_payload(cls, payload: dict[str, object], created_at: "datetime | str | None") -> dict[str, object]:
         """``started_at`` is intentionally absent from the LLM-visible JSON; the FE
         needs it to compute the countdown so the parser grafts it on at render
         time. ``parse_utc`` returns a ``datetime.min`` sentinel on garbage rather
@@ -119,10 +119,9 @@ class TimerAbility(Ability):
         its "Invalid timer payload" guard rather than rendering a year-0001
         countdown that instantly fires the alarm.
         """
-        created_at = row.get("created_at")
         if not created_at:
             return payload
-        parsed = parse_utc(cast(datetime | str, created_at))
+        parsed = parse_utc(created_at)
         if parsed == _PARSE_UTC_SENTINEL:
             return payload
         return {**payload, "started_at": parsed.isoformat()}

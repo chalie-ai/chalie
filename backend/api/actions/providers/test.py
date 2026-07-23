@@ -66,14 +66,13 @@ class ProviderTest(Action):
             return ProviderTestResult(success=False, error="Platform is required").single()
         if not model:
             return ProviderTestResult(success=False, error="Model is required").single()
-
         start = time.time()
         if platform == 'ollama':
-            outcome = test_ollama_provider(config, model, start)
+            outcome = test_ollama_provider(cast(str, config.get('host', '')), model, start)
         elif platform == 'codex_cli':
             outcome = test_codex_provider(model, start)
         else:
-            outcome = test_api_provider(config, platform, model, start)
+            outcome = test_api_provider(cast(str | None, config.get('api_key')), cast(str | None, config.get('host')), platform, model, start)
 
         return ProviderTestResult(
             success=outcome.success,

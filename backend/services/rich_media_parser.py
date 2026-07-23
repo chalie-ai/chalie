@@ -18,6 +18,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+from datetime import datetime
 from typing import cast
 
 logger = logging.getLogger(__name__)
@@ -105,7 +106,7 @@ def _enrich_payload(tool_name: str, payload: object, row: dict[str, object]) -> 
     if ability is None:
         return payload
     try:
-        return ability.enrich_rich_payload(payload, row)
+        return ability.enrich_rich_payload(payload, cast("datetime | str | None", row.get("created_at")))
     except Exception as exc:
         logger.warning(
             "rich_media: enrich_rich_payload(%s) failed — falling back to raw payload: %s",

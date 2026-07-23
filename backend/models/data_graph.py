@@ -32,6 +32,7 @@ import sqlite3
 from typing import ClassVar, Self, cast
 
 from contracts.search_config import DATA_GRAPH_SEARCH, SearchConfig, register_kind
+from contracts.tuples.recall_signals import RecallSignals
 from models.model import Model
 from models.query import Query
 from services._fts_delete import fts5_external_delete
@@ -339,7 +340,7 @@ class DataGraphRow(Model):
                    .limit(limit).get())
 
     @classmethod
-    def _hydrate_candidates(cls, signals: dict[int, dict[str, float]]) -> dict[int, dict[str, object]]:
+    def _hydrate_candidates(cls, signals: dict[int, dict[str, float]]) -> dict[int, tuple[Self, RecallSignals]]:
         """Fetch the full row for every candidate id in one query and pair it
         with its signals — the ORM hydration step every ``gather_candidates``
         below shares."""
@@ -347,21 +348,33 @@ class DataGraphRow(Model):
             return {}
         ids = list(signals.keys())
         rows = {row.id: row for row in cls.filter_in("id", ids).get()}
-        return {rowid: {"row": rows[rowid], **sig} for rowid, sig in signals.items() if rowid in rows}
+        return {
+            rowid: (
+                rows[rowid],
+                RecallSignals(
+                    key_cos=sig.get("key_cos", 0.0),
+                    value_cos=sig.get("value_cos", 0.0),
+                    fts_bonus=sig.get("fts_bonus", 0.0),
+                    variant_cos=sig.get("variant_cos", 0.0),
+                ),
+            )
+            for rowid, sig in signals.items()
+            if rowid in rows
+        }
 
     @classmethod
     def gather_candidates(
         cls, query: str, query_embedding: list[float] | None, k: int
-    ) -> dict[int, dict[str, object]]:
+    ) -> dict[int, tuple[Self, RecallSignals]]:
         """This vertical's raw per-lane recall signals — vec (key/value) +
         doc2query variant + FTS bonus — composed from the primitives above
         (ruling 1, layer 2). Shared here since every searchable vertical composes
         the identical set of lanes. Non-searchable kinds (behavioural patterns,
         ``machine_state``) declare the ``Searchable`` trait off (``__search__ =
         None``) and sit outside the recall span entirely, so this never runs for
-        them. Each entry is ``{'row': <hydrated Self>, 'key_cos', 'value_cos',
-        'fts_bonus', 'variant_cos'}``; fusing these into one composite score is
-        the recall service's job (ruling 2), not this layer's."""
+        them. Each entry is a ``(row, RecallSignals)`` pair — the hydrated row
+        alongside its raw per-lane signals; fusing these into one composite score
+        is the recall service's job (ruling 2), not this layer's."""
         signals = cls.vec_candidates(query_embedding, k)
         for rowid, variant_cos in cls.variant_candidates(query_embedding, k).items():
             row_sig = signals.setdefault(rowid, {"key_cos": 0.0, "value_cos": 0.0})

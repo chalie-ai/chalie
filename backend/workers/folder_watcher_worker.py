@@ -17,7 +17,7 @@ CHECK_INTERVAL = 30   # Check for due scans every 30s
 
 def _scan_folder_if_due(service: FolderWatcherService, folder: dict[str, object]) -> None:
     """Scan folder if its interval is due or a manual scan was requested."""
-    if not (service.is_scan_due(folder) or service.is_scan_requested(cast(str, folder['id']))):
+    if not (service.is_scan_due(cast(str, folder.get('last_scan_at')) if folder.get('last_scan_at') else None, cast(float, folder.get('scan_interval', 300))) or service.is_scan_requested(cast(str, folder['id']))):
         return
     result = service.scan_folder(folder)
     label = folder.get('label') or folder.get('folder_path', '?')

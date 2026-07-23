@@ -360,9 +360,9 @@ class ProviderTestOutcome:
     hint: str | None = None
 
 
-def test_ollama_provider(config: dict[str, object], model: str, start: float) -> ProviderTestOutcome:
+def test_ollama_provider(host: str, model: str, start: float) -> ProviderTestOutcome:
     import time
-    available, err = fetch_ollama_models(cast(str, config.get('host', '')))
+    available, err = fetch_ollama_models(host)
     latency_ms = int((time.time() - start) * 1000)
 
     if err is not None:
@@ -394,9 +394,8 @@ def test_ollama_provider(config: dict[str, object], model: str, start: float) ->
     )
 
 
-def test_api_provider(config: dict[str, object], platform: str, model: str, start: float) -> ProviderTestOutcome:
+def test_api_provider(api_key: str | None, host: str | None, platform: str, model: str, start: float) -> ProviderTestOutcome:
     import time
-    api_key = config.get('api_key')
     if not api_key:
         return ProviderTestOutcome(
             success=False,
@@ -409,7 +408,6 @@ def test_api_provider(config: dict[str, object], platform: str, model: str, star
             'platform': platform, 'model': model,
             'api_key': api_key, 'max_tokens': 1,
         }
-        host = config.get('host')
         if host:
             test_config['host'] = host
         from services.llm_clients.factory import build_client
@@ -428,7 +426,6 @@ def test_api_provider(config: dict[str, object], platform: str, model: str, star
         return ProviderTestOutcome(success=True, model=model, latency_ms=latency_ms, message="Connected successfully")
     except Exception as e:
         return ProviderTestOutcome(success=False, error=map_api_error(str(e), platform, model))
-
 
 def test_codex_provider(model: str, start: float) -> ProviderTestOutcome:
     # codex_cli is subscription-billed on a scarce free tier — never run inference

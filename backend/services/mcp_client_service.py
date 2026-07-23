@@ -262,7 +262,7 @@ class McpClientService:
         """
         existing = self._find_by_normalized_host(host)
         if existing is not None:
-            return self._upsert_existing(existing, name, host, headers)
+            return self._upsert_existing(cast(str, existing["id"]), cast(str, existing["name"]), name, host, headers)
 
         server = McpClientServer(
             name=name,
@@ -292,7 +292,7 @@ class McpClientService:
                 return server
         return None
 
-    def _upsert_existing(self, existing: dict[str, object], name: str, host: str,
+    def _upsert_existing(self, existing_id: str, existing_name: str, name: str, host: str,
                          headers: dict[str, str]) -> dict[str, object]:
         """Re-add of a known endpoint: update fields and re-enable.
 
@@ -304,16 +304,16 @@ class McpClientService:
         is derived from the server name, so a name change additionally invalidates
         the old ``_mcp_<oldname>_*`` policy rows.
         """
-        old_prefix = f"_mcp_{_sanitize_name(cast(str, existing['name']))}_"
+        old_prefix = f"_mcp_{_sanitize_name(existing_name)}_"
         new_prefix = f"_mcp_{_sanitize_name(name)}_"
         if old_prefix != new_prefix:
-            self._delete_policy_rows(cast(str, existing["id"]))
-        self._delete_tools_for_server(cast(str, existing["id"]))
+            self._delete_policy_rows(existing_id)
+        self._delete_tools_for_server(existing_id)
         logger.info(
             "%s Re-add of existing endpoint %r → upsert id=%s",
-            _LOG_PREFIX, host, existing["id"],
+            _LOG_PREFIX, host, existing_id,
         )
-        return self.update_server(cast(str, existing["id"]), {
+        return self.update_server(existing_id, {
             "name": name,
             "host": host,
             "headers": headers or {},

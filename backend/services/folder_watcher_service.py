@@ -212,15 +212,14 @@ class FolderWatcherService:
     # Scanning
     # ─────────────────────────────────────────────
 
-    def is_scan_due(self, folder: Dict[str, object]) -> bool:
+    def is_scan_due(self, last_scan_at: str | None, scan_interval: float) -> bool:
         """Check if enough time has passed since the last scan."""
-        last_scan = folder.get('last_scan_at')
-        if not last_scan:
+        if not last_scan_at:
             return True
         try:
-            last_dt = parse_utc(cast(str, last_scan))
+            last_dt = parse_utc(last_scan_at)
             elapsed = (utc_now() - last_dt).total_seconds()
-            return elapsed >= cast(float, folder.get('scan_interval', 300))
+            return elapsed >= scan_interval
         except (ValueError, TypeError):
             return True
 
@@ -476,7 +475,7 @@ class FolderWatcherService:
         )
 
         # Derive and set environment tags
-        tags = self._derive_environment_tags(folder, abs_path)
+        tags = self._derive_environment_tags(cast(str, folder.get('label', '')), cast(str, folder['folder_path']), abs_path)
         if tags:
             doc_svc.update_tags(doc_id, tags)
 
@@ -519,16 +518,16 @@ class FolderWatcherService:
 
         threading.Thread(target=_run, daemon=True, name=f"doc-watch-{doc_id[:8]}").start()
 
-    def _derive_environment_tags(self, folder: Dict[str, object], abs_path: str) -> list[str]:
+    def _derive_environment_tags(self, label: str, folder_path: str, abs_path: str) -> list[str]:
         """Derive semantic environment tags from the folder label and subfolder path."""
         tags = []
 
         # Folder label is the primary environment
-        if folder.get('label'):
-            tags.append(cast(str, folder['label']))
+        if label:
+            tags.append(label)
 
         # Relative subfolder segments become secondary tags
-        rel_path = os.path.relpath(os.path.dirname(abs_path), cast(str, folder['folder_path']))
+        rel_path = os.path.relpath(os.path.dirname(abs_path), folder_path)
         if rel_path != '.':
             segments = [s for s in rel_path.split(os.sep) if s and not s.startswith('.')]
             tags.extend(segments)
@@ -603,4 +602,3 @@ class FolderWatcherService:
             except (json.JSONDecodeError, TypeError):
                 return []
         return []
-

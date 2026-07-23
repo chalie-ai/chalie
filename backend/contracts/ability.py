@@ -21,6 +21,8 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Protocol
 
 if TYPE_CHECKING:
+    from datetime import datetime
+
     from abilities._result import ToolResult
 
 
@@ -57,4 +59,4 @@ class AbilityContract(Protocol):
     def classify_action(self, params: dict[str, object]) -> "str | None": ...
 
     @classmethod
-    def enrich_rich_payload(cls, payload: dict[str, object], row: dict[str, object]) -> dict[str, object]: ...
+    def enrich_rich_payload(cls, payload: dict[str, object], created_at: "datetime | str | None") -> dict[str, object]: ...

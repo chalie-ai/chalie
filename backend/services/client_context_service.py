@@ -185,7 +185,7 @@ class ClientContextService:
         self._push_history(ctx)
 
         # Demographic trait seeding (once per session)
-        self._seed_demographic_traits(ctx)
+        self._seed_demographic_traits(cast(str, ctx.get("locale", "")), cast(str, ctx.get("language", "")))
 
         logging.debug(f"[CLIENT CONTEXT] Saved context with timezone={ctx.get('timezone')}, "
                      f"device={cast(dict[str, object], ctx.get('device') or {}).get('class')}")
@@ -228,14 +228,11 @@ class ClientContextService:
 
     # ── Demographic Trait Seeding ──────────────────────────────────────
 
-    def _seed_demographic_traits(self, ctx: dict[str, object]) -> None:
+    def _seed_demographic_traits(self, locale: str, language: str) -> None:
         """Runs once per 30-day window — subsequent reinforcement comes from
         conversation. Religion, gender, age are NEVER telemetry-seeded."""
         if self._store.get(CULTURE_SEED_KEY):
             return
-
-        locale = cast(str, ctx.get("locale", ""))
-        language = cast(str, ctx.get("language", ""))
 
         # Try region-specific overrides first (e.g., pt-BR → latin_american)
         culture = None
@@ -266,5 +263,3 @@ class ClientContextService:
             logging.debug(f"[CLIENT CONTEXT] Seeded culture_region={culture} from locale={locale}")
         except Exception as e:
             logging.debug(f"[CLIENT CONTEXT] Demographic seeding failed: {e}")
-
-

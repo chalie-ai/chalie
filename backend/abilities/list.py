@@ -35,6 +35,8 @@ from configs.enums.param_key import Keys
 from abilities._result import ToolResult
 
 if TYPE_CHECKING:
+    from datetime import datetime
+
     from services.list_service import ListService as _ListService
 
 logger = logging.getLogger(__name__)
@@ -141,7 +143,7 @@ class ListAbility(Ability):
         return _dispatch(self, service, action, params)
 
     @classmethod
-    def enrich_rich_payload(cls, payload: dict[str, object], row: dict[str, object]) -> dict[str, object]:
+    def enrich_rich_payload(cls, payload: dict[str, object], created_at: "datetime | str | None") -> dict[str, object]:
         """Re-fetch the live list so checkbox state the user toggled out-of-band
         is visible on conversation refresh.
 
@@ -291,7 +293,7 @@ def _resolve_items(lst: dict[str, object], terms: list[str]) -> "list[str] | Too
 # ── Body / rich shaping ─────────────────────────────────────────────────────────
 
 
-def _rows(lst: dict[str, object]) -> list[dict[str, object]]:
+def _rows(items: list[dict[str, object]]) -> list[dict[str, object]]:
     return [
         {
             "id": item["id"],
@@ -299,12 +301,12 @@ def _rows(lst: dict[str, object]) -> list[dict[str, object]]:
             "done": bool(item["checked"]),
             "position": item["position"],
         }
-        for item in cast(list[dict[str, object]], lst.get("items", []))
+        for item in items
     ]
 
 
 def _body(lst: dict[str, object]) -> dict[str, object]:
-    return {"id": lst["id"], "name": lst["name"], "items": _rows(lst)}
+    return {"id": lst["id"], "name": lst["name"], "items": _rows(cast("list[dict[str, object]]", lst.get("items", [])))}
 
 
 def _fe_card(lst: dict[str, object]) -> dict[str, object]:

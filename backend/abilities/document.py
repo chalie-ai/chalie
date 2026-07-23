@@ -297,7 +297,7 @@ def _handle_list(service: "_DocumentService") -> ToolResult:
     return ToolResult.ok(rows, action="list", count=len(rows))
 
 
-def _append_meta_summary(lines: list[str], doc: dict[str, object], meta: dict[str, object]) -> None:
+def _append_meta_summary(lines: list[str], page_count: int | None, meta: dict[str, object]) -> None:
     doc_type = meta.get("document_type", {})
     if isinstance(doc_type, dict):
         doc_type = doc_type.get("value", "")
@@ -305,8 +305,8 @@ def _append_meta_summary(lines: list[str], doc: dict[str, object], meta: dict[st
         doc_type = ""
     if doc_type:
         lines.append(f"  Type: {doc_type}")
-    if doc.get("page_count"):
-        lines.append(f"  Pages: {doc['page_count']}")
+    if page_count:
+        lines.append(f"  Pages: {page_count}")
     if meta.get("companies"):
         lines.append("  Companies: " + ", ".join(cast(str, c["name"]) for c in cast(list[dict[str, object]], meta["companies"])[:5]))
     if meta.get("dates"):
@@ -348,7 +348,7 @@ def _handle_view(service: "_DocumentService", params: dict[str, object]) -> Tool
 
     meta = cast("dict[str, object]", doc.get("extracted_metadata") or {})
     lines = [f"[DOCUMENT] {doc['original_name']}:"]
-    _append_meta_summary(lines, doc, meta)
+    _append_meta_summary(lines, cast("int | None", doc.get("page_count")), meta)
 
     clean_text = doc.get("clean_text", "")
     if clean_text:
