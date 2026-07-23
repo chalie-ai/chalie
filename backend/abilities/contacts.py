@@ -9,9 +9,9 @@ dependency. The capability/connected gate is consulted only as a fallback: when 
 read finds NOTHING and mail is not connected, the base's ``code=not-connected``
 remediation is surfaced so the user still learns how to populate the index.
 
-This ability stays a :class:`CapabilityAbility` subclass (CAPABILITY_KEY="mail")
-purely to reuse that not-connected remediation shape; it overrides ``run()`` and
-never reaches the base's handler-dispatch flow for a known action.
+The mail capability (CAPABILITY_KEY="mail") is consulted only inside
+``_not_connected`` — this ability owns its whole ``run()`` flow and does not use
+the ``CapabilityAbility`` handler-dispatch base.
 
 ``get`` carries a precision contract — ``resolve()`` is fuzzy (FTS5 prefix-match
 over the contact kind, no score threshold), so taking ``matches[0]`` could hand
@@ -30,33 +30,39 @@ ordinal + the single span instruction. This ability never formats a wire
 envelope.
 """
 
+from __future__ import annotations
+
 import json
 from typing import TYPE_CHECKING, ClassVar, cast
 
 if TYPE_CHECKING:
-    from typing import SupportsInt
+    from contracts.params.param_bag import ParamBag
 
-from abilities._capability import CapabilityAbility
-from configs.enums.param_key import Keys
+from abilities._ability import Ability
 from abilities._result import ToolResult
+from configs.enums.param_key import Keys
+from contracts.params.contacts_params_bag import (
+    ContactsGetParams,
+    ContactsListParams,
+    ContactsParamsBag,
+)
 from models.contact import ContactRow
 
-# Read actions answered inline against the local index. An unknown action is
-# reported with this ladder in valid=.
-_ACTIONS = ("list", "get")
 
-
-class ContactsAbility(CapabilityAbility):
+class ContactsAbility(Ability[ContactsParamsBag]):
     DISCOVERABLE: ClassVar[bool] = False  # pim-delegate-exclusive; pinned on PimConfig only
     CAPABILITY_KEY: ClassVar[str] = "mail"
-    DEFAULT_ACTION: ClassVar[str] = "list"
     NOT_CONNECTED_HINT: ClassVar[str] = (
         "Configure the mail integration in the Brain dashboard."
     )
 
+    # The typed input contract: the dispatch seam builds the bag via
+    # ContactsParamsBag.from_params before run() is called.
+    PARAMS: ClassVar["type[ParamBag] | None"] = ContactsParamsBag
+
     # Pre-gated by the dispatcher BEFORE run(): get requires an identifier; list
-    # requires nothing (an empty query lists the whole book). An unknown action is
-    # caught inline in run() so the valid= ladder names the real read actions.
+    # requires nothing (an empty query lists the whole book). An unknown action
+    # is rejected here and again by the bag's router.
     ACTION_REQUIRED: ClassVar[dict[str, tuple[str, ...]]] = {
         "list": (),
         "get": (Keys.identifier,),
@@ -118,28 +124,28 @@ class ContactsAbility(CapabilityAbility):
 
     # ── Entry point — both actions are inline reads against the local index ─────
 
-    def run(self, params: dict[str, object]) -> ToolResult:
-        action = str(params.get(Keys.action, self.DEFAULT_ACTION)).lower()
-
-        if action == "list":
+    def run(self, params: ContactsParamsBag) -> ToolResult:
+        # The router factory only ever yields the two leaves; the isinstance
+        # chain is the narrowing that hands each handler its exact leaf type.
+        # The trailing branch catches only a hand-built foreign subclass (or
+        # the bare router) — loudly.
+        if isinstance(params, ContactsListParams):
             return self._list(params)
-        if action == "get":
+        if isinstance(params, ContactsGetParams):
             return self._get(params)
-
         return ToolResult.err(
-            f"Unknown contacts action: {action}",
+            f"Unknown contacts params bag: {type(params).__name__}.",
             code="unknown-action",
-            valid=_ACTIONS,
-            action=action,
+            valid=("list", "get"),
         )
 
     # ── list ────────────────────────────────────────────────────────────────
 
-    def _list(self, params: dict[str, object]) -> ToolResult:
+    def _list(self, params: ContactsListParams) -> ToolResult:
         from capabilities.contact_resolver import _parse_contact_row, resolve
 
-        limit = int(cast("SupportsInt", self.param(params, Keys.limit, default=20, clamp=(1, 50))))
-        query = (cast(str, params.get(Keys.query)) or "").strip()
+        limit = params.limit
+        query = params.query
 
         if query:
             contacts = resolve(query, limit=limit)
@@ -176,10 +182,10 @@ class ContactsAbility(CapabilityAbility):
 
     # ── get — three-outcome precision contract ────────────────────────────────
 
-    def _get(self, params: dict[str, object]) -> ToolResult:
+    def _get(self, params: ContactsGetParams) -> ToolResult:
         from capabilities.contact_resolver import resolve
 
-        identifier = (cast(str, params.get(Keys.identifier)) or "").strip()
+        identifier = params.identifier
         candidates = resolve(identifier, limit=5)
 
         if not candidates:

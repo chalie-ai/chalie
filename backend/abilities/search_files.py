@@ -36,19 +36,26 @@ from collections import deque
 from collections.abc import Generator
 from fnmatch import fnmatch
 from pathlib import Path
-from typing import ClassVar, cast
+from typing import TYPE_CHECKING, ClassVar, cast
 
 from abilities._ability import Ability
-from configs.enums.param_key import Keys
 from abilities._result import ToolResult
+from configs.enums.param_key import Keys
+from contracts.params.search_files_params_bag import (
+    DEFAULT_CONTEXT_LINES,
+    SearchFilesGlobParams,
+    SearchFilesGrepParams,
+    SearchFilesParamsBag,
+)
+
+if TYPE_CHECKING:
+    from contracts.params.param_bag import ParamBag
 
 _RESULTS_PER_PAGE = 5
 # Safety ceiling on total results gathered for one query, so a pathological
 # match-dense tree (e.g. a 100MB file with a million matching lines) can never
 # bloat the cache file or memory. A hit sets truncated=true.
 _MAX_RESULTS = 5000
-_DEFAULT_CONTEXT_LINES = 5
-_MAX_CONTEXT_LINES = 20
 _BUDGET_RATIO = 0.8
 # Cooperative wall-clock budget (seconds) for a single walk. NOT a framework
 # execution timeout — it bounds the traversal so an enormous tree returns a
@@ -63,15 +70,20 @@ _NARROW_HINT = "Narrow the directory or tighten the pattern for complete results
 _BROADEN_HINT = "Broaden the pattern or widen the directory and try again."
 
 
-class SearchFilesAbility(Ability):
+class SearchFilesAbility(Ability[SearchFilesParamsBag]):
     # The dispatcher pre-gates these BEFORE the policy gate: an unknown action →
     # code=unknown-action with valid=(glob, grep); a present action missing
     # 'query' → a single code=missing-params error. A present-but-whitespace
-    # query passes the pre-gate (the value is truthy), so run() still guards it.
+    # query passes the pre-gate (the value is truthy); the bag's router rejects
+    # it as empty-query before run() is reached.
     ACTION_REQUIRED: ClassVar[dict[str, tuple[str, ...]]] = {
         "glob": (Keys.query,),
         "grep": (Keys.query,),
     }
+
+    # The typed input contract: the dispatch seam builds the bag via
+    # SearchFilesParamsBag.from_params before run() is called.
+    PARAMS: ClassVar["type[ParamBag] | None"] = SearchFilesParamsBag
 
     def get_name(self) -> str:
         return "search_files"
@@ -152,49 +164,37 @@ class SearchFilesAbility(Ability):
     def get_parameters(self) -> dict[str, object]:
         return self._PARAMETERS
 
-    def run(self, params: dict[str, object]) -> ToolResult:
-        action = cast(str, params.get(Keys.action, ""))
-        query = cast(str, params.get(Keys.query) or "").strip()
-        directory = cast(str, params.get(Keys.directory) or "").strip()
+    def run(self, params: SearchFilesParamsBag) -> ToolResult:
+        # The router factory only ever yields the two leaves; the isinstance
+        # chain hands _search each leaf's exact fields (glob renders no
+        # context, but the gather/cache key still carries the default width).
+        if isinstance(params, SearchFilesGlobParams):
+            return self._search("glob", params.query, params.directory, params.page, DEFAULT_CONTEXT_LINES)
+        if isinstance(params, SearchFilesGrepParams):
+            return self._search("grep", params.query, params.directory, params.page, params.context_lines)
+        return ToolResult.err(
+            f"Unknown search_files params bag: {type(params).__name__}.",
+            code="unknown-action",
+            valid=("glob", "grep"),
+        )
 
-        # The dispatcher's ACTION_REQUIRED pre-gate has already rejected an
-        # unknown action and a missing 'query'; this guards the residue it lets
-        # through — a present-but-whitespace query (truthy to the pre-gate).
-        if action not in ("glob", "grep"):
+    def _search(self, action: str, query: str, directory: str, page: int, context_lines: int) -> ToolResult:
+        root = self._resolve_directory(directory)
+        if isinstance(root, ToolResult):
+            return root
+        # re.error is the ONLY caught failure — a bad grep pattern is a user
+        # input fault. Every other failure bubbles to the dispatcher.
+        try:
+            results, truncated = _gather(action, query, root, context_lines)
+        except re.error as exc:
             return ToolResult.err(
-                f"Invalid action {action!r}. Must be 'glob' or 'grep'.",
-                code="unknown-action",
-                valid=("glob", "grep"),
+                f"Invalid regex {query!r}: {str(exc)[:120]}",
+                code="invalid-regex",
+                hint="escape the special characters or pass a valid Python regex.",
             )
-        if not query:
-            return ToolResult.err(
-                "query is required and must not be empty.",
-                code="empty-query",
-                hint="pass a non-empty filename pattern (glob) or search string (grep).",
-            )
+        return _paginate(action, results, page, truncated)
 
-        page = _parse_int(params.get(Keys.page), default=1, low=1, high=None)
-        if page is None:
-            return ToolResult.err(
-                f"page must be an integer >= 1, got {params.get(Keys.page)!r}.",
-                code="invalid-param",
-                hint="pass a 1-based page number.",
-            )
-
-        if action == "grep":
-            context_lines = _parse_int(
-                params.get(Keys.context_lines), default=_DEFAULT_CONTEXT_LINES, low=0, high=_MAX_CONTEXT_LINES
-            )
-            if context_lines is None:
-                return ToolResult.err(
-                    f"context_lines must be between 0 and {_MAX_CONTEXT_LINES}, "
-                    f"got {params.get(Keys.context_lines)!r}.",
-                    code="invalid-param",
-                    hint=f"pass an integer between 0 and {_MAX_CONTEXT_LINES}.",
-                )
-        else:
-            context_lines = _DEFAULT_CONTEXT_LINES
-
+    def _resolve_directory(self, directory: str) -> "Path | ToolResult":
         root_str = directory or "/"
         try:
             root = Path(os.path.expanduser(root_str)).resolve()
@@ -216,33 +216,7 @@ class SearchFilesAbility(Ability):
                 code="not-a-directory",
                 hint="pass a directory path, not a file path.",
             )
-
-        # re.error is the ONLY caught failure — a bad grep pattern is a user
-        # input fault. Every other failure bubbles to the dispatcher.
-        try:
-            results, truncated = _gather(action, query, root, context_lines)
-        except re.error as exc:
-            return ToolResult.err(
-                f"Invalid regex {query!r}: {str(exc)[:120]}",
-                code="invalid-regex",
-                hint="escape the special characters or pass a valid Python regex.",
-            )
-        return _paginate(action, results, page, truncated)
-
-
-def _parse_int(raw: object, *, default: int, low: int, high: "int | None") -> "int | None":
-    """Return the validated int, or *default* when absent, or None on any
-    out-of-range / non-integer value so the caller can raise a stable error.
-    """
-    if raw is None:
-        return default
-    try:
-        value = int(cast("str | int", raw))
-    except (TypeError, ValueError):
-        return None
-    if value < low or (high is not None and value > high):
-        return None
-    return value
+        return root
 
 
 def _cache_path(action: str, query: str, context_lines: int, root: Path) -> str:

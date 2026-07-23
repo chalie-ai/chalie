@@ -16,22 +16,37 @@ kebab ``code`` (``already-exists`` / ``not-found`` / ``invalid-path`` /
 ``invalid-param`` / ``permission-denied``) — never silent.
 """
 
+from __future__ import annotations
+
 import os
 import shutil
 from pathlib import Path
-from typing import ClassVar, cast
+from typing import TYPE_CHECKING, ClassVar
 
 from abilities._ability import Ability
-from configs.enums.param_key import Keys
 from abilities._result import ToolResult
+from configs.enums.param_key import Keys
+from contracts.params.manage_files_params_bag import (
+    ManageFilesCreateParams,
+    ManageFilesDeleteParams,
+    ManageFilesParamsBag,
+    ManageFilesUpdatePermissionParams,
+)
+
+if TYPE_CHECKING:
+    from contracts.params.param_bag import ParamBag
 
 
-class ManageFilesAbility(Ability):
+class ManageFilesAbility(Ability[ManageFilesParamsBag]):
     ACTION_REQUIRED: ClassVar[dict[str, tuple[str, ...]]] = {
         "create": (Keys.path,),
         "delete": (Keys.path,),
         "update_permission": (Keys.path, Keys.permission_code),
     }
+
+    # The typed input contract: the dispatch seam builds the bag via
+    # ManageFilesParamsBag.from_params before run() is called.
+    PARAMS: ClassVar["type[ParamBag] | None"] = ManageFilesParamsBag
 
     def get_name(self) -> str:
         return "manage_files"
@@ -93,25 +108,23 @@ class ManageFilesAbility(Ability):
     def get_parameters(self) -> dict[str, object]:
         return self._PARAMETERS
 
-    def run(self, params: dict[str, object]) -> ToolResult:
-        action = cast(str, params.get(Keys.action, ""))
-        path_str = cast(str, params.get(Keys.path, ""))
-        perm_raw = params.get(Keys.permission_code)
-        if perm_raw is not None and not isinstance(perm_raw, str):
+    def run(self, params: ManageFilesParamsBag) -> ToolResult:
+        # The router factory only ever yields the three leaves; a hand-built
+        # foreign subclass (or the bare router) is rejected loudly BEFORE the
+        # shared path validation reads a field it may not carry.
+        if not isinstance(
+            params,
+            (ManageFilesCreateParams, ManageFilesDeleteParams, ManageFilesUpdatePermissionParams),
+        ):
             return ToolResult.err(
-                f"permission_code must be a string, got {type(perm_raw).__name__}.",
-                code="invalid-param",
-                hint="pass the octal code as a string, e.g. '0644'.",
-            )
-        perm_str = (perm_raw or "").strip() if perm_raw is not None else ""
-
-        if action not in ("create", "delete", "update_permission"):
-            return ToolResult.err(
-                f"Invalid action {action!r}. Must be 'create', 'delete', or 'update_permission'.",
+                f"Unknown manage_files params bag: {type(params).__name__}.",
                 code="unknown-action",
                 valid=("create", "delete", "update_permission"),
             )
 
+        # Residue guard — defends directly constructed bags; the dispatch path
+        # cannot get here blank (the bag's require_str strips and rejects it).
+        path_str = params.path
         if not path_str or not path_str.strip():
             return ToolResult.err(
                 "path is required and must not be empty.",
@@ -119,8 +132,6 @@ class ManageFilesAbility(Ability):
                 hint="pass an absolute path.",
             )
 
-        # Absolute-path guard — must come before resolve (which would succeed on
-        # a relative path).
         if not Path(path_str).is_absolute():
             return ToolResult.err(
                 f"Path is not absolute: {path_str!r}.",
@@ -135,11 +146,13 @@ class ManageFilesAbility(Ability):
         # the trailing slash.
         is_folder = path_str.rstrip().endswith("/")
 
-        if action == "create":
-            return self._do_create(target, target_str, is_folder, perm_str)
-        if action == "delete":
+        # The isinstance chain hands each handler its exact leaf type; after
+        # the create/delete branches the remaining type IS update_permission.
+        if isinstance(params, ManageFilesCreateParams):
+            return self._do_create(target, target_str, is_folder, params.permission_code)
+        if isinstance(params, ManageFilesDeleteParams):
             return self._do_delete(target, target_str)
-        return self._do_update_permission(target, target_str, perm_str)
+        return self._do_update_permission(target, target_str, params.permission_code)
 
     def _do_create(self, target: Path, target_str: str, is_folder: bool, perm_str: str) -> ToolResult:
         if target.exists():

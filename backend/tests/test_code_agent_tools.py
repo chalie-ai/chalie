@@ -31,6 +31,7 @@ from abilities.move import MoveAbility
 from abilities.replace_all import ReplaceAllAbility
 from abilities.run_script import RunScriptAbility
 from configs.enums.param_key import Keys
+from contracts.params.manage_files_params_bag import ManageFilesParamsBag
 
 pytestmark = pytest.mark.unit
 
@@ -142,10 +143,10 @@ def test_replace_all_single_file(tmp_path: Path) -> None:
 def test_manage_files_create(tmp_path: Path) -> None:
     """manage_files action=create makes an empty file at the given path."""
     target = tmp_path / "new_file.txt"
-    result = ManageFilesAbility().run({
+    result = ManageFilesAbility().run(ManageFilesParamsBag.from_params({
         Keys.action: "create",
         Keys.path: str(target),
-    })
+    }))
 
     assert result.status == "success"
     assert target.exists()
@@ -157,17 +158,17 @@ def test_manage_files_delete(tmp_path: Path) -> None:
     target = tmp_path / "to_delete.txt"
     target.write_text("content", encoding="utf-8")
 
-    result = ManageFilesAbility().run({
+    result = ManageFilesAbility().run(ManageFilesParamsBag.from_params({
         Keys.action: "delete",
         Keys.path: str(target),
-    })
+    }))
     assert result.status == "success"
     assert not target.exists()
 
-    missing = ManageFilesAbility().run({
+    missing = ManageFilesAbility().run(ManageFilesParamsBag.from_params({
         Keys.action: "delete",
         Keys.path: str(target),
-    })
+    }))
     assert missing.status == "error"
     assert missing.code == "not-found"
 
@@ -177,11 +178,11 @@ def test_manage_files_update_permission(tmp_path: Path) -> None:
     target = tmp_path / "perm_file.txt"
     target.write_text("content", encoding="utf-8")
 
-    result = ManageFilesAbility().run({
+    result = ManageFilesAbility().run(ManageFilesParamsBag.from_params({
         Keys.action: "update_permission",
         Keys.path: str(target),
         Keys.permission_code: "0755",
-    })
+    }))
     assert result.status == "success"
 
     mode = os.stat(target).st_mode & 0o7777

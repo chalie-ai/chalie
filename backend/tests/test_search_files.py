@@ -8,6 +8,8 @@ import pytest
 from abilities import search_files
 from abilities._result import ToolResult
 from abilities.search_files import SearchFilesAbility
+from contracts.params.search_files_params_bag import SearchFilesParamsBag
+from exceptions import ToolParamError
 
 pytestmark = pytest.mark.unit
 
@@ -28,7 +30,13 @@ def _run(action: str, query: str, directory: str | None = None, **extra: object)
     params: dict[str, object] = {"action": action, "query": query, **extra}
     if directory is not None:
         params["directory"] = directory
-    return SearchFilesAbility().run(params)
+    # Build the bag exactly as the dispatch seam does, mirroring its
+    # ToolParamError rendering so the error-path tests still see the envelope.
+    try:
+        bag = SearchFilesParamsBag.from_params(params)
+    except ToolParamError as exc:
+        return ToolResult.err(exc.message, code=exc.code, hint=exc.hint, valid=exc.valid)
+    return SearchFilesAbility().run(bag)
 
 
 def _glob_files(tr: ToolResult) -> list[str]:
@@ -62,21 +70,32 @@ def test_missing_query_returns_error() -> None:
     assert "required" in str(tr.body)
 
 
-def test_page_below_one_returns_error(tmp_path: Path) -> None:
+def test_page_below_one_clamps_to_first_page(tmp_path: Path) -> None:
     (tmp_path / "a.py").write_text("x")
     tr = _run("glob", "*.py", str(tmp_path), page=0)
+    assert tr.status == "success"
+    assert tr.meta["page"] == 1
+    assert len(_glob_files(tr)) == 1
+
+
+def test_non_numeric_page_returns_error(tmp_path: Path) -> None:
+    (tmp_path / "a.py").write_text("x")
+    tr = _run("glob", "*.py", str(tmp_path), page="second")
     assert tr.status == "error"
     assert tr.code == "invalid-param"
     assert "page" in str(tr.body)
 
 
-def test_context_lines_over_20_returns_error(tmp_path: Path) -> None:
-    (tmp_path / "a.py").write_text("NEEDLE\n")
-    tr = _run("grep", "NEEDLE", str(tmp_path), context_lines=21)
-    assert tr.status == "error"
-    assert tr.code == "invalid-param"
-    assert "must be between 0 and 20" in str(tr.body)
-    assert "21" in str(tr.body)
+def test_context_lines_over_max_clamps_to_max(tmp_path: Path) -> None:
+    # 61 lines with the match in the middle: the clamped width of 20 renders
+    # 20 above + the match + 20 below = 41 context lines (an unclamped 21
+    # would render 43).
+    content = "\n".join(f"line {i}" for i in range(1, 62))
+    (tmp_path / "a.py").write_text(content)
+    tr = _run("grep", "line 31", str(tmp_path), context_lines=21)
+    rows = _grep_rows(tr)
+    assert len(rows) == 1
+    assert len(cast(str, rows[0]["context"]).split("\n")) == 41
 
 
 def test_directory_not_found_returns_error() -> None:
