@@ -5,9 +5,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Self
 
+from abilities._result import ToolResult
 from configs.enums.param_key import Keys
 from contracts.params.param_bag import ParamBag
-from exceptions import ToolParamError
 
 
 @dataclass(frozen=True, slots=True)
@@ -28,23 +28,30 @@ class ReplaceAllParamsBag(ParamBag):
     path: str | None
 
     @classmethod
-    def from_params(cls, params: dict[str, object]) -> Self:
-        return cls(
-            search=cls._verbatim(params, Keys.search),
-            replace_=cls._verbatim(params, Keys.replace_),
-            glob=cls.opt_str(params, Keys.glob),
-            path=cls.opt_str(params, Keys.path),
-        )
+    def from_params(cls, params: dict[str, object]) -> Self | ToolResult:
+        glob = cls.opt_str(params, Keys.glob)
+        if isinstance(glob, ToolResult):
+            return glob
+        path = cls.opt_str(params, Keys.path)
+        if isinstance(path, ToolResult):
+            return path
+        search = cls._verbatim(params, Keys.search)
+        if isinstance(search, ToolResult):
+            return search
+        replace_ = cls._verbatim(params, Keys.replace_)
+        if isinstance(replace_, ToolResult):
+            return replace_
+        return cls(search=search, replace_=replace_, glob=glob, path=path)
 
     @staticmethod
-    def _verbatim(params: dict[str, object], key: str) -> str:
+    def _verbatim(params: dict[str, object], key: str) -> str | ToolResult:
         """Required string returned exactly as passed — ``require_str`` would
         strip and reject whitespace-only values, corrupting whitespace-
         significant search/replacement text."""
         value = params.get(key)
         if not isinstance(value, str) or not value:
             received = "|".join(params.keys()) or "none"
-            raise ToolParamError(
+            return ToolResult.err(
                 f"Required parameter '{key}' is missing.",
                 code="missing-params",
                 hint=f"pass '{key}' (received: {received})",

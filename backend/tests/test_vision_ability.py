@@ -150,7 +150,7 @@ def test_vision_run_provider_error_returns_visible_error(db: sqlite3.Connection)
 
     ability = VisionAbility(mp=_make_user_mp())
     result = ability.run(
-        VisionParamsBag.from_params({"image": doc_id, "query": "what is this"})
+        built(VisionParamsBag.from_params({"image": doc_id, "query": "what is this"}))
     )
 
     assert result.status == "error"
@@ -162,7 +162,7 @@ def test_vision_run_unknown_doc_id_is_error(db: sqlite3.Connection) -> None:
     from contracts.params.vision_params_bag import VisionParamsBag
 
     ability = VisionAbility(mp=_make_user_mp())
-    result = ability.run(VisionParamsBag.from_params({"image": "deadbeef", "query": "x"}))
+    result = ability.run(built(VisionParamsBag.from_params({"image": "deadbeef", "query": "x"})))
 
     assert result.status == "error"
     assert "deadbeef" in result.body
@@ -177,7 +177,7 @@ import hashlib  # noqa: E402 — appended to existing file
 
 from services.document_service import DocumentService  # noqa: E402
 from services.file_mapper_service import FileMapperService  # noqa: E402
-from tests._tool_result_harness import body, head, seed_transcript  # noqa: E402
+from tests._tool_result_harness import body, built, head, seed_transcript  # noqa: E402
 
 
 @pytest.fixture

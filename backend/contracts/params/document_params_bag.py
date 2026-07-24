@@ -25,23 +25,26 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Self
 
+from abilities._result import ToolResult
 from configs.enums.param_key import Keys
 from contracts.params.param_bag import ParamBag
-from exceptions import ToolParamError
 
 # LLM-callable actions only — ``upload`` is mechanical (not in INPUT_SCHEMA) and
 # never surfaced in unknown-action errors to the model.
 _VALID_ACTIONS = ("search", "list", "view", "delete", "restore", "create")
 
 
-def _address(params: dict[str, object]) -> tuple[str, str]:
+def _address(params: dict[str, object]) -> tuple[str, str] | ToolResult:
     """The optional ``id``/``name`` pair addressing an existing document —
     stripped, ``""`` when absent; the handler raises ``missing-target`` when
     both are blank (either one alone addresses the document)."""
-    return (
-        (ParamBag.opt_str(params, Keys.id) or "").strip(),
-        (ParamBag.opt_str(params, Keys.name_) or "").strip(),
-    )
+    doc_id = ParamBag.opt_str(params, Keys.id)
+    if isinstance(doc_id, ToolResult):
+        return doc_id
+    name = ParamBag.opt_str(params, Keys.name_)
+    if isinstance(name, ToolResult):
+        return name
+    return (doc_id or "").strip(), (name or "").strip()
 
 
 class DocumentParamsBag(ParamBag):
@@ -51,7 +54,7 @@ class DocumentParamsBag(ParamBag):
     __slots__ = ()
 
     @classmethod
-    def from_params(cls, params: dict[str, object]) -> DocumentParamsBag:
+    def from_params(cls, params: dict[str, object]) -> DocumentParamsBag | ToolResult:
         match params.get(Keys.action):
             case "search":
                 return DocumentSearchParams.from_params(params)
@@ -68,7 +71,7 @@ class DocumentParamsBag(ParamBag):
             case "upload":
                 return DocumentUploadParams.from_params(params)
             case unknown:
-                raise ToolParamError(
+                return ToolResult.err(
                     f"Unknown document action: {unknown!r}.",
                     code="unknown-action",
                     valid=_VALID_ACTIONS,
@@ -83,8 +86,11 @@ class DocumentSearchParams(DocumentParamsBag):
     query: str
 
     @classmethod
-    def from_params(cls, params: dict[str, object]) -> Self:
-        return cls(query=cls.require_str(params, Keys.query))
+    def from_params(cls, params: dict[str, object]) -> Self | ToolResult:
+        query = cls.require_str(params, Keys.query)
+        if isinstance(query, ToolResult):
+            return query
+        return cls(query=query)
 
 
 @dataclass(frozen=True, slots=True)
@@ -92,7 +98,7 @@ class DocumentListParams(DocumentParamsBag):
     """No fields — the list action requires no params."""
 
     @classmethod
-    def from_params(cls, params: dict[str, object]) -> Self:
+    def from_params(cls, params: dict[str, object]) -> Self | ToolResult:
         return cls()
 
 
@@ -107,8 +113,11 @@ class DocumentViewParams(DocumentParamsBag):
     name: str
 
     @classmethod
-    def from_params(cls, params: dict[str, object]) -> Self:
-        doc_id, name = _address(params)
+    def from_params(cls, params: dict[str, object]) -> Self | ToolResult:
+        address = _address(params)
+        if isinstance(address, ToolResult):
+            return address
+        doc_id, name = address
         return cls(id=doc_id, name=name)
 
 
@@ -120,8 +129,11 @@ class DocumentDeleteParams(DocumentParamsBag):
     name: str
 
     @classmethod
-    def from_params(cls, params: dict[str, object]) -> Self:
-        doc_id, name = _address(params)
+    def from_params(cls, params: dict[str, object]) -> Self | ToolResult:
+        address = _address(params)
+        if isinstance(address, ToolResult):
+            return address
+        doc_id, name = address
         return cls(id=doc_id, name=name)
 
 
@@ -134,8 +146,11 @@ class DocumentRestoreParams(DocumentParamsBag):
     name: str
 
     @classmethod
-    def from_params(cls, params: dict[str, object]) -> Self:
-        doc_id, name = _address(params)
+    def from_params(cls, params: dict[str, object]) -> Self | ToolResult:
+        address = _address(params)
+        if isinstance(address, ToolResult):
+            return address
+        doc_id, name = address
         return cls(id=doc_id, name=name)
 
 
@@ -148,11 +163,14 @@ class DocumentCreateParams(DocumentParamsBag):
     content: str
 
     @classmethod
-    def from_params(cls, params: dict[str, object]) -> Self:
-        return cls(
-            name_=cls.require_str(params, Keys.name_),
-            content=cls.require_str(params, Keys.content),
-        )
+    def from_params(cls, params: dict[str, object]) -> Self | ToolResult:
+        name_ = cls.require_str(params, Keys.name_)
+        if isinstance(name_, ToolResult):
+            return name_
+        content = cls.require_str(params, Keys.content)
+        if isinstance(content, ToolResult):
+            return content
+        return cls(name_=name_, content=content)
 
 
 @dataclass(frozen=True, slots=True)
@@ -165,9 +183,12 @@ class DocumentUploadParams(DocumentParamsBag):
     name_: str
 
     @classmethod
-    def from_params(cls, params: dict[str, object]) -> Self:
-        return cls(
-            path=cls.require_str(params, Keys.path),
-            name_=cls.opt_str(params, Keys.name_) or "",
-        )
+    def from_params(cls, params: dict[str, object]) -> Self | ToolResult:
+        path = cls.require_str(params, Keys.path)
+        if isinstance(path, ToolResult):
+            return path
+        name_ = cls.opt_str(params, Keys.name_)
+        if isinstance(name_, ToolResult):
+            return name_
+        return cls(path=path, name_=name_ or "")
 

@@ -15,9 +15,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Self
 
+from abilities._result import ToolResult
 from configs.enums.param_key import Keys
 from contracts.params.param_bag import ParamBag
-from exceptions import ToolParamError
 
 _ACTIONS = ("glob", "grep")
 
@@ -41,21 +41,21 @@ class SearchFilesParamsBag(ParamBag):
     __slots__ = ()
 
     @classmethod
-    def from_params(cls, params: dict[str, object]) -> SearchFilesParamsBag:
+    def from_params(cls, params: dict[str, object]) -> SearchFilesParamsBag | ToolResult:
         match params.get(Keys.action):
             case "glob":
                 return SearchFilesGlobParams.from_params(params)
             case "grep":
                 return SearchFilesGrepParams.from_params(params)
             case unknown:
-                raise ToolParamError(
+                return ToolResult.err(
                     f"Unknown search_files action: {unknown!r}.",
                     code="unknown-action",
                     valid=_ACTIONS,
                 )
 
     @classmethod
-    def _query(cls, params: dict[str, object]) -> str:
+    def _query(cls, params: dict[str, object]) -> str | ToolResult:
         """The stripped search query, shared by both leaves.
 
         Hand-rolled instead of ``require_str`` because a blank/missing query
@@ -64,13 +64,13 @@ class SearchFilesParamsBag(ParamBag):
         """
         raw = params.get(Keys.query)
         if raw is not None and not isinstance(raw, str):
-            raise ToolParamError(
+            return ToolResult.err(
                 f"'{Keys.query}' must be text.",
                 code="invalid-param",
                 hint=f"pass '{Keys.query}' as a string.",
             )
         if raw is None or not raw.strip():
-            raise ToolParamError(
+            return ToolResult.err(
                 "query is required and must not be empty.",
                 code="empty-query",
                 hint="pass a non-empty filename pattern (glob) or search string (grep).",
@@ -89,12 +89,17 @@ class SearchFilesGlobParams(SearchFilesParamsBag):
     page: int
 
     @classmethod
-    def from_params(cls, params: dict[str, object]) -> Self:
-        return cls(
-            query=cls._query(params),
-            directory=cls.str_default(params, Keys.directory, default="/"),
-            page=cls.clamp_int(params, Keys.page, default=1, lo=1, hi=_MAX_PAGE),
-        )
+    def from_params(cls, params: dict[str, object]) -> Self | ToolResult:
+        directory = cls.str_default(params, Keys.directory, default="/")
+        if isinstance(directory, ToolResult):
+            return directory
+        page = cls.clamp_int(params, Keys.page, default=1, lo=1, hi=_MAX_PAGE)
+        if isinstance(page, ToolResult):
+            return page
+        query = cls._query(params)
+        if isinstance(query, ToolResult):
+            return query
+        return cls(query=query, directory=directory, page=page)
 
 
 @dataclass(frozen=True, slots=True)
@@ -109,12 +114,28 @@ class SearchFilesGrepParams(SearchFilesParamsBag):
     context_lines: int
 
     @classmethod
-    def from_params(cls, params: dict[str, object]) -> Self:
+    def from_params(cls, params: dict[str, object]) -> Self | ToolResult:
+        directory = cls.str_default(params, Keys.directory, default="/")
+        if isinstance(directory, ToolResult):
+            return directory
+        page = cls.clamp_int(params, Keys.page, default=1, lo=1, hi=_MAX_PAGE)
+        if isinstance(page, ToolResult):
+            return page
+        context_lines = cls.clamp_int(
+            params,
+            Keys.context_lines,
+            default=DEFAULT_CONTEXT_LINES,
+            lo=0,
+            hi=MAX_CONTEXT_LINES,
+        )
+        if isinstance(context_lines, ToolResult):
+            return context_lines
+        query = cls._query(params)
+        if isinstance(query, ToolResult):
+            return query
         return cls(
-            query=cls._query(params),
-            directory=cls.str_default(params, Keys.directory, default="/"),
-            page=cls.clamp_int(params, Keys.page, default=1, lo=1, hi=_MAX_PAGE),
-            context_lines=cls.clamp_int(
-                params, Keys.context_lines, default=DEFAULT_CONTEXT_LINES, lo=0, hi=MAX_CONTEXT_LINES
-            ),
+            query=query,
+            directory=directory,
+            page=page,
+            context_lines=context_lines,
         )

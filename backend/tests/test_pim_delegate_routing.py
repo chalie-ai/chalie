@@ -46,6 +46,7 @@ from configs.channels.pim import PimConfig
 from configs.enums.policy_channel import PolicyChannel
 from controllers.message_processor import MessageProcessor
 from services.processor_config import ProcessorConfig
+from tests._tool_result_harness import built
 
 pytestmark = pytest.mark.unit
 
@@ -70,7 +71,7 @@ def _injected(query: object) -> list[str]:
     base = set(mp.active_tools)
     ability = FindToolsAbility()
     ability.mp = mp
-    ability.run(FindToolsParamsBag.from_params({"query": query}))
+    ability.run(built(FindToolsParamsBag.from_params({"query": query})))
     return [t for t in mp.active_tools if t not in base]
 
 
@@ -236,7 +237,7 @@ def test_pim_short_circuits_when_mail_not_connected() -> None:
     from contracts.params.delegate_params_bag import DelegateParamsBag
 
     result = PimAbility().run(
-        DelegateParamsBag.from_params({"instructions": "what's on my calendar today"})
+        built(DelegateParamsBag.from_params({"instructions": "what's on my calendar today"}))
     )
     assert result.status == "error"
     assert result.code == "not-connected"

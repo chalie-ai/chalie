@@ -15,9 +15,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Self
 
+from abilities._result import ToolResult
 from configs.enums.param_key import Keys
 from contracts.params.param_bag import ParamBag
-from exceptions import ToolParamError
 
 _ACTIONS = ("open", "read", "find", "click", "fill", "select", "scroll", "back", "screenshot", "style")
 
@@ -29,7 +29,7 @@ class BrowserParamsBag(ParamBag):
     __slots__ = ()
 
     @classmethod
-    def from_params(cls, params: dict[str, object]) -> BrowserParamsBag:
+    def from_params(cls, params: dict[str, object]) -> BrowserParamsBag | ToolResult:
         match params.get(Keys.action):
             case "open":
                 return BrowserOpenParams.from_params(params)
@@ -52,7 +52,7 @@ class BrowserParamsBag(ParamBag):
             case "style":
                 return BrowserStyleParams.from_params(params)
             case unknown:
-                raise ToolParamError(
+                return ToolResult.err(
                     f"Unknown browser action: {unknown!r}.",
                     code="unknown-action",
                     valid=_ACTIONS,
@@ -66,8 +66,11 @@ class BrowserOpenParams(BrowserParamsBag):
     url: str
 
     @classmethod
-    def from_params(cls, params: dict[str, object]) -> Self:
-        return cls(url=cls.require_str(params, Keys.url))
+    def from_params(cls, params: dict[str, object]) -> Self | ToolResult:
+        url = cls.require_str(params, Keys.url)
+        if isinstance(url, ToolResult):
+            return url
+        return cls(url=url)
 
 
 @dataclass(frozen=True, slots=True)
@@ -79,8 +82,10 @@ class BrowserReadParams(BrowserParamsBag):
     section: str | None
 
     @classmethod
-    def from_params(cls, params: dict[str, object]) -> Self:
+    def from_params(cls, params: dict[str, object]) -> Self | ToolResult:
         raw = cls.opt_str(params, Keys.section)
+        if isinstance(raw, ToolResult):
+            return raw
         section = raw.strip() if raw is not None else None
         return cls(section=section or None)
 
@@ -92,8 +97,11 @@ class BrowserFindParams(BrowserParamsBag):
     query: str
 
     @classmethod
-    def from_params(cls, params: dict[str, object]) -> Self:
-        return cls(query=cls.require_str(params, Keys.query))
+    def from_params(cls, params: dict[str, object]) -> Self | ToolResult:
+        query = cls.require_str(params, Keys.query)
+        if isinstance(query, ToolResult):
+            return query
+        return cls(query=query)
 
 
 @dataclass(frozen=True, slots=True)
@@ -103,8 +111,11 @@ class BrowserClickParams(BrowserParamsBag):
     target: str
 
     @classmethod
-    def from_params(cls, params: dict[str, object]) -> Self:
-        return cls(target=cls.require_str(params, Keys.target))
+    def from_params(cls, params: dict[str, object]) -> Self | ToolResult:
+        target = cls.require_str(params, Keys.target)
+        if isinstance(target, ToolResult):
+            return target
+        return cls(target=target)
 
 
 @dataclass(frozen=True, slots=True)
@@ -115,11 +126,14 @@ class BrowserFillParams(BrowserParamsBag):
     value: str
 
     @classmethod
-    def from_params(cls, params: dict[str, object]) -> Self:
-        return cls(
-            target=cls.require_str(params, Keys.target),
-            value=cls.require_str(params, Keys.value_),
-        )
+    def from_params(cls, params: dict[str, object]) -> Self | ToolResult:
+        target = cls.require_str(params, Keys.target)
+        if isinstance(target, ToolResult):
+            return target
+        value = cls.require_str(params, Keys.value_)
+        if isinstance(value, ToolResult):
+            return value
+        return cls(target=target, value=value)
 
 
 @dataclass(frozen=True, slots=True)
@@ -130,11 +144,14 @@ class BrowserSelectParams(BrowserParamsBag):
     value: str
 
     @classmethod
-    def from_params(cls, params: dict[str, object]) -> Self:
-        return cls(
-            target=cls.require_str(params, Keys.target),
-            value=cls.require_str(params, Keys.value_),
-        )
+    def from_params(cls, params: dict[str, object]) -> Self | ToolResult:
+        target = cls.require_str(params, Keys.target)
+        if isinstance(target, ToolResult):
+            return target
+        value = cls.require_str(params, Keys.value_)
+        if isinstance(value, ToolResult):
+            return value
+        return cls(target=target, value=value)
 
 
 @dataclass(frozen=True, slots=True)
@@ -144,8 +161,11 @@ class BrowserScrollParams(BrowserParamsBag):
     direction: str
 
     @classmethod
-    def from_params(cls, params: dict[str, object]) -> Self:
-        return cls(direction=cls.require_str(params, Keys.direction))
+    def from_params(cls, params: dict[str, object]) -> Self | ToolResult:
+        direction = cls.require_str(params, Keys.direction)
+        if isinstance(direction, ToolResult):
+            return direction
+        return cls(direction=direction)
 
 
 @dataclass(frozen=True, slots=True)
@@ -153,7 +173,7 @@ class BrowserBackParams(BrowserParamsBag):
     """No fields — 'back' just navigates to the previous page."""
 
     @classmethod
-    def from_params(cls, params: dict[str, object]) -> Self:
+    def from_params(cls, params: dict[str, object]) -> Self | ToolResult:
         return cls()
 
 
@@ -162,7 +182,7 @@ class BrowserScreenshotParams(BrowserParamsBag):
     """No fields — 'screenshot' captures the current page."""
 
     @classmethod
-    def from_params(cls, params: dict[str, object]) -> Self:
+    def from_params(cls, params: dict[str, object]) -> Self | ToolResult:
         return cls()
 
 
@@ -173,5 +193,8 @@ class BrowserStyleParams(BrowserParamsBag):
     target: str
 
     @classmethod
-    def from_params(cls, params: dict[str, object]) -> Self:
-        return cls(target=cls.require_str(params, Keys.target))
+    def from_params(cls, params: dict[str, object]) -> Self | ToolResult:
+        target = cls.require_str(params, Keys.target)
+        if isinstance(target, ToolResult):
+            return target
+        return cls(target=target)

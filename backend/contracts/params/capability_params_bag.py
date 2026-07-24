@@ -21,6 +21,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Self
 
+from abilities._result import ToolResult
 from configs.enums.param_key import Keys
 from contracts.params.param_bag import ParamBag
 
@@ -36,7 +37,7 @@ class CapabilityParamsBag(ParamBag):
     extra: dict[str, object]
 
     @classmethod
-    def from_params(cls, params: dict[str, object]) -> Self:
+    def from_params(cls, params: dict[str, object]) -> Self | ToolResult:
         raw = params.get(Keys.action)
         return cls(
             action=None if raw is None else str(raw).lower(),

@@ -22,9 +22,10 @@ carry a stable kebab-case ``code``, an optional one-line ``hint``, and a
 ``valid`` tuple of acceptable actions/values — everything a weak model needs to
 self-correct without re-reading the schema.
 
-``ToolParamError`` is the one sanctioned way an ability (via ``Ability.param``)
-signals a bad input; the dispatcher catches it and renders it canonically with
-its ``code``/``hint``/``valid``.
+A bad input never surfaces as an exception: the ability's ``ParamBag`` returns
+the error ``ToolResult`` directly from ``from_params`` — authored at the
+failure site with its ``code``/``hint``/``valid`` — and the dispatcher passes
+it to the wire untouched.
 """
 
 from __future__ import annotations

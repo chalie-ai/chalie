@@ -28,9 +28,9 @@ import json
 from dataclasses import dataclass
 from typing import Self
 
+from abilities._result import ToolResult
 from configs.enums.param_key import Keys
 from contracts.params.param_bag import ParamBag
-from exceptions import ToolParamError
 
 _ACTIONS = (
     "list_all", "create", "view",
@@ -39,14 +39,14 @@ _ACTIONS = (
 )
 
 
-def _name(params: dict[str, object]) -> str:
+def _name(params: dict[str, object]) -> str | ToolResult:
     """The create/rename display name: pre-gated present by ACTION_REQUIRED;
     coerced via ``str()`` (a bare number is a legal name) and stripped — the
     blank residue keeps the handlers' historical ``missing-name`` contract."""
     raw = params.get(Keys.name_)
     name = ("" if raw is None else str(raw)).strip()
     if not name:
-        raise ToolParamError("'name' is required.", code="missing-name")
+        return ToolResult.err("'name' is required.", code="missing-name")
     return name
 
 
@@ -58,7 +58,7 @@ def _target(params: dict[str, object]) -> str:
     return ("" if raw is None else str(raw)).strip()
 
 
-def _raw_items(params: dict[str, object]) -> list[object]:
+def _raw_items(params: dict[str, object]) -> list[object] | ToolResult:
     """``items`` as a raw list — ``[]`` when absent. A string is parsed as a
     JSON array when it is one, else folded to a single-item list (the pre-bag
     normalisation, preserved verbatim); any other type is a bad parameter."""
@@ -70,7 +70,7 @@ def _raw_items(params: dict[str, object]) -> list[object]:
             return [raw]
         return parsed if isinstance(parsed, list) else [raw]
     if not isinstance(raw, list):
-        raise ToolParamError(
+        return ToolResult.err(
             "'items' must be a JSON array.",
             code="invalid-items",
             hint="pass 'items' as a JSON array, e.g. [\"milk\",\"eggs\"].",
@@ -85,7 +85,7 @@ class ListParamsBag(ParamBag):
     __slots__ = ()
 
     @classmethod
-    def from_params(cls, params: dict[str, object]) -> ListParamsBag:
+    def from_params(cls, params: dict[str, object]) -> ListParamsBag | ToolResult:
         match params.get(Keys.action):
             case "list_all":
                 return ListAllParams.from_params(params)
@@ -106,7 +106,7 @@ class ListParamsBag(ParamBag):
             case "delete":
                 return ListDeleteParams.from_params(params)
             case unknown:
-                raise ToolParamError(
+                return ToolResult.err(
                     f"Unknown list action: {unknown!r}.",
                     code="unknown-action",
                     valid=_ACTIONS,
@@ -118,7 +118,7 @@ class ListAllParams(ListParamsBag):
     """list_all reads no parameters — the leaf exists so ``run()`` can narrow."""
 
     @classmethod
-    def from_params(cls, params: dict[str, object]) -> Self:
+    def from_params(cls, params: dict[str, object]) -> Self | ToolResult:
         return cls()
 
 
@@ -131,8 +131,14 @@ class ListCreateParams(ListParamsBag):
     items: list[object]
 
     @classmethod
-    def from_params(cls, params: dict[str, object]) -> Self:
-        return cls(name_=_name(params), items=_raw_items(params))
+    def from_params(cls, params: dict[str, object]) -> Self | ToolResult:
+        name_ = _name(params)
+        if isinstance(name_, ToolResult):
+            return name_
+        items = _raw_items(params)
+        if isinstance(items, ToolResult):
+            return items
+        return cls(name_=name_, items=items)
 
 
 @dataclass(frozen=True, slots=True)
@@ -143,7 +149,7 @@ class ListViewParams(ListParamsBag):
     list_: str
 
     @classmethod
-    def from_params(cls, params: dict[str, object]) -> Self:
+    def from_params(cls, params: dict[str, object]) -> Self | ToolResult:
         return cls(list_=_target(params))
 
 
@@ -156,8 +162,11 @@ class ListAddParams(ListParamsBag):
     items: list[object]
 
     @classmethod
-    def from_params(cls, params: dict[str, object]) -> Self:
-        return cls(list_=_target(params), items=_raw_items(params))
+    def from_params(cls, params: dict[str, object]) -> Self | ToolResult:
+        items = _raw_items(params)
+        if isinstance(items, ToolResult):
+            return items
+        return cls(list_=_target(params), items=items)
 
 
 @dataclass(frozen=True, slots=True)
@@ -171,10 +180,10 @@ class ListCheckParams(ListParamsBag):
     items: list[object]
 
     @classmethod
-    def from_params(cls, params: dict[str, object]) -> Self:
+    def from_params(cls, params: dict[str, object]) -> Self | ToolResult:
         raw = params.get(Keys.items)
         if not isinstance(raw, list) or not raw:
-            raise ToolParamError(
+            return ToolResult.err(
                 "'items' must be a non-empty array.",
                 code="invalid-items",
                 hint="each item needs 'content' and 'checked', e.g. [{\"content\":\"milk\",\"checked\":true}].",
@@ -191,8 +200,11 @@ class ListRemoveParams(ListParamsBag):
     items: list[object]
 
     @classmethod
-    def from_params(cls, params: dict[str, object]) -> Self:
-        return cls(list_=_target(params), items=_raw_items(params))
+    def from_params(cls, params: dict[str, object]) -> Self | ToolResult:
+        items = _raw_items(params)
+        if isinstance(items, ToolResult):
+            return items
+        return cls(list_=_target(params), items=items)
 
 
 @dataclass(frozen=True, slots=True)
@@ -203,7 +215,7 @@ class ListClearParams(ListParamsBag):
     list_: str
 
     @classmethod
-    def from_params(cls, params: dict[str, object]) -> Self:
+    def from_params(cls, params: dict[str, object]) -> Self | ToolResult:
         return cls(list_=_target(params))
 
 
@@ -216,8 +228,11 @@ class ListRenameParams(ListParamsBag):
     name_: str
 
     @classmethod
-    def from_params(cls, params: dict[str, object]) -> Self:
-        return cls(list_=_target(params), name_=_name(params))
+    def from_params(cls, params: dict[str, object]) -> Self | ToolResult:
+        name_ = _name(params)
+        if isinstance(name_, ToolResult):
+            return name_
+        return cls(list_=_target(params), name_=name_)
 
 
 @dataclass(frozen=True, slots=True)
@@ -228,5 +243,5 @@ class ListDeleteParams(ListParamsBag):
     list_: str
 
     @classmethod
-    def from_params(cls, params: dict[str, object]) -> Self:
+    def from_params(cls, params: dict[str, object]) -> Self | ToolResult:
         return cls(list_=_target(params))

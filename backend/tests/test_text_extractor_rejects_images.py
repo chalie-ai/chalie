@@ -17,6 +17,7 @@ import pytest
 
 from services.text_extractor import extract_text
 from tests.helpers import blank_png_bytes, ocrable_png_bytes
+from tests._tool_result_harness import built
 
 pytestmark = pytest.mark.unit
 
@@ -69,7 +70,7 @@ def test_read_ability_routes_images_to_vision(db: sqlite3.Connection, tmp_path: 
     p = tmp_path / "photo.png"
     p.write_bytes(blank_png_bytes())
 
-    result = ReadAbility(mp=None).run(ReadParamsBag.from_params({"source": str(p)}))
+    result = ReadAbility(mp=None).run(built(ReadParamsBag.from_params({"source": str(p)})))
 
     assert result.status == "error"
     assert result.code == "not-text"

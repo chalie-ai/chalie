@@ -84,7 +84,10 @@ def _ability() -> ScheduleAbility:
 def _run(params: dict[str, object]) -> ToolResult:
     """Dispatch through the same seam production uses: the router bag is built
     from the raw dict first, then handed to ``run()``."""
-    return _ability().run(ScheduleParamsBag.from_params(params))
+    bag = ScheduleParamsBag.from_params(params)
+    if isinstance(bag, ToolResult):
+        return bag
+    return _ability().run(bag)
 
 
 def _record_of(tr: ToolResult) -> dict[str, object]:

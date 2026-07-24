@@ -21,9 +21,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Self
 
+from abilities._result import ToolResult
 from configs.enums.param_key import Keys
 from contracts.params.param_bag import ParamBag
-from exceptions import ToolParamError
 
 _ACTIONS = ("create", "delete", "update_permission")
 
@@ -35,12 +35,12 @@ class ManageFilesParamsBag(ParamBag):
     __slots__ = ()
 
     @classmethod
-    def from_params(cls, params: dict[str, object]) -> ManageFilesParamsBag:
+    def from_params(cls, params: dict[str, object]) -> ManageFilesParamsBag | ToolResult:
         # Cross-action type guard — the original handler enforced this before
         # dispatching to any action, so the bag does the same here.
         perm_raw = params.get(Keys.permission_code)
         if perm_raw is not None and not isinstance(perm_raw, str):
-            raise ToolParamError(
+            return ToolResult.err(
                 f"permission_code must be a string, got {type(perm_raw).__name__}.",
                 code="invalid-param",
                 hint="pass the octal code as a string, e.g. '0644'.",
@@ -54,7 +54,7 @@ class ManageFilesParamsBag(ParamBag):
             case "update_permission":
                 return ManageFilesUpdatePermissionParams.from_params(params)
             case unknown:
-                raise ToolParamError(
+                return ToolResult.err(
                     f"Unknown manage_files action: {unknown!r}.",
                     code="unknown-action",
                     valid=_ACTIONS,
@@ -70,11 +70,14 @@ class ManageFilesCreateParams(ManageFilesParamsBag):
     permission_code: str
 
     @classmethod
-    def from_params(cls, params: dict[str, object]) -> Self:
-        return cls(
-            path=cls.require_str(params, Keys.path),
-            permission_code=cls.str_default(params, Keys.permission_code, default="").strip(),
-        )
+    def from_params(cls, params: dict[str, object]) -> Self | ToolResult:
+        path = cls.require_str(params, Keys.path)
+        if isinstance(path, ToolResult):
+            return path
+        permission_code = cls.str_default(params, Keys.permission_code, default="")
+        if isinstance(permission_code, ToolResult):
+            return permission_code
+        return cls(path=path, permission_code=permission_code.strip())
 
 
 @dataclass(frozen=True, slots=True)
@@ -84,8 +87,11 @@ class ManageFilesDeleteParams(ManageFilesParamsBag):
     path: str
 
     @classmethod
-    def from_params(cls, params: dict[str, object]) -> Self:
-        return cls(path=cls.require_str(params, Keys.path))
+    def from_params(cls, params: dict[str, object]) -> Self | ToolResult:
+        path = cls.require_str(params, Keys.path)
+        if isinstance(path, ToolResult):
+            return path
+        return cls(path=path)
 
 
 @dataclass(frozen=True, slots=True)
@@ -100,8 +106,11 @@ class ManageFilesUpdatePermissionParams(ManageFilesParamsBag):
     permission_code: str
 
     @classmethod
-    def from_params(cls, params: dict[str, object]) -> Self:
-        return cls(
-            path=cls.require_str(params, Keys.path),
-            permission_code=cls.str_default(params, Keys.permission_code, default="").strip(),
-        )
+    def from_params(cls, params: dict[str, object]) -> Self | ToolResult:
+        path = cls.require_str(params, Keys.path)
+        if isinstance(path, ToolResult):
+            return path
+        permission_code = cls.str_default(params, Keys.permission_code, default="")
+        if isinstance(permission_code, ToolResult):
+            return permission_code
+        return cls(path=path, permission_code=permission_code.strip())

@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Self
 
+from abilities._result import ToolResult
 from configs.enums.param_key import Keys
 from contracts.params.param_bag import ParamBag
 
@@ -19,7 +20,8 @@ class WeatherParamsBag(ParamBag):
     location: str
 
     @classmethod
-    def from_params(cls, params: dict[str, object]) -> Self:
-        return cls(
-            location=cls.str_default(params, Keys.location, default="").strip(),
-        )
+    def from_params(cls, params: dict[str, object]) -> Self | ToolResult:
+        location = cls.str_default(params, Keys.location, default="")
+        if isinstance(location, ToolResult):
+            return location
+        return cls(location=location.strip())

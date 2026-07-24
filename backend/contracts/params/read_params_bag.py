@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Self
 
+from abilities._result import ToolResult
 from configs.enums.param_key import Keys
 from contracts.params.param_bag import ParamBag
 
@@ -21,8 +22,11 @@ class ReadParamsBag(ParamBag):
     max_chars: int
 
     @classmethod
-    def from_params(cls, params: dict[str, object]) -> Self:
-        return cls(
-            source=cls.require_str(params, Keys.source),
-            max_chars=cls.clamp_int(params, Keys.max_chars, default=20000, lo=100, hi=100_000),
-        )
+    def from_params(cls, params: dict[str, object]) -> Self | ToolResult:
+        source = cls.require_str(params, Keys.source)
+        if isinstance(source, ToolResult):
+            return source
+        max_chars = cls.clamp_int(params, Keys.max_chars, default=20000, lo=100, hi=100_000)
+        if isinstance(max_chars, ToolResult):
+            return max_chars
+        return cls(source=source, max_chars=max_chars)

@@ -16,9 +16,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Self
 
+from abilities._result import ToolResult
 from configs.enums.param_key import Keys
 from contracts.params.param_bag import ParamBag
-from exceptions import ToolParamError
 
 CATEGORIES = ("tech", "business", "sports", "science", "entertainment", "us", "uk")
 
@@ -32,17 +32,20 @@ class NewsParamsBag(ParamBag):
     category: str | None
 
     @classmethod
-    def from_params(cls, params: dict[str, object]) -> Self:
+    def from_params(cls, params: dict[str, object]) -> Self | ToolResult:
         raw = params.get(Keys.category)
         if raw is None:
             category = None
         elif isinstance(raw, str) and raw in CATEGORIES:
             category = raw
         else:
-            raise ToolParamError(
+            return ToolResult.err(
                 f"'{raw}' is not a valid value for '{Keys.category}'.",
                 code="invalid-param",
                 hint=f"choose one of: {', '.join(CATEGORIES)}.",
                 valid=CATEGORIES,
             )
-        return cls(query=cls.require_str(params, Keys.query), category=category)
+        query = cls.require_str(params, Keys.query)
+        if isinstance(query, ToolResult):
+            return query
+        return cls(query=query, category=category)

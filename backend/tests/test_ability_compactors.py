@@ -50,6 +50,7 @@ from models.compaction import Compaction
 from models.transcript import Transcript
 from services.provider_cache_service import ProviderCacheService
 from services.provider_db_service import ProviderDbService
+from tests._tool_result_harness import built
 
 if TYPE_CHECKING:
     # Reuse the compactor's own parent contract — no duplicate Protocol.
@@ -169,7 +170,7 @@ def test_run_completes_and_writes_a_checkpoint_without_crashing(db: sqlite3.Conn
     ability = ChatHistoryCompactor(mp)
 
     with patch(_BUILD_CLIENT, return_value=_OfflineClient()):
-        result = ability.run(ChatHistoryCompactorParamsBag.from_params({}))
+        result = ability.run(built(ChatHistoryCompactorParamsBag.from_params({})))
 
     assert result.status == "success"
     checkpoint = Compaction.latest_main("user")

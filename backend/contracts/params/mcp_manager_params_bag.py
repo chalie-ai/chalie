@@ -21,9 +21,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Self, cast
 
+from abilities._result import ToolResult
 from configs.enums.param_key import Keys
 from contracts.params.param_bag import ParamBag
-from exceptions import ToolParamError
 
 _ACTIONS = ("list", "add", "enable", "disable")
 
@@ -35,7 +35,7 @@ class McpManagerParamsBag(ParamBag):
     __slots__ = ()
 
     @classmethod
-    def from_params(cls, params: dict[str, object]) -> McpManagerParamsBag:
+    def from_params(cls, params: dict[str, object]) -> McpManagerParamsBag | ToolResult:
         match params.get(Keys.action):
             case "list":
                 return McpManagerListParams.from_params(params)
@@ -46,7 +46,7 @@ class McpManagerParamsBag(ParamBag):
             case "disable":
                 return McpManagerDisableParams.from_params(params)
             case unknown:
-                raise ToolParamError(
+                return ToolResult.err(
                     f"Unknown mcp_manager action: {unknown!r}.",
                     code="unknown-action",
                     valid=_ACTIONS,
@@ -59,7 +59,7 @@ class McpManagerListParams(McpManagerParamsBag):
     full inventory from the service alone."""
 
     @classmethod
-    def from_params(cls, params: dict[str, object]) -> Self:
+    def from_params(cls, params: dict[str, object]) -> Self | ToolResult:
         return cls()
 
 
@@ -76,21 +76,23 @@ class McpManagerAddParams(McpManagerParamsBag):
     headers: dict[str, str]
 
     @classmethod
-    def from_params(cls, params: dict[str, object]) -> Self:
+    def from_params(cls, params: dict[str, object]) -> Self | ToolResult:
         headers = params.get(Keys.headers) or {}
         if not isinstance(headers, dict) or not all(
             isinstance(k, str) and isinstance(v, str) for k, v in headers.items()
         ):
-            raise ToolParamError(
+            return ToolResult.err(
                 f"'{Keys.headers}' must be a JSON object of string key/value pairs.",
                 code="invalid-param",
                 hint=f"pass '{Keys.headers}' as an object mapping header names to values.",
             )
-        return cls(
-            name=cls.require_str(params, Keys.name_),
-            host=cls.require_str(params, Keys.host),
-            headers=cast("dict[str, str]", headers),
-        )
+        name = cls.require_str(params, Keys.name_)
+        if isinstance(name, ToolResult):
+            return name
+        host = cls.require_str(params, Keys.host)
+        if isinstance(host, ToolResult):
+            return host
+        return cls(name=name, host=host, headers=cast("dict[str, str]", headers))
 
 
 @dataclass(frozen=True, slots=True)
@@ -103,11 +105,14 @@ class McpManagerEnableParams(McpManagerParamsBag):
     name: str
 
     @classmethod
-    def from_params(cls, params: dict[str, object]) -> Self:
-        return cls(
-            server_id=(cls.opt_str(params, Keys.server_id) or "").strip(),
-            name=(cls.opt_str(params, Keys.name_) or "").strip(),
-        )
+    def from_params(cls, params: dict[str, object]) -> Self | ToolResult:
+        server_id = cls.opt_str(params, Keys.server_id)
+        if isinstance(server_id, ToolResult):
+            return server_id
+        name = cls.opt_str(params, Keys.name_)
+        if isinstance(name, ToolResult):
+            return name
+        return cls(server_id=(server_id or "").strip(), name=(name or "").strip())
 
 
 @dataclass(frozen=True, slots=True)
@@ -119,8 +124,11 @@ class McpManagerDisableParams(McpManagerParamsBag):
     name: str
 
     @classmethod
-    def from_params(cls, params: dict[str, object]) -> Self:
-        return cls(
-            server_id=(cls.opt_str(params, Keys.server_id) or "").strip(),
-            name=(cls.opt_str(params, Keys.name_) or "").strip(),
-        )
+    def from_params(cls, params: dict[str, object]) -> Self | ToolResult:
+        server_id = cls.opt_str(params, Keys.server_id)
+        if isinstance(server_id, ToolResult):
+            return server_id
+        name = cls.opt_str(params, Keys.name_)
+        if isinstance(name, ToolResult):
+            return name
+        return cls(server_id=(server_id or "").strip(), name=(name or "").strip())

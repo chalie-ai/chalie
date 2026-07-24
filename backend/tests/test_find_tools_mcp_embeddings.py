@@ -11,6 +11,7 @@ from services.file_mapper_service import FileMapperService
 from services.mcp_client_service import McpClientService, _open_tools_db
 from controllers.message_processor import MessageProcessor
 from tests.helpers import make_stub_config
+from tests._tool_result_harness import built
 
 pytestmark = pytest.mark.unit
 
@@ -31,7 +32,7 @@ def _stub_proc() -> MessageProcessor:
 
 def _run_find_tools(ability: FindToolsAbility, proc: MessageProcessor, params: dict[str, object]) -> ToolResult:
     ability.mp = proc
-    return ability.run(FindToolsParamsBag.from_params(params))
+    return ability.run(built(FindToolsParamsBag.from_params(params)))
 
 
 def _seed_server_online(svc: McpClientService, name: str, tools: list[dict[str, object]]) -> dict[str, object]:

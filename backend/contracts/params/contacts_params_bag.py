@@ -15,9 +15,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Self
 
+from abilities._result import ToolResult
 from configs.enums.param_key import Keys
 from contracts.params.param_bag import ParamBag
-from exceptions import ToolParamError
 
 _ACTIONS = ("list", "get")
 
@@ -29,14 +29,14 @@ class ContactsParamsBag(ParamBag):
     __slots__ = ()
 
     @classmethod
-    def from_params(cls, params: dict[str, object]) -> ContactsParamsBag:
+    def from_params(cls, params: dict[str, object]) -> ContactsParamsBag | ToolResult:
         match params.get(Keys.action):
             case "list":
                 return ContactsListParams.from_params(params)
             case "get":
                 return ContactsGetParams.from_params(params)
             case unknown:
-                raise ToolParamError(
+                return ToolResult.err(
                     f"Unknown contacts action: {unknown!r}.",
                     code="unknown-action",
                     valid=_ACTIONS,
@@ -53,11 +53,14 @@ class ContactsListParams(ContactsParamsBag):
     query: str
 
     @classmethod
-    def from_params(cls, params: dict[str, object]) -> Self:
-        return cls(
-            limit=cls.clamp_int(params, Keys.limit, default=20, lo=1, hi=50),
-            query=cls.str_default(params, Keys.query, default="").strip(),
-        )
+    def from_params(cls, params: dict[str, object]) -> Self | ToolResult:
+        limit = cls.clamp_int(params, Keys.limit, default=20, lo=1, hi=50)
+        if isinstance(limit, ToolResult):
+            return limit
+        query = cls.str_default(params, Keys.query, default="")
+        if isinstance(query, ToolResult):
+            return query
+        return cls(limit=limit, query=query.strip())
 
 
 @dataclass(frozen=True, slots=True)
@@ -68,5 +71,8 @@ class ContactsGetParams(ContactsParamsBag):
     identifier: str
 
     @classmethod
-    def from_params(cls, params: dict[str, object]) -> Self:
-        return cls(identifier=cls.require_str(params, Keys.identifier))
+    def from_params(cls, params: dict[str, object]) -> Self | ToolResult:
+        identifier = cls.require_str(params, Keys.identifier)
+        if isinstance(identifier, ToolResult):
+            return identifier
+        return cls(identifier=identifier)

@@ -23,7 +23,6 @@ from abilities.find_tools import FindToolsAbility
 from configs.channels import UserConfig
 from contracts.params.find_tools_params_bag import FindToolsParamsBag
 from controllers.message_processor import MessageProcessor
-from exceptions import ToolParamError
 from services.dispatch_service import DispatchService
 from services.file_mapper_service import FileMapperService
 
@@ -41,12 +40,10 @@ def _run(db: sqlite3.Connection, query: object) -> tuple[list[str], dict[str, ob
     base = set(mp.active_tools)
     ability = FindToolsAbility()
     ability.mp = mp
-    # Build the bag exactly as the dispatch seam does, mirroring its
-    # ToolParamError rendering so the error-path tests still see the envelope.
-    try:
-        result = ability.run(FindToolsParamsBag.from_params({"query": query}))
-    except ToolParamError as exc:
-        result = ToolResult.err(exc.message, code=exc.code, hint=exc.hint, valid=exc.valid)
+    # Build the bag exactly as the dispatch seam does — from_params returns the
+    # error ToolResult directly, so the error-path tests still see the envelope.
+    bag = FindToolsParamsBag.from_params({"query": query})
+    result = bag if isinstance(bag, ToolResult) else ability.run(bag)
     injected = [t for t in mp.active_tools if t not in base]
     rendered = DispatchService(mp=cast("MessageProcessor", None))._render("find_tools", result)
     body = result.body if isinstance(result.body, dict) else {}

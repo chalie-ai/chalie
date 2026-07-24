@@ -31,6 +31,7 @@ from controllers.message_processor import MessageProcessor
 from services.policy_manager import PolicyManager
 from services.processor_config import ProcessorConfig
 from services.schema_convergence_service import SchemaConvergenceService
+from tests._tool_result_harness import built
 
 pytestmark = pytest.mark.unit
 
@@ -50,7 +51,7 @@ def _mp_for(config: ProcessorConfig) -> MessageProcessor:
 def _find_tools_on(mp: MessageProcessor, params: dict[str, object]) -> Mapping[str, object]:
     ability = FindToolsAbility()
     ability.mp = mp
-    return cast(Mapping[str, object], ability.run(FindToolsParamsBag.from_params(params)).body)
+    return cast(Mapping[str, object], ability.run(built(FindToolsParamsBag.from_params(params))).body)
 
 
 def _seeded_policy_db(tmp_path: Path) -> PolicyManager:

@@ -5,9 +5,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Self
 
+from abilities._result import ToolResult
 from configs.enums.param_key import Keys
 from contracts.params.param_bag import ParamBag
-from exceptions import ToolParamError
 
 
 @dataclass(frozen=True, slots=True)
@@ -22,13 +22,15 @@ class RunScriptParamsBag(ParamBag):
     args: list[str]
 
     @classmethod
-    def from_params(cls, params: dict[str, object]) -> Self:
+    def from_params(cls, params: dict[str, object]) -> Self | ToolResult:
         path = cls.require_str(params, Keys.path)
+        if isinstance(path, ToolResult):
+            return path
         raw_args = params.get(Keys.args)
         if raw_args is None:
             raw_args = []
         if not isinstance(raw_args, list) or any(not isinstance(a, str) for a in raw_args):
-            raise ToolParamError(
+            return ToolResult.err(
                 "args must be a list of strings.",
                 code="invalid-args",
                 hint='pass arguments like ["--flag", "value"].',

@@ -51,7 +51,7 @@ from abilities._mcp_ability import _MCPAbility
 from services.key_healer import KeyHealer
 from abilities._registry import AbilityRegistry
 from abilities._result import ToolResult
-from exceptions import ToolParamError, VaultLockedError
+from exceptions import VaultLockedError
 from models.tool_call import ToolCall
 from services.client_context import ClientContext
 from services.policy_manager import PolicyManager
@@ -387,11 +387,12 @@ class DispatchService:
         running tool are cooperative cancellation (should_stop) and the
         network-level I/O timeouts inside individual abilities.
 
-        Returns a :class:`ToolResult`. A ``ToolParamError`` raised from run() is
-        rendered canonically with its code/hint/valid. A raised exception becomes
-        ``code=unhandled-exception`` (with the VaultLockedError friendly
-        message). A non-ToolResult return value HARD-FAILS as
-        ``code=non-canonical-result``."""
+        Returns a :class:`ToolResult`. A bad parameter never raises: the
+        ability's PARAMS bag returns the error ``ToolResult`` it authored at
+        the failure site, and that result is passed through untouched. A
+        raised exception becomes ``code=unhandled-exception`` (with the
+        VaultLockedError friendly message). A non-ToolResult return value
+        HARD-FAILS as ``code=non-canonical-result``."""
         try:
             ctx = ClientContext.current()
             ability.telemetry = ctx.as_dict() if ctx else None
@@ -399,14 +400,20 @@ class DispatchService:
             ability.telemetry = None
 
         try:
-            # ParamBag migration seam: a migrated ability (PARAMS set) receives its
-            # typed bag, built HERE via the from_params factory so a bad param
-            # raises ToolParamError into the canonical rendering below; an
-            # unmigrated ability gets the raw dict. The ternary dies once every
-            # ability declares PARAMS.
-            raw = ability.run(params if ability.PARAMS is None else ability.PARAMS.from_params(params))
-        except ToolParamError as exc:
-            return ToolResult.err(exc.message, code=exc.code, hint=exc.hint, valid=exc.valid)
+            # The typed-input door: every first-party ability declares PARAMS,
+            # and its bag is built HERE via from_params — which returns either
+            # the bag or the error ToolResult the bag authored at the failure
+            # site. Value or error, both are return values; no exception
+            # crosses this boundary. The raw-dict branch serves the synthetic
+            # _MCPAbility proxies only, whose schemas live on the remote MCP
+            # server and can never have a compile-time bag.
+            if ability.PARAMS is None:
+                raw = ability.run(params)
+            else:
+                built = ability.PARAMS.from_params(params)
+                if isinstance(built, ToolResult):
+                    return built
+                raw = ability.run(built)
         except Exception as exc:  # noqa: BLE001
             # VaultLockedError gets a friendlier message.
             try:

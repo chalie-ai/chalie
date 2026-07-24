@@ -5,9 +5,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Self
 
+from abilities._result import ToolResult
 from configs.enums.param_key import Keys
 from contracts.params.param_bag import ParamBag
-from exceptions import ToolParamError
 
 
 @dataclass(frozen=True, slots=True)
@@ -19,7 +19,7 @@ class VisionParamsBag(ParamBag):
     query: str
 
     @classmethod
-    def from_params(cls, params: dict[str, object]) -> Self:
+    def from_params(cls, params: dict[str, object]) -> Self | ToolResult:
         # The dispatcher pre-gate is truthiness-based, so a non-empty but
         # whitespace-only image/query slips past it and must be rejected here.
         # One combined error names every missing field at once — the model
@@ -32,7 +32,7 @@ class VisionParamsBag(ParamBag):
             missing = ", ".join(
                 name for name, val in (("image", image), ("query", query)) if not val
             )
-            raise ToolParamError(
+            return ToolResult.err(
                 f"Missing required parameter(s): {missing}.",
                 code="missing-params",
                 valid=("image", "query"),

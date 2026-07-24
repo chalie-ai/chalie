@@ -38,6 +38,7 @@ from configs.channels.web_browse import WebBrowseConfig
 from configs.enums.policy_channel import PolicyChannel
 from controllers.message_processor import MessageProcessor
 from services.processor_config import ProcessorConfig
+from tests._tool_result_harness import built
 
 pytestmark = pytest.mark.unit
 
@@ -56,7 +57,7 @@ def _find_tools_on(mp: MessageProcessor, params: dict[str, object]) -> str | Map
     string on failure (the dispatcher adds the ``[find_tools(...)]`` envelope)."""
     ability = FindToolsAbility()
     ability.mp = mp
-    return ability.run(FindToolsParamsBag.from_params(params)).body
+    return ability.run(built(FindToolsParamsBag.from_params(params))).body
 
 
 # ---------------------------------------------------------------------------

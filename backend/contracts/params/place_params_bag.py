@@ -15,9 +15,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Self
 
+from abilities._result import ToolResult
 from configs.enums.param_key import Keys
 from contracts.params.param_bag import ParamBag
-from exceptions import ToolParamError
 
 _ACTIONS = ("save", "list", "get", "delete")
 
@@ -29,7 +29,7 @@ class PlaceParamsBag(ParamBag):
     __slots__ = ()
 
     @classmethod
-    def from_params(cls, params: dict[str, object]) -> PlaceParamsBag:
+    def from_params(cls, params: dict[str, object]) -> PlaceParamsBag | ToolResult:
         match params.get(Keys.action):
             case "save":
                 return PlaceSaveParams.from_params(params)
@@ -40,7 +40,7 @@ class PlaceParamsBag(ParamBag):
             case "delete":
                 return PlaceDeleteParams.from_params(params)
             case unknown:
-                raise ToolParamError(
+                return ToolResult.err(
                     f"Unknown place action: {unknown!r}.",
                     code="unknown-action",
                     hint="choose one of the valid actions below.",
@@ -56,8 +56,11 @@ class PlaceSaveParams(PlaceParamsBag):
     name: str
 
     @classmethod
-    def from_params(cls, params: dict[str, object]) -> Self:
-        return cls(name=cls.require_str(params, Keys.name_).lower())
+    def from_params(cls, params: dict[str, object]) -> Self | ToolResult:
+        name = cls.require_str(params, Keys.name_)
+        if isinstance(name, ToolResult):
+            return name
+        return cls(name=name.lower())
 
 
 @dataclass(frozen=True, slots=True)
@@ -65,7 +68,7 @@ class PlaceListParams(PlaceParamsBag):
     """``list`` reads no params at all — the router validates action alone."""
 
     @classmethod
-    def from_params(cls, params: dict[str, object]) -> Self:
+    def from_params(cls, params: dict[str, object]) -> Self | ToolResult:
         return cls()
 
 
@@ -77,8 +80,11 @@ class PlaceGetParams(PlaceParamsBag):
     name: str
 
     @classmethod
-    def from_params(cls, params: dict[str, object]) -> Self:
-        return cls(name=cls.require_str(params, Keys.name_).lower())
+    def from_params(cls, params: dict[str, object]) -> Self | ToolResult:
+        name = cls.require_str(params, Keys.name_)
+        if isinstance(name, ToolResult):
+            return name
+        return cls(name=name.lower())
 
 
 @dataclass(frozen=True, slots=True)
@@ -89,5 +95,8 @@ class PlaceDeleteParams(PlaceParamsBag):
     name: str
 
     @classmethod
-    def from_params(cls, params: dict[str, object]) -> Self:
-        return cls(name=cls.require_str(params, Keys.name_).lower())
+    def from_params(cls, params: dict[str, object]) -> Self | ToolResult:
+        name = cls.require_str(params, Keys.name_)
+        if isinstance(name, ToolResult):
+            return name
+        return cls(name=name.lower())

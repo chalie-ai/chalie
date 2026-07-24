@@ -9,7 +9,6 @@ from abilities import search_files
 from abilities._result import ToolResult
 from abilities.search_files import SearchFilesAbility
 from contracts.params.search_files_params_bag import SearchFilesParamsBag
-from exceptions import ToolParamError
 
 pytestmark = pytest.mark.unit
 
@@ -30,12 +29,11 @@ def _run(action: str, query: str, directory: str | None = None, **extra: object)
     params: dict[str, object] = {"action": action, "query": query, **extra}
     if directory is not None:
         params["directory"] = directory
-    # Build the bag exactly as the dispatch seam does, mirroring its
-    # ToolParamError rendering so the error-path tests still see the envelope.
-    try:
-        bag = SearchFilesParamsBag.from_params(params)
-    except ToolParamError as exc:
-        return ToolResult.err(exc.message, code=exc.code, hint=exc.hint, valid=exc.valid)
+    # Build the bag exactly as the dispatch seam does — from_params returns the
+    # error ToolResult directly, so the error-path tests still see the envelope.
+    bag = SearchFilesParamsBag.from_params(params)
+    if isinstance(bag, ToolResult):
+        return bag
     return SearchFilesAbility().run(bag)
 
 

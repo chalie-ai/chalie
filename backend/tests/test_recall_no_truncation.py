@@ -32,6 +32,7 @@ from configs.channels.user import UserConfig
 from contracts.params.memory_params_bag import MemoryParamsBag
 from controllers.message_processor import MessageProcessor
 from services.dispatch_service import DispatchService
+from tests._tool_result_harness import built
 
 pytestmark = pytest.mark.unit
 
@@ -62,7 +63,7 @@ def _render_recall(params: dict[str, object]) -> str:
     dispatcher envelope — the exact string the model reads. The ability is
     bound to a real inert ``MessageProcessor`` under ``UserConfig``, exactly
     as the dispatcher binds it on a user turn (``run()`` raises unbound)."""
-    result = MemoryAbility(MessageProcessor(UserConfig())).run(MemoryParamsBag.from_params(params))
+    result = MemoryAbility(MessageProcessor(UserConfig())).run(built(MemoryParamsBag.from_params(params)))
     assert result is not None, "MemoryAbility.run() returned None"
     return DispatchService(mp=cast("MessageProcessor", None))._render("memory", result, None)
 

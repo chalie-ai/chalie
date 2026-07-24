@@ -24,9 +24,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Self
 
+from abilities._result import ToolResult
 from configs.enums.param_key import Keys
 from contracts.params.param_bag import ParamBag
-from exceptions import ToolParamError
 
 _ACTIONS = ("create", "edit", "delete", "read", "list")
 
@@ -39,7 +39,7 @@ class SkillBuilderParamsBag(ParamBag):
     __slots__ = ()
 
     @classmethod
-    def from_params(cls, params: dict[str, object]) -> SkillBuilderParamsBag:
+    def from_params(cls, params: dict[str, object]) -> SkillBuilderParamsBag | ToolResult:
         match params.get(Keys.action):
             case "create":
                 return SkillBuilderCreateParams.from_params(params)
@@ -52,7 +52,7 @@ class SkillBuilderParamsBag(ParamBag):
             case "list":
                 return SkillBuilderListParams.from_params(params)
             case unknown:
-                raise ToolParamError(
+                return ToolResult.err(
                     f"Unknown skill_builder action: {unknown!r}.",
                     code="unknown-action",
                     valid=_ACTIONS,
@@ -72,12 +72,24 @@ class SkillBuilderCreateParams(SkillBuilderParamsBag):
     tags: str
 
     @classmethod
-    def from_params(cls, params: dict[str, object]) -> Self:
+    def from_params(cls, params: dict[str, object]) -> Self | ToolResult:
+        title = cls.require_str(params, Keys.title_)
+        if isinstance(title, ToolResult):
+            return title
+        use_for = cls.require_str(params, Keys.use_for)
+        if isinstance(use_for, ToolResult):
+            return use_for
+        content = cls.require_str(params, Keys.content)
+        if isinstance(content, ToolResult):
+            return content
+        tags = cls.str_default(params, Keys.tags, default="")
+        if isinstance(tags, ToolResult):
+            return tags
         return cls(
-            title=cls.require_str(params, Keys.title_),
-            use_for=cls.require_str(params, Keys.use_for),
-            content=cls.require_str(params, Keys.content),
-            tags=cls.str_default(params, Keys.tags, default="").strip(),
+            title=title,
+            use_for=use_for,
+            content=content,
+            tags=tags.strip(),
         )
 
 
@@ -94,12 +106,23 @@ class SkillBuilderEditParams(SkillBuilderParamsBag):
     tags: str | None
 
     @classmethod
-    def from_params(cls, params: dict[str, object]) -> Self:
+    def from_params(cls, params: dict[str, object]) -> Self | ToolResult:
         raw_tags = cls.opt_str(params, Keys.tags)
+        if isinstance(raw_tags, ToolResult):
+            return raw_tags
+        title = cls.require_str(params, Keys.title_)
+        if isinstance(title, ToolResult):
+            return title
+        use_for = cls.str_default(params, Keys.use_for, default="")
+        if isinstance(use_for, ToolResult):
+            return use_for
+        content = cls.str_default(params, Keys.content, default="")
+        if isinstance(content, ToolResult):
+            return content
         return cls(
-            title=cls.require_str(params, Keys.title_),
-            use_for=cls.str_default(params, Keys.use_for, default="").strip(),
-            content=cls.str_default(params, Keys.content, default="").strip(),
+            title=title,
+            use_for=use_for.strip(),
+            content=content.strip(),
             tags=raw_tags.strip() if raw_tags is not None else None,
         )
 
@@ -112,8 +135,11 @@ class SkillBuilderDeleteParams(SkillBuilderParamsBag):
     title: str
 
     @classmethod
-    def from_params(cls, params: dict[str, object]) -> Self:
-        return cls(title=cls.require_str(params, Keys.title_))
+    def from_params(cls, params: dict[str, object]) -> Self | ToolResult:
+        title = cls.require_str(params, Keys.title_)
+        if isinstance(title, ToolResult):
+            return title
+        return cls(title=title)
 
 
 @dataclass(frozen=True, slots=True)
@@ -124,8 +150,11 @@ class SkillBuilderReadParams(SkillBuilderParamsBag):
     title: str
 
     @classmethod
-    def from_params(cls, params: dict[str, object]) -> Self:
-        return cls(title=cls.require_str(params, Keys.title_))
+    def from_params(cls, params: dict[str, object]) -> Self | ToolResult:
+        title = cls.require_str(params, Keys.title_)
+        if isinstance(title, ToolResult):
+            return title
+        return cls(title=title)
 
 
 @dataclass(frozen=True, slots=True)
@@ -133,5 +162,5 @@ class SkillBuilderListParams(SkillBuilderParamsBag):
     """List reads no parameters — the leaf exists so ``run()`` can narrow."""
 
     @classmethod
-    def from_params(cls, params: dict[str, object]) -> Self:
+    def from_params(cls, params: dict[str, object]) -> Self | ToolResult:
         return cls()

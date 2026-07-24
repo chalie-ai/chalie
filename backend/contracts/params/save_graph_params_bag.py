@@ -10,10 +10,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Self
 
+from abilities._result import ToolResult
 from configs.enums.param_key import Keys
 from contracts.constants.data_graph import VALID_KINDS
 from contracts.params.param_bag import ParamBag
-from exceptions import ToolParamError
 
 # Subset: exclude system (internal-write only). VALID_KINDS already omits
 # document (ingest-only) and behavioral_pattern (save_pattern's tool).
@@ -34,10 +34,10 @@ class SaveGraphParamsBag(ParamBag):
     value_: str
 
     @classmethod
-    def from_params(cls, params: dict[str, object]) -> Self:
+    def from_params(cls, params: dict[str, object]) -> Self | ToolResult:
         kind = str(params.get(Keys.kind, ""))
         if kind not in ALLOWED_KINDS:
-            raise ToolParamError(
+            return ToolResult.err(
                 f"Unknown kind {kind!r}; not a storable fact kind.",
                 code="invalid-param",
                 valid=tuple(ALLOWED_KINDS),
@@ -56,7 +56,7 @@ class SaveGraphParamsBag(ParamBag):
             missing = ", ".join(
                 name for name, val in (("key", key), ("value", value)) if not val
             )
-            raise ToolParamError(
+            return ToolResult.err(
                 f"Missing required parameter(s): {missing}.",
                 code="missing-params",
                 valid=("kind", "key", "value"),

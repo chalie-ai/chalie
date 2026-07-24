@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Self
 
+from abilities._result import ToolResult
 from configs.enums.param_key import Keys
 from contracts.params.param_bag import ParamBag
 
@@ -17,5 +18,8 @@ class FindToolsParamsBag(ParamBag):
     query: list[str]
 
     @classmethod
-    def from_params(cls, params: dict[str, object]) -> Self:
-        return cls(query=cls.require_str_list(params, Keys.query))
+    def from_params(cls, params: dict[str, object]) -> Self | ToolResult:
+        query = cls.require_str_list(params, Keys.query)
+        if isinstance(query, ToolResult):
+            return query
+        return cls(query=query)

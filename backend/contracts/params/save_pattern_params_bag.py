@@ -3,7 +3,7 @@ ability.
 
 The validation ORDER and rules are frozen (name presence → snake_case regex →
 frequency set → summary presence → min-2 evidence); the bag preserves that
-ladder exactly, one :class:`~exceptions.exception.ToolParamError` per rung.
+ladder exactly, one error ``ToolResult`` per rung.
 """
 
 from __future__ import annotations
@@ -12,9 +12,9 @@ import re
 from dataclasses import dataclass
 from typing import Self
 
+from abilities._result import ToolResult
 from configs.enums.param_key import Keys
 from contracts.params.param_bag import ParamBag
-from exceptions import ToolParamError
 
 NAME_PATTERN = re.compile(r"[a-z][a-z0-9_]*")
 VALID_FREQUENCIES = frozenset({"daily", "weekly", "weekday", "weekend", "ad-hoc"})
@@ -43,18 +43,18 @@ class SavePatternParamsBag(ParamBag):
     time_anchor: str
 
     @classmethod
-    def from_params(cls, params: dict[str, object]) -> Self:
+    def from_params(cls, params: dict[str, object]) -> Self | ToolResult:
         # The dispatcher pre-gate is truthiness-based, so a whitespace-only name
         # slips past it as a non-empty string and must be rejected here.
         name = (str(params.get(Keys.name_) or "")).strip()
         if not name:
-            raise ToolParamError(
+            return ToolResult.err(
                 "Missing required parameter(s): name.",
                 code="missing-params",
                 valid=_REQUIRED,
             )
         if not NAME_PATTERN.fullmatch(name):
-            raise ToolParamError(
+            return ToolResult.err(
                 f"Invalid pattern name {name!r}; must be snake_case.",
                 code="invalid-param",
                 hint=EXAMPLE_HINT,
@@ -62,7 +62,7 @@ class SavePatternParamsBag(ParamBag):
 
         frequency = params.get(Keys.frequency, "")
         if frequency not in VALID_FREQUENCIES:
-            raise ToolParamError(
+            return ToolResult.err(
                 f"Unknown frequency {frequency!r}; not a recognised cadence.",
                 code="invalid-param",
                 valid=tuple(sorted(VALID_FREQUENCIES)),
@@ -71,7 +71,7 @@ class SavePatternParamsBag(ParamBag):
 
         summary = (str(params.get(Keys.summary) or "")).strip()
         if not summary:
-            raise ToolParamError(
+            return ToolResult.err(
                 "Missing required parameter(s): summary.",
                 code="missing-params",
                 valid=_REQUIRED,
@@ -80,7 +80,7 @@ class SavePatternParamsBag(ParamBag):
         evidence = params.get(Keys.evidence_transcript_ids)
         n_evidence = len(evidence) if isinstance(evidence, list) else 0
         if not isinstance(evidence, list) or n_evidence < 2:
-            raise ToolParamError(
+            return ToolResult.err(
                 f"At least 2 evidence transcript ids are required; got {n_evidence}.",
                 code="invalid-param",
                 hint="provide at least 2 evidence_transcript_ids from the transcript window",

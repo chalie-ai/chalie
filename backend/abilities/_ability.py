@@ -21,23 +21,17 @@ from __future__ import annotations
 import copy
 import typing
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, Any, Callable, ClassVar, Generic, cast
+from typing import TYPE_CHECKING, Any, ClassVar, Generic, cast
 
 from typing_extensions import TypeVar
 
 from abilities._result import ToolResult
 from contracts.params.param_bag import ParamBag
-from exceptions import ToolParamError
 
 if TYPE_CHECKING:
     from datetime import datetime
 
     from controllers.message_processor import MessageProcessor
-
-# Sentinel distinguishing "no default supplied" from an explicit default of None
-# in Ability.param(): a required param with no value raises; an optional one with
-# default=None returns None.
-_MISSING = object()
 
 # The act_summary framework field, injected into EVERY tool descriptor by
 # get_input_schema — the one place it is declared. It is the per-call act-trail
@@ -52,11 +46,12 @@ _ACT_SUMMARY_PROPERTY: dict[str, object] = {
     ),
 }
 
-# What run() receives: the ability's typed ParamBag once migrated, the raw params
-# dict until then. The PEP 696 default keeps every bare ``Ability`` annotation
-# (registry, dispatcher, unmigrated subclasses) valid while the migration is in
-# flight; a migrated ability declares ``Ability[ItsParamsBag]`` and mypy then
-# enforces that its run() accepts exactly that bag.
+# What run() receives: the ability's typed ParamBag. Every first-party ability
+# declares ``Ability[ItsParamsBag]`` and mypy then enforces that its run()
+# accepts exactly that bag. The PEP 696 default keeps bare ``Ability``
+# annotations (registry, dispatcher) valid and covers the synthetic
+# ``_MCPAbility`` proxies, whose run() receives the raw params dict because a
+# remote MCP schema can never have a compile-time bag.
 B = TypeVar("B", default=Any)
 
 
@@ -107,12 +102,12 @@ class Ability(ABC, Generic[B]):
     # "no pre-validation" so unmigrated tools are untouched by the contract.
     ACTION_REQUIRED: ClassVar[dict[str, tuple[str, ...]]] = {}
 
-    # The ability's typed input contract: a migrated ability sets its ParamBag
-    # class here and run() receives an instance the dispatcher builds via the
-    # bag's from_params factory — validation happens there (ToolParamError →
-    # canonical dispatcher rendering). None (the default) = unmigrated: run()
-    # receives the raw params dict and ACTION_REQUIRED / self.param() keep
-    # gating it.
+    # The ability's typed input contract: every first-party ability sets its
+    # ParamBag class here and run() receives an instance the dispatcher builds
+    # via the bag's from_params factory — a bad input comes back from the bag
+    # as an error ToolResult the dispatcher returns as-is, never an exception.
+    # None is reserved for the synthetic _MCPAbility proxies (remote schema, no
+    # compile-time bag): their run() receives the raw params dict.
     PARAMS: ClassVar["type[ParamBag] | None"] = None
 
     def __init__(self, mp: "MessageProcessor | None" = None) -> None:
@@ -124,16 +119,15 @@ class Ability(ABC, Generic[B]):
 
     def __init_subclass__(cls, **kwargs: object) -> None:
         super().__init_subclass__(**kwargs)
-        # get_input_schema / param are the single assembler and the one sanctioned
-        # param path — sealed. A subclass that redefines either would silently fork
-        # the contract, so it is rejected at import. Subclasses enrich via
-        # get_parameters() / get_summary() instead.
-        for sealed in ("get_input_schema", "param"):
-            if sealed in cls.__dict__:
-                raise TypeError(
-                    f"{cls.__name__} must not override Ability.{sealed} — "
-                    f"enrich get_parameters()/get_summary() instead"
-                )
+        # get_input_schema is the single tool-descriptor assembler — sealed. A
+        # subclass that redefines it would silently fork the contract, so it is
+        # rejected at import. Subclasses enrich via get_parameters() /
+        # get_summary() instead.
+        if "get_input_schema" in cls.__dict__:
+            raise TypeError(
+                f"{cls.__name__} must not override Ability.get_input_schema — "
+                f"enrich get_parameters()/get_summary() instead"
+            )
         # _inject_framework_fields is the single injection site — sealed against
         # arbitrary subclasses (redefining it would fork the act_summary/async
         # contract). The lone sanctioned override is DelegateAbility, which adds
@@ -238,11 +232,11 @@ class Ability(ABC, Generic[B]):
     def run(self, params: B) -> "ToolResult":
         """MUST return a :class:`abilities._result.ToolResult` — anything else
         HARD-FAILS as ``code=non-canonical-result``. ``params`` is this ability's
-        declared ``PARAMS`` bag — constructed (= validated) by the dispatcher —
-        once migrated, or the raw params dict until then. Raise ``ToolParamError``
-        (via a bag validator / ``self.param``) for bad inputs; the dispatcher
-        renders it canonically. The ability NEVER formats the ``[tool(...)]`` wire
-        envelope — the dispatcher owns it."""
+        declared ``PARAMS`` bag, constructed (= validated) by the dispatcher: a
+        bad input never reaches run() — the bag returned the error ToolResult
+        from ``from_params`` and the dispatcher passed it straight to the wire.
+        The ability NEVER formats the ``[tool(...)]`` wire envelope — the
+        dispatcher owns it."""
         ...
 
     # ── The single, final tool-descriptor assembler ───────────────────────────
@@ -270,57 +264,6 @@ class Ability(ABC, Generic[B]):
             required.append("act_summary")
 
         return schema
-
-    # ── The one sanctioned param-handling path ─────────────────────────────────
-
-    @typing.final
-    def param(
-        self,
-        params: dict[str, object],
-        name: str,
-        *,
-        default: object = _MISSING,
-        choices: "tuple[object, ...] | None" = None,
-        clamp: "tuple[object, ...] | None" = None,
-        required: bool = False,
-    ) -> object:
-        """All failures raise ``ToolParamError`` — the dispatcher catches it and
-        renders ``code=invalid-param`` with a ``hint`` and ``valid=`` so the model
-        fixes the call without re-reading the schema. ``final`` — sealed at import
-        by ``__init_subclass__``."""
-        value = params.get(name)
-        if value is None:
-            if required:
-                raise ToolParamError(
-                    f"Required parameter '{name}' is missing.",
-                    code="invalid-param",
-                    hint=f"pass '{name}'.",
-                )
-            if default is _MISSING:
-                return None
-            return default
-
-        if choices is not None and value not in choices:
-            raise ToolParamError(
-                f"'{value}' is not a valid value for '{name}'.",
-                code="invalid-param",
-                hint=f"choose one of: {', '.join(str(c) for c in choices)}.",
-                valid=tuple(str(c) for c in choices),
-            )
-
-        if clamp is not None:
-            lo, hi = clamp
-            try:
-                numeric = cast("Callable[[str], float]", type(lo))(cast("str", value))
-            except (TypeError, ValueError):
-                raise ToolParamError(
-                    f"'{name}' must be a number.",
-                    code="invalid-param",
-                    hint=f"pass a number between {lo} and {hi}.",
-                ) from None
-            value = max(cast("float", lo), min(cast("float", hi), numeric))
-
-        return value
 
     def classify_action(self, params: dict[str, object]) -> "str | None":
         """Derive the risk class the policy gate keys on, from the inputs alone.

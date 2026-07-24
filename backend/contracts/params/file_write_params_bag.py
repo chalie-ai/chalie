@@ -5,9 +5,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Self
 
+from abilities._result import ToolResult
 from configs.enums.param_key import Keys
 from contracts.params.param_bag import ParamBag
-from exceptions import ToolParamError
 
 
 @dataclass(frozen=True, slots=True)
@@ -21,18 +21,20 @@ class FileWriteParamsBag(ParamBag):
     contents: str
 
     @classmethod
-    def from_params(cls, params: dict[str, object]) -> Self:
+    def from_params(cls, params: dict[str, object]) -> Self | ToolResult:
         path = cls.require_str(params, Keys.path)
+        if isinstance(path, ToolResult):
+            return path
 
         if Keys.contents not in params:
-            raise ToolParamError(
+            return ToolResult.err(
                 "contents is required.",
                 code="missing-params",
                 hint="pass a 'contents' string (an empty string writes a 0-byte file).",
             )
         contents = params[Keys.contents]
         if not isinstance(contents, str):
-            raise ToolParamError(
+            return ToolResult.err(
                 f"contents must be a string, got {type(contents).__name__}.",
                 code="invalid-param",
                 hint="pass the file body as a string; serialise structured data yourself first.",

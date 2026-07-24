@@ -241,31 +241,6 @@ class SnapshotError(ChalieException):
     zip layer, corrupt zip, checksum mismatch, or a schema-downgrade block)."""
 
 
-# ── Ability / tool layer ──────────────────────────────────────────────────────
-
-
-class ToolParamError(ChalieException):
-    """Raised by ``Ability.param`` when an input is missing/invalid/out-of-choice.
-
-    Carries the same self-correction fields as an error ``ToolResult`` so the
-    dispatcher can render it canonically (``code``/``hint``/``valid``) without the
-    ability ever formatting an envelope.
-    """
-
-    def __init__(
-        self,
-        message: str,
-        *,
-        code: str = "invalid-param",
-        hint: str | None = None,
-        valid: tuple[str, ...] = (),
-    ) -> None:
-        super().__init__(message)
-        self.message = message
-        self.code = code
-        self.hint = hint
-        self.valid = tuple(valid)
-
 # ── Text reader layer ─────────────────────────────────────────────────────────
 
 

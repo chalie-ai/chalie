@@ -14,6 +14,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Self
 
+from abilities._result import ToolResult
 from configs.enums.param_key import Keys
 from contracts.params.param_bag import ParamBag
 
@@ -27,5 +28,8 @@ class DelegateParamsBag(ParamBag):
     instructions: str
 
     @classmethod
-    def from_params(cls, params: dict[str, object]) -> Self:
-        return cls(instructions=cls.require_str(params, Keys.instructions))
+    def from_params(cls, params: dict[str, object]) -> Self | ToolResult:
+        instructions = cls.require_str(params, Keys.instructions)
+        if isinstance(instructions, ToolResult):
+            return instructions
+        return cls(instructions=instructions)

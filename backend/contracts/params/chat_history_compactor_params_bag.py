@@ -13,6 +13,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Self
 
+from abilities._result import ToolResult
 from contracts.params.param_bag import ParamBag
 
 
@@ -21,5 +22,5 @@ class ChatHistoryCompactorParamsBag(ParamBag):
     """Empty bag — ``chat_history_compactor`` accepts no parameters."""
 
     @classmethod
-    def from_params(cls, params: dict[str, object]) -> Self:
+    def from_params(cls, params: dict[str, object]) -> Self | ToolResult:
         return cls()

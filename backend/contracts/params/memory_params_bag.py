@@ -21,9 +21,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Self
 
+from abilities._result import ToolResult
 from configs.enums.param_key import Keys
 from contracts.params.param_bag import ParamBag
-from exceptions import ToolParamError
 
 #: The turn-0 seed marker. Framework-internal, so deliberately NOT a
 #: :class:`Keys` member — Keys is the model-facing wire vocabulary and this
@@ -38,7 +38,7 @@ class MemoryParamsBag(ParamBag):
     __slots__ = ()
 
     @classmethod
-    def from_params(cls, params: dict[str, object]) -> MemoryParamsBag:
+    def from_params(cls, params: dict[str, object]) -> MemoryParamsBag | ToolResult:
         match params.get(Keys.action):
             case "store":
                 return MemoryStoreParams.from_params(params)
@@ -49,7 +49,7 @@ class MemoryParamsBag(ParamBag):
             case "forget":
                 return MemoryForgetParams.from_params(params)
             case unknown:
-                raise ToolParamError(
+                return ToolResult.err(
                     f"Unknown memory action: {unknown!r}.",
                     code="unknown-action",
                     valid=("store", "recall", "reflect", "forget"),
@@ -70,13 +70,22 @@ class MemoryStoreParams(MemoryParamsBag):
     replaces: str | None
 
     @classmethod
-    def from_params(cls, params: dict[str, object]) -> Self:
+    def from_params(cls, params: dict[str, object]) -> Self | ToolResult:
         value = params.get(Keys.value_)
+        key = cls.require_str(params, Keys.key)
+        if isinstance(key, ToolResult):
+            return key
+        kind = cls.str_default(params, Keys.kind, default="user_specific")
+        if isinstance(kind, ToolResult):
+            return kind
+        replaces = cls.opt_str(params, Keys.replaces)
+        if isinstance(replaces, ToolResult):
+            return replaces
         return cls(
-            key=cls.require_str(params, Keys.key),
+            key=key,
             value=None if value is None else str(value),
-            kind=cls.str_default(params, Keys.kind, default="user_specific"),
-            replaces=cls.opt_str(params, Keys.replaces),
+            kind=kind,
+            replaces=replaces,
         )
 
 
@@ -91,12 +100,14 @@ class MemoryRecallParams(MemoryParamsBag):
     auto: bool
 
     @classmethod
-    def from_params(cls, params: dict[str, object]) -> Self:
-        return cls(
-            query=cls.str_default(params, Keys.query, default=""),
-            location=cls.str_default(params, Keys.location, default=""),
-            auto=cls.flag(params, _AUTO),
-        )
+    def from_params(cls, params: dict[str, object]) -> Self | ToolResult:
+        query = cls.str_default(params, Keys.query, default="")
+        if isinstance(query, ToolResult):
+            return query
+        location = cls.str_default(params, Keys.location, default="")
+        if isinstance(location, ToolResult):
+            return location
+        return cls(query=query, location=location, auto=cls.flag(params, _AUTO))
 
 
 @dataclass(frozen=True, slots=True)
@@ -104,8 +115,11 @@ class MemoryReflectParams(MemoryParamsBag):
     query: str
 
     @classmethod
-    def from_params(cls, params: dict[str, object]) -> Self:
-        return cls(query=cls.require_str(params, Keys.query))
+    def from_params(cls, params: dict[str, object]) -> Self | ToolResult:
+        query = cls.require_str(params, Keys.query)
+        if isinstance(query, ToolResult):
+            return query
+        return cls(query=query)
 
 
 @dataclass(frozen=True, slots=True)
@@ -119,9 +133,14 @@ class MemoryForgetParams(MemoryParamsBag):
     kind: str
 
     @classmethod
-    def from_params(cls, params: dict[str, object]) -> Self:
-        return cls(
-            key=cls.require_str(params, Keys.key),
-            value=cls.opt_str(params, Keys.value_),
-            kind=cls.str_default(params, Keys.kind, default="user_specific"),
-        )
+    def from_params(cls, params: dict[str, object]) -> Self | ToolResult:
+        key = cls.require_str(params, Keys.key)
+        if isinstance(key, ToolResult):
+            return key
+        value = cls.opt_str(params, Keys.value_)
+        if isinstance(value, ToolResult):
+            return value
+        kind = cls.str_default(params, Keys.kind, default="user_specific")
+        if isinstance(kind, ToolResult):
+            return kind
+        return cls(key=key, value=value, kind=kind)

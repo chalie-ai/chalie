@@ -10,6 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Self
 
+from abilities._result import ToolResult
 from configs.enums.param_key import Keys
 from contracts.params.param_bag import ParamBag
 
@@ -21,5 +22,8 @@ class ReviewWindowParamsBag(ParamBag):
     date_time: str
 
     @classmethod
-    def from_params(cls, params: dict[str, object]) -> Self:
-        return cls(date_time=cls.require_str(params, Keys.date_time))
+    def from_params(cls, params: dict[str, object]) -> Self | ToolResult:
+        date_time = cls.require_str(params, Keys.date_time)
+        if isinstance(date_time, ToolResult):
+            return date_time
+        return cls(date_time=date_time)

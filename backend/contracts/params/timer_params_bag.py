@@ -5,9 +5,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Self
 
+from abilities._result import ToolResult
 from configs.enums.param_key import Keys
 from contracts.params.param_bag import ParamBag
-from exceptions import ToolParamError
 
 # Bounds are owned here (the bag is the validator) and imported by the ability
 # for its model-facing schema, so the two can never drift.
@@ -25,10 +25,10 @@ class TimerParamsBag(ParamBag):
     duration_seconds: int
 
     @classmethod
-    def from_params(cls, params: dict[str, object]) -> Self:
+    def from_params(cls, params: dict[str, object]) -> Self | ToolResult:
         title = params.get(Keys.title_)
         if not isinstance(title, str):
-            raise ToolParamError(
+            return ToolResult.err(
                 f"'{Keys.title_}' must be text.",
                 code="invalid-param",
                 hint=f"pass '{Keys.title_}' as a string.",
@@ -40,7 +40,7 @@ class TimerParamsBag(ParamBag):
         # rather than coerced into a 1-second / 0-second timer.
         if isinstance(duration_seconds, bool) or not isinstance(duration_seconds, int) \
                 or duration_seconds < MIN_DURATION_SECONDS or duration_seconds > MAX_DURATION_SECONDS:
-            raise ToolParamError(
+            return ToolResult.err(
                 f"duration_seconds must be an integer between {MIN_DURATION_SECONDS} and {MAX_DURATION_SECONDS}",
                 code="invalid-duration",
                 hint=f"pass an integer number of seconds from {MIN_DURATION_SECONDS} to {MAX_DURATION_SECONDS}.",

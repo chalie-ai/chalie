@@ -21,6 +21,7 @@ path without requiring real IMAP/CalDAV/CardDAV credentials.
 from typing import cast
 
 import pytest
+from tests._tool_result_harness import built
 
 pytestmark = pytest.mark.unit
 
@@ -66,7 +67,7 @@ def test_email_not_connected_returns_structured_error() -> None:
     from abilities.email import EmailAbility
     from contracts.params.capability_params_bag import CapabilityParamsBag
 
-    result = EmailAbility().run(CapabilityParamsBag.from_params({"action": "search"}))
+    result = EmailAbility().run(built(CapabilityParamsBag.from_params({"action": "search"})))
     assert result.status == "error"
     assert result.code == "not-connected"
     assert "not connected" in cast(str, result.body).lower()
@@ -87,9 +88,9 @@ def test_calendar_write_not_connected_returns_tool_result_error() -> None:
     from contracts.params.capability_params_bag import CapabilityParamsBag
 
     result = CalendarAbility().run(
-        CapabilityParamsBag.from_params(
+        built(CapabilityParamsBag.from_params(
             {"action": "update_event", "uid": "test-123", "summary": "New title"}
-        )
+        ))
     )
     assert result.status == "error"
     assert result.code == "not-connected"
@@ -110,7 +111,7 @@ def test_contacts_not_connected_returns_structured_error() -> None:
     from abilities.contacts import ContactsAbility
     from contracts.params.contacts_params_bag import ContactsParamsBag
 
-    result = ContactsAbility().run(ContactsParamsBag.from_params({"action": "list"}))
+    result = ContactsAbility().run(built(ContactsParamsBag.from_params({"action": "list"})))
     assert result.status == "error"
     assert result.code == "not-connected"
     assert "not connected" in cast(str, result.body).lower()

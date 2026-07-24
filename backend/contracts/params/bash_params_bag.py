@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Self
 
+from abilities._result import ToolResult
 from configs.enums.param_key import Keys
 from contracts.params.param_bag import ParamBag
 
@@ -19,8 +20,11 @@ class BashParamsBag(ParamBag):
     timeout_s: int
 
     @classmethod
-    def from_params(cls, params: dict[str, object]) -> Self:
-        return cls(
-            command=cls.require_str(params, Keys.command),
-            timeout_s=cls.clamp_int(params, Keys.timeout_s, default=30, lo=1, hi=300),
-        )
+    def from_params(cls, params: dict[str, object]) -> Self | ToolResult:
+        command = cls.require_str(params, Keys.command)
+        if isinstance(command, ToolResult):
+            return command
+        timeout_s = cls.clamp_int(params, Keys.timeout_s, default=30, lo=1, hi=300)
+        if isinstance(timeout_s, ToolResult):
+            return timeout_s
+        return cls(command=command, timeout_s=timeout_s)
