@@ -8,7 +8,13 @@ import pytest
 from abilities import search_files
 from abilities._result import ToolResult
 from abilities.search_files import SearchFilesAbility
-from contracts.params.search_files_params_bag import SearchFilesParamsBag
+from contracts.params.search_files_params_bag import (
+    SearchFilesContentParams,
+    SearchFilesParamsBag,
+)
+from services.file_index_service import FileIndexService
+from services.file_mapper_service import FileMapperService
+from tests.test_file_index_service import _minimal_pdf_bytes
 
 pytestmark = pytest.mark.unit
 
@@ -310,5 +316,84 @@ def test_grep_invalid_regex_returns_error(tmp_path: Path) -> None:
     assert tr.status == "error"
     assert tr.code == "invalid-regex"
     assert "Invalid regex" in str(tr.body)
+
+
+# ── content (FTS5 file index) ─────────────────────────────────────
+#
+# No cache involved (the ability's docstring is explicit: content is never
+# /tmp-cached), so the autouse _isolated_cache fixture above is inert for
+# these tests. Instead each test redirects FileMapperService._DATA_DIR to
+# tmp_path — the chokepoint FileIndexService() resolves its default db path
+# through (services/file_mapper_service.py get_file_index_db_path ->
+# _DATA_DIR / "file_index.sqlite") — so this test's own setup
+# FileIndexService() and the one _search_content() constructs internally
+# both land on the SAME real sqlite file. Same precedent as
+# tests/test_mcp_client_service.py (monkeypatch.setattr(FileMapperService,
+# "_DATA_DIR", tmp_path)).
+
+
+def test_content_finds_pdf_by_body_text(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(FileMapperService, "_DATA_DIR", tmp_path)
+    pdf_path = tmp_path / "invoice.pdf"
+    pdf_path.write_bytes(_minimal_pdf_bytes("ChalieContentProbeXyzzy"))
+    FileIndexService().index_file(str(pdf_path))  # real pdfplumber extraction path
+
+    tr = _run("content", "ChalieContentProbeXyzzy")
+    assert str(pdf_path) in _glob_files(tr)
+
+
+def test_content_paginates_five_per_page(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(FileMapperService, "_DATA_DIR", tmp_path)
+    service = FileIndexService()
+    paths = []
+    for i in range(7):
+        p = tmp_path / f"note{i:02d}.txt"
+        p.write_text(f"needletoken appears in note {i}")
+        service.index_file(str(p))
+        paths.append(str(p))
+
+    p1 = _run("content", "needletoken")
+    files1 = _glob_files(p1)
+    assert len(files1) == 5
+    assert p1.meta["page"] == 1
+    assert p1.meta["page_count"] == 2
+    assert p1.meta["count"] == 7
+
+    p2 = _run("content", "needletoken", page=2)
+    files2 = _glob_files(p2)
+    assert len(files2) == 2
+
+    # every indexed file appears exactly once across the two pages
+    assert len(files1) + len(files2) == 7
+    assert set(files1) | set(files2) == set(paths)
+
+
+def test_content_blank_or_missing_query_returns_empty_query_error() -> None:
+    blank = _run("content", "   ")
+    assert blank.status == "error"
+    assert blank.code == "empty-query"
+
+    missing = SearchFilesParamsBag.from_params({"action": "content"})
+    assert isinstance(missing, ToolResult)
+    assert missing.status == "error"
+    assert missing.code == "empty-query"
+
+
+def test_content_no_hit_is_success_not_error(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(FileMapperService, "_DATA_DIR", tmp_path)
+    tr = _run("content", "NoSuchTermAnywhereInTheIndex12345")
+    assert tr.status == "success"
+    assert tr.code is None
+    assert isinstance(tr.body, dict)
+    assert tr.body["files"] == []
+    assert tr.meta["count"] == 0
+    assert "broaden" in str(tr.body).lower()
+
+
+def test_content_bag_routes_to_content_params_with_default_page() -> None:
+    bag = SearchFilesParamsBag.from_params({"action": "content", "query": "x"})
+    assert isinstance(bag, SearchFilesContentParams)
+    assert bag.query == "x"
+    assert bag.page == 1
 
 

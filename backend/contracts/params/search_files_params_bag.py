@@ -19,7 +19,7 @@ from abilities._result import ToolResult
 from configs.enums.param_key import Keys
 from contracts.params.param_bag import ParamBag
 
-_ACTIONS = ("glob", "grep")
+_ACTIONS = ("glob", "grep", "content")
 
 # The grep context window: lines shown above AND below each matched line.
 # Owned here because the bag enforces the clamp; the ability imports the
@@ -47,6 +47,8 @@ class SearchFilesParamsBag(ParamBag):
                 return SearchFilesGlobParams.from_params(params)
             case "grep":
                 return SearchFilesGrepParams.from_params(params)
+            case "content":
+                return SearchFilesContentParams.from_params(params)
             case unknown:
                 return ToolResult.err(
                     f"Unknown search_files action: {unknown!r}.",
@@ -139,3 +141,24 @@ class SearchFilesGrepParams(SearchFilesParamsBag):
             page=page,
             context_lines=context_lines,
         )
+
+
+@dataclass(frozen=True, slots=True)
+class SearchFilesContentParams(SearchFilesParamsBag):
+    """``query`` is required and non-blank (``empty-query`` otherwise);
+    ``page`` is 1-based — a non-numeric value is ``invalid-param``, an
+    out-of-range one clamps. No ``directory`` or ``context_lines`` — the
+    content index is global."""
+
+    query: str
+    page: int
+
+    @classmethod
+    def from_params(cls, params: dict[str, object]) -> Self | ToolResult:
+        page = cls.clamp_int(params, Keys.page, default=1, lo=1, hi=_MAX_PAGE)
+        if isinstance(page, ToolResult):
+            return page
+        query = cls._query(params)
+        if isinstance(query, ToolResult):
+            return query
+        return cls(query=query, page=page)

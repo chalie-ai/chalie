@@ -1,4 +1,4 @@
-"""SearchFilesAbility — locate files by name (glob) or content (grep).
+"""SearchFilesAbility — locate files by name (glob), content (grep), or index (content).
 
 Cross-platform alternative to ``bash find`` / ``bash grep`` so the LLM
 gets consistent behaviour across macOS, Linux, and Windows — including
@@ -10,6 +10,10 @@ Returns a sealed :class:`abilities._result.ToolResult` (never a wire envelope):
 * ``grep`` success → ``{"matches": [{"file": <abs>, "line": <int>,
   "text": <line>, "context": <surrounding lines>}, …]}`` — one row per matched
   line.
+* ``content`` success → ``{"files": [<abs path>, …]}`` ranked by relevance from
+  the FTS5 file index (:class:`services.file_index_service.FileIndexService`) —
+  fast and able to see inside PDF/DOCX/PPTX, but may lag the live filesystem;
+  glob/grep stay live and exact.
 * Results are PAGINATED at 5 per page (a result = a file for glob, a matched
   line for grep). Pass ``page`` to walk the list; when more than one page exists
   the body carries a "use the `page` parameter … page N from M pages" note and
@@ -33,7 +37,7 @@ import os
 import re
 import time
 from collections import deque
-from collections.abc import Generator
+from collections.abc import Generator, Sequence
 from fnmatch import fnmatch
 from pathlib import Path
 from typing import ClassVar, cast
@@ -44,11 +48,14 @@ from configs.enums.param_key import Keys
 from contracts.params.param_bag import ParamBag
 from contracts.params.search_files_params_bag import (
     DEFAULT_CONTEXT_LINES,
+    SearchFilesContentParams,
     SearchFilesGlobParams,
     SearchFilesGrepParams,
     SearchFilesParamsBag,
 )
+from services.file_index_service import FileIndexService
 
+_CONTENT_LIMIT = 50
 _RESULTS_PER_PAGE = 5
 # Safety ceiling on total results gathered for one query, so a pathological
 # match-dense tree (e.g. a 100MB file with a million matching lines) can never
@@ -77,6 +84,7 @@ class SearchFilesAbility(Ability[SearchFilesParamsBag]):
     ACTION_REQUIRED: ClassVar[dict[str, tuple[str, ...]]] = {
         "glob": (Keys.query,),
         "grep": (Keys.query,),
+        "content": (Keys.query,),
     }
 
     # The typed input contract: the dispatch seam builds the bag via
@@ -88,7 +96,9 @@ class SearchFilesAbility(Ability[SearchFilesParamsBag]):
 
     def get_summary(self) -> str:
         return (
-            "Locate files on disk by filename pattern (glob) or by content (grep). "
+            "Locate files on disk by name (glob), by live content (grep), or by "
+            "pre-built index (content). The index action is fast/fuzzy/binary-capable "
+            "but may lag the live filesystem by a moment; glob and grep are live/exact. "
             "Use this BEFORE reaching for bash when you need to find a file you "
             "don't already know the path of. Use in conjunction with the `read` "
             "tool to then get a located file's contents into context."
@@ -102,8 +112,8 @@ class SearchFilesAbility(Ability[SearchFilesParamsBag]):
             "list every markdown doc under docs/",
             "grep for 'TODO' in my notes folder",
             "which file defines _FIND_TOOLS_GUARDRAILS",
-            "show me all log files in /tmp",
-            "find files matching test_*.py",
+            "find the document that mentions 'quarterly report'",
+            "which of my notes talks about the kitchen renovation",
         ]
 
     def get_search_tooltip(self) -> str:
@@ -114,12 +124,16 @@ class SearchFilesAbility(Ability[SearchFilesParamsBag]):
         "properties": {
             Keys.action: {
                 "type": "string",
-                "enum": ["glob", "grep"],
+                "enum": ["glob", "grep", "content"],
                 "description": (
                     "'glob' = match files by name/pattern (e.g. '*.py', "
                     "'**/test_*.yaml'). 'grep' = search for content matches "
-                    "inside files. Pick 'glob' when you know the filename "
-                    "shape, 'grep' when you know what's inside the file."
+                    "inside files (live, exact, text-only). 'content' = ranked "
+                    "full-text search over a pre-built index of file contents "
+                    "(fast, fuzzy, can see inside PDF/DOCX/PPTX, but may lag "
+                    "the live filesystem by a moment). Pick 'glob' for filename "
+                    "shapes, 'grep' for live exact text search, 'content' for "
+                    "fuzzy ranked search across all indexed files."
                 ),
             },
             Keys.query: {
@@ -127,7 +141,9 @@ class SearchFilesAbility(Ability[SearchFilesParamsBag]):
                 "description": (
                     "For 'glob': a filename or glob pattern (e.g. '*.md', "
                     "'**/*.log', 'config.*'). For 'grep': the literal "
-                    "string or regex to search file contents for."
+                    "string or regex to search file contents for. For 'content': "
+                    "words or phrases expected to appear in the file's content "
+                    "(fuzzy, ranked by relevance)."
                 ),
             },
             Keys.directory: {
@@ -163,18 +179,27 @@ class SearchFilesAbility(Ability[SearchFilesParamsBag]):
         return self._PARAMETERS
 
     def run(self, params: SearchFilesParamsBag) -> ToolResult:
-        # The router factory only ever yields the two leaves; the isinstance
+        # The router factory only ever yields the three leaves; the isinstance
         # chain hands _search each leaf's exact fields (glob renders no
         # context, but the gather/cache key still carries the default width).
         if isinstance(params, SearchFilesGlobParams):
             return self._search("glob", params.query, params.directory, params.page, DEFAULT_CONTEXT_LINES)
         if isinstance(params, SearchFilesGrepParams):
             return self._search("grep", params.query, params.directory, params.page, params.context_lines)
+        if isinstance(params, SearchFilesContentParams):
+            return self._search_content(params.query, params.page)
         return ToolResult.err(
             f"Unknown search_files params bag: {type(params).__name__}.",
             code="unknown-action",
-            valid=("glob", "grep"),
+            valid=("glob", "grep", "content"),
         )
+
+    def _search_content(self, query: str, page: int) -> ToolResult:
+        # No /tmp cache: the FTS query is instant and caching would only add
+        # staleness on top of the index's own lag. Paginated as "glob" so the
+        # body carries a "files" list, same shape as a name search.
+        paths = FileIndexService().search(query, limit=_CONTENT_LIMIT)
+        return _paginate("glob", paths, page, False)
 
     def _search(self, action: str, query: str, directory: str, page: int, context_lines: int) -> ToolResult:
         root = self._resolve_directory(directory)
@@ -257,7 +282,7 @@ def _gather(action: str, query: str, root: Path, context_lines: int) -> tuple[li
     return results, truncated
 
 
-def _paginate(action: str, results: list[object], page: int, truncated: bool) -> ToolResult:
+def _paginate(action: str, results: Sequence[object], page: int, truncated: bool) -> ToolResult:
     total = len(results)
     page_count = max(1, (total + _RESULTS_PER_PAGE - 1) // _RESULTS_PER_PAGE)
     page = min(page, page_count)
