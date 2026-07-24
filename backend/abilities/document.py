@@ -36,8 +36,19 @@ import shutil as _shutil
 from typing import TYPE_CHECKING, ClassVar, cast
 
 from abilities._ability import Ability
-from configs.enums.param_key import Keys
 from abilities._result import ToolResult
+from configs.enums.param_key import Keys
+from contracts.params.param_bag import ParamBag
+from contracts.params.document_params_bag import (
+    DocumentCreateParams,
+    DocumentDeleteParams,
+    DocumentListParams,
+    DocumentParamsBag,
+    DocumentRestoreParams,
+    DocumentSearchParams,
+    DocumentUploadParams,
+    DocumentViewParams,
+)
 from services.document_chunking import create_document_artifacts
 
 if TYPE_CHECKING:
@@ -49,8 +60,12 @@ logger = logging.getLogger(__name__)
 # model has enough context to pick the right document by id.
 _SNIPPET_CHARS = 120
 
+# LLM-callable actions surfaced in unknown-action errors — ``upload`` is
+# mechanical (not in INPUT_SCHEMA) and never shown to the model.
+_VALID_ACTIONS = ("search", "list", "view", "delete", "restore", "create")
 
-class DocumentAbility(Ability):
+
+class DocumentAbility(Ability[DocumentParamsBag]):
     # Required params per action, validated by the dispatcher's ACTION_REQUIRED
     # pre-gate BEFORE the policy gate or run(). ``delete``/``view``/``restore``
     # require neither id nor name here because either addresses the document; the
@@ -65,6 +80,10 @@ class DocumentAbility(Ability):
         "create": (Keys.name_, Keys.content),
         "upload": (),
     }
+
+    # The typed input contract: the dispatch seam builds the bag via
+    # DocumentParamsBag.from_params before run() is called.
+    PARAMS: ClassVar[type[ParamBag] | None] = DocumentParamsBag
 
     def get_name(self) -> str:
         return "document"
@@ -132,40 +151,31 @@ class DocumentAbility(Ability):
         "required": [Keys.action],
     }
 
-    def run(self, params: dict[str, object]) -> ToolResult:
-        action = cast(str, params.get(Keys.action, "search"))
-
+    def run(self, params: DocumentParamsBag) -> ToolResult:
         from services.document_service import DocumentService
 
         service = DocumentService()
-        return _dispatch(service, action, params)
 
+        if isinstance(params, DocumentSearchParams):
+            return _handle_search(service, params)
+        if isinstance(params, DocumentListParams):
+            return _handle_list(service)
+        if isinstance(params, DocumentViewParams):
+            return _handle_view(service, params)
+        if isinstance(params, DocumentDeleteParams):
+            return _handle_delete(service, params)
+        if isinstance(params, DocumentRestoreParams):
+            return _handle_restore(service, params)
+        if isinstance(params, DocumentCreateParams):
+            return _handle_create(service, params)
+        if isinstance(params, DocumentUploadParams):
+            return _handle_upload(service, params)
 
-_VALID_ACTIONS = ("search", "list", "view", "delete", "restore", "create")
-
-
-def _dispatch(service: "_DocumentService", action: str, params: dict[str, object]) -> ToolResult:
-    if action == "search":
-        return _handle_search(service, params)
-    if action == "list":
-        return _handle_list(service)
-    if action == "view":
-        return _handle_view(service, params)
-    if action == "delete":
-        return _handle_delete(service, params)
-    if action == "restore":
-        return _handle_restore(service, params)
-    if action == "create":
-        return _handle_create(service, params)
-    if action == "upload":
-        # Mechanical-only ingest (not in INPUT_SCHEMA): dispatched by code, never
-        # the LLM. Path-based — see _handle_upload / module docstring.
-        return _handle_upload(service, params)
-    return ToolResult.err(
-        f"Unknown action {action!r}.",
-        code="unknown-action",
-        valid=_VALID_ACTIONS,
-    )
+        return ToolResult.err(
+            f"Unknown document params bag: {type(params).__name__}.",
+            code="unknown-action",
+            valid=_VALID_ACTIONS,
+        )
 
 
 def _exact_name_matches(docs: list[dict[str, object]], name: str) -> list[dict[str, object]]:
@@ -185,7 +195,10 @@ def _candidate_rows(docs: list[dict[str, object]]) -> list[dict[str, object]]:
     return rows
 
 
-def _resolve_unique(service: "_DocumentService", params: dict[str, object]) -> "dict[str, object] | ToolResult":
+def _resolve_unique(
+    service: "_DocumentService",
+    params: DocumentViewParams | DocumentDeleteParams | DocumentRestoreParams,
+) -> "dict[str, object] | ToolResult":
     """Resolve a single document for a destructive/addressed action.
 
     Returns the document dict on an unambiguous resolution, or an error
@@ -195,7 +208,7 @@ def _resolve_unique(service: "_DocumentService", params: dict[str, object]) -> "
     single non-exact (substring) match, returns ``ambiguous-match`` with the
     candidate rows rather than silently picking the first hit.
     """
-    doc_id = cast(str, params.get(Keys.id) or "").strip()
+    doc_id = params.id
     if doc_id:
         doc = service.get_document(doc_id)
         if not doc:
@@ -206,7 +219,7 @@ def _resolve_unique(service: "_DocumentService", params: dict[str, object]) -> "
             )
         return doc
 
-    name = cast(str, params.get(Keys.name_) or "").strip()
+    name = params.name
     if not name:
         return ToolResult.err(
             "id or name is required to address the document.",
@@ -251,8 +264,8 @@ def _group_results_by_doc(results: list[dict[str, object]]) -> dict[str, list[di
     return doc_artifacts
 
 
-def _handle_search(service: "_DocumentService", params: dict[str, object]) -> ToolResult:
-    query = cast(str, params.get(Keys.query, "")).strip()
+def _handle_search(service: "_DocumentService", params: DocumentSearchParams) -> ToolResult:
+    query = params.query
 
     from services.memory_recall_service import recall
 
@@ -326,7 +339,7 @@ def _fetch_doc_fragments(doc_id: str) -> list[str]:
     return [f.value for f in DocumentRow.for_document_id(doc_id).get() if f.value]
 
 
-def _handle_view(service: "_DocumentService", params: dict[str, object]) -> ToolResult:
+def _handle_view(service: "_DocumentService", params: DocumentViewParams) -> ToolResult:
     doc = _resolve_unique(service, params)
     if isinstance(doc, ToolResult):
         return doc
@@ -363,7 +376,7 @@ def _handle_view(service: "_DocumentService", params: dict[str, object]) -> Tool
     return ToolResult.ok("\n".join(lines), action="view", id=doc["id"])
 
 
-def _handle_delete(service: "_DocumentService", params: dict[str, object]) -> ToolResult:
+def _handle_delete(service: "_DocumentService", params: DocumentDeleteParams) -> ToolResult:
     doc = _resolve_unique(service, params)
     if isinstance(doc, ToolResult):
         return doc
@@ -385,9 +398,9 @@ def _handle_delete(service: "_DocumentService", params: dict[str, object]) -> To
     )
 
 
-def _handle_restore(service: "_DocumentService", params: dict[str, object]) -> ToolResult:
-    doc_id = cast(str, params.get(Keys.id) or "").strip()
-    name = cast(str, params.get(Keys.name_) or "").strip()
+def _handle_restore(service: "_DocumentService", params: DocumentRestoreParams) -> ToolResult:
+    doc_id = params.id
+    name = params.name
 
     if doc_id:
         doc = service.get_document(doc_id)
@@ -562,7 +575,7 @@ def ingest_file(
     }
 
 
-def _handle_upload(service: "_DocumentService", params: dict[str, object]) -> ToolResult:
+def _handle_upload(service: "_DocumentService", params: DocumentUploadParams) -> ToolResult:
     """Mechanical upload dispatch (not LLM-callable).
 
     Thin orchestrator over ``ingest_file``. The structured success body
@@ -571,8 +584,8 @@ def _handle_upload(service: "_DocumentService", params: dict[str, object]) -> To
     """
     result = ingest_file(
         service,
-        cast(str, params.get(Keys.path)),
-        name=cast("str | None", params.get(Keys.name_)),
+        params.path,
+        name=params.name_ or None,
     )
     if result.get("error"):
         return ToolResult.err(cast(str, result["error"]), code="upload-failed", action="upload")
@@ -594,9 +607,9 @@ def _handle_upload(service: "_DocumentService", params: dict[str, object]) -> To
     )
 
 
-def _handle_create(service: "_DocumentService", params: dict[str, object]) -> ToolResult:
-    name = cast(str, params.get(Keys.name_, "")).strip()
-    content = cast(str, params.get(Keys.content, "")).strip()
+def _handle_create(service: "_DocumentService", params: DocumentCreateParams) -> ToolResult:
+    name = params.name_
+    content = params.content
 
     if "." not in name:
         name = f"{name}.md"

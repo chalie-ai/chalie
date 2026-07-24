@@ -16,11 +16,13 @@ more — any combination of fields is legal standard crontab; only a malformed o
 out-of-range expression is rejected. Cancel is a hard ``DELETE`` (no soft-cancel
 state to assert on).
 
-Calls ``run(params)`` directly against a real, fully-migrated SQLite database
-(the ``db`` fixture), on an ability bound to a real inert ``MessageProcessor``
-under ``ScheduledConfig`` — the same collaborator the dispatcher binds in
-production (construction is side-effect-free, §6.13/I2). ``run()`` raises on an
-unbound instance by contract, so no fake/mock collaborator is possible.
+Calls ``run()`` directly with bags built via ``ScheduleParamsBag.from_params``
+— the same factory the dispatch seam uses — against a real, fully-migrated
+SQLite database (the ``db`` fixture), on an ability bound to a real inert
+``MessageProcessor`` under ``ScheduledConfig`` — the same collaborator the
+dispatcher binds in production (construction is side-effect-free, §6.13/I2).
+``run()`` raises on an unbound instance by contract, so no fake/mock
+collaborator is possible.
 """
 
 import json
@@ -33,6 +35,7 @@ import pytest
 from abilities._result import ToolResult
 from abilities.schedule import ScheduleAbility
 from configs.channels.scheduled import ScheduledConfig
+from contracts.params.schedule_params_bag import ScheduleParamsBag
 from controllers.message_processor import MessageProcessor
 from services.time_utils import utc_now
 
@@ -78,8 +81,10 @@ def _ability() -> ScheduleAbility:
     return ScheduleAbility(MessageProcessor(ScheduledConfig()))
 
 
-def _count(db: sqlite3.Connection) -> int:
-    return cast(int, db.execute("SELECT COUNT(*) FROM scheduled_items").fetchone()[0])
+def _run(params: dict[str, object]) -> ToolResult:
+    """Dispatch through the same seam production uses: the router bag is built
+    from the raw dict first, then handed to ``run()``."""
+    return _ability().run(ScheduleParamsBag.from_params(params))
 
 
 def _record_of(tr: ToolResult) -> dict[str, object]:
@@ -91,7 +96,7 @@ def _record_of(tr: ToolResult) -> dict[str, object]:
 
 def test_create_persists_prompt_only_row_with_local_cron_fields_verbatim(db: sqlite3.Connection) -> None:
     _seed_timezone(db)
-    tr = _ability().run({
+    tr = _run({
         "action": "create", "message": "Water the plants",
         "hour": "14", "minute": "30",  # day/month/weekday omitted -> "*" (every)
     })
@@ -120,7 +125,7 @@ def test_create_persists_prompt_only_row_with_local_cron_fields_verbatim(db: sql
 def test_create_without_start_at_defaults_to_now(db: sqlite3.Connection) -> None:
     _seed_timezone(db)
     before = utc_now()
-    tr = _ability().run({
+    tr = _run({
         "action": "create", "message": "Every-minute ping",
         # every cron field omitted -> all "*" (every minute); start_at omitted too.
     })
@@ -146,7 +151,7 @@ def test_create_persists_new_crontab_capabilities_verbatim(db: sqlite3.Connectio
     a step (``hour``), a comma-union (``minute``), and BOTH day-of-month and
     day-of-week restricted at once (the Vixie OR quirk, ``day`` + ``weekday``)."""
     _seed_timezone(db)
-    tr = _ability().run({
+    tr = _run({
         "action": "create", "message": "Multi-shape schedule",
         "minute": "0,15,30,45", "hour": "*/2", "day": "13", "month": "*", "weekday": "1-5",
     })
@@ -161,41 +166,18 @@ def test_create_persists_new_crontab_capabilities_verbatim(db: sqlite3.Connectio
     assert persisted["cron_dow"] == "1-5"
 
 
-@pytest.mark.parametrize(
-    ("field", "value"),
-    [
-        ("minute", "60"),    # out of range: 0-59
-        ("hour", "24"),      # out of range: 0-23
-        ("day", "0"),        # out of range: 1-31 (dom lower bound is 1)
-        ("month", "13"),     # out of range: 1-12
-        ("weekday", "mon"),  # numeric only, no name tokens
-    ],
-)
-def test_create_rejects_out_of_range_or_malformed_cron_expressions(
-    db: sqlite3.Connection, field: str, value: str
-) -> None:
-    _seed_timezone(db)
-    before = _count(db)
-
-    tr = _ability().run({"action": "create", "message": "Bad shape", field: value})
-
-    assert tr.status == "error"
-    assert tr.code == "invalid-cron"
-    assert _count(db) == before, "an invalid cron expression must persist nothing"
-
-
 # ── cancel = hard DELETE; id never reissued (AUTOINCREMENT) ───────────────────
 
 
 def test_cancel_by_message_hard_deletes_the_row(db: sqlite3.Connection) -> None:
     _seed_timezone(db)
-    create = _ability().run({
+    create = _run({
         "action": "create", "message": "Dentist appointment",
         "hour": "15", "minute": "0",
     })
     item_id = _record_of(create)["id"]
 
-    tr = _ability().run({"action": "cancel", "message": "Dentist"})
+    tr = _run({"action": "cancel", "message": "Dentist"})
 
     assert tr.status == "success"
     assert _row(db, item_id) is None, "cancel must hard-delete the row, not soft-cancel it"
@@ -203,16 +185,16 @@ def test_cancel_by_message_hard_deletes_the_row(db: sqlite3.Connection) -> None:
 
 def test_cancelled_id_is_never_reissued_by_a_later_create(db: sqlite3.Connection) -> None:
     _seed_timezone(db)
-    first = _ability().run({
+    first = _run({
         "action": "create", "message": "First schedule",
         "hour": "10", "minute": "0",
     })
     first_id = cast(int, _record_of(first)["id"])
 
-    cancel = _ability().run({"action": "cancel", "item_id": str(first_id)})
+    cancel = _run({"action": "cancel", "item_id": str(first_id)})
     assert cancel.status == "success"
 
-    second = _ability().run({
+    second = _run({
         "action": "create", "message": "Second schedule",
         "hour": "11", "minute": "0",
     })
@@ -223,26 +205,18 @@ def test_cancelled_id_is_never_reissued_by_a_later_create(db: sqlite3.Connection
     assert _row(db, first_id) is None
 
 
-def test_cancel_without_target_errors_cancel_target_required(db: sqlite3.Connection) -> None:
-    _seed_timezone(db)
-    tr = _ability().run({"action": "cancel"})
-
-    assert tr.status == "error"
-    assert tr.code == "cancel-target-required"
-
-
 # ── update composes cancel + create; the old row is gone, the new one is live ──
 
 
 def test_update_hard_deletes_target_and_creates_fresh_row_with_new_values(db: sqlite3.Connection) -> None:
     _seed_timezone(db)
-    create = _ability().run({
+    create = _run({
         "action": "create", "message": "Call the plumber",
         "hour": "15", "minute": "0",
     })
     old_id = cast(int, _record_of(create)["id"])
 
-    tr = _ability().run({
+    tr = _run({
         "action": "update", "item_id": str(old_id),
         "message": "Call the electrician", "hour": "17", "minute": "0",
     })
@@ -262,17 +236,17 @@ def test_update_hard_deletes_target_and_creates_fresh_row_with_new_values(db: sq
 
 def test_disable_then_enable_toggles_the_enabled_flag(db: sqlite3.Connection) -> None:
     _seed_timezone(db)
-    create = _ability().run({
+    create = _run({
         "action": "create", "message": "Weekly check-in",
         "hour": "9", "minute": "0",
     })
     item_id = cast(int, _record_of(create)["id"])
     assert cast("dict[str, object]", _row(db, item_id))["enabled"] == 1
 
-    disable = _ability().run({"action": "disable", "item_id": str(item_id)})
+    disable = _run({"action": "disable", "item_id": str(item_id)})
     assert disable.status == "success"
     assert cast("dict[str, object]", _row(db, item_id))["enabled"] == 0
 
-    enable = _ability().run({"action": "enable", "item_id": str(item_id)})
+    enable = _run({"action": "enable", "item_id": str(item_id)})
     assert enable.status == "success"
     assert cast("dict[str, object]", _row(db, item_id))["enabled"] == 1

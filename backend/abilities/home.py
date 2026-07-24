@@ -34,6 +34,11 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, ClassVar, cast
 
+from abilities._capability import CapabilityAbility
+from configs.enums.param_key import Keys
+from abilities._result import ToolResult
+from contracts.params.capability_params_bag import CapabilityParamsBag
+
 if TYPE_CHECKING:
     from collections.abc import Callable
     from typing import Protocol
@@ -41,10 +46,6 @@ if TYPE_CHECKING:
     class _Capability(Protocol):
         def is_connected(self) -> bool: ...
         def get_tools(self) -> list[dict[str, object]]: ...
-
-from abilities._capability import CapabilityAbility
-from configs.enums.param_key import Keys
-from abilities._result import ToolResult
 
 # Actions whose ``entity_id`` must name a real entity. ``control`` is the silent-
 # false-success case the guardrail kills; ``get_state`` would otherwise raise an
@@ -174,19 +175,18 @@ class HomeAbility(CapabilityAbility):
 
     # ── Entry point — entity guardrail, then delegate to the base ──────────────
 
-    def run(self, params: dict[str, object]) -> ToolResult:
-        action = str(params.get(Keys.action, self.DEFAULT_ACTION)).lower()
-        params[Keys.action] = action
+    def run(self, params: CapabilityParamsBag) -> ToolResult:
+        action = self._resolve_action(params)
 
         cap = self._connected_capability()
         if cap is not None:
             if action in _ENTITY_ACTIONS:
-                guard = self._guard_entity(cap, action, str(params.get(Keys.entity_id, "")))
+                guard = self._guard_entity(cap, action, str(params.extra.get(Keys.entity_id, "")))
                 if guard is not None:
                     return guard
             elif action == "trigger_automation":
                 guard = self._guard_automation(
-                    cap, action, str(params.get(Keys.automation_id, ""))
+                    cap, action, str(params.extra.get(Keys.automation_id, ""))
                 )
                 if guard is not None:
                     return guard
@@ -194,7 +194,7 @@ class HomeAbility(CapabilityAbility):
         # Connected + entity verified (or a non-addressed action, or not connected
         # — the base emits the canonical not-connected error in that case): the
         # base owns dispatch and result wrapping.
-        return super().run(params)
+        return self._dispatch(action, dict(params.extra))
 
     # ── Guardrails ─────────────────────────────────────────────────────────────
 

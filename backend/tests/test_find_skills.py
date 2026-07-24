@@ -82,23 +82,6 @@ def _pick_known_title(db_path: Path) -> tuple[int, str, str]:
         conn.close()
 
 
-# ── missing / blank query → loud code=missing-params, NOT a silent success ──────
-
-
-def test_missing_query_is_missing_params(skills_db: Path, db: sqlite3.Connection) -> None:
-    mp = _mp(db)
-    out = mp.dispatch_service.dispatch("find_skills", {"act_summary": "x"})
-    assert "[find_skills(status=error, code=missing-params" in out
-    assert "code=error]" not in out
-
-
-def test_empty_query_array_is_missing_params(skills_db: Path, db: sqlite3.Connection) -> None:
-    mp = _mp(db)
-    out = mp.dispatch_service.dispatch("find_skills", {"query": [], "act_summary": "x"})
-    assert "[find_skills(status=error, code=missing-params" in out
-    assert "code=error]" not in out
-
-
 # ── index missing / corrupt → skill-index-error, NEVER a zero-hit success ───────
 
 

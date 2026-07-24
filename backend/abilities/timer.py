@@ -23,20 +23,23 @@ Rich-media rendering:
 """
 
 from datetime import datetime, timezone
-from typing import ClassVar, cast
+from typing import ClassVar
 
 from abilities._ability import Ability
-from configs.enums.param_key import Keys
 from abilities._result import ToolResult
+from configs.enums.param_key import Keys
+from contracts.params.param_bag import ParamBag
+from contracts.params.timer_params_bag import (
+    MAX_DURATION_SECONDS,
+    MIN_DURATION_SECONDS,
+    TimerParamsBag,
+)
 from services.time_utils import parse_utc
 
 _PARSE_UTC_SENTINEL = datetime.min.replace(tzinfo=timezone.utc)
 
-_MAX_DURATION_SECONDS = 24 * 60 * 60  # 24 hours
-_MIN_DURATION_SECONDS = 1
 
-
-class TimerAbility(Ability):
+class TimerAbility(Ability[TimerParamsBag]):
     SYSTEM = True
 
     # title + duration_seconds are both required; presence is enforced by the
@@ -44,6 +47,10 @@ class TimerAbility(Ability):
     ACTION_REQUIRED: ClassVar[dict[str, tuple[str, ...]]] = {
         "": (Keys.title_, Keys.duration_seconds),
     }
+
+    # The typed input contract: the dispatch seam builds the bag via
+    # TimerParamsBag.from_params before run() is called.
+    PARAMS: ClassVar[type[ParamBag] | None] = TimerParamsBag
 
     def get_name(self) -> str:
         return "timer"
@@ -74,8 +81,8 @@ class TimerAbility(Ability):
             Keys.duration_seconds: {
                 "type": "integer",
                 "description": "Total countdown length in seconds. Must be between 1 and 86400 (24 hours).",
-                "minimum": _MIN_DURATION_SECONDS,
-                "maximum": _MAX_DURATION_SECONDS,
+                "minimum": MIN_DURATION_SECONDS,
+                "maximum": MAX_DURATION_SECONDS,
             },
         },
         "required": [Keys.title_, Keys.duration_seconds],
@@ -84,19 +91,9 @@ class TimerAbility(Ability):
     def get_parameters(self) -> dict[str, object]:
         return self._PARAMETERS
 
-    def run(self, params: dict[str, object]) -> ToolResult:
-        title = (cast(str, params.get(Keys.title_)) or "").strip()
-        duration_seconds = params.get(Keys.duration_seconds)
-
-        # bool is an int subclass — exclude it so a literal True/False is rejected
-        # rather than coerced into a 1-second / 0-second timer.
-        if isinstance(duration_seconds, bool) or not isinstance(duration_seconds, int) \
-                or duration_seconds < _MIN_DURATION_SECONDS or duration_seconds > _MAX_DURATION_SECONDS:
-            return ToolResult.err(
-                f"duration_seconds must be an integer between {_MIN_DURATION_SECONDS} and {_MAX_DURATION_SECONDS}",
-                code="invalid-duration",
-                hint=f"pass an integer number of seconds from {_MIN_DURATION_SECONDS} to {_MAX_DURATION_SECONDS}.",
-            )
+    def run(self, params: TimerParamsBag) -> ToolResult:
+        title = params.title
+        duration_seconds = params.duration_seconds
 
         if len(title) > 80:
             title = title[:80]

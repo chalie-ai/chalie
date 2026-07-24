@@ -29,6 +29,8 @@ from abilities._result import ToolResult
 from services.database import Database
 from services.file_mapper_service import FileMapperService
 from tools.search.fetcher import fetch_ddg_fallback, fetch_providers
+from contracts.params.param_bag import ParamBag
+from contracts.params.search_params_bag import SearchParamsBag
 from exceptions import RateLimitException
 
 logger = logging.getLogger(__name__)
@@ -43,7 +45,7 @@ _PER_PROVIDER = 5
 _MAX_RESULTS = 5
 
 
-class SearchAbility(Ability):
+class SearchAbility(Ability[SearchParamsBag]):
     DISCOVERABLE: ClassVar[bool] = False  # delegate-exclusive; pinned on WebSearchConfig only
 
     # Pre-gated by the dispatcher BEFORE run() and BEFORE the policy gate: an
@@ -52,6 +54,10 @@ class SearchAbility(Ability):
     # blank query is rejected as one code=missing-params error naming 'query', so
     # run() never sees a query-less call.
     ACTION_REQUIRED: ClassVar[dict[str, tuple[str, ...]]] = {"": (Keys.query,)}
+
+    # The typed input contract: the dispatch seam builds the bag via
+    # SearchParamsBag.from_params before run() is called.
+    PARAMS: ClassVar[type[ParamBag] | None] = SearchParamsBag
 
     def get_name(self) -> str:
         return "search"
@@ -93,17 +99,8 @@ class SearchAbility(Ability):
     _DB: ClassVar[str] = str(FileMapperService.get_search_providers_db_path())
     _providers: ClassVar[dict[str, object] | None] = None
 
-    def run(self, params: dict[str, object]) -> ToolResult:
-        # query presence is pre-gated by ACTION_REQUIRED; .strip() guards a
-        # whitespace-only value that the truthiness pre-gate lets through.
-        query = (cast("str", params.get(Keys.query) or "")).strip()
-        if not query:
-            return ToolResult.err(
-                "query is required and cannot be blank.",
-                code="missing-params",
-                hint="pass a plain natural-language query.",
-                valid=("query",),
-            )
+    def run(self, params: SearchParamsBag) -> ToolResult:
+        query = params.query  # pre-gated by ACTION_REQUIRED; bag's require_str rejects blank
 
         t0 = time.time()
         try:

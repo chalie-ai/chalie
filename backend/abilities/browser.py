@@ -25,14 +25,28 @@ from typing import ClassVar, cast
 from urllib.parse import urlparse
 
 from abilities._ability import Ability
-from configs.enums.param_key import Keys
 from abilities._result import ToolResult
+from configs.enums.param_key import Keys
+from contracts.params.browser_params_bag import (
+    BrowserBackParams,
+    BrowserClickParams,
+    BrowserFillParams,
+    BrowserFindParams,
+    BrowserOpenParams,
+    BrowserParamsBag,
+    BrowserReadParams,
+    BrowserScreenshotParams,
+    BrowserScrollParams,
+    BrowserSelectParams,
+    BrowserStyleParams,
+)
+from contracts.params.param_bag import ParamBag
 from tools.browser.session import record_screenshot, run_verb
 
 logger = logging.getLogger(__name__)
 
 
-class BrowserAbility(Ability):
+class BrowserAbility(Ability[BrowserParamsBag]):
     DISCOVERABLE: ClassVar[bool] = False  # delegate-exclusive; pinned on WebBrowseConfig only
 
     def get_name(self) -> str:
@@ -131,41 +145,93 @@ class BrowserAbility(Ability):
         "style": (Keys.target,),
     }
 
-    # verb -> params forwarded to the session layer (the required half is the
-    # dispatcher pre-gate's job, above).
-    _FORWARDED: ClassVar[dict[str, tuple[str, ...]]] = {
-        "open": (Keys.url,),
-        "read": (Keys.section,),
-        "find": (Keys.query,),
-        "click": (Keys.target,),
-        "fill": (Keys.target, Keys.value_),
-        "select": (Keys.target, Keys.value_),
-        "scroll": (Keys.direction,),
-        "back": (),
-        "screenshot": (),
-        "style": (Keys.target,),
-    }
+    # The typed input contract: the dispatch seam builds the bag via
+    # BrowserParamsBag.from_params before run() is called.
+    PARAMS: ClassVar[type[ParamBag] | None] = BrowserParamsBag
 
-    def run(self, params: dict[str, object]) -> ToolResult:
-        action = (cast("str", params.get(Keys.action)) or "").strip().lower()
-        if action == "open":
-            from tools.browser.security import validate_url  # noqa: PLC0415
-            ok, reason = validate_url(str(params[Keys.url]).strip())
-            if not ok:
-                return ToolResult.err(
-                    f"URL blocked: {reason}",
-                    code="url-blocked",
-                    hint="Only public http(s) URLs are reachable; private, "
-                         "loopback, link-local and non-http(s) URLs are refused.",
-                )
-        if action == "screenshot":
+    def run(self, params: BrowserParamsBag) -> ToolResult:
+        # The router factory only ever yields the ten leaves; a hand-built
+        # foreign subclass (or the bare router) is rejected loudly BEFORE the
+        # shared path reads a field it may not carry.
+        if not isinstance(
+            params,
+            (
+                BrowserOpenParams, BrowserReadParams, BrowserFindParams,
+                BrowserClickParams, BrowserFillParams, BrowserSelectParams,
+                BrowserScrollParams, BrowserBackParams, BrowserScreenshotParams,
+                BrowserStyleParams,
+            ),
+        ):
+            return ToolResult.err(
+                f"Unknown browser params bag: {type(params).__name__}.",
+                code="unknown-action",
+                valid=("open", "read", "find", "click", "fill", "select", "scroll", "back", "screenshot", "style"),
+            )
+
+        if isinstance(params, BrowserOpenParams):
+            return self._do_open(params)
+        if isinstance(params, BrowserReadParams):
+            return self._do_read(params)
+        if isinstance(params, BrowserFindParams):
+            return self._do_find(params)
+        if isinstance(params, BrowserClickParams):
+            return self._do_click(params)
+        if isinstance(params, BrowserFillParams):
+            return self._do_fill(params)
+        if isinstance(params, BrowserSelectParams):
+            return self._do_select(params)
+        if isinstance(params, BrowserScrollParams):
+            return self._do_scroll(params)
+        if isinstance(params, BrowserBackParams):
+            return self._do_back()
+        if isinstance(params, BrowserScreenshotParams):
             return self._screenshot()
-        kwargs: dict[str, object] = {
-            k: str(params[k]).strip()
-            for k in self._FORWARDED[action]
-            if str(params.get(k) or "").strip()
-        }
-        envelope = self._run_verb(action, kwargs)
+        return self._do_style(params)
+
+    def _do_open(self, params: BrowserOpenParams) -> ToolResult:
+        from tools.browser.security import validate_url  # noqa: PLC0415
+        ok, reason = validate_url(params.url)
+        if not ok:
+            return ToolResult.err(
+                f"URL blocked: {reason}",
+                code="url-blocked",
+                hint="Only public http(s) URLs are reachable; private, "
+                     "loopback, link-local and non-http(s) URLs are refused.",
+            )
+        envelope = self._run_verb("open", {"url": params.url})
+        return self._reply(envelope)
+
+    def _do_read(self, params: BrowserReadParams) -> ToolResult:
+        kwargs: dict[str, object] = {"section": params.section} if params.section else {}
+        envelope = self._run_verb("read", kwargs)
+        return self._reply(envelope)
+
+    def _do_find(self, params: BrowserFindParams) -> ToolResult:
+        envelope = self._run_verb("find", {"query": params.query})
+        return self._reply(envelope)
+
+    def _do_click(self, params: BrowserClickParams) -> ToolResult:
+        envelope = self._run_verb("click", {"target": params.target})
+        return self._reply(envelope)
+
+    def _do_fill(self, params: BrowserFillParams) -> ToolResult:
+        envelope = self._run_verb("fill", {"target": params.target, "value": params.value})
+        return self._reply(envelope)
+
+    def _do_select(self, params: BrowserSelectParams) -> ToolResult:
+        envelope = self._run_verb("select", {"target": params.target, "value": params.value})
+        return self._reply(envelope)
+
+    def _do_scroll(self, params: BrowserScrollParams) -> ToolResult:
+        envelope = self._run_verb("scroll", {"direction": params.direction})
+        return self._reply(envelope)
+
+    def _do_back(self) -> ToolResult:
+        envelope = self._run_verb("back", {})
+        return self._reply(envelope)
+
+    def _do_style(self, params: BrowserStyleParams) -> ToolResult:
+        envelope = self._run_verb("style", {"target": params.target})
         return self._reply(envelope)
 
     def _run_verb(self, verb: str, kwargs: dict[str, object]) -> dict[str, object]:

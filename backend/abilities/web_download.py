@@ -25,16 +25,18 @@ import logging
 import os
 import tempfile
 import uuid
-from typing import ClassVar, cast
+from typing import ClassVar
 from urllib.parse import urlparse
 
 import requests
 
 from abilities._ability import Ability
-from configs.enums.param_key import Keys
 from abilities._result import ToolResult
-from services.web_fetch import DOWNLOAD, stream_to_file
+from configs.enums.param_key import Keys
+from contracts.params.param_bag import ParamBag
+from contracts.params.web_download_params_bag import WebDownloadParamsBag
 from exceptions import DownloadTooLarge, FetchBlocked
+from services.web_fetch import DOWNLOAD, stream_to_file
 
 logger = logging.getLogger(__name__)
 
@@ -42,7 +44,7 @@ _DOWNLOAD_DIR = os.path.join(tempfile.gettempdir(), "chalie_downloads")
 _BLOCKED_SCHEMES = frozenset({"file", "data"})
 
 
-class WebDownloadAbility(Ability):
+class WebDownloadAbility(Ability[WebDownloadParamsBag]):
     #: The download size cap (100 MB). Enforced by ``stream_to_file`` during the
     #: stream and declared in ``meta`` on success; an over-cap pull is a
     #: ``too-large`` error with the partial file removed.
@@ -54,6 +56,10 @@ class WebDownloadAbility(Ability):
     #: Runs AFTER seam key-healing, so a model's ``uri``/``source``/etc. has already
     #: been canonicalised to ``url`` via ``VARIANTS[Keys.url]`` before this fires.
     ACTION_REQUIRED: ClassVar[dict[str, tuple[str, ...]]] = {"": (Keys.url,)}
+
+    # The typed input contract: the dispatch seam builds the bag via
+    # WebDownloadParamsBag.from_params before run() is called.
+    PARAMS: ClassVar[type[ParamBag] | None] = WebDownloadParamsBag
 
     def get_name(self) -> str:
         return "web_download"
@@ -103,9 +109,8 @@ class WebDownloadAbility(Ability):
     def get_parameters(self) -> dict[str, object]:
         return self._PARAMETERS
 
-    def run(self, params: dict[str, object]) -> ToolResult:
-        url = self.param(params, Keys.url, required=True)
-        url = str(url).strip()
+    def run(self, params: WebDownloadParamsBag) -> ToolResult:
+        url = params.url
 
         scheme = urlparse(url).scheme
         if scheme in _BLOCKED_SCHEMES:
@@ -116,8 +121,7 @@ class WebDownloadAbility(Ability):
                 source=url,
             )
 
-        timeout_min = self.param(params, Keys.timeout, default=15, clamp=(1, 120))
-        timeout_sec = float(cast(float, timeout_min)) * 60
+        timeout_sec = params.timeout * 60.0
 
         dest_path = _build_dest_path(url)
         try:

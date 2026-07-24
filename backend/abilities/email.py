@@ -34,6 +34,7 @@ from typing import ClassVar, cast
 from abilities._capability import CapabilityAbility
 from configs.enums.param_key import Keys
 from abilities._result import ToolResult, truncate
+from contracts.params.capability_params_bag import CapabilityParamsBag
 
 logger = logging.getLogger(__name__)
 LOG_PREFIX = "[EMAIL ABILITY]"
@@ -188,15 +189,15 @@ class EmailAbility(CapabilityAbility):
 
     # ── Entry point — guardrail BEFORE the base's connected gate ────────────────
 
-    def run(self, params: dict[str, object]) -> ToolResult:
-        action = str(params.get(Keys.action, self.DEFAULT_ACTION)).lower()
+    def run(self, params: CapabilityParamsBag) -> ToolResult:
+        action = self._resolve_action(params)
 
         if action in _RECIPIENT_ACTIONS:
-            err = _validate_recipient(params)
+            err = _validate_recipient(params.extra)
             if err is not None:
                 return err
 
-        result = super().run(params)
+        result = self._dispatch(action, dict(params.extra))
         if result.status != "success" or not isinstance(result.body, dict):
             # not-connected / unknown-action / handler-unavailable already carry a
             # canonical code from the base — surface them untouched.

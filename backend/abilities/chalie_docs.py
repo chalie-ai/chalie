@@ -38,8 +38,10 @@ if TYPE_CHECKING:
 import requests
 
 from abilities._ability import Ability
-from configs.enums.param_key import Keys
 from abilities._result import ToolResult, truncate
+from configs.enums.param_key import Keys
+from contracts.params.chalie_docs_params_bag import ChalieDocsParamsBag
+from contracts.params.param_bag import ParamBag
 from services.file_mapper_service import FileMapperService
 from services.text_reader import TextReader
 from exceptions import FetchBlocked, NoReadableContent
@@ -74,11 +76,15 @@ def _read_version() -> str:
         return "unknown"
 
 
-class ChalieDocsAbility(Ability):
+class ChalieDocsAbility(Ability[ChalieDocsParamsBag]):
     #: Action-less tool: the canonical ``query`` is the one required input. The
     #: dispatcher's ACTION_REQUIRED pre-gate rejects a call with no query as
     #: ``code=missing-params`` BEFORE run() (and before the policy gate).
     ACTION_REQUIRED: ClassVar[dict[str, tuple[str, ...]]] = {"": (Keys.query,)}
+
+    # The typed input contract: the dispatch seam builds the bag via
+    # ChalieDocsParamsBag.from_params before run() is called.
+    PARAMS: ClassVar[type[ParamBag] | None] = ChalieDocsParamsBag
 
     def get_name(self) -> str:
         return "chalie_docs"
@@ -119,9 +125,8 @@ class ChalieDocsAbility(Ability):
         "required": [Keys.query],
     }
 
-    def run(self, params: dict[str, object]) -> ToolResult:
-        raw = self.param(params, Keys.query, required=True)
-        query = str(raw).strip().lower()
+    def run(self, params: ChalieDocsParamsBag) -> ToolResult:
+        query = params.query.strip().lower()
         urls = _QUERY_URLS.get(query)
         if not urls:
             # Unknown query — a STABLE, routable error (never the banned

@@ -28,7 +28,7 @@ Everything else — the structured success/empty/error envelopes, the ``count`` 
 shared and lives here exactly once. ``code="error"`` appears nowhere.
 
 Listing ``ABC`` in the bases makes ``Ability.__init_subclass__`` skip this base in
-the metadata probe (precedent: ``abilities/_budget.py``); concrete subclasses are
+the metadata probe (precedent: ``abilities/_delegate.py``); concrete subclasses are
 probed normally.
 """
 

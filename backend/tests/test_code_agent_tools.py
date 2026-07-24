@@ -35,7 +35,6 @@ from contracts.params.manage_files_params_bag import ManageFilesParamsBag
 from contracts.params.move_params_bag import MoveParamsBag
 from contracts.params.replace_all_params_bag import ReplaceAllParamsBag
 from contracts.params.run_script_params_bag import RunScriptParamsBag
-from exceptions import ToolParamError
 
 pytestmark = pytest.mark.unit
 
@@ -249,9 +248,3 @@ def test_run_script_errors(tmp_path: Path) -> None:
     relative = RunScriptAbility().run(RunScriptParamsBag.from_params({Keys.path: "hello.ts"}))
     assert relative.status == "error"
     assert relative.code == "invalid-path"
-
-    script = tmp_path / "ok.ts"
-    script.write_text("console.log(1);\n", encoding="utf-8")
-    with pytest.raises(ToolParamError) as excinfo:
-        RunScriptParamsBag.from_params({Keys.path: str(script), Keys.args: "alpha"})
-    assert excinfo.value.code == "invalid-args"

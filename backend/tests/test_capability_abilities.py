@@ -64,8 +64,9 @@ def test_email_not_connected_returns_structured_error() -> None:
     False and ``search`` (a valid action needing no params) reaches the gate.
     """
     from abilities.email import EmailAbility
+    from contracts.params.capability_params_bag import CapabilityParamsBag
 
-    result = EmailAbility().run({"action": "search"})
+    result = EmailAbility().run(CapabilityParamsBag.from_params({"action": "search"}))
     assert result.status == "error"
     assert result.code == "not-connected"
     assert "not connected" in cast(str, result.body).lower()
@@ -83,9 +84,12 @@ def test_calendar_write_not_connected_returns_tool_result_error() -> None:
     they raise, and the dispatcher owns unhandled-exception wrapping.
     """
     from abilities.calendar import CalendarAbility
+    from contracts.params.capability_params_bag import CapabilityParamsBag
 
     result = CalendarAbility().run(
-        {"action": "update_event", "uid": "test-123", "summary": "New title"}
+        CapabilityParamsBag.from_params(
+            {"action": "update_event", "uid": "test-123", "summary": "New title"}
+        )
     )
     assert result.status == "error"
     assert result.code == "not-connected"

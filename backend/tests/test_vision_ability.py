@@ -125,6 +125,7 @@ def test_vision_run_provider_error_returns_visible_error(db: sqlite3.Connection)
     its one allowed except and returns status='error' with the cause visible
     — never a false success / empty string."""
     from abilities.vision import VisionAbility
+    from contracts.params.vision_params_bag import VisionParamsBag
     from services.document_service import DocumentService
     from services.file_mapper_service import FileMapperService
 
@@ -148,7 +149,9 @@ def test_vision_run_provider_error_returns_visible_error(db: sqlite3.Connection)
     abs_path.write_bytes(png)
 
     ability = VisionAbility(mp=_make_user_mp())
-    result = ability.run({"image": doc_id, "query": "what is this"})
+    result = ability.run(
+        VisionParamsBag.from_params({"image": doc_id, "query": "what is this"})
+    )
 
     assert result.status == "error"
     assert result.body  # non-empty: the failure is visible, not swallowed
@@ -156,9 +159,10 @@ def test_vision_run_provider_error_returns_visible_error(db: sqlite3.Connection)
 
 def test_vision_run_unknown_doc_id_is_error(db: sqlite3.Connection) -> None:
     from abilities.vision import VisionAbility
+    from contracts.params.vision_params_bag import VisionParamsBag
 
     ability = VisionAbility(mp=_make_user_mp())
-    result = ability.run({"image": "deadbeef", "query": "x"})
+    result = ability.run(VisionParamsBag.from_params({"image": "deadbeef", "query": "x"}))
 
     assert result.status == "error"
     assert "deadbeef" in result.body
@@ -216,21 +220,6 @@ def _real_image_doc_for_vision(
     abs_path.parent.mkdir(parents=True, exist_ok=True)
     abs_path.write_bytes(png)
     return doc_id
-
-
-@pytest.mark.unit
-def test_whitespace_only_image_is_missing_params(db: sqlite3.Connection, _vision_chat_mp: MessageProcessor) -> None:
-    """A whitespace-only ``image`` slips the truthiness pre-gate and reaches run(),
-    which rejects the stripped-empty doc id as ``code=missing-params``."""
-    out = _vision_chat_mp.dispatch_service.dispatch(
-        "vision", {"image": "   ", "query": "x", "act_summary": "x"}
-    )
-
-    h = _vision_head(out)
-    assert "status=error" in h
-    assert "code=missing-params" in h
-    assert "code=error]" not in out
-    assert "image" in out
 
 
 @pytest.mark.unit

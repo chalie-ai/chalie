@@ -16,15 +16,17 @@ calendar, contacts, and memory.
 
 from __future__ import annotations
 
-from typing import ClassVar, cast
+from typing import ClassVar
 
 from abilities._delegate import DelegateAbility, delegate_result
 from configs.enums.param_key import Keys
 from abilities._result import ToolResult
 from configs.channels.pim import PimConfig
+from contracts.params.param_bag import ParamBag
+from contracts.params.delegate_params_bag import DelegateParamsBag
 
 
-class PimAbility(DelegateAbility):
+class PimAbility(DelegateAbility[DelegateParamsBag]):
     def get_name(self) -> str:
         return "pim"
 
@@ -72,10 +74,14 @@ class PimAbility(DelegateAbility):
     # empty instruction never spawns an expensive delegate on an empty goal.
     ACTION_REQUIRED: ClassVar[dict[str, tuple[str, ...]]] = {"": (Keys.instructions,)}
 
+    # The typed input contract: the dispatch seam builds the shared delegate
+    # bag via DelegateParamsBag.from_params before run() is called.
+    PARAMS: ClassVar[type[ParamBag] | None] = DelegateParamsBag
+
     def get_parameters(self) -> dict[str, object]:
         return self._PARAMETERS
 
-    def run(self, params: dict[str, object]) -> ToolResult:
+    def run(self, params: DelegateParamsBag) -> ToolResult:
         from capabilities import load_capabilities  # noqa: PLC0415
         from controllers.message_processor import MessageProcessor  # noqa: PLC0415
 
@@ -98,7 +104,7 @@ class PimAbility(DelegateAbility):
 
         result = MessageProcessor.process(
             PimConfig(mp.config.policy_channel),
-            raw_input=cast(str, self.param(params, Keys.instructions, required=True)),
+            raw_input=params.instructions,
         ).result()
         return delegate_result(
             result, hint="Rephrase the instruction or split it into smaller PIM tasks, then retry."

@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING, cast
 import pytest
 
 from abilities.timer import TimerAbility
+from contracts.params.timer_params_bag import TimerParamsBag
 from services.dispatch_service import DispatchService
 
 if TYPE_CHECKING:
@@ -33,7 +34,7 @@ pytestmark = pytest.mark.unit
 
 
 def _render_rich(title: str, duration: int, ordinal: int = 1) -> str:
-    tr = TimerAbility().run({"title": title, "duration_seconds": duration})
+    tr = TimerAbility().run(TimerParamsBag.from_params({"title": title, "duration_seconds": duration}))
     return DispatchService(mp=cast("MessageProcessor", None))._render("timer", tr, ordinal)
 
 

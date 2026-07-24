@@ -27,21 +27,28 @@ result; ``run()`` passes it through unchanged.
 
 from __future__ import annotations
 
-from typing import ClassVar, cast
+from typing import ClassVar
 
 from abilities._delegate import DelegateAbility, delegate_result
 from abilities._result import ToolResult
 from configs.channels.code_agent import CodeAgentConfig
 from configs.enums.param_key import Keys
+from contracts.params.delegate_params_bag import DelegateParamsBag
+from contracts.params.param_bag import ParamBag
 from services.file_mapper_service import FileMapperService
 
 
-class CodeAgentAbility(DelegateAbility):
+class CodeAgentAbility(DelegateAbility[DelegateParamsBag]):
     # An action-less delegate: the dispatcher's ACTION_REQUIRED pre-gate (the
     # ``""`` key covers action-less tools) rejects a missing/empty ``instructions``
     # with ``code=missing-params`` BEFORE the policy gate and BEFORE run() — so an
     # empty instruction never spawns an expensive delegate on an empty goal.
     ACTION_REQUIRED: ClassVar[dict[str, tuple[str, ...]]] = {"": (Keys.instructions,)}
+
+    # The typed input contract: the dispatch seam builds the bag via
+    # The dispatch seam builds the shared delegate bag via
+    # DelegateParamsBag.from_params before run() is called.
+    PARAMS: ClassVar[type[ParamBag] | None] = DelegateParamsBag
 
     _PARAMETERS: ClassVar[dict[str, object]] = {
         "type": "object",
@@ -89,7 +96,7 @@ class CodeAgentAbility(DelegateAbility):
     def get_parameters(self) -> dict[str, object]:
         return self._PARAMETERS
 
-    def run(self, params: dict[str, object]) -> ToolResult:
+    def run(self, params: DelegateParamsBag) -> ToolResult:
         from controllers.message_processor import MessageProcessor  # noqa: PLC0415
 
         mp = self.mp
@@ -103,7 +110,7 @@ class CodeAgentAbility(DelegateAbility):
 
         agent_mp = MessageProcessor.process(
             CodeAgentConfig(mp.config.policy_channel),
-            raw_input=cast(str, self.param(params, Keys.instructions, required=True)),
+            raw_input=params.instructions,
         )
         return delegate_result(
             agent_mp.result(),

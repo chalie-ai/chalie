@@ -10,7 +10,8 @@ Backed by SQLite (scheduled_items table). Provides create, list, search, cancel,
 ``update`` is a thin compose: it cancels the target ``item_id`` then creates a fresh item from the
 remaining params — no bespoke UPDATE path to keep in sync with create's validation.
 All DB access via the :class:`~models.scheduled_item.ScheduledItem` model; this ability owns
-orchestration, validation, embedding generation, and response shaping only — no SQL of its own.
+orchestration, embedding generation, and response shaping only — input validation lives in the
+:class:`~contracts.params.schedule_params_bag.ScheduleParamsBag` router, and no SQL of its own.
 
 ``scheduled_items`` is a prompt-only, crontab table now: one row per schedule, forever
 (``id`` INTEGER PRIMARY KEY AUTOINCREMENT, also the thread's ``turn_id`` on the ``'schedule'``
@@ -23,8 +24,8 @@ current LOCAL minute. Each field is a standard crontab expression — ``*``, ``5
 cancelled id is never reissued (AUTOINCREMENT), so its thread can never be re-entered. ``start_at``
 is a plain LOCAL wall-clock ISO string (optional — defaults to local now); the model is instructed
 to copy it straight from the World State's ``local_time`` telemetry and never compute a UTC offset.
-``validate_cron`` (``services.cron_schedule``) owns the crontab shape rule; this ability calls it
-and surfaces ``ValueError`` as a clear user/LLM-facing error.
+``validate_cron`` (``services.cron_schedule``) owns the crontab shape rule; the input bag calls it
+at the seam and surfaces ``ValueError`` as ``code=invalid-cron``.
 
 Every action returns a :class:`ToolResult` built only via ``ok`` / ``err``. The
 rich scheduler card travels via ``ToolResult(rich=…)``; the dispatcher owns the
@@ -40,11 +41,20 @@ from typing import ClassVar, cast
 from abilities._ability import Ability
 from configs.enums.param_key import Keys
 from abilities._result import ToolResult
+from contracts.params.param_bag import ParamBag
+from contracts.params.schedule_params_bag import (
+    ScheduleCancelParams,
+    ScheduleCreateParams,
+    ScheduleDisableParams,
+    ScheduleEnableParams,
+    ScheduleListParams,
+    ScheduleParamsBag,
+    ScheduleSearchParams,
+    ScheduleUpdateParams,
+)
 from models.scheduled_item import ScheduledItem
-from services.cron_schedule import validate_cron
 from services.database import Database
-from services.locale_service import format_date, parse_local
-from services.time_utils import utc_now
+from services.locale_service import format_date
 
 logger = logging.getLogger(__name__)
 LOG_PREFIX = "[SCHEDULER SKILL]"
@@ -61,13 +71,13 @@ _COLS: tuple[str, ...] = (
 _ACTIONS = ("create", "list", "search", "cancel", "update", "enable", "disable")
 
 
-class ScheduleAbility(Ability):
+class ScheduleAbility(Ability[ScheduleParamsBag]):
     # Pre-gated by the dispatcher BEFORE run(): create requires a 'message';
     # search requires a 'query'; list/cancel require nothing at this layer
-    # (cancel needs item_id OR message — an either/or the map cannot express, so
-    # run() validates it). An unknown action → one unknown-action error whose
-    # valid= names these keys; a known action missing a required param → one
-    # missing-params error. run() never sees a malformed call.
+    # (cancel needs item_id OR message — an either/or the map cannot express,
+    # so the bag validates it). An unknown action → one unknown-action error
+    # whose valid= names these keys; a known action missing a required param →
+    # one missing-params error. run() never sees a malformed call.
     ACTION_REQUIRED: ClassVar[dict[str, tuple[str, ...]]] = {
         "create": (Keys.message,),
         "list": (),
@@ -77,6 +87,10 @@ class ScheduleAbility(Ability):
         "enable": (),
         "disable": (),
     }
+
+    # The typed input contract: the dispatch seam builds the bag via
+    # ScheduleParamsBag.from_params before run() is called.
+    PARAMS: ClassVar[type[ParamBag] | None] = ScheduleParamsBag
 
     def get_name(self) -> str:
         return "schedule"
@@ -228,110 +242,47 @@ class ScheduleAbility(Ability):
     def get_parameters(self) -> dict[str, object]:
         return self._PARAMETERS
 
-    def run(self, params: dict[str, object]) -> ToolResult:
+    def run(self, params: ScheduleParamsBag) -> ToolResult:
         mp = self.mp
         if mp is None:
             raise RuntimeError("schedule.run() dispatched without a bound MessageProcessor")
 
-        action = (cast(str, params.get(Keys.action)) or "list").lower()
-
-        if action == "create":
-            channel = mp.config.channel
-            return _create(channel, params)
-        if action == "list":
-            return _list()
-        if action == "search":
-            return _search(self, params, mp)
-        if action == "cancel":
-            return _cancel(params)
-        if action == "enable":
-            return _set_enabled(params, enabled=True)
-        if action == "disable":
-            return _set_enabled(params, enabled=False)
-        if action == "update":
-            # Compose, don't duplicate: retire the target then recreate from the
-            # same params. Order matters. Validate the replacement BEFORE
-            # cancelling so an illegal cron can't destroy the existing schedule
-            # (validation is pure — no DB writes). Then require the cancel to
-            # LAND before recreating, so a bad item_id surfaces the error
-            # instead of silently creating a duplicate under the guise of an
-            # update.
-            _, err = _parse_create_params(params)
-            if err is not None:
-                return err
-            cancel_result = _cancel(params)
+        # Update SUBCLASSES Create (update = cancel + create over the same
+        # validated fields), so it must be narrowed FIRST or the create branch
+        # would swallow it.
+        if isinstance(params, ScheduleUpdateParams):
+            # Compose, don't duplicate: retire the target then recreate from
+            # the same fields. The bag validated the replacement at the seam —
+            # BEFORE anything here ran — so an illegal cron can never destroy
+            # the existing schedule. The cancel must still LAND before
+            # recreating, so a bad item_id surfaces the error instead of
+            # silently creating a duplicate under the guise of an update.
+            cancel_result = _cancel(params.item_id, "")
             if cancel_result.status == "error":
                 return cancel_result
-            channel = mp.config.channel
-            return _create(channel, params)
+            return _create(mp.config.channel, params)
+        if isinstance(params, ScheduleCreateParams):
+            return _create(mp.config.channel, params)
+        if isinstance(params, ScheduleListParams):
+            return _list()
+        if isinstance(params, ScheduleSearchParams):
+            return _search(params, mp)
+        if isinstance(params, ScheduleCancelParams):
+            return _cancel(params.item_id, params.message)
+        if isinstance(params, ScheduleEnableParams):
+            return _set_enabled(params.item_id, params.message, enabled=True)
+        if isinstance(params, ScheduleDisableParams):
+            return _set_enabled(params.item_id, params.message, enabled=False)
 
-        # Unreachable in practice (ACTION_REQUIRED pre-gates unknown actions);
-        # kept as a self-correcting belt-and-braces error.
+        # Unreachable off the dispatch path (the router factory only yields the
+        # leaves above); kept as a self-correcting belt-and-braces error for a
+        # hand-built foreign subclass.
         return ToolResult.err(
-            f"Unknown scheduler action: {action}",
+            f"Unknown schedule params bag: {type(params).__name__}.",
             code="unknown-action",
             hint="choose one of the valid actions below.",
             valid=_ACTIONS,
         )
-
-
-def _validate_message(params: dict[str, object]) -> tuple[str, ToolResult | None]:
-    message = (cast(str, params.get(Keys.message)) or "").strip()
-    if not message:
-        return "", ToolResult.err(
-            "message is required for create.",
-            code="missing-message",
-            hint="pass the prompt text in 'message'.",
-        )
-    if len(message) > 1000:
-        return "", ToolResult.err(
-            "message exceeds 1000 characters.",
-            code="message-too-long",
-            hint="shorten the prompt text to 1000 characters or fewer.",
-        )
-    return message, None
-
-
-def _resolve_start_at(params: dict[str, object]) -> tuple[datetime, ToolResult | None]:
-    """``start_at`` is a plain LOCAL wall-clock ISO string — the model copies it
-    verbatim from the World State's ``local_time`` telemetry and never converts
-    timezones itself. Optional; defaults to local now when omitted.
-    """
-    start_at_str = (cast(str, params.get(Keys.start_at)) or "").strip()
-    if not start_at_str:
-        return utc_now(), None
-
-    try:
-        return parse_local(start_at_str), None
-    except (ValueError, TypeError) as parse_err:
-        return utc_now(), ToolResult.err(
-            f"Could not understand start_at {start_at_str!r}: {parse_err}",
-            code="invalid-time",
-            hint=(
-                "pass start_at as a local wall-clock ISO timestamp, e.g. "
-                "'2026-03-20T09:00:00' — copy it straight from the World "
-                "State's current local_time."
-            ),
-        )
-
-
-def _parse_cron_field(params: dict[str, object], key: str) -> str:
-    """Read one crontab field (``minute``/``hour``/``day``/``month``/``weekday``)
-    as a string expression; an omitted, null, or blank field means ``*`` (every).
-
-    A weak model may emit the field as a JSON number (``5``) or a string
-    (``"*/5"``); both are normalised to the trimmed string form here — a
-    whole-number float like ``5.0`` is folded to ``"5"`` so it never stringifies
-    as ``"5.0"``. Crontab-shape validity (range, malformed token) is enforced
-    afterwards by ``validate_cron``, the single source of truth for the shape.
-    """
-    raw = params.get(key)
-    if raw is None:
-        return "*"
-    if isinstance(raw, float) and raw.is_integer():
-        raw = int(raw)
-    text = str(raw).strip()
-    return text or "*"
 
 
 def _format_record(
@@ -359,72 +310,23 @@ def _format_record(
     }
 
 
-def _parse_create_params(
-    params: dict[str, object],
-) -> tuple[tuple[str, datetime, str, str, str, str, str] | None, ToolResult | None]:
-    """Validate + coerce the shared create/update inputs WITHOUT touching the DB.
-
-    Returns ``((message, start_at, minute, hour, day, month, weekday), None)``
-    when every field is legal, or ``(None, error)`` on the first invalid one.
-    Pure — the ``update`` path relies on this to reject an illegal replacement
-    *before* cancelling the existing schedule (see :meth:`ScheduleAbility.run`).
-    """
-    message, err = _validate_message(params)
-    if err:
-        return None, err
-    start_at, err = _resolve_start_at(params)
-    if err:
-        return None, err
-
-    minute = _parse_cron_field(params, Keys.minute)
-    hour = _parse_cron_field(params, Keys.hour)
-    day = _parse_cron_field(params, Keys.day)
-    month = _parse_cron_field(params, Keys.month)
-    weekday = _parse_cron_field(params, Keys.weekday)
-
-    try:
-        validate_cron(minute, hour, day, month, weekday)
-    except ValueError as cron_err:
-        return None, ToolResult.err(
-            str(cron_err),
-            code="invalid-cron",
-            hint=(
-                "each field is a numeric crontab expression: '*' (every), a "
-                "number, a 'N-M' range, a '*/S' step, or a comma list — e.g. "
-                "minute='*/5' fires every 5 minutes; hour='9', minute='0' fires "
-                "at 09:00; weekday='1-5' restricts to weekdays."
-            ),
-        )
-
-    return (message, start_at, minute, hour, day, month, weekday), None
-
-
-def _create(channel: str, params: dict[str, object]) -> ToolResult:
+def _create(channel: str, params: ScheduleCreateParams) -> ToolResult:
     try:
         logger.debug(
-            f"{LOG_PREFIX} _create called — message={params.get(Keys.message, '')!r:.80}, "
-            f"start_at={params.get(Keys.start_at, '')!r}, minute={params.get(Keys.minute)!r}, "
-            f"hour={params.get(Keys.hour)!r}, day={params.get(Keys.day)!r}, "
-            f"month={params.get(Keys.month)!r}, weekday={params.get(Keys.weekday)!r}"
+            f"{LOG_PREFIX} _create called — message={params.message!r:.80}, "
+            f"start_at={params.start_at!r}, minute={params.minute!r}, "
+            f"hour={params.hour!r}, day={params.day!r}, "
+            f"month={params.month!r}, weekday={params.weekday!r}"
         )
 
-        parsed, err = _parse_create_params(params)
-        if err is not None:
-            return err
-        if parsed is None:
-            # Unreachable: _parse_create_params returns a tuple whenever err is
-            # None. Kept as a loud belt-and-braces guard rather than an assert.
-            return ToolResult.err("Create failed: parameters vanished", code="create-failed")
-        message, start_at, minute, hour, day, month, weekday = parsed
-
         item = ScheduledItem.create(
-            message=message,
-            start_at=start_at.isoformat(),
-            cron_minute=minute,
-            cron_hour=hour,
-            cron_dom=day,
-            cron_month=month,
-            cron_dow=weekday,
+            message=params.message,
+            start_at=params.start_at.isoformat(),
+            cron_minute=params.minute,
+            cron_hour=params.hour,
+            cron_dom=params.day,
+            cron_month=params.month,
+            cron_dow=params.weekday,
             enabled=1,
             channel=channel,
             created_by_session=None,
@@ -433,12 +335,15 @@ def _create(channel: str, params: dict[str, object]) -> ToolResult:
 
         try:
             from services.scheduler_service import embed_scheduled_item
-            embed_scheduled_item(item_id, message)
+            embed_scheduled_item(item_id, params.message)
         except Exception as emb_err:
             logger.warning(f"{LOG_PREFIX} Embedding failed (non-fatal): {emb_err}")
 
         logger.info(f"{LOG_PREFIX} Created prompt: {item_id}")
-        record = _format_record(item_id, message, start_at, minute, hour, day, month, weekday)
+        record = _format_record(
+            item_id, params.message, params.start_at,
+            params.minute, params.hour, params.day, params.month, params.weekday,
+        )
         return _create_result(record)
 
     except Exception as e:
@@ -454,15 +359,12 @@ def _create_result(record: dict[str, object]) -> ToolResult:
     return ToolResult.ok(body, rich=card, action="create")
 
 
-def _search(ability: "ScheduleAbility", params: dict[str, object], mp: object = None) -> ToolResult:
-    query = (cast(str, params.get(Keys.query)) or "").strip()
-    limit = ability.param(params, Keys.limit, default=5, clamp=(1, 50))
-
+def _search(params: ScheduleSearchParams, mp: object = None) -> ToolResult:
     try:
         from services.embedding_service import get_embedding_service
         from services.embedding_utils import pack_embedding
 
-        emb = get_embedding_service().generate_embedding(query, mp=mp)
+        emb = get_embedding_service().generate_embedding(params.query, mp=mp)
         if not emb:
             return ToolResult.ok(
                 {"status": "success", "action_performed": "search", "records": []},
@@ -476,7 +378,7 @@ def _search(ability: "ScheduleAbility", params: dict[str, object], mp: object = 
                 action="search", count=0,
             )
 
-        rows = ScheduledItem.vector_search(blob, cast(int, limit))
+        rows = ScheduledItem.vector_search(blob, params.limit)
 
         records = []
         for row in rows:
@@ -523,23 +425,15 @@ def _serialise_item_row(row: dict[str, object]) -> dict[str, object]:
     }
 
 
-def _resolve_pending_target(params: dict[str, object], *, verb: str) -> tuple[object, ToolResult | None]:
+def _resolve_pending_target(item_id: str, message_query: str) -> tuple[object, ToolResult | None]:
     """Resolve the item a mutating action targets.
 
-    Accepts ``item_id`` (exact) or ``message`` (fuzzy ``LIKE`` match). Returns
-    ``(item_id, None)`` on a unique hit, or ``(None, error)`` when neither was
-    given, nothing matched, or the fuzzy match was ambiguous. ``verb`` names
-    the operation in the error text so cancel/enable/disable each read
-    naturally. One resolver for every id-or-message action (Law 9)."""
-    item_id = (cast(str, params.get(Keys.item_id)) or "").strip()
-    message_query = (cast(str, params.get(Keys.message)) or "").strip()
-
-    if not item_id and not message_query:
-        return None, ToolResult.err(
-            f"item_id or message is required to {verb}.",
-            code=f"{verb}-target-required",
-            hint="pass item_id (exact) or message (fuzzy match).",
-        )
+    ``item_id`` (exact) wins; otherwise ``message_query`` is a fuzzy ``LIKE``
+    match. The bag guarantees at least one is non-blank — a call with neither
+    was rejected at the seam as ``<verb>-target-required``. Returns
+    ``(item_id, None)`` on a unique hit, or ``(None, error)`` when nothing
+    matched or the fuzzy match was ambiguous. One resolver for every
+    id-or-message action (Law 9)."""
     if item_id:
         return item_id, None
 
@@ -574,9 +468,9 @@ def _fetch_item_record(item_id: object) -> dict[str, object]:
     return {"id": item_id}
 
 
-def _cancel(params: dict[str, object]) -> ToolResult:
+def _cancel(target_id: str, message_query: str) -> ToolResult:
     try:
-        item_id, err = _resolve_pending_target(params, verb="cancel")
+        item_id, err = _resolve_pending_target(target_id, message_query)
         if err is not None:
             return err
 
@@ -605,7 +499,7 @@ def _cancel(params: dict[str, object]) -> ToolResult:
         return ToolResult.err(f"Cancel failed: {e}", code="cancel-failed")
 
 
-def _set_enabled(params: dict[str, object], *, enabled: bool) -> ToolResult:
+def _set_enabled(target_id: str, message_query: str, *, enabled: bool) -> ToolResult:
     """Enable or disable a schedule. Disabling sets ``enabled=0`` so the poller
     skips it; enabling flips it back to 1. There is no ``due_at`` to recompute —
     the poller matches purely off the row's ``start_at`` floor and cron fields
@@ -614,7 +508,7 @@ def _set_enabled(params: dict[str, object], *, enabled: bool) -> ToolResult:
     ``start_at`` never re-floors to now; it already satisfies the floor check."""
     verb = "enable" if enabled else "disable"
     try:
-        item_id, err = _resolve_pending_target(params, verb=verb)
+        item_id, err = _resolve_pending_target(target_id, message_query)
         if err is not None:
             return err
 

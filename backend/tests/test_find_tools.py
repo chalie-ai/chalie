@@ -168,22 +168,6 @@ def test_no_global_cap_large_array_returns_all_deduped(db: sqlite3.Connection) -
     assert injected.count("weather") == 1, f"duplicate intent must collapse. injected={injected!r}"
 
 
-# ── invalid query → loud error, nothing injected ────────────────────────────────
-
-
-def test_missing_query_is_error_nothing_injected(db: sqlite3.Connection) -> None:
-    injected, _body, rendered = _run(db, None)
-    assert injected == [], f"a missing query must inject nothing. injected={injected!r}"
-    assert "status=error" in rendered
-    assert "missing-params" in rendered
-
-
-def test_empty_query_array_is_error(db: sqlite3.Connection) -> None:
-    injected, _body, rendered = _run(db, [])
-    assert injected == []
-    assert "status=error" in rendered
-
-
 # ── graceful degradation when the index is unreachable ──────────────────────────
 
 

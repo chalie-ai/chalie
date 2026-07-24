@@ -23,7 +23,7 @@ fire loudly regardless of CalDAV state:
 * **datetime validation (data-corruption fix):** ``dtstart`` / ``dtend`` (writes)
   and ``date_from`` / ``date_to`` (list window) are resolved through ``_parse_dt``
   (natural language in the user's timezone OR ISO 8601) into a clean UTC ISO
-  string written back onto ``params``. An unparseable value returns
+  string written onto the outbound handler params. An unparseable value returns
   ``code=invalid-time`` with example forms and NOTHING is written — the old path
   ran the raw string through ``parse_utc``, which returns the ``datetime.min``
   (year-0001) sentinel and persisted it to the CalDAV server.
@@ -42,6 +42,7 @@ from typing import ClassVar, cast
 from abilities._capability import CapabilityAbility
 from configs.enums.param_key import Keys
 from abilities._result import ToolResult
+from contracts.params.capability_params_bag import CapabilityParamsBag
 
 logger = logging.getLogger(__name__)
 LOG_PREFIX = "[CALENDAR ABILITY]"
@@ -207,35 +208,36 @@ class CalendarAbility(CapabilityAbility):
 
     # ── Entry point — pre-flight validation, then live dispatch via the base ───
 
-    def run(self, params: dict[str, object]) -> ToolResult:
-        action = str(params.get(Keys.action, self.DEFAULT_ACTION)).lower()
+    def run(self, params: CapabilityParamsBag) -> ToolResult:
+        action = self._resolve_action(params)
+        handler_params = dict(params.extra)
 
         # list_events: resolve the natural-language window to clean ISO before it
         # reaches the handler's parse_utc (which would sentinel an unparseable value).
         if action == "list_events":
-            err = _normalise_datetimes(params, (Keys.date_from, Keys.date_to))
+            err = _normalise_datetimes(handler_params, (Keys.date_from, Keys.date_to))
             if err is not None:
                 return err
-            return super().run(params)
+            return self._dispatch(action, handler_params)
 
         # get_event validates its uid-or-title either/or in the handler.
         if action == "get_event":
-            return super().run(params)
+            return self._dispatch(action, handler_params)
 
         # Write actions: validate datetimes + require an addressable target BEFORE
         # the base's connected gate, so a malformed dtstart errors loudly even when
         # CalDAV is not wired up — and a clean UTC ISO string is what reaches the
         # server. Live title→uid resolution happens in the handler.
-        err = _normalise_datetimes(params, (Keys.dtstart, Keys.dtend))
+        err = _normalise_datetimes(handler_params, (Keys.dtstart, Keys.dtend))
         if err is not None:
             return err
 
         if action in _TARGET_ADDRESSED_WRITES:
-            err = _require_target(params)
+            err = _require_target(handler_params)
             if err is not None:
                 return err
 
-        return super().run(params)
+        return self._dispatch(action, handler_params)
 
 
 # ---------------------------------------------------------------------------

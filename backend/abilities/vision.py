@@ -24,12 +24,14 @@ from typing import ClassVar, cast
 from abilities._delegate import DelegateAbility
 from configs.enums.param_key import Keys
 from abilities._result import ToolResult
+from contracts.params.param_bag import ParamBag
+from contracts.params.vision_params_bag import VisionParamsBag
 
 logger = logging.getLogger(__name__)
 
 
 
-class VisionAbility(DelegateAbility):
+class VisionAbility(DelegateAbility[VisionParamsBag]):
     def get_name(self) -> str:
         return "vision"
 
@@ -56,9 +58,13 @@ class VisionAbility(DelegateAbility):
 
     # Action-less single-purpose tool: the dispatcher pre-gate rejects a MISSING
     # or empty image/query as code=missing-params before run() is reached
-    # (precedent: save_graph.py, save_pattern.py). The
-    # pre-gate is truthiness-based, so whitespace-only residue still reaches run().
+    # (precedent: save_graph.py, save_pattern.py). The pre-gate is
+    # truthiness-based; the bag's from_params rejects the whitespace-only residue.
     ACTION_REQUIRED: ClassVar[dict[str, tuple[str, ...]]] = {"": (Keys.image, Keys.query)}
+
+    # The typed input contract: the dispatch seam builds the bag via
+    # VisionParamsBag.from_params before run() is called.
+    PARAMS: ClassVar[type[ParamBag] | None] = VisionParamsBag
 
     _PARAMETERS: ClassVar[dict[str, object]] = {
         "type": "object",
@@ -81,21 +87,9 @@ class VisionAbility(DelegateAbility):
     def get_parameters(self) -> dict[str, object]:
         return self._PARAMETERS
 
-    def run(self, params: dict[str, object]) -> ToolResult:
-        # The dispatcher pre-gate is truthiness-based, so a non-empty but
-        # whitespace-only image/query slips past it and must be rejected here
-        # (precedent: save_graph.py).
-        doc_id = (cast(str, params.get(Keys.image)) or "").strip()
-        query = (cast(str, params.get(Keys.query)) or "").strip()
-        if not doc_id or not query:
-            missing = ", ".join(
-                name for name, val in (("image", doc_id), ("query", query)) if not val
-            )
-            return ToolResult.err(
-                f"Missing required parameter(s): {missing}.",
-                code="missing-params",
-                valid=("image", "query"),
-            )
+    def run(self, params: VisionParamsBag) -> ToolResult:
+        doc_id = params.image
+        query = params.query
 
         from services.document_service import DocumentService  # noqa: PLC0415
         from services.file_mapper_service import FileMapperService  # noqa: PLC0415

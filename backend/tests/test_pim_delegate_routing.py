@@ -233,8 +233,11 @@ def test_pim_short_circuits_when_mail_not_connected() -> None:
     bound MessageProcessor proves the short-circuit fires before any delegate
     machinery (a bound-mp-less delegate spawn would raise instead)."""
     from abilities.pim import PimAbility
+    from contracts.params.delegate_params_bag import DelegateParamsBag
 
-    result = PimAbility().run({"instructions": "what's on my calendar today"})
+    result = PimAbility().run(
+        DelegateParamsBag.from_params({"instructions": "what's on my calendar today"})
+    )
     assert result.status == "error"
     assert result.code == "not-connected"
     assert "no mail provider is connected" in cast(str, result.body).lower()

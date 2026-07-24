@@ -33,7 +33,7 @@ import logging
 from abc import ABC
 from typing import TYPE_CHECKING, cast
 
-from abilities._ability import Ability
+from abilities._ability import Ability, B
 from abilities._result import ToolResult
 
 if TYPE_CHECKING:
@@ -61,13 +61,14 @@ _ASYNC_PROPERTY: dict[str, object] = {
 }
 
 
-class DelegateAbility(Ability, ABC):
+class DelegateAbility(Ability[B], ABC):
     """Base class for delegate tools — the ONE sanctioned override of
     ``_inject_framework_fields``, adding the delegate-only ``async`` property on
     top of the base ``act_summary``. Abstract (lists ``ABC`` directly, like the
     other base mix-ins) so ``Ability.__init_subclass__`` skips its metadata probe;
     concrete delegates fill in the getters. Per-tool ``run()`` bodies are left to
-    the subclass — each builds a different ``*Config`` and query params."""
+    the subclass — each builds a different ``*Config`` and query params — so the
+    base is generic over the subclass's bag (``DelegateAbility[ItsBag]``)."""
 
     def _inject_framework_fields(self, params: dict[str, object]) -> dict[str, object]:
         """Inject the ``async`` property for delegate tools, gated on

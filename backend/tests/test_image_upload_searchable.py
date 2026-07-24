@@ -26,6 +26,7 @@ from typing import cast
 import pytest
 
 from abilities.document import DocumentAbility
+from contracts.params.document_params_bag import DocumentParamsBag
 from services.provider_db_service import ProviderDbService
 from services.tmp_storage import new_tmp_path
 from tests.helpers import blank_png_bytes, ocrable_png_bytes
@@ -61,10 +62,10 @@ def test_uploaded_image_is_findable_via_document_search(db: sqlite3.Connection) 
     ProviderDbService().set_vision_provider(None)
 
     ability = DocumentAbility(mp=None)
-    up = ability.run({
+    up = ability.run(DocumentParamsBag.from_params({
         "action": "upload",
         "path": _png_at_tmp_path("inv.png", ocrable_png_bytes()),
-    })
+    }))
     # : upload now returns a structured ToolResult body
     # ``{"id","hash","name","status"}`` (Task 6 hash preserved as a body key).
     assert up.status == "success", up
@@ -76,7 +77,7 @@ def test_uploaded_image_is_findable_via_document_search(db: sqlite3.Connection) 
     # drive it explicitly since no worker daemon runs under pytest.
     _drain_search_index()
 
-    found = ability.run({"action": "search", "query": "invoice"})
+    found = ability.run(DocumentParamsBag.from_params({"action": "search", "query": "invoice"}))
     # : search returns a JSON list of document rows; the matched image
     # surfaces via the REAL recall path under its original_name.
     assert any("inv.png" in cast(str, cast(dict[str, object], row).get("name") or "") for row in cast(list[object], found.body)), found.body
@@ -89,10 +90,10 @@ def test_textless_image_upload_fails_visibly(db: sqlite3.Connection) -> None:
     ProviderDbService().set_vision_provider(None)
 
     ability = DocumentAbility(mp=None)
-    up = ability.run({
+    up = ability.run(DocumentParamsBag.from_params({
         "action": "upload",
         "path": _png_at_tmp_path("blank.png", blank_png_bytes()),
-    })
+    }))
 
     assert up.status == "error", up
     assert up.body, up

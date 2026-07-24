@@ -26,15 +26,17 @@ happens at the outer ``web_browse`` tool.
 
 from __future__ import annotations
 
-from typing import ClassVar, cast
+from typing import ClassVar
 
 from abilities._delegate import DelegateAbility, delegate_result
 from configs.enums.param_key import Keys
 from abilities._result import ToolResult
 from configs.channels.web_browse import WebBrowseConfig
+from contracts.params.param_bag import ParamBag
+from contracts.params.delegate_params_bag import DelegateParamsBag
 
 
-class WebBrowseAbility(DelegateAbility):
+class WebBrowseAbility(DelegateAbility[DelegateParamsBag]):
     def get_name(self) -> str:
         return "web_browse"
 
@@ -75,7 +77,7 @@ class WebBrowseAbility(DelegateAbility):
     _PARAMETERS: ClassVar[dict[str, object]] = {
         "type": "object",
         "properties": {
-            Keys.goal: {
+            Keys.instructions: {
                 "type": "string",
                 "description": (
                     "What to accomplish in the browser. Include everything the "
@@ -84,19 +86,23 @@ class WebBrowseAbility(DelegateAbility):
                 ),
             },
         },
-        "required": [Keys.goal],
+        "required": [Keys.instructions],
     }
 
     # An action-less delegate: the dispatcher's ACTION_REQUIRED pre-gate (the
-    # ``""`` key covers action-less tools) rejects a missing/empty ``goal`` with
-    # ``code=missing-params`` BEFORE the policy gate and BEFORE run() — so an empty
-    # goal never spawns an expensive browser delegate on nothing.
-    ACTION_REQUIRED: ClassVar[dict[str, tuple[str, ...]]] = {"": (Keys.goal,)}
+    # ``""`` key covers action-less tools) rejects missing/empty ``instructions``
+    # with ``code=missing-params`` BEFORE the policy gate and BEFORE run() — so an
+    # empty instruction never spawns an expensive browser delegate on nothing.
+    ACTION_REQUIRED: ClassVar[dict[str, tuple[str, ...]]] = {"": (Keys.instructions,)}
+
+    # The typed input contract: the dispatch seam builds the shared delegate
+    # bag via DelegateParamsBag.from_params before run() is called.
+    PARAMS: ClassVar[type[ParamBag] | None] = DelegateParamsBag
 
     def get_parameters(self) -> dict[str, object]:
         return self._PARAMETERS
 
-    def run(self, params: dict[str, object]) -> ToolResult:
+    def run(self, params: DelegateParamsBag) -> ToolResult:
         from controllers.message_processor import MessageProcessor  # noqa: PLC0415
         from tools.browser.session import screenshot_ledger  # noqa: PLC0415
 
@@ -105,9 +111,7 @@ class WebBrowseAbility(DelegateAbility):
             raise RuntimeError("web_browse.run() dispatched without a bound MessageProcessor")
 
         cfg = WebBrowseConfig(mp.config.policy_channel)
-        delegate_mp = MessageProcessor.process(
-            cfg, raw_input=cast(str, self.param(params, Keys.goal, required=True)),
-        )
+        delegate_mp = MessageProcessor.process(cfg, raw_input=params.instructions)
         result = delegate_mp.result()
         tr = delegate_result(
             result, hint="Restate the goal more concretely or break it into steps, then retry."

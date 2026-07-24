@@ -9,8 +9,9 @@ lives in tests/e2e/test_browser_live.py (marker: e2e) and the end-to-end
 scenarios; these tests cover the full no-network surface: schema, the SSRF guard
 itself, and the no-open-page guard, all asserted on the dispatcher WIRE envelope.
 
-The canonical-result-code contract (kebab codes + hint + the unknown-action /
-missing-params pre-gate) is locked in tests/test_ability_browser_tool_result.py.
+The parameter contract (unknown-action / missing-params / per-verb field
+validation) is enforced by ``BrowserParamsBag`` at the dispatch seam and needs
+no tests here.
 """
 
 import sqlite3

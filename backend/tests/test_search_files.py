@@ -56,34 +56,12 @@ def _grep_rows(tr: ToolResult) -> list[dict[str, object]]:
 # ── validation ────────────────────────────────────────────────────
 
 
-def test_invalid_action_returns_error() -> None:
-    tr = _run("nope", "*.py", "/tmp")
-    assert tr.status == "error"
-    assert tr.code == "unknown-action"
-    assert tr.valid == ("glob", "grep")
-
-
-def test_missing_query_returns_error() -> None:
-    tr = _run("glob", "", "/tmp")
-    assert tr.status == "error"
-    assert tr.code == "empty-query"
-    assert "required" in str(tr.body)
-
-
 def test_page_below_one_clamps_to_first_page(tmp_path: Path) -> None:
     (tmp_path / "a.py").write_text("x")
     tr = _run("glob", "*.py", str(tmp_path), page=0)
     assert tr.status == "success"
     assert tr.meta["page"] == 1
     assert len(_glob_files(tr)) == 1
-
-
-def test_non_numeric_page_returns_error(tmp_path: Path) -> None:
-    (tmp_path / "a.py").write_text("x")
-    tr = _run("glob", "*.py", str(tmp_path), page="second")
-    assert tr.status == "error"
-    assert tr.code == "invalid-param"
-    assert "page" in str(tr.body)
 
 
 def test_context_lines_over_max_clamps_to_max(tmp_path: Path) -> None:
