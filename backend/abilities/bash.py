@@ -118,10 +118,8 @@ class BashAbility(Ability[BashParamsBag]):
         "DO USE bash when you need to perform CLI actions which are NOT "
         "possible via any other available tool. "
         "DO NOT USE bash for: downloading files (use web_download), "
-        "file operations within your workspace (use document), "
-        "file operations outside your workspace (use read, file_write, "
-        "manage_files, search_files). "
-        "Prefer document over direct file tools when the file is within your workspace."
+        "file operations (use read, file_write, edit_file, manage_files, "
+        "search_files)."
     )
 
     def get_name(self) -> str:
@@ -163,7 +161,7 @@ class BashAbility(Ability[BashParamsBag]):
                     "MUST NOT be used when other tools apply: "
                     "use read for file/URL reading, search_files for finding files, "
                     "file_write for writing files, manage_files for chmod, "
-                    "web_download for downloads, document for saving notes."
+                    "web_download for downloads, file_write for saving notes."
                 ),
             },
             Keys.timeout_s: {

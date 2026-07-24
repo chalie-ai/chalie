@@ -16,7 +16,7 @@ boundary) and can execute a written ``.ts`` file through ``run_script`` with
 full permissions — replacing the deleted ``code_eval`` one-shot stdin sandbox
 with a real, persistent, multi-step coding loop.
 
-Toolset: read, search_files, file_write, manage_files, move, replace_all,
+Toolset: read, search_files, file_write, manage_files, move, edit_file,
 run_script.
 
 The hand-off contract — what the delegate's final answer must contain (script

@@ -57,6 +57,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import shutil
 from collections import Counter
 from threading import Thread
 from typing import TYPE_CHECKING, Protocol, cast
@@ -101,8 +102,7 @@ logger = logging.getLogger(__name__)
 _MAX_PROVIDER_ATTEMPTS = 3
 #: Real tool-calls a ``user`` turn must make before a proactive-skill scan fires.
 _PROACTIVE_SUGGESTION_MIN_CALLS = 4
-#: Pulls the document id out of the upload ability's JSON result for doc-linking.
-_SEED_UPLOAD_ID_RE = re.compile(r'"id":"([0-9a-f]+)"')
+
 #: Runaway-loop thresholds. A turn has no iteration cap, so a model stuck
 #: re-emitting the same tool call or the same prose would loop until the context
 #: caps out. The same (tool, params) invoked this many times, or the same
@@ -687,21 +687,39 @@ class MessageProcessor:
             self.seeding_turn_zero = False
 
     def _seed_upload_attachment(self, path: str) -> None:
-        """Upload one attachment through the document ability and link the stored
-        doc to this turn's input row. Only files inside the tmp-upload sandbox are
-        accepted; anything else is refused loudly."""
+        """Move an attachment into the docs directory and dispatch a ``read`` so
+        its content lands on the turn-zero act trail. Only files inside the
+        tmp-upload sandbox are accepted; anything else is refused loudly.
+
+        The file is moved (not uploaded through the document ability) so its
+        content appears as a ``read`` tool call on the trail — the model sees
+        exactly what it would if a human had handed it the file. The staging
+        prefix is stripped so the original filename survives; on collision a
+        numeric suffix is appended before the extension.
+        """
         import os  # noqa: PLC0415
         from services.tmp_storage import TMP_PATH_PREFIX  # noqa: PLC0415
+        from services.file_mapper_service import FileMapperService  # noqa: PLC0415
+
         real = os.path.realpath(path)
         if not real.startswith(TMP_PATH_PREFIX) or not os.path.isfile(real):
             logger.warning("[MessageProcessor] refusing attachment outside tmp sandbox: %s", path)
             return
-        result = self.dispatch_service.dispatch("document", {"action": "upload", "path": real})
-        if self.uid is None:
-            return
-        match = _SEED_UPLOAD_ID_RE.search(result)
-        if match:
-            self.transcript_service.link_doc(match.group(1))
+
+        documents_dir = FileMapperService.get_documents_path()
+        documents_dir.mkdir(parents=True, exist_ok=True)
+        # Uploads are staged as "chalie_<8-hex>_<original name>" purely to avoid
+        # tmp collisions — strip the staging prefix so the docs dir keeps the
+        # human filename.
+        basename = re.sub(r"^chalie_([0-9a-f]{8}_)?", "", os.path.basename(real)) or os.path.basename(real)
+        stem, ext = os.path.splitext(basename)
+        dest = documents_dir / basename
+        counter = 1
+        while dest.exists():
+            dest = documents_dir / f"{stem}_{counter}{ext}"
+            counter += 1
+        shutil.move(real, dest)
+        self.dispatch_service.dispatch("read", {"source": str(dest)})
 
     def _maybe_fire_gist(self) -> None:
         """Ingest this thread's gist when it has none stored yet, so the reply

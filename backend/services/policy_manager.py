@@ -11,8 +11,8 @@ The seed file (policy_defaults.json) is the single source of truth for the
 policy table. ``apply_seed`` converges the table to the seed on every boot: it
 INSERT-OR-IGNOREs every seeded row, then DELETES every row whose permission is
 neither in the seed nor an MCP tool permission. Retiring an ability needs only
-a seed-file edit — never a migration. The seed is exhaustive (75 permissions ×
-3 channels = 225 rows), so matching on the permission column alone is correct
+a seed-file edit — never a migration. The seed is exhaustive (80 permissions ×
+3 channels = 240 rows), so matching on the permission column alone is correct
 and complete.
 
 A small set of tools (``INTERNAL``) ALWAYS bypass the gate regardless of channel
@@ -52,18 +52,15 @@ VALID_SETTINGS = {"internal", "allow", "ask", "deny"}
 # user-gated; (2) delegate-exclusive inner tools (DISCOVERABLE=False, pinned on
 # one delegate config) — the user-facing permission is the OUTER delegate tool
 # (``web_search`` covers search/news/web_download, ``web_browse`` covers browser,
-# ``pim`` covers email/calendar/contacts, ``code_agent`` covers its delegated
-# file/script tools); and (3) general file-management tools (``manage_files``,
-# ``move``, ``file_write``) admitted by explicit design ruling: they bypass the
-# policy gate on every channel, are reachable on main channels only through
-# ``find_tools`` discovery, and are pinned always-available for the code_agent
-# delegate. ANY action on these runs unconditionally; they never appear in the
-# Brain policy surface, and the reap pass removes any stale rows for them so
-# this frozenset stays the single source of truth.
+# ``pim`` covers email/calendar/contacts, ``code_agent`` covers ``run_script``).
+# The general file primitives (read / file_write / edit_file / move /
+# manage_files) are NOT here: they carry seeded ``allow`` rows, so the user can
+# tighten them per channel. ANY action on INTERNAL tools runs unconditionally;
+# they never appear in the Brain policy surface, and the reap pass removes any
+# stale rows for them so this frozenset stays the single source of truth.
 INTERNAL = frozenset({
     "browser", "calendar", "chalie_docs", "chat_history_compactor", "contacts",
-    "email", "find_skills", "find_tools", "file_write", "manage_files",
-    "memory", "move", "news", "read", "replace_all",
+    "email", "find_skills", "find_tools", "memory", "news",
     "review_tool_calls", "review_transcript", "run_script", "save_graph",
     "save_pattern", "search", "skill_manager", "web_download",
 })

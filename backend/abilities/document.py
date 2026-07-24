@@ -66,6 +66,15 @@ _VALID_ACTIONS = ("search", "list", "view", "delete", "restore", "create")
 
 
 class DocumentAbility(Ability[DocumentParamsBag]):
+    """Document library — search, view, create, delete, restore, and upload.
+
+    NOT discoverable: the model never sees it in ``find_tools``. The document
+    surface is retained only for the Documents library UI/API until its
+    scheduled removal — files are the document store now, reached through the
+    file primitives (read / file_write / edit_file / search_files)."""
+
+    DISCOVERABLE: ClassVar[bool] = False
+
     # Required params per action, validated by the dispatcher's ACTION_REQUIRED
     # pre-gate BEFORE the policy gate or run(). ``delete``/``view``/``restore``
     # require neither id nor name here because either addresses the document; the

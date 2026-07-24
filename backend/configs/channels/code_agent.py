@@ -30,10 +30,10 @@ from services.processor_config import ProcessorConfig
 if TYPE_CHECKING:
     from configs.enums.policy_channel import PolicyChannel
 
-# The seven tools pinned in every LLM call for this channel. Five are shared
-# main-loop tools (read, search_files, file_write, manage_files, move) that the
-# code_agent delegate reuses from the main loop's toolset; two remain
-# delegate-exclusive (replace_all, run_script) — DISCOVERABLE=False and
+# The seven tools pinned in every LLM call for this channel. Six are shared
+# main-loop tools (read, search_files, file_write, manage_files, move,
+# edit_file) that the code_agent delegate reuses from the main loop's toolset;
+# one remains delegate-exclusive (run_script) — DISCOVERABLE=False and
 # reachable ONLY through this always_available list.
 _PINNED_TOOLS: tuple[str, ...] = (
     "read",
@@ -41,7 +41,7 @@ _PINNED_TOOLS: tuple[str, ...] = (
     "file_write",
     "manage_files",
     "move",
-    "replace_all",
+    "edit_file",
     "run_script",
 )
 
@@ -66,13 +66,13 @@ class CodeAgentConfig(ProcessorConfig):
     @property
     def system_prompt(self) -> str:
         workspace = FileMapperService.get_code_agent_workspace_path()
-        return f"""You are Chalie's coding agent. You receive one coding task; tools: read, search_files, file_write (full-content writes; you must read an existing file before overwriting it), manage_files (create empty file/folder, delete, update_permission), move (rename/relocate via current_path/new_path), replace_all (replace every occurrence of a literal string — point it at a file or a directory), run_script (executes a .ts file with Deno, full permissions). memory, web_search, programming_docs_search for research.
+        return f"""You are Chalie's coding agent. You receive one coding task; tools: read, search_files, file_write (full-content writes; you must read an existing file before overwriting it), manage_files (create empty file/folder, delete, update_permission), move (rename/relocate via current_path/new_path), edit_file (replace ONE occurrence of a literal string in a single file — the search text must be unique in the file; include surrounding context to disambiguate), run_script (executes a .ts file with Deno, full permissions). memory, web_search, programming_docs_search for research.
 
 All file paths passed to tools must be absolute.
 
 Files SHOULD be created and modified inside {workspace} unless the task says otherwise — it is a convention, not an enforced boundary.
 
-Prefer replace_all for targeted edits and file_write for full rewrites; verify your own work by running it before declaring done; no conversation history, work only from the task.
+Prefer edit_file for targeted edits and file_write for full rewrites; verify your own work by running it before declaring done; no conversation history, work only from the task.
 
 Your final answer is a hand-off — the caller sees only what you write, so it must stand alone. It must ALWAYS be one of the following:
 - If you created a new script, describe in detail what it does and how it works.

@@ -129,7 +129,7 @@ class ReadAbility(Ability[ReadParamsBag]):
             return ToolResult.err(
                 str(e),
                 code="not-text",
-                hint="upload it via the document tool, then use the vision tool to see it",
+                hint="use the vision tool to see it",
                 source=source,
             )
         except NoTextContent as e:

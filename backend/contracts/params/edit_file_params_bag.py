@@ -1,4 +1,4 @@
-"""ReplaceAllParamsBag — the typed input contract of the ``replace_all`` ability."""
+"""EditFileParamsBag — the typed input contract of the ``edit_file`` ability."""
 
 from __future__ import annotations
 
@@ -11,28 +11,22 @@ from contracts.params.param_bag import ParamBag
 
 
 @dataclass(frozen=True, slots=True)
-class ReplaceAllParamsBag(ParamBag):
+class EditFileParamsBag(ParamBag):
     """``search`` — the exact literal text to find, required. ``replace_`` —
     the replacement text, required. Both are kept VERBATIM — never stripped,
     whitespace-only values stay valid — because leading/trailing whitespace is
     meaningful replacement text (e.g. tabs → spaces); only an absent, non-str,
     or exactly-empty value is rejected, mirroring the dispatcher pre-gate's
-    truthiness check. ``glob`` — optional filename pattern (e.g. ``*.ts``)
-    limiting which files are touched; ``None`` when omitted. ``path`` —
-    optional absolute path to a single file or directory to scan; ``None``
-    when omitted (defaults to the code_agent workspace)."""
+    truthiness check. ``path`` — required absolute path to a single file to
+    edit."""
 
     search: str
     replace_: str
-    glob: str | None
-    path: str | None
+    path: str
 
     @classmethod
     def from_params(cls, params: dict[str, object]) -> Self | ToolResult:
-        glob = cls.opt_str(params, Keys.glob)
-        if isinstance(glob, ToolResult):
-            return glob
-        path = cls.opt_str(params, Keys.path)
+        path = cls._verbatim(params, Keys.path)
         if isinstance(path, ToolResult):
             return path
         search = cls._verbatim(params, Keys.search)
@@ -41,7 +35,7 @@ class ReplaceAllParamsBag(ParamBag):
         replace_ = cls._verbatim(params, Keys.replace_)
         if isinstance(replace_, ToolResult):
             return replace_
-        return cls(search=search, replace_=replace_, glob=glob, path=path)
+        return cls(search=search, replace_=replace_, path=path)
 
     @staticmethod
     def _verbatim(params: dict[str, object], key: str) -> str | ToolResult:

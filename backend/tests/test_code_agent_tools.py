@@ -6,7 +6,7 @@
 #
 #     http://www.apache.org/licenses/LICENSE-2.0
 
-"""Feature tests — code_agent's file toolset (replace_all,
+"""Feature tests — code_agent's file toolset (edit_file,
 manage_files, move, run_script).
 
 These run the REAL ``Ability.run()`` implementations against a real
@@ -28,12 +28,12 @@ import pytest
 
 from abilities.manage_files import ManageFilesAbility
 from abilities.move import MoveAbility
-from abilities.replace_all import ReplaceAllAbility
+from abilities.edit_file import EditFileAbility
 from abilities.run_script import RunScriptAbility
 from configs.enums.param_key import Keys
 from contracts.params.manage_files_params_bag import ManageFilesParamsBag
 from contracts.params.move_params_bag import MoveParamsBag
-from contracts.params.replace_all_params_bag import ReplaceAllParamsBag
+from contracts.params.edit_file_params_bag import EditFileParamsBag
 from contracts.params.run_script_params_bag import RunScriptParamsBag
 from tests._tool_result_harness import built
 
@@ -42,62 +42,68 @@ pytestmark = pytest.mark.unit
 _HAS_DENO = shutil.which("deno") is not None
 
 
-# ── replace_all ──────────────────────────────────────────────────────────────
+# ── edit_file ──────────────────────────────────────────────────────────────
 
-def test_replace_all_directory(tmp_path: Path) -> None:
-    """replace_all with path= scans the tree, skips .git, rewrites
-    matching files, and reports per-file counts in the body."""
-    root = tmp_path
-    (root / "a.ts").write_text("old_api\nold_api\n", encoding="utf-8")
-    (root / "sub").mkdir()
-    (root / "sub" / "b.txt").write_text("old_api\n", encoding="utf-8")
-    (root / ".git").mkdir()
-    (root / ".git" / "c.ts").write_text("old_api\n", encoding="utf-8")
+def test_edit_file_single_occurrence(tmp_path: Path) -> None:
+    """edit_file replaces a single unique occurrence in the target file —
+    ``old_api`` alone appears twice, so the search leans on surrounding
+    context (the leading newline) to pin exactly one, the tool's intended
+    disambiguation pattern. Untouched lines stay byte-identical."""
+    target = tmp_path / "main.ts"
+    target.write_text("import old_api\nold_api\n", encoding="utf-8")
 
-    result = ReplaceAllAbility().run(built(ReplaceAllParamsBag.from_params({
-        Keys.search: "old_api",
-        Keys.replace_: "new_api",
-        Keys.path: str(root),
+    result = EditFileAbility().run(built(EditFileParamsBag.from_params({
+        Keys.search: "\nold_api\n",
+        Keys.replace_: "\nnew_api\n",
+        Keys.path: str(target),
     })))
 
     assert result.status == "success"
-    body = result.body
-    assert isinstance(body, str)
-    assert "a.ts: 2" in body
-    assert "sub/b.txt: 1" in body
-    assert ".git/c.ts" not in body
-
-    assert (root / "a.ts").read_text(encoding="utf-8") == "new_api\nnew_api\n"
-    assert (root / "sub" / "b.txt").read_text(encoding="utf-8") == "new_api\n"
-    assert (root / ".git" / "c.ts").read_text(encoding="utf-8") == "old_api\n"
+    assert result.body == f"Replaced 1 occurrence in {target}."
+    assert target.read_text(encoding="utf-8") == "import old_api\nnew_api\n"
 
 
-def test_replace_all_glob(tmp_path: Path) -> None:
-    """A second run with glob='*.ts' on a fresh tree touches only .ts files."""
-    root = tmp_path
-    (root / "a.ts").write_text("old_api\nnew_api\n", encoding="utf-8")
-    (root / "b.txt").write_text("old_api\n", encoding="utf-8")
+def test_edit_file_no_occurrence(tmp_path: Path) -> None:
+    """edit_file with a search that does not appear is a loud not-found error —
+    never a silent success — and leaves the file untouched."""
+    target = tmp_path / "main.ts"
+    target.write_text("hello world\n", encoding="utf-8")
 
-    result = ReplaceAllAbility().run(built(ReplaceAllParamsBag.from_params({
-        Keys.search: "old_api",
-        Keys.replace_: "new_api",
-        Keys.glob: "*.ts",
-        Keys.path: str(root),
+    result = EditFileAbility().run(built(EditFileParamsBag.from_params({
+        Keys.search: "zzz",
+        Keys.replace_: "y",
+        Keys.path: str(target),
     })))
 
-    assert result.status == "success"
-    body = result.body
-    assert isinstance(body, str)
-    assert "a.ts: 1" in body
-    assert "b.txt" not in body
-
-    assert (root / "a.ts").read_text(encoding="utf-8") == "new_api\nnew_api\n"
-    assert (root / "b.txt").read_text(encoding="utf-8") == "old_api\n"
+    assert result.status == "error"
+    assert result.code == "not-found"
+    assert target.read_text(encoding="utf-8") == "hello world\n"
 
 
-def test_replace_all_errors(tmp_path: Path) -> None:
-    """replace_all rejects a relative path and a nonexistent absolute path."""
-    rel = ReplaceAllAbility().run(built(ReplaceAllParamsBag.from_params({
+def test_edit_file_multiple_occurrences(tmp_path: Path) -> None:
+    """edit_file errors when the search string appears more than once."""
+    target = tmp_path / "main.ts"
+    target.write_text("old_api\nold_api\n", encoding="utf-8")
+
+    result = EditFileAbility().run(built(EditFileParamsBag.from_params({
+        Keys.search: "old_api",
+        Keys.replace_: "new_api",
+        Keys.path: str(target),
+    })))
+
+    assert result.status == "error"
+    assert result.code == "not-unique"
+    assert result.body == (
+        "You can only replace 1 occurrence at a time, include more of the "
+        "surrounding text to make the `search` unique."
+    )
+    # File must remain untouched
+    assert target.read_text(encoding="utf-8") == "old_api\nold_api\n"
+
+
+def test_edit_file_errors(tmp_path: Path) -> None:
+    """edit_file rejects a relative path, a nonexistent path, and a directory."""
+    rel = EditFileAbility().run(built(EditFileParamsBag.from_params({
         Keys.search: "x",
         Keys.replace_: "y",
         Keys.path: "main.ts",
@@ -105,7 +111,7 @@ def test_replace_all_errors(tmp_path: Path) -> None:
     assert rel.status == "error"
     assert rel.code == "invalid-path"
 
-    missing = ReplaceAllAbility().run(built(ReplaceAllParamsBag.from_params({
+    missing = EditFileAbility().run(built(EditFileParamsBag.from_params({
         Keys.search: "x",
         Keys.replace_: "y",
         Keys.path: str(tmp_path / "nope"),
@@ -113,33 +119,13 @@ def test_replace_all_errors(tmp_path: Path) -> None:
     assert missing.status == "error"
     assert missing.code == "not-found"
 
-
-def test_replace_all_single_file(tmp_path: Path) -> None:
-    """replace_all with path=FILE replaces every occurrence in that file;
-    a non-matching search returns a no-occurrences message and leaves the
-    file untouched."""
-    target = tmp_path / "main.ts"
-    target.write_text("old_api\nold_api\n", encoding="utf-8")
-
-    result = ReplaceAllAbility().run(built(ReplaceAllParamsBag.from_params({
-        Keys.search: "old_api",
-        Keys.replace_: "new_api",
-        Keys.path: str(target),
-    })))
-
-    assert result.status == "success"
-    assert result.body == f"{target}: 2"
-    assert target.read_text(encoding="utf-8") == "new_api\nnew_api\n"
-
-    result2 = ReplaceAllAbility().run(built(ReplaceAllParamsBag.from_params({
-        Keys.search: "zzz",
+    result = EditFileAbility().run(built(EditFileParamsBag.from_params({
+        Keys.search: "x",
         Keys.replace_: "y",
-        Keys.path: str(target),
+        Keys.path: str(tmp_path),
     })))
-
-    assert result2.status == "success"
-    assert result2.body == "No occurrences were found."
-    assert target.read_text(encoding="utf-8") == "new_api\nnew_api\n"
+    assert result.status == "error"
+    assert result.code == "invalid-path"
 
 
 # ── manage_files ─────────────────────────────────────────────────────────────
