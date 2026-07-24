@@ -71,6 +71,9 @@ dependencies = [
     # (see tests/test_ability_returns_tool_result.py) — it runs inside the unit
     # suite, so it must be present wherever the gate runs.
     "mypy>=1.8.0",
+    # watchdog provides FSEvents (macOS) and inotify (Linux) file-change events
+    # for the FileIndexService daemon (backend/workers/file_index_worker.py).
+    "watchdog>=4.0.0",
 ]
 
 [tool.mypy]

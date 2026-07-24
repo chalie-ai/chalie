@@ -256,6 +256,8 @@ def _register_workers(manager: "_WorkerManager", host: str, port: int) -> None:
     _bootstrap_capability_sync()
     _try_register(manager, "search-expander-service",
                   "services.search_expander_service", "search_expander_worker")
+    _try_register(manager, "file-index-service",
+                  "workers.file_index_worker", "file_index_worker")
     _try_register(manager, "mcp-server", "mcp_server.server", "run_mcp_server")
     _try_register(manager, "mcp-client-heartbeat",
                   "workers.mcp_client_worker", "mcp_client_worker")

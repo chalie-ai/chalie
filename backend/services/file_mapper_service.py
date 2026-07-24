@@ -118,6 +118,15 @@ class FileMapperService:
         return cls._DATA_DIR / "mcp_tools.sqlite"
 
     @classmethod
+    def get_file_index_db_path(cls) -> Path:
+        """Return path to the file-index FTS5 search database (gitignored, data/).
+
+        Managed exclusively by FileIndexService — never touched by the
+        document pipeline or any other service.
+        """
+        return cls._DATA_DIR / "file_index.sqlite"
+
+    @classmethod
     def get_search_providers_db_path(cls) -> Path:
         """Return path to the search-provider routing database."""
         return cls._BACKEND_DIR / "tools" / "search" / "assets" / "search_tool_providers.sqlite"
