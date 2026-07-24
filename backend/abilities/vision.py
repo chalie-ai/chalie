@@ -57,10 +57,10 @@ class VisionAbility(DelegateAbility[VisionParamsBag]):
         return "read & see image contents"
 
     # Action-less single-purpose tool: the dispatcher pre-gate rejects a MISSING
-    # or empty image/query as code=missing-params before run() is reached
+    # or empty image/instructions as code=missing-params before run() is reached
     # (precedent: save_graph.py, save_pattern.py). The pre-gate is
     # truthiness-based; the bag's from_params rejects the whitespace-only residue.
-    ACTION_REQUIRED: ClassVar[dict[str, tuple[str, ...]]] = {"": (Keys.image, Keys.query)}
+    ACTION_REQUIRED: ClassVar[dict[str, tuple[str, ...]]] = {"": (Keys.image, Keys.instructions)}
 
     # The typed input contract: the dispatch seam builds the bag via
     # VisionParamsBag.from_params before run() is called.
@@ -76,12 +76,12 @@ class VisionAbility(DelegateAbility[VisionParamsBag]):
                     "in context, use the `document.search` tool to look it up."
                 ),
             },
-            Keys.query: {
+            Keys.instructions: {
                 "type": "string",
                 "description": "What to find out about the image, in natural language.",
             },
         },
-        "required": [Keys.image, Keys.query],
+        "required": [Keys.image, Keys.instructions],
     }
 
     def get_parameters(self) -> dict[str, object]:
@@ -89,7 +89,7 @@ class VisionAbility(DelegateAbility[VisionParamsBag]):
 
     def run(self, params: VisionParamsBag) -> ToolResult:
         doc_id = params.image
-        query = params.query
+        instructions = params.instructions
 
         from services.document_service import DocumentService  # noqa: PLC0415
         from services.file_mapper_service import FileMapperService  # noqa: PLC0415
@@ -112,7 +112,7 @@ class VisionAbility(DelegateAbility[VisionParamsBag]):
         try:
             from services.image_description import ImageDescription  # noqa: PLC0415
 
-            description = ImageDescription(abs_path, query).get_value()
+            description = ImageDescription(abs_path, instructions).get_value()
         except Exception as exc:  # noqa: BLE001 — surfaced, never swallowed
             logger.exception("[VISION] describe failed")
             return ToolResult.err(

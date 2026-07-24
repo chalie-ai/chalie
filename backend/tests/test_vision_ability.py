@@ -150,7 +150,7 @@ def test_vision_run_provider_error_returns_visible_error(db: sqlite3.Connection)
 
     ability = VisionAbility(mp=_make_user_mp())
     result = ability.run(
-        built(VisionParamsBag.from_params({"image": doc_id, "query": "what is this"}))
+        built(VisionParamsBag.from_params({"image": doc_id, "instructions": "what is this"}))
     )
 
     assert result.status == "error"
@@ -162,7 +162,7 @@ def test_vision_run_unknown_doc_id_is_error(db: sqlite3.Connection) -> None:
     from contracts.params.vision_params_bag import VisionParamsBag
 
     ability = VisionAbility(mp=_make_user_mp())
-    result = ability.run(built(VisionParamsBag.from_params({"image": "deadbeef", "query": "x"})))
+    result = ability.run(built(VisionParamsBag.from_params({"image": "deadbeef", "instructions": "x"})))
 
     assert result.status == "error"
     assert "deadbeef" in result.body
@@ -235,7 +235,7 @@ def test_doc_with_no_file_path_is_no_file_on_disk(db: sqlite3.Connection, _visio
     db.commit()
 
     out = _vision_chat_mp.dispatch_service.dispatch(
-        "vision", {"image": doc_id, "query": "x", "act_summary": "x"}
+        "vision", {"image": doc_id, "instructions": "x", "act_summary": "x"}
     )
 
     h = _vision_head(out)
@@ -258,7 +258,7 @@ def test_ocr_fallback_success_is_an_ordinary_success(db: sqlite3.Connection, _vi
     doc_id = _real_image_doc_for_vision(db, rel_dir="vis_tr002", png=ocrable_png_bytes())
 
     out = _vision_chat_mp.dispatch_service.dispatch(
-        "vision", {"image": doc_id, "query": "what is this", "act_summary": "x"}
+        "vision", {"image": doc_id, "instructions": "what is this", "act_summary": "x"}
     )
 
     h = _vision_head(out)
@@ -279,7 +279,7 @@ def test_textless_image_with_no_provider_is_a_visible_error(
     doc_id = _real_image_doc_for_vision(db, rel_dir="vis_tr003")
 
     out = _vision_chat_mp.dispatch_service.dispatch(
-        "vision", {"image": doc_id, "query": "what is this", "act_summary": "x"}
+        "vision", {"image": doc_id, "instructions": "what is this", "act_summary": "x"}
     )
 
     h = _vision_head(out)

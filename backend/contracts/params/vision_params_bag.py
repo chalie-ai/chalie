@@ -12,29 +12,31 @@ from contracts.params.param_bag import ParamBag
 
 @dataclass(frozen=True, slots=True)
 class VisionParamsBag(ParamBag):
-    """``image`` — the stripped 8-character document id; ``query`` — the
+    """``image`` — the stripped 8-character document id; ``instructions`` — the
     stripped natural-language question about the image."""
 
     image: str
-    query: str
+    instructions: str
 
     @classmethod
     def from_params(cls, params: dict[str, object]) -> Self | ToolResult:
         # The dispatcher pre-gate is truthiness-based, so a non-empty but
-        # whitespace-only image/query slips past it and must be rejected here.
-        # One combined error names every missing field at once — the model
+        # whitespace-only image/instructions slips past it and must be rejected
+        # here. One combined error names every missing field at once — the model
         # self-corrects in one step instead of discovering them serially.
         image_raw = params.get(Keys.image, "")
-        query_raw = params.get(Keys.query, "")
+        instructions_raw = params.get(Keys.instructions, "")
         image = image_raw.strip() if isinstance(image_raw, str) else ""
-        query = query_raw.strip() if isinstance(query_raw, str) else ""
-        if not image or not query:
+        instructions = instructions_raw.strip() if isinstance(instructions_raw, str) else ""
+        if not image or not instructions:
             missing = ", ".join(
-                name for name, val in (("image", image), ("query", query)) if not val
+                name
+                for name, val in (("image", image), ("instructions", instructions))
+                if not val
             )
             return ToolResult.err(
                 f"Missing required parameter(s): {missing}.",
                 code="missing-params",
-                valid=("image", "query"),
+                valid=("image", "instructions"),
             )
-        return cls(image=image, query=query)
+        return cls(image=image, instructions=instructions)
