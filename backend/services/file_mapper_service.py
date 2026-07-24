@@ -32,7 +32,7 @@ class FileMapperService:
     _PRETRAINED_DIR: Path = _BACKEND_DIR / "pre-trained"
     _CAPABILITIES_DIR: Path = _BACKEND_DIR / "capabilities"
     _MODELS_DIR: Path = _DATA_DIR / "models"
-    _DOCUMENTS_DIR: Path = _DATA_DIR / "docs"
+    _DOCUMENTS_DIR: Path = _DATA_DIR / "documents"
     _USER_SKILLS_DIR: Path = _DATA_DIR / "skills" / "user"
     _VOICE_MODELS_DIR: Path = _RESOURCES_DIR / "voice-models"
     _ABILITIES_SKILLS_DIR: Path = _ABILITIES_DIR / "skills"
@@ -210,7 +210,7 @@ class FileMapperService:
 
     @classmethod
     def get_documents_path(cls, *parts: str) -> Path:
-        """Return data/docs/ joined with any additional path parts."""
+        """Return data/documents/ joined with any additional path parts."""
         return cls._DOCUMENTS_DIR.joinpath(*parts) if parts else cls._DOCUMENTS_DIR
 
     @classmethod
