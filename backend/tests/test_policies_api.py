@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING
 
 import pytest
 
+from api.actions.policies.blocked import BlockedAction
 from api.endpoints.policies import PoliciesEndpoint
 from tests.restx_test_app import mount_namespace
 
@@ -51,7 +52,10 @@ def client(monkeypatch: pytest.MonkeyPatch) -> "Generator[FlaskClient, None, Non
     # test's in-memory handle.
     _db_gateway.Database().bind()
     try:
-        app = mount_namespace(PoliciesEndpoint("policies").namespace())
+        app = mount_namespace(
+            PoliciesEndpoint("policies").namespace(),
+            BlockedAction("policies", "blocked").namespace(),
+        )
         yield app.test_client()
     finally:
         _db_gateway._local.conns = {}
@@ -91,6 +95,21 @@ def test_put_internal_tool_is_ignored(client: "FlaskClient") -> None:
     assert r.status_code == 204
     rows = client.get("/api/policies/all?limit=100").get_json()["result"]
     assert not any(x["permission"] == "email.send" for x in rows)
+
+
+def test_blocked_log_returns_the_permission_name_verbatim(client: "FlaskClient") -> None:
+    from services.policy_manager import PolicyManager
+
+    # `action_id` carries a permission name, not a row id — the DDL column is TEXT.
+    # Typing the response DTO `int` made pydantic reject every real row, which the
+    # endpoint guard then reported as a 422 "invalid request body".
+    PolicyManager()._log_blocked("chat", "bash.modify_file", "user_unavailable")
+
+    r = client.get("/api/policies/blocked")
+    assert r.status_code == 200, r.get_json()
+    entry = r.get_json()["result"][0]
+    assert entry["action_id"] == "bash.modify_file"
+    assert entry["context"] == "chat" and entry["reason"] == "user_unavailable"
 
 
 @pytest.fixture()

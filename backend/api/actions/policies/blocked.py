@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from typing import cast
-
 from flask import request
 from flask.typing import ResponseReturnValue
 
@@ -45,7 +43,7 @@ class BlockedAction(Action):
         entries = self._service().get_blocked_log(limit=limit)
         dtos = [
             BlockedEntryResponse(
-                action_id=cast(int, entry["action_id"]),
+                action_id=entry["action_id"],
                 context=entry["context"],
                 reason=entry["reason"],
                 created_at=parse_utc(entry["created_at"]),

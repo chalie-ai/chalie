@@ -25,7 +25,8 @@ export interface PolicyRow {
 }
 
 export interface BlockedEntry {
-  action_id: number;
+  /** A permission name (e.g. "bash.modify_file") — the DDL column is TEXT. */
+  action_id: string;
   context: string;
   reason: string;
   created_at: string;
