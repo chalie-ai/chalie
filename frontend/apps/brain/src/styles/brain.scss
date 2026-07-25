@@ -1718,27 +1718,6 @@ input[type='checkbox'] {
 .error-time { font-size: 11px; color: var(--text-tertiary); white-space: nowrap; flex-shrink: 0; font-family: 'Inter', monospace; }
 .error-msg { font-size: 13px; color: var(--text-secondary); }
 
-.watched-folders-section { margin-bottom: 20px; }
-.watched-folders-list { display: flex; flex-direction: column; gap: 4px; }
-
-.watched-folder-item {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 8px 12px;
-  border-radius: 8px;
-  background: var(--bg-surface);
-  border: 1px solid var(--border);
-  font-size: 12px;
-  color: var(--text-secondary);
-}
-
-.wf-icon { color: var(--text-tertiary); flex-shrink: 0; }
-.wf-label { font-weight: 500; color: var(--text-primary); }
-.wf-path { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.wf-meta { color: var(--text-tertiary); white-space: nowrap; }
-.wf-status { flex-shrink: 0; }
-
 .doc-content {
   white-space: pre-wrap;
   font-size: 13px;
@@ -1749,34 +1728,6 @@ input[type='checkbox'] {
   background: var(--bg-surface);
   border: 1px solid var(--border);
 }
-
-.doc-meta-row { display: flex; align-items: center; gap: 8px; margin-bottom: 16px; flex-wrap: wrap; }
-.doc-meta-item { font-size: 12px; color: var(--text-secondary); }
-
-.group-cards-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 12px; }
-
-.group-card {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  padding: 16px;
-  border-radius: 10px;
-  background: var(--bg-surface);
-  border: 1px solid var(--border);
-  cursor: pointer;
-  transition: border-color 200ms, box-shadow 200ms;
-  text-align: left;
-  font-family: inherit;
-  color: var(--text-primary);
-
-  &:hover {
-    border-color: rgba(138, 92, 255, 0.3);
-    box-shadow: 0 0 12px rgba(138, 92, 255, 0.08);
-  }
-}
-
-.group-card-name { font-size: 14px; font-weight: 500; }
-.group-card-count { font-size: 12px; color: var(--text-secondary); }
 
 .loading { color: var(--text-secondary); font-size: 13px; padding: 40px 0; text-align: center; }
 
@@ -1872,7 +1823,6 @@ input[type='checkbox'] {
     .key-cell { max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   }
 
-  .group-cards-grid { grid-template-columns: 1fr; }
   .caps-grid { grid-template-columns: 1fr !important; } // stylelint-disable-line declaration-no-important
   .policies-grid { grid-template-columns: 1fr !important; } // stylelint-disable-line declaration-no-important
   .policy-rule { flex-wrap: wrap; gap: 6px; }
