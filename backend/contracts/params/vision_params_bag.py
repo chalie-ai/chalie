@@ -12,7 +12,7 @@ from contracts.params.param_bag import ParamBag
 
 @dataclass(frozen=True, slots=True)
 class VisionParamsBag(ParamBag):
-    """``image`` — the stripped 8-character document id; ``instructions`` — the
+    """``image`` — the absolute filepath to an image file; ``instructions`` — the
     stripped natural-language question about the image."""
 
     image: str

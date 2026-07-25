@@ -12,6 +12,10 @@ The degradation is deliberately invisible to the caller: it gets a real
 description or an exception — never an empty string or a half-success it would
 have to interpret. VisionAbility.run() converts the raise into status='error'
 with the cause visible.
+
+``image`` is an absolute filepath on disk (not a document id) — VisionAbility
+resolves it directly with no DocumentService involved; a path with no file at
+it is ``code=not-found``.
 """
 
 import logging
@@ -173,10 +177,6 @@ def test_vision_run_unknown_doc_id_is_error(db: sqlite3.Connection) -> None:
 # Ability-specific business-logic tests for the ToolResult contract ().
 # ===========================================================================
 
-import hashlib  # noqa: E402 — appended to existing file
-
-from services.document_service import DocumentService  # noqa: E402
-from services.file_mapper_service import FileMapperService  # noqa: E402
 from tests._tool_result_harness import body, built, head, seed_transcript  # noqa: E402
 
 
@@ -200,54 +200,42 @@ def _vision_body(rendered: str) -> str:
     return body(rendered, "vision")
 
 
-def _real_image_doc_for_vision(
-    db: sqlite3.Connection, rel_dir: str = "vis_tr001", png: bytes | None = None
-) -> str:
-    """Create a real document row AND materialise a real PNG at the resolved
-    documents path so the ability resolves a genuine file on disk. ``png``
-    selects which rung of the describe ladder the image lands on: textless
-    (default) exhausts both, ocrable_png_bytes() lets OCR carry it."""
+def _real_image_path(tmp_path: Path, png: bytes | None = None, name: str = "pic.png") -> str:
+    """Materialise a real PNG on disk and return its absolute path — the vision
+    contract's ``image`` param. ``png`` selects which rung of the describe
+    ladder the image lands on: textless (default) exhausts both, and
+    ocrable_png_bytes() lets OCR carry it."""
     png = blank_png_bytes() if png is None else png
-    doc_svc = DocumentService()
-    doc_id = doc_svc.create_document(
-        original_name="pic.png",
-        mime_type="image/png",
-        file_size=len(png),
-        file_path=f"{rel_dir}/pic.png",
-        file_hash=hashlib.sha256(png).hexdigest(),
-    )
-    abs_path = FileMapperService.get_documents_path(rel_dir, "pic.png")
-    abs_path.parent.mkdir(parents=True, exist_ok=True)
-    abs_path.write_bytes(png)
-    return doc_id
+    path = tmp_path / name
+    path.write_bytes(png)
+    return str(path)
 
 
 @pytest.mark.unit
-def test_doc_with_no_file_path_is_no_file_on_disk(db: sqlite3.Connection, _vision_chat_mp: MessageProcessor) -> None:
-    """A real document row whose ``file_path`` is empty (no stored file) →
-    ``code=no-file-on-disk`` with a recovery hint."""
-    doc_id = "facefeed2"
-    db.execute(
-        "INSERT INTO documents (id, original_name, mime_type, file_size_bytes, "
-        "file_path, file_hash) VALUES (?, ?, ?, ?, ?, ?)",
-        (doc_id, "pic.png", "image/png", len(blank_png_bytes()), "", "abc"),
-    )
-    db.commit()
+def test_nonexistent_filepath_is_not_found(
+    db: sqlite3.Connection, _vision_chat_mp: MessageProcessor, tmp_path: Path
+) -> None:
+    """A filepath with no file at it on disk → ``code=not-found`` with a
+    recovery hint. The doc_id/no-file-on-disk fork is gone: ``image`` is now
+    resolved directly as a filepath, so a missing file IS the not-found case."""
+    missing_path = str(tmp_path / "does-not-exist.png")
 
     out = _vision_chat_mp.dispatch_service.dispatch(
-        "vision", {"image": doc_id, "instructions": "x", "act_summary": "x"}
+        "vision", {"image": missing_path, "instructions": "x", "act_summary": "x"}
     )
 
     h = _vision_head(out)
     assert "status=error" in h
-    assert "code=no-file-on-disk" in h
+    assert "code=not-found" in h
     assert "code=error]" not in out
-    assert doc_id in _vision_body(out)
+    assert missing_path in _vision_body(out)
     assert any(ln.startswith("hint:") for ln in out.splitlines())
 
 
 @pytest.mark.unit
-def test_ocr_fallback_success_is_an_ordinary_success(db: sqlite3.Connection, _vision_chat_mp: MessageProcessor) -> None:
+def test_ocr_fallback_success_is_an_ordinary_success(
+    db: sqlite3.Connection, _vision_chat_mp: MessageProcessor, tmp_path: Path
+) -> None:
     """No vision provider → OCR carries the description → an ORDINARY success at
     the dispatch surface. The degradation is a server-side log line only: no
     ``degraded`` flag and no note in the body, so the LLM sees a description
@@ -255,10 +243,10 @@ def test_ocr_fallback_success_is_an_ordinary_success(db: sqlite3.Connection, _vi
     ProviderDbService().set_vision_provider(None)
     assert ProviderDbService().get_vision_provider() is None
 
-    doc_id = _real_image_doc_for_vision(db, rel_dir="vis_tr002", png=ocrable_png_bytes())
+    image_path = _real_image_path(tmp_path, ocrable_png_bytes())
 
     out = _vision_chat_mp.dispatch_service.dispatch(
-        "vision", {"image": doc_id, "instructions": "what is this", "act_summary": "x"}
+        "vision", {"image": image_path, "instructions": "what is this", "act_summary": "x"}
     )
 
     h = _vision_head(out)
@@ -270,16 +258,16 @@ def test_ocr_fallback_success_is_an_ordinary_success(db: sqlite3.Connection, _vi
 
 @pytest.mark.unit
 def test_textless_image_with_no_provider_is_a_visible_error(
-    db: sqlite3.Connection, _vision_chat_mp: MessageProcessor
+    db: sqlite3.Connection, _vision_chat_mp: MessageProcessor, tmp_path: Path
 ) -> None:
     """Both rungs exhausted at the dispatch surface: no provider AND a textless
     image → ``status=error`` with a recovery hint, never a hollow success."""
     ProviderDbService().set_vision_provider(None)
 
-    doc_id = _real_image_doc_for_vision(db, rel_dir="vis_tr003")
+    image_path = _real_image_path(tmp_path)
 
     out = _vision_chat_mp.dispatch_service.dispatch(
-        "vision", {"image": doc_id, "instructions": "what is this", "act_summary": "x"}
+        "vision", {"image": image_path, "instructions": "what is this", "act_summary": "x"}
     )
 
     h = _vision_head(out)

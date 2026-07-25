@@ -124,6 +124,18 @@ def _is_chalie_path(path: str) -> bool:
     return False
 
 
+def _is_parser_owned(path: str) -> bool:
+    """Return True if *path* is a row only FileParserService creates.
+
+    A file under the documents root whose extension the walk itself would
+    never index (e.g. an image): its content column holds the vision/OCR
+    description upserted at ingest. Reconcile keeps the row while the file
+    exists and never re-extracts it — only FileParserService creates them.
+    """
+    root = str(FileMapperService.get_documents_path())
+    return path.startswith(root + os.sep) and not _is_supported_extension(path)
+
+
 def _is_library_caches(path: str) -> bool:
     """Return True if *path* is a directory named 'Caches' whose parent is 'Library'.
 
@@ -188,6 +200,7 @@ class FileIndexService:
 
     Manages a single FTS5 table in ``data/file_index.sqlite``.  Public API:
     - :meth:`index_file`: delete-then-insert a row for *path*.
+    - :meth:`upsert_content`: delete-then-insert a row for *path* with given content.
     - :meth:`remove_file`: delete the row for *path*.
     - :meth:`move_file`: delete src row, insert dst row.
     - :meth:`search`: return matching file paths.
@@ -249,6 +262,37 @@ class FileIndexService:
             logger.debug("[FileIndexService] Indexed %s", path)
         except Exception as exc:
             logger.error("[FileIndexService] Failed to index %s: %s", path, exc)
+
+    def upsert_content(self, path: str, content: str) -> None:
+        """Upsert a row for *path* with the given *content*.
+
+        Deletes any existing row for *path*, then inserts a new row with the
+        file's content, filename, mtime, and size.  Per-file failures are
+        logged and skipped.
+        """
+        filename = os.path.basename(path)
+        try:
+            stat = os.stat(path)
+            mtime = stat.st_mtime
+            size = stat.st_size
+        except OSError as exc:
+            logger.warning("[FileIndexService] Failed to stat %s: %s", path, exc)
+            return
+
+        try:
+            with Database.transaction(self.db_path) as conn:
+                conn.execute(
+                    "DELETE FROM file_index_fts WHERE path = ?",
+                    (path,),
+                )
+                conn.execute(
+                    "INSERT INTO file_index_fts(path, filename, content, mtime, size) "
+                    "VALUES (?, ?, ?, ?, ?)",
+                    (path, filename, content, mtime, size),
+                )
+            logger.debug("[FileIndexService] Upserted %s", path)
+        except Exception as exc:
+            logger.error("[FileIndexService] Failed to upsert %s: %s", path, exc)
 
     def remove_file(self, path: str) -> None:
         """Remove a file from the index.
@@ -334,6 +378,11 @@ class FileIndexService:
         - Indexes new or changed files.
         - Deletes rows whose files no longer exist.
 
+        Parser-owned rows (files under the documents root with non-indexable
+        extensions) are handled specially: they are kept as long as the file
+        exists on disk (never re-extracted), and deleted when the file is gone.
+        reconcile never CREATES parser-owned rows — only FileParserService does.
+
         Per-file failures are logged and skipped.  The walk never aborts.
         """
         try:
@@ -370,9 +419,13 @@ class FileIndexService:
                 if path not in indexed or indexed[path] != (mtime, size):
                     self.index_file(path)
 
-            # Delete rows for files that no longer exist.
+            # Delete rows for files that no longer exist. Parser-owned rows
+            # are outside the walk (unsupported extensions), so presence on
+            # disk — not membership in `current` — decides their fate.
             for path in indexed:
                 if path not in current:
+                    if _is_parser_owned(path) and os.path.isfile(path):
+                        continue
                     self.remove_file(path)
 
             logger.info(

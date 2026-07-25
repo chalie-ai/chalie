@@ -40,6 +40,7 @@ from watchdog.observers import Observer
 from watchdog.observers.api import BaseObserver
 
 from services.file_index_service import FileIndexService
+from services.file_mapper_service import FileMapperService
 from workers.file_index_worker import _FileIndexHandler
 
 pytestmark = pytest.mark.unit
@@ -280,3 +281,35 @@ def test_concurrent_observer_and_reconcile_do_not_corrupt_the_index(
     assert str(stable) in service.search("kept")
     assert service.search("iteration") == []
     assert not os.path.exists(str(watched))
+
+
+def test_reconcile_keeps_parser_owned_rows_until_the_file_is_gone(
+    scan_root: Path, index_db_path: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A row FileParserService creates for a non-indexable extension under the
+    documents root (e.g. a screenshot .png, whose content is a vision/OCR
+    description upserted at ingest — not walk-extracted text) survives
+    reconcile()'s directory walk while the file still exists on disk, and is
+    removed once the file is actually gone. Proves the `_is_parser_owned`
+    carve-out end to end, not just should_index gating (which the walk
+    already covers for ordinary indexable files).
+    """
+    documents_dir = scan_root / "documents"
+    documents_dir.mkdir()
+    monkeypatch.setattr(FileMapperService, "_DOCUMENTS_DIR", documents_dir)
+
+    png = documents_dir / "screenshot.png"
+    png.write_bytes(b"\x89PNG\r\n\x1a\n0000")
+
+    service = FileIndexService(scan_root=str(scan_root), db_path=index_db_path)
+    service.upsert_content(str(png), "invoice screenshot description")
+    assert str(png) in service.search("invoice")
+
+    # File still exists: the walk skips it (unsupported extension) but the
+    # deletion pass must not treat that as "gone" for a parser-owned row.
+    service.reconcile()
+    assert str(png) in service.search("invoice")
+
+    png.unlink()
+    service.reconcile()
+    assert service.search("invoice") == []

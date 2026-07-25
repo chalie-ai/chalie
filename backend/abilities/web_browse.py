@@ -68,10 +68,7 @@ class WebBrowseAbility(DelegateAbility[DelegateParamsBag]):
         return "delegate an interactive web-browsing task"
 
     def get_follow_up(self, tr: ToolResult) -> str:
-        """Pull the full text of a page the agent reached.
-
-        Screenshots already ride back described (see :meth:`_with_screenshots`),
-        so the only standing next step is reading a page's full text."""
+        """Pull the full text of a page the agent reached."""
         return "To get a full textual version of this page call the `read` tool."
 
     _PARAMETERS: ClassVar[dict[str, object]] = {
@@ -104,7 +101,6 @@ class WebBrowseAbility(DelegateAbility[DelegateParamsBag]):
 
     def run(self, params: DelegateParamsBag) -> ToolResult:
         from controllers.message_processor import MessageProcessor  # noqa: PLC0415
-        from tools.browser.session import screenshot_ledger  # noqa: PLC0415
 
         mp = self.mp
         if mp is None:
@@ -113,34 +109,6 @@ class WebBrowseAbility(DelegateAbility[DelegateParamsBag]):
         cfg = WebBrowseConfig(mp.config.policy_channel)
         delegate_mp = MessageProcessor.process(cfg, raw_input=params.instructions)
         result = delegate_mp.result()
-        tr = delegate_result(
+        return delegate_result(
             result, hint="Restate the goal more concretely or break it into steps, then retry."
-        )
-        # Screenshots ride back off the sub-turn's uid-keyed ledger (the frozen
-        # config no longer carries per-run state, §2.5) — the same key
-        # browser._session_key() records under and PromptService reads.
-        return self._with_screenshots(tr, screenshot_ledger(delegate_mp.uid or 0))
-
-    @staticmethod
-    def _with_screenshots(tr: ToolResult, shots: list[tuple[str, str]]) -> ToolResult:
-        """Mechanical, not prompt-dependent: each screenshot rides back already
-        DESCRIBED. Ingest ran every capture through vision (browser._screenshot →
-        document pipeline), storing the description as the document's clean_text;
-        we surface it inline here — exactly as the raw browser tool hands its own
-        caller a described page — so the model sees what each page shows without a
-        separate vision call, even when the delegate forgot to mention a shot."""
-        if tr.status != "success" or not shots:
-            return tr
-        from services.document_service import DocumentService  # noqa: PLC0415
-
-        doc_svc = DocumentService()
-        blocks = []
-        for doc_id, url in shots:
-            doc = doc_svc.get_document(doc_id)
-            vision = (doc.get("clean_text") if doc else "") or "(description unavailable)"
-            blocks.append(f"- {url} (doc_id={doc_id}):\n{vision}")
-        joined = "\n\n".join(blocks)
-        return ToolResult.ok(
-            f"{tr.body}\n\nScreenshots captured this run (each already described):\n{joined}",
-            screenshots=len(shots),
         )

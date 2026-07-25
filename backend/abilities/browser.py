@@ -41,7 +41,7 @@ from contracts.params.browser_params_bag import (
     BrowserStyleParams,
 )
 from contracts.params.param_bag import ParamBag
-from tools.browser.session import record_screenshot, run_verb
+from tools.browser.session import run_verb
 
 logger = logging.getLogger(__name__)
 
@@ -262,58 +262,40 @@ class BrowserAbility(Ability[BrowserParamsBag]):
         if grabbed.get("error"):
             return self._reply(grabbed)
 
-        from abilities.document import ingest_file  # noqa: PLC0415
-        from services.document_service import DocumentService  # noqa: PLC0415
+        from services.file_parser_service import FileParserService  # noqa: PLC0415
         from services.tmp_storage import new_tmp_path  # noqa: PLC0415
 
         page: dict[str, object] = cast("dict[str, object]", grabbed["page"])
         host = urlparse(cast("str", page["url"])).hostname or "page"
-        doc_svc = DocumentService()
         tmp = new_tmp_path(f"{token_hex(4)}.png")
         try:
             with open(tmp, "wb") as fh:
                 fh.write(cast("bytes", grabbed["png"]))
-            ingested = ingest_file(
-                doc_svc,
+            saved_path, extracted_text = FileParserService().ingest(
                 tmp,
                 name=f"screenshot-{host}.png",
                 subdir="screenshots",
-                source_type="screenshot",
             )
-        finally:
-            if os.path.isfile(tmp):
-                os.remove(tmp)
-        if ingested.get("error") or ingested.get("status") != "ready":
+        except ValueError as exc:
             return ToolResult.err(
-                f"Screenshot ingest failed: {ingested.get('error') or ingested.get('status')}",
+                f"Screenshot ingest failed: {exc}",
                 code="screenshot-ingest-failed",
                 hint="The page was captured but could not be stored or read; retry "
                      "the screenshot.",
                 url=cast("str", page["url"]),
             )
+        finally:
+            if os.path.isfile(tmp):
+                os.remove(tmp)
 
-        record_screenshot(self._session_key(), cast("str", ingested["id"]), cast("str", page["url"]))
-        # The shared ingest already ran the page through vision (a screenshot is an
-        # image, so it routes to services.image_description.ImageDescription),
-        # storing the description as the document's clean_text — the same content
-        # document(action='view') surfaces. Hand it back inline so the agent sees
-        # the page directly.
-        doc = doc_svc.get_document(cast("str", ingested["id"]))
-        if doc is None:
-            return ToolResult.err(
-                "Screenshot stored but its document record vanished before it "
-                "could be read.",
-                code="screenshot-doc-missing",
-                hint="Retry the screenshot.",
-                url=cast("str", page["url"]),
-            )
+        # The FileParserService already ran the image through vision (via
+        # ImageDescription), storing the description as the extracted text.
+        # Hand it back inline so the agent sees the page directly.
         return ToolResult.ok({
             "page": page,
             "data": {
-                "doc_id": ingested["id"],
-                "name": ingested["name"],
-                "status": ingested["status"],
-                "vision": doc.get("clean_text") or "",
+                "name": os.path.basename(saved_path),
+                "vision": extracted_text,
             },
             "changed": {"navigated": False, "dialog": None, "popup": None, "summary": ""},
             "error": None,

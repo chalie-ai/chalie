@@ -10,7 +10,7 @@
 
 The describe ladder (vision provider primary, OCR fallback) lives in
 ``services/image_description.py`` as ``ImageDescription``; this file is the
-user-facing tool that drives it through ``DocumentService`` + ``FileMapperService``.
+user-facing tool that drives it directly on the image filepath.
 
 The paired channel config (``VisionConfig``) lives in
 ``configs/channels/vision.py`` — delegate configs are ProcessorConfig subclasses
@@ -19,7 +19,8 @@ and belong with the other channels, not in the ability."""
 from __future__ import annotations
 
 import logging
-from typing import ClassVar, cast
+import os
+from typing import ClassVar
 
 from abilities._delegate import DelegateAbility
 from configs.enums.param_key import Keys
@@ -72,8 +73,8 @@ class VisionAbility(DelegateAbility[VisionParamsBag]):
             Keys.image: {
                 "type": "string",
                 "description": (
-                    "The 8-character document id (doc_id). If this is not available "
-                    "in context, use the `document.search` tool to look it up."
+                    "Absolute filepath to the image file. Must be a path on disk "
+                    "that the agent can read."
                 ),
             },
             Keys.instructions: {
@@ -88,31 +89,20 @@ class VisionAbility(DelegateAbility[VisionParamsBag]):
         return self._PARAMETERS
 
     def run(self, params: VisionParamsBag) -> ToolResult:
-        doc_id = params.image
+        image_path = params.image
         instructions = params.instructions
 
-        from services.document_service import DocumentService  # noqa: PLC0415
-        from services.file_mapper_service import FileMapperService  # noqa: PLC0415
-
-        doc = DocumentService().get_document(doc_id)
-        if not doc:
+        if not os.path.isfile(image_path):
             return ToolResult.err(
-                f"No document found for id={doc_id}.",
+                f"Image file not found: {image_path}",
                 code="not-found",
-                hint="use document.search to look up the document id",
-            )
-        if not doc.get("file_path"):
-            return ToolResult.err(
-                f"Document {doc_id} has no file on disk.",
-                code="no-file-on-disk",
-                hint="the document has no stored file; re-upload the image",
+                hint="Check the filepath and ensure the image exists on disk",
             )
 
-        abs_path = str(FileMapperService.get_documents_path(cast(str, doc["file_path"])))
         try:
             from services.image_description import ImageDescription  # noqa: PLC0415
 
-            description = ImageDescription(abs_path, instructions).get_value()
+            description = ImageDescription(image_path, instructions).get_value()
         except Exception as exc:  # noqa: BLE001 — surfaced, never swallowed
             logger.exception("[VISION] describe failed")
             return ToolResult.err(

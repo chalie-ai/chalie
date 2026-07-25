@@ -11,8 +11,8 @@
 The model never sees a session id: the invoking delegate's transcript uid IS
 the key, so consecutive `browser` calls in one web_browse run land on the same
 live page. All Playwright objects live on the BrowserPool thread; the ONLY
-entry points for other threads are run_verb() (submits to the pool),
-close_session(), and the ledger readers.
+entry points for other threads are run_verb() (submits to the pool) and
+close_session().
 
 Every verb returns the same JSON-able envelope:
 
@@ -97,11 +97,7 @@ _NAV_TIMEOUT_MS = 30_000
 _ACTION_TIMEOUT_MS = 5_000
 _SETTLE_TIMEOUT_MS = 3_000
 
-# Both dicts are mutated ONLY on the pool thread, except: _LEDGERS is appended
-# by record_screenshot() and popped by close_session() on the dispatcher
-# thread, and read by the delegate prompt builder — single dict ops, GIL-safe.
 _SESSIONS: dict[int, "PageSession"] = {}
-_LEDGERS: dict[int, list[tuple[str, str]]] = {}
 
 _WHITESPACE_RE = re.compile(r"\n{3,}")
 
@@ -117,21 +113,10 @@ def run_verb(key: int, verb: str, kwargs: dict[str, object]) -> dict[str, object
 
 
 def close_session(key: int) -> None:
-    """End-of-run cleanup: drop the screenshot ledger and close the tab (if any)."""
-    _LEDGERS.pop(key, None)
+    """End-of-run cleanup: close the tab (if any)."""
     if key in _SESSIONS:
         from tools.browser.pool import get_pool  # noqa: PLC0415
         get_pool().submit(_close_on_thread, key)
-
-
-def record_screenshot(key: int, doc_id: str, url: str) -> None:
-    """Append one captured screenshot to *key*'s ledger (compaction-immune)."""
-    _LEDGERS.setdefault(key, []).append((doc_id, url))
-
-
-def screenshot_ledger(key: int) -> list[tuple[str, str]]:
-    """All (doc_id, url) screenshots captured in *key*'s run, oldest first."""
-    return list(_LEDGERS.get(key, ()))
 
 
 def error_envelope(message: str) -> dict[str, object]:

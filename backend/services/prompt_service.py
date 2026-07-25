@@ -497,16 +497,9 @@ class PromptService:
     # ── WebBrowseConfig (channel="delegate:web_browse") ──────────────────────
 
     def _web_browse_prompt(self) -> str:
-        """``WebBrowseConfig.get_user_prompt``: the browsing goal, the
-        screenshots captured this run (the browser session's ledger, keyed on
-        the turn uid), then this turn's act trail."""
-        from tools.browser.session import screenshot_ledger  # noqa: PLC0415
-
+        """``WebBrowseConfig.get_user_prompt``: the browsing goal then this
+        turn's act trail."""
         parts = [f"Browsing goal:\n{self.mp.raw_input}"]
-        shots = screenshot_ledger(self.mp.uid or 0)
-        if shots:
-            lines = "\n".join(f"- doc_id={doc_id} ({url})" for doc_id, url in shots)
-            parts.append(f"Screenshots captured this run:\n{lines}")
         trail = self._trail()
         if trail:
             parts.append(trail)
