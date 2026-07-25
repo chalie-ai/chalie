@@ -15,8 +15,8 @@ Domain-specific terminology used throughout the Chalie system.
 | `provider` | The API provider for a family of LLM models; one row per platform+model. | `ollama`, `anthropic`, `openai`, `gemini` |
 | `ProviderType` | Enum selecting which provider slot a send resolves to. | `CHAT`, `VISION`, `DELEGATE`, `VISUAL_OUTPUT` |
 | `ThinkingLevel` | Request-level reasoning-effort knob. | `LOW`, `MEDIUM`, `HIGH`, `MAX` |
-| `ability` | A built-in tool the agent can dispatch (subclasses `Ability`). | `weather`, `email`, `document` |
-| `ability action` | A tool subcommand every dispatchable ability accepts. | `memory(action='recall')`, `document(action='search')` |
+| `ability` | A built-in tool the agent can dispatch (subclasses `Ability`). | `weather`, `email`, `vision` |
+| `ability action` | A tool subcommand every dispatchable ability accepts. | `memory(action='recall')`, `list(action='create')` |
 | `act_summary` | The 3–10 word "what I'm doing" string required on every ability call. | `"Checking the weather in Valletta"` |
 | `act_trail` | The cumulative record of tool_calls rows for one ACT loop. | `[weather] Valletta, MT → 22°C, sunny` |
 | `ToolResult` | The frozen dataclass every `Ability.run` returns. | `ToolResult.ok(body=...)`, `ToolResult.err(code='not-connected')` |
@@ -39,7 +39,6 @@ Domain-specific terminology used throughout the Chalie system.
 | `data_graph` | Bi-temporal key-value graph of typed facts (the concepts layer). | kind `user_specific`, `place`, `contact` |
 | `flashback` | The curated memory bundle injected before iteration 0 on session start. | "5 facts + 3 dated episode gists" |
 | `compaction` | Off-spine durable checkpoint of past transcript rows. | MAIN watermark `turn_id=15` |
-| `documents` | Uploaded file metadata + chunks. | `mime_type='application/pdf'`, `status='ready'` |
 | `TextReader` | The single place a URL or filesystem path becomes plain text: a URL branch (fetch + HTML extraction, with plain-text suffixes passing through verbatim) or a file branch (mime detect + extract). Returns the full text verbatim — no truncation, no whitespace munging — and raises rather than returning empty on failure. | `TextReader(file_path_or_url).get_value()` |
 | `ImageDescription` | The single place an image becomes text: a two-rung ladder, the configured vision provider first, an OCR fallback second. A description is mandatory — exhausting both rungs raises rather than returning empty. | `ImageDescription(file_path, prompt).get_value()` |
 | `policies` | The Allow / Ask / Deny gate per tool action. | `'allow'`, `'ask'`, `'deny'` |
