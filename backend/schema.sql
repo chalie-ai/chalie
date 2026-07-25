@@ -140,6 +140,7 @@ CREATE TABLE IF NOT EXISTS providers (
     dimensions INTEGER,
     timeout INTEGER DEFAULT 120,
     supports_vision INTEGER DEFAULT 0,       -- BOOLEAN
+    context_window INTEGER,                  -- NULL = ask the client (Gemini/Ollama query their API; OpenAI falls back to 128_000)
     created_at TEXT DEFAULT (datetime('now')),
     updated_at TEXT DEFAULT (datetime('now'))
 );

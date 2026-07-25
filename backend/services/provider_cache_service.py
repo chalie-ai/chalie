@@ -78,6 +78,10 @@ class ProviderCacheService:
                     entry['dimensions'] = p['dimensions']
                 if p.get('timeout'):
                     entry['timeout'] = p['timeout']
+                if p.get('context_window'):
+                    # Only when set: absent means "ask the client", which is
+                    # what ProviderService._window_of falls back to.
+                    entry['context_window'] = p['context_window']
                 providers_dict[cast(str, p['name'])] = entry
 
             # Check vault state — api_keys decrypt to None when vault is locked.
@@ -132,6 +136,7 @@ class ProviderCacheService:
                     'api_key': selected.get('api_key'),
                     'dimensions': selected.get('dimensions'),
                     'timeout': selected.get('timeout'),
+                    'context_window': selected.get('context_window'),
                 }
         except Exception as e:
             logger.debug(f"[ProviderCache] Failed to get selected provider: {e}")

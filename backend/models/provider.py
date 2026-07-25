@@ -41,6 +41,7 @@ class Provider(Model):
         "dimensions",
         "timeout",
         "supports_vision",
+        "context_window",
         "created_at",
         "updated_at",
     )
@@ -53,6 +54,7 @@ class Provider(Model):
     dimensions: int | None
     timeout: int
     supports_vision: int
+    context_window: int | None
     created_at: str
     updated_at: str
 
@@ -71,7 +73,7 @@ class Provider(Model):
         cursor = cls._bound_connection().execute(
             "SELECT id, name, platform, model, host, "
             "(api_key IS NOT NULL) AS has_api_key, "
-            "dimensions, timeout, supports_vision "
+            "dimensions, timeout, supports_vision, context_window "
             "FROM providers ORDER BY name"
         )
         return [dict(row) for row in cursor.fetchall()]

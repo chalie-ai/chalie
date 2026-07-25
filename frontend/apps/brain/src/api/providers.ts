@@ -32,6 +32,7 @@ export interface Provider {
   supports_vision: boolean;
   decrypt_failed?: boolean;
   role?: string | null;
+  context_window: number | null;
 }
 
 export interface CatalogEntry {
@@ -58,6 +59,9 @@ export interface ProviderInput {
   model: string;
   host?: string;
   api_key?: string;
+  // null means "ask the client" — Gemini/Ollama query their API for the real
+  // window; the backend clamps whatever is sent to its own ceiling.
+  context_window?: number | null;
 }
 
 // The connectivity test never uses `name` (it probes platform+model+creds), and

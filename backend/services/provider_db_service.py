@@ -8,6 +8,7 @@ from models.provider import Provider as ProviderModel
 from models.setting import Setting
 from services.database import Database
 from services.log_utils import safe
+from services.provider_api import MAX_CONTEXT_WINDOW
 
 logger = logging.getLogger(__name__)
 
@@ -50,6 +51,7 @@ class ProviderDbService:
             "dimensions": provider.dimensions,
             "timeout": provider.timeout,
             "supports_vision": bool(provider.supports_vision),
+            "context_window": provider.context_window,
         }
         if provider.api_key:
             try:
@@ -76,6 +78,7 @@ class ProviderDbService:
                 "dimensions": row["dimensions"],
                 "timeout": row["timeout"],
                 "supports_vision": bool(cast(int, row["supports_vision"])),
+                "context_window": row.get("context_window"),
             }
             for row in ProviderModel.list_summaries()
         ]
@@ -131,6 +134,11 @@ class ProviderDbService:
             }
             vision = 1 if probe_provider(probe_config) else 0
 
+        # Validate and clamp context_window on create
+        context_window = data.get("context_window")
+        if context_window is not None:
+            context_window = self._validate_context_window(context_window)
+
         with Database.transaction():
             provider = ProviderModel(
                 name=data["name"],
@@ -141,6 +149,7 @@ class ProviderDbService:
                 dimensions=data.get("dimensions"),
                 timeout=data.get("timeout", 120),
                 supports_vision=vision,
+                context_window=context_window,
             ).save()
         new_id = provider.id
         # Auto-activate this provider if none is currently selected. Atomic in
@@ -160,6 +169,14 @@ class ProviderDbService:
         for key in ["name", "platform", "model", "host", "dimensions", "timeout"]:
             if key in data:
                 updates[key] = data[key]
+
+        # Validate and clamp context_window on update
+        if "context_window" in data:
+            cw = data["context_window"]
+            if cw is None:
+                updates["context_window"] = None
+            else:
+                updates["context_window"] = self._validate_context_window(cw)
 
         # Re-probe vision support only when a probe-relevant field changes
         # (platform/model/host/api_key). Name-only edits never re-probe.
@@ -204,6 +221,28 @@ class ProviderDbService:
             ProviderModel.touch(provider_id)
 
         return self.get_provider_by_id(provider_id)
+
+    @staticmethod
+    def _validate_context_window(value: object) -> int:
+        """Validate and clamp a context_window value.
+
+        Must be an integer in [1, MAX_CONTEXT_WINDOW]. Returns the clamped
+        value (capped at MAX_CONTEXT_WINDOW) if valid. Raises ValueError
+        when the value is below 1.
+
+        Imported ceiling: ``services.provider_api.MAX_CONTEXT_WINDOW``.
+        """
+        if not isinstance(value, int) or isinstance(value, bool):
+            raise ValueError("context_window must be an integer")
+        if value < 1:
+            raise ValueError("context_window must be >= 1")
+        if value > MAX_CONTEXT_WINDOW:
+            logger.info(
+                "[Provider] context_window %s clamped to %s (MAX_CONTEXT_WINDOW)",
+                value, MAX_CONTEXT_WINDOW,
+            )
+            return MAX_CONTEXT_WINDOW
+        return value
 
     def _provider_roles(self, provider_id: int) -> List[str]:
         """An empty list means the provider holds no role and is safe to delete.
