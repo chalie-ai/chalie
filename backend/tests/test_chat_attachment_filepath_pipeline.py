@@ -20,6 +20,7 @@ from typing import TYPE_CHECKING
 
 import pytest
 
+from api.dto.attachment import Attachment
 from api.threads import _fetch_attachments_for_transcripts
 from configs.channels import UserConfig
 from controllers.message_processor import MessageProcessor
@@ -137,6 +138,8 @@ def test_text_attachment_lands_in_uploads_indexed_linked_and_previewable(
         "is_image": False,
         "url": "/api/files/preview/uploads/brief.txt",
     }]
+    # The dict must satisfy the Attachment DTO — GET /api/thread validates it.
+    Attachment.model_validate(by_id[uid][0])
 
     # The pill's own URL serves the real bytes through the real HTTP endpoint.
     resp = client.get(by_id[uid][0]["url"])
