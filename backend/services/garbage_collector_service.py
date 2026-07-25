@@ -1,5 +1,5 @@
 """GarbageCollectorService — the hourly retention sweep over ``transcript``
-and ``tool_calls``.
+and everything anchored to it: ``tool_calls`` rows and stored voice audio.
 
 Consolidates what used to be two separate mechanisms (a dedicated
 tool-call-orphan Decayable, and a never-finished transcript sweep) into one
@@ -22,6 +22,14 @@ runs outside the transaction since it has nothing to coordinate with — it
 sees only rows this pass's transcript delete could not have produced (those
 were already swept above).
 
+Voice audio is ordered first for a different reason. ``voice_transcript`` DOES
+cascade, so its rows need no pre-clear — but each row names a WAV on disk that
+SQLite cannot see, and once the row is gone so is the only record of where
+that file lives. The paths are therefore read and unlinked while the rows
+still exist, which is exactly what
+:meth:`~services.voice_transcript_service.VoiceTranscriptService.
+delete_for_transcripts` does.
+
 Thin orchestrator (Rule-3 depth, mp-less): it owns no SQL of its own and
 delegates every step to the owning model.
 """
@@ -33,6 +41,7 @@ from dataclasses import dataclass
 from models.tool_call import ToolCall
 from models.transcript import Transcript
 from services.database import Database
+from services.voice_transcript_service import get_service as get_voice_service
 
 
 @dataclass
@@ -58,7 +67,10 @@ class GarbageCollectorService:
         same set inside one transaction — ``tool_calls`` first (children),
         ``transcript`` second (parent) — so the FK from
         ``tool_calls.transcript_id`` (no cascade) never blocks the delete.
-        An empty id set makes both calls clean no-ops.
+        Voice audio is cleaned in the same window and for the same reason of
+        ordering, though not the same mechanism: ``voice_transcript`` cascades,
+        but its WAV files must be unlinked while the rows that name them are
+        still readable. An empty id set makes every call a clean no-op.
         ``ToolCall.decay()`` then reaps any orphan the pre-clear above could
         not have produced (it already swept every child of this pass's
         doomed ids) — legacy dangles left by an older code path — outside
@@ -66,6 +78,7 @@ class GarbageCollectorService:
         with Database.transaction():
             ids = Transcript.unlinked_ids()
             tool_calls_swept = ToolCall.delete_by_transcripts(ids)
+            get_voice_service().delete_for_transcripts(ids)
             transcripts_deleted = Transcript.delete_by_ids(ids)
         tool_calls_orphans_reaped = ToolCall.decay()
         return GarbageCollectionResult(

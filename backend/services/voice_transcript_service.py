@@ -12,8 +12,10 @@ The service owns:
 * Per-chunk synthesis with silence-pad stitching
 * WAV encoding of the final waveform
 
-Public API: one method — :meth:`synthesize` — takes text and returns the raw
-sample array, sample rate, and WAV bytes.
+Public API: :meth:`synthesize` turns text into a raw sample array, sample rate
+and WAV bytes; :meth:`synthesize_settled` drives the whole pipeline for one
+settled transcript row (attempts, silence check, storage, websocket signal);
+:meth:`delete_for_transcripts` is the single owner of voice cleanup.
 """
 
 from __future__ import annotations
@@ -384,9 +386,12 @@ class VoiceTranscriptService:
 
     def delete_for_transcripts(self, transcript_ids: list[int]) -> None:
         """Delete the stored WAV files and ``voice_transcript`` rows for the
-        given transcript ids — the single owner of voice cleanup. Explicit
-        because the GC sweep runs with ``PRAGMA foreign_keys`` OFF (CASCADE
-        never fires there) and a row delete alone would orphan the file."""
+        given transcript ids — the single owner of voice cleanup. The rows
+        alone would cascade away with their transcript, but SQLite cannot see
+        the file on disk: the paths must be read and unlinked *before* the
+        transcript delete removes the only record of where they live. A failed
+        unlink is logged with its path and never blocks the delete — a stray
+        WAV is recoverable, a half-deleted transcript is not."""
         for row in VoiceTranscript.for_transcripts(transcript_ids):
             if row.file_path is not None:
                 path = FileMapperService.get_voice_path(row.file_path)

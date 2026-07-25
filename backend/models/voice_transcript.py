@@ -67,13 +67,15 @@ class VoiceTranscript(Model):
     @classmethod
     def delete_by_transcripts(cls, transcript_ids: list[int]) -> int:
         """Hard-delete every row for the given transcript ids — the voice leg
-        of a transcript delete. The GC sweep runs with ``PRAGMA foreign_keys``
-        OFF, so the ``ON DELETE CASCADE`` on this table never fires there and
-        this explicit delete is the path that actually clears the rows (file
-        removal is :meth:`~services.voice_transcript_service.
-        VoiceTranscriptService.delete_for_transcripts`'s job, which calls
-        this). Same ``json_each`` binding as :meth:`for_transcripts`; empty
-        input is a clean no-op. Returns rows deleted."""
+        of a transcript delete. Deleting the parent transcript would cascade
+        these rows away on its own (``Database._open`` sets ``PRAGMA
+        foreign_keys=ON``), but the WAV on disk is invisible to SQLite, so
+        cleanup has to run through :meth:`~services.voice_transcript_service.
+        VoiceTranscriptService.delete_for_transcripts` — which reads the paths,
+        unlinks them, then calls this so one call leaves nothing behind
+        whatever the caller does with the transcript row afterwards. Same
+        ``json_each`` binding as :meth:`for_transcripts`; empty input is a
+        clean no-op. Returns rows deleted."""
         if not transcript_ids:
             return 0
         cursor = cls._bound_connection().execute(

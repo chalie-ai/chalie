@@ -1,9 +1,11 @@
 """Privacy delete-all action — DELETE /api/privacy/delete-all.
 
 Irreversible wipe of all user data, gated by the ``X-Confirm-Delete: yes``
-header.  The handler truncates every user-owned table and clears user-owned
-MemoryStore keys — the result is a :class:`DeleteAllResult` DTO confirming
-the wipe plus any per-table truncation warnings.
+header.  The handler truncates every user-owned table, clears user-owned
+MemoryStore keys, and removes the on-disk artifacts those rows pointed at
+(uploaded documents, generated voice audio) — the result is a
+:class:`DeleteAllResult` DTO confirming the wipe plus any per-table
+truncation warnings.
 """
 
 from __future__ import annotations
@@ -28,6 +30,7 @@ from models.model import Model
 from models.scheduled_item import ScheduledItem
 from models.tool_call import ToolCall
 from models.transcript import Transcript
+from models.voice_transcript import VoiceTranscript
 from services.database import Database
 from services.file_index_service import FileIndexService
 from services.file_mapper_service import FileMapperService
@@ -39,8 +42,9 @@ logger = logging.getLogger(__name__)
 # Modeled user-data tables for the nuclear delete, FK-children before
 # parents. .truncate() clears each. System / auth / config tables excluded.
 _DELETE_ALL_MODELS: tuple[type[Model], ...] = (
-    ToolCall,          # tool_calls   FK -> transcript(id)
-    ListItem,          # list_items   FK -> lists(id)
+    ToolCall,          # tool_calls        FK -> transcript(id)
+    ListItem,          # list_items        FK -> lists(id)
+    VoiceTranscript,   # voice_transcript  FK -> transcript(id) ON DELETE CASCADE
     Transcript,
     Episode,
     DataGraphRow,      # data_graph
@@ -122,6 +126,18 @@ class PrivacyDeleteAllAction(Action):
                         item.unlink()
         except Exception as e:
             logger.warning(f"[REST API] Failed to clear documents directory: {e}")
+
+        # Delete every generated voice file (directory itself stays). The
+        # layout is flat — one <transcript_id>.wav per synthesized reply — and
+        # the rows naming them were truncated above, so nothing survives to
+        # point at a leftover file.
+        try:
+            voice_path = FileMapperService.get_voice_path()
+            if voice_path.exists():
+                for wav in voice_path.iterdir():
+                    wav.unlink()
+        except Exception as e:
+            logger.warning(f"[REST API] Failed to clear voice directory: {e}")
 
         # Clear the extracted-content index; the reconcile scan repopulates it.
         try:
