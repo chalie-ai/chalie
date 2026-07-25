@@ -18,6 +18,12 @@ class Message(DTO):
     pre-formatted locale string, not a datetime. ``thread_message`` is set on
     rows past the turn's settle0 — the fork-reply continuation (a turn that has
     any is a thread; the main spine renders only through settle0).
+    ``settled`` projects the transcript column on assistant rows — the client
+    needs it to place the speaker button on the turn's final reply and nowhere
+    else. ``voice_state`` carries that row's speech pre-synthesis outcome
+    (``ready`` once the audio is stored, ``failed`` once the pipeline gave up);
+    ``None`` on a settled row means no outcome is recorded yet, so the first
+    speaker press starts the pipeline through the playback route.
     """
 
     id: str
@@ -29,3 +35,5 @@ class Message(DTO):
     tool_calls: list[Chip] | None = None
     segments: list[Segment] | None = None
     thread_message: bool | None = None
+    settled: bool | None = None
+    voice_state: str | None = None

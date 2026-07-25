@@ -241,9 +241,9 @@ class VoiceTranscriptService:
     """TTS synthesis service — the single source of truth for Kokoro-based
     speech synthesis.
 
-    Non-HTTP callers (the MP spine, background tasks, unit tests) use this
-    directly. The HTTP route in ``api.voice`` wraps it with auth, DTO parsing,
-    and the 503/422/500 contract.
+    Synthesis is never on a request thread: :meth:`synthesize_settled` runs it
+    in the background when a turn's final reply settles, and the playback route
+    in ``api.voice`` only serves the outcome this service already stored.
     """
 
     def synthesize(self, text: str) -> tuple[object, int, bytes]:

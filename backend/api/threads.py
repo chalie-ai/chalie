@@ -46,6 +46,7 @@ from services.rich_media_parser import parse as _parse_rich_media
 from models.tool_call import ToolCall
 from models.transcript import Transcript
 from models.turn_execution import TurnExecution
+from models.voice_transcript import VoiceTranscript
 from .auth import require_session
 from .dto import Error, expects, register_dto, responds
 from .dto.attachment import Attachment
@@ -223,6 +224,22 @@ def _apply_assistant_fields(
     msg["segments"] = segments
 
 
+def _voice_states(rows: list[dict[str, object]]) -> dict[int, str]:
+    """The recorded speech pre-synthesis outcome per settled assistant row, in
+    one query. ``ready`` once the audio is stored, ``failed`` once the pipeline
+    gave up; a settled row missing from this map has no outcome yet — history
+    predating the feature, or a job lost to a restart — and the client's first
+    speaker press starts the pipeline through the playback route."""
+    settled_ids = [
+        cast("int", r["id"]) for r in rows
+        if r["role"] == "assistant" and r["settled"]
+    ]
+    return {
+        row.transcript_id: "ready" if row.file_path is not None else "failed"
+        for row in VoiceTranscript.for_transcripts(settled_ids)
+    }
+
+
 def _rows_to_messages(rows: list[dict[str, object]]) -> list[dict[str, object]]:
     """Project raw transcript rows (oldest-first) into the conversation message
     shape — attachments for user rows, rich-media segments for assistant rows,
@@ -257,6 +274,7 @@ def _rows_to_messages(rows: list[dict[str, object]]) -> list[dict[str, object]]:
     # row to its cycle instead: reset at every user row (the cycle boundary),
     # accumulate any assistant-anchored calls, and resolve the span within that
     # window — the one scope where the per-request ordinal is unique.
+    voice_states = _voice_states(rows)
     cycle_calls: list[dict[str, object]] = []
     for r in rows:
         msg = _base_message(r)
@@ -270,6 +288,8 @@ def _rows_to_messages(rows: list[dict[str, object]]) -> list[dict[str, object]]:
         else:
             cycle_calls = cycle_calls + own
             _apply_assistant_fields(msg, cycle_calls)
+            msg["settled"] = bool(r['settled'])
+            msg["voice_state"] = voice_states.get(cast("int", r['id']))
         messages.append(msg)
 
     return messages

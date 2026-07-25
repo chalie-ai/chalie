@@ -9,6 +9,7 @@ runtime. There is no more enable/disable surface to point a broken install
 at: the only real remedy left is reinstalling.
 """
 
+import io
 import sqlite3
 
 import pytest
@@ -30,7 +31,7 @@ def _assert_reinstall_oriented(hint: str) -> None:
 def test_voice_remediation_hints_point_to_reinstall_never_settings(
     authed_client: tuple[FlaskClient, sqlite3.Connection, object],
 ) -> None:
-    """/voice/health (and /voice/synthesize, when unavailable) must steer
+    """/voice/health (and /voice/transcribe, when unavailable) must steer
     users to reinstall Chalie, never a Settings toggle that no longer exists."""
     client, _db, _store = authed_client
 
@@ -45,16 +46,17 @@ def test_voice_remediation_hints_point_to_reinstall_never_settings(
     if health_hint:
         _assert_reinstall_oriented(health_hint)
 
-    # When voice is unavailable, the synthesize route surfaces the same
-    # remediation. Only probe it in the unavailable state so we never trigger
-    # a real (heavy) model load just to read a hint.
-    if hdata.get("status") == "unavailable":
-        synth = client.post(
-            "/api/voice/synthesize",
-            json={"text": "Hello."},
-            content_type="application/json",
+    # When voice deps are missing, transcribe surfaces the same remediation.
+    # Only probe it in the unavailable state so we never trigger a real (heavy)
+    # model load just to read a hint. (Playback needs no model at all — it
+    # serves a stored file — so it has no remediation surface to check.)
+    if hdata.get("reason") == "deps_missing":
+        stt = client.post(
+            "/api/voice/transcribe",
+            data={"file": (io.BytesIO(b"RIFF....WAVE"), "clip.wav")},
+            content_type="multipart/form-data",
         )
-        assert synth.status_code == 503
-        sdata = synth.get_json()
+        assert stt.status_code == 503
+        sdata = stt.get_json()
         assert sdata is not None
         _assert_reinstall_oriented(sdata.get("hint") or "")

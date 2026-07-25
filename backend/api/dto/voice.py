@@ -1,22 +1,22 @@
-"""DTOs for the voice namespace — the TTS/STT request and response contract.
+"""DTOs for the voice namespace — the TTS/STT response contract.
 
-Voice is not CRUD: there is no resource and no DB row. These four shapes type
-the inbound TTS body, the transcribe result, the always-200 readiness probe, and
-the unavailable payload that the frozen in-module helpers already emit. Grouped
-in one file because they form one cohesive namespace shape set.
+These four shapes type the playback outcome for a transcript row's
+pre-synthesized speech, the transcribe result, the always-200 readiness probe,
+and the unavailable payload that the frozen in-module helpers already emit.
+Grouped in one file because they form one cohesive namespace shape set.
 """
 
 from __future__ import annotations
 
-from pydantic import Field
-
 from .base import DTO
 
 
-class TtsRequest(DTO):
-    """Inbound body for text-to-speech synthesis."""
+class VoiceState(DTO):
+    """Read shape for a playback request that has no audio to return — the
+    transcript row's pipeline state (``pending`` while synthesis runs,
+    ``failed`` once it gave up)."""
 
-    text: str = Field(..., min_length=1)
+    state: str
 
 
 class Transcription(DTO):

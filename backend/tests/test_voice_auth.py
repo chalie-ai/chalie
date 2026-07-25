@@ -41,8 +41,11 @@ class TestVoiceEndpointsRejectUnauthenticated:
         assert resp.status_code == 401
         assert resp.get_json() == {"error": "Authentication required"}
 
-    def test_synthesize_requires_auth(self, db: sqlite3.Connection) -> None:
-        resp = _make_client().post('/api/voice/synthesize', json={"text": "hello"})
+    def test_transcript_playback_requires_auth(self, db: sqlite3.Connection) -> None:
+        # Stored speech is conversation content — the guard must reject before
+        # the handler reads a row, so an unauthenticated caller cannot probe
+        # which transcript ids exist by their status codes.
+        resp = _make_client().get('/api/voice/transcript/1')
         assert resp.status_code == 401
         assert resp.get_json() == {"error": "Authentication required"}
 

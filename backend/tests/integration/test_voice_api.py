@@ -5,6 +5,8 @@ from typing import cast
 import pytest
 from flask.testing import FlaskClient
 
+from services.voice_transcript_service import get_service
+
 
 def _voice_available(client: FlaskClient) -> bool:
     resp = client.get('/api/voice/health')
@@ -53,24 +55,16 @@ def test_health_endpoint_returns_known_status(authed_client: tuple[FlaskClient, 
 
 @pytest.mark.integration
 def test_synthesize_returns_single_wav_blob(authed_client: tuple[FlaskClient, sqlite3.Connection, object]) -> None:
-    """POST /voice/synthesize → 200 audio/wav blob with non-zero duration."""
+    """The engine produces one audio/wav blob with non-zero duration."""
     client, _db, _store = authed_client
 
     if not _voice_available(client):
         pytest.skip('Voice models not available in this environment')
 
-    resp = client.post(
-        '/api/voice/synthesize',
-        json={'text': 'Hello world.'},
-        content_type='application/json',
-    )
+    _, _sr, body = get_service().synthesize('Hello world.')
 
-    assert resp.status_code == 200
-    assert resp.mimetype == 'audio/wav'
-
-    body = resp.get_data()
-    assert body[:4] == b'RIFF', 'Response body must start with RIFF WAV header'
-    assert body[8:12] == b'WAVE', 'Response body must contain WAVE marker'
+    assert body[:4] == b'RIFF', 'Output must start with RIFF WAV header'
+    assert body[8:12] == b'WAVE', 'Output must contain WAVE marker'
     assert len(body) > 44, 'WAV blob too short to contain any audio'
 
     duration = _wav_duration(body)
@@ -79,23 +73,19 @@ def test_synthesize_returns_single_wav_blob(authed_client: tuple[FlaskClient, sq
 
 @pytest.mark.integration
 def test_synthesize_rejects_empty_text(authed_client: tuple[FlaskClient, sqlite3.Connection, object]) -> None:
-    """POST /voice/synthesize → 400 for empty or whitespace-only input."""
+    """Empty or whitespace-only input raises rather than producing silence.
+
+    The pipeline maps this to a terminal failed row — it must never write a
+    zero-length WAV and call the row ready.
+    """
     client, _db, _store = authed_client
 
     if not _voice_available(client):
         pytest.skip('Voice models not available in this environment')
 
     for text in ('', '   ', '\n\t  \n'):
-        resp = client.post(
-            '/api/voice/synthesize',
-            json={'text': text},
-            content_type='application/json',
-        )
-        assert resp.status_code == 400, 'Expected 400 for input %r, got %d' % (text, resp.status_code)
-        data = resp.get_json()
-        assert data is not None
-        assert 'error' in data
-        assert data['error'] == 'Text is required'
+        with pytest.raises(ValueError, match='Text is required'):
+            get_service().synthesize(text)
 
 
 @pytest.mark.integration
@@ -120,15 +110,7 @@ def test_synthesize_markdown_input_produces_audio(authed_client: tuple[FlaskClie
         "The _language_ was designed for readability."
     )
 
-    resp = client.post(
-        '/api/voice/synthesize',
-        json={'text': markdown_text},
-        content_type='application/json',
-    )
-
-    assert resp.status_code == 200
-    assert resp.mimetype == 'audio/wav'
-    body = resp.get_data()
+    _, _sr, body = get_service().synthesize(markdown_text)
     assert _wav_duration(body) > 0.5, 'Markdown-rich text must produce substantial audio'
 
 
@@ -149,15 +131,7 @@ def test_synthesize_html_input_produces_audio(authed_client: tuple[FlaskClient, 
         '<p>It sits on the <em>Seine</em> river.</p>'
     )
 
-    resp = client.post(
-        '/api/voice/synthesize',
-        json={'text': html_text},
-        content_type='application/json',
-    )
-
-    assert resp.status_code == 200
-    assert resp.mimetype == 'audio/wav'
-    body = resp.get_data()
+    _, _sr, body = get_service().synthesize(html_text)
     assert _wav_duration(body) > 0.1, 'HTML input must produce audible audio'
 
 
@@ -174,15 +148,9 @@ def test_synthesize_url_input_produces_audio(authed_client: tuple[FlaskClient, s
     if not _voice_available(client):
         pytest.skip('Voice models not available in this environment')
 
-    resp = client.post(
-        '/api/voice/synthesize',
-        json={'text': 'Read more at http://google.com/search for details.'},
-        content_type='application/json',
+    _, _sr, body = get_service().synthesize(
+        'Read more at http://google.com/search for details.',
     )
-
-    assert resp.status_code == 200
-    assert resp.mimetype == 'audio/wav'
-    body = resp.get_data()
     assert _wav_duration(body) > 0.1, 'URL-containing input must produce audio'
 
 

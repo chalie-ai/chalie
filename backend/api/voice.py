@@ -13,10 +13,10 @@ or runtime. If a dep or model file is somehow still missing (a broken/partial
 install), every route returns ``{"status":"unavailable"}`` or 503 with a hint
 to reinstall.
 
-The synthesize route returns a single ``audio/wav`` blob — no streaming, no
-NDJSON. Long text is split into sentence-level chunks (≤320 chars each) before
-being passed to Kokoro so the 510-phoneme hard limit is never hit. Chunks are
-concatenated with short silence pads and encoded as a single waveform.
+The playback route serves the WAV the pre-synthesis pipeline already stored for
+a settled transcript row — a single ``audio/wav`` blob, no streaming, no NDJSON.
+Synthesis itself never happens on the request thread: this route reads a
+terminal outcome, or starts the pipeline once for a row that has none.
 
 The transcribe route accepts a WAV upload, runs Moonshine on it (with VAD +
 denoise + hallucination-dedup + filler/contraction post-processing), and
@@ -33,19 +33,21 @@ from flask import Response, jsonify, make_response, request
 from flask.typing import ResponseReturnValue
 from flask_restx import Namespace, Resource
 
+from models.transcript import Transcript
+from models.voice_transcript import VoiceTranscript
 from services.file_mapper_service import FileMapperService
 from services.voice_transcript_service import get_service
 
 from .auth import require_auth
-from .dto import Error, expects, register_dto, responds
+from .dto import Error, register_dto, responds
 from .dto.boundary import error
-from .dto.voice import Transcription, TtsRequest, VoiceHealth, VoiceUnavailable
+from .dto.voice import Transcription, VoiceHealth, VoiceState, VoiceUnavailable
 
 logger = logging.getLogger(__name__)
 
 voice_ns = Namespace("voice", description="Voice (STT + TTS) operations", path="/api/voice")
 
-register_dto(voice_ns, TtsRequest, Transcription, VoiceHealth, VoiceUnavailable, Error)
+register_dto(voice_ns, Transcription, VoiceHealth, VoiceState, VoiceUnavailable, Error)
 _V = voice_ns.models
 
 # ── Constants (hardcoded — no env vars) ─────────────────────────────────────
@@ -537,40 +539,59 @@ class VoiceHealthResource(Resource):
         return _health("loading")
 
 
-@voice_ns.route("/synthesize")
-class VoiceSynthesizeResource(Resource):
+@voice_ns.route("/transcript/<int:transcript_id>")
+class VoiceTranscriptResource(Resource):
     @require_auth
-    @voice_ns.expect(_V["TtsRequest"])
     @voice_ns.produces(["audio/wav"])
-    @voice_ns.response(200, "Synthesized speech (audio/wav)")
-    @voice_ns.response(503, "Voice unavailable (deps or models missing/loading)", model=_V["VoiceUnavailable"])
-    @voice_ns.response(422, "Text is required or validation failed", model=_V["Error"])
-    @voice_ns.response(500, "TTS synthesis failed", model=_V["Error"])
-    @expects(TtsRequest)
-    def post(self, dto: TtsRequest) -> Response | ResponseReturnValue:
-        """Synthesize text into a single ``audio/wav`` blob."""
-        if not _VOICE_AVAILABLE:
-            return _voice_unavailable_payload(), 503
+    @voice_ns.response(200, "Pre-synthesized speech (audio/wav)")
+    @voice_ns.response(202, "Synthesis started or still running", model=_V["VoiceState"])
+    @voice_ns.response(404, "No speech is possible for this transcript row", model=_V["Error"])
+    @voice_ns.response(409, "Synthesis failed for this transcript row", model=_V["VoiceState"])
+    def get(self, transcript_id: int) -> Response | ResponseReturnValue:
+        """Play back one transcript row's pre-synthesized speech.
 
-        tts_service = get_service()
-        if not tts_service.ensure_loaded():
-            return _loading_or_missing_response()
+        Reads the stored outcome — it never re-synthesizes a row the pipeline
+        already carried to a terminal state. The one exception is a row with no
+        outcome at all (history predating pre-synthesis, or a job lost to a
+        restart): that starts the pipeline once and answers 202, so there is no
+        backfill sweep and no stuck state.
+        """
+        row = VoiceTranscript.filter("transcript_id", transcript_id).first()
 
-        try:
-            _, _, wav_bytes = tts_service.synthesize(dto.text)
+        if row is not None and row.file_path is not None:
+            path = FileMapperService.get_voice_path(row.file_path)
+            if not path.exists():
+                logger.error(
+                    "[Voice] transcript %d claims audio at %s but the file is gone",
+                    transcript_id, path,
+                )
+                return VoiceState(state="failed").model_dump(), 409
+            wav_bytes = path.read_bytes()
             return Response(
                 wav_bytes,
                 mimetype="audio/wav",
                 headers={
                     "Content-Length": str(len(wav_bytes)),
-                    "Cache-Control": "no-cache",
+                    # The audio for a transcript row never changes — the row is
+                    # immutable once written, and a deleted row takes the file
+                    # with it — so the browser may hold it indefinitely.
+                    "Cache-Control": "public, max-age=31536000, immutable",
                 },
             )
-        except ValueError:
-            return error("Text is required", 422)
-        except Exception as e:
-            logger.error("[Voice] TTS synthesis failed: %s", e)
-            return error("TTS synthesis failed", 500)
+
+        if row is not None:
+            return VoiceState(state="failed").model_dump(), 409
+
+        transcript = Transcript.get(transcript_id)
+        if transcript is None or transcript.role != "assistant" or not transcript.settled:
+            return error("No speech for this message", 404)
+
+        threading.Thread(
+            target=get_service().synthesize_settled,
+            args=(transcript_id,),
+            daemon=True,
+        ).start()
+        return VoiceState(state="pending").model_dump(), 202
 
 
 @voice_ns.route("/transcribe")
