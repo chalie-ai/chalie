@@ -47,18 +47,43 @@ if __name__ == "__main__":
     _boot_screen = BootScreen(_cli.host, _cli.port)
     _boot_screen.start()
 
+    # Dependency preflight — the FIRST thing after the port is owned, before the
+    # heavy imports below. A declared dependency that is not installed stops the
+    # boot dead: no degraded mode, no silent fallback. `tiktoken` was imported by
+    # the provider token counter but never declared, so every deployment quietly
+    # fell through to a word-count heuristic that under-measured requests by ~34%
+    # — the compaction gate never fired and context ran past the model window for
+    # months. An absent dependency must be impossible to miss, so it is stated on
+    # stderr (container logs) AND on the page the browser is already polling.
+    from services.dependency_preflight import DependencyPreflight
+    _missing = DependencyPreflight.missing()
+    if _missing:
+        _detail = f"missing module/dependency: {', '.join(_missing)}"
+        print(f"[BOOT] CRITICAL: Chalie failed to load, {_detail}", file=sys.stderr, flush=True)
+        _boot_screen.fail(_detail)
+        _boot_screen.serve_forever()
+        sys.exit(1)
+
 # Force numpy/transformers to fully initialize before any background thread
 # imports them. Python's import system isn't fully thread-safe for nested
 # imports — concurrent first-imports from multiple threads cause a circular
 # import in numpy._typing (NDArray not yet available from the
 # partially-initialized module), which poisons sys.modules and makes every
 # subsequent embedding call fail with "maximum recursion depth exceeded".
+# A failure here is not survivable: it means numpy/transformers is present but
+# broken, and every embedding call downstream would fail with a recursion error
+# that reads nothing like its cause. Context is added and the error re-raised —
+# never swallowed into a warning that boots a broken process anyway.
 try:
     import numpy  # noqa: F401 — thread-safety warm-up
     import transformers  # noqa: F401 — thread-safety warm-up
 except Exception as _e:
-    import sys as _sys
-    print(f"[BOOT] CRITICAL: import failed: {_e}", file=_sys.stderr, flush=True)
+    print(f"[BOOT] CRITICAL: Chalie failed to load, core import failed: {_e}",
+          file=sys.stderr, flush=True)
+    if _boot_screen is not None:
+        _boot_screen.fail(f"core import failed: {_e}")
+        _boot_screen.serve_forever()
+    raise
 
 # Ensure backend/ is on the Python path
 _backend_dir = os.path.dirname(os.path.abspath(__file__))
