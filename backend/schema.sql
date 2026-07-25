@@ -589,6 +589,19 @@ CREATE TABLE IF NOT EXISTS transcript_docs (
 );
 
 -- ────────────────────────────────────────────────────────────────
+-- TRANSCRIPT FILES — filepath-keyed attachment link, replacing
+-- transcript_docs (which is never written, see models/transcript_doc.py).
+-- One row per attachment: the transcript turn that owns it plus the
+-- file's stored path RELATIVE to FileMapperService.get_documents_path().
+-- Composite PK dedups; transcript delete cascades the link.
+-- ────────────────────────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS transcript_files (
+    transcript_id INTEGER NOT NULL REFERENCES transcript(id) ON DELETE CASCADE,
+    path          TEXT    NOT NULL,
+    PRIMARY KEY (transcript_id, path)
+);
+
+-- ────────────────────────────────────────────────────────────────
 -- TURN EXECUTIONS — DB-backed lifecycle of one MessageProcessor turn.
 -- Opened (state='working') the instant a turn's constructor resolves its
 -- turn_id, before any LLM call, so DELETE /api/thread/<turn_id> can flip

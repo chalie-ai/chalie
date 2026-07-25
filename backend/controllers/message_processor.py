@@ -687,39 +687,77 @@ class MessageProcessor:
             self.seeding_turn_zero = False
 
     def _seed_upload_attachment(self, path: str) -> None:
-        """Move an attachment into the docs directory and dispatch a ``read`` so
-        its content lands on the turn-zero act trail. Only files inside the
-        tmp-upload sandbox are accepted; anything else is refused loudly.
+        """Ingest an attachment via FileParserService and dispatch by type.
 
-        The file is moved (not uploaded through the document ability) so its
-        content appears as a ``read`` tool call on the trail — the model sees
-        exactly what it would if a human had handed it the file. The staging
-        prefix is stripped so the original filename survives; on collision a
-        numeric suffix is appended before the extension.
+        Only files inside the tmp-upload sandbox are accepted; anything else is
+        refused loudly. The file is ingested (extracted, copied flat to
+        data/documents/uploads/, indexed) rather than uploaded through the
+        document ability, so its content appears on the turn-zero act trail
+        as a ``read`` or ``vision`` tool call — the model sees exactly what
+        it would if a human had handed it the file.
+
+        On ingest ValueError (extraction failure), falls back to the manual
+        move into uploads/ with a warning, then still dispatches ``read`` so
+        the failure surfaces loudly on the act trail.
+
+        Records the transcript link (transcript_files row) keyed on the
+        transcript row id (self.uid) and the stored path relative to the
+        documents root. Skipped for skip_input_row configs (uid is None).
+
+        Dispatches ``vision`` for image MIME, ``read`` for everything else,
+        both on the SAVED absolute path.
         """
-        import os  # noqa: PLC0415
-        from services.tmp_storage import TMP_PATH_PREFIX  # noqa: PLC0415
-        from services.file_mapper_service import FileMapperService  # noqa: PLC0415
+        import mimetypes
+        import os
+
+        from services.tmp_storage import TMP_PATH_PREFIX
+        from services.file_mapper_service import FileMapperService
+        from services.file_parser_service import FileParserService
+        from models.transcript_file import TranscriptFile
 
         real = os.path.realpath(path)
         if not real.startswith(TMP_PATH_PREFIX) or not os.path.isfile(real):
             logger.warning("[MessageProcessor] refusing attachment outside tmp sandbox: %s", path)
             return
 
-        documents_dir = FileMapperService.get_documents_path()
-        documents_dir.mkdir(parents=True, exist_ok=True)
-        # Uploads are staged as "chalie_<8-hex>_<original name>" purely to avoid
-        # tmp collisions — strip the staging prefix so the docs dir keeps the
-        # human filename.
         basename = re.sub(r"^chalie_([0-9a-f]{8}_)?", "", os.path.basename(real)) or os.path.basename(real)
-        stem, ext = os.path.splitext(basename)
-        dest = documents_dir / basename
-        counter = 1
-        while dest.exists():
-            dest = documents_dir / f"{stem}_{counter}{ext}"
-            counter += 1
-        shutil.move(real, dest)
-        self.dispatch_service.dispatch("read", {"source": str(dest)})
+
+        try:
+            saved_path, _text = FileParserService().ingest(real, name=basename, subdir="uploads")
+            # Ingest succeeded: file is now flat in data/documents/uploads/<basename>.
+            # Delete the tmp file (it was copied, not moved, by FileParserService).
+            try:
+                os.unlink(real)
+            except OSError:
+                logger.warning("[MessageProcessor] staged attachment not cleaned up: %s", real)
+        except ValueError as exc:
+            # Extraction failed: fall back to manual move into uploads/ so the
+            # dispatched read still lands (it will surface the error loudly).
+            logger.warning(
+                "[MessageProcessor] ingest failed for %s — falling back to manual move: %s",
+                path, exc,
+            )
+            uploads_dir = FileMapperService.get_documents_path("uploads")
+            uploads_dir.mkdir(parents=True, exist_ok=True)
+            stem, ext = os.path.splitext(basename)
+            dest = uploads_dir / basename
+            counter = 1
+            while dest.exists():
+                dest = uploads_dir / f"{stem}_{counter}{ext}"
+                counter += 1
+            shutil.move(real, dest)
+            saved_path = str(dest)
+
+        # Record the transcript link (if uid is set — skip for skip_input_row configs).
+        if self.uid is not None:
+            relpath = os.path.relpath(saved_path, FileMapperService.get_documents_path())
+            TranscriptFile(transcript_id=self.uid, path=relpath).link()
+
+        mime = mimetypes.guess_type(saved_path)[0] or ""
+        if mime.startswith("image/"):
+            self.dispatch_service.dispatch("vision", {"image": saved_path, "instructions": "Describe this image"})
+        else:
+            self.dispatch_service.dispatch("read", {"source": saved_path})
 
     def _maybe_fire_gist(self) -> None:
         """Ingest this thread's gist when it has none stored yet, so the reply

@@ -26,7 +26,10 @@ surface can address other configs (e.g. the scheduler) without knowing channels.
 """
 
 import logging
+import mimetypes
+import os
 import sqlite3
+import urllib.parse
 import uuid
 from collections.abc import Sequence
 from typing import cast
@@ -37,6 +40,7 @@ from flask_restx import Namespace, Resource
 
 from configs.channels import config_for
 from services.database import Database
+from services.file_mapper_service import FileMapperService
 from services.locale_service import CHAT_TIMESTAMP_FMT, format_date
 from services.rich_media_parser import parse as _parse_rich_media
 from models.tool_call import ToolCall
@@ -68,8 +72,12 @@ _T = threads_ns.models
 
 
 def _stage_chat_uploads(files: Sequence[object]) -> list[object]:
-    """Returns temp paths that _seed_turn_zero feeds to document.upload — which
-    ingests by PATH, never bytes, so no file blob ever reaches the act-trail.
+    """Returns temp paths that _seed_turn_zero feeds to FileParserService.ingest.
+
+    The files are saved to tmp-storage, then ingested (extracted, copied flat
+    to data/documents/uploads/, indexed) by FileParserService during turn-zero
+    seeding. No file blob ever reaches the act-trail; only the extracted text
+    or vision description does.
     """
     from services.filename_utils import safe_filename  # noqa: PLC0415
     from services.tmp_storage import new_tmp_path  # noqa: PLC0415
@@ -127,29 +135,35 @@ def _fetch_tool_calls_for_transcripts(transcript_ids: list[int]) -> list[dict[st
 
 
 def _fetch_attachments_for_transcripts(conn: sqlite3.Connection, transcript_ids: list[int]) -> dict[int, list[dict[str, object]]]:
-    """Soft-deleted docs are filtered out, so a removed file silently does not
-    render. Each attachment carries the inline-serving
-    ``/api/documents/preview/<id>`` URL.
+    """Attachment rows for the given transcript ids, read from ``transcript_files``.
+
+    Each row carries a path relative to ``FileMapperService.get_documents_path()``.
+    The absolute path is reconstructed, and the row is silently dropped when the
+    file no longer exists on disk — so a removed file does not render, matching
+    the prior soft-delete semantics.
+
+    Each attachment carries the inline-serving ``/api/files/preview/<relpath>`` URL.
     """
     if not transcript_ids:
         return {}
     placeholders = ",".join("?" * len(transcript_ids))
     rows = conn.execute(
-        f"SELECT td.transcript_id, d.id, d.original_name, d.mime_type "
-        f"FROM transcript_docs td JOIN documents d ON d.id = td.doc_id "
-        f"WHERE td.transcript_id IN ({placeholders}) AND d.deleted_at IS NULL "
-        f"ORDER BY td.rowid",
+        f"SELECT transcript_id, path FROM transcript_files "
+        f"WHERE transcript_id IN ({placeholders}) "
+        f"ORDER BY rowid",
         tuple(transcript_ids),
     ).fetchall()
     by_id: dict[int, list[dict[str, object]]] = {}
-    for tid, doc_id, name, mime in rows:
-        mime = mime or ""
-        by_id.setdefault(tid, []).append({
-            "doc_id": doc_id,
-            "filename": name,
+    for tid, relpath in rows:
+        abs_path = os.path.join(str(FileMapperService.get_documents_path()), relpath)
+        if not os.path.exists(abs_path):
+            continue
+        mime = mimetypes.guess_type(relpath)[0] or ""
+        by_id.setdefault(cast("int", tid), []).append({
+            "filename": os.path.basename(relpath),
             "mime_type": mime,
             "is_image": mime.startswith("image/"),
-            "url": f"/api/documents/preview/{doc_id}",
+            "url": f"/api/files/preview/{urllib.parse.quote(relpath)}",
         })
     return by_id
 

@@ -35,6 +35,11 @@ class Action(Endpoint):
     """Most Action verbs act on existing resources and never 201; the few
     that genuinely create (skill copy, list add-item) override to ``True``."""
 
+    id_converter: ClassVar[str] = "string"
+    """Flask URL converter for the ``<id>`` segment. Override to ``"path"``
+    when the id itself contains slashes (e.g. a file path relative to a
+    root) — a ``string`` converter stops at the first ``/``."""
+
     @abstractmethod
     def verb(self) -> str:
         """URL segment of the operation (``/api/{slug}/{verb}/...``)."""
@@ -104,7 +109,7 @@ class Action(Endpoint):
         # names ({slug}_all / {slug}_item) and from every other verb — a verb
         # named "item" or "x-item" can never forge another route's name.
         ns.route(f"/{verb}", endpoint=f"{self.slug()}__{verb}")(VerbResource)
-        ns.route(f"/{verb}/<string:id>", endpoint=f"{self.slug()}__{verb}__item")(VerbItemResource)
+        ns.route(f"/{verb}/<{self.id_converter}:id>", endpoint=f"{self.slug()}__{verb}__item")(VerbItemResource)
         verb_map: dict[str, str | None] = {"get": "get", "post": "post", "put": None, "delete": "delete"}
         self._document(ns, [(VerbResource, verb_map), (VerbItemResource, verb_map)])
         return ns
