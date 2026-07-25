@@ -1,8 +1,10 @@
 """
 Voice namespace — STT + TTS via two single-purpose ONNX libraries.
 
-* TTS → ``kokoro_onnx.Kokoro`` (Kokoro v1.0 + espeak-ng phonemizer)
-* STT → ``moonshine_onnx.MoonshineOnnxModel`` (Moonshine base, ONNX)
+* TTS → ``kokoro_onnx.Kokoro`` (Kokoro v1.0 + espeak-ng phonemizer) — owned by
+  :class:`services.voice_transcript_service.VoiceTranscriptService`.
+* STT → ``moonshine_onnx.MoonshineOnnxModel`` (Moonshine base, ONNX) — owned
+  here in ``voice.py`` alongside the HTTP routes.
 
 Voice deps and model files are installed unconditionally at install time
 (``installer/install.sh`` / the Docker image build) into
@@ -11,37 +13,28 @@ or runtime. If a dep or model file is somehow still missing (a broken/partial
 install), every route returns ``{"status":"unavailable"}`` or 503 with a hint
 to reinstall.
 
-Kokoro uses phonemizer-fork + espeakng-loader under the hood, which preserves
-punctuation as IPA pause tokens and handles numbers, abbreviations, and 2-3
-letter acronyms natively. The TTS-side text pipeline collapses to:
-    markdown/HTML → plaintext → URL → spoken-host → whitespace collapse.
-
 The synthesize route returns a single ``audio/wav`` blob — no streaming, no
 NDJSON. Long text is split into sentence-level chunks (≤320 chars each) before
 being passed to Kokoro so the 510-phoneme hard limit is never hit. Chunks are
 concatenated with short silence pads and encoded as a single waveform.
-"""
 
-import io
+The transcribe route accepts a WAV upload, runs Moonshine on it (with VAD +
+denoise + hallucination-dedup + filler/contraction post-processing), and
+returns the text.
+"""
 import logging
 import re
 import struct
 import tempfile
 import threading
-from typing import TYPE_CHECKING, cast
+from typing import cast
 
 from flask import Response, jsonify, make_response, request
 from flask.typing import ResponseReturnValue
 from flask_restx import Namespace, Resource
 
-if TYPE_CHECKING:
-    from typing import Protocol
-
-    class _KokoroModel(Protocol):
-        def create(self, text: str, voice: str, speed: float, lang: str) -> "tuple[object, int]": ...
-
 from services.file_mapper_service import FileMapperService
-from services.markup import extract_plaintext, markdown_to_html
+from services.voice_transcript_service import get_service
 
 from .auth import require_auth
 from .dto import Error, expects, register_dto, responds
@@ -61,12 +54,12 @@ _V = voice_ns.models
 # intentionally OUTSIDE the data/ volume so the files survive an app upgrade on
 # native installs. They are downloaded once at install time (installer/install.sh
 # / the Docker build), never at boot or runtime.
-_KOKORO_MODEL = FileMapperService.get_voice_models_path("kokoro", "kokoro-v1.0.onnx")
-_KOKORO_VOICES = FileMapperService.get_voice_models_path("kokoro", "voices-v1.0.bin")
+#
+# Only the Moonshine (STT) paths live here — the Kokoro (TTS) paths moved to
+# VoiceTranscriptService, which the health/loading routes query for the
+# combined missing-files check.
 _MOONSHINE_DIR = FileMapperService.get_voice_models_path("moonshine", "base")
 
-TTS_VOICE = "af_heart"
-TTS_LANG = "en-us"
 STT_MODEL_NAME = "base"
 
 # Moonshine internally asserts duration < 64s, so a single transcribe call can
@@ -126,8 +119,15 @@ def _voice_unavailable_payload() -> "dict[str, object]":
 
 def _loading_or_missing_response() -> "Response":
     """503 with a precise ``reason`` and ``Retry-After`` so the client can decide
-    whether to auto-retry (transient cold-start) or give up (missing files)."""
-    missing = _missing_model_files()
+    whether to auto-retry (transient cold-start) or give up (missing files).
+
+    Combines missing-file and loading-state checks from both Kokoro (via the
+    service) and Moonshine (local state).
+    """
+    tts_service = get_service()
+    kokoro_missing = tts_service.missing_model_files()
+    moonshine_missing = _missing_moonshine_files()
+    missing = kokoro_missing + moonshine_missing
     if missing:
         return make_response(jsonify({
             "error": "Voice models not installed",
@@ -143,58 +143,52 @@ def _loading_or_missing_response() -> "Response":
     return resp
 
 
-def _missing_model_files() -> list[str]:
+# ── Lazy model state ────────────────────────────────────────────────────────
+#
+# Kokoro loading state is owned by VoiceTranscriptService.  Moonshine state
+# lives here because STT has its own lock and its loading path is only used by
+# the transcribe route.
+
+_moonshine: object = None
+_stt_lock = threading.Lock()
+_moonshine_load_lock = threading.Lock()
+_moonshine_loaded = False
+_moonshine_loading = False
+
+
+def _missing_moonshine_files() -> list[str]:
+    """Return the names of Moonshine model files that are missing on disk."""
     expected = [
-        _KOKORO_MODEL,
-        _KOKORO_VOICES,
         _MOONSHINE_DIR / "encoder_model.onnx",
         _MOONSHINE_DIR / "decoder_model_merged.onnx",
     ]
     return [p.name for p in expected if not p.is_file()]
 
 
-# ── Lazy model state ────────────────────────────────────────────────────────
+def _ensure_moonshine() -> bool:
+    """Lazily load the Moonshine STT model. Returns ``False`` if files are
+    missing or loading is in progress (caller should 503)."""
+    global _moonshine, _moonshine_loaded, _moonshine_loading
 
-_kokoro: object = None
-_moonshine: object = None
-_load_lock = threading.Lock()
-_models_loaded = False
-_models_loading = False
-
-# phonemizer-fork (espeak-ng under the hood) is not thread-safe; kokoro.create()
-# calls it on every invocation. Serialise the full TTS path. STT shares its own
-# lock so a long synthesis does not block a mic recording from getting
-# transcribed.
-_tts_lock = threading.Lock()
-_stt_lock = threading.Lock()
-
-
-def _ensure_models() -> bool:
-    global _kokoro, _moonshine, _models_loaded, _models_loading
-
-    if _models_loaded:
+    if _moonshine_loaded:
         return True
 
-    with _load_lock:
-        if _models_loaded:
+    with _moonshine_load_lock:
+        if _moonshine_loaded:
             return True
-        if _models_loading:
+        if _moonshine_loading:
             return False
-        _models_loading = True
+        _moonshine_loading = True
 
     try:
-        missing = _missing_model_files()
+        missing = _missing_moonshine_files()
         if missing:
-            logger.error("[Voice] Model files missing: %s", missing)
-            with _load_lock:
-                _models_loading = False
+            logger.error("[Voice] Moonshine model files missing: %s", missing)
+            with _moonshine_load_lock:
+                _moonshine_loading = False
             return False
 
-        from kokoro_onnx import Kokoro
         import moonshine_onnx as mo
-
-        logger.info("[Voice] Loading Kokoro TTS from %s", _KOKORO_MODEL)
-        kokoro = Kokoro(str(_KOKORO_MODEL), str(_KOKORO_VOICES))
 
         logger.info("[Voice] Loading Moonshine STT from %s", _MOONSHINE_DIR)
         moonshine = mo.MoonshineOnnxModel(
@@ -202,127 +196,22 @@ def _ensure_models() -> bool:
             model_name=STT_MODEL_NAME,
         )
 
-        with _load_lock:
-            _kokoro = kokoro
+        with _moonshine_load_lock:
             _moonshine = moonshine
-            _models_loaded = True
-            _models_loading = False
+            _moonshine_loaded = True
+            _moonshine_loading = False
 
-        logger.info("[Voice] Models loaded — accepting requests")
+        logger.info("[Voice] Moonshine loaded — accepting transcription requests")
         return True
 
     except Exception as e:
-        logger.error("[Voice] Model loading failed: %s", e)
-        with _load_lock:
-            _models_loading = False
+        logger.error("[Voice] Moonshine loading failed: %s", e)
+        with _moonshine_load_lock:
+            _moonshine_loading = False
         return False
 
 
-# ── TTS text preprocessing ──────────────────────────────────────────────────
-#
-# Kokoro phonemises via phonemizer-fork (espeak-ng), which:
-#   * preserves punctuation as IPA pause tokens (commas, periods, question
-#     marks all produce natural prosody breaks)
-#   * normalises numbers ("v0.8" reads as "vee zero point eight")
-#   * pronounces 2-3 letter acronyms correctly
-#   * handles abbreviations and ordinals natively
-#
-# So we only need to (a) strip HTML/markdown markers so the LLM's raw output
-# doesn't read tags or symbols aloud, (b) rewrite bare URLs to a human-readable
-# host form (otherwise espeak spells out every slash and digit), (c) collapse
-# whitespace.
-
-# Block-level markdown the LLM occasionally leaks into responses. We do NOT run a
-# full markdown parser for TTS — we strip the block markers and route list items
-# through ``<li>`` so they share the HTML list-pause logic below. Images drop
-# entirely (alt text isn't spoken); links keep their text, not the URL.
-_FENCE_RE = re.compile(r"^[ \t]*```[^\n]*$", re.MULTILINE)
-_MD_IMAGE_RE = re.compile(r"!\[[^\]]*\]\([^)]*\)")
-_MD_LINK_RE = re.compile(r"\[([^\]]*)\]\([^)]*\)")
-_HEADING_RE = re.compile(r"^[ \t]*#{1,6}[ \t]+", re.MULTILINE)
-_BLOCKQUOTE_RE = re.compile(r"^[ \t]*>[ \t]?", re.MULTILINE)
-_LIST_ITEM_RE = re.compile(r"^[ \t]*(?:[-*+]|\d+\.)[ \t]+(.*)$", re.MULTILINE)
-_URL_RE = re.compile(r"https?://([^\s/?#]+)\S*")
-_WS_RE = re.compile(r"\s+")
-# Append a period before ``</li>`` when the item doesn't already end in
-# sentence-terminating punctuation. ``extract_plaintext`` strips ``<li>`` tags
-# down to a single space, which espeak runs together without a beat — items
-# need real punctuation to produce a natural between-item pause.
-_LI_NEEDS_TERMINATOR_RE = re.compile(
-    r"([^\s.!?,;:])\s*</li\s*>", re.IGNORECASE,
-)
-
-
-def _spoken_url(match: "re.Match[str]") -> str:
-    """Rewrite ``http://google.com/123`` → ``google dot com``.
-
-    Without this, espeak reads URLs character-by-character — fast but unpleasant.
-    """
-    host = match.group(1).lower()
-    if host.startswith("www."):
-        host = host[4:]
-    return host.replace(".", " dot ")
-
-
-def _clean_for_tts(text: str) -> str:
-    if not text:
-        return ""
-    # ONE common path: strip block markdown the LLM leaks (lists become <li> so
-    # they join the HTML list-pause logic), rewrite leaked inline emphasis via the
-    # shared markup helper, then flatten every tag through extract_plaintext.
-    text = _FENCE_RE.sub("", text)
-    text = _MD_IMAGE_RE.sub("", text)
-    text = _MD_LINK_RE.sub(r"\1", text)
-    text = _HEADING_RE.sub("", text)
-    text = _BLOCKQUOTE_RE.sub("", text)
-    text = _LIST_ITEM_RE.sub(r"<li>\1</li>", text)
-    text = markdown_to_html(text)
-    text = _LI_NEEDS_TERMINATOR_RE.sub(r"\1.</li>", text)
-    plain = extract_plaintext(text)
-    plain = _URL_RE.sub(_spoken_url, plain)
-    return _WS_RE.sub(" ", plain).strip()
-
-
-# Kokoro ONNX hard limit is 510 phonemes (~1.5 chars/phoneme → 340 chars).
-# 320 gives headroom for phoneme-heavy words.
-_MAX_TTS_CHUNK_CHARS = 320
-_TTS_SILENCE_PAD_SECONDS = 0.15
-_TTS_SPLIT_RE = re.compile(r"(?<=[.!?,;:—])\s+")
-
-
-def _segment_for_tts(text: str) -> list[str]:
-    if not text:
-        return []
-    limit = _MAX_TTS_CHUNK_CHARS
-    chunks: list[str] = []
-    current = ""
-    for fragment in _TTS_SPLIT_RE.split(text):
-        fragment = fragment.strip()
-        if not fragment:
-            continue
-        candidate = f"{current} {fragment}".strip() if current else fragment
-        if len(candidate) <= limit:
-            current = candidate
-        else:
-            if current:
-                chunks.append(current)
-            # Fragment itself over limit — hard-split on whitespace.
-            if len(fragment) > limit:
-                for word in fragment.split():
-                    word = word[:limit]
-                    wc = f"{current} {word}".strip() if current else word
-                    if len(wc) <= limit:
-                        current = wc
-                    else:
-                        if current:
-                            chunks.append(current)
-                        current = word
-            else:
-                current = fragment
-    if current:
-        chunks.append(current)
-    return chunks or [text]
-
+# ── STT audio preprocessing ─────────────────────────────────────────────────
 
 def _dedup_repetitions(text: str) -> str:
     """Collapse Moonshine hallucination loops (consecutive identical 2–20 word phrases)."""
@@ -358,8 +247,6 @@ def _dedup_repetitions(text: str) -> str:
         logger.exception("[Voice] _dedup_repetitions failed on len=%d", len(text))
         return text
 
-
-# ── STT audio preprocessing ─────────────────────────────────────────────────
 
 def _extract_speech(audio: object, sr: int) -> object:
     """Strip non-speech regions using Silero VAD.
@@ -537,14 +424,6 @@ def _wav_duration_seconds(data: bytes) -> float:
         return 0.0
 
 
-def _audio_to_wav_bytes(samples: object, sample_rate: int) -> bytes:
-    import soundfile as sf
-    buf = io.BytesIO()
-    sf.write(buf, samples, sample_rate, format="WAV", subtype="PCM_16")
-    buf.seek(0)
-    return buf.read()
-
-
 def _transcribe_sync(data: bytes) -> str:
     """Run Moonshine on raw WAV bytes (blocking).
 
@@ -631,21 +510,30 @@ class VoiceHealthResource(Resource):
                 hint=_VOICE_INSTALL_HINT,
             )
 
-        if _models_loaded:
+        tts_service = get_service()
+        kokoro_loaded = tts_service.is_loaded
+        moonshine_loaded = _moonshine_loaded
+
+        if kokoro_loaded and moonshine_loaded:
             return _health("ok")
-        if _models_loading:
+        if tts_service.is_loading or _moonshine_loading:
             return _health("loading")
 
-        missing_files = _missing_model_files()
-        if missing_files:
+        kokoro_missing = tts_service.missing_model_files()
+        moonshine_missing = _missing_moonshine_files()
+        if kokoro_missing or moonshine_missing:
             return _health(
                 "unavailable",
                 reason="models_missing",
-                missing=missing_files,
+                missing=kokoro_missing + moonshine_missing,
                 hint="Voice models are missing from this install. Reinstall Chalie to restore them.",
             )
 
-        threading.Thread(target=_ensure_models, daemon=True).start()
+        def _start_loading() -> None:
+            tts_service.ensure_loaded()
+            _ensure_moonshine()
+
+        threading.Thread(target=_start_loading, daemon=True).start()
         return _health("loading")
 
 
@@ -664,55 +552,25 @@ class VoiceSynthesizeResource(Resource):
         if not _VOICE_AVAILABLE:
             return _voice_unavailable_payload(), 503
 
-        if not _ensure_models():
+        tts_service = get_service()
+        if not tts_service.ensure_loaded():
             return _loading_or_missing_response()
 
-        text = _clean_for_tts(dto.text.strip())
-
-        if not text:
-            return error("Text is required", 422)
-
-        chunks = _segment_for_tts(text)
-        logger.info(
-            "[Voice] synthesize: len=%d chunks=%d head=%r",
-            len(text), len(chunks), text[:80],
-        )
-
         try:
-            if len(chunks) == 1:
-                with _tts_lock:
-                    samples, sr = cast("_KokoroModel", _kokoro).create(
-                        chunks[0], voice=TTS_VOICE, speed=1.0, lang=TTS_LANG,
-                    )
-            else:
-                import numpy as np
-                all_samples: list[object] = []
-                sr = None
-                with _tts_lock:
-                    for i, chunk in enumerate(chunks):
-                        chunk_samples, chunk_sr = cast("_KokoroModel", _kokoro).create(
-                            chunk, voice=TTS_VOICE, speed=1.0, lang=TTS_LANG,
-                        )
-                        if sr is None:
-                            sr = chunk_sr
-                        all_samples.append(chunk_samples)
-                        if i < len(chunks) - 1:
-                            pad_len = int(_TTS_SILENCE_PAD_SECONDS * sr)
-                            all_samples.append(np.zeros(pad_len, dtype=cast("np.ndarray[tuple[int], np.dtype[np.float32]]", chunk_samples).dtype))
-                samples = np.concatenate(cast("list[np.ndarray[tuple[int], np.dtype[np.float32]]]", all_samples))
+            _, _, wav_bytes = tts_service.synthesize(dto.text)
+            return Response(
+                wav_bytes,
+                mimetype="audio/wav",
+                headers={
+                    "Content-Length": str(len(wav_bytes)),
+                    "Cache-Control": "no-cache",
+                },
+            )
+        except ValueError:
+            return error("Text is required", 422)
         except Exception as e:
             logger.error("[Voice] TTS synthesis failed: %s", e)
             return error("TTS synthesis failed", 500)
-
-        wav_bytes = _audio_to_wav_bytes(samples, cast(int, sr))
-        return Response(
-            wav_bytes,
-            mimetype="audio/wav",
-            headers={
-                "Content-Length": str(len(wav_bytes)),
-                "Cache-Control": "no-cache",
-            },
-        )
 
 
 @voice_ns.route("/transcribe")
@@ -744,7 +602,7 @@ class VoiceTranscribeResource(Resource):
         if duration > MAX_AUDIO_SECONDS:
             return error(f"Audio exceeds {MAX_AUDIO_SECONDS}s limit ({duration:.1f}s)", 422)
 
-        if not _ensure_models():
+        if not _ensure_moonshine():
             return _loading_or_missing_response()
 
         with _stt_lock:

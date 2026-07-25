@@ -1,6 +1,6 @@
 import pytest
 
-from api.voice import _segment_for_tts, _MAX_TTS_CHUNK_CHARS
+from services.voice_transcript_service import _segment_for_tts, _MAX_TTS_CHUNK_CHARS
 
 # ── helpers ────────────────────────────────────────────────────────────────────
 

@@ -511,6 +511,14 @@ CREATE TABLE IF NOT EXISTS transcript_files (
     PRIMARY KEY (transcript_id, path)
 );
 
+-- Pre-synthesized speech for settled assistant rows. file_path NULL means
+-- synthesis failed after all attempts — the row persists the failed state.
+CREATE TABLE IF NOT EXISTS voice_transcript (
+    transcript_id INTEGER NOT NULL REFERENCES transcript(id) ON DELETE CASCADE,
+    file_path     TEXT,
+    PRIMARY KEY (transcript_id)
+);
+
 -- ────────────────────────────────────────────────────────────────
 -- TURN EXECUTIONS — DB-backed lifecycle of one MessageProcessor turn.
 -- Opened (state='working') the instant a turn's constructor resolves its

@@ -35,6 +35,7 @@ class FileMapperService:
     _DOCUMENTS_DIR: Path = _DATA_DIR / "documents"
     _USER_SKILLS_DIR: Path = _DATA_DIR / "skills" / "user"
     _VOICE_MODELS_DIR: Path = _RESOURCES_DIR / "voice-models"
+    _VOICE_DIR: Path = _DATA_DIR / "generated" / "voice"
     _ABILITIES_SKILLS_DIR: Path = _ABILITIES_DIR / "skills"
     _CODE_AGENT_WORKSPACE_DIR: Path = _DATA_DIR / "code_agent_workspace"
 
@@ -222,6 +223,11 @@ class FileMapperService:
     def get_voice_models_path(cls, *parts: str) -> Path:
         """Return resources/voice-models/ joined with any additional path parts."""
         return cls._VOICE_MODELS_DIR.joinpath(*parts) if parts else cls._VOICE_MODELS_DIR
+
+    @classmethod
+    def get_voice_path(cls, *parts: str) -> Path:
+        """Return data/generated/voice/ joined with any additional path parts."""
+        return cls._VOICE_DIR.joinpath(*parts) if parts else cls._VOICE_DIR
 
     @classmethod
     def get_abilities_skills_path(cls, *parts: str) -> Path:

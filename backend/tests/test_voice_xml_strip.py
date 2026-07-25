@@ -2,7 +2,7 @@
 
 import pytest
 
-from api.voice import _clean_for_tts
+from services.voice_transcript_service import _clean_for_tts
 
 
 @pytest.mark.unit
