@@ -97,10 +97,10 @@ if TYPE_CHECKING:
 from configs.enums.thinking_level import ThinkingLevel
 from contracts.provider_client import ProviderClient
 from exceptions import (
+    ContextLimit,
     ProviderResponseError,
     ProviderTimeoutError,
     RateLimitError,
-    ResponseOverLimitError,
 )
 from services.llm_clients.thinking_map import GEMINI_NONE_FALLBACK_BUDGET, GEMINI_THINKING_BUDGETS
 from services.provider_api import (
@@ -291,9 +291,9 @@ class GeminiClient(ProviderClient):
         if exc_code == 400 and exc_status == 'INVALID_ARGUMENT':
             exc_msg = (getattr(exc, 'message', None) or '').lower()
             if any(s in exc_msg for s in _TOKEN_LIMIT_STRINGS):
-                raise ResponseOverLimitError(
+                raise ContextLimit(
                     f"Gemini rejected payload (token limit): {exc}",
-                    response_code=400, provider='gemini',
+                    provider='gemini',
                 ) from exc
             logger.warning(
                 "[GeminiClient] 400 INVALID_ARGUMENT not matched as token-limit "

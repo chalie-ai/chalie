@@ -2,7 +2,7 @@
 Anthropic thin client — transforms ProviderApiRequest → Anthropic Messages API
 and parses back to ProviderApiResponse.
 
-Native size-rejection signal: HTTP 413 → ResponseOverLimitError.
+Native size-rejection signal: HTTP 413 → ContextLimit.
 VERIFIED: anthropic._exceptions.RequestTooLargeError has class-level
 status_code == 413 and is a subclass of anthropic.APIError.  The catch
 ``except (anthropic.BadRequestError, anthropic.APIError)`` with
@@ -42,10 +42,10 @@ if TYPE_CHECKING:
 from configs.enums.thinking_level import ThinkingLevel
 from contracts.provider_client import ProviderClient
 from exceptions import (
+    ContextLimit,
     ProviderResponseError,
     ProviderTimeoutError,
     RateLimitError,
-    ResponseOverLimitError,
 )
 from services.llm_clients.thinking_map import ANTHROPIC_NONE_THINKING, ANTHROPIC_THINKING_BUDGETS
 from services.provider_api import (
@@ -201,9 +201,9 @@ class AnthropicClient(ProviderClient):
             # getattr(exc, 'status_code', None) returns 413 for that class.
             status = getattr(exc, 'status_code', None)
             if status == 413:
-                raise ResponseOverLimitError(
+                raise ContextLimit(
                     f"Anthropic rejected payload (HTTP 413): {exc}",
-                    response_code=413, provider='anthropic',
+                    provider='anthropic',
                 ) from exc
             if 'thinking' in str(exc).lower() and 'thinking' in create_kwargs:
                 logger.info(

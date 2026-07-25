@@ -13,9 +13,15 @@ their meaning and nothing downstream changes semantically.
 
 from __future__ import annotations
 
-from typing import ClassVar
+import logging
+from typing import TYPE_CHECKING, ClassVar
 
 from exceptions.chalie_exception import ChalieException
+
+if TYPE_CHECKING:
+    from controllers.message_processor import MessageProcessor
+
+logger = logging.getLogger(__name__)
 
 
 # ── API endpoint layer ────────────────────────────────────────────────────────
@@ -52,43 +58,57 @@ class ProviderError(ChalieException):
     """Base for all provider communication errors."""
 
 
-class RequestOverCapError(ProviderError):
-    """Pre-flight: measured request exceeds the context window cap.
+class ContextLimit(ProviderError):
+    """The request no longer fits the model's context window.
 
-    Replaces the OVER_CAP sentinel. The ACT loop catches this and fires
-    both compactors before retrying.
+    One exception for the two ways that fact surfaces, because they mean the
+    same thing and take the same recovery:
+
+    - Pre-flight, when the measured payload reaches 90% of the window
+      (``ProviderService.send``).
+    - Mid-inference, when the provider itself rejects the payload for length —
+      every client's native size signal (Anthropic/Ollama HTTP 413, OpenAI
+      ``context_length_exceeded``, Gemini's token-limit message).
+
+    Carries the :class:`MessageProcessor` whose turn hit the wall. Clients raise
+    it without one — a client has no turn — and ``ProviderService.send``
+    attaches its own before re-raising, so any handler can reach the turn that
+    has to shrink.
     """
 
-    def __init__(self, message: str, window: int = 0, measured: int = 0,
-                 cap: int = 0, provider: str = "", model: str = "") -> None:
-        super().__init__(message)
-        self.window = window
-        self.measured = measured
-        self.cap = cap
-        self.provider = provider
-        self.model = model
-
-
-class ResponseOverLimitError(ProviderError):
-    """Post-flight: the provider rejected the request server-side for size.
-
-    Replaces PayloadTooLargeError and is raised by ALL provider clients on
-    their native size-rejection signals:
-      - Anthropic: HTTP 413
-      - OpenAI: HTTP 400 with error.code == 'context_length_exceeded'
-      - Gemini: token-count exceeded error
-      - Ollama: HTTP 413
-
-    The ACT loop catches this with the same compact-then-retry path as
-    RequestOverCapError.
-    """
-
-    def __init__(self, message: str, response_code: int = 0,
+    def __init__(self, message: str, mp: MessageProcessor | None = None, *,
+                 window: int = 0, measured: int = 0,
                  provider: str = "", model: str = "") -> None:
         super().__init__(message)
-        self.response_code = response_code
+        self.mp = mp
+        self.window = window
+        self.measured = measured
         self.provider = provider
         self.model = model
+
+    def recover(self) -> None:
+        """Compact the turn's history so the next send has room.
+
+        Fires the chat-history compactor on the turn that raised and arms the
+        transcript reviewer, so the model can go and read whatever was folded
+        away. Re-sending is deliberately NOT done here: the retry belongs to
+        the step loop that owns the recursion, not to an exception.
+        """
+        if self.mp is None:
+            raise RuntimeError(
+                "ContextLimit.recover() called without a MessageProcessor — "
+                "ProviderService.send must attach one before re-raising",
+            )
+        logger.warning(
+            "[ContextLimit] %s tokens against a %s window — compacting turn %s",
+            self.measured or "?", self.window or "?", self.mp.turn_id,
+        )
+        self.mp.dispatch_service.dispatch(
+            "chat_history_compactor", {"act_summary": "Compacting conversation"},
+        )
+        self.mp.post_compaction_continuation = True
+        if "review_transcript" not in self.mp.active_tools:
+            self.mp.active_tools.append("review_transcript")
 
 
 class ProviderResponseError(ProviderError):

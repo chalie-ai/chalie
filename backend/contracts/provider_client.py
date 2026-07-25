@@ -44,7 +44,7 @@ class ProviderClient(Protocol):
         """Transform the DTO to native, call the provider, parse back.
 
         Raises:
-            ResponseOverLimitError: provider rejected the payload for size.
+            ContextLimit: provider rejected the payload for size.
             ProviderResponseError: other API or HTTP error.
             RateLimitError: HTTP 429.
             ProviderTimeoutError: the call exceeded PROVIDER_CALL_TIMEOUT_S.

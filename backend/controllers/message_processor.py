@@ -67,11 +67,10 @@ from configs.enums.channels import Channel
 from configs.enums.provider_type import ProviderType
 from configs.enums.thinking_level import ThinkingLevel
 from exceptions import (
+    ContextLimit,
     EmptyCompletionLoop,
     ProviderResponseError,
     ProviderRetriesExhaustedError,
-    RequestOverCapError,
-    ResponseOverLimitError,
     RunAwayLoop,
 )
 from models.provider_request import ProviderRequest
@@ -121,6 +120,12 @@ _EMPTY_COMPLETION_STEER = (
     "reply is never a valid answer. Address the user's request now: call the "
     "tools you need, or write your reply."
 )
+
+#: Consecutive ``ContextLimit`` hits a single turn may recover from before the
+#: error is allowed out. Compaction is the only lever, so a hit that survives it
+#: will survive the next one too — recursing past this is an infinite loop, not
+#: persistence.
+_CONTEXT_LIMIT_RECOVERY_LIMIT = 3
 
 
 class _TurnCancelled(Exception):
@@ -190,6 +195,10 @@ class MessageProcessor:
         # _build_messages.
         self._empty_completions: int = 0
         self._empty_completion_steer: bool = False
+        # Reset by every send that gets through, so it counts consecutive
+        # failures to fit rather than a turn's lifetime total — a long turn may
+        # legitimately outgrow the window more than once as tools add output.
+        self._context_limit_hits: int = 0
 
         # Infrastructure handles.
         self.db = Database()
@@ -301,8 +310,10 @@ class MessageProcessor:
     def _step(self) -> str:
         """One provider step, recursing until the model stops calling tools.
 
-        Send → on over-cap, compact and continue (re-enter with the transcript
-        reviewer armed) → store any prose the model emitted → if it made no tool
+        Send → on ``ContextLimit``, compact and continue (re-enter with the
+        transcript reviewer armed; a payload that will not shrink is let out
+        after ``_CONTEXT_LIMIT_RECOVERY_LIMIT`` attempts rather than spun on)
+        → store any prose the model emitted → if it made no tool
         calls the turn is done (end); otherwise dispatch the calls and recurse.
         A cancel observed at the top of any step aborts the whole turn. Every
         provider client is a single blocking, non-streaming call (§ llm_clients/*)
@@ -316,12 +327,17 @@ class MessageProcessor:
             raise _TurnCancelled()
         try:
             response = self._send_with_retry(self._build_request())
-        except (RequestOverCapError, ResponseOverLimitError):
-            self.dispatch_service.dispatch("chat_history_compactor", {"act_summary": "Compacting conversation"})
-            self.post_compaction_continuation = True
-            if "review_transcript" not in self.active_tools:
-                self.active_tools.append("review_transcript")
+        except ContextLimit as limit:
+            # Compaction is the only lever here, so a hit that survives it is
+            # not a retry — it is a request that cannot be made to fit (one
+            # oversized turn, a window smaller than the prompt itself). Let it
+            # out rather than recursing forever on an unshrinkable payload.
+            self._context_limit_hits += 1
+            if self._context_limit_hits > _CONTEXT_LIMIT_RECOVERY_LIMIT:
+                raise
+            limit.recover()
             return self._step()
+        self._context_limit_hits = 0
         self.post_compaction_continuation = False
         if self.turn_execution_service.should_stop():
             raise _TurnCancelled()
@@ -359,8 +375,9 @@ class MessageProcessor:
     # ── provider send ──────────────────────────────────────────────────────────
 
     def _send_with_retry(self, request: ProviderRequest) -> ProviderResponse:
-        """Send with the turn's resend budget. Over-cap/over-limit errors are
-        re-raised untouched (``run`` compacts and continues); every other
+        """Send with the turn's resend budget. ``ContextLimit`` is re-raised
+        untouched — resending an oversized request unchanged just fails again,
+        so the step loop compacts and continues instead; every other
         provider failure is retried up to ``_MAX_PROVIDER_ATTEMPTS``, emitting a
         user-facing retry notice between attempts, and a cancel observed
         mid-retry aborts the turn. Exhausting the budget raises a clean,
@@ -369,7 +386,7 @@ class MessageProcessor:
         for attempt in range(1, _MAX_PROVIDER_ATTEMPTS + 1):
             try:
                 return self.provider_service.send(request)
-            except (RequestOverCapError, ResponseOverLimitError):
+            except ContextLimit:
                 raise
             except Exception as exc:  # noqa: BLE001 — resend policy lives here, not in the provider
                 last_exc = exc

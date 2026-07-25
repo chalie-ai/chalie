@@ -5,7 +5,7 @@ The openai_compatible path differs only in that a 'host' (base_url) is set in
 the config; the SDK call-path is identical.
 
 Native size-rejection signal:
-  HTTP 400 with error.code == 'context_length_exceeded' → ResponseOverLimitError.
+  HTTP 400 with error.code == 'context_length_exceeded' → ContextLimit.
   Confirmed from existing code: openai_mod.BadRequestError is caught in
   _call_completions; the 'context_length_exceeded' code is the canonical OpenAI
   signal (https://platform.openai.com/docs/guides/error-codes).
@@ -44,10 +44,10 @@ if TYPE_CHECKING:
 from configs.enums.thinking_level import ThinkingLevel
 from contracts.provider_client import ProviderClient
 from exceptions import (
+    ContextLimit,
     ProviderResponseError,
     ProviderTimeoutError,
     RateLimitError,
-    ResponseOverLimitError,
 )
 from services.llm_clients.thinking_map import (
     OPENAI_COMPATIBLE_NONE_BODY,
@@ -186,10 +186,9 @@ class OpenAIClient(ProviderClient):
             err_body = getattr(exc, 'body', None) or {}
             err_code = (err_body.get('error') or {}).get('code', '') if isinstance(err_body, dict) else ''
             if err_code == 'context_length_exceeded' or 'context_length_exceeded' in str(exc).lower():
-                status = getattr(exc, 'status_code', 400)
-                raise ResponseOverLimitError(
+                raise ContextLimit(
                     f"OpenAI rejected payload (context_length_exceeded): {exc}",
-                    response_code=status, provider='openai',
+                    provider='openai',
                 ) from exc
             if _is_thinking_rejection(exc, create_kwargs):
                 # Ladder: only when we sent reasoning_effort='none' do we try

@@ -1,8 +1,8 @@
 """
 Ollama thin client — wraps the Ollama /api/chat endpoint.
 
-Native size-rejection signal: HTTP 413 → ResponseOverLimitError.
-This client maps it to ResponseOverLimitError instead.
+Native size-rejection signal: HTTP 413 → ContextLimit.
+This client maps it to ContextLimit instead.
 
 Known quirk (preserved): the `think` flag is gated on model capability
 (via /api/show), NOT on ThinkingLevel. ThinkingLevel is effectively ignored
@@ -30,10 +30,10 @@ from configs.enums.thinking_level import ThinkingLevel
 from contracts.provider_client import ProviderClient
 from services.llm_clients.thinking_map import OLLAMA_THINK
 from exceptions import (
+    ContextLimit,
     ProviderResponseError,
     ProviderTimeoutError,
     RateLimitError,
-    ResponseOverLimitError,
 )
 from services.provider_api import (
     PROVIDER_CALL_TIMEOUT_S,
@@ -219,9 +219,9 @@ class OllamaClient(ProviderClient):
         if status == 429:
             raise RateLimitError(str(exc), provider='ollama') from exc
         if status == 413:
-            raise ResponseOverLimitError(
+            raise ContextLimit(
                 f"Ollama rejected payload with HTTP 413 (model={self.model})",
-                response_code=413, provider='ollama',
+                provider='ollama',
             ) from exc
         raise ProviderResponseError(str(exc), response_code=status or 0, provider='ollama') from exc
 

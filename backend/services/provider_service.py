@@ -3,8 +3,9 @@
 Resolves the per-turn provider selection, builds and holds the thin transport
 client, and sends one :class:`~models.provider_request.ProviderRequest`
 through the pre-flight cap chokepoint, then logs the call. Retry is NOT this
-layer's job (§6.4): a size fault raises ``RequestOverCapError`` /
-``ResponseOverLimitError`` (the MessageProcessor's cue to compact-then-retry);
+layer's job (§6.4): a size fault raises ``ContextLimit`` — measured pre-flight
+here, or reported by the provider and re-raised with this turn attached — which
+is the MessageProcessor's cue to compact-then-retry;
 any other provider failure bubbles straight up for the MP's own resend policy
 to catch. The two transient notices this layer DOES own — neither a turn state,
 both emitted through ``mp.push_websocket``, which is their only broadcast gate —
@@ -27,7 +28,7 @@ import re
 from typing import TYPE_CHECKING, cast
 
 from configs.enums.provider_type import ProviderType
-from exceptions import ProviderError, RequestOverCapError
+from exceptions import ContextLimit, ProviderError
 from models.turn_signal import TurnSignal
 from services.llm_clients.factory import build_client
 from services.provider_api import MAX_CONTEXT_WINDOW
@@ -46,9 +47,17 @@ _LLM_SENTINEL_PATTERNS = (
 )
 
 
-def _window_of(client: "ProviderClient") -> int:
-    """The one context-window computation: client's declared limit, hard-capped at MAX_CONTEXT_WINDOW."""
-    return min(client.get_context_limit(), MAX_CONTEXT_WINDOW)
+def _window_of(client: "ProviderClient", config: dict[str, object]) -> int:
+    """The one context-window computation, hard-capped at MAX_CONTEXT_WINDOW.
+
+    Prefers the window stored on the provider row. Only when that is unset does
+    it fall back to the client's own answer — which for Gemini and Ollama is a
+    real query against the model, but for an OpenAI-compatible provider is a
+    flat constant that cannot know the model behind an arbitrary host.
+    """
+    stored = config.get("context_window")
+    limit = stored if isinstance(stored, int) and stored > 0 else client.get_context_limit()
+    return min(limit, MAX_CONTEXT_WINDOW)
 
 
 class ProviderService:
@@ -67,17 +76,24 @@ class ProviderService:
         for, and a fabricated 0 would read as a real, empty context."""
         config = self._select(request.type)
         client = build_client(config)
-        window = _window_of(client)
-        cap = window - max(int(0.10 * window), 8000)
+        window = _window_of(client, config)
+        cap = int(0.90 * window)
         measured = client.estimate_request_tokens(cast("ProviderApiRequest", request))
         if measured >= cap:
-            raise RequestOverCapError(
-                f"Request ({measured} tokens) exceeds cap ({cap}); window={window}",
-                window=window, measured=measured, cap=cap,
+            raise ContextLimit(
+                f"Request ({measured} tokens) reached 90% of the {window}-token context window",
+                self.mp, window=window, measured=measured,
                 provider=cast(str, config.get("platform") or ""),
                 model=cast(str, config.get("model") or ""),
             )
-        response = cast("ProviderResponse", client.send(cast("ProviderApiRequest", request)))
+        try:
+            response = cast("ProviderResponse", client.send(cast("ProviderApiRequest", request)))
+        except ContextLimit as limit:
+            # The client knows the provider said "too long"; only this layer
+            # knows whose turn it was. Attach it so the handler can compact.
+            limit.mp = self.mp
+            limit.window = limit.window or window
+            raise
         self.mp.llm_log_service.record(response)
         if request.type is ProviderType.CHAT and response.tokens_input is not None:
             self.mp.push_websocket(
@@ -90,8 +106,9 @@ class ProviderService:
         return self._resolve(request.type).estimate_request_tokens(cast("ProviderApiRequest", request))
 
     def context_limit(self, provider_type: ProviderType = ProviderType.CHAT) -> int:
-        """Context window for ``provider_type``: the client's declared limit, hard-capped at MAX_CONTEXT_WINDOW."""
-        return _window_of(self._resolve(provider_type))
+        """Context window for ``provider_type`` — see :func:`_window_of`."""
+        config = self._select(provider_type)
+        return _window_of(build_client(config), config)
 
     def selected_provider(self) -> ProviderClient:
         """The resolved CHAT provider client (e.g. for prompt-template metadata)."""
