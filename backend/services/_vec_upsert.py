@@ -8,7 +8,7 @@ previous vector once the caller's warning-net absorbs the error. The
 correct upsert is DELETE then INSERT, which vec0 supports natively.
 
 Consumed by every ``*_vec`` shadow-table writer (``episodes_vec``,
-``lists_vec``, ``scheduled_items_vec``, ``documents_vec``). Keep all call
+``lists_vec``, ``scheduled_items_vec``). Keep all call
 sites pointed here so the production-safe path can never drift between
 memory tables.
 """

@@ -56,10 +56,6 @@ _DELETE_ALL_MODELS: tuple[type[Model], ...] = (
 _DELETE_ALL_MODELLESS_TABLES = (
     "data_graph_edges",   # FK -> data_graph(id) ON DELETE CASCADE
     "concept_lut_misses",
-    # Legacy document tables — modelless since the document subsystem was
-    # deleted; entries die with the tables when the schema drops them.
-    "documents",
-    "watched_folders",
 )
 
 # MemoryStore key patterns that belong to the user and must be cleared.

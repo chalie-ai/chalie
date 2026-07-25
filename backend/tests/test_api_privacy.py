@@ -112,13 +112,6 @@ class TestPrivacyAPI:
             ("Buy groceries", "2026-05-01T10:00:00+00:00", "2026-05-01T10:00:00+00:00"),
         )
 
-        # ── Seed documents ────────────────────────────────────────────────────
-        db.execute(
-            "INSERT INTO documents (id, original_name, mime_type, file_path) "
-            "VALUES (?, ?, ?, ?)",
-            ("doc-1", "notes.txt", "text/plain", "data/uploads/notes.txt"),
-        )
-
         db.commit()
 
         # Pre-conditions: every seeded table has >= 1 row
@@ -126,7 +119,6 @@ class TestPrivacyAPI:
         assert db.execute("SELECT COUNT(*) FROM lists").fetchone()[0] >= 1
         assert db.execute("SELECT COUNT(*) FROM list_items").fetchone()[0] >= 1
         assert db.execute("SELECT COUNT(*) FROM scheduled_items").fetchone()[0] >= 1
-        assert db.execute("SELECT COUNT(*) FROM documents").fetchone()[0] >= 1
 
         response = client.delete(
             '/api/privacy/delete-all',
@@ -143,7 +135,6 @@ class TestPrivacyAPI:
         assert db.execute("SELECT COUNT(*) FROM lists").fetchone()[0] == 0
         assert db.execute("SELECT COUNT(*) FROM list_items").fetchone()[0] == 0
         assert db.execute("SELECT COUNT(*) FROM scheduled_items").fetchone()[0] == 0
-        assert db.execute("SELECT COUNT(*) FROM documents").fetchone()[0] == 0
 
     def test_delete_all_tables_all_exist_in_schema(self) -> None:
         import re

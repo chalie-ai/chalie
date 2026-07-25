@@ -31,7 +31,6 @@ _EXPORT_TABLES = [
     "episodes",
     "transcript",
     "scheduled_items", "lists", "list_items",
-    "documents", "watched_folders",
     "data_graph",
 ]
 _EXPORT_STORE_PATTERNS = ["working_memory:*"]

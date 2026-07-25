@@ -62,6 +62,7 @@ _STEPS: tuple[tuple[str, str], ...] = (
     ("scheduled-items-prompt-only-v2", "migrations.migration_008_scheduler_prompt_only"),
     ("system-kind-split-migration-v1", "migrations.migration_009_system_kind_split"),
     ("episode-search-queries-migration-v1", "migrations.migration_010_episode_search_queries"),
+    ("data-graph-document-purge-v1", "migrations.migration_015_purge_document_data_graph_rows"),
 )
 
 # Extra wrapper-era sentinel stems a step's resolution must also satisfy:

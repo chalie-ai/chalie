@@ -8,7 +8,10 @@ from services.processor_config import ProcessorConfig
 
 
 class UserConfig(ProcessorConfig):
-    """Attachments auto-fire document.upload on turn 0 (presence of"""
+    """The user-chat channel. Attachments are ingested at turn zero: each
+    staged upload is saved through FileParserService, linked to the turn via
+    ``transcript_files``, and dispatched by MIME — ``vision`` for images,
+    ``read`` for everything else."""
 
     SUPPORTS_ASYNC = True
     BROADCASTS_STATE = True
