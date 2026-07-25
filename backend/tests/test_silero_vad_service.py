@@ -109,9 +109,11 @@ class TestSileroVadInference:
 
 class TestExtractSpeechEndToEnd:
     def test_extract_speech_strips_silence_and_keeps_voiced_segment(self) -> None:
-        # Real end-to-end path: backend.api.voice._extract_speech() drives the
-        # real SileroVad wrapper exactly as the STT route does, no mocks.
-        from api.voice import _extract_speech
+        # Real end-to-end path: the STT service's speech extraction drives the
+        # real SileroVad wrapper exactly as transcription does, no mocks.
+        from services.speech_to_text_service import get_service
+
+        _extract_speech = get_service()._extract_speech
 
         silence_pad = np.zeros(_SR, dtype=np.float32)  # 1s silence each side
         voiced = _synthesize_voiced_signal(duration_s=1.0)

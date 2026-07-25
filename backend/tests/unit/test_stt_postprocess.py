@@ -3,7 +3,11 @@
 
 import pytest
 
-from api.voice import _strip_fillers, _fix_contractions
+from services.speech_to_text_service import get_service
+
+_stt = get_service()
+_strip_fillers = _stt._strip_fillers
+_fix_contractions = _stt._fix_contractions
 
 
 @pytest.mark.unit

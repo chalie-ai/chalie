@@ -40,9 +40,9 @@ def _insert_transcript(
 
 def _turn_messages() -> list[dict[str, object]]:
     """The seeded turn's rows as the thread-expand endpoint projects them."""
-    from api.threads import serialize_turn
+    from services.turn_serializer_service import get_service as _serializer
 
-    return cast("list[dict[str, object]]", serialize_turn("user", 1)["messages"])
+    return cast("list[dict[str, object]]", _serializer().serialize("user", 1)["messages"])
 
 
 @pytest.fixture
@@ -93,7 +93,7 @@ class TestStoredAudio:
         resp = client.get(f"/api/voice/transcript/{transcript_id}")
 
         assert resp.status_code == 409
-        assert resp.get_json() == {"state": "failed"}
+        assert resp.get_json() == {"success": True, "result": {"state": "failed"}}
 
 
 class TestTerminalFailure:
@@ -110,7 +110,7 @@ class TestTerminalFailure:
         resp = client.get(f"/api/voice/transcript/{transcript_id}")
 
         assert resp.status_code == 409
-        assert resp.get_json() == {"state": "failed"}
+        assert resp.get_json() == {"success": True, "result": {"state": "failed"}}
 
 
 class TestRowsThatCanNeverHaveSpeech:
@@ -198,7 +198,7 @@ class TestLazyStart:
         resp = client.get(f"/api/voice/transcript/{transcript_id}")
 
         assert resp.status_code == 202
-        assert resp.get_json() == {"state": "pending"}
+        assert resp.get_json() == {"success": True, "result": {"state": "pending"}}
 
         deadline = time.monotonic() + 30
         row = None

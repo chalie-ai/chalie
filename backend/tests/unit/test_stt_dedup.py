@@ -5,7 +5,9 @@ they are natural emphasis in real speech.
 
 import pytest
 
-from api.voice import _dedup_repetitions, _MAX_CONSECUTIVE_PHRASE_REPEATS
+from services.speech_to_text_service import _MAX_CONSECUTIVE_PHRASE_REPEATS, get_service
+
+_dedup_repetitions = get_service()._dedup_repetitions
 
 
 @pytest.mark.unit

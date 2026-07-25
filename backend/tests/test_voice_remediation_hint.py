@@ -38,8 +38,9 @@ def test_voice_remediation_hints_point_to_reinstall_never_settings(
     # /voice/health always returns 200 JSON with status + (when not ready) a hint.
     health = client.get("/api/voice/health")
     assert health.status_code == 200
-    hdata = health.get_json()
-    assert hdata is not None
+    body = health.get_json()
+    assert body is not None
+    hdata = body["result"]
     assert hdata.get("status") in ("ok", "loading", "unavailable")
 
     health_hint = hdata.get("hint")
@@ -59,4 +60,5 @@ def test_voice_remediation_hints_point_to_reinstall_never_settings(
         assert stt.status_code == 503
         sdata = stt.get_json()
         assert sdata is not None
-        _assert_reinstall_oriented(sdata.get("hint") or "")
+        # The failure envelope carries one string, so the hint rides inside it.
+        _assert_reinstall_oriented(sdata.get("error") or "")

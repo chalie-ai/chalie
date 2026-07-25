@@ -46,6 +46,9 @@ from .actions.skills.copy import SkillCopy
 from .actions.skills.toggle import SkillToggle
 from .actions.snapshot.export import SnapshotExportAction
 from .actions.snapshot.import_ import SnapshotImportAction
+from .actions.voice.health import VoiceHealthAction
+from .actions.voice.transcribe import VoiceTranscribeAction
+from .actions.voice.transcript import VoiceTranscriptAction
 from .endpoint import Endpoint
 from .endpoints.capabilities import CapabilitiesEndpoint
 from .endpoints.lists import Lists
@@ -106,6 +109,10 @@ ROUTES: tuple[Endpoint, ...] = (
     SnapshotImportAction("snapshot", "import"),
 
     SubagentsEndpoint("subagents"),
+
+    VoiceHealthAction("voice", "health"),
+    VoiceTranscribeAction("voice", "transcribe"),
+    VoiceTranscriptAction("voice", "transcript"),
 
     WrappersEndpoint("wrappers"),
 )

@@ -35,7 +35,7 @@ from typing import cast
 import pytest
 from flask.testing import FlaskClient
 
-from api.threads import serialize_turn
+from services.turn_serializer_service import get_service as _serializer
 from configs.channels.scheduled import ScheduledConfig
 from configs.channels.user import UserConfig
 from controllers.message_processor import MessageProcessor
@@ -57,7 +57,7 @@ def test_never_fired_schedule_is_not_working(db: sqlite3.Connection) -> None:
     assert db is not None  # fixture is taken for its binding side effect (real DB gateway)
     turn_id = 9001
 
-    result = serialize_turn(_CHANNEL, turn_id)
+    result = _serializer().serialize(_CHANNEL, turn_id)
 
     assert result["working"] is False
     assert result["messages"] == []
@@ -84,7 +84,7 @@ def test_reopened_turn_with_prior_settle_is_working(db: sqlite3.Connection) -> N
     execution = later_tick.turn_execution_service.open()
     assert execution is not None  # sanity: the real open-row write succeeded
 
-    result = serialize_turn(_CHANNEL, turn_id)
+    result = _serializer().serialize(_CHANNEL, turn_id)
 
     assert result["working"] is True
 
@@ -108,7 +108,7 @@ def test_finished_execution_with_settled_reply_is_not_working(db: sqlite3.Connec
     finished = mp.turn_execution_service.finish(TurnExecution.COMPLETED)
     assert finished is not None and finished.ended_at is not None  # sanity: real close
 
-    result = serialize_turn(_CHANNEL, turn_id)
+    result = _serializer().serialize(_CHANNEL, turn_id)
 
     assert result["working"] is False
     messages = cast("list[dict[str, object]]", result["messages"])
@@ -147,7 +147,7 @@ def test_crashed_execution_marks_the_block_crashed(db: sqlite3.Connection) -> No
     crashed = mp.turn_execution_service.finish(TurnExecution.CRASHED, "step raised")
     assert crashed is not None and crashed.ended_at is not None  # sanity: real terminal close
 
-    result = serialize_turn(_USER_CHANNEL, turn_id)
+    result = _serializer().serialize(_USER_CHANNEL, turn_id)
 
     assert result["crashed"] is True
     assert result["working"] is False
@@ -167,7 +167,7 @@ def test_completed_execution_is_not_crashed(db: sqlite3.Connection) -> None:
     mp.transcript_service.append_assistant("Done.")
     assert mp.turn_execution_service.finish(TurnExecution.COMPLETED) is not None
 
-    result = serialize_turn(_USER_CHANNEL, turn_id)
+    result = _serializer().serialize(_USER_CHANNEL, turn_id)
 
     assert result["crashed"] is False
 
@@ -212,7 +212,7 @@ def test_single_exchange_with_interim_tool_step_has_no_thread_replies(db: sqlite
 
     final_id = mp.transcript_service.append_assistant("Here's what I found connected.")
 
-    result = serialize_turn(_USER_CHANNEL, turn_id)
+    result = _serializer().serialize(_USER_CHANNEL, turn_id)
     messages = cast("list[dict[str, object]]", result["messages"])
 
     assert [m["id"] for m in messages] == [str(uid), str(interim_id), str(final_id)]
@@ -262,7 +262,7 @@ def test_reply_with_settling_tool_call_tags_only_the_reply_rows(db: sqlite3.Conn
     reply.tool_call_service.finish(call_id, "created", ToolCall.DONE)
     reply_answer_id = reply.transcript_service.append_assistant("Added a 3pm meeting to your calendar.")
 
-    result = serialize_turn(_USER_CHANNEL, turn_id)
+    result = _serializer().serialize(_USER_CHANNEL, turn_id)
     messages = cast("list[dict[str, object]]", result["messages"])
     by_id = {cast("str", m["id"]): m for m in messages}
 
@@ -357,7 +357,7 @@ def test_same_tool_rich_cards_in_one_turn_resolve_per_cycle(db: sqlite3.Connecti
         "And these: <span id='image_search_1'>Southern lights.</span>"
     )
 
-    result = serialize_turn(_USER_CHANNEL, turn_id)
+    result = _serializer().serialize(_USER_CHANNEL, turn_id)
     messages = cast("list[dict[str, object]]", result["messages"])
     by_id = {cast("str", m["id"]): m for m in messages}
 
@@ -405,7 +405,7 @@ def test_serialize_turn_stamps_the_config_type_it_was_called_with(db: sqlite3.Co
     scheduled_mp.transcript_service.append_assistant("Standup reminder: 9am daily sync.")
     assert scheduled_mp.turn_execution_service.finish(TurnExecution.COMPLETED) is not None
 
-    scheduled_result = serialize_turn(_CHANNEL, scheduled_turn_id, config_type=_SCHEDULED_TYPE)
+    scheduled_result = _serializer().serialize(_CHANNEL, scheduled_turn_id, config_type=_SCHEDULED_TYPE)
     assert scheduled_result["type"] == _SCHEDULED_TYPE
 
     user_turn_id = 7101
@@ -415,7 +415,7 @@ def test_serialize_turn_stamps_the_config_type_it_was_called_with(db: sqlite3.Co
     user_mp.current_transcript_id = uid
     user_mp.transcript_service.append_assistant("Sunny, 22C.")
 
-    user_result = serialize_turn(_USER_CHANNEL, user_turn_id)  # default config_type
+    user_result = _serializer().serialize(_USER_CHANNEL, user_turn_id)  # default config_type
 
     assert user_result["type"] == _USER_TYPE
 

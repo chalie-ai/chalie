@@ -74,4 +74,4 @@ class TestVoiceEndpointsAllowAuthenticated:
         )
         assert resp.status_code == 200
         # The real handler ran: it always reports a concrete status.
-        assert resp.get_json()["status"] in ("ok", "loading", "unavailable")
+        assert resp.get_json()["result"]["status"] in ("ok", "loading", "unavailable")

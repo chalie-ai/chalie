@@ -21,7 +21,7 @@ from typing import TYPE_CHECKING
 import pytest
 
 from api.dto.attachment import Attachment
-from api.threads import _fetch_attachments_for_transcripts
+from services.turn_serializer_service import _fetch_attachments_for_transcripts
 from configs.channels import UserConfig
 from controllers.message_processor import MessageProcessor
 from models.tool_call import ToolCall

@@ -8,14 +8,23 @@ export interface VoiceHealth {
   hint?: string;
 }
 
+interface SingleEnvelope<T> {
+  success: boolean;
+  result: T;
+}
+
 export const voice = {
   /**
    * GET /voice/health — public probe (no auth, always 200), so it opts out of
    * redirect-on-401: a failure should mark voice unavailable, never yank the
-   * user to /login/.
+   * user to /login/. Envelope is { success, result: { status, ... } }.
    */
-  health(): Promise<VoiceHealth> {
-    return api.get('/api/voice/health', { redirectOnAuthError: false });
+  async health(): Promise<VoiceHealth> {
+    const body = await api.get<SingleEnvelope<VoiceHealth>>(
+      '/api/voice/health',
+      { redirectOnAuthError: false },
+    );
+    return body.result;
   },
 
   /**
