@@ -19,6 +19,8 @@ There is no `.env` and no environment-variable configuration: code-level config 
 
 This manual flow syncs Python dependencies only. The Playwright browser and the on-device voice models are fetched once by `installer/install.sh` (or the Docker build), not by `pip install -e backend/` or `python backend/run.py` — abilities that need them fail loudly with a reinstall hint until you've run the installer at least once.
 
+`run.py` will not start with a dependency missing. Before any heavy import it checks every entry in `backend/pyproject.toml` against the installed distributions; if one is absent it names it on stderr, serves a terminal error page on the public port instead of the starting page, and exits non-zero. A backend that boots without its dependencies silently takes the degraded branch of some `except ImportError` and lies about its own state. So after a pull that changes `pyproject.toml`, re-run `pip install -e backend/`.
+
 Frontend:
 
 ```bash
